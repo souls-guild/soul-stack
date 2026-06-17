@@ -1,0 +1,21 @@
+# Values для bitnami/redis Helm-чарта (L3c-2). Standalone Redis без auth и без
+# persistence: kind-cluster одноразовый, RBAC не нужен, password-checks в
+# тестах гасили бы потоки port-forward-а и keeper.yml.
+#
+# Service-имя в кластере: `redis-master.default.svc.cluster.local:6379`.
+
+auth:
+  enabled: false
+
+architecture: standalone
+
+master:
+  persistence:
+    enabled: false
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "128Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"

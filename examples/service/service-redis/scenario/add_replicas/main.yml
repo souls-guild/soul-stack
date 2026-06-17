@@ -1,0 +1,144 @@
+name: add_replicas
+description: >-
+  Масштабирование Redis репликами: на каждый новый хост-реплику ставится
+  redis-single, затем хост направляется replicaof на актуальный primary. Адрес
+  primary опознаётся РАНТАЙМ-probe-ом существующих хостов (single-master сервис
+  уже работает — declared-роль здесь не источник истины; runtime берёт роль
+  probe-ом + where:, orchestration.md §4.1). Топология прогона передаётся
+  destiny-redis-replication-config через apply: input: hosts: ${ soulprint.hosts }
+  (E3a scenario-only аксессор, orchestration.md §4.1) — destiny напрямую
+  soulprint.hosts не видит.
+
+  Опирается на эталон service-redis-cluster/scenario/add_replica (runtime-probe
+  primary discovery + replicaof) и create/replication.yml (reuse
+  destiny-redis-replication-config). Отличие модели: service-redis собран
+  КОМПОЗИЦИЕЙ standalone-destiny (а не внутренней action-DSL destiny redis), и НЕ
+  делает cloud-spawn / coven-bind: реплики приходят уже привязанными SID-ами
+  (input.replicas). Эти keeper-side шаги (on: keeper) сознательно вынесены за
+  рамки сервиса.
+
+# ── Входной контракт (docs/input.md) ──────────────────────────────────────────
+input:
+  # SID-ы новых хостов-реплик (уже привязаны к incarnation как Souls). На них
+  # ставится redis и настраивается replicaof. Per-host шаги таргетят по
+  # soulprint.self.sid in input.replicas (стабильный where: без probe —
+  # orchestration.md §4 M3-amend: чисто-стабильный where: легален).
+  replicas:
+    type: array
+    required: true
+    min_items: 1
+    items:
+      type: string
+      format: fqdn
+    description: SID-ы новых хостов-реплик, добавляемых в стек.
+
+  # Пароль Redis (requirepass на репликах + masterauth для replicaof) НЕ во input:
+  # резолвится keeper-side через vault() по пути из incarnation (см. apply:input
+  # шагов 2 и 3, templating.md §2.3/§4).
+
+  # Версия НЕОБЯЗАТЕЛЬНА (как в create): не задана → core.pkg без =version-пина.
+  # Pattern допускает distro-native строку (epoch + revision); жёсткий semver
+  # ломал version-пин на реальном дистрибутиве (BUG-1).
+  redis_version:
+    type: string
+    required: false
+    pattern: "^([0-9]+:)?[0-9][A-Za-z0-9.~+-]*$"
+    description: >-
+      Версия пакета redis-server на новых репликах (distro-native, та же, что в
+      state). Необязательна: не задана → ставится версия по умолчанию из репо.
+
+  redis_socket:
+    type: string
+    default: /var/run/redis/redis-server.sock
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: Путь unix-сокета Redis (должен совпадать с create).
+
+  redis_maxmemory:
+    type: string
+    default: 256mb
+    pattern: "^[0-9]+(b|kb|mb|gb)$"
+    description: Лимит памяти Redis на новых репликах.
+
+# Новые хосты (role: replica) дописываются в incarnation.state.redis_hosts[]
+# после успешного apply (cross-host барьер — orchestration.md §7).
+state_changes:
+  appends: [redis_hosts]
+
+tasks:
+  # 1. Probe адреса актуального primary НА СУЩЕСТВУЮЩИХ хостах (новые реплики
+  # исключены — на них redis ещё не стоит). single-master сервис уже работает,
+  # роль берётся рантайм-probe-ом, НЕ declared soulprint.hosts[].role
+  # (orchestration.md §4.1). changed_when: false — read-only probe. failed_when:
+  # — идиома полноты §5: ответили все существующие (host_count − число новых).
+  # master_addr читается ниже в setup-replication → probe ИМЕНОВАН.
+  - name: Detect actual redis primary address on existing hosts
+    module: core.cmd.shell
+    on: ["${ incarnation.name }"]
+    where: "!(soulprint.self.sid in input.replicas)"
+    register: master_addr
+    changed_when: false
+    failed_when: size(register.master_addr) < (incarnation.host_count - size(input.replicas))
+    params:
+      cmd: >
+        [ "$(redis-cli role | head -1)" = master ]
+        && redis-cli -p 6379 config get bind | awk 'NR==2{print $1}' || true
+
+  # 2. Ставим redis на НОВЫЕ реплики. Таргет — стабильный where: по input.replicas
+  # (orchestration.md §4 M3-amend). serial: 1 — rolling по одной реплике, чтобы не
+  # завалить primary одновременной первичной синхронизацией нескольких реплик.
+  - name: Install redis-single on new replicas
+    on: ["${ incarnation.name }"]
+    where: soulprint.self.sid in input.replicas
+    serial: 1
+    apply:
+      destiny: redis-single
+      input:
+        version:        "${ has(input.redis_version) ? input.redis_version : '' }"
+        # Keeper-side vault()-резолв (templating.md §2.3): путь из incarnation,
+        # в destiny уходит значение (Soul vault-клиент не тянет, ADR-012).
+        redis_password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+        redis_socket:   "${ input.redis_socket }"
+        maxmemory:      "${ input.redis_maxmemory }"
+        config:         "${ essence.redis_config }"
+
+  # 3. Направляем новые реплики на actual-primary. master_addr — свёртка
+  # АГРЕГАТНОГО register шага 1 к одному значению (orchestration.md §4.3):
+  # register.master_addr — карта sid→payload (probe по нескольким существующим
+  # хостам), НЕ скаляр. map(k, …[k].stdout) итерирует по ключам-sid карты и
+  # читает .stdout каждого payload-а; .filter(v, v != '')[0] берёт первый
+  # non-empty (адрес primary — на репликах probe печатает пусто).
+  # Топология прогона уходит destiny через apply: input: hosts: ${ soulprint.hosts }
+  # (E3a); destiny сам решает «я реплика/не реплика» локально по soulprint.self vs
+  # master_addr (изоляция destiny, см. destiny-redis-replication-config). serial: 1
+  # — продолжаем rolling-раскат по одной реплике.
+  - name: Point new replicas at the actual primary
+    on: ["${ incarnation.name }"]
+    where: soulprint.self.sid in input.replicas
+    serial: 1
+    apply:
+      destiny: redis-replication-config
+      input:
+        hosts:       "${ soulprint.hosts }"
+        master_addr: "${ register.master_addr.map(k, register.master_addr[k].stdout).filter(v, v != '')[0] }"
+        # masterauth-пароль — тот же keeper-side vault()-резолв, что и requirepass.
+        password:    "${ vault('secret/redis/' + incarnation.name + '#password') }"
+
+  # 4. Health-gate: ждём, пока новая реплика начнёт синхронизацию с primary.
+  # wait: изъят (orchestration.md §2) → probe + retry:+until:. Самодостаточный
+  # gate → БЕЗ именованного register:, условие через register.self.*. count×delay
+  # = 90s бюджет.
+  - name: Wait until new replicas are syncing
+    module: core.cmd.shell
+    on: ["${ incarnation.name }"]
+    where: soulprint.self.sid in input.replicas
+    changed_when: false
+    retry:
+      count: 18
+      delay: 5s
+      until: register.self.stdout == 'up'
+    failed_when: register.self.stdout != 'up'
+    params:
+      cmd: >
+        redis-cli -p 6379 info replication
+        | awk -F: '/master_link_status/{print $2}' | tr -d '[:space:]'
+        || echo down

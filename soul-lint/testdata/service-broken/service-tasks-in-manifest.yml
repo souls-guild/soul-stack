@@ -1,0 +1,9 @@
+name: redis-cluster
+state_schema_version: 1
+state_schema:
+  type: object
+  properties:
+    foo: { type: string }
+tasks:
+  - name: Install
+    module: core.pkg.installed

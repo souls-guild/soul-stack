@@ -1,0 +1,16 @@
+name: coven-probe
+state_schema_version: 1
+description: >-
+  Probe-сервис для валидации coven-таргетинга резолвера on:/coven (Phase-2 ТЕСТ A).
+  Каждый сценарий ставит redis и пишет coven-маркер-файл на таргетированное
+  подмножество хостов, чтобы по apply_runs (PG) и наличию файла (reality) можно
+  было проверить: задеты ровно целевые ковены, не-целевые чисты.
+  Только core-модули (core.pkg / core.file), без custom-модулей и destiny.
+
+state_schema:
+  type: object
+  properties:
+    marker_file:
+      type: string
+    last_target:
+      type: string

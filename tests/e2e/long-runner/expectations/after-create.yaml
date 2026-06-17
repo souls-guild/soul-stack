@@ -1,0 +1,19 @@
+# Post-apply ожидания service-long-runner::create.
+#
+# state_changes.sets из scenario/create/main.yml:
+#   last_run: "create"
+#   runner_marker: /tmp/long-runner-init.txt
+apply_runs:
+  status: success
+
+incarnation_state:
+  last_run: create
+  runner_marker: /tmp/long-runner-init.txt
+
+audit_events:
+  - type: incarnation.scenario_started
+    payload:
+      incarnation: test-long-runner
+
+metrics:
+  keeper_apply_runs_total{status="success"}: ">= 1"

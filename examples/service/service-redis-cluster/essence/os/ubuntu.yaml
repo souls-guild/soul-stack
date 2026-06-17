@@ -1,0 +1,4 @@
+# Ubuntu-специфичное (пакет называется так, init-система systemd).
+
+package_name: "redis-server"
+service_unit: "redis-server.service"

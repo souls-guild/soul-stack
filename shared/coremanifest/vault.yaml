@@ -1,0 +1,12 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: vault
+
+spec:
+  states:
+    kv-read:
+      description: Keeper-side (on:keeper). Явное чтение Vault KV с audit-event (ADR-017).
+      input:
+        path:   { type: string, required: true, description: "Путь Vault KV (mount-относительный)." }
+        fields: { type: list,   items: { type: string }, description: "Какие ключи извлечь; пусто → весь секрет." }

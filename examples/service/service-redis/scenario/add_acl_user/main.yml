@@ -1,0 +1,52 @@
+name: add_acl_user
+description: >-
+  Приводит ACL-пользователей Redis к переданному АКТУАЛЬНОМУ СПИСКУ. Оператор
+  передаёт полный список пользователей (input.users), а не дельту — сценарий
+  применяет ACL SETUSER на каждого через loop: items: ${ input.users }.
+
+  Демонстрирует loop (orchestration.md §2.2 / destiny/tasks.md §7): одна
+  loop-задача раскрывается в render-фазе в N RenderedTask по элементам списка
+  (сквозные индексы). items резолвится один раз на прогон в host-инвариантном
+  контексте; в теле итерации доступна loop-переменная ${ user.* }.
+
+# ── Входной контракт (docs/input.md) ──────────────────────────────────────────
+# users — актуальный список ACL-пользователей (array). Каждый элемент: имя +
+# ACL-строка в синтаксисе Redis ACL (например "on >secret ~* +@read").
+input:
+  users:
+    type: array
+    required: true
+    items:
+      type: object
+      required: [name, acl]
+      properties:
+        name:
+          type: string
+          pattern: "^[A-Za-z0-9._-]+$"
+          description: Имя ACL-пользователя Redis.
+        acl:
+          type: string
+          secret: true
+          description: >-
+            ACL-правило в синтаксисе Redis ACL SETUSER (флаги/ключи/команды/пароль).
+            Маскируется в логах — может содержать пароль (>password).
+    description: Полный актуальный список ACL-пользователей (перезаписывается целиком).
+
+# После успешного apply фиксируем актуальный список целиком (orchestration.md §7.1).
+state_changes:
+  sets:
+    redis_users: "${ input.users }"
+
+tasks:
+  # loop по актуальному списку: одна задача → N RenderedTask (по одной на
+  # пользователя). redis-cli ACL SETUSER идемпотентен (повторное SETUSER одного и
+  # того же правила — no-op на стороне Redis). no_log: true — ACL-строка содержит
+  # пароль (>password), не должна светиться в логах/трейсах (templating.md §6).
+  - name: Apply Redis ACL for each user in the list
+    module: core.cmd.shell
+    no_log: true
+    loop:
+      items: "${ input.users }"
+      as: user
+    params:
+      cmd: "redis-cli ACL SETUSER ${ user.name } ${ user.acl }"

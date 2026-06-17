@@ -1,0 +1,80 @@
+# L0-испытание (Trial, ADR-023) destiny node-exporter через харнесс-scenario apply.
+#
+# Render-only, герметично: проверяет, что apply:destiny раскрывает destiny
+# node-exporter в ожидаемый плоский план задач (CEL-фаза). L0 не качает tarball,
+# не ставит пакеты, не исполняет text/template (.tmpl) — только CEL-render
+# YAML-выражений.
+name: node-exporter destiny renders fetch/extract/install/unit/service plan
+
+# L0-render берёт input как есть и НЕ применяет default-ы scenario-контракта
+# (defaults подставляет Keeper при инвокации, до render-фазы). Дублируем дефолты.
+#
+# apply:destiny резолвится зеркалом прода (slice A, ADR-023): node-exporter
+# объявлена в _trial/service.yml::destiny[], URL — из default_destiny_source ниже
+# (file://, относительно service-root = _trial/; сама destiny лежит уровнем выше,
+# в examples/destiny/destiny-node-exporter/).
+fixtures:
+  default_destiny_source: "file://../../destiny-{name}"
+  input:
+    version: "1.8.2"
+    # sha256 ОБЯЗАТЕЛЕН (required:true, placeholder-дефолт убран). L0 render-only —
+    # fetch не исполняется, хэш не верифицируется; передаём валидный тестовый 64-hex.
+    sha256:  "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    arch:    amd64
+    # extra_args не передаём — проверяем default [] destiny: ExecStart без доп.
+    # токенов, render_context.vars.extra_args = [].
+
+# Сквозные индексы destiny-задач (apply:destiny вклеивает их в общий план). Сверка
+# params — полная (deep-equal). bin_dir/listen добраны из default destiny.
+assert:
+  rendered_tasks:
+    # url собран CEL-ом из version+arch, checksum-пин из input — supply-chain-safe
+    # переход с shell-curl на core.url.fetched (https-only).
+    - index: 0
+      module: core.url.fetched
+      params:
+        url: https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-amd64.tar.gz
+        path: /tmp/node_exporter-1.8.2.tar.gz
+        checksum: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        mode: "0644"
+
+    - index: 1
+      module: core.archive.extracted
+      params:
+        path: /tmp/node_exporter-1.8.2.tar.gz
+        dest: /tmp/node_exporter-1.8.2
+
+    # core.group/core.user шагов НЕТ: сервис-аккаунт даёт DynamicUser=yes в unit-е
+    # (гибрид-правило прод-конвенции §2). hardening — статический текст шаблона, в
+    # render_context не попадает, в L0-плане его не видно.
+
+    # systemd-unit: vars (bin_dir/listen/extra_args) добраны из default destiny.
+    # extra_args не передан → default [] (ExecStart без доп. токенов). Корень
+    # text/template — render_context {vars,self,role,essence} (templating.md §3.2,
+    # BUG-A fix); плоского params.vars больше нет.
+    - index: 3
+      module: core.file.rendered
+      params:
+        path: /etc/systemd/system/node_exporter.service
+        # template-путь заменён на доставленное Keeper-ом literal-содержимое (A1, ADR-012(d)).
+        template_content: "<present>"
+        mode: "0644"
+        owner: root
+        group: root
+        render_context:
+          vars:
+            bin_dir: /usr/local/bin
+            listen: ":9100"
+            extra_args: []
+          self:
+            sid: trial-host
+            covens: []
+            role: ""
+          role: ""
+          essence: {}
+
+    - index: 4
+      module: core.service.running
+      params:
+        name: node_exporter
+        enabled: true

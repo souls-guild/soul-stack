@@ -1,0 +1,40 @@
+# Конфиг OTel-collector для локального dev-стека (см. dev/docker-compose.yml,
+# сервис otel-collector). Минимальный trace-pipeline: приём OTLP gRPC →
+# batch → экспорт в Jaeger + дублирование в stdout-лог коллектора.
+#
+# Это DEV-конфиг: приём по gRPC без TLS (keeper/soul шлют insecure на
+# 127.0.0.1:4317, см. shared/obs SetupOTel WithInsecure). В проде — receiver
+# c TLS и реальный trace-backend, а не all-in-one in-memory Jaeger.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        # 0.0.0.0 — слушаем на всех интерфейсах внутри контейнера; наружу
+        # docker пробрасывает только 127.0.0.1:4317 (port-mapping в compose).
+        endpoint: 0.0.0.0:4317
+
+processors:
+  # batch — группирует спаны перед экспортом (стандартная рекомендация OTel,
+  # снижает число исходящих запросов). Дефолтных параметров для dev хватает.
+  batch: {}
+
+exporters:
+  # Трейсы в Jaeger по OTLP внутри docker-сети (DNS-имя `jaeger`,
+  # COLLECTOR_OTLP_ENABLED=true поднимает там OTLP :4317).
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+  # debug — печать принятых спанов в лог коллектора
+  # (`docker compose -f dev/docker-compose.yml logs -f otel-collector`).
+  # Удобно убедиться, что трейсы доезжают, не открывая Jaeger UI.
+  debug:
+    verbosity: detailed
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/jaeger, debug]

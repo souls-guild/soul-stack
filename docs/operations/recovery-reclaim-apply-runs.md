@@ -1,0 +1,94 @@
+# Включение `reclaim_apply_runs` в проде
+
+Операционализация GATE-1 (deliver-once recovery) из [ADR-027](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim). Не отдельный ADR — переключение уже реализованного правила, по списку прод-гейтов.
+
+**Что делает.** Reaper-правило `reclaim_apply_runs` ([keeper/internal/reaper/runner.go](../../keeper/internal/reaper/runner.go)) реклеймит зависшие `apply_runs.status='claimed'` обратно в `planned`, если `claim_expires_at < NOW()`. Закрывает дыру «висячий applying» на фазе **до отдачи** (Keeper умер на рендере/claim, задание Soul-у ещё не ушло): живой Acolyte подхватит строку с инкрементом `attempt`, а Soul-side fencing отсечёт устаревший дубль прежнего владельца. Фаза **`dispatched`** (после отдачи) правилом **не трогается** — пере-claim уже отданного = двойной apply.
+
+Без правила Keeper-инстанс, упавший в фазе `claimed`, оставляет `apply_run` застрявшим навсегда — operator должен снимать вручную.
+
+**По дефолту `enabled: false`** (ADR-027 amend (e), [docs/keeper/reaper.md → Конфиг](../keeper/reaper.md#конфиг)). Включение — операционный шаг под гейтом, не одиночный `enabled: true`.
+
+## Прод-гейты (все три обязательны)
+
+### 1. Fencing-Soul раскатан на весь флот
+
+ADR-027 amend GATE-1 + (g) + (e). Все `soul`-агенты должны нести attempt-fencing: Soul-guard по `ApplyRequest.attempt` на исполнении + эхо `RunResult.attempt` для epoch-check на приёме. Без этого пере-claim протухшего Ward отправит второй `ApplyRequest` на хост, а не-fenced Soul не отсечёт устаревший дубль.
+
+**Текущий `soul`-билд несёт fencing** (gate-1 attempt-fencing уже в бинаре, [ADR-027](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim) amend (b)/(g) реализован). Достаточно убедиться, что **на весь парк** раскатан этот билд (а не легаси без attempt-поля).
+
+**Проверка:** под flood-тестом устаревших `RunResult` метрика `keeper_runresult_stale_total` стабильно ненулевая — epoch-check на приёме отсекает stale-`RunResult`. Если 0 при заведомых stale-сценариях — fencing раскатан не везде.
+
+### 2. `acolytes > 0` на ВСЕХ Keeper-инстансах
+
+ADR-027 amend (f) + (e). `reclaim_apply_runs` и `acolytes > 0` — **связанная пара**. При `acolytes: 0` задания исполняются старым синхронным путём и пишутся прямо в `running`; reclaim на не-fenced пути без epoch-защиты задвоит apply.
+
+**Проверка:** на каждом keeper-узле кластера `keeper.yml::acolyte.workers > 0` (см. [config.md → acolytes](../keeper/config.md#acolytes)). Через [Conclave](../adr/0006-cache-redis.md#adr-006-кэш-и-координация--redis): refuse-startup-guard уже отказывается стартовать в опасном `acolytes:0 + CountLive>1`-сетапе ([ADR-027(h)/(k)](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim)), но оператор всё равно подтверждает явно.
+
+### 3. Soul-reconcile (S6) активен для `dispatched`-сирот
+
+ADR-027 amend (g), реализован 2026-05-25 — `WardRoster` ([ADR-012(k)](../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add)). Закрывает окно «Keeper и Soul оба мертвы после отдачи»: Soul на (re)connect шлёт `WardRoster` (ReplaceAll-снимок ведомых `apply_id`+attempt), Keeper в `OrphanDispatched` epoch-fenced single-winner-сверкой терминалит `dispatched`-строки этого SID, которых нет в наборе → новый терминал `orphaned` (миграция 044).
+
+Без этого `dispatched`-строки на флоте с убитыми парами Keeper+Soul зависали бы навсегда — `reclaim` их не трогает by design.
+
+**Проверка:** алерт **dispatched stuck (post-recovery-enable)** ([monitoring.md](monitoring.md)) — SQL `COUNT(*) FROM apply_runs WHERE status = 'dispatched' AND claim_at < NOW() - INTERVAL '1 hour'` должен оставаться около 0 на стенде с симулированным kill keeper+soul. Если копит — Soul-reconcile не работает (старый `soul`-билд без `WardRoster`, форвард-compat no-op fail-safe).
+
+### Без гейтов — НЕ включать
+
+- Без шага 1 (fencing-Soul) → race-condition «два Keeper-а параллельно выкатывают один apply_run на хост».
+- Без шага 2 (`acolytes > 0`) → reclaim возвращает в `planned`, но никто не подберёт; на не-fenced пути reclaim вообще небезопасен.
+- Без шага 3 (`WardRoster`) → `dispatched`-сироты копят бесконечно.
+
+## Включение
+
+В `keeper.yml`:
+
+```yaml
+reaper:
+  interval: 30s              # tick-частота Reaper-цикла; рекомендуется <= acolyte.claim_lease / 2
+  rules:
+    reclaim_apply_runs:
+      enabled: true          # default false
+      stale_after: 1m        # формальный lease-аргумент action-схемы; в SQL-предикат НЕ входит
+      action: set_status
+      target_status: planned
+```
+
+`acolyte_lease > max-РЕНДЕР` — дефолт `30s` ок (lease-инвариант **ослаблен** после GATE-1, [ADR-027 amend (e)](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim)). `acolyte_lease > max(время-apply-одного-хоста)` и Acolyte lease-renew — **больше не требуются** для recovery-границы.
+
+Применить через hot-reload (`SIGHUP` или API/MCP-мутация конфига, [config.md → Hot-reload](../keeper/config.md#hot-reload)) — без рестарта keeper-процесса.
+
+## Валидация после включения
+
+1. **Метрики Reaper-правила** ([reaper.md → Метрики](../keeper/reaper.md#метрики)):
+   - `keeper_reaper_rule_executions_total{rule="reclaim_apply_runs"}` — растёт по tick-у Reaper-цикла (правило вызывается). Это «сколько раз вызывалось», не «сколько раз сработало».
+   - `keeper_reaper_rule_purged_total{rule="reclaim_apply_runs"}` — суммарное число реклеймнутых строк (set_status → planned). Под нагрузкой с симулированными kill-Keeper во время `claimed` — растёт. На стабильном кластере без kill — должна быть около 0.
+   - `keeper_reaper_dispatch_errors_total{rule="reclaim_apply_runs"}` — должна быть 0. Рост = PG-сбой при reclaim.
+
+2. **Audit-events** ([naming-rules.md → Audit-events](../naming-rules.md#audit-events), область `reaper.*`):
+   - `reaper.reclaim_apply_runs.executed` — пишется при срабатывании. SQL: `SELECT * FROM audit_log WHERE event_type = 'reaper.reclaim_apply_runs.executed' ORDER BY created_at DESC LIMIT 20`.
+
+3. **Epoch-check на приёме** ([monitoring.md](monitoring.md)):
+   - `keeper_runresult_stale_total` — всплески при пере-claim прежнего Ward (Soul прислал устаревший `RunResult` с прежним `attempt`). Это **ожидаемо** и означает, что fencing работает.
+   - **Линейный рост числа повторных apply на одних хостах без stale-отсечки** = тревога: fencing раскатан не на весь флот, вернуться к гейту 1.
+
+4. **Алерт `dispatched stuck`** — Soul-reconcile должен орфанить `dispatched`-строки после смерти Soul-владельца ([monitoring.md → Warning](monitoring.md#warning-триаж-в-рабочее-время)). Рост — Soul-reconcile не активен.
+
+## Откат (rollback)
+
+```yaml
+reaper:
+  rules:
+    reclaim_apply_runs:
+      enabled: false
+```
+
+Hot-reload. Безопасно в любой момент — правило идемпотентно (только status-update `claimed → planned`, не data-mutation, не удаление). После отката `claimed`-строки протухшего владельца снова застревают, пока правило выключено.
+
+## Связанное
+
+- [ADR-027 — Acolyte / Ward / recovery](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim), amend GATE-1 (deliver-once recovery, 2026-05-25).
+- [docs/keeper/reaper.md → Включение recovery](../keeper/reaper.md#включение-recovery-recovery-enable) — нормативная фиксация гейта, источник правды.
+- [docs/keeper/reaper.md → Метрики](../keeper/reaper.md#метрики) — canonical-имена метрик Reaper.
+- Параллельные Reaper-правила, которые **не блокируют** включение этого: `mark_disconnected` (Soul heartbeat-выпадение, 90s), `purge_audit_old`, `purge_apply_runs` (30d retention завершённых), `purge_apply_task_register` (1h grace), `purge_old_errands`.
+- [monitoring.md](monitoring.md) — алерт `dispatched stuck (post-recovery-enable)`.
+- [faq.md](faq.md) — диагностика `applying`-stuck.

@@ -1,0 +1,17 @@
+# Souls-фикстура для L3a service-coven-probe::create.
+#
+# scenario create пишет init-маркер на каждом хосте incarnation (on: опущен →
+# весь incarnation), сам по себе coven-таргетинг проверяется в сценариях
+# mark_a/mark_ab/mark_where — здесь covens задаём, чтобы фикстура была
+# готова к будущим тестам других сценариев. Для create ковены роли не играют.
+- sid: soul-a.example.com
+  status: connected
+  covens: [coven-a]
+  soulprint:
+    os:
+      family: debian
+      distro: debian
+      version: "12"
+      pkg_mgr: apt
+      init_system: systemd
+    hostname: soul-a

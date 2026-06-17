@@ -1,0 +1,48 @@
+# {{.BinaryName}}
+
+{{.Description}}
+
+SoulModule-плагин Soul Stack ({{.Namespace}}.{{.Name}}). Реализован через `sdk/module` поверх gRPC-stdio-handshake ([ADR-020](https://github.com/co-cy/soul-stack/blob/main/docs/architecture.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle)).
+
+## Состояния
+
+- `present` — ресурс существует с запрошенными параметрами.
+- `absent` — ресурс отсутствует.
+
+Параметры — см. `manifest.yaml::spec.states.<state>.input`.
+
+Любой `secret: true`-параметр обязан иметь `pattern: "^vault:.*"` — иначе `soul-lint validate-manifest` падает с error (semantic rule `input_secret_without_vault_pattern`).
+
+## Использование в destiny
+
+```yaml
+- module: {{.Namespace}}.{{.Name}}
+  state: present
+  name: example
+  # TODO: остальные params
+```
+
+## Сборка
+
+```
+make build       # → bin/{{.BinaryName}}
+make test
+make check       # fmt + vet + test + build
+```
+
+## Sigil-trust
+
+Перед публикацией official-плагина в продакшен — Архонт подписывает digest
+бинаря через Keeper ([ADR-026](https://github.com/co-cy/soul-stack/blob/main/docs/architecture.md#adr-026-sigil--целостность-плагинов-keeper-signed-digest-индекс)).
+
+## Тесты
+
+- **L0** — unit с моком `pluginv1.SoulModule_ApplyServer` (см. `internal/{{.NamePackage}}/handler_test.go`).
+- **L1** — интеграция через testcontainers с реальным backend-ресурсом.
+- **L3b** — real-soul-container (privileged Debian-12 + установленный модуль).
+
+Подробнее — [Plugin author guide](https://github.com/co-cy/soul-stack-plugins/blob/main/docs/module-author-guide.md).
+
+## Автор
+
+{{.AuthorName}}

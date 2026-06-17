@@ -1,0 +1,20 @@
+# Post-apply ожидания service-coven-probe::create.
+#
+# state_changes.sets из scenario/create/main.yml:
+#   marker_file: /tmp/coven-init.txt
+#   last_target: "create"
+# → проверяем оба поля в incarnation.state.
+apply_runs:
+  status: success
+
+incarnation_state:
+  marker_file: /tmp/coven-init.txt
+  last_target: create
+
+audit_events:
+  - type: incarnation.scenario_started
+    payload:
+      incarnation: test-coven-probe
+
+metrics:
+  keeper_apply_runs_total{status="success"}: ">= 1"

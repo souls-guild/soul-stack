@@ -1,0 +1,166 @@
+# Keeper-side core-модули
+
+Подавляющее большинство core-модулей — **Soul-side** (исполняются на хосте `soul`-бинарём: `pkg`, `file`, `service`, `user`, `exec`, `cmd`, `cron`, …; см. [architecture.md → «Модель модулей»](../architecture.md#модель-модулей)). Часть core-модулей — **Keeper-side**: оперируют реестрами keeper-а (Postgres `souls`+coven, Redis-кэш, журналы) и исполняются на самом keeper-е. Здесь собрана нормативная спецификация Keeper-side core-модулей.
+
+## Диспетчер Soul-side / Keeper-side — `on:`
+
+Адресация (`<namespace>.<module>.<state>`) и контракт SoulModule для обеих сторон один и тот же. Разница — **где исполняется шаг**; это решает scenario-ключ `on:` ([scenario/orchestration.md §3](../scenario/orchestration.md#3-таргет-шага--on)):
+
+| `on:` | Где исполняется | Подходит модулям |
+|---|---|---|
+| опущен / `[coven, …]` | на хостах incarnation | Soul-side core (`core.pkg.installed`, `core.file.present`, …) |
+| `keeper` | на самом keeper-е | Keeper-side core (`core.soul.registered`, `core.cloud.provisioned` — cloud-create через CloudDriver, …) |
+
+Запуск Soul-side core-модуля с `on: keeper` — ошибка валидации; и наоборот. Принадлежность модуля стороне декларируется в его манифесте; `soul-lint` сверяет статически.
+
+## Регистрация и диспетчеризация по адресу (`base` + `state`)
+
+Keeper-side core-модули регистрируются в keeper-side Registry (`keeper/internal/coremod/registry.go`) по **базовому имени** — `<namespace>.<module>` без state-суффикса: `core.soul`, `core.cloud`, `core.choir`, `core.vault`. State приходит из последнего сегмента адреса задачи.
+
+При исполнении keeper-side задачи (`keeper/internal/scenario/keeper_dispatch.go`) адрес `module: <namespace>.<module>.<state>` делится функцией `config.SplitModuleAddr` (единый разборщик для обеих сторон, тот же что у Soul-side runtime) на пару `(base, state)`:
+
+- `base` (`core.cloud`) идёт в `Registry.Lookup` — находит реализацию `SoulModule`;
+- `state` (`created`) кладётся в `ApplyRequest.state` и диспетчится **внутри** реализации модуля.
+
+Примеры author-формы → разбор:
+
+| Адрес задачи (`module:`) | Registry-ключ (`base`) | `ApplyRequest.state` |
+|---|---|---|
+| `core.soul.registered` | `core.soul` | `registered` |
+| `core.cloud.created` / `core.cloud.destroyed` | `core.cloud` | `created` / `destroyed` |
+| `core.choir.present` / `core.choir.absent` | `core.choir` | `present` / `absent` |
+| `core.vault.kv-read` | `core.vault` | `kv-read` |
+
+Бракованный адрес (`SplitModuleAddr` вернул `ok=false`: пустой, `.state`, `core.`) или `base`, которого нет в Registry, — keeper-задача падает (`failed`-событие «unknown keeper-side module»), как Soul-side на неизвестный модуль. Регистрация модуля в Registry условна по наличию его зависимости в `coremod.Deps`: `core.choir` подключается только при заданном `ChoirStore` (сборка без choir-сценариев его не несёт, и шаг с этим модулем упадёт «unknown»).
+
+### Audit-след и per-task алертинг
+
+Каждая keeper-side задача пишет audit-event `task.executed` (симметрично Soul-side handler-у `TaskEvent`): `sid = keeper` (адрес keeper-target-а прогона), `correlation_id = apply_id`, `source: keeper_internal`, `payload.status` — имя `keeperv1.TaskStatus` (`changed → TASK_STATUS_CHANGED` / `failed → TASK_STATUS_FAILED` / иначе `TASK_STATUS_OK`). Благодаря этому **task:-подписка Tiding работает и на keeper-side адреса** (`on: keeper`): keeper-задача с адресом `register ∪ id` (включая `provision_vm` с `id:` без `register:`) попадает в `changed_tasks` терминального события `incarnation.run_completed` и матчится task-селектором ([ADR-052 amend §k/§l](../adr/0052-herald-notifications.md#amend-kl-t4-fix-2026-06-12-changed_tasks-и-task-подписка-покрывают-keeper-side-задачи)). Секрет-гигиена: keeper-side `task.executed` несёт только адрес + status (без `register_data`/output); `error.message` — лишь на провале и только для не-`no_log` задач. Operator-SSE keeper-side прогресс не транслирует.
+
+## `core.soul.registered`
+
+**Первый Keeper-side core-модуль.** Управляет привязкой Soul-а (по `SID`) к набору стабильных Coven-меток в реестре keeper-а (таблицы `souls` + coven, [storage.md](storage.md)). Опционально синхронно обновляет `soulprint.hosts` текущего прогона (чтобы следующий шаг сценария видел нового хоста сразу).
+
+### Адресация и сторона
+
+- Namespace: `core`. Module: `soul`. State: `registered`.
+- Полное имя задачи: `module: core.soul.registered`.
+- Сторона: **Keeper-side**. Шаг **обязан** нести `on: keeper`.
+
+### Состояние (state-форма)
+
+`registered` — декларативная форма: «Soul с указанным `sid` находится в реестре и привязан к указанному набору Coven-меток». Модуль идемпотентен по конструкции (повторный вызов с тем же набором — no-op).
+
+Если записи в `souls` для этого `sid` ещё нет — модуль создаёт её под `status: pending` (новый хост, добавленный сценарием — например, host-ветка `add_replica` или после cloud-create через `core.cloud.provisioned`). Создание записи здесь — единственный side-effect помимо обновления coven; модуль не выписывает bootstrap-токены и не запускает CSR-цикл (это компетенция онбординга, [soul/onboarding.md](../soul/onboarding.md)).
+
+### Параметры (`params:`)
+
+| Параметр | Тип | Обязательность | Default | Описание |
+|---|---|---|---|---|
+| `sid` | string, `format: fqdn` | required | — | `SID` Soul-а (FQDN), к которому применяется привязка. |
+| `coven` | array of string, `pattern: "^[a-z][a-z0-9-]*$"`, `min_items: 1`, `unique: true` | required | — | Набор стабильных Coven-меток. Минимум одна метка. |
+| `mode` | string, `enum: [append, replace, remove]` | optional | `append` | Стратегия применения набора `coven` к существующим меткам (см. ниже). |
+| `refresh_soulprint` | boolean | optional | `true` | Синхронно обновить `soulprint.hosts` текущего scenario-прогона, чтобы следующий шаг видел обновлённые `covens` сразу. Если destiny вызывается не из scenario-контекста — флаг безопасно игнорируется. |
+
+### Семантика `mode`
+
+| `mode` | Итоговый набор coven у `sid` | Поведение по краям | Идемпотентность |
+|---|---|---|---|
+| `append` (default) | существующие ∪ переданные | пустой пересекающийся набор → no-op | да: повторный вызов с тем же `coven` ничего не меняет |
+| `replace` | переданные (existing, не упомянутые, удаляются) | пустой `coven: []` — **ошибка** (двойная защита от footgun-а «хост без корневого coven incarnation»: схема `params.coven` `min_items: 1` + повтор на уровне семантики `mode`; намеренно — чтобы footgun ловился и при ослаблении схемы / расширении контракта в будущем) | да: повторный вызов с тем же набором — no-op |
+| `remove` | существующие \ переданные | пустой `coven: []` или метки, которых нет на хосте — **no-op** (без ошибки); снимает только реально привязанные метки | да: повторный вызов с тем же набором — no-op |
+
+`replace` с непустым `coven`, не содержащим корневой `incarnation.name` — модуль **не блокирует** на уровне семантики mode (set операция симметрична), но это пользовательская ошибка-footgun. Гарантия «хост всегда несёт корневой coven incarnation» — invariant на уровне `souls`+coven таблицы / резолвера (см. [storage.md](storage.md), [scenario/orchestration.md §3](../scenario/orchestration.md#3-таргет-шага--on)), не на уровне отдельного вызова модуля.
+
+### Выходной контракт (`output:` модуля)
+
+Модуль возвращает в `register.<имя>.*` (схема, попадающая в applier-`register:` либо в `register:` обычной module-задачи):
+
+| Поле | Тип | Описание |
+|---|---|---|
+| `sid` | string | `SID`, к которому применилось действие (эхо `params.sid`, удобно для join-ов в логах). |
+| `coven` | array of string | **Итоговый** набор coven-меток на хосте после применения `mode` (а не переданный набор-аргумент). |
+| `mode` | string | Применённый `mode` (эхо `params.mode`, удобно при шаблонной композиции). |
+| `created` | boolean | `true`, если запись в `souls` для этого `sid` была создана модулем; `false`, если уже существовала. |
+| `refreshed` | boolean | `true`, если `soulprint.hosts` текущего прогона был обновлён синхронно (требует `refresh_soulprint: true` И scenario-контекста). |
+| `removed` | array of string | **Только при `mode: remove`**: метки, которые были фактически сняты. Пустой массив, если no-op (или mode ≠ `remove`). |
+
+Плюс стандартные `.changed` / `.failed` DSL-ядра ([destiny/tasks.md §8](../destiny/tasks.md#8-requisites--salt-style-зависимости)).
+
+### Пример вызова из сценария
+
+```yaml
+- name: Register the new replica with the cluster coven labels
+  on: keeper
+  module: core.soul.registered
+  register: registered
+  params:
+    sid:               "{{ input.host.sid }}"
+    coven:             ["{{ incarnation.name }}"]
+    mode:              append
+    refresh_soulprint: true
+```
+
+После этого шага `soulprint.hosts` сценария содержит нового хоста с корневым coven incarnation, и следующий шаг может его таргетировать через обычный `on: ["{{ incarnation.name }}"]`.
+
+### Отношение к destiny `coven-assign`
+
+Существующая destiny `coven-assign` ([examples/destiny/destiny-coven-assign/](../../examples/destiny/destiny-coven-assign/)) остаётся как **тонкая обёртка** вокруг этого модуля: её `tasks/main.yml` сводится к одному шагу `module: core.soul.registered` с `mode: append` и `refresh_soulprint: false` (destiny вызывается не в scenario-контексте — refresh не имеет смысла). `destiny.yml` `coven-assign` (input-контракт `sid`+`coven`) — совместим, не меняется.
+
+Когда писать вызов модуля напрямую, а когда `apply: { destiny: coven-assign }`:
+
+- **Напрямую `module: core.soul.registered`** — типовой случай в сценарии. Один шаг, всё видно на месте, поддерживает все `mode`-режимы.
+- **`apply: { destiny: coven-assign }`** — когда уже есть устоявшийся вызов через destiny (исторический совместимый код), либо когда destiny используется как self-contained unit с molecule-тестом и независимым git-ref-ом ([ADR-007](../adr/0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте)). Обёртка фиксирует `mode: append` — для `replace`/`remove` нужен прямой вызов.
+
+## `core.choir.present` / `core.choir.absent`
+
+Правка членства Voice-а в Choir-е инкарнации (ADR-044): «SID является Voice-ом указанного Choir-а данной инкарнации». **Keeper-side**, диспетчер `on: keeper`. Registry-ключ — base `core.choir`; state (`present`/`absent`) приходит из суффикса адреса через `SplitModuleAddr` (см. раздел «Регистрация и диспетчеризация»). Регистрируется только при заданном `Deps.ChoirStore` — иначе шаг падает «unknown keeper-side module». Реализация — [`keeper/internal/coremod/choir/member.go`](../../keeper/internal/coremod/choir/member.go).
+
+### Адресация и сторона
+
+- Namespace: `core`. Module: `choir`. State: `present` (default при пустом state) / `absent`.
+- Полное имя задачи: `module: core.choir.present` / `module: core.choir.absent`.
+- Сторона: **Keeper-side**. Шаг **обязан** нести `on: keeper`.
+
+### Состояние (state-форма)
+
+| State | Действие | Идемпотентность |
+|---|---|---|
+| `present` (default) | `AddVoice` — SID становится Voice-ом Choir-а. | Voice уже есть (`ErrVoiceExists`) → `changed=false`, не ошибка. |
+| `absent` | `RemoveVoice` — членство снимается. | Voice-а нет (`ErrVoiceNotFound`) → `changed=false`, не ошибка. |
+
+Перед мутацией модуль валидирует существование инкарнации (`IncarnationExists`): отсутствует → `failed`. Инвариант членства (Voice только для SID, уже являющегося членом инкарнации, ADR-044) реализован в choir-CRUD (`AddVoice → ErrNotMembers`) и здесь не дублируется; `ErrNotMembers` → `failed`-событие (прогон уходит в onfail / `error_locked`).
+
+### Параметры (`params:`)
+
+| Параметр | Тип | Обязательность | Описание |
+|---|---|---|---|
+| `incarnation` | string | required | Имя инкарнации, которой принадлежит Choir. Проверяется на существование. |
+| `choir` | string | required | Имя Choir-а. Валидируется `ValidChoirName`; мусор → `failed`. |
+| `sid` | string | required | `SID` хоста-Voice (FQDN). Валидируется `ValidSID`; невалидный → `failed`. |
+| `role` | string | optional | Партия Voice-а в Choir-е (только `present`). |
+| `position` | int (≥ 0) | optional | Позиция Voice-а (только `present`); отрицательная → `failed`. |
+
+### Выходной контракт (`output:` модуля)
+
+`present` отдаёт в `register.<имя>.*`: `incarnation`, `choir`, `sid`, `state: present`, `added` (bool — был ли Voice добавлен). `absent`: `incarnation`, `choir`, `sid`, `state: absent`, `removed` (bool — был ли Voice снят). Плюс стандартные `.changed` / `.failed` DSL-ядра.
+
+### Ограничения S-T5 (не реализовано)
+
+- **Cross-incarnation guard** (`param.incarnation` == инкарнация прогона): run-context модулю недоступен; модуль доверяет param `incarnation`, лишь валидируя его существование. Жёсткий guard — отдельная задача (RunContext-инъекция в keeper-dispatch).
+- **Roster-growth** (новый Voice виден следующему шагу прогона) — не реализовано.
+
+Полный per-module справочник — [docs/module/core/choir/README.md](../module/core/choir/README.md).
+
+## `core.vault.kv-read`
+
+Явное чтение секрета из Vault KV v2 на keeper-стороне с обязательной записью audit-event-а `vault.kv-read` (ADR-017(b)). **Keeper-side**, диспетчер `on: keeper`. Registry-ключ — base `core.vault`; state `kv-read` (verb) приходит из суффикса адреса. Существует параллельно с implicit `${ vault(...) }` в CEL: implicit-форма дёшева для рендера, но не оставляет audit-записи; этот модуль — explicit-форма для compliance-аккуратного чтения. Read-only (`changed=false` всегда). Полный per-module справочник с params/output/security — [docs/module/core/vault/README.md](../module/core/vault/README.md).
+
+## См. также
+
+- [architecture.md → Модель модулей](../architecture.md#модель-модулей) — общая модель core/custom, Soul-side vs Keeper-side, протокол SoulModule.
+- [architecture.md → Адресация модулей](../architecture.md#адресация-модулей) — формат `<namespace>.<module>.<state>`.
+- [scenario/orchestration.md §3](../scenario/orchestration.md#3-таргет-шага--on) — `on:`, диспетчер шага между Soul-стороной и Keeper-стороной.
+- [storage.md](storage.md) — таблицы `souls`, привязка coven.
+- [cloud.md](cloud.md) — `core.cloud.provisioned` и граница с coven-привязкой (`core.soul.registered` — отдельный шаг).
+- [naming-rules.md → Модули Destiny](../naming-rules.md#модули-destiny) — словарь имён.

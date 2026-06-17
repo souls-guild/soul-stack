@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package soulstack.keeper.v1;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;keeperv1";
+
+// SoulprintReport — периодический фоновый push фактов о хосте (refresh_interval).
+//
+// Forward-compat: typed-схема в typed_facts (field 3, ADR-018);
+// facts (field 2, google.protobuf.Struct) — deprecated stub из ADR-012(g),
+// оставлен для wire-compat (only-add политика, see ADR-012(c)).
+message SoulprintReport {
+  // Soul-side timestamp момента сбора фактов. Keeper-side received_at
+  // хранится отдельно в Postgres-storage, не часть wire-format.
+  // При расхождении received_at - collected_at > 10 min → warn в OTel.
+  google.protobuf.Timestamp collected_at = 1;
+
+  // DEPRECATED: stub из ADR-012(g). Используй typed_facts вместо.
+  // Сохранён для wire-compat (forward-compat only-add).
+  google.protobuf.Struct facts = 2 [deprecated = true];
+
+  // Typed-факты по ADR-018. Заполняется Soul-агентами новых версий;
+  // Keeper толерантен к обоим полям.
+  SoulprintFacts typed_facts = 3;
+}
+
+// SoulprintFacts — корневое сообщение typed-схемы (ADR-018).
+// Полная спека — docs/soul/soulprint.md.
+message SoulprintFacts {
+  // Echo SID для логов; authority — mTLS peer cert.
+  string sid = 1;
+
+  // Короткое имя хоста (без домена), uname -n.
+  string hostname = 2;
+
+  OsFacts      os      = 3;
+  KernelFacts  kernel  = 4;
+  CpuFacts     cpu     = 5;
+  MemoryFacts  memory  = 6;
+  NetworkFacts network = 7;
+
+  // field-номера 8..15 reserved:
+  //   8..14 — пост-MVP-расширения (uptime/timezone/virtualization/cloud_provider/disks/bios);
+  //   15 — задел под опциональный extra: google.protobuf.Struct для user-collectors
+  //        (open Q №22, отдельный ADR при закрытии).
+  reserved 8 to 15;
+}
+
+// OsFacts — факты об операционной системе.
+// pkg_mgr и init_system собираются Soul-агентом через таблицу маппинга
+// family+distro → pkg_mgr/init_system. Читаются напрямую core.pkg.* и
+// core.service.* для абстракции через native pkg-mgr/init.
+message OsFacts {
+  string family      = 1;  // debian / rhel / alpine / windows / darwin
+  string distro      = 2;  // ubuntu / rocky / alpine
+  string version     = 3;  // "22.04" / "9.3" / "3.19"
+  string codename    = 4;  // "jammy" / ""
+  string arch        = 5;  // amd64 / arm64
+  string pkg_mgr     = 6;  // apt / dnf / apk / pacman
+  string init_system = 7;  // systemd / openrc / sysv / launchd
+}
+
+// KernelFacts — факты о ядре.
+message KernelFacts {
+  string version = 1;  // полная версия с дистрибутив-suffix (5.15.0-101-generic)
+  string release = 2;  // только версия ядра (5.15.0)
+}
+
+// CpuFacts — факты о процессорах.
+message CpuFacts {
+  int32  count  = 1;  // количество logical CPUs (с учётом HT/SMT)
+  string model  = 2;  // маркетинговое имя (Intel Xeon E5-2670)
+  string vendor = 3;  // GenuineIntel / AuthenticAMD / ARM / Apple
+}
+
+// MemoryFacts — факты о памяти. Все объёмы в МБ, не байты.
+message MemoryFacts {
+  int64 total_mb     = 1;  // полный объём RAM
+  int64 available_mb = 2;  // свободно сейчас
+  int64 swap_mb      = 3;  // объём swap
+}
+
+// NetworkFacts — факты о сети хоста.
+message NetworkFacts {
+  // Основной IPv4, тот, что bind по умолчанию.
+  // Эвристика Soul-агента: интерфейс с default-route → его primary IPv4.
+  // Используется в 90% случаев (например, bind-адрес сервиса).
+  string primary_ip = 1;
+
+  // Полный FQDN (обычно == SID, но отдельный факт о системе).
+  string fqdn = 2;
+
+  // Полный список сетевых интерфейсов для multi-homed/VLAN-aware случаев.
+  repeated NetworkInterface interfaces = 3;
+}
+
+// NetworkInterface — сетевой интерфейс хоста.
+message NetworkInterface {
+  string name = 1;  // eth0 / ens3 / wlan0 / lo
+
+  // IPv4-адреса интерфейса в CIDR-нотации (10.0.0.1/24).
+  repeated string ipv4 = 2;
+
+  // IPv6-адреса.
+  repeated string ipv6 = 3;
+
+  string mac = 4;  // MAC-адрес
+
+  int32 mtu = 5;
+}

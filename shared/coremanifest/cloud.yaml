@@ -1,0 +1,21 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: cloud
+
+spec:
+  states:
+    created:
+      description: Keeper-side (on:keeper). Облачные VM созданы через CloudDriver-плагин (ADR-017).
+      input:
+        provider:          { type: string, required: true, description: "Имя cloud-Provider в реестре (driver + креды + регион)." }
+        profile:           { type: map,    description: "Параметры VM-профиля (backend-специфично)." }
+        count:             { type: int,    description: "Сколько VM создать (default 1, >= 1)." }
+        userdata:          { type: string, description: "Cloud-init userdata (взаимоисключим с generate_userdata)." }
+        generate_userdata: { type: bool,   description: "Сгенерировать userdata из keeper.yml cloud_init (ADR-017(h))." }
+    destroyed:
+      description: Keeper-side (on:keeper). Облачные VM уничтожены, реестры cascade-обновлены (ADR-017).
+      input:
+        provider: { type: string, required: true, description: "Имя cloud-Provider в реестре." }
+        vm_ids:   { type: list,   required: true, items: { type: string }, description: "Список provider-vm-id для уничтожения." }
+        sids:     { type: list,   items: { type: string }, description: "SID-ы для cascade-обновления реестров (souls/seeds/tokens)." }

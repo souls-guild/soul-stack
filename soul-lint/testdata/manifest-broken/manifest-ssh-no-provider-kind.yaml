@@ -1,0 +1,7 @@
+kind: ssh_provider
+protocol_version: 1
+namespace: ssh
+name: vault-ssh
+spec:
+  params_schema:
+    type: object

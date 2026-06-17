@@ -1,0 +1,194 @@
+package rbac
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestParsePermission_FullWildcard(t *testing.T) {
+	p, err := ParsePermission("*")
+	if err != nil {
+		t.Fatalf("ParsePermission(*): %v", err)
+	}
+	if !p.IsWildcard {
+		t.Errorf("IsWildcard = false, want true")
+	}
+	if p.Resource != "" || p.Action != "" {
+		t.Errorf("Resource/Action non-empty: %q/%q", p.Resource, p.Action)
+	}
+}
+
+func TestParsePermission_BareResourceAction(t *testing.T) {
+	p, err := ParsePermission("incarnation.create")
+	if err != nil {
+		t.Fatalf("ParsePermission: %v", err)
+	}
+	if p.IsWildcard {
+		t.Errorf("IsWildcard = true; want false for bare")
+	}
+	if p.Resource != "incarnation" {
+		t.Errorf("Resource = %q", p.Resource)
+	}
+	if p.Action != "create" {
+		t.Errorf("Action = %q", p.Action)
+	}
+	if p.Selector != nil {
+		t.Errorf("Selector = %v, want nil", p.Selector)
+	}
+}
+
+func TestParsePermission_ActionWildcard(t *testing.T) {
+	p, err := ParsePermission("incarnation.*")
+	if err != nil {
+		t.Fatalf("ParsePermission: %v", err)
+	}
+	if p.Resource != "incarnation" || p.Action != "*" {
+		t.Errorf("Resource/Action = %q/%q", p.Resource, p.Action)
+	}
+}
+
+func TestParsePermission_KebabCaseAction(t *testing.T) {
+	p, err := ParsePermission("operator.issue-token")
+	if err != nil {
+		t.Fatalf("ParsePermission: %v", err)
+	}
+	if p.Action != "issue-token" {
+		t.Errorf("Action = %q", p.Action)
+	}
+}
+
+// TestParsePermission_RolePermissions — все шесть role.*-permissions
+// (ADR-028(e)) парсятся без ошибок. Без записи в каталоге (catalog.go)
+// роль с этими permission не запарсилась бы (unknown_permission).
+func TestParsePermission_RolePermissions(t *testing.T) {
+	names := []string{
+		"role.create", "role.delete", "role.list",
+		"role.update", "role.grant-operator", "role.revoke-operator",
+	}
+	for _, n := range names {
+		t.Run(n, func(t *testing.T) {
+			p, err := ParsePermission(n)
+			if err != nil {
+				t.Fatalf("ParsePermission(%q): %v", n, err)
+			}
+			if p.Resource != "role" {
+				t.Errorf("Resource = %q, want role", p.Resource)
+			}
+		})
+	}
+}
+
+func TestParsePermission_WithSelector(t *testing.T) {
+	p, err := ParsePermission("incarnation.create on service=redis,vault")
+	if err != nil {
+		t.Fatalf("ParsePermission: %v", err)
+	}
+	if p.Selector == nil || len(p.Selector["service"]) != 2 {
+		t.Fatalf("Selector = %v", p.Selector)
+	}
+	if p.Selector["service"][0] != "redis" || p.Selector["service"][1] != "vault" {
+		t.Errorf("values = %v", p.Selector["service"])
+	}
+}
+
+// ADR-047 S1: ParseDefaultScope переиспользует parseSelector — тот же closed
+// enum ключей и грамматика, что у per-perm-селектора.
+func TestParseDefaultScope(t *testing.T) {
+	t.Run("empty-nil", func(t *testing.T) {
+		sel, err := ParseDefaultScope("")
+		if err != nil || sel != nil {
+			t.Fatalf("ParseDefaultScope(\"\") = (%v, %v), want (nil, nil)", sel, err)
+		}
+	})
+	t.Run("coven-multi", func(t *testing.T) {
+		sel, err := ParseDefaultScope("coven=prod,stage")
+		if err != nil {
+			t.Fatalf("ParseDefaultScope: %v", err)
+		}
+		if len(sel["coven"]) != 2 || sel["coven"][0] != "prod" || sel["coven"][1] != "stage" {
+			t.Errorf("sel = %v, want coven=[prod stage]", sel)
+		}
+	})
+	t.Run("errors", func(t *testing.T) {
+		cases := []struct{ in, want string }{
+			{"coven", "missing '='"},
+			{"namespace=foo", "unknown selector key"},
+			{"coven=", "value-list is empty"},
+		}
+		for _, c := range cases {
+			if _, err := ParseDefaultScope(c.in); err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("ParseDefaultScope(%q) err = %v, want substring %q", c.in, err, c.want)
+			}
+		}
+	})
+}
+
+func TestParsePermission_Errors(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string // substring
+	}{
+		{"empty", "", "empty string"},
+		{"three-segments", "keeper.incarnation.create", "exactly two segments"},
+		{"no-dot", "incarnation", "expected <resource>.<action>"},
+		{"wildcard-resource", "*.create", "wildcard in <resource>"},
+		{"upper-resource", "Incarnation.create", "does not match"},
+		{"underscore-action", "incarnation.add_user", "does not match"},
+		{"unknown-perm", "unknown.create", "unknown_permission"},
+		{"unknown-selector-key", "incarnation.create on namespace=foo", "unknown selector key"},
+		{"selector-no-eq", "incarnation.create on service", "missing '='"},
+		{"selector-empty-value", "incarnation.create on service=", "value-list is empty"},
+		{"selector-empty-mid", "incarnation.create on service=foo,,bar", "empty value"},
+		{"selector-bad-value", "incarnation.create on service=foo bar", "does not match"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := ParsePermission(c.in)
+			if err == nil {
+				t.Fatalf("ParsePermission(%q): want error containing %q, got nil", c.in, c.want)
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("err = %v; want substring %q", err, c.want)
+			}
+		})
+	}
+}
+
+func TestParsePermission_AllCatalogEntries(t *testing.T) {
+	// Все имена из каталога должны парситься без ошибок (sanity).
+	for name := range AllowedPermissions {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ParsePermission(name); err != nil {
+				t.Errorf("catalog entry %q failed to parse: %v", name, err)
+			}
+		})
+	}
+}
+
+func TestIsAllowedPermission_CadenceEnableDisable(t *testing.T) {
+	// cadence.enable / cadence.disable — гранулярные права на toggle расписания
+	// (отделены от cadence.update; cadence.update остаётся backcompat-грантом).
+	for _, action := range []string{"enable", "disable"} {
+		if !IsAllowedPermission("cadence", action) {
+			t.Errorf("cadence.%s should be in catalog", action)
+		}
+	}
+}
+
+func TestIsAllowedPermission_SynodUpdate(t *testing.T) {
+	// synod.update (ADR-049 amend) — правка description. Должна быть в каталоге:
+	// роль с этим правом иначе отвергнется как unknown_permission на load снимка.
+	if !IsAllowedPermission("synod", "update") {
+		t.Errorf("synod.update should be in catalog (ADR-049 amend)")
+	}
+}
+
+func TestIsAllowedPermission_WildcardAction(t *testing.T) {
+	if !IsAllowedPermission("incarnation", "*") {
+		t.Errorf("incarnation.* should be valid (catalog has incarnation.create etc)")
+	}
+	if IsAllowedPermission("unknown", "*") {
+		t.Errorf("unknown.* should NOT be valid")
+	}
+}

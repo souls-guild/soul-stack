@@ -1,0 +1,47 @@
+{
+  "type": "object",
+  "required": ["folder_id", "zone", "image_id", "subnet_id"],
+  "properties": {
+    "folder_id": { "type": "string" },
+    "zone": {
+      "type": "string",
+      "examples": ["ru-central1-a", "ru-central1-b", "ru-central1-d"]
+    },
+    "platform_id": {
+      "type": "string",
+      "examples": ["standard-v3", "standard-v2"],
+      "default": "standard-v3"
+    },
+    "resources": {
+      "type": "object",
+      "required": ["cores", "memory_gb"],
+      "properties": {
+        "cores": { "type": "integer", "minimum": 2 },
+        "memory_gb": { "type": "integer", "minimum": 1 },
+        "core_fraction": { "type": "integer", "minimum": 5, "maximum": 100 }
+      }
+    },
+    "image_id": { "type": "string" },
+    "disk": {
+      "type": "object",
+      "properties": {
+        "size_gb": { "type": "integer", "minimum": 10 },
+        "type": {
+          "type": "string",
+          "enum": ["network-ssd", "network-hdd", "network-ssd-nonreplicated"]
+        }
+      }
+    },
+    "subnet_id": { "type": "string" },
+    "security_group_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "nat": { "type": "boolean", "default": false },
+    "service_account_id": { "type": "string" },
+    "labels": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    }
+  }
+}

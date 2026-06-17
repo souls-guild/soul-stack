@@ -1,0 +1,29 @@
+# Декларативный pipeline сборки essence (опционально).
+# Если этот файл отсутствует — keeper использует convention-based default:
+#   _default.yaml → coven/<X>.yaml → incarnation.spec
+#
+# role-step намеренно отсутствует — см. ADR-008 (роль НЕ Coven,
+# волатильная роль определяется только inline-probe-шагом сценария).
+#
+# На каждом шаге доступны:
+#   soulprint.self — факты текущего хоста (os, kernel, network, memory, ...),
+#                    typed-схема ADR-018, docs/soul/soulprint.md
+#   incarnation    — { name, service, scenario, ... }
+#   host           — { sid, covens }
+#   vars           — уже накопленный essence из предыдущих шагов
+
+stack:
+  - file: _default.yaml
+
+  - file: "os/${ soulprint.self.os.family }.yaml"
+    optional: true
+
+  - foreach: "${ host.covens }"
+    as: coven_name
+    file: "coven/${ coven_name }.yaml"
+    optional: true
+
+  # Динамический inline: если оператор не задал maxmemory явно — 60% RAM хоста.
+  - inline:
+      redis_maxmemory: "${ int(soulprint.self.memory.total_mb * 0.6) }mb"
+    when: vars.redis_maxmemory == null

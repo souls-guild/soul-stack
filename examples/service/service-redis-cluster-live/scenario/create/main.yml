@@ -1,0 +1,136 @@
+name: create
+description: >-
+  Поднять реальный Redis Cluster (redis-cli --cluster create) на всех хостах
+  incarnation. Шаги: установить redis (core.pkg) → положить cluster-config
+  (core.file.present, cluster-enabled yes + bind primary_ip) → запустить
+  redis-server (core.cmd.shell, idempotent через unless-guard) → дождаться, что
+  порт жив → run_once сформировать кластер с --cluster-replicas.
+
+  Формирование кластера: один хост (run_once, первый по SID) рендерит список
+  адресов нод из soulprint.hosts в файл (core.file.rendered, text/template join),
+  затем зовёт `redis-cli --cluster create <addrs> --cluster-replicas N --yes`.
+  unless-guard делает шаг идемпотентным (повтор create на готовом кластере —
+  no-op).
+
+input:
+  redis_version:
+    type: string
+    required: false
+    pattern: "^([0-9]+:)?[0-9][A-Za-z0-9.~+-]*$"
+    description: Версия пакета redis (distro-native). Не задана → latest из репо.
+
+  cluster_replicas:
+    type: integer
+    required: false
+    min: 0
+    max: 4
+    description: Число реплик на мастер (--cluster-replicas). Default 2 (9 нод = 3 master + 6 replica).
+
+  redis_config:
+    type: object
+    required: false
+    properties: {}
+    additional_properties: { type: string }
+    description: Точечные директивы redis.conf поверх дефолтов кластера.
+
+# Что пишем в incarnation.state после успешного apply.
+# ПИЛОТ-ОГРАНИЧЕНИЕ: sets видит только input/incarnation/soulprint.self —
+# soulprint.hosts/vars/essence/state в sets ещё НЕ реализованы (как в committed
+# service-redis-cluster/create/main.yml). Поэтому cluster_nodes здесь НЕ из
+# soulprint.hosts; топология фиксируется как [] и наполняется отдельным
+# сценарием/probe при необходимости.
+state_changes:
+  sets:
+    redis_version:    "${ has(input.redis_version) ? input.redis_version : '' }"
+    cluster_replicas: "${ has(input.cluster_replicas) ? input.cluster_replicas : 2 }"
+    redis_users:      "${ [] }"
+    redis_config:     "${ has(input.redis_config) ? input.redis_config : {} }"
+    cluster_nodes:    "${ [] }"
+
+tasks:
+  # 1. Установить redis на все ноды.
+  - name: Install redis on all cluster nodes
+    on: ["${ incarnation.name }"]
+    module: core.pkg.installed
+    params:
+      name:    redis
+      version: "${ has(input.redis_version) ? input.redis_version : '' }"
+
+  # 2. Положить cluster-config на каждую ноду. Конфиг HOST-ИНВАРИАНТЕН (pilot:
+  #    module-params не могут быть host-вариативны через soulprint.self —
+  #    per-host params живут только в apply:destiny). bind 0.0.0.0 + announce-ip
+  #    redis определит из bus-соединения; для детерминизма announce-ip
+  #    проставляется отдельным host-invariant шагом ниже через hostname -i.
+  - name: Render redis cluster config (host-invariant)
+    on: ["${ incarnation.name }"]
+    module: core.file.present
+    register: redis_conf
+    params:
+      path: /etc/redis-cluster.conf
+      mode: "0644"
+      content: |
+        port 6379
+        cluster-enabled yes
+        cluster-config-file /var/lib/redis/nodes.conf
+        cluster-node-timeout 5000
+        appendonly yes
+        dir /var/lib/redis
+        bind 0.0.0.0
+        protected-mode no
+
+  # 3. Дописать cluster-announce-ip из реального адреса хоста (shell-side, чтобы
+  #    остаться host-инвариантным на уровне DSL-params — IP берётся командой, не
+  #    из soulprint в params). Идемпотентно: grep-guard.
+  - name: Append cluster-announce-ip from host address
+    on: ["${ incarnation.name }"]
+    module: core.cmd.shell
+    params:
+      cmd: "echo cluster-announce-ip $(hostname -i | awk '{print $1}') >> /etc/redis-cluster.conf"
+      unless: "grep -q cluster-announce-ip /etc/redis-cluster.conf"
+
+  # 4. Запустить redis-server на каждой ноде (idempotent: unless — порт уже жив).
+  #    В контейнере без полноценного init используем nohup-фон вместо openrc.
+  - name: Start redis-server on each node
+    on: ["${ incarnation.name }"]
+    module: core.cmd.shell
+    params:
+      cmd: "mkdir -p /var/lib/redis && nohup redis-server /etc/redis-cluster.conf >/var/log/redis.log 2>&1 & sleep 1; true"
+      unless: "redis-cli -p 6379 ping | grep -q PONG"
+
+  # 5. Health-gate: дождаться, что redis отвечает PONG на каждой ноде.
+  - name: Wait until redis responds on each node
+    on: ["${ incarnation.name }"]
+    module: core.cmd.shell
+    changed_when: false
+    retry:
+      count: 15
+      delay: 2s
+      until: register.self.stdout == 'PONG'
+    failed_when: register.self.stdout != 'PONG'
+    params:
+      # tr -d срезает трейлинг \n у `redis-cli ping` (raw stdout, register не
+      # триммится — конвенция committed scenario create/replication.yml).
+      cmd: "redis-cli -p 6379 ping 2>/dev/null | tr -d '[:space:]' || echo DOWN"
+
+  # 6. run_once: на одной ноде положить список адресов нод в файл (text/template
+  #    join по soulprint.hosts) — нужен для одной cluster-create строки.
+  - name: Render cluster node-address list on bootstrap node
+    on: ["${ incarnation.name }"]
+    run_once: true
+    module: core.file.rendered
+    params:
+      path: /tmp/cluster-nodes.txt
+      mode: "0644"
+      template: templates/cluster-nodes.txt.tmpl
+      vars:
+        addrs: "${ soulprint.hosts.map(h, h.network.primary_ip) }"
+
+  # 7. run_once: сформировать кластер. unless-guard — идемпотентность: если
+  #    cluster_state уже ok, повторный create пропускается.
+  - name: Form the redis cluster
+    on: ["${ incarnation.name }"]
+    run_once: true
+    module: core.cmd.shell
+    params:
+      cmd: "redis-cli --cluster create $(cat /tmp/cluster-nodes.txt) --cluster-replicas ${ has(input.cluster_replicas) ? input.cluster_replicas : 2 } --cluster-yes"
+      unless: "redis-cli -p 6379 cluster info | grep -q cluster_state:ok"

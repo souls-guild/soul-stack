@@ -1,0 +1,95 @@
+name: redis-exporter
+description: Install Prometheus redis_exporter from a pinned GitHub release tarball and run it as a hardened systemd service under DynamicUser (no manual service account), talking to Redis over a unix socket.
+
+# Версия destiny — git ref (ADR-007). Поля `version:` верхнего уровня нет.
+# Список задач — в tasks/main.yml. Только core-модули → required_modules: не нужен.
+#
+# Извлечено из инлайн-сценариев service-monitoring / service-redis-monitored.
+# Ключевая особенность: redis_exporter ходит в Redis через UNIX-СОКЕТ
+# (--redis.addr=unix://<socket>), а не TCP. Из-за этого, в отличие от
+# node-exporter, unit-у нужен AF_UNIX в RestrictAddressFamilies (прод-конвенция
+# §3) и членство в группе redis ради group-доступа к сокету 770 — оно даётся
+# через SupplementaryGroups=redis совместно с DynamicUser=yes (см.
+# tasks/main.yml и templates/redis_exporter.service.tmpl).
+
+input:
+  version:
+    type: string
+    default: "1.62.0"
+    pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    description: Версия redis_exporter (GitHub Releases oliver006/redis_exporter).
+
+  # checksum tarball-а redis_exporter (linux-<arch>). core.url.fetched верифицирует
+  # его ДО публикации файла. ОБЯЗАТЕЛЬНЫЙ, без дефолта (fail-closed): нет хэша →
+  # честный отказ, а не fetch с placeholder-ом, который верификация всё равно
+  # отвергнет. Значение берётся из файла sha256sums GitHub-релиза
+  # oliver006/redis_exporter под пару (version, arch), напр. для
+  # redis_exporter-v<v>.linux-<arch>.tar.gz.
+  sha256:
+    type: string
+    required: true
+    pattern: "^sha256:[0-9a-f]{64}$"
+    description: >-
+      SHA-256 tarball-а redis_exporter (форма "sha256:<hex>"). Должен
+      соответствовать паре version + arch; берётся из sha256sums GitHub-релиза.
+
+  arch:
+    type: string
+    default: amd64
+    enum: [amd64, arm64]
+    description: Архитектура GitHub-релизного tarball-а (amd64|arm64).
+
+  bin_dir:
+    type: string
+    default: /usr/local/bin
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: Каталог, куда раскладывается бинарник redis_exporter.
+
+  listen:
+    type: string
+    default: ":9121"
+    pattern: "^[A-Za-z0-9._-]*:[0-9]{1,5}$"
+    description: Listen-адрес redis_exporter (--web.listen-address). По умолчанию :9121.
+
+  # Путь unix-сокета Redis — точка интеграции с destiny redis-single (тот же путь
+  # идёт в redis.conf::unixsocket). redis_exporter подключается через
+  # --redis.addr=unix://<socket>. Caller (сервис) обязан передать ОДИН И ТОТ ЖЕ
+  # путь в обе destiny.
+  redis_socket:
+    type: string
+    default: /var/run/redis/redis-server.sock
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: >-
+      Путь к unix-сокету Redis, к которому подключается redis_exporter
+      (--redis.addr=unix://...). Совпадает с unixsocket в redis-server.
+
+  # Пароль Redis: redis_exporter авторизуется им (requirepass). Передаётся в unit
+  # через Environment=REDIS_PASSWORD, не в ExecStart (не светится в ps/journalctl).
+  redis_password:
+    type: string
+    required: true
+    secret: true
+    min_length: 16
+    description: >-
+      Пароль Redis (requirepass). Маскируется в логах/трейсах/UI. Принимает уже
+      зарезолвленный пароль ИЛИ vault-ref: каскад — сервис передаёт vault-ref,
+      резолв происходит Soul-side.
+
+  # Passthrough-канал для ЛЮБЫХ флагов redis_exporter сверх базовых --redis.addr
+  # и --web.listen-address: дополнительные коллекторы (--check-keys=...,
+  # --check-single-keys=...), TLS/basic-auth (--web.config.file=<path>), namespace
+  # и пр. Каждый элемент — отдельный токен ExecStart (не разбивается шаблоном по
+  # пробелам), поэтому значение-с-пробелом передавай одним элементом:
+  # ["--web.config.file=/etc/x.yml"]. Сам web.yml (TLS-сертификаты/basic-auth) —
+  # ответственность оператора (отдельный файл на хосте); эта destiny его НЕ
+  # рендерит, только пробрасывает флаг (прод-конвенция §4).
+  extra_args:
+    type: array
+    default: []
+    items:
+      type: string
+    description: >-
+      Дополнительные флаги redis_exporter (--check-keys=..., --is-tile38,
+      --web.config.file=<path> для TLS/basic-auth и пр.). Каждый элемент —
+      отдельный аргумент ExecStart. web.yml для TLS — отдельный файл, не из этой
+      destiny.

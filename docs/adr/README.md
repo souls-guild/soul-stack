@@ -1,0 +1,63 @@
+# ADR — индекс архитектурных решений Soul Stack
+
+Каталог ADR (Architecture Decision Records). Источник правды по верхнеуровневой архитектуре — [`docs/architecture.md`](../architecture.md); ADR постепенно выносятся из него в отдельные файлы (один ADR — один файл, `NNNN-<slug>.md`). Пока вынесены не все — для невынесенных ссылка ведёт на якорь внутри `architecture.md`.
+
+Статусы: **active** — действующее решение; **amended** — действует, но дополнено Amendment-блоком(ами); **superseded** — заменено более новым ADR.
+
+Всего **51 файл** `NNNN-<slug>.md`, максимальный номер — **0054**. Нумерация **с пропусками**: номера 0034, 0036, 0037 не использованы (см. примечание в конце индекса). То есть «0001…0054» — не сплошной диапазон.
+
+| ADR | Заголовок | Статус | Сводка |
+|---|---|---|---|
+| [001](0001-language-go.md#adr-001-язык-реализации--go) | Язык реализации — Go | active | Go как язык всех бинарей системы. **Вынесен в отдельный файл.** |
+| [002](0002-transport-grpc-ha.md#adr-002-транспорт-keeper--souls--grpc-bidirectional-stream-поверх-mtls-ha-кластер-keeper) | Транспорт Keeper ↔ Souls — gRPC bidi поверх mTLS, HA-кластер | amended | Bidirectional stream поверх mTLS, инициирует Soul; Keeper — stateless-кластер (presence/shedding — amendments). **Вынесен в отдельный файл.** |
+| [003](0003-destiny-format.md#adr-003-формат-destiny--yaml-с-типизированной-схемой-cuejson-schema) | Формат Destiny — YAML с типизированной схемой | active | YAML + JSON Schema/CUE, шаблонизатор отдельной фазой. **Вынесен в отдельный файл.** |
+| [004](0004-binaries.md#adr-004-раскладка-бинарей--keeper-soul-soul-lint-push-режим--модуль-внутри-keeper) | Раскладка бинарей — keeper / soul / soul-lint | active | Три (затем четыре) артефакта; push — модуль внутри keeper. **Вынесен в отдельный файл.** |
+| [005](0005-storage-postgres.md#adr-005-хранилище-состояния-keeper--postgres) | Хранилище состояния Keeper — Postgres | active | Postgres — единственное холодное хранилище состояния. **Вынесен в отдельный файл.** |
+| [006](0006-cache-redis.md#adr-006-кэш-и-координация--redis) | Кэш и координация — Redis | amended | Redis — heartbeat, lease, pub/sub, лидер Reaper; presence Souls + Conclave; cluster-mode SSE/apply-events routing с шардированным каналом `events:shard:<n>` K=256 (amendments). **Вынесен в отдельный файл.** |
+| [007](0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте) | Версионирование артефактов — через git ref | active | Версия артефакта = git ref, не поле в манифесте. **Вынесен в отдельный файл.** |
+| [008](0008-coven-stable-tags.md#adr-008-coven--только-стабильные-логические-теги) | Coven — только стабильные логические теги | amended | Coven = стабильные метки; роль НЕ coven; окружение = частный случай coven (amendments). **Вынесен в отдельный файл.** |
+| [009](0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) | Scenario — полная DSL задач destiny + оркестрация | amended | Scenario = все блоки destiny + оркестрационная дельта; cross-incarnation на Voyage-слое + опц. поле задачи `id:` — адрес для per-task-changed-алертов (amendments). **Вынесен в отдельный файл.** |
+| [010](0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов) | Шаблонизатор: CEL + Go text/template | active | CEL — YAML-выражения, text/template — файлы; граница по файлам. **Вынесен в отдельный файл.** |
+| [011](0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам) | Раскладка Go-кода: go.work с модулями | active | go.work с семью модулями по сторонам. **Вынесен в отдельный файл.** |
+| [012](0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add) | Контракт Keeper↔Soul gRPC | amended | Один EventStream с oneof, Keeper-side рендер, forward-compat only-add; back-link apply_run (amendment). **Вынесен в отдельный файл.** |
+| [0013](0013-bootstrap-archon.md) | Bootstrap первого Архонта | active | `keeper init --archon`, advisory-lock, первый Архонт cluster-admin. **Вынесен в отдельный файл.** |
+| [0014](0014-operator-identity.md) | Identity-модель оператора (Archon) | amended | Реестр `operators`, JWT-credential; AID-charset расширен, near-instant revocation (amendments). **Вынесен в отдельный файл.** |
+| [0015](0015-core-modules-mvp.md) | Core-модули MVP: точный список | active | 17 Soul-side core (12 исходных MVP + пост-MVP `url`/`line`/`repo`/`firewall`/`http`). Registry-факт сейчас — 18 Soul-side (+`core.augur` по ADR-025) и 4 Keeper-side (`core.soul`/`core.cloud`/`core.vault` по ADR-017 + `core.choir` по ADR-044); сводка по факту — [module/README.md](../module/README.md#статус-каталога). **Вынесен в отдельный файл.** |
+| [0016](0016-parity-license.md) | Стратегия parity + лицензия | amended | Apache 2.0, open core; гибрид core-рерайт + community-плагины; SDK Фаза 2 (amendments). **Вынесен в отдельный файл.** |
+| [0017](0017-keeper-side-core.md) | Keeper-side core расширены | amended | `core.cloud.provisioned` / `core.vault.kv-read`; cloud credentials-flow + 6 провайдеров (amendments). **Вынесен в отдельный файл.** |
+| [0018](0018-soulprint-typed.md) | Soulprint typed-схема MVP | amended | `SoulprintFacts` вместо Struct-stub; `choirs` как факт, typed_facts byte-passthrough (amendments). **Вынесен в отдельный файл.** |
+| [0019](0019-state-migration-dsl.md) | State_schema migration DSL | active | Плоский DSL + CEL + foreach, forward-only, атомарная PG-tx. **Вынесен в отдельный файл.** |
+| [0020](0020-plugin-infrastructure.md) | Plugin-инфраструктура | amended | manifest / handshake / lifecycle для трёх типов плагинов; SDK Фаза 2, SshProvider-набор (amendments). **Вынесен в отдельный файл.** |
+| [0021](0021-hot-reload-config.md) | Hot-reload конфига с write-back YAML | active | Hot-reload конфига с перезаписью изменённого обратно на диск. **Вынесен в отдельный файл.** |
+| [0022](0022-audit-pipeline.md) | Audit-pipeline | active | Storage / schema / retention аудит-журнала. **Вынесен в отдельный файл.** |
+| [0023](0023-trial-test-runner.md) | Тест-раннер Trial + DSL-coverage | active | `soul-trial`, уровни L0–L3, метрика trial coverage. **Вынесен в отдельный файл.** |
+| [0024](0024-observability.md) | Observability: Prometheus-primary + OTel-bridge | active | Prometheus-primary `/metrics` + OTel-bridge; префиксы `keeper_*`/`soul_*`. **Вынесен в отдельный файл.** |
+| [0025](0025-augur.md) | Augur — брокер внешнего доступа Soul | active | Keeper-side брокер live-доступа Soul к внешним системам (Omen / Rite). **MVP-1 (брокер, `delegate=false`) реализован (2026-05), в baseline; MVP-2 (делегация) отложен** ([amendment 2026-06-16](0025-augur.md)). |
+| [0026](0026-sigil.md) | Sigil — целостность плагинов | active | Keeper-signed digest-индекс целостности плагинов. **Вынесен в отдельный файл.** |
+| [0027](0027-apply-work-queue.md) | Модель исполнения apply — work-queue + claim | amended | Acolyte-пул, Ward-claim, Summons; refuse-guard, recovery, GATE-1 deliver-once (amendments). **Вынесен в отдельный файл.** |
+| [0028](0028-rbac-storage.md) | RBAC-storage → Postgres | amended | RBAC (роли/permissions/membership) в Postgres, фикс BUG-1; Amendment Synod (ADR-049). **Вынесен в отдельный файл.** |
+| [0029](0029-service-registry.md) | Реестр Service-ов → Postgres | active | Реестр Service-ов из `keeper.yml` в Postgres; закрывает остаток ADR-028(h). **Вынесен в отдельный файл.** |
+| [0030](0030-vigil-oracle.md) | Vigil + Oracle — event-driven мониторинг | amended | beacons + reactor; S5 typed-payload / soul_beacon / inotify (amendments). **Вынесен в отдельный файл.** |
+| [0031](0031-scry-drift.md) | Scry — drift-detection | amended | Declarative dry-run reconcile; Slice B/C, Plan-тираж, converge → operational (amendments). **Вынесен в отдельный файл.** |
+| [0032](0032-push-orchestrator.md) | Push-orchestrator (Variant C) | amended | Multi-host destiny push без incarnation/scenario; серия S6/S7 + P2 routing (amendments). **Вынесен в отдельный файл.** |
+| [0033](0033-errand.md) | Errand — pull-ad-hoc exec | amended | Pull-ad-hoc exec вне scenario; E5 cancel, Voyage command-kind (amendments). **Вынесен в отдельный файл.** |
+| [0035](0035-distribution-split.md) | Distribution split — core vs web | active | Разделение дистрибуции: core (API+CLI) vs web (UI). **Вынесен в отдельный файл.** |
+| [0038](0038-toll.md) | Toll — detector массового оттока Souls | amended | Cluster-wide detector оттока Souls; webhook + per-coven thresholds (amendment). **Вынесен в отдельный файл.** |
+| [0039](0039-e2e-testing.md) | E2E-тестирование — три уровня | amended | Три уровня e2e без новой сущности словаря; L3a-impl (amendment). **Вынесен в отдельный файл.** |
+| [0040](0040-tide.md) | Tide — invocation-time scope chunking | superseded | Поглощён [ADR-043 (Voyage)](0043-voyage.md#adr-043-voyage--унифицированный-батчевый-прогон) режимом `kind=scenario`. **Вынесен в отдельный файл.** |
+| [0041](0041-errandrun.md) | ErrandRun — multi-target обвязка над Errand | superseded | Поглощён [ADR-043 (Voyage)](0043-voyage.md#adr-043-voyage--унифицированный-батчевый-прогон) режимом `kind=command`. **Вынесен в отдельный файл.** |
+| [0042](0042-backend-driven-ui.md) | Backend-driven dynamic data в UI | amended | UI не хардкодит динамические каталоги — фетчит из backend. **Вынесен в отдельный файл.** Amend: инстанс `GET /v1/event-types` (Tiding-каталог, ADR-052). |
+| [0043](0043-voyage.md) | Voyage — унифицированный батчевый прогон | active | Унифицированный батчевый прогон; поглощает Tide (ADR-040) и ErrandRun (ADR-041). **Вынесен в отдельный файл.** |
+| [0044](0044-choir.md) | Choir — именованная топология хостов | active | Именованная позиция хоста внутри инкарнации; стабильный declared-факт. **Вынесен в отдельный файл.** |
+| [0045](0045-param-dsl.md) | Param-DSL модулей | active | Типизированные input-поля модулей для UI-формы Run Command. **Вынесен в отдельный файл.** |
+| [0046](0046-cadence.md) | Cadence — регулярные запуски | active | Scheduled/recurring Voyage (interval + cron). **Вынесен в отдельный файл.** |
+| [0047](0047-purview.md) | Purview — scoped RBAC-видимость узлов | active | Role default_scope + расширенный селектор видимости узлов. **Вынесен в отдельный файл.** |
+| [0048](0048-conductor.md) | Conductor — исполнитель Cadence-расписаний | active | Leader-elected исполнитель Cadence-расписаний. **Вынесен в отдельный файл.** |
+| [0049](0049-synod.md) | Synod — группа архонов | active | Группа архонов, бандлящая роли (уровень Архон → Synod → Роли); амендит ADR-028. **Вынесен в отдельный файл.** |
+| [0050](0050-tempo.md) | Tempo — per-AID rate-limiting write-API | active | Per-AID rate-limiting на write-API. **Вынесен в отдельный файл.** |
+| [0051](0051-operator-api-codegen.md) | Operator API codegen: OpenAPI → Go-типы | superseded | oapi-codegen: types-only → strict-server; упразднение `proto/operator/v1`; S6 мост-паттерн. **Заменён [ADR-054](0054-openapi-code-first.md)** (разворот spec-first → code-first); **реализация СНЕСЕНА 2026-06-13 (HEAD `fde65bf`)** — `oapi`-пакет/`oapi_strict.go`/рукопись-источник/`gen-api`/`check-gen-api` удалены. **Вынесен в отдельный файл.** |
+| [0052](0052-herald-notifications.md) | Herald + Tiding — уведомления о событиях прогонов | amended | Herald (канал) + Tiding (правило подписки); tap поверх audit-writer, at-least-once webhook-доставка, scope = события прогонов; ephemeral-Tiding + гибкое тело annotations/projection (amendment). **Вынесен в отдельный файл.** |
+| [0053](0053-dependency-tiers.md) | Tier-ы инфраструктурных зависимостей | active | Обязательный контур PG + Redis + Vault (все fail-fast); Vault hard-required (старт/auth/PKI); OPTIONAL-with-degradation tier; без-Vault режим отвергнут. **Вынесен в отдельный файл.** |
+| [0054](0054-openapi-code-first.md) | Operator API — разворот на code-first (Go → OpenAPI) через huma | amended | Заменяет ADR-051 (инверсия spec-first→code-first); Go-типы — источник, спека производна (huma v2 + humachi); **FULL-TYPED** (Amendment 2026-06-12: typed input/output + извлечённая `XTyped`, `RawBody`-мост отвергнут). **ТИРАЖ ЗАВЕРШЁН 2026-06-13 (HEAD `fde65bf`)**: все ~19 доменов handler-native, served=runtime huma-dump (`HumaFullSpecYAML`), committed `openapi.yaml` производный (`gen-openapi`/`check-openapi`), oapi-каркас снесён, native enum-каталог `huma_enums.go`. **Amendment 2026-06-15**: визуальный вьювер `GET /docs` (RapiDoc, go:embed) + served-spec за JWT (`GET /openapi.yaml`/`/openapi.json`) — механизм A. **Вынесен в отдельный файл.** |
+
+> ADR-034, ADR-036, ADR-037 — номера не использованы (gap в нумерации).

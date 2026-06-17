@@ -1,0 +1,4 @@
+# Essence smoke-nginx-live (роль-agnostic, ADR-008). Используется как
+# подложка под scenario.input — каждый ключ опционально переопределяется.
+nginx_listen_port: 80
+nginx_server_name: localhost

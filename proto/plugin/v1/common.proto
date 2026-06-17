@@ -1,0 +1,61 @@
+syntax = "proto3";
+
+package soulstack.plugin.v1;
+
+option go_package = "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1;pluginv1";
+
+// Kind — дискриминатор типа плагина (ADR-020(e)).
+// Соответствует полю `kind:` в `manifest.yaml` и handshake-строке.
+// Closed enum: расширение — через PR в `proto/plugin/vN/manifest.proto`, не breaking
+// (docs/keeper/plugins.md → Расширение manifest).
+enum Kind {
+  KIND_UNSPECIFIED = 0;
+  KIND_SOUL_MODULE = 1;   // Soul-side: бинарь soul-mod-<name>, реализует шаги Destiny.
+  KIND_CLOUD_DRIVER = 2;  // Keeper-side: бинарь soul-cloud-<provider>, создание/удаление VM.
+  KIND_SSH_PROVIDER = 3;  // Keeper-side: бинарь soul-ssh-<provider>, SSH-credentials для push.
+  KIND_SOUL_BEACON = 4;   // Soul-side: бинарь soul-beacon-<name>, наблюдает состояние хоста (ADR-030 V5-2).
+}
+
+// Capability — closed enum capabilities плагина (ADR-020(f),
+// docs/keeper/plugins.md → required_capabilities-таблица).
+// Плагин декларирует, что ему нужно от системы host-а;
+// `soul-lint` сверяет с `plugin_runtime.allowed_capabilities`.
+enum Capability {
+  CAPABILITY_UNSPECIFIED = 0;
+  CAPABILITY_RUN_AS_ROOT = 1;       // host-процесс должен иметь UID 0.
+  CAPABILITY_NETWORK_OUTBOUND = 2;  // исходящие сетевые вызовы (cloud API, vault, mirror).
+  CAPABILITY_NETWORK_INBOUND = 3;   // плагин слушает порт.
+  CAPABILITY_VAULT_ACCESS = 4;      // обращение к Vault через клиентский helper SDK.
+  CAPABILITY_FS_WRITE_ROOT = 5;     // пишет за пределы /var/lib/soul-stack/.
+  CAPABILITY_EXEC_SUBPROCESS = 6;   // запуск внешних команд через os/exec.
+}
+
+// ResourceType — closed enum типов ресурсов в `side_effects` (ADR-020(g),
+// docs/keeper/plugins.md → side_effects-таблица).
+// Strict-контракт touched ресурсов: runtime-нарушение
+// (плагин трогает ресурс не из side_effects) → шаг помечается failed,
+// причина `policy_violation`.
+enum ResourceType {
+  RESOURCE_TYPE_UNSPECIFIED = 0;
+  RESOURCE_TYPE_SERVICE = 1;    // имя сервиса (haproxy).
+  RESOURCE_TYPE_FILE = 2;       // абсолютный путь к файлу.
+  RESOURCE_TYPE_PACKAGE = 3;    // имя пакета OS.
+  RESOURCE_TYPE_PORT = 4;       // tcp/udp-порт (значение — десятичное в SideEffect.value).
+  RESOURCE_TYPE_USER = 5;       // имя OS-пользователя.
+  RESOURCE_TYPE_GROUP = 6;      // имя OS-группы.
+  RESOURCE_TYPE_DIRECTORY = 7;  // абсолютный путь к директории.
+  RESOURCE_TYPE_CRON = 8;       // имя cron-задачи.
+  RESOURCE_TYPE_MOUNT = 9;      // mountpoint.
+}
+
+// SideEffect — одна пара (type, value) из списка `side_effects` манифеста.
+// Грамматика: запись в YAML — объект ровно с одной парой <resource_type>: <value>;
+// несколько разных ресурсов = несколько записей (CG-6 / ADR-020(g),
+// docs/keeper/plugins.md → Грамматика записей side_effects).
+//
+// value — строковое представление; для PORT — десятичное число строкой
+// (унификация типа value на этом уровне; numeric-парсинг — задача host-а).
+message SideEffect {
+  ResourceType type = 1;
+  string value = 2;
+}

@@ -1,0 +1,30 @@
+# Post-apply ожидания smoke-nginx::create (ADR-039 § Часть D).
+#
+# apply_runs.status — РЕАЛЬНОЕ значение enum keeper/internal/applyrun/applyrun.go
+# (StatusSuccess = "success"). НЕ "succeeded", НЕ "done", НЕ "ok" — harness
+# валидирует expectations fail-early через harness.CheckApplyRunsStatusValid.
+#
+# incarnation_state — deep-subset проверки; здесь точное совпадение
+# scenario.state_changes.sets из examples/service/smoke-nginx/scenario/create/main.yml.
+#
+# audit_events — минимум одна строка `incarnation.scenario_started` с
+# incarnation=test-nginx. Имя event-type — shared/audit/event_types.go
+# (EventIncarnationScenarioStarted). Точное число — не фиксируется (apply_runs
+# lifecycle пишет несколько audit-строк, контракт-тест проверяет presence
+# ключевой, не cardinality).
+#
+# metrics — Prometheus-expression → constraint-строка ('>= 1' / '== 0' / ...).
+apply_runs:
+  status: success
+
+incarnation_state:
+  nginx_package: nginx
+  nginx_service: nginx
+
+audit_events:
+  - type: incarnation.scenario_started
+    payload:
+      incarnation: test-nginx
+
+metrics:
+  keeper_apply_runs_total{status="success"}: ">= 1"

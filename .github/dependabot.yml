@@ -1,0 +1,60 @@
+# Dependabot Soul Stack. Поднимает PR-ы на обновление зависимостей по
+# расписанию. Репо — go-workspace из 8 модулей (см. go.work); dependabot не
+# понимает go.work напрямую — каждому модулю своя запись с directory:.
+#
+# open-pull-requests-limit: 5 на корневой gomod (proto), у остальных — default
+# (5). При шуме можно понизить до 2-3, но MVP-фаза → лучше видеть всё.
+version: 2
+
+updates:
+  - package-ecosystem: gomod
+    directory: /proto
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: gomod
+    directory: /proto/plugin
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: gomod
+    directory: /shared
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: gomod
+    directory: /sdk
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: gomod
+    directory: /keeper
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: gomod
+    directory: /soul
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: gomod
+    directory: /soul-lint
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: gomod
+    directory: /soulctl
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: gomod
+    directory: /tests/e2e
+    schedule:
+      interval: weekly
+
+  # GitHub Actions sами обновляются — actions/checkout@v4, setup-go@v5 и т.п.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

@@ -1,0 +1,171 @@
+kid: keeper-dev-01
+
+listen:
+  grpc:
+    bootstrap:
+      addr: "127.0.0.1:9442"
+      tls:
+        cert: /tmp/keeper-dev/tls/keeper.crt
+        key:  /tmp/keeper-dev/tls/keeper.key
+    event_stream:
+      addr: "127.0.0.1:9443"
+      tls:
+        cert: /tmp/keeper-dev/tls/keeper.crt
+        key:  /tmp/keeper-dev/tls/keeper.key
+        # ClientCAs для mTLS: Vault PKI root (CN=soul-stack) — тот же корень,
+        # что подписывает SoulSeed-сертификаты. См. dev/provision.sh шаг 7.
+        ca:   /tmp/keeper-dev/tls/vault-ca.crt
+  openapi: { addr: "127.0.0.1:8080" }
+  mcp:     { addr: "127.0.0.1:8081" }
+  metrics: { addr: "127.0.0.1:9090" }
+
+postgres:
+  dsn_ref: vault:secret/keeper/postgres
+  pool: { min: 2, max: 10 }
+
+redis:
+  addr: "127.0.0.1:6381"
+  password_ref: ""
+
+vault:
+  addr: "http://127.0.0.1:8200"
+  token: "root"
+  auth:
+    method: token
+  pki_mount: "pki"
+  pki_role: "soul-seed"
+
+auth:
+  jwt:
+    signing_key_ref: vault:secret/keeper/jwt-signing-key
+    issuer: keeper-dev-01
+    ttl_default: 24h
+    ttl_bootstrap: 720h
+
+otel:
+  # Трейсы уходят в dev-стек: otel-collector (docker-compose) на :4317 →
+  # Jaeger UI http://127.0.0.1:16686. Insecure-gRPC (dev-collector без TLS).
+  enabled: true
+  exporter: otlp
+  endpoint: "127.0.0.1:4317"
+
+logging:
+  level: info
+  format: text
+  rotation: { max_size_mb: 100, max_files: 5, compress: false }
+
+# Реестр Service-ов и скаляр default_destiny_source перенесены в Postgres
+# (service_registry + keeper_settings, ADR-029). Эти ключи (`services:` /
+# `default_destiny_source:` / `default_module_source:`) в keeper.yml больше не
+# принимаются — резолв (serviceregistry.Holder) читает только БД. Для dev/E2E
+# реестр сеет шаг 10 в dev/provision.sh (прямой psql INSERT, идемпотентный;
+# вне dev — управление через `service.*` API, см. keeper/operator-api.md):
+#   - keeper_settings[default_destiny_source] = file:///tmp/keeper-dev/destiny/{name}
+#   - service hello-world → file:///tmp/keeper-dev/repos/service-hello-world @ main
+#   - service redis       → file:///tmp/keeper-dev/repos/service-redis @ main
+#     (композиция трёх destiny через apply:destiny, ADR-009; destiny-репо
+#      резолвятся по default_destiny_source: {name} = redis-single /
+#      redis-exporter / node-exporter, ref v1.0.0 из service-redis/service.yml).
+# Seed требует уже применённой схемы (миграции 034/035); на свежей БД он
+# отложен до запуска после `keeper init` — повторить `make dev-provision`.
+
+plugins:
+  cache_root: /tmp/keeper-dev/plugins
+
+plugin_runtime:
+  socket_dir: /tmp/keeper-dev/plugin-sockets
+  startup_timeout: 10s
+  shutdown_grace: 10s
+  allowed_capabilities:
+    - run_as_root
+    - network_outbound
+    - network_inbound
+    - vault_access
+    - fs_write_root
+    - exec_subprocess
+  conflict_policy: warn
+  enable_tls: false
+
+hot_reload:
+  enable_signal: true
+  enable_inotify: false
+  audit_correlation_id: true
+
+audit:
+  enabled: true
+  otel_export: false
+  retention_days: 365
+
+# Watchman (изоляция-детект + soul-shedding S2): период probe PG+Redis и порог
+# подряд-провалов до принудительного закрытия локальных EventStream-стримов.
+# Дефолты (5s / 3) совпадают с config.DefaultWatchman*; вынесены явно для dev-
+# наглядности. На локальном single-instance smoke shedding в норме не срабатывает
+# (PG/Redis из docker-compose доступны).
+watchman_interval: 5s
+watchman_fail_threshold: 3
+
+# Refuse-guard soul-shedding (Finding-A, ADR-027(h)): при acolytes=0 + другие
+# живые Keeper-инстансы в Conclave Keeper отказывается стартовать. Дефолт false
+# (refuse). На single-instance dev-smoke не срабатывает (Conclave.CountLive<=1).
+allow_unsafe_single_path_multi_keeper: false
+
+# Acolyte work-queue pool (ADR-027). >0 — keeper полноценный HA-участник:
+# apply исполняется через Ward-claim, cross-keeper-dispatch работает. Нужен
+# для two-keeper soul-failover демо (см. docs/dev/local-setup.md): keeper-a и
+# keeper-b симметричны (оба acolytes>0), refuse-guard не срабатывает ни на
+# initial-старте, ни на рестарте keeper-a при живом keeper-b (фаза 4). Значение
+# совпадает с keeper-b.dev.yml и стендом мега-теста (3×acolytes:2).
+acolytes: 2
+
+# VoyageWorker-пул (ADR-043): claim+execute унифицированных Voyage-прогонов
+# (kind=scenario|command). Config-gated OFF по умолчанию (workers:0); включён
+# для runtime-валидации пилота. poll_interval/lease_* опущены — берутся дефолты
+# (DefaultVoyagePollInterval / DefaultVoyageLeaseTTL / DefaultVoyageLeaseRenewInterval).
+voyage:
+  workers: 2
+  # max_scope — потолок размера резолвнутого scope одного Voyage (DoS-guard
+  # S-med-3). Не задано → дефолт 10000; 0 → безлимит. Превышение → 422
+  # voyage_scope_too_large.
+  max_scope: 10000
+  # max_batch_size — потолок размера батча/окна (DoS-guard S-W4): эффективный
+  # batch_size для barrier, concurrency для window. Не задано → дефолт 10000;
+  # 0 → без предела. Превышение → 422 voyage_batch_size_too_large.
+  max_batch_size: 10000
+
+reaper:
+  enabled: true
+  interval: 1h
+  dry_run: false
+  batch_size: 500
+  lock_ttl: 5m
+  rules:
+    expire_pending_seeds: { enabled: true, max_age: 24h, action: delete }
+    purge_used_tokens:    { enabled: true, max_age: 90d, action: delete }
+    purge_souls:          { enabled: true, statuses: [disconnected, expired], max_age: 30d, action: delete }
+    purge_old_seeds:      { enabled: true, statuses: [superseded, expired, revoked], max_age: 90d, action: delete }
+    mark_disconnected:    { enabled: true, stale_after: 90s, action: set_status, target_status: disconnected }
+    purge_audit_old:      { enabled: true, max_age: 365d, action: delete }
+    purge_apply_runs:     { enabled: true, max_age: 30d, action: delete }
+    purge_apply_task_register: { enabled: true, max_age: 1h, action: delete }
+    reclaim_voyages:      { enabled: true, stale_after: 1m }
+
+# Conductor — leader-elected исполнитель Cadence-расписаний (ADR-048). Свой
+# lease `conductor:leader`, независимый от reaper.interval (1h). Спавн due-Cadence
+# переехал сюда из Reaper-правила spawn_due_cadence.
+#
+# Адаптивный шаг опроса (ADR-048 «Adaptive interval»): шаг не фиксированный, а
+# clamp(derivedMinPeriod, poll_floor, poll_ceiling); пустой реестр → poll_idle.
+# derivedMinPeriod = MIN(interval_seconds) enabled-правил + 60s-вклад при наличии
+# cron. Профиль «Спокойный» (floor=30s/ceiling=60s/idle=120s): Cadence с частым
+# interval опрашивается у floor, редкие — у ceiling, пустой реестр — idle.
+# floor=30s — абсолютный минимум (DB-CHECK floor interval_seconds ≥ 30 — Pass B).
+# enabled опущено → default-ON при наличии Redis (footgun-guard ADR-048 §5);
+# выключение отдельной Cadence — per-Cadence через её enabled: false, не тут.
+cadence_scheduler:
+  poll_floor: 30s
+  poll_ceiling: 60s
+  poll_idle: 120s
+  lock_ttl: 5m
+
+# RBAC-каталог — в Postgres (ADR-028), управление через role.* API/MCP;
+# ключ `rbac:` в keeper.yml больше не принимается.

@@ -1,0 +1,24 @@
+# service.yml L0-обёртки destiny node-exporter (Trial, ADR-023).
+#
+# Обёртка не настоящий сервис: единственная роль — дать standalone destiny
+# node-exporter render-only L0-проверку через scenario apply:destiny. Но резолв
+# apply:destiny зеркалит ПРОД (slice A): name → service.yml::destiny[] + URL из
+# default_destiny_source (case.yml). Поэтому даже обёртке нужен service.yml с
+# объявленной зависимостью — иначе apply:destiny отвергнется как необъявленная
+# (та же ошибка, что в проде).
+name: trial-node-exporter
+state_schema_version: 1
+description: >-
+  L0-харнесс destiny node-exporter (ADR-023). Не сервис — scenario-обёртка под
+  render-only Trial. state_schema здесь номинальный (Trial L0 его не ассертит).
+
+# state_schema номинальный: L0 render-only его не использует, но service.yml
+# требует непустую object-схему.
+state_schema:
+  type: object
+
+# Объявленная destiny-зависимость: apply:destiny резолвит её по имени
+# (необъявленную отверг бы, зеркаля прод). git-URL приходит из
+# default_destiny_source case.yml (file://, относительно service-root = _trial/).
+destiny:
+  - { name: node-exporter, ref: v1.0.0 }

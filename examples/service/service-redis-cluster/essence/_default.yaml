@@ -1,0 +1,16 @@
+# Baseline для всех incarnation сервиса redis-cluster.
+
+redis_version: "7.2.4"
+redis_maxmemory: "1gb"
+
+redis_config:
+  appendonly: "yes"
+  save: "3600 1 300 100 60 10000"
+  protected-mode: "yes"
+  timeout: "0"
+  tcp-keepalive: "60"
+
+redis_users:
+  default:
+    acl: "off ~* &* +@all"
+    state: "off"

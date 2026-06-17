@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Уязвимость безопасности
+    url: https://github.com/co-cy/soul-stack/security/advisories/new
+    about: НЕ открывайте публичный issue. Раскрытие — через приватный Security Advisory (вкладка Security → Report a vulnerability). См. SECURITY.md.
+  - name: Вопрос / поддержка
+    url: https://github.com/co-cy/soul-stack/blob/main/SUPPORT.md
+    about: Закрытая бета — поддержка best-effort, без SLA. Куда обращаться — см. SUPPORT.md.

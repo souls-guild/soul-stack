@@ -1,0 +1,19 @@
+name: create
+description: >-
+  Инициализатор incarnation для coven-probe: на каждом хосте incarnation пишет
+  init-маркер (core.file.present, on: опущен = весь incarnation). Даёт
+  incarnation существование и базовую точку отсчёта перед coven-таргет-сценариями
+  mark_a / mark_ab / mark_where.
+
+state_changes:
+  sets:
+    marker_file: /tmp/coven-init.txt
+    last_target: "create"
+
+tasks:
+  - name: Write init marker on every host of the incarnation
+    module: core.file.present
+    params:
+      path: /tmp/coven-init.txt
+      mode: "0644"
+      content: "coven-probe init\n"

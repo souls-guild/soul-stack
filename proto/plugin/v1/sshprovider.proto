@@ -1,0 +1,77 @@
+syntax = "proto3";
+
+package soulstack.plugin.v1;
+
+option go_package = "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1;pluginv1";
+
+// SshProvider — service-контракт плагинов `kind: ssh_provider`
+// (ADR-020, docs/keeper/plugins.md → Service-контракт SshProvider).
+//
+// Host — `keeper` (модуль `keeper.push`, docs/keeper/push.md).
+// Бинари плагинов — soul-ssh-<provider> (soul-ssh-vault, soul-ssh-static, soul-ssh-teleport).
+//
+// Под этот контракт укладываются Vault SSH CA, static-key, Teleport.
+service SshProvider {
+  // Выдать SSH-сертификат/ключ для текущей сессии (например, Vault SSH CA
+  // выпускает короткоживущий сертификат).
+  rpc Sign(SignRequest) returns (SignReply);
+
+  // Подтвердить право Keeper-а ходить на конкретный хост
+  // (политика провайдера, если она есть).
+  rpc Authorize(AuthorizeRequest) returns (AuthorizeReply);
+}
+
+// SignRequest — запрос Sign.
+message SignRequest {
+  // FQDN или IP целевого хоста.
+  string host = 1;
+
+  // Имя SSH-пользователя для входа.
+  string user = 2;
+
+  // Public key, под который провайдер должен выдать сертификат
+  // (для CA-провайдеров). PEM-encoded openssh public key.
+  // Для static-key провайдеров может быть пустым (возвращается готовая пара).
+  string public_key = 3;
+}
+
+// SignReply — выпущенные SSH-credentials.
+message SignReply {
+  // SSH-сертификат (PEM-encoded openssh certificate).
+  // Для static-key провайдеров — пустая строка.
+  string certificate = 1;
+
+  // Приватный ключ. SENSITIVE: never log.
+  // Заполняется только для провайдеров, выдающих ephemeral keypair.
+  // Для CA-провайдеров (Vault SSH CA): пустая строка, клиент уже владеет ключом.
+  string private_key = 2;
+
+  // TTL в секундах. Используется для планирования refresh credentials.
+  int64 ttl_seconds = 3;
+
+  // Bastion / SSH-proxy в формате `[user@]host:port` (например, Teleport
+  // proxy: `proxy.example.com:3023`). Заполняется провайдерами, для которых
+  // доступ к целевому хосту идёт через посредника, а не голым `net.Dial(host:port)`.
+  // Пустая строка = прямой коннект.
+  //
+  // ВАЖНО: dispatcher proxy_jump support — ОТДЕЛЬНЫЙ слайс. На момент введения
+  // этого поля `keeper.push` ИГНОРИРУЕТ его (см. docs/keeper/push.md).
+  // Плагин может его заполнять (это already only-add forward-compat); оператор
+  // увидит значение в reason при non-Teleport-flow ошибке. Полная реализация
+  // proxy_jump в dispatcher — S3 после пилота soul-ssh-teleport.
+  string proxy_jump = 4;
+}
+
+// AuthorizeRequest — запрос Authorize.
+message AuthorizeRequest {
+  string host = 1;
+  string user = 2;
+}
+
+// AuthorizeReply — результат Authorize.
+message AuthorizeReply {
+  bool allowed = 1;
+
+  // Если allowed=false — человекочитаемая причина (для аудита/UI).
+  string reason = 2;
+}

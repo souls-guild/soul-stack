@@ -1,0 +1,22 @@
+// {{.BinaryName}} — entry-point плагина SoulModule {{.Namespace}}.{{.Name}}.
+//
+// Плагин запускается host-ом (Soul-демоном) как sub-process с gRPC-stdio
+// handshake (ADR-020). Конкретная реализация Apply / Plan / Validate живёт
+// в internal/{{.NamePackage}}/.
+package main
+
+import (
+	"log"
+	"os"
+
+	"{{.GoModulePath}}/internal/{{.NamePackage}}"
+	"github.com/souls-guild/soul-stack/sdk/module"
+)
+
+func main() {
+	impl := &{{.NamePackage}}.{{.NamePascal}}Module{}
+	if err := module.Serve(impl); err != nil {
+		log.Printf("{{.BinaryName}}: %v", err)
+		os.Exit(1)
+	}
+}

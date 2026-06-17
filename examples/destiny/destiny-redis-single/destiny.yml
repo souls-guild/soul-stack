@@ -1,0 +1,72 @@
+name: redis-single
+description: Install Redis from the distro package manager and render redis.conf with a unix socket enabled for local consumers (e.g. redis_exporter).
+
+# Версия destiny — git ref (ADR-007). Поля `version:` верхнего уровня нет.
+# Список задач — в tasks/main.yml. Только core-модули → required_modules: не нужен.
+#
+# Извлечено из инлайн-сценариев service-monitoring / service-redis-monitored в
+# самостоятельную переиспользуемую destiny. Установка — через пакетный менеджер
+# дистрибутива (core.pkg.installed redis-server), как в инлайн-источнике; tarball
+# для самого Redis не используется (в отличие от экспортеров — те ставятся из
+# GitHub-релизов).
+#
+# Имя destiny — redis-single (одиночный Redis из дистрибутивного пакета), чтобы
+# не коллидировать ни с именем демона/systemd-юнита redis-server, ни с уже
+# существующей examples/destiny/destiny-redis/ (другой destiny — redis-кластер с
+# action-DSL).
+
+input:
+  version:
+    type: string
+    required: false
+    # distro-native: опциональный epoch `N:` + upstream-версия + опциональная
+    # ревизия (напр. Debian `5:7.0.15-1~deb12u7`). Узкий semver ломал version-пин
+    # на реальном дистрибутиве (apt-get install redis-server=7.2.4 → exit 100).
+    pattern: "^([0-9]+:)?[0-9][A-Za-z0-9.~+-]*$"
+    description: >-
+      Версия пакета redis-server в репозитории дистрибутива (distro-native, напр.
+      5:7.0.15-1~deb12u7). Опциональна: если не передана, ставится версия по
+      умолчанию из репозитория (core.pkg без =version-пина).
+
+  redis_password:
+    type: string
+    required: true
+    secret: true
+    min_length: 16
+    description: >-
+      Пароль Redis (requirepass). Маскируется в логах/трейсах/UI. Destiny
+      получает УЖЕ зарезолвленное значение: caller-сценарий читает секрет из Vault
+      keeper-side через CEL-функцию vault() в render-фазе (templating.md §2.3/§4)
+      и прокидывает результат в apply:input. Destiny остаётся «глупой» — кладёт
+      готовый пароль в redis.conf, vault-клиент не тянет (ADR-012).
+
+  # Путь unix-сокета Redis — точка интеграции с destiny redis-exporter (тот же путь
+  # идёт в redis_exporter::--redis.addr=unix://...). Пишется в redis.conf::unixsocket.
+  redis_socket:
+    type: string
+    default: /var/run/redis/redis-server.sock
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: >-
+      Путь к unix-сокету Redis (unixsocket в redis.conf). Единая точка интеграции:
+      этот же путь caller передаёт в destiny redis-exporter.
+
+  maxmemory:
+    type: string
+    default: 256mb
+    pattern: "^[0-9]+(b|kb|mb|gb)$"          # Redis-формат: 256mb, 4gb, …
+    description: Лимит памяти Redis (формат Redis — 256mb, 4gb, …).
+
+  # Задел под сценарий update_config: точечные параметры redis.conf, переопределяемые
+  # caller-ом. Прокидываются в шаблон как .vars.config; шаблон рендерит только
+  # переданные ключи (отсутствующие — не материализуются, остаётся дефолт Redis).
+  config:
+    type: object
+    properties:
+      maxclients:
+        type: integer
+        min: 1
+      timeout:
+        type: integer
+        min: 0
+    additional_properties: true
+    description: Дополнительные директивы redis.conf (задел под update_config).

@@ -1,0 +1,16 @@
+go 1.26.4
+
+use (
+	./keeper
+	./proto
+	./proto/plugin
+	./sdk
+	./shared
+	./soul
+	./soul-lint
+	./soulctl
+	./tests/e2e
+	./tests/e2e-k8s
+	./tests/e2e-live
+	./tests/load
+)

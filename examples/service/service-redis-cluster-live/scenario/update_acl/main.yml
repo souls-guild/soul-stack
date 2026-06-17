@@ -1,0 +1,29 @@
+name: update_acl
+description: >-
+  Обновить ACL одного существующего пользователя на всех нодах кластера
+  (per-node ACL). Параллель add_user, но точечно по одному пользователю —
+  демонстрирует update-операцию над state. SETUSER идемпотентен.
+
+input:
+  user:
+    type: string
+    required: true
+    pattern: "^[A-Za-z0-9._-]+$"
+    description: Имя пользователя для обновления ACL.
+  acl:
+    type: string
+    required: true
+    secret: true
+    description: Новое ACL-правило (Redis ACL SETUSER синтаксис). Маскируется.
+
+# state_changes для точечного update полного списка пользователей в пилоте
+# опускаем (sets перезаписывает целиком, дельта-update redis_users по индексу —
+# future-грамматика appends/modifies, orchestration.md §7.1). Здесь scenario
+# меняет систему; фиксация полного списка — через add_user.
+tasks:
+  - name: Update Redis ACL for a single user on every cluster node
+    on: ["${ incarnation.name }"]
+    module: core.cmd.shell
+    no_log: true
+    params:
+      cmd: "redis-cli -p 6379 ACL SETUSER ${ input.user } ${ input.acl }"

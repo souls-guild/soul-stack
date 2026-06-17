@@ -1,0 +1,167 @@
+# Cloud-интеграция (`keeper.cloud`)
+
+Модуль внутри `keeper`-бинаря, отвечающий за cloud-операции (создание / удаление / опрос VM). Динамическое создание VM реализовано как **шаг сценария с `on: keeper`** через CloudDriver-плагин ([plugins.md](plugins.md)). Service не знает специфики облаков — он знает «нужен шаг создания VM с параметрами»; Keeper выбирает driver и исполняет.
+
+## Provider и Profile в Postgres
+
+**Provider** — настроенная учётка облака (AWS-аккаунт, GCP-проект, OpenStack-tenant). Хранится в Postgres ([storage.md](storage.md)), управляется через OpenAPI / MCP. REST-роуты `POST /v1/providers` / `POST /v1/profiles` **отложены** (cloud-CRUD не реализован, [operator-api.md → Cloud](operator-api.md#cloud--отложено-rest-роутов-нет)); форма тел Provider/Profile описана ниже.
+
+```yaml
+keeper.provider.create
+  name=aws-prod
+  type=aws
+  region=eu-west-1
+  credentials_ref=vault:secret/cloud/aws-prod
+```
+
+**Profile** — шаблон VM, многоразовый. Тоже в Postgres:
+
+```yaml
+keeper.profile.create
+  name=redis-medium-eu
+  provider=aws-prod
+  params={
+    image:         ami-0abc123,
+    instance_type: t3.medium,
+    disk:          { size_gb: 50, type: gp3 },
+    network:       { subnet: subnet-xyz, security_groups: [sg-redis] }
+  }
+  cloud_init=...
+```
+
+Параметры профиля валидируются против `profile_schema`, который driver публикует через RPC `Schema()` ([plugins.md](plugins.md)).
+
+**Default essence в git как подложка.** Дефолтные параметры сервиса лежат в `essence/` репо сервиса (см. [architecture.md → Essence: pipeline сборки](../architecture.md#essence-pipeline-сборки)); оператор переопределяет их в `incarnation.spec` через API. Сами Provider/Profile — runtime-state, и потому в Postgres, а не в git ([architecture.md → Артефакты Soul Stack](../architecture.md#артефакты-soul-stack-что-в-git-что-в-бд)).
+
+## Cloud-create как шаг сценария
+
+В сценарии сервиса cloud-create — обычный шаг с `on: keeper`, использующий keeper-side core-модуль `core.cloud.provisioned` ([ADR-017](../adr/0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read), [keeper/modules.md](modules.md)). Прежний паттерн «core-destiny `cloud-provision`» **отменён ADR-017**: это не пакет задач для Soul, а keeper-side операция реестра, поэтому она — core-модуль с диспетчером `on: keeper`, а не destiny.
+
+```yaml
+- name: provision
+  on: keeper                             # шаг исполняется на keeper-е
+  module: core.cloud.provisioned
+  state: created
+  params:
+    provider: "${ input.spawn.provider }"  # ИМЯ Provider-а из реестра providers
+    profile:  "${ input.spawn.profile }"
+    count:    "${ input.spawn.count }"
+    userdata: "${ input.spawn.cloud_init }" # опц. cloud-init blob для bootstrap soul
+```
+
+Что делает `core.cloud.provisioned` (state `created`):
+
+1. **Резолвит Provider-реестр.** `params.provider` — это имя строки `providers` (не имя CloudDriver-плагина). Keeper читает строку, берёт `type` (= имя плагина `soul-cloud-<type>`), `region` и `credentials_ref`.
+2. **Резолвит credentials.** По `credentials_ref` (`vault:<mount>/<path>`) Keeper читает секрет из Vault KV тем же keeper-side Vault-клиентом, что `core.vault.kv-read`, и кладёт plain-секрет + `region` в `CreateRequest.credentials`. Драйвер в Vault **НЕ ходит** (см. [Credentials-flow](#credentials-flow) ниже).
+3. **Дёргает `CloudDriver.Create`** через PluginHost (spawn one-shot, ADR-020): провайдер создаёт VM, стримит прогресс, ждёт готовности (running + IP/DNS) и возвращает `VmInfo` с заполненным `fqdn` (= SID).
+4. Для каждой VM создаётся запись в `souls` со `status: pending` и выписывается bootstrap-токен под её FQDN (plain-токен попадает только в register-output, в БД — hash).
+5. Cloud-init на VM (через `userdata`) ставит `soul`-бинарь и токен. Soul стартует, делает CSR, переходит в `connected`.
+
+State `destroyed` симметричен: Keeper резолвит тот же Provider (для credentials) и зовёт `CloudDriver.Destroy(vm_ids, credentials)`, затем — cascade-транзакция реестров ([ADR-017](../adr/0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read)).
+
+### Credentials-flow
+
+Вариант **A** (зафиксирован): **Keeper резолвит секрет из Vault и передаёт plain в драйвер; драйвер в Vault не ходит.**
+
+- Секрет хранится в Vault, в реестре `providers` — только `credentials_ref` (`vault:<mount>/<path>`).
+- На каждый `Create`/`Destroy` Keeper читает секрет (keeper-side Vault-клиент), складывает его поля + `region` в `CreateRequest.credentials` / `DestroyRequest.credentials` (`google.protobuf.Struct`, only-add поля в [`clouddriver.proto`](plugins.md)).
+- `region` живёт **внутри** credentials/profile Struct, а не отдельным типизированным полем: он provider-specific (у Proxmox/OpenStack своего `region` нет).
+- Секрет **маскируется на любом выходе** (audit / OTel / SSE / error-сообщения) тем же `MaskSecrets`, что чистит bootstrap-токен и vault-ref-ы. Драйверам поэтому **не нужна** capability `vault_access`.
+
+> **Cloud-init bootstrap (B-flat, ADR-017(h) amendment 2026-05-27).** Реализованный MVP: per-VM bootstrap-токен выписывается ПОСЛЕ возврата `VmInfo` (когда SID известен) и кладётся в `register.<step>.hosts[i].bootstrap_token`. **Cloud-init userdata токены НЕ несёт** (cloud-provider API хранит userdata в plaintext metadata, доступной процессам VM) — содержит только: установку `soul`-бинаря (curl с pinned-CA), embedded PEM CA Keeper-а (`/etc/soul/tls/keeper-ca.pem`), минимальный `soul.yml` с `keeper.endpoints`, systemd-unit `soul.service`. **Доставка per-VM-токена на VM — отдельный шаг сценария** (типично `keeper.push` через SSH-провайдер: `module: keeper.push`, читает `register.<step>.hosts[].bootstrap_token` и доставляет на VM через SSH). См. [«Cloud-init bootstrap (MVP)»](#cloud-init-bootstrap-mvp) ниже.
+
+> **Coven-привязка нового хоста — отдельный scenario-шаг.** `core.cloud.provisioned` создаёт VM и регистрирует их в `souls`, но **сам по себе coven-метки не назначает**: запись `souls → coven` — это отдельный шаг сценария через core-модуль `core.soul.registered` ([`docs/keeper/modules.md`](modules.md)). Разделение сознательное: cloud-create и привязка к coven — разные операции реестра, каждый со своими guard-rails, и они компонуются в сценарии независимо.
+
+Дальше следующие шаги сценария идут уже по coven этого incarnation (`on: ["{{ incarnation.name }}"]`) и ставят destiny на свеже-созданные хосты.
+
+## Безопасность destroy
+
+Удаление VM — деструктивная операция, обязательны guard-rails:
+
+- **Tombstone period.** При scale-down или `incarnation.destroy` VM не удаляется немедленно — помечается `marked_for_deletion`, ждёт `tombstone_ttl` (default 24h). Оператор может откатить.
+- **Confirm flag.** Reconcile/destroy не делает physical destroy без явного `--allow-destroy` или соответствующего поля.
+- **Storage protection.** EBS-volumes / диски не удаляются вместе с VM по умолчанию — отдельно подтверждаются.
+- **Audit.** Каждое удаление пишется в журнал с указанием инициатора ([rbac.md](rbac.md)).
+
+Это критично — иначе одна опечатка в `count` стирает прод.
+
+## Cloud-init bootstrap (MVP)
+
+Реализованный B-flat вариант (ADR-017(h) amendment 2026-05-27). Цель: новая VM, созданная `core.cloud.provisioned`, поднимает `soul`-агента и подключается к Keeper-кластеру.
+
+### Flow
+
+1. **Шаг сценария `core.cloud.provisioned` (`state: created`)** с параметром `generate_userdata: true`:
+   - Keeper резолвит `keeper.yml::cloud_init.tls_ca_ref` в PEM CA через Vault (поле `ca`).
+   - Keeper рендерит cloud-config YAML по embed template (`keeper/internal/cloudinit/templates/cloud-init.tmpl`).
+   - Userdata уходит в `CreateRequest.userdata` (ADR-017(e) only-add), провайдер создаёт VM с этой userdata.
+   - После Create — Keeper выписывает per-VM bootstrap-токен под FQDN VM, кладёт в `register.<step>.hosts[i].bootstrap_token` (plaintext, маскируется на всех выходах audit/SSE/OTel substring-фильтром `audit.MaskSecrets`).
+2. **На VM работает cloud-init:**
+   - Устанавливает CA: `/etc/soul/tls/keeper-ca.pem` (PEM, embedded в userdata).
+   - Скачивает `soul`-бинарь: `curl --cacert /etc/soul/tls/keeper-ca.pem $SOUL_BINARY_URL` → `/usr/local/bin/soul` (pinned-CA, TOFU-mitigation).
+   - Пишет минимальный `/etc/soul/soul.yml` с `keeper.endpoints[0] = {host, bootstrap_port, event_stream_port}`.
+   - `systemctl enable + start soul.service`. Soul без bootstrap-токена пока ничего не делает (звонит на Keeper-Bootstrap-RPC — отвергается без токена).
+3. **Шаг 2 сценария — доставка токена** (типично `module: keeper.push`):
+   - Читает `register.<step1>.hosts[i].bootstrap_token` через CEL.
+   - Через SSH-провайдер (Sigil-allowed `soul-ssh-*`) кладёт токен на VM в место, откуда `soul` его подхватит для CSR-онбординга.
+4. **Soul → Bootstrap-RPC** (ADR-012(b)): CSR с токеном → подпись Vault PKI → mTLS-cert. Дальше — EventStream.
+
+### Конфиг
+
+Блок `keeper.yml::cloud_init` (опциональный):
+
+```yaml
+cloud_init:
+  bootstrap_endpoint: lb.keeper.example:9442      # LB host:port (Bootstrap-RPC listener)
+  tls_ca_ref:         vault:secret/keeper/ca      # PEM CA, поле `ca` в KV
+  soul_binary_url:    https://artifacts.example/soul/v1.0.0/soul
+  soul_version:       v1.0.0                       # опц. метка для диагностики
+```
+
+Hot-reload работает: правка `keeper.yml` через `keeper-reload` → следующий cloud-create-шаг рендерит userdata с новым snapshot-ом (без рестарта Keeper-а).
+
+При отсутствии блока — параметр `generate_userdata: true` валит шаг сценария с понятной ошибкой; явный `userdata: "<blob>"` продолжает работать (legacy / gold-image flow).
+
+### Параметр scenario
+
+```yaml
+- name: provision
+  on: keeper
+  module: core.cloud.provisioned
+  state: created
+  params:
+    provider:          aws-prod
+    profile:           {image: ami-0001, instance_type: t3.medium}
+    count:             3
+    generate_userdata: true            # ← рендер из keeper.yml::cloud_init
+  register: vm
+```
+
+`generate_userdata: true` и `userdata: "..."` — **mutually exclusive** (одновременное присутствие → fail). Без обоих провайдер получает пустой userdata.
+
+### Безопасность
+
+- **Userdata НЕ несёт токены** (cloud-provider plaintext metadata).
+- **Pinned-CA для curl** — атакующий не может подменить `soul`-бинарь man-in-the-middle-ом (требует владения приватником CA Keeper-а).
+- **TLS CA из Vault** — единый источник правды, ротация без правок keeper.yml.
+- **Per-VM-токен доставляется отдельным шагом по SSH** — атакующая поверхность ограничена SSH-доступом, а не cloud metadata.
+
+### Пример
+
+См. [`examples/service/example-cloud-bootstrap/`](../../examples/service/example-cloud-bootstrap/) — полный scenario create со связкой `core.cloud.provisioned` + per-VM-token.
+
+## Список cloud-провайдеров для MVP
+
+AWS / GCP / Azure / Yandex Cloud / OpenStack / vSphere / Proxmox — что из них поставляется в первом релизе, а что — extension community: [open Q №13](../architecture.md#открытые-вопросы).
+
+Reconcile-loop «declared count vs actual VM count» (фоновое выравнивание) — [open Q №17](../architecture.md#открытые-вопросы): закладываем сразу или MVP только manual `incarnation.upgrade/scale`.
+
+## См. также
+
+- [plugins.md](plugins.md) — контракт `CloudDriver`.
+- [storage.md](storage.md) — где живут Provider, Profile, реестр VM.
+- [rbac.md](rbac.md) — RBAC на cloud-операции.
+- [config.md](config.md) → `plugins.cloud_drivers` — реестр драйверов.
+- [architecture.md → Cloud-интеграция через `keeper.cloud`](../architecture.md#cloud-интеграция-через-keepercloud).
+- [architecture.md → Targeting и связь хостов](../architecture.md#targeting-и-связь-хостов) — `on: keeper` vs `on: [coven, …]`.
+- [naming-rules.md](../naming-rules.md) — `keeper.cloud`, `CloudDriver`, Provider, Profile.

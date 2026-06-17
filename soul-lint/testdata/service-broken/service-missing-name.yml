@@ -1,0 +1,6 @@
+description: no name here
+state_schema_version: 1
+state_schema:
+  type: object
+  properties:
+    foo: { type: string }

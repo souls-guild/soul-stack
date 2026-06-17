@@ -1,0 +1,18 @@
+name: redis-sentinel
+state_schema_version: 1
+description: >-
+  Redis Sentinel поверх существующего redis-master (Phase-2 ТЕСТ C). Сценарий
+  create: установить redis (core.pkg, sentinel ships в пакете) → отрендерить
+  sentinel.conf (core.file.rendered: monitor <master_ip> 6379 <quorum>) →
+  запустить redis-sentinel на каждом хосте инкарнации (core.cmd.shell, nohup,
+  как в service-redis-cluster-live — alpine без полноценного init) → health-gate
+  дождаться, что sentinel отвечает PONG на :26379. master_ip/quorum приходят
+  через input (host-инвариантны, ADR-010 params-интерполяция). Только core-модули.
+
+state_schema:
+  type: object
+  required: [master_ip, master_name, quorum]
+  properties:
+    master_ip:    { type: string }
+    master_name:  { type: string }
+    quorum:       { type: integer }

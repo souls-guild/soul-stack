@@ -1,0 +1,52 @@
+# PM workspace
+.pm/
+
+# Claude Code runtime artifacts (scheduled task lockfile)
+.claude/scheduled_tasks.lock
+
+# Go build artefacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.prof
+coverage.txt
+coverage.html
+
+# Каталог собранных бинарей внутри каждого модуля с `main` (см. Makefile, BIN_DIR).
+*/bin/
+
+# Каталог release-артефактов (SBOM, deb/rpm) — см. Makefile, DIST_DIR (make sbom/pkg).
+dist/
+
+# Defensive: бинарики в корнях модулей с main (если кто-то делает `go build .` вне Makefile).
+/keeper/keeper
+/soul/soul
+/soul-lint/soul-lint
+/soulctl/soulctl
+
+# Defensive: stray plugin-бинари из `go build .` в корне example-модуля (конвенция — dist/<binary>).
+/examples/module/soul-cloud-aws/soul-cloud-aws
+/examples/module/soul-cloud-proxmox/soul-cloud-proxmox
+/examples/module/soul-ssh-static/soul-ssh-static
+
+# Vendor / dependency directories are not used in this repo
+vendor/
+
+# Python bytecode cache (от scripts/check-doc-links.py)
+__pycache__/
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# compiled example plugin binaries (ADR-011: examples = non-Go only)
+examples/module/**/soul-cloud-*
+examples/module/**/soul-ssh-*
+examples/module/**/soul-mod-*

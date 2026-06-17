@@ -1,0 +1,7 @@
+name: bad-soulprint-naked
+tasks:
+  - name: bare soulprint without .self/.hosts/.where
+    where: soulprint.os.family == "debian"
+    module: core.exec.run
+    params:
+      command: "true"

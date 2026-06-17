@@ -1,0 +1,150 @@
+# Nightly Soul Stack. Тяжёлые таргеты, которые не должны блокировать каждый PR,
+# но обязаны регулярно прогоняться. См. ADR-039 (E2E уровни) и docs/testing/.
+#
+# Состав:
+#   - race-tests:  go test -race по всем модулям (`make test-race`);
+#   - e2e-live:    L3b real-soul-in-container (Makefile-таргет `e2e-live`):
+#                  реальный soul-бинарь в privileged-контейнере, полный
+#                  gRPC-handshake + apply/Scry-pipeline. continue-on-error —
+#                  job informational: падение на инфраструктуре раннера (docker-
+#                  in-docker, privileged, systemd-PID-1) заводит багу, не валит
+#                  весь nightly.
+#
+# Cron — 02:00 UTC ежедневно. workflow_dispatch — ручной триггер из UI.
+name: Nightly
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Версии синхронны с ci.yml — единый toolchain.
+  PROTOC_VERSION: "34.1"
+  PROTOC_GEN_GO_VERSION: "v1.36.11"
+  PROTOC_GEN_GO_GRPC_VERSION: "v1.6.2"
+  GO_VERSION: "1.26.4"
+
+jobs:
+  # Race-detector по всему корпусу. На горячих pubsub/lease-путях встречается
+  # шанс уловить data race, не видимый обычным `make test`. Job informational
+  # (continue-on-error): race-сигнал — повод завести багу, не остановить весь
+  # nightly прогон (e2e-live может всё ещё содержать полезный результат).
+  race-tests:
+    name: go test -race (per module)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            keeper/go.sum
+            proto/go.sum
+            proto/plugin/go.sum
+            sdk/go.sum
+            shared/go.sum
+            soul/go.sum
+            soul-lint/go.sum
+            soulctl/go.sum
+
+      - name: Install protoc ${{ env.PROTOC_VERSION }}
+        run: |
+          set -euo pipefail
+          ZIP="protoc-${PROTOC_VERSION}-linux-x86_64.zip"
+          URL="https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${ZIP}"
+          curl -fsSL -o /tmp/protoc.zip "$URL"
+          sudo unzip -o -q /tmp/protoc.zip -d /usr/local
+
+      - name: Install protoc-gen-go plugins
+        run: |
+          set -euo pipefail
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@${PROTOC_GEN_GO_VERSION}
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@${PROTOC_GEN_GO_GRPC_VERSION}
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: make test-race
+        run: make test-race
+
+  # L3b real-soul-in-container (ADR-039 уровень B). Вместо soul-stub-а гоняет
+  # реальный `soul`-бинарь внутри privileged-контейнера: покрывает gRPC-
+  # handshake + apply/Scry-pipeline целиком (включая реальный SoulModule.Plan
+  # в drift-тесте). Makefile-таргет `e2e-live` реализован; continue-on-error
+  # держит job informational — флап на инфраструктуре раннера (docker-in-docker,
+  # privileged, systemd-PID-1) не валит весь nightly.
+  e2e-live:
+    name: e2e-live (L3b real-soul-in-container)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            keeper/go.sum
+            proto/go.sum
+            proto/plugin/go.sum
+            sdk/go.sum
+            shared/go.sum
+            soul/go.sum
+            soul-lint/go.sum
+            soulctl/go.sum
+            tests/e2e/go.sum
+
+      - name: Install protoc ${{ env.PROTOC_VERSION }}
+        run: |
+          set -euo pipefail
+          ZIP="protoc-${PROTOC_VERSION}-linux-x86_64.zip"
+          URL="https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${ZIP}"
+          curl -fsSL -o /tmp/protoc.zip "$URL"
+          sudo unzip -o -q /tmp/protoc.zip -d /usr/local
+
+      - name: Install protoc-gen-go plugins
+        run: |
+          set -euo pipefail
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@${PROTOC_GEN_GO_VERSION}
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@${PROTOC_GEN_GO_GRPC_VERSION}
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: make build (нужен соберённый soul + keeper для L3b)
+        run: make build
+
+      # Таргет `e2e-live` реализован (Makefile) — запускаем live-suite. grep-
+      # guard оставлен как страховка от случайного дропа таргета: при отсутствии
+      # печатает диагностику вместо `make: *** No rule`. grep на start-of-line +
+      # `:` ловит именно объявление таргета, а не упоминание в комментариях.
+      - name: make e2e-live
+        env:
+          KEEPER_BIN: ${{ github.workspace }}/keeper/bin/keeper
+        run: |
+          set -euo pipefail
+          if grep -q '^e2e-live:' Makefile; then
+            make e2e-live
+          else
+            echo "make e2e-live: таргет пропал из Makefile — проверь регрессию" >&2
+            exit 1
+          fi
+
+      - name: Upload e2e-live artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-live-logs
+          if-no-files-found: ignore
+          path: |
+            tests/e2e/_artifacts/
+            /tmp/keeper-*.log
+            /tmp/keeper-dev/

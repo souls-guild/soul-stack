@@ -1,0 +1,22 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: cron
+
+required_capabilities:
+  - run_as_root
+  - fs_write_root
+
+spec:
+  states:
+    present:
+      description: Job-файл /etc/cron.d/<name> с заданным расписанием и командой (ADR-015).
+      input:
+        name:     { type: string, required: true, description: "Имя job (= имя файла в /etc/cron.d, [A-Za-z0-9_-])." }
+        schedule: { type: string, required: true, description: "Cron-расписание (5 полей), напр. \"0 3 * * *\"." }
+        command:  { type: string, required: true, description: "Команда, запускаемая по расписанию." }
+        user:     { type: string, description: "Пользователь запуска (default root)." }
+    absent:
+      description: Job-файл удалён.
+      input:
+        name: { type: string, required: true, description: "Имя job (= имя файла в /etc/cron.d)." }

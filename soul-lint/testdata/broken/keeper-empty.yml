@@ -1,0 +1,5 @@
+# Минимальный keeper-конфиг с одним пустым голосом-маркером. `postgres: {}`
+# даёт auto-detect-у keeper-голос, но никакого реального содержания нет —
+# все обязательные top-level блоки (kid / listen / redis / vault) должны
+# вернуть `missing_required_field`.
+postgres: {}

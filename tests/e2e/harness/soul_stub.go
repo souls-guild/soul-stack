@@ -1,0 +1,60 @@
+//go:build e2e
+
+package harness
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/souls-guild/soul-stack/tests/e2e/internal/soulstub"
+)
+
+// ConnectSoulStub открывает live EventStream-стрим soul-stub-а к Keeper-у для
+// i-го pre-auth Soul-а (см. Config.Souls / SoulSID). Это превращает «строку в
+// souls со status=connected» в реальный gRPC-mTLS-стрим: на session-open Keeper
+// захватывает Redis SID-lease, и dispatch (Errand/Apply) маршрутизируется в
+// локальный Outbound этого SID-а. Без открытого стрима dispatch вернёт
+// ErrSoulNotConnected (errand → spawn_error, apply → orphaned).
+//
+// Stub отвечает на ApplyRequest scripted-RunResult-ом и на ErrandRequest —
+// ErrandResult-ом со статусом SUCCESS (см. soulstub.SetErrandStatus для иных
+// веток). Закрытие стрима регистрируется в Stack.Cleanup (LIFO).
+//
+// Возвращает *soulstub.Stub — caller может читать Messages() / менять
+// errand-статус до диспетча.
+func (s *Stack) ConnectSoulStub(t *testing.T, soulIndex int) *soulstub.Stub {
+	t.Helper()
+	if soulIndex < 0 || soulIndex >= len(s.souls) {
+		t.Fatalf("ConnectSoulStub(%d): out of range (создано %d soul-ов)", soulIndex, len(s.souls))
+	}
+	id := s.souls[soulIndex]
+
+	stub := soulstub.New(id.SID, s.KeeperGRPCAddr, id.Cert, id.Key, s.caBundle)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := stub.Open(ctx); err != nil {
+		cancel()
+		t.Fatalf("ConnectSoulStub(%s): open stream: %v", id.SID, err)
+	}
+	s.cleanups = append(s.cleanups, func() {
+		_ = stub.Close()
+		cancel()
+	})
+
+	// Дожидаемся HelloReply: Keeper отправляет его ПОСЛЕ захвата Redis SID-lease
+	// (eventstream.go: presence online = живой lease, захваченный до HelloReply).
+	// Значит, появление HelloReply в Messages() гарантирует, что dispatch уже
+	// сможет смаршрутизировать Errand/Apply в локальный Outbound этого SID-а.
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, m := range stub.Messages() {
+			if m.Kind == "HelloReply" {
+				return stub
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("ConnectSoulStub(%s): HelloReply не получен за 10s (lease/handshake не завершён)", id.SID)
+	return nil
+}

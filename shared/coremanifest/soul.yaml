@@ -1,0 +1,14 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: soul
+
+spec:
+  states:
+    registered:
+      description: Keeper-side (on:keeper). Soul с sid в реестре привязан к набору Coven-меток (ADR-017).
+      input:
+        sid:               { type: string, required: true, description: "SID (FQDN) целевого Soul." }
+        coven:             { type: list,   required: true, items: { type: string }, description: "Набор Coven-меток (kebab-case)." }
+        mode:              { type: string, description: "append (default) | replace | remove." }
+        refresh_soulprint: { type: bool,   description: "Обновить soulprint.hosts прогона (MVP игнорируется, echo refreshed:false)." }

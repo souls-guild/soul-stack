@@ -1,0 +1,155 @@
+# L0-испытание (Trial, ADR-023) сценария add_replicas сервиса redis.
+#
+# Render-only, герметично. Демонстрирует runtime-масштабирование репликами:
+#   - probe primary НА СУЩЕСТВУЮЩИХ хостах (changed_when: false, read-only);
+#   - install redis-single на новой реплике (apply:destiny, индексы 1..7);
+#   - replicaof на actual-primary через destiny-redis-replication-config (apply:
+#     destiny, индекс 8), master_addr из probe (mocks.register.master_addr.stdout);
+#   - health-gate (probe + retry/until, индекс 9).
+#
+# redis-single теперь 7 задач (B2 stateful-hardening): pkg/dir/conf + drop-in
+# (systemd hardening, index 4) + daemon-reload (index 5) + running/restarted.
+# Drop-in + daemon-reload сдвинули replication-config и health-gate на +2.
+#
+# L0-модель — ОДИН хост (ADR-023): синтетический trial-host. Он играет роль
+# единственной НОВОЙ реплики (input.replicas: [trial-host]); per-host шаги по
+# where: soulprint.self.sid in input.replicas таргетят его. probe-шаг
+# (where: !(sid in replicas)) trial-host исключает → пустой таргет → рендерится
+# в пустом контексте (params probe — статичная команда, soulprint в ней нет).
+#
+# Master discovery — РАНТАЙМ-probe (orchestration.md §4.1: для работающего
+# single-master сервиса роль берётся probe-ом, НЕ declared soulprint.hosts[].role).
+# В L0 результат probe мокается через mocks.register; топология прогона
+# (soulprint.hosts) уходит destiny через apply: input: (E3a) — это единственный
+# хост L0 (trial-host) со стабильными фактами из fixtures.soulprint.
+#
+# Пароль резолвится KEEPER-SIDE через vault('secret/redis/'+incarnation.name+
+# '#password') в render-фазе (templating.md §2.3/§4). fixtures.vault мокает Vault
+# KV герметично → в план (requirepass + masterauth) уходит уже ЗНАЧЕНИЕ, как и
+# доедет на хост (Soul vault-клиент не тянет, ADR-012).
+name: add_replicas installs redis and points the new replica at the primary
+
+# L0-источник destiny (герметичный file://): каталоги destiny-<name> в
+# examples/destiny/ относительно service-root (examples/service/service-redis/).
+fixtures:
+  default_destiny_source: "file://../../destiny/destiny-{name}"
+  # ТОЛЬКО обязательный input (replicas); сокет/maxmemory подтянутся из scenario
+  # input:-дефолтов резолвером эффективного input. redis_version НЕ задан
+  # (required:false) → version рендерится "" (latest, без пина). Пароль НЕ во
+  # input — из Vault (см. vault: ниже).
+  input:
+    replicas: [trial-host]
+  # Мок Vault KV: vault('secret/redis/add_replicas#password') (incarnation.name в
+  # L0 = имя сценария). secret/-префикс снимается нормализацией fixtureVault.
+  vault:
+    secret/redis/add_replicas:
+      password: s3cr3t-redis-pass-repl
+  # Стабильные факты trial-host (новая реплика): IP != master_addr → шаг replicaof
+  # в destiny-redis-replication-config рендерится (when: self.ip != master_addr).
+  soulprint:
+    # sid совпадает с синтетическим SID единственного L0-хоста (trial-host) —
+    # чтобы where: soulprint.self.sid in input.replicas таргетил его.
+    sid: trial-host
+    network: { primary_ip: 10.0.0.2 }
+    os: { family: debian }
+  # config новых реплик берётся из essence (как в create), а не из state — L0 state
+  # не виден apply.input. Дублируем essence-дефолт сервиса.
+  essence:
+    redis_config:
+      maxclients: 10000
+      timeout:    300
+
+# Probe primary в L0 не исполняется (Soul-side) — его результат подаётся готовым
+# register-payload-ом для чтения в setup-replication (apply: input: master_addr).
+# Форма register.master_addr — АГРЕГАТНАЯ карта sid→payload (probe по нескольким
+# существующим хостам, orchestration.md §4.3), НЕ скаляр: ключ — SID хоста,
+# значение — payload {stdout, changed, …}. Свёртка к одному значению в шаге 3
+# main.yml: map(k, …[k].stdout).filter(v, v != '')[0] — читает .stdout каждого
+# хоста, берёт первый non-empty. Два хоста: существующий master отдаёт IP,
+# реплика (trial-host) — пусто; ожидаемая свёртка → "10.0.0.1".
+mocks:
+  register:
+    master_addr:
+      existing-master:
+        stdout: "10.0.0.1"
+      trial-host:
+        stdout: ""
+
+assert:
+  rendered_tasks:
+    # ── Probe primary на существующих хостах (read-only) ────────────────────
+    - index: 0
+      module: core.cmd.shell
+
+    # ── install redis-single на новой реплике (apply:destiny, индексы 1..7) ──
+    - index: 1
+      module: core.pkg.installed
+      params:
+        name: redis-server
+        # redis_version не передан (required:false) → has(...) ложно → "" (latest).
+        version: ""
+
+    # Каталог unix-сокета (idempotent install -d) — создаётся ДО рендера конфига.
+    - index: 2
+      module: core.exec.run
+      params:
+        creates: /var/run/redis
+        cmd: install
+        args: ["-d", "-o", "redis", "-g", "redis", "-m", "0755", "/var/run/redis"]
+
+    - index: 3
+      module: core.file.rendered
+      params:
+        path: /etc/redis/redis.conf
+        # template-путь заменён на доставленное Keeper-ом literal-содержимое (A1, ADR-012(d)).
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        # Корень text/template — render_context {vars,self,role,essence}
+        # (templating.md §3.2, BUG-A fix); плоского params.vars больше нет. self
+        # несёт стабильные факты trial-host (network.primary_ip из fixtures.soulprint)
+        # — redis.conf.tmpl читает .self.network.primary_ip для bind.
+        render_context:
+          vars:
+            socket: /var/run/redis/redis-server.sock
+            # keeper-side vault()-резолв → значение в плане (см. create/full-stack).
+            password: s3cr3t-redis-pass-repl
+            maxmemory: 256mb
+            config:
+              maxclients: 10000
+              timeout: 300
+          self:
+            sid: trial-host
+            covens: []
+            role: ""
+            network: { primary_ip: 10.0.0.2 }
+            os: { family: debian }
+          role: ""
+          essence: {}
+
+    # index 4 — systemd drop-in hardening (core.file.rendered → /etc/systemd/system/
+    # redis-server.service.d/hardening.conf), index 5 — daemon-reload (core.exec.run
+    # systemctl daemon-reload). B2 stateful-hardening; детальная сверка — в
+    # destiny-redis-single L0 render-defaults, здесь не дублируем.
+    - index: 6
+      module: core.service.running
+      params:
+        name: redis-server
+        enabled: true
+
+    # ── replicaof на actual-primary (destiny-redis-replication-config, индекс 8)
+    # master_addr — СВЁРТКА агрегата mocks.register.master_addr (sid→payload):
+    # map(k, …[k].stdout).filter(v, v != '')[0] → "10.0.0.1" (master отдал IP,
+    # реплика пусто). Ассерт на rendered command ловит баг свёртки: команда обязана
+    # содержать replicaof 10.0.0.1 (не "", не маска, не payload-map). trial
+    # сверяет фактически отрендеренное значение (no_log маскирует только diff при
+    # FAIL, не само сравнение). primary_ip 10.0.0.2 — это trial-host (реплика).
+    - index: 8
+      module: core.cmd.shell
+      params:
+        cmd: "redis-cli -h 10.0.0.2 CONFIG SET masterauth s3cr3t-redis-pass-repl && redis-cli -h 10.0.0.2 replicaof 10.0.0.1 6379\n"
+
+    # ── health-gate: реплика синхронизируется с primary (индекс 9) ───────────
+    - index: 9
+      module: core.cmd.shell

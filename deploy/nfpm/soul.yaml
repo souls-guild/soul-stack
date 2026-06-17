@@ -1,0 +1,53 @@
+# nfpm-конфиг пакета `soul` (deb + rpm). ADR-004 — управляемый агент-демон.
+#
+# Сборка: `make pkg`. Версия из переменной окружения VERSION (см. Makefile).
+# Бинарь собирается ДО упаковки (`make build`) с ldflags-инъекцией версии —
+# кладётся soul/bin/soul.
+#
+# Hardening soul-юнита мягче keeper-а: Soul применяет Destiny (ставит пакеты,
+# правит файлы) и требует реальных привилегий на хосте (см. soul.service).
+name: soul-stack-soul
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: admin
+priority: optional
+maintainer: Soul Stack <noreply@soul-stack.dev>
+description: |
+  Soul Stack Soul — управляемый агент-демон (ADR-004). Инициирует gRPC-стрим к
+  Keeper поверх mTLS, применяет Destiny через core-модули.
+vendor: Soul Stack
+homepage: https://github.com/souls-guild/soul-stack
+license: Apache-2.0
+
+contents:
+  - src: ./soul/bin/soul
+    dst: /usr/local/bin/soul
+    file_info:
+      mode: 0755
+
+  - src: ./deploy/systemd/soul.service
+    dst: /etc/systemd/system/soul.service
+    file_info:
+      mode: 0644
+
+  - src: ./deploy/systemd/soul.env
+    dst: /etc/soul/soul.env
+    type: config|noreplace
+    file_info:
+      mode: 0644
+
+  # Пример конфига — отдельным именем, рабочий /etc/soul/soul.yml оператор
+  # создаёт сам (см. soul.service: установка, soul init).
+  - src: ./examples/soul/soul.yml
+    dst: /etc/soul/soul.yml.example
+    file_info:
+      mode: 0640
+
+overrides:
+  deb:
+    depends:
+      - adduser
+  rpm:
+    depends:
+      - shadow-utils

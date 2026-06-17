@@ -1,0 +1,93 @@
+syntax = "proto3";
+
+package soulstack.plugin.v1;
+
+import "google/protobuf/struct.proto";
+
+option go_package = "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1;pluginv1";
+
+// SoulBeacon — service-контракт плагинов `kind: soul_beacon` (ADR-020 amendment
+// V5-2, 2026-05-26, четвёртый kind после soul_module / cloud_driver / ssh_provider).
+//
+// Host — `soul`-бинарь (соответствие semantic «beacon observes host»). Бинари
+// плагинов — soul-beacon-<name>. Адресация Vigil — `<namespace>.<name>` в поле
+// `VigilDef.check`; диспетчер Soul-side различает встроенные `core.beacon.*` от
+// plugin-beacon по namespace.
+//
+// Lifecycle (one-shot per Spawn по ADR-020(d)): Soul-side scheduler вызывает
+// плагин per-tick (interval из VigilDef.interval) — Spawn → Check → Close. Поле
+// `state_cookie` в Reply/Request позволяет плагину сохранять inotify-fd /
+// in-memory state между ticks без long-lived процесса: host передаёт cookie
+// предыдущего тика обратно при следующем Spawn (NULL на первом).
+//
+// stream-формы (`Start`) сознательно НЕ вводятся — ADR-030(d) one-shot
+// lifecycle и edge-triggered scheduler уже на Soul-side; stream дал бы
+// дублирующую ответственность планирования.
+service SoulBeacon {
+    // Validate — runtime-проверки params Vigil (то, что не выражается JSON Schema
+    // manifest-а: достижимость пути, валидность regex и т.п.). Вызывается host-ом
+    // ОПЦИОНАЛЬНО при первом старте Vigil в snapshot; ошибки/Ok=false → Vigil не
+    // запускается (scheduler логирует, baseline не устанавливается).
+    //
+    // Имя ValidateVigilRequest/Reply отличается от ValidateRequest/Reply в
+    // soulmodule.proto: в пределах одного proto-пакета имена message-ей должны
+    // быть уникальны (cross-import между soulmodule.proto и beacon.proto не
+    // нужен — это разные kind-ы плагинов).
+    rpc Validate(ValidateVigilRequest) returns (ValidateVigilReply);
+
+    // Check — invoked per-tick для одной Vigil-row. Возвращает state (opaque
+    // строка для edge-triggered сравнения), payload (Struct для
+    // PortentEvent.payload.custom) и state_cookie (passback host для следующего
+    // тика).
+    rpc Check(CheckRequest) returns (CheckReply);
+}
+
+// ValidateVigilRequest — params-фаза при старте Vigil.
+message ValidateVigilRequest {
+    // params — содержимое VigilDef.params (Struct), переданное оператором при
+    // создании Vigil. Семантика params — plugin-specific.
+    google.protobuf.Struct params = 1;
+}
+
+// ValidateVigilReply — результат Validate (форма симметрична
+// pluginv1.ValidateReply из soulmodule.proto: ok + errors[]).
+message ValidateVigilReply {
+    bool ok = 1;
+    repeated string errors = 2;
+}
+
+// CheckRequest — запрос Check.
+message CheckRequest {
+    // params — VigilDef.params (тот же Struct, что в ValidateVigilRequest).
+    google.protobuf.Struct params = 1;
+
+    // state_cookie — opaque-state, который плагин вернул на предыдущем тике
+    // (CheckReply.state_cookie). NULL/пусто на первом тике после старта Vigil
+    // (или после рестарта Soul-демона). Плагин сам выбирает кодировку (CBOR /
+    // JSON / proto-encoded message); host НЕ интерпретирует.
+    bytes state_cookie = 2;
+}
+
+// CheckReply — результат проверки.
+message CheckReply {
+    // state — текущее наблюдаемое состояние хоста. Plugin может вернуть любую
+    // строку; scheduler сравнивает её с last-state per-Vigil для
+    // edge-triggered Portent. Conventions (не обязательны): "ok" / "alerted" /
+    // "degraded" / "unknown".
+    string state = 1;
+
+    // payload — structured data для PortentEvent.payload.custom (Struct, ветка
+    // oneof, V5-1). Host wrap-ит в PortentEvent.payload.custom при формировании
+    // события.
+    google.protobuf.Struct payload = 2;
+
+    // state_cookie — opaque-state для следующего тика (passback). Если плагин
+    // не нуждается в межтиковом state — оставляет пустым.
+    bytes state_cookie = 3;
+
+    // error — non-fatal error message (например permission denied на чтение
+    // файла). Host логирует, scheduler пропускает тик (last-state НЕ
+    // обновляется, Portent НЕ эмитится: ошибка проверки ≠ смена состояния
+    // хоста — симметрия с встроенным [beacon.Beacon].Check err).
+    string error = 4;
+}

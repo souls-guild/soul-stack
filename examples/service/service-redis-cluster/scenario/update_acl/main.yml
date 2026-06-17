@@ -1,0 +1,50 @@
+name: update_acl
+description: Change ACL of one or more existing users
+
+# Формат блока — docs/input.md.
+input:
+  changes:
+    type: object
+    required: true
+    # map произвольных ключей username → ACL-объект: фиксированных полей нет,
+    # форма элементов задаётся в additional_properties (как `os` в
+    # examples/destiny/destiny-redis-replication-config/destiny.yml).
+    properties: {}
+    additional_properties:
+      type: object
+      properties:
+        acl:   { type: string }
+        state: { type: string, enum: [on, off] }
+      required: [acl]
+
+state_changes:
+  modifies: [redis_users.*.acl, redis_users.*.state]
+
+tasks:
+  # Probe: фактическая роль каждого хоста (actual-роль волатильна, берётся
+  # живым probe непосредственно перед таргетингом — concept.md, ADR-008).
+  # failed_when: утверждает полноту ответа (идиома orchestration.md §5):
+  # частичный probe → failed → сценарий стоп, state не коммитится (§7).
+  - name: Detect actual redis role per host
+    module: core.cmd.shell
+    on: ["${ incarnation.name }"]
+    register: redis_role
+    changed_when: false
+    failed_when: size(register.redis_role) < incarnation.host_count
+    params:
+      cmd: "redis-cli role | head -1"
+
+  # Diff и применение ACL на текущем мастере. run_once: — ровно один хост
+  # (первый по SID) из резолва on:+where: (orchestration.md §2). >1 «текущих
+  # master» по probe — норма, шаг идёт на одном детерминированном.
+  # state.redis_users — scenario-контекст (текущее состояние из БД, для diff).
+  - name: Diff and apply ACL changes on the current master
+    on: ["${ incarnation.name }"]
+    where: register.redis_role.stdout == 'master'
+    run_once: true
+    apply:
+      destiny: redis
+      input:
+        action:  update_acls
+        changes: "${ input.changes }"
+        current: "${ state.redis_users }"   # текущее состояние из БД, для diff

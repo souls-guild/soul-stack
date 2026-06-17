@@ -1,0 +1,142 @@
+name: create
+description: >-
+  Разворачивает стек «Redis + мониторинг» КОМПОЗИЦИЕЙ трёх standalone-destiny
+  через apply:destiny (изолированный render каждой, ADR-009). Порядок строгий:
+
+    1. redis-single   — ставит redis-server и рендерит redis.conf с unix-сокетом;
+                        пакет создаёт системную группу redis и unix-сокет (770).
+    2. redis-exporter — выделенный пользователь redis-exporter входит в группу
+                        redis ради group-доступа к сокету; ходит в Redis через
+                        --redis.addr=unix://<socket>. ТРЕБУЕТ, чтобы группа/сокет
+                        уже существовали → строго ПОСЛЕ redis-single.
+    3. node-exporter  — метрики хоста, от Redis не зависит, но идёт последним для
+                        детерминированного порядка.
+
+  Сервис ничего не рендерит сам — только оркеструет порядок apply:destiny и
+  прокидывает каждой destiny её input (версии/сокет/пароль из essence + scenario
+  input). Внутри каждой destiny виден ТОЛЬКО переданный ей apply.input
+  (изоляция, ADR-009): scenario-scope в destiny-env не попадает.
+
+  Пароль Redis НЕ во входном контракте: он лежит в Vault KV по пути, выведенному
+  из incarnation (secret/redis/<incarnation.name>#password), и резолвится
+  KEEPER-SIDE через CEL-функцию vault() в render-фазе (templating.md §2.3/§4) —
+  именно так пароль доезжает на хост уже значением, а не ссылкой (Soul
+  vault-клиент не тянет, ADR-012). Путь строится из доверенного контекста
+  (incarnation), не из operator-input — инъекция в Vault-запрос исключена.
+
+  Демонстрирует scenario-include (orchestration.md §6): тройка apply:destiny
+  вынесена в соседний install.yml и подключена через include: — раскрывается в
+  плоский список ДО render (двухуровневый резолв scenario-локально → service-level).
+
+# ── Входной контракт (docs/input.md) ──────────────────────────────────────────
+# Версии/пути/listen — с дефолтами (или из essence), точечно переопределяются
+# оператором. Пароль Redis НЕ во input — он берётся из Vault через vault() (см.
+# выше и шаги apply:input в install.yml).
+input:
+  # Версия НЕОБЯЗАТЕЛЬНА (как в Ansible/Salt): не задана → core.pkg ставит версию
+  # по умолчанию из репозитория (без =version-пина). Pattern допускает
+  # distro-native строку — опциональный epoch `N:` + upstream-версия + опциональная
+  # ревизия (напр. Debian `5:7.0.15-1~deb12u7`); жёсткий semver `7.2.4` версию-пин
+  # ломал на реальном дистрибутиве (apt-get install redis-server=7.2.4 → exit 100).
+  redis_version:
+    type: string
+    required: false
+    pattern: "^([0-9]+:)?[0-9][A-Za-z0-9.~+-]*$"
+    description: >-
+      Версия пакета redis-server в репозитории дистрибутива (distro-native, напр.
+      5:7.0.15-1~deb12u7). Необязательна: если не задана — ставится версия по
+      умолчанию из репозитория (поведение latest, core.pkg без =version-пина).
+
+  redis_socket:
+    type: string
+    default: /var/run/redis/redis-server.sock
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: >-
+      Путь unix-сокета Redis. Единая точка интеграции: уходит и в redis-single
+      (unixsocket в redis.conf, unixsocketperm 770), и в redis-exporter
+      (--redis.addr=unix://...).
+
+  redis_maxmemory:
+    type: string
+    default: 256mb
+    pattern: "^[0-9]+(b|kb|mb|gb)$"
+    description: Лимит памяти Redis (формат Redis — 256mb, 4gb, …).
+
+  node_exporter_version:
+    type: string
+    default: "1.8.2"
+    pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    description: Версия node_exporter (GitHub Releases prometheus/node_exporter).
+
+  # checksum tarball-а node_exporter. core.url.fetched (внутри destiny node-exporter)
+  # верифицирует ДО публикации файла (supply-chain). ОБЯЗАТЕЛЬНЫЙ, без дефолта:
+  # fail-closed — нет хэша → честный отказ, а не fetch с placeholder-ом, который
+  # верификация всё равно отвергнет. Значение — из GitHub-релиза (файл sha256sums)
+  # под пару (version, arch).
+  node_exporter_sha256:
+    type: string
+    required: true
+    pattern: "^sha256:[0-9a-f]{64}$"
+    description: >-
+      SHA-256 tarball-а node_exporter ("sha256:<hex>"), берётся из sha256sums
+      GitHub-релиза prometheus/node_exporter под пару (version, arch).
+
+  redis_exporter_version:
+    type: string
+    default: "1.62.0"
+    pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    description: Версия redis_exporter (GitHub Releases oliver006/redis_exporter).
+
+  # checksum tarball-а redis_exporter. См. примечание выше: ОБЯЗАТЕЛЬНЫЙ, без
+  # дефолта (fail-closed). Значение — из GitHub-релиза (файл sha256sums) под пару
+  # (version, arch).
+  redis_exporter_sha256:
+    type: string
+    required: true
+    pattern: "^sha256:[0-9a-f]{64}$"
+    description: >-
+      SHA-256 tarball-а redis_exporter ("sha256:<hex>"), берётся из sha256sums
+      GitHub-релиза oliver006/redis_exporter под пару (version, arch).
+
+  arch:
+    type: string
+    default: amd64
+    enum: [amd64, arm64]
+    description: Архитектура GitHub-релизных tarball-ов экспортеров (amd64|arm64).
+
+  bin_dir:
+    type: string
+    default: /usr/local/bin
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: Каталог, куда раскладываются бинарники экспортеров.
+
+  node_exporter_listen:
+    type: string
+    default: ":9100"
+    pattern: "^[A-Za-z0-9._-]*:[0-9]{1,5}$"
+    description: Listen-адрес node_exporter (--web.listen-address).
+
+  redis_exporter_listen:
+    type: string
+    default: ":9121"
+    pattern: "^[A-Za-z0-9._-]*:[0-9]{1,5}$"
+    description: Listen-адрес redis_exporter (--web.listen-address).
+
+# ── Мутация incarnation.state ─────────────────────────────────────────────────
+# После успешного apply Keeper фиксирует, что развёрнуто (ADR-009 §7.1).
+# sets — map поле→CEL: что записать и откуда. На create список ACL-пользователей
+# ещё пуст ([]); он наполняется сценарием add_acl_user.
+state_changes:
+  sets:
+    redis_version:          "${ has(input.redis_version) ? input.redis_version : '' }"
+    node_exporter_version:  "${ input.node_exporter_version }"
+    redis_exporter_version: "${ input.redis_exporter_version }"
+    redis_socket:           "${ input.redis_socket }"
+    redis_maxmemory:        "${ input.redis_maxmemory }"
+    redis_config:           "${ essence.redis_config }"
+    redis_users:            "${ [] }"
+
+tasks:
+  # scenario-include: соседний install.yml (тройка apply:destiny в строгом
+  # порядке) раскрывается inline ДО render.
+  - include: install.yml

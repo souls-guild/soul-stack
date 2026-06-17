@@ -1,0 +1,16 @@
+# Souls-фикстура для L3a service-noop::create.
+#
+# scenario вызывает только core.exec.run echo hello — soulprint минимальный
+# (формально для core.exec нужны просто факты ОС, но даём согласованный с
+# другими L3a-тестами набор).
+- sid: soul-a.example.com
+  status: connected
+  covens: [noop]
+  soulprint:
+    os:
+      family: debian
+      distro: debian
+      version: "12"
+      pkg_mgr: apt
+      init_system: systemd
+    hostname: soul-a

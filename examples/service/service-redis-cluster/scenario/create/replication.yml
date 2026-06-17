@@ -1,0 +1,33 @@
+# Переиспользуемый блок: настройка репликации на хостах кластера.
+# На create redis ещё не запущен, probe невозможен — топология (declared-роли
+# + адрес primary) берётся из soulprint.hosts и пробрасывается в destiny через
+# apply: input: (orchestration.md §4.1, bootstrap-таргетинг). Per-role
+# step-таргетинг на create НЕ вводится: шаг идёт широко по incarnation,
+# а роль разруливает destiny по declared-роли из переданной топологии.
+
+- name: Configure replication on cluster hosts
+  on: ["${ incarnation.name }"]
+  apply:
+    destiny: redis-replication-config
+    input:
+      hosts:       "${ soulprint.hosts }"
+      master_addr: "${ soulprint.hosts.where(\"role == 'primary'\")[0].network.primary_ip }"
+      password:    "${ input.redis_password }"
+
+# Health-gate: wait: изъят (orchestration.md §2) — бюджет времени и условие
+# здоровья выражаются унаследованным retry:+until: на probe-шаге (count ×
+# delay = бюджет, until: = условие). Самодостаточный gate → БЕЗ именованного
+# register: (конвенция пилота restart), условие через register.self.* —
+# собственный результат шага (destiny/tasks.md §9, §10).
+# pipe + awk + `||` — shell-семантика → core.cmd.shell.
+- name: Wait until replicas are syncing with the primary
+  module: core.cmd.shell
+  on: ["${ incarnation.name }"]
+  changed_when: false
+  retry:
+    count: 12
+    delay: 5s
+    until: register.self.stdout == 'up'
+  failed_when: register.self.stdout != 'up'
+  params:
+    cmd: "redis-cli -p 6379 info replication | awk -F: '/master_link_status/{print $2}' | tr -d '[:space:]' || echo down"

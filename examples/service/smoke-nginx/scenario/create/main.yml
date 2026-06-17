@@ -1,0 +1,31 @@
+name: create
+description: >-
+  Устанавливает nginx и запускает systemd-юнит. Используется L3a E2E pilot
+  для проверки контракта apply_runs lifecycle (planned→claimed→dispatched→success)
+  + audit + metrics. Реальное apply в L3a не тестируется (soul-stub отвечает
+  scripted RunResult); реальная мутация хоста — в L3b.
+
+# Минимальный input: только идентификатор хоста, чтобы scenario не падал на
+# обязательном поле и в audit-events можно было сопоставить incarnation/host.
+input:
+  hostname:
+    type: string
+    required: true
+    description: Имя хоста, на котором ожидается выполнение задач scenario.
+
+state_changes:
+  sets:
+    nginx_package: nginx
+    nginx_service: nginx
+
+tasks:
+  - name: Install nginx package
+    module: core.pkg.installed
+    params:
+      name: nginx
+
+  - name: Start and enable nginx service
+    module: core.service.running
+    params:
+      name: nginx
+      enabled: true

@@ -1,0 +1,6 @@
+name: x
+input:
+  mode:
+    type: string
+    enum: [a, b]
+    default: c

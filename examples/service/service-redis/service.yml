@@ -1,0 +1,64 @@
+name: redis
+state_schema_version: 1
+description: >-
+  Redis с мониторингом на одной VM (Linux/systemd), собранный КОМПОЗИЦИЕЙ трёх
+  переиспользуемых standalone-destiny через apply:destiny (ADR-009, изолированный
+  render каждой destiny):
+    - redis-single   — redis-server из пакета дистрибутива + redis.conf с unix-сокетом;
+    - redis-exporter — Prometheus redis_exporter, ходит в Redis через unix-сокет;
+    - node-exporter  — Prometheus node_exporter (метрики хоста).
+  В отличие от service-redis-monitored (инлайн-вариант), здесь сервис ничего не
+  рендерит сам — он только оркеструет порядок apply:destiny и прокидывает каждой
+  destiny её input. Точка интеграции redis ↔ redis_exporter — путь unix-сокета
+  (essence.redis_socket): он уходит и в redis-single (unixsocket в redis.conf),
+  и в redis-exporter (--redis.addr=unix://...).
+
+# state_schema_version = 1 → каталог migrations/ не обязателен (ADR-019).
+# incarnation.state фиксирует, что развёрнуто (версии трёх компонентов + сокет +
+# актуальный список ACL-пользователей), чтобы оператор видел инсталляцию и чтобы
+# повторный apply был idempotent.
+state_schema:
+  type: object
+  required: [redis_version, node_exporter_version, redis_exporter_version, redis_socket]
+  properties:
+    redis_version:          { type: string }
+    node_exporter_version:  { type: string }
+    redis_exporter_version: { type: string }
+    redis_socket:           { type: string }
+    redis_maxmemory:        { type: string }
+    # ACL-пользователи Redis: актуальный список, который сценарий add_acl_user
+    # перезаписывает целиком (оператор передаёт полный список — см. сценарий).
+    redis_users:
+      type: array
+      items:
+        type: object
+        required: [name, acl]
+        properties:
+          name: { type: string }
+          acl:  { type: string }
+    redis_config:
+      type: object
+      additionalProperties: true
+    # Хосты-реплики, добавленные сценарием add_replicas (role: replica). Дописываются
+    # через state_changes.appends после успешного apply (cross-host барьер).
+    redis_hosts:
+      type: array
+      items: { type: string, format: fqdn }
+
+# Зависимости-destiny (ADR-007: версия зависимости = git ref, не semver-range).
+# Резолв git-URL — гибрид (docs/keeper/config.md::default_destiny_source):
+#  - запись без git: → git-URL = default_destiny_source + {name} (keeper.yml);
+#  - запись c git:    → override, git-URL берётся напрямую.
+# ref берётся из записи в обоих случаях. apply:destiny ссылается ТОЛЬКО на имена,
+# объявленные здесь (иначе резолвер отвергает зависимость).
+#
+# Все три destiny — standalone в examples/destiny/ (НЕ внутри этого сервиса):
+# default_destiny_source указывает на их каталог. В dev keeper.dev.yml это
+# file:///.../examples/destiny/{name}; в проде — git@.../{name}.git.
+destiny:
+  - { name: redis-single,             ref: v1.0.0 }
+  - { name: redis-exporter,           ref: v1.0.0 }
+  - { name: node-exporter,            ref: v1.0.0 }
+  # Настройка replicaof на репликах (сценарий add_replicas). Переиспользуемая
+  # standalone-destiny (как и тройка выше), резолвится через default_destiny_source.
+  - { name: redis-replication-config, ref: v1.0.0 }

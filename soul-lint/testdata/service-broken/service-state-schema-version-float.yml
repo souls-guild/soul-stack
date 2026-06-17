@@ -1,0 +1,5 @@
+name: x
+state_schema_version: 1.5
+state_schema:
+  type: object
+  properties: {}

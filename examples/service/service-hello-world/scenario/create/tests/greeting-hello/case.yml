@@ -1,0 +1,18 @@
+# L0-испытание (Trial, ADR-023) сценария create сервиса hello-world.
+#
+# Проверяет, что render-пайплайн при input.greeting="hi" даёт единственную
+# задачу core.file.present с path=/tmp/soul-stack-hello и content="hi"
+# (CEL-интерполяция ${ input.greeting }).
+name: create writes greeting file with input.greeting
+
+fixtures:
+  input:
+    greeting: hi
+
+assert:
+  rendered_tasks:
+    - index: 0
+      module: core.file.present
+      params:
+        path: /tmp/soul-stack-hello
+        content: hi

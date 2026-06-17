@@ -1,0 +1,56 @@
+name: create
+description: >-
+  Cloud-init bootstrap новой VM (ADR-017(h) amendment 2026-05-27, B-flat).
+
+  Шаги:
+    1. provision  — core.cloud.created (generate_userdata)
+                    Создаёт `count` VM, выписывает per-VM bootstrap-токены,
+                    кладёт в register.provision.hosts[].bootstrap_token.
+    2. push_token — keeper.push доставка per-VM-токена по SSH (через soul-ssh-*).
+                    Берёт токен из register предыдущего шага.
+
+  Зависимость: scenario/2 нужен SSH-доступ к VM (root@public_ip, ключ из Vault).
+  Configure keeper.yml::push.targets (или souls.ssh_target в PG) до запуска.
+
+input:
+  provider:
+    type: string
+    required: true
+    description: Имя строки в реестре providers (NOT plugin name).
+  profile:
+    type: string
+    required: false
+    description: Имя строки в реестре profiles.
+  count:
+    type: integer
+    required: false
+    description: Количество VM в батче (default 1).
+
+tasks:
+  # Шаг 1: создаём count VM через CloudDriver. Адрес core.cloud.created несёт
+  # state created в суффиксе — модуль (ADR-017) диспетчеризует created/destroyed.
+  # generate_userdata: true (ADR-017(h) amendment 2026-05-27, B-flat): Keeper
+  # рендерит cloud-init userdata из keeper.yml::cloud_init (CA + soul-binary URL).
+  # Userdata НЕ несёт токены — установка soul-бинаря, CA, soul.yml + systemd-unit.
+  # Per-VM bootstrap-токен выписывается ПОСЛЕ Create и попадает в register.<step>.hosts[].
+  - name: Provision VMs (cloud-init bootstrap)
+    on: keeper
+    module: core.cloud.created
+    params:
+      provider:          "${ input.provider }"
+      profile:           "${ input.profile }"
+      count:             "${ input.count }"
+      generate_userdata: true
+    register: provision
+
+  # Шаг 2: доставка per-VM bootstrap-токена на каждую созданную VM по SSH.
+  # Реальный имя/контракт модуля доставки уточняется в docs/keeper/push.md; этот
+  # пример — иллюстрация двухшагового флоу (B-flat). Параметры (целевой path на
+  # VM, SSH-провайдер) — зависят от текущего push-контракта.
+  - name: Deliver per-VM bootstrap token over SSH
+    on: keeper
+    module: keeper.push.applied
+    params:
+      hosts: "${ register.provision.hosts }"
+    require:
+      - provision

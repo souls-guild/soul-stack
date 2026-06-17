@@ -1,0 +1,22 @@
+# Post-apply ожидания service-hello-world::create.
+#
+# state_changes.sets в scenario:
+#   greeting_file: /tmp/soul-stack-hello
+# → incarnation.state.greeting_file должно стать /tmp/soul-stack-hello.
+#
+# apply_runs.status — реальный enum keeper/internal/applyrun/applyrun.go::StatusSuccess.
+# audit_events — incarnation.scenario_started с apply_id (формат событий см.
+# shared/audit/event_types.go::EventIncarnationScenarioStarted).
+apply_runs:
+  status: success
+
+incarnation_state:
+  greeting_file: /tmp/soul-stack-hello
+
+audit_events:
+  - type: incarnation.scenario_started
+    payload:
+      incarnation: test-hello
+
+metrics:
+  keeper_apply_runs_total{status="success"}: ">= 1"

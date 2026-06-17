@@ -1,0 +1,65 @@
+name: redis
+description: Install and configure Redis server on a single host
+
+# Копия examples/destiny/destiny-redis/destiny.yml для regression-теста
+# soul-lint validate-destiny: должна совпадать с источником (любое
+# содержательное расхождение — баг этого файла, не источника).
+
+input:
+  action:
+    type: string
+    required: true
+    enum: [apply, ensure_user, ensure_users, update_acls, restart, failover_and_restart, ping, replication_status, diagnose]
+
+  version:
+    type: string
+    pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+
+  password:
+    type: string
+    secret: true
+    min_length: 16
+
+  master_addr:
+    type: string
+
+  maxmemory:
+    type: string
+    pattern: "^[0-9]+(b|kb|mb|gb)$"
+
+  config:
+    type: object
+    properties:
+      maxclients:
+        type: integer
+        min: 1
+      timeout:
+        type: integer
+        min: 0
+    additional_properties: true
+
+  user:
+    type: string
+    pattern: "^[a-z_][a-z0-9_-]{0,31}$"
+
+  acl:
+    type: string
+
+  state:
+    type: string
+    enum: [on, off]
+
+  users:
+    type: object
+    description: ACL-пользователи Redis, ключ — имя юзера, значение — {acl, state}.
+    properties: {}
+    additional_properties:
+      type: object
+      properties:
+        acl:
+          type: string
+        state:
+          type: string
+          enum: [on, off]
+      required: [acl, state]
+      additional_properties: false

@@ -1,0 +1,5 @@
+name: task-no-discriminator
+tasks:
+  - name: bare task without module/apply/include/block
+    when: "true"
+    register: r

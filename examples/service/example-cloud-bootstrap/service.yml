@@ -1,0 +1,29 @@
+name: example-cloud-bootstrap
+state_schema_version: 1
+description: >-
+  Минимальный demo-сервис под ADR-017(h) amendment 2026-05-27 (B-flat):
+  cloud-init bootstrap новой VM через generate_userdata + доставка per-VM
+  bootstrap-токена отдельным шагом scenario.
+
+  Что показывает example:
+    1. Шаг core.cloud.created с generate_userdata: true — Keeper рендерит
+       cloud-config userdata по keeper.yml::cloud_init (CA + soul-binary URL),
+       создаёт `count` VM через CloudDriver-плагин, выписывает per-VM-токены
+       и кладёт их в register.<step>.hosts[].bootstrap_token.
+    2. Шаг keeper.push — берёт per-VM-токены из register предыдущего шага и
+       доставляет на каждую VM по SSH (через настроенный soul-ssh-* провайдер).
+       Без этого Soul на VM не знает, какой токен предъявить на Bootstrap-RPC.
+
+  Cloud-init userdata НЕ несёт токены: cloud-provider API хранит userdata в
+  plaintext metadata (security floor). См. ADR-017(h) amendment и
+  docs/keeper/cloud.md → «Cloud-init bootstrap (MVP)».
+
+state_schema:
+  type: object
+  required: [provider, count]
+  properties:
+    provider:    { type: string }
+    profile:     { type: string }
+    count:       { type: integer, minimum: 1 }
+    vm_ids:      { type: array,   items: { type: string } }
+    sids:        { type: array,   items: { type: string, format: fqdn } }

@@ -1,0 +1,3 @@
+/bin/
+# Stray binary from go build without -o
+/soul-legion

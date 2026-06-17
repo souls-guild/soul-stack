@@ -1,0 +1,21 @@
+# Vigil + Decree, которые harness создаёт через Operator-API (REST POST
+# /v1/vigils, /v1/decrees) до эмиссии Portent от Soul-stub-а.
+vigil:
+  name: file-watch-etc
+  coven: [web]
+  interval: 30s
+  check: core.beacon.file_changed
+  params:
+    path: /etc/nginx.conf
+  enabled: true
+
+decree:
+  name: react-file-changed-etc
+  on_beacon: file-watch-etc
+  # V5-1 typed-payload-access: where-CEL читает event.file_changed.path.
+  where_cel: 'event.file_changed.path.startsWith("/etc/")'
+  coven: [web]
+  incarnation_name: web-app
+  action_scenario: noop
+  cooldown: 5m
+  enabled: true

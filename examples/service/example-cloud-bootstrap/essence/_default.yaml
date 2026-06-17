@@ -1,0 +1,6 @@
+# Дефолтные параметры сервиса — Provider/Profile в реестре `providers`/`profiles`
+# (создаются заранее через OpenAPI/MCP, см. docs/keeper/cloud.md). Оператор
+# переопределяет в incarnation.spec.essence.
+provider: aws-prod         # имя строки в реестре providers (NOT plugin name)
+profile:  example-tiny     # имя строки в реестре profiles
+count:    1

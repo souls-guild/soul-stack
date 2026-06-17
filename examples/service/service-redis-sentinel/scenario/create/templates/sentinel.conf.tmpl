@@ -1,0 +1,8 @@
+port 26379
+bind 0.0.0.0
+protected-mode no
+sentinel resolve-hostnames yes
+sentinel monitor {{ .vars.master_name }} {{ .vars.master_ip }} 6379 {{ .vars.quorum }}
+sentinel down-after-milliseconds {{ .vars.master_name }} 5000
+sentinel failover-timeout {{ .vars.master_name }} 10000
+sentinel parallel-syncs {{ .vars.master_name }} 1

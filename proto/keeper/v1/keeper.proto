@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+package soulstack.keeper.v1;
+
+import "keeper/v1/onboarding.proto";
+import "keeper/v1/lifecycle.proto";
+import "keeper/v1/apply.proto";
+import "keeper/v1/soulprint.proto";
+import "keeper/v1/sigil.proto";
+import "keeper/v1/augur.proto";
+import "keeper/v1/beacon.proto";
+import "keeper/v1/errand.proto";
+
+option go_package = "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;keeperv1";
+
+// Keeper — контракт Keeper↔Soul по ADR-012.
+service Keeper {
+  // Pilot RPC, оставлен для smoke-test генерации и health-check.
+  rpc Ping(PingRequest) returns (PingReply);
+
+  // Onboarding: unary RPC, server-only TLS, отдельный listener Keeper-а.
+  // Запускается командой `soul init` единожды.
+  rpc Bootstrap(BootstrapRequest) returns (BootstrapReply);
+
+  // EventStream: долгоживущий bidirectional gRPC-стрим с mTLS.
+  // Единственный канал коммуникации после онбординга (ADR-002, ADR-012(a)).
+  rpc EventStream(stream FromSoul) returns (stream FromKeeper);
+}
+
+message PingRequest {}
+
+message PingReply {
+  string version = 1;
+}
+
+// FromSoul — wrapper-message для сообщений Soul → Keeper в EventStream.
+message FromSoul {
+  oneof payload {
+    Hello hello = 1;
+    TaskEvent task_event = 2;
+    RunResult run_result = 3;
+    SoulprintReport soulprint_report = 4;
+    SeedRotationRequest seed_rotation_request = 5;
+    AugurRequest augur_request = 6;
+    PortentEvent portent_event = 7;
+    WardRoster ward_roster = 8;
+    ErrandResult errand_result = 9;
+  }
+}
+
+// FromKeeper — wrapper-message для сообщений Keeper → Soul в EventStream.
+message FromKeeper {
+  oneof payload {
+    HelloReply hello_reply = 1;
+    ApplyRequest apply_request = 2;
+    CancelApply cancel_apply = 3;
+    SeedRotationReply seed_rotation_reply = 4;
+    PluginSigil plugin_sigil = 5;
+    AugurReply augur_reply = 6;
+    SigilSnapshot sigil_snapshot = 7;
+    SigilTrustAnchors sigil_trust_anchors = 8;
+    VigilSnapshot vigil_snapshot = 9;
+    ErrandRequest errand_request = 10;
+    CancelErrand cancel_errand = 11;
+  }
+}

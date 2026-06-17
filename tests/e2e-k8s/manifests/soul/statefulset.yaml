@@ -1,0 +1,111 @@
+# Soul StatefulSet для L3c kind-cluster (L3c-3). Privileged systemd-PID-1
+# Debian-12 (parity с L3b debian-12.Dockerfile). StatefulSet, не Deployment —
+# нужны стабильные SID (FQDN) на pod-уровне; pod-0 получает hostname `soul-0`,
+# headless Service дает DNS `soul-0.soul.default.svc.cluster.local`.
+#
+# Replicas: 1 (L3c-3 — single Soul). Multi-Soul (replicas=N) — L3c-5.
+#
+# ConfigMap soul-config (рендеренный soul.yml) + Secret soul-bootstrap
+# (bootstrap-token + CA-bundle) создаёт harness через client-go ДО kubectl apply.
+# Без них pod упадёт на CreateContainerConfigError.
+#
+# Privileged + cgroupns=host + tmpfs /run — обязательны для systemd-PID-1
+# (см. soul.Dockerfile комментарий). На kind с docker-desktop (macOS) и Linux-CI
+# privileged-pods разрешены по дефолту; в проде понадобится PodSecurityPolicy
+# исключение, но здесь это test-only.
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: soul
+  labels:
+    app: soul
+spec:
+  serviceName: soul
+  replicas: 1
+  selector:
+    matchLabels:
+      app: soul
+  template:
+    metadata:
+      labels:
+        app: soul
+    spec:
+      # Subdomain=soul + serviceName=soul → pod-DNS `soul-0.soul.default.svc.cluster.local`.
+      # Это резолвится в SID. soul.yml пишет SID=<fqdn>; ниже env SOUL_SID
+      # подсказка для harness-debug, real-SID читается из cfg.SID (см. soul.yml
+      # в ConfigMap).
+      subdomain: soul
+      containers:
+        - name: soul
+          image: soul:e2e-k8s
+          imagePullPolicy: Never
+          securityContext:
+            # privileged для systemd-PID-1 + cgroup-fs hostmount.
+            privileged: true
+          # Soul не открывает входящих listener-ов внутри kind для L3c-3 —
+          # все коммуникации — outbound к keeper:9094 / keeper:9095. Поэтому
+          # `ports:` пуст. metrics:9100 в L3c-5 откроется (если включат).
+          volumeMounts:
+            - name: config
+              mountPath: /etc/soul
+              # readOnly: false — `soul init` будет писать SoulSeed-материал
+              # в /var/lib/soul-stack/seed (не /etc/soul), но bootstrap-token
+              # и ca.pem из Secret/ConfigMap пишутся как файлы на R-only
+              # SubPath-mount. Полный mount /etc/soul read-write упрощает
+              # harness-exec (manipulate token-files и soul.yml на лету).
+              readOnly: false
+            - name: cgroup
+              mountPath: /sys/fs/cgroup
+            - name: run
+              mountPath: /run
+            - name: run-lock
+              mountPath: /run/lock
+      volumes:
+        - name: config
+          # projected volume объединяет ConfigMap (soul.yml + ca.pem) и Secret
+          # (bootstrap-token) под одним mountPath. Без projected пришлось бы
+          # делать два mountPath или копировать содержимое в одно место через
+          # initContainer — projected проще.
+          projected:
+            sources:
+              - configMap:
+                  name: soul-config
+                  items:
+                    - key: soul.yml
+                      path: soul.yml
+                    - key: ca.pem
+                      path: ca.pem
+              - secret:
+                  name: soul-bootstrap
+                  items:
+                    - key: bootstrap-token
+                      path: bootstrap-token
+        - name: cgroup
+          hostPath:
+            path: /sys/fs/cgroup
+            type: Directory
+        - name: run
+          emptyDir:
+            medium: Memory
+        - name: run-lock
+          emptyDir:
+            medium: Memory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: soul
+  labels:
+    app: soul
+spec:
+  # Headless — DNS-резолв per-pod (`soul-0.soul.default.svc.cluster.local`),
+  # не round-robin ClusterIP. soul-pod-у это нужно для стабильного FQDN-имени,
+  # которое матчит SID и CN cert-а.
+  clusterIP: None
+  selector:
+    app: soul
+  ports:
+    - name: placeholder
+      port: 9100
+      targetPort: 9100

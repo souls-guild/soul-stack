@@ -1,0 +1,51 @@
+# systemd-юнит Keeper (ADR-004) — центральный узел Soul Stack.
+#
+# Установка:
+#   useradd --system --no-create-home --shell /usr/sbin/nologin soul-stack   # один раз на хост
+#   install -m0755 keeper/bin/keeper /usr/local/bin/keeper
+#   install -d -o soul-stack -g soul-stack /etc/keeper /var/lib/keeper
+#   install -m0640 keeper.yml /etc/keeper/keeper.yml
+#   install -m0644 deploy/systemd/keeper.service /etc/systemd/system/keeper.service
+#   install -m0644 deploy/systemd/keeper.env     /etc/keeper/keeper.env
+#   systemctl daemon-reload && systemctl enable --now keeper
+
+[Unit]
+Description=Soul Stack Keeper
+Documentation=https://github.com/souls-guild/soul-stack
+# Keeper слушает gRPC/HTTP и ходит в Postgres/Redis — нужна поднятая сеть.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=soul-stack
+Group=soul-stack
+
+# Путь к конфигу вынесен в EnvironmentFile — оператор меняет его без правки юнита.
+EnvironmentFile=/etc/keeper/keeper.env
+ExecStart=/usr/local/bin/keeper run --config=${KEEPER_CONFIG}
+
+# Падение демона — перезапуск; не зацикливаемся при битом конфиге (StartLimit).
+Restart=on-failure
+RestartSec=5s
+StartLimitIntervalSec=60s
+StartLimitBurst=5
+
+# --- hardening (безопасность на первом месте) ---
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+# Единственный writable-путь — стейт-каталог (TLS-материал, кеши, bootstrap-токены).
+ReadWritePaths=/var/lib/keeper
+
+[Install]
+WantedBy=multi-user.target

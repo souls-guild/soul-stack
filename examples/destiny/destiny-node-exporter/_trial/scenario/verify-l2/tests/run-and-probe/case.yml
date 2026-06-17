@@ -1,0 +1,84 @@
+# L2-кейс (docker-стенд, Trial ADR-023, дизайн «Вариант A»). Исполняется ТОЛЬКО
+# под build-tag integration: `go test -tags integration -run TestL2 ./internal/trial/...`
+# (требует docker). Дефолтный harness (make test) помечает его Skipped (маркер
+# stand:/verify:), как и прочие L2-fixtures.
+#
+# End-to-end на реальном Linux реальными core-модулями:
+#   1. render in-process (Keeper-side render-пайплайн, как L0) → ApplyRequest;
+#   2. soul apply (push-oneshot, ADR-004) в стенде применяет план: рендер launch-
+#      скрипта (core.file.rendered) + раскладка config (core.file.present);
+#   3. verify: запустить листенер напрямую (БЕЗ systemctl), пробить порт :9100,
+#      проверить разложенные артефакты;
+#   4. expect_idempotent: повторный apply того же плана → все register.changed==false.
+name: run-and-probe
+description: |
+  E2E node-exporter L2-харнесс (Вариант A): core.file применяется на docker-стенде,
+  mock-листенер стартует напрямую и отвечает на :9100. systemd НЕ используется —
+  листенер запускается процессом в verify (ТЗ §6).
+
+# ─── Стенд ──────────────────────────────────────────────────────────────────
+# mode: push — push-oneshot soul apply (ADR-004): Keeper рендерит план, доставляет
+# soul + ApplyRequest на хост, исполняет. Никаких новых stand-значений (reuse
+# семантики L2-fixtures destiny-redis). Образ python:3.12-slim — python3 нужен
+# launch-скрипту листенера и verify-пробе порта (герметично, без сети к GitHub).
+stand:
+  driver: docker
+  image:  python:3.12-slim
+  mode:   push
+
+# input харнесс-scenario (L2 берёт input как L0-Fixtures.Input — render не
+# подставляет scenario-default, дублируем явно нужные значения).
+input:
+  listen: ":9100"
+  bin_dir: /usr/local/bin
+
+# Двойной прогон того же ApplyRequest: второе применение обязано не менять state
+# (все register.changed==false). Идемпотентность core.file — по контенту/режиму.
+expect_idempotent: true
+
+# ─── Проверки результата ─────────────────────────────────────────────────────
+# Каждая verify-задача — однозадачный ApplyRequest на том же стенде (соответствует
+# дизайну: «verify исполнять тем же docker exec soul apply»). Module — полное имя
+# со state-суффиксом; expect сверяет register-output (exit_code/stdout/stdout_contains).
+verify:
+  # 1. launch-скрипт доставлен и исполняем (core.file.rendered отработал).
+  - name: launch-script-installed
+    apply:
+      module: core.cmd.shell
+      params:
+        cmd: "test -x /usr/local/bin/node_exporter-mock && echo OK"
+    expect:
+      exit_code: 0
+      stdout: "OK"
+
+  # 2. config разложен с верным content (core.file.present отработал).
+  - name: config-deployed
+    apply:
+      module: core.cmd.shell
+      params:
+        cmd: "cat /etc/node_exporter-mock.conf"
+    expect:
+      exit_code: 0
+      stdout_contains: "listen=:9100"
+
+  # 3. Запустить листенер напрямую (БЕЗ systemctl), дождаться порта, пробить
+  #    /metrics python-клиентом, остановить. Проба порта/процесса по ТЗ §6.
+  #    Листенер стартует с полным отсоединением stdout/stderr (>/dev/null 2>&1 </dev/null),
+  #    иначе docker-exec-stream остаётся открытым из-за наследования fd фоновым
+  #    процессом и сессия не завершается. PID убивается явно по $!.
+  - name: listener-serves-metrics
+    apply:
+      module: core.cmd.shell
+      params:
+        cmd: >-
+          /usr/local/bin/node_exporter-mock >/dev/null 2>&1 </dev/null & LPID=$!;
+          for i in $(seq 1 50); do
+            python3 -c "import socket,sys; s=socket.socket(); s.settimeout(0.2); sys.exit(0 if s.connect_ex(('127.0.0.1',9100))==0 else 1)" && break;
+            sleep 0.1;
+          done;
+          OUT=$(python3 -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:9100/metrics', timeout=2).read().decode())");
+          kill "$LPID" 2>/dev/null; wait "$LPID" 2>/dev/null;
+          printf '%s\n' "$OUT"
+    expect:
+      exit_code: 0
+      stdout_contains: "node_exporter_build_info"

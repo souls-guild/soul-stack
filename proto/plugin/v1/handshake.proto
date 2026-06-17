@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package soulstack.plugin.v1;
+
+import "v1/common.proto";
+
+option go_package = "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1;pluginv1";
+
+// Handshake — JSON-строка в одну линию, которую плагин пишет в stdout при запуске
+// (ADR-020(b), docs/keeper/plugins.md → Handshake).
+//
+// Wire-формат — JSON (`protojson.Marshal`). Все строки до первой с магическим
+// полем `soul_stack: "plugin-v1"` host игнорирует.
+message Handshake {
+  // Sanity-маркер, всегда `"plugin-v1"`. Host игнорирует все stdout-строки
+  // до первой с этим полем. Значение не зависит от `protocol_version` —
+  // это маркер формата handshake-строки v1; меняется только при breaking-смене
+  // самого формата handshake (отдельный ADR).
+  string soul_stack = 1;
+
+  // Версия plugin-протокола. Должен совпадать с manifest.protocol_version
+  // (cross-check на host-е, drift → SIGTERM, ADR-020(c)).
+  int32 protocol_version = 2;
+
+  // Должен совпадать с manifest.kind (cross-check на host-е, drift → SIGTERM).
+  Kind kind = 3;
+
+  // Тип сокета. MVP — только `"unix"`.
+  // Расширение `"named_pipe"` (Windows) / `"tcp"` (loopback) — post-MVP, без breaking.
+  string network = 4;
+
+  // Путь к Unix-socket, на котором плагин слушает gRPC.
+  // Должен совпадать с переданным в env-var `SOUL_PLUGIN_SOCKET`.
+  string address = 5;
+
+  // Зарезервировано под опциональный mTLS post-MVP (ADR-020(h)).
+  // В MVP всегда пустая строка `""`. Формат — base64-PEM.
+  string server_cert = 6;
+}

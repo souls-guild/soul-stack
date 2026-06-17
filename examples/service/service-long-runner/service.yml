@@ -1,0 +1,16 @@
+name: long-runner
+state_schema_version: 1
+description: >-
+  Сервис для валидации cross-host барьера и serial-волн (Phase-2 ТЕСТ B).
+  Сценарии гоняют core.cmd.shell sleep РАЗНОЙ длительности на разных хостах
+  (staggered по номеру в SID), чтобы поллингом mid-run поймать одновременно
+  разные per-host статусы в apply_runs и проверить, что incarnation держится в
+  applying до завершения ВСЕХ хостов (single-winner commit). Только core-модули.
+
+state_schema:
+  type: object
+  properties:
+    last_run:
+      type: string
+    runner_marker:
+      type: string

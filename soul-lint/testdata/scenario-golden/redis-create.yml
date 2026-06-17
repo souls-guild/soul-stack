@@ -1,0 +1,94 @@
+name: create
+description: Initial bootstrap of Redis HA cluster (with optional cloud-spawn)
+
+# Типизированный вход сценария. Формат блока — docs/input.md.
+input:
+  redis_version:
+    type: string
+    pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+
+  redis_users:
+    type: object
+    required: true
+    properties: {}
+    additional_properties:
+      type: object
+      properties:
+        acl:   { type: string }
+        state: { type: string, enum: [on, off] }
+      required: [acl, state]
+
+  redis_config:
+    type: object
+    properties: {}
+    additional_properties: { type: string }
+
+  # Адреса хостов кластера. На create probe невозможен (redis ещё не запущен),
+  # топология приходит явным входом оператора и фиксируется в incarnation.state.
+  redis_hosts:
+    type: array
+    items: { type: string }
+
+  redis_password:
+    type: string
+    required: true
+    secret: true
+    pattern: "^vault:.*"
+
+  spawn:
+    type: object
+    properties:
+      provider: { type: string }
+      profile:  { type: string }
+      count:    { type: integer, min: 3, max: 6 }
+      role_distribution:
+        type: array
+        items:
+          type: object
+          properties:
+            index: { type: string }
+            role:  { type: string, enum: [primary, replica] }
+
+# Что сценарий пишет в incarnation.state после успешного apply.
+# sets — map поле→CEL-выражение (orchestration.md §7.1): и какое поле обновить,
+# и откуда значение. В пилоте sets видит только input/incarnation/soulprint.self;
+# soulprint.hosts/vars/essence/state — future (полная грамматика), здесь не используем.
+state_changes:
+  sets:
+    redis_version: "${ input.redis_version }"
+    redis_users:   "${ input.redis_users }"
+    redis_config:  "${ input.redis_config }"
+    redis_hosts:   "${ input.redis_hosts }"
+
+tasks:
+  # Если нужно — создаём VM через CloudDriver (ADR-017: keeper-side core).
+  - name: provision
+    on: keeper
+    when: input.spawn != null
+    module: core.cloud.created
+    params:
+      provider: "${ input.spawn.provider }"
+      profile:  "${ input.spawn.profile }"
+      count:    "${ input.spawn.count }"
+
+  # Ставим Redis на все хосты этого кластера
+  - include: install.yml
+
+  # Настраиваем репликацию на репликах
+  - include: replication.yml
+
+  # Создаём пользователей из input. На create probe невозможен (redis ещё не
+  # запущен) — declared-топология и адрес master берутся из soulprint.hosts и
+  # пробрасываются в destiny через apply: input: (orchestration.md §4.1,
+  # bootstrap-таргетинг). Шаг идёт широко по incarnation; destiny применяет
+  # users на declared-master по master_addr, на репликах — idempotent no-op
+  # (реплики подхватят через replication). Per-role step-таргетинг отдельным
+  # ключом не вводится (pattern пилота create/replication.yml).
+  - name: Ensure redis users on the cluster
+    on: ["${ incarnation.name }"]
+    apply:
+      destiny: redis
+      input:
+        action:      ensure_users
+        users:       "${ input.redis_users }"
+        master_addr: "${ soulprint.hosts.where(\"role == 'primary'\").first.network.primary_ip }"

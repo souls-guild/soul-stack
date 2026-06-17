@@ -1,0 +1,40 @@
+kind: soul_module
+protocol_version: 1                    # compat-флаг SoulModule API; версия самого артефакта — git ref (ADR-007)
+namespace: wb                          # пример third-party коллекции
+name: redis-failover
+
+# Closed enum по ADR-020(f) / docs/keeper/plugins.md → required_capabilities.
+required_capabilities:
+  - network_outbound                   # redis-cli к master/replica
+  - vault_access                       # резолв password через vault:* ссылку
+
+# Strict-контракт touched ресурсов (ADR-020(g)): ровно одна пара
+# <resource_type>: <value> на запись.
+side_effects:
+  - { service: redis-server }
+  - { file: /etc/redis/sentinel.conf }
+
+spec:
+  states:
+    promoted:
+      description: |
+        Promote a designated Redis replica to master, demoting the current master.
+        Семантически switchover; имя состояния — verb-форма past participle
+        по конвенции core-модулей (installed/running/promoted/restarted).
+      input:
+        new_master_sid:
+          type: string
+          required: true
+          format: sid
+          source: { incarnation_hosts: true }
+          description: SID replica-хоста (существующий хост инкарнации), который должен стать новым master.
+        password:
+          type: string
+          required: true
+          secret: true
+          pattern: "^vault:.*"
+          description: Redis password (vault-ref, резолвится Keeper-ом).
+        timeout:
+          type: integer
+          default: 120
+          description: Таймаут на установление новой репликации, секунд.

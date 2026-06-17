@@ -1,0 +1,19 @@
+[Unit]
+Description=Soul agent (Soul Stack L3c)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Запуск daemon-режима. `soul run --config /etc/soul/soul.yml` читает SoulSeed
+# из cfg.Paths.Seed (default /var/lib/soul-stack/seed); SoulSeed должен
+# существовать до старта unit-а (harness вызывает `soul init` отдельным
+# `kubectl exec` до `systemctl start soul.service`).
+ExecStart=/usr/local/bin/soul run --config /etc/soul/soul.yml
+# on-failure: при разрыве EventStream без reconnect-loop unit рестартует
+# (Soul сам имеет reconnect-loop, fallback на systemd-restart — safety-net).
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

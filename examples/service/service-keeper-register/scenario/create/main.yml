@@ -1,0 +1,50 @@
+name: create
+description: >-
+  Привязывает Coven-метку к указанному Soul через keeper-side core-модуль
+  core.soul.registered (on: keeper). Шаг исполняется на keeper-инстансе: хостов
+  он не таргетит, soulprint не читает — берёт sid/coven из input. Доказывает
+  keeper-side dispatch (ADR-017, docs/keeper/modules.md).
+
+# Типизированный вход (docs/input.md).
+input:
+  # SID Soul-а, к которому привязывается метка. На E2E это SID connected
+  # soul-stub-а (FQDN).
+  soul_sid:
+    type: string
+    required: true
+    format: fqdn
+    description: SID Soul-а для coven-привязки keeper-side шагом.
+
+  # Coven-метка, которую keeper-шаг добавляет (mode: append) к существующим
+  # меткам Soul-а в реестре souls.
+  coven_label:
+    type: string
+    required: true
+    pattern: "^[a-z][a-z0-9-]*$"
+    description: Coven-метка, добавляемая keeper-side шагом.
+
+# Сервис ничего не пишет в incarnation.state: keeper-шаг мутирует реестр souls.
+state_changes: {}
+
+tasks:
+  # Keeper-side шаг: привязка coven к Soul в реестре. on: keeper → исполняется на
+  # keeper-инстансе. mode: append — добавляет метку к уже привязанным (корневой
+  # coven incarnation, проставленный при онбординге, сохраняется).
+  - name: Bind the coven label to the soul on the keeper
+    on: keeper
+    module: core.soul.registered
+    register: registered
+    params:
+      sid:   "${ input.soul_sid }"
+      coven: ["${ input.coven_label }"]
+      mode:  append
+
+  # Soul-side шаг на хостах incarnation: даёт каждому connected-хосту реальную
+  # задачу, чтобы roster-хост закрылся success (а не no_match как нецелевой). Сам
+  # по себе read-only no-op — фокус теста на keeper-side шаге выше.
+  - name: Echo on every host of the incarnation
+    module: core.exec.run
+    changed_when: "false"
+    params:
+      cmd: echo
+      args: ["keeper-register-ok"]

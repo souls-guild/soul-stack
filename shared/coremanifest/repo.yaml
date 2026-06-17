@@ -1,0 +1,24 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: repo
+
+required_capabilities:
+  - fs_write_root
+
+spec:
+  states:
+    present:
+      description: Пакетный репозиторий объявлен (файл-описание + GPG-ключ); apt/dnf/yum/apk. ADR-015/ADR-016.
+      input:
+        name:       { type: string, required: true, description: "Имя репозитория (= имя файла-описания, [A-Za-z0-9._-])." }
+        uri:        { type: string, required: true, description: "URL репозитория (http/https; http даёт обязательный warning)." }
+        gpg_key:    { type: string, description: "URL или armored GPG-ключ для supply-chain-проверки." }
+        gpg_check:  { type: bool,   description: "Проверять подпись пакетов (default true; opt-out даёт warning)." }
+        suite:      { type: string, description: "apt suite/дистрибутив (напр. stable)." }
+        components: { type: list,   items: { type: string }, description: "apt components (напр. [main, contrib])." }
+        enabled:    { type: bool,   description: "Репозиторий включён (default true)." }
+    absent:
+      description: Описание репозитория удалено (GPG-ключ не трогается).
+      input:
+        name: { type: string, required: true, description: "Имя репозитория (= имя файла-описания)." }

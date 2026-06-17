@@ -1,0 +1,88 @@
+name: Bug report
+description: Сообщить о баге или неожиданном поведении (закрытая бета)
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Спасибо за отчёт. Перед заполнением сверьтесь с
+        [docs/known-limitations.md](https://github.com/co-cy/soul-stack/blob/main/docs/known-limitations.md)
+        — часть ограничений в бету не входит осознанно.
+
+        **Уязвимость безопасности сюда не пишите.** Канал раскрытия — приватный
+        Security Advisory, см. [SECURITY.md](https://github.com/co-cy/soul-stack/blob/main/SECURITY.md).
+
+  - type: input
+    id: version
+    attributes:
+      label: Версия
+      description: Вывод команды `keeper version`.
+      placeholder: "v0.1.0-beta.3"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Компонент
+      description: Где проявляется баг.
+      options:
+        - keeper
+        - soul
+        - soulctl
+        - soul-lint
+        - web
+        - не уверен / несколько
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Шаги воспроизведения
+      description: Минимальная последовательность, приводящая к багу.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Ожидаемое поведение
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Фактическое поведение
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Логи / audit
+      description: >-
+        Релевантный фрагмент логов или audit-журнала.
+        НЕ прикладывайте секреты — JWT-токены, содержимое Vault, приватные ключи
+        SoulSeed, DSN с паролями. Маскируйте чувствительное.
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Окружение
+      description: ОС хостов (Keeper и Soul), как собрано (бинарь из релиза / `make build` / Docker), версии Postgres / Redis / Vault.
+      placeholder: |
+        Keeper OS: ...
+        Soul OS: ...
+        Сборка: ...
+        Postgres / Redis / Vault: ...
+    validations:
+      required: true

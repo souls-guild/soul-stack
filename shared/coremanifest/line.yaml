@@ -1,0 +1,34 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: line
+
+required_capabilities:
+  - fs_write_root
+
+spec:
+  states:
+    present:
+      description: Строка line присутствует в файле (с regexp — заменяет первую матчащую); ADR-015.
+      input:
+        path:         { type: string, required: true, description: "Целевой файл." }
+        # line обязателен для present, но не для absent — cross-field-инвариант
+        # проверяет Module.Validate (не выражается per-state manifest-required).
+        line:         { type: string, description: "Точная строка, которой управляем (обязательна для present)." }
+        regexp:       { type: string, description: "RE2-паттерн: первая матчащая строка заменяется на line." }
+        insertafter:  { type: string, description: "Литерал-якорь или EOF — куда вставлять (взаимоисключаемо с insertbefore)." }
+        insertbefore: { type: string, description: "Литерал-якорь или BOF — куда вставлять (взаимоисключаемо с insertafter)." }
+        create:       { type: bool,   description: "Создать файл, если отсутствует." }
+        mode:         { type: string, description: "Права при create, восьмеричная форма, напр. \"0644\"." }
+        owner:        { type: string, description: "Владелец при create (имя пользователя)." }
+        group:        { type: string, description: "Группа-владелец при create (имя группы)." }
+    absent:
+      description: Удаляет матчащие строки (по regexp — все; иначе по точному line).
+      input:
+        path:   { type: string, required: true, description: "Целевой файл." }
+        line:   { type: string, description: "Точная строка для удаления (обязателен line или regexp)." }
+        regexp: { type: string, description: "RE2-паттерн: удаляются все матчащие строки." }
+        create: { type: bool,   description: "Создать файл, если отсутствует." }
+        mode:   { type: string, description: "Права при create, восьмеричная форма." }
+        owner:  { type: string, description: "Владелец при create (имя пользователя)." }
+        group:  { type: string, description: "Группа-владелец при create (имя группы)." }

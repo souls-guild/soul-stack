@@ -1,0 +1,183 @@
+# L0-испытание (Trial, ADR-023) сценария create сервиса redis-monitored.
+#
+# Render-only, герметично. После унификации дрейфа демонстрирует КОМПОЗИЦИЮ трёх
+# standalone-destiny через apply:destiny (изолированный render каждой, ADR-009):
+# план — конкатенация задач redis-single (0..6) + redis-exporter (7..12) +
+# node-exporter (13..18) со сквозными индексами. Изоляция видна по тому, что params
+# каждой destiny собраны из её apply.input, а не из scenario-scope.
+#
+# redis-single — 7 задач (stateful-hardening): pkg/socket-dir/conf + systemd-hardening
+# drop-in + daemon-reload + running/restarted. Экспортеры — по 6 задач каждый
+# (fetch/extract/install/unit/running/restarted), без ручного core.user
+# (DynamicUser=yes в unit-е).
+#
+# Пароль Redis приходит из input.redis_password (required, не Vault — отличие от
+# service-redis, где пароль читается keeper-side через vault()): в обе destiny
+# (redis-single redis.conf + redis-exporter Environment) уходит одно значение.
+#
+# L0 не качает tarball/не ставит пакет — только CEL-render YAML-выражений. Реальная
+# установка требует Linux+systemd (см. README).
+name: create composes redis-single + redis-exporter + node-exporter
+
+# L0-источник destiny (герметичный file://): каталоги destiny-<name> лежат в
+# examples/destiny/ относительно service-root (examples/service/service-redis-monitored/).
+fixtures:
+  default_destiny_source: "file://../../destiny/destiny-{name}"
+  # L0-render берёт input как есть и НЕ применяет default-ы scenario-контракта
+  # (defaults подставляет Keeper при инвокации, до render-фазы). Поэтому в fixtures
+  # дублируем дефолты scenario/create/main.yml + обязательный redis_password (без
+  # дефолта). redis_version НЕ передан намеренно (required:false) — latest-путь:
+  # version рендерится в "" → core.pkg без =version-пина. sha256 экспортёров
+  # ОБЯЗАТЕЛЕН (required:true, без placeholder-дефолта) — валидный тестовый 64-hex.
+  input:
+    redis_password:         "change-me-please-32"
+    redis_socket:           /var/run/redis/redis-server.sock
+    redis_maxmemory:        256mb
+    node_exporter_version:  "1.8.2"
+    node_exporter_sha256:   "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    redis_exporter_version: "1.62.0"
+    redis_exporter_sha256:  "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    arch:                   amd64
+    bin_dir:                /usr/local/bin
+    node_exporter_listen:   ":9100"
+    redis_exporter_listen:  ":9121"
+  # soulprint синтетического L0-хоста: экспортеры берут arch из soulprint.self.os.arch
+  # (а не из статичного input.arch). Без этого факта CEL-render шага упал бы на
+  # no-such-key.
+  soulprint:
+    os:
+      arch: amd64
+
+assert:
+  rendered_tasks:
+    # ── redis-single (индексы 0..6) ─────────────────────────────────────────
+    - index: 0
+      module: core.pkg.installed
+      params:
+        name: redis-server
+        # redis_version не передан → has(...) ложно → "" (без пина, latest).
+        version: ""
+
+    # Каталог unix-сокета (idempotent install -d) — создаётся ДО рендера конфига.
+    - index: 1
+      module: core.exec.run
+      params:
+        creates: /var/run/redis
+        cmd: install
+        args: ["-d", "-o", "redis", "-g", "redis", "-m", "0755", "/var/run/redis"]
+
+    # redis.conf: socket/maxmemory/config из apply.input; password — из input.redis_password.
+    - index: 2
+      module: core.file.rendered
+      params:
+        path: /etc/redis/redis.conf
+        # template-путь заменён на доставленное Keeper-ом literal-содержимое (A1, ADR-012(d)).
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            socket: /var/run/redis/redis-server.sock
+            password: change-me-please-32
+            maxmemory: 256mb
+            # config пуст: scenario передаёт ${ {} } (нет essence.redis_config).
+            config: {}
+          self:
+            sid: trial-host
+            covens: []
+            role: ""
+            # os проецируется в self из fixtures.soulprint (нужен экспортерам для
+            # arch); виден во всех render_context.self прогона.
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # index 3 — systemd drop-in hardening, index 4 — daemon-reload (stateful-hardening
+    # redis-single; детальная сверка — в destiny-redis-single L0).
+    - index: 5
+      module: core.service.running
+      params:
+        name: redis-server
+        enabled: true
+
+    # ── redis-exporter (индексы 7..12) ──────────────────────────────────────
+    # Без core.group/core.user: сервис-аккаунт даёт DynamicUser=yes в unit-е;
+    # group-доступ к сокету (770) — через SupplementaryGroups=redis. Блок — 6 задач
+    # (fetch/extract/install/unit/running/restarted), unit-render на index 10.
+    - index: 7
+      module: core.url.fetched
+      params:
+        url: https://github.com/oliver006/redis_exporter/releases/download/v1.62.0/redis_exporter-v1.62.0.linux-amd64.tar.gz
+        path: /tmp/redis_exporter-1.62.0.tar.gz
+        checksum: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        mode: "0644"
+
+    # systemd-unit redis_exporter: redis_addr собран CEL-ом из 'unix://'+socket
+    # (та же точка интеграции, что unixsocket в redis.conf index 2).
+    - index: 10
+      module: core.file.rendered
+      params:
+        path: /etc/systemd/system/redis_exporter.service
+        template_content: "<present>"
+        mode: "0644"
+        owner: root
+        group: root
+        render_context:
+          vars:
+            bin_dir: /usr/local/bin
+            listen: ":9121"
+            redis_addr: unix:///var/run/redis/redis-server.sock
+            password: change-me-please-32
+            # extra_args не передан caller-ом → default [] destiny.
+            extra_args: []
+          self:
+            sid: trial-host
+            covens: []
+            role: ""
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # ── node-exporter (индексы 13..18) ──────────────────────────────────────
+    # node_exporter tarball: url из version+arch (arch из soulprint), checksum-пин.
+    - index: 13
+      module: core.url.fetched
+      params:
+        url: https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-amd64.tar.gz
+        path: /tmp/node_exporter-1.8.2.tar.gz
+        checksum: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        mode: "0644"
+
+    - index: 16
+      module: core.file.rendered
+      params:
+        path: /etc/systemd/system/node_exporter.service
+        template_content: "<present>"
+        mode: "0644"
+        owner: root
+        group: root
+        render_context:
+          vars:
+            bin_dir: /usr/local/bin
+            listen: ":9100"
+            extra_args: []
+          self:
+            sid: trial-host
+            covens: []
+            role: ""
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+  # Регресс на класс багов «state_changes падает на render». redis_version НЕ
+  # передан (latest-путь): незащищённый `${ input.redis_version }` дал бы CEL
+  # «no such key» на рендере sets. Канон — has(...)-guard → в state "".
+  state_changes:
+    redis_version: ""
+    node_exporter_version: "1.8.2"
+    redis_exporter_version: "1.62.0"
+    redis_socket: /var/run/redis/redis-server.sock

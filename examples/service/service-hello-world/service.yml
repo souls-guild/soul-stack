@@ -1,0 +1,15 @@
+name: hello-world
+state_schema_version: 1
+description: Минимальный service с реальным state-change для E2E (запись файла + commit в incarnation.state)
+
+# state_schema_version = 1 → каталог migrations/ не обязателен (ADR-019).
+# В отличие от service-noop, incarnation.state здесь непустой: scenario/create
+# пишет путь созданного файла в поле greeting_file.
+state_schema:
+  type: object
+  properties:
+    greeting_file:
+      type: string
+
+# Зависимостей нет: scenario использует только core-модули (ADR-015),
+# которые не перечисляются в destiny[]/modules[] (ADR-009).

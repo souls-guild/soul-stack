@@ -1,0 +1,850 @@
+package http_test
+
+import (
+	"context"
+	"io"
+	stdhttp "net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+	"unicode/utf8"
+
+	httpmod "github.com/souls-guild/soul-stack/soul/internal/coremod/http"
+	"github.com/souls-guild/soul-stack/soul/internal/coremod/internaltest"
+	"github.com/souls-guild/soul-stack/soul/internal/coremod/util"
+
+	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
+	"google.golang.org/protobuf/types/known/structpb"
+)
+
+// fakeDoer — детерминированный HTTPDoer: возвращает заданное тело/статус для
+// любого запроса, записывает реально полученные метод и заголовки. Сети нет.
+type fakeDoer struct {
+	body       []byte
+	status     int
+	gotHeaders stdhttp.Header
+	gotMethod  string
+	calls      int
+	err        error
+}
+
+func (d *fakeDoer) Do(req *stdhttp.Request) (*stdhttp.Response, error) {
+	d.calls++
+	d.gotMethod = req.Method
+	d.gotHeaders = req.Header.Clone()
+	if d.err != nil {
+		return nil, d.err
+	}
+	status := d.status
+	if status == 0 {
+		status = stdhttp.StatusOK
+	}
+	return &stdhttp.Response{
+		StatusCode: status,
+		Body:       io.NopCloser(strings.NewReader(string(d.body))),
+		Header:     make(stdhttp.Header),
+	}, nil
+}
+
+func mustStruct(t *testing.T, m map[string]any) *structpb.Struct {
+	t.Helper()
+	s, err := structpb.NewStruct(m)
+	if err != nil {
+		t.Fatalf("structpb.NewStruct: %v", err)
+	}
+	return s
+}
+
+// newModule подменяет фабрику клиента на возврат единственного fakeDoer,
+// игнорируя opts (тесты, которым важно только тело/статус/маршрут вызова).
+func newModule(d *fakeDoer) *httpmod.Module {
+	m := httpmod.New()
+	m.NewClient = func(util.HTTPClientOpts) util.HTTPDoer { return d }
+	return m
+}
+
+// newModuleCapturing подменяет фабрику на возврат d и записывает HTTPClientOpts,
+// с которыми модуль её вызвал, в *got. Нужен тестам, проверяющим, что флаги
+// задачи (allow_private / allow_http / insecure_skip_verify) ортогонально
+// доезжают до построения клиента.
+func newModuleCapturing(d *fakeDoer, got *util.HTTPClientOpts) *httpmod.Module {
+	m := httpmod.New()
+	m.NewClient = func(opts util.HTTPClientOpts) util.HTTPDoer {
+		*got = opts
+		return d
+	}
+	return m
+}
+
+// --- Validate ---
+
+func TestValidate_RejectsUnknownVerb(t *testing.T) {
+	m := httpmod.New()
+	reply, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
+		State:  "checked",
+		Params: mustStruct(t, map[string]any{"url": "https://example.com/health"}),
+	})
+	if reply.Ok {
+		t.Fatal("Validate ok=true для неизвестного verb")
+	}
+}
+
+func TestValidate_RequiresURL(t *testing.T) {
+	m := httpmod.New()
+	reply, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
+		State:  "probe",
+		Params: mustStruct(t, map[string]any{}),
+	})
+	if reply.Ok {
+		t.Fatal("Validate ok=true без url")
+	}
+}
+
+func TestValidate_RejectsHTTP(t *testing.T) {
+	m := httpmod.New()
+	reply, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
+		State:  "probe",
+		Params: mustStruct(t, map[string]any{"url": "http://example.com/health"}),
+	})
+	if reply.Ok {
+		t.Fatal("Validate ok=true для http:// URL")
+	}
+}
+
+func TestValidate_RejectsFileScheme(t *testing.T) {
+	m := httpmod.New()
+	reply, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
+		State:  "probe",
+		Params: mustStruct(t, map[string]any{"url": "file:///etc/passwd"}),
+	})
+	if reply.Ok {
+		t.Fatal("Validate ok=true для file:// URL")
+	}
+}
+
+func TestValidate_RejectsMutatingMethod(t *testing.T) {
+	for _, method := range []string{"POST", "PUT", "PATCH", "DELETE", "post"} {
+		m := httpmod.New()
+		reply, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
+			State: "probe",
+			Params: mustStruct(t, map[string]any{
+				"url":    "https://example.com/health",
+				"method": method,
+			}),
+		})
+		if reply.Ok {
+			t.Fatalf("Validate ok=true для мутирующего метода %q", method)
+		}
+	}
+}
+
+func TestValidate_AcceptsGETHEAD(t *testing.T) {
+	for _, method := range []string{"GET", "HEAD", "get", "head", ""} {
+		m := httpmod.New()
+		params := map[string]any{"url": "https://example.com/health"}
+		if method != "" {
+			params["method"] = method
+		}
+		reply, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
+			State:  "probe",
+			Params: mustStruct(t, params),
+		})
+		if !reply.Ok {
+			t.Fatalf("Validate ok=false для метода %q: %v", method, reply.Errors)
+		}
+	}
+}
+
+func TestValidate_AcceptsValidFull(t *testing.T) {
+	m := httpmod.New()
+	reply, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
+		State: "probe",
+		Params: mustStruct(t, map[string]any{
+			"url":          "https://example.com/health",
+			"method":       "GET",
+			"status_codes": []any{200, 204},
+			"timeout":      "5s",
+		}),
+	})
+	if !reply.Ok {
+		t.Fatalf("Validate ok=false для валидного probe: %v", reply.Errors)
+	}
+}
+
+// --- Apply: probe GET 200 ---
+
+func TestApply_GET_200_ReturnsRegister_ChangedFalse(t *testing.T) {
+	body := []byte(`{"status":"ok"}`)
+	d := &fakeDoer{body: body, status: 200}
+	m := newModule(d)
+
+	stream := &internaltest.ApplyStream{}
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State:  "probe",
+		Params: mustStruct(t, map[string]any{"url": "https://example.com/health"}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	ev := stream.Last()
+	if ev.Failed {
+		t.Fatalf("failed=true: %s", ev.Message)
+	}
+	// changed=false конструктивно.
+	if ev.Changed {
+		t.Fatal("changed=true (read-probe обязан быть changed=false)")
+	}
+	if ev.Output.Fields["changed"].GetBoolValue() != false {
+		t.Fatal("output.changed != false")
+	}
+	if ev.Output.Fields["status"].GetNumberValue() != 200 {
+		t.Fatalf("status=%v want 200", ev.Output.Fields["status"].GetNumberValue())
+	}
+	if ev.Output.Fields["body"].GetStringValue() != string(body) {
+		t.Fatalf("body=%q want %q", ev.Output.Fields["body"].GetStringValue(), body)
+	}
+	if _, ok := ev.Output.Fields["elapsed_ms"]; !ok {
+		t.Fatal("elapsed_ms отсутствует в output")
+	}
+	if d.gotMethod != "GET" {
+		t.Fatalf("method=%q want GET", d.gotMethod)
+	}
+}
+
+// --- status_codes mismatch → failed (но с output) ---
+
+func TestApply_StatusMismatch_Fails_WithOutput(t *testing.T) {
+	d := &fakeDoer{body: []byte("error page"), status: 500}
+	m := newModule(d)
+
+	stream := &internaltest.ApplyStream{}
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State: "probe",
+		Params: mustStruct(t, map[string]any{
+			"url":          "https://example.com/health",
+			"status_codes": []any{200},
+		}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	ev := stream.Last()
+	if !ev.Failed {
+		t.Fatal("failed=false при status 500 вне ожидаемого [200]")
+	}
+	// Output приложен для диагностики: фактический status/body.
+	if ev.Output == nil {
+		t.Fatal("output отсутствует при mismatch (нужен для диагностики)")
+	}
+	if ev.Output.Fields["status"].GetNumberValue() != 500 {
+		t.Fatalf("output.status=%v want 500", ev.Output.Fields["status"].GetNumberValue())
+	}
+}
+
+func TestApply_DefaultStatusCodes_200(t *testing.T) {
+	d := &fakeDoer{status: 200}
+	m := newModule(d)
+	stream := &internaltest.ApplyStream{}
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State:  "probe",
+		Params: mustStruct(t, map[string]any{"url": "https://example.com/health"}),
+	}, stream)
+	if stream.Last().Failed {
+		t.Fatal("failed=true для 200 при дефолтном status_codes")
+	}
+
+	d2 := &fakeDoer{status: 201}
+	m2 := newModule(d2)
+	stream2 := &internaltest.ApplyStream{}
+	_ = m2.Apply(&pluginv1.ApplyRequest{
+		State:  "probe",
+		Params: mustStruct(t, map[string]any{"url": "https://example.com/health"}),
+	}, stream2)
+	if !stream2.Last().Failed {
+		t.Fatal("failed=false для 201 при дефолтном status_codes [200]")
+	}
+}
+
+// --- HEAD: тело не читается ---
+
+func TestApply_HEAD_NoBody(t *testing.T) {
+	d := &fakeDoer{body: []byte("should not be read"), status: 200}
+	m := newModule(d)
+
+	stream := &internaltest.ApplyStream{}
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State: "probe",
+		Params: mustStruct(t, map[string]any{
+			"url":    "https://example.com/health",
+			"method": "HEAD",
+		}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	ev := stream.Last()
+	if ev.Failed {
+		t.Fatalf("failed=true: %s", ev.Message)
+	}
+	if d.gotMethod != "HEAD" {
+		t.Fatalf("method=%q want HEAD", d.gotMethod)
+	}
+	if ev.Output.Fields["body"].GetStringValue() != "" {
+		t.Fatalf("HEAD вернул тело: %q", ev.Output.Fields["body"].GetStringValue())
+	}
+}
+
+// --- headers: отправлены, в output только ключи (значения замаскированы) ---
+
+func TestApply_Headers_Sent_OnlyKeysInOutput(t *testing.T) {
+	d := &fakeDoer{body: []byte("ok"), status: 200}
+	m := newModule(d)
+
+	stream := &internaltest.ApplyStream{}
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State: "probe",
+		Params: mustStruct(t, map[string]any{
+			"url": "https://example.com/health",
+			"headers": map[string]any{
+				"Authorization": "Bearer super-secret-token",
+			},
+		}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	ev := stream.Last()
+	if ev.Failed {
+		t.Fatalf("failed=true: %s", ev.Message)
+	}
+	// Заголовок реально отправлен.
+	if got := d.gotHeaders.Get("Authorization"); got != "Bearer super-secret-token" {
+		t.Fatalf("Authorization не отправлен: %q", got)
+	}
+	// В output — headers_keys (только имя), без значения.
+	keys := ev.Output.Fields["headers_keys"].GetListValue()
+	if keys == nil || len(keys.Values) != 1 || keys.Values[0].GetStringValue() != "Authorization" {
+		t.Fatalf("headers_keys=%v want [Authorization]", keys)
+	}
+	if _, ok := ev.Output.Fields["headers"]; ok {
+		t.Fatal("сырой блок headers присутствует в output")
+	}
+	// Значение секрета не просочилось ни в одно поле output.
+	for k, v := range ev.Output.Fields {
+		if strings.Contains(v.GetStringValue(), "super-secret-token") {
+			t.Fatalf("значение заголовка просочилось в output[%q]", k)
+		}
+	}
+}
+
+// --- body cap/truncate ---
+
+func TestApply_BodyCap_Truncated(t *testing.T) {
+	// Тело заведомо больше cap (64 KiB).
+	big := strings.Repeat("a", 70*1024)
+	d := &fakeDoer{body: []byte(big), status: 200}
+	m := newModule(d)
+
+	stream := &internaltest.ApplyStream{}
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State:  "probe",
+		Params: mustStruct(t, map[string]any{"url": "https://example.com/big"}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	ev := stream.Last()
+	if ev.Failed {
+		t.Fatalf("failed=true: %s", ev.Message)
+	}
+	if !ev.Output.Fields["truncated"].GetBoolValue() {
+		t.Fatal("truncated=false для тела > cap")
+	}
+	gotBody := ev.Output.Fields["body"].GetStringValue()
+	if len(gotBody) != 64*1024 {
+		t.Fatalf("len(body)=%d want %d (cap)", len(gotBody), 64*1024)
+	}
+}
+
+func TestApply_BodyUnderCap_NotTruncated(t *testing.T) {
+	d := &fakeDoer{body: []byte("small"), status: 200}
+	m := newModule(d)
+	stream := &internaltest.ApplyStream{}
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State:  "probe",
+		Params: mustStruct(t, map[string]any{"url": "https://example.com/small"}),
+	}, stream)
+	if stream.Last().Output.Fields["truncated"].GetBoolValue() {
+		t.Fatal("truncated=true для маленького тела")
+	}
+}
+
+// --- body маскинг: vault-ref в теле маскируется обычным MaskSecrets ---
+
+func TestApply_BodyMasked_VaultRef(t *testing.T) {
+	d := &fakeDoer{body: []byte("vault:secret/data/x"), status: 200}
+	m := newModule(d)
+	stream := &internaltest.ApplyStream{}
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State:  "probe",
+		Params: mustStruct(t, map[string]any{"url": "https://example.com/v"}),
+	}, stream)
+	got := stream.Last().Output.Fields["body"].GetStringValue()
+	if strings.Contains(got, "vault:secret") {
+		t.Fatalf("vault-ref в теле не замаскирован: %q", got)
+	}
+}
+
+// --- транспортная ошибка → failed ---
+
+func TestApply_TransportError_Fails(t *testing.T) {
+	d := &fakeDoer{err: io.ErrUnexpectedEOF}
+	m := newModule(d)
+	stream := &internaltest.ApplyStream{}
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State:  "probe",
+		Params: mustStruct(t, map[string]any{"url": "https://example.com/x"}),
+	}, stream)
+	if !stream.Last().Failed {
+		t.Fatal("failed=false при транспортной ошибке")
+	}
+}
+
+func TestApply_RejectsHTTPScheme_NoCall(t *testing.T) {
+	d := &fakeDoer{status: 200}
+	m := newModule(d)
+	stream := &internaltest.ApplyStream{}
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State:  "probe",
+		Params: mustStruct(t, map[string]any{"url": "http://example.com/x"}),
+	}, stream)
+	if !stream.Last().Failed {
+		t.Fatal("failed=false для http:// в Apply")
+	}
+	if d.calls != 0 {
+		t.Fatalf("HTTP вызван %d раз для http:// (ожидалось 0)", d.calls)
+	}
+}
+
+// --- SSRF opt-in: allow_private доезжает до фабрики как HTTPClientOpts.AllowPrivate ---
+
+// probe строит клиент per-call фабрикой NewClient под флаги задачи. Проверяем,
+// что allow_private ортогонально превращается в HTTPClientOpts.AllowPrivate.
+func TestApply_AllowPrivate_PropagatesToClientOpts(t *testing.T) {
+	t.Run("default (no param) -> AllowPrivate=false", func(t *testing.T) {
+		var got util.HTTPClientOpts
+		d := &fakeDoer{status: 200}
+		m := newModuleCapturing(d, &got)
+
+		stream := &internaltest.ApplyStream{}
+		_ = m.Apply(&pluginv1.ApplyRequest{
+			State:  "probe",
+			Params: mustStruct(t, map[string]any{"url": "https://example.com/health"}),
+		}, stream)
+
+		if d.calls != 1 {
+			t.Fatalf("клиент вызван %d раз (ожидалось 1)", d.calls)
+		}
+		if got.AllowPrivate {
+			t.Fatal("AllowPrivate=true без param (default обязан быть guarded)")
+		}
+	})
+
+	t.Run("allow_private:true -> AllowPrivate=true", func(t *testing.T) {
+		var got util.HTTPClientOpts
+		d := &fakeDoer{status: 200}
+		m := newModuleCapturing(d, &got)
+
+		stream := &internaltest.ApplyStream{}
+		_ = m.Apply(&pluginv1.ApplyRequest{
+			State: "probe",
+			Params: mustStruct(t, map[string]any{
+				"url":           "https://internal.svc/health",
+				"allow_private": true,
+			}),
+		}, stream)
+
+		if !got.AllowPrivate {
+			t.Fatal("AllowPrivate=false при allow_private:true")
+		}
+		// Прочие контуры не задеты (ортогональность).
+		if got.AllowHTTPRedirect || got.InsecureSkipVerify {
+			t.Fatalf("allow_private задел чужой контур: %+v", got)
+		}
+	})
+
+	t.Run("allow_private not bool -> failed before call", func(t *testing.T) {
+		var got util.HTTPClientOpts
+		d := &fakeDoer{status: 200}
+		m := newModuleCapturing(d, &got)
+
+		stream := &internaltest.ApplyStream{}
+		_ = m.Apply(&pluginv1.ApplyRequest{
+			State: "probe",
+			Params: mustStruct(t, map[string]any{
+				"url":           "https://example.com/x",
+				"allow_private": "yes",
+			}),
+		}, stream)
+
+		if !stream.Last().Failed {
+			t.Fatal("allow_private строкой не дал failed")
+		}
+		if d.calls != 0 {
+			t.Fatalf("клиент вызван при кривом allow_private (calls=%d)", d.calls)
+		}
+	})
+}
+
+// --- downgrade-защита: реальная redirect-цепочка https→http отвергается ---
+
+func TestApply_Redirect_HTTPS_to_HTTP_Blocked(t *testing.T) {
+	var httpHit bool
+	httpSrv := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, _ *stdhttp.Request) {
+		httpHit = true
+		_, _ = w.Write([]byte("downgraded body"))
+	}))
+	defer httpSrv.Close()
+
+	tlsSrv := httptest.NewTLSServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+		stdhttp.Redirect(w, r, httpSrv.URL+"/health", stdhttp.StatusFound)
+	}))
+	defer tlsSrv.Close()
+
+	client := httpmod.NewRealClient()
+	client.Transport = tlsSrv.Client().Transport
+
+	m := httpmod.New()
+	m.NewClient = func(util.HTTPClientOpts) util.HTTPDoer { return client }
+
+	stream := &internaltest.ApplyStream{}
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State:  "probe",
+		Params: mustStruct(t, map[string]any{"url": tlsSrv.URL + "/start"}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if !stream.Last().Failed {
+		t.Fatal("failed=false при редиректе https→http")
+	}
+	if httpHit {
+		t.Fatal("downgrade-редирект достиг http-сервера")
+	}
+}
+
+// --- BUG-2: не-UTF8 / разрезанная руна не ломают structpb-сериализацию ---
+
+// applyProbe вызывает stream.Send; для success-пути с не-UTF8 телом он раньше
+// возвращал грязную gRPC-ошибку из structpb.NewStruct. Теперь тело
+// санитизируется → чистый результат, без ошибки Apply.
+func TestApply_NonUTF8Body_Success_CleanResult(t *testing.T) {
+	d := &fakeDoer{body: []byte{0xff, 0xfe, 'o', 'k'}, status: 200}
+	m := newModule(d)
+	stream := &internaltest.ApplyStream{}
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State:  "probe",
+		Params: mustStruct(t, map[string]any{"url": "https://example.com/bin"}),
+	}, stream); err != nil {
+		t.Fatalf("Apply вернул gRPC-ошибку на не-UTF8 теле: %v", err)
+	}
+	ev := stream.Last()
+	if ev.Failed {
+		t.Fatalf("failed=true: %s", ev.Message)
+	}
+	got := ev.Output.Fields["body"].GetStringValue()
+	if !utf8.ValidString(got) {
+		t.Fatalf("санитизированное тело невалидно как UTF-8: %q", got)
+	}
+}
+
+// Многобайтная руна, разрезанная ровно на границе cap, должна откатываться до
+// последней полной руны → валидный UTF-8, truncated=true.
+func TestApply_RuneSplitAtCap_RuneAware(t *testing.T) {
+	// 65535 ASCII-байт + 2-байтная руna 'é' (0xc3 0xa9) = 65537 байт. Срез
+	// [:65536] оставил бы первый байт 0xc3 (битый префикс) — раньше падало.
+	body := append([]byte(strings.Repeat("a", 64*1024-1)), 0xc3, 0xa9)
+	d := &fakeDoer{body: body, status: 200}
+	m := newModule(d)
+	stream := &internaltest.ApplyStream{}
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State:  "probe",
+		Params: mustStruct(t, map[string]any{"url": "https://example.com/rune"}),
+	}, stream); err != nil {
+		t.Fatalf("Apply вернул ошибку на разрезанной руне: %v", err)
+	}
+	ev := stream.Last()
+	if ev.Failed {
+		t.Fatalf("failed=true: %s", ev.Message)
+	}
+	got := ev.Output.Fields["body"].GetStringValue()
+	if !utf8.ValidString(got) {
+		t.Fatalf("тело после rune-aware cap невалидно: невалидный UTF-8")
+	}
+	if !ev.Output.Fields["truncated"].GetBoolValue() {
+		t.Fatal("truncated=false при усечении по cap")
+	}
+	// Откатили частичную руну → длина < cap, без последнего битого байта.
+	if strings.HasSuffix(got, "\xc3") {
+		t.Fatal("частичная руна осталась в конце тела")
+	}
+}
+
+// mismatch-путь обязан ДОВОЗИТЬ output даже при не-UTF8 теле (раньше
+// structpb.NewStruct err → Output=nil, диагностика терялась молча).
+func TestApply_StatusMismatch_NonUTF8Body_OutputDelivered(t *testing.T) {
+	d := &fakeDoer{body: []byte{0xff, 0xfe, 'e', 'r', 'r'}, status: 500}
+	m := newModule(d)
+	stream := &internaltest.ApplyStream{}
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State: "probe",
+		Params: mustStruct(t, map[string]any{
+			"url":          "https://example.com/health",
+			"status_codes": []any{200},
+		}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	ev := stream.Last()
+	if !ev.Failed {
+		t.Fatal("failed=false при status 500 вне [200]")
+	}
+	if ev.Output == nil {
+		t.Fatal("output потерян на mismatch с не-UTF8 телом (нужен для диагностики)")
+	}
+	if ev.Output.Fields["status"].GetNumberValue() != 500 {
+		t.Fatalf("output.status=%v want 500", ev.Output.Fields["status"].GetNumberValue())
+	}
+	// changed=false на mismatch-failed (regression-guard).
+	if ev.Changed {
+		t.Fatal("changed=true на mismatch (read-probe обязан быть changed=false)")
+	}
+	if ev.Output.Fields["changed"].GetBoolValue() {
+		t.Fatal("output.changed=true на mismatch")
+	}
+}
+
+// Тело РОВНО на границе 64KiB не усекается (off-by-one: читаем cap+1, len==cap).
+func TestApply_BodyExactlyAtCap_NotTruncated(t *testing.T) {
+	body := strings.Repeat("a", 64*1024)
+	d := &fakeDoer{body: []byte(body), status: 200}
+	m := newModule(d)
+	stream := &internaltest.ApplyStream{}
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State:  "probe",
+		Params: mustStruct(t, map[string]any{"url": "https://example.com/exact"}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	ev := stream.Last()
+	if ev.Output.Fields["truncated"].GetBoolValue() {
+		t.Fatal("truncated=true для тела ровно 64KiB (off-by-one)")
+	}
+	if got := len(ev.Output.Fields["body"].GetStringValue()); got != 64*1024 {
+		t.Fatalf("len(body)=%d want %d", got, 64*1024)
+	}
+}
+
+// --- BUG-1: vault-ref-substring-маскинг в теле ---
+
+// vault-ref ВНУТРИ JSON-тела (не префикс всей строки) теперь маскируется.
+func TestApply_BodyMasked_EmbeddedVaultRef(t *testing.T) {
+	d := &fakeDoer{body: []byte(`{"token":"vault:secret/data/x"}`), status: 200}
+	m := newModule(d)
+	stream := &internaltest.ApplyStream{}
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State:  "probe",
+		Params: mustStruct(t, map[string]any{"url": "https://example.com/v"}),
+	}, stream)
+	got := stream.Last().Output.Fields["body"].GetStringValue()
+	if strings.Contains(got, "vault:secret") {
+		t.Fatalf("embedded vault-ref не замаскирован: %q", got)
+	}
+	if !strings.Contains(got, "***MASKED***") {
+		t.Fatalf("маска отсутствует в теле: %q", got)
+	}
+}
+
+// Тело без vault-ref не трогается.
+func TestApply_BodyNoVaultRef_Untouched(t *testing.T) {
+	d := &fakeDoer{body: []byte(`{"status":"ok","up":true}`), status: 200}
+	m := newModule(d)
+	stream := &internaltest.ApplyStream{}
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State:  "probe",
+		Params: mustStruct(t, map[string]any{"url": "https://example.com/h"}),
+	}, stream)
+	got := stream.Last().Output.Fields["body"].GetStringValue()
+	if got != `{"status":"ok","up":true}` {
+		t.Fatalf("тело без vault-ref изменено: %q", got)
+	}
+}
+
+// Произвольный plaintext-секрет НЕ маскируется — документированное ограничение
+// (тело semi-trusted). Тест фиксирует факт, чтобы поведение было осознанным.
+func TestApply_BodyPlaintextSecret_NotMasked(t *testing.T) {
+	d := &fakeDoer{body: []byte(`{"password":"hunter2"}`), status: 200}
+	m := newModule(d)
+	stream := &internaltest.ApplyStream{}
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State:  "probe",
+		Params: mustStruct(t, map[string]any{"url": "https://example.com/p"}),
+	}, stream)
+	got := stream.Last().Output.Fields["body"].GetStringValue()
+	if !strings.Contains(got, "hunter2") {
+		t.Fatalf("plaintext-секрет неожиданно замаскирован (ограничение нарушено): %q", got)
+	}
+}
+
+// --- покрытие (qa gaps) ---
+
+func TestApply_EmptyBody_200(t *testing.T) {
+	d := &fakeDoer{body: []byte{}, status: 200}
+	m := newModule(d)
+	stream := &internaltest.ApplyStream{}
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State:  "probe",
+		Params: mustStruct(t, map[string]any{"url": "https://example.com/empty"}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	ev := stream.Last()
+	if ev.Failed {
+		t.Fatalf("failed=true на пустом теле 200: %s", ev.Message)
+	}
+	if ev.Output.Fields["body"].GetStringValue() != "" {
+		t.Fatalf("body не пуст: %q", ev.Output.Fields["body"].GetStringValue())
+	}
+	if ev.Output.Fields["truncated"].GetBoolValue() {
+		t.Fatal("truncated=true на пустом теле")
+	}
+}
+
+func TestValidate_InvalidTimeout(t *testing.T) {
+	for _, ts := range []string{"abc", "0s", "-5s", "0"} {
+		m := httpmod.New()
+		reply, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
+			State: "probe",
+			Params: mustStruct(t, map[string]any{
+				"url":     "https://example.com/health",
+				"timeout": ts,
+			}),
+		})
+		if reply.Ok {
+			t.Fatalf("Validate ok=true для невалидного timeout %q", ts)
+		}
+	}
+}
+
+// Кастомный status_codes [200,204] реально матчит 204 в Apply (не только Validate).
+func TestApply_CustomStatusCodes_Matches204(t *testing.T) {
+	d := &fakeDoer{status: 204}
+	m := newModule(d)
+	stream := &internaltest.ApplyStream{}
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State: "probe",
+		Params: mustStruct(t, map[string]any{
+			"url":          "https://example.com/health",
+			"status_codes": []any{200, 204},
+		}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if stream.Last().Failed {
+		t.Fatal("failed=true для 204 при status_codes [200,204]")
+	}
+}
+
+// status_codes [] → fallback [200] (зафиксировать поведение).
+func TestApply_EmptyStatusCodes_FallbackTo200(t *testing.T) {
+	d200 := &fakeDoer{status: 200}
+	s := &internaltest.ApplyStream{}
+	_ = newModule(d200).Apply(&pluginv1.ApplyRequest{
+		State: "probe",
+		Params: mustStruct(t, map[string]any{
+			"url":          "https://example.com/h",
+			"status_codes": []any{},
+		}),
+	}, s)
+	if s.Last().Failed {
+		t.Fatal("failed=true для 200 при status_codes [] (ожидался fallback [200])")
+	}
+
+	d201 := &fakeDoer{status: 201}
+	s2 := &internaltest.ApplyStream{}
+	_ = newModule(d201).Apply(&pluginv1.ApplyRequest{
+		State: "probe",
+		Params: mustStruct(t, map[string]any{
+			"url":          "https://example.com/h",
+			"status_codes": []any{},
+		}),
+	}, s2)
+	if !s2.Last().Failed {
+		t.Fatal("failed=false для 201 при status_codes [] (fallback [200] не сработал)")
+	}
+}
+
+// headers_keys детерминированы (отсортированы) независимо от порядка вставки.
+func TestApply_HeaderKeys_Sorted(t *testing.T) {
+	d := &fakeDoer{body: []byte("ok"), status: 200}
+	m := newModule(d)
+	stream := &internaltest.ApplyStream{}
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State: "probe",
+		Params: mustStruct(t, map[string]any{
+			"url": "https://example.com/h",
+			"headers": map[string]any{
+				"X-Zebra":       "1",
+				"Authorization": "2",
+				"Accept":        "3",
+			},
+		}),
+	}, stream)
+	keys := stream.Last().Output.Fields["headers_keys"].GetListValue()
+	want := []string{"Accept", "Authorization", "X-Zebra"}
+	if keys == nil || len(keys.Values) != len(want) {
+		t.Fatalf("headers_keys=%v want %v", keys, want)
+	}
+	for i, w := range want {
+		if got := keys.Values[i].GetStringValue(); got != w {
+			t.Fatalf("headers_keys[%d]=%q want %q (не отсортировано)", i, got, w)
+		}
+	}
+}
+
+// --- timeout: медленный сервер дольше timeout → failed, не виснет ---
+
+func TestApply_Timeout_Fails(t *testing.T) {
+	release := make(chan struct{})
+	tlsSrv := httptest.NewTLSServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, _ *stdhttp.Request) {
+		select {
+		case <-release:
+		case <-time.After(5 * time.Second):
+		}
+		_, _ = w.Write([]byte("late"))
+	}))
+	defer tlsSrv.Close()
+	defer close(release)
+
+	client := httpmod.NewRealClient()
+	client.Transport = tlsSrv.Client().Transport
+	m := httpmod.New()
+	m.NewClient = func(util.HTTPClientOpts) util.HTTPDoer { return client }
+
+	done := make(chan struct{})
+	stream := &internaltest.ApplyStream{}
+	go func() {
+		_ = m.Apply(&pluginv1.ApplyRequest{
+			State: "probe",
+			Params: mustStruct(t, map[string]any{
+				"url":     tlsSrv.URL + "/slow",
+				"timeout": "200ms",
+			}),
+		}, stream)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Apply завис: timeout не сработал")
+	}
+	if !stream.Last().Failed {
+		t.Fatal("failed=false при превышении timeout")
+	}
+}

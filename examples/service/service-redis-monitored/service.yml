@@ -1,0 +1,36 @@
+name: redis-monitored
+state_schema_version: 1
+description: >-
+  Базовый Redis с мониторингом на одной VM (Linux/systemd): redis-server +
+  node_exporter + redis_exporter. redis_exporter подключается к Redis через
+  unix-сокет (--redis.addr=unix://<socket>).
+
+# state_schema_version = 1 → каталог migrations/ не обязателен (ADR-019).
+# incarnation.state хранит зафиксированные версии трёх компонентов и путь
+# unix-сокета Redis (точка интеграции redis ↔ redis_exporter): этого достаточно,
+# чтобы оператор видел, что развёрнуто, и чтобы повторный create был idempotent.
+state_schema:
+  type: object
+  required: [redis_version, node_exporter_version, redis_exporter_version, redis_socket]
+  properties:
+    redis_version:          { type: string }
+    node_exporter_version:  { type: string }
+    redis_exporter_version: { type: string }
+    redis_socket:           { type: string }
+
+# Зависимости-destiny (ADR-007: версия зависимости = git ref, не semver-range).
+# Резолв git-URL — гибрид (docs/keeper/config.md::default_destiny_source):
+#  - запись без git: → git-URL = default_destiny_source + {name} (keeper.yml);
+#  - запись c git:    → override, git-URL берётся напрямую.
+# apply:destiny ссылается ТОЛЬКО на имена, объявленные здесь (иначе резолвер
+# отвергает зависимость).
+#
+# Стек собран КОМПОЗИЦИЕЙ трёх переиспользуемых standalone-destiny через
+# apply:destiny (изолированный render каждой, ADR-009) — сервис ничего не рендерит
+# сам. Прод-grade варианты (redis-single с systemd-hardening drop-in; экспортеры
+# под DynamicUser=yes + hardening + extra_args + arch из soulprint) живут в destiny,
+# дрейф с прежними инлайн-копиями устранён.
+destiny:
+  - { name: redis-single,   ref: v1.0.0 }
+  - { name: redis-exporter, ref: v1.0.0 }
+  - { name: node-exporter,  ref: v1.0.0 }

@@ -1,0 +1,25 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: git
+
+required_capabilities:
+  - exec_subprocess
+  - network_outbound
+
+spec:
+  states:
+    cloned:
+      description: Путь содержит git-репо (клонируется при отсутствии); ADR-015.
+      input:
+        repo:   { type: string, required: true, description: "URL репозитория." }
+        path:   { type: string, required: true, description: "Целевой каталог клона." }
+        branch: { type: string, description: "Ветка (default main)." }
+        depth:  { type: int,    description: "Глубина shallow-клона (--depth)." }
+    pulled:
+      description: Клон-if-missing + git pull --ff-only. Changed только при смене HEAD.
+      input:
+        repo:   { type: string, required: true, description: "URL репозитория." }
+        path:   { type: string, required: true, description: "Целевой каталог клона." }
+        branch: { type: string, description: "Ветка (default main)." }
+        depth:  { type: int,    description: "Глубина shallow-клона (--depth)." }

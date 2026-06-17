@@ -1,0 +1,575 @@
+package api
+
+// Guard-тесты ТИРАЖ-БАТЧА-2a разворота OPERATOR-домена ЦЕЛИКОМ на huma full-typed
+// (ADR-054 §Pattern, 5 эталонов). Все operator-роуты на huma: create/revoke/
+// issue-token — WRITE+AUDIT (вариант B, huma-audit-middleware); list — read-with-
+// typed-query (БЕЗ audit); get — read-with-path (БЕЗ audit). Доказывают инварианты
+// кластера поверх chi:
+//
+//   - wire/golden: create 201 OperatorCreateReply; list 200 envelope items[]; get 200
+//     Operator; revoke 204 пустое; issue-token 200 IssueTokenReply (byte-exact);
+//   - unknown-field → 400; missing-required → 422; bad auth_method enum → 422; bad
+//     revoked bool → 400 (query-эталон); RBAC-deny → 403;
+//   - S6-GUARD на КАЖДЫЙ write-роут (create/revoke/issue-token): полная huma-навеска
+//     (RequirePermission + humaAuditMiddleware + huma-handler) пишет audit-event с
+//     НЕПУСТЫМ payload + ПРАВИЛЬНЫМ event-type на 2xx и НЕ пишет на 4xx/403.
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
+	apimiddleware "github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
+	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
+	keeperjwt "github.com/souls-guild/soul-stack/keeper/internal/jwt"
+	"github.com/souls-guild/soul-stack/shared/audit"
+)
+
+// opCreatedAt — фиксированный created_at, который SelectByAID отдаёт во всех
+// operator-success-путях (детерминированный golden wire).
+var opCreatedAt = time.Date(2026, 6, 13, 10, 0, 0, 0, time.UTC)
+
+// opPool — узкий мок [handlers.OperatorPool] для всех operator-success-путей huma-
+// теста. Покрывает 2xx (S6-guard: audit на успехе). Exec INSERT/UPDATE → OK;
+// QueryRow COUNT → 1; QueryRow SELECT operator → активный archon-bob (NULL
+// created_by_aid → bootstrap_initial=true); Query lock-admins → пусто (target не
+// admin → revoke не lockout-ит). Конкретные сценарии не варьируются — error-
+// классификацию валидируют handlers/operator_test.go.
+type opPool struct{}
+
+func (opPool) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+	return pgconn.NewCommandTag("OK 1"), nil
+}
+func (opPool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
+	switch {
+	case strings.Contains(sql, "COUNT(*) FROM operators"):
+		return opIntRow{n: 1}
+	case strings.Contains(sql, "SELECT aid, display_name"):
+		// active archon-bob, created_by_aid NULL (bootstrap_initial=true),
+		// revoked_at NULL, metadata пусто.
+		return opStaticRow{values: []any{
+			"archon-bob", "Bob", "jwt", opCreatedAt,
+			nil, nil, []byte("{}"),
+		}}
+	}
+	return opStaticRow{err: pgx.ErrNoRows}
+}
+func (opPool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
+	switch {
+	case strings.Contains(sql, "FROM synod_operators"),
+		strings.Contains(sql, "FROM rbac_role_operators"):
+		return &opAdminRows{}, nil // пусто → target не cluster-admin → revoke ok
+	case strings.Contains(sql, "FROM operators"):
+		return &opListRows{}, nil // одна строка archon-bob
+	}
+	return &opAdminRows{}, nil
+}
+func (opPool) BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error) {
+	return opTx{}, nil
+}
+
+// opTx проксирует Exec/Query на opPool; Commit/Rollback no-op.
+type opTx struct{ pgx.Tx }
+
+func (opTx) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	return opPool{}.Exec(ctx, sql, args...)
+}
+func (opTx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	return opPool{}.Query(ctx, sql, args...)
+}
+func (opTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	return opPool{}.QueryRow(ctx, sql, args...)
+}
+func (opTx) Commit(context.Context) error   { return nil }
+func (opTx) Rollback(context.Context) error { return nil }
+
+type opIntRow struct{ n int }
+
+func (r opIntRow) Scan(dest ...any) error { *dest[0].(*int) = r.n; return nil }
+
+// opStaticRow — row SELECT operator (7 колонок: aid/display_name/auth_method/
+// created_at/created_by_aid/revoked_at/metadata). nil-значения → NULL.
+type opStaticRow struct {
+	values []any
+	err    error
+}
+
+func (r opStaticRow) Scan(dest ...any) error {
+	if r.err != nil {
+		return r.err
+	}
+	for i, d := range dest {
+		v := r.values[i]
+		switch dd := d.(type) {
+		case *string:
+			*dd = v.(string)
+		case *time.Time:
+			*dd = v.(time.Time)
+		case **string:
+			if v == nil {
+				*dd = nil
+			} else {
+				s := v.(string)
+				*dd = &s
+			}
+		case **time.Time:
+			if v == nil {
+				*dd = nil
+			} else {
+				tt := v.(time.Time)
+				*dd = &tt
+			}
+		case *[]byte:
+			if v == nil {
+				*dd = nil
+			} else {
+				*dd = v.([]byte)
+			}
+		}
+	}
+	return nil
+}
+
+// opAdminRows — пустой результат lock-admins Query (target не admin).
+type opAdminRows struct{}
+
+func (r *opAdminRows) Next() bool                                   { return false }
+func (r *opAdminRows) Scan(...any) error                            { return nil }
+func (r *opAdminRows) Err() error                                   { return nil }
+func (r *opAdminRows) Close()                                       {}
+func (r *opAdminRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
+func (r *opAdminRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
+func (r *opAdminRows) Values() ([]any, error)                       { return nil, nil }
+func (r *opAdminRows) RawValues() [][]byte                          { return nil }
+func (r *opAdminRows) Conn() *pgx.Conn                              { return nil }
+
+// opListRows — один row List operators (archon-bob, active, NULL created_by_aid).
+type opListRows struct{ done bool }
+
+func (r *opListRows) Next() bool {
+	if r.done {
+		return false
+	}
+	r.done = true
+	return true
+}
+func (r *opListRows) Scan(dest ...any) error {
+	return opStaticRow{values: []any{
+		"archon-bob", "Bob", "jwt", opCreatedAt,
+		nil, nil, []byte("{}"),
+	}}.Scan(dest...)
+}
+func (r *opListRows) Err() error                                   { return nil }
+func (r *opListRows) Close()                                       {}
+func (r *opListRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
+func (r *opListRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
+func (r *opListRows) Values() ([]any, error)                       { return nil, nil }
+func (r *opListRows) RawValues() [][]byte                          { return nil }
+func (r *opListRows) Conn() *pgx.Conn                              { return nil }
+
+// opIssuer — JWTIssuer-mock: фиксированный токен (детерминированный golden jwt).
+type opIssuer struct{}
+
+func (opIssuer) Issue(aid string, _ []string, _ time.Duration, _ bool) (string, error) {
+	return "jwt-" + aid, nil
+}
+
+// opRBAC — RBACSource-mock (RolesOf).
+type opRBAC struct{}
+
+func (opRBAC) RolesOf(string) []string { return nil }
+
+// humaOperatorRouter собирает chi-роутер со ВСЕМИ operator-роутами через huma —
+// продакшен-навеска из router.go: RequirePermission(operator.<action>) на каждой
+// группе + (для write) huma-audit-middleware вариант B + huma-операция.
+// injectClaims заменяет RequireJWT.
+func humaOperatorRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, auditW audit.Writer) *chi.Mux {
+	t.Helper()
+	installHumaErrorOverride()
+	opH := handlers.NewOperatorHandler(opPool{}, opIssuer{}, opRBAC{}, time.Hour, nil)
+
+	r := chi.NewRouter()
+	injectClaims := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			ctx := apimiddleware.InjectClaimsForTest(req.Context(), &keeperjwt.Claims{Subject: "archon-alice"})
+			next.ServeHTTP(w, req.WithContext(ctx))
+		})
+	}
+	r.Route("/v1", func(r chi.Router) {
+		r.Route("/operators", func(r chi.Router) {
+			r.With(injectClaims, apimiddleware.RequirePermission(enforcer, "operator", "create", apimiddleware.NoSelector)).Group(func(r chi.Router) {
+				registerHumaOperatorCreate(newHumaOperatorAPI(r, auditW, audit.EventOperatorCreated, nil), opH)
+			})
+			r.With(injectClaims, apimiddleware.RequirePermission(enforcer, "operator", "list", apimiddleware.NoSelector)).Group(func(r chi.Router) {
+				registerHumaOperatorList(newHumaCadenceAPI(r), opH)
+			})
+			r.With(injectClaims, apimiddleware.RequirePermission(enforcer, "operator", "list", apimiddleware.NoSelector)).Group(func(r chi.Router) {
+				registerHumaOperatorGet(newHumaCadenceAPI(r), opH)
+			})
+			r.With(injectClaims, apimiddleware.RequirePermission(enforcer, "operator", "revoke", apimiddleware.NoSelector)).Group(func(r chi.Router) {
+				registerHumaOperatorRevoke(newHumaOperatorAPI(r, auditW, audit.EventOperatorRevoked, nil), opH)
+			})
+			r.With(injectClaims, apimiddleware.RequirePermission(enforcer, "operator", "issue-token", apimiddleware.NoSelector)).Group(func(r chi.Router) {
+				registerHumaOperatorIssueToken(newHumaOperatorAPI(r, auditW, audit.EventOperatorTokenIssued, nil), opH)
+			})
+		})
+	})
+	return r
+}
+
+// === CREATE (WRITE+AUDIT operator.created) ===
+
+func TestHumaOperator_Create_GoldenWire(t *testing.T) {
+	r := humaOperatorRouter(t, strictAllowAll{}, nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/operators", strings.NewReader(`{"aid":"archon-bob","display_name":"Bob"}`))
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
+	}
+	var m map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+	}
+	out, _ := json.Marshal(m)
+	const golden = `{"aid":"archon-bob","created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","display_name":"Bob","jwt":"jwt-archon-bob"}`
+	if got := string(out); got != golden {
+		t.Errorf("GOLDEN wire-дрейф operator.create:\n got  = %s\n want = %s", got, golden)
+	}
+}
+
+func TestHumaOperator_Create_UnknownField_400(t *testing.T) {
+	r := humaOperatorRouter(t, strictAllowAll{}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/operators", strings.NewReader(`{"aid":"archon-bob","bogus":1}`))
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	assertHumaProblem(t, rec, problem.TypeMalformedRequest)
+}
+
+func TestHumaOperator_Create_MissingAID_422(t *testing.T) {
+	r := humaOperatorRouter(t, strictAllowAll{}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/operators", strings.NewReader(`{"display_name":"Bob"}`))
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
+	}
+	assertHumaProblem(t, rec, problem.TypeValidationFailed)
+}
+
+func TestHumaOperator_Create_RBACDeny_403(t *testing.T) {
+	r := humaOperatorRouter(t, strictDenyAll{}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/operators", strings.NewReader(`{"aid":"archon-bob"}`))
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHumaAudit_OperatorCreate_RecordsOnSuccess(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	r := humaOperatorRouter(t, strictAllowAll{}, auditCap)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/operators", strings.NewReader(`{"aid":"archon-bob","display_name":"Bob"}`))
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
+	}
+	assertAuditWritten(t, auditCap, audit.EventOperatorCreated, map[string]any{
+		"aid": "archon-bob", "created_by_aid": "archon-alice", "auth_method": "jwt",
+	})
+}
+
+func TestHumaAudit_OperatorCreate_NoAudit_OnRBACDeny(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	r := humaOperatorRouter(t, strictDenyAll{}, auditCap)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/operators", strings.NewReader(`{"aid":"archon-bob"}`))
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+	if len(auditCap.Events()) != 0 {
+		t.Errorf("audit записан на RBAC-deny operator.create (%d событий)", len(auditCap.Events()))
+	}
+}
+
+// === LIST (READ, query-tier, БЕЗ audit) ===
+
+func TestHumaOperator_List_GoldenWire(t *testing.T) {
+	r := humaOperatorRouter(t, strictAllowAll{}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/operators", nil)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var m map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+	}
+	out, _ := json.Marshal(m)
+	const golden = `{"items":[{"aid":"archon-bob","auth_method":"jwt","bootstrap_initial":true,"created_at":"2026-06-13T10:00:00Z","display_name":"Bob"}],"limit":50,"offset":0,"total":1}`
+	if got := string(out); got != golden {
+		t.Errorf("GOLDEN wire-дрейф operator.list:\n got  = %s\n want = %s", got, golden)
+	}
+}
+
+func TestHumaOperator_List_BadAuthMethod_422(t *testing.T) {
+	r := humaOperatorRouter(t, strictAllowAll{}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/operators?auth_method=bogus", nil)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422 (bad auth_method enum); body=%s", rec.Code, rec.Body.String())
+	}
+	assertHumaProblem(t, rec, problem.TypeValidationFailed)
+}
+
+func TestHumaOperator_List_BadRevoked_400(t *testing.T) {
+	r := humaOperatorRouter(t, strictAllowAll{}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/operators?revoked=notabool", nil)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (bad revoked bool); body=%s", rec.Code, rec.Body.String())
+	}
+	assertHumaProblem(t, rec, problem.TypeMalformedRequest)
+}
+
+// TestHumaOperator_List_BadOffset_400 — КОНТРАКТ-инвариант границ (решение A, parity
+// audit OutOfRangePagination): offset<0 → 400 (sharedapi.CheckPageBounds в ListTyped),
+// а НЕ 200 с битым envelope и НЕ huma-422 (huma typed-int НЕ несёт schema-minimum).
+// Должно совпадать с легаси ParsePage (offset<0 → 400), иначе wire-change.
+func TestHumaOperator_List_BadOffset_400(t *testing.T) {
+	r := humaOperatorRouter(t, strictAllowAll{}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/operators?offset=-1", nil)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (offset<0 → CheckPageBounds 400, НЕ 200/huma-422, parity ParsePage); body=%s", rec.Code, rec.Body.String())
+	}
+	assertHumaProblem(t, rec, problem.TypeMalformedRequest)
+}
+
+// TestHumaOperator_List_BadLimit_400 — out-of-range limit (0 и 1001) → 400
+// (sharedapi.CheckPageBounds: limit∈[1,1000]), parity audit OutOfRangePagination и
+// легаси ParsePage. Раньше huma-путь молча отдавал 200 с битой пагинацией (минуя
+// CheckPageBounds) — этот guard ловит регресс.
+func TestHumaOperator_List_BadLimit_400(t *testing.T) {
+	r := humaOperatorRouter(t, strictAllowAll{}, nil)
+	for _, c := range []string{
+		"/v1/operators?limit=0",
+		"/v1/operators?limit=1001",
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, c, nil)
+		r.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400 (out-of-range limit → CheckPageBounds 400, parity ParsePage, НЕ huma-422); body=%s", c, rec.Code, rec.Body.String())
+			continue
+		}
+		assertHumaProblem(t, rec, problem.TypeMalformedRequest)
+	}
+}
+
+func TestHumaOperator_List_NoAudit(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	r := humaOperatorRouter(t, strictAllowAll{}, auditCap)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/operators", nil)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if len(auditCap.Events()) != 0 {
+		t.Errorf("READ-роут operator.list записал audit (%d событий)", len(auditCap.Events()))
+	}
+}
+
+func TestHumaOperator_List_RBACDeny_403(t *testing.T) {
+	r := humaOperatorRouter(t, strictDenyAll{}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/operators", nil)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// === GET (READ, path, БЕЗ audit) ===
+
+func TestHumaOperator_Get_GoldenWire(t *testing.T) {
+	r := humaOperatorRouter(t, strictAllowAll{}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/operators/archon-bob", nil)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var m map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+	}
+	out, _ := json.Marshal(m)
+	const golden = `{"aid":"archon-bob","auth_method":"jwt","bootstrap_initial":true,"created_at":"2026-06-13T10:00:00Z","display_name":"Bob"}`
+	if got := string(out); got != golden {
+		t.Errorf("GOLDEN wire-дрейф operator.get:\n got  = %s\n want = %s", got, golden)
+	}
+}
+
+func TestHumaOperator_Get_BadAID_422(t *testing.T) {
+	r := humaOperatorRouter(t, strictAllowAll{}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/operators/INVALID", nil)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422 (bad path-AID); body=%s", rec.Code, rec.Body.String())
+	}
+	assertHumaProblem(t, rec, problem.TypeValidationFailed)
+}
+
+func TestHumaOperator_Get_RBACDeny_403(t *testing.T) {
+	r := humaOperatorRouter(t, strictDenyAll{}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/operators/archon-bob", nil)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// === REVOKE (WRITE+AUDIT operator.revoked) ===
+
+func TestHumaOperator_Revoke_204(t *testing.T) {
+	r := humaOperatorRouter(t, strictAllowAll{}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/operators/archon-bob/revoke", strings.NewReader(`{}`))
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
+	}
+	if body := strings.TrimSpace(rec.Body.String()); body != "" {
+		t.Errorf("204-тело operator.revoke должно быть ПУСТЫМ, got %q", body)
+	}
+}
+
+func TestHumaAudit_OperatorRevoke_RecordsOnSuccess(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	r := humaOperatorRouter(t, strictAllowAll{}, auditCap)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/operators/archon-bob/revoke", strings.NewReader(`{"reason":"offboarding"}`))
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
+	}
+	assertAuditWritten(t, auditCap, audit.EventOperatorRevoked, map[string]any{
+		"aid": "archon-bob", "reason": "offboarding",
+	})
+}
+
+func TestHumaAudit_OperatorRevoke_NoAudit_OnBadAID(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	r := humaOperatorRouter(t, strictAllowAll{}, auditCap)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/operators/INVALID/revoke", strings.NewReader(`{}`))
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422 (bad path-AID); body=%s", rec.Code, rec.Body.String())
+	}
+	if len(auditCap.Events()) != 0 {
+		t.Errorf("audit записан на bad-AID revoke (%d событий)", len(auditCap.Events()))
+	}
+}
+
+// === ISSUE-TOKEN (WRITE+AUDIT operator.token-issued, 200 С ТЕЛОМ) ===
+
+func TestHumaOperator_IssueToken_GoldenWire(t *testing.T) {
+	r := humaOperatorRouter(t, strictAllowAll{}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/operators/archon-bob/issue-token", nil)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var m map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
+	}
+	// expires_at — now+TTL (нестабильно), сторожим набор остальных полей.
+	if m["aid"] != "archon-bob" {
+		t.Errorf("aid = %v, want archon-bob", m["aid"])
+	}
+	if m["jwt"] != "jwt-archon-bob" {
+		t.Errorf("jwt = %v, want jwt-archon-bob", m["jwt"])
+	}
+	if _, ok := m["expires_at"]; !ok {
+		t.Errorf("issue-token reply без expires_at: %v", m)
+	}
+}
+
+func TestHumaAudit_OperatorIssueToken_RecordsOnSuccess(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	r := humaOperatorRouter(t, strictAllowAll{}, auditCap)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/operators/archon-bob/issue-token", nil)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	assertAuditWritten(t, auditCap, audit.EventOperatorTokenIssued, map[string]any{"aid": "archon-bob"})
+}
+
+func TestHumaAudit_OperatorIssueToken_NoAudit_OnBadAID(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	r := humaOperatorRouter(t, strictAllowAll{}, auditCap)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/operators/INVALID/issue-token", nil)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422 (bad path-AID); body=%s", rec.Code, rec.Body.String())
+	}
+	if len(auditCap.Events()) != 0 {
+		t.Errorf("audit записан на bad-AID issue-token (%d событий)", len(auditCap.Events()))
+	}
+}
+
+// === OpenAPI-фрагмент: ВСЕ operator-операции из FULL-TYPED Go-типов ===
+
+func TestHumaOperator_OpenAPIFragment_3_1(t *testing.T) {
+	frag, err := HumaOperatorSpecYAML()
+	if err != nil {
+		t.Fatalf("HumaOperatorSpecYAML: %v", err)
+	}
+	if !strings.Contains(frag, "openapi: 3.1.0") {
+		t.Errorf("huma-фрагмент не несёт `openapi: 3.1.0`:\n%s", frag)
+	}
+	for _, want := range []string{
+		"createOperator", "listOperators", "getOperator", "revokeOperator",
+		"issueOperatorToken", "auth_method", "revoked",
+	} {
+		if !strings.Contains(frag, want) {
+			t.Errorf("OpenAPI-фрагмент не содержит %q:\n%s", want, frag)
+		}
+	}
+	// list-query auth_method multi-value НЕ нужен (single string), но explode-
+	// артефактов RawBody-моста быть не должно.
+	if strings.Contains(frag, "octet-stream") {
+		t.Errorf("OpenAPI-фрагмент несёт application/octet-stream:\n%s", frag)
+	}
+}

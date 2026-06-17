@@ -1,0 +1,69 @@
+name: update_config
+description: >-
+  Обновляет конфигурацию Redis: повторно применяет destiny redis-single с новыми
+  параметрами (maxmemory + точечные директивы redis.conf). redis-single
+  перерисовывает redis.conf через core.file.rendered и рестартит redis-server
+  только при изменении файла (onchanges на register redis_conf внутри destiny) —
+  это и есть re-apply: тот же изолированный render-проход, что в create, но с
+  другим config.
+
+  Демонстрирует повторное применение destiny (re-apply) с обновлённым input.
+
+# ── Входной контракт (docs/input.md) ──────────────────────────────────────────
+input:
+  redis_maxmemory:
+    type: string
+    default: 256mb
+    pattern: "^[0-9]+(b|kb|mb|gb)$"
+    description: Новый лимит памяти Redis (формат Redis — 256mb, 4gb, …).
+
+  config:
+    type: object
+    properties: {}
+    additional_properties: true
+    description: >-
+      Точечные директивы redis.conf (поверх дефолтов Redis). Прокидываются в
+      шаблон redis.conf.tmpl как .vars.config; шаблон рендерит только переданные
+      ключи, отсутствующие остаются дефолтом Redis.
+
+  # Пароль неизменен при update_config; redis-single требует requirepass в своём
+  # input-контракте — пробрасываем keeper-side vault()-резолвом (см. apply:input
+  # ниже), а сокет — из input. Пароль НЕ во input-контракте сценария.
+
+  # Версия НЕОБЯЗАТЕЛЬНА (как в create): не задана → core.pkg без =version-пина.
+  # Pattern допускает distro-native строку (epoch + revision); жёсткий semver
+  # ломал version-пин на реальном дистрибутиве (BUG-1).
+  redis_version:
+    type: string
+    required: false
+    pattern: "^([0-9]+:)?[0-9][A-Za-z0-9.~+-]*$"
+    description: >-
+      Версия пакета redis-server (distro-native, idempotent, обычно та же, что в
+      state). Необязательна: не задана → ставится версия по умолчанию из репо.
+
+  redis_socket:
+    type: string
+    default: /var/run/redis/redis-server.sock
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: Путь unix-сокета Redis (неизменен; должен совпадать с create).
+
+# Фиксируем обновлённые параметры в incarnation.state (orchestration.md §7.1).
+state_changes:
+  sets:
+    redis_maxmemory: "${ input.redis_maxmemory }"
+    redis_config:    "${ has(input.config) ? input.config : {} }"
+
+tasks:
+  # re-apply redis-single с новым config: redis.conf перерисовывается, redis
+  # рестартится только при изменении (onchanges внутри destiny).
+  - name: Re-apply redis-single with updated config
+    apply:
+      destiny: redis-single
+      input:
+        version:        "${ has(input.redis_version) ? input.redis_version : '' }"
+        # Keeper-side vault()-резолв (templating.md §2.3): путь из incarnation,
+        # в destiny уходит значение (Soul vault-клиент не тянет, ADR-012).
+        redis_password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+        redis_socket:   "${ input.redis_socket }"
+        maxmemory:      "${ input.redis_maxmemory }"
+        config:         "${ input.config }"

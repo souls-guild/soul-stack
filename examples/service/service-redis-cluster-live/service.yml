@@ -1,0 +1,37 @@
+name: redis-cluster-live
+state_schema_version: 1
+description: >-
+  Реальный Redis Cluster (redis-cli --cluster, 16384 hash-слотов) поверх 9 нод.
+  В отличие от service-redis-cluster (master-replica replication через
+  wb.redis-failover) — здесь честный cluster-mode: cluster-enabled yes,
+  cluster-bus, шардинг слотов, --cluster-replicas. Все операции — core-модули
+  (core.pkg/core.file/core.service/core.cmd), без custom-модулей.
+
+# Структура incarnation.state (per-incarnation hold).
+state_schema:
+  type: object
+  required: [redis_version, redis_users, cluster_replicas, cluster_nodes]
+  properties:
+    redis_version: { type: string }
+    cluster_replicas: { type: integer }
+    redis_users:
+      type: array
+      items:
+        type: object
+        required: [name, acl]
+        properties:
+          name: { type: string }
+          acl:  { type: string }
+    redis_config:
+      type: object
+      additionalProperties: { type: string }
+    cluster_nodes:
+      type: array
+      items:
+        type: object
+        properties:
+          sid: { type: string, format: fqdn }
+          ip:  { type: string }
+
+# Сервис использует только core-модули — required destiny/modules не нужны.
+# Блок destiny: отсутствует (нет destiny-кирпичиков, всё инлайн в scenario).

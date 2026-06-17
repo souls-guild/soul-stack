@@ -1,0 +1,103 @@
+name: add_replica
+description: >-
+  Добавить новую ноду в существующий Redis Cluster как РЕПЛИКУ. Шаги: на новой
+  ноде (таргет по стабильному SID через where:, probe не нужен — ADR-008)
+  установить+сконфигурить+запустить redis в cluster-mode; затем run_once с любой
+  ноды кластера `redis-cli --cluster add-node <new> <seed> --cluster-slave`
+  (redis сам выберет мастера с наименьшим числом реплик, либо
+  --cluster-master-id если передан).
+
+  new_node_ip / seed_ip передаёт оператор (на add_replica probe ноды-новичка
+  нет; адреса берутся из входа — модель 3-ADDR scenario).
+
+input:
+  new_node_sid:
+    type: string
+    required: true
+    description: SID новой ноды (FQDN), уже привязанной к incarnation как Soul.
+  new_node_ip:
+    type: string
+    required: true
+    pattern: "^[0-9.]+$"
+    description: IP новой ноды для cluster add-node.
+  seed_ip:
+    type: string
+    required: true
+    pattern: "^[0-9.]+$"
+    description: IP любой существующей ноды кластера (контакт для add-node).
+  master_id:
+    type: string
+    required: false
+    description: 40-hex node-id мастера, чьей репликой станет новичок. Не задан → redis выберет сам.
+
+tasks:
+  # 1. Установить redis на новой ноде (таргет по стабильному SID).
+  - name: Install redis on the new node
+    on: ["${ incarnation.name }"]
+    where: soulprint.self.sid == input.new_node_sid
+    module: core.pkg.installed
+    params:
+      name: redis
+
+  # 2. Конфиг (host-инвариантен) на новой ноде.
+  - name: Render cluster config on the new node
+    on: ["${ incarnation.name }"]
+    where: soulprint.self.sid == input.new_node_sid
+    module: core.file.present
+    params:
+      path: /etc/redis-cluster.conf
+      mode: "0644"
+      content: |
+        port 6379
+        cluster-enabled yes
+        cluster-config-file /var/lib/redis/nodes.conf
+        cluster-node-timeout 5000
+        appendonly yes
+        dir /var/lib/redis
+        bind 0.0.0.0
+        protected-mode no
+
+  # 3. announce-ip из адреса хоста.
+  - name: Append cluster-announce-ip on the new node
+    on: ["${ incarnation.name }"]
+    where: soulprint.self.sid == input.new_node_sid
+    module: core.cmd.shell
+    params:
+      cmd: "echo cluster-announce-ip $(hostname -i | awk '{print $1}') >> /etc/redis-cluster.conf"
+      unless: "grep -q cluster-announce-ip /etc/redis-cluster.conf"
+
+  # 4. Запустить redis на новой ноде.
+  - name: Start redis on the new node
+    on: ["${ incarnation.name }"]
+    where: soulprint.self.sid == input.new_node_sid
+    module: core.cmd.shell
+    params:
+      cmd: "mkdir -p /var/lib/redis && nohup redis-server /etc/redis-cluster.conf >/var/log/redis.log 2>&1 & sleep 1; true"
+      unless: "redis-cli -p 6379 ping | grep -q PONG"
+
+  # 5. Health-gate на новой ноде.
+  - name: Wait until new node responds
+    on: ["${ incarnation.name }"]
+    where: soulprint.self.sid == input.new_node_sid
+    module: core.cmd.shell
+    changed_when: false
+    retry:
+      count: 15
+      delay: 2s
+      until: register.self.stdout == 'PONG'
+    failed_when: register.self.stdout != 'PONG'
+    params:
+      cmd: "redis-cli -p 6379 ping 2>/dev/null | tr -d '[:space:]' || echo DOWN"
+
+  # 6. run_once с новой ноды: добавить себя в кластер как реплику. add-node
+  #    можно звать с любой ноды; зовём с новой (она в таргете new_node_sid).
+  #    --cluster-master-id если оператор задал, иначе redis балансирует сам.
+  #    unless-guard — идемпотентность: если узел уже в cluster nodes, пропуск.
+  - name: Join the cluster as a replica
+    on: ["${ incarnation.name }"]
+    where: soulprint.self.sid == input.new_node_sid
+    module: core.cmd.shell
+    params:
+      cmd: >
+        redis-cli --cluster add-node ${ input.new_node_ip }:6379 ${ input.seed_ip }:6379 --cluster-slave ${ has(input.master_id) ? '--cluster-master-id ' + input.master_id : '' } --cluster-yes
+      unless: "redis-cli -h ${ input.seed_ip } -p 6379 cluster nodes | grep -q ${ input.new_node_ip }:6379"

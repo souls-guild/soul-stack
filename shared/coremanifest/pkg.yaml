@@ -1,0 +1,24 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: pkg
+
+required_capabilities:
+  - run_as_root
+  - exec_subprocess
+
+spec:
+  states:
+    installed:
+      description: Пакет установлен (опционально точной версии). Идемпотентно (ADR-015).
+      input:
+        name:    { type: string, required: true, description: "Имя пакета." }
+        version: { type: string, description: "Точная версия пакета (если опущено — любая)." }
+    latest:
+      description: Пакет установлен и обновлён до последней доступной версии.
+      input:
+        name: { type: string, required: true, description: "Имя пакета." }
+    absent:
+      description: Пакет удалён.
+      input:
+        name: { type: string, required: true, description: "Имя пакета." }

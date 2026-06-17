@@ -1,0 +1,29 @@
+# Baseline-essence сервиса redis (подложка автора). Оператор переопределяет в
+# spec инкарнации; на L0-прогоне ключевые значения дублируются в fixtures кейса.
+#
+# Версии пиннятся на конкретные релизы. Для redis — версия пакета redis-server в
+# репозитории дистрибутива; для экспортеров — релизы стороннего ПО с GitHub
+# (ADR-007: версия артефакта Soul Stack — git-ref, но это сторонние релизы,
+# поэтому здесь — обычные значения, а не ref).
+#
+# redis_socket — единая точка интеграции: один и тот же путь идёт в redis-single
+# (unixsocket в redis.conf) и в redis-exporter (--redis.addr=unix://...).
+
+node_exporter_version:  "1.8.2"
+redis_exporter_version: "1.62.0"
+
+redis_socket:    "/var/run/redis/redis-server.sock"
+redis_maxmemory: "256mb"
+
+# Архитектура и каталог бинарей экспортеров (одинаковы для обоих).
+arch:    "amd64"
+bin_dir: "/usr/local/bin"
+
+# Listen-адреса экспортеров.
+node_exporter_listen:  ":9100"
+redis_exporter_listen: ":9121"
+
+# Точечные директивы redis.conf поверх дефолтов Redis (задел под update_config).
+redis_config:
+  maxclients: 10000
+  timeout:    300

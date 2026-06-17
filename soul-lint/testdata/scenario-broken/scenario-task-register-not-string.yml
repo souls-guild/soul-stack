@@ -1,0 +1,5 @@
+name: task-register-not-string
+tasks:
+  - register: 42
+    module: core.exec.run
+    params: {}

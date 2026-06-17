@@ -1,0 +1,409 @@
+package herald
+
+import (
+	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/souls-guild/soul-stack/shared/audit"
+	"github.com/souls-guild/soul-stack/shared/netguard"
+)
+
+// privateResolver — netguard.Resolver, резолвящий любое имя в private-IP (10.x):
+// имитирует DNS-rebind на внутренний адрес. dial-guard должен отвергнуть.
+type privateResolver struct{}
+
+func (privateResolver) LookupIPAddr(_ context.Context, _ string) ([]net.IPAddr, error) {
+	return []net.IPAddr{{IP: net.ParseIP("10.0.0.7")}}, nil
+}
+
+// runWorkerOnce клеймит один job и обрабатывает его (без полного Run-loop-а:
+// детерминированно, без фоновых горутин-спанов кроме renewLease, который
+// останавливается defer-ом handle).
+func runWorkerOnce(t *testing.T, w *DeliveryWorker) {
+	t.Helper()
+	if err := w.validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	claimed, err := w.Queue.Claim(context.Background(), time.Millisecond)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if claimed == nil {
+		t.Fatal("expected a claimed job, got empty queue")
+	}
+	w.handle(context.Background(), claimed.Payload)
+}
+
+// TestDelivery_Success_PostsSignedPayload — end-to-end успех: httptest-приёмник
+// получает POST с правильным телом и валидной HMAC-подписью; терминал —
+// herald.delivered.
+func TestDelivery_Success_PostsSignedPayload(t *testing.T) {
+	var gotBody []byte
+	var gotSig string
+	var gotCT string
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		gotSig = r.Header.Get(SignatureHeader)
+		gotCT = r.Header.Get("Content-Type")
+		rw.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	backend := newFakeBackend()
+	rec := &recordingAudit{}
+	secretRef := "vault:secret/keeper/sign#token"
+	h := &Herald{
+		Name: "ok-webhook", Type: HeraldWebhook,
+		Config:    map[string]any{"url": srv.URL, "allow_private": true, "http_allowed": true}, // httptest на 127.0.0.1
+		SecretRef: &secretRef, Enabled: true,
+	}
+	w := &DeliveryWorker{
+		Queue: backend, Heralds: recordingHeralds{herald: h},
+		KV:    stubKV{data: map[string]any{"token": "sign-key"}},
+		Audit: rec, Logger: discardLogger(), Resolver: netguard.DefaultResolver,
+	}
+
+	occurred := time.Date(2026, 6, 11, 10, 30, 0, 0, time.UTC)
+	job := &DeliveryJob{
+		ID: "j-ok", Herald: "ok-webhook", Tiding: "t",
+		EventType: audit.EventScenarioRunFailed, OccurredAt: occurred,
+		PayloadCopy: map[string]any{"voyage_id": "v1"},
+	}
+	payload, _ := marshalJob(job)
+	_ = backend.Enqueue(context.Background(), payload)
+
+	runWorkerOnce(t, w)
+
+	if len(gotBody) == 0 {
+		t.Fatal("webhook receiver got no body")
+	}
+	if gotCT != "application/json" {
+		t.Errorf("Content-Type = %q", gotCT)
+	}
+	// occurred_at в теле — ненулевой валидный RFC3339 (guard на баг live-smoke:
+	// доставка не должна слать occurred_at=0001-01-01).
+	var bodyOut webhookPayload
+	if err := json.Unmarshal(gotBody, &bodyOut); err != nil {
+		t.Fatalf("webhook body не парсится как JSON: %v", err)
+	}
+	parsed, err := time.Parse(time.RFC3339, bodyOut.OccurredAt)
+	if err != nil {
+		t.Fatalf("occurred_at = %q не RFC3339: %v", bodyOut.OccurredAt, err)
+	}
+	if parsed.IsZero() {
+		t.Fatalf("occurred_at нулевой в webhook-теле (баг 0001-01-01): %q", bodyOut.OccurredAt)
+	}
+	if !parsed.Equal(occurred) {
+		t.Errorf("occurred_at = %v, want %v", parsed, occurred)
+	}
+	// Подпись валидна над фактически полученным телом.
+	mac := hmac.New(sha256.New, []byte("sign-key"))
+	mac.Write(gotBody)
+	want := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	if gotSig != want {
+		t.Errorf("signature = %q, want %q", gotSig, want)
+	}
+	terms := rec.terminals()
+	if len(terms) != 1 || terms[0].EventType != audit.EventHeraldDelivered {
+		t.Fatalf("want one herald.delivered, got %+v", terms)
+	}
+	if backend.acks != 1 {
+		t.Errorf("acks = %d, want 1", backend.acks)
+	}
+}
+
+// TestDelivery_AnnotationsProjection_SignedFinalBody — end-to-end (ADR-052(h)/(i)
+// N3): httptest-приёмник получает тело с суженным projection-ом payload-ом +
+// верхнеуровневым annotations-ключом, а HMAC-подпись валидна над ЭТИМ финальным
+// телом (не над исходным полным payload).
+func TestDelivery_AnnotationsProjection_SignedFinalBody(t *testing.T) {
+	var gotBody []byte
+	var gotSig string
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		gotSig = r.Header.Get(SignatureHeader)
+		rw.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	backend := newFakeBackend()
+	rec := &recordingAudit{}
+	secretRef := "vault:secret/keeper/sign#token"
+	h := &Herald{
+		Name: "shaped-webhook", Type: HeraldWebhook,
+		Config:    map[string]any{"url": srv.URL, "allow_private": true, "http_allowed": true},
+		SecretRef: &secretRef, Enabled: true,
+	}
+	w := &DeliveryWorker{
+		Queue: backend, Heralds: recordingHeralds{herald: h},
+		KV:    stubKV{data: map[string]any{"token": "sign-key"}},
+		Audit: rec, Logger: discardLogger(), Resolver: netguard.DefaultResolver,
+	}
+
+	job := &DeliveryJob{
+		ID: "j-shaped", Herald: "shaped-webhook", Tiding: "t",
+		EventType:  audit.EventScenarioRunFailed,
+		OccurredAt: time.Date(2026, 6, 11, 10, 30, 0, 0, time.UTC),
+		PayloadCopy: map[string]any{
+			"voyage_id": "v1",
+			"summary":   map[string]any{"succeeded": float64(7), "failed": float64(1)},
+			"drop":      "должно-исчезнуть",
+		},
+		Projection:  []string{"voyage_id", "summary.failed"},
+		Annotations: map[string]any{"team": "ops", "severity": "high"},
+	}
+	payload, _ := marshalJob(job)
+	_ = backend.Enqueue(context.Background(), payload)
+
+	runWorkerOnce(t, w)
+
+	if len(gotBody) == 0 {
+		t.Fatal("webhook receiver got no body")
+	}
+	var body webhookPayload
+	if err := json.Unmarshal(gotBody, &body); err != nil {
+		t.Fatalf("webhook body не парсится: %v", err)
+	}
+	// projection: payload сужен (voyage_id + summary.failed), исходный drop ушёл.
+	if body.Payload["voyage_id"] != "v1" {
+		t.Errorf("payload.voyage_id = %v", body.Payload["voyage_id"])
+	}
+	if _, present := body.Payload["drop"]; present {
+		t.Errorf("dropped field leaked through projection allow-list")
+	}
+	summary, ok := body.Payload["summary"].(map[string]any)
+	if !ok || summary["failed"] != float64(1) {
+		t.Fatalf("projected summary.failed missing: %v", body.Payload)
+	}
+	if _, present := summary["succeeded"]; present {
+		t.Errorf("summary.succeeded leaked (not in projection)")
+	}
+	// annotations верхнеуровневые.
+	if body.Annotations["team"] != "ops" || body.Annotations["severity"] != "high" {
+		t.Errorf("annotations = %v", body.Annotations)
+	}
+	// подпись валидна над фактически полученным (финальным) телом.
+	mac := hmac.New(sha256.New, []byte("sign-key"))
+	mac.Write(gotBody)
+	want := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	if gotSig != want {
+		t.Errorf("signature = %q, want %q (must sign final shaped body)", gotSig, want)
+	}
+	terms := rec.terminals()
+	if len(terms) != 1 || terms[0].EventType != audit.EventHeraldDelivered {
+		t.Fatalf("want one herald.delivered, got %+v", terms)
+	}
+}
+
+// TestDelivery_5xx_Retries — приёмник отвечает 500 → доставка не финализируется
+// успехом, job перепоставлен на retry с инкрементом attempt.
+func TestDelivery_5xx_Retries(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		rw.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	backend := newFakeBackend()
+	rec := &recordingAudit{}
+	h := &Herald{Name: "flaky", Type: HeraldWebhook, Config: map[string]any{"url": srv.URL, "allow_private": true, "http_allowed": true}, Enabled: true}
+	w := &DeliveryWorker{Queue: backend, Heralds: recordingHeralds{herald: h}, Audit: rec, Logger: discardLogger()}
+
+	job := &DeliveryJob{ID: "j-flaky", Attempt: 0, Herald: "flaky", EventType: audit.EventScenarioRunFailed}
+	payload, _ := marshalJob(job)
+	_ = backend.Enqueue(context.Background(), payload)
+
+	runWorkerOnce(t, w)
+
+	if hits.Load() != 1 {
+		t.Fatalf("receiver hits = %d, want 1", hits.Load())
+	}
+	if backend.requeues != 1 {
+		t.Fatalf("5xx must requeue, requeues=%d", backend.requeues)
+	}
+	pj := backend.pendingJobs(t)
+	if len(pj) != 1 || pj[0].Attempt != 1 {
+		t.Fatalf("requeued attempt = %v, want 1", pj)
+	}
+	if len(rec.terminals()) != 0 {
+		t.Fatalf("5xx on non-final attempt must not write terminal audit yet")
+	}
+}
+
+// TestDelivery_4xx_TerminalNoRetry — приёмник отвечает 401 (устойчивая клиентская
+// ошибка) → терминал herald.failed сразу, без retry, даже на первой попытке.
+func TestDelivery_4xx_TerminalNoRetry(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		rw.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	backend := newFakeBackend()
+	rec := &recordingAudit{}
+	h := &Herald{Name: "authfail", Type: HeraldWebhook, Config: map[string]any{"url": srv.URL, "allow_private": true, "http_allowed": true}, Enabled: true}
+	w := &DeliveryWorker{Queue: backend, Heralds: recordingHeralds{herald: h}, Audit: rec, Logger: discardLogger()}
+
+	job := &DeliveryJob{ID: "j-401", Attempt: 0, Herald: "authfail", EventType: audit.EventScenarioRunFailed}
+	payload, _ := marshalJob(job)
+	_ = backend.Enqueue(context.Background(), payload)
+
+	runWorkerOnce(t, w)
+
+	if hits.Load() != 1 {
+		t.Fatalf("receiver hits = %d, want 1", hits.Load())
+	}
+	if backend.requeues != 0 {
+		t.Fatalf("4xx (non-408/429) is terminal, must not retry, requeues=%d", backend.requeues)
+	}
+	terms := rec.terminals()
+	if len(terms) != 1 || terms[0].EventType != audit.EventHeraldFailed {
+		t.Fatalf("4xx must write one herald.failed terminal, got %+v", terms)
+	}
+}
+
+// TestDelivery_429_Retries — 429 Too Many Requests — транзиентный rate-limit:
+// ретраится (исключение из «4xx → terminal»), job перепоставлен.
+func TestDelivery_429_Retries(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		rw.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	backend := newFakeBackend()
+	rec := &recordingAudit{}
+	h := &Herald{Name: "throttled", Type: HeraldWebhook, Config: map[string]any{"url": srv.URL, "allow_private": true, "http_allowed": true}, Enabled: true}
+	w := &DeliveryWorker{Queue: backend, Heralds: recordingHeralds{herald: h}, Audit: rec, Logger: discardLogger()}
+
+	job := &DeliveryJob{ID: "j-429", Attempt: 0, Herald: "throttled", EventType: audit.EventScenarioRunFailed}
+	payload, _ := marshalJob(job)
+	_ = backend.Enqueue(context.Background(), payload)
+
+	runWorkerOnce(t, w)
+
+	if backend.requeues != 1 {
+		t.Fatalf("429 must requeue (transient), requeues=%d", backend.requeues)
+	}
+	if len(rec.terminals()) != 0 {
+		t.Fatalf("429 on non-final attempt must not write terminal audit yet")
+	}
+}
+
+// TestDelivery_Timeout_Retries — приёмник висит дольше delivery-timeout-а →
+// доставка падает по таймауту → retry.
+func TestDelivery_Timeout_Retries(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+		<-release // держим до конца теста
+		rw.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	backend := newFakeBackend()
+	h := &Herald{Name: "slow", Type: HeraldWebhook, Config: map[string]any{"url": srv.URL, "allow_private": true, "http_allowed": true}, Enabled: true}
+	w := &DeliveryWorker{
+		Queue: backend, Heralds: recordingHeralds{herald: h},
+		Logger: discardLogger(), Timeout: 150 * time.Millisecond,
+	}
+
+	job := &DeliveryJob{ID: "j-slow", Attempt: 0, Herald: "slow", EventType: audit.EventScenarioRunFailed}
+	payload, _ := marshalJob(job)
+	_ = backend.Enqueue(context.Background(), payload)
+
+	start := time.Now()
+	runWorkerOnce(t, w)
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("delivery did not honour timeout (took %v)", elapsed)
+	}
+	if backend.requeues != 1 {
+		t.Fatalf("timeout must requeue, requeues=%d", backend.requeues)
+	}
+}
+
+// TestDelivery_SSRF_PrivateIPRejectedBeforeRequest — webhook на private-IP БЕЗ
+// allow_private отвергается SSRF-guard-ом ДО HTTP-запроса (терминал без retry,
+// приёмник не вызывается).
+func TestDelivery_SSRF_PrivateIPRejectedBeforeRequest(t *testing.T) {
+	var hits atomic.Int32
+	// Поднимаем реальный сервер, но URL подменяем на private-IP — guard должен
+	// отрезать ДО соединения, поэтому сервер не получит запрос.
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		rw.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	backend := newFakeBackend()
+	rec := &recordingAudit{}
+	// Литеральный private-IP, allow_private НЕ задан → guard отвергает.
+	h := &Herald{Name: "ssrf", Type: HeraldWebhook, Config: map[string]any{"url": "https://10.0.0.1/hook"}, Enabled: true}
+	w := &DeliveryWorker{Queue: backend, Heralds: recordingHeralds{herald: h}, Audit: rec, Logger: discardLogger()}
+
+	job := &DeliveryJob{ID: "j-ssrf", Attempt: 0, Herald: "ssrf", EventType: audit.EventScenarioRunFailed}
+	payload, _ := marshalJob(job)
+	_ = backend.Enqueue(context.Background(), payload)
+
+	runWorkerOnce(t, w)
+
+	if hits.Load() != 0 {
+		t.Fatalf("SSRF target must not be contacted, hits=%d", hits.Load())
+	}
+	if backend.requeues != 0 {
+		t.Fatalf("SSRF rejection is terminal (no retry), requeues=%d", backend.requeues)
+	}
+	terms := rec.terminals()
+	if len(terms) != 1 || terms[0].EventType != audit.EventHeraldFailed {
+		t.Fatalf("want one herald.failed terminal, got %+v", terms)
+	}
+}
+
+// TestDelivery_SSRF_DNSResolvedToPrivate_RejectedAtDial — host резолвится в
+// private-IP (через инжектированный резолвер) → отказ на dial-фазе, приёмник не
+// вызывается. Проверяет, что dial-guard работает не только на литеральном IP.
+func TestDelivery_SSRF_DNSResolvedToPrivate_RejectedAtDial(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		rw.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	backend := newFakeBackend()
+	rec := &recordingAudit{}
+	h := &Herald{Name: "rebind", Type: HeraldWebhook, Config: map[string]any{"url": "https://evil.example.test/hook"}, Enabled: true}
+	w := &DeliveryWorker{
+		Queue: backend, Heralds: recordingHeralds{herald: h},
+		Audit: rec, Logger: discardLogger(),
+		Resolver: privateResolver{}, // имя резолвится в 10.x
+	}
+
+	job := &DeliveryJob{ID: "j-rebind", Attempt: 0, Herald: "rebind", EventType: audit.EventScenarioRunFailed}
+	payload, _ := marshalJob(job)
+	_ = backend.Enqueue(context.Background(), payload)
+
+	runWorkerOnce(t, w)
+
+	if hits.Load() != 0 {
+		t.Fatalf("rebind target must not be contacted, hits=%d", hits.Load())
+	}
+	// DNS-резолв в private — транзиентно-похожая ошибка (dial), поэтому это retry,
+	// не terminal-no-retry: guard отверг на dial, а не на pre-валидации.
+	if backend.requeues != 1 {
+		t.Fatalf("dial-guard rejection retries, requeues=%d", backend.requeues)
+	}
+}

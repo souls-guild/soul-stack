@@ -1,0 +1,12 @@
+{
+  "_comment": "POST /v1/incarnation/run — добавление пользователя к существующему кластеру",
+
+  "name": "test-cache-redis-cl-dev",
+  "scenario": "add_user",
+
+  "inputs": {
+    "user": "analytics",
+    "acl": "on ~cache:analytics:* +@read",
+    "state": "on"
+  }
+}

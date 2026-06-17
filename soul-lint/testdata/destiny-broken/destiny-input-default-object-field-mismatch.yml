@@ -1,0 +1,9 @@
+name: x
+input:
+  cfg:
+    type: object
+    properties:
+      port:
+        type: integer
+    default:
+      port: "not-int"

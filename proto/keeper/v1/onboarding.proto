@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package soulstack.keeper.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;keeperv1";
+
+// BootstrapRequest — запрос Soul-а на онбординг.
+// Передаётся ДО mTLS-стрима, на отдельном listener-е с server-only TLS
+// (у Soul-а ещё нет SoulSeed-сертификата).
+message BootstrapRequest {
+  // FQDN хоста (= SID). Совпадает с CN/SAN будущего выпускаемого сертификата.
+  string sid = 1;
+
+  // SENSITIVE: never log. Однократный токен онбординга.
+  // Server-side немедленно хешируется (SHA-256) и сверяется с bootstrap_tokens.token_hash.
+  // Plain-значение нигде не сохраняется.
+  string bootstrap_token = 2;
+
+  // PEM-encoded CSR. Несёт public key Soul-а; private key никогда не покидает хост.
+  bytes csr_pem = 3;
+
+  // Версия soul-бинаря — для аудита онбординга.
+  string soul_version = 4;
+}
+
+// BootstrapReply — успешный выпуск SoulSeed.
+message BootstrapReply {
+  // Выпущенный SoulSeed-сертификат в PEM.
+  bytes certificate_pem = 1;
+
+  // CA-цепочка для верификации серверного сертификата Keeper-а при последующем mTLS.
+  bytes ca_chain_pem = 2;
+
+  // expires_at сертификата — используется Soul-ом для планирования ротации.
+  google.protobuf.Timestamp not_after = 3;
+
+  // KID Keeper-инстанса, выпустившего seed. Аудит и диагностика.
+  string kid = 4;
+
+  // PEM (SPKI) публичного ed25519-ключа подписи Sigil (ADR-026, slice S2b).
+  // Edет Soul-у как trust-anchor: Soul персистит его рядом с SoulSeed и
+  // верифицирует им подпись допусков плагинов (PluginSigil) в pull-режиме
+  // (slice S6). Пусто — Sigil на Keeper-е не настроен (sigil.signing_key_ref
+  // отсутствует/пуст); тогда verify плагинов выключен на этом хосте.
+  // optional: пустое значение — валидное «Sigil выключен».
+  optional string sigil_pubkey_pem = 5;
+
+  // ПОЛНЫЙ набор trust-anchor-ов подписи Sigil (SPKI PEM публичных ed25519-
+  // ключей) — поддержка multi-anchor ротации (ADR-026, R3). При наличии набора
+  // Soul использует ИМЕННО его (любой anchor из набора верифицирует подпись).
+  // Одиночное sigil_pubkey_pem (field 5) — legacy single-anchor для wire-compat;
+  // если set непуст, single-поле игнорируется. Пустой набор = «Sigil выключен»
+  // (как пустое одиночное поле).
+  repeated string sigil_pubkey_pem_set = 6;
+}

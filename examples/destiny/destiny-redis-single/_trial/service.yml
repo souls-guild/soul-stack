@@ -1,0 +1,18 @@
+# service.yml L0-обёртки destiny redis-single (Trial, ADR-023).
+#
+# Обёртка не настоящий сервис: единственная роль — дать standalone destiny
+# redis-single render-only L0-проверку через scenario apply:destiny. Резолв
+# apply:destiny зеркалит ПРОД (slice A): name → service.yml::destiny[] + URL из
+# default_destiny_source (case.yml). Поэтому даже обёртке нужен service.yml с
+# объявленной зависимостью.
+name: trial-redis-single
+state_schema_version: 1
+description: >-
+  L0-харнесс destiny redis-single (ADR-023). Не сервис — scenario-обёртка под
+  render-only Trial. state_schema здесь номинальный (Trial L0 его не ассертит).
+
+state_schema:
+  type: object
+
+destiny:
+  - { name: redis-single, ref: v1.0.0 }

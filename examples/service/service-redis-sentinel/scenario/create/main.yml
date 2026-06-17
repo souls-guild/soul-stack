@@ -1,0 +1,67 @@
+name: create
+description: >-
+  Поднять redis-sentinel на всех хостах инкарнации, мониторящих один redis-master
+  (master_ip из input). Шаги: install redis (sentinel в пакете) → render
+  sentinel.conf (monitor master_ip 6379 quorum) → nohup redis-sentinel → wait
+  PONG на :26379. Идемпотентно (unless-guard на старте sentinel).
+
+input:
+  master_ip:
+    type: string
+    required: true
+    description: IP redis-master-а, который мониторит этот sentinel-кластер.
+  master_name:
+    type: string
+    required: false
+    description: Логическое имя master-а в sentinel (default mymaster).
+  quorum:
+    type: integer
+    required: false
+    min: 1
+    max: 9
+    description: Quorum sentinel-ов для признания master down (default 2).
+
+state_changes:
+  sets:
+    master_ip:   "${ input.master_ip }"
+    master_name: "${ has(input.master_name) ? input.master_name : 'mymaster' }"
+    quorum:      "${ has(input.quorum) ? input.quorum : 2 }"
+
+tasks:
+  - name: Install redis (provides redis-sentinel)
+    on: ["${ incarnation.name }"]
+    module: core.pkg.installed
+    params:
+      name: redis
+
+  - name: Render sentinel.conf monitoring the master
+    on: ["${ incarnation.name }"]
+    module: core.file.rendered
+    register: sentinel_conf
+    params:
+      path: /etc/redis-sentinel.conf
+      mode: "0644"
+      template: templates/sentinel.conf.tmpl
+      vars:
+        master_ip:   "${ input.master_ip }"
+        master_name: "${ has(input.master_name) ? input.master_name : 'mymaster' }"
+        quorum:      "${ has(input.quorum) ? input.quorum : 2 }"
+
+  - name: Start redis-sentinel on each host
+    on: ["${ incarnation.name }"]
+    module: core.cmd.shell
+    params:
+      cmd: "cp /etc/redis-sentinel.conf /tmp/sentinel-run.conf && nohup redis-sentinel /tmp/sentinel-run.conf >/var/log/redis-sentinel.log 2>&1 & sleep 1; true"
+      unless: "redis-cli -p 26379 ping | grep -q PONG"
+
+  - name: Wait until sentinel responds on :26379
+    on: ["${ incarnation.name }"]
+    module: core.cmd.shell
+    changed_when: false
+    retry:
+      count: 12
+      delay: 2s
+      until: register.self.stdout == 'PONG'
+    failed_when: register.self.stdout != 'PONG'
+    params:
+      cmd: "redis-cli -p 26379 ping 2>/dev/null | tr -d '[:space:]' || echo DOWN"

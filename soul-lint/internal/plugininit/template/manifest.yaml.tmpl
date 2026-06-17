@@ -1,0 +1,107 @@
+# Manifest плагина (ADR-020 + ADR-026 Sigil-trust).
+# Полная спека: docs/keeper/plugins.md → Manifest.
+kind: soul_module
+protocol_version: {{.ProtocolVersion}}
+namespace: {{.Namespace}}
+name: {{.Name}}
+
+# capabilities, которые модуль декларирует к запросу у host-а (closed enum:
+# run_as_root / network_outbound / network_inbound / vault_access /
+# fs_write_root / exec_subprocess). soul-lint сверяет с plugin_runtime
+# host-а; недекларированные capabilities блокируют запуск (default-deny).
+required_capabilities: []
+
+# Декларация наблюдаемых эффектов (closed enum типов: service / file /
+# package / port / user / group / directory / cron / mount). Используется
+# Augur-RBAC и аудитом. TODO: заполнить по реальным ресурсам модуля.
+side_effects: []
+
+spec:
+  # spec.states.<state>.input — описание input-параметров модуля для каждого
+  # state. Используется soul-lint при валидации `params:` шага destiny против
+  # манифеста И backend-ом для построения формы модуля в UI (ADR-045).
+  # type ∈ {string, int, bool, list, map}. required/secret/default — опц. флаги.
+  # См. docs/keeper/plugins.md → spec.soul_module, docs/input.md → param-DSL.
+  #
+  # ВАЖНО (semantic rule input_secret_without_vault_pattern,
+  # shared/plugin/manifest.go): любой secret-параметр ОБЯЗАН иметь
+  # pattern: "^vault:.*" — без него validate-manifest падает с error.
+  # Единственный допустимый pattern для secret — ровно `^vault:.*`.
+  states:
+    present:
+      description: "Ресурс существует с запрошенными параметрами"
+      input:
+        name:
+          type: string
+          required: true
+          description: "Имя ресурса"
+
+        # --- Образцы param-DSL формы модуля (ADR-045) ---
+        # Ниже — живые примеры всех form-полей. backend строит из них форму:
+        # dropdown / cluster-picker / typed-list / textarea. Удалите ненужное,
+        # подставьте свои параметры. Закомментированные блоки см. в конце.
+
+        # enum — closed-set: UI рисует dropdown, валидатор бьёт значения вне списка.
+        mode:
+          type: string
+          enum: [strict, relaxed]
+          default: strict
+          description: "Режим применения (closed-set: strict|relaxed)."
+
+        # pattern — regex-валидация свободной строки.
+        owner:
+          type: string
+          pattern: "^[a-z_][a-z0-9_-]*$"
+          description: "Владелец ресурса (unix-username-like)."
+
+        # format + source — cluster-aware picker. format: sid даёт FQDN-валидацию,
+        # source указывает каталог значений (incarnation_hosts — все SID инкарнации;
+        # альтернатива — choir: <name>, см. закомментированный пример ниже).
+        target_host:
+          type: string
+          format: sid
+          source: { incarnation_hosts: true }
+          description: "SID (FQDN) хоста-цели; UI отдаёт picker по хостам инкарнации."
+
+        # items — типизированный список (list[int]): UI рисует список int-полей,
+        # а не свободный список строк. Для list/array items — тип ЭЛЕМЕНТА.
+        ports:
+          type: list
+          items: { type: int }
+          description: "Список портов (типизированный list[int])."
+
+        # items на map — тип ЗНАЧЕНИЯ (map[string]string): KEY→VALUE-пары.
+        labels:
+          type: map
+          items: { type: string }
+          description: "Произвольные метки (KEY: VALUE)."
+
+        # multiline + example — большое textarea с placeholder-подсказкой.
+        # Чисто UI-hints (валидатором не проверяются), но помогают оператору.
+        script:
+          type: string
+          multiline: true
+          example: "set -euo pipefail\necho hello"
+          description: "Скрипт применения (многострочный)."
+
+        # Пример secret-параметра (vault-ref обязателен, pattern ровно ^vault:.*):
+        # password:
+        #   type: string
+        #   required: true
+        #   secret: true
+        #   pattern: "^vault:.*"
+        #   description: "Vault-ref на password (формат: vault:secret/<path>#<key>)"
+        #
+        # Альтернативный source — конкретная Choir-партия инкарнации (ADR-044):
+        # primary:
+        #   type: string
+        #   format: sid
+        #   source: { choir: writers }
+        #   description: "SID из Choir-партии 'writers' (cluster-aware picker)."
+    absent:
+      description: "Ресурс отсутствует"
+      input:
+        name:
+          type: string
+          required: true
+          description: "Имя ресурса"

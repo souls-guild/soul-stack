@@ -1,0 +1,72 @@
+- name: Ping redis
+  module: core.exec.run
+  when: input.action == 'ping'
+  changed_when: false                  # read-only, никогда не меняет state хоста
+  register: ping_result
+  params:
+    cmd: redis-cli
+    args: ["ping"]
+  output:
+    stdout: "${ ping_result.stdout }"
+
+# TODO(open Q): parse_info — кастомная функция парсинга Redis INFO output.
+# Ни в sprig-allowlist (docs/templating.md §3.3), ни в стартовом списке CEL-функций
+# (docs/templating.md §2.3) аналога нет. Варианты разрешения (propose-and-wait):
+#   (a) ввести CEL-функцию parse_info в shared/cel allowlist (расширение списка);
+#   (b) изменить probe core.exec.run, чтобы вызывал redis-cli с JSON-режимом и
+#       возвращал уже структурированный stdout (тогда достаточно fromJson из sprig
+#       на render-фазе или native parsing на CEL-фазе через явную функцию).
+# Здесь и далее значения, требующие parse_info, оставлены как сырой stdout-placeholder.
+- name: Read replication state
+  module: core.exec.run
+  when: input.action == 'replication_status'
+  changed_when: false
+  register: repl_info
+  params:
+    cmd: redis-cli
+    args: ["INFO", "replication"]
+  output:
+    replication_state: "${ repl_info.stdout }"  # placeholder без parse_info
+
+# action: diagnose — три read-only команды fire-and-forget.
+# Каждая `parallel: true` стартует в своём потоке, основной flow идёт дальше.
+- name: Ping redis
+  module: core.exec.run
+  when: input.action == 'diagnose'
+  parallel: true
+  changed_when: false
+  register: ping
+  params:
+    cmd: redis-cli
+    args: ["ping"]
+
+- name: Read replication state
+  module: core.exec.run
+  when: input.action == 'diagnose'
+  parallel: true
+  changed_when: false
+  register: repl
+  params:
+    cmd: redis-cli
+    args: ["INFO", "replication"]
+
+- name: Read memory usage
+  module: core.exec.run
+  when: input.action == 'diagnose'
+  parallel: true
+  changed_when: false
+  register: mem
+  params:
+    cmd: redis-cli
+    args: ["INFO", "memory"]
+
+# Implicit barrier: эта задача обращается к register.ping/repl/mem,
+# поэтому фреймворк дожидается завершения всех трёх перед стартом.
+- name: Collect diagnose result
+  module: core.noop
+  when: input.action == 'diagnose'
+  params: {}
+  output:
+    ping:              "${ register.ping.stdout }"
+    replication_state: "${ register.repl.stdout }"  # placeholder без parse_info
+    used_memory:       "${ register.mem.stdout }"   # placeholder без parse_info

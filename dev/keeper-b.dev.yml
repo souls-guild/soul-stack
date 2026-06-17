@@ -1,0 +1,143 @@
+kid: keeper-dev-b
+
+# Второй keeper-инстанс dev-стека для soul-failover демо (S4). Делит с
+# keeper.dev.yml общие PG/Redis/Vault и тот же TLS-материал из
+# /tmp/keeper-dev/tls/ (выпущен dev/provision.sh). Отличается только `kid` и
+# непересекающимися listen-портами (см. ниже).
+#
+# acolytes: 2 — HA work-queue (ADR-027). При двух живых Keeper-инстансах в
+# Conclave refuse-guard soul-shedding (S3, allow_unsafe_single_path_multi_keeper:
+# false) НЕ даст стартовать инстансу с acolytes=0 на single-path. acolytes>0 на
+# обоих → пул исполнения активен, guard не срабатывает.
+#
+# Зачем второй keeper: dev/soul.dev.yml перечисляет ОБА keeper в
+# keeper.endpoints с приоритетами (priority 1 = keeper-a, 2 = keeper-b). При
+# падении keeper-a soul уходит на keeper-b; при восстановлении возвращается
+# (failback.enabled: true). Процедура — docs/dev/local-setup.md → soul-failover.
+
+listen:
+  grpc:
+    bootstrap:
+      addr: "127.0.0.1:9542"
+      tls:
+        cert: /tmp/keeper-dev/tls/keeper.crt
+        key:  /tmp/keeper-dev/tls/keeper.key
+    event_stream:
+      addr: "127.0.0.1:9543"
+      tls:
+        cert: /tmp/keeper-dev/tls/keeper.crt
+        key:  /tmp/keeper-dev/tls/keeper.key
+        # ClientCAs для mTLS: тот же Vault PKI root (CN=soul-stack), что и у
+        # keeper-a — SoulSeed-сертификаты подписаны им же, soul верифицирует
+        # оба keeper одним CA. См. dev/provision.sh шаг 7.
+        ca:   /tmp/keeper-dev/tls/vault-ca.crt
+  openapi: { addr: "127.0.0.1:8082" }
+  mcp:     { addr: "127.0.0.1:8083" }
+  metrics: { addr: "127.0.0.1:9092" }
+
+postgres:
+  dsn_ref: vault:secret/keeper/postgres
+  pool: { min: 2, max: 10 }
+
+redis:
+  addr: "127.0.0.1:6381"
+  password_ref: ""
+
+vault:
+  addr: "http://127.0.0.1:8200"
+  token: "root"
+  auth:
+    method: token
+  pki_mount: "pki"
+  pki_role: "soul-seed"
+
+auth:
+  jwt:
+    signing_key_ref: vault:secret/keeper/jwt-signing-key
+    # issuer совпадает с kid инстанса — токены, выпущенные keeper-b, отличимы
+    # в аудите от keeper-a по claim `iss`.
+    issuer: keeper-dev-b
+    ttl_default: 24h
+    ttl_bootstrap: 720h
+
+otel:
+  # Те же dev-трейсы: otel-collector (docker-compose) :4317 → Jaeger
+  # http://127.0.0.1:16686. Insecure-gRPC (dev-collector без TLS). service в
+  # Jaeger у обоих keeper один (`keeper`) — различай инстансы по kid в спанах.
+  enabled: true
+  exporter: otlp
+  endpoint: "127.0.0.1:4317"
+
+logging:
+  level: info
+  format: text
+  rotation: { max_size_mb: 100, max_files: 5, compress: false }
+
+plugins:
+  cache_root: /tmp/keeper-dev/plugins
+
+plugin_runtime:
+  socket_dir: /tmp/keeper-dev/plugin-sockets-b
+  startup_timeout: 10s
+  shutdown_grace: 10s
+  allowed_capabilities:
+    - run_as_root
+    - network_outbound
+    - network_inbound
+    - vault_access
+    - fs_write_root
+    - exec_subprocess
+  conflict_policy: warn
+  enable_tls: false
+
+hot_reload:
+  enable_signal: true
+  enable_inotify: false
+  audit_correlation_id: true
+
+audit:
+  enabled: true
+  otel_export: false
+  retention_days: 365
+
+# Watchman (изоляция-детект + soul-shedding S2): при потере PG/Redis инстанс
+# сам закрывает локальные EventStream-стримы. На двух-keeper failover-демо это
+# даёт второй сценарий ухода soul — БЕЗ kill keeper-a: достаточно изолировать
+# его от PG/Redis, Watchman сбросит стрим, soul уйдёт на keeper-b. Дефолты
+# (5s / 3) совпадают с config.DefaultWatchman*; вынесены явно.
+watchman_interval: 5s
+watchman_fail_threshold: 3
+
+# HA work-queue: acolytes>0 на обоих инстансах. См. шапку про refuse-guard S3.
+acolytes: 2
+
+# Refuse-guard soul-shedding (Finding-A, ADR-027(h)): default false (refuse).
+# При acolytes=2 не релевантен (single-path guard срабатывает только при
+# acolytes=0 + живой Conclave); оставлен явно для симметрии с keeper.dev.yml.
+allow_unsafe_single_path_multi_keeper: false
+
+reaper:
+  enabled: true
+  interval: 1h
+  dry_run: false
+  batch_size: 500
+  lock_ttl: 5m
+  rules:
+    expire_pending_seeds: { enabled: true, max_age: 24h, action: delete }
+    purge_used_tokens:    { enabled: true, max_age: 90d, action: delete }
+    purge_souls:          { enabled: true, statuses: [disconnected, expired], max_age: 30d, action: delete }
+    purge_old_seeds:      { enabled: true, statuses: [superseded, expired, revoked], max_age: 90d, action: delete }
+    mark_disconnected:    { enabled: true, stale_after: 90s, action: set_status, target_status: disconnected }
+    purge_audit_old:      { enabled: true, max_age: 365d, action: delete }
+    purge_apply_runs:     { enabled: true, max_age: 30d, action: delete }
+    purge_apply_task_register: { enabled: true, max_age: 1h, action: delete }
+
+# Conductor (ADR-048) — симметрично keeper-a: оба инстанса поднимают планировщик,
+# лидерство по lease conductor:leader выбирается независимо от reaper:leader
+# (могут быть разные держатели). Адаптивный шаг опроса (ADR-048 «Adaptive
+# interval»), профиль «Спокойный» floor=30s/ceiling=60s/idle=120s — см. keeper.dev.yml.
+cadence_scheduler:
+  poll_floor: 30s
+  poll_ceiling: 60s
+  poll_idle: 120s
+  lock_ttl: 5m

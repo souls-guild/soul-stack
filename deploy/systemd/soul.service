@@ -1,0 +1,49 @@
+# systemd-юнит Soul (ADR-004) — управляемый агент-демон.
+#
+# Установка (на каждом управляемом хосте):
+#   useradd --system --no-create-home --shell /usr/sbin/nologin soul-stack
+#   install -m0755 soul/bin/soul /usr/local/bin/soul
+#   install -d -o soul-stack -g soul-stack /etc/soul /var/lib/soul-stack
+#   install -m0640 soul.yml /etc/soul/soul.yml
+#   install -m0644 deploy/systemd/soul.service /etc/systemd/system/soul.service
+#   install -m0644 deploy/systemd/soul.env     /etc/soul/soul.env
+#   systemctl daemon-reload && systemctl enable --now soul
+#
+# ВНИМАНИЕ к hardening: Soul применяет Destiny (ставит пакеты, правит файлы,
+# управляет сервисами) — это требует РЕАЛЬНЫХ привилегий на хосте. Жёсткие
+# ProtectSystem=strict / MemoryDenyWriteExecute, уместные для Keeper, для Soul
+# сломают core-модули. Поэтому здесь hardening мягче: базовая изоляция есть,
+# но запись в систему НЕ запрещена. Не ужесточать без проверки apply-цикла.
+
+[Unit]
+Description=Soul Stack Soul agent
+Documentation=https://github.com/souls-guild/soul-stack
+# Soul инициирует gRPC-стрим к Keeper (ADR-002) — нужна поднятая сеть.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=soul-stack
+Group=soul-stack
+
+EnvironmentFile=/etc/soul/soul.env
+ExecStart=/usr/local/bin/soul run --config=${SOUL_CONFIG}
+
+Restart=on-failure
+RestartSec=5s
+StartLimitIntervalSec=60s
+StartLimitBurst=5
+
+# --- hardening (мягкий профиль: Soul по природе меняет систему) ---
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# Стейт-каталог Soul: кеш плагинов/бинарей по SHA-256, TLS-материал (SoulSeed).
+ReadWritePaths=/var/lib/soul-stack
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,4 @@
+name: redis
+input:
+  weird:
+    type: blabla

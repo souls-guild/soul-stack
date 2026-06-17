@@ -1,0 +1,149 @@
+# Keeper Deployment + Service для L3c kind-cluster (L3c-2/3/4).
+#
+# Image: keeper:e2e-k8s (загружается harness-ом через `kind load docker-image`).
+# imagePullPolicy: Never — образ не существует в registry, тянуть нечего.
+#
+# Replicas: 3 (L3c-3 multi-keeper). L3c-2 patch-ил replicas=1; теперь дефолт —
+# multi-replica HA. harness.DeployKeeper(t, N) патчит spec.replicas под запрос.
+#
+# ConfigMap keeper-config и Secret keeper-tls создаёт harness ДО kubectl apply —
+# Deployment ссылается на них как на готовые объекты. Без них pod упадёт на
+# CreateContainerConfigError, что отражается в waitDeploymentReady как timeout.
+#
+# Probes: readinessProbe — /readyz (PG+Vault+Redis); livenessProbe — /healthz
+# (static 200). Initial-delay 30s — keeper применяет миграции PG на старте,
+# /readyz возвращает 503 пока миграции не закончатся.
+#
+# `keeper run --initialize` (см. Dockerfile::CMD) — bootstrap-pending mode без
+# `keeper init` (ADR-013(d)): keeper стартует с пустым operators-registry,
+# OperatorAPI отвечает 503 (`operator-bootstrap-pending`), но /readyz и
+# /healthz работают штатно. L3c-2 этого достаточно для ping-теста; L3c-3
+# заменит на полный `keeper init` через kubectl-job + retry-run без флага.
+#
+# Per-pod KID (L3c-4 failover-test): keeper.yml в ConfigMap содержит литерал
+# `__KID__` placeholder. Init-container `kid-render` (busybox shell) делает
+# `sed s/__KID__/<podName>/g` из ConfigMap-mount в emptyDir, и основной
+# keeper-container монтирует уже отрендеренный конфиг. Без этого все 3 pod
+# имели бы одинаковый KID и конкурировали бы за один Redis-lease невидимо
+# (failover detection через `GET reaper:leader` не работал бы — лидер всегда
+# тот же KID). KID = `<podName>` (pod-name удовлетворяет regex KID
+# `^[a-z][a-z0-9-]{0,62}$` для k8s-генерируемых имён `keeper-xxxx-xxxxx`).
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keeper
+  labels:
+    app: keeper
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: keeper
+  template:
+    metadata:
+      labels:
+        app: keeper
+    spec:
+      initContainers:
+        # kid-render — busybox shell, читает /tmpl/keeper.yml (ConfigMap),
+        # подставляет POD_NAME (downwardAPI) в литерал `__KID__`, пишет
+        # /rendered/keeper.yml в emptyDir. Без этого все 3 pod имели бы
+        # одинаковый KID из ConfigMap (failover тест не отличил бы лидера).
+        - name: kid-render
+          image: busybox:1.36
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              sed "s/__KID__/${POD_NAME}/g" /tmpl/keeper.yml > /rendered/keeper.yml
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          volumeMounts:
+            - name: config-tmpl
+              mountPath: /tmpl
+              readOnly: true
+            - name: config-rendered
+              mountPath: /rendered
+      containers:
+        - name: keeper
+          image: keeper:e2e-k8s
+          imagePullPolicy: Never
+          ports:
+            - name: openapi
+              containerPort: 8080
+            - name: mcp
+              containerPort: 8090
+            - name: metrics
+              containerPort: 9100
+            - name: grpc-bootstrap
+              containerPort: 9094
+            - name: grpc-stream
+              containerPort: 9095
+          env:
+            - name: SOUL_STACK_ALLOW_FILE_REPOS
+              value: "1"
+          volumeMounts:
+            - name: config-rendered
+              mountPath: /etc/keeper
+              readOnly: true
+            - name: tls
+              mountPath: /etc/keeper-tls
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: openapi
+            initialDelaySeconds: 30
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: openapi
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+      volumes:
+        - name: config-tmpl
+          configMap:
+            name: keeper-config
+        - name: config-rendered
+          emptyDir: {}
+        - name: tls
+          secret:
+            secretName: keeper-tls
+            defaultMode: 0o400
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keeper
+  labels:
+    app: keeper
+spec:
+  selector:
+    app: keeper
+  ports:
+    - name: openapi
+      port: 8080
+      targetPort: openapi
+    - name: mcp
+      port: 8090
+      targetPort: mcp
+    - name: metrics
+      port: 9100
+      targetPort: metrics
+    - name: grpc-bootstrap
+      port: 9094
+      targetPort: grpc-bootstrap
+    - name: grpc-stream
+      port: 9095
+      targetPort: grpc-stream

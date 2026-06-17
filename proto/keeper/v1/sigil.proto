@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+package soulstack.keeper.v1;
+
+option go_package = "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;keeperv1";
+
+// PluginSigil — транспорт одной печати доверия Sigil (ADR-026) от Keeper к
+// Soul по EventStream-у (only-add в FromKeeper.oneof, slice S2b).
+//
+// Самодостаточен для Soul-side verify (slice S6): несёт всё, что нужно
+// re-собрать подписываемый блок и проверить ed25519-подпись trust-anchor-ом из
+// bootstrap (BootstrapReply.sigil_pubkey_pem):
+//
+//   - namespace + name + ref — идентичность допущенного плагина;
+//   - binary_sha256 — хеш бинаря, который Soul сверяет с локальным бинарём;
+//   - signature — ed25519-подпись блока (ns, name, ref, binary_sha256, manifest);
+//   - manifest — сырые байты manifest.yaml (M1), которые Soul прогоняет через
+//     shared/pluginhost.NormalizeManifestBytes перед хешированием (S3↔S6-инвариант).
+//
+// S2b вводит ТОЛЬКО этот контракт. Раздача PluginSigil-сообщений Keeper-ом и
+// сам verify на Soul-е — slice S6.
+message PluginSigil {
+  // namespace плагина (например `core`, `community`).
+  string namespace = 1;
+
+  // name плагина внутри namespace.
+  string name = 2;
+
+  // ref — operator-asserted метка версии допуска (вариант C ADR-026); в
+  // целостность бинаря НЕ участвует, но входит в подписываемый блок.
+  string ref = 3;
+
+  // SHA-256 бинаря плагина, hex lowercase (64 символа).
+  string binary_sha256 = 4;
+
+  // Сырая ed25519-подпись блока (64 байта, без base64/PEM).
+  bytes signature = 5;
+
+  // Сырые байты manifest.yaml (M1). Канон для verify — эти байты через
+  // NormalizeManifestBytes, не parsed-форма.
+  bytes manifest = 6;
+}
+
+// SigilSnapshot — ПОЛНЫЙ active-набор допусков плагинов (replace-семантика,
+// ADR-026). Едет only-add в FromKeeper.oneof существующего EventStream-а.
+//
+// Soul применяет его как ReplaceAll: ЗАМЕНЯЕТ весь свой локальный набор Sigil-ов
+// этим списком, НЕ делает upsert. Допуск, отсутствующий в snapshot, Soul
+// забывает — так срабатывает revoke/retire: после revoke Архонтом Keeper шлёт
+// новый snapshot без отозванного допуска, и near-instant revoke (S6c) закрывает
+// доступ без перезапуска Soul-а. Пустой sigils[] = ни один плагин не допущен.
+message SigilSnapshot {
+  repeated PluginSigil sigils = 1;
+}
+
+// SigilTrustAnchors — ПОЛНЫЙ набор trust-anchor-ов подписи Sigil (replace-
+// семантика, ADR-026, ротация R3). Едет only-add в FromKeeper.oneof.
+//
+// Soul применяет его как ReplaceAll по тем же правилам, что SigilSnapshot:
+// ЗАМЕНЯЕТ весь свой набор anchor-ов этим списком (multi-anchor поддержка для
+// безразрывной ротации ключа подписи). Anchor, отсутствующий в наборе, Soul
+// забывает (retire старого ключа). Каждый элемент — SPKI PEM публичного
+// ed25519-ключа подписи Sigil (тот же формат, что BootstrapReply.sigil_pubkey_pem).
+message SigilTrustAnchors {
+  repeated string pubkey_pem = 1;
+}

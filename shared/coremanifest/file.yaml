@@ -1,0 +1,31 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: file
+
+required_capabilities:
+  - fs_write_root
+
+spec:
+  states:
+    present:
+      description: Файл существует с заданным content/mode/owner/group (ADR-015).
+      input:
+        path:    { type: string, required: true, description: "Целевой путь файла." }
+        content: { type: string, description: "Содержимое файла (inline)." }
+        mode:    { type: string, description: "Права в восьмеричной форме, напр. \"0640\"." }
+        owner:   { type: string, description: "Владелец (имя пользователя)." }
+        group:   { type: string, description: "Группа-владелец (имя группы)." }
+    absent:
+      description: Файл удалён.
+      input:
+        path: { type: string, required: true, description: "Путь удаляемого файла." }
+    rendered:
+      description: Файл = результат рендера text/template-шаблона (ADR-010).
+      input:
+        path:     { type: string, required: true, description: "Целевой путь рендеренного файла." }
+        template: { type: string, required: true, description: "Путь к .tmpl-шаблону (резолвится локально, потом service-level)." }
+        vars:     { type: map,    items: { type: string }, description: "Переменные рендера (видны шаблону как .vars.*)." }
+        mode:     { type: string, description: "Права в восьмеричной форме, напр. \"0644\"." }
+        owner:    { type: string, description: "Владелец (имя пользователя)." }
+        group:    { type: string, description: "Группа-владелец (имя группы)." }

@@ -1,0 +1,14 @@
+# Переиспользуемый блок: установка Redis на все хосты кластера.
+# Роль-агностичный шаг: один и тот же state на всех хостах incarnation,
+# soulprint.hosts здесь не нужен (orchestration.md §3, on: список covens).
+
+- name: Install redis on all cluster hosts
+  on: ["${ incarnation.name }"]
+  apply:
+    destiny: redis
+    input:
+      action:    apply
+      version:   "${ essence.redis_version }"
+      password:  "${ input.redis_password }"
+      maxmemory: "${ essence.redis_maxmemory }"
+      config:    "${ essence.redis_config }"

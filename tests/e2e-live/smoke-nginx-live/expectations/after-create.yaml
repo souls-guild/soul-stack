@@ -1,0 +1,42 @@
+# Post-apply ожидания smoke-nginx-live::create (ADR-039 § Часть D, L3b).
+#
+# apply_runs.status — РЕАЛЬНОЕ значение enum keeper/internal/applyrun/applyrun.go
+# (StatusSuccess = "success"). harness валидирует expectations fail-early через
+# harness.CheckApplyRunsStatusValid (см. asserts.go).
+#
+# incarnation_state — deep-subset; здесь точное совпадение state_changes.sets
+# из examples/service/smoke-nginx-live/scenario/create/main.yml.
+#
+# audit_events — минимум одна строка `incarnation.scenario_started` с
+# apply_id-матчем. Точное число событий не фиксируется (apply_runs lifecycle
+# пишет несколько audit-строк, контракт-тест проверяет presence ключевой).
+#
+# metrics — Prometheus-expression → constraint-строка ('>= 1' / '== 0' / ...).
+#
+# host_state — container-side ассерты (L3b-4). Читается фикстурным YAML
+# loader-ом (L3b-5, harness/expectations.go), применяется Stack.AssertExpectations:
+# packages → AssertHostPkgInstalled, services → AssertHostServiceActive,
+# files[].contains → AssertHostFileExists + AssertHostFileContent.
+apply_runs:
+  status: success
+
+incarnation_state:
+  nginx_package: installed
+  nginx_service: active
+  nginx_config_managed: true
+
+audit_events:
+  - type: incarnation.scenario_started
+
+metrics:
+  keeper_apply_runs_total{status="success"}: ">= 1"
+
+host_state:
+  - soul: soul-live-a.example.com
+    packages:
+      nginx: installed
+    services:
+      nginx: active
+    files:
+      - path: /etc/nginx/sites-available/default
+        contains: "server_name soul-live-a"

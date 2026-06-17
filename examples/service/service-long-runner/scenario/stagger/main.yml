@@ -1,0 +1,33 @@
+name: stagger
+description: >-
+  Staggered cross-host барьер. Один core.cmd.shell-task на ВСЕХ хостах
+  incarnation: каждый хост спит ВРЕМЯ = (номер в SID) * 6 секунд, затем пишет
+  done-маркер с временем. redis-01 ~6s, redis-10 ~60s. params host-инвариантны
+  (длительность вычисляет сам shell из hostname), как требует pilot-ограничение.
+
+  Валидация (ТЕСТ B): поллингом во время прогона ловим apply_runs, где часть
+  хостов уже success (короткий sleep), часть ещё applying/claimed (длинный
+  sleep). incarnation держится в applying пока не закроются ВСЕ; state
+  коммитится один раз (single-winner) после завершения последнего хоста.
+
+state_changes:
+  sets:
+    last_run: "stagger"
+    runner_marker: /tmp/long-runner-done.txt
+
+tasks:
+  - name: Staggered sleep per host then write done marker
+    on: ["${ incarnation.name }"]
+    module: core.cmd.shell
+    params:
+      # Номер хоста: последние цифры hostname (lr-07 -> 7). Спим num*6 сек.
+      # ВНИМАНИЕ: в cmd НЕЛЬЗЯ использовать shell ${VAR} — маркер ${ } = CEL-
+      # интерполяция (ADR-010), коллизия. Поэтому только $VAR без фигурных скобок
+      # и без ${VAR:-default}; число берётся напрямую, default через ||.
+      cmd: >-
+        N=$(hostname | grep -oE '[0-9]+' | head -1 | sed 's/^0*//' || echo 1);
+        test -n "$N" || N=1;
+        SECS=$(expr $N \* 6);
+        sleep $SECS;
+        echo "done after $SECS s on $(hostname) at $(date -u +%H:%M:%S)" > /tmp/long-runner-done.txt;
+        true

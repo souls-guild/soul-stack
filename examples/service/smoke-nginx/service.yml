@@ -1,0 +1,22 @@
+name: smoke-nginx
+state_schema_version: 1
+description: >-
+  Минимальный service для L3a E2E pilot (ADR-039): один scenario "create",
+  две core-задачи (установка пакета + запуск сервиса). Используется harness-ом
+  tests/e2e/ для контракт-теста apply_runs lifecycle + audit + metrics.
+
+# state_schema_version=1 → каталог migrations/ не обязателен (ADR-019).
+# state-changes scenario фиксируют установленный пакет и активный сервис в
+# incarnation.state для post-apply ассертов.
+state_schema:
+  type: object
+  properties:
+    nginx_package:
+      type: string
+      description: Имя установленного пакета (литерал nginx).
+    nginx_service:
+      type: string
+      description: Имя запущенного systemd-юнита (литерал nginx).
+
+# Зависимостей нет: scenario использует только core-модули (ADR-015) —
+# в destiny[]/modules[] не перечисляются (ADR-009).

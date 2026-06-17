@@ -1,0 +1,170 @@
+syntax = "proto3";
+
+package soulstack.plugin.v1;
+
+import "google/protobuf/struct.proto";
+
+option go_package = "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1;pluginv1";
+
+// CloudDriver — service-контракт плагинов `kind: cloud_driver`
+// (ADR-020, docs/keeper/plugins.md → Service-контракт CloudDriver).
+//
+// Host — `keeper` (модуль `keeper.cloud`, docs/keeper/cloud.md).
+// Бинари плагинов — soul-cloud-<provider> (soul-cloud-aws, soul-cloud-yc, …).
+//
+// Cloud-create встроен в сценарии как шаг с `on: keeper`
+// (модуль core.cloud.provisioned, ADR-017).
+service CloudDriver {
+  // Публикует profile_schema (должен совпадать с manifest.spec.profile_schema).
+  // Используется при создании Profile через OpenAPI/MCP для валидации.
+  rpc Schema(SchemaRequest) returns (SchemaReply);
+
+  // Runtime-проверки параметров профиля: квоты, доступность образа, валидность
+  // subnet-а — то, что не выражается JSON Schema.
+  rpc Validate(ValidateProfileRequest) returns (ValidateProfileReply);
+
+  // Создаёт VM (одну или N), стримит прогресс.
+  rpc Create(CreateRequest) returns (stream CreateEvent);
+
+  // Удаляет VM. Под guard-rails — см. docs/keeper/cloud.md → Безопасность destroy.
+  rpc Destroy(DestroyRequest) returns (stream DestroyEvent);
+
+  // Опрос состояния конкретной VM.
+  rpc Status(StatusRequest) returns (StatusReply);
+
+  // Перечисление VM, известных провайдеру.
+  rpc List(ListRequest) returns (stream VmInfo);
+}
+
+// SchemaRequest — запрос Schema. Параметров нет; отдельный message для
+// forward-compat (добавление полей без breaking).
+message SchemaRequest {}
+
+// SchemaReply — JSON Schema VM-профиля (draft 2020-12).
+message SchemaReply {
+  google.protobuf.Struct profile_schema = 1;
+}
+
+// ValidateProfileRequest — запрос Validate для CloudDriver.
+// Имя отличается от ValidateRequest в soulmodule.proto, чтобы пакет
+// `soulstack.plugin.v1` не имел коллизии типов.
+message ValidateProfileRequest {
+  // Параметры VM-профиля, соответствующие profile_schema.
+  google.protobuf.Struct profile = 1;
+}
+
+// ValidateProfileReply — результат Validate для CloudDriver.
+message ValidateProfileReply {
+  bool ok = 1;
+  repeated string errors = 2;
+}
+
+// CreateRequest — запрос Create.
+message CreateRequest {
+  // Параметры VM-профиля (соответствуют profile_schema).
+  google.protobuf.Struct profile = 1;
+
+  // Сколько VM создать. Default 1.
+  int32 count = 2;
+
+  // Credentials провайдера, резолвленные Keeper-ом из Provider-реестра
+  // (credentials A-flow, docs/keeper/cloud.md → Credentials-flow): Keeper
+  // читает `providers.credentials_ref` (vault:<mount>/<path>) и кладёт сюда
+  // plain-секрет; драйвер в Vault НЕ ходит. Содержимое provider-specific
+  // (AWS: access_key_id/secret_access_key/session_token; YC: service-account-key
+  // и т.д.). Сюда же Keeper кладёт `region` из Provider-реестра — это
+  // provider-specific параметр (у Proxmox/OpenStack своего `region` нет),
+  // поэтому он живёт внутри credentials/profile Struct, а не отдельным полем.
+  // forward-compat only-add (ADR-012(c) стиль): added v1.
+  google.protobuf.Struct credentials = 3;
+
+  // Cloud-init userdata для bootstrap soul-агента на свежей VM (PM-decision:
+  // cloud-init userdata). Сырой userdata-blob, который драйвер передаёт
+  // провайдеру при создании (AWS RunInstances UserData). Применяется ко ВСЕМ
+  // VM батча одинаково: bootstrap-токен per-SID на этой фазе ещё неизвестен
+  // (SID = FQDN присваивается провайдером уже ПОСЛЕ create) — см. open question
+  // про chicken-egg в docs/keeper/cloud.md → Credentials-flow.
+  // forward-compat only-add: added v1.
+  string userdata = 4;
+}
+
+// CreateEvent — событие из Create-stream-а.
+// Финальное событие переносит созданные VM (vms[]), промежуточные —
+// диагностические message-ы.
+message CreateEvent {
+  string message = 1;
+
+  // Заполнено только в финальном событии — список созданных VM.
+  repeated VmInfo vms = 2;
+
+  // Заполнено при ошибке. Stream закрывается после первого failed=true.
+  bool failed = 3;
+}
+
+// DestroyRequest — запрос Destroy.
+message DestroyRequest {
+  // VM-идентификаторы для удаления (формат provider-specific).
+  repeated string vm_ids = 1;
+
+  // Credentials провайдера, резолвленные Keeper-ом из Provider-реестра — см.
+  // CreateRequest.credentials (тот же A-flow). Без них драйвер не может
+  // аутентифицироваться в provider API для TerminateInstances.
+  // forward-compat only-add (ADR-012(c) стиль): added v1.
+  google.protobuf.Struct credentials = 2;
+}
+
+// DestroyEvent — событие из Destroy-stream-а.
+message DestroyEvent {
+  string message = 1;
+  string vm_id = 2;
+  bool failed = 3;
+}
+
+// StatusRequest — запрос Status.
+message StatusRequest {
+  string vm_id = 1;
+
+  // Credentials провайдера, резолвленные Keeper-ом из Provider-реестра — см.
+  // CreateRequest.credentials (тот же A-flow). Без них драйвер не может
+  // аутентифицироваться в provider API для DescribeInstances/Get-операции.
+  // forward-compat only-add (ADR-012(c) стиль): added v1.
+  google.protobuf.Struct credentials = 2;
+}
+
+// StatusReply — результат Status.
+message StatusReply {
+  // Состояние VM в терминах провайдера (provider-specific строка).
+  // Нормализация до общего enum — отдельная задача keeper.cloud (post-MVP).
+  string state = 1;
+
+  // Дополнительная provider-specific информация.
+  google.protobuf.Struct attributes = 2;
+}
+
+// ListRequest — запрос List.
+message ListRequest {
+  // Provider-specific фильтр (теги, регион, и т.п.); пустой = все.
+  google.protobuf.Struct filter = 1;
+
+  // Credentials провайдера, резолвленные Keeper-ом из Provider-реестра — см.
+  // CreateRequest.credentials (тот же A-flow). До v1 это поле отсутствовало,
+  // драйверы как workaround клали creds внутрь filter — миграция убрала
+  // workaround, чтобы 5 драйверов тиража не повторяли его × 5.
+  // forward-compat only-add (ADR-012(c) стиль): added v1.
+  google.protobuf.Struct credentials = 2;
+}
+
+// VmInfo — описание одной VM (используется в Create и List).
+message VmInfo {
+  // Provider-specific идентификатор VM (instance-id для AWS, id для GCP, и т.п.).
+  string vm_id = 1;
+
+  // FQDN, если provider присвоил — будет использован как SID при онбординге Soul.
+  string fqdn = 2;
+
+  // Основной IP-адрес.
+  string primary_ip = 3;
+
+  // Provider-specific дополнительные атрибуты.
+  google.protobuf.Struct attributes = 4;
+}

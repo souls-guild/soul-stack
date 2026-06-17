@@ -1,0 +1,108 @@
+// Package trial — герметичный раннер испытаний (Trial, [ADR-023]) Destiny/
+// Scenario, бинарь `soul-trial`. Этот пакет реализует уровень L0
+// (render-only): прогон Keeper-side render-пайплайна (`keeper/internal/render`)
+// на fixtures без хоста и без внешней инфры, сверка отрендеренного плана
+// (`[]RenderedTask`) с `assert.rendered_tasks`, сбор trial coverage по
+// CEL-веткам через cel.CoverageSink.
+//
+// L0-секции assert: rendered_tasks (плоский план задач), state_changes
+// (отрендеренные sets) и state_after (детерминированный итоговый
+// incarnation.state). assert.dispatch — секция уровня L3 (multi-host
+// оркестрация, [ADR-023]); на single-host один синтетический хост, поэтому она
+// осмысленна только на multi-host и в L0 не реализуется (strict-декод отвергает
+// её как unknown-key — это намеренно, см. AssertBlock).
+//
+// [ADR-023]: docs/adr/0023-trial-test-runner.md#adr-023-тест-раннер-trial-soul-trial-и-dsl-coverage
+package trial
+
+// Case — один файл испытания `case.yml` ([ADR-023], формат — расширение
+// migration-эталона). Структура read-only после загрузки.
+//
+// Fixtures задают весь герметичный контекст прогона (input/essence/soulprint/
+// vault). Mocks.Register — register-контекст probe-шагов для `where:`/`when:`
+// (в L0-пилоте проброс готового register-payload-а, без исполнения probe).
+// Assert — ожидаемый результат; в пилоте используется только RenderedTasks.
+type Case struct {
+	Name     string      `yaml:"name"`
+	Fixtures Fixtures    `yaml:"fixtures"`
+	Mocks    Mocks       `yaml:"mocks,omitempty"`
+	Assert   AssertBlock `yaml:"assert"`
+}
+
+// Fixtures — герметичный вход прогона. Все поля опциональны; пустое поле =
+// пустой контекст соответствующей переменной CEL.
+//
+// Soulprint в L0 — факты одного хоста (карта `soulprint.self.<path>`).
+// Vault — мок vault-резолва: ключ = logical-path секрета (`secret/<...>`),
+// значение = map полей секрета (форма KV v2 `data.data`).
+//
+// State — базовый `incarnation.state` ДО прогона сценария (для операций,
+// накапливающих state поверх существующего — add_user/update_acl/…). Нужен
+// только для assert.state_after, где ожидаемый итог = State + отрендеренные
+// state_changes.sets; для сценариев create (state «с нуля») опускается.
+//
+// DefaultDestinySource — L0-аналог keeper.yml::default_destiny_source (то же
+// имя ключа): шаблон URL с подстановкой {name}, по которому apply:destiny
+// резолвит destiny-зависимость. В L0 источник обязан быть герметичным
+// (`file://`-схема, путь относительно service-root кейса, напр.
+// `file://../../destiny/{name}`); per-entry `destiny[].git` override побеждает
+// шаблон, но в L0 тоже обязан быть `file://`. Пустое значение допустимо для
+// кейсов без apply:destiny — резолвер тогда не дёргается.
+type Fixtures struct {
+	Input                map[string]any            `yaml:"input,omitempty"`
+	Essence              map[string]any            `yaml:"essence,omitempty"`
+	Soulprint            map[string]any            `yaml:"soulprint,omitempty"`
+	Vault                map[string]map[string]any `yaml:"vault,omitempty"`
+	State                map[string]any            `yaml:"state,omitempty"`
+	DefaultDestinySource string                    `yaml:"default_destiny_source,omitempty"`
+}
+
+// Mocks — моки для шагов, обращающихся к среде хоста.
+//
+// Register — карта register-name → payload probe-шага. В L0-пилоте payload
+// подставляется как готовый register-результат для `where:`/`when:` без
+// исполнения самого probe (probe — Soul-side, в L0 хоста нет).
+type Mocks struct {
+	Register map[string]any `yaml:"register,omitempty"`
+}
+
+// AssertBlock — ожидаемый результат прогона. Подсекции независимы и
+// опциональны ([ADR-023]); L0 реализует RenderedTasks, StateChanges и
+// StateAfter.
+//
+// StateChanges — ожидаемый результат рендера `state_changes.sets` сценария
+// (поле → значение после CEL-свёртки, симметрично RenderedTasks для tasks).
+// Опционально: даже без этой секции state_changes ВСЕГДА рендерятся при
+// прогоне кейса, и ошибка рендера (например незащищённый `${ input.X }` по
+// optional-без-default input → CEL «no such key») — фейл кейса. Секция нужна,
+// когда хочется зафиксировать конкретные значения, а не только сам факт
+// успешного рендера.
+//
+// StateAfter — ожидаемый детерминированный итоговый `incarnation.state` после
+// прогона: базовый `fixtures.state` + отрендеренные `state_changes.sets`
+// (зеркало прод-коммита, orchestration.md §7.1). Герметично, без хоста (L0).
+// Сверка ПОЛНАЯ (как L1-migration): лишний ключ в итоге — тоже расхождение,
+// state фиксируется целиком. Опционально: кейс выбирает state_after, когда
+// важен сам факт итогового state, а не только дельта sets (state_changes —
+// частичная сверка дельты, state_after — полная сверка результата).
+type AssertBlock struct {
+	RenderedTasks []ExpectedTask `yaml:"rendered_tasks,omitempty"`
+	StateChanges  map[string]any `yaml:"state_changes,omitempty"`
+	StateAfter    map[string]any `yaml:"state_after,omitempty"`
+	// Dispatch — секция уровня L3 (multi-host оркестрация, [ADR-023]): на
+	// single-host один синтетический хост, dispatch-план осмыслен только на
+	// топологии. Поле НЕ объявлено, чтобы strict-декод отверг опирающиеся на
+	// него кейсы явной ошибкой unknown-key, а не молча-пропуском (тест —
+	// TestLoadCase_RejectsUnknownSection).
+}
+
+// ExpectedTask — ожидание на одну отрендеренную задачу плана.
+//
+// Index — позиция в scenario.tasks[] (связь с RenderedTask.Index). Module —
+// ожидаемый module-адрес. Params — ожидаемые CEL-rendered params (deep-compare).
+// Params опциональны: если не заданы — сверяются только index+module.
+type ExpectedTask struct {
+	Index  int            `yaml:"index"`
+	Module string         `yaml:"module"`
+	Params map[string]any `yaml:"params,omitempty"`
+}

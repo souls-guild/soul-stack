@@ -1,0 +1,249 @@
+syntax = "proto3";
+
+package soulstack.keeper.v1;
+
+import "google/protobuf/struct.proto";
+
+import "keeper/v1/common.proto";
+
+option go_package = "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;keeperv1";
+
+// RenderedTask — задача после Keeper-side рендера (CEL и text/template-фазы УЖЕ применены, ADR-010, ADR-012(d)).
+// Soul только исполняет, не рендерит.
+message RenderedTask {
+  // Имя задачи из destiny/scenario.
+  string name = 1;
+
+  // Адресация модуля: <namespace>.<module>.<state>, например "core.pkg.installed".
+  string module = 2;
+
+  // Параметры модуля после рендера, типизированы согласно манифесту модуля.
+  google.protobuf.Struct params = 3;
+
+  // Если true — Soul не логирует params и output этой задачи (DSL-ядро no_log:, см. destiny/tasks.md).
+  bool no_log = 4;
+
+  // Per-task жёсткий лимит на одну попытку Apply (DSL-ядро timeout:, destiny/tasks.md §9).
+  // Формат — convention `duration` Soul Stack (Go-duration "30s"/"5m"/"1h30m"
+  // ИЛИ суффикс `<N>d`, см. docs/keeper/config.md → «Конвенции типов»); пусто =
+  // нет per-task лимита (действует только scenario-ceiling).
+  // Формат валидируется при ПАРСЕ destiny/scenario (config-валидатор);
+  // render/dispatch протягивают строку как есть, без повторной проверки. Soul
+  // re-парсит тем же config.ParseDuration и при истечении ставит
+  // TaskEvent.status = TASK_STATUS_TIMED_OUT (неположительная duration = «нет лимита»).
+  string timeout = 5;
+
+  // Индексы задач-источников для DSL-ядра `onchanges:` (destiny/tasks.md §8):
+  // ссылаются на позицию RenderedTask в ApplyRequest.tasks[] (= TaskEvent.task_idx).
+  // Keeper-side резолвит register-имена `onchanges:` в эти индексы (Variant A:
+  // имена резолвятся на Keeper-е, Soul оперирует только индексами — проще на
+  // Soul, корректно для MVP single-host; cross-host onchanges — отдельной
+  // работой позже). Семантика gating: задача исполняется, только если хотя бы
+  // у одного из перечисленных источников register.changed == true; пусто =
+  // безусловный запуск.
+  repeated int32 onchanges_idx = 6;
+
+  // Flow-control CEL-предикаты (ADR-012(d): flow-control CEL — Soul-side,
+  // sandboxed, без внешнего доступа). В отличие от params (рендерятся Keeper-side
+  // и приезжают готовыми), эти предикаты зависят от register.* — результатов
+  // ПРЕДЫДУЩИХ задач, известных только Soul-у во время прогона. Поэтому Keeper
+  // протягивает их КАК CEL-СТРОКИ (не вычисляет), а Soul вычисляет урезанной
+  // cel-go-песочницей (shared/cel.NewFlowControl). Sandbox: запрещены vault()/
+  // now() (внешний доступ/недетерминизм) и soulprint.hosts/soulprint.where
+  // (cross-host, scenario-only) — символ не зарегистрирован → compile-error.
+
+  // when — CEL-предикат gating ДО Apply (destiny/tasks.md §9). Soul вычисляет
+  // ПЕРЕД вызовом mod.Apply: false → задача SKIPPED (Apply не вызывается); пусто
+  // = безусловный запуск. Связка с onchanges — AND (исполняется только при
+  // when && onchanges-satisfied).
+  string when = 7;
+
+  // changed_when — CEL-предикат override register.self.changed, вычисляется
+  // ПОСЛЕ Apply (destiny/tasks.md §9). Keeper протягивает CEL-строкой, Soul
+  // вычисляет sandboxed-движком после module.Apply: true → задача CHANGED, false
+  // → changed снимается (классический `changed_when: false` на probe). НЕ трогает
+  // failed.
+  string changed_when = 8;
+
+  // failed_when — CEL-предикат override register.self.failed, вычисляется ПОСЛЕ
+  // Apply (destiny/tasks.md §9). Keeper протягивает CEL-строкой, Soul вычисляет
+  // sandboxed-движком после changed_when: true при OK-модуле → FAILED (искусственный
+  // провал по бизнес-условию); `failed_when: "false"` при упавшем модуле = ignore_errors
+  // (статус НЕ FAILED, исходная ошибка сохраняется в register.self.ignored_error и
+  // TaskEvent.error информационно, прогон не ломается). НЕ применяется к TIMED_OUT —
+  // таймаут инфраструктурный, остаётся терминальным fail-stop.
+  string failed_when = 9;
+
+  // flow_context — литеральный per-host снапшот НЕ-register части CEL-контекста
+  // flow-control-предикатов: { input, vars, essence, incarnation, self }. Keeper
+  // собирает его на CEL-фазе (то же, что для рендера params, МИНУС soulprint.hosts
+  // и loop), Soul читает как ДАННЫЕ (не код): биндит soulprint.self ← flow_context.self,
+  // остальное — top-level переменными активации. Host-вариативен (self per-host),
+  // исключён из per-host-сверки host-инвариантности params.
+  google.protobuf.Struct flow_context = 10;
+
+  // onfail_idx — индексы задач-источников DSL-ядра `onfail:` (destiny/tasks.md §8):
+  // ссылаются на позицию RenderedTask в ApplyRequest.tasks[] (= TaskEvent.task_idx),
+  // зеркало onchanges_idx. Keeper-side резолвит register-имена `onfail:` в эти
+  // индексы (Variant A, как onchanges_idx). Семантика gating: задача исполняется,
+  // ТОЛЬКО если хотя бы у одного из перечисленных источников register.failed == true
+  // (TIMED_OUT — частный случай failed, тоже триггерит); пусто = не-onfail-задача
+  // (gating не применяется). onfail-задача (rescue/cleanup) — единственное, что
+  // исполняется после первого провала прогона: см. изменение fail-stop в
+  // applyrunner.Run (failed-задача больше не делает немедленный break, но прогон
+  // остаётся FAILED — onfail это cleanup, а не отмена провала).
+  repeated int32 onfail_idx = 12;
+
+  // until — CEL-предикат выхода из retry-петли (DSL-ядро retry.until,
+  // destiny/tasks.md §9). Soul-side, та же sandboxed-песочница, что и failed_when
+  // (shared/cel.NewFlowControl). Вычисляется ПОСЛЕ каждой попытки (после
+  // changed_when/failed_when override): true → выход из петли (финальный статус =
+  // статус попытки КАК ЕСТЬ, until НЕ override-ит failed); false → пауза retry_delay
+  // и следующая попытка. После retry_count попыток с until-false → задача FAILED
+  // (код flowcontrol.until_exhausted), ДАЖЕ если последняя попытка OK/CHANGED.
+  // Пусто = until-условие не задано (retry-петля управляется только статусом
+  // попытки). На TIMED_OUT-попытке until НЕ вычисляется (таймаут — «неуспех,
+  // повторить если попытки остались»).
+  string until = 11;
+
+  // retry_count — максимум попыток ВКЛЮЧАЯ первую (DSL-ядро retry.count,
+  // destiny/tasks.md §9). 0/1/пусто = одна попытка (обратная совместимость:
+  // поведение как без retry). БЕЗ until: повтор пока попытка FAILED/TIMED_OUT,
+  // первый не-FAILED исход (OK/CHANGED) → выход; все исчерпаны → финальный статус
+  // ПОСЛЕДНЕЙ попытки (FAILED или TIMED_OUT — НЕ схлопывается в FAILED). С until:
+  // см. поле until.
+  int32 retry_count = 14;
+
+  // retry_delay — пауза между попытками (DSL-ядро retry.delay, destiny/tasks.md §9).
+  // Формат — convention `duration` Soul Stack (как timeout=5: Go-duration "10s"/"5m"
+  // ИЛИ суффикс `<N>d`), Soul парсит тем же config.ParseDuration. Пусто/невалид =
+  // default 5s. Применяется ТОЛЬКО между попытками (не перед первой, не после
+  // последней) и прерывается отменой прогона (CancelApply). В per-task timeout НЕ
+  // входит — отдельного ceiling на всю петлю нет.
+  string retry_delay = 15;
+
+  // register — register-имя результата задачи (destiny/tasks.md §6, register:).
+  // Soul строит registerByName[register] = register-payload, чтобы flow-control-
+  // предикаты последующих задач писали `register.<name>.*`. Пусто = задача не
+  // регистрирует результат под именем (доступна только своим idx). Отличается от
+  // TaskEvent.register_data: то — payload, это — ИМЯ, под которым он адресуется.
+  string register = 13;
+}
+
+// ApplyRequest — команда Keeper → Soul на выполнение прогона.
+message ApplyRequest {
+  // ULID, уникальный идентификатор прогона.
+  string apply_id = 1;
+
+  // План задач после Keeper-side рендера.
+  repeated RenderedTask tasks = 2;
+
+  // W3C traceparent родительского span-а grpc.apply_dispatch. Soul извлекает его и
+  // стартует apply.run как child (ADR-024 cross-process trace-propagation).
+  string trace_context = 3;
+
+  // attempt — fencing-epoch прогона на этом хосте (ADR-027(g), Phase 2). Echo из
+  // apply_runs.attempt на момент claim: ClaimNext инкрементит его при каждом
+  // захвате Ward, поэтому пере-claim протухшего задания (recovery-скан вернул его
+  // planned → новый claim) приезжает с БОЛЬШИМ attempt, чем оригинал.
+  //
+  // Soul-side guard (runtime.ApplyRunner.AcceptAttempt) отвергает ApplyRequest с
+  // attempt < последнего виденного для этого apply_id — это отсекает stale-дубль
+  // (мёртвый Ward, чей apply ещё в полёте), не полагаясь на идемпотентность
+  // модулей. Барьер Keeper-а закрывает оригинальный (больший attempt) своим
+  // RunResult; отвергнутый дубль молча дропается (ADR-027 barrier-B1).
+  //
+  // 0/пусто = старый Keeper без fencing (forward-compat, ADR-012(c) only-add):
+  // guard такой запрос НЕ отвергает (fencing деградирует до защиты по apply_id +
+  // SID-lease). Только never-reuse: новый номер поля при breaking change.
+  int32 attempt = 4;
+
+  // dry_run — режим Scry (ADR-031): Soul НЕ применяет задачи, а для каждой зовёт
+  // SoulModule.Plan (pure-read, НЕ мутирует хост) и собирает машинный
+  // PlanEvent.changed — «Apply изменил бы ресурс?» (drift). Хост ничего не
+  // меняет: на dry_run module.Apply физически не вызывается (read-only гарантия
+  // структурная, не «модуль обещал»). Default-deny: для задачи, чей модуль не
+  // объявил read-safe-capability (custom-плагин / non-core), Plan НЕ вызывается —
+  // задача получает явный отказ «drift не поддержан», не ложное clean.
+  //
+  // false/пусто = обычный apply (forward-compat, ADR-012(c) only-add): старый
+  // Keeper поля не шлёт → Soul исполняет прогон как раньше. Только never-reuse
+  // номера поля. Slice A несёт только транспорт+soul-механику; keeper-side
+  // check-drift flow (что именно dry-run-ить) — Slice B.
+  bool dry_run = 5;
+}
+
+// TaskStatus — финальный статус одной задачи. Соответствует DSL-ядру register.<name>.*.
+enum TaskStatus {
+  TASK_STATUS_UNSPECIFIED = 0;
+  TASK_STATUS_OK = 1;          // changed=false, failed=false
+  TASK_STATUS_CHANGED = 2;     // changed=true, failed=false
+  TASK_STATUS_FAILED = 3;      // failed=true
+  TASK_STATUS_TIMED_OUT = 4;   // timed_out=true (является частным случаем failed)
+  TASK_STATUS_SKIPPED = 5;     // задача пропущена по requisite/условию (onchanges/when/onfail/require) — не выполнялась
+  TASK_STATUS_CANCELLED = 6;   // прервана по CancelApply от Keeper-а (см. CancelApply / RunStatus.CANCELLED)
+}
+
+// TaskEvent — финальный результат одной задачи (агрегация на Soul-е после завершения
+// SoulModule sub-process-а). Прогресс long-running шагов в MVP не передаётся (post-MVP).
+message TaskEvent {
+  string apply_id = 1;
+
+  // Индекс задачи в ApplyRequest.tasks[].
+  int32 task_idx = 2;
+
+  TaskStatus status = 3;
+
+  // register-payload: DSL-ядро (.changed/.failed/.timed_out) + декларированные в destiny output:-поля.
+  google.protobuf.Struct register_data = 4;
+
+  // Заполнено только при status = FAILED или TIMED_OUT.
+  TaskError error = 5;
+
+  // Эхо RenderedTask.no_log — keeper-side audit-suppression по этому флагу
+  // (multi-Keeper-safe: TaskEvent мог прийти не на тот инстанс, что держит
+  // []RenderedTask). При true keeper не пишет register_data/error.message в audit.
+  bool no_log = 6;
+}
+
+// RunStatus — финальный статус всего прогона.
+enum RunStatus {
+  RUN_STATUS_UNSPECIFIED = 0;
+  RUN_STATUS_SUCCESS = 1;
+  RUN_STATUS_FAILED = 2;
+  RUN_STATUS_CANCELLED = 3;
+  RUN_STATUS_ERROR_LOCKED = 4;
+}
+
+// RunResult — финальный отчёт о прогоне apply.
+// Заменяет ранее предлагавшееся "StateReport" (конфликт с incarnation.state в naming-rules).
+message RunResult {
+  string apply_id = 1;
+
+  RunStatus status = 2;
+
+  // Агрегированные state_changes для последующего commit-а incarnation.state Keeper-ом.
+  // Структура — соответствует docs/scenario/orchestration.md (state_changes-блок).
+  google.protobuf.Struct state_changes = 3;
+
+  // attempt — fencing-epoch прогона, ЭХО из ApplyRequest.attempt (ADR-027(g),
+  // gate-1 recovery-передизайн). Soul возвращает его как есть. Keeper на ПРИЁМЕ
+  // (correlateRunResult) сверяет с apply_runs.attempt: меньше текущего → результат
+  // от устаревшей попытки (существует пере-claim с бОльшим epoch), коммит state
+  // ОТВЕРГАЕТСЯ (stale-drop). Симметрия с Soul-side AcceptAttempt: фенсим и
+  // исполнение, и приём результата.
+  //
+  // 0/пусто = старый Soul без эхо (forward-compat, ADR-012(c) only-add):
+  // проверка актуальности НЕ применяется (деградирует до append-only single-winner
+  // guard по статусу). Только never-reuse номера поля.
+  int32 attempt = 4;
+}
+
+// CancelApply — команда Keeper → Soul на отмену текущего прогона.
+// Soul пытается остановить in-flight SoulModule sub-process и шлёт RunResult со status=CANCELLED.
+message CancelApply {
+  string apply_id = 1;
+
+  // Человекочитаемая причина отмены (для логов/аудита).
+  string reason = 2;
+}

@@ -1,0 +1,50 @@
+# Post-apply ожидания redis-cluster-live::create (ADR-039 § Часть D, L3b-5).
+#
+# Multi-host real-soul-in-container: 3 Soul-контейнера (soul-live-a / -b / -c
+# .example.com), на каждом ставится redis (debian-12 apt-package), рендерится
+# cluster-config, поднимается redis-server в фоне, один из хостов формирует
+# Redis Cluster через redis-cli --cluster create с --cluster-replicas 0
+# (3 master без реплик — минимум для cluster_state:ok на 3-узловом стенде).
+#
+# apply_runs.status / incarnation_state / audit_events / metrics — те же
+# контракт-проверки, что в smoke-nginx-live (см. expectations.go: каждое поле
+# в одну assert-функцию). Прогон даёт N=3 строки apply_runs (PK = applyID+sid);
+# AssertApplyRunsStatus требует success у всех.
+#
+# host_state — три почти симметричные блока (один на soul-host): пакет redis
+# установлен, файл /etc/redis-cluster.conf содержит маркер 'cluster-enabled yes'.
+# init_system в L3b-Dockerfile — systemd, но redis в этом сценарии запускается
+# core.cmd.shell-ом через nohup (см. examples/service/service-redis-cluster-live
+# /scenario/create/main.yml шаг 4), а не systemd-юнитом — поэтому services-
+# проверки нет (это осознанное расхождение с smoke-nginx-live).
+apply_runs:
+  status: success
+
+incarnation_state:
+  cluster_replicas: 0
+
+audit_events:
+  - type: incarnation.scenario_started
+
+metrics:
+  keeper_apply_runs_total: ">= 1"
+
+host_state:
+  - soul: soul-live-a.example.com
+    packages:
+      redis: installed
+    files:
+      - path: /etc/redis-cluster.conf
+        contains: "cluster-enabled yes"
+  - soul: soul-live-b.example.com
+    packages:
+      redis: installed
+    files:
+      - path: /etc/redis-cluster.conf
+        contains: "cluster-enabled yes"
+  - soul: soul-live-c.example.com
+    packages:
+      redis: installed
+    files:
+      - path: /etc/redis-cluster.conf
+        contains: "cluster-enabled yes"

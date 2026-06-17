@@ -1,0 +1,248 @@
+# CI Soul Stack. Гейт живёт в Makefile (`make check`), workflow только
+# воспроизводит окружение и прогоняет таргеты. Решение зафиксировано в проектном
+# CLAUDE.md (CI локально в Makefile, GH Actions — тонкая обёртка).
+#
+# Портируемость: owner/repo нигде не хардкодится (репозиторий временный, позже
+# переедет). module-path в go.mod — placeholder, go.work резолвит модули локально
+# из чекаута, переименование не требуется.
+name: CI
+
+on:
+  push:
+  pull_request:
+    branches: [main]
+
+# Отменяем устаревшие прогоны на той же ветке/PR — экономия раннеров.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Кодоген-тулчейн запиннут под committed `proto/gen/go` — иначе `check-gen`
+  # ловит drift. Версии берутся из заголовков сгенерённого кода:
+  #   protoc        v7.34.1  (libprotoc 34.1)
+  #   protoc-gen-go v1.36.11
+  #   protoc-gen-go-grpc v1.6.2
+  # protoc-gen-go записывает строку `protoc vX` прямо в заголовок .pb.go, поэтому
+  # apt-версия protoc (старее) сломала бы идемпотентность — ставим ровно 34.1.
+  PROTOC_VERSION: "34.1"
+  PROTOC_GEN_GO_VERSION: "v1.36.11"
+  PROTOC_GEN_GO_GRPC_VERSION: "v1.6.2"
+  GO_VERSION: "1.26.4"
+
+jobs:
+  # Основной required-гейт. Полностью воспроизводит `make check`:
+  # check-fmt vet build test check-gen check-openapi lint.
+  check:
+    name: check (make check)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          # Явная версия из go.work (toolchain 1.26.4). go-version-file: go.work
+          # тоже поддерживается setup-go, но явный пин нагляднее и не зависит от
+          # парсинга `toolchain`-строки.
+          go-version: ${{ env.GO_VERSION }}
+          # setup-go кэширует ~/go/pkg/mod и build-cache по хэшу go.sum всех
+          # модулей go.work — встроенный кэш, отдельный actions/cache не нужен.
+          cache-dependency-path: |
+            keeper/go.sum
+            proto/go.sum
+            proto/plugin/go.sum
+            sdk/go.sum
+            shared/go.sum
+            soul/go.sum
+            soul-lint/go.sum
+            soulctl/go.sum
+            tests/e2e/go.sum
+
+      # protoc нужен таргету `check-gen` (через `gen`). Версия запиннута: иначе
+      # заголовок `protoc vX` в сгенерённом коде разойдётся с committed.
+      - name: Install protoc ${{ env.PROTOC_VERSION }}
+        run: |
+          set -euo pipefail
+          ZIP="protoc-${PROTOC_VERSION}-linux-x86_64.zip"
+          URL="https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${ZIP}"
+          curl -fsSL -o /tmp/protoc.zip "$URL"
+          sudo unzip -o -q /tmp/protoc.zip -d /usr/local
+          protoc --version
+
+      # protoc-плагины — через go install запиннутых версий; попадают в
+      # $(go env GOPATH)/bin, который Makefile сам прокидывает в PATH.
+      - name: Install protoc-gen-go plugins
+        run: |
+          set -euo pipefail
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@${PROTOC_GEN_GO_VERSION}
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@${PROTOC_GEN_GO_GRPC_VERSION}
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: make check
+        run: make check
+
+  # L3a fast-loop E2E (ADR-039): testcontainers (PG+Redis+Vault) + Keeper-процесс +
+  # soul-stub. Зависит от check (нет смысла гонять e2e, если базовый гейт упал) и
+  # требует собранного keeper-бинаря (harness/stack.go спавнит sub-process, путь
+  # читается из env KEEPER_BIN — см. tests/e2e/harness/stack.go). Docker на
+  # ubuntu-latest есть из коробки — testcontainers поднимают зависимые сервисы.
+  #
+  # Скип-семантика pilot-каркаса: без docker harness.NewStack делает t.Skip; в
+  # CI docker есть → тесты гоняются по-настоящему. Если e2e на этой фазе ещё
+  # skeleton-only — `make e2e` возвращает 0 на пустом списке тестов, гейт зелёный.
+  e2e:
+    name: e2e (L3a fast-loop)
+    runs-on: ubuntu-latest
+    needs: check
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            keeper/go.sum
+            proto/go.sum
+            proto/plugin/go.sum
+            sdk/go.sum
+            shared/go.sum
+            soul/go.sum
+            soul-lint/go.sum
+            soulctl/go.sum
+            tests/e2e/go.sum
+
+      # protoc + плагины: `make build` тянет за собой `make gen` для модулей, чьи
+      # пакеты include committed .pb.go (committed, но re-gen на свежем чекауте
+      # не делается — pure build). На самом деле для build они не нужны, но
+      # держим окружение полным — committed-код собирается и так. Шаги ниже
+      # сохранены для симметрии с check-job (на случай добавления `make gen` в
+      # pre-step). Если станет узким местом по времени — можно убрать.
+      - name: Install protoc ${{ env.PROTOC_VERSION }}
+        run: |
+          set -euo pipefail
+          ZIP="protoc-${PROTOC_VERSION}-linux-x86_64.zip"
+          URL="https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${ZIP}"
+          curl -fsSL -o /tmp/protoc.zip "$URL"
+          sudo unzip -o -q /tmp/protoc.zip -d /usr/local
+          protoc --version
+
+      - name: Install protoc-gen-go plugins
+        run: |
+          set -euo pipefail
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@${PROTOC_GEN_GO_VERSION}
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@${PROTOC_GEN_GO_GRPC_VERSION}
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # Keeper-бинарь нужен harness-у (sub-process spawn). Собираем явно перед e2e.
+      - name: make build (keeper + soul + soul-lint + soulctl)
+        run: make build
+
+      - name: make e2e
+        env:
+          # Harness читает KEEPER_BIN (см. tests/e2e/harness/stack.go).
+          # `make build` кладёт бинарь в keeper/bin/keeper, GITHUB_WORKSPACE —
+          # корень чекаута.
+          KEEPER_BIN: ${{ github.workspace }}/keeper/bin/keeper
+        run: make e2e
+
+      # Артефакты теста на падении — логи keeper-процесса, дампы fixtures и т.п.
+      # Каталоги создаются harness-ом (если он их пишет); если их нет — upload
+      # пропустит шаг (if-no-files-found: ignore).
+      - name: Upload e2e artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs
+          if-no-files-found: ignore
+          path: |
+            tests/e2e/_artifacts/
+            /tmp/keeper-*.log
+            /tmp/keeper-dev/
+
+  # Интеграционные тесты под build-tag `integration` (testcontainers-go).
+  # Docker на ubuntu-latest есть → testcontainers сами поднимают контейнеры
+  # (postgres:16-alpine и т.п.). Отдельный job, чтобы не тормозить required-гейт.
+  #
+  # ПОКРЫТИЕ: гоняется весь `make test-integration` (go test -tags=integration
+  # -race -count=1 по всем модулям go.work). Тесты, которым нужна НЕ-testcontainers
+  # инфра (заранее поднятый Vault/Redis-cluster и т.п.), должны сами скипаться по
+  # отсутствию окружения (t.Skip). Если такой тест жёстко падает в чистом CI —
+  # это сигнал автору теста добавить skip-guard, а не повод чинить workflow.
+  # Job informational (continue-on-error), не блокирует merge.
+  integration:
+    name: integration tests (testcontainers)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            keeper/go.sum
+            proto/go.sum
+            proto/plugin/go.sum
+            sdk/go.sum
+            shared/go.sum
+            soul/go.sum
+            soul-lint/go.sum
+            soulctl/go.sum
+            tests/e2e/go.sum
+
+      - name: make test-integration
+        run: make test-integration
+
+  # Сканер уязвимостей по Go-модулям. Informational: транзиентная advisory не
+  # должна блокировать релиз, но сигнал виден в логах job-а.
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            keeper/go.sum
+            proto/go.sum
+            proto/plugin/go.sum
+            sdk/go.sum
+            shared/go.sum
+            soul/go.sum
+            soul-lint/go.sum
+            soulctl/go.sum
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      # govulncheck не понимает go.work напрямую — прогоняем по каждому модулю.
+      # Список модулей синхронен с MODULES в Makefile. Модуль без go-пакетов
+      # (пустой `go list ./...`) пропускается, иначе govulncheck падает на
+      # "no packages".
+      - name: Run govulncheck per module
+        run: |
+          set -euo pipefail
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          for m in proto proto/plugin shared sdk keeper soul soul-lint soulctl; do
+            if [ -z "$(cd "$m" && go list ./... 2>/dev/null)" ]; then
+              echo "skip $m (no Go packages)"
+              continue
+            fi
+            echo "govulncheck ./... in $m"
+            (cd "$m" && govulncheck ./...)
+          done

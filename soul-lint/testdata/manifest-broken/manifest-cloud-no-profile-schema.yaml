@@ -1,0 +1,6 @@
+kind: cloud_driver
+protocol_version: 1
+namespace: cloud
+name: aws
+spec:
+  provider_kind: aws

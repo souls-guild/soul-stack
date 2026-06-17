@@ -1,0 +1,10 @@
+# Baseline-essence сервиса monitoring (подложка автора).
+# Оператор переопределяет в spec инкарнации; на pilot ключевые значения всё
+# равно приходят через scenario-input: (см. scenario/create/main.yml).
+#
+# Версии экспортеров пиннятся на конкретные релизы (ADR-007: версия артефакта —
+# git-ref, но это релизы СТОРОННЕГО ПО, поэтому здесь они — обычные значения,
+# а не ref). Путь redis-сокета — конвенция debian/ubuntu redis-server.
+node_exporter_version:  "1.8.2"
+redis_exporter_version: "1.62.0"
+redis_socket:           "/var/run/redis/redis-server.sock"

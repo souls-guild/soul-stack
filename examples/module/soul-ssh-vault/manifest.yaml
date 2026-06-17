@@ -1,0 +1,78 @@
+kind: ssh_provider
+protocol_version: 1                    # compat-флаг plugin-протокола (ADR-020(c))
+namespace: ssh                         # коллекция SshProvider в этом репо
+name: vault
+
+# Closed enum по ADR-020(f). Vault SSH CA-провайдер:
+#   network_outbound — HTTP-вызовы Vault API.
+#   vault_access     — variant B (PM-decision creds-flow): плагин САМ ходит в
+#                      Vault (token / approle / kubernetes), а не получает
+#                      резолвленный секрет от keeper.push. Для ssh/sign это
+#                      естественнее, чем A-flow (см. docs/keeper/plugins.md →
+#                      env-convention).
+required_capabilities:
+  - network_outbound
+  - vault_access
+
+# SshProvider не трогает локальные ресурсы host-а (cert живёт в памяти
+# keeper.push на время сессии — Keeper-ephemeral режим, см. docs/keeper/push.md).
+side_effects: []
+
+spec:
+  # provider_kind — открытая строка (ADR-020(e)); convention из docs/keeper/plugins.md.
+  provider_kind: vault_ssh_ca
+  # JSON Schema draft 2020-12 (формат для kind: ssh_provider — см.
+  # docs/keeper/plugins.md → spec.params_schema). Embedded из schema.json.
+  params_schema:
+    type: object
+    required: [vault_addr, role]
+    properties:
+      vault_addr:
+        type: string
+        description: Базовый URL Vault API (https://vault.example.com:8200).
+        examples: ["https://vault.internal:8200"]
+        format: uri
+      vault_mount:
+        type: string
+        description: Vault SSH CA mount path (без leading/trailing slash).
+        default: "ssh"
+        examples: ["ssh", "ssh-client-signer"]
+      role:
+        type: string
+        description: Имя Vault SSH role, под которой подписывается ключ.
+        examples: ["keeper-push"]
+      auth_method:
+        type: string
+        description: Метод аутентификации плагина в Vault.
+        enum: [token, approle]
+        default: token
+      token:
+        type: string
+        description: >-
+          Vault token для auth_method=token. Альтернатива — env VAULT_TOKEN внутри
+          SOUL_SSH_VAULT_PARAMS. SENSITIVE.
+      approle:
+        type: object
+        description: Креденшалы для auth_method=approle.
+        properties:
+          role_id:   { type: string, description: "AppRole RoleID" }
+          secret_id: { type: string, description: "AppRole SecretID (SENSITIVE)" }
+          mount:     { type: string, default: "approle", description: "AppRole mount path" }
+      valid_principals:
+        type: array
+        description: >-
+          Allowlist principal-ов (Linux-пользователей), которые плагин разрешает
+          класть в подписанный cert. Пустой список = принимать любой `req.user`
+          (если Vault role это разрешает). Жёсткое ограничение для production.
+        items: { type: string }
+      deny:
+        type: array
+        description: >-
+          Deny-list пар (host, user); по умолчанию провайдер allow-all (dev/test).
+          Каждая запись — `{host?, user?}`; пустое поле = wildcard по этому
+          измерению (симметрично soul-ssh-static).
+        items:
+          type: object
+          properties:
+            host: { type: string, format: hostname }
+            user: { type: string }

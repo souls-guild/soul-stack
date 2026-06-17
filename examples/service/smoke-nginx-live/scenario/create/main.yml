@@ -1,0 +1,89 @@
+name: create
+description: >-
+  L3b real-soul-in-container flagship-smoke (ADR-039): устанавливает nginx
+  пакетным менеджером, рендерит site-config из шаблона и поднимает
+  systemd-юнит. В отличие от L3a smoke-nginx (soul-stub отвечает scripted),
+  здесь destiny-задачи реально мутируют контейнер. Цель — покрыть end-to-end
+  flow Keeper render → ApplyRequest → Soul Apply → RunResult → apply_runs
+  success на ПОДЛИННЫХ core-модулях (core.pkg / core.file.rendered /
+  core.service).
+
+# ── Входной контракт ─────────────────────────────────────────────────────────
+# Минимальный: только идентификатор хоста (server_name в nginx-конфиге +
+# матч в audit-событиях). Остальное — из essence (listen-порт, default-имя).
+input:
+  hostname:
+    type: string
+    required: true
+    description: >-
+      Имя хоста, на котором ожидается выполнение задач (server_name в
+      отрендеренном nginx-конфиге). Берётся из incarnation.spec / RunScenario
+      input, проверяется audit-event-ассертами теста.
+
+# ── Мутация incarnation.state ────────────────────────────────────────────────
+# state_changes.sets фиксируют post-apply снимок (ADR-009 §7.1). Литералы, а
+# не CEL-резолв — состояние «полностью развёрнуто», без вариаций.
+state_changes:
+  sets:
+    # state_changes.sets — map поле → строка-выражение (orchestration.md §7.1).
+    # Литерал без ${ … } присваивается как строка (тип в state — string,
+    # совпадает с state_schema enum). Для bool используем ${ true } —
+    # одиночный ${…} даёт нативный тип (ADR-010).
+    nginx_package: installed
+    nginx_service: active
+    nginx_config_managed: "${ true }"
+
+# ── Задачи (inline, ADR-009) ─────────────────────────────────────────────────
+# Все три core-модуля идут inline — переиспользования нет, отдельную destiny
+# заводить под smoke избыточно (см. docs/scenario/concept.md «граница —
+# рекомендация»).
+#
+# Идемпотентность: повторный apply должен оставаться changed=false на каждом
+# шаге (core.pkg.installed без version-пина → repo-latest стоит, no-op;
+# core.file.rendered сравнивает SHA-256 с диском; core.service.running
+# проверяет is-active). Тест в L3b-3 проверяет только первый прогон.
+tasks:
+  # 1. Пакет из репозитория дистрибутива. Без =version-пина: smoke не
+  # завязан на конкретную сборку nginx — берём то, что лежит в репо.
+  # retry — против флапающего apt-mirror-а (та же причина, что в
+  # destiny-redis-single/tasks/main.yml).
+  - name: Install nginx package
+    module: core.pkg.installed
+    retry: { count: 3, delay: 10s }
+    params:
+      name: nginx
+
+  # 2. site-config /etc/nginx/sites-available/default. register +
+  # onchanges-цепочка на core.service.restarted ниже — рестарт только при
+  # реальном изменении конфига (идемпотентность повторного apply).
+  # mode 0644 / owner root — стандарт Debian-пакета nginx.
+  - name: Render nginx default site-config
+    module: core.file.rendered
+    register: nginx_default_conf
+    params:
+      path: /etc/nginx/sites-available/default
+      template: templates/nginx-default.conf.tmpl
+      mode: "0644"
+      owner: root
+      group: root
+      vars:
+        server_name: "${ input.hostname }"
+        listen_port: "${ essence.nginx_listen_port }"
+
+  # 3. systemd-юнит nginx: enabled + active. После установки пакета юнит уже
+  # на месте (Debian-postinst), нам остаётся гарантировать active+enabled.
+  - name: Ensure nginx service is running and enabled at boot
+    module: core.service.running
+    params:
+      name: nginx
+      enabled: true
+
+  # 4. Реактивный рестарт ТОЛЬКО при изменении site-config (onchanges).
+  # На первый apply: rendered changed=true → рестарт; на повторный:
+  # changed=false → шаг no-op. timeout — против зависшего systemd-restart.
+  - name: Restart nginx when site-config changed
+    module: core.service.restarted
+    onchanges: [nginx_default_conf]
+    timeout: 30s
+    params:
+      name: nginx

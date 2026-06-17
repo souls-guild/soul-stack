@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package soulstack.keeper.v1;
+
+option go_package = "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;keeperv1";
+
+// TaskError описывает структурированную ошибку выполнения задачи.
+// Каталог конкретных code-значений — отдельная задача (post-MVP).
+message TaskError {
+  string code = 1;
+  string message = 2;
+  string module = 3;
+}

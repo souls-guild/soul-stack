@@ -1,0 +1,9 @@
+# within-destiny include-сосед (destiny/tasks.md §4): подключается из main.yml.
+# Та же структура — top-level список задач, видит только input.* destiny.
+
+- name: Record the marker placement
+  module: core.exec.run
+  changed_when: "false"
+  params:
+    cmd: echo
+    args: ["marker", "written", "to", "${ input.marker_file }"]

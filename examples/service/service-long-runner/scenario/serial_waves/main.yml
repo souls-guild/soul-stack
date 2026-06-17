@@ -1,0 +1,27 @@
+name: serial_waves
+description: >-
+  serial-волновое исполнение. serial: 3 → хосты таргета (отсортированы по SID)
+  катятся волнами по ≤3 хоста; внутри волны параллельно, волны строго
+  последовательны. Каждый хост спит фиксированно ~12s, пишет wave-маркер с
+  временем завершения.
+
+  Валидация (ТЕСТ B): поллингом видим, что одновременно applying не более 3
+  хостов (ширина волны); следующая волна не стартует, пока текущая не закрылась
+  (времена в маркерах идут блоками по 3). state коммитится ОДИН раз после всех
+  волн (serial НЕ дробит commit — §2.2.1 инвариант).
+
+state_changes:
+  sets:
+    last_run: "serial_waves"
+    runner_marker: /tmp/long-runner-wave.txt
+
+tasks:
+  - name: Serial wave sleep then write wave marker
+    on: ["${ incarnation.name }"]
+    serial: 3
+    module: core.cmd.shell
+    params:
+      cmd: >-
+        sleep 12;
+        echo "wave-done on $(hostname) at $(date -u +%H:%M:%S)" > /tmp/long-runner-wave.txt;
+        true

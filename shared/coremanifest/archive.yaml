@@ -1,0 +1,19 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: archive
+
+required_capabilities:
+  - fs_write_root
+
+spec:
+  states:
+    extracted:
+      description: Распаковать архив path в каталог dest (tar/tar.gz/tar.bz2/zip); ADR-015.
+      input:
+        path:        { type: string, required: true, description: "Путь к архиву-источнику." }
+        dest:        { type: string, required: true, description: "Каталог распаковки." }
+        format:      { type: string, description: "Формат (tar|tar.gz|tar.bz2|zip); опущено — auto-detect по расширению." }
+        max_size:    { type: string, description: "Лимит суммарного распакованного размера (число байт или N[KiB|MiB|GiB]); по умолчанию 1GiB. Защита от zip-bomb." }
+        max_entries: { type: integer, description: "Лимит числа записей в архиве; по умолчанию 100000. Защита от zip-bomb." }
+        max_ratio:   { type: integer, description: "Лимит отношения распакованных байт к сжатым (compression ratio); по умолчанию 100, 0 — отключено. Защита от zip-bomb с маленьким сжатым размером." }

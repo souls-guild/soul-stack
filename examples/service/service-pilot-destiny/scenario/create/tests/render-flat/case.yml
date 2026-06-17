@@ -1,0 +1,43 @@
+# L0-испытание (Trial, ADR-023) сценария create сервиса pilot-destiny.
+#
+# Render-only, герметично. Демонстрирует слайс A (apply:destiny, V2 ADR-009):
+#   - apply:destiny раскрывается изолированным render-проходом destiny pilot-flat;
+#   - две задачи destiny вклеиваются в общий план со сквозными индексами 0,1;
+#   - destiny видит ТОЛЬКО свой input: (marker_file/marker_payload приходят из
+#     apply.input; scenario input.path/content в destiny-env НЕ попадают);
+#   - marker_mode не передан в apply.input → добран из default destiny (0644).
+#
+# destiny pilot-flat лежит ВНУТРИ сервиса (destiny-pilot-flat/). apply:destiny
+# резолвится зеркалом прода (slice A, ADR-023): pilot-flat объявлена в
+# service.yml::destiny[], URL — из default_destiny_source ниже. Здесь destiny
+# в том же каталоге, что сервис, поэтому шаблон без `../` (file://destiny-{name}
+# относительно service-root).
+name: create delegates marker placement to pilot-flat destiny
+
+# scenario-input оператора. apply.input резолвит из него marker_file/marker_payload.
+fixtures:
+  default_destiny_source: "file://destiny-{name}"
+  input:
+    path:    /etc/pilot/marker.txt
+    content: "pilot ok"
+
+# Сверка плана: две задачи destiny (сквозные индексы 0 и 1). Изоляция видна по
+# тому, что params собраны из apply.input (marker_*), а scenario input.path
+# попал туда только потому, что scenario явно прокинул его через apply.input.
+assert:
+  rendered_tasks:
+    # core.file.present: content из apply.input (scenario input.content),
+    # mode добран из default destiny (0644) — apply.input его не передавал.
+    - index: 0
+      module: core.file.present
+      params:
+        path:    /etc/pilot/marker.txt
+        content: "pilot ok"
+        mode:    "0644"
+
+    # core.exec.run: argv несёт marker_file из apply.input в последнем элементе.
+    - index: 1
+      module: core.exec.run
+      params:
+        cmd: echo
+        args: ["marker", "written", "to", "/etc/pilot/marker.txt"]

@@ -1,0 +1,18 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: sysctl
+
+required_capabilities:
+  - run_as_root
+  - exec_subprocess
+  - fs_write_root
+
+spec:
+  states:
+    present:
+      description: Kernel-параметр name=value (runtime через sysctl -w + persist в /etc/sysctl.d); ADR-015.
+      input:
+        name:     { type: string, required: true, description: "Имя kernel-параметра (напр. net.ipv4.ip_forward)." }
+        value:    { type: string, required: true, description: "Желаемое значение." }
+        filename: { type: string, description: "Имя persist-файла в /etc/sysctl.d (default — name с '.'→'-' + .conf)." }

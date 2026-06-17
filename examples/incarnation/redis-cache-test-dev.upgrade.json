@@ -1,0 +1,12 @@
+{
+  "_comment": "POST /v1/incarnation/upgrade — переход incarnation на новую версию service (с прогоном миграций state_schema)",
+
+  "name": "test-cache-redis-cl-dev",
+  "to_version": "v1.5.0",
+
+  "options": {
+    "dry_run": false,
+    "archon_aid": "archon-db-01",
+    "reason": "Pin to latest stable; state schema migrates 1 → 2"
+  }
+}

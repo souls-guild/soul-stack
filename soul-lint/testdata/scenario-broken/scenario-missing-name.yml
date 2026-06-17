@@ -1,0 +1,6 @@
+description: no name here
+tasks:
+  - name: noop
+    module: core.exec.run
+    params:
+      command: "true"

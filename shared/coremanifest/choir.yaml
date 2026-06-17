@@ -1,0 +1,21 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: choir
+
+spec:
+  states:
+    present:
+      description: Keeper-side (on:keeper). Voice с sid присутствует в Choir прогона (ADR-044).
+      input:
+        incarnation: { type: string, required: true, description: "Имя инкарнации, чьим Choir управляем." }
+        choir:       { type: string, required: true, description: "Имя Choir-партии внутри инкарнации." }
+        sid:         { type: string, required: true, format: sid, description: "SID (FQDN) Soul, чей Voice добавляется в Choir.", source: { incarnation_hosts: true } }
+        role:        { type: string, description: "Роль-метка голоса в хоре (свободная)." }
+        position:    { type: int,    description: "Позиция Voice в партии (>= 0)." }
+    absent:
+      description: Keeper-side (on:keeper). Voice с sid отсутствует в Choir прогона (ADR-044).
+      input:
+        incarnation: { type: string, required: true, description: "Имя инкарнации, чьим Choir управляем." }
+        choir:       { type: string, required: true, description: "Имя Choir-партии внутри инкарнации." }
+        sid:         { type: string, required: true, format: sid, description: "SID (FQDN) Soul, чей Voice убирается из Choir.", source: { incarnation_hosts: true } }

@@ -1,0 +1,85 @@
+# L0-испытание (Trial, ADR-023) destiny redis-exporter через харнесс-scenario apply.
+#
+# Render-only, герметично. Главное, что демонстрирует кейс:
+#   - core.url.fetched: имя файла tarball-а несёт префикс `v` перед версией
+#     (redis_exporter-v<v>.linux-<arch>) — отличие раскладки от node_exporter;
+#   - сервис-аккаунт даёт DynamicUser=yes в unit-е (гибрид-правило прод-конвенции
+#     §2): ручного core.user/core.group НЕТ; group-доступ к unix-сокету (770)
+#     transient-юзер получает через SupplementaryGroups=redis — статический текст
+#     шаблона, в render_context не попадает, в L0-плане его не видно;
+#   - core.file.rendered unit: redis_addr собран CEL-ом из 'unix://' + redis_socket
+#     — подключение к Redis через unix-сокет.
+name: redis-exporter destiny renders fetch/extract/install/unit/service plan
+
+# L0-render не применяет default-ы контракта — дублируем дефолты + обязательные.
+#
+# apply:destiny резолвится зеркалом прода (slice A, ADR-023): redis-exporter
+# объявлена в _trial/service.yml::destiny[], URL — из default_destiny_source ниже
+# (file://, относительно service-root = _trial/).
+fixtures:
+  default_destiny_source: "file://../../destiny-{name}"
+  input:
+    version:        "1.62.0"
+    # sha256 ОБЯЗАТЕЛЕН (required:true, placeholder-дефолт убран). L0 render-only —
+    # fetch не исполняется; передаём валидный тестовый 64-hex.
+    sha256:         "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    arch:           amd64
+    redis_socket:   /var/run/redis/redis-server.sock
+    redis_password: "change-me-please-32"
+    # extra_args не передаём — проверяем default [] destiny: ExecStart без доп.
+    # токенов, render_context.vars.extra_args = [].
+
+assert:
+  rendered_tasks:
+    # url: префикс `v` перед версией в имени файла и каталоге внутри tarball-а.
+    - index: 0
+      module: core.url.fetched
+      params:
+        url: https://github.com/oliver006/redis_exporter/releases/download/v1.62.0/redis_exporter-v1.62.0.linux-amd64.tar.gz
+        path: /tmp/redis_exporter-1.62.0.tar.gz
+        checksum: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        mode: "0644"
+
+    - index: 1
+      module: core.archive.extracted
+      params:
+        path: /tmp/redis_exporter-1.62.0.tar.gz
+        dest: /tmp/redis_exporter-1.62.0
+
+    # core.group/core.user шагов НЕТ: сервис-аккаунт даёт DynamicUser=yes в unit-е
+    # (гибрид-правило прод-конвенции §2). Group-доступ к сокету (770) — через
+    # SupplementaryGroups=redis, статический текст шаблона, в плане не виден.
+
+    # unit: redis_addr собран CEL-ом из 'unix://' + redis_socket — подключение к
+    # Redis через unix-сокет. bin_dir/listen добраны из default destiny. extra_args
+    # не передан → default [] (ExecStart без доп. токенов).
+    - index: 3
+      module: core.file.rendered
+      params:
+        path: /etc/systemd/system/redis_exporter.service
+        # template-путь заменён на доставленное Keeper-ом literal-содержимое (A1, ADR-012(d)).
+        template_content: "<present>"
+        mode: "0644"
+        owner: root
+        group: root
+        # Корень text/template — render_context {vars,self,role,essence}
+        # (templating.md §3.2, BUG-A fix); плоского params.vars больше нет.
+        render_context:
+          vars:
+            bin_dir: /usr/local/bin
+            listen: ":9121"
+            redis_addr: unix:///var/run/redis/redis-server.sock
+            password: change-me-please-32
+            extra_args: []
+          self:
+            sid: trial-host
+            covens: []
+            role: ""
+          role: ""
+          essence: {}
+
+    - index: 4
+      module: core.service.running
+      params:
+        name: redis_exporter
+        enabled: true

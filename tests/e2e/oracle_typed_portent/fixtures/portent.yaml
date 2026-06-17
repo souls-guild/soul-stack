@@ -1,0 +1,15 @@
+# Portent, который Soul-stub эмитит после открытия EventStream-а.
+# В V5-1 typed-payload-режиме stub шлёт ОБЕ ветки (legacy data + typed
+# file_changed) — backward-compat в hand-off-период.
+portent:
+  beacon_name: file-watch-etc
+  sid: soul-oracle-0.example.com
+  # Typed payload (V5-1).
+  payload:
+    kind: file_changed
+    path: /etc/nginx.conf
+    sha256: deadbeef0123456789
+  # Legacy data (deprecated, dual-write).
+  data:
+    path: /etc/nginx.conf
+    sha256: deadbeef0123456789

@@ -1,0 +1,24 @@
+name: mark_ab
+description: >-
+  Таргет ДВУХ ковенов (on: [cluster-a, cluster-b]). Валидация: apply_runs ровно
+  для 6 хостов (cluster-a + cluster-b), cluster-c чист.
+
+state_changes:
+  sets:
+    marker_file: /tmp/coven-marker-ab.txt
+    last_target: "cluster-a+cluster-b"
+
+tasks:
+  - name: Install redis on cluster-a and cluster-b
+    on: ["cluster-a", "cluster-b"]
+    module: core.pkg.installed
+    params:
+      name: redis
+
+  - name: Write coven marker on cluster-a and cluster-b
+    on: ["cluster-a", "cluster-b"]
+    module: core.file.present
+    params:
+      path: /tmp/coven-marker-ab.txt
+      mode: "0644"
+      content: "marked-by mark_ab target=cluster-a,cluster-b\n"

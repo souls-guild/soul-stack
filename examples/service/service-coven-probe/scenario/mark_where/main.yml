@@ -1,0 +1,22 @@
+name: mark_where
+description: >-
+  where:-предикат поверх coven. on: таргетит ДВА ковена (cluster-a + cluster-b),
+  но where: по стабильному факту sid оставляет только хосты с префиксом "ta-"
+  (т.е. cluster-a в стенде). Валидация: при on=[cluster-a,cluster-b] резолвер
+  сначала набирает 6 хостов, where отсекает 3 хоста cluster-b → apply файла
+  только на cluster-a. cluster-c вне on: вообще не участвует.
+
+state_changes:
+  sets:
+    marker_file: /tmp/coven-marker-where.txt
+    last_target: "on=a,b where=ta-*"
+
+tasks:
+  - name: Write marker only on ta-* hosts (where over coven a+b)
+    on: ["cluster-a", "cluster-b"]
+    where: soulprint.self.sid.startsWith("ta-")
+    module: core.file.present
+    params:
+      path: /tmp/coven-marker-where.txt
+      mode: "0644"
+      content: "marked-by mark_where filtered=ca-only\n"

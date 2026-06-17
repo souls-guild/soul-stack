@@ -1,0 +1,34 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: mount
+
+required_capabilities:
+  - run_as_root
+  - exec_subprocess
+  - fs_write_root
+
+spec:
+  states:
+    present:
+      description: Запись в /etc/fstab + смонтировано (ADR-015).
+      input:
+        path:   { type: string, required: true, description: "Точка монтирования (target)." }
+        source: { type: string, required: true, description: "Источник (device/UUID/сетевой ресурс)." }
+        fstype: { type: string, required: true, description: "Тип ФС (ext4/nfs/…)." }
+        opts:   { type: string, description: "Опции монтирования (default \"defaults\")." }
+    absent:
+      description: Размонтировано + удалено из /etc/fstab.
+      input:
+        path: { type: string, required: true, description: "Точка монтирования (target)." }
+    mounted:
+      description: Только смонтировано «как есть» (без правки fstab) — runtime-mount.
+      input:
+        path:   { type: string, required: true, description: "Точка монтирования (target)." }
+        source: { type: string, required: true, description: "Источник (device/UUID/сетевой ресурс)." }
+        fstype: { type: string, required: true, description: "Тип ФС (ext4/nfs/…)." }
+        opts:   { type: string, description: "Опции монтирования (default \"defaults\")." }
+    unmounted:
+      description: Только размонтировано (запись в fstab остаётся).
+      input:
+        path: { type: string, required: true, description: "Точка монтирования (target)." }

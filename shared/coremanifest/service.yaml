@@ -1,0 +1,28 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: service
+
+required_capabilities:
+  - run_as_root
+  - exec_subprocess
+
+spec:
+  states:
+    running:
+      description: Сервис запущен. Опциональный enabled управляет автозапуском одним шагом (ADR-015).
+      input:
+        name:    { type: string, required: true, description: "Имя сервиса/юнита." }
+        enabled: { type: bool,   description: "true → дополнительно enable, false → disable, опущено → autostart не трогать." }
+    stopped:
+      description: Сервис остановлен.
+      input:
+        name: { type: string, required: true, description: "Имя сервиса/юнита." }
+    restarted:
+      description: Безусловный restart (changed всегда true).
+      input:
+        name: { type: string, required: true, description: "Имя сервиса/юнита." }
+    enabled:
+      description: Автозапуск сервиса при загрузке системы.
+      input:
+        name: { type: string, required: true, description: "Имя сервиса/юнита." }

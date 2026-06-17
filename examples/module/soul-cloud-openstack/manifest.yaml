@@ -1,0 +1,57 @@
+kind: cloud_driver
+protocol_version: 1                    # compat-флаг plugin-протокола (ADR-020(c))
+namespace: cloud                       # пример third-party коллекции CloudDriver
+name: openstack
+
+# Closed enum по ADR-020(f).
+# vault_access НЕ нужен: credentials резолвит Keeper (A-flow, docs/keeper/cloud.md)
+# и передаёт plain в CreateRequest.credentials — драйвер в Vault НЕ ходит.
+required_capabilities:
+  - network_outbound                   # вызовы OpenStack API (Keystone + Nova)
+
+# CloudDriver работает на keeper-стороне и не трогает локальные ресурсы host-а —
+# объявляем пустой список (ADR-020(g), пример из docs/keeper/plugins.md).
+side_effects: []
+
+spec:
+  provider_kind: openstack             # семейство провайдера (OpenStack / Nova compute)
+  # JSON Schema draft 2020-12 (формат для kind: cloud_driver — см.
+  # docs/keeper/plugins.md → spec.profile_schema). Региона нет в required:
+  # некоторые приватные OpenStack-облака запускаются без regions (один Keystone
+  # на одно облако), в таких случаях region остаётся пустым.
+  profile_schema:
+    type: object
+    required: [image_id, flavor_id, network_id]
+    properties:
+      region:
+        type: string
+        description: |
+          Имя региона OpenStack (RegionName в Keystone-каталоге). Опционально:
+          приватные облака без regions оставляют поле пустым.
+      availability_zone:
+        type: string
+        description: Compute AZ внутри региона (nova:default, nova:az1, ...).
+      image_id:
+        type: string
+        description: ID образа в Glance.
+      flavor_id:
+        type: string
+        description: ID flavor-а (тип VM) в Nova.
+      network_id:
+        type: string
+        description: ID сети Neutron, к которой подключается основной интерфейс VM.
+      key_name:
+        type: string
+        description: Имя SSH-keypair в Nova (опционально — bootstrap-доступ).
+      security_groups:
+        type: array
+        items:
+          type: string
+        description: Имена security-groups Neutron, навешиваемых на VM.
+      labels:
+        type: object
+        additionalProperties:
+          type: string
+        description: |
+          Метки VM, складываются в Nova server.metadata. Ключ
+          `soulstack-run` используется драйвером для идемпотентности.

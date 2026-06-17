@@ -1,0 +1,83 @@
+kind: cloud_driver
+protocol_version: 1                    # compat-флаг plugin-протокола (ADR-020(c))
+namespace: cloud                       # пример third-party коллекции CloudDriver
+name: azure
+
+# Closed enum по ADR-020(f).
+# vault_access НЕ нужен: credentials резолвит Keeper (A-flow, docs/keeper/cloud.md)
+# и передаёт plain в CreateRequest.credentials — драйвер в Vault НЕ ходит.
+required_capabilities:
+  - network_outbound                   # вызовы Azure ARM API
+
+# CloudDriver работает на keeper-стороне и не трогает локальные ресурсы host-а —
+# объявляем пустой список (ADR-020(g), пример из docs/keeper/plugins.md).
+side_effects: []
+
+spec:
+  provider_kind: azure                 # информативное поле семейства провайдера
+  # JSON Schema draft 2020-12 (формат для kind: cloud_driver — см.
+  # docs/keeper/plugins.md → spec.profile_schema).
+  #
+  # Azure VM в отличие от EC2 — multi-resource (VM + NIC + PublicIP). Профиль
+  # описывает требуемый шейп; драйвер сам создаёт под-ресурсы с детерминированными
+  # производными именами от vm_name (см. main.go → resourceNames).
+  profile_schema:
+    type: object
+    required: [location, vm_size, image, subnet_id]
+    properties:
+      location:
+        type: string
+        examples: [westeurope, eastus, northeurope]
+      vm_size:
+        type: string
+        examples: [Standard_B2s, Standard_D2s_v5]
+      image:
+        type: object
+        required: [publisher, offer, sku]
+        properties:
+          publisher: { type: string }
+          offer:     { type: string }
+          sku:       { type: string }
+          version:
+            type: string
+            default: latest
+      # ARM-resource-id подсети — полностью квалифицированный, чтобы драйвер не
+      # городил собственный join subscription/rg/vnet/subnet.
+      subnet_id:
+        type: string
+        pattern: "^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$"
+      admin_username:
+        type: string
+        default: soul
+      ssh_public_key:
+        type: string
+      public_ip:
+        type: object
+        properties:
+          enabled:
+            type: boolean
+            default: true
+          sku:
+            type: string
+            enum: [Basic, Standard]
+            default: Standard
+          # DNS-label для PublicIP: при наличии fqdn будет
+          # `<dns_label>.<location>.cloudapp.azure.com`; без него драйвер вернёт
+          # primary_ip как identifier.
+          dns_label:
+            type: string
+      disk:
+        type: object
+        properties:
+          size_gb:
+            type: integer
+            minimum: 30
+          type:
+            type: string
+            enum: [Standard_LRS, StandardSSD_LRS, Premium_LRS]
+      network_security_group_id:
+        type: string
+      tags:
+        type: object
+        additionalProperties:
+          type: string

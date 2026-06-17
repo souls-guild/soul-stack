@@ -1,0 +1,14 @@
+# Скрипт ответов soul-stub-а для service-coven-probe::create.
+#
+# scenario пишет init-маркер /tmp/coven-init.txt через core.file.present.
+# state_changes.sets: marker_file=/tmp/coven-init.txt, last_target="create".
+scenarios:
+  create:
+    apply_responses:
+      - task_name: "Write init marker on every host of the incarnation"
+        run_result:
+          status: success
+          state_changes:
+            files:
+              - path: /tmp/coven-init.txt
+                state: present

@@ -1,0 +1,47 @@
+name: remove_replica
+description: >-
+  Удалить РЕПЛИКУ из Redis Cluster: `redis-cli --cluster del-node <seed>
+  <node-id>`. node-id (40-hex) реплики резолвится shell-side из `cluster nodes`
+  по её IP (del-node принимает node-id, не IP). После del-node нода покидает
+  кластер; redis на ней останавливается (опционально) и узел можно decommission.
+
+  Удаляем ТОЛЬКО реплику (мастер с назначенными слотами нельзя удалить без
+  reshard — это другой сценарий). del-node реплики безопасен: слоты не двигаются.
+
+  run_once с seed-ноды (любая существующая нода кластера). Идемпотентность:
+  unless-guard — если узла уже нет в cluster nodes, пропуск.
+
+input:
+  seed_ip:
+    type: string
+    required: true
+    pattern: "^[0-9.]+$"
+    description: IP любой существующей ноды кластера (контакт для del-node).
+  remove_ip:
+    type: string
+    required: true
+    pattern: "^[0-9.]+$"
+    description: IP удаляемой реплики (её node-id резолвится из cluster nodes).
+
+tasks:
+  # run_once с seed: найти node-id реплики по IP и удалить её из кластера.
+  # del-node делается с seed-ноды; таргетим seed по стабильному адресу-предикату.
+  # node-id берётся командой (cluster nodes | awk по IP) — host-инвариантно.
+  - name: Remove the replica from the cluster by node-id
+    on: ["${ incarnation.name }"]
+    where: soulprint.self.network.primary_ip == input.seed_ip
+    module: core.cmd.shell
+    params:
+      cmd: >
+        NODEID=$(redis-cli -h ${ input.seed_ip } -p 6379 cluster nodes | awk -v ip="${ input.remove_ip }:6379" '$2 ~ ip {print $1}');
+        test -n "$NODEID" && redis-cli --cluster del-node ${ input.seed_ip }:6379 "$NODEID" || echo "node already absent"
+      unless: "! redis-cli -h ${ input.seed_ip } -p 6379 cluster nodes | grep -q ${ input.remove_ip }:6379"
+
+  # Остановить redis на удалённой ноде (cleanup; таргет по стабильному адресу).
+  - name: Stop redis on the removed node
+    on: ["${ incarnation.name }"]
+    where: soulprint.self.network.primary_ip == input.remove_ip
+    module: core.cmd.shell
+    params:
+      cmd: "pkill redis-server 2>/dev/null; rm -f /var/lib/redis/nodes.conf; true"
+      unless: "! redis-cli -p 6379 ping 2>/dev/null | grep -q PONG"

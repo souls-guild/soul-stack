@@ -1,0 +1,63 @@
+kind: cloud_driver
+protocol_version: 1                    # compat-флаг plugin-протокола (ADR-020(c))
+namespace: cloud                       # пример third-party коллекции CloudDriver
+name: gcp
+
+# Closed enum по ADR-020(f).
+# vault_access НЕ нужен: credentials резолвит Keeper (A-flow, docs/keeper/cloud.md)
+# и передаёт plain (service-account JSON) в CreateRequest.credentials — драйвер
+# в Vault НЕ ходит.
+required_capabilities:
+  - network_outbound                   # вызовы Compute Engine API
+
+# CloudDriver работает на keeper-стороне и не трогает локальные ресурсы host-а —
+# объявляем пустой список (ADR-020(g), пример из docs/keeper/plugins.md).
+side_effects: []
+
+spec:
+  provider_kind: gcp                   # информативное поле семейства провайдера
+  # JSON Schema draft 2020-12 (формат для kind: cloud_driver — см.
+  # docs/keeper/plugins.md → spec.profile_schema).
+  profile_schema:
+    type: object
+    required: [project, zone, machine_type, source_image]
+    properties:
+      project:
+        type: string
+        # GCP project-id: 6–30 символов, lowercase letters/digits/hyphens,
+        # не начинается/заканчивается hyphen-ом.
+        pattern: "^[a-z][-a-z0-9]{4,28}[a-z0-9]$"
+      zone:
+        type: string
+        # europe-west1-b / us-central1-a / asia-northeast1-c
+        pattern: "^[a-z]+-[a-z]+[0-9]+-[a-z]$"
+      machine_type:
+        type: string
+        examples: [e2-medium, n2-standard-2, c2-standard-4]
+      source_image:
+        type: string
+        # Полная ссылка или короткий путь: projects/<p>/global/images/<i>
+        # или projects/<p>/global/images/family/<f>.
+        pattern: "^(projects/[a-z][-a-z0-9]+/global/images/(family/)?[a-z][-a-z0-9.]+|https://www\\.googleapis\\.com/compute/v1/.+)$"
+      disk:
+        type: object
+        properties:
+          size_gb:
+            type: integer
+            minimum: 10
+          type:
+            type: string
+            enum: [pd-standard, pd-balanced, pd-ssd, hyperdisk-balanced]
+      network:
+        type: object
+        properties:
+          # Короткое имя или selfLink сети/подсети. Default — `default`.
+          network:
+            type: string
+          subnet:
+            type: string
+      labels:
+        type: object
+        # GCP label-keys: lowercase letters/digits/dashes/underscores; max 63.
+        additionalProperties:
+          type: string

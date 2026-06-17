@@ -1,0 +1,34 @@
+name: converge
+description: |
+  Scry-сценарий drift-детекта (ADR-031 Slice B) для hello-world. Объявляет
+  ЖЕЛАЕМОЕ конечное состояние greeting-файла: тот же path и тот же content, что
+  пишет scenario/create. Keeper прогоняет converge в dry_run-режиме при
+  check-drift; Soul зовёт core.file.Plan (read-safe) вместо Apply, сравнивает
+  желаемое vs фактическое и возвращает per-task changed.
+
+  Содержимое сверяется по input.greeting. В отличие от service-noop (там
+  converge хардкодит marker-content), hello-world держит drift-детект честным:
+  тот же greeting, что был применён, оператор передаёт в body check-drift —
+  и Plan core.file.present увидит расхождение, если файл изменили на хосте.
+
+# converge.input.greeting обязателен: путь файла зафиксирован в
+# incarnation.state.greeting_file, но сам текст приветствия в state не хранится
+# (state_schema несёт только greeting_file). Поэтому ожидаемый content
+# приходит из operator-override в body check-drift (InputOverride, ADR-031).
+input:
+  greeting:
+    type: string
+    required: true
+    description: Ожидаемый текст greeting-файла (тот же, что был применён в create).
+
+# converge — read-only declaration: drift-проверка ничего не коммитит в state
+# (Soul не вызывает mod.Apply на dry_run, Keeper не запускает фазу state_changes
+# для DryRun-прогонов).
+state_changes: {}
+
+tasks:
+  - name: Ensure greeting file matches desired content
+    module: core.file.present
+    params:
+      path: /tmp/soul-stack-hello
+      content: "${ input.greeting }"

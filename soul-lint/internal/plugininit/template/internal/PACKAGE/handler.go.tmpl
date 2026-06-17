@@ -1,0 +1,51 @@
+// Package {{.NamePackage}} реализует SoulModule {{.Namespace}}.{{.Name}}.
+//
+// Плагин-контракт: pluginv1.SoulModule (Validate / Plan / Apply). SDK
+// (sdk/module.BaseModule) даёт no-op default для Validate/Plan/Apply;
+// автор переопределяет минимум Apply, опционально Plan (под drift-detect,
+// ADR-031 Scry — требует marker PlanReadSafe).
+package {{.NamePackage}}
+
+import (
+	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
+	"github.com/souls-guild/soul-stack/sdk/module"
+	"google.golang.org/grpc"
+)
+
+// {{.NamePascal}}Module — реализация SoulModule {{.Namespace}}.{{.Name}}.
+type {{.NamePascal}}Module struct {
+	module.BaseModule
+}
+
+// Apply применяет запрошенный state на ресурс.
+//
+// Контракт: idempotent. Шаги:
+//  1. Распарсить req.Task.Input против spec.states.<state>.input (manifest).
+//  2. Прочитать текущее состояние ресурса (resource-specific API).
+//  3. Если desired == current — no-op, emit финальный ApplyEvent с changed=false.
+//  4. Иначе — применить изменение, emit стрим ApplyEvent (stdout/stderr/state_change).
+//  5. На фейле — emit ApplyEvent с exit_code != 0 или вернуть error.
+func (m *{{.NamePascal}}Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
+	// TODO: реализуйте Apply под ваш ресурс.
+	_ = req
+	_ = stream
+	return nil
+}
+
+// Plan — pure-read dry-run (опционально). Раскомментируйте, если модуль умеет
+// читать состояние без мутации хоста. ADR-031 Scry: host зовёт Plan вместо
+// Apply на dry_run-задачах; без реализации PlanReadSafe-marker host применяет
+// default-deny (drift не определяется, явный отказ — не ложное «нет дрифта»).
+//
+// Контракт PlanReadSafe: РОВНО ОДИН финальный PlanEvent с машинным `changed`
+// до возврата из метода (без ошибки). Возврат nil без события → host трактует
+// как FAILED plan.no_result.
+//
+// func (m *{{.NamePascal}}Module) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
+//     // TODO: прочитать текущее состояние, посчитать changed, emit финальный PlanEvent.
+//     return nil
+// }
+//
+// // PlanReadSafe — marker-интерфейс: модуль ОБЪЯВЛЯЕТ, что Plan безопасен к
+// // dry_run (читает, не мутирует). Реализуйте ТОЛЬКО после написания pure-read Plan.
+// func (m *{{.NamePascal}}Module) PlanReadSafe() {}

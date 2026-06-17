@@ -1,0 +1,54 @@
+# nfpm-конфиг пакета `keeper` (deb + rpm). ADR-004 — центральный узел Soul Stack.
+#
+# Сборка: `make pkg` (вызывает nfpm package). Версия берётся из переменной
+# окружения VERSION (см. Makefile) через ${VERSION}-подстановку nfpm. Бинарь
+# должен быть собран ДО упаковки (`make build`) — кладётся keeper/bin/keeper.
+#
+# Пакет ставит: бинарь в /usr/local/bin, systemd-юнит + env, пример конфига как
+# .yml.example (не перетирает рабочий конфиг оператора при upgrade — pkg-конфиги
+# помечены config-flag-ом, но пример кладём отдельным именем намеренно).
+name: soul-stack-keeper
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: admin
+priority: optional
+maintainer: Soul Stack <noreply@soul-stack.dev>
+description: |
+  Soul Stack Keeper — центральный узел управления конфигурациями (ADR-004).
+  gRPC bidi-stream поверх mTLS, OpenAPI/MCP для операторов, Postgres + Redis.
+vendor: Soul Stack
+homepage: https://github.com/souls-guild/soul-stack
+license: Apache-2.0
+
+contents:
+  - src: ./keeper/bin/keeper
+    dst: /usr/local/bin/keeper
+    file_info:
+      mode: 0755
+
+  - src: ./deploy/systemd/keeper.service
+    dst: /etc/systemd/system/keeper.service
+    file_info:
+      mode: 0644
+
+  - src: ./deploy/systemd/keeper.env
+    dst: /etc/keeper/keeper.env
+    type: config|noreplace
+    file_info:
+      mode: 0644
+
+  # Пример конфига — отдельным именем, чтобы upgrade не трогал рабочий
+  # /etc/keeper/keeper.yml оператора. Скопировать руками при первой установке.
+  - src: ./examples/keeper/keeper.yml
+    dst: /etc/keeper/keeper.yml.example
+    file_info:
+      mode: 0640
+
+overrides:
+  deb:
+    depends:
+      - adduser
+  rpm:
+    depends:
+      - shadow-utils

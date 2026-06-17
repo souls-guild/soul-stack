@@ -1,0 +1,25 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: user
+
+required_capabilities:
+  - run_as_root
+  - exec_subprocess
+
+spec:
+  states:
+    present:
+      description: Пользователь существует (present-or-create, без reconcile существующего; ADR-015).
+      input:
+        name:   { type: string, required: true, description: "Имя пользователя." }
+        uid:    { type: int,    description: "Явный uid (useradd -u). Действует только при создании." }
+        shell:  { type: string, description: "Login shell (useradd -s). Действует только при создании." }
+        home:   { type: string, description: "Домашний каталог (useradd -d). Действует только при создании." }
+        groups: { type: list,   items: { type: string }, description: "Supplementary-группы (useradd -G). Действует только при создании." }
+        system: { type: bool,   description: "Системный аккаунт (useradd -r) для сервис-аккаунтов. Только при создании." }
+        group:  { type: string, description: "Primary-группа (useradd -g); должна уже существовать. Только при создании." }
+    absent:
+      description: Пользователь удалён.
+      input:
+        name: { type: string, required: true, description: "Имя пользователя." }
