@@ -8,7 +8,9 @@
 //	soul help
 //
 // `init` — единократный bootstrap-цикл (ADR-012(b)): генерация key+CSR →
-// unary Bootstrap RPC к Keeper → запись SoulSeed на диск.
+// unary Bootstrap RPC к Keeper → запись SoulSeed на диск. Bootstrap-токен
+// берётся из --token ИЛИ из env SOUL_BOOTSTRAP_TOKEN (флаг побеждает env).
+// Env-форма предпочтительнее: флаг светится в `ps` и shell-history, env — нет.
 //
 // `run` — долгоживущий демон-loop: load SoulSeed → Discover custom-плагинов
 // → собрать Registry (core + custom) → dial EventStream к Keeper → recv-loop
@@ -62,6 +64,10 @@ import (
 
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
+
+// envBootstrapToken — env-var с bootstrap-токеном для `soul init`,
+// безопасная альтернатива --token (флаг виден в `ps`/shell-history).
+const envBootstrapToken = "SOUL_BOOTSTRAP_TOKEN"
 
 const (
 	defaultConfigPath = "/etc/soul/soul.yml"
@@ -126,6 +132,20 @@ Commands:
 Run "soul <command> --help" for command-specific flags.`)
 }
 
+// resolveInitToken выбирает bootstrap-токен по precedence: явный --token
+// побеждает env SOUL_BOOTSTRAP_TOKEN (флаг = override). Пустой --token → env.
+// Оба пусты → ошибка (хотя бы один источник обязателен). Env-форма безопаснее:
+// --token виден в `ps`/shell-history, env — нет.
+func resolveInitToken(flagToken string) (string, error) {
+	if flagToken != "" {
+		return flagToken, nil
+	}
+	if envToken := os.Getenv(envBootstrapToken); envToken != "" {
+		return envToken, nil
+	}
+	return "", fmt.Errorf("soul init: provide token via --token or %s", envBootstrapToken)
+}
+
 // runInit парсит флаги, поднимает зависимости (config), вызывает
 // bootstrap.Run и печатает итоги.
 func runInit(args []string) int {
@@ -137,17 +157,19 @@ func runInit(args []string) int {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	fs.StringVar(&configPath, "config", defaultConfigPath, "soul.yml path")
-	fs.StringVar(&token, "token", "", "bootstrap token issued by Keeper (required)")
+	fs.StringVar(&token, "token", "", "bootstrap token issued by Keeper (or env "+envBootstrapToken+"; env is safer — flag is visible in ps/history)")
 	fs.StringVar(&sid, "sid", "", "SID override (precedence: --sid > config.sid > os.Hostname lowercased)")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage: soul init --token=<bootstrap-token> [flags]")
+		fmt.Fprintln(os.Stderr, "  Token may also be supplied via env "+envBootstrapToken+" (safer: not exposed in ps/shell history).")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
-	if token == "" {
-		fmt.Fprintln(os.Stderr, "soul init: --token is required")
+	token, err := resolveInitToken(token)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
 		fs.Usage()
 		return exitUsage
 	}
