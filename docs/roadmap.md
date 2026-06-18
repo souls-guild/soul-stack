@@ -4,7 +4,13 @@
 
 > Обновляется PM по ходу. Решения фиксируются в ADR ([architecture.md](architecture.md)); здесь — план и статус, не нормативный источник.
 
-## Статус (2026-05-26)
+> ⚠️ **Этот файл — исторический план развития, заморожен на отметке 2026-05-26.** С тех пор выпущена **`v0.1.0-beta.1`** (закрытая бета, приватные репо `souls-guild`). Часть статусов ниже устарела относительно фактического состояния: например, «Cloud parity ✓ готово» означает реализованные CloudDriver-плагины, но **operator-flow cloud-provisioning операционально недоступен в бете** (нет REST/MCP/UI-ручек `/v1/providers` / `/v1/profiles`); «push 🟡 в работе» — фактически закрыт в рамках Voyage-эпика. Актуальные границы беты и GA-готовности — НЕ здесь, а в:
+> - [known-limitations.md](known-limitations.md) — что НЕ входит в закрытую бету (источник правды по границам беты).
+> - [prod-readiness.md](prod-readiness.md) — GA-gap роадмап (P0/P1/P2-блокеры по результатам по-коду аудита; источник правды по GA-границам).
+>
+> Этот файл сохранён как история принятых решений и трекинга MVP→prod; новые статусы сюда не пишутся.
+
+## Статус (2026-05-26, исторический)
 - MVP feature-complete, релиз-гейт закрыт, HA провалидирован на масштабе (3 keeper + 9-node real redis-cluster, 0 багов ядра).
 - Код на GitHub — **временный** репо `co-cy/soul-stack` (переедет; module-path и реальная подпись финализируются на постоянном репо). Коммиты в `main`, CI = `make check`.
 - **К 2026-05-26 закрыто:** 6 cloud-провайдеров (AWS пилот + GCP/YC/Azure батч-1 + OpenStack/Proxmox батч-2); 3 SshProvider-плагина (static / Vault SSH CA / Teleport); drift Slice A+B (Plan pure-read на 17 core-модулей: 12 stateful покрыты, 2 deferred Slice C, 3 verbs not-applicable); release-ops полностью.

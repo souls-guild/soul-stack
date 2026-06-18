@@ -1,0 +1,24 @@
+name: pilot-flat
+description: >
+  Плоская пилот-destiny (слайс A): кладёт marker-файл и логирует факт. Только
+  core-модули, плоский tasks/main.yml без внутреннего include/block/loop. Видит
+  ТОЛЬКО свой input: (изоляция destiny, ADR-009) — никакого scenario-scope.
+
+# Версия destiny — git ref (ADR-007), поля version: нет.
+# Эта destiny использует только core-модули → required_modules: не нужен.
+
+input:
+  marker_file:
+    type: string
+    required: true
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: "Путь marker-файла (scenario передаёт его через apply.input)."
+  marker_payload:
+    type: string
+    required: true
+    description: Содержимое marker-файла.
+  marker_mode:
+    type: string
+    default: "0644"
+    pattern: "^0[0-7]{3}$"
+    description: Права marker-файла; default 0644 (демонстрация добора defaults).

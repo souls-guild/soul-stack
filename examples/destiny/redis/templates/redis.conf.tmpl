@@ -1,0 +1,25 @@
+{{/*
+  Render-time: значения берутся из .vars (явно переданы task-задачей
+  core.file.rendered) и из системного .self (стабильные факты текущего хоста).
+  Это фрагмент-иллюстрация, не полный redis.conf.
+
+  Доступный контекст рендера — см. docs/templating.md §3.2.
+*/}}
+bind {{ .self.network.primary_ip }} 127.0.0.1
+port 6379
+protected-mode yes
+
+maxmemory {{ .vars.maxmemory }}
+maxmemory-policy allkeys-lru
+
+requirepass {{ .vars.password }}
+
+{{ range $key, $value := .vars.config }}
+{{ $key }} {{ $value }}
+{{ end }}
+
+{{/* Replication settings — рендерятся, если task передал master_addr в .vars. */}}
+{{ if .vars.master_addr }}
+replicaof {{ .vars.master_addr }} 6379
+masterauth {{ .vars.password }}
+{{ end }}

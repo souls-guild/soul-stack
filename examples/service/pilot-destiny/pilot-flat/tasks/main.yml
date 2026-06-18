@@ -1,0 +1,15 @@
+# pilot-flat — точка входа destiny. Демонстрирует within-destiny include
+# (слайс B, destiny/tasks.md §4): вторая задача вынесена в соседний record.yml и
+# подключена через include: — раскрывается в плоский список ДО render. Сквозные
+# индексы итогового плана (0 = marker, 1 = record) сохраняются.
+# Все ссылки — только input.* destiny (scenario-scope недоступен, ADR-009).
+
+- name: Lay down the marker file
+  module: core.file.present
+  params:
+    path:    "${ input.marker_file }"
+    content: "${ input.marker_payload }"
+    mode:    "${ input.marker_mode }"
+
+# within-destiny include: сосед в той же папке tasks/, раскрывается inline.
+- include: record.yml

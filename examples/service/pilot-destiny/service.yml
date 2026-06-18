@@ -1,0 +1,25 @@
+name: pilot-destiny
+state_schema_version: 1
+description: >
+  Пилот apply:destiny (слайс A): сервис из одного сценария create, который
+  делегирует работу в плоскую destiny pilot-flat через apply: { destiny, input }.
+  Демонстрирует изолированный render-проход destiny (V2, ADR-009): destiny видит
+  только свой input:, не scenario-scope.
+
+# incarnation.state — что зафиксировано после apply.
+state_schema:
+  type: object
+  required: [marker_path, marker_content]
+  properties:
+    marker_path:    { type: string }
+    marker_content: { type: string }
+
+# Зависимость-destiny. Гибрид источника:
+#  - запись без git: → git-URL = default_destiny_source + {name} (keeper.yml);
+#  - запись c git:    → override, git-URL берётся напрямую (шаблон не нужен).
+# ref берётся из записи в обоих случаях (ADR-007: version = git ref).
+# В L0-фикстуре destiny лежит рядом (pilot-flat/), git не используется.
+# Пример per-entry override (закомментирован — отдельного destiny-репо в L0 нет):
+#   - { name: pilot-special, ref: v2.0.0, git: "git@github.com:custom/destiny-special.git" }
+destiny:
+  - { name: pilot-flat, ref: v1.0.0 }

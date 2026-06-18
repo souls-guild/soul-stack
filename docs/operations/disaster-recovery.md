@@ -58,7 +58,7 @@ Action:
 
 1. **Diagnose первопричину** перед перезапуском. Если все упали по одной причине (битая `keeper.yml`, неработающий Vault) — перезапуск без fix не поможет.
 2. Поднять **один** инстанс с проверенной версией:
-   - Проверить `keeper.yml` локально на синтаксис (`keeper --check-config /etc/keeper/keeper.yml` — на момент написания возможно отсутствует, тогда альтернатива — soul-lint валидация / запуск с logging.level=debug).
+   - Проверить `keeper.yml` локально на синтаксис. Отдельной офлайн-команды валидации **нет** (CLI `keeper` имеет только `init` / `run` / `version` / `help`; `--check-config` не реализован, [soulctl](../../soulctl/README.md) keeper-конфиг не валидирует). Практика: `keeper run --config=/etc/keeper/keeper.yml` на изолированном dev-инстансе — невалидный конфиг падает на старте с понятной ошибкой; либо запуск с `logging.level=debug` и наблюдение `journalctl -u keeper`.
    - Если новая версия — откатить пакет до проверенной.
    - `systemctl start keeper` — следить за `journalctl -u keeper -f`.
 3. После старта одного инстанса — Souls начнут переподключаться на него (потенциальный перегруз — единственный инстанс держит весь флот). Поднимать дополнительные инстансы по мере их готовности.
@@ -245,9 +245,9 @@ ORDER BY claim_at;
 
 ## Open questions (runbook)
 
-Не покрыто в коде / документации на момент написания, требует уточнения:
+Сверено с кодом (CLI `keeper`, реестр метрик); ниже — отсутствующие операционные удобства, которые могут понадобиться позже:
 
-- **`keeper --check-config`** — есть ли подкоманда для офлайн-валидации `keeper.yml` без старта инстанса? Если нет — оператор валидирует через `journalctl -u keeper` на dev-stage. См. наблюдения [§ Observations в отчёте].
-- **`keeper issue-token`** — для catastrophic identity recovery нужен ли отдельный subcommand на manual JWT issue для существующего Архонта (без через API)? В MVP не нашёл.
-- **Conclave-метрики** — `keeper_conclave_live_count` или подобная — экспонируется ли? Документация observability её не упоминает; в коде, возможно, есть.
-- **Conclave-deregister на crash** — graceful-shutdown снимает ключ; crash оставляет до TTL. Это документировано, но операционно может потребоваться явный `keeper conclave-evict --kid=...` для случая «знаю что хост точно мёртв, не ждать TTL». Не нашёл такого CLI.
+- **`keeper --check-config`** — отдельной подкоманды офлайн-валидации `keeper.yml` **нет** (CLI = `init` / `run` / `version` / `help`). Практика валидации — `keeper run` на изолированном dev-инстансе (невалидный конфиг падает на старте), см. шаг 2 выше. Кандидат на post-MVP-удобство.
+- **`keeper issue-token`** — отдельного subcommand на manual JWT issue для существующего Архонта **нет**. Catastrophic identity recovery — через ротацию signing-key + bootstrap-like процесс (см. [bootstrap-rbac.md → Сброс к «единственному админу»](bootstrap-rbac.md#сброс-к-единственному-админу-catastrophic-recovery)). Кандидат на post-MVP.
+- **Conclave-метрики** — метрики вида `keeper_conclave_live_count` в коде **нет** (реестр Keeper-метрик — [observability.md](../observability.md)). Живость инстансов смотрят по Redis-ключам conclave напрямую и по `journalctl`. Кандидат на post-MVP.
+- **Conclave-deregister на crash** — graceful-shutdown снимает ключ; crash оставляет до TTL. Явной команды `keeper conclave-evict --kid=...` для «знаю, что хост точно мёртв, не ждать TTL» **нет** — оператор ждёт истечения TTL либо удаляет ключ из Redis вручную. Кандидат на post-MVP.

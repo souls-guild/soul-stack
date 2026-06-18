@@ -1,0 +1,34 @@
+# ACL-строка (input.acl) — несколько правил через пробел (~* +@all …), redis-cli
+# ожидает их отдельными аргументами; argv-форма передала бы весь ACL одним токеном.
+# Пословное разбиение делает shell → core.cmd.shell. Источник cmd — доверенный
+# (автор scenario), требование TRUSTED-ONLY соблюдено (cmd.go §Безопасность).
+- name: Apply ACL for single redis user
+  module: core.cmd.shell
+  when: input.action == 'ensure_user'
+  no_log: true                         # ACL содержит секреты — не логировать
+  params:
+    cmd: |
+      redis-cli ACL SETUSER ${ input.user } ${ input.acl } ${ input.state == 'on' ? '>on' : 'off' }
+
+# ACL применяются ПРОТИВ master_addr (redis-cli -h <master_addr>), а не
+# локально. Шаг create идёт широко по incarnation; локальный ACL на репликах
+# до репликации = рассинхрон. С -h на master любой хост incarnation пишет
+# users на один и тот же master → на репликах idempotent (та же команда к
+# тому же master). master_addr scenario вычисляет сам (модель 3-ADDR).
+- name: Apply ACL for each redis user from input.users on the master
+  module: core.cmd.shell
+  when: input.action == 'ensure_users'
+  no_log: true
+  loop:
+    items: "${ input.users }"
+    as:    user
+    index_as: username
+  params:
+    cmd: |
+      redis-cli -h ${ input.master_addr } ACL SETUSER ${ username } ${ user.acl } ${ user.state == 'on' ? '>on' : 'off' }
+
+- name: Restart redis-server
+  module: core.service.restarted
+  when: input.action == 'restart'
+  params:
+    name: "${ vars.redis_unit_name }"

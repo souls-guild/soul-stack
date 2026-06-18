@@ -1,0 +1,135 @@
+# L0-испытание (Trial, ADR-023) destiny redis-single через харнесс-scenario apply.
+#
+# Render-only, герметично. Главное, что демонстрирует кейс:
+#   - core.pkg.installed: установка из пакетного менеджера (version из input);
+#   - core.exec.run: явное создание каталога unix-сокета /var/run/redis ДО старта
+#     redis-server (idempotency-якорь creates:);
+#   - core.file.rendered redis.conf: dual-access (TCP 6379 bind primary_ip +
+#     unix-сокет), проброс пути unix-сокета в .vars.socket (точка интеграции
+#     redis ↔ redis_exporter) + maxmemory/config/password;
+#   - core.file.rendered hardening drop-in: override поверх ДИСТРИБУТИВНОГО
+#     redis-server.service (stateful-hardening, ReadWritePaths под data-dir/socket/
+#     log; vars пуст — статический текст шаблона);
+#   - core.exec.run daemon-reload: реактивно (onchanges drop-in) перечитать unit
+#     до рестарта; в L0-плане задача присутствует безусловно (onchanges — runtime).
+name: redis-single destiny renders pkg/dir/config/service plan
+
+# L0-render не применяет default-ы контракта — дублируем дефолты + обязательные.
+#
+# apply:destiny резолвится зеркалом прода (slice A, ADR-023): redis-single
+# объявлена в _trial/service.yml::destiny[], URL — из default_destiny_source ниже
+# (file://, относительно service-root = _trial/).
+fixtures:
+  default_destiny_source: "file://../../{name}"
+  input:
+    # distro-native version-пин (epoch + revision), как реально отдаёт apt
+    # (BUG-1 fix: pattern допускает такие строки). has(input.version) истинно →
+    # пин уходит насквозь.
+    version:        "5:7.0.15-1~deb12u7"
+    redis_password: "change-me-please-32"
+    redis_socket:   /var/run/redis/redis-server.sock
+    maxmemory:      256mb
+    config:
+      maxclients: 10000
+      timeout:    300
+  # Стабильные факты trial-host: primary_ip нужен strict-mode шаблону для
+  # bind {{ .self.network.primary_ip }} (dual-access TCP 6379). Без него рендер
+  # redis.conf.tmpl падает на обращении к незаявленному ключу.
+  soulprint:
+    network: { primary_ip: 10.0.0.10 }
+
+assert:
+  rendered_tasks:
+    - index: 0
+      module: core.pkg.installed
+      params:
+        name: redis-server
+        version: "5:7.0.15-1~deb12u7"
+
+    # Каталог unix-сокета создаётся ДО рендера конфига и старта сервиса
+    # (install -d, идемпотентно через creates:).
+    - index: 1
+      module: core.exec.run
+      params:
+        creates: /var/run/redis
+        cmd: install
+        args: ["-d", "-o", "redis", "-g", "redis", "-m", "0755", "/var/run/redis"]
+
+    # redis.conf: путь unix-сокета пробрасывается в шаблон как .vars.socket —
+    # точка интеграции с redis_exporter. config прокинут целиком (задел update_config).
+    # Корень text/template-контекста — render_context {vars,self,role,essence}
+    # (templating.md §3.2, BUG-A fix): Keeper собирает его per-host и доставляет
+    # рядом с template_content; плоского params.vars больше нет. self несёт
+    # стабильные факты trial-host: network из fixtures.soulprint смержен с
+    # registry-проекцией sid/covens/role (soulprintSelfMap, cel_render.go) —
+    # шаблон читает .self.network.primary_ip для bind (dual-access TCP 6379).
+    - index: 2
+      module: core.file.rendered
+      params:
+        path: /etc/redis/redis.conf
+        # template-путь заменён на доставленное Keeper-ом literal-содержимое (A1, ADR-012(d)).
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            socket: /var/run/redis/redis-server.sock
+            password: change-me-please-32
+            maxmemory: 256mb
+            config:
+              maxclients: 10000
+              timeout: 300
+          self:
+            network: { primary_ip: 10.0.0.10 }
+            sid: trial-host
+            covens: []
+            role: ""
+          role: ""
+          essence: {}
+
+    # systemd drop-in hardening поверх дистрибутивного redis-server.service.
+    # vars пуст — hardening статичен (под input не параметризуется). owner/group
+    # root: override-файл systemd принадлежит root, не сервис-аккаунту redis.
+    - index: 3
+      module: core.file.rendered
+      params:
+        path: /etc/systemd/system/redis-server.service.d/hardening.conf
+        template_content: "<present>"
+        mode: "0644"
+        owner: root
+        group: root
+        render_context:
+          vars: {}
+          self:
+            network: { primary_ip: 10.0.0.10 }
+            sid: trial-host
+            covens: []
+            role: ""
+          role: ""
+          essence: {}
+
+    # daemon-reload до рестарта: drop-in меняет загруженный unit → systemctl
+    # daemon-reload перечитывает его. argv без shell. onchanges (drop-in) —
+    # runtime-условие, в render-only L0-плане задача присутствует безусловно.
+    - index: 4
+      module: core.exec.run
+      params:
+        cmd: systemctl
+        args: ["daemon-reload"]
+
+    - index: 5
+      module: core.service.running
+      params:
+        name: redis-server
+        enabled: true
+
+    # Финальный рестарт-триггер: онлайн-реакция на изменение redis.conf ИЛИ
+    # hardening-drop-in (onchanges [redis_conf, redis_hardening] → onchanges_idx
+    # [2, 3] на резолве, harness assert его не сверяет). Центральная часть плана,
+    # на которую ссылаются composite-фикстуры как на эталон, поэтому фиксируем явно.
+    # В rendered params только name (onchanges/timeout живут вне params) — сверяем его.
+    - index: 6
+      module: core.service.restarted
+      params:
+        name: redis-server

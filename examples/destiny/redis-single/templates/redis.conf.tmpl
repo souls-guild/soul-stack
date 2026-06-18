@@ -1,0 +1,69 @@
+{{/*
+  redis.conf для базового Redis в режиме dual-access (TCP + unix-сокет). Контекст
+  рендера (docs/templating.md §3.2):
+    .vars  — явно переданные core.file.rendered (socket, password, maxmemory, config).
+    .self  — стабильные факты хоста; primary_ip нужен для bind.
+  Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010).
+
+  Dual-access: одна инсталляция Redis слушает И TCP-порт 6379, И unix-сокет.
+    - TCP 6379 (bind primary_ip + 127.0.0.1) — для обычных клиентов приложения.
+    - unix-сокет (unixsocket + unixsocketperm 770) — least-privilege локальный
+      путь для redis_exporter (destiny redis-exporter, --redis.addr=unix://<socket>)
+      и локального redis-cli (-s <socket>).
+  Bind на primary_ip + 127.0.0.1: внешние клиенты — по IP хоста, локальные — по
+  loopback. Путь сокета — .vars.socket, тот же, что input.redis_socket передаёт
+  caller в обе destiny.
+
+  ВАЖНО: этот файл ЦЕЛИКОМ заменяет дистрибутивный /etc/redis/redis.conf,
+  поэтому он обязан САМ задавать все критичные для systemd-managed Redis директивы —
+  иначе вступают встроенные дефолты бинаря redis-server, а не дистрибутивные.
+  Конкретно:
+    - `dir /var/lib/redis` — рабочий каталог под RDB/AOF. Встроенный дефолт `dir /`
+      read-only для пользователя redis; при SIGTERM-рестарте (onchanges) Redis пишет
+      финальный RDB-снапшот, падает «Read-only file system» и НЕ выходит → рестарт
+      висит вечно → весь apply упирается в таймаут. Каталог создаёт пакет redis
+      (owner redis:redis, mode 0750), туда redis писать может.
+    - `save …` ЯВНО — встроенный дефолт `save 3600 1 …` и был активен (шаблон его
+      раньше не задавал) и провоцировал финальный снапшот; полагаться на него молча
+      нельзя. Здесь задана дистрибутивная save-policy (900/300/60-окна).
+    - daemonize/supervised/pidfile/logfile — под управление systemd-юнитом
+      redis-server (Type=notify, supervised systemd; см. ниже).
+
+  .vars.config — задел под update_config: range по переданным директивам. Идёт
+  ПОСЛЕ базовых директив, поэтому caller может осознанно переопределить любую из них
+  (last-wins в redis.conf). Если config не передан/пуст — секция пуста.
+*/}}
+bind {{ .self.network.primary_ip }} 127.0.0.1
+port 6379
+protected-mode yes
+
+# Управление через systemd-юнит redis-server (пакет дистрибутива).
+# daemonize no + supervised systemd: redis-server остаётся foreground-процессом и
+# сам уведомляет systemd о готовности (Type=notify в юните). pidfile/logfile —
+# дистрибутивные пути; при supervised systemd логи также уходят в journald.
+daemonize no
+supervised systemd
+pidfile /var/run/redis/redis-server.pid
+logfile /var/log/redis/redis-server.log
+
+# Рабочий каталог под RDB/AOF. КРИТИЧНО: без него Redis пишет дамп в `/`
+# (read-only для redis) и зависает при рестарте. Каталог создаёт пакет redis.
+dir /var/lib/redis
+
+# Persistence: явная дистрибутивная save-policy вместо молчаливого встроенного
+# дефолта redis-server. Снимок пишется в `dir` (пишемый), рестарт/останов чистый.
+save 900 1 300 10 60 10000
+
+# Unix-сокет — least-privilege локальный путь для redis_exporter и локального
+# redis-cli. Обычные клиенты ходят по TCP 6379 (bind выше).
+unixsocket {{ .vars.socket }}
+unixsocketperm 770
+
+maxmemory {{ .vars.maxmemory }}
+maxmemory-policy allkeys-lru
+
+requirepass {{ .vars.password }}
+
+{{ range $key, $value := .vars.config }}
+{{ $key }} {{ $value }}
+{{ end }}

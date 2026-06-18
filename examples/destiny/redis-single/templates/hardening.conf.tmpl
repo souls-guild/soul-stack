@@ -1,0 +1,48 @@
+{{/*
+  systemd drop-in hardening для redis-server. Контекст рендера (docs/templating.md §3.2):
+    .vars  — пуст (статический hardening, под input не параметризуется);
+    .self  — стабильные факты хоста (здесь не используются).
+  Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010).
+
+  ПОЧЕМУ drop-in, а не свой unit. Redis ставится дистрибутивным пакетом
+  (core.pkg.installed redis-server) вместе с его systemd-юнитом redis-server.service.
+  Дистрибутивный unit заменять целиком нельзя — он несёт ExecStart/Type=notify/
+  RuntimeDirectory и обновляется вместе с пакетом. Поэтому hardening доезжает
+  override-ом: /etc/systemd/system/redis-server.service.d/hardening.conf поверх
+  дистрибутивного unit-а (директивы [Service] мержатся, наши имеют приоритет).
+
+  СЕРВИС-АККАУНТ. User/Group в drop-in НЕ задаём намеренно. redis — stateful-сервис
+  (прод-конвенция §2/§3): owned data-dir /var/lib/redis (RDB/AOF) требует стабильного
+  uid-владельца файлов между рестартами и апгрейдами. Дистрибутивный пакет уже
+  заводит system-аккаунт redis:redis (стабильный uid) и дистрибутивный unit уже
+  запускается под ним. DynamicUser=yes тут непригоден: файлы под transient-uid одного
+  запуска на следующем будут принадлежать «чужому» uid. Аккаунт — от пакета, ручные
+  core.user/core.group не нужны.
+
+  HARDENING (прод-конвенция §3, «безопасность на первом месте», requirements.md).
+  Stateful-вариант блока: ProtectSystem=strict + ReadWritePaths под фактические
+  каталоги записи redis. БЕЗ ReadWritePaths strict делает весь / только-чтение и
+  redis не сможет писать RDB/AOF/socket/pid/log — прод-инцидент. RW-пути взяты из
+  redis.conf.tmpl: dir /var/lib/redis (RDB/AOF), unixsocket+pidfile под /var/run/redis,
+  logfile под /var/log/redis. Перечислены каталоги этих путей, и только они.
+
+  MemoryDenyWriteExecute НЕ ставим намеренно (в отличие от Go-бинарей exporter-ов).
+  redis — на C, использует jemalloc и поддерживает loadable-модули; MDWE запрещает
+  W+X-маппинги и способен ломать аллокатор/JIT-страницы модулей → редкий, но реальный
+  крэш под нагрузкой. Для stateful redis безопаснее MDWE не включать.
+
+  CapabilityBoundingSet= пуст: redis слушает :6379 (>1024) и unix-сокет, привилегий
+  не требует, CAP_NET_BIND_SERVICE не нужен.
+*/}}
+[Service]
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/redis /var/run/redis /var/log/redis
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+RestrictNamespaces=yes
+CapabilityBoundingSet=

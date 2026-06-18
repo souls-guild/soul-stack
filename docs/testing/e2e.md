@@ -116,13 +116,15 @@ incarnation_state:                            # deep-subset проверка jso
   nginx_service: nginx
 
 audit_events:                                 # presence-проверка (минимум одна строка)
-  - type: scenario.applied
+  - type: incarnation.created                 # реальный EventType (shared/audit/event_types.go)
     payload:
       incarnation: test-nginx
 
 metrics:                                      # Prometheus-expression → constraint-строка
-  keeper_apply_runs_total{status="success"}: ">= 1"
+  keeper_scenario_runs_total{result="ok"}: ">= 1"
 ```
+
+> Имена audit-event-ов и метрик в expectations — **реальные значения из Go-кода**, не выдуманные. Источник правды по audit-типам — [`shared/audit/event_types.go`](../../shared/audit/event_types.go) (например `incarnation.created`, `incarnation.scenario_started`, `incarnation.run_completed`; событий `scenario.applied` / `scenario.completed` в коде НЕТ). Источник по метрикам прогона — [`keeper/internal/scenario/metrics.go`](../../keeper/internal/scenario/metrics.go): метрика называется `keeper_scenario_runs_total{result="ok"|"error"|"locked"}` (метрики `keeper_apply_runs_total` в коде НЕТ).
 
 | Ключ | Семантика |
 |---|---|
@@ -141,9 +143,7 @@ Harness валидирует `apply_runs.status` на старте теста ч
 `harness.CheckApplyRunsStatusValid`. Список разрешённых значений — в
 [`tests/e2e/harness/asserts.go`](../../tests/e2e/harness/asserts.go) (карта
 `validApplyRunsStatus`). Источник — [`keeper/internal/applyrun/applyrun.go`](../../keeper/internal/applyrun/applyrun.go)
-(const-ы `StatusSuccess` etc.); дублирование снимается в L3a-implementation slice
-импортом `applyrun.ValidStatus` через `replace` в `tests/e2e/go.mod` (drift
-ловится `TestValidApplyRunsStatus_CoversApplyRunGoEnum` в pilot-тесте).
+(const-ы `StatusSuccess` etc.); drift ловится тестом, сверяющим карту с Go-enum.
 
 ## Контракт harness
 
@@ -164,8 +164,8 @@ func TestX(t *testing.T) {
 
     stack.AssertApplyRunsStatus(t, applyID, "success")
     stack.AssertIncarnationState(t, inc, map[string]any{...})
-    stack.AssertAuditEvent(t, "scenario.applied", map[string]any{...})
-    stack.AssertMetricGE(t, `keeper_apply_runs_total{status="success"}`, 1)
+    stack.AssertAuditEvent(t, "incarnation.created", map[string]any{...})
+    stack.AssertMetricGE(t, `keeper_scenario_runs_total{result="ok"}`, 1)
 }
 ```
 
@@ -225,18 +225,24 @@ bootstrap/keeper_init.go::extractSigningKey`). harness кладёт `signing_key
 base64-encoded string из 32 случайных байт (`crypto/rand` → `base64.StdEncoding`),
 полностью симметрично `openssl rand -base64 32` в `dev/provision.sh:90`.
 
-## Pilot-фаза vs L3a-implementation slice
+## Статус реализации L3a
 
-Текущий статус ([ADR-039 «Что отложено»](../adr/0039-e2e-testing.md#adr-039-e2e-тестирование--три-уровня-без-новой-сущности-словаря)):
+L3a-harness **реализован полностью** (фаза v3, pilot-stub снят): `NewStack`
+делает реальный spawn инфры через testcontainers (PG / Redis / Vault), поднимает
+реальный `keeper`-процесс sub-process-ом, открывает реальный gRPC-стрим из
+soul-stub-а, грузит fixtures/expectations YAML loader-ом и выполняет реальные
+`Assert*`-методы.
 
-- **Сделано** (pilot): структура каталогов, типы fixtures/expectations,
-  enum-валидация `apply_runs.status` (drift-тест), Makefile-таргет, ADR-фиксация.
-- **Отложено** (L3a-implementation slice): реальный spawn testcontainers,
-  реальный Keeper-процесс, реальный gRPC-клиент в soul-stub-е, реальная
-  загрузка fixtures/expectations YAML loader-ом, реальные `Assert*`-методы.
+`t.Skip` остаётся ровно в двух случаях, означающих «E2E невозможен в этой среде»,
+а не «not implemented»:
 
-В pilot все `Stack.*`-методы делают `t.Skip("L3a pilot stub: ...")` — тесты
-видны в `go test`-выводе как skipped, не как failed.
+- нет keeper-бинаря (`KEEPER_BIN` не задан и `make build` не выполнен) — skip ДО
+  spawn-а, чтобы разработчик без сборки не ловил 5-минутный таймаут;
+- нет docker — testcontainers вернёт ошибку spawn-а; в этом случае тест **фейлится
+  явно** (E2E запрошен сознательно, отсутствие docker — fail, не skip).
+
+Сборка/vet с `-tags=e2e` обязаны проходить всегда (инвариант ADR-039 — compile-clean
+без docker).
 
 ## L3b (real-soul-in-container) — `tests/e2e-live/`
 
@@ -250,7 +256,19 @@ Smoke-тесты:
   Redis Cluster через `redis-cli --cluster create`.
 
 Build-tag: `e2e_live`. Запуск: `make e2e-live` (требует `make build-linux` +
-docker с privileged-режимом). Frequency: nightly cron / on-demand.
+docker с privileged-режимом). Frequency: on-demand (pre-tag gate в
+[RELEASING.md](../../RELEASING.md); ежедневный nightly-cron отключён — manual-only).
+
+**WSL2.** На WSL2 контейнер не дозванивается до keeper через
+`host.docker.internal` — прокинь реальный хост-IP через `E2E_KEEPER_HOST`
+(harness пропишет его в `soul.yml`-эндпоинт). Рецепт:
+
+```sh
+E2E_KEEPER_HOST=$(hostname -I | awk '{print $1}') make e2e-live
+```
+
+Без `E2E_KEEPER_HOST` поведение не меняется (CI-дефолт `host.docker.internal`).
+Полный quickstart — [`tests/e2e-live/README.md`](../../tests/e2e-live/README.md).
 
 Отличия от L3a:
 

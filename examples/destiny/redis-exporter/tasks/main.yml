@@ -1,0 +1,85 @@
+# tasks/main.yml — точка входа destiny redis-exporter (плоский список module-задач).
+# Видит ТОЛЬКО свой input: (изоляция, ADR-009).
+#
+# Установка из релиза — та же «тройка», что у node-exporter (url.fetched →
+# archive.extracted → install). Отличие в раскладке имён tarball-а GitHub Releases
+# redis_exporter: имя файла и каталог внутри несут префикс `v` перед версией
+# (redis_exporter-v<v>.linux-<arch>).
+#
+# Подключение к Redis — через UNIX-СОКЕТ (--redis.addr=unix://<socket>), не TCP.
+# Сервис-аккаунт — DynamicUser=yes (прод-конвенция §2, гибрид-правило): redis_exporter
+# stateless, owned data-dir у него нет, ручные core.user/core.group НЕ заводятся.
+# Group-доступ к сокету (unixsocketperm 770, owner redis:redis) даётся transient-
+# юзеру через SupplementaryGroups=redis в unit-е (см. templates/...service.tmpl) —
+# DynamicUser совместим со статически-named supplementary-группами. Прав владельца
+# redis exporter НЕ получает. Группа redis уже существует — её заводит как side-effect
+# ПАКЕТ redis-server (шаг core.pkg.installed в destiny redis-single: postinst пакета
+# создаёт пользователя/группу redis на Debian/Ubuntu/RHEL), а не явный core.group-шаг.
+# Порядок гарантирует caller: apply:destiny redis-single → redis-exporter.
+
+- name: Fetch redis_exporter tarball
+  module: core.url.fetched
+  params:
+    url: "${ 'https://github.com/oliver006/redis_exporter/releases/download/v' + input.version + '/redis_exporter-v' + input.version + '.linux-' + input.arch + '.tar.gz' }"
+    path: "${ '/tmp/redis_exporter-' + input.version + '.tar.gz' }"
+    checksum: "${ input.sha256 }"
+    mode: "0644"
+
+- name: Extract redis_exporter tarball
+  module: core.archive.extracted
+  params:
+    path: "${ '/tmp/redis_exporter-' + input.version + '.tar.gz' }"
+    dest: "${ '/tmp/redis_exporter-' + input.version }"
+
+- name: Install redis_exporter binary
+  module: core.cmd.shell
+  params:
+    creates: "${ input.bin_dir + '/redis_exporter' }"
+    cmd: >-
+      install -m 0755
+      '${ '/tmp/redis_exporter-' + input.version + '/redis_exporter-v' + input.version + '.linux-' + input.arch + '/redis_exporter' }'
+      '${ input.bin_dir + '/redis_exporter' }'
+
+# Выделенного системного пользователя/группы НЕТ намеренно. redis_exporter —
+# stateless-демон без owned data-dir, поэтому по гибрид-правилу прод-конвенции
+# (docs/destiny/production-conventions.md §2) сервис-аккаунт даёт сам systemd через
+# DynamicUser=yes в unit-е. Group-доступ к сокету Redis (770) transient-юзер
+# получает через SupplementaryGroups=redis (см. шаблон) — DynamicUser совместим со
+# статически-named supplementary-группами, ручной core.user не нужен. Сама группа
+# redis заводится как side-effect пакета redis-server (postinst в core.pkg.installed
+# destiny redis-single), не отдельным core.group-шагом.
+
+# systemd-unit. redis_addr собирается CEL-ом из 'unix://' + input.redis_socket —
+# тот же сокет, что unixsocket в redis.conf. register, чтобы рестартить unit при
+# изменении файла.
+- name: Render redis_exporter systemd unit
+  module: core.file.rendered
+  register: redis_exporter_unit
+  params:
+    path: /etc/systemd/system/redis_exporter.service
+    template: templates/redis_exporter.service.tmpl
+    mode: "0644"
+    owner: root
+    group: root
+    vars:
+      bin_dir:    "${ input.bin_dir }"
+      listen:     "${ input.listen }"
+      redis_addr: "${ 'unix://' + input.redis_socket }"
+      password:   "${ input.redis_password }"
+      # passthrough-флаги redis_exporter (--check-keys=..., --web.config.file=...
+      # и пр.): уходят в шаблон списком, range дописывает каждый отдельным токеном
+      # ExecStart. Вся ячейка = один ${…} → нативный список (ADR-010).
+      extra_args: "${ input.extra_args }"
+
+- name: Ensure redis_exporter is running and enabled at boot
+  module: core.service.running
+  params:
+    name: redis_exporter
+    enabled: true
+
+- name: Restart redis_exporter because unit changed
+  module: core.service.restarted
+  onchanges: [redis_exporter_unit]
+  timeout: 30s
+  params:
+    name: redis_exporter

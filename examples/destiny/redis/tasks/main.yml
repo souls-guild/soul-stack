@@ -1,0 +1,11 @@
+- name: Apply Redis configuration
+  include: apply.yml
+  when: input.action == 'apply'
+
+- name: Manage Redis service state
+  include: manage.yml
+  when: input.action in ['ensure_user', 'ensure_users', 'restart']
+
+- name: Run Redis diagnostics
+  include: diagnostic.yml
+  when: input.action in ['ping', 'replication_status', 'diagnose']
