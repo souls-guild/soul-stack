@@ -109,12 +109,14 @@ Nightly-job `e2e-live` гоняет **реальный `soul`-бинарь в pr
 
 ## Доказанная нагрузка
 
-Источник правды — [testing/load-testing.md](testing/load-testing.md) (Ф0 + срез Ф1 **измерены** на живом стенде 2026-06-17; полный 100k-ramp — расчётный, Ф2).
+Источник правды — [testing/load-testing.md](testing/load-testing.md) (Ф0 + Ф1 **измерены до N=25000** на живом стенде 2026-06-17, 24 vCPU/30 GiB, 1 keeper-инстанс; полный 100k-ramp — расчётный, Ф2).
 
-- **Keeper линеен по стримам** до измеренного N=1000 коннектов; per-soul прирост RSS ≈ **0.12–0.15 MiB/душу** (приростная дельта, не абсолют — [§8.1](testing/load-testing.md#8-измеренные-результаты-ф0--срез-ф1-2026-06-17)).
-- **Экстраполяция на 100k по дельте** ≈ 15–19 GiB RSS → **3–4 инстанса** на 100k по модели (в бюджете [scaling.md → Sizing](operations/scaling.md#sizing-infrastructure-под-100k-vm-приблизительно)); реальный cliff на N=1000/300 **не достигнут** — точный per-soul под 100k остаётся задачей Ф2.
-- **Read-API** держит с запасом (3811 req/s, p99 5.9 ms на `GET /v1/souls`).
-- **applybus maxclients-fix** (sharded-каналы) устранил cliff на ~10k command-Voyage; cross-keeper-проверка под нагрузкой — P1.
+- **Keeper линеен по стримам** до измеренного N=25000 коннектов (connect p99 ≤ 185 ms, 0 ошибок); per-soul прирост RSS ≈ **0.12 MiB/душу** на N=10k–25k (приростной коэффициент, не абсолют — [§8.1](testing/load-testing.md#8-измеренные-результаты-ф0--ф1-2026-06-17)).
+- **Экстраполяция на 100k по коэффициенту** ≈ 11–12 GiB RSS → **3–4 инстанса** на 100k по модели (в бюджете [scaling.md → Sizing](operations/scaling.md#sizing-infrastructure-под-100k-vm-приблизительно)); cliff на ≤ 25k **не достигнут**, точный per-soul под 100k остаётся задачей Ф2.
+- **Предел single-host** — зонд 50k упёрся в ≈ 28222 стрима (исчерпание эфемерных портов loopback на стороне harness-а, **не Keeper**); истинный 50k+ → распределённый генератор (Ф2).
+- **Read-API** держит с запасом: `GET /v1/souls` 3476→1488 rps по росту флота, p99 < 140 ms; каталоги p99 < 5 ms. **Write-ось** ≈ 234 rps p99 5–7 ms под 25k-флотом.
+- **applybus maxclients-fix** (holder-skip + sharded-каналы, `fec7e02`) устранил cliff на ~10k command-Voyage (до фикса 10k не финализировал вовсе); cross-keeper-проверка под нагрузкой — P1.
+- **Tempo-preview rate-limit развязан** (`34d85a9`, bucket `voyage_preview` 30/60) — preview ≈ 10 → 33 rps.
 
 ---
 

@@ -1,0 +1,122 @@
+# Release Soul Stack. Автоматизирует ручной релиз-флоу (P0 release-инженерия,
+# docs/prod-readiness.md): `make build` + `make pkg` + `make sbom` и публикация
+# артефактов в GitHub Release. Вся build-логика остаётся в Makefile — workflow её
+# только воспроизводит на раннере, не дублирует.
+#
+# ЭКОНОМИЯ GH-минут (лимит 2k/мес): workflow гонится ИСКЛЮЧИТЕЛЬНО на push тега
+# `v*` — релизы редки. На обычный push в ветку/PR он не запускается (это зона
+# ci.yml). Один тег = один прогон.
+name: Release
+
+# Только tag-push `v*`. Не реагирует на ветки/PR. На уже существующий тег
+# (например v0.1.0-beta.1) НЕ сработает — триггер ловит push НОВОГО тега.
+on:
+  push:
+    tags:
+      - "v*"
+
+# Нужны права на запись в Releases (создание релиза + загрузка ассетов).
+# Остальное — read.
+permissions:
+  contents: write
+
+env:
+  # Версия Go из go.work (toolchain 1.26.4), синхронно с ci.yml.
+  GO_VERSION: "1.26.4"
+
+jobs:
+  release:
+    name: build + package + publish release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          # Полная история + теги: VERSION в Makefile берётся из
+          # `git describe --tags`. Без fetch-depth: 0 и тегов describe вернёт
+          # короткий sha вместо имени тега.
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            keeper/go.sum
+            proto/go.sum
+            proto/plugin/go.sum
+            sdk/go.sum
+            shared/go.sum
+            soul/go.sum
+            soul-lint/go.sum
+            soulctl/go.sum
+
+      # Упаковщики, которых нет в PATH раннера. Те же команды, что печатает
+      # Makefile в подсказке при их отсутствии (pkg/sbom-таргеты).
+      - name: Install nfpm + cyclonedx-gomod
+        run: |
+          set -euo pipefail
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+          go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # Бинари (нативно linux-amd64 на ubuntu-latest), затем deb+rpm и SBOM.
+      # VERSION внутри каждого таргета выводится из git describe (тег) — как при
+      # ручном релизе, отдельно прокидывать не нужно.
+      - name: make build
+        run: make build
+
+      - name: make pkg (deb + rpm)
+        run: make pkg
+
+      - name: make sbom
+        run: make sbom
+
+      # `make build` кладёт бинари в <module>/bin/<name> без arch-суффикса.
+      # Раскладываем их в dist/release-assets/ с *-linux-amd64-именами для
+      # релиза (раннер = linux-amd64, бинари из `make build` именно такие).
+      # soul-trial из build НЕ публикуется (внутренний trial-харнесс).
+      - name: Stage release binaries
+        run: |
+          set -euo pipefail
+          mkdir -p dist/release-assets
+          cp keeper/bin/keeper        dist/release-assets/keeper-linux-amd64
+          cp soul/bin/soul            dist/release-assets/soul-linux-amd64
+          cp soul-lint/bin/soul-lint  dist/release-assets/soul-lint-linux-amd64
+          cp soulctl/bin/soulctl      dist/release-assets/soulctl-linux-amd64
+          ls -l dist/release-assets dist/pkg dist/sbom
+
+      # Prerelease для пред-релизных тегов: имя содержит `-beta` или `-rc`
+      # (например v0.1.0-beta.1, v1.2.0-rc.1). Стабильный тег (v1.2.0) → обычный
+      # релиз. softprops/action-gh-release принимает prerelease как boolean-строку.
+      - name: Determine prerelease flag
+        id: prerelease
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if [[ "$tag" == *-beta* || "$tag" == *-rc* ]]; then
+            echo "value=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # Тег и имя релиза = пушнутый тег. Тело генерируется автоматически из
+          # коммитов между тегами.
+          generate_release_notes: true
+          prerelease: ${{ steps.prerelease.outputs.value }}
+          files: |
+            dist/release-assets/keeper-linux-amd64
+            dist/release-assets/soul-linux-amd64
+            dist/release-assets/soul-lint-linux-amd64
+            dist/release-assets/soulctl-linux-amd64
+            dist/pkg/*.deb
+            dist/pkg/*.rpm
+            dist/sbom/*.cdx.json
+
+# TODO (P0-остаток): docker build+push в registry + cosign keyless-подпись
+# образов — после выбора registry; см. docs/prod-readiness.md. Здесь добавятся
+# шаги docker/login-action + docker/build-push-action + sigstore/cosign-installer
+# (cosign sign --yes <image>@<digest>, keyless через OIDC-токен этого workflow).

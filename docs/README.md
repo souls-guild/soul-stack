@@ -124,7 +124,7 @@
 | [security/threat-model.md](security/threat-model.md) | **Threat-model** кластера Keeper + флота Souls: активы, актёры / поверхности / границы, остаточные риски, требования к окружению. Reference; документирует уже-реализованные механизмы, новых решений не вводит. |
 | [module-collections.md](module-collections.md) | Коллекции модулей как сущность: feature backlog и open Q (имя, дистрибуция, RBAC, signing, push-кеш). |
 | [testing/](testing/README.md) | Индекс уровней тестирования (L0–L4); нормативная спека L3a — [testing/e2e.md](testing/e2e.md). |
-| [testing/load-testing.md](testing/load-testing.md) | План нагрузочного тестирования: оси Souls/API/run, масштаб 1k–100k, harness soul-legion, фазы Ф0/Ф1/Ф2. |
+| [testing/load-testing.md](testing/load-testing.md) | План нагрузочного тестирования: оси Souls/API/run, масштаб 1k–100k, harness soul-legion, фазы Ф0/Ф1/Ф2. Ф0+Ф1 ИЗМЕРЕНЫ до 25k (§8); 100k остаётся расчётным. |
 | [dev/local-setup.md](dev/local-setup.md) | Локальный dev-стек: docker-compose (PG / Vault / Redis / OTel) + testcontainers-go для integration-тестов. |
 | [guides/plugin-author.md](guides/plugin-author.md) | **Как написать свой модуль (soul-mod-*) — указатель.** Авторитетный пошаговый гайд автора — в companion-репо `soul-stack-plugins` ([module-author-guide.md](https://github.com/co-cy/soul-stack-plugins/blob/main/docs/module-author-guide.md)); этот core-side файл — короткий ориентир: когда писать плагин vs core/scenario + указатели на core-артефакты автора (SDK `sdk/module`, `proto/plugin/v1`, ADR-011 / ADR-016 / ADR-026). |
 | [../CLAUDE.md](../CLAUDE.md) | Гайд для ИИ-агентов: правила работы, propose-and-wait, документация впереди кода, сводка решений. Каждая агентская сессия. |
@@ -140,7 +140,7 @@
 | [known-limitations.md](known-limitations.md) | Что НЕ входит в закрытую бету: cloud-provisioning без REST/MCP/UI, неполное MCP-покрытие, audit-scaling на крупных флотах, supply-chain-подпись, JWT-only identity, профиль push / recovery / Redis. Каждый пункт со ссылкой на канон — чтобы отсутствие фичи не принять за баг. |
 | [prod-readiness.md](prod-readiness.md) | **GA-gap роадмап**: что не готово для продакшена / GA (по результатам по-коду аудита). P0-блокеры (e2e-live blocking, clean-room onboarding, release-дистрибуция + cosign, Shepherd, recovery-lease live, внешний pentest, снять `continue-on-error`), P1-hardening, P2 + сильные места и доказанная нагрузка. Источник правды по GA-границам наравне с known-limitations.md; **не путать с дрейфующим roadmap.md**. |
 
-**Состояние.** MVP feature-complete: три бинаря (`keeper` / `soul` / `soul-lint`) реализованы, HA-кластер Keeper (Postgres + Redis) доказан на живом стенде; идёт подготовка к закрытой бете. Сборка / линт / тесты — таргеты [`Makefile`](../Makefile) (`make build` / `make test` / `make check`). Все архитектурные решения проходят через ADR ([adr/](adr/README.md)); документация впереди кода — изменение дизайна это правка соответствующего ADR, а не «новый код как получилось».
+**Состояние.** MVP feature-complete: три бинаря (`keeper` / `soul` / `soul-lint`) реализованы, HA-кластер Keeper (Postgres + Redis) доказан на живом стенде; **выпущена `v0.1.0-beta.1` (закрытая бета, приватные репо `souls-guild`)**. Сборка / линт / тесты — таргеты [`Makefile`](../Makefile) (`make build` / `make test` / `make check`). Все архитектурные решения проходят через ADR ([adr/](adr/README.md)); документация впереди кода — изменение дизайна это правка соответствующего ADR, а не «новый код как получилось».
 
 ---
 
