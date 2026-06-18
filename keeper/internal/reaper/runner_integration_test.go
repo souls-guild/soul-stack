@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,6 +33,8 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/redis"
 	"github.com/souls-guild/soul-stack/shared/audit"
 	"github.com/souls-guild/soul-stack/shared/config"
+	"github.com/souls-guild/soul-stack/shared/obs"
+	"github.com/souls-guild/soul-stack/shared/obs/obstest"
 )
 
 // reaperLeaderKey — копия [reaper.leaseKey], зафиксированного в
@@ -636,5 +639,205 @@ func TestIntegration_Runner_LeaseConflictBlocks(t *testing.T) {
 	// повторный Acquire от другого holder-а возвращает ErrLeaseTaken).
 	if _, err := redis.Acquire(f.ctx, f.redis, reaperLeaderKey, "probe", time.Second); err == nil {
 		t.Errorf("competing Acquire succeeded; expected ErrLeaseTaken")
+	}
+}
+
+// reclaimApplyRunsRuleYAML — блок правила reclaim_apply_runs, вставляемый в
+// runnerIntegrationYAML после purge_apply_runs. По дефолту правило ВЫКЛЮЧЕНО
+// (включается только при раскатанном attempt-fencing, см. purger.go), поэтому
+// в общий YAML оно не входит — тесты подставляют его явно с нужным enabled.
+const reclaimApplyRunsRuleYAML = `    purge_apply_runs:
+      enabled: true
+      max_age: 1ms
+      action: delete
+    reclaim_apply_runs:
+      enabled: %t
+      stale_after: 1m
+      action: set_status
+      target_status: planned
+`
+
+// withReclaimRule подставляет блок reclaim_apply_runs в runnerIntegrationYAML
+// сразу после purge_apply_runs, выставляя его enabled в нужное значение.
+func withReclaimRule(t *testing.T, enabled bool) string {
+	t.Helper()
+	const purgeApplyRunsBlock = `    purge_apply_runs:
+      enabled: true
+      max_age: 1ms
+      action: delete
+`
+	return replaceOnceStr(t, runnerIntegrationYAML, purgeApplyRunsBlock,
+		fmt.Sprintf(reclaimApplyRunsRuleYAML, enabled))
+}
+
+// seedReclaimScenario засевает на реальный PG полный набор apply_runs под
+// recovery-скан: один протухший claimed (умер ДО отдачи Soul-у — ЕДИНСТВЕННЫЙ
+// кандидат), плюс строки, которые правило НЕ должно трогать (GATE-1
+// dispatched/running с истёкшим lease + живой claimed). zombie-claimed несёт
+// attempt=1 — проверяем, что reclaim его НЕ сбрасывает (fencing-epoch). Все —
+// через общий helper seedClaimedApplyRun (integration_test.go).
+func seedReclaimScenario(t *testing.T, f *runnerIntegrationFixture) {
+	t.Helper()
+	now := time.Now().UTC()
+	expired := now.Add(-1 * time.Minute) // lease протух (holder умер)
+	alive := now.Add(10 * time.Minute)   // lease ещё живой
+
+	seedIncarnation(t, f.ctx, f.pool, "inc-reclaim")
+	// Протухший claimed — умер ДО dispatch, ЕДИНСТВЕННЫЙ реклеймится. attempt=1.
+	seedClaimedApplyRun(t, f.ctx, f.pool, "zombie-claimed", "h1.example.com", "inc-reclaim", "claimed", 1, expired)
+	// GATE-1: dispatched с протухшим lease — НЕ трогать (Soul владеет после отдачи).
+	seedClaimedApplyRun(t, f.ctx, f.pool, "dispatched-expired", "h2.example.com", "inc-reclaim", "dispatched", 2, expired)
+	// GATE-1: running с протухшим lease (vestigial) — НЕ реклеймится.
+	seedClaimedApplyRun(t, f.ctx, f.pool, "zombie-running", "h3.example.com", "inc-reclaim", "running", 3, expired)
+	// Живой claimed (lease в будущем) — НЕ реклеймится.
+	seedClaimedApplyRun(t, f.ctx, f.pool, "alive-claimed", "h4.example.com", "inc-reclaim", "claimed", 1, alive)
+}
+
+// TestIntegration_Runner_ReclaimApplyRuns_Enabled — ★ happy-path механизма
+// recovery-lease ЧЕРЕЗ РЕАЛЬНЫЙ Runner-tick (не прямой Purger-вызов): реальный
+// Runner поверх testcontainers PG+Redis с включённым reclaim_apply_runs
+// захватывает lease, диспетчит правило, и единственный протухший claimed-Ward
+// возвращается в planned со сбросом claim_by_kid/claim_at/claim_expires_at;
+// attempt СОХРАНЯЕТСЯ (fencing-epoch). Параллельно проверяет, что метрика
+// keeper_reaper_rule_purged_total{rule="reclaim_apply_runs"} выросла до 1.
+// GATE-1-строки (dispatched/running expired + живой claimed) не тронуты —
+// доказывает, что Runner-путь не отличается от прямого SQL.
+func TestIntegration_Runner_ReclaimApplyRuns_Enabled(t *testing.T) {
+	f := newRunnerIntegrationFixture(t)
+	seedReclaimScenario(t, f)
+
+	store := writeYAMLAndLoadStore(t, withReclaimRule(t, true))
+	reg := obs.NewRegistry()
+	metrics := reaper.RegisterReaperMetrics(reg)
+	rn, err := reaper.NewRunner(reaper.Deps{
+		Purger:  newRunnerExecutor(f.pool),
+		Redis:   f.redis,
+		Store:   store,
+		Holder:  "keeper-int-01",
+		Logger:  silentSlog(),
+		Metrics: metrics,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- rn.Run(ctx) }()
+
+	// Ждём, пока правило отработает хотя бы раз: признак — zombie-claimed
+	// перешёл в planned.
+	waitForCond(t, 8*time.Second, func() bool {
+		return countRow(t, f.ctx, f.pool,
+			"SELECT COUNT(*) FROM apply_runs WHERE apply_id = 'zombie-claimed' AND status = 'planned'") == 1
+	})
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Errorf("Run returned: %v", err)
+	}
+
+	// Протухший claimed реклеймнут: planned, владелец/lease сброшены, attempt
+	// СОХРАНЁН (fencing-epoch инкрементит следующий claim, не reclaim).
+	status, attempt, kid := applyRunSnapshot(t, f.ctx, f.pool, "zombie-claimed", "h1.example.com")
+	if status != "planned" {
+		t.Errorf("zombie-claimed: status = %q, want planned", status)
+	}
+	if attempt != 1 {
+		t.Errorf("zombie-claimed: attempt = %d, want 1 (NOT reset — fencing-epoch)", attempt)
+	}
+	if kid != nil {
+		t.Errorf("zombie-claimed: claim_by_kid = %v, want NULL (claim released)", *kid)
+	}
+
+	// GATE-1 через Runner-путь: dispatched / running expired не тронуты.
+	if status, _, kid := applyRunSnapshot(t, f.ctx, f.pool, "dispatched-expired", "h2.example.com"); status != "dispatched" || kid == nil {
+		t.Errorf("dispatched-expired: status=%q kid=%v; want dispatched + non-NULL kid (Soul владеет, НЕ реклеймить)", status, kid)
+	}
+	if status, _, kid := applyRunSnapshot(t, f.ctx, f.pool, "zombie-running", "h3.example.com"); status != "running" || kid == nil {
+		t.Errorf("zombie-running: status=%q kid=%v; want running + non-NULL kid (running больше не реклеймится)", status, kid)
+	}
+	// Живой claimed не тронут.
+	if status, _, kid := applyRunSnapshot(t, f.ctx, f.pool, "alive-claimed", "h4.example.com"); status != "claimed" || kid == nil {
+		t.Errorf("alive-claimed: status=%q kid=%v; want claimed + non-NULL kid (alive Ward untouched)", status, kid)
+	}
+
+	// Метрика purged_total под label rule="reclaim_apply_runs" доросла до 1
+	// (реклеймнута ровно одна строка). Exposition-формат печатает значение
+	// после пробела: `...{rule="reclaim_apply_runs"} 1`.
+	body := obstest.Scrape(t, reg.Gatherer())
+	if !strings.Contains(body, `keeper_reaper_rule_purged_total{rule="reclaim_apply_runs"} 1`) {
+		t.Errorf("purged_total for reclaim_apply_runs != 1 (реклеймнута 1 строка); got=\n%s", body)
+	}
+	if !strings.Contains(body, `keeper_reaper_rule_executions_total{rule="reclaim_apply_runs"}`) {
+		t.Errorf("executions_total missing for reclaim_apply_runs; got=\n%s", body)
+	}
+}
+
+// TestIntegration_Runner_ReclaimApplyRuns_Disabled — ★ negative (disabled)
+// ЧЕРЕЗ РЕАЛЬНЫЙ Runner-tick: при reclaim_apply_runs enabled:false правило не
+// диспетчится, поэтому протухший claimed-Ward остаётся claimed (НЕ возвращается
+// в planned) и его владелец/lease сохранены. Доказывает, что default-OFF
+// реально защищает от recovery до раскатки attempt-fencing на SQL-уровне (а не
+// только на fakePurger). Прочие правила (включённые в YAML) отрабатывают, что
+// гарантирует: Runner крутился и tick случился — отсутствие реклейма не из-за
+// того, что loop не запустился.
+func TestIntegration_Runner_ReclaimApplyRuns_Disabled(t *testing.T) {
+	f := newRunnerIntegrationFixture(t)
+	seedReclaimScenario(t, f)
+
+	// Маркерная audit-запись: правило purge_audit_old (max_age=1ms) её снесёт —
+	// признак, что Runner реально провёл хотя бы один tick.
+	if _, err := f.pool.Exec(f.ctx,
+		`INSERT INTO audit_log (audit_id, created_at, event_type, source, payload)
+		 VALUES ($1, $2, 'config.reload_succeeded', 'signal', '{}'::jsonb)`,
+		audit.NewULID(), time.Now().UTC().Add(-30*24*time.Hour)); err != nil {
+		t.Fatalf("seed audit marker: %v", err)
+	}
+
+	store := writeYAMLAndLoadStore(t, withReclaimRule(t, false))
+	rn, err := reaper.NewRunner(reaper.Deps{
+		Purger: newRunnerExecutor(f.pool),
+		Redis:  f.redis,
+		Store:  store,
+		Holder: "keeper-int-01",
+		Logger: silentSlog(),
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- rn.Run(ctx) }()
+
+	// Ждём доказательства, что tick случился: маркерная audit-запись снесена
+	// включённым purge_audit_old.
+	waitForCond(t, 8*time.Second, func() bool {
+		return countRow(t, f.ctx, f.pool, "SELECT COUNT(*) FROM audit_log") == 0
+	})
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Errorf("Run returned: %v", err)
+	}
+
+	// reclaim_apply_runs disabled → протухший claimed НЕ тронут даже после
+	// прошедшего tick-а: остаётся claimed с прежним владельцем и attempt.
+	status, attempt, kid := applyRunSnapshot(t, f.ctx, f.pool, "zombie-claimed", "h1.example.com")
+	if status != "claimed" {
+		t.Errorf("zombie-claimed: status = %q, want claimed (правило disabled — НЕ реклеймить)", status)
+	}
+	if attempt != 1 {
+		t.Errorf("zombie-claimed: attempt = %d, want 1 (не тронут)", attempt)
+	}
+	if kid == nil {
+		t.Errorf("zombie-claimed: claim_by_kid = NULL, want non-NULL (правило disabled — claim сохранён)")
+	}
+	// Ни одна строка не должна стать planned из-за reclaim.
+	if got := countRow(t, f.ctx, f.pool, "SELECT COUNT(*) FROM apply_runs WHERE status = 'planned'"); got != 0 {
+		t.Errorf("planned rows = %d, want 0 (reclaim disabled — claimed не двигается)", got)
 	}
 }
