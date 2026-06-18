@@ -20,7 +20,6 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 	"github.com/souls-guild/soul-stack/keeper/internal/scenario"
 )
 
@@ -80,10 +79,14 @@ type incListInput struct {
 	SortDir string `query:"sort_dir" doc:"направление сортировки (asc/desc)"`
 }
 
-// incListOutput — huma-output GET /v1/incarnations (FULL-TYPED). Body — typed envelope
-// (handlers.IncarnationListReply: items/offset/limit/total). Byte-exact с legacy.
+// incListOutput — huma-output GET /v1/incarnations (FULL-TYPED). Body — TAGGED native
+// envelope incarnationListReply (items.$ref на native IncarnationGetReply с json-тегами:
+// snake_case-wire). Прежде Body был handlers.IncarnationListReply (= PagedResponse[
+// IncarnationGetView]) — untagged View → PascalCase-wire (контракт-баг #7). Register-func
+// проецирует reply.Items через newIncarnationGetReply. Схема OpenAPI не меняется (та же
+// alias-цель incarnationListReply).
 type incListOutput struct {
-	Body handlers.IncarnationListReply
+	Body incarnationListReply
 }
 
 func incListOperation() huma.Operation {
@@ -138,9 +141,13 @@ type incHistoryInput struct {
 }
 
 // incHistoryOutput — huma-output GET /v1/incarnations/{name}/history (FULL-TYPED). Body
-// — typed envelope (handlers.IncarnationHistoryReply). Byte-exact с legacy.
+// — TAGGED native envelope incarnationHistoryReply (items.$ref на native StateHistoryEntry
+// с json-тегами: snake_case-wire). Прежде Body был handlers.IncarnationHistoryReply (=
+// PagedResponse[StateHistoryView]) — untagged View → PascalCase-wire (контракт-баг #7).
+// Register-func проецирует reply.Items через newStateHistoryEntry. Схема OpenAPI не
+// меняется (та же alias-цель incarnationHistoryReply).
 type incHistoryOutput struct {
-	Body handlers.IncarnationHistoryReply
+	Body incarnationHistoryReply
 }
 
 func incHistoryOperation() huma.Operation {

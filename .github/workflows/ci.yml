@@ -176,14 +176,17 @@ jobs:
   # инфра (заранее поднятый Vault/Redis-cluster и т.п.), должны сами скипаться по
   # отсутствию окружения (t.Skip). Если такой тест жёстко падает в чистом CI —
   # это сигнал автору теста добавить skip-guard, а не повод чинить workflow.
-  # Job informational (continue-on-error), не блокирует merge.
+  # Job BLOCKING: integration входит в required-гейт (P0-7).
+  #
+  # Прежняя пометка «6 flaky» была неверной: это были НЕ флапы, а детерминированные
+  # test↔contract рассинхроны (history-тесты) + контракт-баг PascalCase-wire в трёх
+  # list/history-ручках (untagged доменный *View уходил в Body, минуя проекцию →
+  # PascalCase JSON-ключи вместо snake_case схемы). Все шесть починены детерминированно
+  # (4 устаревших test↔contract + 2 history) + guard TestIntegration_ListEndpoints_
+  # SnakeCaseWire ловит весь класс на будущее → continue-on-error снят.
   integration:
     name: integration tests (testcontainers)
     runs-on: ubuntu-latest
-    # continue-on-error до стабилизации 6 flaky (P1, docs/prod-readiness.md):
-    # order-dependent / auth-race в keeper/internal/api. Снятие СЕЙЧАС = красный
-    # CI на флапах. Убрать после карантина flaky → integration станет blocking (P0-7).
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v6

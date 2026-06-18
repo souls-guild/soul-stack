@@ -28,7 +28,6 @@ import (
 // envelope / byte-passthrough typed_facts сохраняются).
 type (
 	soulCovenAssignReplyBody = handlers.SoulCovenAssignResponse
-	soulListReplyBody        = handlers.SoulListReply
 	soulSoulprintReplyBody   = handlers.SoulprintReadReply
 )
 
@@ -235,10 +234,15 @@ type soulListInput struct {
 	Limit     int32  `query:"limit" default:"50" doc:"размер страницы 1..1000 (out-of-range → 400)"`
 }
 
-// soulListOutput — huma-output GET /v1/souls (FULL-TYPED). Body — typed 200-envelope
-// (handlers.SoulListReply: items/offset/limit/total[/total_approximate/next_cursor]).
+// soulListOutput — huma-output GET /v1/souls (FULL-TYPED). Body — TAGGED native envelope
+// soulListReply (CURSOR, 6 полей: items.$ref на native SoulListEntry с json-тегами +
+// next_cursor/total_approximate omitempty). Прежде Body был handlers.SoulListReply (=
+// PagedResponse[SoulListView]) — untagged View → PascalCase-wire (контракт-баг #7).
+// Register-func проецирует reply.Items через newSoulListEntry и ПЕРЕНОСИТ cursor-поля
+// (next_cursor/total_approximate) byte-exact. Схема OpenAPI не меняется (та же alias-цель
+// soulListReply).
 type soulListOutput struct {
-	Body soulListReplyBody
+	Body soulListReply
 }
 
 // soulListOperation — метаданные GET /v1/souls. Path = "/" относительно chi-группы /v1/souls.

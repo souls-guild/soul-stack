@@ -173,7 +173,25 @@ func registerHumaSoulList(humaAPI huma.API, soulH *handlers.SoulHandler) {
 		if err != nil {
 			return nil, soulProblem(err)
 		}
-		return &soulListOutput{Body: reply}, nil
+		items := make([]SoulListEntry, len(reply.Items))
+		for i := range reply.Items {
+			items[i] = newSoulListEntry(reply.Items[i])
+		}
+		out := soulListReply{
+			Items:      items,
+			Offset:     int32(reply.Offset),
+			Limit:      int32(reply.Limit),
+			Total:      int32(reply.Total),
+			NextCursor: reply.NextCursor,
+		}
+		// total_approximate — omitempty в обоих формах: keyset-режим даёт true →
+		// *bool(&true) (ключ present), offset-режим false → nil (ключ опущен,
+		// byte-exact с PagedResponse.TotalApproximate `bool omitempty`).
+		if reply.TotalApproximate {
+			ta := true
+			out.TotalApproximate = &ta
+		}
+		return &soulListOutput{Body: out}, nil
 	})
 }
 

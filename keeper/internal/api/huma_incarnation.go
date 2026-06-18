@@ -267,7 +267,16 @@ func registerHumaIncarnationList(humaAPI huma.API, incH *handlers.IncarnationHan
 		if err != nil {
 			return nil, incProblem(err)
 		}
-		return &incListOutput{Body: reply}, nil
+		items := make([]IncarnationGetReply, len(reply.Items))
+		for i := range reply.Items {
+			items[i] = newIncarnationGetReply(reply.Items[i])
+		}
+		return &incListOutput{Body: incarnationListReply{
+			Items:  items,
+			Offset: int32(reply.Offset),
+			Limit:  int32(reply.Limit),
+			Total:  int32(reply.Total),
+		}}, nil
 	})
 }
 
@@ -284,7 +293,16 @@ func registerHumaIncarnationHistory(humaAPI huma.API, incH *handlers.Incarnation
 		if err != nil {
 			return nil, incProblem(err)
 		}
-		return &incHistoryOutput{Body: reply}, nil
+		items := make([]StateHistoryEntry, len(reply.Items))
+		for i := range reply.Items {
+			items[i] = newStateHistoryEntry(reply.Items[i])
+		}
+		return &incHistoryOutput{Body: incarnationHistoryReply{
+			Items:  items,
+			Offset: int32(reply.Offset),
+			Limit:  int32(reply.Limit),
+			Total:  int32(reply.Total),
+		}}, nil
 	})
 }
 

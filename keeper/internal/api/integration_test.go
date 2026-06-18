@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -1256,6 +1257,22 @@ func TestIntegration_Incarnation_List_200(t *testing.T) {
 		t.Errorf("Total=%d len=%d, want 3/3", out.Total, len(out.Items))
 	}
 
+	// GUARD контракт-wire: items[]-элемент несёт snake_case-ключи (схема OpenAPI
+	// snake_case), НЕ PascalCase доменного *View. Positive — ключ присутствует;
+	// negative — PascalCase-двойник ОТСУТСТВУЕТ (без него тест зелёный при двойном
+	// присутствии обоих ключей). Регрессия: list-Body сериализовался через untagged
+	// IncarnationGetView → ApplyID/CreatedAt-ключи (контракт-баг #7).
+	first := out.Items[0]
+	if _, ok := first["created_at"]; !ok {
+		t.Errorf("items[0] missing snake_case ключ 'created_at': %v", first)
+	}
+	if _, ok := first["CreatedAt"]; ok {
+		t.Fatalf("items[0] несёт PascalCase ключ 'CreatedAt' (контракт-wire сломан): %v", first)
+	}
+	if _, ok := first["StateSchemaVersion"]; ok {
+		t.Fatalf("items[0] несёт PascalCase ключ 'StateSchemaVersion' (контракт-wire сломан): %v", first)
+	}
+
 	// service-filter.
 	req2, _ := http.NewRequest(http.MethodGet, base+"/v1/incarnations?service=redis", nil)
 	req2.Header.Set("Authorization", "Bearer "+tok)
@@ -1353,6 +1370,17 @@ VALUES ('01HFIRST', 'redis-test', 'create', '{}', '{"x":1}', 'archon-alice', '01
 	}
 	if out.Items[0]["history_id"] != "01HFIRST" {
 		t.Errorf("items[0].history_id = %v", out.Items[0]["history_id"])
+	}
+	// GUARD контракт-wire: positive snake_case + negative PascalCase-двойник
+	// (untagged StateHistoryView дал бы HistoryID/ApplyID — контракт-баг #7).
+	if _, ok := out.Items[0]["apply_id"]; !ok {
+		t.Errorf("items[0] missing snake_case ключ 'apply_id': %v", out.Items[0])
+	}
+	if _, ok := out.Items[0]["HistoryID"]; ok {
+		t.Fatalf("items[0] несёт PascalCase ключ 'HistoryID' (контракт-wire сломан): %v", out.Items[0])
+	}
+	if _, ok := out.Items[0]["ApplyID"]; ok {
+		t.Fatalf("items[0] несёт PascalCase ключ 'ApplyID' (контракт-wire сломан): %v", out.Items[0])
 	}
 	// Timestamp обязан быть заполнен и парситься как RFC3339 (state_history.at
 	// через DEFAULT NOW()). Wire-ключ — created_at (общий с остальным Operator
@@ -1472,6 +1500,97 @@ func TestIntegration_Incarnation_History_404(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// snakeCaseKeyRe — контрактный wire-формат JSON-ключа (snake_case): начинается со
+// строчной буквы, дальше [a-z0-9_]. Любая заглавная (PascalCase untagged-View) → fail.
+var snakeCaseKeyRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+// TestIntegration_ListEndpoints_SnakeCaseWire — guard класса контракт-wire: для
+// каждой paged-list-ручки первый items[]-элемент обязан нести ТОЛЬКО snake_case
+// ключи (схема OpenAPI snake_case). Ловит весь класс «доменный *View без json-тегов
+// уходит в Body напрямую, минуя проекцию → PascalCase-ключи» (контракт-баг #7) и для
+// будущих list-ручек тоже. Каждый sub-test сидит свои данные изолированно.
+func TestIntegration_ListEndpoints_SnakeCaseWire(t *testing.T) {
+	cases := []struct {
+		name  string
+		rbac  *rbactest.Config
+		seed  func(t *testing.T)
+		path  string
+		minOk int // минимум ожидаемых items (>=1 — иначе guard вхолостую)
+	}{
+		{
+			name: "incarnation_list",
+			rbac: adminRBAC(),
+			seed: func(t *testing.T) {
+				seedIncarnation(t, "redis-a", "redis", "archon-alice")
+			},
+			path:  "/v1/incarnations",
+			minOk: 1,
+		},
+		{
+			name: "incarnation_history",
+			rbac: adminRBAC(),
+			seed: func(t *testing.T) {
+				seedIncarnation(t, "redis-h", "redis", "archon-alice")
+				if _, err := integrationPool.Exec(context.Background(), `
+INSERT INTO state_history (history_id, incarnation_name, scenario,
+    state_before, state_after, changed_by_aid, apply_id)
+VALUES ('01HHIST000000000000000000A', 'redis-h', 'create', '{}', '{"x":1}', 'archon-alice', '01HAPPLY00000000000000000A')`); err != nil {
+					t.Fatalf("seed history: %v", err)
+				}
+			},
+			path:  "/v1/incarnations/redis-h/history",
+			minOk: 1,
+		},
+		{
+			name: "soul_list",
+			rbac: soulRBAC(),
+			seed: func(t *testing.T) {
+				seedSoulFull(t, "redis-01.example.com", "agent", soul.StatusConnected, []string{"redis-prod"}, "archon-alice")
+			},
+			path:  "/v1/souls",
+			minOk: 1,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			truncateOperators(t)
+			seedOperator(t, "archon-alice", "")
+			tc.seed(t)
+
+			base, stop := startServer(t, tc.rbac)
+			defer stop()
+
+			tok := newValidTokenFor(t, "archon-alice", []string{"cluster-admin"})
+			req, _ := http.NewRequest(http.MethodGet, base+tc.path, nil)
+			req.Header.Set("Authorization", "Bearer "+tok)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("Do: %v", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				raw, _ := io.ReadAll(resp.Body)
+				t.Fatalf("status = %d, body=%s", resp.StatusCode, raw)
+			}
+			var out struct {
+				Items []map[string]any `json:"items"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if len(out.Items) < tc.minOk {
+				t.Fatalf("items len = %d, want >= %d (guard вхолостую без элемента)", len(out.Items), tc.minOk)
+			}
+			for key := range out.Items[0] {
+				if !snakeCaseKeyRe.MatchString(key) {
+					t.Errorf("items[0] ключ %q не snake_case (контракт-wire сломан): %v", key, out.Items[0])
+				}
+			}
+		})
 	}
 }
 
@@ -2082,6 +2201,23 @@ func TestIntegration_Soul_List_200_Filters(t *testing.T) {
 	// Без фильтра — 3.
 	if total, items := listSouls(t, base, tok, ""); total != 3 || items != 3 {
 		t.Errorf("no filter: total=%d items=%d, want 3/3", total, items)
+	}
+
+	// GUARD контракт-wire: items[]-элемент soul-list несёт snake_case-ключи
+	// (sid/last_seen_at/registered_at), НЕ PascalCase доменного SoulListView.
+	// Positive — ключ present; negative — PascalCase-двойник ОТСУТСТВУЕТ.
+	// Регрессия: list-Body сериализовался через untagged SoulListView →
+	// SID/LastSeenAt/RegisteredAt-ключи (контракт-баг #7).
+	first := firstSoulItem(t, base, tok)
+	for _, key := range []string{"sid", "last_seen_at", "registered_at"} {
+		if _, ok := first[key]; !ok {
+			t.Errorf("items[0] missing snake_case ключ %q: %v", key, first)
+		}
+	}
+	for _, key := range []string{"SID", "LastSeenAt", "RegisteredAt"} {
+		if _, ok := first[key]; ok {
+			t.Fatalf("items[0] несёт PascalCase ключ %q (контракт-wire сломан): %v", key, first)
+		}
 	}
 	// coven=redis-prod → 2.
 	if total, items := listSouls(t, base, tok, "coven=redis-prod"); total != 2 || items != 2 {
@@ -3097,6 +3233,33 @@ func listSouls(t *testing.T, base, tok, query string) (total, items int) {
 		t.Fatalf("listSouls(%q): decode: %v", query, err)
 	}
 	return out.Total, len(out.Items)
+}
+
+// firstSoulItem возвращает первый items[]-элемент GET /v1/souls как raw-map (для
+// guard-ассертов wire-ключей). Fatal, если список пуст.
+func firstSoulItem(t *testing.T, base, tok string) map[string]any {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, base+"/v1/souls", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("firstSoulItem: Do: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("firstSoulItem: status = %d, body=%s", resp.StatusCode, raw)
+	}
+	var out struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("firstSoulItem: decode: %v", err)
+	}
+	if len(out.Items) == 0 {
+		t.Fatalf("firstSoulItem: пустой список souls")
+	}
+	return out.Items[0]
 }
 
 // seedSoulFull вставляет souls-row с произвольными status / coven (для
