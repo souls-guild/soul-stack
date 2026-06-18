@@ -3,7 +3,7 @@ module github.com/souls-guild/soul-stack/tests/e2e
 go 1.26.4
 
 require (
-	github.com/jackc/pgx/v5 v5.9.2
+	github.com/jackc/pgx/v5 v5.10.0
 	github.com/souls-guild/soul-stack/proto v0.0.0
 	github.com/testcontainers/testcontainers-go v0.42.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.42.0
