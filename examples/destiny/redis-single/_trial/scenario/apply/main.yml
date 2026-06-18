@@ -1,7 +1,7 @@
 # L0-харнесс destiny redis-single (Trial, ADR-023). Минимальный scenario, чья
 # единственная задача — apply:destiny redis-single, чтобы дать destiny render-only
 # L0. Каноническая раскладка обёртки (ADR-023): подкаталог самой destiny —
-# `destiny-redis-single/_trial/scenario/apply/`. Резолвер L0 зеркалит прод
+# `redis-single/_trial/scenario/apply/`. Резолвер L0 зеркалит прод
 # (slice A, ADR-023): apply:destiny резолвится по имени из
 # `_trial/service.yml::destiny[]` + URL из `default_destiny_source` тест-кейса.
 name: apply

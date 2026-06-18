@@ -1,0 +1,34 @@
+# L2-кейс (docker systemd-PID1 стенд, Trial ADR-023). Build-tag integration.
+#
+# Доказывает путь reload→новое-определение ДЕТЕРМИНИРОВАННО, независимо от
+# NeedDaemonReload-флага: daemon_reload=always делает безусловный daemon-reload
+# перед restart. Если фикс работает — применяется НОВОЕ определение (ExecStart=…2000).
+# Дополняет auto-reload (на случай env-артефактов с flag-flip), сам флаг тут не
+# участвует.
+name: always-reload
+description: |
+  E2E daemon-reload (always): core.service.restarted(daemon_reload=always) делает
+  безусловный reload → применяется v2 независимо от NeedDaemonReload.
+
+stand:
+  driver: docker
+  image:  debian:12-slim
+  mode:   push
+  init:   systemd
+
+input:
+  unit:        reload-probe
+  reload_mode: always
+
+# restarted всегда changed=true → повторный apply не идемпотентен.
+expect_idempotent: false
+
+verify:
+  - name: execstart-is-v2
+    apply:
+      module: core.cmd.shell
+      params:
+        cmd: "systemctl show reload-probe -p ExecStart --value"
+    expect:
+      exit_code: 0
+      stdout_contains: "2000"

@@ -29,5 +29,5 @@ func TestE2EServiceNoop_Create(t *testing.T) {
 	stack.AssertAuditEvent(t, "incarnation.scenario_started", map[string]any{
 		"apply_id": applyID,
 	})
-	stack.AssertMetricGE(t, `keeper_apply_runs_total{status="success"}`, 1)
+	stack.AssertMetricGE(t, `keeper_scenario_runs_total{result="ok"}`, 1)
 }

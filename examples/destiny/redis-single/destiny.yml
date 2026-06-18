@@ -12,7 +12,7 @@ description: Install Redis from the distro package manager and render redis.conf
 #
 # Имя destiny — redis-single (одиночный Redis из дистрибутивного пакета), чтобы
 # не коллидировать ни с именем демона/systemd-юнита redis-server, ни с уже
-# существующей examples/destiny/destiny-redis/ (другой destiny — redis-кластер с
+# существующей examples/destiny/redis/ (другой destiny — redis-кластер с
 # action-DSL).
 
 input:

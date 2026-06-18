@@ -14,6 +14,9 @@
 # ключевой, не cardinality).
 #
 # metrics — Prometheus-expression → constraint-строка ('>= 1' / '== 0' / ...).
+# keeper_scenario_runs_total{result="ok"} — реальная метрика успешного прогона
+# scenario (keeper/internal/scenario/metrics.go). Метрики keeper_apply_runs_total
+# в коде нет.
 apply_runs:
   status: success
 
@@ -27,4 +30,4 @@ audit_events:
       incarnation: test-nginx
 
 metrics:
-  keeper_apply_runs_total{status="success"}: ">= 1"
+  keeper_scenario_runs_total{result="ok"}: ">= 1"

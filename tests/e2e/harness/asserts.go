@@ -190,7 +190,7 @@ func (s *Stack) AssertAuditEvent(t *testing.T, eventType string, expectedPayload
 // Stack.MetricsURL) и проверяет, что значение метрики `metric` >= минимума.
 //
 // metric — Prometheus-выражение из expectations.yaml вида
-// `keeper_apply_runs_total{status="success"}` или bare-name `keeper_xxx_total`.
+// `keeper_scenario_runs_total{result="ok"}` или bare-name `keeper_xxx_total`.
 // Поддерживается только сумма по матчящим строкам (counter/gauge); histogram-
 // decomposition в MVP не нужен.
 func (s *Stack) AssertMetricGE(t *testing.T, metric string, minimum float64) {

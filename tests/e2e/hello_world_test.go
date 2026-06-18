@@ -12,7 +12,7 @@
 //     - incarnation.state.greeting_file == "/tmp/soul-stack-hello"
 //       (берётся state_changes.sets из scenario/create/main.yml);
 //     - audit_log: incarnation.scenario_started с apply_id;
-//     - metrics: keeper_apply_runs_total{status="success"} >= 1.
+//     - metrics: keeper_scenario_runs_total{result="ok"} >= 1.
 package e2e_test
 
 import (
@@ -44,5 +44,5 @@ func TestE2EServiceHelloWorld_Create(t *testing.T) {
 	stack.AssertAuditEvent(t, "incarnation.scenario_started", map[string]any{
 		"apply_id": applyID,
 	})
-	stack.AssertMetricGE(t, `keeper_apply_runs_total{status="success"}`, 1)
+	stack.AssertMetricGE(t, `keeper_scenario_runs_total{result="ok"}`, 1)
 }

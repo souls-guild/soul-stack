@@ -11,7 +11,7 @@ description: |
 
 # ─── Стенд ────────────────────────────────────────────────────────────────────
 # Формат блока `stand:` — open Q №3 в docs/destiny/testing.md. Здесь —
-# иллюстративный минимум: docker, ubuntu, push-режим (как destiny-redis).
+# иллюстративный минимум: docker, ubuntu, push-режим (как redis).
 stand:
   driver: docker
   image:  ubuntu:24.04
