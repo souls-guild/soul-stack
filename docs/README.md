@@ -138,6 +138,7 @@
 | Документ | Что это |
 |---|---|
 | [known-limitations.md](known-limitations.md) | Что НЕ входит в закрытую бету: cloud-provisioning без REST/MCP/UI, неполное MCP-покрытие, audit-scaling на крупных флотах, supply-chain-подпись, JWT-only identity, профиль push / recovery / Redis. Каждый пункт со ссылкой на канон — чтобы отсутствие фичи не принять за баг. |
+| [prod-readiness.md](prod-readiness.md) | **GA-gap роадмап**: что не готово для продакшена / GA (по результатам по-коду аудита). P0-блокеры (e2e-live blocking, clean-room onboarding, release-дистрибуция + cosign, Shepherd, recovery-lease live, внешний pentest, снять `continue-on-error`), P1-hardening, P2 + сильные места и доказанная нагрузка. Источник правды по GA-границам наравне с known-limitations.md; **не путать с дрейфующим roadmap.md**. |
 
 **Состояние.** MVP feature-complete: три бинаря (`keeper` / `soul` / `soul-lint`) реализованы, HA-кластер Keeper (Postgres + Redis) доказан на живом стенде; идёт подготовка к закрытой бете. Сборка / линт / тесты — таргеты [`Makefile`](../Makefile) (`make build` / `make test` / `make check`). Все архитектурные решения проходят через ADR ([adr/](adr/README.md)); документация впереди кода — изменение дизайна это правка соответствующего ADR, а не «новый код как получилось».
 
