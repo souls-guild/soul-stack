@@ -477,7 +477,12 @@ func TestIntegration_OpenAPI_200(t *testing.T) {
 	base, stop := startServer(t, nil)
 	defer stop()
 
-	resp, err := http.Get(base + "/openapi.yaml")
+	// GET /openapi.yaml — ЗА JWT (ADR-054 doc-viewer / router.go): спека больше не
+	// публична, /docs фетчит её с Bearer-заголовком. Без токена → 401, поэтому шлём
+	// валидный JWT (как UI).
+	req, _ := http.NewRequest(http.MethodGet, base+"/openapi.yaml", nil)
+	req.Header.Set("Authorization", "Bearer "+newValidToken(t))
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("GET /openapi.yaml: %v", err)
 	}
@@ -489,11 +494,13 @@ func TestIntegration_OpenAPI_200(t *testing.T) {
 		t.Errorf("Content-Type = %q, want application/yaml prefix", got)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	// Спека намеренно на OpenAPI 3.0.3 (а не 3.1): oapi-codegen v2 не держит 3.1,
-	// эпик OpenAPI-codegen даунгрейднул docs/keeper/openapi.yaml до 3.0.3.
-	// Эндпоинт отдаёт этот файл как есть — тест проверяет фактическую версию.
-	if !strings.HasPrefix(string(body), "openapi: 3.0.3") {
-		t.Errorf("body не похож на OpenAPI 3.0.3 spec; first 64 bytes: %q", string(body[:min(64, len(body))]))
+	// Served-эндпоинт отдаёт runtime-дамп huma-агрегатора (servedOpenAPIHandler) —
+	// это OpenAPI 3.1.0. Committed docs/keeper/openapi.yaml (3.0.3 для oapi-codegen)
+	// — производный снимок для UI-vendor, НЕ served. huma .YAML() сортирует ключи
+	// верхнего уровня по алфавиту (components/info/openapi/paths…), поэтому
+	// `openapi: 3.1.0` НЕ первая строка — ищем версию строкой по всему документу.
+	if !strings.Contains(string(body), "openapi: 3.1.0") {
+		t.Errorf("body не содержит маркер OpenAPI 3.1.0; first 64 bytes: %q", string(body[:min(64, len(body))]))
 	}
 }
 
@@ -781,8 +788,12 @@ func TestIntegration_Operator_Revoke_SingleAdmin_409Lockout(t *testing.T) {
 	defer stop()
 
 	tok := newValidTokenFor(t, "archon-alice", []string{"cluster-admin"})
-	req, _ := http.NewRequest(http.MethodPost, base+"/v1/operators/archon-alice/revoke", nil)
+	// revoke-контракт требует requestBody (committed openapi.yaml →
+	// requestBody.required: true; единственное поле reason — optional). Пустой
+	// JSON-объект удовлетворяет huma-валидацию, не задавая reason.
+	req, _ := http.NewRequest(http.MethodPost, base+"/v1/operators/archon-alice/revoke", bytesReader(`{}`))
 	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("Do: %v", err)
@@ -953,8 +964,11 @@ func TestIntegration_Operator_Revoke_AlreadyRevoked_409(t *testing.T) {
 	defer stop()
 
 	tok := newValidTokenFor(t, "archon-alice", []string{"cluster-admin"})
-	req, _ := http.NewRequest(http.MethodPost, base+"/v1/operators/archon-bob/revoke", nil)
+	// revoke-контракт требует requestBody (см. Revoke_SingleAdmin); пустой JSON-
+	// объект проходит валидацию, reason не задаётся.
+	req, _ := http.NewRequest(http.MethodPost, base+"/v1/operators/archon-bob/revoke", bytesReader(`{}`))
 	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("Do: %v", err)
@@ -1461,9 +1475,11 @@ func TestIntegration_Incarnation_History_404(t *testing.T) {
 	}
 }
 
-// TestIntegration_Incarnation_Create_BodyTooLarge_400 — body > v1RequestBodyLimit
-// (1 MiB) → MaxBytesReader → 400 problem+json (qa coverage gap M0.6c-1).
-func TestIntegration_Incarnation_Create_BodyTooLarge_400(t *testing.T) {
+// TestIntegration_Incarnation_Create_BodyTooLarge_413 — body > v1RequestBodyLimit
+// (1 MiB). huma-роут (incarnation Create мигрирован на huma) сам ограничивает тело
+// и на превышении отдаёт RFC-корректный 413 Payload Too Large (huma v2:
+// "request body is too large limit=… bytes"), а не 400. Тест проверяет именно 413.
+func TestIntegration_Incarnation_Create_BodyTooLarge_413(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-alice", "")
 
@@ -1482,9 +1498,9 @@ func TestIntegration_Incarnation_Create_BodyTooLarge_400(t *testing.T) {
 		t.Fatalf("Do: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
 		raw, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status = %d, want 400, body=%s", resp.StatusCode, raw)
+		t.Fatalf("status = %d, want 413, body=%s", resp.StatusCode, raw)
 	}
 }
 
