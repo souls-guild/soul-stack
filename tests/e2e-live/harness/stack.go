@@ -215,6 +215,12 @@ func NewStack(t *testing.T, cfg Config) *Stack {
 		t.Fatalf("NewStack: keeper run: %v", err)
 	}
 
+	// Service-registration (L3b-3): материализует cfg.ExamplePath в per-test
+	// git-репо и регистрирует cfg.ServiceName@main через POST /v1/services. Без
+	// этого CreateIncarnation отвечает 422 «service is not registered» (ADR-029).
+	// Порядок к soul-spawn-у не привязан — соул для регистрации не нужен.
+	s.registerExampleService(t)
+
 	// soul-container spawn (L3b-2): по одному privileged Debian-12 systemd-PID-1
 	// контейнеру на каждый запрошенный Soul. Имена детерминированные —
 	// `soul-live-<idx>.example.com` (PKI-role soul-seed разрешает example.com).
@@ -369,8 +375,23 @@ func (s *Stack) runKeeperInit(keeperYAMLPath string) string {
 // как HTTP-listener начнёт отвечать (поллинг /readyz).
 func (s *Stack) startKeeperRun(keeperYAMLPath string) error {
 	binaryPath := keeperBinaryPath(s.t)
+	// Service/destiny git-снапшоты artifact-loader-а кешируются в каталоге,
+	// дефолт которого `/var/lib/soul-stack-keeper/...` (не writable: keeper в L3b
+	// бежит на ХОСТЕ под обычным юзером). Перенаправляем в tmpDir через env-
+	// override (KEEPER_SERVICE_CACHE_DIR / KEEPER_DESTINY_CACHE_DIR /
+	// KEEPER_PLUGIN_WORK_DIR — см. cmd/keeper/main.go). Без этого load service
+	// при CreateIncarnation падает 500 «mkdir /var/lib/...: permission denied»
+	// на материализации service-снапшота из file://-репо (parity L3a).
+	serviceCacheDir := filepath.Join(s.tmpDir, "service-cache")
+	destinyCacheDir := filepath.Join(s.tmpDir, "destiny-cache")
+	pluginWorkDir := filepath.Join(s.tmpDir, "plugin-src")
 	cmd := exec.Command(binaryPath, "run", "--config", keeperYAMLPath)
-	cmd.Env = append(os.Environ(), "SOUL_STACK_ALLOW_FILE_REPOS=1")
+	cmd.Env = append(os.Environ(),
+		"SOUL_STACK_ALLOW_FILE_REPOS=1",
+		"KEEPER_SERVICE_CACHE_DIR="+serviceCacheDir,
+		"KEEPER_DESTINY_CACHE_DIR="+destinyCacheDir,
+		"KEEPER_PLUGIN_WORK_DIR="+pluginWorkDir,
+	)
 	cmd.Stdout = &testLogWriter{t: s.t, prefix: "keeper-stdout"}
 	cmd.Stderr = &testLogWriter{t: s.t, prefix: "keeper-stderr"}
 
@@ -485,6 +506,15 @@ func (w *testLogWriter) Write(p []byte) (int, error) {
 //
 // 202 → возвращает имя incarnation. Любая другая статус-страница — t.Fatal
 // с телом ответа.
+//
+// Retry на 422 «service is not registered»: реестр сервисов резолвится из
+// in-memory Holder-snapshot (serviceregistry.Holder), который обновляется TTL-
+// poll-ом (10s) + Redis pub/sub-инвалидацией. registerExampleService публикует
+// сервис прямо перед потоком теста, и первый CreateIncarnation может прилететь
+// в окне до того, как snapshot подхватил новую запись (POST вернул 201, но
+// snapshot ещё устаревший). Это гонка регистрация↔snapshot-refresh, а не
+// отсутствие сервиса — короткий retry закрывает её герметично, не трогая
+// публичный контракт. На уже-видимом сервисе первый запрос проходит сразу.
 func (s *Stack) CreateIncarnation(t *testing.T, name string, serviceRef string, spec map[string]any) string {
 	t.Helper()
 	c := s.opClient(t)
@@ -496,11 +526,25 @@ func (s *Stack) CreateIncarnation(t *testing.T, name string, serviceRef string, 
 	if spec != nil {
 		body["input"] = spec
 	}
-	resp, status, err := c.post(context.Background(), "/v1/incarnations", body)
-	if err != nil {
-		t.Fatalf("CreateIncarnation %s: http: %v", name, err)
-	}
-	if status != http.StatusAccepted {
+
+	var resp []byte
+	var status int
+	var err error
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		resp, status, err = c.post(context.Background(), "/v1/incarnations", body)
+		if err != nil {
+			t.Fatalf("CreateIncarnation %s: http: %v", name, err)
+		}
+		if status == http.StatusAccepted {
+			break
+		}
+		if status == http.StatusUnprocessableEntity &&
+			strings.Contains(string(resp), "is not registered") &&
+			time.Now().Before(deadline) {
+			time.Sleep(250 * time.Millisecond)
+			continue
+		}
 		t.Fatalf("CreateIncarnation %s: status %d, body=%s", name, status, string(resp))
 	}
 	var out struct {
@@ -511,6 +555,61 @@ func (s *Stack) CreateIncarnation(t *testing.T, name string, serviceRef string, 
 		t.Fatalf("CreateIncarnation %s: decode: %v (body=%s)", name, err, string(resp))
 	}
 	return out.Incarnation
+}
+
+// CreateIncarnationWithApply — как CreateIncarnation, но возвращает и apply_id
+// авто-запущенного scenario `create`. POST /v1/incarnations сразу запускает
+// create-прогон и переводит incarnation в `applying` (incarnation.go). Поэтому
+// отдельный RunScenario(create) сразу после Create отвергается lock-gate-ом
+// («incarnation уже в статусе applying» — run.go), и ожидание его apply_id
+// зависает в WaitApplySuccess до timeout. Использовать этот метод вместо пары
+// CreateIncarnation + RunScenario(create). Симметрично L3a-harness
+// (tests/e2e/harness/stack.go::CreateIncarnationWithApply).
+//
+// Возвращает (incarnationName, applyID авто-create-прогона).
+func (s *Stack) CreateIncarnationWithApply(t *testing.T, name string, serviceRef string, spec map[string]any) (string, string) {
+	t.Helper()
+	c := s.opClient(t)
+	service := stripServiceRef(serviceRef)
+	body := map[string]any{
+		"name":    name,
+		"service": service,
+	}
+	if spec != nil {
+		body["input"] = spec
+	}
+
+	var resp []byte
+	var status int
+	var err error
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		resp, status, err = c.post(context.Background(), "/v1/incarnations", body)
+		if err != nil {
+			t.Fatalf("CreateIncarnationWithApply %s: http: %v", name, err)
+		}
+		if status == http.StatusAccepted {
+			break
+		}
+		if status == http.StatusUnprocessableEntity &&
+			strings.Contains(string(resp), "is not registered") &&
+			time.Now().Before(deadline) {
+			time.Sleep(250 * time.Millisecond)
+			continue
+		}
+		t.Fatalf("CreateIncarnationWithApply %s: status %d, body=%s", name, status, string(resp))
+	}
+	var out struct {
+		ApplyID     string `json:"apply_id"`
+		Incarnation string `json:"incarnation"`
+	}
+	if err := json.Unmarshal(resp, &out); err != nil {
+		t.Fatalf("CreateIncarnationWithApply %s: decode: %v (body=%s)", name, err, string(resp))
+	}
+	if out.ApplyID == "" {
+		t.Fatalf("CreateIncarnationWithApply %s: пустой apply_id в 202 body=%s (create-scenario не запущен?)", name, string(resp))
+	}
+	return out.Incarnation, out.ApplyID
 }
 
 // RunScenario запускает scenario на существующей incarnation.
@@ -587,6 +686,44 @@ func (s *Stack) WaitApplySuccess(t *testing.T, applyID string, timeoutSec int) {
 		time.Sleep(500 * time.Millisecond)
 	}
 	t.Fatalf("WaitApplySuccess %s: success не достигнут за %ds", applyID, timeoutSec)
+}
+
+// WaitIncarnationReady блокируется до перехода incarnation.status в `ready`.
+//
+// Зачем отдельно от WaitApplySuccess: `apply_runs.status=success` (per-host
+// терминал задач) выставляется РАНЬШЕ, чем коммит state_changes в
+// incarnation.state. commitSuccess (run.go §8) пишет state + status='ready'
+// одной PG-транзакцией ПОСЛЕ барьера всех хостов — т.е. между «apply_runs
+// success» и «state закоммичен» есть окно. На L3a (soul-stub отвечает мгновенно)
+// окно микроскопическое; на L3b (реальный soul + gRPC round-trip) тест успевает
+// прочитать incarnation.state как пустой `{}` → AssertIncarnationState флапает.
+// Ждём именно status='ready' — это единственная точка, гарантирующая, что
+// state_changes уже в БД.
+//
+// Терминальный ≠ ready (error_locked / migration_failed / destroy_failed) —
+// немедленный t.Fatal с текущим статусом.
+func (s *Stack) WaitIncarnationReady(t *testing.T, incarnationName string, timeoutSec int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
+	var last string
+	for time.Now().Before(deadline) {
+		var status string
+		err := s.db.QueryRow(context.Background(),
+			"SELECT status FROM incarnation WHERE name = $1", incarnationName).Scan(&status)
+		if err != nil {
+			t.Fatalf("WaitIncarnationReady %s: query: %v", incarnationName, err)
+		}
+		last = status
+		switch status {
+		case "ready":
+			return
+		case "error_locked", "migration_failed", "destroy_failed", "destroyed":
+			t.Fatalf("WaitIncarnationReady %s: достигнут терминальный статус %q вместо ready", incarnationName, status)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	t.Fatalf("WaitIncarnationReady %s: status=ready не достигнут за %ds (последний статус=%q)",
+		incarnationName, timeoutSec, last)
 }
 
 // stripServiceRef отрезает `@<ref>` (если есть). Operator API создаёт

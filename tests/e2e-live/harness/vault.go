@@ -10,7 +10,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -191,6 +193,12 @@ func generateHS256Key(t *testing.T) string {
 // host.docker.internal (последний — для коннекта из L3b soul-контейнера к
 // keeper-у, который слушает на хосте), TTL 24h.
 //
+// Bootstrap — server-only TLS (ADR-012): соул верифицирует keeper-серт по
+// hostname keeper-эндпоинта. Поэтому SAN ОБЯЗАН покрывать host, на который
+// соул реально дозванивается (keeperEndpointHost()). При E2E_KEEPER_HOST-override
+// (WSL2: реальный хост-IP) — добавляем его в ip_sans/alt_names, иначе соул
+// получит TLS-SAN-mismatch вместо connection-refused.
+//
 // Симметрично `dev/provision.sh:155-172`. cert/key/caBundle возвращаются как
 // PEM-байты для прямой записи на диск перед стартом keeper-процесса.
 func IssueKeeperServerCert(t *testing.T, stack *Stack) (cert, key, caBundle []byte) {
@@ -199,10 +207,20 @@ func IssueKeeperServerCert(t *testing.T, stack *Stack) (cert, key, caBundle []by
 	ctx, cancel := context.WithTimeout(context.Background(), vaultHTTPTimeout)
 	defer cancel()
 
+	ipSANs := []string{"127.0.0.1"}
+	altNames := []string{"localhost", defaultKeeperHost}
+	if host := keeperEndpointHost(); host != defaultKeeperHost {
+		if net.ParseIP(host) != nil {
+			ipSANs = append(ipSANs, host)
+		} else {
+			altNames = append(altNames, host)
+		}
+	}
+
 	data, err := vc.write(ctx, vaultPKIIssueSoulSeed, map[string]any{
 		"common_name": "localhost",
-		"ip_sans":     "127.0.0.1",
-		"alt_names":   "localhost,host.docker.internal",
+		"ip_sans":     strings.Join(ipSANs, ","),
+		"alt_names":   strings.Join(altNames, ","),
 		"ttl":         "24h",
 	})
 	if err != nil {

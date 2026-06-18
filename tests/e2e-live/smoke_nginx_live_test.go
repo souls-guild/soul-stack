@@ -46,11 +46,22 @@ func TestL3bSmokeNginxLive_InstallAndStart(t *testing.T) {
 		t.Errorf("SoulContainers[0].SID = %q, ожидалось %q", sc.SID, wantSID)
 	}
 
-	inc := stack.CreateIncarnation(t, "test-nginx-live", "smoke-nginx-live@main", map[string]any{
-		"hostname": wantSID,
-	})
+	const incName = "test-nginx-live"
 
-	applyID := stack.RunScenario(t, inc, "create", map[string]any{
+	// Coven-членство ДО Create: roster прогона резолвится по `incarnation.name ∈
+	// coven[]` (ADR-008, topology/resolver.go::rosterSQL). Bootstrap-flow выставил
+	// souls.status='connected', но coven остался пустым — без этого шага scenario
+	// видит no_hosts → ноль строк apply_runs → WaitApplySuccess timeout. Ставим
+	// метку ДО CreateIncarnationWithApply, т.к. POST /v1/incarnations авто-
+	// запускает create-прогон сразу; coven должен существовать к его roster-
+	// резолву. Параллель с L3a (tests/e2e/smoke_nginx_test.go::AddSoulToCoven).
+	stack.AddSoulToCoven(t, 0, incName)
+
+	// POST /v1/incarnations авто-запускает scenario `create` и возвращает его
+	// apply_id. Отдельный RunScenario(create) был бы отвергнут lock-gate-ом
+	// («incarnation уже в статусе applying») и его apply_id никогда не получил бы
+	// apply_runs-строк. Ждём apply_id именно авто-create-прогона (как L3a).
+	inc, applyID := stack.CreateIncarnationWithApply(t, incName, "smoke-nginx-live@main", map[string]any{
 		"hostname": wantSID,
 	})
 
@@ -59,6 +70,11 @@ func TestL3bSmokeNginxLive_InstallAndStart(t *testing.T) {
 	// фиксирует ожидаемое время прогона (~3–5 минут).
 	stack.WaitApplySuccess(t, applyID, 300)
 
+	// apply_runs success ≠ incarnation.state закоммичен: state_changes пишутся
+	// отдельной транзакцией ПОСЛЕ барьера (run.go §8, status→ready). Без этого
+	// ожидания AssertIncarnationState читает пустой state в окне гонки.
+	stack.WaitIncarnationReady(t, inc, 30)
+
 	// YAML loader (L3b-5): apply_runs / incarnation_state / audit_events /
 	// metrics / host_state — один источник правды (smoke-nginx-live/expectations
 	// /after-create.yaml). Симметрично L3a-fixture-формату (см. docs/testing/e2e.md).
@@ -66,8 +82,12 @@ func TestL3bSmokeNginxLive_InstallAndStart(t *testing.T) {
 	stack.AssertExpectations(t, exp, applyID, inc)
 
 	// apply_id в payload audit-event-а — runtime-значение, не выражается через
-	// YAML-fixture; проверяется отдельно после AssertExpectations.
-	stack.AssertAuditEvent(t, "incarnation.scenario_started", map[string]any{
+	// YAML-fixture; проверяется отдельно после AssertExpectations. POST
+	// /v1/incarnations авто-запускает create-scenario и пишет `incarnation.created`
+	// (huma_incarnation_op.go) с apply_id авто-прогона в payload — тот же apply_id,
+	// что и в WaitApplySuccess. `incarnation.scenario_started` пишется только при
+	// явном RunScenario, который здесь не вызывается (как L3a smoke_nginx_test.go).
+	stack.AssertAuditEvent(t, "incarnation.created", map[string]any{
 		"apply_id": applyID,
 	})
 }

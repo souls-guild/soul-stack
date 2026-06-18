@@ -54,15 +54,22 @@ func TestL3bDriftLive_HelloWorld(t *testing.T) {
 		greeting     = "hello from soul-stack"
 	)
 
-	inc := stack.CreateIncarnation(t, "test-hello-drift", "hello-world@main", map[string]any{
-		"greeting": greeting,
-	})
+	const incName = "test-hello-drift"
 
-	applyID := stack.RunScenario(t, inc, "create", map[string]any{
+	// Coven-членство ДО Create: roster резолвится по `incarnation.name ∈ coven[]`
+	// (ADR-008, topology/resolver.go::rosterSQL); без него scenario видит no_hosts.
+	stack.AddSoulToCoven(t, 0, incName)
+
+	// POST /v1/incarnations авто-запускает create и возвращает его apply_id.
+	// Отдельный RunScenario(create) был бы отвергнут lock-gate-ом («incarnation
+	// уже в статусе applying») — ждём apply_id именно авто-create-прогона.
+	inc, applyID := stack.CreateIncarnationWithApply(t, incName, "hello-world@main", map[string]any{
 		"greeting": greeting,
 	})
 	// hello-world — без apt: render → core.file.present → RunResult быстрый.
 	stack.WaitApplySuccess(t, applyID, 60)
+	// apply_runs success ≠ state закоммичен — ждём ready перед чтением state.
+	stack.WaitIncarnationReady(t, inc, 30)
 
 	// Реальный результат apply на хосте: файл создан с переданным content.
 	stack.AssertHostFileExists(t, 0, greetingFile)

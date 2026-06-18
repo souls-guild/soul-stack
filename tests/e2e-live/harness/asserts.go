@@ -142,12 +142,31 @@ func (s *Stack) AssertAuditEvent(t *testing.T, eventType string, expectedPayload
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	// Пустой/nil payload (fixture `audit_events: [{type: ...}]` без payload) —
+	// presence-проверка только по event_type. `payload @> 'null'::jsonb` не
+	// матчит объект-payload и дал бы ложный fail; для «событие такого типа есть»
+	// фильтр по payload не нужен.
+	var (
+		count int
+		err   error
+	)
+	if len(expectedPayload) == 0 {
+		err = s.db.QueryRow(ctx,
+			"SELECT COUNT(*) FROM audit_log WHERE event_type = $1", eventType).Scan(&count)
+		if err != nil {
+			t.Fatalf("AssertAuditEvent %s: query: %v", eventType, err)
+		}
+		if count == 0 {
+			t.Fatalf("AssertAuditEvent %s: ни одного события такого типа", eventType)
+		}
+		return
+	}
+
 	subsetJSON, err := json.Marshal(expectedPayload)
 	if err != nil {
 		t.Fatalf("AssertAuditEvent: marshal expected payload: %v", err)
 	}
 
-	var count int
 	err = s.db.QueryRow(ctx, `
 		SELECT COUNT(*) FROM audit_log
 		WHERE event_type = $1 AND payload @> $2::jsonb

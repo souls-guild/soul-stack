@@ -25,11 +25,17 @@ incarnation_state:
   nginx_service: active
   nginx_config_managed: true
 
+# POST /v1/incarnations авто-запускает create-scenario и пишет
+# `incarnation.created` (НЕ scenario_started — то только при явном RunScenario).
 audit_events:
-  - type: incarnation.scenario_started
+  - type: incarnation.created
 
+# keeper_scenario_runs_total{result="ok"} — реальная метрика успешного прогона
+# (keeper/internal/scenario/metrics.go, closed enum ok/failed/locked). Параллель
+# с L3a (tests/e2e/smoke_nginx_test.go::AssertMetricGE). Метрики
+# keeper_apply_runs_total в коде нет.
 metrics:
-  keeper_apply_runs_total{status="success"}: ">= 1"
+  keeper_scenario_runs_total{result="ok"}: ">= 1"
 
 host_state:
   - soul: soul-live-a.example.com

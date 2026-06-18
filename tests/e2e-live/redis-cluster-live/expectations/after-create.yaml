@@ -23,11 +23,15 @@ apply_runs:
 incarnation_state:
   cluster_replicas: 0
 
+# POST /v1/incarnations авто-запускает create-scenario и пишет
+# `incarnation.created` (НЕ scenario_started — то только при явном RunScenario).
 audit_events:
-  - type: incarnation.scenario_started
+  - type: incarnation.created
 
+# keeper_scenario_runs_total{result="ok"} — реальная метрика успешного прогона
+# (keeper/internal/scenario/metrics.go). Метрики keeper_apply_runs_total нет.
 metrics:
-  keeper_apply_runs_total: ">= 1"
+  keeper_scenario_runs_total{result="ok"}: ">= 1"
 
 host_state:
   - soul: soul-live-a.example.com

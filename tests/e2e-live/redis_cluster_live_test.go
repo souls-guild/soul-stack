@@ -53,11 +53,19 @@ func TestL3bRedisClusterLive_ThreeNode(t *testing.T) {
 		}
 	}
 
-	inc := stack.CreateIncarnation(t, "test-redis-cluster", "redis-cluster-live@main", map[string]any{
-		"cluster_replicas": 0,
-	})
+	const incName = "test-redis-cluster"
 
-	applyID := stack.RunScenario(t, inc, "create", map[string]any{
+	// Coven-членство ДО Create: roster резолвится по `incarnation.name ∈ coven[]`
+	// (ADR-008, topology/resolver.go::rosterSQL). Все три соула должны быть в
+	// covene incarnation, иначе scenario видит no_hosts → ноль строк apply_runs.
+	for i := range stack.SoulContainers {
+		stack.AddSoulToCoven(t, i, incName)
+	}
+
+	// POST /v1/incarnations авто-запускает create и возвращает его apply_id.
+	// Отдельный RunScenario(create) был бы отвергнут lock-gate-ом («incarnation
+	// уже в статусе applying») — ждём apply_id именно авто-create-прогона.
+	inc, applyID := stack.CreateIncarnationWithApply(t, incName, "redis-cluster-live@main", map[string]any{
 		"cluster_replicas": 0,
 	})
 
@@ -66,6 +74,8 @@ func TestL3bRedisClusterLive_ThreeNode(t *testing.T) {
 	// --cluster create. README example фиксирует ожидаемое время (~5-8 минут на
 	// холодном CI).
 	stack.WaitApplySuccess(t, applyID, 600)
+	// apply_runs success ≠ state закоммичен — ждём ready перед чтением state.
+	stack.WaitIncarnationReady(t, inc, 30)
 
 	exp := harness.LoadExpectations(t, "redis-cluster-live/expectations/after-create.yaml")
 	stack.AssertExpectations(t, exp, applyID, inc)

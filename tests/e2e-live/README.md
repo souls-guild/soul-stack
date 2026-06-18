@@ -24,6 +24,27 @@ SOUL_BIN_LINUX=$(pwd)/soul/bin/soul-linux-amd64 \
 
 Требует **docker** с поддержкой privileged-контейнеров (cgroup-mount + systemd-PID-1).
 
+### WSL2 + Docker-Desktop
+
+На native-Linux соул-контейнер дозванивается к keeper-у через
+`host.docker.internal` (host-gateway) — дефолт, ничего настраивать не нужно.
+
+На **WSL2 + Docker-Desktop** контейнеры живут в DD-VM, а keeper-процесс —
+в WSL2-дистре (разные network-namespace). Из контейнера `host.docker.internal`
+резолвится в DD-VM-шлюз (`192.168.65.254`), где keeper НЕ слушает → bootstrap
+падает на `connection refused`. Реальный WSL2-хост-IP из контейнера достижим —
+прокинь его через `E2E_KEEPER_HOST` (харнес пропишет его в `soul.yml`-эндпоинт,
+ExtraHosts и **TLS-SAN** keeper-серта):
+
+```sh
+make build-linux
+cd tests/e2e-live
+E2E_KEEPER_HOST=$(hostname -I | awk '{print $1}') \
+  go test -tags=e2e_live -run TestL3bSmokeNginxLive -timeout 25m
+```
+
+Без `E2E_KEEPER_HOST` поведение не меняется (CI-дефолт `host.docker.internal`).
+
 ## Frequency
 
 - **L3a** (fast-loop) — каждый PR через `make e2e` (~30–60 сек на тест).

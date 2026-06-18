@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,7 @@ import (
 
 	dockercontainer "github.com/moby/moby/api/types/container"
 	"github.com/testcontainers/testcontainers-go"
+	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	tcnetwork "github.com/testcontainers/testcontainers-go/network"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -42,15 +44,17 @@ type SoulContainer struct {
 // Exec выполняет команду внутри soul-контейнера. Используется container-side
 // asserts (AssertHostPkgInstalled / AssertHostServiceActive / ...) — L3b-4.
 //
-// Возвращает (stdout+stderr, exitCode, err). testcontainers-go Exec API
-// возвращает один объединённый reader (multiplexed stdout+stderr); harness
-// не разделяет — caller-у достаточно exit-кода для assert-а, тело используется
-// только в diag-сообщениях.
+// Возвращает (stdout+stderr, exitCode, err). tcexec.Multiplexed демультиплексирует
+// docker-stream (8-байтные frame-header-ы) в чистый текст — без него reader
+// содержит сырые header-байты (`\x01\x00…\x07active`), и assert-ы с точным
+// сравнением stdout (например AssertHostServiceActive: `== "active"`) ложно
+// падают. stdout и stderr склеиваются в один поток (caller-у достаточно exit-
+// кода + текста для diag).
 func (sc *SoulContainer) Exec(ctx context.Context, cmd []string) (combined string, exitCode int, err error) {
 	if sc == nil || sc.Container == nil {
 		return "", -1, errors.New("SoulContainer.Exec: nil container")
 	}
-	code, reader, err := sc.Container.Exec(ctx, cmd)
+	code, reader, err := sc.Container.Exec(ctx, cmd, tcexec.Multiplexed())
 	if err != nil {
 		return "", code, fmt.Errorf("exec %v: %w", cmd, err)
 	}
@@ -138,13 +142,9 @@ func SpawnSoulContainer(t *testing.T, stack *Stack, sid, bootstrapToken string) 
 			PrintBuildLog: false,
 			KeepImage:     true, // одинаковый Dockerfile для всех L3b-тестов — переиспользуем слои.
 		},
-		Name:     fmt.Sprintf("soul-live-%s-%d", sanitizeSID(sid), time.Now().UnixNano()),
-		Hostname: sid,
-		ExtraHosts: []string{
-			// Linux-CI: docker-desktop alias `host.docker.internal` штатно не
-			// настроен, нужен явный host-gateway-mapping.
-			"host.docker.internal:host-gateway",
-		},
+		Name:       fmt.Sprintf("soul-live-%s-%d", sanitizeSID(sid), time.Now().UnixNano()),
+		Hostname:   sid,
+		ExtraHosts: keeperExtraHosts(),
 		Networks: []string{stack.dockerNetwork.Name},
 		Files: []testcontainers.ContainerFile{
 			{HostFilePath: soulBinPath, ContainerFilePath: "/usr/local/bin/soul", FileMode: 0o755},
@@ -258,16 +258,60 @@ func waitForSoulConnected(ctx context.Context, stack *Stack, sid string, timeout
 	return fmt.Errorf("soul %s did not reach status=connected within %v", sid, timeout)
 }
 
+// defaultKeeperHost — host, на который соул-контейнер дозванивается к keeper-у
+// по умолчанию. На native-Linux-CI резолвится через ExtraHosts host-gateway
+// (см. SpawnSoulContainer); это рабочий дефолт, ломать его нельзя.
+const defaultKeeperHost = "host.docker.internal"
+
+// keeperEndpointHostEnv — env-override host-а keeper-эндпоинта для соул-контейнера.
+//
+// Зачем: на WSL2 + Docker-Desktop контейнеры живут в DD-VM, а keeper-процесс —
+// в WSL2-дистре (разные network-namespace). Из контейнера `host.docker.internal`
+// резолвится в DD-VM-шлюз (192.168.65.254), где keeper НЕ слушает → bootstrap
+// падает на `connection refused`. Реальный WSL2-хост-IP (`hostname -I` первый,
+// напр. 172.27.x.x) из контейнера достижим. Override прописывает этот IP в
+// soul.yml::keeper.endpoints[].host + добавляет его же в TLS-SAN keeper-серта.
+//
+// Если env не задан — дефолт host.docker.internal (native-Linux-CI не ломается).
+// Гонять на WSL2: `E2E_KEEPER_HOST=$(hostname -I | awk '{print $1}') go test ...`.
+const keeperEndpointHostEnv = "E2E_KEEPER_HOST"
+
+// keeperEndpointHost возвращает host, на который соул-контейнер дозванивается к
+// keeper-у: значение env E2E_KEEPER_HOST либо дефолт host.docker.internal.
+func keeperEndpointHost() string {
+	if v := strings.TrimSpace(os.Getenv(keeperEndpointHostEnv)); v != "" {
+		return v
+	}
+	return defaultKeeperHost
+}
+
+// keeperExtraHosts возвращает ExtraHosts-маппинг для соул-контейнера.
+//
+// Дефолтный `host.docker.internal:host-gateway` держим всегда — на native-Linux
+// docker-desktop-alias штатно не настроен, и keeper-эндпоинт по умолчанию его и
+// использует. При override именем (не IP) добавляем `<host>:host-gateway`, чтобы
+// имя резолвилось в шлюз. IP-override (WSL2-кейс) в ExtraHosts не нуждается —
+// контейнер маршрутизирует к хост-IP напрямую.
+func keeperExtraHosts() []string {
+	hosts := []string{defaultKeeperHost + ":host-gateway"}
+	if override := strings.TrimSpace(os.Getenv(keeperEndpointHostEnv)); override != "" &&
+		override != defaultKeeperHost && net.ParseIP(override) == nil {
+		hosts = append(hosts, override+":host-gateway")
+	}
+	return hosts
+}
+
 // buildSoulYAML рендерит soul.yml для запуска внутри контейнера. Все пути —
-// container-side; keeper-endpoint — host.docker.internal:<port> (резолвится
-// через ExtraHosts host-gateway).
+// container-side; keeper-endpoint — <host>:<port>, где host берётся из
+// keeperEndpointHost() (дефолт host.docker.internal, резолвится через
+// ExtraHosts host-gateway; на WSL2 — реальный хост-IP через E2E_KEEPER_HOST).
 func buildSoulYAML(stack *Stack) string {
 	const tmpl = `paths:
   seed: /var/lib/soul-stack/seed
   modules: /var/lib/soul-stack/modules
 keeper:
   endpoints:
-    - host: host.docker.internal
+    - host: %s
       bootstrap_port: %d
       event_stream_port: %d
       priority: 1
@@ -280,7 +324,7 @@ hot_reload:
   enable_signal: false
   enable_inotify: false
 `
-	return fmt.Sprintf(tmpl, stack.bootstrapPort, stack.eventStreamPort)
+	return fmt.Sprintf(tmpl, keeperEndpointHost(), stack.bootstrapPort, stack.eventStreamPort)
 }
 
 // findDockerfile возвращает абсолютный путь к L3b-Dockerfile-у. Относительный
