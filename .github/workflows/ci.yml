@@ -180,6 +180,9 @@ jobs:
   integration:
     name: integration tests (testcontainers)
     runs-on: ubuntu-latest
+    # continue-on-error до стабилизации 6 flaky (P1, docs/prod-readiness.md):
+    # order-dependent / auth-race в keeper/internal/api. Снятие СЕЙЧАС = красный
+    # CI на флапах. Убрать после карантина flaky → integration станет blocking (P0-7).
     continue-on-error: true
     steps:
       - name: Checkout
@@ -203,12 +206,14 @@ jobs:
       - name: make test-integration
         run: make test-integration
 
-  # Сканер уязвимостей по Go-модулям. Informational: транзиентная advisory не
-  # должна блокировать релиз, но сигнал виден в логах job-а.
+  # Сканер уязвимостей по Go-модулям. Blocking: supply-chain advisory обязана
+  # останавливать merge (P0-7, docs/prod-readiness.md). На момент включения
+  # govulncheck чист по всем модулям (`make check-vuln` зелёный) — гейт не
+  # маскирует существующих находок. Транзиентный сбой vuln-DB лечится перезапуском
+  # job-а, а не игнором результата.
   govulncheck:
     name: govulncheck
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v6

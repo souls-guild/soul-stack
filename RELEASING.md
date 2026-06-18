@@ -20,7 +20,7 @@ make test-integration   # testcontainers (нужен docker)
 make e2e                # L3a fast-loop (нужен docker)
 ```
 
-Перед бета-тегом дополнительно гоняются длительные уровни (nightly/on-demand, не в `make check`): `make e2e-live` (L3b), `make e2e-k8s` (L3c). Релиз не выпускается, пока гейт не зелёный.
+Здесь — docker-зависимые уровни до L3a. Длительный L3b (`make e2e-live`) — отдельный **блокирующий** pre-tag шаг (e), L3c (`make e2e-k8s`) гоняется on-demand. Релиз не выпускается, пока гейт не зелёный.
 
 ### (c) Bump CHANGELOG
 
@@ -37,7 +37,41 @@ README, конфиг-схемы, поведение proto-контракта Kee
 тегируется, пока в документируемых поверхностях остаётся незакрытый или
 незафиксированный drift.
 
-### (e) Аннотированный git-тег
+### (e) e2e-live gate (real apply на реальном хосте) — блокирующий
+
+**Обязательный шаг до создания тега.** unit/integration гоняют стабы; единственный
+тест, доказывающий что `apply` работает на **реальном** хосте end-to-end (реальный
+soul-бинарь в privileged Debian-контейнере, реальный `apt`-install + systemd), —
+L3b `make e2e-live` (кейсы nginx / drift / redis-cluster). Без зелёного e2e-live тег
+**не режется**: apply на реальном хосте мог сломаться, и поймает это только этот
+уровень. Это локальный эквивалент CI-gate — без расхода GitHub-минут.
+
+1. Docker-free гейт — зелёный:
+
+   ```sh
+   make check    # build + vet + test + check-gen/openapi/template/doc-links + vuln + lint
+   ```
+
+2. L3b real apply — **все три кейса** зелёные:
+
+   ```sh
+   make e2e-live    # nginx / drift / redis-cluster — real apt-install + systemd
+   ```
+
+   На **WSL2 + Docker-Desktop** перед прогоном пробросить реальный WSL2-хост-IP
+   (контейнер-соул не достучится до keeper через `host.docker.internal` — тот
+   указывает на DD-VM-шлюз, не на WSL2-хост):
+
+   ```sh
+   E2E_KEEPER_HOST=$(hostname -I | awk '{print $1}') make e2e-live
+   ```
+
+   На native-Linux env-override не нужен (CI-дефолт `host.docker.internal`).
+   Детали окружения и рецепт — [tests/e2e-live/README.md](tests/e2e-live/README.md).
+
+Релиз не тегируется, пока `make check` и все кейсы `make e2e-live` не зелёные.
+
+### (f) Аннотированный git-тег
 
 Один тег на корень репозитория:
 
@@ -48,7 +82,7 @@ git push origin vX.Y.Z-beta.N
 
 Первый бета-тег — `v0.1.0-beta.1`. Тег **аннотированный** (не lightweight): `git describe` берёт ближайший аннотированный тег, и именно он попадает в `VERSION` при сборке.
 
-### (f) Сборка артефактов на теге
+### (g) Сборка артефактов на теге
 
 С checked-out тега (чтобы `git describe` дал чистую версию без `-dirty`/хеша) собрать релизные артефакты:
 
@@ -59,7 +93,7 @@ make sbom   # CycloneDX SBOM по keeper/soul/soul-lint → dist/sbom/
 
 `make pkg` пересобирает бинари под `linux/$(PKG_ARCH)` (default `amd64`; `make pkg PKG_ARCH=arm64` — для arm) с теми же ldflags-инъекциями версии. `make sbom` строит SBOM в режиме `app` (граф того, что реально слинковано). Оба таргета требуют внешний tooling (`nfpm`, `cyclonedx-gomod`) — в `make check` не входят, ставятся через `go install` (подсказка печатается, если не найден). Для голой кросс-сборки бинарей без пакетов — `make build-linux`.
 
-### (g) Раздача
+### (h) Раздача
 
 Приложить артефакты из `dist/pkg/` и `dist/sbom/` к GitHub Release соответствующего тега (или раздать тестерам беты напрямую — на закрытой бете дистрибуция также build-from-source, см. [CONTRIBUTING.md](CONTRIBUTING.md)).
 
