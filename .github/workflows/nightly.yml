@@ -10,12 +10,17 @@
 #                  in-docker, privileged, systemd-PID-1) заводит багу, не валит
 #                  весь nightly.
 #
-# Cron — 02:00 UTC ежедневно. workflow_dispatch — ручной триггер из UI.
 name: Nightly
 
+# Schedule (ежедневный cron) НАМЕРЕННО отключён — экономия GitHub-минут
+# (лимит 2000 мин/мес; e2e-live 60м + race-tests 30м каждую ночь ≈ 2700 мин/мес,
+# выше лимита). GitHub-CI — только крупные релизы. Оба job-а теперь manual-only
+# (workflow_dispatch — ручной запуск из UI / `gh workflow run`):
+#   - e2e-live   → перенесён в локальный pre-tag gate (RELEASING.md шаг e),
+#                  гоняется на машине разработчика перед тегом, не в Actions;
+#   - race-tests → on-demand, по требованию через workflow_dispatch.
+# Это НЕ забытый cron: вернуть ежедневный прогон = вернуть `schedule:` ниже.
 on:
-  schedule:
-    - cron: "0 2 * * *"
   workflow_dispatch:
 
 permissions:
