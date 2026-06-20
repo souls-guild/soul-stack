@@ -181,10 +181,10 @@ test-integration:
 		(cd $$m && go test -tags=integration -race -count=1 ./...) || exit 1; \
 	done
 
-# L3a fast-loop E2E (ADR-039): testcontainers (PG+Redis+Vault) + Keeper-процесс +
-# soul-stub helper-пакет. Отдельный go-модуль tests/e2e/ (deps testcontainers не
-# утекают в основные keeper/soul). НЕ входит в `check` (требует docker; pilot-фаза
-# может быть skeleton-only — см. tests/e2e/README.md).
+# L3a fast-loop E2E (ADR-039): рабочий harness — testcontainers (PG+Redis+Vault) +
+# реальный Keeper-процесс + soul-stub с live gRPC-mTLS. Отдельный go-модуль
+# tests/e2e/ под build-tag `e2e` (deps testcontainers не утекают в основные
+# keeper/soul). НЕ входит в `check` (требует docker); деталь — tests/e2e/README.md.
 e2e:
 	@if [ -z "$$(cd tests/e2e && go list -tags=e2e ./... 2>/dev/null)" ]; then \
 		echo "skip tests/e2e (no Go packages under build-tag e2e)"; \

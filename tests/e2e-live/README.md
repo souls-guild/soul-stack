@@ -61,20 +61,27 @@ tests/e2e-live/
 │   └── debian-12.Dockerfile        # privileged systemd-PID-1 base-image
 ├── harness/                        # копия L3a-harness + L3b-specific helpers
 │   ├── stack.go                    # NewStack — PG/Redis/Vault/keeper
-│   ├── bootstrap.go                # IssueBootstrapToken (L3b-2)
-│   ├── container.go                # SoulContainer + SpawnSoulContainer (L3b-2)
-│   ├── asserts.go                  # keeper-side + container-side asserts
-│   ├── expectations.go             # LoadExpectations / AssertExpectations (L3b-5)
+│   ├── bootstrap.go                # IssueBootstrapToken
+│   ├── container.go                # SoulContainer + SpawnSoulContainer (privileged Debian-12)
+│   ├── asserts.go                  # keeper-side + container-side asserts (AssertHost*)
+│   ├── expectations.go             # LoadExpectations / AssertExpectations (+ host_state)
+│   ├── coven.go                    # AddSoulToCoven (roster по incarnation.name)
 │   ├── operator.go                 # HTTP-клиент Operator API
-│   ├── vault.go                    # InitVaultTestSecrets / IssueKeeperServerCert
+│   ├── vault.go                    # InitVaultTestSecrets / IssueKeeperServerCert / SeedVaultKV
 │   ├── config_builder.go           # buildKeeperYAML
 │   ├── probe.go                    # waitForReady
-│   ├── git.go                      # SetupGitRepo (L3b-3)
-│   └── drift.go                    # CheckDrift → DriftReport (L3b-6)
-├── smoke-nginx-live/
-│   └── expectations/
-│       └── after-create.yaml
-└── drift_live_test.go              # TestL3bDriftLive_HelloWorld (L3b-6)
+│   ├── git.go                      # SetupGitRepo
+│   ├── destiny.go                  # MaterializeDestinies
+│   └── drift.go                    # CheckDrift → DriftReport (реальный core.file.Plan)
+├── smoke-nginx-live/  redis/  redis-cluster-live/  staged-probe-live/
+│   └── …/expectations/             # per-example host_state-ожидания
+├── smoke_bootstrap_test.go         # TestL3bBootstrap_OneSoul
+├── smoke_nginx_live_test.go        # TestL3bSmokeNginxLive_InstallAndStart
+├── redis_live_test.go              # TestL3bRedisLive_CreateWithNodeExporter
+├── redis_cluster_live_test.go      # TestL3bRedisClusterLive_ThreeNode
+├── staged_probe_live_test.go       # TestL3bStagedProbeLive_WhereTargetsOnlyMaster
+├── drift_live_test.go              # TestL3bDriftLive_HelloWorld
+└── plugin_beacon_test.go           # TestE2EBeaconPlugin_FullLoop
 ```
 
 ## Slices
@@ -96,8 +103,11 @@ L3b реализуется итеративно. Карта slice-ов (architec
 |---|---|---|
 | `TestL3bBootstrap_OneSoul` | 1 | Real CSR Bootstrap-flow + `souls.status=connected` после `SpawnSoulContainer`. |
 | `TestL3bSmokeNginxLive_InstallAndStart` | 1 | Реальный `apt install nginx` + `systemctl start nginx` + `core.file.rendered` site-config. Использует `harness.LoadExpectations` + `Stack.AssertExpectations`. |
+| `TestL3bRedisLive_CreateWithNodeExporter` | 1 | Реальный redis-сервис: `apt install redis` + node-exporter destiny на живом хосте. |
 | `TestL3bRedisClusterLive_ThreeNode` | 3 | Multi-host: установка redis на 3 контейнера + формирование Redis Cluster (`redis-cli --cluster create --cluster-replicas 0`); independent check `cluster_state:ok`. |
+| `TestL3bStagedProbeLive_WhereTargetsOnlyMaster` | 2+ | **staged-render probe→where на живом soul** (ADR-056): реальный probe-шаг эмитит per-host register, Passage-действие `where: register.*=='master'` реально применяется ТОЛЬКО на master-хосте. L3b-аналог `TestE2EStagedFailover_2Passage`, но через реальный apply вместо stub. |
 | `TestL3bDriftLive_HelloWorld` | 1 | Drift-check на живом soul: create hello-world (`core.file.present` greeting-файл) → clean baseline → out-of-band мутация файла → `CheckDrift` видит `drifted=1` через реальный `core.file.Plan` → re-apply → `CheckDrift` снова clean. Ловит регресс реального Plan (в отличие от stub-Plan L3a). |
+| `TestE2EBeaconPlugin_FullLoop` | 1 | Реальный `soul_beacon`-плагин (gRPC-over-stdio): inotify-портент → Vigil → Decree → Oracle → fired scenario на живом soul. |
 
 ## Expectations YAML loader (L3b-5)
 
