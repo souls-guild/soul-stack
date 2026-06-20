@@ -12,16 +12,16 @@ tasks:
 
   # smoke идёт ПОСЛЕ create — redis запущен, actual-роль доступна живым probe.
   # Probe несёт ИМЕНОВАННЫЙ register: smoke_role, т.к. его результат читается
-  # ПОЗЖЕ в where: следующего шага (orchestration.md §4 канон register.<name>.*,
-  # §5 probe-идиома: changed_when:false + failed_when:-полнота ответа).
+  # ПОЗЖЕ в where: следующего шага (orchestration.md §4 канон register.<name>.*).
+  # Полнота probe гарантируется fail-stop барьером (ADR-056 §5). tr -d '\n' —
+  # register.stdout без trailing newline (where сравнивает == 'slave').
   - name: Detect actual redis role on each host
     module: core.cmd.shell
     on: ["${ incarnation.name }"]
     register: smoke_role
     changed_when: false
-    failed_when: size(register.smoke_role) < incarnation.host_count
     params:
-      cmd: "redis-cli role | head -1"
+      cmd: "redis-cli role | head -1 | tr -d '\\n'"
 
   # actual-роль через where: по register предыдущего probe (НЕ declared,
   # НЕ удалённый под-ковен {name}-replica). orchestration.md §4: where: без

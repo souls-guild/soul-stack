@@ -259,8 +259,7 @@ Per-incarnation state-commit (ADR-043 §7/§8) фиксирует state посл
   module: core.exec.run
   on: ["${ incarnation.name }"]
   register: redis_role
-  changed_when: false
-  failed_when: size(register.redis_role) < incarnation.host_count
+  changed_when: false                                          # probe state не меняет
   params:
     command: "redis-cli role | head -1"
 
@@ -430,7 +429,9 @@ template-контекста, доступная в любом expression-key (`w
 |---|---|---|
 | `incarnation.host_count` | int | Число хостов в таргете прогона **после** резолва `on:` (стабильно по Postgres) и **до** применения `where:` (волатильный фильтр). На probe-шаге, который таргетит весь incarnation, это `size(soulprint.hosts)` для соответствующего прогона. |
 
-**Назначение — идиома полноты probe** (§5): `failed_when: size(register.<probe>) < incarnation.host_count` утверждает, что probe ответили все хосты таргета. Без этой проверки частичный probe тихо приводит к разрушительной операции на «ответившей» части (см. footgun ниже в §5).
+**Назначение.** `incarnation.host_count` — размер таргета прогона для выражений, которым нужно знать ширину incarnation: пороги/проценты в собственной логике сценария (`serial: "${ ... }"`-производные расчёты, ассерты топологии в тестах §6, sizing передаваемых в destiny параметров через `apply: input:`).
+
+> **Не для «полноты probe».** Идиома `failed_when: size(register.<probe>) < incarnation.host_count` («упасть, если probe ответили не все хосты») **не используется и неисполнима**: `failed_when:` вычисляется Soul-side per-host, видит только `register:` предыдущих задач и `register.self.*`, но **не** собственный агрегатный `register.<этого-probe>` и **не** cross-host `size(...)` — обращение даёт CEL `no such key`. Полнота probe в защите не нуждается: разрушительную операцию по неполному probe гарантированно отсекает fail-stop барьер staged-render (§5, [ADR-056 §г](../adr/0056-staged-render-passage.md)), а не ручная проверка.
 
 **Доступ в destiny — отсутствует.** Поле — часть `incarnation.*`-namespace, который в destiny не виден ([destiny/tasks.md §10](../destiny/tasks.md#10-шаблонный-контекст)). destiny получает значение, если ей нужно, через `apply: input:`-проброс.
 
@@ -499,18 +500,24 @@ register.<X>.map(k, register.<X>[k].stdout).filter(v, v != '')[0]
   on: ["${ incarnation.name }"]
   register: redis_role
   changed_when: false                                          # probe state не меняет
-  failed_when: size(register.redis_role) < incarnation.host_count   # идиома полноты
   params:
     command: "redis-cli role | head -1"
 ```
 
-**Полнота и успех probe — через `failed_when:` или семантику модуля.** Идиома: `failed_when:` утверждает, что **ответили все нужные хосты** (например, число элементов в per-host `register:`-карте не меньше числа хостов в таргете). Если probe частичный или хост не ответил — `failed_when:` делает шаг `failed`, дальше работает **штатная обработка падения шага** из DSL-ядра (`onfail:` / остановка сценария / `error_locked`). Никакой отдельной политики «слепого таргета» нет — она закрыта именно этой идиомой.
+**Успех probe — через семантику модуля (`failed_when:` по `register.self.*`).** Probe-шаг ничем не отличается от обычного: статус хоста определяет модуль (ненулевой exit `core.exec.run` → хост `failed`) либо унаследованный `failed_when:` **по собственному результату** (`register.self.stdout`/`.rc`). Если probe упал на хосте — работает **штатная обработка падения шага** из DSL-ядра (`retry:` / `onfail:` / остановка сценария / `error_locked`).
+
+> **«Полнота probe» НЕ выражается ручной идиомой.** Прежний спека-пример нёс `failed_when: size(register.redis_role) < incarnation.host_count` («упасть, если probe ответили не все хосты»). Эта идиома **изъята** — она физически неисполнима: `failed_when:` вычисляется Soul-side per-host и видит только `register:` предыдущих задач + `register.self.*`; **собственный** агрегатный `register.<этого-probe>` по имени и cross-host `size(...)` ему **недоступны** → CEL `no such key`. Полнота probe не нуждается в ручной проверке — защиту от разрушительной операции по неполному probe даёт fail-stop барьер staged-render (см. footgun ниже).
 
 Обработка ошибок в scenario — **только унаследованные из DSL-ядра** механизмы: `retry:`, `onfail:`, `failed_when:`, `onchanges:` ([destiny/tasks.md §8, §9](../destiny/tasks.md#8-requisites--salt-style-зависимости)). **Новый атрибут не вводится.**
 
 > **Probe и его потребитель — разные Passage ([ADR-056](../adr/0056-staged-render-passage.md)).** Шаг, читающий `register:` probe (через `where:` / `apply: input:` / `params:` / `vars:`), исполняется в **следующем** Passage относительно самого probe (probe и потребитель не могут оказаться в одном Passage). Это и обеспечивает, что `register:` уже собран барьером предыдущего Passage к моменту render-а потребителя. До завершения раскатки staged-render на текущем keeper механизм резолвится по мере внедрения.
 
-> **Footgun: silent-destructive-on-partial.** Без `failed_when:`-проверки полноты probe-шаг, на который не ответила часть хостов, отдаёт неполный `register:`. Следующий шаг с `where:` по этому `register:` молча применит разрушительную операцию (restart, failover) только к «ответившей» части — а остальные останутся в неизвестном состоянии, и `incarnation.state` закоммитится по неполной картине. **Закрытие footgun-а: probe ОБЯЗАН нести `failed_when:`, утверждающий полноту ответа** (число ответивших хостов = размер таргета). Тогда частичный probe → `failed` → сценарий останавливается → `incarnation.state` не коммитится (см. §7). Спека-пример probe всегда показывает `failed_when:` именно как идиому полноты; review/architect при ревью scenario-спеки и пилота проверяют, что не осталось недокументированного silent-destructive-on-partial.
+> **Footgun: silent-destructive-on-partial — закрыт барьером, а НЕ идиомой.** Опасность: probe, на который не ответила часть хостов, отдаёт неполный `register:`, и следующий шаг с `where:` по этому `register:` применил бы разрушительную операцию (restart, failover) только к «ответившей» части. **Закрытие — fail-stop барьер staged-render ([ADR-056 §г](../adr/0056-staged-render-passage.md)), без ручной проверки полноты:**
+>
+> - **Хост-кандидат упал в probe-Passage** → барьер этого Passage фиксирует failure → прогон останавливается, **следующий Passage (где стоит `where:`) не стартует**, `incarnation.state` не коммитится → `error_locked` (§7). Разрушительный шаг просто не доходит до dispatch.
+> - **Хост терминален, но `register:` неполон** (probe вернулся без нужного ключа для конкретного хоста) → при render-е `where:` следующего Passage обращение к `register.<probe>.*` этого хоста даёт eval-ошибку `no such key` → задача `failed` (ловится штатно, §7), а не молчаливо «не тот таргет».
+>
+> Ручная идиома полноты (`failed_when: size(...) < incarnation.host_count`) **не нужна и неисполнима** (см. выше и §4.2): safety обеспечивает барьер. review/architect при ревью scenario-спеки и пилота проверяют, что не осталось пути, обходящего fail-stop барьер для destructive-on-failed/partial-probe.
 
 ## 6. Двухуровневый резолв ресурсов
 

@@ -33,16 +33,16 @@ state_changes:
 tasks:
   # Probe: фактическая роль каждого хоста (actual-роль волатильна, берётся
   # живым probe непосредственно перед таргетингом — concept.md, ADR-008).
-  # failed_when: утверждает полноту ответа (идиома orchestration.md §5):
-  # частичный probe → failed → сценарий стоп, state не коммитится (§7).
+  # Полнота probe гарантируется fail-stop барьером (ADR-056 §5): упавший probe
+  # на любом хосте → barrier → error_locked, where-Passage не стартует.
+  # tr -d '\n' — register.stdout без trailing newline (where сравнивает == 'master').
   - name: Detect actual redis role per host
     module: core.cmd.shell
     on: ["${ incarnation.name }"]
     register: redis_role
     changed_when: false
-    failed_when: size(register.redis_role) < incarnation.host_count
     params:
-      cmd: "redis-cli role | head -1"
+      cmd: "redis-cli role | head -1 | tr -d '\\n'"
 
   # Создаём пользователя на текущем мастере. run_once: — ровно один хост
   # (первый по SID) из резолва on:+where: (orchestration.md §2). >1 «текущих

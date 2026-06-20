@@ -22,22 +22,23 @@ state_changes:
     expect: one
 
 tasks:
-  # Probe: фактическая роль выводимого хоста. failed_when: — идиома полноты §5
-  # (хост таргета обязан ответить). where: таргетит ровно выводимую реплику по
-  # стабильному soulprint.self.sid (orchestration.md §4 M3-amend: чисто-стабильный
-  # where: без probe легален).
+  # Probe: фактическая роль выводимого хоста. where: таргетит ровно выводимую
+  # реплику по стабильному soulprint.self.sid (orchestration.md §4 M3-amend:
+  # чисто-стабильный where: без probe легален). Полнота probe гарантируется
+  # fail-stop барьером (ADR-056 §5): упавший probe → barrier → error_locked.
   - name: Detect role of the replica being removed
     module: core.cmd.shell
     on: ["${ incarnation.name }"]
     where: soulprint.self.sid == input.sid
     register: role
     changed_when: false
-    failed_when: size(register.role) < 1
     params:
-      cmd: "redis-cli role | head -1"
+      cmd: "redis-cli role | head -1 | tr -d '\\n'"
 
   # Защита от потери primary: выводить можно только реплику, не текущий primary
-  # (его вывод = split-brain). failed_when: останавливает сценарий до коммита.
+  # (его вывод = split-brain). failed_when: register.self — собственный результат
+  # шага (исполним), останавливает сценарий до коммита. tr -d '\n' — register.stdout
+  # без trailing newline (failed_when сравнивает == 'master').
   - name: Refuse to remove the current primary
     module: core.cmd.shell
     on: ["${ incarnation.name }"]
@@ -45,7 +46,7 @@ tasks:
     changed_when: false
     failed_when: register.self.stdout == 'master'
     params:
-      cmd: "redis-cli role | head -1"
+      cmd: "redis-cli role | head -1 | tr -d '\\n'"
 
   # Останавливаем redis на выводимой реплике (graceful: SHUTDOWN NOSAVE — это
   # реплика, её данные — копия primary). changed_when: фиксирует факт остановки.

@@ -78,16 +78,16 @@ tasks:
   # 1. Probe адреса актуального primary НА СУЩЕСТВУЮЩИХ хостах (новые реплики
   # исключены — на них redis ещё не стоит). single-master сервис уже работает,
   # роль берётся рантайм-probe-ом, НЕ declared soulprint.hosts[].role
-  # (orchestration.md §4.1). changed_when: false — read-only probe. failed_when:
-  # — идиома полноты §5: ответили все существующие (host_count − число новых).
-  # master_addr читается ниже в setup-replication → probe ИМЕНОВАН.
+  # (orchestration.md §4.1). changed_when: false — read-only probe. Полнота
+  # probe гарантируется fail-stop барьером (ADR-056 §5): упавший probe →
+  # barrier → error_locked. master_addr читается ниже в setup-replication →
+  # probe ИМЕНОВАН.
   - name: Detect actual redis primary address on existing hosts
     module: core.cmd.shell
     on: ["${ incarnation.name }"]
     where: "!(soulprint.self.sid in input.replicas)"
     register: master_addr
     changed_when: false
-    failed_when: size(register.master_addr) < (incarnation.host_count - size(input.replicas))
     params:
       cmd: >
         [ "$(redis-cli role | head -1)" = master ]

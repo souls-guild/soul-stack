@@ -91,9 +91,9 @@ tasks:
   # Probe IP фактического primary СУЩЕСТВУЮЩИХ хостов (кластер работает,
   # primary волатилен — failover мог быть; runtime-паттерн как restart).
   # where: исключает новый хост — на нём redis ещё не стоит. На хосте-primary
-  # команда печатает его bind-IP, на репликах — пусто. failed_when: — идиома
-  # полноты §5 (ответили все существующие, host_count - 1, новый исключён).
-  # master_addr читается ниже в setup-replication → probe ИМЕНОВАН
+  # команда печатает его bind-IP, на репликах — пусто. Полнота probe
+  # гарантируется fail-stop барьером (ADR-056 §5): упавший probe → barrier →
+  # error_locked. master_addr читается ниже в setup-replication → probe ИМЕНОВАН
   # (конвенция register пилота restart).
   - name: Detect actual redis primary address on existing hosts
     module: core.cmd.shell
@@ -101,7 +101,6 @@ tasks:
     where: soulprint.self.sid != vars.new_sid
     register: master_addr
     changed_when: false
-    failed_when: size(register.master_addr) < (incarnation.host_count - 1)
     params:
       cmd: >
         [ "$(redis-cli role | head -1)" = master ]
