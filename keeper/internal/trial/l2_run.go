@@ -22,7 +22,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
+	dockercontainer "github.com/moby/moby/api/types/container"
 	"github.com/testcontainers/testcontainers-go"
 	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -58,9 +60,10 @@ type applyOutcome struct {
 }
 
 // StartL2Stand собирает soul под linux/<arch стенда> (= GOARCH хоста, контейнер
-// под ту же платформу), поднимает контейнер из stand.Image и доставляет soul.
-// Контейнер держится живым command-ом `sleep infinity` — exec-ы идут поверх него
-// (soul apply каждый раз отдельным exec, как oneshot push-сессия).
+// под ту же платформу), поднимает контейнер и доставляет soul. Контейнер держится
+// живым (sleep infinity в режиме init: none, systemd-PID1 в режиме init: systemd) —
+// exec-ы идут поверх него (soul apply каждый раз отдельным exec, как oneshot
+// push-сессия).
 func StartL2Stand(ctx context.Context, stand Stand) (*L2Stand, error) {
 	soulBin, err := buildSoulLinux(ctx)
 	if err != nil {
@@ -68,17 +71,16 @@ func StartL2Stand(ctx context.Context, stand Stand) (*L2Stand, error) {
 	}
 	defer os.Remove(soulBin)
 
-	req := testcontainers.ContainerRequest{
-		Image:      stand.Image,
-		Entrypoint: []string{"sleep", "infinity"},
-		WaitingFor: wait.ForExec([]string{"true"}),
+	req, err := standRequest(stand)
+	if err != nil {
+		return nil, err
 	}
 	ctr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
 		Started:          true,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("trial L2: поднять стенд %s: %w", stand.Image, err)
+		return nil, fmt.Errorf("trial L2: поднять стенд (init=%s): %w", stand.init(), err)
 	}
 
 	if err := ctr.CopyFileToContainer(ctx, soulBin, containerSoulPath, 0o755); err != nil {
@@ -87,6 +89,74 @@ func StartL2Stand(ctx context.Context, stand Stand) (*L2Stand, error) {
 	}
 
 	return &L2Stand{ctr: ctr, soul: containerSoulPath}, nil
+}
+
+// standRequest строит ContainerRequest под выбранный init-режим стенда.
+//
+//   - none (default): контейнер на `sleep infinity` из stand.Image, без PID1-init
+//     (текущее поведение L2-пилота, не меняется);
+//   - systemd: systemd-PID1-стенд из tests/e2e-live/dockerfiles/debian-12.Dockerfile
+//     (тот же отлаженный образ, что L3b real-soul harness). Профиль privileged +
+//     CgroupnsMode=host + tmpfs /run,/run/lock + Entrypoint /sbin/init + ожидание
+//     `systemctl is-system-running --wait` (exit 0=running|1=degraded) — копия
+//     эталона harness.SpawnSoulContainer.
+func standRequest(stand Stand) (testcontainers.ContainerRequest, error) {
+	if stand.init() == StandInitNone {
+		return testcontainers.ContainerRequest{
+			Image:      stand.Image,
+			Entrypoint: []string{"sleep", "infinity"},
+			WaitingFor: wait.ForExec([]string{"true"}),
+		}, nil
+	}
+
+	dockerfile, err := systemdStandDockerfile()
+	if err != nil {
+		return testcontainers.ContainerRequest{}, err
+	}
+	return testcontainers.ContainerRequest{
+		FromDockerfile: testcontainers.FromDockerfile{
+			Context:    filepath.Dir(dockerfile),
+			Dockerfile: filepath.Base(dockerfile),
+			// Образ детерминирован Dockerfile-ом — кешируем слои между кейсами,
+			// как L3b harness (KeepImage).
+			KeepImage: true,
+		},
+		Entrypoint: []string{"/sbin/init"},
+		HostConfigModifier: func(hc *dockercontainer.HostConfig) {
+			hc.Privileged = true
+			// systemd-PID1: tmpfs /run + /run/lock; CgroupnsMode=host — systemd
+			// видит cgroup-fs хоста (необходимо для systemctl).
+			hc.CgroupnsMode = "host"
+			if hc.Tmpfs == nil {
+				hc.Tmpfs = map[string]string{}
+			}
+			hc.Tmpfs["/run"] = "rw"
+			hc.Tmpfs["/run/lock"] = "rw"
+		},
+		// is-system-running: 0=running, 1=degraded (slim-Debian без unit-ов —
+		// норма), 2=initializing (ещё ждём). Принимаем 0 и 1.
+		WaitingFor: wait.ForExec([]string{"systemctl", "is-system-running", "--wait"}).
+			WithExitCodeMatcher(func(code int) bool { return code == 0 || code == 1 }).
+			WithStartupTimeout(60 * time.Second),
+	}, nil
+}
+
+// systemdStandDockerfile возвращает путь к L3b-Dockerfile-у systemd-PID1-стенда
+// (tests/e2e-live/dockerfiles/debian-12.Dockerfile), переиспользуемому из этого
+// пакета. repo-root выводится тем же runtime.Caller-ом, что soulModuleDir.
+func systemdStandDockerfile() (string, error) {
+	_, self, _, ok := runtimeCaller()
+	if !ok {
+		return "", fmt.Errorf("trial L2: не удалось определить путь пакета")
+	}
+	// self = .../keeper/internal/trial/l2_run.go → repo-root = ../../../..
+	trialDir := filepath.Dir(self)
+	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(trialDir)))
+	dockerfile := filepath.Join(repoRoot, "tests", "e2e-live", "dockerfiles", "debian-12.Dockerfile")
+	if _, err := os.Stat(dockerfile); err != nil {
+		return "", fmt.Errorf("trial L2: systemd-стенд: Dockerfile не найден по %s: %w", dockerfile, err)
+	}
+	return dockerfile, nil
 }
 
 // Close уничтожает стенд.

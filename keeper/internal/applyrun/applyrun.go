@@ -103,16 +103,24 @@ func ValidStatus(s Status) bool {
 // CRUD-слоя (симметрично nullable-указателям TaskIdx / StartedByAID). Запись
 // рецепта на dispatch-е — Phase 1.4.2, чтение при claim — Phase 1.4.3.
 type ApplyRun struct {
-	ApplyID         string     `json:"apply_id"`
-	SID             string     `json:"sid"`
-	IncarnationName string     `json:"incarnation_name"`
-	Scenario        string     `json:"scenario"`
-	TaskIdx         *int       `json:"task_idx,omitempty"`
-	Status          Status     `json:"status"`
-	ErrorSummary    *string    `json:"error_summary,omitempty"`
-	StartedAt       time.Time  `json:"started_at"`
-	FinishedAt      *time.Time `json:"finished_at,omitempty"`
-	StartedByAID    *string    `json:"started_by_aid,omitempty"`
+	ApplyID         string `json:"apply_id"`
+	SID             string `json:"sid"`
+	IncarnationName string `json:"incarnation_name"`
+	Scenario        string `json:"scenario"`
+	TaskIdx         *int   `json:"task_idx,omitempty"`
+	Status          Status `json:"status"`
+
+	// Passage — индекс Passage staged-render (ADR-056, S3): на один хост прогона
+	// приходится N строк apply_runs (по одной на Passage), составляющих PK
+	// (apply_id, sid, passage) после миграции 078. Zero-value 0 = единственный
+	// Passage — N=1-прогон (без register-зависимостей) пишет единственную строку
+	// passage=0, поведение БИТ-В-БИТ как до staged-render. Insert пишет это поле явно.
+	Passage int `json:"passage"`
+
+	ErrorSummary *string    `json:"error_summary,omitempty"`
+	StartedAt    time.Time  `json:"started_at"`
+	FinishedAt   *time.Time `json:"finished_at,omitempty"`
+	StartedByAID *string    `json:"started_by_aid,omitempty"`
 
 	ClaimByKID     *string    `json:"claim_by_kid,omitempty"`
 	ClaimAt        *time.Time `json:"claim_at,omitempty"`

@@ -144,13 +144,37 @@ func (r *Runner) loadRegisterByHost(ctx context.Context, applyID string, tasks [
 	return buildRegisterByHost(rows, tasks), nil
 }
 
+// loadRegisterByHostUpToPassage читает register-данные прогона, накопленные в
+// Passage СТРОГО МЕНЬШЕ upToPassage (staged-render, ADR-056 §в.1): render Passage
+// N подставляет register всех предыдущих Passage per-host. upToPassage=0 (первый
+// Passage) → пустая map (register ещё не собран — как up-front render).
+//
+// Резолв task_idx → register-name тот же, что в [loadRegisterByHost] (по
+// []RenderedTask текущего прогона). Stage-loop run.go вызывает это перед render-ом
+// каждого Passage и прокидывает результат в RenderInput.RegisterByHost.
+func (r *Runner) loadRegisterByHostUpToPassage(ctx context.Context, applyID string, upToPassage int, tasks []*render.RenderedTask) (map[string]map[string]any, error) {
+	rows, err := applyrun.SelectTaskRegistersByApplyIDUpToPassage(ctx, r.deps.DB, applyID, upToPassage)
+	if err != nil {
+		return nil, fmt.Errorf("scenario: load register-данных прогона (passage < %d): %w", upToPassage, err)
+	}
+	return buildRegisterByHost(rows, tasks), nil
+}
+
 // buildRegisterByHost — чистая свёртка register-строк прогона в per-host map
-// (sid → register-name → payload) по mapping task_idx→register-name из tasks.
+// (sid → register-name → payload) по mapping plan_index→register-name из tasks.
 // Вынесена из loadRegisterByHost для unit-тестирования без PG.
+//
+// Корреляция по ГЛОБАЛЬНОМУ plan_index (ADR-056 §S1 fix Variant B): nameByIdx
+// строится по RenderedTask.Index (глобальный сквозной индекс по всему плану), а
+// register-строка несёт TaskRegister.PlanIndex (эхо TaskEvent.plan_index, тот же
+// глобальный индекс). Раньше мапилось nameByIdx[t.Index] (глобальный) против
+// rows.TaskIdx (ЛОКАЛЬНАЯ позиция в ApplyRequest Passage) — рассинхрон имён на
+// passage>0 (latent-баг). Локальный task_idx на корреляцию НЕ годится: он
+// неуникален между Passage И между хостами одного Passage (разный where:).
 //
 // Если несколько задач на одном хосте имеют одно register-имя (программно
 // возможно, но валидатор scenario такое не пропускает) — побеждает строка с
-// бóльшим task_idx (SelectTaskRegistersByApplyID сортирует по task_idx ASC,
+// бóльшим plan_index (SelectTaskRegistersByApplyID сортирует по plan_index ASC,
 // поздняя перезаписывает раннюю).
 //
 // no_log (вариант B): задача с NoLog=true НЕ попадает в nameByIdx, поэтому её
@@ -175,7 +199,7 @@ func buildRegisterByHost(rows []applyrun.TaskRegister, tasks []*render.RenderedT
 
 	out := make(map[string]map[string]any)
 	for i := range rows {
-		name := nameByIdx[rows[i].TaskIdx]
+		name := nameByIdx[rows[i].PlanIndex]
 		if name == "" {
 			continue
 		}
@@ -232,8 +256,14 @@ func taskAddress(t *render.RenderedTask) (addr string, addressable bool) {
 // buildChangedTasks — чистая свёртка per-task «что изменилось» по адресу
 // (Register ∪ ID). Образец — [buildRegisterByHost] (idx→register-резолв из
 // tasks). Без PG/audit-чтения: changedKeys — уже прочитанное множество
-// (sid, task_idx) CHANGED-задач (auditpg.SelectChangedTaskKeys), plans —
+// (sid, plan_index) CHANGED-задач (auditpg.SelectChangedTaskKeys), plans —
 // DispatchPlan-ы прогона (TargetSIDs после on:/where:).
+//
+// Корреляция CHANGED-факта с планом идёт по ГЛОБАЛЬНОМУ RenderedTask.Index
+// (= ChangedTaskKey.PlanIndex, ADR-056 §S1 fix Variant B, T3): под staged/
+// per-host-where локальный task_idx ≠ глобальному, ключ по нему указывал бы на
+// соседнюю задачу (mismatch state_changes-whitelist + audit). SelectChangedTaskKeys
+// уже отдаёт глобальный plan_index из payload (fallback task_idx для N=1).
 //
 // Группировка:
 //   - адресуемая задача (register/id) → ключ = адрес; loop-итерации с одним
@@ -317,10 +347,11 @@ func buildChangedTasks(
 			a.totalSIDs[sid] = struct{}{}
 		}
 		// union CHANGED-sid этого idx в changed. Проверяем по адресным TargetSIDs:
-		// changedKeys — множество (sid, idx); пробегаем target-sids idx-а и берём
-		// те, что отметились CHANGED.
+		// changedKeys — множество (sid, plan_index); пробегаем target-sids idx-а и
+		// берём те, что отметились CHANGED. t.Index — ГЛОБАЛЬНЫЙ RenderedTask.Index,
+		// совпадает с ключом PlanIndex (T3); локальный task_idx тут не используется.
 		for _, sid := range targetsByIdx[t.Index] {
-			if _, ok := changedKeys[auditpg.ChangedTaskKey{SID: sid, TaskIdx: t.Index}]; ok {
+			if _, ok := changedKeys[auditpg.ChangedTaskKey{SID: sid, PlanIndex: t.Index}]; ok {
 				a.changedSIDs[sid] = struct{}{}
 			}
 		}

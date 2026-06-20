@@ -10,14 +10,19 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// fakeChangedReader — ChangedTaskReader: отдаёт фикс-множество CHANGED-ключей.
+// fakeChangedReader — ChangedTaskReader: отдаёт фикс-множества CHANGED/FAILED-ключей.
 type fakeChangedReader struct {
-	keys map[auditpg.ChangedTaskKey]struct{}
-	err  error
+	keys       map[auditpg.ChangedTaskKey]struct{}
+	failedKeys map[auditpg.ChangedTaskKey]struct{}
+	err        error
 }
 
 func (f *fakeChangedReader) SelectChangedTaskKeys(_ context.Context, _ string) (map[auditpg.ChangedTaskKey]struct{}, error) {
 	return f.keys, f.err
+}
+
+func (f *fakeChangedReader) SelectFailedTaskKeys(_ context.Context, _ string) (map[auditpg.ChangedTaskKey]struct{}, error) {
+	return f.failedKeys, f.err
 }
 
 func runCompletedRunner(aw audit.Writer, ar ChangedTaskReader) *Runner {
@@ -41,8 +46,8 @@ func runCompletedSpec() RunSpec {
 func TestEmitRunCompleted_SingleEventWithChangedTasks(t *testing.T) {
 	aw := &fakeAuditWriter{}
 	ar := &fakeChangedReader{keys: changedKeys(
-		auditpg.ChangedTaskKey{SID: "a.local", TaskIdx: 0},
-		auditpg.ChangedTaskKey{SID: "b.local", TaskIdx: 0},
+		auditpg.ChangedTaskKey{SID: "a.local", PlanIndex: 0},
+		auditpg.ChangedTaskKey{SID: "b.local", PlanIndex: 0},
 	)}
 	r := runCompletedRunner(aw, ar)
 
@@ -129,7 +134,7 @@ func TestEmitRunCompleted_FailedLateAbortPartialChangedTasks(t *testing.T) {
 	aw := &fakeAuditWriter{}
 	// CHANGED только на одном из двух таргет-хостов (частичный прогресс до падения).
 	ar := &fakeChangedReader{keys: changedKeys(
-		auditpg.ChangedTaskKey{SID: "a.local", TaskIdx: 0},
+		auditpg.ChangedTaskKey{SID: "a.local", PlanIndex: 0},
 	)}
 	r := runCompletedRunner(aw, ar)
 

@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"testing"
 	"time"
@@ -91,6 +92,39 @@ func (s *Stack) AddSoulToCoven(t *testing.T, soulIndex int, coven string) {
 		WHERE sid = $1 AND NOT ($2 = ANY(coalesce(coven, '{}')))
 	`, sid, coven); err != nil {
 		t.Fatalf("AddSoulToCoven(%s, %s): %v", sid, coven, err)
+	}
+}
+
+// SeedSoulprint записывает souls.soulprint_facts (JSONB) для i-го pre-auth
+// Soul-а. Нужно сервисам, чей render читает soulprint keeper-side: redis-exporter
+// берёт `arch: soulprint.self.os.arch`, node-exporter — `soulprint.self.os.arch`
+// в URL tarball-а (ADR-018). RegisterSoulPreAuth строку soulprint НЕ заполняет
+// (NULL), и без seed render-фаза падает на nil-доступе к `os.arch`. smoke-nginx
+// soulprint не читает keeper-side и работает без seed-а — для redis он обязателен.
+//
+// facts — форма `SoulprintFacts`-JSON (resolver scanHost → map[string]any,
+// CEL `soulprint.self.<path>`): верхнеуровневый ключ `os` с подполями
+// arch/family/distro/version/pkg_mgr/init_system. Симметрично fixtures/souls.yaml.
+func (s *Stack) SeedSoulprint(t *testing.T, soulIndex int, facts map[string]any) {
+	t.Helper()
+	if soulIndex < 0 || soulIndex >= len(s.souls) {
+		t.Fatalf("SeedSoulprint(%d): out of range (создано %d soul-ов)", soulIndex, len(s.souls))
+	}
+	sid := s.souls[soulIndex].SID
+	factsJSON, err := json.Marshal(facts)
+	if err != nil {
+		t.Fatalf("SeedSoulprint(%s): marshal facts: %v", sid, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := s.db.Exec(ctx, `
+		UPDATE souls
+		SET soulprint_facts = $2::jsonb,
+		    soulprint_collected_at = NOW(),
+		    soulprint_received_at = NOW()
+		WHERE sid = $1
+	`, sid, string(factsJSON)); err != nil {
+		t.Fatalf("SeedSoulprint(%s): %v", sid, err)
 	}
 }
 

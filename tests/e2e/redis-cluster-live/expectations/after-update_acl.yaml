@@ -1,0 +1,20 @@
+# Post-apply ожидания redis-cluster-live::update_acl (после create).
+# Сценарий НЕ объявляет state_changes (точечный update одного пользователя; полный
+# список redis_users фиксируется через add_user, см. main.yml-комментарий) —
+# контракт = lifecycle (apply_runs success + audit + metric). incarnation.state на
+# create-baseline (redis_users остаётся []).
+#
+# Задача host-инвариантна (on: incarnation, без where:) → приезжает на host,
+# row=success. acl secret:true + no_log:true — маскинг на выходе, на lifecycle
+# не влияет.
+apply_runs:
+  status: success
+
+incarnation_state:
+  redis_users: []
+
+audit_events:
+  - type: incarnation.scenario_started
+
+metrics:
+  keeper_scenario_runs_total{result="ok"}: ">= 2"

@@ -17,10 +17,15 @@ import (
 //  1. duplicate_task_address — два+ задачи делят одно имя в адресном
 //     пространстве подписки `register ∪ id` (два register, два id, либо
 //     register одной задачи == id другой).
-//  2. unknown_register_reference — `onchanges:`/`onfail:`/`require:` (списочная
-//     форма) ИЛИ CEL-предикат (`when:`/`changed_when:`/`failed_when:`/`until:`/
-//     `where:`/`loop.when:`) ссылается на register-имя `register.<name>.*`,
-//     которого нет ни у одной задачи плана.
+//  2. unknown_register_reference — ссылка на register-имя `register.<name>.*`,
+//     которого нет ни у одной задачи плана, в любом register-читающем поле:
+//     `onchanges:`/`onfail:`/`require:` (списочная форма) ИЛИ CEL-предикат
+//     (`when:`/`changed_when:`/`failed_when:`/`until:`/`where:`/`loop.when:`) ИЛИ
+//     интерполяция `${ register.<name>.* }` в source-поле (`vars:`/`output:`/
+//     `params:`/`apply.input:`/`loop.items:`). Последний класс закрыт ADR-056 S2 —
+//     до него unknown-register в интерполяции доживал до рантайм-стратификатора;
+//     набор полей здесь обязан совпадать с passage-определяющими источниками
+//     стратификатора (см. collectRefs).
 //
 // Почему ОШИБКА, а не warning, для дубля адреса:
 // register-имена резолвятся в task-индексы через плоскую карту имя→index по
@@ -53,7 +58,7 @@ import (
 // `where:`/`loop.when:`, где ссылка пишется как `register.<name>.*`) покрыт
 // текстовым извлечением: содержимое строковых литералов вырезается (как в
 // shared/cel guard-ах), затем regex `register.<name>` собирает имена (см.
-// extractRegisterRefs). Динамический доступ (`register["..."]`) и `register.self`
+// ExtractRegisterRefs). Динамический доступ (`register["..."]`) и `register.self`
 // (текущая задача) сознательно не флагаются. Полный CEL-AST-парс не нужен —
 // форма ссылки фиксирована грамматикой (`register.<name>`).
 //
@@ -133,9 +138,24 @@ func collectAddresses(seq *ast.SequenceNode, pathPrefix string, addrs, registers
 	}
 }
 
-// collectRefs обходит задачи (рекурсивно через block:) и для каждой проверяет
-// списочные requisite-поля onchanges/onfail/require против known. Неизвестное
-// имя → unknown_register_reference.
+// collectRefs обходит задачи (рекурсивно через block:) и проверяет КАЖДОЕ
+// register-читающее поле задачи против known; неизвестное имя →
+// unknown_register_reference. Поля бьются на три класса:
+//
+//   - requisite-списки (onchanges/onfail/require) — имя task пишется как голый
+//     элемент списка (checkRefList);
+//   - CEL-предикаты (when/changed_when/failed_when/where + вложенные retry.until/
+//     loop.when) — ссылка как `register.<name>.*` в выражении (checkPredicateRefs);
+//   - интерполяционные поля (vars/output/params/apply.input/loop.items) — ссылка
+//     как `${ register.<name>.* }` в строковых литералах, рекурсивно по map/seq
+//     (checkInterpRefs).
+//
+// Этот набор обязан 1:1 совпадать с passage-определяющими источниками
+// стратификатора (keeper/internal/render.collectTaskReads, ADR-056-реестр), чтобы
+// граф register-ссылок линтера и граф стратификатора не расходились: дыра в
+// валидаторе означала бы, что unknown-register в output/vars/params/apply.input
+// доживает до рантайма и падает StratifyUnknownRegister онлайн, а не ловится
+// офлайн линтером. Guard-инвариант — reads==refs consistency (passage_test.go).
 func collectRefs(seq *ast.SequenceNode, pathPrefix string, known map[string]bool) []diag.Diagnostic {
 	var out []diag.Diagnostic
 	for i, item := range seq.Values {
@@ -155,6 +175,20 @@ func collectRefs(seq *ast.SequenceNode, pathPrefix string, known map[string]bool
 			case "when", "changed_when", "failed_when", "where":
 				out = append(out, checkPredicateRefs(tok.Value, kv.Value, known, taskPath)...)
 				out = append(out, checkSoulprintRefs(tok.Value, kv.Value, taskPath)...)
+			case "vars", "output", "params":
+				// Интерполяционные source-поля: ${ register.X } в строковых
+				// литералах, рекурсивно по вложенным map/seq.
+				out = append(out, checkInterpRefs(kv.Value, known, taskPath, tok.Value)...)
+			case "apply":
+				// applier-задача: register читается в apply.input (вложенный map).
+				if amm, isMap := kv.Value.(*ast.MappingNode); isMap {
+					for _, sub := range amm.Values {
+						st := sub.Key.GetToken()
+						if st != nil && st.Value == "input" {
+							out = append(out, checkInterpRefs(sub.Value, known, taskPath, "apply.input")...)
+						}
+					}
+				}
 			case "retry":
 				// `until:` — CEL-предикат внутри retry-mapping.
 				if rmm, isMap := kv.Value.(*ast.MappingNode); isMap {
@@ -167,13 +201,20 @@ func collectRefs(seq *ast.SequenceNode, pathPrefix string, known map[string]bool
 					}
 				}
 			case "loop":
-				// `when:` — CEL-предикат внутри loop-mapping.
+				// `when:` — CEL-предикат; `items:` — интерполяционный source
+				// (${ register.X } в скаляре/списке/map).
 				if lmm, isMap := kv.Value.(*ast.MappingNode); isMap {
 					for _, sub := range lmm.Values {
 						st := sub.Key.GetToken()
-						if st != nil && st.Value == "when" {
+						if st == nil {
+							continue
+						}
+						switch st.Value {
+						case "when":
 							out = append(out, checkPredicateRefs("loop.when", sub.Value, known, taskPath)...)
 							out = append(out, checkSoulprintRefs("loop.when", sub.Value, taskPath)...)
+						case "items":
+							out = append(out, checkInterpRefs(sub.Value, known, taskPath, "loop.items")...)
 						}
 					}
 				}
@@ -185,6 +226,58 @@ func collectRefs(seq *ast.SequenceNode, pathPrefix string, known map[string]bool
 		}
 	}
 	return out
+}
+
+// checkInterpRefs рекурсивно обходит AST-узел интерполяционного поля (vars /
+// output / params / apply.input / loop.items) и проверяет register-имена,
+// встреченные внутри `${ register.<name>.* }` строковых литералов, против known.
+// Это закрывает дыру cross-ref-валидатора: до ADR-056 S2 unknown-register в
+// интерполяции (а не в предикате/requisite) не ловился офлайн и падал только
+// рантайм-стратификатором (StratifyUnknownRegister).
+//
+// Извлечение делает ExtractRegisterRefs — тот же канон-парсер `register.<name>`,
+// что и стратификатор и checkPredicateRefs (без дубля regex). Не-string узлы
+// (int/bool/null) ссылок не несут, рекурсия спускается только по map/seq.
+// Диагностика — на позиции строкового узла, где найдена ссылка.
+func checkInterpRefs(node ast.Node, known map[string]bool, taskPath, kind string) []diag.Diagnostic {
+	switch n := node.(type) {
+	case *ast.StringNode:
+		var out []diag.Diagnostic
+		rt := n.GetToken()
+		line, col := 0, 0
+		if rt != nil {
+			line, col = rt.Position.Line, rt.Position.Column
+		}
+		for _, name := range ExtractRegisterRefs(n.Value) {
+			if known[name] {
+				continue
+			}
+			out = append(out, diagAt(line, col, diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+				Code:     "unknown_register_reference",
+				Message:  fmt.Sprintf("%s interpolates register %q, which no task declares", kind, name),
+				Hint:     "interpolation reads ${ register.<name>.* }; check for a typo or a missing register: on the producing task (register.self is the current task and is not checked)",
+				YAMLPath: fmt.Sprintf("%s.%s", taskPath, kind),
+			}))
+		}
+		return out
+	case *ast.MappingNode:
+		var out []diag.Diagnostic
+		for _, kv := range n.Values {
+			out = append(out, checkInterpRefs(kv.Value, known, taskPath, kind)...)
+		}
+		return out
+	case *ast.MappingValueNode:
+		return checkInterpRefs(n.Value, known, taskPath, kind)
+	case *ast.SequenceNode:
+		var out []diag.Diagnostic
+		for _, v := range n.Values {
+			out = append(out, checkInterpRefs(v, known, taskPath, kind)...)
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 // checkRefList проверяет элементы списочного requisite-поля (onchanges/onfail/
@@ -232,12 +325,19 @@ var reRegisterCELRef = regexp.MustCompile(`(^|[^A-Za-z0-9_.])register\.([a-z][a-
 // ложное unknown_register_reference.
 var celStringLiteral = regexp.MustCompile(`'[^']*'|"[^"]*"`)
 
-// extractRegisterRefs возвращает отсортированный набор уникальных имён из
+// ExtractRegisterRefs возвращает отсортированный набор уникальных имён из
 // `register.<name>` в CEL-строке (после вырезания строковых литералов). `self`
 // исключается — это текущая задача (register.self.*), её известность не
 // проверяется cross-ref-ом. Сортировка делает диагностики детерминированными
 // при нескольких unknown-ссылках в одном предикате.
-func extractRegisterRefs(expr string) []string {
+//
+// Экспортирована как канонический парсер cross-task register-ссылок: stage-render
+// стратификация ([ADR-056], keeper/internal/render) переиспользует её, чтобы
+// строить граф register-зависимостей по той же грамматике `register.<name>`, что
+// и cross-ref-валидатор, — без дубля regex. `register.self.*` (Soul-side
+// собственный результат той же задачи) ссылкой НЕ считается ни здесь, ни в
+// стратификации (это не cross-task ребро).
+func ExtractRegisterRefs(expr string) []string {
 	stripped := celStringLiteral.ReplaceAllString(expr, `""`)
 	seen := map[string]struct{}{}
 	for _, m := range reRegisterCELRef.FindAllStringSubmatch(stripped, -1) {
@@ -272,7 +372,7 @@ func checkPredicateRefs(kind string, value ast.Node, known map[string]bool, task
 	if rt != nil {
 		line, col = rt.Position.Line, rt.Position.Column
 	}
-	for _, name := range extractRegisterRefs(sn.Value) {
+	for _, name := range ExtractRegisterRefs(sn.Value) {
 		if known[name] {
 			continue
 		}

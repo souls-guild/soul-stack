@@ -170,7 +170,7 @@ curl -s http://127.0.0.1:8080/v1/souls -H "Authorization: Bearer $TOKEN"
 
 ## Шаг 7. Apply: применить сценарий `hello-world`
 
-Что применяем: **service** `hello-world` ([examples/service/service-hello-world/](../examples/service/service-hello-world/)) — минимальный сервис со сценарием `create`, который пишет greeting-файл `/tmp/soul-stack-hello` на каждом хосте incarnation и фиксирует путь в `incarnation.state`.
+Что применяем: **service** `hello-world` ([examples/service/hello-world/](../examples/service/hello-world/)) — минимальный сервис со сценарием `create`, который пишет greeting-файл `/tmp/soul-stack-hello` на каждом хосте incarnation и фиксирует путь в `incarnation.state`.
 
 Чтобы Keeper мог резолвить сервис, он должен быть в реестре сервисов (git-источник + ref). В проде это `POST /v1/services`:
 

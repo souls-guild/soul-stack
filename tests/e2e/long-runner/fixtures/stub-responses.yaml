@@ -1,4 +1,4 @@
-# Скрипт ответов soul-stub-а для service-long-runner::create.
+# Скрипт ответов soul-stub-а для long-runner::create.
 #
 # scenario пишет init-маркер /tmp/long-runner-init.txt через core.file.present.
 # state_changes.sets: last_run="create", runner_marker=/tmp/long-runner-init.txt.

@@ -34,14 +34,14 @@ import (
 // ждём success + incarnation `ready`.
 func TestScenarioApply_NoopCreate_Succeeds(t *testing.T) {
 	stack := harness.NewStack(t, harness.Config{
-		ExamplePath: "examples/service/service-noop",
+		ExamplePath: "examples/service/noop",
 		Souls:       1,
 	})
 	defer stack.Cleanup()
 
 	// Reusable helper №1: материализация example → file://-git-репо + POST
 	// /v1/services. Без неё CreateIncarnation отвечает 422.
-	stack.RegisterService(t, "noop", "examples/service/service-noop")
+	stack.RegisterService(t, "noop", "examples/service/noop")
 
 	// Reusable helper №2: live EventStream-стрим (Redis SID-lease → dispatch
 	// маршрутизируется в локальный Outbound). SetApplyDefaultSuccess — SUCCESS

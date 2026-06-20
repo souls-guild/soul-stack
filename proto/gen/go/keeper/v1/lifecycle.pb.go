@@ -28,7 +28,24 @@ type Hello struct {
 	// SID echoed for logging only; authoritative source is the mTLS peer certificate.
 	SidEcho string `protobuf:"bytes,1,opt,name=sid_echo,json=sidEcho,proto3" json:"sid_echo,omitempty"`
 	// Версия soul-бинаря.
-	SoulVersion   string `protobuf:"bytes,2,opt,name=soul_version,json=soulVersion,proto3" json:"soul_version,omitempty"`
+	SoulVersion string `protobuf:"bytes,2,opt,name=soul_version,json=soulVersion,proto3" json:"soul_version,omitempty"`
+	// capabilities — набор фичей протокола, которые этот Soul-бинарь поддерживает
+	// (ADR-056 §S5 forward-compat). Анонс при connect-е; Keeper персистит его рядом
+	// с presence (Redis, жизненный цикл = SID-lease) и сверяет ДО dispatch-а
+	// фич-зависимых прогонов.
+	//
+	// Канон строковых значений — naming-rules.md → «Soul-capabilities». MVP:
+	//   - "passage" — Soul эхает ApplyRequest.passage в TaskEvent/RunResult, то есть
+	//     умеет участвовать в staged-render (N>1 Passage, ADR-056). Soul без этого
+	//     признака под staged-сценарием отвергается keeper-ом ДО dispatch
+	//     (`soul_passage_unsupported`, fail-closed) — иначе barrier следующего Passage
+	//     ждал бы терминал, которого старый бинарь не пришлёт (зависание в applying).
+	//
+	// Пустой набор = старый Soul без capability-анонса (forward-compat, ADR-012(c)
+	// only-add): keeper трактует его как не поддерживающий НИ ОДНОЙ фичи (fail-closed
+	// для фич-зависимых прогонов; N=1-прогоны совместимы как раньше). Только
+	// never-reuse номера поля.
+	Capabilities  []string `protobuf:"bytes,3,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -75,6 +92,13 @@ func (x *Hello) GetSoulVersion() string {
 		return x.SoulVersion
 	}
 	return ""
+}
+
+func (x *Hello) GetCapabilities() []string {
+	if x != nil {
+		return x.Capabilities
+	}
+	return nil
 }
 
 // HelloReply — ответ Keeper-а с метаданными сессии.
@@ -368,10 +392,11 @@ var File_keeper_v1_lifecycle_proto protoreflect.FileDescriptor
 
 const file_keeper_v1_lifecycle_proto_rawDesc = "" +
 	"\n" +
-	"\x19keeper/v1/lifecycle.proto\x12\x13soulstack.keeper.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"E\n" +
+	"\x19keeper/v1/lifecycle.proto\x12\x13soulstack.keeper.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"i\n" +
 	"\x05Hello\x12\x19\n" +
 	"\bsid_echo\x18\x01 \x01(\tR\asidEcho\x12!\n" +
-	"\fsoul_version\x18\x02 \x01(\tR\vsoulVersion\"z\n" +
+	"\fsoul_version\x18\x02 \x01(\tR\vsoulVersion\x12\"\n" +
+	"\fcapabilities\x18\x03 \x03(\tR\fcapabilities\"z\n" +
 	"\n" +
 	"HelloReply\x12\x1d\n" +
 	"\n" +

@@ -13,7 +13,7 @@
 | [output.md](output.md) | `output:`-контракт destiny (top-level): симметричный `input:` блок-декларация того, какой результат destiny публикует caller-у; читается из scenario через `register:` на applier-задаче. |
 | [vars.md](vars.md) | `vars.yml` — destiny-локалы. Жёсткие значения автора destiny; снаружи не переопределяются; могут ссылаться на `input.*`. |
 | [testing.md](testing.md) | Molecule-style тестирование destiny на эфемерном стенде; раскладка `tests/<case>/`; open Q вокруг coverage-инструмента. |
-| [production-conventions.md](production-conventions.md) | Чек-лист «прод-grade destiny»: passthrough-флаги, гибрид-правило сервис-аккаунта (DynamicUser vs ручной uid), обязательный systemd-hardening, supply-chain, изоляция. Эталон — `destiny-node-exporter`. |
+| [production-conventions.md](production-conventions.md) | Чек-лист «прод-grade destiny»: passthrough-флаги, гибрид-правило сервис-аккаунта (DynamicUser vs ручной uid), обязательный systemd-hardening, supply-chain, изоляция. Эталон — `node-exporter` (stateful-аккаунт + supply-chain + привилегированные textfile-коллекторы). |
 
 ## Связанные документы
 
@@ -26,4 +26,4 @@
 - [`docs/templating.md`](../templating.md) — спека шаблонизатора (ADR-010): CEL для выражений в задачах destiny, Go text/template для `templates/*.tmpl`, маркер `${ … }`, `core.file.rendered` как рендер-модуль.
 - [`docs/soul-lint.md`](../soul-lint.md) — статические проверки destiny на этапе CI/IDE.
 - [`docs/module-collections.md`](../module-collections.md) — namespace-префикс в адресации модулей.
-- [`examples/destiny/destiny-redis/`](../../examples/destiny/destiny-redis/) — рабочий пример полной раскладки.
+- [`examples/destiny/redis/`](../../examples/destiny/redis/) — рабочий пример полной раскладки.

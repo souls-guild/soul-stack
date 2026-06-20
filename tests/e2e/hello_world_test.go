@@ -10,7 +10,7 @@
 //  4. WaitApplySuccess → asserts по after-create.yaml expectations:
 //     - apply_runs.status == "success";
 //     - incarnation.state.greeting_file == "/tmp/soul-stack-hello"
-//       (берётся state_changes.sets из scenario/create/main.yml);
+//     (берётся state_changes.sets из scenario/create/main.yml);
 //     - audit_log: incarnation.scenario_started с apply_id;
 //     - metrics: keeper_scenario_runs_total{result="ok"} >= 1.
 package e2e_test
@@ -23,7 +23,7 @@ import (
 
 func TestE2EServiceHelloWorld_Create(t *testing.T) {
 	stack := harness.NewStack(t, harness.Config{
-		ExamplePath: "examples/service/service-hello-world",
+		ExamplePath: "examples/service/hello-world",
 		Souls:       1,
 	})
 	defer stack.Cleanup()

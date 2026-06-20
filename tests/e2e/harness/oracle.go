@@ -212,9 +212,9 @@ func (s *Stack) CreateDecree(ctx context.Context, t *testing.T, opts CreateDecre
 // уникальных subject-ов, по которым Decree уже стрелял, а не суммарный
 // fire-counter (см. ограничения в шапке файла).
 type OracleFire struct {
-	Decree   string
-	Subject  string
-	FiredAt  time.Time
+	Decree  string
+	Subject string
+	FiredAt time.Time
 }
 
 // WaitForOracleFires блокируется до того, как для Decree-а decreeName в таблице

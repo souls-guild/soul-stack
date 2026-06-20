@@ -36,7 +36,7 @@ input:
 # Что пишем в incarnation.state после успешного apply.
 # ПИЛОТ-ОГРАНИЧЕНИЕ: sets видит только input/incarnation/soulprint.self —
 # soulprint.hosts/vars/essence/state в sets ещё НЕ реализованы (как в committed
-# service-redis-cluster/create/main.yml). Поэтому cluster_nodes здесь НЕ из
+# redis-cluster/create/main.yml). Поэтому cluster_nodes здесь НЕ из
 # soulprint.hosts; топология фиксируется как [] и наполняется отдельным
 # сценарием/probe при необходимости.
 state_changes:

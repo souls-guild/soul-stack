@@ -589,8 +589,50 @@ func (s *Stack) AssertHostFileContent(t *testing.T, soulIdx int, path, substr st
 	}
 }
 
+// AssertHostHTTPContains делает HTTP GET по url ВНУТРИ soul-контейнера (curl,
+// присутствует в L3b-Dockerfile) и проверяет, что тело ответа содержит substr.
+// Поллит до retrySec секунд: сетевой сервис (node_exporter :9100/metrics)
+// поднимается асинхронно после systemctl start — exporter-у нужно секунду на
+// bind listen-сокета.
+//
+// Это и есть piggyback-проверка node-exporter: url=http://127.0.0.1:9100/metrics,
+// substr="node_" (любая node_exporter-метрика) подтверждает, что бинарь
+// разложен, systemd-unit активен И порт реально слушает + отдаёт /metrics —
+// чего services/files-проверки по отдельности не доказывают.
+//
+// curl -fsS: -f → ненулевой exit на HTTP >= 400, -s → без прогресс-бара, -S →
+// показать ошибку. exit 0 + substr в теле = успех.
+func (s *Stack) AssertHostHTTPContains(t *testing.T, soulIdx int, url, substr string, retrySec int) {
+	t.Helper()
+	sc := s.soulContainerByIdx(t, soulIdx)
+
+	var lastOut string
+	var lastCode int
+	deadline := time.Now().Add(time.Duration(retrySec) * time.Second)
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), hostExecTimeout)
+		script := fmt.Sprintf("curl -fsS %s | grep -F -- %s", shellQuote(url), shellQuote(substr))
+		out, code, err := sc.Exec(ctx, []string{"/bin/sh", "-c", script})
+		cancel()
+		if err != nil {
+			t.Fatalf("AssertHostHTTPContains(soulIdx=%d url=%s): exec: %v\noutput=%s",
+				soulIdx, url, err, out)
+		}
+		lastOut, lastCode = out, code
+		if code == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+	t.Fatalf("AssertHostHTTPContains(soulIdx=%d url=%s substr=%q): не получено за %ds (curl|grep exit=%d)\noutput=%s",
+		soulIdx, url, substr, retrySec, lastCode, lastOut)
+}
+
 // shellQuote оборачивает строку в одинарные кавычки, экранируя внутренние
-// одинарные кавычки по шаблону POSIX `'\''`. Используется только для путей и
+// одинарные кавычки по шаблону POSIX `'\”`. Используется только для путей и
 // substring-ов из тест-fixtures (контролируемый input, не user-data).
 func shellQuote(s string) string {
 	return `'` + strings.ReplaceAll(s, `'`, `'\''`) + `'`

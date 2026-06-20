@@ -1,0 +1,33 @@
+# tasks/account.yml — стабильный сервис-аккаунт node_exporter + textfile-каталог.
+#
+# В отличие от stateless-ветки прод-конвенции §2 (DynamicUser=yes, аккаунт даёт
+# сам systemd), держим ручной system-аккаунт (stateful-ветка §2): textfile-каталог
+# переживает рестарты и читается root-сборщиками — нужен стабильный uid-владелец.
+# Группа создаётся ДО пользователя (core.user -g требует существующую primary-группу).
+
+- name: Ensure the node_exporter system group exists
+  module: core.group.present
+  params:
+    name: "${ input.user }"
+    system: true
+
+- name: Ensure the node_exporter system user exists
+  module: core.user.present
+  params:
+    name: "${ input.user }"
+    system: true
+    group: "${ input.user }"
+    shell: /usr/sbin/nologin
+    home: /
+
+# textfile-каталог. Декларативное состояние core.file.directory: idempotent по
+# mode/owner/group, чинит дрейф, поддерживает dry-run (в отличие от императивного
+# core.exec.run install -d). owner/group — сервис-аккаунт (oneshot-сборчики пишут
+# туда от root, основной демон читает).
+- name: Ensure textfile collector directory exists
+  module: core.file.directory
+  params:
+    path:  "${ input.textfile_dir }"
+    owner: "${ input.user }"
+    group: "${ input.user }"
+    mode:  "0755"

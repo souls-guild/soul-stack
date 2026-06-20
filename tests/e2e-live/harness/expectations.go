@@ -59,10 +59,11 @@ type AuditEventExpectation struct {
 // AssertExpectations резолвит индекс через findSoulIdx и фейлит, если sid
 // неизвестен (помогает поймать опечатки в YAML).
 type HostStateExpectation struct {
-	Soul     string                `yaml:"soul"`
-	Packages map[string]string     `yaml:"packages"` // pkg → status (только "installed" в MVP)
-	Services map[string]string     `yaml:"services"` // svc → state  (только "active"    в MVP)
-	Files    []HostFileExpectation `yaml:"files"`
+	Soul      string                    `yaml:"soul"`
+	Packages  map[string]string         `yaml:"packages"` // pkg → status (только "installed" в MVP)
+	Services  map[string]string         `yaml:"services"` // svc → state  (только "active"    в MVP)
+	Files     []HostFileExpectation     `yaml:"files"`
+	Endpoints []HostEndpointExpectation `yaml:"endpoints"`
 }
 
 // HostFileExpectation — ожидание по файлу внутри контейнера.
@@ -71,6 +72,16 @@ type HostStateExpectation struct {
 // дополнительно проверяется AssertHostFileContent.
 type HostFileExpectation struct {
 	Path     string `yaml:"path"`
+	Contains string `yaml:"contains"`
+}
+
+// HostEndpointExpectation — HTTP-ожидание по сетевому сервису внутри контейнера
+// (AssertHostHTTPContains). URL обязателен, Contains обязателен (тело ответа
+// должно содержать подстроку — например node_exporter :9100/metrics → "node_").
+// Это доказывает, что порт реально слушает и отдаёт ожидаемый контент — чего
+// services/files-проверки по отдельности не дают.
+type HostEndpointExpectation struct {
+	URL      string `yaml:"url"`
 	Contains string `yaml:"contains"`
 }
 
@@ -167,6 +178,15 @@ func (s *Stack) AssertExpectations(t *testing.T, e *Expectations, applyID, incNa
 			if f.Contains != "" {
 				s.AssertHostFileContent(t, soulIdx, f.Path, f.Contains)
 			}
+		}
+		for _, ep := range hs.Endpoints {
+			if ep.URL == "" || ep.Contains == "" {
+				t.Fatalf("host_state(%s).endpoints: url и contains обязательны (url=%q contains=%q)",
+					hs.Soul, ep.URL, ep.Contains)
+			}
+			// 30s retry: сетевой сервис (node_exporter) bind-ит listen-сокет
+			// асинхронно после systemctl start.
+			s.AssertHostHTTPContains(t, soulIdx, ep.URL, ep.Contains, 30)
 		}
 	}
 }

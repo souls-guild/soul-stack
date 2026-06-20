@@ -1,0 +1,115 @@
+name: node-exporter
+description: >-
+  Install Prometheus node_exporter from a GitHub release tarball and run it as a
+  hardened systemd service under a stable system account (node_exporter), with
+  optional textfile collectors (smartmon / nvme / ipmi) shipped as privileged
+  oneshot timers.
+
+# Версия destiny — git ref, под которым закоммичен файл (ADR-007). Поля
+# `version:` верхнего уровня намеренно нет.
+#
+# Список задач — НЕ в этом файле. Он живёт в tasks/main.yml. Здесь только
+# манифест: input-контракт. Эта destiny использует только core-модули →
+# required_modules: не нужен.
+#
+# Стабильный сервис-аккаунт node_exporter (НЕ DynamicUser — textfile-каталог
+# должен пережить рестарт и быть доступен root-сборщикам), textfile-коллекторы
+# железа крутятся отдельными oneshot-таймерами под жёстким systemd-sandbox.
+#
+# arch НЕ во input: tarball-архитектура читается напрямую из soulprint.self.os.arch
+# (soulprint доступен в destiny-CEL — см. tasks/main.yml). soulprint отдаёт
+# значение в нотации amd64/arm64 (proto soulprint.proto), маппинг не нужен.
+
+input:
+  # version — версия node_exporter (GitHub Releases prometheus/node_exporter).
+  # REQUIRED без дефолта: версия артефакта — осознанный выбор оператора, не
+  # «какая-нибудь».
+  version:
+    type: string
+    required: true
+    format: semver
+    description: Версия node_exporter (GitHub Releases prometheus/node_exporter).
+
+  # sha256 — pinned-хэш tarball-а node_exporter (linux-<arch>). ОПЦИОНАЛЬНЫЙ:
+  # задан → передаётся в checksum шага core.url.fetched, который верифицирует
+  # его ДО публикации файла (supply-chain, прод-конвенция §7); пуст (default "")
+  # → core.url трактует пустой checksum как «без верификации» и идёт idempotency
+  # по SHA-256 содержимого (см. soul/internal/coremod/url/fetched.go: ветка
+  # `checksum != ""`). Форма "sha256:<hex>" — иначе core.url отвергнет на Validate.
+  #
+  # ВНИМАНИЕ supply-chain: при пустом sha256 целостность артефакта не проверяется.
+  # Для прод-окружения задавайте хэш из официального sha256sums GitHub-релиза под
+  # пару (version, arch). Опциональность — компромисс под зеркала/nexus, где хэш
+  # может быть недоступен заранее; default-безопасный путь — задать хэш.
+  sha256:
+    type: string
+    default: ""
+    pattern: "^(sha256:[0-9a-f]{64})?$"
+    description: >-
+      Опциональный SHA-256 tarball-а node_exporter (форма "sha256:<hex>"). Задан
+      — core.url.fetched верифицирует ДО публикации; пуст — скачивание без
+      проверки (idempotency по SHA-256 содержимого). Должен соответствовать паре
+      version + arch.
+
+  # base_url — корень GitHub Releases (или подменяемое зеркало/nexus-proxy).
+  # https-only (core.url отвергнёт http:// на Validate без allow_http). Полный URL
+  # tarball-а собирается CEL-ом в tasks/main.yml из base_url + version + arch
+  # (arch — из soulprint.self.os.arch).
+  base_url:
+    type: string
+    default: "https://github.com/prometheus/node_exporter/releases/download"
+    pattern: "^https://[A-Za-z0-9._/:-]+$"
+    description: >-
+      Корень загрузки релизов node_exporter. По умолчанию GitHub Releases;
+      переопределяется на внутреннее зеркало/nexus-proxy.
+
+  # listen — listen-адрес node_exporter (--web.listen-address). Дефолт :9100
+  # (стандартный порт node_exporter). Caller обычно передаёт адрес, привязанный к
+  # internal-сети (см. _trial/scenario).
+  listen:
+    type: string
+    default: ":9100"
+    pattern: "^[A-Za-z0-9._-]*:[0-9]{1,5}$"
+    description: Listen-адрес node_exporter (--web.listen-address). По умолчанию :9100.
+
+  # collectors — какие textfile-коллекторы железа устанавливать. Каждый ставит
+  # пакет + скрипт-сборщик + oneshot .service/.timer. systemd-Condition в юнитах
+  # не даёт коллектору стартовать на VM/без соответствующего железа (smartmon —
+  # ConditionVirtualization=no, nvme — наличие /dev/nvme*, ipmi — /dev/ipmi0),
+  # поэтому установка коллектора безопасна и там, где железа нет.
+  collectors:
+    type: array
+    default: [smartmon, nvme, ipmi]
+    items:
+      type: string
+      enum: [smartmon, nvme, ipmi]
+    description: >-
+      Textfile-коллекторы железа для установки (smartmon|nvme|ipmi). Каждый —
+      пакет + скрипт + oneshot .timer; systemd-Condition не даёт стартовать без
+      железа.
+
+  # ── Passthrough-константы роли (прод-конвенция §1): вынесены в input с
+  #    дефолтами, чтобы оператор мог переопределить без правки destiny. ─────────
+
+  bin_dir:
+    type: string
+    default: /usr/local/bin
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: Каталог, куда раскладываются бинарь node_exporter и скрипты-сборщики.
+
+  user:
+    type: string
+    default: node_exporter
+    pattern: "^[a-z_][a-z0-9_-]*$"
+    description: >-
+      Системный сервис-аккаунт node_exporter (он же primary-группа). Стабильный
+      uid нужен, т.к. textfile-каталог переживает рестарты (прод-конвенция §2,
+      stateful-ветка).
+
+  textfile_dir:
+    type: string
+    default: /var/lib/node_exporter
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: >-
+      Каталог textfile-метрик (--collector.textfile.directory). node_exporter
+      читает .prom из него; oneshot-сборщики туда пишут.

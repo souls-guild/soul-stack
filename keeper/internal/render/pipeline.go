@@ -118,11 +118,36 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 	plans := make([]DispatchPlan, 0, len(in.Scenario.Tasks))
 	idx := 0
 
+	// passageStart фиксирует, с какого RenderedTask начинается текущая top-level
+	// задача — чтобы заклеймить весь её выход (включая apply:destiny/loop-потомков)
+	// passage-индексом originating-задачи (staged-render, ADR-056). Стампинг делаем
+	// в конце каждой итерации (stampPassage), а не точечно: один проход, любые
+	// expansion-ветки покрыты автоматически.
 	for i := range in.Scenario.Tasks {
 		task := in.Scenario.Tasks[i]
 
 		if err := guardPilotDSL(task, i); err != nil {
 			return nil, nil, err
+		}
+
+		passage := taskPassageAt(in.TaskPassage, i)
+		passageStart := len(tasks)
+
+		// Будущий Passage (staged-render, ADR-056 §в.1): register ещё не собран —
+		// НЕ резолвим register-зависимые where:/params: (упали бы на пустом
+		// register — это и есть исходный drift). Эмитим placeholder ради сквозной
+		// index-нумерации; orchestrator его в активном Passage не диспатчит. Когда
+		// его Passage станет активным, повторный Render резолвит полноценно.
+		// Гейт строго staged (TaskPassage задан): не-staged caller сюда не входит.
+		if in.TaskPassage != nil && passage > in.ActivePassage {
+			rt := &RenderedTask{Index: idx, Name: task.Name, Register: task.Register, ID: task.ID, Passage: passage}
+			if task.Module != nil {
+				rt.Module = task.Module.Module
+			}
+			tasks = append(tasks, rt)
+			plans = append(plans, DispatchPlan{TaskIndex: idx})
+			idx++
+			continue
 		}
 
 		// keeper-side задача (`on: keeper`, docs/keeper/modules.md): хостов нет —
@@ -143,6 +168,7 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 				Keeper:     true,
 			})
 			idx++
+			stampPassage(tasks, passageStart, passage)
 			continue
 		}
 
@@ -168,6 +194,7 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 			tasks = append(tasks, dt...)
 			plans = append(plans, dp...)
 			idx += len(dt)
+			stampPassage(tasks, passageStart, passage)
 			continue
 		}
 
@@ -184,6 +211,7 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 			tasks = append(tasks, lt...)
 			plans = append(plans, lp...)
 			idx += len(lt)
+			stampPassage(tasks, passageStart, passage)
 			continue
 		}
 
@@ -199,6 +227,7 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 			SerialWidth: serialWidth(task.Serial, len(targeted)),
 		})
 		idx++
+		stampPassage(tasks, passageStart, passage)
 	}
 
 	// Резолв `onchanges:`/`onfail:` register-имён в task-индексы (Variant A) —
@@ -650,6 +679,31 @@ func guardPilotDSL(task config.Task, idx int) error {
 		return fmt.Errorf("%w: task[%d] %q не является module-задачей", ErrUnsupportedDSL, idx, task.Name)
 	}
 	return nil
+}
+
+// taskPassageAt возвращает passage-индекс top-level задачи i из плана
+// стратификации (RenderInput.TaskPassage). nil-план либо i вне диапазона → 0
+// (N=1 / не-staged caller: Trial / Acolyte RenderForHost / CheckDrift) —
+// поведение БИТ-В-БИТ как до staged-render. Index-out-of-range трактуем как 0
+// fail-safe: лишний Passage-0 безопаснее паники на рассинхроне длины.
+func taskPassageAt(plan []int, i int) int {
+	if i < 0 || i >= len(plan) {
+		return 0
+	}
+	return plan[i]
+}
+
+// stampPassage проставляет passage всем RenderedTask, добавленным текущей
+// top-level задачей (tasks[from:]). Один вызов в конце каждой итерации Render
+// клеймит и apply:destiny/loop-потомков (block — атомарная единица Passage,
+// ADR-056), не размазывая стампинг по веткам.
+func stampPassage(tasks []*RenderedTask, from, passage int) {
+	if passage == 0 {
+		return // zero-value уже стоит — не трогаем (fast-path N=1).
+	}
+	for i := from; i < len(tasks); i++ {
+		tasks[i].Passage = passage
+	}
 }
 
 // compile-time проверка, что *structpb.Struct — proto.Message (используется в

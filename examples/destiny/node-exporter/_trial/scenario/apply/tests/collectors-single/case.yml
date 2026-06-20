@@ -1,0 +1,52 @@
+# L0-кейс: один коллектор (collectors: ["smartmon"]).
+#
+# Доказывает, что одиночный список валиден и проброшен в destiny: план
+# рендерится без падения, smartmon-задачи на месте. На L0 when: каждого
+# коллектор-шага — строка, вычисляемая Soul-ом; здесь ассертим, что when:
+# smartmon-ветки буквально несёт `'smartmon' in input.collectors`, а nvme/ipmi —
+# свои предикаты (Soul вычислит их false на этом списке). Точная фиксация when:
+# через rendered_tasks недоступна (ExpectedTask не ассертит when:), поэтому
+# кейс фиксирует module-состав плана: установочное ядро + smartmon/nvme/ipmi
+# задачи все присутствуют (when: разруливает их на хосте).
+name: node-exporter renders with single collector (smartmon only)
+
+fixtures:
+  default_destiny_source: "file://../../{name}"
+  input:
+    version: "1.9.0"
+    sha256: ""
+    collectors: [smartmon]
+  soulprint:
+    os:
+      arch: amd64
+    network:
+      primary_ip: "10.0.0.5"
+
+assert:
+  rendered_tasks:
+    - index: 0
+      module: core.url.fetched
+    # smartmon-ветка: пакет + скрипт + unit + timer на своих индексах.
+    - index: 9
+      module: core.pkg.installed
+      params:
+        name: smartmontools
+    - index: 11
+      module: core.file.rendered
+      params:
+        path: /etc/systemd/system/node-exporter-smartmon.service
+    - index: 13
+      module: core.service.running
+      params:
+        name: node-exporter-smartmon.timer
+        enabled: true
+    # nvme/ipmi-задачи остаются в плане (when: Soul-side ложен на этом списке) —
+    # фиксируем, что одиночный список не вырезал их индексы.
+    - index: 15
+      module: core.pkg.installed
+      params:
+        name: nvme-cli
+    - index: 22
+      module: core.pkg.installed
+      params:
+        name: ipmitool

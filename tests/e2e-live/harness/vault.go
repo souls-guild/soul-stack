@@ -177,6 +177,29 @@ func InitVaultTestSecrets(t *testing.T, stack *Stack) {
 	}
 }
 
+// SeedVaultKV кладёт произвольный KV v2-секрет по logical-пути `secret/<rel>` с
+// полями fields. Используется сервисами, которые тянут секрет keeper-side через
+// CEL `vault('secret/<rel>#<field>')` в render-фазе (redis-create:
+// `vault('secret/redis/'+incarnation.name+'#password')`, ADR-010/ADR-012 — пароль
+// доезжает на хост значением, Soul vault-клиент не тянет).
+//
+// rel — путь БЕЗ mount-префикса и БЕЗ `data/` (KV v2-инфиксы добавляются тут):
+// для CEL-пути `secret/redis/<inc>` передавать rel = "redis/<inc>". Keeper-side
+// ReadKV нормализует logical-путь к KVv2-relative и читает `secret/data/<rel>`,
+// поэтому harness пишет туда же.
+func SeedVaultKV(t *testing.T, stack *Stack, rel string, fields map[string]any) {
+	t.Helper()
+	if stack == nil || stack.VaultAddr == "" || stack.vaultToken == "" {
+		t.Fatal("SeedVaultKV: stack.VaultAddr / vaultToken пустые (NewStack не вызван?)")
+	}
+	vc := newVaultClient(stack.VaultAddr, stack.vaultToken)
+	ctx, cancel := context.WithTimeout(context.Background(), vaultHTTPTimeout)
+	defer cancel()
+	if _, err := vc.write(ctx, "secret/data/"+rel, map[string]any{"data": fields}); err != nil {
+		t.Fatalf("SeedVaultKV(%q): %v", rel, err)
+	}
+}
+
 // generateHS256Key возвращает 32 случайных байта в base64-encoded строке.
 // Симметрично `openssl rand -base64 32` в `dev/provision.sh:90`.
 func generateHS256Key(t *testing.T) string {

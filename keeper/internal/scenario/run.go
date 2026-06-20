@@ -243,6 +243,107 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	if r.deps.Destiny != nil {
 		renderIn.Destiny = r.deps.Destiny.resolverFor(art.Manifest)
 	}
+
+	// 4.9. Стратификация прогона по register-зависимости (staged-render, ADR-056
+	//      §б) — ДО первого Render: задача, читающая register.X в where:/apply:
+	//      input:/params:/vars:, попадает в Passage строго ПОСЛЕ probe-шага,
+	//      эмитящего register: X. Stratify работает над тем же плоским top-level
+	//      списком scn.Tasks (после ExpandIncludes), что и Render. N=1 (нет register-
+	//      зависимостей) → Passage{Count:1, все passage 0} → поведение БИТ-В-БИТ.
+	//      Цикл / висячая register-ссылка → errStratify → render_failed (явный
+	//      отказ, не silent-wrong-target). Делаем ДО Render, потому что для staged
+	//      первый Render обязан знать TaskPassage/ActivePassage=0 — иначе он
+	//      эагерно отрендерил бы register-зависимый where будущего Passage по
+	//      пустому register и упал (это исходный drift).
+	passage, perr := render.Stratify(scn.Tasks)
+	if perr != nil {
+		abort("render_failed", fmt.Errorf("scenario: стратификация passage %s/%s: %w", spec.IncarnationName, spec.ScenarioName, perr))
+		return
+	}
+	staged := passage.Count > 1
+
+	// 4.95. serial + staged (N>1) — 2D serial×passage РЕАЛИЗОВАН (ADR-056 §S4 amend,
+	//       S-2D1). Рестрикт `serial_staged_unsupported` СНЯТ. Оси serial (волны
+	//       ХОСТОВ) и Passage (стратификация ЗАДАЧ) ортогональны и теперь крутятся
+	//       совместно: Passage-цикл ниже исполняет каждый Passage по порядку, а
+	//       dispatchPassage внутри бьёт хосты на serial-волны из задач ИМЕННО ЭТОГО
+	//       Passage (effectiveSerialWidth на tasksForPassage-срезе → per-Passage
+	//       width, НЕ per-RUN). Probe-Passage без serial едет одной волной, даже когда
+	//       последующий Passage несёт serial:1 (никакого silent-wrong-width). serial+
+	//       staged идёт тем же inline-путём, что serial БЕЗ staged, поэтому наследует
+	//       crash-recovery-лимит staged-inline (ADR-056 §S4: Acolyte-reclaim не
+	//       покрывает staged-inline) — это не новая регрессия.
+
+	// 4.955. Cross-passage requisite — KEEPER-SIDE GATING (ADR-056 R3). onchanges/
+	//        onfail-источник в БОЛЕЕ РАННЕМ Passage, чем потребитель, едет отдельным
+	//        ApplyRequest → Soul gating одного Passage не видит результат источника
+	//        другого Passage (R1-remap чинит ТОЛЬКО same-passage). Поэтому связь
+	//        резолвит Keeper per-host по накопленным CHANGED/FAILED-фактам предыдущих
+	//        Passage (crosspassage.go): cross-passage onchanges OR по CHANGED, onfail
+	//        зеркально по FAILED∪TIMED_OUT. R2-reject СНЯТ — cross-passage поддержан.
+	//
+	//        Источник CHANGED/FAILED-фактов — журнал аудита (AuditReader). Без него
+	//        keeper не может определить, спас ли cross-passage источник → fail-closed
+	//        reject (симметрия nil passageCap §S5): угадывать «не changed» = молчаливо
+	//        не выполнить реально-нужный consumer / не запустить rescue. Гейт строго
+	//        staged (N=1 → один Passage, cross-passage невозможен). Детектор
+	//        CrossPassageRequisite переиспользуется для проверки наличия cross-passage
+	//        связи (есть → нужен reader).
+	if staged && r.deps.AuditReader == nil {
+		if info, bad := config.CrossPassageRequisite(scn.Tasks, passage); bad {
+			abort("cross_passage_requisite_unsupported", fmt.Errorf(
+				"scenario %s/%s: задача %q ссылается через %s: на register %q, чей источник в другом Passage (consumer passage %d, источник passage %d) — cross-passage gating требует журнала аудита (AuditReader), но он недоступен → отказ fail-closed (ADR-056 R3)",
+				spec.IncarnationName, spec.ScenarioName, info.ConsumerName, info.Kind, info.RequisiteName, info.ConsumerPassage, info.SourcePassage))
+			return
+		}
+	}
+
+	// 4.96. Forward-compat staged-гейт (ADR-056 §S5). Staged-прогон шлёт N
+	//       ApplyRequest на хост (по Passage); barrier каждого Passage ждёт его
+	//       терминал — RunResult с echo passage. Soul, не умеющий эхать passage
+	//       (старый бинарь без passage-capability), под N>1 вернёт RunResult с
+	//       passage=0 на все Passage → barrier Passage 1+ ждал бы терминал, которого
+	//       нет → ЗАВИСАНИЕ в applying. Поэтому ДО dispatch проверяем, что КАЖДЫЙ
+	//       online-хост прогона анонсировал passage-capability. Любой неподдержи-
+	//       вающий → fail-closed abort `soul_passage_unsupported` (не hang, не
+	//       молчаливое одно-проходное исполнение, которое вернуло бы исходный drift).
+	//       N=1-прогон (staged==false) гейт НЕ проходит — он шлёт один passage=0,
+	//       совместим со старым Soul БИТ-В-БИТ. Чекер nil (нет Redis / unit) →
+	//       отвергаем staged целиком: без presence-источника нельзя подтвердить
+	//       поддержку, а слать N>1 вслепую — тот же риск зависания.
+	if staged {
+		sids := make([]string, len(hosts))
+		for i, h := range hosts {
+			sids[i] = h.SID
+		}
+		if r.passageCap == nil {
+			abort("soul_passage_unsupported", fmt.Errorf(
+				"scenario %s/%s: staged-прогон (%d Passage) требует подтверждения passage-capability хостов, но presence-чекер недоступен (нет Redis) — отказ fail-closed (ADR-056 §S5)",
+				spec.IncarnationName, spec.ScenarioName, passage.Count))
+			return
+		}
+		lacking, lerr := r.passageCap.SoulsLackingPassage(ctx, sids)
+		if lerr != nil {
+			abort("soul_passage_unsupported", fmt.Errorf(
+				"scenario %s/%s: проверка passage-capability хостов staged-прогона провалилась — отказ fail-closed (ADR-056 §S5): %w",
+				spec.IncarnationName, spec.ScenarioName, lerr))
+			return
+		}
+		if len(lacking) > 0 {
+			abort("soul_passage_unsupported", fmt.Errorf(
+				"scenario %s/%s: staged-прогон (%d Passage по register-зависимости) требует Passage-aware Soul, но хосты %v не поддерживают поле passage — обнови soul-бинарь либо убери register-зависимость (ADR-056 §S5)",
+				spec.IncarnationName, spec.ScenarioName, passage.Count, lacking))
+			return
+		}
+	}
+
+	if staged {
+		// Первый Render staged-прогона рендерит Passage 0 полноценно, будущие
+		// Passage — placeholder-ами (ActivePassage=0, register ещё пуст).
+		renderIn.TaskPassage = passage.TaskPassage
+		renderIn.ActivePassage = 0
+	}
+
 	tasks, plans, err = r.deps.Render.Render(ctx, renderIn)
 	if err != nil {
 		abort("render_failed", err)
@@ -262,8 +363,12 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		return
 	}
 
-	// 6. Dispatch: ветвление пути (ADR-027, Phase 1.4.2).
+	// 6. Dispatch: ветвление пути (ADR-027, Phase 1.4.2) × staged-render (ADR-056).
 	//
+	//   - staged (Passage.Count>1): СТАРЫЙ путь (inline) — stage-loop ниже. Acolyte
+	//     рендерит per-host при claim ОДИН раз (не per-Passage) — staged на Acolyte
+	//     отложен в S4 (ADR-056 §S4). Поэтому при Count>1 идём inline даже при
+	//     AcolyteEnabled.
 	//   - serial-guard: scenario с любой задачей `serial:` (после ExpandIncludes)
 	//     → СТАРЫЙ путь (inline render+SendApply+per-wave barrier), даже при
 	//     AcolyteEnabled. Распределённый serial — Phase 3.
@@ -274,16 +379,73 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	// Render выше (шаги 4.5/5) выполняется в ОБОИХ путях: run-goroutine держит
 	// tasks/renderIn для post-barrier register-load + state_changes-commit
 	// (KEY-инвариант: barrier+commit остаются в run-goroutine в Phase 1). state
-	// коммитится строго ПОСЛЕ барьера — единый barrier, не по-волново (§7).
-	if r.acolyteEnabled && !hasSerialTask(scn) {
+	// коммитится строго ПОСЛЕ барьера ПОСЛЕДНЕГО Passage — единый commit, не
+	// по-волново и не по-Passage (§7 / ADR-056 §г).
+	if r.acolyteEnabled && !hasSerialTask(scn) && !staged {
 		if err := r.dispatchPlanned(ctx, spec, log, hosts, tasks); err != nil {
 			abort("dispatch_failed", err)
 			return
 		}
 	} else {
-		if err := r.dispatch(ctx, spec, log, tasks, plans); err != nil {
-			abort("dispatch_failed", err)
-			return
+		// Passage-loop (ADR-056 §в): для каждого Passage P по порядку —
+		//   render(задачи P, RegisterByHost = накоплено из Passage < P) →
+		//   dispatch(задачи P) → barrier(P) → сбор register(P).
+		// На P=0 переиспользуем render шага 5 (для staged он уже с ActivePassage=0;
+		// для Count==1 — обычный render, БИТ-В-БИТ). P>0 (только staged): повторный
+		// Render с per-host register Passage < P. state-commit — ОДИН раз после
+		// последнего Passage (шаги 7-8), НЕ по-Passage (ADR-056 §г).
+		passageTasks, passagePlans := tasks, plans
+		for p := 0; p < passage.Count; p++ {
+			if p > 0 {
+				// Staged-прогон, P>0: повторный Render с накопленным per-host register
+				// Passage < P. Задачи будущих Passage (> P) эмитятся placeholder-ами
+				// (register не готов, ADR-056 §в.1); активный Passage P и предыдущие —
+				// резолвятся полноценно (where: register.* теперь видит реальный факт).
+				// loadRegisterByHostUpToPassage резолвит task_idx→register-name по УЖЕ
+				// имеющимся tasks (Index стабилен между Passage — тот же план).
+				reg, lerr := r.loadRegisterByHostUpToPassage(ctx, spec.ApplyID, p, tasks)
+				if lerr != nil {
+					abort("register_load_failed", lerr)
+					return
+				}
+				renderIn.RegisterByHost = reg
+				renderIn.TaskPassage = passage.TaskPassage
+				renderIn.ActivePassage = p
+				pt, pp, rerr := r.deps.Render.Render(ctx, renderIn)
+				if rerr != nil {
+					abort("render_failed", rerr)
+					return
+				}
+				passageTasks, passagePlans = pt, pp
+				// Держим резолвнутые tasks/plans для register-резолва следующего Passage
+				// и финальной свёртки changed_tasks (Index стабилен между Passage).
+				tasks, plans = pt, pp
+			}
+
+			pTasks, pPlans := tasksForPassage(passageTasks, passagePlans, p)
+			// Cross-passage requisite-gate Passage p (ADR-056 R3): для p>0 загружаем
+			// CHANGED/FAILED-факты Passage < p (из журнала аудита) и резолвим per-host
+			// onchanges/onfail-связи, чей источник в более раннем Passage. p==0 →
+			// gate=nil (нет более раннего Passage). Полный план (tasks) — для
+			// passageByIndex источников, которых нет в Passage-p-срезе.
+			var gate *crossPassageGate
+			if p > 0 && r.deps.AuditReader != nil {
+				changed, ferr := r.deps.AuditReader.SelectChangedTaskKeys(ctx, spec.ApplyID)
+				if ferr != nil {
+					abort("register_load_failed", fmt.Errorf("scenario: cross-passage changed-факты: %w", ferr))
+					return
+				}
+				failed, ferr := r.deps.AuditReader.SelectFailedTaskKeys(ctx, spec.ApplyID)
+				if ferr != nil {
+					abort("register_load_failed", fmt.Errorf("scenario: cross-passage failed-факты: %w", ferr))
+					return
+				}
+				gate = newCrossPassageGate(tasks, changed, failed)
+			}
+			if err := r.dispatchPassage(ctx, spec, log, p, pTasks, pPlans, gate); err != nil {
+				abort("dispatch_failed", err)
+				return
+			}
 		}
 	}
 
@@ -664,9 +826,9 @@ func (r *Runner) ensureTerminalApplyRun(ctx context.Context, spec RunSpec, reaso
 		default:
 			continue // уже терминальна
 		}
-		if uerr := applyrun.UpdateStatus(wctx, r.deps.DB, spec.ApplyID, st.SID, terminal, &summary); uerr != nil {
+		if uerr := applyrun.UpdateStatus(wctx, r.deps.DB, spec.ApplyID, st.SID, st.Passage, terminal, &summary); uerr != nil {
 			log.Warn("scenario: терминализация строки apply_runs провалена",
-				slog.String("sid", st.SID), slog.String("reason", reason), slog.Any("error", uerr))
+				slog.String("sid", st.SID), slog.Int("passage", st.Passage), slog.String("reason", reason), slog.Any("error", uerr))
 		}
 	}
 }

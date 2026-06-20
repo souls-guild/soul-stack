@@ -1,0 +1,21 @@
+name: failover
+description: |
+  Passage 0 — probe роли (register: role), эмитящий per-host факт.
+  Passage 1 — действие, таргетящееся `where: register.role.stdout == 'master'`.
+  Stratify (ADR-056) разносит probe и потребителя register.role по разным Passage;
+  stage-loop рендерит Passage 1 с per-host register Passage 0 → where таргетит
+  ТОЛЬКО master-хост.
+state_changes: {}
+tasks:
+  - name: Probe role
+    module: core.exec.run
+    register: role
+    changed_when: "false"
+    params:
+      cmd: detect-role
+
+  - name: Act on master only
+    module: core.exec.run
+    where: "register.role.stdout == 'master'"
+    params:
+      cmd: promote

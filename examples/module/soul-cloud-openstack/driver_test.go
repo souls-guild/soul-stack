@@ -744,15 +744,15 @@ func TestBuildAuthOptions_AcceptsIDs(t *testing.T) {
 // classifyOS — таксономия по HTTP-кодам и эвристике.
 func TestClassifyOS_HTTPCodes(t *testing.T) {
 	cases := map[int]clouddriver.FailClass{
-		http.StatusUnauthorized:        clouddriver.FailAuth,
-		http.StatusForbidden:           clouddriver.FailAuth,
-		http.StatusNotFound:            clouddriver.FailNotFound,
-		http.StatusConflict:            clouddriver.FailInvalidParams,
-		http.StatusBadRequest:          clouddriver.FailInvalidParams,
+		http.StatusUnauthorized:          clouddriver.FailAuth,
+		http.StatusForbidden:             clouddriver.FailAuth,
+		http.StatusNotFound:              clouddriver.FailNotFound,
+		http.StatusConflict:              clouddriver.FailInvalidParams,
+		http.StatusBadRequest:            clouddriver.FailInvalidParams,
 		http.StatusRequestEntityTooLarge: clouddriver.FailTransient,
-		http.StatusTooManyRequests:     clouddriver.FailTransient,
-		http.StatusInternalServerError: clouddriver.FailTransient,
-		http.StatusServiceUnavailable:  clouddriver.FailTransient,
+		http.StatusTooManyRequests:       clouddriver.FailTransient,
+		http.StatusInternalServerError:   clouddriver.FailTransient,
+		http.StatusServiceUnavailable:    clouddriver.FailTransient,
 	}
 	for code, want := range cases {
 		got := classifyOS(gophercloud.ErrUnexpectedResponseCode{Actual: code})

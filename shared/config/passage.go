@@ -1,0 +1,396 @@
+package config
+
+// Passage-стратификация ([ADR-056](../../docs/adr/0056-staged-render-passage.md)).
+// ЧИСТАЯ функция над планом задач прогона ([]Task после ExpandIncludes): вычисляет
+// для каждой задачи её Passage-индекс (0-based) по графу cross-task register-
+// зависимости и валидирует граф (цикл / висячая ссылка). НИЧЕГО не исполняет и не
+// рендерит — stage-loop (render→dispatch→barrier→повтор) живёт keeper-side.
+//
+// Живёт в shared/config (а не keeper-internal): один и тот же граф register-
+// зависимости обязан строиться (а) keeper-рантаймом перед dispatch, (б) keeper-
+// тестами, (в) ОФЛАЙН soul-lint-ом ДО apply. Дубль логики между ними = риск
+// silent-wrong-target (расхождение графа). keeper/internal/render держит тонкие
+// alias-ы (Stratify/Passage/коды) на эти символы.
+//
+// Зачем (ADR-056, §«Риски — silent-wrong-target»). Задача, читающая `register.X`
+// в любом passage-определяющем register-источнике, ОБЯЗАНА исполниться строго
+// ПОСЛЕ probe-шага, эмитящего `register: X` (probe и его потребитель не могут
+// оказаться в одном Passage) — иначе `where:` отберёт хосты по пустому/устаревшему
+// register и разрушительная операция уйдёт не на те хосты МОЛЧА.
+//
+// Канонический реестр passage-определяющих register-источников Task (ADR-056):
+//
+//	where · vars · params · apply.input · output · loop.items · block (рекурсия).
+//
+// requisites (`onchanges`/`onfail`/`require`) — НЕ passage-определяющие. Flow-control
+// CEL (`when`/`changed_when`/`failed_when`/`retry.until`/`loop.when`) тоже не
+// определяет passage (исполняется Soul-side), но включён в обход как conservative
+// over-approximation: лишнее ребро может лишь добавить барьер, не пропустить его.
+//
+// Инвариант сопровождения: новое keeper-рендеримое register-читающее поле Task
+// обязано синхронно появиться в collectTaskReads (тут) И в collectRefs (cross-ref-
+// валидатор task_refs.go) И в реестре ADR-056 — иначе граф стратификатора и граф
+// линтера разойдутся (guard-тест reads==refs consistency).
+
+import (
+	"fmt"
+	"sort"
+)
+
+// Passage — стратификационный план прогона: для каждой top-level задачи её
+// passage-индекс (0-based) + общее число Passage. Index ссылается на позицию в
+// плане (Tasks после ExpandIncludes), совпадает с RenderedTask.Index.
+//
+// TaskPassage[i] — passage i-й задачи плана. Count = max(TaskPassage)+1 (>=1).
+// Count==1 — fast-path: ни одной cross-task register-зависимости, все задачи в
+// passage 0, поведение идентично up-front render (backward-compat).
+type Passage struct {
+	TaskPassage []int
+	Count       int
+}
+
+// StratifyError — ошибка стратификации register-графа. Несёт код (для caller-а:
+// keeper run.go → render_failed; soul-lint → офлайн-диагностика) и человекочитаемое
+// сообщение. Это невалидный граф зависимостей автора сценария (цикл / ссылка на
+// несуществующий register), который обязан остановить прогон ЯВНО, а не молча
+// (симметрия unknown_register_reference в config-валидаторе и silent-wrong-target).
+type StratifyError struct {
+	Code string
+	Msg  string
+}
+
+func (e *StratifyError) Error() string { return e.Msg }
+
+// StratifyError-коды.
+const (
+	// StratifyCycle — register-зависимость по кругу (probe A читает register.B,
+	// probe B читает register.A): топологического порядка нет.
+	StratifyCycle = "register_dependency_cycle"
+	// StratifyUnknownRegister — задача читает register.X, но НИ ОДНА задача плана
+	// не эмитит `register: X`. Дублирует cross-ref-валидатор config-а (страховка:
+	// стратификация обязана падать явно, а не молча стратифицировать по неполному
+	// графу — silent-wrong-target).
+	StratifyUnknownRegister = "unknown_register_reference"
+)
+
+// Stratify вычисляет passage-индексы для плана задач прогона по графу cross-task
+// register-зависимости. Возвращает [Passage] либо *[StratifyError] (цикл / висячая
+// ссылка). tasks — плоский top-level список задач (после ExpandIncludes);
+// nil/пустой → Passage{Count: 1}.
+//
+// Алгоритм (топологическая стратификация + program-order для эмиттеров):
+//
+//  1. Эмиттеры: register-имя → индекс задачи, его эмитящей (`register: X`),
+//     last-wins при дубле.
+//  2. Читатели: для каждой задачи — набор cross-task register-имён из passage-
+//     определяющих источников (where/vars/params/apply.input/output/loop.items,
+//     рекурсивно через block; `register.self` исключён).
+//  3. passage(T) — мемоизированная рекурсия по двум видам рёбер:
+//     register-ребро (passage(T) >= 1 + passage(эмиттер X)) и program-order ребро
+//     для probe-эмиттера (passage(probe) >= passage любой предшествующей задачи —
+//     даёт re-probe в Passage ПОСЛЕ действия, restart-кейс).
+//  4. Цикл по register-рёбрам → StratifyCycle. Висячая ссылка → StratifyUnknownRegister.
+func Stratify(tasks []Task) (Passage, error) {
+	n := len(tasks)
+	if n == 0 {
+		return Passage{TaskPassage: nil, Count: 1}, nil
+	}
+
+	emitter := emitterIndex(tasks)
+	reads := make([][]string, n)
+	emits := make([]bool, n)
+	for i := range tasks {
+		reads[i] = taskRegisterReads(&tasks[i])
+		emits[i] = taskEmitsRegister(&tasks[i])
+	}
+
+	// Висячая ссылка: читатель register.X, которого никто не эмитит. Падаем ДО
+	// топосорта — иначе стратификация пошла бы по неполному графу.
+	for i := range reads {
+		for _, name := range reads[i] {
+			if _, ok := emitter[name]; !ok {
+				return Passage{}, &StratifyError{
+					Code: StratifyUnknownRegister,
+					Msg: fmt.Sprintf(
+						"task #%d reads register %q, which no task in the run declares — staged-render cannot stratify (would target on an unresolved register)",
+						i, name),
+				}
+			}
+		}
+	}
+
+	const (
+		unvisited = 0
+		onStack   = 1
+		done      = 2
+	)
+	state := make([]int, n)
+	memo := make([]int, n)
+
+	var visit func(i int) (int, error)
+	visit = func(i int) (int, error) {
+		switch state[i] {
+		case done:
+			return memo[i], nil
+		case onStack:
+			return 0, &StratifyError{
+				Code: StratifyCycle,
+				Msg:  fmt.Sprintf("register dependency cycle detected at task #%d — tasks read each other's register in a loop, no Passage order exists", i),
+			}
+		}
+		state[i] = onStack
+
+		level := 0
+		for _, name := range reads[i] {
+			src := emitter[name]
+			if src == i {
+				continue
+			}
+			p, err := visit(src)
+			if err != nil {
+				return 0, err
+			}
+			if p+1 > level {
+				level = p + 1
+			}
+		}
+		if emits[i] {
+			for j := 0; j < i; j++ {
+				p, err := visit(j)
+				if err != nil {
+					return 0, err
+				}
+				if p > level {
+					level = p
+				}
+			}
+		}
+
+		state[i] = done
+		memo[i] = level
+		return level, nil
+	}
+
+	maxP := 0
+	for i := 0; i < n; i++ {
+		p, err := visit(i)
+		if err != nil {
+			return Passage{}, err
+		}
+		if p > maxP {
+			maxP = p
+		}
+	}
+
+	return Passage{TaskPassage: memo, Count: maxP + 1}, nil
+}
+
+// emitterIndex строит карту register-имя → индекс top-level задачи, эмитящей его.
+// register, объявленный внутри block:, адресуется плоско → приписывается индексу
+// КОНТЕЙНЕРА (block — атомарная единица Passage). last-wins при дубле имени.
+func emitterIndex(tasks []Task) map[string]int {
+	idx := map[string]int{}
+	for i := range tasks {
+		for _, name := range taskEmittedRegisters(&tasks[i]) {
+			idx[name] = i
+		}
+	}
+	return idx
+}
+
+// taskEmittedRegisters — все register-имена, эмитимые задачей и её block-потомками.
+func taskEmittedRegisters(t *Task) []string {
+	var out []string
+	if t.Register != "" {
+		out = append(out, t.Register)
+	}
+	if t.Block != nil {
+		for i := range t.Block.Block {
+			out = append(out, taskEmittedRegisters(&t.Block.Block[i])...)
+		}
+	}
+	return out
+}
+
+// taskEmitsRegister — задача (или её block-потомок) эмитит хотя бы один register.
+func taskEmitsRegister(t *Task) bool {
+	return len(taskEmittedRegisters(t)) > 0
+}
+
+// taskRegisterReads — отсортированный уникальный набор cross-task register-имён,
+// которые задача ЧИТАЕТ. Имена собственного register: задачи (и block-потомков)
+// ИСКЛЮЧАЮТСЯ — это self-ссылка внутри одного среза, не cross-task ребро.
+func taskRegisterReads(t *Task) []string {
+	own := map[string]bool{}
+	for _, name := range taskEmittedRegisters(t) {
+		own[name] = true
+	}
+	seen := map[string]bool{}
+	collectTaskReads(t, seen)
+	out := make([]string, 0, len(seen))
+	for name := range seen {
+		if own[name] {
+			continue
+		}
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// collectTaskReads наполняет seen register-именами, читаемыми задачей в passage-
+// определяющих источниках (ADR-056-реестр): where / vars / params / apply.input /
+// output / loop.items, рекурсивно через block. Flow-control CEL — conservative
+// over-approx. requisites сюда НЕ входят. Self-фильтрация — в taskRegisterReads.
+func collectTaskReads(t *Task, seen map[string]bool) {
+	addCELRefs(t.Where, seen)
+	addCELRefs(t.When, seen)
+	addCELRefs(t.ChangedWhen, seen)
+	addCELRefs(t.FailedWhen, seen)
+	if t.Retry != nil {
+		addCELRefs(t.Retry.Until, seen)
+	}
+	if t.Loop != nil {
+		addCELRefs(t.Loop.When, seen)
+	}
+
+	addMapRefs(t.Vars, seen)
+	addMapRefs(t.Output, seen)
+	if t.Loop != nil {
+		addValueRefs(t.Loop.Items, seen)
+	}
+	if t.Module != nil {
+		addMapRefs(t.Module.Params, seen)
+	}
+	if t.Apply != nil {
+		addMapRefs(t.Apply.Input, seen)
+	}
+	if t.Block != nil {
+		for i := range t.Block.Block {
+			collectTaskReads(&t.Block.Block[i], seen)
+		}
+	}
+}
+
+// addCELRefs извлекает cross-task register-имена из голой CEL-строки через
+// канонический парсер ExtractRegisterRefs.
+func addCELRefs(expr string, seen map[string]bool) {
+	for _, name := range ExtractRegisterRefs(expr) {
+		seen[name] = true
+	}
+}
+
+// addMapRefs обходит map значений (vars/params/apply.input) и извлекает register-
+// имена из строковых литералов (внутри `${ … }`-маркера). Рекурсивно в map/seq.
+func addMapRefs(m map[string]any, seen map[string]bool) {
+	for _, v := range m {
+		addValueRefs(v, seen)
+	}
+}
+
+// addValueRefs рекурсивно обходит any-значение (string / map / seq) и собирает
+// register-имена из всех строк.
+func addValueRefs(v any, seen map[string]bool) {
+	switch t := v.(type) {
+	case string:
+		addCELRefs(t, seen)
+	case map[string]any:
+		for _, sub := range t {
+			addValueRefs(sub, seen)
+		}
+	case []any:
+		for _, sub := range t {
+			addValueRefs(sub, seen)
+		}
+	}
+}
+
+// CrossPassageRequisite детектирует задачу, чей onchanges/onfail-источник лежит в
+// ДРУГОМ Passage (ADR-056 amend, R2 — explicit-reject до полной keeper-side gating-
+// поддержки R3). requisites (`onchanges:`/`onfail:`) — НЕ passage-определяющие
+// (в граф Stratify не входят), поэтому их источник может оказаться в любом Passage.
+// Если consumer и источник в РАЗНЫХ Passage, они едут РАЗНЫМИ ApplyRequest-ами:
+// Soul gating одного Passage не видит register источника другого Passage →
+// registerByIdx[remap=sentinel]=nil → onchanges-задача молча SKIPPED, onfail-rescue
+// молча НЕ запускается. Фикс до R3 — fail-closed reject (симметрия
+// serial_staged_unsupported), а не молчаливый мисфайр.
+//
+// passage — результат [Stratify] того же плана tasks. Возвращает координаты первой
+// найденной cross-passage-связи (task-имя consumer-а, requisite-имя, его kind,
+// passage обоих) и ok=true; ok=false — все requisites same-passage (R1-remap их
+// чинит). N=1 (passage.Count==1) → ok=false всегда (один Passage).
+func CrossPassageRequisite(tasks []Task, passage Passage) (info CrossPassageInfo, ok bool) {
+	if passage.Count <= 1 || len(passage.TaskPassage) != len(tasks) {
+		return CrossPassageInfo{}, false
+	}
+	emitter := emitterIndex(tasks)
+	for i := range tasks {
+		consumerPassage := passage.TaskPassage[i]
+		for _, req := range taskRequisites(&tasks[i]) {
+			srcIdx, known := emitter[req.name]
+			if !known {
+				// Висячий requisite (нет задачи с таким register:) — НЕ наша забота:
+				// его ловит cross-ref-валидатор config-а (unknown_register_reference)
+				// офлайн. Здесь интересует только cross-passage СУЩЕСТВУЮЩЕГО источника.
+				continue
+			}
+			if srcPassage := passage.TaskPassage[srcIdx]; srcPassage != consumerPassage {
+				return CrossPassageInfo{
+					ConsumerName:    taskDisplayName(&tasks[i]),
+					RequisiteName:   req.name,
+					Kind:            req.kind,
+					ConsumerPassage: consumerPassage,
+					SourcePassage:   srcPassage,
+				}, true
+			}
+		}
+	}
+	return CrossPassageInfo{}, false
+}
+
+// CrossPassageInfo — координаты cross-passage requisite-связи (для текста abort-а).
+type CrossPassageInfo struct {
+	ConsumerName    string // имя задачи-потребителя requisite
+	RequisiteName   string // register-имя источника
+	Kind            string // "onchanges" | "onfail"
+	ConsumerPassage int
+	SourcePassage   int
+}
+
+// taskRequisite — одна requisite-ссылка задачи (register-имя источника + kind).
+type taskRequisite struct {
+	name string
+	kind string
+}
+
+// taskRequisites собирает onchanges/onfail-имена задачи И её block-потомков
+// (requisites адресуются плоско по register-имени, block — атомарная единица
+// Passage). require: НЕ включается: его семантика — порядок исполнения, не
+// changed/failed-gating по registerByIdx (R2 строго про onchanges/onfail).
+func taskRequisites(t *Task) []taskRequisite {
+	var out []taskRequisite
+	for _, name := range t.OnChanges {
+		out = append(out, taskRequisite{name: name, kind: "onchanges"})
+	}
+	for _, name := range t.OnFail {
+		out = append(out, taskRequisite{name: name, kind: "onfail"})
+	}
+	if t.Block != nil {
+		for i := range t.Block.Block {
+			out = append(out, taskRequisites(&t.Block.Block[i])...)
+		}
+	}
+	return out
+}
+
+// taskDisplayName — имя задачи для диагностики (name: либо register: либо "<unnamed>").
+func taskDisplayName(t *Task) string {
+	switch {
+	case t.Name != "":
+		return t.Name
+	case t.Register != "":
+		return t.Register
+	default:
+		return "<unnamed>"
+	}
+}

@@ -307,6 +307,15 @@ type Deps struct {
 	// [config.DefaultTempoVoyagePreview*] (резолвится при сборке роутера).
 	// Используется лишь при non-nil TempoLimiter.
 	TempoVoyagePreviewLimits func() apimiddleware.RateLimitLimits
+
+	// WebUIEnabled — резолвнутый тоггл встроенного UI на маршруте `/ui`
+	// (ADR-055): true → статика go:embed монтируется (публично, ВНЕ /v1, parity
+	// /docs); false → /ui не подключается. Резолвится daemon-ом из
+	// [config.KeeperConfig.WebUIMounted] (default-ON: nil-config → true).
+	// Zero-value (false) у вызывающих, не выставивших поле (unit-тесты без UI),
+	// — осознанный «не монтировать»: /ui для них не нужен, mount требует embed-
+	// дерева. Внешнего бэкенда тоггл не требует (UI вшит в бинарь).
+	WebUIEnabled bool
 }
 
 // RBACProvider — общая поверхность rbac-сервиса, нужная и middleware-у
@@ -634,7 +643,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 		}
 	}
 
-	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, roleH, synodH, sigilH, sigilKeyH, serviceH, augurH, oracleH, pushH, pushProviderH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, logger)
+	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, roleH, synodH, sigilH, sigilKeyH, serviceH, augurH, oracleH, pushH, pushProviderH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, logger)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,

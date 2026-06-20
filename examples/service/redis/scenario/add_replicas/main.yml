@@ -5,13 +5,13 @@ description: >-
   primary опознаётся РАНТАЙМ-probe-ом существующих хостов (single-master сервис
   уже работает — declared-роль здесь не источник истины; runtime берёт роль
   probe-ом + where:, orchestration.md §4.1). Топология прогона передаётся
-  destiny-redis-replication-config через apply: input: hosts: ${ soulprint.hosts }
+  redis-replication-config через apply: input: hosts: ${ soulprint.hosts }
   (E3a scenario-only аксессор, orchestration.md §4.1) — destiny напрямую
   soulprint.hosts не видит.
 
-  Опирается на эталон service-redis-cluster/scenario/add_replica (runtime-probe
+  Опирается на эталон redis-cluster/scenario/add_replica (runtime-probe
   primary discovery + replicaof) и create/replication.yml (reuse
-  destiny-redis-replication-config). Отличие модели: service-redis собран
+  redis-replication-config). Отличие модели: redis собран
   КОМПОЗИЦИЕЙ standalone-destiny (а не внутренней action-DSL destiny redis), и НЕ
   делает cloud-spawn / coven-bind: реплики приходят уже привязанными SID-ами
   (input.replicas). Эти keeper-side шаги (on: keeper) сознательно вынесены за
@@ -109,7 +109,7 @@ tasks:
   # non-empty (адрес primary — на репликах probe печатает пусто).
   # Топология прогона уходит destiny через apply: input: hosts: ${ soulprint.hosts }
   # (E3a); destiny сам решает «я реплика/не реплика» локально по soulprint.self vs
-  # master_addr (изоляция destiny, см. destiny-redis-replication-config). serial: 1
+  # master_addr (изоляция destiny, см. redis-replication-config). serial: 1
   # — продолжаем rolling-раскат по одной реплике.
   - name: Point new replicas at the actual primary
     on: ["${ incarnation.name }"]

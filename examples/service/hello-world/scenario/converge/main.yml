@@ -6,7 +6,7 @@ description: |
   check-drift; Soul зовёт core.file.Plan (read-safe) вместо Apply, сравнивает
   желаемое vs фактическое и возвращает per-task changed.
 
-  Содержимое сверяется по input.greeting. В отличие от service-noop (там
+  Содержимое сверяется по input.greeting. В отличие от noop (там
   converge хардкодит marker-content), hello-world держит drift-детект честным:
   тот же greeting, что был применён, оператор передаёт в body check-drift —
   и Plan core.file.present увидит расхождение, если файл изменили на хосте.

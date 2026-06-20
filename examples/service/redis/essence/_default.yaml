@@ -19,9 +19,15 @@ redis_maxmemory: "256mb"
 arch:    "amd64"
 bin_dir: "/usr/local/bin"
 
-# Listen-адреса экспортеров.
+# Listen-адреса экспортеров. node_exporter — :9100 (стандартный порт).
 node_exporter_listen:  ":9100"
 redis_exporter_listen: ":9121"
+
+# Textfile-коллекторы железа node-exporter. На VM/в стеке redis железа нет —
+# единая политика []: ставится только ядро node_exporter без oneshot-сборщиков.
+# Тот же список читают create и update_node_exporter (re-apply иначе менял бы
+# набор коллекторов помимо версии).
+node_exporter_collectors: []
 
 # Точечные директивы redis.conf поверх дефолтов Redis (задел под update_config).
 redis_config:

@@ -1,0 +1,42 @@
+# Souls-фикстура для L3a redis-cluster-live (контракт-e2e под
+# examples/service/redis-cluster-live).
+#
+# Один soul-stub под SID `soul-test-0.example.com`, status=connected — happy-path
+# apply_runs lifecycle. covens: [<incarnation.name>] — членство в Coven incarnation
+# (incarnation.name = корневая Coven-метка, ADR-008); roster прогона резолвится по
+# нему. Coven-метку проставляет тест через Stack.AddSoulToCoven (имя инкарнации
+# зависит от сценария: redis-cluster-live-create, -add-user, …).
+#
+# soulprint ОБЯЗАТЕЛЕН. Сервис целиком на core-модулях (без apply:destiny/vault),
+# но keeper-side резолвит факты хоста при render-е/таргетинге:
+#   - os.pkg_mgr/init_system — core.pkg/core.service (ADR-018, soulprint.md §3);
+#   - network.primary_ip — scenario create рендерит cluster-nodes.txt через
+#     `soulprint.hosts.map(h, h.network.primary_ip)` (run_once, text/template),
+#     а add_replica/remove_replica/reshard таргетят `where:`-предикатом по
+#     soulprint.self.network.primary_ip / soulprint.self.sid.
+#
+# Этот fixture-формат отражает структуру SoulprintFacts (resolver scanHost →
+# map[string]any); harness грузит os/network через Stack.SeedSoulprint (cert.go),
+# coven — через Stack.AddSoulToCoven. SID авторитетен из registry (souls.sid),
+# не из soulprint (ADR-018). Значения дублируются inline в тесте
+# (YAML-loader fixtures пока не реализован — pilot-паттерн).
+#
+# ОДНА нода (не 9): L3a-контракт проверяет render→dispatch→RunResult→state по
+# task-name, не реальную 9-нодовую топологию (это L3b-live, tests/e2e-live).
+# Один host = один apply_runs-row → WaitApplySuccess/AssertApplyRunsStatus
+# валидны и для `where:`-фильтрованных сценариев (нет не-целевых хостов в
+# no_match — он терминал-не-провал, но harness-WaitApplySuccess его фейлит).
+- sid: soul-test-0.example.com
+  status: connected
+  covens: [redis-cluster-live]
+  soulprint:
+    os:
+      family: debian
+      distro: debian
+      version: "12"
+      arch: amd64
+      pkg_mgr: apt
+      init_system: systemd
+    network:
+      primary_ip: "10.0.0.10"
+    hostname: soul-a

@@ -278,6 +278,28 @@ type LeaseOwnerChecker interface {
 	SoulLeaseOwner(ctx context.Context, sid string) (kid string, ok bool, err error)
 }
 
+// PassageCapabilityChecker — узкая поверхность Redis-проверки «какие SID-ы НЕ
+// анонсировали passage-capability» (ADR-056 §S5 forward-compat). Интерфейс (а не
+// прямой импорт keeper/internal/redis) держит scenario-runner независимым от
+// Redis-клиента — тот же приём, что [LeaseOwnerChecker] / [SummonsPublisher].
+//
+// Нужен ТОЛЬКО staged-гейту run.go: ДО dispatch-а сценария, стратифицированного в
+// N>1 Passage, проверяет, что КАЖДЫЙ таргет-хост умеет эхать ApplyRequest.passage.
+// Хост без capability → прогон отвергается (soul_passage_unsupported, fail-closed):
+// иначе barrier следующего Passage ждал бы терминал, которого старый бинарь не
+// пришлёт (зависание в applying).
+//
+// Возвращает подмножество переданных SID-ов БЕЗ capability (пустой/nil → все
+// поддерживают). Ошибка — сетевой сбой Redis: staged-гейт обязан отвергнуть
+// прогон (а не угадать поддержку), поэтому ошибка проброшена наверх.
+//
+// nil в Deps → гейт деградирует fail-closed: staged-прогон без чекера (нет Redis /
+// unit-тест) отвергается целиком (нельзя подтвердить поддержку — нельзя слать N>1).
+// Реализуется тонкой обёрткой над [redis.SoulsLackingCapability] при wire-up-е.
+type PassageCapabilityChecker interface {
+	SoulsLackingPassage(ctx context.Context, sids []string) ([]string, error)
+}
+
 // KeeperModuleRegistry — узкая поверхность keeper-side core-Registry
 // (keeper/internal/coremod), нужная scenario-runner-у для локального исполнения
 // задач с `on: keeper` (ADR-017, docs/keeper/modules.md). Интерфейс (а не прямой
@@ -290,17 +312,21 @@ type KeeperModuleRegistry interface {
 	Lookup(name string) (module.SoulModule, bool)
 }
 
-// ChangedTaskReader — узкая поверхность read-доступа к журналу аудита: множество
-// (sid, task_idx) задач прогона, терминал-ивших со статусом CHANGED (T3).
-// Источник changed — `task.executed`-события (events_taskevent.go), НЕ отдельная
-// таблица. Интерфейс (а не прямой *auditpg.Reader) держит scenario-пакет
-// тестируемым без PG — fake реализует один метод, как у [KeeperModuleRegistry].
+// ChangedTaskReader — узкая поверхность read-доступа к журналу аудита: множества
+// (sid, plan_index) задач прогона, терминал-ивших со статусом CHANGED (T3,
+// свёртка changed_tasks) либо FAILED/TIMED_OUT (ADR-056 R3, cross-passage
+// onfail-rescue-gating). Источник — `task.executed`-события (events_taskevent.go),
+// НЕ отдельная таблица. Интерфейс (а не прямой *auditpg.Reader) держит scenario-
+// пакет тестируемым без PG — fake реализует два метода.
 //
-// Реализуется [auditpg.Reader] (метод SelectChangedTaskKeys с той же сигнатурой).
-// nil → терминальное событие incarnation.run_completed эмитится без changed_tasks
-// (свёртка пропускается; финал прогона не валится — событие best-effort).
+// Реализуется [auditpg.Reader] (методы SelectChangedTaskKeys / SelectFailedTaskKeys
+// с той же сигнатурой). nil → терминальное событие incarnation.run_completed
+// эмитится без changed_tasks (свёртка пропускается, финал прогона не валится);
+// cross-passage onchanges/onfail-gating (R3) деградирует fail-closed —
+// staged-прогон с cross-passage requisite отвергается (см. run.go).
 type ChangedTaskReader interface {
 	SelectChangedTaskKeys(ctx context.Context, applyID string) (map[auditpg.ChangedTaskKey]struct{}, error)
+	SelectFailedTaskKeys(ctx context.Context, applyID string) (map[auditpg.ChangedTaskKey]struct{}, error)
 }
 
 // Deps — конструкторские зависимости [Runner]. Обязательны все, кроме Logger
@@ -377,6 +403,12 @@ type Deps struct {
 	// в applying (single-keeper-only footgun дефолта acolytes=0).
 	LeaseOwner LeaseOwnerChecker
 
+	// PassageCap — чекер passage-capability таргет-хостов для staged-гейта run.go
+	// (ADR-056 §S5). nil → staged-прогон (N>1 Passage) отвергается целиком
+	// (fail-closed: без Redis нельзя подтвердить поддержку). Заполняется при
+	// wire-up-е тонкой обёрткой над redis.SoulsLackingCapability.
+	PassageCap PassageCapabilityChecker
+
 	// PollInterval / RunTimeout — переопределение дефолтов (для тестов).
 	// Нулевое значение → дефолт.
 	PollInterval time.Duration
@@ -405,6 +437,11 @@ type Runner struct {
 	// multi-keeper-guard-а старого пути dispatch-а (acolytes=0, dispatch.go).
 	// nil → guard выключен.
 	leaseOwner LeaseOwnerChecker
+
+	// passageCap — чекер passage-capability таргет-хостов (копия Deps.PassageCap)
+	// для staged-гейта run.go (ADR-056 §S5). nil → staged-прогон отвергается
+	// fail-closed.
+	passageCap PassageCapabilityChecker
 
 	// keeperModules — keeper-side core-Registry (копия Deps.KeeperModules) для
 	// локального исполнения задач `on: keeper` (run.go::dispatchKeeperTasks).
@@ -444,6 +481,7 @@ func NewRunner(deps Deps) *Runner {
 		acolyteEnabled: deps.AcolyteEnabled,
 		kid:            deps.KID,
 		leaseOwner:     deps.LeaseOwner,
+		passageCap:     deps.PassageCap,
 		keeperModules:  deps.KeeperModules,
 		active:         make(map[string]context.CancelFunc),
 	}

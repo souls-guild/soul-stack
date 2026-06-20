@@ -101,7 +101,12 @@ func (s *Stack) materializeServiceRepo(t *testing.T, serviceName, relativePath s
 	runGit(t, "", "init", "-q", "-b", "main", repoDir)
 	copyTree(t, srcDir, repoDir)
 	runGit(t, repoDir, "add", "-A")
-	runGit(t, repoDir, "commit", "-q", "-m", "e2e service snapshot from "+relativePath)
+	// commit.gpgsign=false локально к вызову: глобальный ~/.gitconfig оператора
+	// может требовать подпись (gpg/ssh-ключ), которого в среде прогона нет —
+	// fixture обязан быть герметичным и не зависеть от настроек хоста (parity с
+	// L3b-harness и harness/destiny.go).
+	runGit(t, repoDir, "-c", "commit.gpgsign=false",
+		"commit", "-q", "-m", "e2e service snapshot from "+relativePath)
 
 	return "file://" + repoDir
 }

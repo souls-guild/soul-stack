@@ -27,9 +27,10 @@ state_schema:
 #
 # Стек собран КОМПОЗИЦИЕЙ трёх переиспользуемых standalone-destiny через
 # apply:destiny (изолированный render каждой, ADR-009) — сервис ничего не рендерит
-# сам. Прод-grade варианты (redis-single с systemd-hardening drop-in; экспортеры
-# под DynamicUser=yes + hardening + extra_args + arch из soulprint) живут в destiny,
-# дрейф с прежними инлайн-копиями устранён.
+# сам. Прод-grade варианты (redis-single с systemd-hardening drop-in; redis-exporter
+# под DynamicUser=yes, node-exporter под стабильным node_exporter; hardening +
+# extra_args + arch из soulprint) живут в destiny, дрейф с прежними инлайн-копиями
+# устранён.
 destiny:
   - { name: redis-single,   ref: v1.0.0 }
   - { name: redis-exporter, ref: v1.0.0 }

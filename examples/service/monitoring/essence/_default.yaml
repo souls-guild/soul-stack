@@ -8,3 +8,7 @@
 node_exporter_version:  "1.8.2"
 redis_exporter_version: "1.62.0"
 redis_socket:           "/var/run/redis/redis-server.sock"
+
+# Textfile-коллекторы железа node-exporter. На VM железа нет — единая политика []:
+# ставится только ядро node_exporter без oneshot-сборщиков.
+node_exporter_collectors: []

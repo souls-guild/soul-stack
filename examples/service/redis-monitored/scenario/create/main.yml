@@ -17,9 +17,9 @@ description: |
   Сервис ничего не рендерит сам — он только оркеструет порядок apply:destiny и
   прокидывает каждой destiny её input. Внутри каждой destiny виден ТОЛЬКО
   переданный ей apply.input (изоляция, ADR-009): scenario-scope в destiny-env не
-  попадает. Прод-grade установка (redis-single с hardening; экспортеры под
-  DynamicUser + hardening + extra_args + arch из soulprint) живёт в самих destiny —
-  дрейф с прежними инлайн-копиями устранён.
+  попадает. Прод-grade установка (redis-single с hardening; redis-exporter под
+  DynamicUser=yes, node-exporter под стабильным node_exporter; hardening + arch из
+  soulprint) живёт в самих destiny — дрейф с прежними инлайн-копиями устранён.
 
   Точка интеграции — путь unix-сокета Redis (input.redis_socket): один и тот же
   путь уходит и в redis-single (unixsocket в redis.conf), и в redis-exporter
@@ -116,12 +116,6 @@ input:
       соответствовать паре redis_exporter_version + arch; берётся из sha256sums
       GitHub-релиза oliver006/redis_exporter.
 
-  arch:
-    type: string
-    default: amd64
-    enum: [amd64, arm64]
-    description: Архитектура GitHub-релизных tarball-ов экспортеров (amd64|arm64).
-
   bin_dir:
     type: string
     default: /usr/local/bin
@@ -132,7 +126,21 @@ input:
     type: string
     default: ":9100"
     pattern: "^[A-Za-z0-9._-]*:[0-9]{1,5}$"
-    description: Listen-адрес node_exporter (--web.listen-address). По умолчанию :9100.
+    description: >-
+      Listen-адрес node_exporter (--web.listen-address). По умолчанию :9100
+      (стандартный порт node_exporter).
+
+  # Textfile-коллекторы железа node-exporter. Дефолт [] (из essence): на VM
+  # железа нет, ставится только ядро node_exporter без oneshot-сборщиков.
+  node_exporter_collectors:
+    type: array
+    default: []
+    items:
+      type: string
+      enum: [smartmon, nvme, ipmi]
+    description: >-
+      Список textfile-коллекторов node-exporter (smartmon|nvme|ipmi). [] = только
+      ядро node_exporter без oneshot-сборщиков железа.
 
   redis_exporter_listen:
     type: string
@@ -198,7 +206,12 @@ tasks:
       input:
         version: "${ input.node_exporter_version }"
         sha256:  "${ input.node_exporter_sha256 }"
-        arch:    "${ soulprint.self.os.arch }"
+        # arch НЕ передаём: destiny берёт его напрямую из soulprint.self.os.arch
+        # (soulprint доступен в destiny-CEL). Один incarnation может смешивать
+        # amd64/arm64-хосты — destiny сама подберёт tarball под факт хоста.
         bin_dir: "${ input.bin_dir }"
         listen:  "${ input.node_exporter_listen }"
-        # extra_args не передаём — destiny подставит свой default [].
+        # collectors — единый источник (input.node_exporter_collectors, дефолт []):
+        # на VM железа нет, ставится только ядро. base_url/user/textfile_dir не
+        # передаём — дефолты destiny устроят.
+        collectors: "${ input.node_exporter_collectors }"

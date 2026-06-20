@@ -71,8 +71,10 @@ const (
 // `changed`/`failed` per task_idx) + [applyrun.SelectByApplyID]
 // (error_summary первой упавшей задачи).
 type DriftTaskResult struct {
-	// Idx — task_idx (порядок в scenario.tasks[] после include-expand). Стабилен
-	// между Keeper-side render и Soul-side TaskEvent (ADR-012(d)).
+	// Idx — ГЛОБАЛЬНЫЙ plan_index задачи (RenderedTask.Index, сквозной по всему
+	// плану прогона и по всем Passage, ADR-056 §S1 fix Variant B). Стабилен между
+	// Keeper-side render и Soul-side TaskEvent (ADR-012(d)); не зависит от per-host
+	// where: (в отличие от локального TaskEvent.task_idx).
 	Idx int `json:"idx"`
 	// Module — `<namespace>.<module>.<state>` из RenderedTask.Module (например
 	// `core.pkg.installed`).
@@ -433,10 +435,10 @@ func isAllTerminal(statuses []applyrun.HostStatus, wantHosts int) bool {
 }
 
 // assembleDriftReport собирает DriftReport из persisted-данных прогона после
-// барьера: per-host apply_runs (status + error_summary + task_idx) и
-// apply_task_register (changed/failed per task_idx).
+// барьера: per-host apply_runs (status + error_summary + failed_plan_index) и
+// apply_task_register (changed/failed per plan_index).
 //
-// Маппинг task_idx → module/action — из renderedTasks (Keeper-side render
+// Маппинг plan_index → module/action — из renderedTasks (Keeper-side render
 // держит RenderedTask с Module/Name/Index). Host вне prepared-map (не должно
 // случиться: insertPlanned писал на каждый roster-хост) пропускается с warn-ом
 // в логе caller-а — но в текущей сборке достаём перечень из роутов apply_runs.
@@ -472,9 +474,10 @@ func (r *Runner) assembleDriftReport(ctx context.Context, spec CheckDriftSpec, t
 	}, nil
 }
 
-// taskMetaIndex — task_idx → {module, action} из RenderedTask. После expand-
-// include порядок индексов стабильный (RenderedTask.Index = scenario.tasks[i]
-// after include-expand).
+// taskMetaIndex — plan_index → {module, action} из RenderedTask (ключ —
+// RenderedTask.Index, ГЛОБАЛЬНЫЙ сквозной индекс по всему плану, ADR-056 §S1 fix
+// Variant B). После expand-include порядок индексов стабильный
+// (RenderedTask.Index = позиция в полном плане прогона).
 type taskMetaIndex map[int]taskMeta
 
 type taskMeta struct {
@@ -502,24 +505,52 @@ func groupRegistersBySID(rs []applyrun.TaskRegister) map[string][]applyrun.TaskR
 }
 
 // hostTaskFailure — описание упавшей задачи хоста (для unsupported/failed-
-// дифференциации). Источник — apply_runs.task_idx + error_summary (записывается
-// recordTaskFailure при FAILED-TaskEvent-е). error_summary форматируется как
-// `task <idx> <module>: <message>` — несёт machine-readable идентификатор
-// `plan.unsupported` в тексте сообщения.
+// дифференциации). Источник — apply_runs.failed_plan_index + error_summary
+// (записывается recordTaskFailure при FAILED-TaskEvent-е). error_summary
+// форматируется как `task <idx> <module>: <message>` — несёт machine-readable
+// идентификатор `plan.unsupported` в тексте сообщения.
+//
+// planIndex — ГЛОБАЛЬНЫЙ сквозной plan_index упавшей задачи (apply_runs.
+// failed_plan_index, миграция 081, ADR-056 §S1 fix Variant B): ключ резолва
+// module/action против taskMeta (построен по RenderedTask.Index). НЕ локальный
+// task_idx — он под staged/per-host-where указывал бы на соседнюю задачу.
 type hostTaskFailure struct {
-	taskIdx int
-	summary string
+	planIndex int
+	summary   string
 }
 
 func buildTaskFailureMap(statuses []applyrun.HostStatus) map[string]hostTaskFailure {
 	out := make(map[string]hostTaskFailure, len(statuses))
 	for _, hs := range statuses {
-		if hs.TaskIdx == nil || hs.ErrorSummary == nil {
+		// failed_plan_index — глобальный ключ резолва module/action. Старый Soul
+		// без plan_index / прогон до миграции 081 → fallback на локальный task_idx
+		// (для N=1 они совпадают, поведение БИТ-В-БИТ). Без ни того, ни другого
+		// (dispatch-level фейл без TaskEvent-а) — failure-строка не строится.
+		if hs.ErrorSummary == nil {
 			continue
 		}
-		out[hs.SID] = hostTaskFailure{taskIdx: *hs.TaskIdx, summary: *hs.ErrorSummary}
+		idx, ok := failedPlanIndex(hs)
+		if !ok {
+			continue
+		}
+		out[hs.SID] = hostTaskFailure{planIndex: idx, summary: *hs.ErrorSummary}
 	}
 	return out
+}
+
+// failedPlanIndex выбирает ГЛОБАЛЬНЫЙ plan_index упавшей задачи хоста:
+// failed_plan_index (миграция 081) приоритетен; при его отсутствии (старый Soul
+// без эхо plan_index / строка прогона до 081) — fallback на локальный task_idx,
+// который для N=1 совпадает с глобальным. (false, _) — упавшая задача не
+// зафиксирована (нет ни того, ни другого).
+func failedPlanIndex(hs applyrun.HostStatus) (int, bool) {
+	if hs.FailedPlanIndex != nil {
+		return *hs.FailedPlanIndex, true
+	}
+	if hs.TaskIdx != nil {
+		return *hs.TaskIdx, true
+	}
+	return 0, false
 }
 
 // buildHostReport собирает per-host агрегат: per-task результаты + общий
@@ -536,13 +567,19 @@ func buildHostReport(hs applyrun.HostStatus, taskMeta taskMetaIndex, registers [
 	results := make([]DriftTaskResult, 0, len(registers)+1)
 	hasDrifted := false
 	for _, reg := range registers {
-		meta := taskMeta[reg.TaskIdx]
+		// Корреляция по ГЛОБАЛЬНОМУ plan_index (ADR-056 §S1 fix Variant B):
+		// taskMeta построен по RenderedTask.Index (глобальный сквозной индекс по
+		// всему плану), а reg.TaskIdx — ЛОКАЛЬНАЯ позиция в ApplyRequest Passage
+		// хоста (неуникальна между Passage И между хостами одного Passage при
+		// per-host where:). Резолв и Idx — по PlanIndex (тот же глобальный
+		// индекс), иначе module/action промаркированы не той задачей.
+		meta := taskMeta[reg.PlanIndex]
 		changed, _ := boolField(reg.RegisterData, "changed")
 		if changed {
 			hasDrifted = true
 		}
 		results = append(results, DriftTaskResult{
-			Idx:     reg.TaskIdx,
+			Idx:     reg.PlanIndex,
 			Module:  meta.module,
 			Action:  meta.action,
 			Changed: changed,
@@ -555,9 +592,15 @@ func buildHostReport(hs applyrun.HostStatus, taskMeta taskMetaIndex, registers [
 	// failed` на уровне host.
 	if hs.Status == applyrun.StatusFailed || hs.Status == applyrun.StatusCancelled || hs.Status == applyrun.StatusOrphaned {
 		if failure.summary != "" {
-			meta := taskMeta[failure.taskIdx]
+			// Резолв module/action по ГЛОБАЛЬНОМУ plan_index (ADR-056 §S1 fix
+			// Variant B): taskMeta построен по RenderedTask.Index (глобальный
+			// сквозной индекс), failure.planIndex — apply_runs.failed_plan_index
+			// (эхо TaskEvent.plan_index). Локальный task_idx тут дал бы module/
+			// action соседней задачи под staged/per-host-where — симметрично
+			// register-ветке выше (reg.PlanIndex), которую закрыла миграция 079.
+			meta := taskMeta[failure.planIndex]
 			results = append(results, DriftTaskResult{
-				Idx:     failure.taskIdx,
+				Idx:     failure.planIndex,
 				Module:  meta.module,
 				Action:  meta.action,
 				Changed: false,

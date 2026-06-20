@@ -51,19 +51,19 @@ func withDeterministicSuffix(t *testing.T, suffix string) {
 // Поведение настраивается per-метод; *Seq позволяет сменить результат между
 // раундами поллера (как describeSeq в AWS-тестах).
 type fakeVMs struct {
-	createErr     error
-	createCalled  int
-	lastCreateVM  armcompute.VirtualMachine
-	lastCreateRG  string
+	createErr      error
+	createCalled   int
+	lastCreateVM   armcompute.VirtualMachine
+	lastCreateRG   string
 	lastCreateName string
 
-	getSeq      []armcompute.VirtualMachinesClientGetResponse
-	getIdx      int
-	getFn       func(call int) (armcompute.VirtualMachinesClientGetResponse, error)
-	getN        int
+	getSeq []armcompute.VirtualMachinesClientGetResponse
+	getIdx int
+	getFn  func(call int) (armcompute.VirtualMachinesClientGetResponse, error)
+	getN   int
 
-	deleteErr    error
-	deleteCalls  []string // имена удалённых VM
+	deleteErr   error
+	deleteCalls []string // имена удалённых VM
 
 	listResult []*armcompute.VirtualMachine
 	listErr    error
@@ -111,10 +111,10 @@ func (f *fakeVMs) ListByRunTag(_ context.Context, _, _ string) ([]*armcompute.Vi
 }
 
 type fakeNICs struct {
-	createErr    error
-	createCalls  []string
-	deleteCalls  []string
-	deleteErr    error
+	createErr   error
+	createCalls []string
+	deleteCalls []string
+	deleteErr   error
 }
 
 func (f *fakeNICs) CreateAndWait(_ context.Context, _, name string, _ armnetwork.Interface) (armnetwork.Interface, error) {
@@ -134,12 +134,12 @@ func (f *fakeNICs) DeleteAndWait(_ context.Context, _, name string) error {
 }
 
 type fakePIPs struct {
-	createErr    error
-	createCalls  []string
-	deleteCalls  []string
-	deleteErr    error
-	getResult    armnetwork.PublicIPAddress
-	getErr       error
+	createErr   error
+	createCalls []string
+	deleteCalls []string
+	deleteErr   error
+	getResult   armnetwork.PublicIPAddress
+	getErr      error
 }
 
 func (f *fakePIPs) CreateAndWait(_ context.Context, _, name string, _ armnetwork.PublicIPAddress) (armnetwork.PublicIPAddress, error) {
@@ -512,10 +512,10 @@ func TestCreate_Idempotent_TagMatch(t *testing.T) {
 	prof["tags"] = map[string]any{runTagKey: "run-42"}
 
 	existing := []*armcompute.VirtualMachine{{
-		Name:     to.Ptr("run-42-vm-0"),
-		Location: to.Ptr("westeurope"),
+		Name:       to.Ptr("run-42-vm-0"),
+		Location:   to.Ptr("westeurope"),
 		Properties: &armcompute.VirtualMachineProperties{ProvisioningState: to.Ptr("Succeeded")},
-		Tags:     map[string]*string{runTagKey: to.Ptr("run-42")},
+		Tags:       map[string]*string{runTagKey: to.Ptr("run-42")},
 	}}
 	vms := &fakeVMs{
 		listResult: existing,

@@ -13,6 +13,24 @@ message Hello {
 
   // Версия soul-бинаря.
   string soul_version = 2;
+
+  // capabilities — набор фичей протокола, которые этот Soul-бинарь поддерживает
+  // (ADR-056 §S5 forward-compat). Анонс при connect-е; Keeper персистит его рядом
+  // с presence (Redis, жизненный цикл = SID-lease) и сверяет ДО dispatch-а
+  // фич-зависимых прогонов.
+  //
+  // Канон строковых значений — naming-rules.md → «Soul-capabilities». MVP:
+  //   - "passage" — Soul эхает ApplyRequest.passage в TaskEvent/RunResult, то есть
+  //     умеет участвовать в staged-render (N>1 Passage, ADR-056). Soul без этого
+  //     признака под staged-сценарием отвергается keeper-ом ДО dispatch
+  //     (`soul_passage_unsupported`, fail-closed) — иначе barrier следующего Passage
+  //     ждал бы терминал, которого старый бинарь не пришлёт (зависание в applying).
+  //
+  // Пустой набор = старый Soul без capability-анонса (forward-compat, ADR-012(c)
+  // only-add): keeper трактует его как не поддерживающий НИ ОДНОЙ фичи (fail-closed
+  // для фич-зависимых прогонов; N=1-прогоны совместимы как раньше). Только
+  // never-reuse номера поля.
+  repeated string capabilities = 3;
 }
 
 // HelloReply — ответ Keeper-а с метаданными сессии.

@@ -28,6 +28,7 @@ import (
 
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 const Name = "core.service"
@@ -59,7 +60,33 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 	if _, _, err := util.TriBoolParam(req.Params, "enabled"); err != nil {
 		errs = append(errs, err.Error())
 	}
+	// daemon_reload — closed-set enum (auto|always|never). Проверка значения,
+	// не литерала: manifest-DSL объявляет enum для UI/линтера, runtime-guard
+	// «неизвестное значение → ошибка валидации, не молча» делаем тут поверх
+	// делегации (симметрия с tri-bool `enabled`).
+	if _, err := daemonReloadMode(req.Params); err != nil {
+		errs = append(errs, err.Error())
+	}
 	return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
+}
+
+// daemonReloadMode извлекает и валидирует param `daemon_reload` (default auto).
+// Отсутствие/null → auto. Неизвестное строковое значение → ошибка (отвергается
+// на Validate). Применяется только к мутирующим states (running/restarted/
+// enabled); на stopped param игнорируется (manifest его там не объявляет).
+func daemonReloadMode(params *structpb.Struct) (util.DaemonReloadMode, error) {
+	s, err := util.OptStringParam(params, "daemon_reload")
+	if err != nil {
+		return "", err
+	}
+	switch s {
+	case "":
+		return util.DaemonReloadAuto, nil
+	case string(util.DaemonReloadAuto), string(util.DaemonReloadAlways), string(util.DaemonReloadNever):
+		return util.DaemonReloadMode(s), nil
+	default:
+		return "", fmt.Errorf("param %q: unknown value %q (want auto|always|never)", "daemon_reload", s)
+	}
 }
 
 // PlanReadSafe объявляет, что core.service.Plan — pure-read (ADR-031 Scry):
@@ -154,9 +181,9 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	case "stopped":
 		return m.applyStopped(ctx, stream, init, name)
 	case "restarted":
-		return m.applyRestarted(ctx, stream, init, name)
+		return m.applyRestarted(ctx, stream, init, name, req)
 	case "enabled":
-		return m.applyEnabled(ctx, stream, init, name)
+		return m.applyEnabled(ctx, stream, init, name, req)
 	default:
 		return util.SendFailed(stream, fmt.Sprintf("unknown state %q", req.State))
 	}
@@ -174,6 +201,17 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 // не помечает changed.
 func (m *Module) applyRunning(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], init util.InitSystem, name string, req *pluginv1.ApplyRequest) error {
 	wantEnabled, manageEnabled, err := util.TriBoolParam(req.Params, "enabled")
+	if err != nil {
+		return util.SendFailed(stream, err.Error())
+	}
+	mode, err := daemonReloadMode(req.Params)
+	if err != nil {
+		return util.SendFailed(stream, err.Error())
+	}
+	// daemon-reload ДО start/enable: после правки unit-файла без reload systemd
+	// стартовал бы со старым определением. reload не помечает шаг changed (см.
+	// EnsureDaemonReloaded), только диагностика в output.
+	reloaded, err := util.EnsureDaemonReloaded(ctx, m.Runner, init, name, mode)
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
@@ -199,6 +237,9 @@ func (m *Module) applyRunning(ctx context.Context, stream grpc.ServerStreamingSe
 		changed = changed || enabledChanged
 		output["enabled"] = wantEnabled
 	}
+	if reloaded {
+		output["reloaded"] = true
+	}
 	return util.SendFinal(stream, changed, output)
 }
 
@@ -216,22 +257,50 @@ func (m *Module) applyStopped(ctx context.Context, stream grpc.ServerStreamingSe
 	return util.SendFinal(stream, true, map[string]any{"name": name, "active": false})
 }
 
-func (m *Module) applyRestarted(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], init util.InitSystem, name string) error {
+func (m *Module) applyRestarted(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], init util.InitSystem, name string, req *pluginv1.ApplyRequest) error {
+	mode, err := daemonReloadMode(req.Params)
+	if err != nil {
+		return util.SendFailed(stream, err.Error())
+	}
+	// daemon-reload ДО restart: без него systemd рестартует со старым unit-ом.
+	// reload не влияет на changed (restarted и так безусловно changed=true).
+	reloaded, err := util.EnsureDaemonReloaded(ctx, m.Runner, init, name, mode)
+	if err != nil {
+		return util.SendFailed(stream, err.Error())
+	}
 	// restarted — безусловно changed=true: пользователь явно попросил рестарт,
 	// например после core.file.present обновил конфиг и хочет, чтобы service
 	// перечитал. Идемпотентности тут быть не должно.
 	if err := m.restart(ctx, init, name); err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
-	return util.SendFinal(stream, true, map[string]any{"name": name, "active": true})
+	output := map[string]any{"name": name, "active": true}
+	if reloaded {
+		output["reloaded"] = true
+	}
+	return util.SendFinal(stream, true, output)
 }
 
-func (m *Module) applyEnabled(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], init util.InitSystem, name string) error {
+func (m *Module) applyEnabled(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], init util.InitSystem, name string, req *pluginv1.ApplyRequest) error {
+	mode, err := daemonReloadMode(req.Params)
+	if err != nil {
+		return util.SendFailed(stream, err.Error())
+	}
+	// daemon-reload ДО enable: новый/изменённый unit должен быть подхвачен
+	// systemd до создания enable-симлинков. reload не влияет на changed.
+	reloaded, err := util.EnsureDaemonReloaded(ctx, m.Runner, init, name, mode)
+	if err != nil {
+		return util.SendFailed(stream, err.Error())
+	}
 	changed, err := m.ensureEnabled(ctx, init, name, true)
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
-	return util.SendFinal(stream, changed, map[string]any{"name": name, "enabled": true})
+	output := map[string]any{"name": name, "enabled": true}
+	if reloaded {
+		output["reloaded"] = true
+	}
+	return util.SendFinal(stream, changed, output)
 }
 
 // ensureEnabled приводит autostart-состояние юнита к want (true = enable,

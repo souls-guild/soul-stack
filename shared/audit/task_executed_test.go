@@ -6,13 +6,14 @@ import (
 )
 
 // TestBuildTaskExecutedPayload_BaseFields — базовая форма: sid/apply_id/task_idx/
-// status присутствуют; без error/register_data ключи не добавляются.
+// plan_index/status присутствуют; без error/register_data ключи не добавляются.
 func TestBuildTaskExecutedPayload_BaseFields(t *testing.T) {
 	p := BuildTaskExecutedPayload(TaskExecutedInput{
-		SID:     "h.local",
-		ApplyID: "apply-1",
-		TaskIdx: 3,
-		Status:  "TASK_STATUS_CHANGED",
+		SID:       "h.local",
+		ApplyID:   "apply-1",
+		TaskIdx:   3,
+		PlanIndex: 7,
+		Status:    "TASK_STATUS_CHANGED",
 	})
 	if p["sid"] != "h.local" || p["apply_id"] != "apply-1" || p["task_idx"] != 3 {
 		t.Errorf("base fields = %v", p)
@@ -24,6 +25,22 @@ func TestBuildTaskExecutedPayload_BaseFields(t *testing.T) {
 		if _, present := p[absent]; present {
 			t.Errorf("payload unexpectedly carries %q: %v", absent, p[absent])
 		}
+	}
+}
+
+// TestBuildTaskExecutedPayload_PlanIndexEmitted — T3: ГЛОБАЛЬНЫЙ plan_index едет
+// в payload аддитивно рядом с локальным task_idx (ключ корреляции CHANGED-задачи с
+// планом в auditpg.SelectChangedTaskKeys под staged/per-host-where). Под staged
+// plan_index ≠ task_idx — оба кладутся, свёртка ключуется на plan_index.
+func TestBuildTaskExecutedPayload_PlanIndexEmitted(t *testing.T) {
+	p := BuildTaskExecutedPayload(TaskExecutedInput{
+		SID: "h", ApplyID: "a", TaskIdx: 2, PlanIndex: 9, Status: "TASK_STATUS_CHANGED",
+	})
+	if p["plan_index"] != 9 {
+		t.Errorf("plan_index = %v, want 9 (глобальный сквозной индекс)", p["plan_index"])
+	}
+	if p["task_idx"] != 2 {
+		t.Errorf("task_idx = %v, want 2 (локальный сохранён для наблюдаемости)", p["task_idx"])
 	}
 }
 

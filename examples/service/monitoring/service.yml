@@ -23,8 +23,9 @@ state_schema:
 #
 # node-exporter — переиспользуемая standalone-destiny в examples/destiny/ (НЕ
 # внутри этого сервиса): scenario её не рендерит, только оркеструет apply:destiny
-# и прокидывает её input. Прод-grade вариант (DynamicUser + hardening + extra_args
-# + arch из soulprint) живёт в destiny, дрейф с инлайн-копией устранён.
+# и прокидывает её input. Прод-grade вариант (стабильный сервис-аккаунт
+# node_exporter + hardening + arch из soulprint) живёт в destiny, дрейф с
+# инлайн-копией устранён.
 #
 # redis-exporter здесь НЕ через apply:destiny (остаётся инлайн в scenario/create):
 # прод-destiny redis-exporter требует redis_password (required) и несёт

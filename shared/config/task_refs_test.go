@@ -666,3 +666,108 @@ tasks:
 		t.Fatalf("валидный scenario не должен давать cross-ref ошибок; got=%d, diags=%v", got, diags)
 	}
 }
+
+// TestTaskRefs_UnknownInterpField_Destiny — закрытый ADR-056 S2 пробел: cross-ref-
+// валидатор раньше НЕ обходил интерполяционные source-поля (vars/output/params/
+// loop.items), и unknown-register в них доживал до рантайм-стратификатора. Теперь
+// каждое поле ловится офлайн. Набор полей здесь обязан совпадать с passage-
+// определяющими источниками стратификатора (reads==refs, render/passage_test.go).
+func TestTaskRefs_UnknownInterpField_Destiny(t *testing.T) {
+	cases := map[string]string{
+		"output": `
+- name: act
+  module: core.exec.run
+  changed_when: false
+  output:
+    role: "${ register.ghost.stdout }"
+  params: { cmd: "true" }
+`,
+		"vars": `
+- name: act
+  module: core.exec.run
+  changed_when: false
+  vars:
+    v: "${ register.ghost.stdout }"
+  params: { cmd: "true" }
+`,
+		"params": `
+- name: act
+  module: core.exec.run
+  changed_when: false
+  params:
+    cmd: echo
+    args: ["${ register.ghost.stdout }"]
+`,
+		"loop.items": `
+- name: act
+  module: core.exec.run
+  changed_when: false
+  loop:
+    items: "${ register.ghost.stdout }"
+    as: item
+  params: { cmd: "echo ${ item }" }
+`,
+	}
+	for field, src := range cases {
+		t.Run(field, func(t *testing.T) {
+			_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+			if got := countCode(diags, "unknown_register_reference"); got != 1 {
+				dump(t, diags)
+				t.Fatalf("%s: unknown_register_reference count = %d, want 1 (валидатор-дыра ADR-056 S2 не закрыта)", field, got)
+			}
+		})
+	}
+}
+
+// TestTaskRefs_UnknownApplyInput_Scenario — applier-задача: register, который
+// никто не эмитит, в apply.input → unknown_register_reference (apply живёт только
+// в scenario).
+func TestTaskRefs_UnknownApplyInput_Scenario(t *testing.T) {
+	src := `
+name: act
+tasks:
+  - name: delegate
+    apply:
+      destiny: redis
+      input:
+        seed: "${ register.ghost.stdout }"
+`
+	_, _, diags, _ := LoadScenarioManifestFromBytes("scenario/act/main.yml", []byte(src), ValidateOptions{})
+	if got := countCode(diags, "unknown_register_reference"); got != 1 {
+		dump(t, diags)
+		t.Fatalf("apply.input: unknown_register_reference count = %d, want 1", got)
+	}
+}
+
+// TestTaskRefs_KnownInterpField_NotFlagged — register, который эмитит probe-
+// задача, прочитанный через ${ … } в output/params/apply.input, валиден и НЕ даёт
+// ложного unknown_register_reference (forward-ref по плоскому пространству плана).
+func TestTaskRefs_KnownInterpField_NotFlagged(t *testing.T) {
+	src := `
+name: chain
+tasks:
+  - name: probe
+    module: core.exec.run
+    register: probe
+    changed_when: false
+    params: { cmd: "true" }
+  - name: use in output and params
+    module: core.exec.run
+    changed_when: false
+    output:
+      role: "${ register.probe.stdout }"
+    params:
+      cmd: echo
+      args: ["${ register.probe.stdout }"]
+  - name: use in apply input
+    apply:
+      destiny: redis
+      input:
+        seed: "${ register.probe.stdout }"
+`
+	_, _, diags, _ := LoadScenarioManifestFromBytes("scenario/chain/main.yml", []byte(src), ValidateOptions{})
+	if got := countCode(diags, "unknown_register_reference"); got != 0 {
+		dump(t, diags)
+		t.Fatalf("known register в output/params/apply.input не должен ловиться; got=%d", got)
+	}
+}

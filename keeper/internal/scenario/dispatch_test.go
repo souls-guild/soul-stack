@@ -141,6 +141,40 @@ func TestEffectiveSerialWidth(t *testing.T) {
 	}
 }
 
+// TestUnit_EffectiveSerialWidth_PerPassageSlice — ★ РЕВЕРС-GUARD per-passage width
+// (ADR-056 §serial, min-width per-Passage). dispatchPassage зовёт effectiveSerialWidth
+// на срезе ОДНОГО Passage (tasksForPassage-фильтрованные plans), НЕ на полном прогоне.
+// Реверс (per-RUN min-width): probe Passage 0 БЕЗ serial поехал бы волнами по 1 из-за
+// serial:1 задачи Passage 1 (silent destructive throttle). Тест доказывает, что width
+// каждого Passage = min среди задач ИМЕННО ЭТОГО Passage.
+func TestUnit_EffectiveSerialWidth_PerPassageSlice(t *testing.T) {
+	// 3 задачи: Passage 0 — probe (#0, без serial); Passage 1 — два действия (#1
+	// serial:1, #2 serial:3). Полный прогон (per-RUN) дал бы min=1 для probe тоже.
+	tasks := []*render.RenderedTask{
+		{Index: 0, Passage: 0},
+		{Index: 1, Passage: 1},
+		{Index: 2, Passage: 1},
+	}
+	plans := []render.DispatchPlan{
+		{TaskIndex: 0, SerialWidth: 0}, // probe Passage 0 — без serial
+		{TaskIndex: 1, SerialWidth: 1}, // действие Passage 1 — serial:1
+		{TaskIndex: 2, SerialWidth: 3}, // действие Passage 1 — serial:3
+	}
+
+	// Passage 0: только probe (#0, serial 0) → width 0 (одна волна на всех).
+	// Реверс per-RUN взял бы min(0,1,3 положит.)=1 → probe поехал бы по 1 хосту.
+	_, p0Plans := tasksForPassage(tasks, plans, 0)
+	if w := effectiveSerialWidth(p0Plans); w != 0 {
+		t.Fatalf("★ Passage 0 effectiveSerialWidth = %d, want 0 (probe БЕЗ serial — per-RUN min-width просочился бы из Passage 1 serial:1 → throttle)", w)
+	}
+
+	// Passage 1: действия #1(1) и #2(3) → min положит. = 1.
+	_, p1Plans := tasksForPassage(tasks, plans, 1)
+	if w := effectiveSerialWidth(p1Plans); w != 1 {
+		t.Fatalf("Passage 1 effectiveSerialWidth = %d, want 1 (min среди serial:1 и serial:3)", w)
+	}
+}
+
 func TestSplitWaves(t *testing.T) {
 	sids := []string{"a", "b", "c", "d", "e"}
 	tests := []struct {
@@ -236,6 +270,30 @@ func TestFailureReason(t *testing.T) {
 			name: "cancelled без summary → статус",
 			hs:   applyrun.HostStatus{Status: applyrun.StatusCancelled},
 			want: "cancelled",
+		},
+		{
+			// GUARD (ADR-056 §S1 fix Variant B): под staged/per-host-where
+			// локальный TaskIdx ≠ глобальный FailedPlanIndex. no_log-карта
+			// построена по глобальному RenderedTask.Index. Резолв ОБЯЗАН идти по
+			// FailedPlanIndex: задача с глобальным idx=5 — no_log, её stderr нёс
+			// пароль; локальный idx=1 в no_log-карте отсутствует. РЕВЕРС (резолв
+			// по TaskIdx=1) → noLog[1]=false → пароль из ErrorSummary утёк бы в
+			// operator-facing причину. Security-relevant.
+			name:  "staged: no_log резолвится по глобальному plan_index, не локальному task_idx",
+			hs:    applyrun.HostStatus{Status: applyrun.StatusFailed, TaskIdx: intp(1), FailedPlanIndex: intp(5), ErrorSummary: strp("task 5 core.exec.run: secret-password-in-stderr")},
+			noLog: map[int]bool{5: true},
+			want:  "task 5: (no_log task failed)",
+		},
+		{
+			// Симметрично: глобальный idx=5 — обычная задача (не no_log), хотя
+			// локальный idx=2 коллизионно совпал с no_log-индексом другой задачи
+			// другого Passage. Резолв по FailedPlanIndex(5) → noLog[5]=false →
+			// message виден. Реверс (по TaskIdx=2) ложно подавил бы причину
+			// обычной задачи.
+			name:  "staged: обычная задача не подавляется из-за коллизии локального task_idx",
+			hs:    applyrun.HostStatus{Status: applyrun.StatusFailed, TaskIdx: intp(2), FailedPlanIndex: intp(5), ErrorSummary: strp("task 5 core.pkg.installed: boom")},
+			noLog: map[int]bool{2: true},
+			want:  "task 5 core.pkg.installed: boom",
 		},
 	}
 	for _, tt := range tests {
@@ -344,7 +402,7 @@ func TestClassify(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			done, failed := classify(tt.statuses, tt.wantHosts, nil)
+			done, failed := classify(tt.statuses, 0, tt.wantHosts, nil)
 			if tt.wantFail {
 				if failed == nil {
 					t.Fatalf("failed = nil, want non-nil")

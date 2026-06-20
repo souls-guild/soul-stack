@@ -237,7 +237,22 @@ type RenderedTask struct {
 	// предикаты последующих задач писали `register.<name>.*`. Пусто = задача не
 	// регистрирует результат под именем (доступна только своим idx). Отличается от
 	// TaskEvent.register_data: то — payload, это — ИМЯ, под которым он адресуется.
-	Register      string `protobuf:"bytes,13,opt,name=register,proto3" json:"register,omitempty"`
+	Register string `protobuf:"bytes,13,opt,name=register,proto3" json:"register,omitempty"`
+	// plan_index — ГЛОБАЛЬНЫЙ сквозной индекс задачи в ПОЛНОМ плане прогона (по
+	// ВСЕМ Passage staged-render, ADR-056), = RenderedTask.Index на Keeper-е
+	// (pipeline.go). В отличие от позиции в ApplyRequest.tasks[] (она ЛОКАЛЬНА:
+	// подмножество задач одного Passage, отфильтрованное per-host через where:),
+	// plan_index уникален по всему плану И не зависит от per-host where: — это
+	// стабильный ключ register-корреляции на Keeper-е (apply_task_register.plan_index,
+	// миграция 079). Soul эхает его в TaskEvent.plan_index; для register-резолва
+	// (buildRegisterByHost) Keeper мапит nameByIdx[Index] против plan_index, а НЕ
+	// против локального task_idx — иначе при passage>0 или разном per-host where:
+	// имена разъезжаются (latent-баг task_idx-коллизии, ADR-056 §S1 fix Variant B).
+	//
+	// 0/пусто = старый Soul без эхо ИЛИ N=1-прогон (один Passage, локальный==глобальный):
+	// forward-compat (ADR-012(c) only-add). Для N=1 plan_index==task_idx, корреляция
+	// совпадает с прежним поведением БИТ-В-БИТ. Только never-reuse номера поля.
+	PlanIndex     int32 `protobuf:"varint,16,opt,name=plan_index,json=planIndex,proto3" json:"plan_index,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -377,6 +392,13 @@ func (x *RenderedTask) GetRegister() string {
 	return ""
 }
 
+func (x *RenderedTask) GetPlanIndex() int32 {
+	if x != nil {
+		return x.PlanIndex
+	}
+	return 0
+}
+
 // ApplyRequest — команда Keeper → Soul на выполнение прогона.
 type ApplyRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -402,6 +424,18 @@ type ApplyRequest struct {
 	// guard такой запрос НЕ отвергает (fencing деградирует до защиты по apply_id +
 	// SID-lease). Только never-reuse: новый номер поля при breaking change.
 	Attempt int32 `protobuf:"varint,4,opt,name=attempt,proto3" json:"attempt,omitempty"`
+	// passage — индекс Passage (0-based) staged-render, к которому относится это
+	// задание (ADR-056). Прогон сценария исполняется как N≥1 упорядоченных Passage
+	// (render → dispatch → barrier → сбор register); этот ApplyRequest несёт
+	// подмножество задач ОДНОГО Passage. Корреляция per-Passage задания с его
+	// терминалом — по (apply_id, sid, passage) (echo в TaskEvent/RunResult).
+	//
+	// 0/пусто = единственный Passage (forward-compat, ADR-012(c) only-add):
+	// N=1-сценарий (без register-зависимостей) и старый Keeper без поля шлют
+	// passage=0 — поведение БИТ-В-БИТ как до staged-render (один проход). Soul
+	// эхает passage в TaskEvent/RunResult как есть. Только never-reuse номера поля.
+	// Стратификация на N>1 и stage-loop — S2/S3; S1 несёт только транспорт+схему.
+	Passage int32 `protobuf:"varint,6,opt,name=passage,proto3" json:"passage,omitempty"`
 	// dry_run — режим Scry (ADR-031): Soul НЕ применяет задачи, а для каждой зовёт
 	// SoulModule.Plan (pure-read, НЕ мутирует хост) и собирает машинный
 	// PlanEvent.changed — «Apply изменил бы ресурс?» (drift). Хост ничего не
@@ -477,6 +511,13 @@ func (x *ApplyRequest) GetAttempt() int32 {
 	return 0
 }
 
+func (x *ApplyRequest) GetPassage() int32 {
+	if x != nil {
+		return x.Passage
+	}
+	return 0
+}
+
 func (x *ApplyRequest) GetDryRun() bool {
 	if x != nil {
 		return x.DryRun
@@ -499,7 +540,26 @@ type TaskEvent struct {
 	// Эхо RenderedTask.no_log — keeper-side audit-suppression по этому флагу
 	// (multi-Keeper-safe: TaskEvent мог прийти не на тот инстанс, что держит
 	// []RenderedTask). При true keeper не пишет register_data/error.message в audit.
-	NoLog         bool `protobuf:"varint,6,opt,name=no_log,json=noLog,proto3" json:"no_log,omitempty"`
+	NoLog bool `protobuf:"varint,6,opt,name=no_log,json=noLog,proto3" json:"no_log,omitempty"`
+	// passage — эхо ApplyRequest.passage (ADR-056): индекс Passage (0-based),
+	// которому принадлежит задача. Soul возвращает его как есть. Keeper копит
+	// register per-(apply_id, sid, passage): render следующего Passage читает
+	// register предыдущих (staged-render). 0/пусто = единственный Passage
+	// (forward-compat, ADR-012(c) only-add) — поведение как до staged-render.
+	// Только never-reuse номера поля.
+	Passage int32 `protobuf:"varint,7,opt,name=passage,proto3" json:"passage,omitempty"`
+	// plan_index — эхо RenderedTask.plan_index (ADR-056 §S1 fix Variant B):
+	// ГЛОБАЛЬНЫЙ сквозной индекс задачи в полном плане прогона (по всем Passage),
+	// которым Keeper корелирует register-данные (apply_task_register.plan_index,
+	// миграция 079). Soul берёт его из req.Tasks[idx].plan_index и эхает как есть —
+	// task_idx (field 2) остаётся ЛОКАЛЬНОЙ позицией в ApplyRequest.tasks[] (его
+	// семантика НЕ меняется: онлайн-gating onchanges_idx/onfail_idx ссылается на
+	// локальный индекс среза). plan_index — отдельный глобальный ключ для
+	// Keeper-side register-корреляции через Passage.
+	//
+	// 0/пусто = старый Soul без эхо ИЛИ N=1-прогон (plan_index==task_idx):
+	// forward-compat (ADR-012(c) only-add). Только never-reuse номера поля.
+	PlanIndex     int32 `protobuf:"varint,8,opt,name=plan_index,json=planIndex,proto3" json:"plan_index,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -576,6 +636,20 @@ func (x *TaskEvent) GetNoLog() bool {
 	return false
 }
 
+func (x *TaskEvent) GetPassage() int32 {
+	if x != nil {
+		return x.Passage
+	}
+	return 0
+}
+
+func (x *TaskEvent) GetPlanIndex() int32 {
+	if x != nil {
+		return x.PlanIndex
+	}
+	return 0
+}
+
 // RunResult — финальный отчёт о прогоне apply.
 // Заменяет ранее предлагавшееся "StateReport" (конфликт с incarnation.state в naming-rules).
 type RunResult struct {
@@ -595,7 +669,16 @@ type RunResult struct {
 	// 0/пусто = старый Soul без эхо (forward-compat, ADR-012(c) only-add):
 	// проверка актуальности НЕ применяется (деградирует до append-only single-winner
 	// guard по статусу). Только never-reuse номера поля.
-	Attempt       int32 `protobuf:"varint,4,opt,name=attempt,proto3" json:"attempt,omitempty"`
+	Attempt int32 `protobuf:"varint,4,opt,name=attempt,proto3" json:"attempt,omitempty"`
+	// passage — эхо ApplyRequest.passage (ADR-056): индекс Passage (0-based),
+	// терминал которого несёт этот отчёт. Корреляция RunResult → строка прогона —
+	// по (apply_id, sid, passage). Barrier каждого Passage ждёт терминалы своего
+	// среза; финальный итог прогона и единственный commit incarnation.state —
+	// после терминала ПОСЛЕДНЕГО Passage (state-commit НЕ дробится по-Passage,
+	// ADR-056 §г / ADR-009 §7). 0/пусто = единственный Passage (forward-compat,
+	// ADR-012(c) only-add) — поведение как до staged-render. Только never-reuse
+	// номера поля.
+	Passage       int32 `protobuf:"varint,5,opt,name=passage,proto3" json:"passage,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -654,6 +737,13 @@ func (x *RunResult) GetStateChanges() *structpb.Struct {
 func (x *RunResult) GetAttempt() int32 {
 	if x != nil {
 		return x.Attempt
+	}
+	return 0
+}
+
+func (x *RunResult) GetPassage() int32 {
+	if x != nil {
+		return x.Passage
 	}
 	return 0
 }
@@ -717,7 +807,7 @@ var File_keeper_v1_apply_proto protoreflect.FileDescriptor
 
 const file_keeper_v1_apply_proto_rawDesc = "" +
 	"\n" +
-	"\x15keeper/v1/apply.proto\x12\x13soulstack.keeper.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x16keeper/v1/common.proto\"\xe8\x03\n" +
+	"\x15keeper/v1/apply.proto\x12\x13soulstack.keeper.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x16keeper/v1/common.proto\"\x87\x04\n" +
 	"\fRenderedTask\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06module\x18\x02 \x01(\tR\x06module\x12/\n" +
@@ -738,25 +828,32 @@ const file_keeper_v1_apply_proto_rawDesc = "" +
 	"retryCount\x12\x1f\n" +
 	"\vretry_delay\x18\x0f \x01(\tR\n" +
 	"retryDelay\x12\x1a\n" +
-	"\bregister\x18\r \x01(\tR\bregister\"\xba\x01\n" +
+	"\bregister\x18\r \x01(\tR\bregister\x12\x1d\n" +
+	"\n" +
+	"plan_index\x18\x10 \x01(\x05R\tplanIndex\"\xd4\x01\n" +
 	"\fApplyRequest\x12\x19\n" +
 	"\bapply_id\x18\x01 \x01(\tR\aapplyId\x127\n" +
 	"\x05tasks\x18\x02 \x03(\v2!.soulstack.keeper.v1.RenderedTaskR\x05tasks\x12#\n" +
 	"\rtrace_context\x18\x03 \x01(\tR\ftraceContext\x12\x18\n" +
-	"\aattempt\x18\x04 \x01(\x05R\aattempt\x12\x17\n" +
-	"\adry_run\x18\x05 \x01(\bR\x06dryRun\"\x85\x02\n" +
+	"\aattempt\x18\x04 \x01(\x05R\aattempt\x12\x18\n" +
+	"\apassage\x18\x06 \x01(\x05R\apassage\x12\x17\n" +
+	"\adry_run\x18\x05 \x01(\bR\x06dryRun\"\xbe\x02\n" +
 	"\tTaskEvent\x12\x19\n" +
 	"\bapply_id\x18\x01 \x01(\tR\aapplyId\x12\x19\n" +
 	"\btask_idx\x18\x02 \x01(\x05R\ataskIdx\x127\n" +
 	"\x06status\x18\x03 \x01(\x0e2\x1f.soulstack.keeper.v1.TaskStatusR\x06status\x12<\n" +
 	"\rregister_data\x18\x04 \x01(\v2\x17.google.protobuf.StructR\fregisterData\x124\n" +
 	"\x05error\x18\x05 \x01(\v2\x1e.soulstack.keeper.v1.TaskErrorR\x05error\x12\x15\n" +
-	"\x06no_log\x18\x06 \x01(\bR\x05noLog\"\xb6\x01\n" +
+	"\x06no_log\x18\x06 \x01(\bR\x05noLog\x12\x18\n" +
+	"\apassage\x18\a \x01(\x05R\apassage\x12\x1d\n" +
+	"\n" +
+	"plan_index\x18\b \x01(\x05R\tplanIndex\"\xd0\x01\n" +
 	"\tRunResult\x12\x19\n" +
 	"\bapply_id\x18\x01 \x01(\tR\aapplyId\x126\n" +
 	"\x06status\x18\x02 \x01(\x0e2\x1e.soulstack.keeper.v1.RunStatusR\x06status\x12<\n" +
 	"\rstate_changes\x18\x03 \x01(\v2\x17.google.protobuf.StructR\fstateChanges\x12\x18\n" +
-	"\aattempt\x18\x04 \x01(\x05R\aattempt\"@\n" +
+	"\aattempt\x18\x04 \x01(\x05R\aattempt\x12\x18\n" +
+	"\apassage\x18\x05 \x01(\x05R\apassage\"@\n" +
 	"\vCancelApply\x12\x19\n" +
 	"\bapply_id\x18\x01 \x01(\tR\aapplyId\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason*\xbd\x01\n" +

@@ -1,7 +1,7 @@
-# service-hello-world
+# hello-world
 
 Минимальный пример сервиса для **E2E с реальным commit-ом в `incarnation.state`**.
-В отличие от [`service-noop`](../service-noop/README.md) (там `core.exec.run echo`,
+В отличие от [`noop`](../noop/README.md) (там `core.exec.run echo`,
 `state_changes: {}` — state не меняется), здесь сценарий `create`:
 
 1. пишет greeting-файл на каждом хосте incarnation через `core.file.present`;
@@ -13,7 +13,7 @@ cross-host барьер → commit state в Postgres.
 ## Раскладка
 
 ```
-service-hello-world/
+hello-world/
 ├── service.yml                       # манифест: state_schema_version=1, state_schema с полем greeting_file
 ├── essence/
 │   └── _default.yaml                 # baseline-essence: greeting (подложка)
@@ -46,8 +46,8 @@ service-hello-world/
 ## Валидация
 
 ```bash
-./soul-lint/bin/soul-lint validate-service  examples/service/service-hello-world/service.yml
-./soul-lint/bin/soul-lint validate-scenario examples/service/service-hello-world/scenario/create/main.yml
+./soul-lint/bin/soul-lint validate-service  examples/service/hello-world/service.yml
+./soul-lint/bin/soul-lint validate-scenario examples/service/hello-world/scenario/create/main.yml
 ```
 
 Оба должны давать exit 0 и `OK: <path>`.

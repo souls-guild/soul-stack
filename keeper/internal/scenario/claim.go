@@ -130,7 +130,7 @@ func (c *ClaimRunner) execute(ctx context.Context, run *applyrun.ApplyRun) {
 		// per-host резолва on:/where:). UpdateStatus проставит finished_at.
 		// Барьер засчитает no_match как benign-терминал (как success) → прогон
 		// идёт в ready, не error_locked.
-		if err := applyrun.UpdateStatus(ctx, c.deps.Deps.DB, run.ApplyID, run.SID, applyrun.StatusNoMatch, nil); err != nil {
+		if err := applyrun.UpdateStatus(ctx, c.deps.Deps.DB, run.ApplyID, run.SID, run.Passage, applyrun.StatusNoMatch, nil); err != nil {
 			if errors.Is(err, applyrun.ErrApplyRunAlreadyTerminal) {
 				log.Info("scenario: claim no-op no_match — single-winner no-op, первый коммиттер победил")
 				return
@@ -153,7 +153,7 @@ func (c *ClaimRunner) execute(ctx context.Context, run *applyrun.ApplyRun) {
 	if cancelled, cerr := applyrun.SelectCancelRequested(ctx, c.deps.Deps.DB, run.ApplyID, run.SID); cerr != nil {
 		log.Warn("scenario: claim — чтение cancel_requested провалено, продолжаем apply", slog.Any("error", cerr))
 	} else if cancelled {
-		if err := applyrun.UpdateStatus(ctx, c.deps.Deps.DB, run.ApplyID, run.SID, applyrun.StatusCancelled, nil); err != nil {
+		if err := applyrun.UpdateStatus(ctx, c.deps.Deps.DB, run.ApplyID, run.SID, run.Passage, applyrun.StatusCancelled, nil); err != nil {
 			if errors.Is(err, applyrun.ErrApplyRunAlreadyTerminal) {
 				log.Info("scenario: claim cancelled — single-winner no-op, первый коммиттер победил")
 				return
@@ -244,7 +244,7 @@ func (c *ClaimRunner) aborted(ctx context.Context) bool {
 // (без раскрытого секрета). summary читается наружу через barrier/status_details
 // без маскинга — caller обязан передать масштабированную/нейтральную строку.
 func (c *ClaimRunner) markFailed(ctx context.Context, run *applyrun.ApplyRun, summary string, log *slog.Logger) {
-	if err := applyrun.UpdateStatus(ctx, c.deps.Deps.DB, run.ApplyID, run.SID, applyrun.StatusFailed, &summary); err != nil {
+	if err := applyrun.UpdateStatus(ctx, c.deps.Deps.DB, run.ApplyID, run.SID, run.Passage, applyrun.StatusFailed, &summary); err != nil {
 		if errors.Is(err, applyrun.ErrApplyRunAlreadyTerminal) {
 			log.Info("scenario: claim failed — single-winner no-op, первый коммиттер победил",
 				slog.String("summary", summary))

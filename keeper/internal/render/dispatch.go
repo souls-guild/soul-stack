@@ -20,8 +20,10 @@ import (
 //   - `on: [coven, …]` → AND-пересечение по Coven-меткам (хост попадает, только
 //     если у него присутствуют ВСЕ перечисленные метки). Литералы-ковены с
 //     CEL-обёрткой `${ … }` (например, `${ incarnation.name }`) вычисляются;
-//     `${ incarnation.name }` сводится к корневой Coven-метке и не сужает scope
-//     (отбрасывается из фильтра в [resolveCovenList]).
+//     `${ incarnation.name }` проходит через общий фильтр как обычная метка и не
+//     сужает scope — каждый хост roster-а несёт корневую метку по построению
+//     (rosterSQL `WHERE $1 = ANY(coven)`, ADR-008), так что фильтрация по ней
+//     эквивалентна «весь incarnation».
 //
 // Резолв `where:` — per-host bool-предикат (evalWhere). Пустой where → все
 // targeted-хосты.
@@ -72,10 +74,11 @@ func IsKeeperTask(task config.Task) bool {
 }
 
 // resolveOn преобразует значение `on:` в список Coven-меток. Возвращаемый
-// nil/empty означает «нет фильтра по ковенам» (весь incarnation):
-//   - on: опущен;
-//   - on: [`${ incarnation.name }`] — корневая Coven-метка эквивалентна всему
-//     incarnation, поэтому фильтр не сужает roster.
+// nil/empty означает «нет фильтра по ковенам» (весь incarnation, только при
+// опущенном on:). Корневая метка `${ incarnation.name }` НЕ отбрасывается
+// специально: она попадает в список как обычная метка, а фильтрация по ней
+// безопасна и эквивалентна «весь incarnation» — каждый хост roster-а несёт
+// корневую метку (rosterSQL `WHERE $1 = ANY(coven)`, ADR-008).
 //
 // `on: keeper` сюда НЕ доходит — keeper-side задачи отводятся пайплайном в
 // renderKeeperTask до резолва roster (см. [IsKeeperTask]); ветка оставлена
@@ -119,8 +122,11 @@ func keeperVars(in RenderInput) cel.Vars {
 
 // resolveCovenList вычисляет элементы `on: [...]`: статические kebab-метки — как
 // есть; CEL-обёртки `${ … }` — через интерполяцию (контекст без soulprint:
-// `on:` резолвится один раз на прогон, не per-host). Метка, совпавшая с
-// incarnation.name, отбрасывается (= весь incarnation, не сужает фильтр).
+// `on:` резолвится один раз на прогон, не per-host). Корневая метка
+// `incarnation.name` НЕ имеет спец-обработки — попадает в список наравне с
+// прочими: фильтр по ней безопасен и эквивалентен «весь incarnation», т.к.
+// каждый хост roster-а несёт корневую метку (rosterSQL `WHERE $1 = ANY(coven)`,
+// ADR-008).
 func resolveCovenList(engine *cel.Engine, in RenderInput, items []any) ([]string, error) {
 	// on: резолвится не per-host — soulprint в контексте недоступен.
 	vars := cel.Vars{
@@ -147,11 +153,6 @@ func resolveCovenList(engine *cel.Engine, in RenderInput, items []any) ([]string
 		coven, ok := val.(string)
 		if !ok {
 			return nil, fmt.Errorf("render: on[%d] %q вычислился в %T, ожидалась строка-coven", i, s, val)
-		}
-		// `${ incarnation.name }` ≡ весь incarnation: корневая Coven-метка не
-		// сужает roster, который и так = connected-souls этой incarnation.
-		if coven == in.Incarnation.Name {
-			continue
 		}
 		out = append(out, coven)
 	}

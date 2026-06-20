@@ -1,0 +1,22 @@
+# Souls-фикстура для L3a redis::restart_node_exporter.
+#
+# Один soul-stub: restart_node_exporter — единственная задача
+# core.service.restarted (имя юнита node_exporter), без apply:destiny и без
+# multi-host таргетинга. covens: [redis-restart] — членство в Coven incarnation
+# (incarnation.name, ADR-008); roster прогона резолвится по нему.
+#
+# soulprint обязателен для create-прогона в том же тесте (redis-exporter/
+# node-exporter читают soulprint keeper-side). Сам restart_node_exporter
+# soulprint не читает. Тот же os-блок, что в souls.yaml.
+- sid: soul-a.example.com
+  status: connected
+  covens: [redis-restart]
+  soulprint:
+    os:
+      family: debian
+      distro: debian
+      version: "12"
+      arch: amd64
+      pkg_mgr: apt
+      init_system: systemd
+    hostname: soul-a

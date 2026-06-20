@@ -1,0 +1,52 @@
+# L0-кейс: primary_ip вне 10.0.0.0/8.
+#
+# soulprint.self.network.primary_ip=192.168.1.5 (не 10.*) → apply:input
+# CEL-тернарник даёт пустой host → listen = ":9100" (bind на все интерфейсы +
+# порт). Контраст с render-defaults (primary_ip 10.0.0.5 → listen "10.0.0.5:9100").
+# Доказывает internal-bind-логику: вне 10/8 host пуст.
+#
+# listen попадает в render_context.vars.listen основного unit-шага (core.file.
+# rendered кладёт CEL-собранные vars в render_context). Ассертим render_context
+# unit-задачи (index 6) целиком — он детерминирован для синтетического L0-хоста;
+# ключевая величина — vars.listen = ":9100".
+name: node-exporter binds to all interfaces when primary_ip is non-10
+
+fixtures:
+  default_destiny_source: "file://../../{name}"
+  input:
+    version: "1.9.0"
+    sha256: ""
+    collectors: [smartmon, nvme, ipmi]
+  soulprint:
+    os:
+      arch: amd64
+    network:
+      primary_ip: "192.168.1.5"
+
+assert:
+  rendered_tasks:
+    - index: 6
+      module: core.file.rendered
+      params:
+        path: /etc/systemd/system/node_exporter.service
+        # template_content присутствует (literal .tmpl доставлен Keeper→Soul);
+        # точную посимвольную сверку шаблона не делаем (хрупко), см. presentMarker.
+        template_content: "<present>"
+        # render_context.vars.listen = ":9100" — пустой host (primary_ip не 10.*).
+        render_context:
+          vars:
+            bin_dir: /usr/local/bin
+            listen: ":9100"
+            textfile_dir: /var/lib/node_exporter
+            user: node_exporter
+          self:
+            choirs: []
+            covens: []
+            network:
+              primary_ip: "192.168.1.5"
+            os:
+              arch: amd64
+            role: ""
+            sid: trial-host
+          role: ""
+          essence: {}

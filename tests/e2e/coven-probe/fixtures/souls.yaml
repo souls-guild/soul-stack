@@ -1,4 +1,4 @@
-# Souls-фикстура для L3a service-coven-probe::create.
+# Souls-фикстура для L3a coven-probe::create.
 #
 # scenario create пишет init-маркер на каждом хосте incarnation (on: опущен →
 # весь incarnation), сам по себе coven-таргетинг проверяется в сценариях

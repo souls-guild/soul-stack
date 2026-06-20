@@ -8,7 +8,7 @@ input:
     required: true
     # map произвольных ключей username → ACL-объект: фиксированных полей нет,
     # форма элементов задаётся в additional_properties (как `os` в
-    # examples/destiny/destiny-redis-replication-config/destiny.yml).
+    # examples/destiny/redis-replication-config/destiny.yml).
     properties: {}
     additional_properties:
       type: object

@@ -3,7 +3,7 @@
 # Render-only, герметично. Демонстрирует runtime-масштабирование репликами:
 #   - probe primary НА СУЩЕСТВУЮЩИХ хостах (changed_when: false, read-only);
 #   - install redis-single на новой реплике (apply:destiny, индексы 1..7);
-#   - replicaof на actual-primary через destiny-redis-replication-config (apply:
+#   - replicaof на actual-primary через redis-replication-config (apply:
 #     destiny, индекс 8), master_addr из probe (mocks.register.master_addr.stdout);
 #   - health-gate (probe + retry/until, индекс 9).
 #
@@ -30,9 +30,9 @@
 name: add_replicas installs redis and points the new replica at the primary
 
 # L0-источник destiny (герметичный file://): каталоги destiny-<name> в
-# examples/destiny/ относительно service-root (examples/service/service-redis/).
+# examples/destiny/ относительно service-root (examples/service/redis/).
 fixtures:
-  default_destiny_source: "file://../../destiny/destiny-{name}"
+  default_destiny_source: "file://../../destiny/{name}"
   # ТОЛЬКО обязательный input (replicas); сокет/maxmemory подтянутся из scenario
   # input:-дефолтов резолвером эффективного input. redis_version НЕ задан
   # (required:false) → version рендерится "" (latest, без пина). Пароль НЕ во
@@ -45,7 +45,7 @@ fixtures:
     secret/redis/add_replicas:
       password: s3cr3t-redis-pass-repl
   # Стабильные факты trial-host (новая реплика): IP != master_addr → шаг replicaof
-  # в destiny-redis-replication-config рендерится (when: self.ip != master_addr).
+  # в redis-replication-config рендерится (when: self.ip != master_addr).
   soulprint:
     # sid совпадает с синтетическим SID единственного L0-хоста (trial-host) —
     # чтобы where: soulprint.self.sid in input.replicas таргетил его.
@@ -131,14 +131,14 @@ assert:
     # index 4 — systemd drop-in hardening (core.file.rendered → /etc/systemd/system/
     # redis-server.service.d/hardening.conf), index 5 — daemon-reload (core.exec.run
     # systemctl daemon-reload). B2 stateful-hardening; детальная сверка — в
-    # destiny-redis-single L0 render-defaults, здесь не дублируем.
+    # redis-single L0 render-defaults, здесь не дублируем.
     - index: 6
       module: core.service.running
       params:
         name: redis-server
         enabled: true
 
-    # ── replicaof на actual-primary (destiny-redis-replication-config, индекс 8)
+    # ── replicaof на actual-primary (redis-replication-config, индекс 8)
     # master_addr — СВЁРТКА агрегата mocks.register.master_addr (sid→payload):
     # map(k, …[k].stdout).filter(v, v != '')[0] → "10.0.0.1" (master отдал IP,
     # реплика пусто). Ассерт на rendered command ловит баг свёртки: команда обязана

@@ -8,8 +8,8 @@
 
 | Папка | Что |
 |---|---|
-| [`destiny/destiny-redis/`](destiny/destiny-redis/) | Атомарный destiny-кирпичик «как поставить и настроить Redis на хосте». Отдельный git-репо в реальной жизни. Включает `tasks/main.yml` (top-level список задач без обёртки) и [`tests/install-and-ping/case.yml`](destiny/destiny-redis/tests/install-and-ping/case.yml) — иллюстрация формата molecule-style тестов destiny. Полный разбор формата — в [docs/destiny/](../docs/destiny/README.md). |
-| [`service/service-redis-cluster/`](service/service-redis-cluster/) | Полный пример service-репо: `service.yml`, иерархический `essence/`, набор сценариев, миграции, тесты. |
+| [`destiny/redis/`](destiny/redis/) | Атомарный destiny-кирпичик «как поставить и настроить Redis на хосте». Отдельный git-репо в реальной жизни. Включает `tasks/main.yml` (top-level список задач без обёртки) и [`tests/install-and-ping/case.yml`](destiny/redis/tests/install-and-ping/case.yml) — иллюстрация формата molecule-style тестов destiny. Полный разбор формата — в [docs/destiny/](../docs/destiny/README.md). |
+| [`service/redis-cluster/`](service/redis-cluster/) | Полный пример service-репо: `service.yml`, иерархический `essence/`, набор сценариев, миграции, тесты. |
 | [`keeper/keeper.yml`](keeper/keeper.yml) | Конфиг центрального инстанса `keeper` (HA-кластерный, поверх Postgres+Redis+Vault). |
 | [`soul/soul.yml`](soul/soul.yml) | Конфиг агента `soul` на управляемом хосте: fallback-list endpoints, retry, failback. |
 | [`incarnation/`](incarnation/) | Примеры API-вызовов оператора: создание incarnation, запуск сценария, upgrade. |

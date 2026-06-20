@@ -25,12 +25,12 @@ import (
 
 func TestE2EKeeperSideDispatch_CovenRegistered(t *testing.T) {
 	stack := harness.NewStack(t, harness.Config{
-		ExamplePath: "examples/service/service-keeper-register",
+		ExamplePath: "examples/service/keeper-register",
 		Souls:       1,
 	})
 	defer stack.Cleanup()
 
-	stack.RegisterService(t, "keeper-register", "examples/service/service-keeper-register")
+	stack.RegisterService(t, "keeper-register", "examples/service/keeper-register")
 
 	// Live EventStream-стрим: соседний Soul-side echo-шаг прогона диспатчится
 	// сюда (default-success), keeper-шаг исполняется локально на keeper-е.

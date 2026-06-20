@@ -70,7 +70,7 @@ PKG_DIR  := $(DIST_DIR)/pkg
 # окружения для ${ARCH}-подстановки в deploy/nfpm/*.yaml.
 PKG_ARCH ?= amd64
 
-.PHONY: gen build build-soulctl build-linux test test-race test-integration e2e e2e-live e2e-k8s docker-build-keeper docker-build-soul tidy check check-fmt vet check-gen check-doc-links check-vuln lint dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand gen-openapi check-openapi check-template sbom pkg sign stress load-test help
+.PHONY: gen build build-soulctl build-linux test test-race test-integration e2e e2e-live e2e-k8s docker-build-keeper docker-build-soul tidy check check-fmt vet check-gen check-doc-links check-vuln lint dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand gen-openapi check-openapi check-template sync-webui check-webui sbom pkg sign stress load-test help
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -428,6 +428,38 @@ check-template:
 		echo "plugin-template: copy in sync"; \
 	fi
 
+# Embed-UI vendoring: собранный build-снапшот UI живёт source-of-truth в
+# companion-repo ../soul-stack-web/dist/, а core embed-ит копию через
+# keeper/internal/webui/assets/ (go:embed, раздаётся keeper-ом на /ui, ADR-055).
+# Drift между ними отлавливается так же, как plugin-template:
+#
+#   sync-webui.sh — обновить копию из companion (rsync --delete зеркалит dist/,
+#                   при отсутствии dist/ — собирает companion `npm run build`).
+#   check-webui   — CI-guard на расхождение; ошибка означает «забыли sync после
+#                   пересборки UI в companion».
+#
+# Companion — ОТДЕЛЬНЫЙ репозиторий: на чужой машине/CI его может не быть. Если SRC
+# отсутствует — гейт не падает (иначе сломал бы `make check` без companion), а
+# пропускается с warning. Drift ловится только когда companion доступен рядом.
+WEBUI_SRC := ../soul-stack-web/dist
+WEBUI_DST := keeper/internal/webui/assets
+
+sync-webui:
+	@bash scripts/sync-webui.sh
+
+check-webui:
+	@if [ ! -d "$(WEBUI_SRC)" ]; then \
+		echo "companion soul-stack-web/dist not found, skipping webui-drift check"; \
+	elif ! diff -r -q $(WEBUI_SRC) $(WEBUI_DST) >/dev/null; then \
+		echo "embed-UI drift detected:"; \
+		diff -r $(WEBUI_SRC) $(WEBUI_DST) || true; \
+		echo ""; \
+		echo "run 'make sync-webui' (or 'scripts/sync-webui.sh') to update the embedded copy"; \
+		exit 1; \
+	else \
+		echo "embed-UI: copy in sync"; \
+	fi
+
 # --- Release/packaging ---
 # Эти таргеты аддитивны: в `check` НЕ входят (требуют внешний tooling, который в
 # dev-окружении может быть не установлен). Артефакты пишутся в dist/ (gitignored).
@@ -504,7 +536,7 @@ sign:
 # `test`); гонять отдельно. Release/packaging-таргеты (sbom/pkg/sign) сюда НЕ
 # входят — внешний tooling. `check-vuln` требует доступ к vuln.go.dev — offline
 # пропускается через SKIP_VULNCHECK=1 (см. таргет), в CI гонит реально.
-check: check-fmt vet build test check-gen check-openapi check-template check-doc-links check-vuln lint
+check: check-fmt vet build test check-gen check-openapi check-template check-webui check-doc-links check-vuln lint
 	@echo "check: все проверки пройдены"
 
 # gofmt-форматирование по всем модулям. `gofmt -l` печатает только файлы,
@@ -776,6 +808,8 @@ help:
 	@echo "  gen-openapi       перегенерировать committed openapi.yaml из huma-агрегатора"
 	@echo "  check-openapi     CI-guard на drift committed openapi.yaml vs huma-dump"
 	@echo "  check-template    CI-guard на drift embedded plugin-template (skip без companion)"
+	@echo "  sync-webui        вендоринг dist/ companion soul-stack-web → keeper/internal/webui/assets/"
+	@echo "  check-webui       CI-guard на drift embedded UI (skip без companion)"
 	@echo ""
 	@echo "Release/packaging (аддитивно, НЕ входят в check):"
 	@echo "  sbom              CycloneDX SBOM по go-модулям (cyclonedx-gomod) → dist/sbom/"

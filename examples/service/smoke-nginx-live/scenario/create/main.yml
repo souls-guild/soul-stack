@@ -46,7 +46,7 @@ tasks:
   # 1. Пакет из репозитория дистрибутива. Без =version-пина: smoke не
   # завязан на конкретную сборку nginx — берём то, что лежит в репо.
   # retry — против флапающего apt-mirror-а (та же причина, что в
-  # destiny-redis-single/tasks/main.yml).
+  # redis-single/tasks/main.yml).
   - name: Install nginx package
     module: core.pkg.installed
     retry: { count: 3, delay: 10s }

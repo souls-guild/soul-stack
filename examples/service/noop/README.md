@@ -1,4 +1,4 @@
-# service-noop
+# noop
 
 Минимальный пример сервиса для **E2E scenario-runner-а** (`M2.x.scenario-runner`).
 Состоит из одного сценария `create`, который запускает `core.exec.run` с
@@ -8,7 +8,7 @@
 ## Раскладка
 
 ```
-service-noop/
+noop/
 ├── service.yml                       # манифест: state_schema_version=1, пустой state_schema
 ├── essence/
 │   └── _default.yaml                 # baseline-essence: одно demo-поле `greeting`
@@ -36,8 +36,8 @@ service-noop/
 ## Валидация
 
 ```bash
-./soul-lint/bin/soul-lint validate-service  examples/service/service-noop/service.yml
-./soul-lint/bin/soul-lint validate-scenario examples/service/service-noop/scenario/create/main.yml
+./soul-lint/bin/soul-lint validate-service  examples/service/noop/service.yml
+./soul-lint/bin/soul-lint validate-scenario examples/service/noop/scenario/create/main.yml
 ```
 
 Оба должны давать exit 0 и `OK: <path>`.

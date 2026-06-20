@@ -36,11 +36,34 @@ type L2Case struct {
 type Stand struct {
 	// Driver — драйвер стенда. Пилот поддерживает только docker.
 	Driver string `yaml:"driver"`
-	// Image — базовый образ хоста-стенда (например ubuntu:24.04).
+	// Image — базовый образ хоста-стенда (например ubuntu:24.04). Для init: systemd
+	// поле игнорируется: стенд собирается из debian-12.Dockerfile (см. StartL2Stand).
 	Image string `yaml:"image"`
 	// Mode — как destiny попадает на стенд. push = push-oneshot soul apply
 	// (Keeper рендерит план, доставляет soul + ApplyRequest на хост, исполняет).
 	Mode string `yaml:"mode"`
+	// Init — init-система стенда (опционально). `none` (default) — контейнер живёт
+	// под `sleep infinity`, без PID1-init (текущее поведение L2-пилота). `systemd` —
+	// systemd-PID1-стенд (privileged, образ из debian-12.Dockerfile e2e-live),
+	// нужен кейсам с core.service.* (is-active/restart требуют живого systemd).
+	Init string `yaml:"init,omitempty"`
+}
+
+// Init-режимы стенда (поле stand.init). Closed-set: неизвестное значение
+// отвергается на загрузке кейса (validate).
+const (
+	// StandInitNone — без PID1-init: контейнер на `sleep infinity` (default).
+	StandInitNone = "none"
+	// StandInitSystemd — systemd-PID1-стенд для core.service.*-кейсов.
+	StandInitSystemd = "systemd"
+)
+
+// init возвращает эффективное значение stand.init (default none при пустом).
+func (s Stand) init() string {
+	if s.Init == "" {
+		return StandInitNone
+	}
+	return s.Init
 }
 
 // Verify — одна проверка результата (docs/destiny/testing.md §L2). Каждая
@@ -111,6 +134,11 @@ func (c *L2Case) validate() error {
 	}
 	if c.Stand.Mode != "push" {
 		return fmt.Errorf("stand.mode: пилот L2 поддерживает только push (получено %q)", c.Stand.Mode)
+	}
+	switch c.Stand.Init {
+	case "", StandInitNone, StandInitSystemd:
+	default:
+		return fmt.Errorf("stand.init: неизвестное значение %q (допустимо none|systemd)", c.Stand.Init)
 	}
 	if len(c.Verify) == 0 {
 		return fmt.Errorf("verify: пуст (L2 сверяет результат apply verify-задачами)")

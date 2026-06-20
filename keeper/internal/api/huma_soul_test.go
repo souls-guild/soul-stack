@@ -983,15 +983,16 @@ func TestHumaSoul_Exec_ChiCoexistence(t *testing.T) {
 		handlers.NewPermissionCatalogHandler(nil),
 		handlers.NewEventTypeCatalogHandler(nil),
 		handlers.NewMyPermissionsHandler(nil, nil),
-		nil, // enforcer
-		nil, // auditWriter
-		nil, // metricsHTTP
-		nil, // tollDegraded
-		nil, // tempoLimiter
-		nil, // tempoMetrics
-		nil, // tempoVoyageCreateLimits
-		nil, // tempoVoyagePreviewLimits
-		nil, // logger
+		nil,   // enforcer
+		nil,   // auditWriter
+		nil,   // metricsHTTP
+		nil,   // tollDegraded
+		nil,   // tempoLimiter
+		nil,   // tempoMetrics
+		nil,   // tempoVoyageCreateLimits
+		nil,   // tempoVoyagePreviewLimits
+		false, // webUIEnabled — /ui вне интереса soul-роутинг-теста
+		nil,   // logger
 	)
 	routes, ok := h.(chi.Routes)
 	if !ok {

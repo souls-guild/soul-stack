@@ -7,7 +7,7 @@ description: >-
     - redis-single   — redis-server из пакета дистрибутива + redis.conf с unix-сокетом;
     - redis-exporter — Prometheus redis_exporter, ходит в Redis через unix-сокет;
     - node-exporter  — Prometheus node_exporter (метрики хоста).
-  В отличие от service-redis-monitored (инлайн-вариант), здесь сервис ничего не
+  В отличие от redis-monitored (инлайн-вариант), здесь сервис ничего не
   рендерит сам — он только оркеструет порядок apply:destiny и прокидывает каждой
   destiny её input. Точка интеграции redis ↔ redis_exporter — путь unix-сокета
   (essence.redis_socket): он уходит и в redis-single (unixsocket в redis.conf),
@@ -58,6 +58,9 @@ state_schema:
 destiny:
   - { name: redis-single,             ref: v1.0.0 }
   - { name: redis-exporter,           ref: v1.0.0 }
+  # node-exporter (бинарь node_exporter, version-aware install, textfile-
+  # коллекторы), каталог examples/destiny/node-exporter/. Резолвится через
+  # default_destiny_source как и остальные (шаблон {name} → каталог node-exporter).
   - { name: node-exporter,            ref: v1.0.0 }
   # Настройка replicaof на репликах (сценарий add_replicas). Переиспользуемая
   # standalone-destiny (как и тройка выше), резолвится через default_destiny_source.

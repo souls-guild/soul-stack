@@ -1,0 +1,30 @@
+# tasks/install.yml — скачивание и распаковка релизного tarball-а node_exporter.
+# Тройка установки разнесена по границе include из-за ограничения ядра: register
+# одного include-файла НЕ виден в onchanges другого (cross-file register —
+# нерешённый open Q docs/destiny/tasks.md §12; рабочий корпус держит register и
+# его onchanges-потребителя в одном файле). Раскладка бинаря (register
+# node_exporter_bin) живёт в service.yml рядом с рестартом, который на неё
+# реагирует. Здесь — только сетевая часть (fetch) + распаковка, без register-ов.
+#
+# arch для URL берётся из soulprint.self.os.arch (soulprint доступен в destiny-CEL).
+
+# 1. Скачать tarball во временный путь. URL собирается CEL-ом из base_url +
+#    version + arch (soulprint.self.os.arch). checksum верифицируется ДО
+#    материализации файла; при пустом input.sha256 core.url трактует checksum как
+#    «без проверки» и идёт idempotency по SHA-256 содержимого
+#    (soul/internal/coremod/url/fetched.go).
+- name: Fetch node_exporter tarball
+  module: core.url.fetched
+  params:
+    url: "${ input.base_url + '/v' + input.version + '/node_exporter-' + input.version + '.linux-' + soulprint.self.os.arch + '.tar.gz' }"
+    path: "${ '/tmp/node_exporter-' + input.version + '.tar.gz' }"
+    checksum: "${ input.sha256 }"
+    mode: "0644"
+
+# 2. Распаковать tarball в каталог. format auto-detect по .tar.gz. Идемпотентно:
+#    core.archive пишет marker и повторно не распаковывает тот же архив.
+- name: Extract node_exporter tarball
+  module: core.archive.extracted
+  params:
+    path: "${ '/tmp/node_exporter-' + input.version + '.tar.gz' }"
+    dest: "${ '/tmp/node_exporter-' + input.version }"

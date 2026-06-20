@@ -1,5 +1,7 @@
 # ADR-035. Distribution split — core (API+CLI) vs web (UI).
 
+> **Статус: amended.** [ADR-055](0055-embed-ui-bundle.md) активирует отложенный embed-compat-shim (см. §«Что отложено» → «Embed compat-shim для air-gapped enterprise») как опциональный **default-ON** embed UI на маршруте `/ui` для беты (single-binary onboarding). Это **не разворот** разделения дистрибуции: companion-source-of-truth (п.2) и toolchain-split (инварианты: core CI не зависит от web-build, нет npm в Makefile/go.work) сохранены; разворачивается только инвариант п.3/«Отвергнутые (б)» «никакого embed UI-assets в keeper» — теперь допускается завендоренный **собранный артефакт** (не исходники). Детали — [ADR-055](0055-embed-ui-bundle.md).
+
 **Контекст.** На MVP-стадии в репо возник `ui/` — React+TS+Vite scaffold UI (5 страниц + 7 тестов). По мере роста стало ясно: TS-tooling (node_modules, vite, vitest) живёт по другим правилам, чем Go-ядро; UI — опциональный компонент (operator работает через CLI/MCP/OpenAPI), но тянет за собой ~400+ npm-пакетов в основной репо.
 
 **Решение.**

@@ -55,8 +55,14 @@ func (h *eventStreamHandler) handleTaskEvent(ctx context.Context, sid, sessionID
 		SID:     sid,
 		ApplyID: ev.GetApplyId(),
 		TaskIdx: int(ev.GetTaskIdx()),
-		Status:  ev.GetStatus().String(),
-		NoLog:   noLog,
+		// plan_index (ADR-056 §S1 fix Variant B): ГЛОБАЛЬНЫЙ сквозной индекс по всему
+		// плану (= RenderedTask.Index) — ключ корреляции CHANGED-задачи с планом в
+		// auditpg.SelectChangedTaskKeys (state_changes-whitelist + audit). Локальный
+		// TaskIdx под staged/per-host-where ≠ глобальному. N=1 → plan_index==task_idx.
+		PlanIndex: int(ev.GetPlanIndex()),
+		Status:    ev.GetStatus().String(),
+		NoLog:     noLog,
+		Passage:   int(ev.GetPassage()),
 	}
 	if e := ev.GetError(); e != nil {
 		in.Error = &audit.TaskExecutedError{
@@ -150,11 +156,22 @@ func (h *eventStreamHandler) recordTaskFailure(ctx context.Context, sid string, 
 	} else {
 		summary = composeTaskErrorSummary(taskIdx, ev.GetError())
 	}
-	if err := applyrun.RecordTaskFailure(ctx, h.deps.ApplyRunDB, ev.GetApplyId(), sid, taskIdx, summary); err != nil {
+	// passage (ADR-056): причина падения пишется в строку (apply_id, sid, passage)
+	// этого Passage; N=1 → 0. Soul эхает passage из ApplyRequest.
+	//
+	// plan_index (ADR-056 §S1 fix Variant B): ГЛОБАЛЬНЫЙ сквозной индекс упавшей
+	// задачи по всему плану (= RenderedTask.Index). Пишется в apply_runs.
+	// failed_plan_index — ключ корреляции module/action упавшей задачи на сборке
+	// DriftReport (checkdrift.buildHostReport) и no_log-подавления в barrier
+	// (dispatch.failureReason). Локальный taskIdx (поле task_idx) под staged/
+	// per-host-where ≠ глобальному — на корреляцию с планом не годится (тот же
+	// дефект, что register-канал закрыл миграцией 079). N=1 → plan_index==task_idx.
+	if err := applyrun.RecordTaskFailure(ctx, h.deps.ApplyRunDB, ev.GetApplyId(), sid, int(ev.GetPassage()), taskIdx, int(ev.GetPlanIndex()), summary); err != nil {
 		h.logger.Warn("eventstream: record task failure failed",
 			slog.String("sid", sid),
 			slog.String("apply_id", ev.GetApplyId()),
 			slog.Int("task_idx", taskIdx),
+			slog.Int64("plan_index", int64(ev.GetPlanIndex())),
 			slog.Any("error", err),
 		)
 	}
@@ -228,10 +245,19 @@ func (h *eventStreamHandler) accumulateRegister(ctx context.Context, sid string,
 		return
 	}
 	if err := applyrun.UpsertTaskRegister(ctx, h.deps.ApplyRunDB, &applyrun.TaskRegister{
-		ApplyID:      ev.GetApplyId(),
-		SID:          sid,
+		ApplyID: ev.GetApplyId(),
+		SID:     sid,
+		// plan_index (ADR-056 §S1 fix Variant B): ГЛОБАЛЬНЫЙ сквозной индекс задачи
+		// по всему плану (все Passage) — ключ register-корреляции. На нём ключуется
+		// apply_task_register (миграция 079); task_idx (локальная позиция в
+		// ApplyRequest своего Passage) неуникален между Passage и между хостами,
+		// поэтому ключом быть не может. N=1 / старый Soul → plan_index=0=task_idx.
+		PlanIndex:    int(ev.GetPlanIndex()),
 		TaskIdx:      int(ev.GetTaskIdx()),
 		RegisterData: rd.AsMap(),
+		// passage (ADR-056): register копится per-(apply_id, sid, passage). FK на
+		// apply_runs требует совпадения passage со строкой задания этого Passage.
+		Passage: int(ev.GetPassage()),
 	}); err != nil {
 		h.logger.Warn("eventstream: accumulate register_data failed",
 			slog.String("sid", sid),
@@ -278,6 +304,8 @@ func (h *eventStreamHandler) publishTaskExecuted(sid string, ev *keeperv1.TaskEv
 		"sid":         sid,
 		"task_idx":    idx,
 		"task_status": ev.GetStatus().String(),
+		// passage (ADR-056): индекс Passage staged-render. 0 = единственный Passage.
+		"passage": ev.GetPassage(),
 	}
 	// Маркер намеренного подавления для UX (SSE и так флорит error.message и не
 	// кладёт register_data; маркер — чтобы клиент видел причину «тихого» фрейма).

@@ -20,6 +20,14 @@ spec:
       description: Файл удалён.
       input:
         path: { type: string, required: true, description: "Путь удаляемого файла." }
+    directory:
+      description: Каталог существует с заданным owner/group/mode (замена `core.exec.run install -d`, ADR-015).
+      input:
+        path:    { type: string, required: true, description: "Целевой путь каталога." }
+        mode:    { type: string, description: "Права в восьмеричной форме, напр. \"0755\"." }
+        owner:   { type: string, description: "Владелец (имя пользователя)." }
+        group:   { type: string, description: "Группа-владелец (имя группы)." }
+        parents: { type: bool,   description: "Создавать промежуточные каталоги (семантика mkdir -p). Default false." }
     rendered:
       description: Файл = результат рендера text/template-шаблона (ADR-010).
       input:

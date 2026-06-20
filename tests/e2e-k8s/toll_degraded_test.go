@@ -34,12 +34,12 @@ import (
 //  6. AssertAuditEvent `cluster.degraded_set`.
 func TestL3cToll_DegradedMode(t *testing.T) {
 	const (
-		soulCount        = 5
-		killCount        = 3 // 3/5 = 60% > threshold 20%
-		warmupWait       = 70 * time.Second
-		degradedTimeout  = 90 * time.Second
-		incarnationName  = "any-name"   // не существует, Toll отдаёт 503 раньше
-		scenarioName     = "any-scenario" // тот же инвариант
+		soulCount       = 5
+		killCount       = 3 // 3/5 = 60% > threshold 20%
+		warmupWait      = 70 * time.Second
+		degradedTimeout = 90 * time.Second
+		incarnationName = "any-name"     // не существует, Toll отдаёт 503 раньше
+		scenarioName    = "any-scenario" // тот же инвариант
 	)
 
 	stack := harness.NewStack(t, harness.Config{})

@@ -305,31 +305,34 @@ mkdir -p "${KEEPER_DEV_DIR}/repos" "${KEEPER_DEV_DIR}/destiny"
 
 # service-репо (записи service_registry, см. шаг 10; ref: main).
 provision_git_repo \
-    "${EXAMPLES}/service/service-hello-world" \
-    "${KEEPER_DEV_DIR}/repos/service-hello-world" \
+    "${EXAMPLES}/service/hello-world" \
+    "${KEEPER_DEV_DIR}/repos/hello-world" \
     main "сервиса hello-world"
 provision_git_repo \
-    "${EXAMPLES}/service/service-redis" \
-    "${KEEPER_DEV_DIR}/repos/service-redis" \
+    "${EXAMPLES}/service/redis" \
+    "${KEEPER_DEV_DIR}/repos/redis" \
     main "сервиса redis"
 
 # destiny-репо (keeper_settings[default_destiny_source]=file://.../destiny/{name},
-# см. шаг 10; ref: v1.0.0 — из service-redis/service.yml::destiny[]). Имя каталога
-# = {name} из destiny[], НЕ examples-имя destiny-<name>.
+# см. шаг 10; ref: v1.0.0 — из redis/service.yml::destiny[]). Имя каталога
+# = {name} из destiny[], и каталог examples теперь тоже голый {name}.
 provision_git_repo \
-    "${EXAMPLES}/destiny/destiny-redis-single" \
+    "${EXAMPLES}/destiny/redis-single" \
     "${KEEPER_DEV_DIR}/destiny/redis-single" \
     v1.0.0 "destiny redis-single"
 provision_git_repo \
-    "${EXAMPLES}/destiny/destiny-redis-exporter" \
+    "${EXAMPLES}/destiny/redis-exporter" \
     "${KEEPER_DEV_DIR}/destiny/redis-exporter" \
     v1.0.0 "destiny redis-exporter"
+# node-exporter (examples/destiny/node-exporter/, бинарь wb_node_exporter,
+# version-aware install, textfile-коллекторы). Резолвится единообразно через
+# default_destiny_source ({name}=node-exporter), без per-entry git override.
 provision_git_repo \
-    "${EXAMPLES}/destiny/destiny-node-exporter" \
+    "${EXAMPLES}/destiny/node-exporter" \
     "${KEEPER_DEV_DIR}/destiny/node-exporter" \
     v1.0.0 "destiny node-exporter"
 provision_git_repo \
-    "${EXAMPLES}/destiny/destiny-redis-replication-config" \
+    "${EXAMPLES}/destiny/redis-replication-config" \
     "${KEEPER_DEV_DIR}/destiny/redis-replication-config" \
     v1.0.0 "destiny redis-replication-config"
 
@@ -340,8 +343,8 @@ provision_git_repo \
 # (serviceregistry.Holder.Resolve / DefaultDestinySource) читает только БД.
 # Без seed-а E2E-smoke поднял бы пустой реестр и Resolve("hello-world"/"redis")
 # вернул бы false. Сеем те же записи, что раньше были в services[]:
-#   - service hello-world → file:///tmp/keeper-dev/repos/service-hello-world @ main
-#   - service redis       → file:///tmp/keeper-dev/repos/service-redis @ main
+#   - service hello-world → file:///tmp/keeper-dev/repos/hello-world @ main
+#   - service redis       → file:///tmp/keeper-dev/repos/redis @ main
 #   - keeper_settings[default_destiny_source] = file:///tmp/keeper-dev/destiny/{name}
 #
 # Способ — прямой psql INSERT (provision имеет PG-доступ; Архонт/JWT для
@@ -370,8 +373,8 @@ seed_service_registry() {
     log "seeding service_registry (hello-world, redis) + keeper_settings[default_destiny_source]"
     psql_cli -f - <<'SQL'
 INSERT INTO service_registry (name, git, ref) VALUES
-    ('hello-world', 'file:///tmp/keeper-dev/repos/service-hello-world', 'main'),
-    ('redis',       'file:///tmp/keeper-dev/repos/service-redis',       'main')
+    ('hello-world', 'file:///tmp/keeper-dev/repos/hello-world', 'main'),
+    ('redis',       'file:///tmp/keeper-dev/repos/redis',       'main')
 ON CONFLICT (name) DO NOTHING;
 
 INSERT INTO keeper_settings (key, value) VALUES

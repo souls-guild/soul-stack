@@ -39,7 +39,7 @@ import (
 
 func TestL3bDriftLive_HelloWorld(t *testing.T) {
 	stack := harness.NewStack(t, harness.Config{
-		ExamplePath: "examples/service/service-hello-world",
+		ExamplePath: "examples/service/hello-world",
 		ServiceName: "hello-world",
 		Souls:       1,
 	})

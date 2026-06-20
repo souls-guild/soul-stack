@@ -183,6 +183,14 @@ func TestEmbed_ContainsExpectedMigrations(t *testing.T) {
 		"076_create_purge_push_runs.up.sql",
 		"077_create_purge_archives.down.sql",
 		"077_create_purge_archives.up.sql",
+		"078_add_apply_runs_passage.down.sql",
+		"078_add_apply_runs_passage.up.sql",
+		"079_apply_task_register_plan_index.down.sql",
+		"079_apply_task_register_plan_index.up.sql",
+		"080_purge_apply_task_register_plan_index.down.sql",
+		"080_purge_apply_task_register_plan_index.up.sql",
+		"081_add_apply_runs_failed_plan_index.down.sql",
+		"081_add_apply_runs_failed_plan_index.up.sql",
 	}
 	if len(names) != len(want) {
 		t.Fatalf("got %d files, want %d: %v", len(names), len(want), names)
@@ -951,6 +959,129 @@ func TestEmbed_PurgeApplyTaskRegisterFunction(t *testing.T) {
 	}
 	if !strings.Contains(string(d), "DROP FUNCTION IF EXISTS purge_apply_task_register(interval, integer)") {
 		t.Errorf("down.sql does not drop purge_apply_task_register; content: %.200s", d)
+	}
+}
+
+// TestEmbed_PurgeApplyTaskRegisterPlanIndex — sanity на 080 (ADR-056 §S1 fix
+// Variant B): forward-фикс purge_apply_task_register под staged-render. up
+// переключает DELETE-join со неуникального под N>1 task_idx на стабильно-
+// уникальный plan_index (CTE-проекция + final DELETE-предикат); down возвращает
+// тело функции к форме 023 (task_idx-join), т.к. 079.down снимает plan_index.
+func TestEmbed_PurgeApplyTaskRegisterPlanIndex(t *testing.T) {
+	b, err := FS.ReadFile("080_purge_apply_task_register_plan_index.up.sql")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	body := string(b)
+	for _, frag := range []string{
+		"CREATE OR REPLACE FUNCTION purge_apply_task_register(grace_period interval",
+		"SELECT atr.apply_id, atr.sid, atr.plan_index",
+		"ar.passage = atr.passage",
+		"t.plan_index = e.plan_index",
+	} {
+		if !strings.Contains(body, frag) {
+			t.Errorf("080 up.sql missing %q; content head: %.400s", frag, body)
+		}
+	}
+	// up НЕ должен ключевать удаление по task_idx (это и был баг).
+	if strings.Contains(body, "t.task_idx = e.task_idx") {
+		t.Errorf("080 up.sql still keys DELETE by task_idx; content: %.400s", body)
+	}
+	d, err := FS.ReadFile("080_purge_apply_task_register_plan_index.down.sql")
+	if err != nil {
+		t.Fatalf("read down: %v", err)
+	}
+	dbody := string(d)
+	// down восстанавливает форму 023 (task_idx-join), без ссылки на колонку
+	// plan_index в SQL (079.down её снимет). Комментарий-пояснение упоминать
+	// plan_index может — проверяем именно SQL-предикаты/проекцию.
+	if !strings.Contains(dbody, "t.task_idx = e.task_idx") {
+		t.Errorf("080 down.sql does not restore task_idx-join (форма 023); content: %.300s", dbody)
+	}
+	for _, frag := range []string{"atr.plan_index", "t.plan_index", "e.plan_index"} {
+		if strings.Contains(dbody, frag) {
+			t.Errorf("080 down.sql still references column %q (079.down снимет колонку); content: %.300s", frag, dbody)
+		}
+	}
+}
+
+// TestEmbed_ApplyRunsPassage — sanity на 078 (staged-render Passage, ADR-056
+// S1, Variant I): расширение PK apply_runs до (apply_id, sid, passage) +
+// переуказание FK apply_task_register на тройку. up добавляет колонку passage
+// (NOT NULL DEFAULT 0) обеим таблицам, дропает старые PK/FK и пересоздаёт их
+// тройными; down возвращает парные PK/FK и снимает колонки.
+func TestEmbed_ApplyRunsPassage(t *testing.T) {
+	b, err := FS.ReadFile("078_add_apply_runs_passage.up.sql")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	body := string(b)
+	for _, frag := range []string{
+		"ALTER TABLE apply_runs",
+		"ADD COLUMN passage INT NOT NULL DEFAULT 0",
+		"ALTER TABLE apply_task_register",
+		"DROP CONSTRAINT apply_task_register_apply_run_fk",
+		"DROP CONSTRAINT apply_runs_pkey",
+		"ADD CONSTRAINT apply_runs_pkey PRIMARY KEY (apply_id, sid, passage)",
+		"FOREIGN KEY (apply_id, sid, passage) REFERENCES apply_runs (apply_id, sid, passage) ON DELETE CASCADE",
+	} {
+		if !strings.Contains(body, frag) {
+			t.Errorf("078 up.sql missing %q; content head: %.400s", frag, body)
+		}
+	}
+	d, err := FS.ReadFile("078_add_apply_runs_passage.down.sql")
+	if err != nil {
+		t.Fatalf("read down: %v", err)
+	}
+	dbody := string(d)
+	for _, frag := range []string{
+		"ADD CONSTRAINT apply_runs_pkey PRIMARY KEY (apply_id, sid)",
+		"FOREIGN KEY (apply_id, sid) REFERENCES apply_runs (apply_id, sid) ON DELETE CASCADE",
+		"DROP COLUMN passage",
+	} {
+		if !strings.Contains(dbody, frag) {
+			t.Errorf("078 down.sql missing %q; content: %.400s", frag, dbody)
+		}
+	}
+	// down не должен оставлять тройной PK (форма 018).
+	if strings.Contains(dbody, "PRIMARY KEY (apply_id, sid, passage)") {
+		t.Errorf("078 down.sql still references тройной PK; content: %.300s", dbody)
+	}
+}
+
+// TestEmbed_ApplyRunsFailedPlanIndex — sanity на 081 (ADR-056 §S1 fix Variant B,
+// failure-канал — последняя инстанция класса global-vs-local-task_idx): apply_runs
+// получает nullable-колонку failed_plan_index под ГЛОБАЛЬНЫЙ plan_index упавшей
+// задачи (корреляция module/action в drift-report + no_log-подавление в barrier).
+// up добавляет колонку и backfill-ит её из task_idx (N=1: локальный==глобальный);
+// down дропает колонку.
+func TestEmbed_ApplyRunsFailedPlanIndex(t *testing.T) {
+	b, err := FS.ReadFile("081_add_apply_runs_failed_plan_index.up.sql")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	body := string(b)
+	for _, frag := range []string{
+		"ALTER TABLE apply_runs",
+		"ADD COLUMN failed_plan_index INT",
+		"SET failed_plan_index = task_idx",
+		"WHERE task_idx IS NOT NULL",
+	} {
+		if !strings.Contains(body, frag) {
+			t.Errorf("081 up.sql missing %q; content head: %.400s", frag, body)
+		}
+	}
+	// Колонка nullable (как task_idx): неизвестна до первой упавшей задачи —
+	// NOT NULL DEFAULT здесь был бы неверной семантикой.
+	if strings.Contains(body, "failed_plan_index INT NOT NULL") {
+		t.Errorf("081 up.sql: failed_plan_index должна быть nullable (как task_idx); content: %.300s", body)
+	}
+	d, err := FS.ReadFile("081_add_apply_runs_failed_plan_index.down.sql")
+	if err != nil {
+		t.Fatalf("read down: %v", err)
+	}
+	if !strings.Contains(string(d), "DROP COLUMN IF EXISTS failed_plan_index") {
+		t.Errorf("081 down.sql does not drop failed_plan_index; content: %.200s", d)
 	}
 }
 

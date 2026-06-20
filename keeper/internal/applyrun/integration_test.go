@@ -264,7 +264,7 @@ func TestIntegration_UpdateStatus_SetsFinishedAt(t *testing.T) {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	if err := UpdateStatus(ctx, integrationPool, "a", "s", StatusSuccess, nil); err != nil {
+	if err := UpdateStatus(ctx, integrationPool, "a", "s", 0, StatusSuccess, nil); err != nil {
 		t.Fatalf("UpdateStatus: %v", err)
 	}
 	got, err := SelectByApplyID(ctx, integrationPool, "a", "s")
@@ -299,13 +299,13 @@ func TestIntegration_UpdateStatus_ErrorSummaryCoalesce(t *testing.T) {
 		t.Fatalf("Insert: %v", err)
 	}
 	// running→failed: summary записан (COALESCE на легитимном переходе).
-	if err := UpdateStatus(ctx, integrationPool, "a", "s", StatusFailed, strp("boom")); err != nil {
+	if err := UpdateStatus(ctx, integrationPool, "a", "s", 0, StatusFailed, strp("boom")); err != nil {
 		t.Fatalf("UpdateStatus#1 (running→failed): %v", err)
 	}
 
 	// Повторный terminal-write (failed→failed) отвергается append-only guard-ом
 	// ДО любой записи — caller трактует как no-op (первый коммиттер победил).
-	err := UpdateStatus(ctx, integrationPool, "a", "s", StatusFailed, nil)
+	err := UpdateStatus(ctx, integrationPool, "a", "s", 0, StatusFailed, nil)
 	if !errors.Is(err, ErrApplyRunAlreadyTerminal) {
 		t.Fatalf("UpdateStatus#2 (failed→failed): err = %v, want ErrApplyRunAlreadyTerminal", err)
 	}
@@ -326,7 +326,7 @@ func TestIntegration_UpdateStatus_ErrorSummaryCoalesce(t *testing.T) {
 func TestIntegration_UpdateStatus_NotFound(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
-	err := UpdateStatus(ctx, integrationPool, "ghost", "s", StatusSuccess, nil)
+	err := UpdateStatus(ctx, integrationPool, "ghost", "s", 0, StatusSuccess, nil)
 	if !errors.Is(err, ErrApplyRunNotFound) {
 		t.Fatalf("err = %v, want ErrApplyRunNotFound", err)
 	}
@@ -344,7 +344,7 @@ func TestIntegration_SelectIncarnationByApplyID(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	name, scenario, attempt, err := SelectIncarnationByApplyID(ctx, integrationPool, "a", "s")
+	name, scenario, attempt, err := SelectIncarnationByApplyID(ctx, integrationPool, "a", "s", 0)
 	if err != nil {
 		t.Fatalf("SelectIncarnationByApplyID: %v", err)
 	}
@@ -358,7 +358,7 @@ func TestIntegration_SelectIncarnationByApplyID(t *testing.T) {
 
 func TestIntegration_SelectIncarnationByApplyID_NotFound(t *testing.T) {
 	resetAll(t)
-	_, _, _, err := SelectIncarnationByApplyID(context.Background(), integrationPool, "ghost", "s")
+	_, _, _, err := SelectIncarnationByApplyID(context.Background(), integrationPool, "ghost", "s", 0)
 	if !errors.Is(err, ErrApplyRunNotFound) {
 		t.Fatalf("err = %v, want ErrApplyRunNotFound", err)
 	}
@@ -444,10 +444,10 @@ func TestIntegration_SelectStatusesByApplyID(t *testing.T) {
 	}
 
 	// Переводим один хост в success, другой в failed с summary.
-	if err := UpdateStatus(ctx, integrationPool, "01HBARRIER", "host-a", StatusSuccess, nil); err != nil {
+	if err := UpdateStatus(ctx, integrationPool, "01HBARRIER", "host-a", 0, StatusSuccess, nil); err != nil {
 		t.Fatalf("UpdateStatus host-a: %v", err)
 	}
-	if err := UpdateStatus(ctx, integrationPool, "01HBARRIER", "host-b", StatusFailed, strp("boom")); err != nil {
+	if err := UpdateStatus(ctx, integrationPool, "01HBARRIER", "host-b", 0, StatusFailed, strp("boom")); err != nil {
 		t.Fatalf("UpdateStatus host-b: %v", err)
 	}
 
@@ -573,7 +573,7 @@ func TestIntegration_RequestCancel_TerminalNoOp(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	if err := UpdateStatus(ctx, integrationPool, "01HDONE", "host-a", StatusSuccess, nil); err != nil {
+	if err := UpdateStatus(ctx, integrationPool, "01HDONE", "host-a", 0, StatusSuccess, nil); err != nil {
 		t.Fatalf("UpdateStatus: %v", err)
 	}
 
@@ -652,7 +652,7 @@ func TestIntegration_RequestCancel_PartialRunning(t *testing.T) {
 		}
 	}
 	// host-a уже завершился success — он не должен получить cancel_requested.
-	if err := UpdateStatus(ctx, integrationPool, "01HMIXED", "host-a", StatusSuccess, nil); err != nil {
+	if err := UpdateStatus(ctx, integrationPool, "01HMIXED", "host-a", 0, StatusSuccess, nil); err != nil {
 		t.Fatalf("UpdateStatus host-a: %v", err)
 	}
 
@@ -704,13 +704,15 @@ func TestIntegration_RecordTaskFailure_FirstFailureWins(t *testing.T) {
 
 	seedApplyRun(t, "01HFAIL", "host-a")
 
-	// Первая упавшая задача фиксирует task_idx + summary.
-	if err := RecordTaskFailure(ctx, integrationPool, "01HFAIL", "host-a", 1,
-		"task 1 core.pkg.installed: E: Version '7.2.4' not found"); err != nil {
+	// Первая упавшая задача фиксирует task_idx (локальный 1) + failed_plan_index
+	// (глобальный 4 — staged/per-host-where, локальный ≠ глобальный) + summary.
+	if err := RecordTaskFailure(ctx, integrationPool, "01HFAIL", "host-a", 0, 1, 4,
+		"task 4 core.pkg.installed: E: Version '7.2.4' not found"); err != nil {
 		t.Fatalf("RecordTaskFailure first: %v", err)
 	}
-	// Вторая упавшая задача НЕ затирает (COALESCE first-failure-wins).
-	if err := RecordTaskFailure(ctx, integrationPool, "01HFAIL", "host-a", 3, "task 3 later boom"); err != nil {
+	// Вторая упавшая задача НЕ затирает (COALESCE first-failure-wins) — ни
+	// task_idx, ни failed_plan_index, ни summary.
+	if err := RecordTaskFailure(ctx, integrationPool, "01HFAIL", "host-a", 0, 3, 9, "task 9 later boom"); err != nil {
 		t.Fatalf("RecordTaskFailure second: %v", err)
 	}
 
@@ -719,21 +721,38 @@ func TestIntegration_RecordTaskFailure_FirstFailureWins(t *testing.T) {
 		t.Fatalf("SelectByApplyID: %v", err)
 	}
 	if got.TaskIdx == nil || *got.TaskIdx != 1 {
-		t.Errorf("task_idx = %v, want 1 (первая упавшая задача)", got.TaskIdx)
+		t.Errorf("task_idx = %v, want 1 (первая упавшая задача, локальный)", got.TaskIdx)
 	}
-	if got.ErrorSummary == nil || *got.ErrorSummary != "task 1 core.pkg.installed: E: Version '7.2.4' not found" {
+	if got.ErrorSummary == nil || *got.ErrorSummary != "task 4 core.pkg.installed: E: Version '7.2.4' not found" {
 		t.Errorf("error_summary = %v, want первой задачи", got.ErrorSummary)
 	}
 	// Статус остаётся running до RunResult.
 	if got.Status != StatusRunning {
 		t.Errorf("status = %q, want running (RecordTaskFailure не трогает статус)", got.Status)
 	}
+
+	// failed_plan_index читается через HostStatus-проекцию (SelectByApplyID её не
+	// несёт). Глобальный индекс первой упавшей задачи = 4 (first-failure-wins).
+	statuses, err := SelectStatusesByApplyID(ctx, integrationPool, "01HFAIL")
+	if err != nil {
+		t.Fatalf("SelectStatusesByApplyID: %v", err)
+	}
+	if len(statuses) != 1 {
+		t.Fatalf("statuses len = %d, want 1", len(statuses))
+	}
+	hs := statuses[0]
+	if hs.FailedPlanIndex == nil || *hs.FailedPlanIndex != 4 {
+		t.Errorf("★ failed_plan_index = %v, want 4 (глобальный, первая упавшая задача — не затёрт второй с 9)", hs.FailedPlanIndex)
+	}
+	if hs.TaskIdx == nil || *hs.TaskIdx != 1 {
+		t.Errorf("HostStatus.TaskIdx = %v, want 1 (локальный)", hs.TaskIdx)
+	}
 }
 
 func TestIntegration_RecordTaskFailure_NotFound(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
-	err := RecordTaskFailure(ctx, integrationPool, "01HMISSING", "host-x", 0, "boom")
+	err := RecordTaskFailure(ctx, integrationPool, "01HMISSING", "host-x", 0, 0, 0, "boom")
 	if !errors.Is(err, ErrApplyRunNotFound) {
 		t.Fatalf("err = %v, want ErrApplyRunNotFound", err)
 	}
@@ -853,14 +872,15 @@ func TestIntegration_TaskRegister_UpsertAndSelect(t *testing.T) {
 	seedApplyRun(t, "01HREG", "host-a")
 	seedApplyRun(t, "01HREG", "host-b")
 
+	// PlanIndex — ключ корреляции (PK-компонент, миграция 079); N=1 → ==TaskIdx.
 	rows := []*TaskRegister{
-		{ApplyID: "01HREG", SID: "host-a", TaskIdx: 0, RegisterData: map[string]any{"stdout": "a0", "rc": float64(0)}},
-		{ApplyID: "01HREG", SID: "host-a", TaskIdx: 2, RegisterData: map[string]any{"stdout": "a2"}},
-		{ApplyID: "01HREG", SID: "host-b", TaskIdx: 0, RegisterData: map[string]any{"stdout": "b0"}},
+		{ApplyID: "01HREG", SID: "host-a", PlanIndex: 0, TaskIdx: 0, RegisterData: map[string]any{"stdout": "a0", "rc": float64(0)}},
+		{ApplyID: "01HREG", SID: "host-a", PlanIndex: 2, TaskIdx: 2, RegisterData: map[string]any{"stdout": "a2"}},
+		{ApplyID: "01HREG", SID: "host-b", PlanIndex: 0, TaskIdx: 0, RegisterData: map[string]any{"stdout": "b0"}},
 	}
 	for _, r := range rows {
 		if err := UpsertTaskRegister(ctx, integrationPool, r); err != nil {
-			t.Fatalf("UpsertTaskRegister(%s,%d): %v", r.SID, r.TaskIdx, err)
+			t.Fatalf("UpsertTaskRegister(%s,%d): %v", r.SID, r.PlanIndex, err)
 		}
 	}
 
@@ -871,15 +891,15 @@ func TestIntegration_TaskRegister_UpsertAndSelect(t *testing.T) {
 	if len(got) != 3 {
 		t.Fatalf("len = %d, want 3", len(got))
 	}
-	// Сортировка (sid, task_idx): host-a/0, host-a/2, host-b/0.
-	if got[0].SID != "host-a" || got[0].TaskIdx != 0 {
-		t.Errorf("got[0] = %s/%d, want host-a/0", got[0].SID, got[0].TaskIdx)
+	// Сортировка (sid, plan_index): host-a/0, host-a/2, host-b/0.
+	if got[0].SID != "host-a" || got[0].PlanIndex != 0 {
+		t.Errorf("got[0] = %s/%d, want host-a/0", got[0].SID, got[0].PlanIndex)
 	}
-	if got[1].SID != "host-a" || got[1].TaskIdx != 2 {
-		t.Errorf("got[1] = %s/%d, want host-a/2", got[1].SID, got[1].TaskIdx)
+	if got[1].SID != "host-a" || got[1].PlanIndex != 2 {
+		t.Errorf("got[1] = %s/%d, want host-a/2", got[1].SID, got[1].PlanIndex)
 	}
-	if got[2].SID != "host-b" || got[2].TaskIdx != 0 {
-		t.Errorf("got[2] = %s/%d, want host-b/0", got[2].SID, got[2].TaskIdx)
+	if got[2].SID != "host-b" || got[2].PlanIndex != 0 {
+		t.Errorf("got[2] = %s/%d, want host-b/0", got[2].SID, got[2].PlanIndex)
 	}
 	if got[0].RegisterData["stdout"] != "a0" {
 		t.Errorf("got[0].stdout = %v, want a0", got[0].RegisterData["stdout"])
@@ -1549,7 +1569,7 @@ func TestIntegration_OrphanDispatched_SingleWinnerVsRunResult(t *testing.T) {
 	dispatchRow(t, "01HRACE", "host-a")
 
 	// RunResult пришёл первым: dispatched → success.
-	if err := UpdateStatus(ctx, integrationPool, "01HRACE", "host-a", StatusSuccess, nil); err != nil {
+	if err := UpdateStatus(ctx, integrationPool, "01HRACE", "host-a", 0, StatusSuccess, nil); err != nil {
 		t.Fatalf("UpdateStatus(success): %v", err)
 	}
 
@@ -1638,7 +1658,7 @@ func TestIntegration_UpdateStatus_NoMatchSetsFinishedAt(t *testing.T) {
 		t.Fatalf("Insert(planned): %v", err)
 	}
 	// claim no-op: on:/where: отфильтровал всё → no_match (НЕ success).
-	if err := UpdateStatus(ctx, integrationPool, "01HNM", "host-x", StatusNoMatch, nil); err != nil {
+	if err := UpdateStatus(ctx, integrationPool, "01HNM", "host-x", 0, StatusNoMatch, nil); err != nil {
 		t.Fatalf("UpdateStatus(no_match): %v", err)
 	}
 	got, err := SelectByApplyID(ctx, integrationPool, "01HNM", "host-x")

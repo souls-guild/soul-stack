@@ -121,7 +121,9 @@ var newAzureClients = func(_ context.Context, c azureCredentials) (azureClients,
 
 // --- real-implementations: оборачивают Begin*+PollUntilDone в один вызов ---
 
-type realVMs struct{ cli *armcompute.VirtualMachinesClient }
+type realVMs struct {
+	cli *armcompute.VirtualMachinesClient
+}
 
 func (r *realVMs) CreateAndWait(ctx context.Context, rg, name string, params armcompute.VirtualMachine) (armcompute.VirtualMachine, error) {
 	poller, err := r.cli.BeginCreateOrUpdate(ctx, rg, name, params, nil)
@@ -193,7 +195,9 @@ func (r *realNICs) DeleteAndWait(ctx context.Context, rg, name string) error {
 	return err
 }
 
-type realPIPs struct{ cli *armnetwork.PublicIPAddressesClient }
+type realPIPs struct {
+	cli *armnetwork.PublicIPAddressesClient
+}
 
 func (r *realPIPs) CreateAndWait(ctx context.Context, rg, name string, params armnetwork.PublicIPAddress) (armnetwork.PublicIPAddress, error) {
 	poller, err := r.cli.BeginCreateOrUpdate(ctx, rg, name, params, nil)

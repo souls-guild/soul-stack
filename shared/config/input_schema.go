@@ -935,7 +935,7 @@ func recurseItemsProperties(s *InputSchema, present map[string]*ast.MappingValue
 	}
 	if kv, ok := present["additional_properties"]; ok {
 		// additional_properties: <schema> — это форма «map произвольных
-		// ключей с общей schema-значением» (см. examples/destiny/destiny-redis
+		// ключей с общей schema-значением» (см. examples/destiny/redis
 		// → users). Голый bool не валидируем (там нет вложенной схемы).
 		if apNode, isMap := kv.Value.(*ast.MappingNode); isMap {
 			var sub *InputSchema

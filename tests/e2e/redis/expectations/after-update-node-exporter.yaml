@@ -1,0 +1,26 @@
+# Post-apply ожидания redis::update_node_exporter.
+#
+# apply_runs.status — реальный enum keeper/internal/applyrun (StatusSuccess).
+#
+# incarnation_state — deep-subset; значение = scenario.state_changes.sets из
+# examples/service/redis/scenario/update_node_exporter/main.yml: ТОЛЬКО
+# node_exporter_version ← input.node_exporter_version (re-apply одной destiny,
+# остальной state неизменен от create). Версия 1.9.0 — новая (create ставил 1.8.2),
+# поэтому subset на node_exporter_version=1.9.0 доказывает мутацию.
+#
+# audit_events — incarnation.scenario_started (явный RunScenario; payload
+# {name, scenario, apply_id}). apply_id проверяется отдельно в тесте.
+#
+# metrics — keeper_scenario_runs_total{result="ok"} (create + update_node_exporter
+# → >= 2; subset-ассерт >= 1).
+apply_runs:
+  status: success
+
+incarnation_state:
+  node_exporter_version: "1.9.0"
+
+audit_events:
+  - type: incarnation.scenario_started
+
+metrics:
+  keeper_scenario_runs_total{result="ok"}: ">= 1"

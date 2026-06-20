@@ -44,7 +44,7 @@ func (d *perHostCountDispatcher) SendApply(ctx context.Context, sid string, req 
 	d.mu.Lock()
 	d.counts[sid] = len(req.GetTasks())
 	d.mu.Unlock()
-	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, applyrun.StatusSuccess, nil); err != nil {
+	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, 0, applyrun.StatusSuccess, nil); err != nil {
 		d.t.Errorf("perHostCountDispatcher: UpdateStatus: %v", err)
 	}
 	return nil
@@ -461,7 +461,7 @@ func (d *perHostCommandDispatcher) SendApply(ctx context.Context, sid string, re
 		d.cmds[sid] = renderedExecCommand(tasks[0].GetParams())
 	}
 	d.mu.Unlock()
-	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, applyrun.StatusSuccess, nil); err != nil {
+	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, 0, applyrun.StatusSuccess, nil); err != nil {
 		d.t.Errorf("perHostCommandDispatcher: UpdateStatus: %v", err)
 	}
 	return nil

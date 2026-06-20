@@ -15,11 +15,11 @@ import (
 //   - 404              → not_found
 //   - 400              → invalid_params
 //   - 500              → разбираем по тексту body: «does not exist» → not_found,
-//                        прочее → transient (Proxmox любит 500 на временные
-//                        проблемы lock-контеншена и операционные конфликты)
+//     прочее → transient (Proxmox любит 500 на временные
+//     проблемы lock-контеншена и операционные конфликты)
 //   - 5xx прочее       → transient
 //   - 429              → transient (rate-limit, у Proxmox обычно нет, но на
-//                        всякий случай)
+//     всякий случай)
 //
 // Это единственная provider-specific часть error-обработки;
 // backoff/retry/маппинг-в-event делает SDK (sdk/clouddriver), общий для всех

@@ -109,18 +109,18 @@ func (d *ProxmoxDriver) Validate(_ context.Context, req *pluginv1.ValidateProfil
 
 // vmProfile — параметры профиля, разобранные для clone-операции.
 type vmProfile struct {
-	targetNode    string
-	templateVMID  int
-	newVMIDStart  int
-	namePrefix    string
-	fullClone     bool
-	cores         int
-	memory        int // МБ
-	storage       string
-	bridge        string
-	tags          map[string]string
-	cicustom      string
-	runTag        string
+	targetNode   string
+	templateVMID int
+	newVMIDStart int
+	namePrefix   string
+	fullClone    bool
+	cores        int
+	memory       int // МБ
+	storage      string
+	bridge       string
+	tags         map[string]string
+	cicustom     string
+	runTag       string
 }
 
 const (

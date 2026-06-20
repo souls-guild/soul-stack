@@ -145,7 +145,7 @@ func SpawnSoulContainer(t *testing.T, stack *Stack, sid, bootstrapToken string) 
 		Name:       fmt.Sprintf("soul-live-%s-%d", sanitizeSID(sid), time.Now().UnixNano()),
 		Hostname:   sid,
 		ExtraHosts: keeperExtraHosts(),
-		Networks: []string{stack.dockerNetwork.Name},
+		Networks:   []string{stack.dockerNetwork.Name},
 		Files: []testcontainers.ContainerFile{
 			{HostFilePath: soulBinPath, ContainerFilePath: "/usr/local/bin/soul", FileMode: 0o755},
 			{HostFilePath: caPath, ContainerFilePath: "/etc/soul/ca.pem", FileMode: 0o644},

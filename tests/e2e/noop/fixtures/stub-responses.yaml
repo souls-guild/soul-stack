@@ -1,4 +1,4 @@
-# Скрипт ответов soul-stub-а для service-noop::create.
+# Скрипт ответов soul-stub-а для noop::create.
 #
 # scenario/create/main.yml содержит одну задачу core.exec.run echo hello,
 # `changed_when: "false"` → no-op: state_changes scenario пустой,

@@ -9,7 +9,7 @@ input:
     required: true
     description: Текст, который записывается в greeting-файл.
 
-# Реальная мутация state (в отличие от service-noop): после успешного apply
+# Реальная мутация state (в отличие от noop): после успешного apply
 # Keeper зафиксирует greeting_file в incarnation.state (ADR-009, orchestration.md
 # §7.1). sets — map поле→CEL-выражение: путь файла берётся литералом (тем же, что
 # в params.path задачи ниже) и попадает в incarnation.state.greeting_file.

@@ -270,5 +270,5 @@ func waitMultiSoulReady(t *testing.T, s *Stack, podNames []string, timeout time.
 	}
 }
 
-func ptrBool(b bool) *bool                                 { return &b }
+func ptrBool(b bool) *bool                                       { return &b }
 func ptrHostPathType(t corev1.HostPathType) *corev1.HostPathType { return &t }

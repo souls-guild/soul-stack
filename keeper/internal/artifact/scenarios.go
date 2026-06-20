@@ -67,7 +67,7 @@ const (
 // разбираемое для UI listing-а. Поля симметричны JSON-форме [Scenario];
 // `input` и `input_schema` оба принимаются (docs/scenario/concept.md):
 // исторически слово было `input_schema`, в свежих примерах — `input` (см.
-// service-redis-monitored). Берём приоритет input_schema → input.
+// redis-monitored). Берём приоритет input_schema → input.
 //
 // Нестандартные top-level-поля игнорируются (yaml.Unmarshal в struct ловит
 // только перечисленные), это соответствует stop-rule ТЗ.

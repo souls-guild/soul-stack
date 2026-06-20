@@ -1,0 +1,34 @@
+# L0-кейс: arm64-хост.
+#
+# soulprint.self.os.arch=arm64 → destiny берёт arch НАПРЯМУЮ из soulprint
+# (apply:input его не передаёт) → CEL собирает url с `linux-arm64.tar.gz` (а не
+# amd64). Доказывает, что arch резолвится в destiny-CEL из soulprint и попадает в
+# URL/путь распаковки. Ассерт — на url шага core.url.fetched (index 0): сегмент
+# linux-arm64.
+name: node-exporter renders arm64 download url from soulprint arch
+
+fixtures:
+  default_destiny_source: "file://../../{name}"
+  input:
+    version: "1.9.0"
+    sha256: ""
+    collectors: [smartmon, nvme, ipmi]
+  soulprint:
+    os:
+      arch: arm64
+    network:
+      primary_ip: "10.0.0.5"
+
+assert:
+  rendered_tasks:
+    - index: 0
+      module: core.url.fetched
+      params:
+        url: https://github.com/prometheus/node_exporter/releases/download/v1.9.0/node_exporter-1.9.0.linux-arm64.tar.gz
+        path: /tmp/node_exporter-1.9.0.tar.gz
+    # install-шаг разворачивает arm64-каталог в unless/cmd (через arch).
+    - index: 1
+      module: core.archive.extracted
+      params:
+        path: /tmp/node_exporter-1.9.0.tar.gz
+        dest: /tmp/node_exporter-1.9.0

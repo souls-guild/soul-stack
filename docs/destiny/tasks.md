@@ -614,14 +614,14 @@ DSL-ядро задач выше — общее для destiny и scenario ([ADR
 ## 11. Полный композитный пример
 
 ```yaml
-# destiny-redis/tasks/main.yml — диспетчер
+# redis/tasks/main.yml — диспетчер
 - name: Apply Redis configuration
   include: apply.yml
   when: input.action == 'apply'
 ```
 
 ```yaml
-# destiny-redis/tasks/apply.yml
+# redis/tasks/apply.yml
 - name: Install redis-server package
   module: core.pkg.installed
   retry: { count: 3, delay: 10s }      # сеть может моргать

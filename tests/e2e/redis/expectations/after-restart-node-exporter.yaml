@@ -1,0 +1,21 @@
+# Post-apply ожидания redis::restart_node_exporter.
+#
+# apply_runs.status — реальный enum keeper/internal/applyrun (StatusSuccess).
+#
+# incarnation_state НЕ проверяется: restart_node_exporter не объявляет
+# state_changes (принудительный рестарт без мутации state). incarnation остаётся
+# с create-state — дельты нет, ассертить нечего.
+#
+# audit_events — incarnation.scenario_started (явный RunScenario; payload
+# {name, scenario, apply_id}). apply_id проверяется отдельно в тесте.
+#
+# metrics — keeper_scenario_runs_total{result="ok"} (create + restart_node_exporter
+# → >= 2; subset-ассерт >= 1).
+apply_runs:
+  status: success
+
+audit_events:
+  - type: incarnation.scenario_started
+
+metrics:
+  keeper_scenario_runs_total{result="ok"}: ">= 1"

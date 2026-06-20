@@ -6,7 +6,7 @@
 // с N>1 soul-контейнерами. Stack поднимает три privileged Debian-12 systemd-PID-1
 // контейнера (soul-live-a/-b/-c.example.com), каждый со своим SID, своим
 // bootstrap-token-ом и реальным CSR-handshake-ом. Service —
-// examples/service/service-redis-cluster-live (committed, scenario create
+// examples/service/redis-cluster-live (committed, scenario create
 // устанавливает redis, рендерит cluster-config, запускает redis-server и
 // формирует Redis Cluster через redis-cli --cluster create на одной ноде).
 //
@@ -33,7 +33,7 @@ import (
 
 func TestL3bRedisClusterLive_ThreeNode(t *testing.T) {
 	stack := harness.NewStack(t, harness.Config{
-		ExamplePath: "examples/service/service-redis-cluster-live",
+		ExamplePath: "examples/service/redis-cluster-live",
 		ServiceName: "redis-cluster-live",
 		Souls:       3,
 	})

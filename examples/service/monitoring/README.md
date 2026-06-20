@@ -1,12 +1,15 @@
-# service-monitoring
+# monitoring
 
 Пример сервиса, который разворачивает Prometheus-экспортеры на VM:
 
-- **node-exporter** — системные метрики, слушает `:9100` по умолчанию.
+- **node-exporter** — системные метрики, слушает стандартный `:9100` по умолчанию.
   Делегируется в переиспользуемую standalone-destiny
-  [`destiny-node-exporter`](../../destiny/destiny-node-exporter/) через
+  [`node-exporter`](../../destiny/node-exporter/) через
   `apply:destiny` (изоляция input, [ADR-009](../../../docs/adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация)):
-  прод-grade unit под `DynamicUser=yes` + hardening, `arch` из soulprint;
+  бинарь `node_exporter` под **стабильным system-аккаунтом `node_exporter`**
+  (stateful-ветка), version-aware install + hardened-unit, `arch` из soulprint.
+  Опциональные textfile-коллекторы железа (smartmon/nvme/ipmi) выключены здесь
+  (`node_exporter_collectors: []`) — на VM железа нет, ставится только ядро;
 - **redis_exporter** — метрики Redis, подключается к Redis **через unix-сокет**
   (`--redis.addr=unix:///<path>`), слушает `:9121` по умолчанию. Работает под
   выделенным системным пользователем `redis-exporter` в группе `redis`
@@ -17,10 +20,10 @@
 без нового Go-кода ядра.
 
 > **Почему redis_exporter — инлайн, а node-exporter — destiny.** Прод-destiny
-> [`destiny-redis-exporter`](../../destiny/destiny-redis-exporter/) требует
+> [`redis-exporter`](../../destiny/redis-exporter/) требует
 > `redis_password` (required) и несёт `Requires=redis-server.service` в unit-е —
 > она рассчитана на хост с локальным Redis под паролем. Назначение
-> `service-monitoring` иное: экспортеры на хосте с **уже работающим** Redis
+> `monitoring` иное: экспортеры на хосте с **уже работающим** Redis
 > (возможно, без `requirepass`), сервис сам Redis НЕ ставит. Перевод сломал бы это
 > и потребовал бы расширения публичного контракта новым required-полем. Дрейф с
 > node-exporter устранён; redis_exporter здесь — отдельный кейс, не дубль эталона.
@@ -38,12 +41,16 @@
   Группу `redis` создаёт пакет redis-server; если Redis на хосте есть, группа
   уже на месте. `DynamicUser` для redis_exporter **не используется**: эфемерный
   UID systemd не входит в группу `redis` и получил бы `EACCES` на `connect()`.
-  node_exporter сокет не нужен — он остаётся под `DynamicUser=yes`. Если группы
+  node-exporter сокета не требует; его аккаунт — стабильный system-user
+  `node_exporter` (stateful-ветка: textfile-каталог `/var/lib/node_exporter`
+  переживает рестарты и читается root-сборщиками), это решает сама destiny
+  `node-exporter`. Если группы
   `redis` нет (Redis на хосте ещё не установлен) — шаг `core.user` упадёт; в этом
   случае установите Redis заранее или добавьте `core.group.present name: redis`.
 - **Версии экспортеров** пиннятся через input на конкретные релизы
   (`node_exporter_version`, `redis_exporter_version`); вместе с версией оператор
-  пиннит и checksum tarball-а (`node_exporter_sha256`, `redis_exporter_sha256`).
+  обязан передать checksum tarball-а (`node_exporter_sha256`,
+  `redis_exporter_sha256` — оба `required: true`).
 - **Установка — единый паттерн «тройка»:** `core.url.fetched` (скачать tarball с
   GitHub Releases) → `core.archive.extracted` (распаковать) → `core.cmd.shell`
   (`install -m0755` бинаря в `bin_dir`). Скачивание делает специализированный
@@ -51,12 +58,12 @@
   файла** (неверный хэш не материализуется, supply-chain). `core.cmd.shell`
   остаётся только для локального install-шага (`core.file.present` копировать из
   пути не умеет — только inline-content), сети в нём нет.
-- **Checksum tarball-а пиннится через input** (`node_exporter_sha256`,
-  `redis_exporter_sha256`, форма `"sha256:<hex>"`). Дефолты — **placeholder
-  (нули)** под версии/arch по умолчанию: реальный sha256 без сети не подтверждён,
-  в `main.yml` стоят `TODO`-пометки. Для реального прогона оператор обязан
-  передать настоящие хэши (из `sha256sums.txt` соответствующего GitHub-релиза),
-  иначе `core.url.fetched` упадёт на checksum mismatch.
+- **Checksum tarball-а — обязательный input** (`node_exporter_sha256`,
+  `redis_exporter_sha256`, форма `"sha256:<hex>"`, оба `required: true` **без
+  default**, fail-closed по [прод-конвенции §7](../../../docs/destiny/production-conventions.md#7-supply-chain)).
+  Дефолта нет: нет хэша → честный отказ резолва, а не fetch с placeholder-ом.
+  Хэши берутся из `sha256sums.txt` соответствующего GitHub-релиза под пару
+  (version, arch); `core.url.fetched` верифицирует их ДО публикации файла.
 
 Если какое-то из допущений не так (например, нужен пакет из репозитория дистрибутива
 вместо tarball, или подключение к Redis по TCP, а не сокету) — поправьте input/scenario.
@@ -64,7 +71,7 @@
 ## Раскладка
 
 ```
-service-monitoring/
+monitoring/
 ├── service.yml                              # манифест: state_schema_version=1,
 │                                            #   destiny[] (node-exporter),
 │                                            #   state_schema {node/redis версии, redis_socket}
@@ -90,10 +97,14 @@ service-monitoring/
 На каждом хосте incarnation:
 
 1. **node-exporter** — один `apply:destiny` в
-   [`destiny-node-exporter`](../../destiny/destiny-node-exporter/): тройка
-   `core.url.fetched` (checksum-пин) → `core.archive.extracted` → `core.cmd.shell
-   install` → `core.file.rendered` systemd-unit (`DynamicUser=yes` + hardening) →
-   `core.service.running` (`enabled: true`) + рестарт по `onchanges`. scenario
+   [`node-exporter`](../../destiny/node-exporter/): тройка
+   `core.url.fetched` (checksum-пин) → `core.archive.extracted` → version-aware
+   `core.cmd.shell install` (бинарь раскладывается как `node_exporter`,
+   `unless --version` ловит апгрейд) → `core.group.present`/`core.user.present`
+   (стабильный system-аккаунт `node_exporter`) → `core.file.rendered` hardened-unit
+   → `core.service.running` (`enabled: true`) + рестарт по `onchanges`. При
+   `node_exporter_collectors: []` (дефолт сервиса) ставится только ядро; шаги
+   привилегированных коллекторов выключены по `when:`. scenario
    прокидывает destiny её input; `arch` берётся из `soulprint.self.os.arch`.
 2. **redis_exporter** — инлайн (не `apply:destiny`, см. выше): та же тройка
    url.fetched → archive.extracted → install → `core.user.present`
@@ -119,16 +130,20 @@ service-monitoring/
 | Параметр | Тип | Default | Назначение |
 |---|---|---|---|
 | `node_exporter_version` | string (semver-like) | `1.8.2` | Версия node_exporter. |
-| `node_exporter_sha256` | string `sha256:<hex>` | placeholder (нули) | SHA-256 tarball-а node_exporter. **TODO: реальный хэш релиза.** |
+| `node_exporter_sha256` | string `sha256:<hex>`, **required** | — | SHA-256 tarball-а node_exporter. Из `sha256sums` GitHub-релиза под пару (version, arch). |
 | `redis_exporter_version` | string (semver-like) | `1.62.0` | Версия redis_exporter. |
-| `redis_exporter_sha256` | string `sha256:<hex>` | placeholder (нули) | SHA-256 tarball-а redis_exporter. **TODO: реальный хэш релиза.** |
-| `arch` | enum `amd64`/`arm64` | `amd64` | Архитектура релизного tarball-а. |
+| `redis_exporter_sha256` | string `sha256:<hex>`, **required** | — | SHA-256 tarball-а redis_exporter. Из `sha256sums` GitHub-релиза под пару (version, arch). |
+| `arch` | enum `amd64`/`arm64` | `amd64` | Архитектура релизного tarball-а. Задаётся в контракте scenario, но обе destiny берут arch напрямую из `soulprint.self.os.arch` — input в задачи не доезжает (один incarnation может смешивать amd64/arm64-хосты). |
 | `bin_dir` | string (abs path) | `/usr/local/bin` | Куда раскладываются бинарники. |
 | `redis_socket` | string (abs path) | `/var/run/redis/redis-server.sock` | Unix-сокет Redis. |
-| `node_exporter_listen` | string `host:port` | `:9100` | Listen-адрес node_exporter. |
+| `node_exporter_listen` | string `host:port` | `:9100` | Listen-адрес node_exporter (`--web.listen-address`). |
+| `node_exporter_collectors` | array enum `smartmon`/`nvme`/`ipmi` | `[]` | Какие textfile-коллекторы железа node-exporter ставить. `[]` = только ядро (на VM железа нет). |
 | `redis_exporter_listen` | string `host:port` | `:9121` | Listen-адрес redis_exporter. |
+| `redis_exporter_extra_args` | array string | `[]` | Доп. флаги инлайн-redis_exporter (`--check-keys=…`, `--web.config.file=…` для TLS/basic-auth и пр.). Каждый элемент — отдельный токен `ExecStart`. |
 
-Обязательных параметров нет — `create` на чистой VM проходит без аргументов.
+Обязательны два checksum-параметра (`node_exporter_sha256`, `redis_exporter_sha256`,
+fail-closed по [прод-конвенции §7](../../../docs/destiny/production-conventions.md#7-supply-chain));
+остальное — дефолты.
 
 ## Идемпотентность
 
@@ -149,8 +164,8 @@ service-monitoring/
 ## Валидация
 
 ```bash
-./soul-lint/bin/soul-lint validate-service  examples/service/service-monitoring/service.yml
-./soul-lint/bin/soul-lint validate-scenario examples/service/service-monitoring/scenario/create/main.yml
+./soul-lint/bin/soul-lint validate-service  examples/service/monitoring/service.yml
+./soul-lint/bin/soul-lint validate-scenario examples/service/monitoring/scenario/create/main.yml
 ```
 
 Оба дают exit 0 и `OK: <path>`.
@@ -158,7 +173,7 @@ service-monitoring/
 ## L0-trial (render-only)
 
 ```bash
-./keeper/bin/soul-trial run examples/service/service-monitoring/scenario/create/tests/render-defaults/case.yml
+./keeper/bin/soul-trial run examples/service/monitoring/scenario/create/tests/render-defaults/case.yml
 ```
 
 Кейс герметичен (render-only, ничего не качает): проверяет CEL-render задач при
@@ -171,15 +186,16 @@ service-monitoring/
 
 > `apply:destiny node-exporter` резолвится зеркалом прода (slice A, ADR-023): имя →
 > `service.yml::destiny[]` + URL из `fixtures.default_destiny_source` кейса
-> (`file://../../destiny/destiny-{name}`, герметично). `fixtures.soulprint.os.arch`
+> (`file://../../destiny/{name}`, герметично). `fixtures.soulprint.os.arch`
 > даёт `arch` хоста, который экспортеры берут из `soulprint.self.os.arch`.
 
 > **Реальный прогон** (установка бинарей, поднятие сервисов) требует Linux+systemd
 > и сетевого доступа к GitHub Releases — на dev-mac не выполняется. L0-trial
 > покрывает render-фазу; интеграционный прогон — на linux-стенде через
-> `keeper.push` / pull-агента. Перед реальным прогоном замените placeholder-хэши
-> `node_exporter_sha256` / `redis_exporter_sha256` на настоящие — иначе
-> `core.url.fetched` упадёт на checksum mismatch.
+> `keeper.push` / pull-агента. `node_exporter_sha256` / `redis_exporter_sha256` —
+> обязательные параметры (без дефолта): для реального прогона передайте настоящие
+> хэши из `sha256sums` GitHub-релиза, иначе `core.url.fetched` упадёт на checksum
+> mismatch (а без значения вовсе — резолв откажет fail-closed).
 
 ## Чего здесь специально нет
 

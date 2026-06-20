@@ -44,3 +44,59 @@ func ServiceActive(ctx context.Context, runner Runner, init InitSystem, name str
 	}
 	return false, fmt.Errorf("ServiceActive: unsupported init %q", init)
 }
+
+// DaemonReloadMode — режим централизованного daemon-reload в core.service
+// (param `daemon_reload`, ADR-015 amendment). Closed-set: применяется перед
+// мутирующими actions (running/restarted/enabled).
+type DaemonReloadMode string
+
+const (
+	// DaemonReloadAuto — gated по systemd-флагу NeedDaemonReload: reload только
+	// при рассинхроне unit-файла с загруженным определением. Дефолт.
+	DaemonReloadAuto DaemonReloadMode = "auto"
+	// DaemonReloadAlways — безусловный daemon-reload перед action.
+	DaemonReloadAlways DaemonReloadMode = "always"
+	// DaemonReloadNever — явный opt-out: reload не делается вообще.
+	DaemonReloadNever DaemonReloadMode = "never"
+)
+
+// EnsureDaemonReloaded выполняет `systemctl daemon-reload` перед мутирующим
+// action core.service (start/restart/enable), если того требует режим mode и
+// init-система. Закрывает баг: после изменения unit-файла без daemon-reload
+// `systemctl restart` тихо рестартует со СТАРЫМ определением (exit 0, лишь
+// warning).
+//
+// Семантика по init-системам и режимам:
+//   - non-systemd (openrc/sysv) — no-op (false, nil): у них нет daemon-reload;
+//   - mode never — no-op (false, nil): явный opt-out оператора;
+//   - mode always — безусловный `systemctl daemon-reload` (true, nil);
+//   - mode auto — `systemctl show <name> --property=NeedDaemonReload --value`;
+//     при `yes` → reload (true), иначе no-op (false). На первом install нового
+//     unit флаг = `no` (systemd подхватит определение на start) — reload не нужен.
+//
+// reloaded возвращается для диагностики (output["reloaded"]) и НЕ влияет на
+// changed шага: reload — побочное условие применения, не самостоятельное
+// изменение состояния сервиса. Исполняется через тот же Runner, что прочие
+// systemctl-вызовы модуля (мокается в unit-тестах).
+func EnsureDaemonReloaded(ctx context.Context, runner Runner, init InitSystem, name string, mode DaemonReloadMode) (reloaded bool, err error) {
+	if init != InitSystemSystemd || mode == DaemonReloadNever {
+		return false, nil
+	}
+	if mode == DaemonReloadAuto {
+		r := runner.Run(ctx, "systemctl", "show", name, "--property=NeedDaemonReload", "--value")
+		if r.Err != nil {
+			return false, fmt.Errorf("systemctl show NeedDaemonReload: %v", r.Err)
+		}
+		if strings.TrimSpace(r.Stdout) != "yes" {
+			return false, nil
+		}
+	}
+	r := runner.Run(ctx, "systemctl", "daemon-reload")
+	if r.Err != nil {
+		return false, fmt.Errorf("systemctl daemon-reload: %v", r.Err)
+	}
+	if r.ExitCode != 0 {
+		return false, fmt.Errorf("systemctl daemon-reload exited %d: %s", r.ExitCode, strings.TrimSpace(r.Stderr))
+	}
+	return true, nil
+}

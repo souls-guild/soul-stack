@@ -1,0 +1,29 @@
+# Souls-фикстура для L3a redis-sentinel::create (e2e под examples/service/redis-sentinel).
+#
+# Один soul-stub под SID `soul-a.example.com`, status=connected — happy-path
+# apply_runs lifecycle. covens: [redis-sentinel] — членство в Coven incarnation
+# (incarnation.name = redis-sentinel-метка, ADR-008); roster прогона резолвится
+# по нему (`incarnation.name ∈ coven[]`).
+#
+# soulprint ОБЯЗАТЕЛЕН: core.pkg.installed / core.cmd.shell читают
+# soulprint.self.os.{pkg_mgr,init_system} keeper-side при выборе бэкенда
+# (ADR-018, docs/soul/soulprint.md §3). Сам render sentinel.conf факты хоста НЕ
+# использует (master_ip/quorum приходят через input, host-инвариантны), но
+# pkg_mgr/init_system нужны core-модулям, иначе render падает.
+#
+# Этот fixture-формат отражает структуру SoulprintFacts (resolver scanHost →
+# map[string]any); harness грузит os-блок через Stack.SeedSoulprint (cert.go),
+# coven — через Stack.AddSoulToCoven (YAML-loader fixtures пока не реализован,
+# значения дублируются inline в redis_sentinel_test.go — pilot-паттерн).
+- sid: soul-a.example.com
+  status: connected
+  covens: [redis-sentinel]
+  soulprint:
+    os:
+      family: debian
+      distro: debian
+      version: "12"
+      arch: amd64
+      pkg_mgr: apt
+      init_system: systemd
+    hostname: soul-a

@@ -357,10 +357,10 @@ fixtures+expectations `tests/e2e/<example-slug>/`. Service-fixture не дубл
 | Тест | Service | Сценарий | Покрывает |
 |---|---|---|---|
 | `smoke_nginx_test.go` | `smoke-nginx` | `create` | pilot; nginx install + service start. |
-| `hello_world_test.go` | `service-hello-world` | `create` | `input.greeting` (required) + мутация `state.greeting_file`. |
-| `noop_test.go` | `service-noop` | `create` | no-op `core.exec.run`, state не мутируется. |
-| `coven_probe_test.go` | `service-coven-probe` | `create` | init-маркер, двойная мутация state (`marker_file`, `last_target`). |
-| `long_runner_test.go` | `service-long-runner` | `create` | init-маркер, двойная мутация state (`last_run`, `runner_marker`). |
+| `hello_world_test.go` | `hello-world` | `create` | `input.greeting` (required) + мутация `state.greeting_file`. |
+| `noop_test.go` | `noop` | `create` | no-op `core.exec.run`, state не мутируется. |
+| `coven_probe_test.go` | `coven-probe` | `create` | init-маркер, двойная мутация state (`marker_file`, `last_target`). |
+| `long_runner_test.go` | `long-runner` | `create` | init-маркер, двойная мутация state (`last_run`, `runner_marker`). |
 
 «Продвинутые» сценарии (`mark_a/mark_ab/mark_where` coven-таргетинга,
 `stagger/serial_waves` long-runner-а, redis-композиции с Vault + destiny-deps,

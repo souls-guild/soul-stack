@@ -13,13 +13,13 @@ import (
 
 // TestL3cRedisCluster_Resharding — L3c-5 part B: портирование мега-теста
 // 2026-05-25 (project_megatest_ha_scale_2026_05_25.md) в kind. 3 Soul-pod →
-// scenario `create` из service-redis-cluster-live (3-master cluster,
+// scenario `create` из redis-cluster-live (3-master cluster,
 // --cluster-replicas 0) → assert `cluster_state:ok` через `redis-cli cluster
 // info` в одном из pod-ов.
 //
 // Pre-requisites:
 //   - service-catalog c записью `redis-cluster-live` (POST /v1/services).
-//   - keeper-pod ДОЛЖЕН видеть git-repo `service-redis-cluster-live`. В L3b
+//   - keeper-pod ДОЛЖЕН видеть git-repo `redis-cluster-live`. В L3b
 //     это file://-URL на host-side bare-repo (см. tests/e2e-live/harness/
 //     git.go); в kind-cluster file:// из pod-а недоступен — host-FS отсутствует.
 //     Нужен либо in-cluster git-server pod (sidecar/standalone), либо
@@ -41,7 +41,7 @@ func TestL3cRedisCluster_Resharding(t *testing.T) {
 	// harness.DeployGitServerPod + Stack.RegisterService с in-cluster URL,
 	// этот код станет boilerplate.
 	stack := harness.NewStack(t, harness.Config{
-		ExamplePath: "examples/service/service-redis-cluster-live",
+		ExamplePath: "examples/service/redis-cluster-live",
 		ServiceName: "redis-cluster-live",
 		Souls:       3,
 	})

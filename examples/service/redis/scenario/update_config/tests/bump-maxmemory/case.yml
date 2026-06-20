@@ -11,7 +11,7 @@ name: update_config re-applies redis-single with new maxmemory and config
 
 # L0-источник destiny (герметичный file://, относительно service-root).
 fixtures:
-  default_destiny_source: "file://../../destiny/destiny-{name}"
+  default_destiny_source: "file://../../destiny/{name}"
   input:
     # distro-native version-пин (epoch + revision) — то, что реально отдаёт apt на
     # Debian; узкий semver ломал =version-пин (BUG-1). has(input.redis_version)

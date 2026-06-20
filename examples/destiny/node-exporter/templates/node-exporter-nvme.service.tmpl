@@ -1,0 +1,44 @@
+{{/*
+  oneshot-сборщик NVMe SMART-метрики для node_exporter. Контекст рендера:
+    .vars.bin_dir      — каталог скрипта nvme_metrics.sh;
+    .vars.textfile_dir — куда пишется nvme_metrics.prom.
+  Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010).
+
+  User=root: nvme-cli требует доступа к char-устройствам /dev/nvme*. Sandbox
+  жёсткий (ТЗ §коллекторы): запись только в textfile-каталог, без сети,
+  DeviceAllow на char-nvme, capabilities CAP_SYS_ADMIN/CAP_SYS_RAWIO.
+
+  ConditionPathExistsGlob=/dev/nvme[0-9]* — без NVMe-устройства коллектор не
+  стартует (та же Condition в .timer).
+*/}}
+[Unit]
+Description=Collect NVMe metrics for node_exporter
+ConditionPathExistsGlob=/dev/nvme[0-9]*
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/env bash -c 'set -euo pipefail; tmp="$(mktemp {{ .vars.textfile_dir }}/nvme_metrics.prom.XXXXXX)"; "{{ .vars.bin_dir }}/nvme_metrics.sh" > "$tmp"; mv "$tmp" "{{ .vars.textfile_dir }}/nvme_metrics.prom"'
+
+# systemd-hardening привилегированного oneshot (ТЗ §коллекторы).
+ReadWritePaths={{ .vars.textfile_dir }}
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX
+NoNewPrivileges=yes
+ProtectProc=invisible
+PrivateDevices=no
+DevicePolicy=closed
+DeviceAllow=char-nvme rw
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_RAWIO

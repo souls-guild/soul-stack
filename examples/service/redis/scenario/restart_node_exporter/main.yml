@@ -1,0 +1,14 @@
+name: restart_node_exporter
+description: >-
+  Принудительный рестарт демона node_exporter без изменения incarnation.state.
+  Имя юнита — node_exporter (destiny node-exporter): лёгкий L0-тест ловит регресс
+  имени. state не мутируется (нет state_changes).
+
+# Входного контракта нет: рестарт безусловен, параметров не требует.
+
+tasks:
+  - name: Restart node_exporter
+    module: core.service.restarted
+    timeout: 30s
+    params:
+      name: node_exporter

@@ -188,10 +188,14 @@ func TestHandleTaskEvent_FailedRecordsTaskFailure(t *testing.T) {
 	aw := &recordingAudit{}
 	ardb := &fakeApplyRunDB{}
 	h := newTestHandlerWithApplyRun(t, aw, ardb)
+	// GUARD (ADR-056 §S1 fix Variant B): локальный TaskIdx=1 ≠ глобальный
+	// PlanIndex=6 (staged/per-host-where). recordTaskFailure ОБЯЗАН писать в
+	// failed_plan_index ГЛОБАЛЬНЫЙ ev.PlanIndex (6-й арг), task_idx — локальный.
 	h.handleTaskEvent(context.Background(), "host.example.com", "session-1", &keeperv1.TaskEvent{
-		ApplyId: "01HAPPLY",
-		TaskIdx: 0,
-		Status:  keeperv1.TaskStatus_TASK_STATUS_FAILED,
+		ApplyId:   "01HAPPLY",
+		TaskIdx:   1,
+		PlanIndex: 6,
+		Status:    keeperv1.TaskStatus_TASK_STATUS_FAILED,
 		Error: &keeperv1.TaskError{
 			Code: "module.failed", Module: "core.pkg.installed", Message: "E: Version '7.2.4' not found",
 		},
@@ -199,16 +203,26 @@ func TestHandleTaskEvent_FailedRecordsTaskFailure(t *testing.T) {
 	if ardb.execCalls != 1 {
 		t.Fatalf("execCalls = %d, want 1 (RecordTaskFailure)", ardb.execCalls)
 	}
-	if !strings.Contains(ardb.execSQL, "UPDATE apply_runs") || !strings.Contains(ardb.execSQL, "COALESCE(error_summary") {
-		t.Errorf("SQL = %q, want RecordTaskFailure UPDATE", ardb.execSQL)
+	if !strings.Contains(ardb.execSQL, "UPDATE apply_runs") || !strings.Contains(ardb.execSQL, "COALESCE(error_summary") ||
+		!strings.Contains(ardb.execSQL, "COALESCE(failed_plan_index") {
+		t.Errorf("SQL = %q, want RecordTaskFailure UPDATE (с failed_plan_index)", ardb.execSQL)
 	}
-	if len(ardb.execArgs) != 4 {
-		t.Fatalf("execArgs len = %d, want 4", len(ardb.execArgs))
+	// S3 (ADR-056): RecordTaskFailure несёт passage (5-й арг) + failed_plan_index
+	// (6-й арг) — причина пишется в строку (apply_id, sid, passage). passage из
+	// эхо TaskEvent.passage (тут 0).
+	if len(ardb.execArgs) != 6 {
+		t.Fatalf("execArgs len = %d, want 6", len(ardb.execArgs))
 	}
-	if ardb.execArgs[2] != 0 {
-		t.Errorf("task_idx arg = %v, want 0", ardb.execArgs[2])
+	if ardb.execArgs[2] != 1 {
+		t.Errorf("task_idx arg = %v, want 1 (локальный)", ardb.execArgs[2])
 	}
-	want := "task 0 core.pkg.installed: E: Version '7.2.4' not found"
+	if ardb.execArgs[4] != 0 {
+		t.Errorf("passage arg = %v, want 0", ardb.execArgs[4])
+	}
+	if ardb.execArgs[5] != 6 {
+		t.Errorf("★ failed_plan_index arg = %v, want 6 (глобальный ev.PlanIndex, не локальный TaskIdx=1)", ardb.execArgs[5])
+	}
+	want := "task 1 core.pkg.installed: E: Version '7.2.4' not found"
 	if ardb.execArgs[3] != want {
 		t.Errorf("summary arg = %q, want %q", ardb.execArgs[3], want)
 	}
@@ -400,6 +414,7 @@ func TestHandleTaskEvent_AccumulatesRegister(t *testing.T) {
 	}
 	ev := &keeperv1.TaskEvent{
 		ApplyId:      "01HABCAPPLY00000000000000",
+		PlanIndex:    5,
 		TaskIdx:      2,
 		Status:       keeperv1.TaskStatus_TASK_STATUS_CHANGED,
 		RegisterData: rd,
@@ -412,11 +427,15 @@ func TestHandleTaskEvent_AccumulatesRegister(t *testing.T) {
 	if want := "INSERT INTO apply_task_register"; !strings.Contains(ardb.execSQL, want) {
 		t.Errorf("SQL = %q, want содержащий %q", ardb.execSQL, want)
 	}
-	if len(ardb.execArgs) != 4 {
-		t.Fatalf("execArgs len = %d, want 4", len(ardb.execArgs))
+	// ADR-056 §S1 fix Variant B: register-upsert несёт ГЛОБАЛЬНЫЙ plan_index как
+	// ключ корреляции ($3), локальный task_idx — данными ($4), passage — компонент
+	// FK на apply_runs(apply_id, sid, passage) ($6). args: apply_id, sid, plan_index,
+	// task_idx, register_data, passage.
+	if len(ardb.execArgs) != 6 {
+		t.Fatalf("execArgs len = %d, want 6", len(ardb.execArgs))
 	}
-	if ardb.execArgs[0] != "01HABCAPPLY00000000000000" || ardb.execArgs[1] != "host.example.com" || ardb.execArgs[2] != 2 {
-		t.Errorf("args[0..2] = %v / %v / %v", ardb.execArgs[0], ardb.execArgs[1], ardb.execArgs[2])
+	if ardb.execArgs[0] != "01HABCAPPLY00000000000000" || ardb.execArgs[1] != "host.example.com" || ardb.execArgs[2] != 5 || ardb.execArgs[3] != 2 {
+		t.Errorf("args[0..3] = %v / %v / %v / %v", ardb.execArgs[0], ardb.execArgs[1], ardb.execArgs[2], ardb.execArgs[3])
 	}
 }
 
@@ -917,4 +936,118 @@ func TestHandleTaskEvent_AuditWriterErrorIsNotFatal(t *testing.T) {
 	h.handleTaskEvent(context.Background(), "host.example.com", "session-1", &keeperv1.TaskEvent{
 		ApplyId: "apply-x", Status: keeperv1.TaskStatus_TASK_STATUS_OK,
 	})
+}
+
+// --- staged-render Passage backward-compat (★ guard, ADR-056 S1) ---
+//
+// S1-инвариант: single-passage прогон (passage=0, в т.ч. старый Soul без поля —
+// proto-дефолт 0) проходит correlation/register/audit БИТ-В-БИТ как до
+// staged-render. Доказываем: явный passage=0 и опущенный passage дают идентичный
+// результат, корреляция по (apply_id, sid) не меняется, а passage=0 эхается в
+// observability-payload. Multi-passage цикл (passage>0) — S2/S3.
+
+// TestHandleRunResult_Passage0_CorrelatesIdentically — RunResult с passage=0
+// (и опущенным passage) коррелирует со строкой (apply_id, sid, passage=0) —
+// тем же UpdateStatus, что N=1-прогон до staged-render (S3 ADR-056): passage=0
+// хитит ту же единственную строку хоста (data-level БИТ-В-БИТ). passage=0 едет
+// в audit-payload для триажа per-Passage.
+func TestHandleRunResult_Passage0_CorrelatesIdentically(t *testing.T) {
+	run := func(t *testing.T, ev *keeperv1.RunResult) (*fakeApplyRunDB, *recordingAudit) {
+		t.Helper()
+		aw := &recordingAudit{}
+		ardb := &fakeApplyRunDB{
+			queryRow: func() pgx.Row { return applyRunStaticRow{name: "redis-prod", scenario: "scale"} },
+		}
+		h := newTestHandlerWithApplyRun(t, aw, ardb)
+		h.handleRunResult(context.Background(), "host.example.com", "session-1", ev)
+		return ardb, aw
+	}
+
+	explicit, awExplicit := run(t, &keeperv1.RunResult{
+		ApplyId: "01HAPPLY", Status: keeperv1.RunStatus_RUN_STATUS_SUCCESS, Passage: 0,
+	})
+	// Опущенный passage (старый Soul без поля) — proto-дефолт 0, идентичный путь.
+	omitted, _ := run(t, &keeperv1.RunResult{
+		ApplyId: "01HAPPLY", Status: keeperv1.RunStatus_RUN_STATUS_SUCCESS,
+	})
+
+	// Correlation: ровно один UpdateStatus, WHERE по (apply_id, sid, passage) с
+	// passage=0 (5-й арг). N=1-прогон шлёт passage=0 → хитит ту же единственную
+	// строку хоста, что до staged-render (data-level БИТ-В-БИТ).
+	for name, ardb := range map[string]*fakeApplyRunDB{"explicit": explicit, "omitted": omitted} {
+		if ardb.execCalls != 1 {
+			t.Fatalf("%s: UpdateStatus execCalls = %d, want 1", name, ardb.execCalls)
+		}
+		if !strings.Contains(ardb.execSQL, "WHERE apply_id = $1 AND sid = $2 AND passage = $5") {
+			t.Errorf("%s: correlation WHERE не passage-aware (S3 ADR-056): %q", name, ardb.execSQL)
+		}
+		if len(ardb.execArgs) != 5 {
+			t.Errorf("%s: execArgs len = %d, want 5 (passage в WHERE на S3)", name, len(ardb.execArgs))
+		}
+		if ardb.execArgs[2] != "success" {
+			t.Errorf("%s: status arg = %v, want success", name, ardb.execArgs[2])
+		}
+		if ardb.execArgs[4] != 0 {
+			t.Errorf("%s: passage arg = %v, want 0", name, ardb.execArgs[4])
+		}
+	}
+
+	// passage=0 эхается в audit run.completed для триажа per-Passage (foundation).
+	got := awExplicit.snapshot()
+	if len(got) != 1 {
+		t.Fatalf("audit events = %d, want 1", len(got))
+	}
+	if p, ok := got[0].Payload["passage"]; !ok || p != int32(0) {
+		t.Errorf("run.completed payload passage = %v (ok=%v), want int32(0)", p, ok)
+	}
+}
+
+// TestHandleTaskEvent_Passage0_AccumulatesIdentically — TaskEvent с passage=0
+// (N=1, plan_index==task_idx) копит register так же, как до staged-render: ключ
+// корреляции plan_index ($3) равен task_idx, passage=0 — компонент FK на
+// apply_runs (ADR-056 §S1 fix Variant B; миграция 079). passage=0 едет в
+// task.executed payload.
+func TestHandleTaskEvent_Passage0_AccumulatesIdentically(t *testing.T) {
+	aw := &recordingAudit{}
+	ardb := &fakeApplyRunDB{}
+	h := newTestHandlerWithApplyRun(t, aw, ardb)
+
+	rd, err := structpb.NewStruct(map[string]any{"stdout": "leader"})
+	if err != nil {
+		t.Fatalf("NewStruct: %v", err)
+	}
+	// N=1: старый Soul без plan_index шлёт 0; новый Soul эхает plan_index==task_idx.
+	// Эмулируем эхо нового Soul-а (plan_index=task_idx=2) — поведение идентично N=1.
+	h.handleTaskEvent(context.Background(), "host.example.com", "session-1", &keeperv1.TaskEvent{
+		ApplyId: "01HABCAPPLY00000000000000", PlanIndex: 2, TaskIdx: 2,
+		Status: keeperv1.TaskStatus_TASK_STATUS_CHANGED, RegisterData: rd, Passage: 0,
+	})
+
+	// upsert apply_task_register (ADR-056 §S1 fix Variant B): 6 аргументов
+	// (apply_id, sid, plan_index, task_idx, register_data, passage). Ключ
+	// корреляции — plan_index; passage=0 — компонент FK на apply_runs.
+	if ardb.execCalls != 1 {
+		t.Fatalf("execCalls = %d, want 1 (upsert apply_task_register)", ardb.execCalls)
+	}
+	if !strings.Contains(ardb.execSQL, "INSERT INTO apply_task_register") {
+		t.Errorf("SQL = %q, want INSERT INTO apply_task_register", ardb.execSQL)
+	}
+	if len(ardb.execArgs) != 6 {
+		t.Fatalf("execArgs len = %d, want 6 (plan_index + passage в register-upsert)", len(ardb.execArgs))
+	}
+	if ardb.execArgs[0] != "01HABCAPPLY00000000000000" || ardb.execArgs[1] != "host.example.com" || ardb.execArgs[2] != 2 || ardb.execArgs[3] != 2 {
+		t.Errorf("args[0..3] = %v / %v / %v / %v", ardb.execArgs[0], ardb.execArgs[1], ardb.execArgs[2], ardb.execArgs[3])
+	}
+	if ardb.execArgs[5] != 0 {
+		t.Errorf("passage arg = %v, want 0", ardb.execArgs[5])
+	}
+
+	// passage=0 эхается в task.executed payload.
+	got := aw.snapshot()
+	if len(got) != 1 {
+		t.Fatalf("audit events = %d, want 1", len(got))
+	}
+	if p, ok := got[0].Payload["passage"]; !ok || p != 0 {
+		t.Errorf("task.executed payload passage = %v (ok=%v), want 0", p, ok)
+	}
 }

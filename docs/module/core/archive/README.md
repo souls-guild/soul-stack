@@ -59,7 +59,7 @@ decompress-only; для MVP этого достаточно).
     dest: "${ '/tmp/node_exporter-' + input.version }"
 ```
 
-(из [`examples/destiny/destiny-node-exporter/tasks/main.yml`](../../../../examples/destiny/destiny-node-exporter/tasks/main.yml))
+(из [`examples/destiny/node-exporter/tasks/install.yml`](../../../../examples/destiny/node-exporter/tasks/install.yml))
 
 ## Безопасность
 

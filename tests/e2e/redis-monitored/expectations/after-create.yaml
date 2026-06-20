@@ -1,0 +1,37 @@
+# Post-apply ожидания redis-monitored::create (e2e под
+# examples/service/redis-monitored).
+#
+# apply_runs.status — реальный enum keeper/internal/applyrun (StatusSuccess).
+#
+# incarnation_state — deep-subset; значения = scenario.state_changes.sets из
+# examples/service/redis-monitored/scenario/create/main.yml, отрендеренные
+# keeper-side из input/soulprint.self ПОСЛЕ барьера (run.go §8). Контракт
+# state_schema (service.yml) — ровно эти четыре поля:
+#   redis_version          ← has(input.redis_version)?input.redis_version:''
+#                            (передаём непустым в тесте → пин-строка);
+#   node_exporter_version  ← input.node_exporter_version (default 1.8.2);
+#   redis_exporter_version ← input.redis_exporter_version (default 1.62.0);
+#   redis_socket           ← input.redis_socket (default /var/run/redis/...).
+# Отличие от tests/e2e/redis: здесь НЕТ redis_maxmemory / redis_users в state —
+# state_schema redis-monitored их не объявляет (см. service.yml::state_schema).
+#
+# audit_events — incarnation.created (POST /v1/incarnations авто-запускает create
+# и пишет именно его, НЕ scenario_started). apply_id в payload — runtime-значение,
+# проверяется отдельно в тесте (не через YAML-fixture).
+#
+# metrics — keeper_scenario_runs_total{result="ok"} (keeper/internal/scenario/
+# metrics.go), успешный прогон → >= 1.
+apply_runs:
+  status: success
+
+incarnation_state:
+  redis_version: "5:7.0.15-1~deb12u7"
+  node_exporter_version: "1.8.2"
+  redis_exporter_version: "1.62.0"
+  redis_socket: /var/run/redis/redis-server.sock
+
+audit_events:
+  - type: incarnation.created
+
+metrics:
+  keeper_scenario_runs_total{result="ok"}: ">= 1"

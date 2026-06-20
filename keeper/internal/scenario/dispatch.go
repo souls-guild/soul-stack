@@ -40,13 +40,39 @@ import (
 // только после завершения ВСЕХ волн (или fail-stop); state коммитится один раз
 // в run() ПОСЛЕ возврата dispatch, никогда по-волново.
 func (r *Runner) dispatch(ctx context.Context, spec RunSpec, log *slog.Logger, tasks []*render.RenderedTask, plans []render.DispatchPlan) error {
+	// passage 0: N=1-прогон (без staged-render) — единственный Passage, поведение
+	// БИТ-В-БИТ как до ADR-056 (одна строка apply_runs на хост, barrier по passage 0).
+	// gate=nil: один Passage → cross-passage requisite невозможен.
+	return r.dispatchPassage(ctx, spec, log, 0, tasks, plans, nil)
+}
+
+// dispatchPassage выполняет cross-host fan-out ОДНОГО Passage (ADR-056 §в.2-3) и
+// ждёт его barrier (§в.3). tasks/plans — подмножество ОДНОГО Passage (run.go
+// stage-loop отфильтровал по RenderedTask.Passage); passage клеймится в
+// ApplyRequest.passage + apply_runs(apply_id, sid, passage) для per-Passage
+// корреляции терминала. barrier ждёт терминалы строк именно этого Passage.
+//
+// serial-логика (волны хостов) работает внутри КАЖДОГО Passage: оси serial (хосты)
+// и Passage (задачи) ортогональны (ADR-056 §S4 amend, 2D serial×passage). Ширина
+// волны выводится из plans ЭТОГО Passage (effectiveSerialWidth на tasksForPassage-
+// срезе — per-Passage width, НЕ per-RUN): probe-Passage без serial едет одной волной,
+// даже когда последующий Passage несёт serial:N. N=1-прогон вызывается с passage=0 —
+// единственная волна(ы) одного Passage, БИТ-В-БИТ.
+func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Logger, passage int, tasks []*render.RenderedTask, plans []render.DispatchPlan, gate *crossPassageGate) error {
 	noLogByIndex := noLogIndex(tasks)
 	perHost := groupByHost(tasks, plans)
+	// Cross-passage requisite-gating (ADR-056 R3): per-host резолв onchanges/onfail-
+	// связей, чей источник в более раннем Passage. nil-gate (N=1 / Passage 0) → no-op.
+	// Применяется ДО dispatch: consumer, чей cross-passage onchanges не сработал на
+	// хосте (и без same-passage источника), исключается из среза этого хоста; иначе
+	// cross-passage idx убираются с wire (Soul гейтит по same-passage / безусловно).
+	perHost = gate.applyGate(perHost, passage)
 	if len(perHost) == 0 {
-		// Ни одна задача не таргетит ни одного хоста (where: отфильтровал
-		// всех на каждой задаче). Не ошибка: нечего применять, прогон
-		// успешен no-op-ом.
-		log.Info("scenario: dispatch — ни одна задача не таргетит хосты, no-op")
+		// Ни одна задача Passage не таргетит ни одного хоста (where: отфильтровал
+		// всех на каждой задаче). Не ошибка: нечего применять в этом Passage, идём
+		// дальше (для N=1 — прогон успешен no-op-ом).
+		log.Info("scenario: dispatch — ни одна задача Passage не таргетит хосты, no-op",
+			slog.Int("passage", passage))
 		return nil
 	}
 
@@ -58,14 +84,14 @@ func (r *Runner) dispatch(ctx context.Context, spec RunSpec, log *slog.Logger, t
 	// строки apply_runs не должен заставлять barrier ждать до timeout-а).
 	dispatchedTotal := 0
 	for wi, wave := range waves {
-		dispatched, derr := r.dispatchWave(ctx, spec, log, perHost, wave)
+		dispatched, derr := r.dispatchWave(ctx, spec, log, passage, perHost, wave)
 		dispatchedTotal += dispatched
 
-		// Per-wave barrier: ждём терминала хостов ВСЕХ стартованных волн.
-		// classify сканирует все apply_runs-строки прогона, поэтому failed-хост
-		// текущей волны ломает barrier сразу (fail-stop): следующая волна не
-		// стартует.
-		if berr := r.waitBarrier(ctx, spec.ApplyID, dispatchedTotal, noLogByIndex, log); berr != nil {
+		// Per-wave barrier: ждём терминала хостов ВСЕХ стартованных волн ЭТОГО
+		// Passage. classify сканирует apply_runs-строки прогона и фильтрует по
+		// passage, поэтому failed-хост текущей волны ломает barrier сразу
+		// (fail-stop): следующая волна не стартует.
+		if berr := r.waitBarrier(ctx, spec.ApplyID, passage, dispatchedTotal, noLogByIndex, log); berr != nil {
 			return berr
 		}
 		if derr != nil {
@@ -136,7 +162,9 @@ func (r *Runner) dispatchPlanned(ctx context.Context, spec RunSpec, log *slog.Lo
 	r.publishSummons(ctx, log)
 
 	noLogByIndex := noLogIndex(tasks)
-	return r.waitBarrier(ctx, spec.ApplyID, dispatched, noLogByIndex, log)
+	// Acolyte-путь — non-staged (ADR-056 §S4): planned-задания пишутся passage 0,
+	// barrier ждёт срез Passage 0. Staged (N>1) на Acolyte отвергается в run.go.
+	return r.waitBarrier(ctx, spec.ApplyID, 0, dispatched, noLogByIndex, log)
 }
 
 // publishSummons шлёт один best-effort Summons-сигнал planned-заданий
@@ -194,7 +222,7 @@ func serialPresent(serial any) bool {
 // При send-фейле хост помечается failed сразу — RunResult от него не придёт,
 // иначе per-wave barrier завис бы до timeout-а; failed-строка ломает barrier
 // штатно (fail-stop).
-func (r *Runner) dispatchWave(ctx context.Context, spec RunSpec, log *slog.Logger, perHost map[string][]*render.RenderedTask, wave []string) (int, error) {
+func (r *Runner) dispatchWave(ctx context.Context, spec RunSpec, log *slog.Logger, passage int, perHost map[string][]*render.RenderedTask, wave []string) (int, error) {
 	dispatched := 0
 	for _, sid := range wave {
 		// attempt НЕ проставляется (остаётся 0) ОСОЗНАННО: это старый inline-путь
@@ -207,6 +235,9 @@ func (r *Runner) dispatchWave(ctx context.Context, spec RunSpec, log *slog.Logge
 		req := &keeperv1.ApplyRequest{
 			ApplyId: spec.ApplyID,
 			Tasks:   render.ToProtoTasks(perHost[sid]),
+			// passage (ADR-056): Soul эхает его в TaskEvent/RunResult — Keeper
+			// коррелирует терминал и копит register per-(apply_id, sid, passage).
+			Passage: int32(passage),
 		}
 		if err := applyrun.Insert(ctx, r.deps.DB, &applyrun.ApplyRun{
 			ApplyID:         spec.ApplyID,
@@ -215,6 +246,7 @@ func (r *Runner) dispatchWave(ctx context.Context, spec RunSpec, log *slog.Logge
 			Scenario:        spec.ScenarioName,
 			Status:          applyrun.StatusRunning,
 			StartedByAID:    startedByPtr(spec.StartedByAID),
+			Passage:         passage,
 		}); err != nil {
 			return dispatched, fmt.Errorf("scenario: insert apply_run (%s): %w", sid, err)
 		}
@@ -232,7 +264,7 @@ func (r *Runner) dispatchWave(ctx context.Context, spec RunSpec, log *slog.Logge
 			// payload-эха. Полный err уходит лишь в обёрнутую ошибку выше (она
 			// проходит через MaskSecrets в lockIncarnation перед записью).
 			summary := "send_apply_failed"
-			_ = applyrun.UpdateStatus(ctx, r.deps.DB, spec.ApplyID, sid, applyrun.StatusFailed, &summary)
+			_ = applyrun.UpdateStatus(ctx, r.deps.DB, spec.ApplyID, sid, passage, applyrun.StatusFailed, &summary)
 			return dispatched, fmt.Errorf("scenario: send apply (%s): %w", sid, err)
 		}
 		dispatched++
@@ -289,7 +321,7 @@ func (r *Runner) warnCrossKeeperDispatch(ctx context.Context, sid string, log *s
 //   - nil — все хосты success.
 //   - ошибка — хотя бы один failed/cancelled, либо ctx отменён (timeout/Cancel/
 //     Shutdown). Любой не-success терминал ломает прогон (fail-closed, §7).
-func (r *Runner) waitBarrier(ctx context.Context, applyID string, wantHosts int, noLogByIndex map[int]bool, log *slog.Logger) error {
+func (r *Runner) waitBarrier(ctx context.Context, applyID string, passage, wantHosts int, noLogByIndex map[int]bool, log *slog.Logger) error {
 	ticker := time.NewTicker(r.pollInterval)
 	defer ticker.Stop()
 
@@ -310,7 +342,7 @@ func (r *Runner) waitBarrier(ctx context.Context, applyID string, wantHosts int,
 			return fmt.Errorf("scenario: barrier прерван: %w", errCancelRequested)
 		}
 
-		done, failed := classify(statuses, wantHosts, noLogByIndex)
+		done, failed := classify(statuses, passage, wantHosts, noLogByIndex)
 		if failed != nil {
 			return failed
 		}
@@ -351,9 +383,18 @@ func cancelRequested(statuses []applyrun.HostStatus) bool {
 // `task <idx> <module>: <message>`, BUG-3); для no_log-задачи stderr
 // подавляется ([failureReason]). NULL error_summary (dispatch-level фейл без
 // TaskEvent-а) → подставляется сам статус хоста.
-func classify(statuses []applyrun.HostStatus, wantHosts int, noLogByIndex map[int]bool) (done bool, failed error) {
+func classify(statuses []applyrun.HostStatus, passage, wantHosts int, noLogByIndex map[int]bool) (done bool, failed error) {
 	terminal := 0
 	for _, hs := range statuses {
+		// Staged-render (ADR-056): barrier ЭТОГО Passage считает терминалы строк
+		// только своего среза. Строки предыдущих Passage (уже success) и keeper-
+		// target-а (passage 0, исполнен ДО host-fan-out-а) сюда не относятся —
+		// иначе terminal раздулся бы и barrier объявил бы done преждевременно.
+		// N=1-прогон: единственный Passage 0 → фильтр пропускает все host-строки,
+		// БИТ-В-БИТ как до staged-render.
+		if hs.Passage != passage {
+			continue
+		}
 		// keeper-target (`on: keeper`) — НЕ хост: его apply_runs-строку пишет
 		// dispatchKeeperTasks ДО host-barrier-а, а wantHosts считает только
 		// реальные хосты. Без этого исключения keeper-success раздувал бы
@@ -392,17 +433,24 @@ func classify(statuses []applyrun.HostStatus, wantHosts int, noLogByIndex map[in
 //   - сам статус хоста (`failed`/`cancelled`) — если summary нет (dispatch-
 //     level фейл без TaskEvent-а).
 //
-// no_log: если упавшая задача (по task_idx) объявлена `no_log: true`, её
-// stderr мог нести пароль — message заменяется нейтральным `(no_log task
-// failed)` с сохранением `task <idx>`-префикса для триажа. MaskSecrets уже
-// отработал на write-path-е (recordTaskFailure); тут — полное подавление
-// тела сообщения no_log-задачи.
+// no_log: если упавшая задача объявлена `no_log: true`, её stderr мог нести
+// пароль — message заменяется нейтральным `(no_log task failed)` с сохранением
+// `task <idx>`-префикса для триажа. MaskSecrets уже отработал на write-path-е
+// (recordTaskFailure); тут — полное подавление тела сообщения no_log-задачи.
+//
+// Адрес упавшей задачи в noLogByIndex — по ГЛОБАЛЬНОМУ plan_index (ADR-056 §S1
+// fix Variant B): noLogByIndex построен по RenderedTask.Index (глобальный
+// сквозной индекс), failed_plan_index несёт тот же глобальный индекс (эхо
+// TaskEvent.plan_index). Локальный task_idx под staged/per-host-where указывал
+// бы на соседнюю задачу — и тогда либо НЕ подавил бы stderr реальной no_log-
+// задачи (утечка пароля), либо подавил бы причину обычной задачи. Резолв строго
+// глобальный; для N=1 plan_index==task_idx, поведение БИТ-В-БИТ.
 func failureReason(hs applyrun.HostStatus, noLogByIndex map[int]bool) string {
 	if hs.ErrorSummary == nil {
 		return string(hs.Status)
 	}
-	if hs.TaskIdx != nil && noLogByIndex[*hs.TaskIdx] {
-		return fmt.Sprintf("task %d: (no_log task failed)", *hs.TaskIdx)
+	if idx, ok := failedPlanIndex(hs); ok && noLogByIndex[idx] {
+		return fmt.Sprintf("task %d: (no_log task failed)", idx)
 	}
 	return *hs.ErrorSummary
 }
@@ -418,6 +466,33 @@ func noLogIndex(tasks []*render.RenderedTask) map[int]bool {
 		}
 	}
 	return out
+}
+
+// tasksForPassage отбирает RenderedTask-и и их DispatchPlan-ы, принадлежащие
+// Passage p (staged-render, ADR-056): ApplyRequest одного Passage несёт только
+// его задачи, barrier ждёт только его терминалы. keeper-side задачи (Keeper-plan)
+// исключаются — они исполнены ДО host-fan-out-а (dispatchKeeperTasks, passage 0).
+// Plan-ы фильтруются по тому же набору task-индексов (groupByHost уже игнорирует
+// plan без задачи в наборе, но явная фильтрация делает serial-ширину Passage-точной).
+func tasksForPassage(tasks []*render.RenderedTask, plans []render.DispatchPlan, p int) ([]*render.RenderedTask, []render.DispatchPlan) {
+	idxInPassage := make(map[int]bool, len(tasks))
+	outTasks := make([]*render.RenderedTask, 0, len(tasks))
+	for _, t := range tasks {
+		if t.Passage == p {
+			outTasks = append(outTasks, t)
+			idxInPassage[t.Index] = true
+		}
+	}
+	outPlans := make([]render.DispatchPlan, 0, len(plans))
+	for _, pl := range plans {
+		if pl.Keeper {
+			continue
+		}
+		if idxInPassage[pl.TaskIndex] {
+			outPlans = append(outPlans, pl)
+		}
+	}
+	return outTasks, outPlans
 }
 
 // groupByHost строит SID → []RenderedTask по DispatchPlan-ам. Каждая задача
@@ -460,14 +535,20 @@ func sortedSIDs(perHost map[string][]*render.RenderedTask) []string {
 	return out
 }
 
-// effectiveSerialWidth выводит ширину волны прогона из per-task SerialWidth
+// effectiveSerialWidth выводит ширину волны из per-task SerialWidth ПЕРЕДАННЫХ
 // планов (orchestration.md §2.2.1). serial: — per-task ось, но dispatch-модель
 // «один ApplyRequest на хост со всеми его задачами» (composite PK apply_id,sid)
 // не может катить разные задачи разными волнами в рамках одного запроса.
-// Агрегация: ширина волны прогона = МИНИМАЛЬНАЯ положительная SerialWidth среди
-// задач (самое узкое окно — строго fail-closed-консервативно: чем уже волна,
-// тем меньше хостов под риском при падении). 0 (ни одна задача не несёт serial:)
+// Агрегация: ширина волны = МИНИМАЛЬНАЯ положительная SerialWidth среди задач
+// среза (самое узкое окно — строго fail-closed-консервативно: чем уже волна, тем
+// меньше хостов под риском при падении). 0 (ни одна задача среза не несёт serial:)
 // → все хосты в одной волне (поведение без serial).
+//
+// Срез — это задачи ОДНОГО Passage (dispatchPassage передаёт tasksForPassage-
+// фильтрованные plans): ADR-056 §S4 amend min-width стал per-Passage, НЕ per-RUN.
+// Probe-Passage без serial → width 0 (одна волна), даже если другой Passage несёт
+// serial:N — его узкое окно НЕ просачивается в чужой Passage (silent-wrong-width
+// устранён). При N=1 (один Passage) per-Passage и per-RUN совпадают бит-в-бит.
 func effectiveSerialWidth(plans []render.DispatchPlan) int {
 	width := 0
 	for _, p := range plans {

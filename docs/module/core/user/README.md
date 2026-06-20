@@ -81,28 +81,27 @@ useradd) — это defense-in-depth: даже если имя-опция как
 
 ## Пример
 
-В comitted examples `core.user.present` намеренно **не** используется:
-stateless-демоны (node_exporter, redis_exporter) получают сервис-аккаунт через
-`DynamicUser=yes` в systemd-юните (гибрид-правило прод-конвенции). Минимальный
-пример системного сервис-аккаунта stateful-сервиса:
+Выбор «`core.user.present` vs `DynamicUser=yes`» — это [гибрид-правило прод-конвенции §2](../../../destiny/production-conventions.md#2-сервис-аккаунт--гибрид-правило): **stateless**-демон без owned data-dir получает эфемерный аккаунт от systemd (`DynamicUser=yes`, ручной `core.user` не нужен), а **stateful**-сервису нужен стабильный uid-владелец каталога — его заводит `core.user.present`. Рабочий пример stateful-аккаунта — `node_exporter` в эталонной destiny [`node-exporter`](../../../../examples/destiny/node-exporter/tasks/account.yml) (textfile-каталог железных метрик переживает рестарты, нужен стабильный владелец); инлайн-redis_exporter в [`monitoring`](../../../../examples/service/monitoring/scenario/create/main.yml) — другой полюс: least-privilege `core.user.present` без стабильного state. Минимальный шаблон:
 
 ```yaml
 # Primary-группа создаётся ДО пользователя (core.user -g требует существующую).
-- name: Ensure the app group exists
+- name: Ensure the node_exporter system group exists
   module: core.group.present
   params:
-    name: appsvc
+    name: node_exporter
     system: true
 
-- name: Ensure the app system user exists
+- name: Ensure the node_exporter system user exists
   module: core.user.present
   params:
-    name: appsvc
+    name: node_exporter
     system: true
-    group: appsvc
+    group: node_exporter
     shell: /usr/sbin/nologin
-    home: /var/lib/appsvc
+    home: /
 ```
+
+(из [`examples/destiny/node-exporter/tasks/main.yml`](../../../../examples/destiny/node-exporter/tasks/main.yml))
 
 ## Безопасность
 

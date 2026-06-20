@@ -143,6 +143,27 @@ type RenderInput struct {
 	// из Hosts). В destiny-проходе renderApplyDestiny ставит true: soulprint.hosts
 	// в destiny — ошибка изоляции (orchestration.md §4.1), проекция не пробрасывается.
 	destinyIsolated bool
+
+	// TaskPassage — passage-индекс (0-based) каждой top-level задачи плана прогона
+	// (staged-render, ADR-056; результат [Stratify]). Render клеймит им каждую
+	// порождённую [RenderedTask] (и её apply:destiny/loop-потомков) по
+	// originating-задаче — orchestrator (run.go) фильтрует dispatch/barrier по
+	// RenderedTask.Passage. nil → все задачи в Passage 0 (N=1 / не-staged caller:
+	// Trial, Acolyte RenderForHost, CheckDrift) — поведение БИТ-В-БИТ. Длина обязана
+	// совпадать с числом top-level задач после ExpandIncludes (caller гарантирует:
+	// Stratify работает над тем же списком).
+	TaskPassage []int
+
+	// ActivePassage — индекс Passage, который stage-loop рендерит и диспатчит
+	// СЕЙЧАС (staged-render, ADR-056 §в.1). Задачи будущих Passage (TaskPassage[i] >
+	// ActivePassage) ещё не имеют собранного register — их `where:`/`params:`,
+	// читающие register, НЕ резолвятся: Render эмитит для них placeholder
+	// RenderedTask (корректный Index/Passage, params/таргет не вычислены) только
+	// ради сквозной index-нумерации; orchestrator их в этом Passage не диспатчит
+	// (фильтр по Passage). Когда их Passage станет активным, повторный Render с
+	// накопленным register резолвит их полноценно. nil-TaskPassage → ActivePassage
+	// игнорируется (не-staged: все задачи Passage 0 рендерятся как сейчас, БИТ-В-БИТ).
+	ActivePassage int
 }
 
 // RenderedTask — задача после Keeper-side CEL-рендера, промежуточное
@@ -168,6 +189,15 @@ type RenderedTask struct {
 	Module   string
 	Params   *structpb.Struct
 	Register string
+
+	// Passage — passage-индекс (0-based) staged-render (ADR-056), унаследованный
+	// от originating top-level задачи через RenderInput.TaskPassage. orchestrator
+	// (run.go stage-loop) диспатчит и барьерит задачи строго по Passage:
+	// ApplyRequest несёт только задачи одного Passage, его barrier ждёт терминалы
+	// строк (apply_id, sid, passage=N). 0 = единственный Passage (N=1 / не-staged)
+	// — БИТ-В-БИТ как до staged-render. apply:destiny/loop-потомки наследуют
+	// Passage родителя (block — атомарная единица Passage, ADR-056).
+	Passage int
 	// ID — стабильный адрес задачи из DSL-ядра `id:` (config.Task.ID, T1):
 	// альтернатива register для адресации задачи без захвата register-результата
 	// (register∪id, T1 запрещает оба сразу). Orchestrator-only, как Index — в

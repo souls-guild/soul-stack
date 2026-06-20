@@ -1,0 +1,28 @@
+# Souls-фикстура для L3a redis::create (pilot e2e под examples/service/redis).
+#
+# Один soul-stub под SID `soul-a.example.com`, status=connected — happy-path
+# apply_runs lifecycle. covens: [redis] — членство в Coven incarnation
+# (incarnation.name = redis-метка, ADR-008); roster прогона резолвится по нему.
+#
+# soulprint ОБЯЗАТЕЛЕН (в отличие от smoke-nginx): render redis читает факты
+# хоста KEEPER-SIDE — redis-exporter берёт arch из soulprint.self.os.arch, а
+# node-exporter подставляет soulprint.self.os.arch в URL release-tarball-а
+# (ADR-018). os.arch=amd64 → tarball linux-amd64. pkg_mgr/init_system нужны
+# core.pkg/core.service (docs/soul/soulprint.md §3).
+#
+# Этот fixture-формат отражает структуру SoulprintFacts (resolver scanHost →
+# map[string]any); harness грузит os-блок через Stack.SeedSoulprint (cert.go),
+# coven — через Stack.AddSoulToCoven (YAML-loader fixtures пока не реализован,
+# значения дублируются inline в redis_test.go — pilot-паттерн).
+- sid: soul-a.example.com
+  status: connected
+  covens: [redis]
+  soulprint:
+    os:
+      family: debian
+      distro: debian
+      version: "12"
+      arch: amd64
+      pkg_mgr: apt
+      init_system: systemd
+    hostname: soul-a

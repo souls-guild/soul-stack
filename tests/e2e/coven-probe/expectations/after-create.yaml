@@ -1,4 +1,4 @@
-# Post-apply ожидания service-coven-probe::create.
+# Post-apply ожидания coven-probe::create.
 #
 # state_changes.sets из scenario/create/main.yml:
 #   marker_file: /tmp/coven-init.txt

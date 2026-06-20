@@ -4,7 +4,7 @@ description: Install Redis from the distro package manager and render redis.conf
 # Версия destiny — git ref (ADR-007). Поля `version:` верхнего уровня нет.
 # Список задач — в tasks/main.yml. Только core-модули → required_modules: не нужен.
 #
-# Извлечено из инлайн-сценариев service-monitoring / service-redis-monitored в
+# Извлечено из инлайн-сценариев monitoring / redis-monitored в
 # самостоятельную переиспользуемую destiny. Установка — через пакетный менеджер
 # дистрибутива (core.pkg.installed redis-server), как в инлайн-источнике; tarball
 # для самого Redis не используется (в отличие от экспортеров — те ставятся из

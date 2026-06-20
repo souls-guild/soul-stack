@@ -66,7 +66,7 @@ func (m *mockVault) start(t *testing.T) *httptest.Server {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": map[string]any{
-				"signed_key":   m.signedKey,
+				"signed_key":    m.signedKey,
 				"serial_number": "0001",
 			},
 		})
@@ -94,9 +94,9 @@ func realClientForMock(addr, token string) func(p params) (vaultClient, error) {
 
 func TestSign_HappyPath_KeeperEphemeral(t *testing.T) {
 	mock := &mockVault{
-		signMount: "ssh",
-		signRole:  "keeper-push",
-		signedKey: "ssh-ed25519-cert-v01@openssh.com AAAA-fake-cert host-1@keeper",
+		signMount:    "ssh",
+		signRole:     "keeper-push",
+		signedKey:    "ssh-ed25519-cert-v01@openssh.com AAAA-fake-cert host-1@keeper",
 		requireToken: true,
 		expectedReq: func(t *testing.T, body map[string]any) {
 			if body["public_key"] != "ssh-ed25519 AAAAtest" {

@@ -1,4 +1,4 @@
-# Post-apply ожидания service-noop::create.
+# Post-apply ожидания noop::create.
 #
 # state_changes scenario пустой → incarnation.state не проверяем (пустой объект).
 # Остаются apply_runs, audit, metrics — minimal-flow проверка scenario-runner.

@@ -65,7 +65,7 @@ func TestIntegration_KeeperChangedTask_FoldsIntoChangedTasks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SelectChangedTaskKeys: %v", err)
 	}
-	if _, ok := keys[auditpg.ChangedTaskKey{SID: render.KeeperTargetSID, TaskIdx: 0}]; !ok {
+	if _, ok := keys[auditpg.ChangedTaskKey{SID: render.KeeperTargetSID, PlanIndex: 0}]; !ok {
 		t.Fatalf("ключ (keeper, 0) отсутствует в SelectChangedTaskKeys — keeper changed-задача выпала: %v", keys)
 	}
 

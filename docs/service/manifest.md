@@ -156,7 +156,7 @@ modules:
   - { name: wb.redis-failover, ref: v1.2.0 }
 ```
 
-Рабочий пример с полной раскладкой папки — [`examples/service/service-redis-cluster/`](../../examples/service/service-redis-cluster/).
+Рабочий пример с полной раскладкой папки — [`examples/service/redis-cluster/`](../../examples/service/redis-cluster/).
 
 ## Сценарии
 

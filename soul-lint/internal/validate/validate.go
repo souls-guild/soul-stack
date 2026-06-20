@@ -84,7 +84,14 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 	case KindService:
 		_, _, diags, _ = config.LoadServiceManifestFromBytes(opts.Path, src, config.ValidateOptions{})
 	case KindScenario:
-		_, _, diags, _ = config.LoadScenarioManifestFromBytes(opts.Path, src, config.ValidateOptions{})
+		var scn *config.ScenarioManifest
+		scn, _, diags, _ = config.LoadScenarioManifestFromBytes(opts.Path, src, config.ValidateOptions{})
+		// Stage-валидация (ADR-056 §S5): офлайн Passage-стратификация той же
+		// функцией config.Stratify, что рантайм делает перед dispatch. Ловит
+		// register-цикл и serial+staged ДО apply (config-валидатор уже поднял
+		// unknown_register на парсе). Прогоняется даже при наличии диагностик парса
+		// (stageDiagnostics сам решает по nil scn, надёжен ли граф).
+		diags = append(diags, stageDiagnostics(opts.Path, scn)...)
 	case KindManifest:
 		_, diags = sharedplugin.LoadFromBytes(opts.Path, src)
 	default:

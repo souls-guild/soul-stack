@@ -105,7 +105,7 @@ Keeper-side core-модули регистрируются в keeper-side Regist
 
 ### Отношение к destiny `coven-assign`
 
-Существующая destiny `coven-assign` ([examples/destiny/destiny-coven-assign/](../../examples/destiny/destiny-coven-assign/)) остаётся как **тонкая обёртка** вокруг этого модуля: её `tasks/main.yml` сводится к одному шагу `module: core.soul.registered` с `mode: append` и `refresh_soulprint: false` (destiny вызывается не в scenario-контексте — refresh не имеет смысла). `destiny.yml` `coven-assign` (input-контракт `sid`+`coven`) — совместим, не меняется.
+Существующая destiny `coven-assign` ([examples/destiny/coven-assign/](../../examples/destiny/coven-assign/)) остаётся как **тонкая обёртка** вокруг этого модуля: её `tasks/main.yml` сводится к одному шагу `module: core.soul.registered` с `mode: append` и `refresh_soulprint: false` (destiny вызывается не в scenario-контексте — refresh не имеет смысла). `destiny.yml` `coven-assign` (input-контракт `sid`+`coven`) — совместим, не меняется.
 
 Когда писать вызов модуля напрямую, а когда `apply: { destiny: coven-assign }`:
 

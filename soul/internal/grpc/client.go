@@ -209,6 +209,10 @@ func (c *Client) dialOne(ctx context.Context, addr string, creds credentials.Tra
 		hello := &keeperv1.Hello{
 			SidEcho:     c.cfg.SID,
 			SoulVersion: c.cfg.SoulVersion,
+			// Анонс фичей протокола (ADR-056 §S5): keeper персистит набор рядом с
+			// presence и сверяет ДО dispatch-а staged-сценария. Без "passage" этот
+			// Soul под N>1 Passage отвергается fail-closed, а не зависает.
+			Capabilities: config.SoulCapabilities(),
 		}
 		if err := stream.Send(&keeperv1.FromSoul{Payload: &keeperv1.FromSoul_Hello{Hello: hello}}); err != nil {
 			hsDone <- fmt.Errorf("send Hello: %w", err)

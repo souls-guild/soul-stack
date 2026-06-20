@@ -1,0 +1,35 @@
+# Post-apply ожидания redis-cluster-live::create.
+#
+# apply_runs.status — реальный enum keeper/internal/applyrun (StatusSuccess).
+#
+# incarnation_state — deep-subset; значения = scenario.state_changes.sets из
+# scenario/create/main.yml, отрендеренные keeper-side из input ПОСЛЕ барьера
+# (run.go §8). На L3a НЕ передаём cluster_replicas/redis_config → дефолты sets:
+#   redis_version    ← input.redis_version (передаём непустым в тесте);
+#   cluster_replicas ← 2 (default sets-выражения has(input...) ? ... : 2);
+#   redis_users      ← [] (на create ACL ещё пуст);
+#   redis_config     ← {} (input.redis_config не задан);
+#   cluster_nodes    ← [] (пилот-ограничение sets: soulprint.hosts недоступен,
+#                          топология фиксируется как [], см. main.yml).
+#
+# audit_events — incarnation.created (POST /v1/incarnations авто-запускает create,
+# пишет именно его, НЕ scenario_started). apply_id в payload — runtime-значение,
+# проверяется отдельно в тесте.
+#
+# metrics — keeper_scenario_runs_total{result="ok"} (keeper/internal/scenario/
+# metrics.go), успешный прогон → >= 1.
+apply_runs:
+  status: success
+
+incarnation_state:
+  redis_version: "7:7.2.4-1~deb12u1"
+  cluster_replicas: 2
+  redis_users: []
+  redis_config: {}
+  cluster_nodes: []
+
+audit_events:
+  - type: incarnation.created
+
+metrics:
+  keeper_scenario_runs_total{result="ok"}: ">= 1"

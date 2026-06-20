@@ -1,0 +1,42 @@
+# L0-кейс: пустой список коллекторов (collectors: []).
+#
+# Доказывает, что destiny валидна без коллекторов: CEL-предикаты `'<c>' in
+# input.collectors` на каждом коллектор-шаге резолвятся в false БЕЗ падения
+# рендера (пустой массив — легальный аргумент `in`). Сам факт PASS этого кейса =
+# доказательство: harness падает, если CEL-рендер плана падает. На L0 when:
+# протягивается в RenderedTask как строка (Soul вычисляет на хосте), поэтому
+# коллектор-задачи остаются в плане с index — но их when будет ложным, ни одна
+# коллектор-ветка не активируется. Ассертим установочное ядро (fetch/install/
+# unit) — оно от collectors не зависит и всегда в плане.
+name: node-exporter renders with empty collectors list (no plan failure)
+
+fixtures:
+  default_destiny_source: "file://../../{name}"
+  input:
+    version: "1.9.0"
+    sha256: ""
+    collectors: []
+  soulprint:
+    os:
+      arch: amd64
+    network:
+      primary_ip: "10.0.0.5"
+
+assert:
+  rendered_tasks:
+    # Установочное ядро не зависит от collectors — присутствует при пустом списке.
+    - index: 0
+      module: core.url.fetched
+      params:
+        url: https://github.com/prometheus/node_exporter/releases/download/v1.9.0/node_exporter-1.9.0.linux-amd64.tar.gz
+    - index: 5
+      module: core.cmd.shell
+    - index: 6
+      module: core.file.rendered
+      params:
+        path: /etc/systemd/system/node_exporter.service
+    # Коллектор-задачи остаются в плане (when: — Soul-side), но их when ложен:
+    # ассертим лишь module-присутствие, чтобы зафиксировать, что пустой список не
+    # вырезал индексы и не сломал план. smartmon-pkg на index 9.
+    - index: 9
+      module: core.pkg.installed

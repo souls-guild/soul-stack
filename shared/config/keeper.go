@@ -217,6 +217,16 @@ type KeeperConfig struct {
 	// keeper не падает — fail-open). Workers по умолчанию [DefaultHeraldWorkers].
 	Herald *KeeperHerald `yaml:"herald,omitempty"`
 
+	// WebUIEnabled — тоггл встроенного UI на маршруте `/ui` (ADR-055). `*bool`,
+	// чтобы различить «не задано» от явного `false`: nil/опущено → default-ON
+	// (true) — бета хочет single-binary UI из коробки; явный `false` → opt-out
+	// (статика `/ui` НЕ монтируется, API `/v1` не затрагивается). Симметрия
+	// footgun-guard-у соседних подсистем (`tempo.enabled`/Toll default-ON), но
+	// БЕЗ зависимости от инфраструктуры: UI вшит в бинарь (go:embed), внешнего
+	// бэкенда не требует. Hot-reloadable (ADR-021) — re-mount роутера. Резолв —
+	// [KeeperConfig.WebUIEnabled].
+	WebUIEnabled *bool `yaml:"web_ui_enabled,omitempty"`
+
 	// CloudInit — параметры рендера cloud-init userdata для VM, создаваемых
 	// `core.cloud.provisioned` (ADR-017(h) amendment 2026-05-27, B-flat
 	// закреплён). При nil — userdata-генерация не доступна: сценарий с
@@ -232,6 +242,18 @@ type KeeperConfig struct {
 	// отдельным шагом scenario (типично `keeper.push` через SSH-провайдер).
 	// См. ADR-017(h) amendment и docs/keeper/cloud.md → «Cloud-init bootstrap (MVP)».
 	CloudInit *KeeperCloudInit `yaml:"cloud_init,omitempty"`
+}
+
+// WebUIMounted возвращает эффективный тоггл встроенного UI (`/ui`, ADR-055):
+// nil/опущено → true (default-ON, footgun-guard как Tempo/Toll); явный `false`
+// → false (opt-out). Чистый резолв указателя; UI вшит в бинарь — внешнего
+// бэкенда не требует (в отличие от Tempo/Toll, которым нужен Redis). Имя
+// отлично от поля WebUIEnabled (Go не допускает метод и поле с одним именем).
+func (c *KeeperConfig) WebUIMounted() bool {
+	if c == nil || c.WebUIEnabled == nil {
+		return true
+	}
+	return *c.WebUIEnabled
 }
 
 // Дефолты VoyageWorker-pool (ADR-043). Применяются в daemon при пустом полe

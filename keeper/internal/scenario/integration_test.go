@@ -28,6 +28,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
+	"github.com/souls-guild/soul-stack/keeper/internal/auditpg"
 	"github.com/souls-guild/soul-stack/keeper/internal/essence"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/migrate"
@@ -223,7 +224,7 @@ func (m *mockDispatcher) SendApply(ctx context.Context, sid string, req *keeperv
 	m.gotApplyID = req.GetApplyId()
 	m.gotTasks = len(req.GetTasks())
 	m.gotAttempt = req.GetAttempt()
-	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, m.result, m.summary); err != nil {
+	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, 0, m.result, m.summary); err != nil {
 		m.t.Errorf("mockDispatcher: UpdateStatus: %v", err)
 	}
 	return nil
@@ -252,7 +253,7 @@ func (d *waveDispatcher) SendApply(ctx context.Context, sid string, req *keeperv
 		s := "simulated failure"
 		summary = &s
 	}
-	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, status, summary); err != nil {
+	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, 0, status, summary); err != nil {
 		d.t.Errorf("waveDispatcher: UpdateStatus: %v", err)
 	}
 	return nil
@@ -271,9 +272,64 @@ func newRunner(t *testing.T, disp ApplyDispatcher, gitURL string) *Runner {
 	return newRunnerWithDestiny(t, disp, nil)
 }
 
+// newRunnerAcolyte собирает Runner с AcolyteEnabled=true и реальным Outbound
+// (disp симулирует Soul). Используется staged-тестом, доказывающим, что staged-
+// прогон идёт INLINE даже в work-queue-режиме (гейт run.go !staged, ADR-056 §S4):
+// dispatchPlanned (Acolyte-путь) для staged НЕ вызывается. KID/PollInterval как у
+// newAcolyteRunner. gitURL не используется (loader клонирует из ServiceRef.Git).
+func newRunnerAcolyte(t *testing.T, disp ApplyDispatcher, gitURL string) *Runner {
+	t.Helper()
+	engine, err := cel.New()
+	if err != nil {
+		t.Fatalf("cel.New: %v", err)
+	}
+	return NewRunner(Deps{
+		Loader:         artifact.NewServiceLoader(t.TempDir(), nil),
+		Topology:       topology.NewResolver(integrationPool, nil, nil),
+		Essence:        essence.NewResolver(nil),
+		Render:         render.NewPipeline(nil, engine, nil, nil),
+		Outbound:       disp,
+		DB:             integrationPool,
+		AcolyteEnabled: true,
+		KID:            "keeper-acolyte-staged-test",
+		// Staged-гейт (ADR-056 §S5): тестовые хосты passage-capable (см. newRunnerWithDestiny).
+		PassageCap:   stubPassageCap{},
+		PollInterval: 20 * time.Millisecond,
+		RunTimeout:   20 * time.Second,
+	})
+}
+
 // newRunnerWithDestiny собирает Runner с опциональным DestinySource (для
 // apply:destiny). destinyTemplate пуст → Destiny=nil (apply:destiny не поддержан).
 func newRunnerWithDestiny(t *testing.T, disp ApplyDispatcher, destinySrc *DestinySource) *Runner {
+	t.Helper()
+	engine, err := cel.New()
+	if err != nil {
+		t.Fatalf("cel.New: %v", err)
+	}
+	return NewRunner(Deps{
+		Loader:   artifact.NewServiceLoader(t.TempDir(), nil),
+		Topology: topology.NewResolver(integrationPool, nil, nil),
+		Essence:  essence.NewResolver(nil),
+		Render:   render.NewPipeline(nil, engine, nil, nil),
+		Outbound: disp,
+		Destiny:  destinySrc,
+		DB:       integrationPool,
+		// Staged-гейт (ADR-056 §S5): тестовые хосты «поддерживают passage» (lacking
+		// пуст) — иначе fail-closed reject отверг бы все staged-тесты. Forward-compat
+		// reject проверяется отдельным stub-ом в TestIntegration_StagedOldSoul_Rejected.
+		PassageCap:   stubPassageCap{},
+		PollInterval: 20 * time.Millisecond,
+		RunTimeout:   20 * time.Second,
+	})
+}
+
+// newRunnerWithAuditStaged — staged-вариант [newRunnerWithAudit] (реальные
+// auditpg.Writer/Reader как production daemon.go) + PassageCap=stubPassageCap{}
+// (оба хоста passage-aware, иначе S5-гейт отверг бы staged). Нужен cross-passage-
+// гейту (ADR-056 R3): он читает CHANGED/FAILED-факты предыдущих Passage из журнала
+// аудита через AuditReader.
+func newRunnerWithAuditStaged(t *testing.T, disp ApplyDispatcher) *Runner {
 	t.Helper()
 	engine, err := cel.New()
 	if err != nil {
@@ -285,8 +341,44 @@ func newRunnerWithDestiny(t *testing.T, disp ApplyDispatcher, destinySrc *Destin
 		Essence:      essence.NewResolver(nil),
 		Render:       render.NewPipeline(nil, engine, nil, nil),
 		Outbound:     disp,
-		Destiny:      destinySrc,
 		DB:           integrationPool,
+		Audit:        auditpg.NewWriter(integrationPool),
+		AuditReader:  auditpg.NewReader(integrationPool),
+		PassageCap:   stubPassageCap{},
+		PollInterval: 20 * time.Millisecond,
+		RunTimeout:   20 * time.Second,
+	})
+}
+
+// stubPassageCap — управляемая [PassageCapabilityChecker] для тестов. lacking —
+// список SID-ов, которые НЕ поддерживают passage (по умолчанию nil → все
+// поддерживают, как одноверсионный бета-флот). err — симуляция сбоя Redis.
+type stubPassageCap struct {
+	lacking []string
+	err     error
+}
+
+func (s stubPassageCap) SoulsLackingPassage(_ context.Context, _ []string) ([]string, error) {
+	return s.lacking, s.err
+}
+
+// newRunnerWithPassageCap — Runner с явным [PassageCapabilityChecker] (forward-
+// compat guard-тест ADR-056 §S5): cap=nil → fail-closed-ветка гейта; cap с
+// lacking → reject. Остальное как newRunnerWithDestiny (без Destiny).
+func newRunnerWithPassageCap(t *testing.T, disp ApplyDispatcher, cap PassageCapabilityChecker) *Runner {
+	t.Helper()
+	engine, err := cel.New()
+	if err != nil {
+		t.Fatalf("cel.New: %v", err)
+	}
+	return NewRunner(Deps{
+		Loader:       artifact.NewServiceLoader(t.TempDir(), nil),
+		Topology:     topology.NewResolver(integrationPool, nil, nil),
+		Essence:      essence.NewResolver(nil),
+		Render:       render.NewPipeline(nil, engine, nil, nil),
+		Outbound:     disp,
+		DB:           integrationPool,
+		PassageCap:   cap,
 		PollInterval: 20 * time.Millisecond,
 		RunTimeout:   20 * time.Second,
 	})
@@ -699,7 +791,7 @@ func (m *registerMockDispatcher) SendApply(ctx context.Context, sid string, req 
 			m.t.Errorf("registerMockDispatcher: UpsertTaskRegister: %v", err)
 		}
 	}
-	if err := applyrun.UpdateStatus(ctx, integrationPool, applyID, sid, applyrun.StatusSuccess, nil); err != nil {
+	if err := applyrun.UpdateStatus(ctx, integrationPool, applyID, sid, 0, applyrun.StatusSuccess, nil); err != nil {
 		m.t.Errorf("registerMockDispatcher: UpdateStatus: %v", err)
 	}
 	return nil
@@ -1001,7 +1093,7 @@ func (d *captureDispatcher) SendApply(ctx context.Context, sid string, req *keep
 	if tasks := req.GetTasks(); len(tasks) > 0 {
 		d.gotCommand = renderedExecCommand(tasks[0].GetParams())
 	}
-	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, applyrun.StatusSuccess, nil); err != nil {
+	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, 0, applyrun.StatusSuccess, nil); err != nil {
 		d.t.Errorf("captureDispatcher: UpdateStatus: %v", err)
 	}
 	return nil
@@ -1621,7 +1713,7 @@ func (d *cancelAfterFirstWaveDispatcher) SendApply(ctx context.Context, sid stri
 	// отмена, а не failed-хост (иначе тест дублировал бы fail-stop). Терминал
 	// проставляем после флага: barrier увидит cancel_requested на success-строке
 	// и прервёт rolling до старта следующей волны.
-	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, applyrun.StatusSuccess, nil); err != nil {
+	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, 0, applyrun.StatusSuccess, nil); err != nil {
 		d.t.Errorf("cancelAfterFirstWaveDispatcher: UpdateStatus: %v", err)
 	}
 	return nil

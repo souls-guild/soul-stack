@@ -1,0 +1,46 @@
+# Souls-фикстура для redis::add_replicas (НЕ исполняется на L3a — см. ниже).
+#
+# Два soul-stub-а: существующий primary (soul-a) + новая реплика (soul-b).
+# add_replicas — multi-step orchestration с РАНТАЙМ-probe primary на
+# существующих хостах (where: !(sid in replicas)), serial:1 rolling-install на
+# новых репликах и сверткой агрегатного register.master_addr (sid→payload) к
+# одному адресу в apply:input шага replicaof.
+#
+# ОГРАНИЧЕНИЕ L3a (почему тест Skip-ается, не зелёный):
+#   add_replicas резолвит register.master_addr (результат probe-задачи) в
+#   apply:input ДО dispatch-а, на единственном up-front keeper-side render-проходе
+#   (keeper/internal/render/pipeline.go: register в flow_context НЕ кладётся,
+#   его строит Soul из результатов предыдущих задач). soul-stub на обычный
+#   ApplyRequest register-данные (TaskEvent.register_data) НЕ эмитит — register
+#   остаётся пустым, и свёртка `register.master_addr.map(...).filter(v,v!='')[0]`
+#   рендерится по пустому списку. Это runtime-probe + cross-host register —
+#   территория L3b (реальный Soul исполняет probe и строит register), а не
+#   контракт-стаба L3a. Фикстура описывает желаемый L3b-результат.
+#
+# covens: [redis-repl] — членство в Coven incarnation (incarnation.name, ADR-008).
+- sid: soul-a.example.com
+  status: connected
+  covens: [redis-repl]
+  soulprint:
+    os:
+      family: debian
+      distro: debian
+      version: "12"
+      arch: amd64
+      pkg_mgr: apt
+      init_system: systemd
+    network: { primary_ip: 10.0.0.1 }
+    hostname: soul-a
+- sid: soul-b.example.com
+  status: connected
+  covens: [redis-repl]
+  soulprint:
+    os:
+      family: debian
+      distro: debian
+      version: "12"
+      arch: amd64
+      pkg_mgr: apt
+      init_system: systemd
+    network: { primary_ip: 10.0.0.2 }
+    hostname: soul-b

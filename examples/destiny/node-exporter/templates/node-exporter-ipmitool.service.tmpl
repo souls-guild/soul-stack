@@ -1,0 +1,47 @@
+{{/*
+  oneshot-сборщик IPMI-сенсоров для node_exporter. Контекст рендера:
+    .vars.textfile_dir — каталог awk-скрипта ipmitool И выходного ipmitool.prom.
+  Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010).
+
+  Pipeline: `ipmitool sensor` → awk-скрипт ipmitool (конвертит в prometheus-форму)
+  → ipmitool.prom. User=root: /usr/bin/ipmitool требует доступа к /dev/ipmi0
+  (char-ipmidev).
+
+  ProtectKernelModules=no (ТЗ): драйвер ipmi_si / ipmi_devintf может подгружаться
+  лениво при первом обращении к /dev/ipmi0 — запрет загрузки модулей сломал бы
+  сбор на хостах, где драйвер ещё не загружен. Остальной sandbox жёсткий.
+
+  ConditionPathExists=/dev/ipmi0 — без BMC-устройства коллектор не стартует (та же
+  Condition в .timer).
+*/}}
+[Unit]
+Description=Collect IPMI metrics for node_exporter
+ConditionPathExists=/dev/ipmi0
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/env bash -c 'set -euo pipefail; tmp="$(mktemp {{ .vars.textfile_dir }}/ipmitool.prom.XXXXXX)"; /usr/bin/ipmitool sensor | {{ .vars.textfile_dir }}/ipmitool > "$tmp"; mv "$tmp" "{{ .vars.textfile_dir }}/ipmitool.prom"'
+
+# systemd-hardening привилегированного oneshot (ТЗ §коллекторы).
+ReadWritePaths={{ .vars.textfile_dir }}
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=no
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX
+NoNewPrivileges=yes
+ProtectProc=invisible
+PrivateDevices=no
+DevicePolicy=closed
+DeviceAllow=char-ipmidev rw
+CapabilityBoundingSet=CAP_SYS_RAWIO CAP_DAC_OVERRIDE

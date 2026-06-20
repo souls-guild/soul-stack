@@ -8,7 +8,7 @@
   | Модуль | State-формы | Назначение |
   |---|---|---|
   | `core.pkg` | `installed` / `absent` / `latest` | Пакеты OS, абстракция через native pkg-mgr (apt/yum/dnf/pacman/apk), detection через Soulprint. |
-  | `core.file` | `present` / `absent` / `rendered` | Файл существует с literal-content (`present`) / отсутствует (`absent`) / отрендерен из `.tmpl` (`rendered`, см. [ADR-010](0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов)). |
+  | `core.file` | `present` / `absent` / `rendered` / `directory` | Файл существует с literal-content (`present`) / отсутствует (`absent`) / отрендерен из `.tmpl` (`rendered`, см. [ADR-010](0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов)) / каталог существует с owner/group/mode (`directory`, см. Amendment 2026-06-18 ниже). |
   | `core.service` | `running` / `stopped` / `restarted` / `enabled` | Сервис, абстракция через systemd/openrc/sysv. |
   | `core.user` | `present` / `absent` | Локальные пользователи OS. |
   | `core.group` | `present` / `absent` | Локальные группы. |
@@ -57,3 +57,25 @@
   - 17 Soul-side модулей — больше, чем минимум-минимум (можно ужать до 6, заменив остальное через `core.exec.run`), но плохой DX и невозможно проверить idempotency. Базовые 12 — необходимый минимум для production-ready first service; `core.url` добавлен сверху как безопасная замена `core.cmd.shell`-обхода для download, `core.line` — пост-факто по реальному запросу (урезанный безопасный MVP), `core.repo`/`core.firewall` — следующим слайсом по реальному запросу, `core.http` (read-probe) — отдельным слайсом по реальному запросу.
   - `core.line` **принят** (урезанный безопасный MVP, без backrefs, replace первого совпадения) — пилот паттерна in-place построчной правки. `core.repo`/`core.firewall` **приняты** (2026-05) одним слайсом по образцу пилота: оба переиспользуют `util.AtomicWritePreserving`/`util.DetectPkgMgr`/новый `util.DetectFirewall`, оба `present`/`absent`. `core.http` (read-probe, verb `probe`, `changed=false`) **принят** (2026-05) отдельным слайсом: переиспользует вынесенную в `util` HTTP-инфраструктуру (`util.ValidateURL`/`util.CheckRedirect`/`util.NewHTTPClient`/`util.HTTPDoer`) совместно с `core.url`; мутирующий HTTP отложен post-MVP. Ранний кандидат-имя `core.uri` отвергнут (uri/url-путаница) — выбран объект `http`.
   - `core.cloud.provisioned` и `core.vault.kv-read` — переоформление существующих неявных вещей; миграция примеров в `service.yml` — отдельная задача.
+- **Amendment (2026-06-18, новый state `directory` в `core.file`).** В `core.file`
+  добавлен state `directory` (`core.file.directory`) — декларативное создание
+  каталога вместо императивного `core.exec.run install -d`. Params: `path`
+  (required), `owner`, `group`, `mode` (как у `present`), `parents` (bool, default
+  `false` — семантика `mkdir -p`: создавать промежуточные каталоги). `recurse`
+  (рекурсивное выставление прав на содержимое) сознательно НЕ реализован в MVP —
+  управляется только сам каталог; добавляется позже без breaking change при
+  реальном запросе. Идемпотентность (паритет с `present`): каталог есть и
+  `owner`/`group`/`mode` совпадают → `changed=false`; каталога нет → создать →
+  `changed=true`; атрибуты дрейфят → починить (`chmod`/`chown`) → `changed=true`;
+  путь занят файлом (не каталогом) → ошибка без перезаписи. Поддержан Plan/Scry
+  ([ADR-031](0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile)):
+  `planDirectory` — pure-read drift (тот же `changed`, что выполнил бы Apply, без
+  мутации хоста). Реализация — [`soul/internal/coremod/file/directory.go`](../../soul/internal/coremod/file/directory.go)
+  (`applyDirectory`/`planDirectory` + ветки `case "directory"` в Apply/Plan/Validate),
+  переиспользует `util.ParseMode`/`util.ApplyOwnership`/`util.OwnershipDrift`.
+  Author-манифест — блок `states.directory` в
+  [`shared/coremanifest/file.yaml`](../../shared/coremanifest/file.yaml) (additive,
+  only-add; `soul-lint` валидирует автоматически). Additive и обратно совместимо:
+  существующие задачи `core.file` не затронуты. Документация —
+  [`docs/module/core/file/README.md`](../module/core/file/README.md).
+- **Amendment (2026-06-18, централизованный daemon-reload в `core.service`).** `core.service` (systemd-backend) перед мутирующими actions (`running` / `restarted` / `enabled`) проверяет systemd-флаг `NeedDaemonReload` и при рассинхроне unit-файла с загруженным определением делает `systemctl daemon-reload` ДО start/restart/enable. Закрывает баг: после правки unit-файла без reload `systemctl restart` тихо рестартует со СТАРЫМ определением (exit 0, лишь warning). Поведение управляется опциональным параметром `daemon_reload` (string enum `auto` | `always` | `never`, **default `auto`**, объявлен в `shared/coremanifest/service.yaml` на states `running`/`restarted`/`enabled`; на `stopped` НЕ объявляется — там reload не нужен): `auto` — reload только при `NeedDaemonReload=yes` (gated, идемпотентно); `always` — reload безусловно; `never` — явный opt-out. Механизм проверки — `systemctl show <unit> --property=NeedDaemonReload --value` (`yes`/`no`); на первом install нового unit флаг = `no` (systemd подхватит определение на start), reload не нужен. **reload НЕ помечает шаг `changed`** (changed остаётся функцией только start/restart/enable) — при реально выполненном reload в `output` добавляется диагностическое `reloaded: true`. `openrc`/`sysv` — **no-op** (у них нет daemon-reload). Реализация — хелпер `util.EnsureDaemonReloaded` рядом с `util.ServiceActive` (тот же mock-абельный Runner, без D-Bus/go-systemd); enum валидируется в `core.service.Validate` (неизвестное значение → ошибка валидации, не молча). Additive и обратно совместимо: существующие задачи без `daemon_reload` получают `auto`.

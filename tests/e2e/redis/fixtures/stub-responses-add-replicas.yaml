@@ -1,0 +1,40 @@
+# Скрипт ответов soul-stub-а для redis::add_replicas (НЕ исполняется на L3a).
+#
+# См. souls-add-replicas.yaml: add_replicas требует runtime-probe + cross-host
+# register (master_addr резолвится из probe-результата в apply:input на
+# single-pass keeper-render), что soul-stub L3a не моделирует (register-данные не
+# эмитятся на обычный ApplyRequest). Тест Skip-ается; этот скрипт документирует
+# task-name цепочки для будущего L3b-харнеса.
+#
+# task_name цепочки add_replicas:
+#   1. probe primary на существующих хостах (core.cmd.shell);
+#   2. install redis-single на новых репликах (apply:destiny redis-single —
+#      те же task_name, что в create);
+#   3. replicaof на actual-primary (apply:destiny redis-replication-config →
+#      core.cmd.shell "Point this replica at the configured master");
+#   4. health-gate "Wait until new replicas are syncing" (core.cmd.shell).
+scenarios:
+  add_replicas:
+    apply_responses:
+      - task_name: "Detect actual redis primary address on existing hosts"
+        run_result: { status: success }
+      - task_name: "Install redis-server package"
+        run_result: { status: success }
+      - task_name: "Ensure the redis socket directory exists"
+        run_result: { status: success }
+      - task_name: "Render redis.conf with dual-access (TCP + unix socket)"
+        run_result: { status: success }
+      - task_name: "Ensure the redis-server systemd drop-in directory exists"
+        run_result: { status: success }
+      - task_name: "Render redis-server systemd hardening drop-in"
+        run_result: { status: success }
+      - task_name: "Reload systemd because the hardening drop-in changed"
+        run_result: { status: success }
+      - task_name: "Ensure redis-server is running and enabled at boot"
+        run_result: { status: success }
+      - task_name: "Restart redis-server because config or hardening changed"
+        run_result: { status: success }
+      - task_name: "Point this replica at the configured master"
+        run_result: { status: success }
+      - task_name: "Wait until new replicas are syncing"
+        run_result: { status: success }

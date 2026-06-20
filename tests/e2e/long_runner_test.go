@@ -15,7 +15,7 @@ import (
 
 func TestE2EServiceLongRunner_Create(t *testing.T) {
 	stack := harness.NewStack(t, harness.Config{
-		ExamplePath: "examples/service/service-long-runner",
+		ExamplePath: "examples/service/long-runner",
 		Souls:       1,
 	})
 	defer stack.Cleanup()

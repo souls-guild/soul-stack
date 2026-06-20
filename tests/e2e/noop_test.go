@@ -15,7 +15,7 @@ import (
 
 func TestE2EServiceNoop_Create(t *testing.T) {
 	stack := harness.NewStack(t, harness.Config{
-		ExamplePath: "examples/service/service-noop",
+		ExamplePath: "examples/service/noop",
 		Souls:       1,
 	})
 	defer stack.Cleanup()

@@ -32,10 +32,10 @@ type ycAPI interface {
 // Yandex Cloud поддерживает три формы аутентификации (стр. документации
 // «authorization»):
 //   - IAMToken      — короткоживущий (≤12h) bearer-токен, выпускается через
-//                     yc iam create-token или ServiceAccountKey-flow;
+//     yc iam create-token или ServiceAccountKey-flow;
 //   - OAuthToken    — токен Яндекс-паспорта пользователя;
 //   - ServiceAccountKey — JSON-key файла сервис-аккаунта (id+private_key+
-//                     service_account_id+key_algorithm).
+//     service_account_id+key_algorithm).
 //
 // Поля XOR: ровно одно из iam_token / oauth_token / service_account_key должно
 // быть непусто. FolderID / Zone — provider-specific метаданные, лежат рядом с

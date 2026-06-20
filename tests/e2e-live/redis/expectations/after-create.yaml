@@ -1,0 +1,59 @@
+# Post-apply ожидания redis::create в L3b (real-soul-in-container под
+# examples/service/redis). Один Debian-12 systemd-PID-1 контейнер
+# (soul-live-a.example.com). create раскрывает три standalone-destiny через
+# apply:destiny: redis-single (apt-пакет + redis.conf + systemd) → redis-exporter
+# (GitHub-tarball + unit) → node-exporter (GitHub-tarball + unit). Это первый
+# L3b-сервис-композиция (smoke-nginx-live/redis-cluster-live — самодостаточны).
+#
+# apply_runs/incarnation_state/audit/metrics — те же контракт-проверки, что в
+# smoke-nginx-live. incarnation_state идёт из scenario.state_changes.sets
+# (keeper-side рендер из input/essence ПОСЛЕ барьера), НЕ из RunResult.
+#
+# host_state — реальная верификация Exec-ом внутри контейнера (L3b-4 +
+# endpoints-расширение): пакет redis-server installed + systemd active, unix-сокет
+# существует; redis_exporter/node_exporter active.
+#
+# ★ Piggyback-проверка node-exporter (центральная цель этого pilot-а):
+#   - бинарь /usr/local/bin/node_exporter существует (files);
+#   - systemd-unit node_exporter active (services);
+#   - порт :9100 РЕАЛЬНО слушает и отдаёт /metrics (endpoints, curl внутри
+#     контейнера → тело содержит "node_" — node_exporter-метрику). Это и есть
+#     доказательство «node-exporter поднялся», которого services/files по
+#     отдельности не дают.
+apply_runs:
+  status: success
+
+incarnation_state:
+  node_exporter_version: "1.8.2"
+  redis_exporter_version: "1.62.0"
+  redis_socket: /var/run/redis/redis-server.sock
+  redis_maxmemory: 256mb
+
+audit_events:
+  - type: incarnation.created
+
+metrics:
+  keeper_scenario_runs_total{result="ok"}: ">= 1"
+
+host_state:
+  - soul: soul-live-a.example.com
+    packages:
+      redis-server: installed
+    services:
+      redis-server: active
+      redis_exporter: active
+      node_exporter: active
+    files:
+      # unix-сокет redis (единая точка интеграции с redis_exporter).
+      - path: /var/run/redis/redis-server.sock
+      # бинарь node_exporter, разложенный из GitHub-tarball (piggyback).
+      - path: /usr/local/bin/node_exporter
+      # бинарь redis_exporter, разложенный из GitHub-tarball.
+      - path: /usr/local/bin/redis_exporter
+    endpoints:
+      # ★ node-exporter слушает :9100 и отдаёт /metrics с node_-метриками.
+      - url: http://127.0.0.1:9100/metrics
+        contains: "node_"
+      # redis_exporter слушает :9121 и отдаёт redis_-метрики.
+      - url: http://127.0.0.1:9121/metrics
+        contains: "redis_"

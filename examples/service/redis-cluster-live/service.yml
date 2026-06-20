@@ -2,7 +2,7 @@ name: redis-cluster-live
 state_schema_version: 1
 description: >-
   Реальный Redis Cluster (redis-cli --cluster, 16384 hash-слотов) поверх 9 нод.
-  В отличие от service-redis-cluster (master-replica replication через
+  В отличие от redis-cluster (master-replica replication через
   wb.redis-failover) — здесь честный cluster-mode: cluster-enabled yes,
   cluster-bus, шардинг слотов, --cluster-replicas. Все операции — core-модули
   (core.pkg/core.file/core.service/core.cmd), без custom-модулей.

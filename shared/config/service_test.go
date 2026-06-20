@@ -8,7 +8,7 @@ import (
 )
 
 func TestLoadServiceManifest_Golden(t *testing.T) {
-	path := filepath.FromSlash("../../examples/service/service-redis-cluster/service.yml")
+	path := filepath.FromSlash("../../examples/service/redis-cluster/service.yml")
 	cfg, doc, diags, err := LoadServiceManifest(path, ValidateOptions{})
 	if err != nil {
 		t.Fatalf("io error: %v", err)

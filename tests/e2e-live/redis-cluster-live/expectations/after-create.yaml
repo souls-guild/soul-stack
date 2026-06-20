@@ -14,7 +14,7 @@
 # host_state — три почти симметричные блока (один на soul-host): пакет redis
 # установлен, файл /etc/redis-cluster.conf содержит маркер 'cluster-enabled yes'.
 # init_system в L3b-Dockerfile — systemd, но redis в этом сценарии запускается
-# core.cmd.shell-ом через nohup (см. examples/service/service-redis-cluster-live
+# core.cmd.shell-ом через nohup (см. examples/service/redis-cluster-live
 # /scenario/create/main.yml шаг 4), а не systemd-юнитом — поэтому services-
 # проверки нет (это осознанное расхождение с smoke-nginx-live).
 apply_runs:

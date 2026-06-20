@@ -116,12 +116,12 @@ type vmProfile struct {
 }
 
 const (
-	defaultPlatformID  = "standard-v3"
-	defaultDiskSizeGB  = 20
-	defaultDiskType    = "network-ssd"
-	gibibyte           = int64(1024 * 1024 * 1024)
-	defaultCores       = int64(2)
-	defaultMemoryGB    = int64(2)
+	defaultPlatformID = "standard-v3"
+	defaultDiskSizeGB = 20
+	defaultDiskType   = "network-ssd"
+	gibibyte          = int64(1024 * 1024 * 1024)
+	defaultCores      = int64(2)
+	defaultMemoryGB   = int64(2)
 )
 
 func parseProfile(p map[string]any) vmProfile {
@@ -310,12 +310,12 @@ func buildCreateRequest(prof vmProfile, folderID, zone, userdata string, seq int
 	}
 
 	req := &computev1.CreateInstanceRequest{
-		FolderId:   folderID,
-		Name:       vmName(prof.runLabel, seq),
-		ZoneId:     zone,
-		PlatformId: prof.platformID,
-		Labels:     labels,
-		Metadata:   metadata,
+		FolderId:      folderID,
+		Name:          vmName(prof.runLabel, seq),
+		ZoneId:        zone,
+		PlatformId:    prof.platformID,
+		Labels:        labels,
+		Metadata:      metadata,
 		ResourcesSpec: resources,
 		BootDiskSpec: &computev1.AttachedDiskSpec{
 			AutoDelete: true,

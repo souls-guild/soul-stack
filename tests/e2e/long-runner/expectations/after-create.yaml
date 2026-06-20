@@ -1,4 +1,4 @@
-# Post-apply ожидания service-long-runner::create.
+# Post-apply ожидания long-runner::create.
 #
 # state_changes.sets из scenario/create/main.yml:
 #   last_run: "create"

@@ -101,7 +101,7 @@ SoulSeed модуль **не** выписывает
     coven: ["${ incarnation.name }"]
 ```
 
-(из [`examples/service/service-redis-cluster/scenario/add_replica/main.yml`](../../../../examples/service/service-redis-cluster/scenario/add_replica/main.yml))
+(из [`examples/service/redis-cluster/scenario/add_replica/main.yml`](../../../../examples/service/redis-cluster/scenario/add_replica/main.yml))
 
 ## См. также
 

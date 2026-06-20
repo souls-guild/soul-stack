@@ -170,11 +170,11 @@ Soulprint — наш аналог Salt grains: факты о хосте, кот�
 
 | Use-case | Поле | Файл |
 |---|---|---|
-| Essence pipeline — ступень по OS | `soulprint.self.os.family` | `examples/service/service-redis-cluster/essence/_stack.yaml:14` |
-| Essence pipeline — расчёт maxmemory | `soulprint.self.memory.total_mb` | `examples/service/service-redis-cluster/essence/_stack.yaml:28` |
-| Probe self-check в destiny | `soulprint.self.network.primary_ip != input.master_addr` | `examples/destiny/destiny-redis-replication-config/tasks/main.yml` |
-| Render config через `.tmpl` | `.self.network.primary_ip` | `examples/destiny/destiny-redis/templates/redis.conf.tmpl` |
-| Scenario `where:` по SID | `soulprint.self.sid == input.target_sid` | `examples/service/service-redis-cluster/scenario/add_replica/main.yml` |
+| Essence pipeline — ступень по OS | `soulprint.self.os.family` | `examples/service/redis-cluster/essence/_stack.yaml:14` |
+| Essence pipeline — расчёт maxmemory | `soulprint.self.memory.total_mb` | `examples/service/redis-cluster/essence/_stack.yaml:28` |
+| Probe self-check в destiny | `soulprint.self.network.primary_ip != input.master_addr` | `examples/destiny/redis-replication-config/tasks/main.yml` |
+| Render config через `.tmpl` | `.self.network.primary_ip` | `examples/destiny/redis/templates/redis.conf.tmpl` |
+| Scenario `where:` по SID | `soulprint.self.sid == input.target_sid` | `examples/service/redis-cluster/scenario/add_replica/main.yml` |
 | Scenario probe master | `soulprint.hosts.where("role == 'primary'")[0].network.primary_ip` | `scenario/create/main.yml`, `scenario/create/replication.yml` |
 | Smoke-test «ровно один primary» | `size(soulprint.hosts.where("role == 'primary'")) == 1` | `tests/smoke.yml:45` |
 | core.pkg.installed → native pkg-mgr | `soulprint.self.os.pkg_mgr` | внутри core-модуля |

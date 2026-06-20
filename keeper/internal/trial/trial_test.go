@@ -906,6 +906,88 @@ func TestCompareParams_NoLogMask(t *testing.T) {
 	}
 }
 
+// writeApplyDestinyTree строит герметичное дерево для L0-кейса с apply:destiny:
+//
+//	<root>/service.yml                       — declares destiny[] dep
+//	<root>/scenario/create/main.yml          — scenario с apply: { destiny: <dst> }
+//	<root>/scenario/create/tests/c1/case.yml — кейс с fixtures.soulprint + default_destiny_source
+//	<root>/destiny-<dst>/{destiny.yml,tasks/main.yml} — destiny, читающая soulprint.self
+//
+// Возвращает путь к каталогу кейса (для Run). serviceRootFor(case.yml) == <root>,
+// поэтому service.yml и destiny-каталог резолвятся относительно него.
+func writeApplyDestinyTree(t *testing.T, dst, mainYML, caseYML, destinyYML, destinyTasks string) string {
+	t.Helper()
+	root := t.TempDir()
+	caseDir := filepath.Join(root, "scenario", "create", "tests", "c1")
+	dstTasksDir := filepath.Join(root, "destiny-"+dst, "tasks")
+	for _, d := range []string{caseDir, dstTasksDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+	files := map[string]string{
+		filepath.Join(root, "service.yml"):                    "name: arch-svc\nstate_schema_version: 1\nstate_schema:\n  type: object\n  properties: {}\ndestiny:\n  - { name: " + dst + ", ref: v1.0.0 }\n",
+		filepath.Join(root, "scenario", "create", "main.yml"): mainYML,
+		filepath.Join(caseDir, caseFileName):                  caseYML,
+		filepath.Join(root, "destiny-"+dst, "destiny.yml"):    destinyYML,
+		filepath.Join(dstTasksDir, "main.yml"):                destinyTasks,
+	}
+	for path, content := range files {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	return caseDir
+}
+
+// TestRunCase_ApplyDestinySelfArch — L0-guard ослабления инварианта (ADR-009/010
+// amendment): destiny, рендерящаяся через scenario-обёртку apply:destiny, видит
+// инжектированный fixtures.soulprint.self.os.arch (синтетический arm64). Доказывает,
+// что self целевого хоста течёт в destiny-проход и в L0 (тот же renderApplyDestiny,
+// что в проде) — soulprint.self в destiny-CEL рендерится с fixtures.soulprint.
+func TestRunCase_ApplyDestinySelfArch(t *testing.T) {
+	caseDir := writeApplyDestinyTree(t, "arch-aware",
+		`name: create
+tasks:
+  - name: apply arch-aware destiny
+    apply:
+      destiny: arch-aware
+      input: {}
+`,
+		`name: apply destiny self.arch
+fixtures:
+  default_destiny_source: file://destiny-{name}
+  soulprint:
+    os:
+      family: debian
+      arch: arm64
+assert:
+  rendered_tasks:
+    - index: 0
+      module: core.exec.run
+      params:
+        cmd: "install --arch arm64"
+`,
+		"name: arch-aware\n",
+		`- name: fetch by arch
+  module: core.exec.run
+  params:
+    cmd: "install --arch ${ soulprint.self.os.arch }"
+`,
+	)
+
+	results, err := Run(context.Background(), caseDir)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("ожидали 1 результат, получили %d", len(results))
+	}
+	if !results[0].Pass {
+		t.Fatalf("ожидали PASS (soulprint.self.os.arch=arm64 в destiny-проходе L0), получили: %v", results[0].Failures)
+	}
+}
+
 // TestFixtureVault — fixture-vault резолвит vault-ref герметично и нормализует
 // logical/relative формы пути.
 func TestFixtureVault(t *testing.T) {

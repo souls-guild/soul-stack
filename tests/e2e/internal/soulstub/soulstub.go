@@ -25,6 +25,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
+	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 // ErrAlreadyOpen возвращается, если Open вызван второй раз без Close.
@@ -69,6 +70,16 @@ type Stub struct {
 	// SetApplyDefaultSuccess.
 	applyDefaultSuccess bool
 
+	// taskRegisterByName — scripted per-task register (staged-render, ADR-056):
+	// task_name → per-SID register-payload (sid → register_data). На ApplyRequest
+	// stub эмитит TaskEvent с RegisterData ДО агрегированного RunResult (как
+	// настоящий Soul на probe-задаче), echo-я passage из запроса. Keeper-side
+	// accumulateRegister складывает register per-(apply_id, sid, passage), откуда
+	// render следующего Passage резолвит where: register.*. Без scripted-register
+	// (дефолт) stub register не эмитит — обычный apply (L3a-контракт). Включается
+	// [SetTaskRegister].
+	taskRegisterByName map[string]map[string]map[string]any
+
 	// dryRunPlanSet — включён ли Plan-ответ на dry_run-ApplyRequest (Scry,
 	// ADR-031). Когда true, на ApplyRequest{dry_run:true} stub перед RunResult
 	// шлёт по одному TaskEvent на каждую задачу со status=CHANGED|OK и
@@ -111,17 +122,35 @@ type Message struct {
 // Keeper-server-cert-а (для верификации server-cert-а на handshake-е).
 func New(sid, keeperGRPCAddr string, cert, key, caBundle []byte) *Stub {
 	return &Stub{
-		SID:               sid,
-		KeeperGRPCAddr:    keeperGRPCAddr,
-		cert:              cert,
-		key:               key,
-		caBundle:          caBundle,
-		scripted:          make(map[string][]ScriptEntry),
-		errandStatus:      keeperv1.ErrandStatus_ERRAND_STATUS_SUCCESS,
-		applyStatusBySID:  make(map[string]bool),
-		errandStatusBySID: make(map[string]keeperv1.ErrandStatus),
-		done:              make(chan struct{}),
+		SID:                sid,
+		KeeperGRPCAddr:     keeperGRPCAddr,
+		cert:               cert,
+		key:                key,
+		caBundle:           caBundle,
+		scripted:           make(map[string][]ScriptEntry),
+		errandStatus:       keeperv1.ErrandStatus_ERRAND_STATUS_SUCCESS,
+		applyStatusBySID:   make(map[string]bool),
+		errandStatusBySID:  make(map[string]keeperv1.ErrandStatus),
+		taskRegisterByName: make(map[string]map[string]map[string]any),
+		done:               make(chan struct{}),
 	}
+}
+
+// SetTaskRegister задаёт scripted per-task register (staged-render, ADR-056):
+// задача taskName на хосте s.SID эмитит TaskEvent с RegisterData=data ДО
+// агрегированного RunResult (как настоящий Soul на probe-задаче, эхо-я passage
+// из ApplyRequest). Keeper копит register per-(apply_id, sid, passage), и render
+// следующего Passage резолвит `where: register.<name>.*` per-host этим фактом.
+// Для 2-passage e2e probe→where: один хост даёт role='master', другой 'slave'.
+func (s *Stub) SetTaskRegister(taskName string, data map[string]any) {
+	s.mu.Lock()
+	bySID := s.taskRegisterByName[taskName]
+	if bySID == nil {
+		bySID = make(map[string]map[string]any)
+		s.taskRegisterByName[taskName] = bySID
+	}
+	bySID[s.SID] = data
+	s.mu.Unlock()
 }
 
 // SetErrandStatus задаёт статус, которым stub ответит на ErrandRequest
@@ -230,6 +259,12 @@ func (s *Stub) Open(ctx context.Context) error {
 			Hello: &keeperv1.Hello{
 				SidEcho:     s.SID,
 				SoulVersion: "soulstub-l3a",
+				// Анонс фичей протокола (ADR-056 §S5) — тот же канон-список, что шлёт
+				// реальный Soul (soul/internal/grpc/client.go). Без "passage" keeper
+				// отвергает stub под staged-сценарием (N>1 Passage) fail-closed
+				// (soul_passage_unsupported, run.go), хотя respondToApply эхает passage
+				// в TaskEvent/RunResult (S3) — capability обязана совпасть с поведением.
+				Capabilities: config.SoulCapabilities(),
 			},
 		},
 	}); err != nil {
@@ -336,11 +371,20 @@ func (s *Stub) respondToApply(req *keeperv1.ApplyRequest) {
 					ApplyId: req.GetApplyId(),
 					Status:  status,
 					Attempt: req.GetAttempt(),
+					Passage: req.GetPassage(),
 				},
 			},
 		})
 		return
 	}
+
+	// Scripted per-task register (staged-render, ADR-056): для probe-задачи (с
+	// заданным SetTaskRegister) эмитим TaskEvent с RegisterData ДО RunResult,
+	// echo-я passage из запроса — как настоящий Soul на register-задаче. Keeper
+	// копит register per-(apply_id, sid, passage); render следующего Passage
+	// резолвит `where: register.<name>.*` этим фактом. Без scripted-register —
+	// no-op (обычный apply).
+	s.emitTaskRegisters(req)
 
 	// dry_run + включённый Plan-режим (Scry, ADR-031): эмитим per-task TaskEvent
 	// с register_data{changed}, как сделал бы Soul после mod.Plan. Это наполняет
@@ -386,9 +430,54 @@ func (s *Stub) respondToApply(req *keeperv1.ApplyRequest) {
 				Status:       worst,
 				StateChanges: stateStruct,
 				Attempt:      req.GetAttempt(),
+				// passage (ADR-056): echo из ApplyRequest — Keeper коррелирует
+				// терминал per-(apply_id, sid, passage) и барьерит срез Passage.
+				Passage: req.GetPassage(),
 			},
 		},
 	})
+}
+
+// emitTaskRegisters эмитит TaskEvent с RegisterData для задач ApplyRequest, у
+// которых задан scripted per-task register этого SID (SetTaskRegister). task_idx
+// — позиция задачи в req.Tasks[] (так же его проставляет настоящий Soul); passage
+// — echo ApplyRequest.passage. Keeper-side accumulateRegister складывает
+// register_data в apply_task_register по (apply_id, sid, task_idx) с этим passage.
+// no-op, если scripted-register не задан.
+func (s *Stub) emitTaskRegisters(req *keeperv1.ApplyRequest) {
+	s.mu.Lock()
+	stream := s.stream
+	byName := s.taskRegisterByName
+	sid := s.SID
+	s.mu.Unlock()
+	if stream == nil || len(byName) == 0 {
+		return
+	}
+	for idx, task := range req.GetTasks() {
+		bySID, ok := byName[task.GetName()]
+		if !ok {
+			continue
+		}
+		data, ok := bySID[sid]
+		if !ok {
+			continue
+		}
+		reg, err := structpb.NewStruct(data)
+		if err != nil {
+			continue
+		}
+		_ = stream.Send(&keeperv1.FromSoul{
+			Payload: &keeperv1.FromSoul_TaskEvent{
+				TaskEvent: &keeperv1.TaskEvent{
+					ApplyId:      req.GetApplyId(),
+					TaskIdx:      int32(idx),
+					Status:       keeperv1.TaskStatus_TASK_STATUS_OK,
+					RegisterData: reg,
+					Passage:      req.GetPassage(),
+				},
+			},
+		})
+	}
 }
 
 // emitPlanTaskEvents шлёт по одному TaskEvent на каждую задачу dry_run-
@@ -420,6 +509,7 @@ func (s *Stub) emitPlanTaskEvents(req *keeperv1.ApplyRequest, changed bool) {
 					TaskIdx:      int32(idx),
 					Status:       status,
 					RegisterData: reg,
+					Passage:      req.GetPassage(),
 				},
 			},
 		})

@@ -2,7 +2,7 @@
 
 Этот гайд — мост между [getting-started.md](../getting-started.md) (где ты поднял один Keeper, онбордил один Soul и применил готовый `hello-world`) и эксплуатацией. Здесь ты **сам соберёшь сервис с нуля**: напишешь его файлы, зарегистрируешь в Keeper-е, создашь инкарнацию и увидишь результат на хосте.
 
-Это не reference-спека — это пошаговый туториал. Где нужна полная грамматика (все поля задачи, вся CEL-семантика, весь формат миграций) — даю ссылку на нормативный документ. Сам гайд держится на **реальном работающем примере**: [`examples/service/service-hello-world/`](../../examples/service/service-hello-world/). Каждый кусок YAML ниже — это файл оттуда, не выдумка.
+Это не reference-спека — это пошаговый туториал. Где нужна полная грамматика (все поля задачи, вся CEL-семантика, весь формат миграций) — даю ссылку на нормативный документ. Сам гайд держится на **реальном работающем примере**: [`examples/service/hello-world/`](../../examples/service/hello-world/). Каждый кусок YAML ниже — это файл оттуда, не выдумка.
 
 ## 1. Цель и предпосылки
 
@@ -29,7 +29,7 @@ curl -s http://127.0.0.1:8080/v1/souls -H "Authorization: Bearer $TOKEN"
 Раскладка нашего `hello-world` (минимальная — обязательны только `service.yml` и хотя бы один сценарий):
 
 ```
-service-hello-world/
+hello-world/
 ├── service.yml                     # манифест: имя, версия state-схемы, структура incarnation.state
 ├── essence/
 │   └── _default.yaml               # baseline-параметры для всех инкарнаций (подложка)
@@ -54,7 +54,7 @@ service-hello-world/
 
 Манифест короткий по дизайну: только метаданные сервиса и **контракт на структуру runtime-state**. Никаких задач — они живут в сценариях.
 
-[`examples/service/service-hello-world/service.yml`](../../examples/service/service-hello-world/service.yml):
+[`examples/service/hello-world/service.yml`](../../examples/service/hello-world/service.yml):
 
 ```yaml
 name: hello-world
@@ -81,7 +81,7 @@ state_schema:
 
 Сценарий — это одна операция над сервисом (CRUD-style: `create` / `add_user` / `restart` / …). Каждая папка `scenario/<name>/` — отдельная операция; Keeper находит их auto-discover-ом, перечислять в манифесте не нужно. Точка входа — `main.yml` с тремя блоками: `input:` (контракт входов), `state_changes:` (что писать в state), `tasks:` (шаги).
 
-[`examples/service/service-hello-world/scenario/create/main.yml`](../../examples/service/service-hello-world/scenario/create/main.yml):
+[`examples/service/hello-world/scenario/create/main.yml`](../../examples/service/hello-world/scenario/create/main.yml):
 
 ```yaml
 name: create
@@ -121,7 +121,7 @@ tasks:
 
 ### Тест сценария (опционально, но полезно)
 
-Рядом с сценарием лежит L0-тест — он проверяет, что **рендер** даёт ожидаемые задачи, без реальных хостов. [`scenario/create/tests/greeting-hello/case.yml`](../../examples/service/service-hello-world/scenario/create/tests/greeting-hello/case.yml):
+Рядом с сценарием лежит L0-тест — он проверяет, что **рендер** даёт ожидаемые задачи, без реальных хостов. [`scenario/create/tests/greeting-hello/case.yml`](../../examples/service/hello-world/scenario/create/tests/greeting-hello/case.yml):
 
 ```yaml
 name: create writes greeting file with input.greeting
@@ -145,7 +145,7 @@ assert:
 
 Essence — иерархически собираемые параметры инкарнации (Salt-pillar аналог). `_default.yaml` — baseline для всех инкарнаций; поверх него можно класть overlay'и по Coven-меткам (`essence/coven/<label>.yaml`) и по OS-family (`essence/os/<family>.yaml`).
 
-[`examples/service/service-hello-world/essence/_default.yaml`](../../examples/service/service-hello-world/essence/_default.yaml):
+[`examples/service/hello-world/essence/_default.yaml`](../../examples/service/hello-world/essence/_default.yaml):
 
 ```yaml
 greeting: hello from soul stack
@@ -160,8 +160,8 @@ greeting: hello from soul stack
 Прежде чем регистрировать сервис, прогони статический линтер — он ловит структурные ошибки манифеста и сценария без запуска Keeper-а:
 
 ```sh
-./soul-lint/bin/soul-lint validate-service  examples/service/service-hello-world/service.yml
-./soul-lint/bin/soul-lint validate-scenario examples/service/service-hello-world/scenario/create/main.yml
+./soul-lint/bin/soul-lint validate-service  examples/service/hello-world/service.yml
+./soul-lint/bin/soul-lint validate-scenario examples/service/hello-world/scenario/create/main.yml
 ```
 
 Оба должны дать exit 0 и `OK: <path>`. Что именно проверяет линтер (regex имени, JSON Schema на корне, соответствие `state_schema_version` ↔ `migrations/`, запрещённые ключи) — [docs/service/manifest.md → `soul-lint validate-service`](../service/manifest.md#валидация-soul-lint-validate-service) и [docs/soul-lint.md](../soul-lint.md).
@@ -249,4 +249,4 @@ soulctl incarnation run hello-demo create --input '{"greeting":"hi again"}' --wa
 - **Зависимости.** Переиспользуемые пакеты задач — выноси в отдельные destiny и подключай через `destiny[]` в `service.yml` + `apply:` в сценарии. Custom-модули — через `modules[]`. Формат — [docs/service/manifest.md](../service/manifest.md).
 - **Факты о хосте.** Таргетинг и значения по фактам системы — `soulprint.self.*` (OS-family, pkg_mgr, IP, …). Схема — [docs/soul/soulprint.md](../soul/soulprint.md).
 - **Day-2 операции** (мониторинг, апгрейд, восстановление кластера) — раздел [Сделать](../README.md#сделать-оператор) в карте документации и [docs/operations/](../operations/README.md).
-- **Готовые образцы** сервисов посложнее — [`examples/service/`](../../examples/service/) (например, [`service-redis-cluster/`](../../examples/service/service-redis-cluster/) с rolling-update и failover).
+- **Готовые образцы** сервисов посложнее — [`examples/service/`](../../examples/service/) (например, [`redis-cluster/`](../../examples/service/redis-cluster/) с rolling-update и failover).

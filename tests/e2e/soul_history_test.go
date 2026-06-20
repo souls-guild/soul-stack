@@ -27,12 +27,12 @@ import (
 
 func TestSoulHistory_AggregatesScenarioAndErrand(t *testing.T) {
 	stack := harness.NewStack(t, harness.Config{
-		ExamplePath: "examples/service/service-noop",
+		ExamplePath: "examples/service/noop",
 		Souls:       1,
 	})
 	defer stack.Cleanup()
 
-	stack.RegisterService(t, "noop", "examples/service/service-noop")
+	stack.RegisterService(t, "noop", "examples/service/noop")
 
 	stub := stack.ConnectSoulStub(t, 0)
 	stub.SetApplyDefaultSuccess(true)

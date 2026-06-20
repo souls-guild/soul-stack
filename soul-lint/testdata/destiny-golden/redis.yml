@@ -1,7 +1,7 @@
 name: redis
 description: Install and configure Redis server on a single host
 
-# Копия examples/destiny/destiny-redis/destiny.yml для regression-теста
+# Копия examples/destiny/redis/destiny.yml для regression-теста
 # soul-lint validate-destiny: должна совпадать с источником (любое
 # содержательное расхождение — баг этого файла, не источника).
 

@@ -34,7 +34,7 @@ import (
 //
 // Исполняется ДО host-dispatch-а (run.go): keeper-шаги в реальных сценариях идут
 // первыми (provision/coven-bind → затем apply на хостах, см.
-// service-redis-cluster/create). Cross-task chaining keeper-register → host-render
+// redis-cluster/create). Cross-task chaining keeper-register → host-render
 // в пилоте недоступен (in.Register пуст — future), поэтому порядок «keeper, потом
 // hosts» функционально достаточен.
 //
@@ -78,11 +78,16 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, log *slo
 
 		if failed {
 			summary := composeKeeperFailure(rt, msg)
-			if rerr := applyrun.RecordTaskFailure(ctx, r.deps.DB, spec.ApplyID, render.KeeperTargetSID, rt.Index, summary); rerr != nil {
+			// keeper-target — single-passage (passage 0): keeper-side задачи
+			// исполняются ДО host-fan-out-а одной строкой apply_runs (ADR-056 не
+			// дробит keeper-target по Passage). rt.Index — глобальный сквозной
+			// индекс по плану; для keeper-target локальный==глобальный (нет
+			// per-host where:), поэтому task_idx и plan_index совпадают (=rt.Index).
+			if rerr := applyrun.RecordTaskFailure(ctx, r.deps.DB, spec.ApplyID, render.KeeperTargetSID, 0, rt.Index, rt.Index, summary); rerr != nil {
 				log.Warn("scenario: запись причины падения keeper-задачи провалена",
 					slog.Int("task_idx", rt.Index), slog.Any("error", rerr))
 			}
-			if uerr := applyrun.UpdateStatus(ctx, r.deps.DB, spec.ApplyID, render.KeeperTargetSID, applyrun.StatusFailed, &summary); uerr != nil {
+			if uerr := applyrun.UpdateStatus(ctx, r.deps.DB, spec.ApplyID, render.KeeperTargetSID, 0, applyrun.StatusFailed, &summary); uerr != nil {
 				log.Warn("scenario: перевод keeper apply_run в failed провален",
 					slog.Any("error", uerr))
 			}
@@ -95,7 +100,7 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, log *slo
 		r.accumulateKeeperRegister(ctx, spec.ApplyID, rt, changed, failed, output, log)
 	}
 
-	if err := applyrun.UpdateStatus(ctx, r.deps.DB, spec.ApplyID, render.KeeperTargetSID, applyrun.StatusSuccess, nil); err != nil {
+	if err := applyrun.UpdateStatus(ctx, r.deps.DB, spec.ApplyID, render.KeeperTargetSID, 0, applyrun.StatusSuccess, nil); err != nil {
 		return fmt.Errorf("scenario: перевод keeper apply_run в success: %w", err)
 	}
 	return nil
@@ -127,8 +132,12 @@ func (r *Runner) emitKeeperTaskExecuted(ctx context.Context, applyID string, rt 
 		SID:     render.KeeperTargetSID,
 		ApplyID: applyID,
 		TaskIdx: rt.Index,
-		Status:  keeperTaskStatus(changed, failed).String(),
-		NoLog:   rt.NoLog,
+		// keeper-side задачи (`on: keeper`) исполняются до host-fan-out (один
+		// KeeperTargetSID, passage=0) — локальная позиция всегда совпадает с
+		// глобальным RenderedTask.Index. plan_index == task_idx == rt.Index.
+		PlanIndex: rt.Index,
+		Status:    keeperTaskStatus(changed, failed).String(),
+		NoLog:     rt.NoLog,
 	}
 	if failed {
 		in.Error = &audit.TaskExecutedError{
@@ -229,8 +238,13 @@ func (r *Runner) accumulateKeeperRegister(ctx context.Context, applyID string, r
 		data[k] = v
 	}
 	if err := applyrun.UpsertTaskRegister(ctx, r.deps.DB, &applyrun.TaskRegister{
-		ApplyID:      applyID,
-		SID:          render.KeeperTargetSID,
+		ApplyID: applyID,
+		SID:     render.KeeperTargetSID,
+		// keeper-side задача исполняется локально с глобальным rt.Index — он же и
+		// ключ корреляции (PlanIndex), и информационный TaskIdx: на keeper-стороне
+		// нет per-Passage среза ApplyRequest, поэтому локальный==глобальный индекс
+		// (ADR-056 §S1 fix Variant B). buildRegisterByHost резолвит имя по PlanIndex.
+		PlanIndex:    rt.Index,
 		TaskIdx:      rt.Index,
 		RegisterData: data,
 	}); err != nil {

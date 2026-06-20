@@ -11,7 +11,7 @@ State_schema-миграция преобразует `incarnation.state` (jsonb 
 `<service-repo>/migrations/<NNN>_to_<MMM>.yml` — один файл = один шаг миграции. Цепочка `001 → 002 → 003 → ...` прогоняется keeper-ом последовательно при upgrade.
 
 ```
-service-redis-cluster/
+redis-cluster/
 ├── service.yml                            # state_schema_version: 3
 ├── migrations/
 │   ├── 001_to_002.yml                     # описанный ниже формат
@@ -169,4 +169,4 @@ state_after:
 - [`docs/architecture.md` → §«Versioning и миграции state_schema»](architecture.md#versioning-и-миграции-state_schema) — высокоуровневое описание (`state_schema_version`, upgrade-механизм, atomicity).
 - [`docs/architecture.md` → §«`state_history`»](architecture.md#state_history--журнал-изменений-state) — журнал, через который доступно восстановление при инциденте.
 - [`docs/templating.md`](templating.md) — CEL общая спека.
-- [`examples/service/service-redis-cluster/migrations/`](../examples/service/service-redis-cluster/migrations/) — пример.
+- [`examples/service/redis-cluster/migrations/`](../examples/service/redis-cluster/migrations/) — пример.

@@ -668,6 +668,43 @@ func (s *Stack) WaitApplySuccess(t *testing.T, applyID string, timeoutSec int) {
 	t.Fatalf("WaitApplySuccess %s: success не достигнут за %ds", applyID, timeoutSec)
 }
 
+// WaitIncarnationReady блокируется до перехода incarnation.status в `ready`.
+//
+// Зачем отдельно от WaitApplySuccess: apply_runs.status=success (per-host барьер
+// задач) выставляется РАНЬШЕ, чем коммит state_changes в incarnation.state —
+// commitSuccess (run.go §8) пишет state+status='ready' одной PG-транзакцией ПОСЛЕ
+// барьера всех хостов. На smoke-nginx (2 задачи) окно микроскопическое и
+// AssertIncarnationState сразу после WaitApplySuccess проходит; на сервисе с
+// десятками задач (redis::create — 3 destiny) окно шире, и чтение state ловит
+// пустой `{}`. Ждём именно status='ready' — единственная точка, гарантирующая,
+// что state_changes уже в БД. Параллель с L3b-harness (tests/e2e-live).
+//
+// Терминальный ≠ ready (error_locked / migration_failed / destroyed) —
+// немедленный t.Fatal с текущим статусом.
+func (s *Stack) WaitIncarnationReady(t *testing.T, incarnationName string, timeoutSec int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
+	var last string
+	for time.Now().Before(deadline) {
+		var status string
+		err := s.db.QueryRow(context.Background(),
+			"SELECT status FROM incarnation WHERE name = $1", incarnationName).Scan(&status)
+		if err != nil {
+			t.Fatalf("WaitIncarnationReady %s: query: %v", incarnationName, err)
+		}
+		last = status
+		switch status {
+		case "ready":
+			return
+		case "error_locked", "migration_failed", "destroy_failed", "destroyed":
+			t.Fatalf("WaitIncarnationReady %s: достигнут терминальный статус %q вместо ready", incarnationName, status)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	t.Fatalf("WaitIncarnationReady %s: status=ready не достигнут за %ds (последний статус=%q)",
+		incarnationName, timeoutSec, last)
+}
+
 // stripServiceRef отрезает `@<ref>` (если есть). Operator API создаёт
 // incarnation по bare service-name; ref разрешается через service registry
 // (ADR-029). ТЗ harness-у даёт `smoke-nginx@main` — для совместимости с

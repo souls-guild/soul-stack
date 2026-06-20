@@ -3,26 +3,32 @@
 # Render-only, герметично. После унификации дрейфа демонстрирует КОМПОЗИЦИЮ трёх
 # standalone-destiny через apply:destiny (изолированный render каждой, ADR-009):
 # план — конкатенация задач redis-single (0..6) + redis-exporter (7..12) +
-# node-exporter (13..18) со сквозными индексами. Изоляция видна по тому, что params
+# node-exporter (13..) со сквозными индексами. Изоляция видна по тому, что params
 # каждой destiny собраны из её apply.input, а не из scenario-scope.
 #
 # redis-single — 7 задач (stateful-hardening): pkg/socket-dir/conf + systemd-hardening
-# drop-in + daemon-reload + running/restarted. Экспортеры — по 6 задач каждый
+# drop-in + daemon-reload + running/restarted. redis-exporter — 6 задач
 # (fetch/extract/install/unit/running/restarted), без ручного core.user
 # (DynamicUser=yes в unit-е).
 #
+# node-exporter — destiny (бинарь node_exporter, version-aware install,
+# textfile-коллекторы железа), каталог examples/destiny/node-exporter/. collectors=[]
+# (input) → ставится только ядро. Шаги коллекторов (when:) при collectors=[] всё
+# равно в плане (L0-render не вычисляет when — предикаты Soul-side), поэтому
+# node-exporter-блок длиннее 10 задач; ассертим только ядро 13..22.
+#
 # Пароль Redis приходит из input.redis_password (required, не Vault — отличие от
-# service-redis, где пароль читается keeper-side через vault()): в обе destiny
+# redis, где пароль читается keeper-side через vault()): в обе destiny
 # (redis-single redis.conf + redis-exporter Environment) уходит одно значение.
 #
 # L0 не качает tarball/не ставит пакет — только CEL-render YAML-выражений. Реальная
 # установка требует Linux+systemd (см. README).
 name: create composes redis-single + redis-exporter + node-exporter
 
-# L0-источник destiny (герметичный file://): каталоги destiny-<name> лежат в
-# examples/destiny/ относительно service-root (examples/service/service-redis-monitored/).
+# L0-источник destiny (герметичный file://): каталоги destiny лежат в
+# examples/destiny/ относительно service-root (examples/service/redis-monitored/).
 fixtures:
-  default_destiny_source: "file://../../destiny/destiny-{name}"
+  default_destiny_source: "file://../../destiny/{name}"
   # L0-render берёт input как есть и НЕ применяет default-ы scenario-контракта
   # (defaults подставляет Keeper при инвокации, до render-фазы). Поэтому в fixtures
   # дублируем дефолты scenario/create/main.yml + обязательный redis_password (без
@@ -30,17 +36,17 @@ fixtures:
   # version рендерится в "" → core.pkg без =version-пина. sha256 экспортёров
   # ОБЯЗАТЕЛЕН (required:true, без placeholder-дефолта) — валидный тестовый 64-hex.
   input:
-    redis_password:         "change-me-please-32"
-    redis_socket:           /var/run/redis/redis-server.sock
-    redis_maxmemory:        256mb
-    node_exporter_version:  "1.8.2"
-    node_exporter_sha256:   "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-    redis_exporter_version: "1.62.0"
-    redis_exporter_sha256:  "sha256:2222222222222222222222222222222222222222222222222222222222222222"
-    arch:                   amd64
-    bin_dir:                /usr/local/bin
-    node_exporter_listen:   ":9100"
-    redis_exporter_listen:  ":9121"
+    redis_password:           "change-me-please-32"
+    redis_socket:             /var/run/redis/redis-server.sock
+    redis_maxmemory:          256mb
+    node_exporter_version:    "1.8.2"
+    node_exporter_sha256:     "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    node_exporter_collectors: []
+    redis_exporter_version:   "1.62.0"
+    redis_exporter_sha256:    "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    bin_dir:                  /usr/local/bin
+    node_exporter_listen:     ":9100"
+    redis_exporter_listen:    ":9121"
   # soulprint синтетического L0-хоста: экспортеры берут arch из soulprint.self.os.arch
   # (а не из статичного input.arch). Без этого факта CEL-render шага упал бы на
   # no-such-key.
@@ -86,6 +92,7 @@ assert:
           self:
             sid: trial-host
             covens: []
+            choirs: []
             role: ""
             # os проецируется в self из fixtures.soulprint (нужен экспортерам для
             # arch); виден во всех render_context.self прогона.
@@ -95,7 +102,7 @@ assert:
           essence: {}
 
     # index 3 — systemd drop-in hardening, index 4 — daemon-reload (stateful-hardening
-    # redis-single; детальная сверка — в destiny-redis-single L0).
+    # redis-single; детальная сверка — в redis-single L0).
     - index: 5
       module: core.service.running
       params:
@@ -135,23 +142,72 @@ assert:
           self:
             sid: trial-host
             covens: []
+            choirs: []
             role: ""
             os:
               arch: amd64
           role: ""
           essence: {}
 
-    # ── node-exporter (индексы 13..18) ──────────────────────────────────────
-    # node_exporter tarball: url из version+arch (arch из soulprint), checksum-пин.
+    # ── node-exporter (индексы 13..) ────────────────────────────────────────
+    # destiny node-exporter (каталог examples/destiny/node-exporter/): бинарь
+    # node_exporter, version-aware install, стабильный сервис-аккаунт node_exporter,
+    # hardened-unit. collectors=[] (input) → ставится только ядро.
+    #
+    # ВАЖНО про индексы: L0-render НЕ вычисляет when: (предикаты — Soul-side,
+    # исполняются при apply). Поэтому шаги коллекторов (when: '<c>' in input.collectors)
+    # при collectors=[] всё равно присутствуют в плане — отбракует их хост. Ассертим
+    # только ядро (idx 13..21). Раскладка destiny: install.yml 13 fetch / 14 extract;
+    # account.yml 15 group / 16 user / 17 directory; service.yml 18 install-бинаря /
+    # 19 unit / 20 running / 21 restarted.
+
+    # fetch tarball: URL собран CEL-ом из base_url + version + arch; arch — из
+    # soulprint.self.os.arch (destiny берёт напрямую). v-префикс тега GitHub release.
     - index: 13
       module: core.url.fetched
       params:
-        url: https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-amd64.tar.gz
+        url: "https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-amd64.tar.gz"
         path: /tmp/node_exporter-1.8.2.tar.gz
         checksum: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
         mode: "0644"
 
+    # Стабильный сервис-аккаунт node_exporter (НЕ DynamicUser — textfile-каталог
+    # переживает рестарты): группа ДО пользователя.
+    - index: 15
+      module: core.group.present
+      params:
+        name: node_exporter
+        system: true
+
     - index: 16
+      module: core.user.present
+      params:
+        name: node_exporter
+        system: true
+        group: node_exporter
+        shell: /usr/sbin/nologin
+        home: /
+
+    # textfile-каталог через декларативное core.file.directory.
+    - index: 17
+      module: core.file.directory
+      params:
+        path: /var/lib/node_exporter
+        owner: node_exporter
+        group: node_exporter
+        mode: "0755"
+
+    # version-aware install (service.yml): бинарь node_exporter; unless-guard
+    # пропускает install, если уже стоит нужная версия (grep -qF 'version 1.8.2 ').
+    - index: 18
+      module: core.cmd.shell
+      params:
+        cmd: "install -m 0755 '/tmp/node_exporter-1.8.2/node_exporter-1.8.2.linux-amd64/node_exporter' '/usr/local/bin/node_exporter'"
+        unless: "test -x /usr/local/bin/node_exporter && /usr/local/bin/node_exporter --version 2>&1 | grep -qF 'version 1.8.2 '"
+
+    # Unit-path — /etc/systemd/system/node_exporter.service, listen :9100.
+    # literal-содержимое .tmpl доставлено Keeper-ом (A1).
+    - index: 19
       module: core.file.rendered
       params:
         path: /etc/systemd/system/node_exporter.service
@@ -162,16 +218,31 @@ assert:
         render_context:
           vars:
             bin_dir: /usr/local/bin
+            user: node_exporter
             listen: ":9100"
-            extra_args: []
+            textfile_dir: /var/lib/node_exporter
           self:
             sid: trial-host
             covens: []
+            choirs: []
             role: ""
             os:
               arch: amd64
           role: ""
           essence: {}
+
+    # running + restart — по имени юнита node_exporter (ловит регресс имени).
+    # daemon-reload-шага НЕТ: core.service сам reload-ит при смене unit (auto).
+    - index: 20
+      module: core.service.running
+      params:
+        name: node_exporter
+        enabled: true
+
+    - index: 21
+      module: core.service.restarted
+      params:
+        name: node_exporter
 
   # Регресс на класс багов «state_changes падает на render». redis_version НЕ
   # передан (latest-путь): незащищённый `${ input.redis_version }` дал бы CEL

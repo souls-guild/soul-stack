@@ -146,7 +146,7 @@ func finalizeHostsAsCheckDriftAcolyte(t *testing.T, applyID string, sids []strin
 				t.Fatalf("UpsertTaskRegister(%s,%d): %v", sid, idx, err)
 			}
 		}
-		if err := applyrun.UpdateStatus(ctx, integrationPool, applyID, sid, applyrun.StatusSuccess, nil); err != nil {
+		if err := applyrun.UpdateStatus(ctx, integrationPool, applyID, sid, 0, applyrun.StatusSuccess, nil); err != nil {
 			t.Fatalf("UpdateStatus(%s,success): %v", sid, err)
 		}
 	}
@@ -161,10 +161,11 @@ func finalizeHostsAsUnsupported(t *testing.T, applyID, sid string, taskIdx int) 
 	// failure-таск тоже несёт apply_task_register со skipped/failed-фактами;
 	// но для unsupported-классификации hand-classifier-у достаточно
 	// error_summary. Эмулируем минимум: пишем failure через RecordTaskFailure.
-	if err := applyrun.RecordTaskFailure(context.Background(), integrationPool, applyID, sid, taskIdx, summary); err != nil {
+	// N=1 unsupported-сценарий: локальный task_idx == глобальный plan_index.
+	if err := applyrun.RecordTaskFailure(context.Background(), integrationPool, applyID, sid, 0, taskIdx, taskIdx, summary); err != nil {
 		t.Fatalf("RecordTaskFailure: %v", err)
 	}
-	if err := applyrun.UpdateStatus(context.Background(), integrationPool, applyID, sid, applyrun.StatusFailed, &summary); err != nil {
+	if err := applyrun.UpdateStatus(context.Background(), integrationPool, applyID, sid, 0, applyrun.StatusFailed, &summary); err != nil {
 		t.Fatalf("UpdateStatus(failed): %v", err)
 	}
 }

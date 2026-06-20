@@ -1,0 +1,34 @@
+# Souls-фикстура для L3a redis-monitored::create (e2e под
+# examples/service/redis-monitored).
+#
+# Один soul-stub под SID `soul-a.example.com`, status=connected — happy-path
+# apply_runs lifecycle. covens: [redis-monitored] — членство в Coven incarnation
+# (incarnation.name = redis-monitored-метка, ADR-008); roster прогона резолвится
+# по нему.
+#
+# soulprint ОБЯЗАТЕЛЕН: render redis-monitored читает факты хоста KEEPER-SIDE —
+# redis-exporter берёт arch из soulprint.self.os.arch, node-exporter подставляет
+# soulprint.self.os.arch в URL release-tarball-а (ADR-018). os.arch=amd64 →
+# tarball linux-amd64. pkg_mgr/init_system нужны core.pkg/core.service
+# (docs/soul/soulprint.md §3).
+#
+# Отличие от tests/e2e/redis: redis-monitored НЕ читает пароль Redis из Vault —
+# пароль приходит из input.redis_password (required, литерал/scoped vault-ref).
+# Поэтому Vault KV для этого fixture-а не сеется.
+#
+# Этот fixture-формат отражает структуру SoulprintFacts (resolver scanHost →
+# map[string]any); harness грузит os-блок через Stack.SeedSoulprint (cert.go),
+# coven — через Stack.AddSoulToCoven (YAML-loader fixtures пока не реализован,
+# значения дублируются inline в redis_monitored_test.go — pilot-паттерн).
+- sid: soul-a.example.com
+  status: connected
+  covens: [redis-monitored]
+  soulprint:
+    os:
+      family: debian
+      distro: debian
+      version: "12"
+      arch: amd64
+      pkg_mgr: apt
+      init_system: systemd
+    hostname: soul-a

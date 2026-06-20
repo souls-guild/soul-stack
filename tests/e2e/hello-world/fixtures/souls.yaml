@@ -1,4 +1,4 @@
-# Souls-фикстура для L3a service-hello-world (расширение pilot-pattern smoke-nginx).
+# Souls-фикстура для L3a hello-world (расширение pilot-pattern smoke-nginx).
 #
 # Один soul-stub представляет себя Keeper-у под SID `soul-a.example.com`.
 # scenario/create использует core.file.present — требует только базовый

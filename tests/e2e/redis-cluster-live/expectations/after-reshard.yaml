@@ -1,0 +1,15 @@
+# Post-apply ожидания redis-cluster-live::reshard (после create).
+# Сценарий НЕ объявляет state_changes (reshard двигает слоты на хостах, не state) —
+# контракт = lifecycle (apply_runs success + audit + metric). incarnation.state на
+# create-baseline.
+#
+# `where: soulprint.self.network.primary_ip == input.seed_ip` (seed=10.0.0.10):
+# единственная задача приезжает на host, row=success.
+apply_runs:
+  status: success
+
+audit_events:
+  - type: incarnation.scenario_started
+
+metrics:
+  keeper_scenario_runs_total{result="ok"}: ">= 2"

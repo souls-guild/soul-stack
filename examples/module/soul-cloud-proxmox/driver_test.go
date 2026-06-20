@@ -66,12 +66,12 @@ type fakePVE struct {
 	clusterErr   error
 	clusterCalls int
 
-	agentSeq    []string // primaryIP по вызовам
-	agentErr    error
-	agentIdx    int
-	agentFn     func(call int, node string, vmid int) (string, error)
-	agentN      int
-	agentCalls  int
+	agentSeq   []string // primaryIP по вызовам
+	agentErr   error
+	agentIdx   int
+	agentFn    func(call int, node string, vmid int) (string, error)
+	agentN     int
+	agentCalls int
 }
 
 func (f *fakePVE) CloneVM(_ context.Context, p CloneParams) (string, error) {
@@ -366,9 +366,9 @@ func TestCreate_WaitsForRunning(t *testing.T) {
 	withFastBackoff(t, 10)
 	f := &fakePVE{
 		statusSeq: []VMStatus{
-			lockedStatus("clone"),                  // раунд 1: locked
-			{Status: "stopped"},                    // раунд 2: не залочена, но ещё не стартанула
-			runningStatus("soul-10000"),            // раунд 3+: running
+			lockedStatus("clone"),       // раунд 1: locked
+			{Status: "stopped"},         // раунд 2: не залочена, но ещё не стартанула
+			runningStatus("soul-10000"), // раунд 3+: running
 		},
 		// agent: первый probe agent ещё не отвечает (по тексту 500 — Transient
 		// classify через pveHTTPError); потом IP.
@@ -898,4 +898,3 @@ func TestHasTag(t *testing.T) {
 		}
 	}
 }
-

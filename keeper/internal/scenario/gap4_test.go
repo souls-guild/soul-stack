@@ -305,7 +305,7 @@ func (d *blockingDispatcher) SendApply(ctx context.Context, sid string, req *kee
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, applyrun.StatusSuccess, nil); err != nil {
+	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, 0, applyrun.StatusSuccess, nil); err != nil {
 		d.t.Errorf("blockingDispatcher: UpdateStatus: %v", err)
 	}
 	return nil

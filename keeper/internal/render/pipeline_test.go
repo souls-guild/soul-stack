@@ -29,10 +29,10 @@ func host(sid string, coven []string, soulprint map[string]any) *topology.HostFa
 }
 
 // TestRender_NoopScenario — обязательный тест ТЗ: рендер
-// examples/service/service-noop/scenario/create/main.yml → один RenderedTask с
+// examples/service/noop/scenario/create/main.yml → один RenderedTask с
 // core.exec.run и rendered command.
 func TestRender_NoopScenario(t *testing.T) {
-	path := filepath.FromSlash("../../../examples/service/service-noop/scenario/create/main.yml")
+	path := filepath.FromSlash("../../../examples/service/noop/scenario/create/main.yml")
 	manifest, _, diags, err := config.LoadScenarioManifest(path, config.ValidateOptions{})
 	if err != nil {
 		t.Fatalf("LoadScenarioManifest: %v", err)

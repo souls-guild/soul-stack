@@ -1,0 +1,16 @@
+# Post-apply ожидания redis-cluster-live::remove_replica (после create).
+# Сценарий НЕ объявляет state_changes — контракт = lifecycle (apply_runs success +
+# audit + metric). incarnation.state на create-baseline.
+#
+# Две задачи с разными `where:`-предикатами по soulprint.self.network.primary_ip
+# (seed=10.0.0.10): seed_ip и remove_ip передаются равными primary_ip единственного
+# host-а, чтобы обе задачи приехали на него → row=success (нет no_match на одной
+# ноде).
+apply_runs:
+  status: success
+
+audit_events:
+  - type: incarnation.scenario_started
+
+metrics:
+  keeper_scenario_runs_total{result="ok"}: ">= 2"

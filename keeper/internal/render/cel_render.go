@@ -157,7 +157,7 @@ func incarnationVars(in RenderInput, hostCount int) map[string]any {
 func hostVars(in RenderInput, host *topology.HostFacts, hostCount int) cel.Vars {
 	return cel.Vars{
 		Input:          in.Input,
-		Register:       in.Register,
+		Register:       hostRegister(in, host),
 		Incarnation:    incarnationVars(in, hostCount),
 		SoulprintSelf:  soulprintSelfMap(host),
 		SoulprintHosts: soulprintHosts(in),
@@ -165,6 +165,26 @@ func hostVars(in RenderInput, host *topology.HostFacts, hostCount int) cel.Vars 
 		Ctx:            in.Ctx,
 		AllowHosts:     !in.destinyIsolated,
 	}
+}
+
+// hostRegister выбирает register-контекст для CEL-рендера задач конкретного
+// хоста. Staged-render (ADR-056 §в.1): render Passage N подставляет register
+// ПРЕДЫДУЩИХ Passage per-host — `register.<probe>.*` в `where:`/`apply:input:`/
+// `params:`/`vars:` резолвится фактом, собранным этим хостом (probe роли вернул
+// 'master' на одном хосте, 'slave' на другом). Источник — in.RegisterByHost[sid]
+// (накопленный барьерами предыдущих Passage, прокинутый stage-loop-ом run.go).
+//
+// Backward-compat: если per-host карта для хоста пуста (первый Passage, N=1-
+// прогон, либо не-staged путь) — возвращается flat in.Register (в пилоте пуст).
+// Так N=1-прогон видит register=пусто как до staged-render (БИТ-В-БИТ), а
+// keeper-side/destiny-проходы (свои register-контексты) не затрагиваются.
+func hostRegister(in RenderInput, host *topology.HostFacts) map[string]any {
+	if host != nil {
+		if reg := in.RegisterByHost[host.SID]; len(reg) > 0 {
+			return reg
+		}
+	}
+	return in.Register
 }
 
 // buildRenderContext собирает корень text/template-контекста для шага

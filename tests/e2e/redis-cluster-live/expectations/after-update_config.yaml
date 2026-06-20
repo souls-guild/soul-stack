@@ -1,0 +1,20 @@
+# Post-apply ожидания redis-cluster-live::update_config (после create).
+# scenario.state_changes.sets: redis_config ← {maxmemory, maxmemory-policy}.
+# maxmemory ← input.maxmemory; maxmemory-policy ← input.maxmemory_policy или
+# 'noeviction' (default sets-выражения). На L3a передаём оба явно.
+#
+# redis_config — nested-map; subset-match сверяет именно эту дельту, остальные
+# ключи state наследуются от create-baseline.
+apply_runs:
+  status: success
+
+incarnation_state:
+  redis_config:
+    maxmemory: "512mb"
+    maxmemory-policy: "allkeys-lru"
+
+audit_events:
+  - type: incarnation.scenario_started
+
+metrics:
+  keeper_scenario_runs_total{result="ok"}: ">= 2"

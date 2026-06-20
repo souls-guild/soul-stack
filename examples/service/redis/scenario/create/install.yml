@@ -35,9 +35,10 @@
       # arch — из фактов хоста (soulprint), не из статичного input.arch: один
       # incarnation может смешивать amd64/arm64-хосты, tarball должен совпасть с
       # реальной архитектурой. soulprint уже отдаёт amd64/arm64 (proto
-      # soulprint.proto) — маппинг не нужен. destiny soulprint напрямую не видит
-      # (изоляция ADR-009), значение доезжает в неё только через этот apply:input
-      # (симметрично node-exporter ниже).
+      # soulprint.proto) — маппинг не нужен. destiny redis-exporter soulprint
+      # напрямую не видит (изоляция ADR-009), значение доезжает в неё только
+      # через этот apply:input. node-exporter ниже arch так НЕ получает —
+      # читает soulprint.self.os.arch сам в своей destiny.
       arch:           "${ soulprint.self.os.arch }"
       bin_dir:        "${ input.bin_dir }"
       listen:         "${ input.redis_exporter_listen }"
@@ -45,20 +46,21 @@
       # Тот же keeper-side vault()-резолв, что и для redis-single (см. выше).
       redis_password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
 
-# 3. node_exporter: метрики хоста, от Redis не зависит.
+# 3. node_exporter: метрики хоста, от Redis не зависит. destiny node-exporter
+#    (бинарь node_exporter, version-aware install, textfile-коллекторы железа).
 - name: Apply node-exporter destiny
   apply:
     destiny: node-exporter
     input:
-      version: "${ input.node_exporter_version }"
-      sha256:  "${ input.node_exporter_sha256 }"
-      # arch — из фактов хоста (soulprint), не из статичного input.arch: один
-      # incarnation может смешивать amd64/arm64-хосты, tarball должен совпасть с
-      # реальной архитектурой. soulprint уже отдаёт amd64/arm64 (proto
-      # soulprint.proto) — маппинг не нужен. destiny soulprint напрямую не видит
-      # (изоляция ADR-009), значение доезжает в неё только через этот apply:input.
-      arch:    "${ soulprint.self.os.arch }"
-      bin_dir: "${ input.bin_dir }"
-      listen:  "${ input.node_exporter_listen }"
-      # extra_args не передаём — destiny подставит свой default [] (passthrough
-      # node_exporter-флагов нужен точечно; добавляется здесь при необходимости).
+      version:    "${ input.node_exporter_version }"
+      sha256:     "${ input.node_exporter_sha256 }"
+      # arch НЕ передаём: destiny берёт его напрямую из soulprint.self.os.arch
+      # (soulprint доступен в destiny-CEL). Один incarnation может смешивать
+      # amd64/arm64-хосты — destiny сама подберёт tarball под факт хоста.
+      bin_dir:    "${ input.bin_dir }"
+      listen:     "${ input.node_exporter_listen }"
+      # collectors — единый источник (essence.node_exporter_collectors, дефолт []):
+      # тот же список читает update_node_exporter, иначе re-apply менял бы набор
+      # коллекторов помимо версии. base_url/user/textfile_dir не передаём —
+      # дефолты destiny устроят.
+      collectors: "${ input.node_exporter_collectors }"

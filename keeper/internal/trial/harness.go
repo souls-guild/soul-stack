@@ -137,7 +137,7 @@ func renderCase(ctx context.Context, c *Case, caseFile string) (renderedCase, er
 		Input:       effectiveInput,
 		Register:    orEmptyMap(c.Mocks.Register),
 		Incarnation: render.IncarnationMeta{Name: scn.Name},
-		Hosts:       fixtureHosts(c.Fixtures.Soulprint),
+		Hosts:       fixtureHosts(scn.Name, c.Fixtures.Soulprint),
 		Destiny:     destiny,
 		Templates:   templates,
 	}
@@ -285,11 +285,15 @@ func readWithin(base, name string) ([]byte, error) {
 }
 
 // fixtureHosts строит roster L0 из fixtures.soulprint — один синтетический
-// хост. Coven включает корневую incarnation-метку через пустой набор: L0 не
-// таргетит ковены, on:/where: резолвятся в контексте этого хоста.
-func fixtureHosts(soulprint map[string]any) []*topology.HostFacts {
+// хост. Он явно несёт корневую incarnation-метку (incarnationName ==
+// RenderInput.Incarnation.Name), зеркаля прод-инвариант roster-а (rosterSQL
+// `WHERE $1 = ANY(coven)`: каждый хост incarnation несёт корневую метку).
+// Благодаря ей `on:` опущенный, `on: ["${ incarnation.name }"]` и `where:`
+// резолвятся на этот хост так же, как в проде.
+func fixtureHosts(incarnationName string, soulprint map[string]any) []*topology.HostFacts {
 	return []*topology.HostFacts{{
 		SID:       trialHostSID,
+		Coven:     []string{incarnationName},
 		Soulprint: orEmptyMap(soulprint),
 	}}
 }

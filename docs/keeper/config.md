@@ -653,6 +653,20 @@ tempo:
 
 > **Hot-reload `tempo.*`** ([ADR-021](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml)). `rate` / `burst` reload-able без рестарта: лимитер stateless, читает живой `config.Store`-snapshot на **каждом** запросе — новый лимит применяется со следующего запроса, текущие бакеты в Redis доживают по своему `PEXPIRE`. Невалидные (≤0) значения из reload-а трактуются как fail-OPEN passthrough (на сбое конфига блокировать нельзя). Restart-required: `enabled` (Tempo-инфраструктура / Redis token-bucket поднимается или гасится только на старте `setupTempo`, симметрично `toll.enabled`).
 
+## `web_ui_enabled` (top-level)
+
+Тоггл встроенного операторского web-UI на маршруте `/ui` ([ADR-055](../adr/0055-embed-ui-bundle.md#adr-055-embed-ui-bundle--опциональный-single-binary-keeper-с-ui-на-ui)). Реальный UI **вкомпилён в `keeper`-бинарь** (`go:embed` статики из companion-репо `soul-stack-web`, см. [docs/web/README.md](../web/README.md)) и отдаётся keeper-ом из коробки — **отдельного процесса, порта и backend-а не требует**. Статика монтируется на уже существующий OpenAPI-listener (`listen.openapi.addr`, обычно `:8080`); **новых listener-ов и портов `web_ui_enabled` не вводит** — UI делит `:8080` с Operator API (`/v1/*`) и OpenAPI-вьювером (`/docs`).
+
+```yaml
+# web_ui_enabled: true     # дефолт (опущено / null → ON); false — opt-out. top-level
+```
+
+| Поле | Тип | Default | Смысл |
+|---|---|---|---|
+| `web_ui_enabled` | `*bool` | `true` | Монтировать ли встроенный UI на `/ui`. **`*bool`, чтобы отличить «не задано» от явного `false`:** опущено / `null` → `true` (**default-ON** — бета хочет single-binary UI «из коробки», footgun-guard в духе [`tempo.enabled`](#tempo) / [`toll`](#toll)); явный `false` → **opt-out**: статика `/ui` НЕ монтируется, API `/v1/*` и `/docs` не затрагиваются. В отличие от Tempo/Toll **не зависит от инфраструктуры** — UI вшит в бинарь, внешнего backend-а не нужно. Ключ — **top-level**. Резолв эффективного значения — метод `WebUIMounted()` (`shared/config/keeper.go`): `nil` → `true`. |
+
+> **Hot-reload `web_ui_enabled`** ([ADR-021](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml)). **Restart-required** (тихо игнорируется на reload-е, симметрично [`toll.enabled`](#toll) / [`tempo.enabled`](#tempo)): эффективное значение читается один раз на старте и запекается в смонтированный роутер; SIGHUP / API-reload не переключает `/ui`-mount на лету. Чтобы включить/выключить UI — изменить ключ и перезапустить `keeper`. Routing-тоггл не оправдывает atomic re-mount роутера на горячую: статика вшита в бинарь, состояния не несёт, переключение редкое (бета-onboarding), а disposal/swap chi-роутера под трафиком — лишний риск ради бинарного флага. Новых портов при включении не открывается (статика садится на тот же `:8080`).
+
 ## `push`
 
 **Pilot-path wire-up SshDispatcher** (S6, 2026-05-26, [ADR-032 amendment](../architecture.md)). Pilot включает `keeper.push.apply` в проде через 3 inline-поля в `keeper.yml`. Long-term canon (S7) — миграция в `souls.ssh_target jsonb` + PG-table `push_providers`; S7-3 ввёл multi-CA `push.host_ca_refs[]`. Singular `push.host_ca_ref` остаётся под 1-release WARN deprecation window.
@@ -941,6 +955,8 @@ audit:
 
 watchman_interval: 5s
 watchman_fail_threshold: 3
+
+# web_ui_enabled: true   # дефолт ON — встроенный UI на /ui (ADR-055); false — opt-out
 
 # allow_unsafe_single_path_multi_keeper: false  # дефолт refuse при multi-keeper + acolytes=0
 

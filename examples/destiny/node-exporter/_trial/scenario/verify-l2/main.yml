@@ -1,0 +1,84 @@
+# L2-харнесс destiny node-exporter (Trial, ADR-023, дизайн «Вариант A»).
+#
+# Назначение — дать destiny node-exporter ГЕРМЕТИЧНУЮ E2E-проверку на реальном
+# Linux-стенде (docker) реальными core-модулями, БЕЗ двух непреодолимых для
+# герметичного пилота зависимостей продовой destiny:
+#   - core.url.fetched тянет tarball с GitHub (https-only, сеть) — supply-chain,
+#     не герметично в эфемерном контейнере без интернета;
+#   - core.service.* требует systemd-PID1 (is-active/enable) — нет в ванильном
+#     ubuntu-контейнере без --privileged systemd-образа.
+# (см. docs/destiny/testing.md §L2 / open Q №3.)
+#
+# Поэтому L2-пилот применяет ПОДМНОЖЕСТВО конвейера node-exporter, исполнимое
+# герметично: рендер launch-скрипта из .tmpl (core.file.rendered — демонстрирует
+# Keeper→Soul handoff template_content + text/template на хосте, ровно как
+# systemd-unit node_exporter.service в проде) + раскладку конфигурации
+# (core.file.present, inline-content, идемпотентность по контенту). Запуск самого
+# листенера и проба порта :9100 — в verify-блоке кейса (бинарь стартует напрямую,
+# БЕЗ systemctl, ТЗ §6).
+#
+# Это НЕ новая destiny-сущность и НЕ новый сервис: harness-обёртка в _trial/-дереве
+# самой destiny, симметрично существующему _trial/scenario/apply (L0-render).
+name: verify-l2
+description: >-
+  L2-харнесс node-exporter (ADR-023, Вариант A): герметичная E2E-проверка core.file
+  на docker-стенде. Запуск листенера и проба порта — в verify кейса (без systemd).
+
+# input харнесс-scenario. Подмножество контракта продовой destiny node-exporter
+# (version/sha256/listen/collectors/bin_dir), исполнимое герметично. Реальный
+# fetch/systemd НЕ задействуются — берутся только те поля, что нужны core.file-
+# подмножеству (listen → launch-скрипт + config, bin_dir → путь скрипта).
+input:
+  version:
+    type: string
+    default: "1.9.0"
+    pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    description: Версия node_exporter (passthrough контракта; в L2 не качается).
+  sha256:
+    type: string
+    default: ""
+    pattern: "^(sha256:[0-9a-f]{64})?$"
+    description: Опциональный SHA-256 tarball-а (passthrough; в L2 не верифицируется).
+  listen:
+    type: string
+    default: ":9100"
+    pattern: "^[A-Za-z0-9._-]*:[0-9]{1,5}$"
+    description: Listen-адрес mock-листенера node_exporter (host:port, дефолт :9100).
+  collectors:
+    type: array
+    default: []
+    items:
+      type: string
+      enum: [smartmon, nvme, ipmi]
+    description: >-
+      Textfile-коллекторы железа. На L2-контейнере (VM, без железа) — пусто:
+      коллекторы gate-ятся systemd-Condition, их установка тут не проверяется.
+  bin_dir:
+    type: string
+    default: /usr/local/bin
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: Каталог launch-скрипта листенера.
+
+tasks:
+  # 1. Launch-скрипт листенера из .tmpl. core.file.rendered: Keeper доставляет
+  #    literal template_content + render_context {vars,self,role,essence},
+  #    Soul-сторона рендерит text/template на хосте (ADR-010) — тот же путь, что
+  #    systemd-unit node_exporter.service в проде. listen приходит из input → vars.
+  - name: Render node_exporter launch script
+    module: core.file.rendered
+    register: launch_script
+    params:
+      path: "${ input.bin_dir + '/node_exporter-mock' }"
+      template: templates/node_exporter_launch.sh.tmpl
+      mode: "0755"
+      vars:
+        listen: "${ input.listen }"
+
+  # 2. Раскладка config-файла листенера. core.file.present с inline-content:
+  #    идемпотентность по контенту (повторный apply того же контента → changed=false).
+  - name: Deploy node_exporter mock config
+    module: core.file.present
+    params:
+      path: /etc/node_exporter-mock.conf
+      content: "listen=${ input.listen }\n"
+      mode: "0644"

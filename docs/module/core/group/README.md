@@ -47,15 +47,18 @@ Backend — `groupadd` / `groupdel`. Семантика `present` — present-or
 
 ## Пример
 
-В committed examples `core.group.present` намеренно **не** используется (см.
-[core/user/README.md](../user/README.md): сервис-аккаунты дают через `DynamicUser=yes`).
-Минимальный пример системной primary-группы под сервис-аккаунт:
+`core.group.present` заводит primary-группу stateful-сервис-аккаунта **до**
+самого пользователя (`core.user -g` требует существующую группу) — см.
+[гибрид-правило §2](../../../destiny/production-conventions.md#2-сервис-аккаунт--гибрид-правило)
+(для stateless-демонов под `DynamicUser=yes` группа не нужна, её даёт systemd).
+Рабочий пример — группа `node_exporter` в эталонной destiny
+[`node-exporter`](../../../../examples/destiny/node-exporter/tasks/account.yml):
 
 ```yaml
-- name: Ensure the app system group exists
+- name: Ensure the node_exporter system group exists
   module: core.group.present
   params:
-    name: appsvc
+    name: node_exporter
     system: true
 ```
 

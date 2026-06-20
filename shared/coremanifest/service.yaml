@@ -14,6 +14,7 @@ spec:
       input:
         name:    { type: string, required: true, description: "Имя сервиса/юнита." }
         enabled: { type: bool,   description: "true → дополнительно enable, false → disable, опущено → autostart не трогать." }
+        daemon_reload: { type: string, enum: [auto, always, never], default: auto, description: "systemctl daemon-reload перед start (systemd): auto = при NeedDaemonReload, always = безусловно, never = opt-out. openrc/sysv — no-op (ADR-015)." }
     stopped:
       description: Сервис остановлен.
       input:
@@ -22,7 +23,9 @@ spec:
       description: Безусловный restart (changed всегда true).
       input:
         name: { type: string, required: true, description: "Имя сервиса/юнита." }
+        daemon_reload: { type: string, enum: [auto, always, never], default: auto, description: "systemctl daemon-reload перед restart (systemd): auto = при NeedDaemonReload, always = безусловно, never = opt-out. openrc/sysv — no-op (ADR-015)." }
     enabled:
       description: Автозапуск сервиса при загрузке системы.
       input:
         name: { type: string, required: true, description: "Имя сервиса/юнита." }
+        daemon_reload: { type: string, enum: [auto, always, never], default: auto, description: "systemctl daemon-reload перед enable (systemd): auto = при NeedDaemonReload, always = безусловно, never = opt-out. openrc/sysv — no-op (ADR-015)." }

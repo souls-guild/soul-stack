@@ -60,7 +60,7 @@
 
   **(c) `network.primary_ip` + `interfaces[]`.** Convenience-string на корне `NetworkFacts` (используется 90% случаев, в т.ч. `self.network.primary_ip` в `redis.conf.tmpl`); `interfaces[]` — для multi-homed/VLAN-aware случаев. Алгоритм определения `primary_ip` — Soul-side, MVP-эвристика: интерфейс с default-route → его primary IPv4.
 
-  **(d) Каноническая CEL-форма — `soulprint.self.<path>`.** Голая форма `soulprint.<path>` (без `.self`) — **ошибка валидации** в `soul-lint`. Симметрия с `register.self.*` ([destiny/tasks.md §10](../destiny/tasks.md#10-шаблонный-контекст)). Существующие примеры (`destiny-redis-replication-config/tasks/main.yml` и т.п.) переписываются батч-задачей под канон.
+  **(d) Каноническая CEL-форма — `soulprint.self.<path>`.** Голая форма `soulprint.<path>` (без `.self`) — **ошибка валидации** в `soul-lint`. Симметрия с `register.self.*` ([destiny/tasks.md §10](../destiny/tasks.md#10-шаблонный-контекст)). Существующие примеры (`redis-replication-config/tasks/main.yml` и т.п.) переписываются батч-задачей под канон.
 
   **(e) `covens` НЕ в `SoulprintFacts`.** Это **Keeper-registry-данные** (`souls.coven[]` в Postgres, назначает оператор через API или `core.soul.registered` — см. [`docs/keeper/modules.md`](../keeper/modules.md)), а не факты, собираемые Soul-агентом. `soulprint.self.covens` и `soulprint.hosts[].covens` в CEL — **проекция** Keeper-side данных в Soulprint-namespace: Keeper при резолве CEL-выражения склеивает `SoulprintFacts` (от Soul) + `souls.coven[]` (из Postgres) в логическую view `HostFacts`. Soul ничего про covens не знает.
 
@@ -76,7 +76,7 @@
   - `proto/keeper/v1/soulprint.proto` дополняется новыми messages; `make gen` пересобирает `proto/gen/go/keeper/v1/soulprint.pb.go`.
   - `docs/soul/soulprint.md` — новый файл (детальная спека).
   - `docs/naming-rules.md` дополняется разделом про Soulprint-поля.
-  - Существующие примеры переписываются под `soulprint.self.<path>` отдельной батч-задачей (`docs/destiny/destiny-redis-replication-config/`, `essence/_stack.yaml` и т.п.).
+  - Существующие примеры переписываются под `soulprint.self.<path>` отдельной батч-задачей (`examples/destiny/redis-replication-config/`, `essence/_stack.yaml` и т.п.).
   - `soul-lint` получает static-checkable Soulprint-схему (`docs/templating.md:97` — теперь `soulprint.self.*` имеет конкретные типы из proto, а не `dyn`).
   - **Open Q №6 закрыт.** Open Q №22 (user-collectors) — остаётся открытым.
   - ADR-012(g) обновляется: stub `facts: Struct` помечен `deprecated`, ссылается на `typed_facts`.

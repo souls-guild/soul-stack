@@ -1,0 +1,45 @@
+{{/*
+  oneshot-сборщик SMART-метрики дисков для node_exporter. Контекст рендера:
+    .vars.bin_dir      — каталог скрипта smartmon.sh;
+    .vars.textfile_dir — куда пишется smart_metrics.prom.
+  Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010).
+
+  Запускается под User=root: smartctl требует прямого доступа к блочным
+  устройствам (RAW IO). systemd-sandbox жёсткий (ТЗ §коллекторы): запись только в
+  textfile-каталог, без сети, devices closed + точечный DeviceAllow на блочные
+  устройства, capabilities сужены до CAP_SYS_RAWIO/CAP_SYS_ADMIN.
+
+  ConditionVirtualization=no — на VM физических дисков нет, коллектор не стартует
+  (защита от ручного start; та же Condition в .timer).
+*/}}
+[Unit]
+Description=Collect SMART metrics for node_exporter
+ConditionVirtualization=no
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/env bash -c 'set -euo pipefail; tmp="$(mktemp {{ .vars.textfile_dir }}/smart_metrics.prom.XXXXXX)"; "{{ .vars.bin_dir }}/smartmon.sh" > "$tmp"; mv "$tmp" "{{ .vars.textfile_dir }}/smart_metrics.prom"'
+
+# systemd-hardening привилегированного oneshot (ТЗ §коллекторы).
+ReadWritePaths={{ .vars.textfile_dir }}
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX
+NoNewPrivileges=yes
+ProtectProc=invisible
+PrivateDevices=no
+DevicePolicy=closed
+DeviceAllow=block-* r
+CapabilityBoundingSet=CAP_SYS_RAWIO CAP_SYS_ADMIN

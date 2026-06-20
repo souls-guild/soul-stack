@@ -9,7 +9,7 @@ import (
 
 func TestLoadScenarioManifest_Golden(t *testing.T) {
 	// Локальная patched-копия (soul-lint/testdata/scenario-golden/) — оригинал
-	// `examples/service/service-redis-cluster/scenario/create/main.yml` имеет
+	// `examples/service/redis-cluster/scenario/create/main.yml` имеет
 	// deviation от input.md (`type: object` без `properties:`); правка
 	// examples — out of scope M1.2.c (delegation §«Что НЕ делаешь»).
 	path := filepath.FromSlash("../../soul-lint/testdata/scenario-golden/redis-create.yml")

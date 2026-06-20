@@ -1,10 +1,10 @@
-# service-redis — Redis с мониторингом, собранный КОМПОЗИЦИЕЙ destiny
+# redis — Redis с мониторингом, собранный КОМПОЗИЦИЕЙ destiny
 
 Сервис «redis» демонстрирует главную модель Soul Stack: **один сервис подключает
 несколько переиспользуемых standalone-destiny через `apply:destiny`** (ADR-009,
 изолированный render каждой destiny), вместо того чтобы инлайнить задачи.
 
-Контраст с [`service-redis-monitored`](../service-redis-monitored/): тот же стек
+Контраст с [`redis-monitored`](../redis-monitored/): тот же стек
 (redis-server + redis_exporter + node_exporter), но там всё инлайн в одном
 `scenario/create/main.yml`, а здесь сервис **ничего не рендерит сам** — только
 оркеструет порядок `apply:destiny` и прокидывает каждой destiny её `input`.
@@ -16,9 +16,9 @@
 
 | destiny | роль | контракт `input` |
 |---|---|---|
-| [`redis-single`](../../destiny/destiny-redis-single/) | redis-server + redis.conf с unix-сокетом | `version`, `redis_password`, `redis_socket`, `maxmemory`, `config` |
-| [`redis-exporter`](../../destiny/destiny-redis-exporter/) | redis_exporter через unix-сокет | `version`, `sha256`, `arch`, `bin_dir`, `listen`, `redis_socket`, `redis_password` |
-| [`node-exporter`](../../destiny/destiny-node-exporter/) | node_exporter (метрики хоста) | `version`, `sha256`, `arch`, `bin_dir`, `listen` |
+| [`redis-single`](../../destiny/redis-single/) | redis-server + redis.conf с unix-сокетом | `version`, `redis_password`, `redis_socket`, `maxmemory`, `config` |
+| [`redis-exporter`](../../destiny/redis-exporter/) | redis_exporter через unix-сокет | `version`, `sha256`, `arch`, `bin_dir`, `listen`, `redis_socket`, `redis_password` |
+| [`node-exporter`](../../destiny/node-exporter/) | node_exporter (бинарь `node_exporter`, стабильный аккаунт `node_exporter`, метрики хоста + опц. коллекторы железа) | `version`, `sha256`, `base_url`, `listen`, `collectors`, `bin_dir`, `user`, `textfile_dir` (arch — из `soulprint.self.os.arch`, не input) |
 
 **Резолв (ADR-007).** `ref` каждой зависимости — из `service.yml::destiny[]`
 (здесь `v1.0.0` для всех трёх). git-URL — гибрид
@@ -55,12 +55,12 @@ least-privilege пользователем в группе `redis` (group-дос
   (`core.exec.run`, `changed_when: false`, `where: !(sid in input.replicas)`);
   на новые реплики ставится `redis-single` (`apply:destiny`), затем они
   направляются `replicaof` на этот primary через
-  [`redis-replication-config`](../../destiny/destiny-redis-replication-config/),
+  [`redis-replication-config`](../../destiny/redis-replication-config/),
   получая топологию прогона через `apply: input: hosts: ${ soulprint.hosts }`
   (E3a scenario-only аксессор). master_addr — свёртка агрегатного
   `register.master_addr` (карта sid→payload) к одному значению. Раскат
   `serial: 1` (rolling по одной реплике), завершается health-gate-ом
-  (probe + `retry`/`until`). Эталон топологии — [`service-redis-cluster`](../service-redis-cluster/).
+  (probe + `retry`/`until`). Эталон топологии — [`redis-cluster`](../redis-cluster/).
 
 ## Безопасность
 
@@ -76,10 +76,10 @@ least-privilege пользователем в группе `redis` (group-дос
 
 ```sh
 cd keeper
-go run ./cmd/soul-trial run ../examples/service/service-redis/scenario/add_acl_user/tests/three-users/case.yml     # PASS
-go run ./cmd/soul-trial run ../examples/service/service-redis/scenario/add_replicas/tests/one-replica/case.yml     # PASS
-go run ./cmd/soul-trial run ../examples/service/service-redis/scenario/create/tests/full-stack/case.yml            # PASS
-go run ./cmd/soul-trial run ../examples/service/service-redis/scenario/update_config/tests/bump-maxmemory/case.yml # PASS
+go run ./cmd/soul-trial run ../examples/service/redis/scenario/add_acl_user/tests/three-users/case.yml     # PASS
+go run ./cmd/soul-trial run ../examples/service/redis/scenario/add_replicas/tests/one-replica/case.yml     # PASS
+go run ./cmd/soul-trial run ../examples/service/redis/scenario/create/tests/full-stack/case.yml            # PASS
+go run ./cmd/soul-trial run ../examples/service/redis/scenario/update_config/tests/bump-maxmemory/case.yml # PASS
 ```
 
 > **Примечание (cross-service L0-резолв `apply:destiny`).** Кейсы `create`,
@@ -87,11 +87,11 @@ go run ./cmd/soul-trial run ../examples/service/service-redis/scenario/update_co
 > в `examples/destiny/`. L0-резолвер
 > (`keeper/internal/trial/destiny.go::fixtureDestinyResolver`) достаёт их
 > герметично через `case.yml::fixtures.default_destiny_source` — file://-шаблон
-> (здесь `file://../../destiny/destiny-{name}`, путь относительно service-root),
+> (здесь `file://../../destiny/{name}`, путь относительно service-root),
 > зеркалящий прод `keeper.yml::default_destiny_source`. `add_acl_user` —
 > инлайн `loop:` без `apply:destiny`.
 >
-> В живом Keeper service-redis + destiny резолвятся как git-репо по ref
+> В живом Keeper redis + destiny резолвятся как git-репо по ref
 > (ADR-007/009) — в local-dev они материализуются `make dev-provision` под
 > file://-URL-ами из `dev/keeper.dev.yml` (см.
 > [docs/dev/local-setup.md → Артефакты service/destiny](../../../docs/dev/local-setup.md#артефакты-servicedestiny-для-резолва)).

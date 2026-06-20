@@ -64,7 +64,7 @@ Backend берётся из soulprint-факта `os.pkg_mgr` (**primary**, [ADR
     version: "${ has(input.version) ? input.version : '' }"
 ```
 
-(из [`examples/destiny/destiny-redis-single/tasks/main.yml`](../../../../examples/destiny/destiny-redis-single/tasks/main.yml))
+(из [`examples/destiny/redis-single/tasks/main.yml`](../../../../examples/destiny/redis-single/tasks/main.yml))
 
 ## Безопасность
 

@@ -103,3 +103,108 @@ func TestReadHeartbeat_Missing(t *testing.T) {
 		t.Error("ok=true on missing key")
 	}
 }
+
+// --- Soul-capabilities (ADR-056 §S5 forward-compat) ---
+
+func TestSoulCapabilities_SetAndHas(t *testing.T) {
+	c, _ := newClientMR(t)
+	ctx := context.Background()
+	sid := "host.example.com"
+
+	if err := SetSoulCapabilities(ctx, c, sid, []string{"passage"}); err != nil {
+		t.Fatalf("SetSoulCapabilities: %v", err)
+	}
+	has, err := SoulHasCapability(ctx, c, sid, "passage")
+	if err != nil {
+		t.Fatalf("SoulHasCapability: %v", err)
+	}
+	if !has {
+		t.Error("passage not reported after announce")
+	}
+	hasOther, _ := SoulHasCapability(ctx, c, sid, "unknown-cap")
+	if hasOther {
+		t.Error("unknown-cap reported as supported")
+	}
+}
+
+// TestSoulCapabilities_EmptySetOverwrites — старый бинарь (пустой набор) после
+// нового ОБЯЗАН перезаписать stale-флаг "passage" (fail-closed на reconnect).
+func TestSoulCapabilities_EmptySetOverwrites(t *testing.T) {
+	c, _ := newClientMR(t)
+	ctx := context.Background()
+	sid := "host.example.com"
+
+	if err := SetSoulCapabilities(ctx, c, sid, []string{"passage"}); err != nil {
+		t.Fatalf("SetSoulCapabilities(passage): %v", err)
+	}
+	// Тот же SID переподключился старым бинарём — пустой набор.
+	if err := SetSoulCapabilities(ctx, c, sid, nil); err != nil {
+		t.Fatalf("SetSoulCapabilities(nil): %v", err)
+	}
+	has, _ := SoulHasCapability(ctx, c, sid, "passage")
+	if has {
+		t.Error("stale passage survived reconnect of old binary — fail-closed broken")
+	}
+}
+
+// TestSoulHasCapability_MissingFailClosed — нет ключа/поля → false (старый Soul без
+// анонса трактуется как не поддерживающий, fail-closed).
+func TestSoulHasCapability_MissingFailClosed(t *testing.T) {
+	c, _ := newClientMR(t)
+	ctx := context.Background()
+	has, err := SoulHasCapability(ctx, c, "ghost.example.com", "passage")
+	if err != nil {
+		t.Fatalf("SoulHasCapability: %v", err)
+	}
+	if has {
+		t.Error("missing key reported passage-capable")
+	}
+}
+
+// TestSoulsLackingCapability_Batch — batch-проверка: host-a анонсировал passage,
+// host-b нет (пустой), host-c вовсе без ключа → lacking = {host-b, host-c}.
+func TestSoulsLackingCapability_Batch(t *testing.T) {
+	c, _ := newClientMR(t)
+	ctx := context.Background()
+	if err := SetSoulCapabilities(ctx, c, "host-a", []string{"passage"}); err != nil {
+		t.Fatalf("set a: %v", err)
+	}
+	if err := SetSoulCapabilities(ctx, c, "host-b", nil); err != nil {
+		t.Fatalf("set b: %v", err)
+	}
+	// host-c — ключа нет вовсе.
+
+	lacking, err := SoulsLackingCapability(ctx, c, []string{"host-a", "host-b", "host-c"}, "passage")
+	if err != nil {
+		t.Fatalf("SoulsLackingCapability: %v", err)
+	}
+	got := map[string]bool{}
+	for _, s := range lacking {
+		got[s] = true
+	}
+	if got["host-a"] {
+		t.Error("host-a (passage-capable) reported as lacking")
+	}
+	if !got["host-b"] || !got["host-c"] {
+		t.Errorf("lacking = %v, want host-b and host-c (fail-closed)", lacking)
+	}
+}
+
+// TestSoulsLackingCapability_AllCapable — все анонсировали passage → lacking пуст
+// (одноверсионный бета-флот: staged-гейт пропускает).
+func TestSoulsLackingCapability_AllCapable(t *testing.T) {
+	c, _ := newClientMR(t)
+	ctx := context.Background()
+	for _, sid := range []string{"host-a", "host-b"} {
+		if err := SetSoulCapabilities(ctx, c, sid, []string{"passage"}); err != nil {
+			t.Fatalf("set %s: %v", sid, err)
+		}
+	}
+	lacking, err := SoulsLackingCapability(ctx, c, []string{"host-a", "host-b"}, "passage")
+	if err != nil {
+		t.Fatalf("SoulsLackingCapability: %v", err)
+	}
+	if len(lacking) != 0 {
+		t.Errorf("lacking = %v, want [] (all passage-capable)", lacking)
+	}
+}

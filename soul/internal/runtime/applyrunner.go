@@ -347,6 +347,12 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	applyID := req.GetApplyId()
+	// passage — индекс Passage staged-render (ADR-056). Эхается в КАЖДОМ
+	// TaskEvent/RunResult прогона как есть (0 для N=1 — БИТ-В-БИТ как до staged):
+	// keeper коррелирует терминал per-(apply_id, sid, passage) и накапливает
+	// register для render следующего Passage. Захватываем один раз — все события
+	// этого ApplyRequest относятся к одному Passage.
+	passage := req.GetPassage()
 	if applyID != "" {
 		r.register(applyID, cancel)
 		defer r.unregister(applyID)
@@ -402,7 +408,7 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 		if runFailed && len(task.GetOnfailIdx()) == 0 {
 			ev := skippedTaskEvent(applyID, int32(idx))
 			recordRegister(registerByIdx, registerByName, int32(idx), task.GetRegister(), ev.GetRegisterData())
-			if err := sendTaskEvent(sink, ev, task); err != nil {
+			if err := sendTaskEvent(sink, ev, task, passage); err != nil {
 				return fmt.Errorf("runtime: send TaskEvent[%d]: %w", idx, err)
 			}
 			r.metrics.ObserveTask(taskResult(ev.GetStatus()))
@@ -435,7 +441,7 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 			}
 			ev.RegisterData = buildRegisterData(ev.GetStatus(), nil)
 			recordRegister(registerByIdx, registerByName, int32(idx), task.GetRegister(), ev.GetRegisterData())
-			if err := sendTaskEvent(sink, ev, task); err != nil {
+			if err := sendTaskEvent(sink, ev, task, passage); err != nil {
 				return fmt.Errorf("runtime: send TaskEvent[%d]: %w", idx, err)
 			}
 			r.metrics.ObserveTask(applyResultFailed)
@@ -456,7 +462,7 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 			skipOnFail(task.GetOnfailIdx(), registerByIdx) {
 			ev := skippedTaskEvent(applyID, int32(idx))
 			recordRegister(registerByIdx, registerByName, int32(idx), task.GetRegister(), ev.GetRegisterData())
-			if err := sendTaskEvent(sink, ev, task); err != nil {
+			if err := sendTaskEvent(sink, ev, task, passage); err != nil {
 				return fmt.Errorf("runtime: send TaskEvent[%d]: %w", idx, err)
 			}
 			// SKIPPED — терминальный не-успех-нейтральный исход; closed-enum
@@ -486,7 +492,7 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 				Message: "apply cancelled by Keeper",
 			}
 			ev.RegisterData = buildRegisterData(ev.GetStatus(), nil)
-			if err := sendTaskEvent(sink, ev, task); err != nil {
+			if err := sendTaskEvent(sink, ev, task, passage); err != nil {
 				return fmt.Errorf("runtime: send TaskEvent[%d]: %w", idx, err)
 			}
 			// Отменённая задача — терминальный не-успех; в closed enum
@@ -495,7 +501,7 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 			runStatus = keeperv1.RunStatus_RUN_STATUS_CANCELLED
 			break
 		}
-		if err := sendTaskEvent(sink, ev, task); err != nil {
+		if err := sendTaskEvent(sink, ev, task, passage); err != nil {
 			return fmt.Errorf("runtime: send TaskEvent[%d]: %w", idx, err)
 		}
 		// register выполненной задачи доступен последующим: gating-у onchanges (по
@@ -528,6 +534,9 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 		// результат устаревшей попытки. Soul возвращает значение как есть; 0 (старый
 		// Keeper без fencing) уезжает 0 → проверка актуальности деградирует штатно.
 		Attempt: req.GetAttempt(),
+		// passage — эхо ApplyRequest.passage (ADR-056): barrier этого Passage ждёт
+		// терминал по (apply_id, sid, passage). 0 для N=1 — БИТ-В-БИТ как до staged.
+		Passage: passage,
 	})
 }
 
@@ -536,8 +545,19 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 // долгоживущем audit для no_log-задач, не обращаясь к []RenderedTask (этот
 // TaskEvent мог прийти на другой Keeper-инстанс, ADR-002). Soul знает no_log из
 // плана прогона — исполняет задачу, не логируя её params/output.
-func sendTaskEvent(sink EventSink, ev *keeperv1.TaskEvent, task *keeperv1.RenderedTask) error {
+func sendTaskEvent(sink EventSink, ev *keeperv1.TaskEvent, task *keeperv1.RenderedTask, passage int32) error {
 	ev.NoLog = task.GetNoLog()
+	// Эхо ApplyRequest.passage (ADR-056): keeper коррелирует терминал per-
+	// (apply_id, sid, passage) и копит register для render следующего Passage.
+	// Единая точка проставления для всех TaskEvent прогона.
+	ev.Passage = passage
+	// Эхо RenderedTask.plan_index (ADR-056 §S1 fix Variant B): ГЛОБАЛЬНЫЙ сквозной
+	// индекс задачи по всему плану (все Passage). Keeper корелирует register
+	// именно по нему (apply_task_register.plan_index), НЕ по локальному
+	// TaskEvent.task_idx (позиция в ApplyRequest.tasks[] — она локальна для
+	// passage/host). N=1-прогон / старый Keeper без поля → plan_index=0=task_idx,
+	// поведение БИТ-В-БИТ. Единая точка проставления для всех TaskEvent прогона.
+	ev.PlanIndex = task.GetPlanIndex()
 	return sink.SendTaskEvent(ev)
 }
 

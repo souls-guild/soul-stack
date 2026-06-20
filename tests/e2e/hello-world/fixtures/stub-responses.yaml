@@ -1,4 +1,4 @@
-# Скрипт ответов soul-stub-а для service-hello-world::create.
+# Скрипт ответов soul-stub-а для hello-world::create.
 #
 # scenario/create/main.yml содержит одну задачу core.file.present, пишущую
 # /tmp/soul-stack-hello с содержимым input.greeting.

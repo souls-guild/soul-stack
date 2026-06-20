@@ -112,7 +112,7 @@ tasks:
   # из probe существующих (register.master_addr), НЕ из declared soulprint.hosts
   # (кластер работает). Структуру хостов передаём destiny через input (M3) —
   # destiny сама пропускает primary по своему инварианту
-  # (destiny-redis-replication-config). Изоляция destiny цела (§4.1).
+  # (redis-replication-config). Изоляция destiny цела (§4.1).
   - name: setup-replication
     on: ["${ incarnation.name }"]
     where: soulprint.self.sid == vars.new_sid

@@ -26,4 +26,4 @@ Scenario — единица операции над [Incarnation](../architectur
 - [`docs/input.md`](../input.md) — **общий** стандарт формата `input:` (применяется к destiny, scenario и манифесту модуля).
 - [`docs/templating.md`](../templating.md) — спека шаблонизатора (ADR-010): CEL для всех scenario-выражений (`where:`/`when:`/`changed_when:`/`failed_when:`/`until:`, `params:`, `apply: input:`, `on:`-литералы), маркер `${ … }`, граница с Go text/template, footgun-ы `soulprint.where(...)` vs `soulprint.hosts.where(...)`.
 - [`docs/soul-lint.md`](../soul-lint.md) — статические проверки (в т.ч. backlog для scenario-специфики).
-- [`examples/service/service-redis-cluster/`](../../examples/service/service-redis-cluster/) — рабочий пример service-репо с раскладкой `scenario/`.
+- [`examples/service/redis-cluster/`](../../examples/service/redis-cluster/) — рабочий пример service-репо с раскладкой `scenario/`.

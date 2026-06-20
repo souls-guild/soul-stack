@@ -48,7 +48,7 @@ destiny-<name>/
 ### Пример
 
 ```yaml
-# destiny-redis/destiny.yml
+# redis/destiny.yml
 name: redis
 description: Install and configure Redis server on a single host
 
@@ -64,7 +64,7 @@ input:
     type: string
     secret: true
     min_length: 16
-  # … остальные параметры — см. examples/destiny/destiny-redis/destiny.yml
+  # … остальные параметры — см. examples/destiny/redis/destiny.yml
 
 # Эта destiny использует только core-модули → required_modules не нужен.
 # Появляется только когда нужны custom-модули из сторонних коллекций:
@@ -72,7 +72,7 @@ input:
 # required_modules: [wb.haproxy, wb.myapp]
 ```
 
-Рабочий пример с полным `input:`-блоком — в [examples/destiny/destiny-redis/destiny.yml](../../examples/destiny/destiny-redis/destiny.yml).
+Рабочий пример с полным `input:`-блоком — в [examples/destiny/redis/destiny.yml](../../examples/destiny/redis/destiny.yml).
 
 ## Когда нужны соседи `tasks/main.yml`
 

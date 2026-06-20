@@ -1,11 +1,13 @@
 // Package file реализует core-модуль `core.file` ([ADR-015]).
 //
 // Состояния MVP:
-//   - present:  файл существует с заданным content/mode/owner/group.
-//   - absent:   файл удалён.
-//   - rendered: файл = результат рендера text/template-шаблона ([ADR-010]).
+//   - present:   файл существует с заданным content/mode/owner/group.
+//   - absent:    файл удалён.
+//   - rendered:  файл = результат рендера text/template-шаблона ([ADR-010]).
 //     Keeper кладёт literal template_content + CEL-rendered vars в params,
 //     Soul-сторона рендерит сама через shared/tmpl (см. rendered.go).
+//   - directory: каталог существует с заданным owner/group/mode (см.
+//     directory.go); декларативная замена `core.exec.run install -d`.
 //
 // [ADR-010]: docs/adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов
 // [ADR-015]: docs/adr/0015-core-modules-mvp.md#adr-015-core-модули-mvp-точный-список
@@ -76,9 +78,9 @@ func New() *Module {
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	var errs []string
 	switch req.State {
-	case "present", "absent", "rendered":
+	case "present", "absent", "rendered", "directory":
 	default:
-		errs = append(errs, fmt.Sprintf("unknown state %q (want present|absent|rendered)", req.State))
+		errs = append(errs, fmt.Sprintf("unknown state %q (want present|absent|rendered|directory)", req.State))
 	}
 	if _, err := util.StringParam(req.Params, "path"); err != nil {
 		errs = append(errs, err.Error())
@@ -99,7 +101,7 @@ func (m *Module) PlanReadSafe() {}
 // Plan — pure-read dry-run (ADR-031 Scry): читает текущее состояние файла (тот
 // же stat/read/perm/ownership-сравнение, что в начале Apply) и шлёт
 // PlanEvent.changed — «Apply изменил бы файл?». НЕ мутирует хост: ни запись,
-// ни chmod/chown. Покрывает present/absent/rendered.
+// ни chmod/chown. Покрывает present/absent/rendered/directory.
 func (m *Module) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
 	path, err := util.StringParam(req.Params, "path")
 	if err != nil {
@@ -112,6 +114,8 @@ func (m *Module) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServ
 		return m.planAbsent(stream, path)
 	case "rendered":
 		return m.planRendered(stream, req, path)
+	case "directory":
+		return m.planDirectory(stream, req, path)
 	default:
 		return util.PlanFailed(fmt.Sprintf("unknown state %q", req.State))
 	}
@@ -207,6 +211,8 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		return m.applyAbsent(stream, path)
 	case "rendered":
 		return m.applyRendered(stream, req, path)
+	case "directory":
+		return m.applyDirectory(stream, req, path)
 	default:
 		return util.SendFailed(stream, fmt.Sprintf("unknown state %q", req.State))
 	}

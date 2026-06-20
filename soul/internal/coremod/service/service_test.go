@@ -1124,3 +1124,394 @@ func TestApply_ActionProcessError_Fails(t *testing.T) {
 		t.Fatal("failed=false when action process errored (Err set)")
 	}
 }
+
+// ─── daemon_reload (ADR-015 amendment): централизованный systemctl daemon-reload
+// перед мутирующими actions. Guard-кейсы: режимы auto/always/never, порядок
+// reload→action, чистота changed, non-systemd no-op.
+
+const (
+	cmdShowNeedReload = "systemctl show redis --property=NeedDaemonReload --value"
+	cmdDaemonReload   = "systemctl daemon-reload"
+	cmdRestart        = "systemctl restart redis"
+)
+
+// indexOf — позиция первого вызова cmd в r.Calls (-1 если не было). Для проверки
+// порядка reload→action (reload-индекс < action-индекс).
+func indexOf(calls []string, cmd string) int {
+	for i, c := range calls {
+		if c == cmd {
+			return i
+		}
+	}
+	return -1
+}
+
+func contains(calls []string, cmd string) bool { return indexOf(calls, cmd) >= 0 }
+
+// auto + NeedDaemonReload=yes → daemon-reload вызван ПЕРЕД restart (порядок).
+func TestApply_Restarted_DaemonReloadAuto_NeedYes_ReloadsBeforeRestart(t *testing.T) {
+	r := systemdDetected()
+	r.On(cmdShowNeedReload, util.Result{ExitCode: 0, Stdout: "yes\n"})
+	r.On(cmdDaemonReload, util.Result{ExitCode: 0})
+	r.On(cmdRestart, util.Result{ExitCode: 0})
+	m := &service.Module{Runner: r}
+
+	stream := &internaltest.ApplyStream{}
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State:  "restarted",
+		Params: mustStruct(t, map[string]any{"name": "redis"}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if stream.Last().Failed {
+		t.Fatalf("unexpected failed: %s", stream.Last().Message)
+	}
+	ri, xi := indexOf(r.Calls, cmdDaemonReload), indexOf(r.Calls, cmdRestart)
+	if ri < 0 || xi < 0 {
+		t.Fatalf("ожидались daemon-reload и restart, calls=%v", r.Calls)
+	}
+	if ri >= xi {
+		t.Fatalf("daemon-reload должен идти ПЕРЕД restart: reload@%d restart@%d calls=%v", ri, xi, r.Calls)
+	}
+	// reload не помечает шаг changed сверх обычного restarted=true (контракт).
+	if !stream.Last().Changed {
+		t.Fatal("restarted: changed=false")
+	}
+	// диагностика reloaded=true в output.
+	if v, ok := stream.Last().GetOutput().AsMap()["reloaded"]; !ok || v != true {
+		t.Fatalf("output[reloaded] != true: %v", stream.Last().GetOutput().AsMap())
+	}
+}
+
+// auto + NeedDaemonReload=no → reload НЕ вызван, restart вызван.
+func TestApply_Restarted_DaemonReloadAuto_NeedNo_NoReload(t *testing.T) {
+	r := systemdDetected()
+	r.On(cmdShowNeedReload, util.Result{ExitCode: 0, Stdout: "no\n"})
+	r.On(cmdRestart, util.Result{ExitCode: 0})
+	m := &service.Module{Runner: r}
+
+	stream := &internaltest.ApplyStream{}
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State:  "restarted",
+		Params: mustStruct(t, map[string]any{"name": "redis"}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if contains(r.Calls, cmdDaemonReload) {
+		t.Fatalf("daemon-reload не должен вызываться при NeedDaemonReload=no, calls=%v", r.Calls)
+	}
+	if !contains(r.Calls, cmdRestart) {
+		t.Fatalf("restart не вызван, calls=%v", r.Calls)
+	}
+	// reloaded отсутствует в output, когда reload не делался.
+	if _, ok := stream.Last().GetOutput().AsMap()["reloaded"]; ok {
+		t.Fatalf("output[reloaded] не должен присутствовать без reload: %v", stream.Last().GetOutput().AsMap())
+	}
+}
+
+// always → daemon-reload вызван безусловно, даже при NeedDaemonReload=no
+// (systemctl show в этом режиме вообще не зовётся).
+func TestApply_Restarted_DaemonReloadAlways_AlwaysReloads(t *testing.T) {
+	r := systemdDetected()
+	r.On(cmdShowNeedReload, util.Result{ExitCode: 0, Stdout: "no\n"})
+	r.On(cmdDaemonReload, util.Result{ExitCode: 0})
+	r.On(cmdRestart, util.Result{ExitCode: 0})
+	m := &service.Module{Runner: r}
+
+	stream := &internaltest.ApplyStream{}
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State:  "restarted",
+		Params: mustStruct(t, map[string]any{"name": "redis", "daemon_reload": "always"}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if contains(r.Calls, cmdShowNeedReload) {
+		t.Fatalf("always: systemctl show NeedDaemonReload не должен вызываться, calls=%v", r.Calls)
+	}
+	ri, xi := indexOf(r.Calls, cmdDaemonReload), indexOf(r.Calls, cmdRestart)
+	if ri < 0 || ri >= xi {
+		t.Fatalf("always: daemon-reload перед restart, reload@%d restart@%d calls=%v", ri, xi, r.Calls)
+	}
+}
+
+// never → daemon-reload НЕ вызван никогда (и show не зовётся), restart вызван.
+func TestApply_Restarted_DaemonReloadNever_NoReload(t *testing.T) {
+	r := systemdDetected()
+	r.On(cmdShowNeedReload, util.Result{ExitCode: 0, Stdout: "yes\n"}) // даже при yes
+	r.On(cmdRestart, util.Result{ExitCode: 0})
+	m := &service.Module{Runner: r}
+
+	stream := &internaltest.ApplyStream{}
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State:  "restarted",
+		Params: mustStruct(t, map[string]any{"name": "redis", "daemon_reload": "never"}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if contains(r.Calls, cmdDaemonReload) {
+		t.Fatalf("never: daemon-reload не должен вызываться, calls=%v", r.Calls)
+	}
+	if contains(r.Calls, cmdShowNeedReload) {
+		t.Fatalf("never: systemctl show не должен вызываться, calls=%v", r.Calls)
+	}
+	if !contains(r.Calls, cmdRestart) {
+		t.Fatalf("never: restart не вызван, calls=%v", r.Calls)
+	}
+}
+
+// running: auto + NeedDaemonReload=yes → reload ПЕРЕД start, changed только от start.
+func TestApply_Running_DaemonReloadAuto_NeedYes_ReloadsBeforeStart(t *testing.T) {
+	r := systemdDetected()
+	r.On(cmdShowNeedReload, util.Result{ExitCode: 0, Stdout: "yes\n"})
+	r.On(cmdDaemonReload, util.Result{ExitCode: 0})
+	r.On("systemctl is-active --quiet redis", util.Result{ExitCode: 3})
+	r.On("systemctl start redis", util.Result{ExitCode: 0})
+	m := &service.Module{Runner: r}
+
+	stream := &internaltest.ApplyStream{}
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State:  "running",
+		Params: mustStruct(t, map[string]any{"name": "redis"}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	ri, si := indexOf(r.Calls, cmdDaemonReload), indexOf(r.Calls, "systemctl start redis")
+	if ri < 0 || si < 0 || ri >= si {
+		t.Fatalf("running: daemon-reload перед start, reload@%d start@%d calls=%v", ri, si, r.Calls)
+	}
+	if !stream.Last().Changed {
+		t.Fatal("running: changed=false при старте")
+	}
+}
+
+// running: auto + NeedDaemonReload=yes на УЖЕ активном сервисе → reload сделан,
+// но changed=false (reload НЕ помечает шаг changed; start не нужен).
+func TestApply_Running_DaemonReloadAuto_ReloadDoesNotMarkChanged(t *testing.T) {
+	r := systemdDetected()
+	r.On(cmdShowNeedReload, util.Result{ExitCode: 0, Stdout: "yes\n"})
+	r.On(cmdDaemonReload, util.Result{ExitCode: 0})
+	r.On("systemctl is-active --quiet redis", util.Result{ExitCode: 0}) // уже активен
+	m := &service.Module{Runner: r}
+
+	stream := &internaltest.ApplyStream{}
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State:  "running",
+		Params: mustStruct(t, map[string]any{"name": "redis"}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if !contains(r.Calls, cmdDaemonReload) {
+		t.Fatalf("reload должен был выполниться, calls=%v", r.Calls)
+	}
+	if stream.Last().Changed {
+		t.Fatal("changed=true из-за reload на уже-активном сервисе — reload не должен влиять на changed")
+	}
+	if v, ok := stream.Last().GetOutput().AsMap()["reloaded"]; !ok || v != true {
+		t.Fatalf("output[reloaded] != true: %v", stream.Last().GetOutput().AsMap())
+	}
+}
+
+// enabled: auto + NeedDaemonReload=yes → reload ПЕРЕД enable.
+func TestApply_Enabled_DaemonReloadAuto_NeedYes_ReloadsBeforeEnable(t *testing.T) {
+	r := systemdDetected()
+	r.On(cmdShowNeedReload, util.Result{ExitCode: 0, Stdout: "yes\n"})
+	r.On(cmdDaemonReload, util.Result{ExitCode: 0})
+	r.On("systemctl is-enabled --quiet redis", util.Result{ExitCode: 1})
+	r.On("systemctl enable redis", util.Result{ExitCode: 0})
+	m := &service.Module{Runner: r}
+
+	stream := &internaltest.ApplyStream{}
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State:  "enabled",
+		Params: mustStruct(t, map[string]any{"name": "redis"}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	ri, ei := indexOf(r.Calls, cmdDaemonReload), indexOf(r.Calls, "systemctl enable redis")
+	if ri < 0 || ei < 0 || ri >= ei {
+		t.Fatalf("enabled: daemon-reload перед enable, reload@%d enable@%d calls=%v", ri, ei, r.Calls)
+	}
+}
+
+// non-systemd init (openrc) → daemon-reload no-op (не вызывается даже в always).
+func TestApply_OpenRC_DaemonReloadAlways_NoOp(t *testing.T) {
+	r := openrcDetected()
+	r.On("rc-service redis restart", util.Result{ExitCode: 0})
+	m := &service.Module{Runner: r}
+
+	stream := &internaltest.ApplyStream{}
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State:  "restarted",
+		Params: mustStruct(t, map[string]any{"name": "redis", "daemon_reload": "always"}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if contains(r.Calls, cmdDaemonReload) {
+		t.Fatalf("openrc: daemon-reload не должен вызываться (no-op), calls=%v", r.Calls)
+	}
+	if !contains(r.Calls, "rc-service redis restart") {
+		t.Fatalf("openrc restart не вызван, calls=%v", r.Calls)
+	}
+}
+
+// stopped не затронут daemon_reload: manifest его там не объявляет, Apply не зовёт
+// EnsureDaemonReloaded (reload не вызывается даже при NeedDaemonReload=yes).
+func TestApply_Stopped_DaemonReload_NotInvoked(t *testing.T) {
+	r := systemdDetected()
+	r.On(cmdShowNeedReload, util.Result{ExitCode: 0, Stdout: "yes\n"})
+	r.On(cmdDaemonReload, util.Result{ExitCode: 0})
+	r.On("systemctl is-active --quiet redis", util.Result{ExitCode: 0})
+	r.On("systemctl stop redis", util.Result{ExitCode: 0})
+	m := &service.Module{Runner: r}
+
+	stream := &internaltest.ApplyStream{}
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State:  "stopped",
+		Params: mustStruct(t, map[string]any{"name": "redis"}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if contains(r.Calls, cmdDaemonReload) || contains(r.Calls, cmdShowNeedReload) {
+		t.Fatalf("stopped не должен трогать daemon-reload, calls=%v", r.Calls)
+	}
+}
+
+// daemon_reload с неизвестным значением → ошибка валидации (не молча).
+func TestValidate_DaemonReload_UnknownValue_Fails(t *testing.T) {
+	m := service.New()
+	reply, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
+		State:  "restarted",
+		Params: mustStruct(t, map[string]any{"name": "redis", "daemon_reload": "reload-pls"}),
+	})
+	if reply.Ok {
+		t.Fatal("Validate daemon_reload=reload-pls: ok=true (должно быть отклонено)")
+	}
+}
+
+// daemon_reload с валидными значениями проходит Validate на всех мутирующих states.
+func TestValidate_DaemonReload_ValidValues(t *testing.T) {
+	m := service.New()
+	for _, st := range []string{"running", "restarted", "enabled"} {
+		for _, mode := range []string{"auto", "always", "never"} {
+			reply, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
+				State:  st,
+				Params: mustStruct(t, map[string]any{"name": "redis", "daemon_reload": mode}),
+			})
+			if !reply.Ok {
+				t.Fatalf("Validate %s+daemon_reload=%s: not ok: %v", st, mode, reply.Errors)
+			}
+		}
+	}
+}
+
+// ─── Guard-кейсы (QA, low-risk пробелы): закрепляют текущие инварианты, чтобы
+// следующая правка хелпера не изменила их молча.
+
+// GUARD-1: auto + `systemctl show NeedDaemonReload` вернул exit≠0 (или пустой
+// stdout) — текущее поведение: reload НЕ делается (показатель != "yes"), но шаг
+// НЕ падает (no-op). Закрепляем: exit≠0 у `show` интерпретируется как
+// «reload не нужен», а не как ошибка шага. Меняет смысл — только через architect.
+func TestApply_Restarted_DaemonReloadAuto_ShowNonZeroExit_NoReload_NoFail(t *testing.T) {
+	r := systemdDetected()
+	// show вернул ненулевой код + пустой stdout (без Err: процесс запустился).
+	r.On(cmdShowNeedReload, util.Result{ExitCode: 1, Stdout: ""})
+	r.On(cmdRestart, util.Result{ExitCode: 0})
+	m := &service.Module{Runner: r}
+
+	stream := &internaltest.ApplyStream{}
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State:  "restarted",
+		Params: mustStruct(t, map[string]any{"name": "redis"}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	// Шаг НЕ падает: ненулевой exit у show — «reload не нужен», не ошибка.
+	if stream.Last().Failed {
+		t.Fatalf("show exit≠0 не должен фейлить шаг (текущее поведение): %s", stream.Last().Message)
+	}
+	// reload не делался → restart всё равно произошёл (restarted всегда changed).
+	if contains(r.Calls, cmdDaemonReload) {
+		t.Fatalf("reload не должен делаться при show!=\"yes\", calls=%v", r.Calls)
+	}
+	if !contains(r.Calls, cmdRestart) {
+		t.Fatalf("restart не вызван, calls=%v", r.Calls)
+	}
+	if !stream.Last().Changed {
+		t.Fatal("restarted: changed=false")
+	}
+}
+
+// GUARD-2: daemon_reload не-строка (число) → Validate Ok=false И Apply Failed
+// (один парсер daemonReloadMode, без мутаций). Симметрично EnabledNonBool:
+// OptStringParam отвергает non-string до switch-а по значению.
+func TestDaemonReload_NonString_RejectedBothPaths(t *testing.T) {
+	params := mustStruct(t, map[string]any{"name": "redis", "daemon_reload": 7})
+
+	// Validate: Ok=false (daemonReloadMode возвращает ошибку парсера).
+	m := service.New()
+	reply, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
+		State:  "restarted",
+		Params: params,
+	})
+	if reply.Ok {
+		t.Fatal("Validate daemon_reload=7 (число): ok=true (должно быть отклонено)")
+	}
+
+	// Apply: Failed на том же парсере, без мутаций (restart НЕ вызывается).
+	r := systemdDetected()
+	r.On(cmdRestart, util.Result{ExitCode: 0})
+	mm := &service.Module{Runner: r}
+	stream := &internaltest.ApplyStream{}
+	_ = mm.Apply(&pluginv1.ApplyRequest{State: "restarted", Params: params}, stream)
+	if !stream.Last().Failed {
+		t.Fatal("Apply daemon_reload=7: failed=false (должно падать на парсере)")
+	}
+	if contains(r.Calls, cmdRestart) || contains(r.Calls, cmdDaemonReload) {
+		t.Fatalf("non-string daemon_reload не должен доходить до мутаций, calls=%v", r.Calls)
+	}
+}
+
+// GUARD-3: команда `systemctl daemon-reload` вернула exit≠0 → шаг падает ДО
+// action (restart НЕ вызывается со старым unit-ом). Это суть фичи: reload-фейл
+// должен останавливать применение, а не молча рестартовать устаревшее определение.
+func TestApply_Restarted_DaemonReloadCommandFails_NoRestart(t *testing.T) {
+	r := systemdDetected()
+	r.On(cmdShowNeedReload, util.Result{ExitCode: 0, Stdout: "yes\n"})
+	r.On(cmdDaemonReload, util.Result{ExitCode: 1, Stderr: "reload boom"})
+	r.On(cmdRestart, util.Result{ExitCode: 0})
+	m := &service.Module{Runner: r}
+
+	stream := &internaltest.ApplyStream{}
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State:  "restarted",
+		Params: mustStruct(t, map[string]any{"name": "redis"}),
+	}, stream)
+	if !stream.Last().Failed {
+		t.Fatal("daemon-reload exit≠0 должен фейлить шаг")
+	}
+	if contains(r.Calls, cmdRestart) {
+		t.Fatalf("restart НЕ должен вызываться после фейла daemon-reload (иначе рестарт со старым unit-ом), calls=%v", r.Calls)
+	}
+}
+
+// GUARD-3b: команда `systemctl daemon-reload` не запустилась (Err) → так же
+// failed до action (отдельно от ненулевого exit, симметрично прочим Err-веткам).
+func TestApply_Restarted_DaemonReloadCommandProcessError_NoRestart(t *testing.T) {
+	r := systemdDetected()
+	r.On(cmdShowNeedReload, util.Result{ExitCode: 0, Stdout: "yes\n"})
+	r.On(cmdDaemonReload, util.Result{Err: errSpawn})
+	r.On(cmdRestart, util.Result{ExitCode: 0})
+	m := &service.Module{Runner: r}
+
+	stream := &internaltest.ApplyStream{}
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State:  "restarted",
+		Params: mustStruct(t, map[string]any{"name": "redis"}),
+	}, stream)
+	if !stream.Last().Failed {
+		t.Fatal("daemon-reload process-error должен фейлить шаг")
+	}
+	if contains(r.Calls, cmdRestart) {
+		t.Fatalf("restart НЕ должен вызываться после Err daemon-reload, calls=%v", r.Calls)
+	}
+}

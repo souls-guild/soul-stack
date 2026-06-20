@@ -2528,6 +2528,15 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 		leaseOwner = leaseOwnerChecker{rc: d.redisClient}
 	}
 
+	// Staged-гейт passage-capability (ADR-056 §S5): чекер «какие таргет-хосты НЕ
+	// анонсировали passage». non-nil ТОЛЬКО при живом Redis (presence-источник
+	// capability — heartbeat-Hash в Redis). nil → staged-прогон (N>1 Passage)
+	// отвергается fail-closed (нельзя подтвердить поддержку без presence).
+	var passageCap scenario.PassageCapabilityChecker
+	if d.redisClient != nil {
+		passageCap = passageCapChecker{rc: d.redisClient}
+	}
+
 	// Топология с lease-aware presence (ADR-006(a)): «Soul online» деривируется
 	// из живого Redis SID-lease, не из снимка `souls.status`. d.redisClient уже
 	// поднят (setupRedis отработал перед этим шагом). nil-Redis (single-Keeper
@@ -2564,6 +2573,7 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 		KID:            cfg.KID,
 		Summons:        summons,
 		LeaseOwner:     leaseOwner,
+		PassageCap:     passageCap,
 	})
 	d.scenarioRunner = scenarioRunner
 	d.cleanups.push(func() {
@@ -3817,6 +3827,11 @@ func (d *daemon) setupAPIServer(_ context.Context) error {
 		// ModuleFormPrepH — резолвер source-каталогов UI-формы модуля (ADR-045
 		// S3) поверх pgxpool (паттерн VoyageCommandPGResolver(d.pool)).
 		ModuleFormPrepH: handlers.NewModuleFormPrepHandler(handlers.NewFormPrepPGResolver(d.pool), d.logger),
+		// WebUIEnabled — тоггл встроенного UI `/ui` (ADR-055). Резолв *bool →
+		// bool: default-ON (nil-config → true), явный web_ui_enabled: false →
+		// /ui не монтируется. UI вшит в бинарь (go:embed) — внешнего бэкенда не
+		// требует, в отличие от Tempo/Toll.
+		WebUIEnabled: cfg.WebUIMounted(),
 	}, logger)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: build HTTP server: %v\n", err)
@@ -4130,6 +4145,17 @@ type leaseOwnerChecker struct{ rc *keeperredis.Client }
 
 func (c leaseOwnerChecker) SoulLeaseOwner(ctx context.Context, sid string) (string, bool, error) {
 	return keeperredis.SoulLeaseOwner(ctx, c.rc, sid)
+}
+
+// passageCapChecker адаптирует Redis-клиент под staged-гейт scenario-runner-а
+// (ADR-056 §S5): возвращает подмножество SID-ов, НЕ анонсировавших passage-
+// capability. Узкая склейка ради изоляции scenario-пакета от keeperredis (runner
+// зависит от интерфейса [scenario.PassageCapabilityChecker]) — тот же приём, что
+// leaseOwnerChecker.
+type passageCapChecker struct{ rc *keeperredis.Client }
+
+func (c passageCapChecker) SoulsLackingPassage(ctx context.Context, sids []string) ([]string, error) {
+	return keeperredis.SoulsLackingCapability(ctx, c.rc, sids, config.CapabilityPassage)
 }
 
 // setupVoyageWorker — pool VoyageWorker-ов (ADR-043, S1). Feature-flag

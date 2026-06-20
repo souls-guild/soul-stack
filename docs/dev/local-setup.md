@@ -36,6 +36,8 @@ Backlog для следующих slice-ов: Vault PKI (Keeper-side issuance mT
 | `make dev-web [WEB_DIR=…]` | Vite dev-сервер companion-репо (`WEB_DIR`, default `../soul-stack-web`) с обязательным `--host` — иначе vite биндится только на IPv6 `[::1]` и `http://127.0.0.1:5173` отказывает. Гасит старый vite этого репо, поднимает `nohup npm run dev -- --host`, ждёт 200 на `:5173`. Лог → `/tmp/keeper-dev/web-dev.log`. Скрипт — [`dev/web-run.sh`](../../dev/web-run.sh). |
 | `make dev-stand` | Полный подъём стенда одной командой: `dev-provision` → `dev-keeper` → `dev-souls` → `dev-web` + сводка адресов и напоминание про `make dev-jwt`. Применять после рестарта / смены суток (см. [Быстрое восстановление стенда](#быстрое-восстановление-стенда-после-tmp-чистки)). |
 
+> **Два UI: dev vite-сервер vs embed на keeper — не путать.** UI с [ADR-055](../adr/0055-embed-ui-bundle.md#adr-055-embed-ui-bundle--опциональный-single-binary-keeper-с-ui-на-ui) встроен в `keeper`-бинарь (`go:embed`) и в проде/бете отдаётся самим keeper-ом на **`http://<keeper>:8080/ui`** (тоггл [`web_ui_enabled`](../keeper/config.md#web_ui_enabled-top-level), default-ON). Для **разработки фронта** `make dev-web` поднимает живой vite dev-сервер с HMR на **`http://127.0.0.1:5173/ui/`** (отдельный процесс, hot-reload исходников из companion `soul-stack-web`) — это «настоящий» UI при работе над фронтом. Embed на `:8080/ui` показывает **завендоренный снапшот** (`keeper/internal/webui/assets/`, обновляется `make sync-webui`) — он может отставать от исходников companion-а, пока снапшот не пере-синкнут. То есть: фронт правишь и смотришь на `:5173/ui/`; «как увидит пользователь беты» проверяешь на `:8080/ui` после `make sync-webui`. Подробнее про вендоринг — [docs/web/README.md](../web/README.md).
+
 ## Connection details
 
 Порты выбраны так, чтобы не конфликтовать с типичными пользовательскими
@@ -179,16 +181,16 @@ ref**, а не из локальной директории. `make dev-provision
 
 | Артефакт | git-URL (из `keeper.dev.yml`) | ref | источник в `examples/` |
 |---|---|---|---|
-| service `hello-world` | `file:///tmp/keeper-dev/repos/service-hello-world` | `main` | `examples/service/service-hello-world` |
-| service `redis` | `file:///tmp/keeper-dev/repos/service-redis` | `main` | `examples/service/service-redis` |
-| destiny `redis-single` | `file:///tmp/keeper-dev/destiny/redis-single` | `v1.0.0` | `examples/destiny/destiny-redis-single` |
-| destiny `redis-exporter` | `file:///tmp/keeper-dev/destiny/redis-exporter` | `v1.0.0` | `examples/destiny/destiny-redis-exporter` |
-| destiny `node-exporter` | `file:///tmp/keeper-dev/destiny/node-exporter` | `v1.0.0` | `examples/destiny/destiny-node-exporter` |
+| service `hello-world` | `file:///tmp/keeper-dev/repos/hello-world` | `main` | `examples/service/hello-world` |
+| service `redis` | `file:///tmp/keeper-dev/repos/redis` | `main` | `examples/service/redis` |
+| destiny `redis-single` | `file:///tmp/keeper-dev/destiny/redis-single` | `v1.0.0` | `examples/destiny/redis-single` |
+| destiny `redis-exporter` | `file:///tmp/keeper-dev/destiny/redis-exporter` | `v1.0.0` | `examples/destiny/redis-exporter` |
+| destiny `node-exporter` | `file:///tmp/keeper-dev/destiny/node-exporter` | `v1.0.0` | `examples/destiny/node-exporter` |
 
 destiny-URL — это `default_destiny_source` (`file:///tmp/keeper-dev/destiny/{name}`)
-с подстановкой `{name}` из `service-redis/service.yml::destiny[]`; ref `v1.0.0`
+с подстановкой `{name}` из `redis/service.yml::destiny[]`; ref `v1.0.0`
 там же объявлен. Каталог destiny-репо называется по `{name}` (`redis-single`),
-**не** по examples-имени (`destiny-redis-single`).
+**не** по examples-имени (`redis-single`).
 
 Provision создаёт репо детерминированно (фиксированные author/date → стабильный
 commit-SHA при неизменном содержимом): повторный `make dev-provision` не плодит
@@ -328,7 +330,7 @@ make dev-stop
 - `POST /v1/operators` с Bearer JWT первого Архонта → 201 + JWT нового
   оператора; повтор → 409 `operator-already-exists`.
 - `POST /v1/incarnations` для `service: redis` / `scenario: create` → 202 +
-  `apply_id`. service-redis + 3 destiny резолвятся из file://-репо
+  `apply_id`. redis + 3 destiny резолвятся из file://-репо
   (созданы `dev-provision`), рендерятся Keeper-side (CEL + text/template).
 - `POST /v1/operators/archon-alice/revoke` → 409 `would-lock-out-cluster`
   (инвариант ADR-013: последнего `*`-permission удалить нельзя).

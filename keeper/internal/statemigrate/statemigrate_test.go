@@ -13,7 +13,7 @@ import (
 
 // fixtureDir — путь к реальным фикстурам redis-cluster (авторитет над
 // docs-примерами).
-const fixtureDir = "../../../examples/service/service-redis-cluster/migrations"
+const fixtureDir = "../../../examples/service/redis-cluster/migrations"
 
 func mustEvaluator(t *testing.T) Evaluator {
 	t.Helper()

@@ -229,6 +229,148 @@ func TestRender_DestinyIsolation_SelfStillWorks(t *testing.T) {
 	}
 }
 
+// TestRender_DestinyIsolation_SelfArch — guard ослабления инварианта (ADR-009/010
+// amendment): destiny-CEL читает стабильный self-факт целевого хоста
+// soulprint.self.os.arch — синтетический arm64 подставляется в params destiny.
+// Симметрия с .tmpl render_context (ADR-012(d)): self-факты доступны и в CEL .yml.
+func TestRender_DestinyIsolation_SelfArch(t *testing.T) {
+	d := &ResolvedDestiny{
+		Name:  "arch-aware",
+		Input: config.InputSchemaMap{},
+		Tasks: []config.Task{
+			{
+				Name: "fetch by arch",
+				Module: &config.ModuleTask{
+					Module: "core.exec.run",
+					Params: map[string]any{"cmd": "install --arch ${ soulprint.self.os.arch }"},
+				},
+			},
+		},
+	}
+	res := &stubDestinyResolver{resolved: d}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+
+	in := RenderInput{
+		Scenario:    applyScenario("arch-aware", map[string]any{}),
+		Input:       map[string]any{},
+		Incarnation: IncarnationMeta{Name: "prod"},
+		Hosts: []*topology.HostFacts{
+			hostWithRole("arm-1.example.com", "primary", []string{"prod"},
+				map[string]any{"primary_ip": "10.0.0.1"},
+				map[string]any{"family": "debian", "arch": "arm64"}),
+		},
+		Destiny: res,
+	}
+
+	tasks, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if got := tasks[0].Params.GetFields()["cmd"].GetStringValue(); got != "install --arch arm64" {
+		t.Fatalf("command = %q, want install --arch arm64", got)
+	}
+}
+
+// TestRender_DestinyIsolation_WhereForbidden — soulprint.where(...) в destiny-
+// проходе → ошибка изоляции (топология прогона остаётся scenario-only), зеркало
+// TestRender_DestinyIsolation_HostsForbidden для аксессора-синонима.
+func TestRender_DestinyIsolation_WhereForbidden(t *testing.T) {
+	d := &ResolvedDestiny{
+		Name:  "leaky-where",
+		Input: config.InputSchemaMap{},
+		Tasks: []config.Task{
+			{
+				Name: "leak where",
+				Module: &config.ModuleTask{
+					Module: "core.exec.run",
+					Params: map[string]any{"cmd": `echo ${ size(soulprint.where("'prod' in covens")) }`},
+				},
+			},
+		},
+	}
+	res := &stubDestinyResolver{resolved: d}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+
+	in := hostsRunInput(applyScenario("leaky-where", map[string]any{}))
+	in.Destiny = res
+
+	_, _, err := p.Render(context.Background(), in)
+	if err == nil {
+		t.Fatalf("ожидали ошибку изоляции для soulprint.where в destiny")
+	}
+	if !strings.Contains(err.Error(), "soulprint.hosts") {
+		t.Fatalf("ожидали сообщение про изоляцию soulprint.hosts, получили: %v", err)
+	}
+}
+
+// TestRender_ScenarioSelfArch — scenario-проход НЕ сломан ослаблением: тот же
+// self-факт soulprint.self.os.arch читается в module-задаче scenario напрямую.
+func TestRender_ScenarioSelfArch(t *testing.T) {
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario: moduleScenario("core.exec.run", map[string]any{
+			"cmd": "install --arch ${ soulprint.self.os.arch }",
+		}),
+		Input:       map[string]any{},
+		Incarnation: IncarnationMeta{Name: "prod"},
+		Hosts: []*topology.HostFacts{
+			hostWithRole("arm-1.example.com", "primary", []string{"prod"},
+				map[string]any{"primary_ip": "10.0.0.1"},
+				map[string]any{"family": "debian", "arch": "arm64"}),
+		},
+	}
+	tasks, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if got := tasks[0].Params.GetFields()["cmd"].GetStringValue(); got != "install --arch arm64" {
+		t.Fatalf("command = %q, want install --arch arm64", got)
+	}
+}
+
+// TestRender_ApplyDestiny_InputArchCompat — apply:input остаётся валидным каналом
+// после ослабления (обратная совместимость): scenario рендерит arch из
+// soulprint.self и пробрасывает его в destiny через apply:input; destiny читает
+// input.arch (а не soulprint.self напрямую) — старая идиома не ломается.
+func TestRender_ApplyDestiny_InputArchCompat(t *testing.T) {
+	d := &ResolvedDestiny{
+		Name:  "via-input",
+		Input: config.InputSchemaMap{"arch": {Type: "string", Required: true}},
+		Tasks: []config.Task{
+			{
+				Name: "use input arch",
+				Module: &config.ModuleTask{
+					Module: "core.exec.run",
+					Params: map[string]any{"cmd": "install --arch ${ input.arch }"},
+				},
+			},
+		},
+	}
+	res := &stubDestinyResolver{resolved: d}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+
+	in := RenderInput{
+		// scenario вычисляет arch из self целевого хоста и передаёт в destiny.
+		Scenario:    applyScenario("via-input", map[string]any{"arch": "${ soulprint.self.os.arch }"}),
+		Input:       map[string]any{},
+		Incarnation: IncarnationMeta{Name: "prod"},
+		Hosts: []*topology.HostFacts{
+			hostWithRole("arm-1.example.com", "primary", []string{"prod"},
+				map[string]any{"primary_ip": "10.0.0.1"},
+				map[string]any{"family": "debian", "arch": "arm64"}),
+		},
+		Destiny: res,
+	}
+
+	tasks, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if got := tasks[0].Params.GetFields()["cmd"].GetStringValue(); got != "install --arch arm64" {
+		t.Fatalf("command = %q, want install --arch arm64", got)
+	}
+}
+
 // TestRender_EmptyFilterIndex0_StepError — where никого не отобрал → [0] над
 // пустым списком → ошибка шага рендера (понятная, не паника). «primary не
 // найден» — это ошибка шага, а не тихий null.

@@ -16,7 +16,7 @@ import (
 
 func TestE2EServiceCovenProbe_Create(t *testing.T) {
 	stack := harness.NewStack(t, harness.Config{
-		ExamplePath: "examples/service/service-coven-probe",
+		ExamplePath: "examples/service/coven-probe",
 		Souls:       1,
 	})
 	defer stack.Cleanup()

@@ -128,6 +128,22 @@ message RenderedTask {
   // регистрирует результат под именем (доступна только своим idx). Отличается от
   // TaskEvent.register_data: то — payload, это — ИМЯ, под которым он адресуется.
   string register = 13;
+
+  // plan_index — ГЛОБАЛЬНЫЙ сквозной индекс задачи в ПОЛНОМ плане прогона (по
+  // ВСЕМ Passage staged-render, ADR-056), = RenderedTask.Index на Keeper-е
+  // (pipeline.go). В отличие от позиции в ApplyRequest.tasks[] (она ЛОКАЛЬНА:
+  // подмножество задач одного Passage, отфильтрованное per-host через where:),
+  // plan_index уникален по всему плану И не зависит от per-host where: — это
+  // стабильный ключ register-корреляции на Keeper-е (apply_task_register.plan_index,
+  // миграция 079). Soul эхает его в TaskEvent.plan_index; для register-резолва
+  // (buildRegisterByHost) Keeper мапит nameByIdx[Index] против plan_index, а НЕ
+  // против локального task_idx — иначе при passage>0 или разном per-host where:
+  // имена разъезжаются (latent-баг task_idx-коллизии, ADR-056 §S1 fix Variant B).
+  //
+  // 0/пусто = старый Soul без эхо ИЛИ N=1-прогон (один Passage, локальный==глобальный):
+  // forward-compat (ADR-012(c) only-add). Для N=1 plan_index==task_idx, корреляция
+  // совпадает с прежним поведением БИТ-В-БИТ. Только never-reuse номера поля.
+  int32 plan_index = 16;
 }
 
 // ApplyRequest — команда Keeper → Soul на выполнение прогона.
@@ -157,6 +173,19 @@ message ApplyRequest {
   // guard такой запрос НЕ отвергает (fencing деградирует до защиты по apply_id +
   // SID-lease). Только never-reuse: новый номер поля при breaking change.
   int32 attempt = 4;
+
+  // passage — индекс Passage (0-based) staged-render, к которому относится это
+  // задание (ADR-056). Прогон сценария исполняется как N≥1 упорядоченных Passage
+  // (render → dispatch → barrier → сбор register); этот ApplyRequest несёт
+  // подмножество задач ОДНОГО Passage. Корреляция per-Passage задания с его
+  // терминалом — по (apply_id, sid, passage) (echo в TaskEvent/RunResult).
+  //
+  // 0/пусто = единственный Passage (forward-compat, ADR-012(c) only-add):
+  // N=1-сценарий (без register-зависимостей) и старый Keeper без поля шлют
+  // passage=0 — поведение БИТ-В-БИТ как до staged-render (один проход). Soul
+  // эхает passage в TaskEvent/RunResult как есть. Только never-reuse номера поля.
+  // Стратификация на N>1 и stage-loop — S2/S3; S1 несёт только транспорт+схему.
+  int32 passage = 6;
 
   // dry_run — режим Scry (ADR-031): Soul НЕ применяет задачи, а для каждой зовёт
   // SoulModule.Plan (pure-read, НЕ мутирует хост) и собирает машинный
@@ -204,6 +233,27 @@ message TaskEvent {
   // (multi-Keeper-safe: TaskEvent мог прийти не на тот инстанс, что держит
   // []RenderedTask). При true keeper не пишет register_data/error.message в audit.
   bool no_log = 6;
+
+  // passage — эхо ApplyRequest.passage (ADR-056): индекс Passage (0-based),
+  // которому принадлежит задача. Soul возвращает его как есть. Keeper копит
+  // register per-(apply_id, sid, passage): render следующего Passage читает
+  // register предыдущих (staged-render). 0/пусто = единственный Passage
+  // (forward-compat, ADR-012(c) only-add) — поведение как до staged-render.
+  // Только never-reuse номера поля.
+  int32 passage = 7;
+
+  // plan_index — эхо RenderedTask.plan_index (ADR-056 §S1 fix Variant B):
+  // ГЛОБАЛЬНЫЙ сквозной индекс задачи в полном плане прогона (по всем Passage),
+  // которым Keeper корелирует register-данные (apply_task_register.plan_index,
+  // миграция 079). Soul берёт его из req.Tasks[idx].plan_index и эхает как есть —
+  // task_idx (field 2) остаётся ЛОКАЛЬНОЙ позицией в ApplyRequest.tasks[] (его
+  // семантика НЕ меняется: онлайн-gating onchanges_idx/onfail_idx ссылается на
+  // локальный индекс среза). plan_index — отдельный глобальный ключ для
+  // Keeper-side register-корреляции через Passage.
+  //
+  // 0/пусто = старый Soul без эхо ИЛИ N=1-прогон (plan_index==task_idx):
+  // forward-compat (ADR-012(c) only-add). Только never-reuse номера поля.
+  int32 plan_index = 8;
 }
 
 // RunStatus — финальный статус всего прогона.
@@ -237,6 +287,16 @@ message RunResult {
   // проверка актуальности НЕ применяется (деградирует до append-only single-winner
   // guard по статусу). Только never-reuse номера поля.
   int32 attempt = 4;
+
+  // passage — эхо ApplyRequest.passage (ADR-056): индекс Passage (0-based),
+  // терминал которого несёт этот отчёт. Корреляция RunResult → строка прогона —
+  // по (apply_id, sid, passage). Barrier каждого Passage ждёт терминалы своего
+  // среза; финальный итог прогона и единственный commit incarnation.state —
+  // после терминала ПОСЛЕДНЕГО Passage (state-commit НЕ дробится по-Passage,
+  // ADR-056 §г / ADR-009 §7). 0/пусто = единственный Passage (forward-compat,
+  // ADR-012(c) only-add) — поведение как до staged-render. Только never-reuse
+  // номера поля.
+  int32 passage = 5;
 }
 
 // CancelApply — команда Keeper → Soul на отмену текущего прогона.

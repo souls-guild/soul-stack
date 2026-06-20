@@ -37,9 +37,9 @@ func TestGolden_DestinyExample(t *testing.T) {
 }
 
 func TestGolden_DestinyExample_FromRepo(t *testing.T) {
-	// Полный пример из examples/destiny/destiny-redis/destiny.yml должен
+	// Полный пример из examples/destiny/redis/destiny.yml должен
 	// валидироваться напрямую с 0 diagnostics — это контракт регрессии.
-	runExpect(t, "../../../examples/destiny/destiny-redis/destiny.yml", KindDestiny, false, ExitOK, nil)
+	runExpect(t, "../../../examples/destiny/redis/destiny.yml", KindDestiny, false, ExitOK, nil)
 }
 
 func TestGolden_ServiceExample(t *testing.T) {
@@ -47,13 +47,44 @@ func TestGolden_ServiceExample(t *testing.T) {
 }
 
 func TestGolden_ServiceExample_FromRepo(t *testing.T) {
-	// Полный пример из examples/service/service-redis-cluster/service.yml
+	// Полный пример из examples/service/redis-cluster/service.yml
 	// должен валидироваться напрямую с 0 diagnostics — контракт регрессии.
-	runExpect(t, "../../../examples/service/service-redis-cluster/service.yml", KindService, false, ExitOK, nil)
+	runExpect(t, "../../../examples/service/redis-cluster/service.yml", KindService, false, ExitOK, nil)
 }
 
 func TestGolden_ScenarioExample(t *testing.T) {
 	runExpect(t, "../../testdata/scenario-golden/redis-create.yml", KindScenario, false, ExitOK, nil)
+}
+
+// TestGolden_ScenarioSerialStaged — serial: + staged (N>1 Passage) ВАЛИДЕН (ADR-056
+// §S4 amend, S-2D1): рестрикт serial_staged_unsupported снят, 2D serial×passage
+// реализован. Сценарий проходит линт с ExitOK и passage_plan HINT (структура
+// Passage), БЕЗ ошибки serial_staged_unsupported. Реверс (рестрикт вернулся) →
+// ExitHasErrors → этот тест падает.
+func TestGolden_ScenarioSerialStaged(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := Run(Options{Path: "../../testdata/scenario-golden/serial-staged.yml", JSON: true, Kind: KindScenario}, &out, &errOut)
+	if code != ExitOK {
+		t.Fatalf("exit code: got %d, want %d (serial+staged теперь валиден)\nstdout: %s\nstderr: %s", code, ExitOK, out.String(), errOut.String())
+	}
+	codes := map[string]bool{}
+	dec := json.NewDecoder(&out)
+	for {
+		var d diag.Diagnostic
+		if err := dec.Decode(&d); err != nil {
+			if err == io.EOF {
+				break
+			}
+			t.Fatalf("json decode: %v", err)
+		}
+		codes[d.Code] = true
+	}
+	if !codes["passage_plan"] {
+		t.Errorf("ожидался passage_plan HINT (staged-структура), got: %v", sortedKeys(codes))
+	}
+	if codes["serial_staged_unsupported"] {
+		t.Fatalf("★ serial_staged_unsupported поднялся — рестрикт вернулся (ADR-056 §S4 amend нарушен)")
+	}
 }
 
 func TestGolden_ManifestSoulModule(t *testing.T) {

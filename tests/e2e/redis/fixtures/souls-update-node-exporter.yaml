@@ -1,0 +1,21 @@
+# Souls-фикстура для L3a redis::update_node_exporter.
+#
+# Один soul-stub: update_node_exporter — re-apply ОДНОЙ destiny node-exporter
+# (один хост). covens: [redis-nodeexp] — членство в Coven incarnation
+# (incarnation.name, ADR-008); roster прогона резолвится по нему.
+#
+# soulprint обязателен: node-exporter берёт arch напрямую из soulprint.self.os.arch
+# (URL release-tarball-а), и create-прогон в том же тесте тоже читает soulprint
+# keeper-side. Тот же os-блок, что в souls.yaml.
+- sid: soul-a.example.com
+  status: connected
+  covens: [redis-nodeexp]
+  soulprint:
+    os:
+      family: debian
+      distro: debian
+      version: "12"
+      arch: amd64
+      pkg_mgr: apt
+      init_system: systemd
+    hostname: soul-a

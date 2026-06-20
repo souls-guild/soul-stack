@@ -1,0 +1,27 @@
+# Желаемые post-apply ожидания redis::add_replicas (для будущего L3b-харнеса).
+#
+# НЕ исполняется на L3a — см. souls-add-replicas.yaml (runtime-probe + cross-host
+# register не моделируются soul-stub-ом). Зафиксировано как контракт для L3b.
+#
+# apply_runs.status — success (rolling install + replicaof + health-gate прошли).
+#
+# incarnation_state — add_replicas объявляет ТОЛЬКО state_changes.appends:
+# [redis_hosts] (без sets). На текущем keeper appends/modifies в commit НЕ
+# применяются (keeper/internal/scenario/state.go mergeStateChanges + render/
+# pipeline.go RenderStateChanges — «future-расширение полной грамматики»), поэтому
+# даже на L3b в этой версии redis_hosts в incarnation.state НЕ появится. Поле
+# оставлено закомментированным как намерение DSL, не как текущая гарантия.
+#   # redis_hosts: [soul-b.example.com]
+#
+# audit_events — incarnation.scenario_started (явный RunScenario; payload
+# {name, scenario, apply_id}).
+#
+# metrics — keeper_scenario_runs_total{result="ok"} >= 1.
+apply_runs:
+  status: success
+
+audit_events:
+  - type: incarnation.scenario_started
+
+metrics:
+  keeper_scenario_runs_total{result="ok"}: ">= 1"

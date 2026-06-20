@@ -1,0 +1,29 @@
+# L0-кейс: переопределение base_url на внутреннее зеркало.
+#
+# base_url_override=https://nexus.internal/ne → scenario apply:input передаёт его
+# в destiny.base_url → CEL собирает url с этого зеркала вместо GitHub Releases.
+# Доказывает, что зеркало/nexus подменяет корень загрузки (прод-конвенция:
+# base_url переопределяется на внутренний proxy). Ассерт — url шага
+# core.url.fetched начинается с зеркала.
+name: node-exporter renders download url from base_url mirror override
+
+fixtures:
+  default_destiny_source: "file://../../{name}"
+  input:
+    version: "1.9.0"
+    sha256: ""
+    collectors: [smartmon, nvme, ipmi]
+    base_url_override: "https://nexus.internal/ne"
+  soulprint:
+    os:
+      arch: amd64
+    network:
+      primary_ip: "10.0.0.5"
+
+assert:
+  rendered_tasks:
+    - index: 0
+      module: core.url.fetched
+      params:
+        url: https://nexus.internal/ne/v1.9.0/node_exporter-1.9.0.linux-amd64.tar.gz
+        path: /tmp/node_exporter-1.9.0.tar.gz

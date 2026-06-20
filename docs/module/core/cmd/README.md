@@ -47,22 +47,43 @@ shell-ом. **Модуль TRUSTED-ONLY**: `cmd`-строка уходит в `s
 Как и у `core.exec`, non-zero exit основной команды сам по себе не делает шаг
 failed — решает `failed_when:` в scenario.
 
-## Пример
+## Примеры
+
+**`creates`-guard** — install пропускается, если файл-результат уже на месте (простейшая идемпотентность, но **не** ловит апгрейд версии: путь тот же → шаг no-op даже когда содержимое устарело):
 
 ```yaml
 # Разложить бинарь из распакованного каталога: install -m 0755 — локальный shell,
 # без сети. Идемпотентность — через creates: бинарь на месте → no-op.
-- name: Install node_exporter binary
+- name: Install redis_exporter binary
   module: core.cmd.shell
   params:
-    creates: "${ input.bin_dir + '/node_exporter' }"
+    creates: "${ input.bin_dir + '/redis_exporter' }"
     cmd: >-
       install -m 0755
-      '${ '/tmp/node_exporter-' + input.version + '/node_exporter-' + input.version + '.linux-' + input.arch + '/node_exporter' }'
+      '${ '/tmp/redis_exporter-' + input.redis_exporter_version + '/redis_exporter-v' + input.redis_exporter_version + '.linux-' + soulprint.self.os.arch + '/redis_exporter' }'
+      '${ input.bin_dir + '/redis_exporter' }'
+```
+
+(из инлайн-блока redis_exporter в [`examples/service/monitoring/scenario/create/main.yml`](../../../../examples/service/monitoring/scenario/create/main.yml). Эталонный `node-exporter` install-шаг идёт **не** через `creates`, а version-aware `unless` — см. ниже: `creates` не ловит апгрейд версии, поэтому бинарь под пин-версию лучше ставить через `unless`)
+
+**Version-aware `unless`-guard** — install пропускается ТОЛЬКО когда на месте уже стоит бинарь нужной версии. В отличие от `creates`, это позволяет **апгрейд**: другая версия → `unless` не satisfied → install выполняется и перезаписывает старый бинарь. `unless` satisfied = exit 0 (`--version`-вывод содержит ожидаемую версию):
+
+```yaml
+# install пропускается, только если уже стоит node_exporter нужной версии;
+# любая другая версия (или отсутствие бинаря) → unless не satisfied → переустановка.
+# register: install-шаг подключён к onchanges рестарта — апгрейд рестартит сервис.
+- name: Install node_exporter binary
+  module: core.cmd.shell
+  register: node_exporter_bin
+  params:
+    unless: "${ 'test -x ' + input.bin_dir + '/node_exporter && ' + input.bin_dir + '/node_exporter --version 2>&1 | grep -qF ' + \"'version \" + input.version + \" '\" }"
+    cmd: >-
+      install -m 0755
+      '${ '/tmp/node_exporter-' + input.version + '/node_exporter-' + input.version + '.linux-' + soulprint.self.os.arch + '/node_exporter' }'
       '${ input.bin_dir + '/node_exporter' }'
 ```
 
-(из [`examples/destiny/destiny-node-exporter/tasks/main.yml`](../../../../examples/destiny/destiny-node-exporter/tasks/main.yml))
+(из [`examples/destiny/node-exporter/tasks/service.yml`](../../../../examples/destiny/node-exporter/tasks/service.yml). `grep`-паттерн `'version <X> '` — в одинарных кавычках, с пробелами по обе стороны версии. `node_exporter --version` печатает строку `node_exporter, version <X> (...)` — пробел перед `(` есть всегда; ведущий пробел отделяет токен `version`, **trailing-пробел обязателен**, чтобы паттерн `'version 1.9.0 '` НЕ дал ложный матч на выводе `version 1.9.01 ` (без trailing-пробела `grep -qF 'version 1.9.0'` совпал бы и с `1.9.01`). `input.version` под semver-`pattern`, в кавычках injection невозможна. `arch` берётся из `soulprint.self.os.arch` — стабильный self-факт хоста, доступный в CEL-проходе destiny.)
 
 ## Безопасность
 

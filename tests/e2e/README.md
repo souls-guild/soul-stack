@@ -61,10 +61,10 @@ tests/e2e/
 | Тест | Service | Сценарий | Что покрывает |
 |---|---|---|---|
 | `smoke_nginx_test.go` | `examples/service/smoke-nginx` | `create` | pilot; install nginx + start service, два task_name. |
-| `hello_world_test.go` | `examples/service/service-hello-world` | `create` | `input.greeting` (required) + мутация `state.greeting_file`. |
-| `noop_test.go` | `examples/service/service-noop` | `create` | минимальный no-op `core.exec.run`; state не мутируется. |
-| `coven_probe_test.go` | `examples/service/service-coven-probe` | `create` | init-маркер `core.file.present`, двойная мутация state (`marker_file`, `last_target`). |
-| `long_runner_test.go` | `examples/service/service-long-runner` | `create` | init-маркер `core.file.present`, двойная мутация state (`last_run`, `runner_marker`). |
+| `hello_world_test.go` | `examples/service/hello-world` | `create` | `input.greeting` (required) + мутация `state.greeting_file`. |
+| `noop_test.go` | `examples/service/noop` | `create` | минимальный no-op `core.exec.run`; state не мутируется. |
+| `coven_probe_test.go` | `examples/service/coven-probe` | `create` | init-маркер `core.file.present`, двойная мутация state (`marker_file`, `last_target`). |
+| `long_runner_test.go` | `examples/service/long-runner` | `create` | init-маркер `core.file.present`, двойная мутация state (`last_run`, `runner_marker`). |
 
 Тесты на «продвинутые» сценарии (`mark_a/mark_ab/mark_where`, `stagger/serial_waves`)
 требуют multi-host и/или поллинга mid-run — отдельный slice.

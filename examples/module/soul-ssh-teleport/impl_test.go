@@ -18,12 +18,12 @@ import (
 // Симметрично vault/realClientForMock: тесту нужны только наблюдаемые точки
 // контракта, не реальный Teleport API.
 type mockTeleportClient struct {
-	signedCert     string
-	signErr        error
-	gotPubkey      string
-	gotPrincipal   string
-	gotRoles       []string
-	closed         atomic.Bool
+	signedCert   string
+	signErr      error
+	gotPubkey    string
+	gotPrincipal string
+	gotRoles     []string
+	closed       atomic.Bool
 }
 
 func (m *mockTeleportClient) GenerateUserSSHCert(_ context.Context, pubkey, principal string, roles []string) (string, error) {

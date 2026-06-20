@@ -1,0 +1,16 @@
+name: staged-probe-live
+state_schema_version: 1
+description: >-
+  L3b staged-render capstone (ADR-056 §S5): реальный soul-флот исполняет probe
+  (core.cmd.shell) → keeper собирает per-host register → задача Passage 1 с
+  where: register.role.stdout == 'master' таргетится ТОЛЬКО на master-хост.
+  Доказывает probe→where end-to-end на ПОДЛИННОМ soul-бинаре (S3 доказал на
+  soul-STUB). Фокус — targeting по свежему register, без redis/cloud/vault.
+
+# state_schema_version=1 → каталог migrations/ не обязателен (ADR-019).
+# state_changes scenario пуст: фокус-сценарий доказывает targeting Passage 1,
+# а не мутацию incarnation.state (commit state — отдельный инвариант, покрыт
+# другими L3a/L3b-тестами).
+state_schema:
+  type: object
+  properties: {}

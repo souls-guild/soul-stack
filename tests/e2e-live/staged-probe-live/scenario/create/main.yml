@@ -1,0 +1,38 @@
+name: create
+description: >-
+  Staged-render probe→where на реальном soul-флоте (ADR-056 §S5, L3b capstone).
+  Passage 0: probe роли каждого хоста (core.cmd.shell printf master|slave по
+  hostname) → register: role. Passage 1: core.file.present создаёт маркер-файл
+  ТОЛЬКО там, где register.role.stdout == 'master' — keeper стратифицирует
+  потребителя в Passage строго ПОСЛЕ probe (N=2) и резолвит where свежим
+  per-host register, собранным барьером Passage 0.
+
+# Фокус-сценарий: state не меняется (commit state — отдельный инвариант).
+state_changes: {}
+
+tasks:
+  # ── Passage 0: probe роли per-host ───────────────────────────────────────
+  # printf (НЕ echo) — без trailing newline, иначе register.role.stdout был бы
+  # "master\n" и where: == 'master' не сматчился бы (cmd-модуль stdout НЕ тримит).
+  # Hostname контейнера = SID (SpawnSoulContainer Hostname:sid), поэтому роль
+  # детерминирована по хосту: soul-live-a → master, остальные → slave.
+  - name: Probe role per host
+    module: core.cmd.shell
+    register: role
+    changed_when: "false"
+    params:
+      cmd: |
+        if [ "$(hostname)" = "soul-live-a.example.com" ]; then printf master; else printf slave; fi
+
+  # ── Passage 1: действие ТОЛЬКО на master по СВЕЖЕМУ register ──────────────
+  # where: register.role.stdout — keeper стратифицирует эту задачу в Passage 1
+  # (строго после probe Passage 0) и резолвит where собранным per-host register.
+  # Маркер-файл — наблюдаемое доказательство targeting-а (AssertHostFileExists
+  # на master, отсутствие на slave).
+  - name: Mark the master host
+    module: core.file.present
+    where: "register.role.stdout == 'master'"
+    params:
+      path: /tmp/acted-on-master
+      content: "passage-1 ran here\n"
+      mode: "0644"

@@ -1,0 +1,62 @@
+# L0-харнесс destiny node-exporter (Trial, ADR-023).
+#
+# soul-trial L0 рендерит scenario, а не standalone destiny напрямую (harness
+# завязан на scenario/<name>/main.yml). Эта обёртка — минимальный scenario,
+# единственная задача которого — apply:destiny node-exporter, чтобы дать destiny
+# render-only L0-проверку. Каноническая раскладка обёртки (ADR-023): подкаталог
+# самой destiny — `node-exporter/_trial/scenario/apply/`.
+#
+# Резолвер L0 зеркалит прод (slice A, ADR-023): apply: { destiny: node-exporter }
+# резолвится по имени из `_trial/service.yml::destiny[]`, а URL берётся из
+# `default_destiny_source` тест-кейса (file://, относительно service-root =
+# `_trial/`). Целевая destiny лежит уровнем выше — `examples/destiny/node-exporter/`.
+name: apply
+description: >-
+  Trial-харнесс: делегирует установку node_exporter в destiny node-exporter
+  через apply:destiny. Не сервис — обёртка под L0-render destiny.
+
+input:
+  version:
+    type: string
+    default: "1.9.0"
+    pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+  sha256:
+    type: string
+    default: ""
+    pattern: "^(sha256:[0-9a-f]{64})?$"
+  collectors:
+    type: array
+    default: [smartmon, nvme, ipmi]
+    items:
+      type: string
+      enum: [smartmon, nvme, ipmi]
+  # base_url_override — опциональный проброс зеркала/nexus в destiny.base_url.
+  # Пуст (default "") → destiny берёт свой default (GitHub Releases); непуст →
+  # apply:input передаёт его в destiny. Нужен L0-кейсу base-url-override.
+  base_url_override:
+    type: string
+    default: ""
+
+tasks:
+  - name: Apply node-exporter destiny
+    apply:
+      destiny: node-exporter
+      input:
+        # CEL по scenario-scope: значения резолвятся в scenario-env, в destiny
+        # уходит уже результат (destiny scenario-input не видит, изоляция ADR-009).
+        version:    "${ input.version }"
+        sha256:     "${ input.sha256 }"
+        # arch НЕ передаём: destiny берёт его напрямую из soulprint.self.os.arch
+        # (soulprint доступен в destiny-CEL). L0-кейс arch-arm64 варьирует
+        # soulprint.os.arch фикстуры — он доезжает в URL через destiny, не через
+        # этот apply:input.
+        # listen привязан к internal-сети: primary_ip из 10.0.0.0/8 → bind на него,
+        # иначе bind на все интерфейсы (пустой host) + стандартный порт :9100.
+        # L0-кейс listen-non10 варьирует primary_ip.
+        listen:     "${ (soulprint.self.network.primary_ip.startsWith('10.') ? soulprint.self.network.primary_ip : '') + ':9100' }"
+        collectors: "${ input.collectors }"
+        # base_url передаём в destiny ТОЛЬКО при непустом override; иначе ключ
+        # опускаем условным merge — destiny применит свой default GitHub Releases.
+        # CEL-тернарник: непустой override → его значение; пустой → тот же
+        # destiny-default (idempotent passthrough, не ломает render-defaults).
+        base_url:   "${ input.base_url_override != '' ? input.base_url_override : 'https://github.com/prometheus/node_exporter/releases/download' }"

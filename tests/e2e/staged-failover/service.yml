@@ -1,0 +1,10 @@
+name: staged-failover
+state_schema_version: 1
+description: |
+  Staged-render (ADR-056) 2-passage e2e fixture: probe роли → действие на master.
+  НЕ в examples/** — тестовая фикстура staged-render-proof (examples/ — WIP-зона
+  пользователя). Воспроизводит каноническую идиому probe→where (orchestration.md
+  §4-5 / ADR-008 волатильная роль) на контракт-тире.
+state_schema:
+  type: object
+  properties: {}

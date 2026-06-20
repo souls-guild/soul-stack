@@ -1,0 +1,23 @@
+# Post-apply ожидания redis-cluster-live::add_user (после create на той же
+# incarnation). scenario.state_changes.sets: redis_users ← input.users (полный
+# список, перезаписывается целиком). acl secret:true — маскинг на выходе (логи/UI),
+# в incarnation.state значение хранится как есть (ADR-010 «маскинг на выходе»),
+# поэтому assert по реальному ACL-правилу.
+#
+# Остальные ключи state (redis_version/cluster_replicas/redis_config/cluster_nodes)
+# наследуются от create-baseline и не проверяются здесь (subset-match по дельте).
+apply_runs:
+  status: success
+
+incarnation_state:
+  redis_users:
+    - name: app
+      acl: "on >app-pass ~app:* +@read +@write"
+    - name: readonly
+      acl: "on >ro-pass ~* +@read"
+
+audit_events:
+  - type: incarnation.scenario_started
+
+metrics:
+  keeper_scenario_runs_total{result="ok"}: ">= 2"

@@ -599,10 +599,23 @@ func (h *eventStreamHandler) EventStream(stream grpclib.BidiStreamingServer[keep
 	// lease уже захвачен, Soul виден сразу.
 	h.touchSeen(ctx, sid)
 
+	// Персист анонсированных capabilities (ADR-056 §S5) рядом с presence —
+	// staged-гейт run.go сверяет их ДО dispatch. Пишем ВСЕГДА (включая пустой
+	// набор от старого бинаря), перезаписью: иначе старый Soul, переподключившийся
+	// после нового, унаследовал бы stale-флаг "passage". Best-effort (как
+	// heartbeat): без Redis (dev/unit) — гейт деградирует fail-closed на staged.
+	if h.deps.Redis != nil {
+		if err := keeperredis.SetSoulCapabilities(ctx, h.deps.Redis, sid, hello.GetCapabilities()); err != nil {
+			h.logger.Debug("eventstream: persist soul capabilities failed",
+				slog.String("sid", sid), slog.Any("error", err))
+		}
+	}
+
 	h.logger.Info("eventstream: session opened",
 		slog.String("sid", sid),
 		slog.String("session_id", sessionID),
 		slog.String("soul_version", hello.GetSoulVersion()),
+		slog.Any("capabilities", hello.GetCapabilities()),
 	)
 	defer h.logger.Info("eventstream: session closed",
 		slog.String("sid", sid),

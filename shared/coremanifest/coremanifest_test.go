@@ -11,7 +11,7 @@ import "testing"
 // keeper-стороны (StateCreated/StateDestroyed, StateRead, present/absent).
 var expectedModules = map[string][]string{
 	"core.exec":     {"run"},
-	"core.file":     {"present", "absent", "rendered"},
+	"core.file":     {"present", "absent", "rendered", "directory"},
 	"core.pkg":      {"installed", "latest", "absent"},
 	"core.service":  {"running", "stopped", "restarted", "enabled"},
 	"core.user":     {"present", "absent"},

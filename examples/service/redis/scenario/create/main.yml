@@ -114,7 +114,23 @@ input:
     type: string
     default: ":9100"
     pattern: "^[A-Za-z0-9._-]*:[0-9]{1,5}$"
-    description: Listen-адрес node_exporter (--web.listen-address).
+    description: >-
+      Listen-адрес node_exporter (--web.listen-address). По умолчанию :9100
+      (стандартный порт node_exporter).
+
+  # Textfile-коллекторы железа node-exporter. Дефолт [] (из essence): на VM/в
+  # стеке redis железа нет, ставится только ядро node_exporter. Тот же список
+  # читает update_node_exporter — единая политика collectors (re-apply иначе
+  # менял бы набор коллекторов помимо версии).
+  node_exporter_collectors:
+    type: array
+    default: []
+    items:
+      type: string
+      enum: [smartmon, nvme, ipmi]
+    description: >-
+      Список textfile-коллекторов node-exporter (smartmon|nvme|ipmi). [] = только
+      ядро node_exporter без oneshot-сборщиков железа.
 
   redis_exporter_listen:
     type: string

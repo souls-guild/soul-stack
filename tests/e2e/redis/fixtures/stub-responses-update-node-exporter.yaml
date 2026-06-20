@@ -1,0 +1,39 @@
+# Скрипт ответов soul-stub-а для redis::update_node_exporter.
+#
+# scenario update_node_exporter — re-apply ОДНОЙ destiny node-exporter с НОВОЙ
+# версией (version-aware install переустановит бинарь и рестартнёт демон только
+# при смене версии). task_name ниже = `name:` задач в
+# examples/destiny/node-exporter/tasks/{install,account,service}.yml.
+#
+# Эти же task_name появляются на create-прогоне (та же destiny node-exporter),
+# чейн create→update_node_exporter в одном тесте → одного скрипта достаточно
+# (stub матчит по task_name). collectors.yml-задачи под when: при collectors=[]
+# скипаются на Soul-е, на L3a ловятся default-success (LoadApplyScript).
+#
+# state_changes — per-task артефакт RunResult; incarnation.state мутируется
+# ОТДЕЛЬНО (keeper-side sets: node_exporter_version ← input ПОСЛЕ барьера).
+scenarios:
+  update_node_exporter:
+    apply_responses:
+      - task_name: "Fetch node_exporter tarball"
+        run_result: { status: success }
+      - task_name: "Extract node_exporter tarball"
+        run_result: { status: success }
+      - task_name: "Ensure the node_exporter system group exists"
+        run_result: { status: success }
+      - task_name: "Ensure the node_exporter system user exists"
+        run_result: { status: success }
+      - task_name: "Ensure textfile collector directory exists"
+        run_result: { status: success }
+      - task_name: "Install node_exporter binary"
+        run_result: { status: success }
+      - task_name: "Render node_exporter systemd unit"
+        run_result: { status: success }
+      - task_name: "Ensure node_exporter is running and enabled at boot"
+        run_result:
+          status: success
+          state_changes:
+            services:
+              - node_exporter: running
+      - task_name: "Restart node_exporter because unit or binary changed"
+        run_result: { status: success }

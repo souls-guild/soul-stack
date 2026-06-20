@@ -1,4 +1,4 @@
-# Souls-фикстура для L3a service-long-runner::create.
+# Souls-фикстура для L3a long-runner::create.
 #
 # scenario create — простой write маркер; сами «длинные прогоны» (staggered,
 # serial_waves) — отдельные сценарии, проверяются отдельным slice-ом. Здесь

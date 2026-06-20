@@ -314,9 +314,9 @@ func (e *pveHTTPError) Error() string {
 // CloneVM — POST /nodes/<source>/qemu/<vmid>/clone.
 func (c *pveRealClient) CloneVM(ctx context.Context, p CloneParams) (string, error) {
 	form := url.Values{
-		"newid":  []string{strconv.Itoa(p.NewVMID)},
-		"name":   []string{p.Name},
-		"full":   []string{boolForm(p.FullClone)},
+		"newid": []string{strconv.Itoa(p.NewVMID)},
+		"name":  []string{p.Name},
+		"full":  []string{boolForm(p.FullClone)},
 	}
 	if p.TargetNode != "" && p.TargetNode != p.SourceNode {
 		form.Set("target", p.TargetNode)

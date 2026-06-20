@@ -69,15 +69,16 @@ func TestHumaCadence_RestReachable_ChiCoexistence(t *testing.T) {
 		handlers.NewPermissionCatalogHandler(nil),
 		handlers.NewEventTypeCatalogHandler(nil),
 		handlers.NewMyPermissionsHandler(nil, nil),
-		nil, // enforcer (nil: RBAC не дёргается — проверка через router-tree)
-		nil, // auditWriter
-		nil, // metricsHTTP
-		nil, // tollDegraded
-		nil, // tempoLimiter
-		nil, // tempoMetrics
-		nil, // tempoVoyageCreateLimits
-		nil, // tempoVoyagePreviewLimits
-		nil, // logger
+		nil,   // enforcer (nil: RBAC не дёргается — проверка через router-tree)
+		nil,   // auditWriter
+		nil,   // metricsHTTP
+		nil,   // tollDegraded
+		nil,   // tempoLimiter
+		nil,   // tempoMetrics
+		nil,   // tempoVoyageCreateLimits
+		nil,   // tempoVoyagePreviewLimits
+		false, // webUIEnabled — /ui вне интереса cadence-роутинг-теста
+		nil,   // logger
 	)
 	routes, ok := h.(chi.Routes)
 	if !ok {

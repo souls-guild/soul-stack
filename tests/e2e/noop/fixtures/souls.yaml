@@ -1,4 +1,4 @@
-# Souls-фикстура для L3a service-noop::create.
+# Souls-фикстура для L3a noop::create.
 #
 # scenario вызывает только core.exec.run echo hello — soulprint минимальный
 # (формально для core.exec нужны просто факты ОС, но даём согласованный с

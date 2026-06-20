@@ -165,8 +165,11 @@ func TestInsert_HappyPath(t *testing.T) {
 	if !strings.Contains(f.queryRowSQL, "INSERT INTO apply_runs") {
 		t.Errorf("SQL = %q", f.queryRowSQL)
 	}
-	if len(f.queryRowArgs) != 8 {
-		t.Fatalf("args len = %d, want 8", len(f.queryRowArgs))
+	if len(f.queryRowArgs) != 9 {
+		t.Fatalf("args len = %d, want 9", len(f.queryRowArgs))
+	}
+	if f.queryRowArgs[8] != 0 {
+		t.Errorf("args[8] passage = %v, want 0 (default Passage)", f.queryRowArgs[8])
 	}
 	if f.queryRowArgs[0] != "01HAPPLY0000000000000000" {
 		t.Errorf("args[0] apply_id = %v", f.queryRowArgs[0])
@@ -318,7 +321,7 @@ func TestInsert_MapsFKViolation(t *testing.T) {
 
 func TestUpdateStatus_HappyPath(t *testing.T) {
 	f := &fakeDB{execTag: pgconn.NewCommandTag("UPDATE 1"), execTagSet: true}
-	err := UpdateStatus(context.Background(), f, "a", "s", StatusSuccess, nil)
+	err := UpdateStatus(context.Background(), f, "a", "s", 0, StatusSuccess, nil)
 	if err != nil {
 		t.Fatalf("UpdateStatus: %v", err)
 	}
@@ -331,8 +334,11 @@ func TestUpdateStatus_HappyPath(t *testing.T) {
 	if !strings.Contains(f.execSQL, "finished_at") {
 		t.Errorf("SQL must touch finished_at: %q", f.execSQL)
 	}
-	if len(f.execArgs) != 4 {
-		t.Fatalf("args len = %d, want 4", len(f.execArgs))
+	if len(f.execArgs) != 5 {
+		t.Fatalf("args len = %d, want 5", len(f.execArgs))
+	}
+	if f.execArgs[4] != 0 {
+		t.Errorf("args[4] passage = %v, want 0", f.execArgs[4])
 	}
 	if f.execArgs[2] != "success" {
 		t.Errorf("args[2] status = %v, want success", f.execArgs[2])
@@ -344,7 +350,7 @@ func TestUpdateStatus_HappyPath(t *testing.T) {
 
 func TestUpdateStatus_WithErrorSummary(t *testing.T) {
 	f := &fakeDB{execTag: pgconn.NewCommandTag("UPDATE 1"), execTagSet: true}
-	err := UpdateStatus(context.Background(), f, "a", "s", StatusFailed, strp("task 0 failed: policy_violation"))
+	err := UpdateStatus(context.Background(), f, "a", "s", 0, StatusFailed, strp("task 0 failed: policy_violation"))
 	if err != nil {
 		t.Fatalf("UpdateStatus: %v", err)
 	}
@@ -362,7 +368,7 @@ func TestUpdateStatus_NotFound(t *testing.T) {
 			return errRow{err: pgx.ErrNoRows}
 		},
 	}
-	err := UpdateStatus(context.Background(), f, "a", "s", StatusSuccess, nil)
+	err := UpdateStatus(context.Background(), f, "a", "s", 0, StatusSuccess, nil)
 	if !errors.Is(err, ErrApplyRunNotFound) {
 		t.Fatalf("err = %v, want ErrApplyRunNotFound", err)
 	}
@@ -372,7 +378,7 @@ func TestUpdateStatus_NotFound(t *testing.T) {
 // терминал не перезаписывается терминалом.
 func TestUpdateStatus_AppendOnlyGuardInSQL(t *testing.T) {
 	f := &fakeDB{execTag: pgconn.NewCommandTag("UPDATE 1"), execTagSet: true}
-	if err := UpdateStatus(context.Background(), f, "a", "s", StatusSuccess, nil); err != nil {
+	if err := UpdateStatus(context.Background(), f, "a", "s", 0, StatusSuccess, nil); err != nil {
 		t.Fatalf("UpdateStatus: %v", err)
 	}
 	if !strings.Contains(f.execSQL, "status IN ('planned', 'claimed', 'running', 'dispatched')") {
@@ -385,7 +391,7 @@ func TestUpdateStatus_AppendOnlyGuardInSQL(t *testing.T) {
 func TestUpdateStatus_DispatchedToTerminal_OK(t *testing.T) {
 	for _, term := range []Status{StatusSuccess, StatusFailed, StatusCancelled} {
 		f := &fakeDB{execTag: pgconn.NewCommandTag("UPDATE 1"), execTagSet: true}
-		if err := UpdateStatus(context.Background(), f, "a", "s", term, nil); err != nil {
+		if err := UpdateStatus(context.Background(), f, "a", "s", 0, term, nil); err != nil {
 			t.Fatalf("dispatched → %s: %v", term, err)
 		}
 		if f.queryRowCalls != 0 {
@@ -400,7 +406,7 @@ func TestUpdateStatus_DispatchedToTerminal_OK(t *testing.T) {
 // Не-терминал → терминал: переход проходит (UPDATE 1), probe не дёргается.
 func TestUpdateStatus_NonTerminalToTerminal_OK(t *testing.T) {
 	f := &fakeDB{execTag: pgconn.NewCommandTag("UPDATE 1"), execTagSet: true}
-	if err := UpdateStatus(context.Background(), f, "a", "s", StatusSuccess, nil); err != nil {
+	if err := UpdateStatus(context.Background(), f, "a", "s", 0, StatusSuccess, nil); err != nil {
 		t.Fatalf("non-terminal → terminal: %v", err)
 	}
 	if f.queryRowCalls != 0 {
@@ -419,7 +425,7 @@ func TestUpdateStatus_TerminalToTerminal_AlreadyTerminal(t *testing.T) {
 				return staticRow{values: []any{st}}
 			},
 		}
-		err := UpdateStatus(context.Background(), f, "a", "s", StatusFailed, strp("recovery boom"))
+		err := UpdateStatus(context.Background(), f, "a", "s", 0, StatusFailed, strp("recovery boom"))
 		if !errors.Is(err, ErrApplyRunAlreadyTerminal) {
 			t.Errorf("status=%s: err = %v, want ErrApplyRunAlreadyTerminal", st, err)
 		}
@@ -431,10 +437,10 @@ func TestUpdateStatus_TerminalToTerminal_AlreadyTerminal(t *testing.T) {
 
 func TestUpdateStatus_RejectsEmptyKey(t *testing.T) {
 	f := &fakeDB{}
-	if err := UpdateStatus(context.Background(), f, "", "s", StatusSuccess, nil); err == nil {
+	if err := UpdateStatus(context.Background(), f, "", "s", 0, StatusSuccess, nil); err == nil {
 		t.Error("empty apply_id returned nil")
 	}
-	if err := UpdateStatus(context.Background(), f, "a", "", StatusSuccess, nil); err == nil {
+	if err := UpdateStatus(context.Background(), f, "a", "", 0, StatusSuccess, nil); err == nil {
 		t.Error("empty sid returned nil")
 	}
 	if f.execCalls != 0 {
@@ -444,7 +450,7 @@ func TestUpdateStatus_RejectsEmptyKey(t *testing.T) {
 
 func TestUpdateStatus_RejectsInvalidStatus(t *testing.T) {
 	f := &fakeDB{}
-	if err := UpdateStatus(context.Background(), f, "a", "s", Status("hax"), nil); err == nil {
+	if err := UpdateStatus(context.Background(), f, "a", "s", 0, Status("hax"), nil); err == nil {
 		t.Fatal("invalid status returned nil")
 	}
 }
@@ -453,30 +459,39 @@ func TestUpdateStatus_RejectsInvalidStatus(t *testing.T) {
 
 func TestRecordTaskFailure_HappyPath(t *testing.T) {
 	f := &fakeDB{execTag: pgconn.NewCommandTag("UPDATE 1"), execTagSet: true}
-	err := RecordTaskFailure(context.Background(), f, "a", "s", 2, "task 2 core.pkg.installed: E: Version not found")
+	// taskIdx=2 (локальный), planIndex=7 (глобальный) различны — фиксируем, что
+	// оба едут как отдельные аргументы (ADR-056 §S1 fix Variant B).
+	err := RecordTaskFailure(context.Background(), f, "a", "s", 0, 2, 7, "task 7 core.pkg.installed: E: Version not found")
 	if err != nil {
 		t.Fatalf("RecordTaskFailure: %v", err)
 	}
 	if f.execCalls != 1 {
 		t.Errorf("execCalls = %d, want 1", f.execCalls)
 	}
-	if !strings.Contains(f.execSQL, "COALESCE(task_idx") || !strings.Contains(f.execSQL, "COALESCE(error_summary") {
-		t.Errorf("SQL must COALESCE first-failure-wins: %q", f.execSQL)
+	if !strings.Contains(f.execSQL, "COALESCE(task_idx") || !strings.Contains(f.execSQL, "COALESCE(error_summary") ||
+		!strings.Contains(f.execSQL, "COALESCE(failed_plan_index") {
+		t.Errorf("SQL must COALESCE first-failure-wins (task_idx/error_summary/failed_plan_index): %q", f.execSQL)
 	}
-	if len(f.execArgs) != 4 {
-		t.Fatalf("args len = %d, want 4", len(f.execArgs))
+	if len(f.execArgs) != 6 {
+		t.Fatalf("args len = %d, want 6", len(f.execArgs))
+	}
+	if f.execArgs[4] != 0 {
+		t.Errorf("args[4] passage = %v, want 0", f.execArgs[4])
 	}
 	if f.execArgs[2] != 2 {
-		t.Errorf("args[2] task_idx = %v, want 2", f.execArgs[2])
+		t.Errorf("args[2] task_idx (локальный) = %v, want 2", f.execArgs[2])
 	}
-	if f.execArgs[3] != "task 2 core.pkg.installed: E: Version not found" {
+	if f.execArgs[5] != 7 {
+		t.Errorf("args[5] failed_plan_index (глобальный) = %v, want 7", f.execArgs[5])
+	}
+	if f.execArgs[3] != "task 7 core.pkg.installed: E: Version not found" {
 		t.Errorf("args[3] summary = %v", f.execArgs[3])
 	}
 }
 
 func TestRecordTaskFailure_NotFound(t *testing.T) {
 	f := &fakeDB{execTag: pgconn.NewCommandTag("UPDATE 0"), execTagSet: true}
-	err := RecordTaskFailure(context.Background(), f, "a", "s", 0, "boom")
+	err := RecordTaskFailure(context.Background(), f, "a", "s", 0, 0, 0, "boom")
 	if !errors.Is(err, ErrApplyRunNotFound) {
 		t.Fatalf("err = %v, want ErrApplyRunNotFound", err)
 	}
@@ -484,14 +499,17 @@ func TestRecordTaskFailure_NotFound(t *testing.T) {
 
 func TestRecordTaskFailure_RejectsBadInput(t *testing.T) {
 	f := &fakeDB{}
-	if err := RecordTaskFailure(context.Background(), f, "", "s", 0, "x"); err == nil {
+	if err := RecordTaskFailure(context.Background(), f, "", "s", 0, 0, 0, "x"); err == nil {
 		t.Error("empty apply_id returned nil")
 	}
-	if err := RecordTaskFailure(context.Background(), f, "a", "", 0, "x"); err == nil {
+	if err := RecordTaskFailure(context.Background(), f, "a", "", 0, 0, 0, "x"); err == nil {
 		t.Error("empty sid returned nil")
 	}
-	if err := RecordTaskFailure(context.Background(), f, "a", "s", -1, "x"); err == nil {
+	if err := RecordTaskFailure(context.Background(), f, "a", "s", 0, -1, 0, "x"); err == nil {
 		t.Error("negative task_idx returned nil")
+	}
+	if err := RecordTaskFailure(context.Background(), f, "a", "s", 0, 0, -1, "x"); err == nil {
+		t.Error("negative plan_index returned nil")
 	}
 	if f.execCalls != 0 {
 		t.Errorf("execCalls = %d on validation failure, want 0", f.execCalls)
@@ -590,7 +608,7 @@ func TestSelectIncarnationByApplyID_HappyPath(t *testing.T) {
 			return staticRow{values: []any{"redis-prod", "scale", int32(3)}}
 		},
 	}
-	name, scenario, attempt, err := SelectIncarnationByApplyID(context.Background(), f, "a", "s")
+	name, scenario, attempt, err := SelectIncarnationByApplyID(context.Background(), f, "a", "s", 0)
 	if err != nil {
 		t.Fatalf("SelectIncarnationByApplyID: %v", err)
 	}
@@ -600,14 +618,14 @@ func TestSelectIncarnationByApplyID_HappyPath(t *testing.T) {
 	if attempt != 3 {
 		t.Errorf("attempt = %d, want 3 (fencing-epoch строки)", attempt)
 	}
-	if len(f.queryRowArgs) != 2 || f.queryRowArgs[0] != "a" || f.queryRowArgs[1] != "s" {
+	if len(f.queryRowArgs) != 3 || f.queryRowArgs[0] != "a" || f.queryRowArgs[1] != "s" || f.queryRowArgs[2] != 0 {
 		t.Errorf("args = %v", f.queryRowArgs)
 	}
 }
 
 func TestSelectIncarnationByApplyID_NotFound(t *testing.T) {
 	f := &fakeDB{} // default → ErrNoRows
-	_, _, _, err := SelectIncarnationByApplyID(context.Background(), f, "missing", "s")
+	_, _, _, err := SelectIncarnationByApplyID(context.Background(), f, "missing", "s", 0)
 	if !errors.Is(err, ErrApplyRunNotFound) {
 		t.Fatalf("err = %v, want ErrApplyRunNotFound", err)
 	}

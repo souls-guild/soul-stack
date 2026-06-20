@@ -1,0 +1,14 @@
+# Скрипт ответов soul-stub-а для redis::restart_node_exporter.
+#
+# scenario restart_node_exporter — одна задача core.service.restarted
+# "Restart node_exporter" (имя юнита node_exporter). Принудительный рестарт без
+# изменения incarnation.state (в сценарии нет state_changes).
+#
+# state_changes нет: restart не несёт per-task артефакта и не мутирует
+# incarnation.state — тест ассертит только apply_runs success + audit + metric,
+# без state-дельты (см. expectations/after-restart-node-exporter.yaml).
+scenarios:
+  restart_node_exporter:
+    apply_responses:
+      - task_name: "Restart node_exporter"
+        run_result: { status: success }

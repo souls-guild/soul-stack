@@ -394,14 +394,20 @@ func TestIntegration_Reader_DeliveryHistory_Filters(t *testing.T) {
 }
 
 // TestIntegration_Reader_ChangedTaskKeys — guard read-пути свёртки changed-задач
-// (T3): SelectChangedTaskKeys читает (sid, task_idx) задач прогона, терминал-ивших
-// CHANGED, СТРОГО из `task.executed`-событий со `status == TASK_STATUS_CHANGED`.
+// (T3): SelectChangedTaskKeys читает (sid, plan_index) задач прогона, терминал-
+// ивших CHANGED, СТРОГО из `task.executed`-событий со `status == TASK_STATUS_CHANGED`.
 // Проверяем:
 //   - фильтр по correlation_id (apply_id) + event_type + status (другие прогоны /
 //     статусы / типы не попадают);
-//   - дедуп пары (sid, task_idx) (retry дал две task.executed-строки одной задачи);
+//   - дедуп пары (sid, plan_index) (retry дал две task.executed-строки одной задачи);
+//   - backward-compat: строки БЕЗ plan_index (старый Soul / прогон до T3) читаются
+//     с fallback на task_idx (COALESCE в SQL);
 //   - секрет-гигиена: register_data/error-значения payload НЕ влияют на ключи
-//     (берутся только sid + task_idx).
+//     (берутся только sid + plan_index).
+//
+// Этот сид специально кладёт ТОЛЬКО task_idx (без plan_index) — проверяет
+// fallback-ветку. Приоритет plan_index над task_idx под staged/per-host (plan_idx
+// ≠ task_idx) проверяет TestIntegration_Reader_ChangedTaskKeys_PlanIndexPriority.
 func TestIntegration_Reader_ChangedTaskKeys(t *testing.T) {
 	resetAuditLog(t)
 	ctx := context.Background()
@@ -436,8 +442,9 @@ func TestIntegration_Reader_ChangedTaskKeys(t *testing.T) {
 			Source:        audit.SourceSoulGRPC,
 			CorrelationID: s.apply,
 			Payload: map[string]any{
-				"sid":           s.sid,
-				"apply_id":      s.apply,
+				"sid":      s.sid,
+				"apply_id": s.apply,
+				// БЕЗ plan_index — backward-compat: чтение fallback-ит на task_idx.
 				"task_idx":      s.idx,
 				"status":        s.status,
 				"register_data": map[string]any{"password": "should-not-leak-into-key"},
@@ -463,11 +470,11 @@ func TestIntegration_Reader_ChangedTaskKeys(t *testing.T) {
 	}
 
 	// Ожидаем РОВНО {(a,0),(b,0),(a,1)} — дедуп схлопнул дубль (a,0); OK/FAILED
-	// и прогон B исключены.
+	// и прогон B исключены. plan_index взят fallback-ом из task_idx.
 	want := map[ChangedTaskKey]struct{}{
-		{SID: "a.local", TaskIdx: 0}: {},
-		{SID: "b.local", TaskIdx: 0}: {},
-		{SID: "a.local", TaskIdx: 1}: {},
+		{SID: "a.local", PlanIndex: 0}: {},
+		{SID: "b.local", PlanIndex: 0}: {},
+		{SID: "a.local", PlanIndex: 1}: {},
 	}
 	if len(keys) != len(want) {
 		t.Fatalf("got %d keys, want %d: %+v", len(keys), len(want), keys)
@@ -478,8 +485,64 @@ func TestIntegration_Reader_ChangedTaskKeys(t *testing.T) {
 		}
 	}
 	// Прогон B не должен присутствовать.
-	if _, ok := keys[ChangedTaskKey{SID: "z.local", TaskIdx: 0}]; ok {
+	if _, ok := keys[ChangedTaskKey{SID: "z.local", PlanIndex: 0}]; ok {
 		t.Error("cross-apply leak: applyB key in applyA result")
+	}
+}
+
+// TestIntegration_Reader_ChangedTaskKeys_PlanIndexPriority — T3 GUARD (read-путь):
+// под staged/per-host-where ГЛОБАЛЬНЫЙ plan_index ≠ ЛОКАЛЬНОМУ task_idx; свёртка
+// CHANGED-задач ОБЯЗАНА брать plan_index (ключ корреляции с RenderedTask.Index),
+// а НЕ task_idx — иначе ключ указал бы на соседнюю задачу (mismatch в
+// state_changes-whitelist + audit changed_tasks).
+//
+// Сид: одна CHANGED-задача с plan_index=7, task_idx=2 (имитация второго Passage,
+// где локальная позиция 2 соответствует глобальному плану 7). Ожидаем ключ
+// (sid, 7) — глобальный; РЕВЕРС-инвариант: (sid, 2) (локальный task_idx) в
+// результате присутствовать НЕ должен.
+func TestIntegration_Reader_ChangedTaskKeys_PlanIndexPriority(t *testing.T) {
+	resetAuditLog(t)
+	ctx := context.Background()
+
+	w := NewWriter(integrationPool)
+	reader := NewReader(integrationPool)
+
+	applyID := audit.NewULID()
+
+	ev := &audit.Event{
+		EventType:     audit.EventTaskExecuted,
+		Source:        audit.SourceSoulGRPC,
+		CorrelationID: applyID,
+		Payload: map[string]any{
+			"sid":      "h.local",
+			"apply_id": applyID,
+			// staged/per-host: локальная позиция 2 в своём Passage ≠ глобальному
+			// сквозному индексу 7 по всему плану.
+			"task_idx":   2,
+			"plan_index": 7,
+			"status":     "TASK_STATUS_CHANGED",
+		},
+	}
+	if err := w.Write(ctx, ev); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+
+	keys, err := reader.SelectChangedTaskKeys(ctx, applyID)
+	if err != nil {
+		t.Fatalf("SelectChangedTaskKeys: %v", err)
+	}
+
+	// Ключ — ГЛОБАЛЬНЫЙ plan_index (7), а не локальный task_idx (2).
+	if _, ok := keys[ChangedTaskKey{SID: "h.local", PlanIndex: 7}]; !ok {
+		t.Errorf("ожидался ключ (h.local, plan_index=7) — свёртка ДОЛЖНА брать глобальный plan_index; keys=%+v", keys)
+	}
+	// РЕВЕРС: локальный task_idx (2) НЕ должен стать ключом — иначе корреляция с
+	// планом указала бы на соседнюю задачу (T3-баг).
+	if _, ok := keys[ChangedTaskKey{SID: "h.local", PlanIndex: 2}]; ok {
+		t.Errorf("ключ (h.local, 2) присутствует — свёртка взяла ЛОКАЛЬНЫЙ task_idx вместо plan_index (T3-регресс); keys=%+v", keys)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("got %d keys, want 1: %+v", len(keys), keys)
 	}
 }
 

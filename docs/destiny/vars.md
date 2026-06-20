@@ -23,7 +23,7 @@
 Top-level YAML-map. Никакой обёртки (`vars:` ключом верхнего уровня внутри файла — тавтологично, путь к файлу и так сообщает контекст).
 
 ```yaml
-# destiny-redis/vars.yml
+# redis/vars.yml
 redis_unit_name: redis-server
 redis_conf_path: /etc/redis/redis.conf
 redis_data_dir:  /var/lib/redis
@@ -45,7 +45,7 @@ acl_file_path: "/etc/redis/users/${ input.user }.acl"
 ## Использование в задачах
 
 ```yaml
-# destiny-redis/tasks/apply.yml
+# redis/tasks/apply.yml
 - name: Install redis-server package
   module: core.pkg.installed
   params:

@@ -841,4 +841,3 @@ func (r resourceRef) delete(ctx context.Context, cli azureClients, rg string) er
 	}
 	return errors.New("unknown resource kind: " + r.kind)
 }
-

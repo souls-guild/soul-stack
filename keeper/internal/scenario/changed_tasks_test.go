@@ -38,8 +38,8 @@ func TestBuildChangedTasks_ChangedHostsByUniqueSID(t *testing.T) {
 		{TaskIndex: 0, TargetSIDs: []string{"a.local", "b.local", "c.local"}},
 	}
 	keys := changedKeys(
-		auditpg.ChangedTaskKey{SID: "a.local", TaskIdx: 0},
-		auditpg.ChangedTaskKey{SID: "b.local", TaskIdx: 0},
+		auditpg.ChangedTaskKey{SID: "a.local", PlanIndex: 0},
+		auditpg.ChangedTaskKey{SID: "b.local", PlanIndex: 0},
 	)
 
 	got := buildChangedTasks(tasks, plans, keys)
@@ -79,9 +79,9 @@ func TestBuildChangedTasks_LoopNoDoubleCount(t *testing.T) {
 	}
 	// CHANGED: a.local на idx 0 и 2; b.local на idx 1. По union sid это {a,b} = 2.
 	keys := changedKeys(
-		auditpg.ChangedTaskKey{SID: "a.local", TaskIdx: 0},
-		auditpg.ChangedTaskKey{SID: "a.local", TaskIdx: 2},
-		auditpg.ChangedTaskKey{SID: "b.local", TaskIdx: 1},
+		auditpg.ChangedTaskKey{SID: "a.local", PlanIndex: 0},
+		auditpg.ChangedTaskKey{SID: "a.local", PlanIndex: 2},
+		auditpg.ChangedTaskKey{SID: "b.local", PlanIndex: 1},
 	)
 
 	got := buildChangedTasks(tasks, plans, keys)
@@ -99,6 +99,54 @@ func TestBuildChangedTasks_LoopNoDoubleCount(t *testing.T) {
 	}
 }
 
+// TestBuildChangedTasks_StagedPlanIndexCorrelation — T3 GUARD (свёртка-сторона):
+// под staged/per-host-where ГЛОБАЛЬНЫЙ RenderedTask.Index (= ChangedTaskKey.PlanIndex)
+// ≠ ЛОКАЛЬНОМУ task_idx. buildChangedTasks корелирует CHANGED по глобальному
+// Index — changed-ключ, построенный по глобальному plan_index (как теперь делает
+// SelectChangedTaskKeys), ДОЛЖЕН попадать; ключ по локальному task_idx — НЕТ.
+//
+// Модель: задача глобального Index=5 (второй Passage, локальная позиция была бы 2),
+// таргет h.local. CHANGED-ключ корректный — {h.local, PlanIndex:5}.
+func TestBuildChangedTasks_StagedPlanIndexCorrelation(t *testing.T) {
+	tasks := []*render.RenderedTask{
+		{Index: 5, Name: "restart_staged", Register: "rst", Module: "core.service.running"},
+	}
+	plans := []render.DispatchPlan{
+		{TaskIndex: 5, TargetSIDs: []string{"h.local"}},
+	}
+	// Глобальный plan_index=5 (то, что отдаёт SelectChangedTaskKeys после T3).
+	keys := changedKeys(auditpg.ChangedTaskKey{SID: "h.local", PlanIndex: 5})
+
+	got := buildChangedTasks(tasks, plans, keys)
+	if len(got) != 1 {
+		t.Fatalf("got %d, want 1 (changed-задача под staged должна корелировать по глобальному plan_index)", len(got))
+	}
+	if got[0].ChangedHosts != 1 || got[0].Register != "rst" {
+		t.Errorf("ChangedHosts=%d Register=%q, want 1/rst", got[0].ChangedHosts, got[0].Register)
+	}
+}
+
+// TestBuildChangedTasks_StagedLocalIdxMiscorrelates — РЕВЕРС-инвариант T3 GUARD:
+// если бы свёртка ключевалась по ЛОКАЛЬНОМУ task_idx (=2), changed-ключ {h.local,2}
+// НЕ совпал бы с глобальным Index=5 задачи → задача молча выпала бы из changed_tasks
+// (mismatch state_changes-whitelist + audit). Этот тест фиксирует, что такой ключ
+// действительно НЕ матчится — гарантия, что регресс на локальный индекс будет пойман.
+func TestBuildChangedTasks_StagedLocalIdxMiscorrelates(t *testing.T) {
+	tasks := []*render.RenderedTask{
+		{Index: 5, Name: "restart_staged", Register: "rst", Module: "core.service.running"},
+	}
+	plans := []render.DispatchPlan{
+		{TaskIndex: 5, TargetSIDs: []string{"h.local"}},
+	}
+	// Ошибочный (локальный) ключ: task_idx=2 ≠ глобальному Index=5.
+	keys := changedKeys(auditpg.ChangedTaskKey{SID: "h.local", PlanIndex: 2})
+
+	got := buildChangedTasks(tasks, plans, keys)
+	if len(got) != 0 {
+		t.Fatalf("got %d, want 0 — ключ по ЛОКАЛЬНОМУ task_idx (2) не должен матчить глобальный Index (5): %+v", len(got), got)
+	}
+}
+
 // TestBuildChangedTasks_NoChangesOmitted — таска без CHANGED ни на одном хосте
 // НЕ попадает в массив.
 func TestBuildChangedTasks_NoChangesOmitted(t *testing.T) {
@@ -111,7 +159,7 @@ func TestBuildChangedTasks_NoChangesOmitted(t *testing.T) {
 		{TaskIndex: 1, TargetSIDs: []string{"h.local"}},
 	}
 	// CHANGED только idx 0.
-	keys := changedKeys(auditpg.ChangedTaskKey{SID: "h.local", TaskIdx: 0})
+	keys := changedKeys(auditpg.ChangedTaskKey{SID: "h.local", PlanIndex: 0})
 
 	got := buildChangedTasks(tasks, plans, keys)
 	if len(got) != 1 {
@@ -136,7 +184,7 @@ func TestBuildChangedTasks_TotalFromDispatchPlan(t *testing.T) {
 	plans := []render.DispatchPlan{
 		{TaskIndex: 0, TargetSIDs: []string{"a.local", "b.local"}},
 	}
-	keys := changedKeys(auditpg.ChangedTaskKey{SID: "a.local", TaskIdx: 0})
+	keys := changedKeys(auditpg.ChangedTaskKey{SID: "a.local", PlanIndex: 0})
 
 	got := buildChangedTasks(tasks, plans, keys)
 	if len(got) != 1 {
@@ -159,7 +207,7 @@ func TestBuildChangedTasks_AddressIDFallback(t *testing.T) {
 	plans := []render.DispatchPlan{
 		{TaskIndex: 0, TargetSIDs: []string{"h.local"}},
 	}
-	keys := changedKeys(auditpg.ChangedTaskKey{SID: "h.local", TaskIdx: 0})
+	keys := changedKeys(auditpg.ChangedTaskKey{SID: "h.local", PlanIndex: 0})
 
 	got := buildChangedTasks(tasks, plans, keys)
 	if len(got) != 1 {
@@ -180,7 +228,7 @@ func TestBuildChangedTasks_UnaddressableIncluded(t *testing.T) {
 	plans := []render.DispatchPlan{
 		{TaskIndex: 0, TargetSIDs: []string{"h.local"}},
 	}
-	keys := changedKeys(auditpg.ChangedTaskKey{SID: "h.local", TaskIdx: 0})
+	keys := changedKeys(auditpg.ChangedTaskKey{SID: "h.local", PlanIndex: 0})
 
 	got := buildChangedTasks(tasks, plans, keys)
 	if len(got) != 1 {
@@ -208,8 +256,8 @@ func TestBuildChangedTasks_UnaddressableNotFolded(t *testing.T) {
 		{TaskIndex: 1, TargetSIDs: []string{"h.local"}},
 	}
 	keys := changedKeys(
-		auditpg.ChangedTaskKey{SID: "h.local", TaskIdx: 0},
-		auditpg.ChangedTaskKey{SID: "h.local", TaskIdx: 1},
+		auditpg.ChangedTaskKey{SID: "h.local", PlanIndex: 0},
+		auditpg.ChangedTaskKey{SID: "h.local", PlanIndex: 1},
 	)
 
 	got := buildChangedTasks(tasks, plans, keys)

@@ -165,8 +165,11 @@ type destroyStreamL2 struct {
 	sent []*pluginv1.DestroyEvent
 }
 
-func (s *destroyStreamL2) Send(e *pluginv1.DestroyEvent) error { s.sent = append(s.sent, e); return nil }
-func (s *destroyStreamL2) Context() context.Context            { return s.ctx }
+func (s *destroyStreamL2) Send(e *pluginv1.DestroyEvent) error {
+	s.sent = append(s.sent, e)
+	return nil
+}
+func (s *destroyStreamL2) Context() context.Context { return s.ctx }
 
 func l2Struct(t *testing.T, m map[string]any) *structpb.Struct {
 	t.Helper()

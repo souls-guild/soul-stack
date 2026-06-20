@@ -86,15 +86,16 @@ func metaRouter(t *testing.T, verifier *keeperjwt.Verifier) http.Handler {
 		handlers.NewPermissionCatalogHandler(nil),
 		handlers.NewEventTypeCatalogHandler(nil),
 		handlers.NewMyPermissionsHandler(nil, nil),
-		nil, // enforcer
-		nil, // auditWriter
-		nil, // metricsHTTP
-		nil, // tollDegraded
-		nil, // tempoLimiter
-		nil, // tempoMetrics
-		nil, // tempoVoyageCreateLimits
-		nil, // tempoVoyagePreviewLimits
-		nil, // logger
+		nil,   // enforcer
+		nil,   // auditWriter
+		nil,   // metricsHTTP
+		nil,   // tollDegraded
+		nil,   // tempoLimiter
+		nil,   // tempoMetrics
+		nil,   // tempoVoyageCreateLimits
+		nil,   // tempoVoyagePreviewLimits
+		false, // webUIEnabled — meta-тесты /ui не проверяют (guard в webui_routes_test.go)
+		nil,   // logger
 	)
 }
 

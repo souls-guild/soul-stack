@@ -4,7 +4,7 @@ description: Install Prometheus redis_exporter from a pinned GitHub release tarb
 # Версия destiny — git ref (ADR-007). Поля `version:` верхнего уровня нет.
 # Список задач — в tasks/main.yml. Только core-модули → required_modules: не нужен.
 #
-# Извлечено из инлайн-сценариев service-monitoring / service-redis-monitored.
+# Извлечено из инлайн-сценариев monitoring / redis-monitored.
 # Ключевая особенность: redis_exporter ходит в Redis через UNIX-СОКЕТ
 # (--redis.addr=unix://<socket>), а не TCP. Из-за этого, в отличие от
 # node-exporter, unit-у нужен AF_UNIX в RestrictAddressFamilies (прод-конвенция

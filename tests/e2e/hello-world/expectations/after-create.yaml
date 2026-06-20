@@ -1,4 +1,4 @@
-# Post-apply ожидания service-hello-world::create.
+# Post-apply ожидания hello-world::create.
 #
 # state_changes.sets в scenario:
 #   greeting_file: /tmp/soul-stack-hello

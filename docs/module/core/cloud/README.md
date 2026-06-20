@@ -139,7 +139,7 @@ fqdn — шаг падает (нельзя использовать как SID).
     count:    "${ input.spawn.count }"
 ```
 
-(адаптировано из [`examples/service/service-redis-cluster/scenario/create/main.yml`](../../../../examples/service/service-redis-cluster/scenario/create/main.yml);
+(адаптировано из [`examples/service/redis-cluster/scenario/create/main.yml`](../../../../examples/service/redis-cluster/scenario/create/main.yml);
 пример в репозитории дополнительно передаёт `role_distribution`/`sid` —
 модуль эти params **не читает**, см. deferred-заметку ниже).
 

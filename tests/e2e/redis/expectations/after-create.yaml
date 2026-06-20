@@ -1,0 +1,38 @@
+# Post-apply ожидания redis::create (pilot e2e под examples/service/redis).
+#
+# apply_runs.status — реальный enum keeper/internal/applyrun (StatusSuccess).
+#
+# incarnation_state — deep-subset; значения = scenario.state_changes.sets из
+# examples/service/redis/scenario/create/main.yml, отрендеренные keeper-side из
+# input/essence ПОСЛЕ барьера (run.go §8):
+#   redis_version          ← input.redis_version (передаём непустым в тесте);
+#   node_exporter_version  ← input/essence (default 1.8.2);
+#   redis_exporter_version ← input/essence (default 1.62.0);
+#   redis_socket           ← input (default /var/run/redis/redis-server.sock);
+#   redis_maxmemory        ← input (default 256mb);
+#   redis_users            ← [] (на create список ACL ещё пуст).
+# redis_config (essence) в subset не проверяем — nested-map, для контракта create
+# достаточно скалярных версий/сокета.
+#
+# audit_events — incarnation.created (POST /v1/incarnations авто-запускает create
+# и пишет именно его, НЕ scenario_started). apply_id в payload — runtime-значение,
+# проверяется отдельно в тесте (не через YAML-fixture).
+#
+# metrics — keeper_scenario_runs_total{result="ok"} (keeper/internal/scenario/
+# metrics.go), успешный прогон → >= 1.
+apply_runs:
+  status: success
+
+incarnation_state:
+  redis_version: "5:7.0.15-1~deb12u7"
+  node_exporter_version: "1.8.2"
+  redis_exporter_version: "1.62.0"
+  redis_socket: /var/run/redis/redis-server.sock
+  redis_maxmemory: 256mb
+  redis_users: []
+
+audit_events:
+  - type: incarnation.created
+
+metrics:
+  keeper_scenario_runs_total{result="ok"}: ">= 1"

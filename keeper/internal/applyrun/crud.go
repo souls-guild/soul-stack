@@ -57,8 +57,8 @@ var (
 const insertSQL = `
 INSERT INTO apply_runs (
     apply_id, sid, incarnation_name, scenario, task_idx, status,
-    error_summary, started_by_aid
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    error_summary, started_by_aid, passage
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 RETURNING started_at
 `
 
@@ -117,6 +117,7 @@ func Insert(ctx context.Context, db ExecQueryRower, run *ApplyRun) error {
 		string(run.Status),
 		errorSummaryArg,
 		startedByArg,
+		run.Passage,
 	)
 	if err := row.Scan(&run.StartedAt); err != nil {
 		return mapInsertError(err)
@@ -223,17 +224,23 @@ func mapInsertError(err error) error {
 // `running` (терминал фиксируется фактическим временем завершения); для
 // `running` остаётся NULL. error_summary — COALESCE: NULL-аргумент не
 // затирает уже записанное значение.
+//
+// WHERE по (apply_id, sid, passage): staged-render (ADR-056, S3) пишет N строк
+// на хост (по одной на Passage), PK после миграции 078 — тройной. Терминал
+// адресуется по passage из эхо RunResult.passage (correlateRunResult). N=1-прогон
+// несёт passage=0 на каждой строке и каждом терминале — WHERE хитит ровно ту же
+// единственную строку, что и до staged-render (БИТ-В-БИТ).
 const updateStatusSQL = `
 UPDATE apply_runs
 SET status        = $3,
     error_summary = COALESCE($4, error_summary),
     finished_at   = CASE WHEN $3 = 'running' THEN finished_at ELSE NOW() END
-WHERE apply_id = $1 AND sid = $2
+WHERE apply_id = $1 AND sid = $2 AND passage = $5
   AND status IN ('planned', 'claimed', 'running', 'dispatched')
 `
 
 const probeStatusSQL = `
-SELECT status FROM apply_runs WHERE apply_id = $1 AND sid = $2
+SELECT status FROM apply_runs WHERE apply_id = $1 AND sid = $2 AND passage = $3
 `
 
 // UpdateStatus переводит строку `(applyID, sid)` в новый status. На
@@ -247,12 +254,16 @@ SELECT status FROM apply_runs WHERE apply_id = $1 AND sid = $2
 // оригинальный-RunResult vs recovery-перехват ([correlateRunResult] /
 // barrier-классификатор).
 //
+// passage адресует Passage-строку staged-render (ADR-056): терминал приходит на
+// строку (apply_id, sid, passage). N=1-прогон зовёт с passage=0 (единственная
+// строка хоста) — поведение БИТ-В-БИТ.
+//
 // Возврат:
 //   - [ErrApplyRunNotFound]        — строки нет вовсе.
 //   - [ErrApplyRunAlreadyTerminal] — строка есть, но уже терминальна (первый
 //     коммиттер победил): caller трактует как no-op (логирует, не валит
 //     барьер), НЕ ошибка консистентности.
-func UpdateStatus(ctx context.Context, db ExecQueryRower, applyID, sid string, status Status, errorSummary *string) error {
+func UpdateStatus(ctx context.Context, db ExecQueryRower, applyID, sid string, passage int, status Status, errorSummary *string) error {
 	if applyID == "" {
 		return fmt.Errorf("applyrun: empty apply_id")
 	}
@@ -268,7 +279,7 @@ func UpdateStatus(ctx context.Context, db ExecQueryRower, applyID, sid string, s
 		errorSummaryArg = *errorSummary
 	}
 
-	tag, err := db.Exec(ctx, updateStatusSQL, applyID, sid, string(status), errorSummaryArg)
+	tag, err := db.Exec(ctx, updateStatusSQL, applyID, sid, string(status), errorSummaryArg, passage)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == pgErrCodeCheckViolation {
@@ -283,7 +294,7 @@ func UpdateStatus(ctx context.Context, db ExecQueryRower, applyID, sid string, s
 	// 0 строк: либо строки нет, либо она уже терминальна (append-only guard
 	// отсёк перезапись). Различаем добором статуса (паттерн MarkDispatched).
 	var statusStr string
-	if perr := db.QueryRow(ctx, probeStatusSQL, applyID, sid).Scan(&statusStr); perr != nil {
+	if perr := db.QueryRow(ctx, probeStatusSQL, applyID, sid, passage).Scan(&statusStr); perr != nil {
 		if errors.Is(perr, pgx.ErrNoRows) {
 			return ErrApplyRunNotFound
 		}
@@ -349,31 +360,53 @@ func SelectByApplyID(ctx context.Context, db ExecQueryRower, applyID, sid string
 }
 
 // recordTaskFailureSQL фиксирует данные первой упавшей задачи хоста
-// (BUG-3): task_idx и error_summary пишутся только если ещё не заполнены
-// (COALESCE с уже хранимым значением → first-failure-wins). Статус строки
-// не трогаем — терминал проставит RunResult ([UpdateStatus]); до него строка
-// остаётся `running`, но уже несёт причину падения для последующей агрегации.
+// (BUG-3): task_idx / failed_plan_index и error_summary пишутся только если ещё
+// не заполнены (COALESCE с уже хранимым значением → first-failure-wins). Статус
+// строки не трогаем — терминал проставит RunResult ([UpdateStatus]); до него
+// строка остаётся `running`, но уже несёт причину падения для последующей
+// агрегации.
+//
+// failed_plan_index ($6) — ГЛОБАЛЬНЫЙ сквозной plan_index упавшей задачи (по
+// всему плану, все Passage; ADR-056 §S1 fix Variant B). Это ключ корреляции с
+// RenderedTask.Index для module/action упавшей задачи (drift-report) и no_log-
+// подавления (barrier). task_idx ($3) — ЛОКАЛЬНАЯ позиция в ApplyRequest своего
+// Passage (информационно). COALESCE на ОБА поля одним first-failure-условием:
+// они описывают одну и ту же первую упавшую задачу, пишутся атомарно.
+//
+// WHERE по (apply_id, sid, passage): staged-render (ADR-056) — упавшая задача
+// принадлежит конкретному Passage, причину пишем в его строку. passage из эхо
+// TaskEvent.passage. N=1 → passage=0 (единственная строка хоста), БИТ-В-БИТ.
 const recordTaskFailureSQL = `
 UPDATE apply_runs
-SET task_idx      = COALESCE(task_idx, $3),
-    error_summary = COALESCE(error_summary, $4)
-WHERE apply_id = $1 AND sid = $2
+SET task_idx          = COALESCE(task_idx, $3),
+    error_summary     = COALESCE(error_summary, $4),
+    failed_plan_index = COALESCE(failed_plan_index, $6)
+WHERE apply_id = $1 AND sid = $2 AND passage = $5
 `
 
-// RecordTaskFailure записывает индекс и краткое описание первой упавшей
-// задачи хоста в строку `(applyID, sid)`. Идемпотентна по first-failure-wins:
-// повторный вызов (вторая упавшая задача / retry) не затирает уже записанные
-// task_idx/error_summary (COALESCE). Вызывается RunResult-pipeline-ом из
-// handleTaskEvent при TaskEvent со status FAILED/TIMED_OUT — так причина
-// падения переживает cross-Keeper-роутинг (TaskEvent и run-goroutine могут
-// быть на разных инстансах, ADR-002) до агрегации в error_summary прогона.
+// RecordTaskFailure записывает локальный и глобальный индекс и краткое описание
+// первой упавшей задачи хоста в строку `(applyID, sid, passage)`. Идемпотентна
+// по first-failure-wins: повторный вызов (вторая упавшая задача / retry) не
+// затирает уже записанные task_idx/failed_plan_index/error_summary (COALESCE).
+// Вызывается RunResult-pipeline-ом из handleTaskEvent при TaskEvent со status
+// FAILED/TIMED_OUT — так причина падения переживает cross-Keeper-роутинг
+// (TaskEvent и run-goroutine могут быть на разных инстансах, ADR-002) до
+// агрегации в error_summary прогона.
+//
+// taskIdx — ЛОКАЛЬНАЯ позиция упавшей задачи в ApplyRequest.tasks[] её Passage
+// (эхо TaskEvent.task_idx, информационно для триажа). planIndex — ГЛОБАЛЬНЫЙ
+// сквозной plan_index по всему плану (эхо TaskEvent.plan_index, = RenderedTask.
+// Index): ключ корреляции с метаданными плана (ADR-056 §S1 fix Variant B). На
+// staged/per-host-where они различаются; N=1 → planIndex==taskIdx.
 //
 // summary — уже скомпонованная и пропущенная через MaskSecrets строка
 // (`task <idx> <module>: <message>`); CRUD-слой её не интерпретирует.
 //
+// passage адресует Passage-строку staged-render (ADR-056); N=1 → 0.
+//
 // Возврат [ErrApplyRunNotFound], если строки нет (TaskEvent опередил Insert
 // либо ad-hoc push без scenario-runner-а).
-func RecordTaskFailure(ctx context.Context, db ExecQueryRower, applyID, sid string, taskIdx int, summary string) error {
+func RecordTaskFailure(ctx context.Context, db ExecQueryRower, applyID, sid string, passage, taskIdx, planIndex int, summary string) error {
 	if applyID == "" {
 		return fmt.Errorf("applyrun: empty apply_id")
 	}
@@ -383,8 +416,11 @@ func RecordTaskFailure(ctx context.Context, db ExecQueryRower, applyID, sid stri
 	if taskIdx < 0 {
 		return fmt.Errorf("applyrun: negative task_idx %d", taskIdx)
 	}
+	if planIndex < 0 {
+		return fmt.Errorf("applyrun: negative plan_index %d", planIndex)
+	}
 
-	tag, err := db.Exec(ctx, recordTaskFailureSQL, applyID, sid, taskIdx, summary)
+	tag, err := db.Exec(ctx, recordTaskFailureSQL, applyID, sid, taskIdx, summary, passage, planIndex)
 	if err != nil {
 		return fmt.Errorf("applyrun: record task failure: %w", err)
 	}
@@ -395,18 +431,25 @@ func RecordTaskFailure(ctx context.Context, db ExecQueryRower, applyID, sid stri
 }
 
 const selectStatusesByApplyIDSQL = `
-SELECT sid, status, task_idx, error_summary, cancel_requested
+SELECT sid, status, task_idx, failed_plan_index, error_summary, cancel_requested, passage
 FROM apply_runs
 WHERE apply_id = $1
-ORDER BY sid ASC
+ORDER BY sid ASC, passage ASC
 `
 
 // HostStatus — узкая проекция строки apply_runs для fan-in-опроса
 // scenario-runner-ом: scenario-runner поллит [SelectStatusesByApplyID]
 // до тех пор, пока статусы всех SID-ов прогона не станут терминальными.
 //
-// TaskIdx — индекс упавшей задачи (заполнен [RecordTaskFailure] на failed-
-// хосте; nil на success / ещё-running / dispatch-level фейле без TaskEvent-а).
+// TaskIdx — ЛОКАЛЬНАЯ позиция упавшей задачи в ApplyRequest её Passage (заполнен
+// [RecordTaskFailure] на failed-хосте; nil на success / ещё-running / dispatch-
+// level фейле без TaskEvent-а). Информационно (триаж); НЕ ключ корреляции с
+// глобальным планом под staged/per-host-where — см. FailedPlanIndex.
+//
+// FailedPlanIndex — ГЛОБАЛЬНЫЙ сквозной plan_index упавшей задачи по всему плану
+// (все Passage; миграция 081, ADR-056 §S1 fix Variant B). Ключ корреляции с
+// RenderedTask.Index для module/action упавшей задачи (drift-report) и no_log-
+// подавления (barrier). nil на тех же условиях, что TaskIdx; N=1 → ==TaskIdx.
 //
 // CancelRequested — флаг cluster-wide Cancel (G1, миграция 024): любой Keeper
 // при Cancel ставит его через [RequestCancel]; run-goroutine-владелец видит
@@ -417,8 +460,15 @@ type HostStatus struct {
 	SID             string
 	Status          Status
 	TaskIdx         *int
+	FailedPlanIndex *int
 	ErrorSummary    *string
 	CancelRequested bool
+
+	// Passage — индекс Passage staged-render (ADR-056, S3) строки. Барьер
+	// каждого Passage считает терминалы своего среза (passage==N). N=1-прогон
+	// несёт passage=0 на каждой строке — срез совпадает со всеми строками хоста,
+	// барьер ведёт себя БИТ-В-БИТ как до staged-render.
+	Passage int
 }
 
 // SelectStatusesByApplyID возвращает статусы всех хостов одного прогона
@@ -444,7 +494,7 @@ func SelectStatusesByApplyID(ctx context.Context, db ExecQueryRower, applyID str
 			hs        HostStatus
 			statusStr string
 		)
-		if err := rows.Scan(&hs.SID, &statusStr, &hs.TaskIdx, &hs.ErrorSummary, &hs.CancelRequested); err != nil {
+		if err := rows.Scan(&hs.SID, &statusStr, &hs.TaskIdx, &hs.FailedPlanIndex, &hs.ErrorSummary, &hs.CancelRequested, &hs.Passage); err != nil {
 			return nil, fmt.Errorf("applyrun: statuses scan: %w", err)
 		}
 		hs.Status = Status(statusStr)
@@ -528,6 +578,14 @@ func SelectCancelRequested(ctx context.Context, db ExecQueryRower, applyID, sid 
 //	$1 claim_by_kid   — KID Acolyte-владельца
 //	$2 lease          — interval до claim_expires_at (NOW() + $2)
 //	$3 batch          — LIMIT захватываемой пачки
+//
+// passage-aware claim — S3: claim по `(apply_id, sid)` уникален пока все строки
+// несут passage=0 (S1/S2: стратификация вычисляет passage статически, но
+// stage-loop, пишущий passage>0 строки apply_runs, — S3). Когда staged-render
+// начнёт класть N строк на хост (по одной на Passage), claim станет
+// passage-aware (захватывать только строки текущего активного Passage — задание
+// = `(apply_id, sid, passage)`, ADR-056/ADR-027 amend). Симметрия с
+// updateStatusSQL.
 const claimNextSQL = `
 UPDATE apply_runs AS r
 SET status           = 'claimed',
@@ -789,7 +847,7 @@ func SelectAccessByApplyID(ctx context.Context, db ExecQueryRower, applyID strin
 const selectIncarnationByApplyIDSQL = `
 SELECT incarnation_name, scenario, attempt
 FROM apply_runs
-WHERE apply_id = $1 AND sid = $2
+WHERE apply_id = $1 AND sid = $2 AND passage = $3
 `
 
 // SelectIncarnationByApplyID — узкий резолв `(apply_id, sid) → (incarnation,
@@ -802,10 +860,13 @@ WHERE apply_id = $1 AND sid = $2
 // устаревшей попытки (recvAttempt < row.attempt → существует пере-claim с бОльшим
 // epoch → stale-drop).
 //
+// passage адресует Passage-строку staged-render (ADR-056): RunResult.passage
+// echo указывает, чей терминал коррелируем; N=1 → 0 (единственная строка хоста).
+//
 // Возврат [ErrApplyRunNotFound], если строки нет (apply без scenario-runner-а
 // — ad-hoc push / standalone apply; caller обрабатывает как log+skip).
-func SelectIncarnationByApplyID(ctx context.Context, db ExecQueryRower, applyID, sid string) (incarnationName, scenario string, attempt int32, err error) {
-	row := db.QueryRow(ctx, selectIncarnationByApplyIDSQL, applyID, sid)
+func SelectIncarnationByApplyID(ctx context.Context, db ExecQueryRower, applyID, sid string, passage int) (incarnationName, scenario string, attempt int32, err error) {
+	row := db.QueryRow(ctx, selectIncarnationByApplyIDSQL, applyID, sid, passage)
 	if scanErr := row.Scan(&incarnationName, &scenario, &attempt); scanErr != nil {
 		if errors.Is(scanErr, pgx.ErrNoRows) {
 			return "", "", 0, ErrApplyRunNotFound

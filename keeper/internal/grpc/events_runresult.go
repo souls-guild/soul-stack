@@ -56,6 +56,10 @@ func (h *eventStreamHandler) handleRunResult(ctx context.Context, sid, sessionID
 		"sid":      sid,
 		"apply_id": ev.GetApplyId(),
 		"status":   ev.GetStatus().String(),
+		// passage (ADR-056 staged-render): индекс Passage, терминал которого несёт
+		// этот отчёт. 0 = единственный Passage (поведение как до staged-render).
+		// Корреляция/барьер per-Passage — S3; здесь поле едет в audit для триажа.
+		"passage": ev.GetPassage(),
 	}
 	if sc := ev.GetStateChanges(); sc != nil {
 		if b, err := protojson.Marshal(sc); err != nil {
@@ -99,7 +103,11 @@ func (h *eventStreamHandler) correlateRunResult(ctx context.Context, sid, sessio
 		return
 	}
 	applyID := ev.GetApplyId()
-	name, scenario, rowAttempt, err := applyrun.SelectIncarnationByApplyID(ctx, h.deps.ApplyRunDB, applyID, sid)
+	// passage (ADR-056 staged-render): RunResult коррелирует со строкой
+	// (apply_id, sid, passage). Soul эхает passage из ApplyRequest как есть; N=1 →
+	// 0 (единственная строка хоста), correlation БИТ-В-БИТ как до staged-render.
+	passage := int(ev.GetPassage())
+	name, scenario, rowAttempt, err := applyrun.SelectIncarnationByApplyID(ctx, h.deps.ApplyRunDB, applyID, sid, passage)
 	if err != nil {
 		if errors.Is(err, applyrun.ErrApplyRunNotFound) {
 			h.logger.Info("eventstream: RunResult без apply_runs-строки — correlation пропущена",
@@ -156,7 +164,7 @@ func (h *eventStreamHandler) correlateRunResult(ctx context.Context, sid, sessio
 	// уже записанное. Если TaskEvent-а с ошибкой не было (dispatch-level фейл),
 	// error_summary остаётся NULL, и barrier classify подставит сам статус
 	// (`failed`) — без бессмысленного `run_status=RUN_STATUS_FAILED`.
-	if err := applyrun.UpdateStatus(ctx, h.deps.ApplyRunDB, applyID, sid, status, nil); err != nil {
+	if err := applyrun.UpdateStatus(ctx, h.deps.ApplyRunDB, applyID, sid, passage, status, nil); err != nil {
 		// Append-only single-winner (ADR-027(j)): строку уже перевёл в терминал
 		// другой обработчик (recovery-перехват / повторный RunResult). НЕ ошибка
 		// — первый победил, дубль-терминал не записываем. Логируем как no-op.

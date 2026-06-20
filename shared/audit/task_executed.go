@@ -21,7 +21,21 @@ type TaskExecutedError struct {
 type TaskExecutedInput struct {
 	SID     string
 	ApplyID string
+	// TaskIdx — ЛОКАЛЬНАЯ позиция задачи в ApplyRequest своего Passage (эхо
+	// TaskEvent.task_idx). Под staged/per-host-where ≠ глобальному
+	// RenderedTask.Index. Остаётся в payload для наблюдаемости/триажа, НЕ ключ
+	// корреляции CHANGED-задач с планом — см. PlanIndex.
 	TaskIdx int
+	// PlanIndex — ГЛОБАЛЬНЫЙ сквозной индекс задачи по всему плану прогона (по
+	// всем Passage), = RenderedTask.Index (эхо TaskEvent.plan_index, ADR-056 §S1
+	// fix Variant B). Ключ корреляции CHANGED-задачи с планом в
+	// auditpg.SelectChangedTaskKeys (state_changes-whitelist + audit changed_tasks).
+	// Локальный TaskIdx под staged/per-host-where указывал бы на соседнюю задачу
+	// (тот же дефект, что register-канал закрыл миграцией 079). keeper-side задачи
+	// (`on: keeper`) исполняются до host-fan-out → PlanIndex==TaskIdx==Index.
+	// N=1 / старый Soul (payload без plan_index) → корреляция fallback-ит на
+	// TaskIdx, для N=1 совпадающий с глобальным.
+	PlanIndex int
 	// Status — строковое имя terminal-статуса задачи (keeperv1.TaskStatus.String(),
 	// например "TASK_STATUS_CHANGED"). Свёртка changed фильтрует по литералу
 	// "TASK_STATUS_CHANGED" — обе стороны кладут одно и то же имя enum-а.
@@ -37,6 +51,11 @@ type TaskExecutedInput struct {
 	// keeper-side register_data в audit не кладёт вовсе (секрет-гигиена) —
 	// оставляет пустым.
 	RegisterData string
+	// Passage — индекс Passage staged-render (ADR-056), которому принадлежит
+	// задача (эхо TaskEvent.passage). 0 = единственный Passage (поведение как до
+	// staged-render). В payload едет всегда (включая 0) для триажа per-Passage;
+	// keeper-side задачи (`on: keeper`) исполняются до host-fan-out → passage=0.
+	Passage int
 }
 
 // BuildTaskExecutedPayload собирает payload audit-события task.executed из
@@ -56,7 +75,15 @@ func BuildTaskExecutedPayload(in TaskExecutedInput) map[string]any {
 		"sid":      in.SID,
 		"apply_id": in.ApplyID,
 		"task_idx": in.TaskIdx,
-		"status":   in.Status,
+		// plan_index (ADR-056 §S1 fix Variant B): ГЛОБАЛЬНЫЙ сквозной индекс задачи
+		// по всему плану (= RenderedTask.Index). Ключ корреляции CHANGED-задачи с
+		// планом в auditpg.SelectChangedTaskKeys; task_idx (локальная позиция в
+		// своём Passage) под staged/per-host-where указывал бы на соседнюю задачу.
+		// Кладётся всегда (аддитивно к task_idx) — старые audit-строки без него
+		// читаются корреляцией с fallback на task_idx (N=1 → совпадают).
+		"plan_index": in.PlanIndex,
+		"status":     in.Status,
+		"passage":    in.Passage,
 	}
 	if in.NoLog {
 		payload["suppressed"] = "no_log"

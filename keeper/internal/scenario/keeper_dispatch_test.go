@@ -315,7 +315,7 @@ func TestKeeperTaskExecuted_NoRegisterButIDFoldsToChangedTask(t *testing.T) {
 	plans := []render.DispatchPlan{
 		{TaskIndex: 0, Keeper: true, TargetSIDs: []string{render.KeeperTargetSID}},
 	}
-	keys := changedKeys(auditpg.ChangedTaskKey{SID: render.KeeperTargetSID, TaskIdx: 0})
+	keys := changedKeys(auditpg.ChangedTaskKey{SID: render.KeeperTargetSID, PlanIndex: 0})
 
 	got := buildChangedTasks(tasks, plans, keys)
 	if len(got) != 1 {

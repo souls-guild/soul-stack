@@ -7,20 +7,20 @@
 // PG-stub-обхода EmitPortent.
 //
 // Поток (реальный, без моков keeper-side):
-//   1. RegisterService + CreateIncarnationWithApply (incarnation существует —
-//      Oracle-enqueuer резолвит ServiceRef из incarnation.service).
-//   2. AddSoulToCoven(incarnation.name) — субъект-match Decree + membership-check
-//      (incarnation_name ∈ covens субъекта, ADR-030(b)) проходят.
-//   3. CreateVigil (core.beacon.file_changed) + CreateDecree (typed-payload
-//      where-CEL `event.file_changed.path.startsWith("/etc/")`, action_scenario
-//      ОТЛИЧНЫЙ от auto-create — `converge`, чтобы реактор-прогон отличался от
-//      авто-create-прогона по scenario+started_by_aid).
-//   4. soul-stub.SendPortent(FileChangedPortent{path:/etc/...}) через живой стрим.
-//   5. ASSERT прямыми PG-queries (real DB, real flows):
-//      - WaitForOracleFires — oracle_fires cooldown-state (decree, subject);
-//      - audit_log `oracle.fired` (decree + scenario + sid);
-//      - WaitForOracleReaction — apply_runs(scenario=converge, started_by_aid=NULL)
-//        поставлен реактором (EnqueueScenario → InsertPlanned).
+//  1. RegisterService + CreateIncarnationWithApply (incarnation существует —
+//     Oracle-enqueuer резолвит ServiceRef из incarnation.service).
+//  2. AddSoulToCoven(incarnation.name) — субъект-match Decree + membership-check
+//     (incarnation_name ∈ covens субъекта, ADR-030(b)) проходят.
+//  3. CreateVigil (core.beacon.file_changed) + CreateDecree (typed-payload
+//     where-CEL `event.file_changed.path.startsWith("/etc/")`, action_scenario
+//     ОТЛИЧНЫЙ от auto-create — `converge`, чтобы реактор-прогон отличался от
+//     авто-create-прогона по scenario+started_by_aid).
+//  4. soul-stub.SendPortent(FileChangedPortent{path:/etc/...}) через живой стрим.
+//  5. ASSERT прямыми PG-queries (real DB, real flows):
+//     - WaitForOracleFires — oracle_fires cooldown-state (decree, subject);
+//     - audit_log `oracle.fired` (decree + scenario + sid);
+//     - WaitForOracleReaction — apply_runs(scenario=converge, started_by_aid=NULL)
+//     поставлен реактором (EnqueueScenario → InsertPlanned).
 //
 // Ограничение (документированное): soul-stub не запускает реальный beacon-
 // scheduler — caller вручную собирает PortentEvent (L3a-контракт: проверяем
@@ -39,7 +39,7 @@ import (
 
 func TestOracle_FileChanged_FiresScenario(t *testing.T) {
 	stack := harness.NewStack(t, harness.Config{
-		ExamplePath: "examples/service/service-noop",
+		ExamplePath: "examples/service/noop",
 		Souls:       1,
 	})
 	defer stack.Cleanup()
@@ -49,7 +49,7 @@ func TestOracle_FileChanged_FiresScenario(t *testing.T) {
 
 	const incName = "oracle-fire-target"
 
-	stack.RegisterService(t, "noop", "examples/service/service-noop")
+	stack.RegisterService(t, "noop", "examples/service/noop")
 
 	// Live EventStream: Redis SID-lease → dispatch маршрутизируется локально;
 	// SetApplyDefaultSuccess — SUCCESS на любую задачу (важен lifecycle apply_runs,
