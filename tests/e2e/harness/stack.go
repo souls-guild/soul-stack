@@ -461,6 +461,36 @@ func (w *testLogWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// SeedIncarnationReady вставляет incarnation-строку напрямую в Postgres со
+// status=ready и заданным baseline state, минуя scenario `create`.
+//
+// Нужно для e2e мутирующих сценариев сервисов, у которых `create` недоступен в
+// L3a-фикстуре (cloud-spawn / declared-role / probe на ещё-не-запущенном хосте —
+// напр. redis-cluster): такой сценарий требует предсуществующей ready-incarnation,
+// но прогнать её create нельзя. Прямой seed даёт нужную точку входа.
+//
+// serviceVersion — git-ref сервиса (обычно "main"); state — baseline
+// incarnation.state (JSONB). covens НЕ выставляются (declared env-теги не нужны:
+// roster резолвится по `incarnation.name ∈ souls.coven[]`, см. AddSoulToCoven).
+// created_by_aid = NULL (seed без оператора; FK ON DELETE SET NULL это допускает).
+// state_schema_version по умолчанию из DDL (DEFAULT 1) не задаём явно — мутирующий
+// сценарий читает state по полям, не по версии.
+func (s *Stack) SeedIncarnationReady(t *testing.T, name, service, serviceVersion string, state map[string]any) {
+	t.Helper()
+	stateJSON, err := json.Marshal(state)
+	if err != nil {
+		t.Fatalf("SeedIncarnationReady(%s): marshal state: %v", name, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := s.db.Exec(ctx, `
+		INSERT INTO incarnation (name, service, service_version, spec, state, status)
+		VALUES ($1, $2, $3, '{}'::jsonb, $4::jsonb, 'ready')
+	`, name, service, serviceVersion, string(stateJSON)); err != nil {
+		t.Fatalf("SeedIncarnationReady(%s): %v", name, err)
+	}
+}
+
 // CreateIncarnation создаёт incarnation через Operator API Keeper-а.
 //
 // serviceRef — `<service>@<ref>` по контракту ТЗ; harness отрезает суффикс
@@ -599,9 +629,27 @@ func (s *Stack) RunScenario(t *testing.T, incarnationName string, scenarioName s
 		body["input"] = input
 	}
 	path := fmt.Sprintf("/v1/incarnations/%s/scenarios/%s", incarnationName, scenarioName)
-	resp, status, err := c.post(context.Background(), path, body)
-	if err != nil {
-		t.Fatalf("RunScenario %s/%s: http: %v", incarnationName, scenarioName, err)
+	// Тот же транзиентный 422 «service ... not registered», что в CreateIncarnation:
+	// serviceregistry.Holder подтягивает снимок асинхронно (pub/sub + 10s TTL).
+	// Прямой seed incarnation (SeedIncarnationReady) минует CreateIncarnation-поллинг,
+	// поэтому первый RunScenario может попасть в холодное окно снимка. Поллим ТОЛЬКО
+	// этот маркер; любой иной 422 (input/required) — немедленный fatal без маскировки.
+	var resp []byte
+	var status int
+	var err error
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		resp, status, err = c.post(context.Background(), path, body)
+		if err != nil {
+			t.Fatalf("RunScenario %s/%s: http: %v", incarnationName, scenarioName, err)
+		}
+		if status == http.StatusUnprocessableEntity &&
+			strings.Contains(string(resp), "not registered") &&
+			time.Now().Before(deadline) {
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+		break
 	}
 	if status != http.StatusAccepted {
 		t.Fatalf("RunScenario %s/%s: status %d, body=%s", incarnationName, scenarioName, status, string(resp))

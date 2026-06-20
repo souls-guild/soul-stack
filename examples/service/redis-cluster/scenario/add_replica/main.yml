@@ -22,6 +22,10 @@ input:
     required: true
     secret: true
     pattern: "^vault:.*"
+    # Пароль приходит scoped vault:-ref (default-deny на input без vault_scope —
+    # docs/input.md §«vault_scope»). prefix-glob ограничивает резолв ветвью
+    # secret/redis/* (per-incarnation путь secret/redis/<inc>#password).
+    vault_scope: "secret/redis/*"
 
 # Факт о новом хосте (role: replica) пишется в incarnation.state.redis_hosts[]
 # после успешного apply (cross-host барьер — orchestration.md §7). Declared-роль
