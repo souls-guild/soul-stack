@@ -280,6 +280,10 @@ func (r *Runner) CheckDrift(ctx context.Context, spec CheckDriftSpec) (*DriftRep
 			ServiceVersion: inc.ServiceVersion,
 		},
 		Hosts: hosts,
+		// State — снимок incarnation.state для `incarnation.state.<path>` (ADR-009/010).
+		// Симметрично run-goroutine: converge-scenario может читать pre-run state;
+		// check-drift сравнивает desired-vs-actual тем же render-конвейером. Read-only.
+		State: inc.State,
 		Ctx:   ctx,
 		Templates: render.NewSnapshotTemplateReader(
 			func(rel string) ([]byte, error) { return artifact.ReadSnapshotFile(art.LocalDir, rel) },

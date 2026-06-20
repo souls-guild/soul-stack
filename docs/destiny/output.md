@@ -55,7 +55,7 @@ Scenario вызывает destiny через `apply: { destiny: ..., input: { ..
   register: bootstrapped
 
 - name: Continue with the freshly bootstrapped database
-  module: core.noop
+  module: core.noop.run
   params: {}
   output:
     dsn: "${ register.bootstrapped.dsn }"   # объявленное output-поле destiny
@@ -75,7 +75,7 @@ Scenario `output:`-блока **нет**: scenario пишет результат
 
 > **`register:` как источник `state_changes`.** `state_changes.sets` может
 > читать `register.<task>.<поле>` probe-задачи прогона
-> ([scenario/orchestration.md §7.1](../scenario/orchestration.md#71-грамматика-state_changes--поле--источник-значения)).
+> ([scenario/orchestration.md §7.1](../scenario/orchestration.md#71-грамматика-state_changes--список-crud-операций)).
 > `TaskEvent.register_data` накапливается на Keeper-стороне (таблица
 > `apply_task_register`), после барьера scenario-runner строит per-host
 > register-карту и рендерит `sets`. Это сознательно **отдельно** от

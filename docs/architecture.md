@@ -506,6 +506,10 @@ Soul Stack принимает «исполняемый файл, который 
 
 Вынесен в [`docs/adr/0056-staged-render-passage.md`](adr/0056-staged-render-passage.md). Прогон сценария исполняется как **N упорядоченных Passage** (фаза прогона = render → dispatch → barrier → сбор register). Реализует обещанный каноном [orchestration.md §4/§5](scenario/orchestration.md#4-волатильный-предикат--where) probe→where: задача, читающая `register.X` (в `where:`/`apply: input:`/`params:`/`vars:`), стратифицируется в Passage **после** probe, эмитящего `X` (топологический N-stage); render следующего Passage подставляет per-host register предыдущих. Закрывает doc-drift «keeper рендерит один up-front проход ДО probe → `where:` видит пустой register». **`incarnation.state` коммитится ОДИН раз после последнего Passage** — barrier/state-commit-инвариант §7 не дробится; Passage — ось задач, не ось коммита. Reuse: `loadRegisterByHost`/`apply_task_register`/`SelectTaskRegistersByApplyID` (post-barrier register) как Passage-loop; `evalWhere`/`renderParams` уже принимают `in.Register`. Контракт: proto only-add `passage` в `ApplyRequest`/`TaskEvent`/`RunResult`; PG-PK per-passage (вариант фиксируется в S1); N `RunResult` на `(apply_id, sid, passage)`; старый Soul под staged-сценарием → explicit-reject (`render_failed`, не зависание). **Amends [ADR-009](#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация)** (per-task `serial:`/§8 → per-task dispatch через Passage), **[ADR-012](#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add)** (dispatch «один ApplyRequest на хост» → «N на хост по Passage»), **[ADR-027](#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim)** (reclaim/Ward-claim гранулярность → per-passage). Закрывает [open Q №24](#открытые-вопросы) (per-task гранулярность `serial:`). Слайс-карта S0–S5.
 
+### [ADR-057. `state_changes` — упорядоченный список CRUD-глаголов](adr/0057-state-changes-crud-verbs.md)
+
+Вынесен в [`docs/adr/0057-state-changes-crud-verbs.md`](adr/0057-state-changes-crud-verbs.md). `state_changes` сценария становится **упорядоченным списком операций** (YAML-список, не map). Каждый элемент — один **CRUD-глагол** (сингуляр): **`set`** (перезапись поля целиком, заменяет прежний `sets`-map), **`add`** (добавить элемент в коллекцию: map — `key:`+`value:`, list — `value:`+опц. `match:`; `on_conflict: skip|replace|error`, default `skip` = идемпотентно «добавить если нет»), **`modify`** (`match:` + `patch:` — патч ВСЕХ подходящих, all-by-default), **`remove`** (`match:` — удалить ВСЕХ подходящих), **`foreach`/`as`/`do`** (bulk fan-out, форма буквально из migration-DSL [ADR-019](#adr-019-state_schema-migration-dsl)). **Множественность выражается `match`-предикатом** (CEL над элементом), не ручками/флагами; CEL-биндинги `elem` (элемент list/скаляр), `key`/`value` (запись map) поверх полного sets-контекста (`input`/`incarnation`/`soulprint.self`/`register`/`vars`/`essence`). Опц. `expect: one|at_most_one|any` (default `any`) — runtime-ассерт кратности `modify`/`remove` (зацепил ≠ ожидаемого → `error_locked` до коммита). Предохранители: soul-lint WARN на константно-истинный/отсутствующий `match`; empty-match → no-op (идемпотентность). Операции применяются в порядке объявления к промежуточному state, одна PG-транзакция, один `state_history`-snapshot, фейл любой → `error_locked` (barrier/state-commit-инвариант [§7](scenario/orchestration.md#7-инвариант-barrier--state-commit) не ослаблен). Тип коллекции — из `state_schema`; семантика per-RUN (last-wins по SID, НЕ per-host union). Чинит **латентный баг**: `appends`/`modifies` ([ADR-009 §7.1](#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация)) были no-op-плейсхолдерами без источника значения — `incarnation.state` не рос (`add_replica`/`add_user`/`update_acl`). **`remove` (state_changes) ≠ `delete` (migration-DSL)** — намеренно разные имена (вынуть элемент коллекции vs снести путь схемы). Не вводятся: `clear`/`rename`/`move`/`upsert`/позиционный remove/парные `*_one`/`*_all`/флаг `all:`. Transit (breaking): map-форма (`sets`/`appends`/`modifies`) парсится один релиз как DEPRECATED (dual-parse + soul-lint warn), затем удаляется. **Amends [ADR-009](#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация)** (грамматика §7.1). Нормативная спека — [`docs/scenario/orchestration.md §7.1`](scenario/orchestration.md#71-грамматика-state_changes--список-crud-операций).
+
 ## Plugin-инфраструктура
 
 В Soul Stack три категории расширений: **модули Destiny**, **cloud-провайдеры** и **SSH-провайдеры для push-режима**. Все три используют **единую plugin-инфраструктуру** — один и тот же handshake-механизм, протокол, requirements к артефакту. Меняется только service-контракт (gRPC-сервис), который плагин реализует.
@@ -714,15 +718,19 @@ input:
       count:    { type: integer, min: 3, max: 6 }
 
 # Что сценарий пишет в incarnation.state после успешного apply.
-# sets — map поле→CEL-выражение: и какое поле обновить, и откуда значение
-# (рендерится Keeper-side, scenario/orchestration.md §7.1). sets видит
-# input/incarnation/soulprint.self/register.*; essence/vars/state — future.
+# state_changes — упорядоченный список CRUD-глаголов (ADR-057): set/add/modify/
+# remove + foreach. set — перезапись поля целиком; значение из CEL ${ … }
+# (рендерится Keeper-side, scenario/orchestration.md §7.1). Контекст:
+# input/incarnation/soulprint.self/register/vars/essence.
 state_changes:
-  sets:
-    redis_version: "${ input.redis_version }"
-    redis_users:   "${ input.users }"
-    redis_config:  "${ input.config }"
-    redis_hosts:   "${ input.hosts }"
+  - set: redis_version
+    value: "${ input.redis_version }"
+  - set: redis_users
+    value: "${ input.users }"
+  - set: redis_config
+    value: "${ input.config }"
+  - set: redis_hosts
+    value: "${ input.hosts }"
 
 # Шаги — каждый знает, где исполняется (on: keeper / on: [coven,…] / on: опущен)
 tasks:
@@ -749,7 +757,7 @@ tasks:
 
 Ключ `on:` решает, где выполняется шаг: `keeper` — локально на keeper-е, `[coven, …]` — пересечение covens (⊆ incarnation), опущен — весь incarnation. Волатильный per-host фильтр по `register:` предыдущего probe — ключ `where:` ([ADR-008](#adr-008-coven--только-стабильные-логические-теги)). Один сценарий смешивает keeper- и хост-шаги в линейном flow, в одном языке задач ([ADR-009](#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация)). Это аналог Salt Orchestration + State, но без двух разных языков и без двух мест. Нормативная семантика — [`docs/scenario/orchestration.md`](scenario/orchestration.md).
 
-Блок `input:` валидирует входные параметры сценария до прогона (по стандарту [docs/input.md](input.md)). `state_changes.sets` — map `<поле> → <CEL-выражение>`: декларирует **и** какие поля `incarnation.state` сценарий обновит при успехе, **и** откуда берётся значение каждого (рендерится keeper-ом после барьера, [scenario/orchestration.md §7.1](scenario/orchestration.md#71-грамматика-state_changes--поле--источник-значения)).
+Блок `input:` валидирует входные параметры сценария до прогона (по стандарту [docs/input.md](input.md)). `state_changes` — **упорядоченный список CRUD-глаголов** (`set`/`add`/`modify`/`remove` + `foreach`, [ADR-057](#adr-057-state_changes--упорядоченный-список-crud-глаголов)): декларирует, **что** сценарий пишет в `incarnation.state` при успехе и **откуда** берётся значение (CEL `${ … }`, рендерится keeper-ом после барьера); множественность — через `match`-предикат. Нормативно — [scenario/orchestration.md §7.1](scenario/orchestration.md#71-грамматика-state_changes--список-crud-операций).
 
 **Опциональный `$ref`** — для очень больших или переиспользуемых схем:
 

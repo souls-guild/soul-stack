@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"path"
 
+	securejoin "github.com/cyphar/filepath-securejoin"
+
 	"github.com/souls-guild/soul-stack/shared/config"
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
@@ -17,6 +19,9 @@ const (
 	destinyManifestFile = "destiny.yml"
 	destinyTasksFile    = "tasks/main.yml"
 	destinyTasksDir     = "tasks"
+	// destinyVarsFile — destiny-локалы рядом с манифестом (docs/destiny/vars.md).
+	// Опционален: его отсутствие — не ошибка (destiny без локалов).
+	destinyVarsFile = "vars.yml"
 )
 
 // DestinyRef — координаты destiny-репозитория для загрузки. Симметрично
@@ -40,6 +45,10 @@ type DestinyArtifact struct {
 	LocalDir string
 	Manifest *config.DestinyManifest
 	Tasks    []config.Task
+	// Vars — RAW destiny-локалы из `vars.yml` (docs/destiny/vars.md), без
+	// схемо-валидации (vars не типизированы). nil, если файла нет. CEL-выражения
+	// `${ … }` в значениях резолвятся в render-фазе, не здесь.
+	Vars map[string]any
 }
 
 // DestinyLoader загружает destiny-репозитории в кеш под cacheRoot и парсит их
@@ -75,7 +84,29 @@ func (l *DestinyLoader) Load(ctx context.Context, ref DestinyRef) (*DestinyArtif
 	}
 	art.Tasks = tasks
 
+	vars, err := l.parseVars(art)
+	if err != nil {
+		return nil, err
+	}
+	art.Vars = vars
+
 	return art, nil
+}
+
+// parseVars читает опциональный `vars.yml` снапшота (destiny-локалы,
+// docs/destiny/vars.md). Отсутствие файла → nil (destiny без локалов).
+// securejoin клампит выход за пределы снапшота; для not-exist возвращает nil,
+// чтобы опциональность файла сохранилась.
+func (l *DestinyLoader) parseVars(art *DestinyArtifact) (map[string]any, error) {
+	full, err := securejoin.SecureJoin(art.LocalDir, destinyVarsFile)
+	if err != nil {
+		return nil, fmt.Errorf("artifact: небезопасный путь %s destiny %q: %w", destinyVarsFile, art.Ref.Name, err)
+	}
+	vars, err := config.LoadDestinyVars(full)
+	if err != nil {
+		return nil, fmt.Errorf("artifact: %s destiny %q: %w", destinyVarsFile, art.Ref.Name, err)
+	}
+	return vars, nil
 }
 
 // parseManifest читает и валидирует `destiny.yml` снапшота.

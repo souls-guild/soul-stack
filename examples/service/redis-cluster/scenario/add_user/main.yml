@@ -18,8 +18,17 @@ input:
     required: true
     enum: [on, off]
 
+# state.redis_users — map username → {acl, state}. add по key растит map на одну
+# запись (ADR-057 list-форма; раньше appends был no-op-плейсхолдером — юзер не
+# оседал в state). on_conflict: error — двойное создание существующего юзера явная
+# ошибка (error_locked, state не коммитится).
 state_changes:
-  appends: [redis_users]
+  - add: redis_users
+    key: "${ input.user }"
+    value:
+      acl:   "${ input.acl }"
+      state: "${ input.state }"
+    on_conflict: error
 
 tasks:
   # Probe: фактическая роль каждого хоста (actual-роль волатильна, берётся

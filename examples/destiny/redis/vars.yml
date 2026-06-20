@@ -7,4 +7,9 @@ redis_user:      redis
 redis_group:     redis
 
 # Может ссылаться на input через шаблон — vars вычисляются после валидации input.
-acl_file_path: "/etc/redis/users/${ input.user }.acl"
+# user опционален (присутствует только для action: ensure_user — manage.yml): прочие
+# action (apply/update_acls/…) его не передают, а vars.yml резолвится безусловно ОДИН
+# раз на проход (resolveDestinyVars, ДО when-гейтинга задач). has()-guard даёт
+# безопасное "" при отсутствии user — путь нужен лишь ensure_user-задаче, прочие его
+# не читают. Идиома та же, что version в apply.yml (has(input.version) ? … : '').
+acl_file_path: "${ has(input.user) ? '/etc/redis/users/' + input.user + '.acl' : '' }"

@@ -16,7 +16,7 @@ func TestResolveTaskVars_Empty(t *testing.T) {
 	e := newEngine(t)
 	base := cel.Vars{Input: map[string]any{"x": "v"}}
 
-	got, err := resolveTaskVars(e, nil, base)
+	got, err := resolveTaskVars(e, nil, nil, base)
 	if err != nil {
 		t.Fatalf("resolveTaskVars(nil): %v", err)
 	}
@@ -24,7 +24,7 @@ func TestResolveTaskVars_Empty(t *testing.T) {
 		t.Errorf("Vars = %v, want nil для пустых task-vars", got.Vars)
 	}
 
-	got, err = resolveTaskVars(e, map[string]any{}, base)
+	got, err = resolveTaskVars(e, nil, map[string]any{}, base)
 	if err != nil {
 		t.Fatalf("resolveTaskVars(empty): %v", err)
 	}
@@ -39,7 +39,7 @@ func TestResolveTaskVars_FromInput(t *testing.T) {
 	e := newEngine(t)
 	base := cel.Vars{Input: map[string]any{"host": "10.0.0.1"}}
 
-	got, err := resolveTaskVars(e, map[string]any{"addr": "${ input.host }"}, base)
+	got, err := resolveTaskVars(e, nil, map[string]any{"addr": "${ input.host }"}, base)
 	if err != nil {
 		t.Fatalf("resolveTaskVars: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestResolveTaskVars_FromInput(t *testing.T) {
 // литералом (CEL трогает только строки, симметрично params).
 func TestResolveTaskVars_NonStringPassthrough(t *testing.T) {
 	e := newEngine(t)
-	got, err := resolveTaskVars(e, map[string]any{
+	got, err := resolveTaskVars(e, nil, map[string]any{
 		"port":    int64(6379),
 		"enabled": true,
 	}, cel.Vars{})
@@ -73,7 +73,7 @@ func TestResolveTaskVars_NativeTypeSingleBlock(t *testing.T) {
 	e := newEngine(t)
 	base := cel.Vars{Input: map[string]any{"n": int64(5)}}
 
-	got, err := resolveTaskVars(e, map[string]any{"count": "${ input.n }"}, base)
+	got, err := resolveTaskVars(e, nil, map[string]any{"count": "${ input.n }"}, base)
 	if err != nil {
 		t.Fatalf("resolveTaskVars: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestResolveTaskVars_NoSelfReference(t *testing.T) {
 	e := newEngine(t)
 	base := cel.Vars{Input: map[string]any{"host": "h"}}
 
-	_, err := resolveTaskVars(e, map[string]any{
+	_, err := resolveTaskVars(e, nil, map[string]any{
 		"a": "${ input.host }",
 		"b": "${ vars.a }",
 	}, base)
@@ -107,7 +107,7 @@ func TestResolveTaskVars_FromSoulprintSelf(t *testing.T) {
 	e := newEngine(t)
 	base := cel.Vars{SoulprintSelf: map[string]any{"os": map[string]any{"family": "debian"}}}
 
-	got, err := resolveTaskVars(e, map[string]any{"fam": "${ soulprint.self.os.family }"}, base)
+	got, err := resolveTaskVars(e, nil, map[string]any{"fam": "${ soulprint.self.os.family }"}, base)
 	if err != nil {
 		t.Fatalf("resolveTaskVars: %v", err)
 	}

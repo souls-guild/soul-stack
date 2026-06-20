@@ -92,3 +92,42 @@ input:
           enum: [on, off]
       required: [acl, state]
       additional_properties: false
+
+  # action: update_acls — патч ACL у СУЩЕСТВУЮЩИХ юзеров. Применяется на текущем
+  # мастере локально (scenario таргетит where: role=='master' + run_once, см.
+  # service/redis-cluster/scenario/update_acl). changes — map username → {acl,
+  # state?}: state необязателен (меняем только ACL, on/off оставляем как был).
+  # Симметрия с input.users (ensure_users), но state опционален — потому что это
+  # ПАТЧ существующих, а не создание.
+  changes:
+    type: object
+    description: Патч ACL существующих юзеров, ключ — имя юзера, значение — {acl, state?}.
+    properties: {}
+    additional_properties:
+      type: object
+      properties:
+        acl:
+          type: string
+        state:
+          type: string
+          enum: [on, off]
+      required: [acl]
+      additional_properties: false
+
+  # Текущее состояние redis_users из incarnation.state (scenario пробрасывает
+  # ${ state.redis_users }). Нужно для дефолта state, когда changes[user].state
+  # не передан: берём прежнее on/off из current[user].state, чтобы патч ACL не
+  # сбрасывал юзера в off молча.
+  current:
+    type: object
+    description: Текущее состояние ACL-юзеров (для дефолта state при патче).
+    properties: {}
+    additional_properties:
+      type: object
+      properties:
+        acl:
+          type: string
+        state:
+          type: string
+          enum: [on, off]
+      additional_properties: false

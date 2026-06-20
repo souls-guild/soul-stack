@@ -3,7 +3,9 @@ package config
 import (
 	"fmt"
 	"regexp"
+	"strings"
 
+	"github.com/goccy/go-yaml"
 	"github.com/goccy/go-yaml/ast"
 
 	"github.com/souls-guild/soul-stack/shared/diag"
@@ -32,50 +34,253 @@ type ScenarioManifest struct {
 // StateChanges — декларация мутаций `incarnation.state`, которые сценарий
 // зафиксирует после успешного cross-host барьера (orchestration.md §7).
 //
-// `Sets` — map `<поле> → <CEL-выражение>`: и какое поле `incarnation.state`
-// обновить, и откуда взять значение (рендерится Keeper-side в scenario-CEL-
-// окружении после барьера, orchestration.md §7.1). Значение — строка-выражение
-// (`${ … }`-маркер ADR-010) либо литерал; cross-host свёртка — last-wins по SID.
+// Две формы декода (UnmarshalYAML различает по виду YAML-узла):
 //
-// `Appends`/`Modifies` (per-host коллекции) — future-расширение полной
-// грамматики: пока остаются списками field-path-ов (`list of string`), движком
-// не применяются. Пустой блок (`state_changes: {}`) валиден — state не меняется.
+//   - НОВАЯ list-форма (sequence): `state_changes:` — упорядоченный список
+//     операций-глаголов (`- set:` / `- add:` / `- modify:` / `- remove:` /
+//     `- foreach:`), применяемых по порядку объявления к промежуточному state.
+//     Декодируется в `Ops` (см. StateChange); `IsList` = true. Целевая грамматика
+//     ADR-057 (все глаголы реализованы).
+//   - СТАРАЯ map-форма (mapping, DEPRECATED): `state_changes: { sets: {...},
+//     appends: [...], modifies: [...] }`. Сохраняется ради backward-compat
+//     существующих сценариев — декодируется в `Sets`/`Appends`/`Modifies`,
+//     `IsList` = false. Семантика прежняя (orchestration.md §7.1): `Sets` — map
+//     `<поле> → <CEL-выражение>`; cross-host свёртка — last-wins по SID.
+//     `Appends`/`Modifies` движком не применяются (исторический плейсхолдер).
+//
+// Пустой блок валиден в обеих формах (state не меняется): `state_changes: {}`
+// (старая) или `state_changes: []` (новая).
 type StateChanges struct {
+	// IsList — дискриминатор формы (true для новой list-формы). Render/merge
+	// ветвятся по нему: list → ordered Ops; map → legacy Sets-overwrite.
+	IsList bool `yaml:"-"`
+
+	// Ops — упорядоченный список операций новой list-формы. nil/пусто в map-форме.
+	Ops []StateChange `yaml:"-"`
+
+	// Sets/Appends/Modifies — старая map-форма (DEPRECATED). nil в list-форме.
 	Sets     map[string]string `yaml:"sets,omitempty"`
 	Appends  []string          `yaml:"appends,omitempty"`
 	Modifies []string          `yaml:"modifies,omitempty"`
 }
 
-// UnmarshalYAML — кастомный декод StateChanges. Стандартный NodeToValue падает
-// на `sets: "scalar"` с обобщённой ошибкой type-mismatch (decode-fault), которая
-// дублируется с информативной диагностикой validateStateChanges. Тут декодируем
-// по AST по полю, узел неподходящей формы — просто пропускаем
-// (validateStateChanges поднимет осмысленный type_mismatch с yaml_path):
+// StateVerb — глагол одной операции state_changes (новая list-форма).
+type StateVerb string
+
+const (
+	// VerbSet — перезапись поля целиком (семантика прежнего `sets`).
+	VerbSet StateVerb = "set"
+	// VerbAdd — добавить элемент в коллекцию (map/list) идемпотентно.
+	VerbAdd StateVerb = "add"
+	// VerbModify — патч ВСЕХ элементов коллекции, подходящих под Match (all-by-
+	// default; orchestration.md §7.1).
+	VerbModify StateVerb = "modify"
+	// VerbRemove — удалить ВСЕ элементы коллекции, подходящие под Match.
+	VerbRemove StateVerb = "remove"
+	// VerbForeach — bulk fan-out N операций из CEL-списка/map (render-time, форма
+	// из migration-DSL ADR-019). Раскрывается в N RenderedOp до merge.
+	VerbForeach StateVerb = "foreach"
+)
+
+// Expect — опц. runtime-ассерт кратности match в modify/remove (ADR-057 §c).
+// DEFAULT (пустое значение) = ExpectAny (любое число зацепленных, в т.ч. ноль).
+type Expect string
+
+const (
+	// ExpectAny — любое число зацепленных элементов (DEFAULT). Пустая строка в
+	// op.Expect трактуется как ExpectAny.
+	ExpectAny Expect = "any"
+	// ExpectOne — ровно один зацепленный элемент (иначе error_locked до коммита).
+	ExpectOne Expect = "one"
+	// ExpectAtMostOne — ноль или один зацепленный элемент.
+	ExpectAtMostOne Expect = "at_most_one"
+)
+
+// OnConflict — политика идемпотентности `add` при совпадении идентичности.
+type OnConflict string
+
+const (
+	// OnConflictSkip — элемент с такой идентичностью уже есть → no-op (DEFAULT).
+	OnConflictSkip OnConflict = "skip"
+	// OnConflictReplace — перезаписать существующий элемент новым значением.
+	OnConflictReplace OnConflict = "replace"
+	// OnConflictError — провалить прогон (error_locked, state не коммитнут).
+	OnConflictError OnConflict = "error"
+)
+
+// StateChange — одна операция упорядоченного списка `state_changes` (новая
+// list-форма). Глагол определяет, какие поля значимы:
 //
-//   - `sets` — mapping `<поле>: <выражение>` → map[string]string;
-//   - `appends`/`modifies` — sequence строк → []string (future, см. StateChanges).
+//   - set:     Field + Value (перезапись поля целиком);
+//   - add:     Field + Value (+ Key для map-коллекции / Match|Key для list-дедупа,
+//   - OnConflict skip|replace|error, default skip);
+//   - modify:  Field + Match + Patch (+ опц. Expect) — патч всех подходящих;
+//   - remove:  Field + Match (+ опц. Expect) — удалить всех подходящих;
+//   - foreach: In (CEL-список/map) + As (имя биндинга) + Do (вложенные глаголы) —
+//     render-time fan-out N операций (форма из migration-DSL ADR-019). Foreach
+//     несёт целевое поле в Field=="" (глагол `foreach:` указывает не коллекцию, а
+//     CEL-выражение коллекции для итерации, оно лежит в In).
+//
+// Value/Patch — произвольное YAML-значение: строка-CEL (`${ … }`), литерал,
+// либо вложенный объект/список с CEL-строками в ячейках (рендерится рекурсивно
+// Keeper-side). Key/Match — строки-CEL (идентичность/предикат элемента).
+type StateChange struct {
+	Verb  StateVerb
+	Field string
+
+	Value      any
+	Key        string
+	Match      string
+	OnConflict OnConflict
+
+	// Patch — map путь-в-элементе → CEL/литерал (только modify). Merge-time:
+	// каждое значение вычисляется поверх per-host scenario-контекста + биндингов
+	// текущего элемента (elem/key/value). Точечный путь (`config.maxmemory`) —
+	// вложенный merge, не перезапись записи целиком (ADR-057 §a).
+	Patch any
+	// Expect — опц. ассерт кратности match (modify/remove). "" → ExpectAny.
+	Expect Expect
+
+	// foreach: In — CEL-выражение коллекции для итерации (`${ … }`); As — имя
+	// биндинга текущего элемента; Do — вложенные операции, применяемые на каждой
+	// итерации с активным биндингом As.
+	In string
+	As string
+	Do []StateChange
+}
+
+// stateOpVerbs — известные глаголы операции (для дискриминатора в декоде/валидации).
+// `expect` НЕ глагол — это параметр modify/remove (ADR-057 §c).
+var stateOpVerbs = map[string]StateVerb{
+	"set":     VerbSet,
+	"add":     VerbAdd,
+	"modify":  VerbModify,
+	"remove":  VerbRemove,
+	"foreach": VerbForeach,
+}
+
+// UnmarshalYAML — DUAL-PARSE StateChanges по виду YAML-узла:
+//
+//   - SequenceNode → новая list-форма: декодируем каждый элемент-mapping в
+//     StateChange (по глаголу-ключу), ставим IsList=true. Структурную валидацию
+//     (обязательные/неприменимые ключи по каждому глаголу) поднимает
+//     validateStateChanges по AST — здесь только декод значений.
+//   - MappingNode → старая map-форма (DEPRECATED): прежний путь декода
+//     sets/appends/modifies (переиспользуем setsFromNode/stringSeqFromNode).
+//   - прочее (scalar/null) → zero-value (диагностику поднимет walker/валидатор).
+//
+// Узел неподходящей формы внутри элемента пропускается без паники —
+// validateStateChanges поднимет осмысленную диагностику по yaml_path.
 func (s *StateChanges) UnmarshalYAML(node ast.Node) error {
-	mm, ok := node.(*ast.MappingNode)
-	if !ok {
-		// state_changes: <scalar/seq> — диагностику поднимет общий walker;
-		// здесь оставляем zero-value.
+	switch n := node.(type) {
+	case *ast.SequenceNode:
+		s.IsList = true
+		s.Ops = make([]StateChange, 0, len(n.Values))
+		for _, item := range n.Values {
+			if op, ok := stateOpFromNode(item); ok {
+				s.Ops = append(s.Ops, op)
+			}
+		}
+		return nil
+	case *ast.MappingNode:
+		for _, kv := range n.Values {
+			tok := kv.Key.GetToken()
+			if tok == nil {
+				continue
+			}
+			switch tok.Value {
+			case "sets":
+				s.Sets = setsFromNode(kv.Value)
+			case "appends":
+				s.Appends = stringSeqFromNode(kv.Value)
+			case "modifies":
+				s.Modifies = stringSeqFromNode(kv.Value)
+			}
+		}
+		return nil
+	default:
+		// state_changes: <scalar/null> — zero-value (валидатор поднимет type_mismatch).
 		return nil
 	}
+}
+
+// stateOpFromNode декодирует один элемент list-формы (mapping с глаголом-ключом)
+// в StateChange. Глагол-ключ (`set`/`add`/…) несёт целевой Field; прочие ключи
+// (`value`/`key`/`match`/`on_conflict`/`patch`/`in`/`as`/`do`) — параметры op.
+// Не-mapping элемент / отсутствие глагола → (zero, false): валидатор поднимет
+// диагностику по yaml_path.
+func stateOpFromNode(node ast.Node) (StateChange, bool) {
+	mm, ok := node.(*ast.MappingNode)
+	if !ok {
+		return StateChange{}, false
+	}
+	var op StateChange
+	var hasVerb bool
 	for _, kv := range mm.Values {
 		tok := kv.Key.GetToken()
 		if tok == nil {
 			continue
 		}
-		switch tok.Value {
-		case "sets":
-			s.Sets = setsFromNode(kv.Value)
-		case "appends":
-			s.Appends = stringSeqFromNode(kv.Value)
-		case "modifies":
-			s.Modifies = stringSeqFromNode(kv.Value)
+		key := tok.Value
+		if verb, isVerb := stateOpVerbs[key]; isVerb {
+			op.Verb = verb
+			// `foreach:` несёт CEL-выражение коллекции (→ In), прочие глаголы —
+			// имя целевого поля (→ Field). orchestration.md §7.1.
+			if verb == VerbForeach {
+				op.In = stringFromNode(kv.Value)
+			} else {
+				op.Field = stringFromNode(kv.Value)
+			}
+			hasVerb = true
+			continue
+		}
+		switch key {
+		case "value":
+			op.Value = nodeToAny(kv.Value)
+		case "key":
+			op.Key = stringFromNode(kv.Value)
+		case "match":
+			op.Match = stringFromNode(kv.Value)
+		case "on_conflict":
+			op.OnConflict = OnConflict(stringFromNode(kv.Value))
+		case "patch":
+			op.Patch = nodeToAny(kv.Value)
+		case "expect":
+			op.Expect = Expect(stringFromNode(kv.Value))
+		case "as":
+			op.As = stringFromNode(kv.Value)
+		case "do":
+			if seq, isSeq := kv.Value.(*ast.SequenceNode); isSeq {
+				for _, sub := range seq.Values {
+					if subOp, okSub := stateOpFromNode(sub); okSub {
+						op.Do = append(op.Do, subOp)
+					}
+				}
+			}
 		}
 	}
-	return nil
+	return op, hasVerb
+}
+
+// stringFromNode извлекает строковое значение узла (для глагол-Field, key, match,
+// on_conflict). Не-строка → "" (валидатор поднимет type_mismatch).
+func stringFromNode(node ast.Node) string {
+	if sn, ok := node.(*ast.StringNode); ok {
+		return sn.Value
+	}
+	return ""
+}
+
+// nodeToAny декодирует произвольный YAML-узел (value/patch) в Go-значение через
+// goccy NodeToValue: строка-CEL, литерал, либо вложенный объект/список (CEL-
+// строки в ячейках рендерятся рекурсивно Keeper-side). Сбой декода → nil
+// (валидатор поднимет диагностику по yaml_path).
+func nodeToAny(node ast.Node) any {
+	var v any
+	if err := yaml.NodeToValue(node, &v); err != nil {
+		return nil
+	}
+	return v
 }
 
 // setsFromNode декодирует mapping `<поле>: <выражение>` в map[string]string.
@@ -152,11 +357,45 @@ var deprecatedTaskKeys = map[string]string{
 	"filter": "filter: removed (orchestration.md §4); use where: predicate instead",
 }
 
-// stateChangesKnownKeys — закрытый набор ключей внутри `state_changes:`.
+// stateChangesKnownKeys — закрытый набор ключей старой map-формы `state_changes:`.
 var stateChangesKnownKeys = map[string]bool{
 	"sets":     true,
 	"appends":  true,
 	"modifies": true,
+}
+
+// stateOpKnownKeys — закрытый набор ключей одной операции list-формы (глагол +
+// параметры). Глаголы — из stateOpVerbs; остальные — общие параметры op. Ключ
+// вне набора → unknown_key. `expect` — параметр (modify/remove), не глагол; `as`/
+// `do` — параметры foreach; `in` ключом не является (foreach: несёт выражение).
+var stateOpKnownKeys = map[string]bool{
+	"set": true, "add": true, "modify": true, "remove": true,
+	"foreach": true,
+	"value":   true, "key": true, "match": true, "on_conflict": true,
+	"patch": true, "expect": true, "as": true, "do": true,
+}
+
+// stateOpConflictValues — допустимые значения `on_conflict`.
+var stateOpConflictValues = map[string]bool{
+	"skip": true, "replace": true, "error": true,
+}
+
+// stateOpExpectValues — допустимые значения `expect` (modify/remove).
+var stateOpExpectValues = map[string]bool{
+	"one": true, "at_most_one": true, "any": true,
+}
+
+// foreachReservedBindings — имена, которые `foreach.as:` перекрывать нельзя:
+// голый as-биндинг объявляется в merge-time CEL-контексте (render.renderForeach)
+// и затёр бы фиксированный scenario-контекст ИЛИ локальные биндинги элемента
+// коллекции. Сверх loopReservedNames (input/register/incarnation/soulprint/
+// essence/vars) добавлены elem/key/value — локальные биндинги текущего элемента
+// в add-match/modify-patch (ADR-057 §b): `as: elem` затенило бы elem-биндинг
+// вложенной add-операции (reserved_binding_name).
+var foreachReservedBindings = map[string]bool{
+	"input": true, "register": true, "incarnation": true,
+	"soulprint": true, "essence": true, "vars": true,
+	"elem": true, "key": true, "value": true,
 }
 
 // schemaValidateScenario — пост-decode проверки ScenarioManifest.
@@ -242,20 +481,52 @@ func schemaValidateScenario(path string, root *ast.MappingNode, m *ScenarioManif
 	return out
 }
 
-// validateStateChanges — проверка структуры `state_changes:`-блока.
+// validateStateChanges — проверка структуры `state_changes:`-блока. DUAL-FORM:
 //
-// Допустимы только три ключа. `sets` — mapping `<поле>: <выражение>` (ключи
-// непустые, значения — непустые строки-выражения, orchestration.md §7.1).
-// `appends`/`modifies` (future) — массивы строк (field-path-ов). Пустой block
-// (`state_changes: {}`) валиден. Скаляр на месте блока даёт `type_mismatch` уже
-// на decode-фазе; здесь дополнительно проверяем unknown keys и тип values.
+//   - sequence на месте блока → новая list-форма: каждый элемент — операция-
+//     глагол (validateStateOp); все глаголы (set/add/modify/remove/foreach)
+//     валидируются по полной грамматике ADR-057.
+//   - mapping → старая map-форма (DEPRECATED): прежний путь (sets/appends/
+//     modifies). Пустой `state_changes: {}` валиден.
+//   - прочее (scalar/null) — decode уже поднял type_mismatch; здесь молча.
 func validateStateChanges(root *ast.MappingNode, pathPrefix string) []diag.Diagnostic {
-	node := findInputMapping(root, "state_changes")
-	if node == nil {
-		// либо null, либо не mapping — decode уже поднял диагностику.
+	node := findValueNode(root, "state_changes")
+	switch n := node.(type) {
+	case *ast.SequenceNode:
+		var out []diag.Diagnostic
+		for i, item := range n.Values {
+			out = append(out, validateStateOp(item, fmt.Sprintf("%s[%d]", pathPrefix, i))...)
+		}
+		return out
+	case *ast.MappingNode:
+		return validateStateChangesMap(n, pathPrefix)
+	default:
 		return nil
 	}
+}
+
+// validateStateChangesMap — старая map-форма (sets/appends/modifies, DEPRECATED).
+//
+// Предохранитель (b) ADR-057 transit: валидная map-форма НЕ ошибка (dual-parse
+// один релиз), но обязана дать DEPRECATION-WARN — иначе сценарий молча едет на
+// форме, которую следующий релиз удалит. Для appends/modifies — отдельный, более
+// строгий warn: они были no-op-плейсхолдерами (state НЕ растёт), их надо
+// переписать на add/modify, иначе латентный баг (ADR-057 §контекст).
+func validateStateChangesMap(node *ast.MappingNode, pathPrefix string) []diag.Diagnostic {
 	var out []diag.Diagnostic
+
+	// Один deprecation-warn на весь блок (на сам ключ state_changes — позиция
+	// первого known-ключа), чтобы не дублировать на каждом sets/appends/modifies.
+	if pos := firstKnownStateChangeKeyPos(node); pos != nil {
+		out = append(out, diagAt(pos.Line, pos.Column, diag.Diagnostic{
+			Level: diag.LevelWarning, Phase: diag.PhaseSchemaValidate,
+			Code:     "deprecated_form",
+			Message:  "state_changes map-form (sets/appends/modifies) is deprecated and will be removed next release",
+			Hint:     "rewrite as the ordered list-of-verbs form (- set: / - add: / - modify: / - remove:) — ADR-057",
+			YAMLPath: pathPrefix,
+		}))
+	}
+
 	for _, kv := range node.Values {
 		tok := kv.Key.GetToken()
 		if tok == nil {
@@ -267,7 +538,7 @@ func validateStateChanges(root *ast.MappingNode, pathPrefix string) []diag.Diagn
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 				Code:     "unknown_key",
 				Message:  `unknown field "` + keyName + `"`,
-				Hint:     "state_changes allows only sets / appends / modifies",
+				Hint:     "state_changes (map-form, deprecated) allows only sets / appends / modifies; prefer the ordered list-form (- set: / - add:)",
 				YAMLPath: pathPrefix + "." + keyName,
 			}))
 			continue
@@ -276,9 +547,467 @@ func validateStateChanges(root *ast.MappingNode, pathPrefix string) []diag.Diagn
 			out = append(out, validateSetsMap(tok.Position.Line, tok.Position.Column, kv.Value, pathPrefix)...)
 			continue
 		}
+		// appends/modifies — no-op-плейсхолдеры: state НЕ растёт. Отдельный warn,
+		// чтобы автор не думал, что декларация работает (ADR-057 transit).
+		out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+			Level: diag.LevelWarning, Phase: diag.PhaseSchemaValidate,
+			Code:     "noop_placeholder",
+			Message:  fmt.Sprintf("state_changes.%s is a no-op placeholder — it never applied, incarnation.state does not grow", keyName),
+			Hint:     "rewrite on the list-form: appends → - add: / modifies → - modify: (otherwise state will not change) — ADR-057",
+			YAMLPath: pathPrefix + "." + keyName,
+		}))
 		out = append(out, validateStringSeq(tok.Position.Line, tok.Position.Column, kv.Value, keyName, pathPrefix)...)
 	}
 	return out
+}
+
+// firstKnownStateChangeKeyPos возвращает позицию первого известного ключа
+// map-формы (sets/appends/modifies) для якоря deprecation-warn-а на блоке.
+// nil — пустой `state_changes: {}` (deprecated-warn не нужен: пустой блок никого
+// не вводит в заблуждение, валиден в обеих формах).
+func firstKnownStateChangeKeyPos(node *ast.MappingNode) *struct{ Line, Column int } {
+	for _, kv := range node.Values {
+		tok := kv.Key.GetToken()
+		if tok == nil {
+			continue
+		}
+		if stateChangesKnownKeys[tok.Value] {
+			return &struct{ Line, Column int }{tok.Position.Line, tok.Position.Column}
+		}
+	}
+	return nil
+}
+
+// validateStateOp — валидация одной операции list-формы (элемент `state_changes[i]`).
+//
+// Элемент обязан быть mapping с РОВНО одним глаголом-ключом (`set`/`add`/…), чьё
+// значение — непустое имя целевого поля. Параметры (`value`/`key`/`match`/
+// `on_conflict`/`patch`/`expect`/`as`/`do`) проверяются по применимости к глаголу:
+//
+//   - set:    нужен value; match/key/on_conflict/patch/expect — неприменимы;
+//   - add:    нужен value; on_conflict ∈ {skip,replace,error}; key (map) / match
+//     (list-дедуп) опц.; patch/expect — неприменимы;
+//   - modify: нужен match + patch; опц. expect; value/key/on_conflict/as/do неприм.;
+//   - remove: нужен match; опц. expect; value/key/on_conflict/patch/as/do неприм.;
+//   - foreach: нужен as + do (непустой); вложенный foreach в do отвергается.
+func validateStateOp(node ast.Node, path string) []diag.Diagnostic {
+	mm, ok := node.(*ast.MappingNode)
+	if !ok {
+		vt := node.GetToken()
+		line, col := 0, 0
+		if vt != nil {
+			line, col = vt.Position.Line, vt.Position.Column
+		}
+		return []diag.Diagnostic{diagAt(line, col, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:     "type_mismatch",
+			Message:  "state_changes operation must be a mapping with a verb key (- set: / - add: / …)",
+			YAMLPath: path,
+		})}
+	}
+
+	var out []diag.Diagnostic
+	var verbTok = struct {
+		name string
+		line int
+		col  int
+		set  bool
+	}{}
+	seen := make(map[string]*ast.MappingValueNode, len(mm.Values))
+
+	for _, kv := range mm.Values {
+		tok := kv.Key.GetToken()
+		if tok == nil {
+			continue
+		}
+		key := tok.Value
+		seen[key] = kv
+		if !stateOpKnownKeys[key] {
+			out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+				Code:     "unknown_key",
+				Message:  `unknown field "` + key + `"`,
+				Hint:     "operation keys: <verb> (set/add/modify/remove/foreach) + value/key/match/on_conflict/patch/expect/as/do",
+				YAMLPath: path + "." + key,
+			}))
+			continue
+		}
+		if _, isVerb := stateOpVerbs[key]; isVerb {
+			if verbTok.set {
+				out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+					Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+					Code:     "invalid_value",
+					Message:  fmt.Sprintf("state_changes operation has multiple verbs (%q and %q) — exactly one expected", verbTok.name, key),
+					YAMLPath: path,
+				}))
+				continue
+			}
+			verbTok.name, verbTok.line, verbTok.col, verbTok.set = key, tok.Position.Line, tok.Position.Column, true
+			// `foreach:` несёт CEL-выражение коллекции; прочие глаголы — имя
+			// целевого поля. В обоих случаях значение обязано быть непустой
+			// строкой (foreach без выражения / verb без поля — ошибка).
+			if stringFromNode(kv.Value) == "" {
+				msg := fmt.Sprintf("%s: target field must be a non-empty string", key)
+				if key == "foreach" {
+					msg = "foreach: requires a non-empty CEL collection expression (foreach: \"${ ... }\")"
+				}
+				out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+					Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+					Code:     "empty_value",
+					Message:  msg,
+					YAMLPath: path + "." + key,
+				}))
+			}
+		}
+	}
+
+	if !verbTok.set {
+		return append(out, diagAt(lineOf(mm), colOf(mm), diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:     "missing_required_field",
+			Message:  "state_changes operation has no verb (expected one of set/add/modify/remove/foreach)",
+			YAMLPath: path,
+		}))
+	}
+
+	switch verbTok.name {
+	case "set":
+		out = append(out, validateSetOp(seen, path, verbTok.line, verbTok.col)...)
+	case "add":
+		out = append(out, validateAddOp(seen, path, verbTok.line, verbTok.col)...)
+	case "modify":
+		out = append(out, validateModifyOp(seen, path, verbTok.line, verbTok.col)...)
+	case "remove":
+		out = append(out, validateRemoveOp(seen, path, verbTok.line, verbTok.col)...)
+	case "foreach":
+		out = append(out, validateForeachOp(seen, path, verbTok.line, verbTok.col)...)
+	}
+	return out
+}
+
+// validateModifyOp — `modify` требует match + patch (map путь→CEL); опц. expect;
+// value/key/on_conflict/in/as/do неприменимы. patch обязан быть mapping.
+// Предохранитель широкого match: константно-истинный (`match: true`) или
+// отсутствующий match — WARN «широкий предикат патчит всю коллекцию» (§7.1 (d)).
+func validateModifyOp(seen map[string]*ast.MappingValueNode, path string, vline, vcol int) []diag.Diagnostic {
+	var out []diag.Diagnostic
+	out = append(out, warnWideMatch(seen, path, vline, vcol, "modify")...)
+	if seen["patch"] == nil {
+		out = append(out, diagAt(vline, vcol, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:     "missing_required_field",
+			Message:  "modify: requires patch: { <path-in-element>: \"${ ... }\" } (orchestration.md §7.1)",
+			YAMLPath: path + ".patch",
+		}))
+	} else {
+		out = append(out, validatePatchMap(seen["patch"], path)...)
+	}
+	out = append(out, validateExpectValue(seen, path)...)
+	out = append(out, rejectKeys(seen, path, []string{"value", "key", "on_conflict", "as", "do"}, "modify:")...)
+	return out
+}
+
+// validateRemoveOp — `remove` требует match; опц. expect; value/key/on_conflict/
+// patch/in/as/do неприменимы. Тот же предохранитель широкого match.
+func validateRemoveOp(seen map[string]*ast.MappingValueNode, path string, vline, vcol int) []diag.Diagnostic {
+	var out []diag.Diagnostic
+	out = append(out, warnWideMatch(seen, path, vline, vcol, "remove")...)
+	out = append(out, validateExpectValue(seen, path)...)
+	out = append(out, rejectKeys(seen, path, []string{"value", "key", "on_conflict", "patch", "as", "do"}, "remove:")...)
+	return out
+}
+
+// validateForeachOp — `foreach` требует as: (имя биндинга) + do: (непустой список
+// вложенных операций); value/key/match/on_conflict/patch/expect неприменимы.
+// Каждая вложенная do-операция валидируется рекурсивно (validateStateOp).
+//
+// `as:` не должен затенять зарезервированное имя CEL-контекста или локальный
+// биндинг элемента (foreachReservedBindings) → reserved_binding_name.
+//
+// Вложенный foreach в do — вне грамматики (ADR-057: do несёт CRUD-глаголы, не
+// повторный цикл). validateStateOp его НЕ отвергает (foreach — валидный верхний
+// глагол), поэтому каждый do-элемент явно проверяется здесь: do-foreach прошёл бы
+// lint, а render.renderForeach раскрыл бы его через renderOneStateOp с Verb=foreach
+// → merge упал бы в рантайме (`verb foreach не поддержан` → state_changes_apply_
+// failed → error_locked ПОСЛЕ apply на хостах). Ловим на этапе валидации (BUG-2).
+func validateForeachOp(seen map[string]*ast.MappingValueNode, path string, vline, vcol int) []diag.Diagnostic {
+	var out []diag.Diagnostic
+	if as := seen["as"]; as == nil || stringFromNode(as.Value) == "" {
+		out = append(out, diagAt(vline, vcol, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:     "missing_required_field",
+			Message:  "foreach: requires as: <name> (binding for the current iteration element)",
+			YAMLPath: path + ".as",
+		}))
+	} else if name := stringFromNode(as.Value); foreachReservedBindings[name] {
+		tok := as.Key.GetToken()
+		line, col := vline, vcol
+		if tok != nil {
+			line, col = tok.Position.Line, tok.Position.Column
+		}
+		out = append(out, diagAt(line, col, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:     "reserved_binding_name",
+			Message:  fmt.Sprintf("foreach.as %q shadows a reserved name (CEL context or per-element binding)", name),
+			Hint:     "reserved: input, register, incarnation, soulprint, essence, vars, elem, key, value",
+			YAMLPath: path + ".as",
+		}))
+	}
+	doKV := seen["do"]
+	if doKV == nil {
+		out = append(out, diagAt(vline, vcol, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:     "missing_required_field",
+			Message:  "foreach: requires do: [<verb...>] (operations applied per iteration)",
+			YAMLPath: path + ".do",
+		}))
+	} else if seq, ok := doKV.Value.(*ast.SequenceNode); ok {
+		if len(seq.Values) == 0 {
+			out = append(out, diagAt(vline, vcol, diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+				Code:     "empty_value",
+				Message:  "foreach.do must contain at least one operation",
+				YAMLPath: path + ".do",
+			}))
+		}
+		for i, item := range seq.Values {
+			doPath := fmt.Sprintf("%s.do[%d]", path, i)
+			out = append(out, validateStateOp(item, doPath)...)
+			out = append(out, rejectNestedForeach(item, doPath)...)
+		}
+	} else {
+		out = append(out, diagAt(vline, vcol, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:     "type_mismatch",
+			Message:  "foreach.do must be a sequence of operations",
+			YAMLPath: path + ".do",
+		}))
+	}
+	out = append(out, rejectKeys(seen, path, []string{"value", "key", "match", "on_conflict", "patch", "expect"}, "foreach:")...)
+	return out
+}
+
+// rejectNestedForeach отбраковывает foreach-глагол внутри do: вложенный цикл вне
+// грамматики ADR-057 (do несёт только CRUD-глаголы). Проверка по AST — ищет ключ
+// `foreach` среди ключей do-элемента.
+func rejectNestedForeach(node ast.Node, path string) []diag.Diagnostic {
+	mm, ok := node.(*ast.MappingNode)
+	if !ok {
+		return nil
+	}
+	for _, kv := range mm.Values {
+		tok := kv.Key.GetToken()
+		if tok == nil || tok.Value != "foreach" {
+			continue
+		}
+		return []diag.Diagnostic{diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:     "nested_foreach_unsupported",
+			Message:  "nested foreach in do: is not supported (do: carries CRUD verbs set/add/modify/remove only) — ADR-057",
+			Hint:     "flatten the iteration: a single foreach with the combined collection, or precompute the list in vars:",
+			YAMLPath: path + ".foreach",
+		})}
+	}
+	return nil
+}
+
+// validatePatchMap проверяет, что `patch:` — mapping (путь-в-элементе → значение).
+// Пустой patch валиден грамматически (no-op merge), но бессмыслен — допускаем без
+// ошибки (симметрично пустому state_changes).
+func validatePatchMap(patchKV *ast.MappingValueNode, path string) []diag.Diagnostic {
+	if _, ok := patchKV.Value.(*ast.MappingNode); ok {
+		return nil
+	}
+	tok := patchKV.Key.GetToken()
+	line, col := 0, 0
+	if tok != nil {
+		line, col = tok.Position.Line, tok.Position.Column
+	}
+	return []diag.Diagnostic{diagAt(line, col, diag.Diagnostic{
+		Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+		Code:     "type_mismatch",
+		Message:  "modify.patch must be a mapping of <path-in-element> → CEL/literal",
+		YAMLPath: path + ".patch",
+	})}
+}
+
+// validateExpectValue проверяет значение `expect` ∈ {one, at_most_one, any}.
+func validateExpectValue(seen map[string]*ast.MappingValueNode, path string) []diag.Diagnostic {
+	exp := seen["expect"]
+	if exp == nil {
+		return nil
+	}
+	val := stringFromNode(exp.Value)
+	if stateOpExpectValues[val] {
+		return nil
+	}
+	tok := exp.Key.GetToken()
+	line, col := 0, 0
+	if tok != nil {
+		line, col = tok.Position.Line, tok.Position.Column
+	}
+	return []diag.Diagnostic{diagAt(line, col, diag.Diagnostic{
+		Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+		Code:     "invalid_value",
+		Message:  fmt.Sprintf("expect %q is invalid (expected one / at_most_one / any)", val),
+		YAMLPath: path + ".expect",
+	})}
+}
+
+// warnWideMatch — предохранитель (a) ADR-057 §d: modify/remove без match: ИЛИ с
+// константно-истинным предикатом (`match: true`) перепатчат/снесут ВСЮ коллекцию.
+// Не ошибка (автор мог хотеть именно «всех»), но WARN — намерение должно быть
+// явным. soul-lint выводит warn, exit-code остаётся 0.
+func warnWideMatch(seen map[string]*ast.MappingValueNode, path string, vline, vcol int, verb string) []diag.Diagnostic {
+	m := seen["match"]
+	if m == nil {
+		return []diag.Diagnostic{diagAt(vline, vcol, diag.Diagnostic{
+			Level: diag.LevelWarning, Phase: diag.PhaseSchemaValidate,
+			Code:     "wide_match",
+			Message:  fmt.Sprintf("%s without match: affects the WHOLE collection (all elements)", verb),
+			Hint:     "add match: \"<CEL-predicate>\" to scope the operation, or confirm bulk intent is desired",
+			YAMLPath: path,
+		})}
+	}
+	if isConstTrueMatch(stringFromNode(m.Value)) {
+		tok := m.Key.GetToken()
+		line, col := vline, vcol
+		if tok != nil {
+			line, col = tok.Position.Line, tok.Position.Column
+		}
+		return []diag.Diagnostic{diagAt(line, col, diag.Diagnostic{
+			Level: diag.LevelWarning, Phase: diag.PhaseSchemaValidate,
+			Code:     "wide_match",
+			Message:  fmt.Sprintf("%s with constant-true match affects the WHOLE collection (all elements)", verb),
+			Hint:     "narrow the predicate (key == X / elem.id == Y), or confirm bulk intent is desired",
+			YAMLPath: path + ".match",
+		})}
+	}
+	return nil
+}
+
+// isConstTrueMatch распознаёт константно-истинный предикат (`true`, `1 == 1`),
+// сносящий/патчащий всю коллекцию. Полноценный CEL-анализ не нужен — ловим
+// очевидную литеральную форму `true` (с возможными пробелами/обёрткой `${ }`).
+//
+// TODO(wide-match): расширить до «предикат не ссылается на elem/key/value» (любой
+// match, игнорирующий элемент, зацепляет всю коллекцию — подозрителен). Корректно
+// это требует CEL-AST-обхода (shared/cel): regex по идентификаторам даёт ложные
+// срабатывания на `register.value`/`input.key`/поле `x.elem`. Пока ловим только
+// литерал `true`; полное покрытие — отдельным слайсом с разбором AST.
+func isConstTrueMatch(expr string) bool {
+	s := strings.TrimSpace(expr)
+	s = strings.TrimPrefix(s, "${")
+	s = strings.TrimSuffix(s, "}")
+	return strings.TrimSpace(s) == "true"
+}
+
+// validateSetOp — `set` требует value; match/key/on_conflict/patch/expect
+// неприменимы. `expect` — ассерт кратности ТОЛЬКО для modify/remove (ADR-057 §c);
+// на set он молча игнорировался бы движком (ловушка для оператора, BUG-1).
+func validateSetOp(seen map[string]*ast.MappingValueNode, path string, vline, vcol int) []diag.Diagnostic {
+	var out []diag.Diagnostic
+	if seen["value"] == nil {
+		out = append(out, diagAt(vline, vcol, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:     "missing_required_field",
+			Message:  "set: requires value: (CEL-expression or literal to overwrite the field)",
+			YAMLPath: path + ".value",
+		}))
+	}
+	out = append(out, rejectKeys(seen, path, []string{"match", "key", "on_conflict", "patch", "expect", "in", "as", "do"}, "set:")...)
+	return out
+}
+
+// validateAddOp — `add` требует value; on_conflict ∈ {skip,replace,error};
+// key (map) / match (list-дедуп) опц.; patch/expect/in/as/do неприменимы.
+// `expect` — ассерт кратности ТОЛЬКО для modify/remove (ADR-057 §c); на add он
+// молча игнорировался бы движком (ловушка: оператор ждёт страховку от дубля на
+// add, её там нет — дедуп делает on_conflict, BUG-1).
+func validateAddOp(seen map[string]*ast.MappingValueNode, path string, vline, vcol int) []diag.Diagnostic {
+	var out []diag.Diagnostic
+	if seen["value"] == nil {
+		out = append(out, diagAt(vline, vcol, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:     "missing_required_field",
+			Message:  "add: requires value: (element to add — object or scalar)",
+			YAMLPath: path + ".value",
+		}))
+	}
+	if oc := seen["on_conflict"]; oc != nil {
+		val := stringFromNode(oc.Value)
+		if !stateOpConflictValues[val] {
+			tok := oc.Key.GetToken()
+			line, col := vline, vcol
+			if tok != nil {
+				line, col = tok.Position.Line, tok.Position.Column
+			}
+			out = append(out, diagAt(line, col, diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+				Code:     "invalid_value",
+				Message:  fmt.Sprintf("on_conflict %q is invalid (expected skip / replace / error)", val),
+				YAMLPath: path + ".on_conflict",
+			}))
+		}
+	}
+	out = append(out, rejectKeys(seen, path, []string{"patch", "expect", "in", "as", "do"}, "add:")...)
+	return out
+}
+
+// rejectKeys поднимает unknown_key для каждого присутствующего, но неприменимого
+// к глаголу ключа (например, patch: на add, match: на set).
+func rejectKeys(seen map[string]*ast.MappingValueNode, path string, keys []string, verb string) []diag.Diagnostic {
+	var out []diag.Diagnostic
+	for _, k := range keys {
+		kv := seen[k]
+		if kv == nil {
+			continue
+		}
+		tok := kv.Key.GetToken()
+		line, col := 0, 0
+		if tok != nil {
+			line, col = tok.Position.Line, tok.Position.Column
+		}
+		out = append(out, diagAt(line, col, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:     "unknown_key",
+			Message:  fmt.Sprintf("%s does not accept %q", verb, k),
+			YAMLPath: path + "." + k,
+		}))
+	}
+	return out
+}
+
+// lineOf/colOf — позиция узла (fallback 0 при отсутствии токена).
+func lineOf(node ast.Node) int {
+	if tok := node.GetToken(); tok != nil {
+		return tok.Position.Line
+	}
+	return 0
+}
+
+func colOf(node ast.Node) int {
+	if tok := node.GetToken(); tok != nil {
+		return tok.Position.Column
+	}
+	return 0
+}
+
+// findValueNode — raw value-узел под top-level ключом name (любой формы:
+// mapping/sequence/scalar). Параллель findInputMapping/findSequenceValue, но без
+// фильтра по виду — нужен для dual-form-диспетчеризации (validateStateChanges).
+func findValueNode(root *ast.MappingNode, name string) ast.Node {
+	if root == nil {
+		return nil
+	}
+	for _, kv := range root.Values {
+		tok := kv.Key.GetToken()
+		if tok == nil || tok.Value != name {
+			continue
+		}
+		return kv.Value
+	}
+	return nil
 }
 
 // validateSetsMap проверяет `sets` как mapping `<поле>: <выражение>`: значение

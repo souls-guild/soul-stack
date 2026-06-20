@@ -231,6 +231,12 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			ServiceVersion: inc.ServiceVersion,
 		},
 		Hosts: hosts,
+		// State — read-only снимок incarnation.state на момент row-lock прогона
+		// (stateBefore захвачен под FOR UPDATE). Доступен в scenario-render CEL как
+		// `incarnation.state.<path>` (ADR-009/010, Вариант A). ОДНА точка: renderIn
+		// переиспользуется на всех passages staged-render-а, поэтому снимок
+		// инвариантен (P0 ≡ P1+ = pre-run state, НЕ накапливается между passages).
+		State: stateBefore,
 		Ctx:   ctx, // vault() (RenderStateChanges не идёт через Render → ctx нужен явно)
 		// Templates: ридер .tmpl снапшота сервиса для core.file.rendered.
 		// Двухуровневый резолв scenario-local→service-level (ADR-009): чтение
@@ -514,16 +520,25 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	}
 	renderIn.RegisterByHost = registerByHost
 
-	// 8. Все задачи success на всех хостах → рендер state_changes.sets
+	// 8. Все задачи success на всех хостах → рендер state_changes
 	//    (Keeper-side CEL, last-wins cross-host) и commit в incarnation.state.
-	//    Рендер sets — строго ПОСЛЕ барьера (orchestration.md §7.1): значения
-	//    фиксируются по факту успешного apply, не до него.
-	renderedSets, err := r.deps.Render.RenderStateChanges(renderIn)
+	//    Рендер — строго ПОСЛЕ барьера (orchestration.md §7): значения
+	//    фиксируются по факту успешного apply, не до него. RenderStateOps —
+	//    упорядоченный список set+add-операций (новая list-форма); merge применяет
+	//    их к stateBefore по порядку (set-overwrite / идемпотентный add).
+	renderedOps, err := r.deps.Render.RenderStateOps(renderIn)
 	if err != nil {
 		abort("state_changes_render_failed", err)
 		return
 	}
-	stateAfter := mergeStateChanges(stateBefore, renderedSets)
+	stateAfter, err := mergeStateChanges(stateBefore, renderedOps, art.Manifest.StateSchema, r.deps.Render.EvalStateMatch, r.deps.Render.EvalStateOpExpr)
+	if err != nil {
+		// Фейл применения операции (on_conflict: error / неконсистентная коллекция /
+		// match-предикат упал) — error_locked, state НЕ коммитнут (stateAfter не
+		// дошёл до commitSuccess). orchestration.md §7: фейл свёртки = блокировка.
+		abort("state_changes_apply_failed", err)
+		return
+	}
 	if err := r.commitSuccess(ctx, spec, stateBefore, stateAfter); err != nil {
 		// Single-winner (ADR-027(j) W1): incarnation уже выведена из applying
 		// другим коммиттером (recovery-перехват / параллельный финал) — НЕ

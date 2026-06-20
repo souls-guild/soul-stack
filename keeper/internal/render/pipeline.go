@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"sort"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -272,11 +274,6 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		return nil, err
 	}
 
-	resolved, err := resolveVaultRefs(ctx, p.vault, task.Module.Params)
-	if err != nil {
-		return nil, fmt.Errorf("render: task %q: %w", task.Name, err)
-	}
-
 	rt := &RenderedTask{
 		Index:    idx,
 		Name:     task.Name,
@@ -311,11 +308,34 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		renderHosts = []*topology.HostFacts{{}}
 	}
 
+	// Static-when placeholder-skip (ADR-012(d), Вариант b): при register-/soulprint-
+	// независимом when:, вычислившемся в false на Keeper-е, params НЕ рендерятся —
+	// задача всё равно станет SKIPPED на Soul-е (он вычислит тот же when по тому же
+	// flow_context). Это лечит multi-action destiny: задачи неактивной ветки
+	// (`when: input.action == 'apply'` при другом action) читают optional-input,
+	// которого нет → no-such-key → render_failed эжер-рендера. Skip собирает ТОЛЬКО
+	// flow_context (Soul читает его для evalWhen — сборка из input/vars/essence/
+	// incarnation/self, НЕ из падающих params, безопасна) и оставляет полноценный
+	// RenderedTask (Index/Passage/Register/When/requisites сохранены, params пусты).
+	// Решение детерминировано (static-when host-инвариантен) — берётся на первом
+	// хосте, fc остальных собирается ради валидности snapshot-а.
+	if skip, serr := p.staticWhenSkips(in, task, renderHosts, len(targeted), loopVars); serr != nil {
+		return nil, serr
+	} else if skip != nil {
+		rt.FlowContext = skip
+		return rt, nil
+	}
+
+	resolved, err := resolveVaultRefs(ctx, p.vault, task.Module.Params)
+	if err != nil {
+		return nil, fmt.Errorf("render: task %q: %w", task.Name, err)
+	}
+
 	isRendered := task.Module.Module == moduleFileRendered
 	var firstSID string
 	for hi, h := range renderHosts {
 		vars := hostLoopVars(in, h, len(targeted), loopVars)
-		vars, err = resolveTaskVars(p.cel, task.Vars, vars)
+		vars, err = resolveTaskVars(p.cel, fileVarsForHost(in, h), task.Vars, vars)
 		if err != nil {
 			return nil, fmt.Errorf("render: task %q (host %s): %w", task.Name, h.SID, err)
 		}
@@ -397,6 +417,60 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 	return rt, nil
 }
 
+// staticWhenSkips решает, пропускать ли рендер params задачи по статическому when:
+// (ADR-012(d), Вариант b placeholder-skip). Возвращает:
+//   - (fc, nil) — задачу СКИПАЕМ: when статический (register-/soulprint-независимый)
+//     и вычислился в false. fc — flow_context первого хоста (его Soul читает для
+//     собственного evalWhen → подтвердит when:false → SKIPPED, как сейчас);
+//   - (nil, nil) — НЕ скипаем: when не статический (register/soulprint/пустой) ИЛИ
+//     статический-но-true. Обычный путь с рендером params.
+//   - (nil, err) — ошибка сборки flow_context либо eval статического предиката
+//     (битый when — Keeper падает так же, как упал бы Soul; см. evalStaticWhen).
+//
+// Решение детерминировано: static-when host-инвариантен по построению (не зависит
+// от soulprint.self/register — единственных host-вариативных слоёв), поэтому
+// вычисляется на ПЕРВОМ хосте. flow_context остальных хостов всё равно собирается
+// (валидность snapshot-а каждого хоста — как и в основном цикле renderTaskIter), но
+// в исход static-when не входит. Так skip консистентен по хостам и по Passage:
+// один input/state-снимок прогона даёт один и тот же false на всех хостах и при
+// повторном рендере следующего Passage.
+func (p *Pipeline) staticWhenSkips(
+	in RenderInput,
+	task config.Task,
+	renderHosts []*topology.HostFacts,
+	targetCount int,
+	loopVars map[string]any,
+) (*structpb.Struct, error) {
+	if !isStaticWhen(task.When) {
+		return nil, nil
+	}
+
+	var firstFC *structpb.Struct
+	for hi, h := range renderHosts {
+		vars := hostLoopVars(in, h, targetCount, loopVars)
+		vars, err := resolveTaskVars(p.cel, fileVarsForHost(in, h), task.Vars, vars)
+		if err != nil {
+			return nil, fmt.Errorf("render: task %q (host %s): %w", task.Name, h.SID, err)
+		}
+		fc, err := buildFlowContext(in, h, vars, targetCount)
+		if err != nil {
+			return nil, fmt.Errorf("render: task %q (host %s): %w", task.Name, h.SID, err)
+		}
+		if hi == 0 {
+			firstFC = fc
+		}
+	}
+
+	pass, err := evalStaticWhen(task.When, firstFC)
+	if err != nil {
+		return nil, fmt.Errorf("render: task %q: static-when %q: %w", task.Name, task.When, err)
+	}
+	if pass {
+		return nil, nil // when:true — задача активна, рендерим params обычным путём.
+	}
+	return firstFC, nil
+}
+
 // renderKeeperTask рендерит keeper-side задачу (`on: keeper`, docs/keeper/
 // modules.md): params вычисляются ОДИН раз в keeper-контексте (keeperVars — без
 // per-host soulprint), потому что хостов нет — шаг исполняется на самом keeper-
@@ -424,7 +498,9 @@ func (p *Pipeline) renderKeeperTask(ctx context.Context, in RenderInput, task co
 	}
 
 	vars := keeperVars(in)
-	vars, err = resolveTaskVars(p.cel, task.Vars, vars)
+	// keeper-side задача — не destiny-проход (destiny-tasks все Soul-side в пилоте);
+	// file-vars базы нет (DestinyVarsResolved nil вне renderApplyDestiny).
+	vars, err = resolveTaskVars(p.cel, nil, task.Vars, vars)
 	if err != nil {
 		return nil, fmt.Errorf("render: keeper task %q: %w", task.Name, err)
 	}
@@ -460,6 +536,109 @@ func (p *Pipeline) renderKeeperTask(ctx context.Context, in RenderInput, task co
 // (when/changed_when/failed_when). Стиль и форма — как reLoopWhenSoulprint
 // (loop.go): один regex по границе слова, fail-closed на multi-host.
 var reFlowControlSoulprint = regexp.MustCompile(`\bsoulprint\b`)
+
+// flowControlEngine — общий Soul-side flow-control-движок ([cel.NewFlowControl],
+// ADR-012(d)) для Keeper-side static-when placeholder-skip. КРИТИЧНО: это та же
+// sandbox-песочница, что Soul использует для evalWhen (applyrunner.go) — не
+// full Keeper-env. Гарантия бит-в-бит эквивалентности static-when-false на Keeper
+// и when-false на Soul (один и тот же env, один и тот же flow_context). Движок
+// потокобезопасен (compile-cache под RWMutex) и переиспользуется всеми прогонами;
+// собирается лениво один раз (паттерн rbac/soulprint, statepredicate) — конструктор
+// от рантайма не зависит, но строить его в init() — платить на каждый импорт.
+var (
+	flowControlEngineOnce sync.Once
+	flowControlEngineInst *cel.Engine
+	flowControlEngineErr  error
+)
+
+func flowControlEngine() (*cel.Engine, error) {
+	flowControlEngineOnce.Do(func() {
+		flowControlEngineInst, flowControlEngineErr = cel.NewFlowControl()
+	})
+	return flowControlEngineInst, flowControlEngineErr
+}
+
+// isStaticWhen сообщает, можно ли вычислить предикат when: Keeper-side ДО рендера
+// params (placeholder-skip, ADR-012(d), Вариант b). Статическим считается непустой
+// when, который НЕ зависит от register.* (результатов предыдущих задач, известных
+// только Soul-у) и НЕ зависит от soulprint (host-вариативного слоя). Такой предикат
+// детерминирован на Keeper-е из flow_context (input/vars/essence/incarnation), и
+// его false-исход одинаков на всех хостах прогона.
+//
+// Переиспользует канонические парсеры (без дубля regex):
+//   - config.ExtractRegisterRefs (shared/config/task_refs.go) — register-ссылки;
+//     любая register.<name> (кроме register.self, которой во when по семантике нет
+//     для gating) делает when register-зависимым → НЕ статический;
+//   - reFlowControlSoulprint (guardFlowControlHostInvariant) — soulprint host-
+//     вариативен (soulprint.self), исключаем из «статического».
+//
+// Пустой when → false (нет предиката — нечего вычислять Keeper-side; задача
+// безусловна, идёт обычным путём с рендером params). Смешанный when
+// (register+input) → НЕ статический (есть register-ссылка) — остаётся Soul-side.
+func isStaticWhen(when string) bool {
+	// Допущение: register-зависимость детектится только по точечной форме
+	// register.<name> (ExtractRegisterRefs). Bracket-форма register["x"] во when вне
+	// поддержки — симметрично checkPredicateRefs в config-валидаторе. Для when это
+	// латентно (probe-register всегда точечный).
+	if when == "" {
+		return false
+	}
+	if len(config.ExtractRegisterRefs(when)) != 0 {
+		return false
+	}
+	if reFlowControlSoulprint.MatchString(when) {
+		return false
+	}
+	return true
+}
+
+// evalStaticWhen вычисляет статический when: Keeper-side через тот же flow-control-
+// движок и тот же flow_context, что поедут на Soul (evalWhen). Возвращает результат
+// предиката. Вызывается ТОЛЬКО для when, прошедшего isStaticWhen (register-/
+// soulprint-независимый) — register в активации пуст, и его пустота не влияет на
+// исход. Бит-в-бит эквивалентно Soul-side evalWhen (один env, один flow_context).
+//
+// Ошибка eval (например, no-such-key на отсутствующем input) пробрасывается caller-у:
+// Keeper падает с render_failed на битом статическом предикате так же, как Soul упал
+// бы на нём в evalWhen — расхождения поведения нет, ошибка автора видна раньше.
+func evalStaticWhen(when string, fc *structpb.Struct) (bool, error) {
+	engine, err := flowControlEngine()
+	if err != nil {
+		return false, fmt.Errorf("static-when: сборка flow-control-движка: %w", err)
+	}
+	// Активация — flowControlVars Soul-side формы (flow_context + пустой register).
+	// register-карта пуста: isStaticWhen уже гарантировал отсутствие register.* в
+	// when, поэтому пустота register на исход не влияет (симметрия с Soul, где
+	// register для register-независимого when тоже не читается).
+	return engine.EvalPredicate(when, flowControlVarsFromStruct(fc, nil))
+}
+
+// flowControlVarsFromStruct распаковывает flow_context-снапшот в cel.Vars Soul-side
+// формы — точное зеркало soul/internal/runtime.flowControlVars (applyrunner.go),
+// чтобы static-when на Keeper биндился ТЕМИ ЖЕ именами, что evalWhen на Soul.
+// register передаётся отдельно (nil для static-when — register-независимый предикат).
+// nil/отсутствующие секции → пустые map (штатный CEL no-such-key, не паника).
+func flowControlVarsFromStruct(flowCtx *structpb.Struct, register map[string]any) cel.Vars {
+	fc := map[string]any{}
+	if flowCtx != nil {
+		fc = flowCtx.AsMap()
+	}
+	flowSection := func(key string) map[string]any {
+		if sec, ok := fc[key].(map[string]any); ok {
+			return sec
+		}
+		return map[string]any{}
+	}
+	return cel.Vars{
+		Input:         flowSection("input"),
+		Vars:          flowSection("vars"),
+		Essence:       flowSection("essence"),
+		Incarnation:   flowSection("incarnation"),
+		SoulprintSelf: flowSection(flowContextSelfKey),
+		Register:      register,
+		// AllowHosts намеренно false: NewFlowControl форсит изоляцию soulprint.hosts.
+	}
+}
 
 // guardFlowControlHostInvariant отвергает host-вариативный flow-control-предикат
 // (when/changed_when/failed_when со ссылкой на soulprint.self) на multi-host
@@ -597,50 +776,396 @@ func setRenderContext(st *structpb.Struct, rc map[string]any) error {
 	return nil
 }
 
-// RenderStateChanges рендерит `state_changes.sets` сценария (поле → CEL-выражение)
-// в map отрендеренных значений для коммита в incarnation.state (orchestration.md
-// §7.1). Вызывается после барьера (run.go), отдельно от Render. Контекст sets —
-// input/incarnation/soulprint.self + register этого хоста (слайс 2: register
-// probe-задач прогона, in.RegisterByHost[sid], резолвнутый по register-имени);
-// vars/essence/state/soulprint.hosts — future-расширение полной грамматики, в
-// пилоте недоступны.
+// RenderStateChanges рендерит `state_changes` сценария в map field→value для
+// коммита set-операций (orchestration.md §7.1). Совместимость: возвращает ту же
+// плоскую map, что и раньше — проекцию ТОЛЬКО set-операций (старой map-формы
+// `sets:` и новой list-формы `- set:`). add-операции в эту проекцию НЕ входят:
+// они требуют упорядоченного применения к промежуточному state (см.
+// [Pipeline.RenderStateOps] / scenario.mergeStateChanges). Сохранена ради
+// trial-ассерта `assert.state_changes` (поле→значение) и существующих
+// state-merge unit-тестов.
 //
-// Cross-host свёртка — last-wins по сортировке SID: для каждого поля sets берётся
-// значение, вычисленное на хосте с лексикографически последним SID. Хосты прогона
-// (in.Hosts) сортируются по SID; sets вычисляются для каждого по порядку, поле
-// перезаписывается — побеждает последний. Это детерминированно (как «последняя
-// запись побеждает» в output.md).
-//
-// Пустой/nil sets → пустой map (state не меняется). Пустой in.Hosts → пустой map
-// (некому вычислять; caller — run.go — уже отверг прогон без хостов).
-//
-// appends/modifies (future, per-host коллекции) здесь НЕ обрабатываются.
+// Реализована поверх RenderStateOps: рендерит весь упорядоченный список, затем
+// проецирует set-операции в map (последняя по порядку перезаписывает раннюю).
 func (p *Pipeline) RenderStateChanges(in RenderInput) (map[string]any, error) {
+	ops, err := p.RenderStateOps(in)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]any, len(ops))
+	for i := range ops {
+		if ops[i].Verb == config.VerbSet {
+			out[ops[i].Field] = ops[i].Value
+		}
+	}
+	return out, nil
+}
+
+// RenderStateOps рендерит упорядоченный список операций `state_changes` сценария
+// (orchestration.md §7, новая list-форма) в []RenderedOp с уже вычисленными
+// Keeper-side значениями. Вызывается после барьера (run.go), отдельно от Render.
+//
+// Контекст CEL — input/incarnation/soulprint.self + register этого хоста (слайс
+// 2: register probe-задач прогона, in.RegisterByHost[sid]); vars/essence/state/
+// soulprint.hosts — future полной грамматики, в пилоте недоступны.
+//
+// Cross-host свёртка — last-wins по сортировке SID: Value (и для map-add — Key)
+// каждой операции вычисляются на каждом хосте по порядку SID, поздний
+// перезаписывает раннего (детерминизм, output.md). Match-предикат list-дедупа
+// НЕ вычисляется здесь — он протягивается как строка и применяется merge-ом
+// per-existing-элемент (зависит от каждого элемента state, не от хоста).
+//
+// Две формы StateChanges:
+//   - list-форма (IsList): операции из sc.Ops в порядке объявления;
+//   - map-форма (DEPRECATED): sc.Sets → set-операции (порядок недетерминирован,
+//     но set-семантика field-overwrite от порядка не зависит — last-wins на поле).
+//
+// nil/пустой блок → nil. Пустой in.Hosts → nil (некому вычислять; caller run.go
+// уже отверг прогон без хостов).
+func (p *Pipeline) RenderStateOps(in RenderInput) ([]RenderedOp, error) {
 	if in.Scenario == nil {
 		return nil, fmt.Errorf("render: scenario manifest is nil")
 	}
 	sc := in.Scenario.StateChanges
-	if sc == nil || len(sc.Sets) == 0 {
-		return map[string]any{}, nil
+	if sc == nil {
+		return nil, nil
 	}
 
 	hosts := sortedHostsBySID(in.Hosts)
 	if len(hosts) == 0 {
-		return map[string]any{}, nil
+		return nil, nil
 	}
 
-	out := make(map[string]any, len(sc.Sets))
-	for _, h := range hosts {
-		vars := stateChangesVars(in, h)
-		for field, expr := range sc.Sets {
-			val, err := p.cel.EvalInterpolation(expr, vars)
+	if sc.IsList {
+		return p.renderStateOpsList(in, hosts, sc.Ops)
+	}
+	return p.renderStateOpsLegacy(in, hosts, sc.Sets)
+}
+
+// renderStateOpsLegacy рендерит старую map-форму `sets:` в set-операции. Каждое
+// поле — CEL-выражение, last-wins cross-host. Имена полей детерминированно
+// сортируются для стабильного порядка операций (set-семантика от порядка не
+// зависит, но детерминизм важен для логов/сверки).
+func (p *Pipeline) renderStateOpsLegacy(in RenderInput, hosts []*topology.HostFacts, sets map[string]string) ([]RenderedOp, error) {
+	if len(sets) == 0 {
+		return nil, nil
+	}
+	fields := make([]string, 0, len(sets))
+	for f := range sets {
+		fields = append(fields, f)
+	}
+	sort.Strings(fields)
+
+	out := make([]RenderedOp, 0, len(fields))
+	for _, field := range fields {
+		var val any
+		for _, h := range hosts {
+			v, err := p.cel.EvalInterpolation(sets[field], stateChangesVars(in, h))
 			if err != nil {
 				return nil, fmt.Errorf("render: state_changes.sets.%s (host %s): %w", field, h.SID, err)
 			}
-			out[field] = val
+			val = v // last-wins по SID
+		}
+		out = append(out, RenderedOp{Verb: config.VerbSet, Field: field, Value: val})
+	}
+	return out, nil
+}
+
+// renderStateOpsList рендерит новую list-форму: каждую операцию по порядку.
+//
+//   - set/add: Value (произвольное YAML с CEL-ячейками) и map-add Key рендерятся
+//     per-host last-wins; Match list-дедупа протягивается строкой (merge-time);
+//   - modify/remove: Match/Patch протягиваются КАК ЕСТЬ (вычисляются merge-time
+//     per-element — зависят от каждого элемента state). К RenderedOp прикладывается
+//     per-RUN снимок scenario-контекста (Context, last-wins по SID) — он нужен
+//     merge-time, т.к. match `key == input.username` / patch `${ input.acl }`
+//     видят полный sets-контекст (ADR-057 §b);
+//   - foreach: render-time fan-out — итерируем по элементам CEL-коллекции,
+//     каждую вложенную do-операцию рендерим с активным биндингом `as`-имени.
+//     Раскрывается в N RenderedOp (по числу элементов × числу do-операций).
+func (p *Pipeline) renderStateOpsList(in RenderInput, hosts []*topology.HostFacts, ops []config.StateChange) ([]RenderedOp, error) {
+	out := make([]RenderedOp, 0, len(ops))
+	for i := range ops {
+		op := ops[i]
+		if op.Verb == config.VerbForeach {
+			expanded, err := p.renderForeach(in, hosts, op, i, nil)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, expanded...)
+			continue
+		}
+		ro, err := p.renderOneStateOp(in, hosts, op, i, nil)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ro)
+	}
+	return out, nil
+}
+
+// renderOneStateOp рендерит ОДНУ не-foreach операцию (set/add/modify/remove).
+// loopBind — биндинг текущей foreach-итерации (`as`-имя → элемент), nil вне
+// foreach; он подмешивается в CEL-контекст всех ячеек value/key/patch/match.
+func (p *Pipeline) renderOneStateOp(in RenderInput, hosts []*topology.HostFacts, op config.StateChange, idx int, loopBind map[string]any) (RenderedOp, error) {
+	ro := RenderedOp{Verb: op.Verb, Field: op.Field, Match: op.Match, OnConflict: op.OnConflict, Expect: op.Expect}
+
+	// modify/remove: Match/Patch вычисляются merge-time per-element. Здесь —
+	// только снимок per-RUN scenario-контекста (last-wins по SID) + подстановка
+	// foreach-биндинга в Patch-строки (он render-time, see renderForeach).
+	if op.Verb == config.VerbModify || op.Verb == config.VerbRemove {
+		ctx := p.stateContextSnapshot(in, hosts, loopBind)
+		ro.Context = ctx
+		if op.Verb == config.VerbModify {
+			patch, err := patchMapFromAny(op.Patch)
+			if err != nil {
+				return RenderedOp{}, fmt.Errorf("render: state_changes[%d] modify %q: %w", idx, op.Field, err)
+			}
+			ro.Patch = patch
+		}
+		// foreach-биндинг в match/patch резолвится merge-time через Context
+		// (loopBind влит в snapshot), match/patch остаются строками. Match с
+		// `as`-именем (например `elem.sid == replica`) увидит replica из Context.
+		return ro, nil
+	}
+
+	// set/add: Value (рекурсивный CEL) + map-add Key — per-host last-wins.
+	var val any
+	var key string
+	for _, h := range hosts {
+		vars := stateChangesVars(in, h)
+		vars.Loop = mergeLoop(vars.Loop, loopBind)
+		v, err := renderValue(p.cel, op.Value, vars, fmt.Sprintf("state_changes[%d].value", idx))
+		if err != nil {
+			return RenderedOp{}, fmt.Errorf("render: state_changes[%d] %s %q (host %s): %w", idx, op.Verb, op.Field, h.SID, err)
+		}
+		val = v // last-wins по SID
+		if op.Key != "" {
+			kv, kerr := p.cel.EvalInterpolation(op.Key, vars)
+			if kerr != nil {
+				return RenderedOp{}, fmt.Errorf("render: state_changes[%d].key %q (host %s): %w", idx, op.Key, h.SID, kerr)
+			}
+			key = fmt.Sprint(kv)
+		}
+	}
+	ro.Value = val
+	ro.Key = key
+	// add внутри foreach: match-предикат list-дедупа может ссылаться на `as`-имя
+	// (ADR-057 пример add_replicas: `match: "elem == sid"`). Чистый add-match
+	// (EvalStateMatch) видит только elem/value; чтобы `sid` резолвился merge-time,
+	// прикладываем foreach-биндинг как Context — merge берёт context-aware
+	// вычислитель, если Context != nil (findListMatch). Вне foreach Context=nil →
+	// прежний чистый add-match elem/value.
+	if op.Verb == config.VerbAdd && len(loopBind) > 0 {
+		ro.Context = loopBind
+	}
+	return ro, nil
+}
+
+// renderForeach раскрывает foreach в render-фазе: вычисляет CEL-коллекцию op.In,
+// итерирует по элементам (list → as=элемент; map → as=объект-запись с .key/.value),
+// и для каждого элемента рендерит все do-операции с активным биндингом as-имени.
+// Раскрывается в N×M RenderedOp (N элементов × M do-операций).
+//
+// ★ Форма биндинга (ADR-057 §3, ЗАФИКСИРОВАНА):
+//   - foreach по LIST → `as`=ЭЛЕМЕНТ как есть. Для list of scalars `${replica}`
+//     даёт скаляр; для list of objects `${replica.sid}` — поле объекта.
+//   - foreach по MAP → `as`=ОБЪЕКТ-ЗАПИСЬ {key, value}: `${change.key}` —
+//     ключ записи, `${change.value.acl}` — поле значения. Это симметрично
+//     register-карте (sid→payload) и migration-DSL foreach по map.
+//
+// Коллекция op.In вычисляется ОДИН раз (host-инвариантна в пилоте: foreach по
+// input.*/vars.* — общий контекст прогона; foreach по soulprint.self.* был бы
+// host-вариативен и здесь не поддержан — снимок последнего хоста по SID, как и
+// прочая last-wins-свёртка). nestedBind — биндинг внешнего foreach (вложенность
+// грамматикой запрещена, но параметр для симметрии).
+func (p *Pipeline) renderForeach(in RenderInput, hosts []*topology.HostFacts, op config.StateChange, idx int, nestedBind map[string]any) ([]RenderedOp, error) {
+	// Коллекция вычисляется в контексте последнего хоста по SID (last-wins).
+	last := hosts[len(hosts)-1]
+	vars := stateChangesVars(in, last)
+	vars.Loop = mergeLoop(vars.Loop, nestedBind)
+	collVal, err := p.cel.EvalInterpolation(op.In, vars)
+	if err != nil {
+		return nil, fmt.Errorf("render: state_changes[%d].foreach %q: %w", idx, op.In, err)
+	}
+
+	binds, err := foreachBindings(op.As, collVal)
+	if err != nil {
+		return nil, fmt.Errorf("render: state_changes[%d].foreach %q: %w", idx, op.In, err)
+	}
+
+	out := make([]RenderedOp, 0, len(binds)*len(op.Do))
+	for _, bind := range binds {
+		merged := mergeLoop(nestedBind, bind)
+		for di := range op.Do {
+			sub := op.Do[di]
+			ro, derr := p.renderOneStateOp(in, hosts, sub, idx, merged)
+			if derr != nil {
+				return nil, fmt.Errorf("render: state_changes[%d].foreach.do[%d]: %w", idx, di, derr)
+			}
+			out = append(out, ro)
 		}
 	}
 	return out, nil
+}
+
+// foreachBindings строит per-iteration биндинги `as`-имени из вычисленной
+// коллекции. ★ list → as=элемент; map → as={key, value}-запись (ADR-057 §3).
+// Порядок map-итерации детерминирован (сортировка ключей) — воспроизводимость
+// state-коммита. Не list/не map (скаляр/nil) → ошибка: foreach требует коллекцию.
+func foreachBindings(asName string, coll any) ([]map[string]any, error) {
+	switch c := coll.(type) {
+	case []any:
+		out := make([]map[string]any, 0, len(c))
+		for _, elem := range c {
+			out = append(out, map[string]any{asName: elem})
+		}
+		return out, nil
+	case map[string]any:
+		keys := make([]string, 0, len(c))
+		for k := range c {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		out := make([]map[string]any, 0, len(c))
+		for _, k := range keys {
+			// as=объект-запись: .key (строка) + .value (значение записи).
+			out = append(out, map[string]any{asName: map[string]any{"key": k, "value": c[k]}})
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("foreach: выражение дало %T, ожидался list или map", coll)
+	}
+}
+
+// patchMapFromAny приводит произвольное YAML-значение patch к map[string]any
+// (путь-в-элементе → CEL/литерал). nil → пустой map (no-op merge). Не-map → ошибка
+// (config-валидатор уже отверг, defense in depth).
+func patchMapFromAny(v any) (map[string]any, error) {
+	if v == nil {
+		return map[string]any{}, nil
+	}
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("patch должен быть map путь→значение, получено %T", v)
+	}
+	return m, nil
+}
+
+// stateContextSnapshot строит per-RUN снимок scenario-контекста (last-wins по
+// SID) как плоскую map для merge-time вычисления modify/remove match/patch.
+// Содержит input/register/incarnation/self/essence/vars + влитый foreach-биндинг
+// (loopBind). Берётся контекст ПОСЛЕДНЕГО хоста по SID — register/self
+// host-вариативны, last-wins (output.md, симметрично set/add).
+func (p *Pipeline) stateContextSnapshot(in RenderInput, hosts []*topology.HostFacts, loopBind map[string]any) map[string]any {
+	last := hosts[len(hosts)-1]
+	vars := stateChangesVars(in, last)
+	ctx := map[string]any{}
+	putIfSet := func(name string, m map[string]any) {
+		if m != nil {
+			ctx[name] = m
+		}
+	}
+	putIfSet("input", vars.Input)
+	putIfSet("register", vars.Register)
+	putIfSet("incarnation", vars.Incarnation)
+	putIfSet("essence", vars.Essence)
+	putIfSet("vars", vars.Vars)
+	if vars.SoulprintSelf != nil {
+		ctx["soulprint"] = map[string]any{"self": vars.SoulprintSelf}
+	}
+	for k, v := range loopBind {
+		ctx[k] = v
+	}
+	return ctx
+}
+
+// mergeLoop сливает два loop-биндинга (внешний + текущий) в новую map. Текущий
+// (b) перекрывает внешний (a) при коллизии имён. nil-аргументы безопасны.
+func mergeLoop(a, b map[string]any) map[string]any {
+	if len(a) == 0 && len(b) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(a)+len(b))
+	for k, v := range a {
+		out[k] = v
+	}
+	for k, v := range b {
+		out[k] = v
+	}
+	return out
+}
+
+// EvalStateMatch вычисляет match-предикат идентичности list-элемента `add`-
+// операции (orchestration.md §7, new list-форма). Биндинги: `elem` —
+// существующий элемент коллекции, `value` — добавляемый (уже отрендеренный).
+// Оба кладутся как top-level CEL-имена (через Vars.Loop — тот же механизм
+// loop-переменных). Прочий scenario-контекст (input/register/…) в match НЕ
+// доступен: идентичность — чистая функция от elem+value (как migration-CEL —
+// чистая функция от state, ADR-019). Пустой predicate сюда не приходит (merge
+// при пустом match сравнивает элементы deep-equal-ом без CEL).
+//
+// Результат обязан быть bool (evalBoolExpr). Вызывается merge-ом per-existing-
+// элемент — этот метод stateless относительно Pipeline (cel.Engine потокобезопасен).
+func (p *Pipeline) EvalStateMatch(predicate string, elem, value any) (bool, error) {
+	vars := cel.Vars{Loop: map[string]any{"elem": elem, "value": value}}
+	return evalBoolExpr(p.cel, "state_changes.add.match", predicate, vars)
+}
+
+// EvalStateOpExpr — merge-time вычислитель CEL для modify/remove (см.
+// [StateOpEvalFunc]). В отличие от EvalStateMatch (изолированный elem/value для
+// add-дедупа), здесь expr видит ПОЛНЫЙ scenario-контекст прогона (ctx — снимок
+// input/register/incarnation/soulprint.self/essence/vars, собранный
+// stateContextSnapshot) ПЛЮС биндинги текущего элемента (binds — elem/key/value).
+// boolOut=true → match-предикат (EvalExpression→bool); boolOut=false →
+// patch-значение (EvalInterpolation→native). Так modify-match `key ==
+// input.username` видит и key (элемент), и input.* (контекст).
+//
+// Вызывается merge-ом (scenario/trial) per-matched-элемент; stateless
+// относительно Pipeline (cel.Engine потокобезопасен).
+func (p *Pipeline) EvalStateOpExpr(expr string, ctx, binds map[string]any, boolOut bool) (any, error) {
+	vars := stateOpVars(ctx)
+	vars.Loop = mergeLoop(vars.Loop, binds)
+	if boolOut {
+		return evalBoolExpr(p.cel, "state_changes.match", expr, vars)
+	}
+	return p.cel.EvalInterpolation(expr, vars)
+}
+
+// stateOpVars распаковывает плоский ctx-снимок (stateContextSnapshot) обратно в
+// cel.Vars для merge-time-вычисления modify/remove. Симметрично stateChangesVars,
+// но источник — уже собранный per-RUN snapshot (хост-резолв сделан на render-
+// стороне), а не топология. soulprint.self достаётся из вложенного soulprint-map.
+func stateOpVars(ctx map[string]any) cel.Vars {
+	asMap := func(k string) map[string]any {
+		m, _ := ctx[k].(map[string]any)
+		return m
+	}
+	v := cel.Vars{
+		Input:       asMap("input"),
+		Register:    asMap("register"),
+		Incarnation: asMap("incarnation"),
+		Essence:     asMap("essence"),
+		Vars:        asMap("vars"),
+	}
+	if sp, ok := ctx["soulprint"].(map[string]any); ok {
+		if self, ok := sp["self"].(map[string]any); ok {
+			v.SoulprintSelf = self
+		}
+	}
+	// foreach-биндинг (as-имя) лежит в ctx как top-level ключ — переносим в Loop.
+	loop := map[string]any{}
+	for k, val := range ctx {
+		switch k {
+		case "input", "register", "incarnation", "essence", "vars", "soulprint":
+			continue
+		}
+		loop[k] = val
+	}
+	if len(loop) > 0 {
+		v.Loop = loop
+	}
+	return v
 }
 
 // guardPilotDSL отвергает task-ключи вне pilot-объёма явной [ErrUnsupportedDSL],

@@ -21,6 +21,14 @@ type ResolvedDestiny struct {
 	// Input — input:-схема `destiny.yml` (для defense-in-depth-проверки
 	// apply.input против контракта).
 	Input config.InputSchemaMap
+	// Vars — RAW destiny-локалы из `vars.yml` (docs/destiny/vars.md), без
+	// схемо-валидации (vars не типизированы). CEL-выражения `${ … }` в значениях
+	// резолвятся внутри destiny-прохода (renderApplyDestiny) над
+	// input+soulprint.self+incarnation — изолированно от scenario-scope; результат
+	// — базовый слой `vars.*`, поверх которого task-level `vars:` переопределяют
+	// одноимённые ключи (Вариант A, vars.md «Слияние file-vars ↔ task-vars»). nil
+	// → destiny без локалов.
+	Vars map[string]any
 	// Templates — ридер `.tmpl` снапшота ЭТОЙ destiny (её шаблоны живут в её
 	// собственном снапшоте, не в снапшоте сервиса; одноуровневый резолв —
 	// scenario-local-слоя у destiny нет). nil → core.file.rendered внутри destiny
@@ -96,6 +104,17 @@ func (p *Pipeline) renderApplyDestiny(
 		destinyIsolated: true,
 	}
 
+	// destiny-локалы vars.yml (Вариант A, vars.md): резолв ОДИН раз на проход
+	// per-host над destiny-env (input destiny + soulprint.self + incarnation),
+	// изолированно от scenario-scope. resolveDestinyVars сам строит base-env с
+	// пустыми Register/Essence/Vars и AllowHosts=false — `vars.<other>`/`register.*`/
+	// `essence.*`/`soulprint.hosts` в значении vars.yml дают ошибку изоляции.
+	destinyVars, verr := p.resolveDestinyVars(destinyIn, resolved.Vars, targeted)
+	if verr != nil {
+		return nil, nil, verr
+	}
+	destinyIn.DestinyVarsResolved = destinyVars
+
 	tasks := make([]*RenderedTask, 0, len(resolved.Tasks))
 	plans := make([]DispatchPlan, 0, len(resolved.Tasks))
 	idx := startIndex
@@ -124,6 +143,52 @@ func (p *Pipeline) renderApplyDestiny(
 		idx++
 	}
 	return tasks, plans, nil
+}
+
+// resolveDestinyVars резолвит destiny-локалы `vars.yml` (raw) per-host в
+// destiny-env (Вариант A, vars.md). Возвращает sid → имя→резолвленное-значение.
+//
+// Изоляция (КРИТИЧНО): base-env строится hostVars-ом над destinyIn — изолированным
+// RenderInput destiny (Register/Essence пусты, destinyIsolated=true → AllowHosts
+// =false). Доступны input.* (destiny-input, не scenario), soulprint.self.* и
+// incarnation.*; `register.*`/`essence.*`/`soulprint.hosts` дают ошибку изоляции.
+// base.Vars НЕ заполняется в процессе резолва → `vars.<other>` внутри значения
+// vars.yml даёт no-such-key (запрет перекрёстных и само-ссылок, vars.md). Раздельный
+// per-key резолв в один base гарантирует порядко-независимость (file-vars не видят
+// друг друга — зеркало resolveTaskVars).
+//
+// Резолв per-host: значения могут ссылаться на soulprint.self (host-вариативный),
+// поэтому каждый хост получает свою карту. nil raw → nil (destiny без локалов).
+// Пустой targeted (where: отфильтровал всех) → один синтетический хост под ключ "".
+func (p *Pipeline) resolveDestinyVars(destinyIn RenderInput, raw map[string]any, targeted []*topology.HostFacts) (map[string]map[string]any, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	hosts := targeted
+	if len(hosts) == 0 {
+		hosts = []*topology.HostFacts{{}}
+	}
+	out := make(map[string]map[string]any, len(hosts))
+	for _, host := range hosts {
+		base := hostVars(destinyIn, host, len(targeted))
+		resolved := make(map[string]any, len(raw))
+		for name, val := range raw {
+			s, ok := val.(string)
+			if !ok {
+				// Non-string vars-значение — литерал (CEL трогает только строки,
+				// симметрично resolveTaskVars/renderValue).
+				resolved[name] = val
+				continue
+			}
+			r, err := p.cel.EvalInterpolation(s, base)
+			if err != nil {
+				return nil, fmt.Errorf("render: destiny %q vars.%s (vars.yml, host %s): %w", destinyIn.Scenario.Name, name, host.SID, err)
+			}
+			resolved[name] = r
+		}
+		out[host.SID] = resolved
+	}
+	return out, nil
 }
 
 // resolveApplyInput вычисляет вход destiny из apply.input.

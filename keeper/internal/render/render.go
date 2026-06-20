@@ -130,12 +130,35 @@ type RenderInput struct {
 	Destiny        DestinyResolver
 	Templates      TemplateReader
 
+	// State — снимок incarnation.state на момент захвата row-lock прогона
+	// (run.go: stateBefore = inc.State под FOR UPDATE). Read-only: проецируется в
+	// CEL как `incarnation.state.<path>` (incarnationVars), доступен в
+	// params/where/apply-input И в state_changes-контексте; eval НЕ мутирует его
+	// (CEL читает, не пишет — Вариант A, ADR-009/010). ИНВАРИАНТ на все passages
+	// staged-render-а: renderIn переиспользуется на P>0 с тем же State, поэтому
+	// `incarnation.state.*` идентичен на P0 и P1+ (= pre-run stateBefore, НЕ
+	// промежуточный результат state_changes). nil → ключ `state` не объявляется
+	// (push/trial без State: `incarnation.state.x` = no-such-key, backward-compat).
+	State map[string]any
+
 	// Ctx — request-scoped контекст прогона, прокидываемый в CEL-функцию vault()
 	// ([ADR-017]) для отмены/таймаута ReadKV. Устанавливается [Pipeline.Render]
 	// из своего ctx-аргумента и [Pipeline.RenderStateChanges]-caller-ом (run.go);
 	// дочерний destiny-проход (renderApplyDestiny) наследует. nil ⇒ vault()
 	// читает с context.Background() (cel.Vars.Ctx-семантика).
 	Ctx context.Context
+
+	// DestinyVarsResolved — резолвленные destiny-локалы `vars.yml` (Вариант A,
+	// docs/destiny/vars.md), per-host: sid → имя→значение. Заполняется ОДИН раз на
+	// destiny-проход (renderApplyDestiny резолвит vars.yml над destiny-env
+	// input+soulprint.self+incarnation, изолированно от scenario register/essence и
+	// без видимости vars друг друга), затем используется как БАЗОВЫЙ слой `vars.*`
+	// при рендере каждой destiny-задачи (resolveTaskVars мерджит task-level `vars:`
+	// поверх него — task переопределяет одноимённый file-vars). Инвариантен по
+	// задачам прохода (резолвится не per-task). nil/пустой для хоста → база `vars.*`
+	// пуста (scenario-проход: file-vars не участвуют). Ключ — SID хоста;
+	// синтетический пустой хост (where: отфильтровал всех) → ключ "".
+	DestinyVarsResolved map[string]map[string]any
 
 	// destinyIsolated помечает изолированный destiny-проход (renderApplyDestiny).
 	// Неэкспортируемое: внешние caller-ы (scenario-runner, trial) всегда дают
@@ -276,6 +299,69 @@ type RenderedTask struct {
 	// resolveOnFail, после превращения в OnFailIdx не используются.
 	onFailNames []string
 }
+
+// RenderedOp — одна операция `state_changes` после Keeper-side CEL-рендера
+// (значение/ключ/match уже вычислены, cross-host last-wins-свёртка применена).
+// Упорядоченный список этих операций возвращает [Pipeline.RenderStateOps];
+// применяет их к incarnation.state — scenario.mergeStateChanges / trial-зеркало
+// (orchestration.md §7, новая list-форма грамматики state_changes).
+//
+// Verb различает применение:
+//   - VerbSet — перезапись Field значением Value;
+//   - VerbAdd — идемпотентное добавление Value в коллекцию Field (map: по Key;
+//     list: дедуп по Match-предикату). OnConflict (skip|replace|error) — политика
+//     при совпадении идентичности;
+//   - VerbModify — патч ВСЕХ элементов Field, подходящих под Match. Patch —
+//     map путь-в-элементе → CEL/литерал, протягивается КАК ШАБЛОН (не вычислен):
+//     merge вычисляет его per-matched-элемент через [StateOpEvalFunc] (биндинги
+//     elem/key/value + scenario-контекст Context);
+//   - VerbRemove — удалить ВСЕ элементы Field, подходящие под Match.
+//
+// foreach в RenderedOp не попадает — он раскрыт в render-фазе в N RenderedOp
+// (по элементам коллекции, биндинг as-имени уже подставлен в Value/Patch/Match).
+//
+// Match/Patch протягиваются КАК СТРОКА/ШАБЛОН: merge вычисляет их per-element
+// (Keeper заранее не вычисляет — зависят от каждого элемента state). Value (а
+// для map — Key) уже cross-host-свёрнуты last-wins по SID.
+//
+// Context — per-RUN снимок scenario-контекста (input/register/incarnation/
+// soulprint.self/essence/vars), last-wins по SID (output.md). Нужен merge-time
+// для вычисления modify-Match/Patch и remove-Match, которые видят полный
+// sets-контекст поверх биндингов элемента (ADR-057 §b). Для set/add — nil
+// (их Value/Key уже вычислены на render-стороне; add-Match — чистая функция
+// elem+value, см. [StateMatchFunc]).
+//
+// Expect — опц. ассерт кратности match для modify/remove (ADR-057 §c). ""/any —
+// без ассерта.
+type RenderedOp struct {
+	Verb       config.StateVerb
+	Field      string
+	Value      any
+	Key        string
+	Match      string
+	OnConflict config.OnConflict
+
+	Patch   map[string]any
+	Expect  config.Expect
+	Context map[string]any
+}
+
+// StateMatchFunc — вычислитель match-предиката идентичности list-элемента add-
+// операции (см. [Pipeline.EvalStateMatch]). Передаётся в merge (scenario/trial),
+// чтобы тот не держал собственный cel.Engine: предикат `elem.sid == value.sid`
+// вычисляется per-existing-элемент против биндингов elem (существующий) / value
+// (добавляемый). Возврат — bool «идентичны».
+type StateMatchFunc func(predicate string, elem, value any) (bool, error)
+
+// StateOpEvalFunc — вычислитель CEL для modify/remove merge-time (см.
+// [Pipeline.EvalStateOpExpr]). В отличие от [StateMatchFunc] (изолированный
+// elem/value для add-дедупа), здесь предикат/значение видит ПОЛНЫЙ scenario-
+// контекст прогона (ctx — снимок input/register/incarnation/soulprint.self/
+// essence/vars) ПЛЮС биндинги текущего элемента коллекции (binds — elem/key/
+// value). Используется per-matched-элемент: match-предикат → bool (boolOut=true),
+// patch-значение → any (boolOut=false). Так modify-match `key == input.username`
+// видит и key (элемент), и input.* (контекст).
+type StateOpEvalFunc func(expr string, ctx, binds map[string]any, boolOut bool) (any, error)
 
 // DispatchPlan — на какие хосты идёт задача после резолва `on:`+`where:`.
 // TaskIndex ссылается на RenderedTask.Index. TargetSIDs — отсортированный по

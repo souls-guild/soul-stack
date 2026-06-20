@@ -1,19 +1,58 @@
 package scenario
 
 import (
+	"encoding/json"
+	"errors"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
+	"github.com/souls-guild/soul-stack/shared/cel"
+	"github.com/souls-guild/soul-stack/shared/config"
 )
+
+// noMatch — заглушка StateMatchFunc для тестов, не использующих match-предикат
+// (set-only / map-add по key). Вызов = тестовый баг (помечаем t.Fatal через
+// замыкание не получится — возвращаем ошибку, которую merge пробросит).
+func noMatch(string, any, any) (bool, error) {
+	return false, errInvariant
+}
+
+// noOpEval — заглушка StateOpEvalFunc для тестов без modify/remove. Вызов =
+// тестовый баг (set/add не должны звать opEval).
+func noOpEval(string, map[string]any, map[string]any, bool) (any, error) {
+	return nil, errInvariant
+}
+
+var errInvariant = errors.New("matchEval/opEval не должен вызываться в этом тесте")
+
+// opEvalForTest строит реальный render.Pipeline.EvalStateOpExpr (CEL для
+// modify/remove match+patch с полным scenario-контекстом + биндингами элемента).
+func opEvalForTest(t *testing.T) render.StateOpEvalFunc {
+	t.Helper()
+	eng, err := cel.New()
+	if err != nil {
+		t.Fatalf("cel.New: %v", err)
+	}
+	return render.NewPipeline(nil, eng, nil, nil).EvalStateOpExpr
+}
+
+func setOp(field string, val any) render.RenderedOp {
+	return render.RenderedOp{Verb: config.VerbSet, Field: field, Value: val}
+}
 
 func TestMergeStateChanges_EmptyNoop(t *testing.T) {
 	before := map[string]any{"users": []any{"alice"}, "count": float64(1)}
 
-	// Пустой renderedSets → state не меняется (deep-copy).
-	after := mergeStateChanges(before, nil)
+	// Пустой ops → state не меняется (deep-copy).
+	after, err := mergeStateChanges(before, nil, nil, noMatch, noOpEval)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
 	if len(after) != 2 {
 		t.Fatalf("after = %+v, want copy of before", after)
 	}
@@ -30,11 +69,14 @@ func TestMergeStateChanges_EmptyNoop(t *testing.T) {
 
 func TestMergeStateChanges_AppliesSets(t *testing.T) {
 	before := map[string]any{"existing": "keep", "count": float64(1)}
-	rendered := map[string]any{
-		"greeting_file": "/tmp/soul-stack-hello", // новое поле
-		"count":         float64(42),             // перезапись существующего
+	ops := []render.RenderedOp{
+		setOp("greeting_file", "/tmp/soul-stack-hello"), // новое поле
+		setOp("count", float64(42)),                     // перезапись существующего
 	}
-	after := mergeStateChanges(before, rendered)
+	after, err := mergeStateChanges(before, ops, nil, noMatch, noOpEval)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
 
 	if after["greeting_file"] != "/tmp/soul-stack-hello" {
 		t.Errorf("greeting_file = %v, want /tmp/soul-stack-hello", after["greeting_file"])
@@ -55,7 +97,10 @@ func TestMergeStateChanges_AppliesSets(t *testing.T) {
 }
 
 func TestMergeStateChanges_NilBefore(t *testing.T) {
-	after := mergeStateChanges(nil, nil)
+	after, err := mergeStateChanges(nil, nil, nil, noMatch, noOpEval)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
 	if after == nil {
 		t.Fatal("after = nil, want empty map")
 	}
@@ -63,11 +108,821 @@ func TestMergeStateChanges_NilBefore(t *testing.T) {
 		t.Errorf("after = %+v, want empty", after)
 	}
 
-	// nil before + непустой sets → state из sets.
-	after = mergeStateChanges(nil, map[string]any{"x": "y"})
+	// nil before + непустой set → state из set-операции.
+	after, err = mergeStateChanges(nil, []render.RenderedOp{setOp("x", "y")}, nil, noMatch, noOpEval)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
 	if after["x"] != "y" {
 		t.Errorf("after = %+v, want {x:y}", after)
 	}
+}
+
+// --- Guard-тесты новой грамматики state_changes (add + on_conflict). Паттерн
+// тиражируется (modify/remove следующим батчем), цена ошибки умножается. ---
+
+// redisHostsSchema — state_schema redis-cluster (фрагмент: redis_hosts — array).
+// Источник материализации типа коллекции для add в отсутствующее поле.
+var redisHostsSchema = map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"redis_hosts": map[string]any{
+			"type":  "array",
+			"items": map[string]any{"type": "object"},
+		},
+		"redis_users": map[string]any{
+			"type":                 "object",
+			"additionalProperties": map[string]any{"type": "object"},
+		},
+	},
+}
+
+// matchEvalForTest строит реальный render.Pipeline.EvalStateMatch (CEL elem/value).
+func matchEvalForTest(t *testing.T) render.StateMatchFunc {
+	t.Helper()
+	eng, err := cel.New()
+	if err != nil {
+		t.Fatalf("cel.New: %v", err)
+	}
+	return render.NewPipeline(nil, eng, nil, nil).EvalStateMatch
+}
+
+func addRedisHost(sid, role string, onConflict config.OnConflict) render.RenderedOp {
+	return render.RenderedOp{
+		Verb:       config.VerbAdd,
+		Field:      "redis_hosts",
+		Value:      map[string]any{"sid": sid, "role": role},
+		Match:      "elem.sid == value.sid",
+		OnConflict: onConflict,
+	}
+}
+
+// TestMergeStateChanges_AddNewSID_Grows — add нового SID растит redis_hosts на 1
+// (★ закрытие латентного бага: старая appends-форма игнорировалась, redis_hosts
+// не рос).
+func TestMergeStateChanges_AddNewSID_Grows(t *testing.T) {
+	before := map[string]any{"redis_hosts": []any{
+		map[string]any{"sid": "host-a", "role": "primary"},
+	}}
+	ops := []render.RenderedOp{addRedisHost("host-b", "replica", config.OnConflictSkip)}
+
+	after, err := mergeStateChanges(before, ops, redisHostsSchema, matchEvalForTest(t), noOpEval)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	hosts := after["redis_hosts"].([]any)
+	if len(hosts) != 2 {
+		t.Fatalf("redis_hosts len = %d, want 2 (add нового sid растит коллекцию)", len(hosts))
+	}
+	newHost := hosts[1].(map[string]any)
+	if newHost["sid"] != "host-b" || newHost["role"] != "replica" {
+		t.Errorf("новый элемент = %+v, want {sid:host-b, role:replica}", newHost)
+	}
+	// Оригинал не задет (deep-copy).
+	if len(before["redis_hosts"].([]any)) != 1 {
+		t.Errorf("before мутирован: redis_hosts len = %d", len(before["redis_hosts"].([]any)))
+	}
+}
+
+// TestMergeStateChanges_AddExistingSID_Idempotent — ★ ГЛАВНЫЙ ИНВАРИАНТ: add
+// существующего SID при on_conflict=skip (default) → NO-OP, длина не меняется
+// («добавляет если нет»). Идемпотентность повторного прогона add_replica.
+func TestMergeStateChanges_AddExistingSID_Idempotent(t *testing.T) {
+	before := map[string]any{"redis_hosts": []any{
+		map[string]any{"sid": "host-a", "role": "primary"},
+		map[string]any{"sid": "host-b", "role": "replica"},
+	}}
+	ops := []render.RenderedOp{addRedisHost("host-b", "replica", config.OnConflictSkip)}
+
+	after, err := mergeStateChanges(before, ops, redisHostsSchema, matchEvalForTest(t), noOpEval)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	hosts := after["redis_hosts"].([]any)
+	if len(hosts) != 2 {
+		t.Fatalf("★ redis_hosts len = %d, want 2 (повтор существующего sid = NO-OP, on_conflict=skip)", len(hosts))
+	}
+}
+
+// TestMergeStateChanges_AddExistingSID_ErrorBlocks — on_conflict=error на
+// существующем → ошибка (run.go переведёт в error_locked, state НЕ коммитнут).
+func TestMergeStateChanges_AddExistingSID_ErrorBlocks(t *testing.T) {
+	before := map[string]any{"redis_hosts": []any{
+		map[string]any{"sid": "host-b", "role": "replica"},
+	}}
+	ops := []render.RenderedOp{addRedisHost("host-b", "replica", config.OnConflictError)}
+
+	_, err := mergeStateChanges(before, ops, redisHostsSchema, matchEvalForTest(t), noOpEval)
+	if err == nil {
+		t.Fatal("★ ожидали ошибку (on_conflict=error на существующем) — state не должен коммититься")
+	}
+}
+
+// TestMergeStateChanges_AddReplaceExisting — on_conflict=replace перезаписывает
+// существующий элемент новым value (длина не меняется).
+func TestMergeStateChanges_AddReplaceExisting(t *testing.T) {
+	before := map[string]any{"redis_hosts": []any{
+		map[string]any{"sid": "host-b", "role": "replica"},
+	}}
+	ops := []render.RenderedOp{addRedisHost("host-b", "primary", config.OnConflictReplace)}
+
+	after, err := mergeStateChanges(before, ops, redisHostsSchema, matchEvalForTest(t), noOpEval)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	hosts := after["redis_hosts"].([]any)
+	if len(hosts) != 1 {
+		t.Fatalf("redis_hosts len = %d, want 1 (replace не растит)", len(hosts))
+	}
+	if hosts[0].(map[string]any)["role"] != "primary" {
+		t.Errorf("элемент не перезаписан: %+v", hosts[0])
+	}
+}
+
+// TestMergeStateChanges_AddMaterializesFromSchema — add в ОТСУТСТВУЮЩЕЕ поле:
+// коллекция материализуется нужного типа из state_schema (redis_hosts: array → list).
+func TestMergeStateChanges_AddMaterializesFromSchema(t *testing.T) {
+	before := map[string]any{"redis_version": "7.2"} // redis_hosts отсутствует
+	ops := []render.RenderedOp{addRedisHost("host-a", "primary", config.OnConflictSkip)}
+
+	after, err := mergeStateChanges(before, ops, redisHostsSchema, matchEvalForTest(t), noOpEval)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	hosts, ok := after["redis_hosts"].([]any)
+	if !ok {
+		t.Fatalf("redis_hosts = %T, want []any (материализован list из schema)", after["redis_hosts"])
+	}
+	if len(hosts) != 1 {
+		t.Fatalf("redis_hosts len = %d, want 1", len(hosts))
+	}
+}
+
+// TestMergeStateChanges_AddMapByKey — add в map-коллекцию по key (redis_users):
+// материализация object из schema, идемпотентность по key.
+func TestMergeStateChanges_AddMapByKey(t *testing.T) {
+	addUser := func(key string, oc config.OnConflict) render.RenderedOp {
+		return render.RenderedOp{
+			Verb: config.VerbAdd, Field: "redis_users", Key: key,
+			Value: map[string]any{"acl": "+@read", "state": "on"}, OnConflict: oc,
+		}
+	}
+	before := map[string]any{} // redis_users отсутствует
+
+	after, err := mergeStateChanges(before, []render.RenderedOp{addUser("alice", config.OnConflictSkip)}, redisHostsSchema, matchEvalForTest(t), noOpEval)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	users, ok := after["redis_users"].(map[string]any)
+	if !ok {
+		t.Fatalf("redis_users = %T, want map (материализован object из schema)", after["redis_users"])
+	}
+	if _, has := users["alice"]; !has {
+		t.Fatal("ключ alice не добавлен")
+	}
+
+	// Повтор того же key (skip) → no-op (длина map не меняется).
+	after2, err := mergeStateChanges(after, []render.RenderedOp{addUser("alice", config.OnConflictSkip)}, redisHostsSchema, matchEvalForTest(t), noOpEval)
+	if err != nil {
+		t.Fatalf("merge2: %v", err)
+	}
+	if len(after2["redis_users"].(map[string]any)) != 1 {
+		t.Errorf("повтор key=alice (skip) должен быть no-op, got len=%d", len(after2["redis_users"].(map[string]any)))
+	}
+}
+
+// --- Guard-тесты modify/remove/expect (новые глаголы ADR-057). ---
+
+// modifyHostsOp строит modify-операцию по redis_hosts (list of objects) с
+// предвычисленным Context (input/vars) для merge-time CEL.
+func modifyHostsOp(match string, patch map[string]any, ctx map[string]any, expect config.Expect) render.RenderedOp {
+	return render.RenderedOp{
+		Verb: config.VerbModify, Field: "redis_hosts",
+		Match: match, Patch: patch, Context: ctx, Expect: expect,
+	}
+}
+
+// TestMergeStateChanges_ModifyAllByPredicate — ★ modify ВСЕХ подходящих под
+// предикат (3 реплики role→standby) → все 3 изменены, primary цел.
+func TestMergeStateChanges_ModifyAllByPredicate(t *testing.T) {
+	before := map[string]any{"redis_hosts": []any{
+		map[string]any{"sid": "host-a", "role": "primary"},
+		map[string]any{"sid": "host-b", "role": "replica"},
+		map[string]any{"sid": "host-c", "role": "replica"},
+		map[string]any{"sid": "host-d", "role": "replica"},
+	}}
+	op := modifyHostsOp("elem.role == 'replica'", map[string]any{"role": "${ 'standby' }"}, nil, "")
+
+	after, err := mergeStateChanges(before, []render.RenderedOp{op}, redisHostsSchema, noMatch, opEvalForTest(t))
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	hosts := after["redis_hosts"].([]any)
+	standby := 0
+	for _, h := range hosts {
+		if h.(map[string]any)["role"] == "standby" {
+			standby++
+		}
+	}
+	if standby != 3 {
+		t.Fatalf("★ standby = %d, want 3 (все реплики пропатчены)", standby)
+	}
+	if hosts[0].(map[string]any)["role"] != "primary" {
+		t.Errorf("primary задет: %+v (не подходил под предикат)", hosts[0])
+	}
+	// Оригинал не задет (deep-copy + per-element copy в applyPatch).
+	if before["redis_hosts"].([]any)[1].(map[string]any)["role"] != "replica" {
+		t.Errorf("before мутирован")
+	}
+}
+
+// TestMergeStateChanges_ModifyEmptyMatch_Noop — empty-match → no-op (не ошибка).
+func TestMergeStateChanges_ModifyEmptyMatch_Noop(t *testing.T) {
+	before := map[string]any{"redis_hosts": []any{
+		map[string]any{"sid": "host-a", "role": "primary"},
+	}}
+	op := modifyHostsOp("elem.role == 'replica'", map[string]any{"role": "${ 'standby' }"}, nil, "")
+
+	after, err := mergeStateChanges(before, []render.RenderedOp{op}, redisHostsSchema, noMatch, opEvalForTest(t))
+	if err != nil {
+		t.Fatalf("★ empty-match modify должен быть no-op, не ошибка: %v", err)
+	}
+	if after["redis_hosts"].([]any)[0].(map[string]any)["role"] != "primary" {
+		t.Errorf("no-op нарушен: %+v", after["redis_hosts"])
+	}
+}
+
+// TestMergeStateChanges_ModifyNestedPatch — ★ patch точечного пути (config.x) →
+// вложенное поле обновлено, СОСЕДНИЕ поля записи целы (merge, не перезапись).
+func TestMergeStateChanges_ModifyNestedPatch(t *testing.T) {
+	before := map[string]any{"redis_hosts": []any{
+		map[string]any{
+			"sid": "host-a", "role": "primary",
+			"config": map[string]any{"maxmemory": "256mb", "appendonly": "yes"},
+		},
+	}}
+	ctx := map[string]any{"input": map[string]any{"mem": "512mb"}}
+	op := modifyHostsOp("elem.sid == 'host-a'",
+		map[string]any{"config.maxmemory": "${ input.mem }"}, ctx, "")
+
+	after, err := mergeStateChanges(before, []render.RenderedOp{op}, redisHostsSchema, noMatch, opEvalForTest(t))
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	host := after["redis_hosts"].([]any)[0].(map[string]any)
+	cfg := host["config"].(map[string]any)
+	if cfg["maxmemory"] != "512mb" {
+		t.Fatalf("★ config.maxmemory = %v, want 512mb (вложенное поле обновлено)", cfg["maxmemory"])
+	}
+	if cfg["appendonly"] != "yes" {
+		t.Errorf("★ config.appendonly = %v, want yes (соседнее поле затёрто — patch перезаписал запись целиком)", cfg["appendonly"])
+	}
+	if host["role"] != "primary" {
+		t.Errorf("top-level role затёрт: %+v", host)
+	}
+}
+
+// TestMergeStateChanges_ModifyMapByKey — modify map-коллекции (redis_users):
+// match видит key/value, patch мержится в значение записи.
+func TestMergeStateChanges_ModifyMapByKey(t *testing.T) {
+	before := map[string]any{"redis_users": map[string]any{
+		"alice": map[string]any{"acl": "+@read", "state": "on"},
+		"bob":   map[string]any{"acl": "+@read", "state": "on"},
+	}}
+	ctx := map[string]any{"input": map[string]any{"username": "alice", "acl": "+@all", "state": "off"}}
+	op := render.RenderedOp{
+		Verb: config.VerbModify, Field: "redis_users",
+		Match:   "key == input.username",
+		Patch:   map[string]any{"acl": "${ input.acl }", "state": "${ input.state }"},
+		Context: ctx,
+	}
+	after, err := mergeStateChanges(before, []render.RenderedOp{op}, redisHostsSchema, noMatch, opEvalForTest(t))
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	users := after["redis_users"].(map[string]any)
+	alice := users["alice"].(map[string]any)
+	if alice["acl"] != "+@all" || alice["state"] != "off" {
+		t.Errorf("alice не пропатчен: %+v", alice)
+	}
+	if users["bob"].(map[string]any)["acl"] != "+@read" {
+		t.Errorf("bob задет (не подходил под key == input.username): %+v", users["bob"])
+	}
+}
+
+// TestMergeStateChanges_RemoveAllByPredicate — remove всех подходящих; прочие
+// целы. remove empty-match → no-op.
+func TestMergeStateChanges_RemoveAllByPredicate(t *testing.T) {
+	before := map[string]any{"redis_hosts": []any{
+		map[string]any{"sid": "host-a", "role": "primary"},
+		map[string]any{"sid": "host-b", "role": "replica"},
+		map[string]any{"sid": "host-c", "role": "replica"},
+	}}
+	op := render.RenderedOp{Verb: config.VerbRemove, Field: "redis_hosts", Match: "elem.role == 'replica'"}
+
+	after, err := mergeStateChanges(before, []render.RenderedOp{op}, redisHostsSchema, noMatch, opEvalForTest(t))
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	hosts := after["redis_hosts"].([]any)
+	if len(hosts) != 1 || hosts[0].(map[string]any)["sid"] != "host-a" {
+		t.Fatalf("★ remove реплик: осталось %+v, want [host-a]", hosts)
+	}
+
+	// empty-match (нет реплик) → no-op.
+	noop, err := mergeStateChanges(after, []render.RenderedOp{op}, redisHostsSchema, noMatch, opEvalForTest(t))
+	if err != nil {
+		t.Fatalf("★ remove empty-match должен быть no-op: %v", err)
+	}
+	if len(noop["redis_hosts"].([]any)) != 1 {
+		t.Errorf("empty-match remove изменил коллекцию: %+v", noop["redis_hosts"])
+	}
+}
+
+// TestMergeStateChanges_RemoveMapByKey — remove из map-коллекции по предикату key.
+func TestMergeStateChanges_RemoveMapByKey(t *testing.T) {
+	before := map[string]any{"redis_users": map[string]any{
+		"alice": map[string]any{"acl": "+@read"},
+		"bob":   map[string]any{"acl": "+@read"},
+	}}
+	ctx := map[string]any{"input": map[string]any{"username": "bob"}}
+	op := render.RenderedOp{Verb: config.VerbRemove, Field: "redis_users", Match: "key == input.username", Context: ctx}
+
+	after, err := mergeStateChanges(before, []render.RenderedOp{op}, redisHostsSchema, noMatch, opEvalForTest(t))
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	users := after["redis_users"].(map[string]any)
+	if _, ok := users["bob"]; ok {
+		t.Errorf("bob не удалён: %+v", users)
+	}
+	if _, ok := users["alice"]; !ok {
+		t.Errorf("alice удалён ошибочно: %+v", users)
+	}
+}
+
+// TestMergeStateChanges_ExpectOne — ★ expect: one зацепил 2 → ошибка (state НЕ
+// коммитнут); зацепил 1 → ок.
+func TestMergeStateChanges_ExpectOne(t *testing.T) {
+	twoReplicas := map[string]any{"redis_hosts": []any{
+		map[string]any{"sid": "host-b", "role": "replica"},
+		map[string]any{"sid": "host-c", "role": "replica"},
+	}}
+	tooMany := render.RenderedOp{Verb: config.VerbRemove, Field: "redis_hosts", Match: "elem.role == 'replica'", Expect: config.ExpectOne}
+	if _, err := mergeStateChanges(twoReplicas, []render.RenderedOp{tooMany}, redisHostsSchema, noMatch, opEvalForTest(t)); err == nil {
+		t.Fatal("★ expect: one зацепил 2 — ожидали ошибку (error_locked, state не коммитнут)")
+	}
+
+	// Зацепил ровно один → ок.
+	ctx := map[string]any{"input": map[string]any{"sid": "host-b"}}
+	one := render.RenderedOp{Verb: config.VerbRemove, Field: "redis_hosts", Match: "elem.sid == input.sid", Expect: config.ExpectOne, Context: ctx}
+	after, err := mergeStateChanges(twoReplicas, []render.RenderedOp{one}, redisHostsSchema, noMatch, opEvalForTest(t))
+	if err != nil {
+		t.Fatalf("★ expect: one зацепил 1 должен быть ок: %v", err)
+	}
+	if len(after["redis_hosts"].([]any)) != 1 {
+		t.Errorf("после remove одного осталось %+v", after["redis_hosts"])
+	}
+}
+
+// TestForeachListAdd_GrowsByN — ★ foreach по list (add N) end-to-end через
+// render→merge: RenderStateOps раскрывает foreach в N add, mergeStateChanges
+// растит коллекцию на N. Идемпотентно по on_conflict (повтор не дублирует).
+func TestForeachListAdd_GrowsByN(t *testing.T) {
+	manifest := &config.ScenarioManifest{
+		Name: "add_replicas",
+		StateChanges: &config.StateChanges{
+			IsList: true,
+			Ops: []config.StateChange{{
+				Verb: config.VerbForeach, In: "${ input.replicas }", As: "sid",
+				Do: []config.StateChange{{
+					Verb: config.VerbAdd, Field: "redis_hosts",
+					Value: "${ sid }", Match: "elem == sid", OnConflict: config.OnConflictSkip,
+				}},
+			}},
+		},
+	}
+	eng, err := cel.New()
+	if err != nil {
+		t.Fatalf("cel.New: %v", err)
+	}
+	p := render.NewPipeline(nil, eng, nil, nil)
+	in := render.RenderInput{
+		Scenario:    manifest,
+		Input:       map[string]any{"replicas": []any{"r1", "r2", "r3"}},
+		Incarnation: render.IncarnationMeta{Name: "svc"},
+		Hosts:       []*topology.HostFacts{{SID: "a", Coven: []string{"svc"}}},
+	}
+	ops, err := p.RenderStateOps(in)
+	if err != nil {
+		t.Fatalf("RenderStateOps: %v", err)
+	}
+
+	// list of scalars schema.
+	schema := map[string]any{"type": "object", "properties": map[string]any{
+		"redis_hosts": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+	}}
+	before := map[string]any{"redis_hosts": []any{"r0"}}
+
+	after, err := mergeStateChanges(before, ops, schema, p.EvalStateMatch, p.EvalStateOpExpr)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	hosts := after["redis_hosts"].([]any)
+	if len(hosts) != 4 {
+		t.Fatalf("★ redis_hosts len = %d, want 4 (r0 + 3 foreach-add)", len(hosts))
+	}
+
+	// Идемпотентность: повтор тех же ops → длина не растёт (on_conflict: skip).
+	again, err := mergeStateChanges(after, ops, schema, p.EvalStateMatch, p.EvalStateOpExpr)
+	if err != nil {
+		t.Fatalf("merge2: %v", err)
+	}
+	if len(again["redis_hosts"].([]any)) != 4 {
+		t.Errorf("★ повтор foreach-add не идемпотентен: len = %d, want 4", len(again["redis_hosts"].([]any)))
+	}
+}
+
+// TestForeachMapModify_PerEntryBinding — ★ foreach по map (modify N юзеров):
+// каждая запись пропатчена СВОИМ значением (биндинг change.key/change.value),
+// end-to-end render→merge.
+func TestForeachMapModify_PerEntryBinding(t *testing.T) {
+	manifest := &config.ScenarioManifest{
+		Name: "update_acl",
+		StateChanges: &config.StateChanges{
+			IsList: true,
+			Ops: []config.StateChange{{
+				Verb: config.VerbForeach, In: "${ input.changes }", As: "change",
+				Do: []config.StateChange{{
+					Verb: config.VerbModify, Field: "redis_users",
+					Match: "key == change.key",
+					Patch: map[string]any{"acl": "${ change.value.acl }"},
+				}},
+			}},
+		},
+	}
+	eng, err := cel.New()
+	if err != nil {
+		t.Fatalf("cel.New: %v", err)
+	}
+	p := render.NewPipeline(nil, eng, nil, nil)
+	in := render.RenderInput{
+		Scenario: manifest,
+		Input: map[string]any{"changes": map[string]any{
+			"alice": map[string]any{"acl": "+@all"},
+			"bob":   map[string]any{"acl": "+@write"},
+		}},
+		Incarnation: render.IncarnationMeta{Name: "svc"},
+		Hosts:       []*topology.HostFacts{{SID: "a", Coven: []string{"svc"}}},
+	}
+	ops, err := p.RenderStateOps(in)
+	if err != nil {
+		t.Fatalf("RenderStateOps: %v", err)
+	}
+
+	before := map[string]any{"redis_users": map[string]any{
+		"alice": map[string]any{"acl": "+@read", "state": "on"},
+		"bob":   map[string]any{"acl": "+@read", "state": "on"},
+		"carol": map[string]any{"acl": "+@read", "state": "on"},
+	}}
+	after, err := mergeStateChanges(before, ops, redisHostsSchema, p.EvalStateMatch, p.EvalStateOpExpr)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	users := after["redis_users"].(map[string]any)
+	if users["alice"].(map[string]any)["acl"] != "+@all" {
+		t.Errorf("★ alice.acl = %v, want +@all (свой биндинг)", users["alice"])
+	}
+	if users["bob"].(map[string]any)["acl"] != "+@write" {
+		t.Errorf("★ bob.acl = %v, want +@write (свой биндинг)", users["bob"])
+	}
+	if users["carol"].(map[string]any)["acl"] != "+@read" {
+		t.Errorf("carol задет (не во input.changes): %v", users["carol"])
+	}
+	// state-поле цело (patch только acl, merge не перезапись записи).
+	if users["alice"].(map[string]any)["state"] != "on" {
+		t.Errorf("alice.state затёрт patch-ем: %v", users["alice"])
+	}
+}
+
+// stateMirrorFixture/stateMirrorOps/stateMirrorExpected — ★ общая фикстура для
+// анти-дрейф-сверки прод-merge (этот тест) и trial-merge (trial.TestMergeMirror_*
+// в diff_test.go). Обе стороны применяют ИДЕНТИЧНЫЙ вход к ИДЕНТИЧНОМУ ожиданию;
+// если тела mergeStateChanges разойдутся (дубль), один из тестов упадёт.
+func stateMirrorFixture() map[string]any {
+	return map[string]any{
+		"redis_version": "7.2",
+		"redis_hosts": []any{
+			map[string]any{"sid": "host-a", "role": "primary"},
+		},
+	}
+}
+
+func stateMirrorOps() []render.RenderedOp {
+	return []render.RenderedOp{
+		{Verb: config.VerbSet, Field: "redis_version", Value: "7.4"},
+		addRedisHost("host-b", "replica", config.OnConflictSkip), // новый → растёт
+		addRedisHost("host-a", "primary", config.OnConflictSkip), // существующий → no-op
+	}
+}
+
+// stateMirrorExpectedJSON — канонический ожидаемый state_after (JSON для
+// детерминированной сверки независимо от порядка map-ключей).
+const stateMirrorExpectedJSON = `{"redis_version":"7.4","redis_hosts":[{"sid":"host-a","role":"primary"},{"sid":"host-b","role":"replica"}]}`
+
+// TestMergeStateChanges_MirrorProd — прод-сторона анти-дрейф-сверки.
+func TestMergeStateChanges_MirrorProd(t *testing.T) {
+	after, err := mergeStateChanges(stateMirrorFixture(), stateMirrorOps(), redisHostsSchema, matchEvalForTest(t), noOpEval)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	got, _ := json.Marshal(after)
+	if !equalJSONState(t, string(got), stateMirrorExpectedJSON) {
+		t.Errorf("★ прод state_after = %s, want %s", got, stateMirrorExpectedJSON)
+	}
+}
+
+// verbsMirrorFixture/verbsMirrorOps/verbsMirrorExpectedJSON — ★ анти-дрейф-сверка
+// для НОВЫХ глаголов modify/remove (foreach раскрыт в render → в merge приходят
+// готовые add/modify/remove). Дублируется байт-в-байт в trial.TestMergeVerbsMirror_*
+// (diff_test.go): расхождение тел applyModifyOp/applyRemoveOp разведёт Trial с
+// продом. Контекст modify (input.*) предвычислен (как делает render-сторона).
+func verbsMirrorFixture() map[string]any {
+	return map[string]any{
+		"redis_users": map[string]any{
+			"alice": map[string]any{"acl": "+@read", "state": "on"},
+			"bob":   map[string]any{"acl": "+@read", "state": "on"},
+		},
+		"redis_hosts": []any{
+			map[string]any{"sid": "host-a", "role": "primary"},
+			map[string]any{"sid": "host-b", "role": "replica"},
+			map[string]any{"sid": "host-c", "role": "replica"},
+		},
+	}
+}
+
+func verbsMirrorOps() []render.RenderedOp {
+	modifyCtx := map[string]any{"input": map[string]any{"username": "alice", "acl": "+@all"}}
+	removeCtx := map[string]any{"input": map[string]any{"sid": "host-c"}}
+	return []render.RenderedOp{
+		// modify map по key: alice.acl → +@all (state цел).
+		{Verb: config.VerbModify, Field: "redis_users", Match: "key == input.username",
+			Patch: map[string]any{"acl": "${ input.acl }"}, Context: modifyCtx},
+		// remove list по sid: host-c удалён (expect: one).
+		{Verb: config.VerbRemove, Field: "redis_hosts", Match: "elem.sid == input.sid",
+			Expect: config.ExpectOne, Context: removeCtx},
+	}
+}
+
+// verbsMirrorExpectedJSON — обязан совпадать с trial.verbsMirrorExpectedJSON.
+const verbsMirrorExpectedJSON = `{"redis_users":{"alice":{"acl":"+@all","state":"on"},"bob":{"acl":"+@read","state":"on"}},"redis_hosts":[{"sid":"host-a","role":"primary"},{"sid":"host-b","role":"replica"}]}`
+
+// TestMergeVerbsMirror_Prod — прод-сторона анти-дрейф-сверки новых глаголов.
+func TestMergeVerbsMirror_Prod(t *testing.T) {
+	after, err := mergeStateChanges(verbsMirrorFixture(), verbsMirrorOps(), redisHostsSchema, noMatch, opEvalForTest(t))
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	got, _ := json.Marshal(after)
+	if !equalJSONState(t, string(got), verbsMirrorExpectedJSON) {
+		t.Errorf("★ прод state_after = %s, want %s (дрейф modify/remove)", got, verbsMirrorExpectedJSON)
+	}
+}
+
+// --- Guard-тесты пробелов покрытия (ADR-057): композиция в блоке, scalar-list,
+// пустые коллекции, patch-clobber. ---
+
+// TestMergeStateChanges_Composition_SetThenAdd — ★ set создаёт коллекцию, add в
+// неё в ТОМ ЖЕ блоке видит промежуточный state (ops применяются по порядку к
+// промежуточному результату, ADR-057 §e). Детерминированный порядок.
+func TestMergeStateChanges_Composition_SetThenAdd(t *testing.T) {
+	before := map[string]any{} // redis_hosts отсутствует
+	ops := []render.RenderedOp{
+		{Verb: config.VerbSet, Field: "redis_hosts", Value: []any{}}, // создаём пустой list
+		addRedisHost("host-a", "primary", config.OnConflictSkip),     // add видит созданный list
+		addRedisHost("host-b", "replica", config.OnConflictSkip),
+	}
+	after, err := mergeStateChanges(before, ops, redisHostsSchema, matchEvalForTest(t), noOpEval)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	hosts := after["redis_hosts"].([]any)
+	if len(hosts) != 2 {
+		t.Fatalf("★ redis_hosts len = %d, want 2 (add в созданную set-ом коллекцию)", len(hosts))
+	}
+	if hosts[0].(map[string]any)["sid"] != "host-a" || hosts[1].(map[string]any)["sid"] != "host-b" {
+		t.Errorf("★ порядок add нарушен: %+v", hosts)
+	}
+}
+
+// TestMergeStateChanges_Composition_AddThenRemove — ★ add X → remove X по match в
+// одном блоке: элемента в итоге нет (remove видит результат add). Промежуточный
+// state виден последующей операции.
+func TestMergeStateChanges_Composition_AddThenRemove(t *testing.T) {
+	before := map[string]any{"redis_hosts": []any{
+		map[string]any{"sid": "host-a", "role": "primary"},
+	}}
+	removeCtx := map[string]any{}
+	ops := []render.RenderedOp{
+		addRedisHost("host-b", "replica", config.OnConflictSkip),                                           // +host-b
+		{Verb: config.VerbRemove, Field: "redis_hosts", Match: "elem.sid == 'host-b'", Context: removeCtx}, // -host-b
+	}
+	after, err := mergeStateChanges(before, ops, redisHostsSchema, matchEvalForTest(t), opEvalForTest(t))
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	hosts := after["redis_hosts"].([]any)
+	if len(hosts) != 1 || hosts[0].(map[string]any)["sid"] != "host-a" {
+		t.Fatalf("★ add X → remove X: ожидали только host-a, got %+v", hosts)
+	}
+}
+
+// TestMergeStateChanges_ScalarList_ModifyRemove — modify/remove над list of
+// scalars (elem=скаляр): remove работает по предикату над скаляром; modify
+// (точечный patch) даёт ПОНЯТНУЮ ошибку, не панику.
+func TestMergeStateChanges_ScalarList_ModifyRemove(t *testing.T) {
+	scalarSchema := map[string]any{"type": "object", "properties": map[string]any{
+		"tags": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+	}}
+	before := func() map[string]any {
+		return map[string]any{"tags": []any{"a", "b", "c"}}
+	}
+
+	// remove над scalar-list по предикату elem — работает.
+	rm := render.RenderedOp{Verb: config.VerbRemove, Field: "tags", Match: "elem == 'b'", Context: map[string]any{}}
+	after, err := mergeStateChanges(before(), []render.RenderedOp{rm}, scalarSchema, noMatch, opEvalForTest(t))
+	if err != nil {
+		t.Fatalf("remove над scalar-list: %v", err)
+	}
+	tags := after["tags"].([]any)
+	if len(tags) != 2 || tags[0] != "a" || tags[1] != "c" {
+		t.Fatalf("★ remove scalar 'b': got %+v, want [a c]", tags)
+	}
+
+	// modify (точечный patch) над scalar-элементом — понятная ошибка, не паника.
+	mod := render.RenderedOp{Verb: config.VerbModify, Field: "tags", Match: "elem == 'a'",
+		Patch: map[string]any{"x": "${ 'y' }"}, Context: map[string]any{}}
+	if _, err := mergeStateChanges(before(), []render.RenderedOp{mod}, scalarSchema, noMatch, opEvalForTest(t)); err == nil {
+		t.Fatal("★ modify scalar-элемента точечным patch должен дать ошибку (patch применим только к объекту)")
+	}
+}
+
+// TestMergeStateChanges_RemoveAll_EmptyNotNil — ★ remove ВСЕХ элементов даёт
+// ПУСТУЮ коллекцию ([]any{} / map{}), НЕ nil: следующий add должен видеть пустую
+// коллекцию и материализовать в неё, не упасть на nil.
+func TestMergeStateChanges_RemoveAll_EmptyNotNil(t *testing.T) {
+	// list: remove всех → []any{} (не nil), затем add в неё растит на 1.
+	beforeList := map[string]any{"redis_hosts": []any{
+		map[string]any{"sid": "host-a", "role": "replica"},
+		map[string]any{"sid": "host-b", "role": "replica"},
+	}}
+	ops := []render.RenderedOp{
+		{Verb: config.VerbRemove, Field: "redis_hosts", Match: "elem.role == 'replica'", Context: map[string]any{}},
+		addRedisHost("host-c", "primary", config.OnConflictSkip),
+	}
+	after, err := mergeStateChanges(beforeList, ops, redisHostsSchema, matchEvalForTest(t), opEvalForTest(t))
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	hosts, ok := after["redis_hosts"].([]any)
+	if !ok {
+		t.Fatalf("★ redis_hosts = %T, want []any (remove-всех оставляет пустой list, не nil)", after["redis_hosts"])
+	}
+	if len(hosts) != 1 || hosts[0].(map[string]any)["sid"] != "host-c" {
+		t.Fatalf("★ add после remove-всех: got %+v, want [host-c]", hosts)
+	}
+
+	// map: remove всех → map{} (не nil), add по key растит на 1.
+	beforeMap := map[string]any{"redis_users": map[string]any{
+		"alice": map[string]any{"acl": "+@read"},
+	}}
+	opsMap := []render.RenderedOp{
+		{Verb: config.VerbRemove, Field: "redis_users", Match: "true == true", Context: map[string]any{}},
+		{Verb: config.VerbAdd, Field: "redis_users", Key: "bob",
+			Value: map[string]any{"acl": "+@all"}, OnConflict: config.OnConflictSkip},
+	}
+	afterMap, err := mergeStateChanges(beforeMap, opsMap, redisHostsSchema, noMatch, opEvalForTest(t))
+	if err != nil {
+		t.Fatalf("merge map: %v", err)
+	}
+	users, ok := afterMap["redis_users"].(map[string]any)
+	if !ok {
+		t.Fatalf("★ redis_users = %T, want map (remove-всех оставляет пустой map, не nil)", afterMap["redis_users"])
+	}
+	if len(users) != 1 {
+		t.Fatalf("★ add после remove-всех map: got %+v, want {bob}", users)
+	}
+	if _, has := users["bob"]; !has {
+		t.Errorf("★ bob не добавлен в опустевший map: %+v", users)
+	}
+}
+
+// TestMergeStateChanges_PatchClobber_MissingVsExistingScalar — ★ QA observation:
+// patch вложенного пути config.maxmemory.
+//   - ОТСУТСТВУЮЩИЙ промежуточный путь (config нет) → материализуем map (ADR-057 §f);
+//   - СУЩЕСТВУЮЩИЙ не-map промежуточный узел (config="string") → ERROR, не молчаливый
+//     клоббер (потеря данных небезопасна).
+func TestMergeStateChanges_PatchClobber_MissingVsExistingScalar(t *testing.T) {
+	ctx := map[string]any{"input": map[string]any{"mem": "512mb"}}
+	patchOp := func() render.RenderedOp {
+		return render.RenderedOp{Verb: config.VerbModify, Field: "redis_hosts",
+			Match: "elem.sid == 'host-a'", Patch: map[string]any{"config.maxmemory": "${ input.mem }"}, Context: ctx}
+	}
+
+	// missing → материализуем config как map.
+	beforeMissing := map[string]any{"redis_hosts": []any{
+		map[string]any{"sid": "host-a", "role": "primary"}, // config отсутствует
+	}}
+	after, err := mergeStateChanges(beforeMissing, []render.RenderedOp{patchOp()}, redisHostsSchema, noMatch, opEvalForTest(t))
+	if err != nil {
+		t.Fatalf("★ missing промежуточный путь должен материализоваться, не ошибка: %v", err)
+	}
+	cfg := after["redis_hosts"].([]any)[0].(map[string]any)["config"].(map[string]any)
+	if cfg["maxmemory"] != "512mb" {
+		t.Errorf("★ config.maxmemory = %v, want 512mb (config материализован)", cfg["maxmemory"])
+	}
+
+	// existing-scalar → ERROR (config — строка, спустить вложенный путь = клоббер).
+	beforeScalar := map[string]any{"redis_hosts": []any{
+		map[string]any{"sid": "host-a", "role": "primary", "config": "some-string-value"},
+	}}
+	if _, err := mergeStateChanges(beforeScalar, []render.RenderedOp{patchOp()}, redisHostsSchema, noMatch, opEvalForTest(t)); err == nil {
+		t.Fatal("★ patch config.maxmemory поверх config=\"string\" должен дать ошибку (silent-clobber небезопасен), не молча затереть")
+	}
+}
+
+// TestSetNestedPath_ProdNoSilentClobber — прод-сторона unit-guard setNestedPath
+// (зеркало trial.TestSetNestedPath_NoSilentClobber): missing создаётся, существующий
+// не-map → ошибка без мутации.
+func TestSetNestedPath_ProdNoSilentClobber(t *testing.T) {
+	m := map[string]any{}
+	if err := setNestedPath(m, "config.maxmemory", "256mb"); err != nil {
+		t.Fatalf("setNestedPath missing: %v", err)
+	}
+	if m["config"].(map[string]any)["maxmemory"] != "256mb" {
+		t.Errorf("config не материализован: %+v", m)
+	}
+	m2 := map[string]any{"config": "scalar"}
+	if err := setNestedPath(m2, "config.maxmemory", "256mb"); err == nil {
+		t.Fatal("★ setNestedPath поверх config=\"scalar\" должен вернуть ошибку")
+	}
+	if m2["config"] != "scalar" {
+		t.Errorf("★ скалярное значение затёрто: %+v", m2)
+	}
+}
+
+// TestMergeStateChanges_AddConflictReason_NoSecretLeak — ★ BUG-3 (security): add в
+// map с key=зарезолвленный-секрет + on_conflict:error. Reason ошибки (уезжает в
+// incarnation.status_details.error немаскированным — audit.MaskSecrets ловит
+// `vault:`-ref, не plaintext-значение) НЕ должен содержать значение ключа: только
+// имя коллекции-поля. То же для list add-conflict (зарезолвленный value/elem).
+func TestMergeStateChanges_AddConflictReason_NoSecretLeak(t *testing.T) {
+	const secret = "s3cr3t-vault-resolved-value"
+
+	// map add-conflict: key уже зарезолвлен в секрет (как после render `${ vault(...) }`).
+	beforeMap := map[string]any{"redis_users": map[string]any{
+		secret: map[string]any{"acl": "+@read"},
+	}}
+	mapOp := render.RenderedOp{Verb: config.VerbAdd, Field: "redis_users", Key: secret,
+		Value: map[string]any{"acl": "+@all"}, OnConflict: config.OnConflictError}
+	_, err := mergeStateChanges(beforeMap, []render.RenderedOp{mapOp}, redisHostsSchema, noMatch, noOpEval)
+	if err == nil {
+		t.Fatal("ожидали ошибку (on_conflict=error на существующем key)")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("★ secret-LEAK: reason содержит plaintext ключа: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "redis_users") {
+		t.Errorf("reason должен называть поле redis_users: %q", err.Error())
+	}
+
+	// list add-conflict: value несёт секрет, элемент уже есть (deep-equal).
+	beforeList := map[string]any{"redis_hosts": []any{secret}}
+	listOp := render.RenderedOp{Verb: config.VerbAdd, Field: "redis_hosts",
+		Value: secret, OnConflict: config.OnConflictError}
+	_, err = mergeStateChanges(beforeList, []render.RenderedOp{listOp}, redisHostsSchema, matchEvalForTest(t), noOpEval)
+	if err == nil {
+		t.Fatal("ожидали ошибку (on_conflict=error на существующем элементе)")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("★ secret-LEAK: list-reason содержит plaintext value: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "redis_hosts") {
+		t.Errorf("list-reason должен называть поле redis_hosts: %q", err.Error())
+	}
+}
+
+// equalJSONState сравнивает два JSON-стейта семантически (порядок ключей не важен).
+func equalJSONState(t *testing.T, a, b string) bool {
+	t.Helper()
+	var ma, mb map[string]any
+	if err := json.Unmarshal([]byte(a), &ma); err != nil {
+		t.Fatalf("unmarshal a: %v", err)
+	}
+	if err := json.Unmarshal([]byte(b), &mb); err != nil {
+		t.Fatalf("unmarshal b: %v", err)
+	}
+	return reflect.DeepEqual(ma, mb)
 }
 
 func TestBuildRegisterByHost_ResolvesNamesPerHost(t *testing.T) {

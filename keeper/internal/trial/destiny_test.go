@@ -123,3 +123,43 @@ func TestFixtureDestinyResolver_RejectsPlaceholderNotInLeaf(t *testing.T) {
 		t.Fatalf("ожидали ошибку про последний сегмент, получили: %v", err)
 	}
 }
+
+// TestFixtureDestinyResolver_LoadsVarsYml — trial-зеркало прода: соседний vars.yml
+// (destiny-локалы) грузится через config.LoadDestinyVars в ResolvedDestiny.Vars,
+// как DestinyLoader.parseVars. Отсутствие файла → nil (опционален).
+func TestFixtureDestinyResolver_LoadsVarsYml(t *testing.T) {
+	root := t.TempDir()
+	dir := writeDestinyFixture(t, root, "withvars")
+	varsYml := "redis_unit_name: redis-server\nacl_path: \"/acl/${ input.user }.acl\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "vars.yml"), []byte(varsYml), 0o644); err != nil {
+		t.Fatalf("write vars.yml: %v", err)
+	}
+
+	r := newFixtureDestinyResolver(root, "file://destiny-{name}",
+		[]config.DependencyRef{{Name: "withvars", Ref: "v1.0.0"}})
+	got, err := r.Resolve(context.Background(), "withvars")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got.Vars["redis_unit_name"] != "redis-server" {
+		t.Errorf("Vars[redis_unit_name] = %v, want redis-server", got.Vars["redis_unit_name"])
+	}
+	if got.Vars["acl_path"] != "/acl/${ input.user }.acl" {
+		t.Errorf("Vars[acl_path] = %v — RAW, без резолва CEL (резолв в render)", got.Vars["acl_path"])
+	}
+}
+
+// TestFixtureDestinyResolver_NoVarsYml — отсутствие vars.yml не ошибка: Vars=nil.
+func TestFixtureDestinyResolver_NoVarsYml(t *testing.T) {
+	root := t.TempDir()
+	writeDestinyFixture(t, root, "novars")
+	r := newFixtureDestinyResolver(root, "file://destiny-{name}",
+		[]config.DependencyRef{{Name: "novars", Ref: "v1.0.0"}})
+	got, err := r.Resolve(context.Background(), "novars")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got.Vars != nil {
+		t.Errorf("Vars = %v, want nil для destiny без vars.yml", got.Vars)
+	}
+}

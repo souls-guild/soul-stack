@@ -96,26 +96,36 @@ func evalWhere(engine *cel.Engine, where string, vars cel.Vars) (bool, error) {
 	return evalBoolExpr(engine, "where", where, vars)
 }
 
-// resolveTaskVars вычисляет task-level `vars:` (destiny/tasks.md §9) и возвращает
-// контекст vars с заполненным полем Vars. Каждое значение vars[key] — CEL-
-// выражение/интерполяция (`${ … }`) над контекстом задачи (input/incarnation/
-// soulprint.self/essence/register/loop), резолвится через EvalInterpolation
-// (нативный тип при ровно одном `${…}`-блоке, иначе строка).
+// resolveTaskVars собирает финальный слой `vars.*` для рендера одной задачи на
+// одном хосте: БАЗА — резолвленные destiny-локалы `vars.yml` (fileVars,
+// docs/destiny/vars.md), ПОВЕРХ — task-level `vars:` (taskVars, destiny/tasks.md
+// §9). Вариант A (vars.md «Слияние file-vars ↔ task-vars»): task-var переопределяет
+// одноимённый file-var; оба резолвятся в одном base-env, НЕ видя друг друга.
 //
-// Scope per-task: vars: вычисляются ДО params/where в контексте base, где сами
-// task-vars ещё НЕ видны (base.Vars пуст). Это запрещает ссылки vars→vars
-// (взаимные/самоссылки), как зафиксировано в destiny/tasks.md §9 («не на свои же
-// task-vars — нет циклических ссылок»): обращение `vars.<key>` внутри другого
-// vars-значения даст no-such-key. Поэтому порядок вычисления между ключами
-// безразличен (каждый видит только базовый контекст).
+// fileVars уже резолвлены ОДИН раз на destiny-проход (resolveDestinyVars над
+// destiny-env input+soulprint.self+incarnation, изолированно от scenario-scope) —
+// здесь они только подкладываются базой. В scenario-проходе fileVars пуст (vars.yml
+// — destiny-сущность); поведение scenario-задач БИТ-В-БИТ как до фичи.
 //
-// Пустой/nil task-vars → base без изменений (поле Vars остаётся nil → штатный
-// no-such-key на `vars.<key>`).
-func resolveTaskVars(engine *cel.Engine, taskVars map[string]any, base cel.Vars) (cel.Vars, error) {
-	if len(taskVars) == 0 {
+// taskVars резолвятся через EvalInterpolation (`${ … }`) над base, где base.Vars
+// ПУСТ — ни file-vars, ни другие task-vars не видны (запрет ссылок vars→vars,
+// destiny/tasks.md §9; зеркально resolveDestinyVars). Порядок ключей безразличен
+// (каждый видит только базовый контекст). Это сознательно: file-vars в base.Vars
+// НЕ кладутся ДО резолва task-vars, иначе task-var мог бы сослаться на file-var и
+// нарушить «оба над одним base-env без видимости друг друга».
+//
+// Оба пусты → base без изменений (Vars=nil → штатный no-such-key на `vars.<key>`).
+func resolveTaskVars(engine *cel.Engine, fileVars, taskVars map[string]any, base cel.Vars) (cel.Vars, error) {
+	if len(fileVars) == 0 && len(taskVars) == 0 {
 		return base, nil
 	}
-	resolved := make(map[string]any, len(taskVars))
+	resolved := make(map[string]any, len(fileVars)+len(taskVars))
+	// База: file-vars уже резолвлены — копируются как есть (без CEL).
+	for key, val := range fileVars {
+		resolved[key] = val
+	}
+	// Поверх: task-vars резолвятся над base (base.Vars пуст — file-vars не видны),
+	// перезаписывают одноимённые file-vars (Вариант A).
 	for key, raw := range taskVars {
 		s, ok := raw.(string)
 		if !ok {
@@ -134,16 +144,44 @@ func resolveTaskVars(engine *cel.Engine, taskVars map[string]any, base cel.Vars)
 	return base, nil
 }
 
+// fileVarsForHost возвращает резолвленные destiny-локалы `vars.yml` для хоста host
+// (база слоя `vars.*`, Вариант A). Источник — in.DestinyVarsResolved, заполненный
+// renderApplyDestiny per-host. nil host (синтетический пустой контекст) → ключ "".
+// nil-карта (scenario-проход / destiny без vars.yml) → nil (база пуста).
+func fileVarsForHost(in RenderInput, host *topology.HostFacts) map[string]any {
+	if in.DestinyVarsResolved == nil {
+		return nil
+	}
+	sid := ""
+	if host != nil {
+		sid = host.SID
+	}
+	return in.DestinyVarsResolved[sid]
+}
+
 // incarnationVars строит incarnation-map для CEL-контекста: name/service/
 // service_version из IncarnationMeta + host_count (число targeted-хостов,
 // scenario-предикаты используют его — add_user/main.yml).
+//
+// state — read-only снимок incarnation.state на момент захвата row-lock прогона
+// ([ADR-009]/[ADR-010]): scenario-render-контекст видит pre-run state как
+// `incarnation.state.<path>` в params/where/apply-input И в state_changes
+// (stateChangesVars зовёт ту же функцию). Снимок ИНВАРИАНТЕН на все passages
+// staged-render-а (RenderInput.State фиксируется один раз stateBefore под FOR
+// UPDATE, не накапливается между passages — в отличие от register). nil-State →
+// ключ не кладётся: `incarnation.state.<x>` даёт штатный no-such-key (push/trial
+// без State, backward-compat), не compile-ошибку (`incarnation` — DynType).
 func incarnationVars(in RenderInput, hostCount int) map[string]any {
-	return map[string]any{
+	m := map[string]any{
 		"name":            in.Incarnation.Name,
 		"service":         in.Incarnation.Service,
 		"service_version": in.Incarnation.ServiceVersion,
 		"host_count":      hostCount,
 	}
+	if in.State != nil {
+		m["state"] = in.State
+	}
+	return m
 }
 
 // hostVars строит cel.Vars для конкретного хоста: общий контекст прогона

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/souls-guild/soul-stack/shared/config"
@@ -81,6 +82,13 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 		}
 	case KindDestiny:
 		_, _, diags, _ = config.LoadDestinyManifestFromBytes(opts.Path, src, config.ValidateOptions{})
+		// Кросс-файловая проверка коллизии destiny-локалов: соседний `vars.yml`
+		// (file-level vars) против task-level `vars:` из `tasks/main.yml`. Вариант A
+		// (vars.md) детерминирован, но коллизия имён — частый источник недоразумений
+		// → warn. Отсутствие любого из соседей → проверка пропускается (vars.yml
+		// опционален, tasks/main.yml может лежать иначе — линтер манифеста на это не
+		// падает).
+		diags = append(diags, destinyVarsCollisionDiags(opts.Path)...)
 	case KindService:
 		_, _, diags, _ = config.LoadServiceManifestFromBytes(opts.Path, src, config.ValidateOptions{})
 	case KindScenario:
@@ -104,6 +112,48 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 		return ExitHasErrors
 	}
 	return ExitOK
+}
+
+// destinyVarsCollisionDiags поднимает warn на каждое имя, объявленное И в
+// соседнем `vars.yml` (file-level destiny-локалы), И в task-level `vars:` хотя бы
+// одной задачи `tasks/main.yml`. Вариант A детерминирован (task переопределяет
+// file, vars.md), но коллизия — частый источник недоразумений.
+//
+// manifestPath — путь к destiny.yml; соседи берутся из его каталога. Любая I/O-
+// или parse-ошибка соседа → пропуск (vars.yml опционален; ошибки самих задач
+// ловит validate-scenario/рантайм — здесь только коллизия). Не падает, если
+// соседей нет.
+func destinyVarsCollisionDiags(manifestPath string) []diag.Diagnostic {
+	dir := filepath.Dir(manifestPath)
+
+	fileVars, err := config.LoadDestinyVars(filepath.Join(dir, "vars.yml"))
+	if err != nil || len(fileVars) == 0 {
+		return nil
+	}
+
+	tasksPath := filepath.Join(dir, "tasks", "main.yml")
+	tasksData, rerr := os.ReadFile(tasksPath)
+	if rerr != nil {
+		return nil
+	}
+	tasks, _, terr := config.LoadDestinyTasksFromBytes(tasksPath, tasksData, config.ValidateOptions{})
+	if terr != nil {
+		return nil
+	}
+
+	var out []diag.Diagnostic
+	for _, name := range config.DestinyVarsCollisions(fileVars, tasks) {
+		out = append(out, diag.Diagnostic{
+			Level:    diag.LevelWarning,
+			Phase:    diag.PhaseSemanticValidate,
+			File:     filepath.Join(dir, "vars.yml"),
+			Code:     "vars_collision",
+			Message:  fmt.Sprintf("vars.%s declared in both vars.yml and a task-level vars:; task-level wins (Variant A)", name),
+			Hint:     "rename one, or rely on task-level override intentionally (docs/destiny/vars.md)",
+			YAMLPath: "$." + name,
+		})
+	}
+	return out
 }
 
 // printDiagnostics форматирует и пишет диагностики в `w` в выбранном режиме.

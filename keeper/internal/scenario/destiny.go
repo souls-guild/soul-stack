@@ -116,6 +116,7 @@ func (r *destinyResolver) Resolve(ctx context.Context, name string) (*render.Res
 		Name:      art.Manifest.Name,
 		Tasks:     art.Tasks,
 		Input:     art.Manifest.Input,
+		Vars:      art.Vars, // destiny-локалы vars.yml (docs/destiny/vars.md), raw
 		Templates: templates,
 	}, nil
 }

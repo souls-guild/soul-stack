@@ -141,6 +141,34 @@ func TestRender_ApplyDestiny_Isolation(t *testing.T) {
 	}
 }
 
+// TestRender_ApplyDestiny_StateIsolation — destiny НЕ видит incarnation.state:
+// Вариант A (incarnation.state в scenario-render) не протёк в destiny-проход.
+// State кладётся в RenderInput (не в IncarnationMeta), а renderApplyDestiny
+// копирует только parentIn.Incarnation (meta) и НЕ пробрасывает State → у destiny
+// `incarnation.state` пуст. Задача destiny, читающая incarnation.state.x в
+// non-optional форме, падает eval-ошибкой (no such key) — изоляция, как для
+// scenario-input (orchestration.md §4.1: state — только через apply.input).
+func TestRender_ApplyDestiny_StateIsolation(t *testing.T) {
+	leaky := flatDestiny()
+	leaky.Tasks[0].Module.Params["content"] = "${ incarnation.state.redis_users }"
+	res := &stubDestinyResolver{resolved: leaky}
+
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario:    applyScenario("pilot-flat", map[string]any{"marker_file": "/m", "marker_payload": "p"}),
+		Incarnation: IncarnationMeta{Name: "svc"},
+		// scenario-scope несёт state — destiny НЕ должна его увидеть.
+		State:   map[string]any{"redis_users": map[string]any{"alice": "x"}},
+		Hosts:   []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
+		Destiny: res,
+	}
+
+	_, _, err := p.Render(context.Background(), in)
+	if err == nil {
+		t.Fatal("Render: ожидалась ошибка — destiny не должна видеть incarnation.state (изоляция Вариант A)")
+	}
+}
+
 // TestRender_ApplyDestiny_MissingRequired — обязательный input destiny не передан
 // через apply.input и без default → ошибка контракта.
 func TestRender_ApplyDestiny_MissingRequired(t *testing.T) {

@@ -1,9 +1,16 @@
+# Гейт по action — на каждой задаче (`when: input.action == 'apply'`): main.yml
+# подключает этот файл безусловно (include не может нести `when:`, destiny/tasks.md
+# §4.1). Реактивные задачи (onchanges:) тоже несут гейт — requisites и when
+# суммируются по AND (destiny/tasks.md §6 `when:`), поэтому при другом action
+# группа целиком `skipped: when` и реактивные триггеры не срабатывают.
+
 # version опционален (required:false): caller может не передать ключ вовсе. Тогда
 # has(input.version) ложно → version рендерится в "" → core.pkg ставит версию по
 # умолчанию из репо БЕЗ =version-пина (поведение latest). Если передан — пин на
 # distro-native строку (напр. 5:7.0.15-1~deb12u7).
 - name: Install redis-server package
   module: core.pkg.installed
+  when: input.action == 'apply'
   retry: { count: 3, delay: 10s }
   params:
     name: "${ vars.redis_unit_name }"
@@ -17,6 +24,7 @@
 # при финализации params core.file.rendered — выровнять.
 - name: Render redis.conf from template
   module: core.file.rendered
+  when: input.action == 'apply'
   register: redis_conf
   params:
     path: "${ vars.redis_conf_path }"
@@ -43,6 +51,7 @@
 # register, чтобы реактивно дернуть daemon-reload + restart только при изменении.
 - name: Render redis-server systemd hardening drop-in
   module: core.file.rendered
+  when: input.action == 'apply'
   register: redis_hardening
   params:
     path: /etc/systemd/system/redis-server.service.d/hardening.conf
@@ -57,6 +66,7 @@
 # argv без shell — метасимволов в команде нет.
 - name: Reload systemd because the hardening drop-in changed
   module: core.exec.run
+  when: input.action == 'apply'
   onchanges: [redis_hardening]
   params:
     cmd: systemctl
@@ -64,6 +74,7 @@
 
 - name: Ensure redis-server is running and enabled at boot
   module: core.service.running
+  when: input.action == 'apply'
   params:
     name: "${ vars.redis_unit_name }"
     enabled: true
@@ -74,6 +85,7 @@
 # drop-in → daemon-reload → restart. Ни то ни другое не изменилось → no-op.
 - name: Restart redis-server because config or hardening changed
   module: core.service.restarted
+  when: input.action == 'apply'
   onchanges: [redis_conf, redis_hardening]
   timeout: 30s
   params:

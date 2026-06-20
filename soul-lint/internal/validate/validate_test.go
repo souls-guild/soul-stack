@@ -56,6 +56,15 @@ func TestGolden_ScenarioExample(t *testing.T) {
 	runExpect(t, "../../testdata/scenario-golden/redis-create.yml", KindScenario, false, ExitOK, nil)
 }
 
+// TestGolden_ScenarioIncarnationStateRead — `incarnation.state.<path>` (read-only
+// снимок incarnation.state в scenario render, ADR-009/010 Вариант A) ВАЛИДЕН в
+// предикате и apply.input. Контракт: каноническая форма НЕ ловится
+// state_naked_reference (его режет только голый `state.*` без префикса). Реверс
+// (incarnation.state ошибочно зарезан) → ExitHasErrors → тест падает.
+func TestGolden_ScenarioIncarnationStateRead(t *testing.T) {
+	runExpect(t, "../../testdata/scenario-golden/incarnation-state-read.yml", KindScenario, false, ExitOK, nil)
+}
+
 // TestGolden_ScenarioSerialStaged — serial: + staged (N>1 Passage) ВАЛИДЕН (ADR-056
 // §S4 amend, S-2D1): рестрикт serial_staged_unsupported снят, 2D serial×passage
 // реализован. Сценарий проходит линт с ExitOK и passage_plan HINT (структура

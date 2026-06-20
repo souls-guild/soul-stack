@@ -90,6 +90,17 @@ acl_file_path: "/etc/redis/users/${ input.user }.acl"
 - **`register.<name>`** — результаты задач. На момент вычисления `vars` задач ещё не было.
 - **`essence.*`** — этого пространства имён в destiny **нет вообще**. essence — концепция уровня service; service сам решает, какие значения подкладывать в `input:` destiny при вызове.
 
+## Слияние file-vars ↔ task-vars (Вариант A)
+
+Пространство имён `vars.*` делят два источника: file-level `vars.yml` (этот документ) и task-level `vars:` на отдельной задаче ([tasks.md §9](tasks.md)). Когда имя объявлено в обоих — действует **Вариант A**:
+
+- **task-level `vars:` переопределяет одноимённый file-level var.** File-vars — базовый слой, task-vars кладутся поверх. Исход детерминирован: на задаче с собственным `vars: { redis_unit_name: … }` именно task-значение попадёт в `${ vars.redis_unit_name }`, а file-level — нет.
+- **Оба слоя резолвятся над одним базовым контекстом (`input.*` + `soulprint.self.*` + `incarnation.*`) и НЕ видят друг друга.** file-var не может сослаться на task-var, task-var — на file-var, ни тот ни другой — на свой же слой (`vars.<other>` внутри значения даёт no-such-key). Это та же изоляция, что запрет перекрёстных ссылок внутри `vars.yml` (см. «Что доступно внутри `vars`»): порядок объявления безразличен.
+- **Изоляция scope сохраняется.** file-vars резолвятся внутри destiny-прохода (после валидации `apply.input`), `register.*`/`essence.*`/`soulprint.hosts` им недоступны — как и task-vars destiny-задачи. scenario-level `vars:` в destiny НЕ видны вовсе (только через `apply: input:`).
+- **`soul-lint` поднимает `warn` (`vars_collision`)** на каждое имя, объявленное и в `vars.yml`, и в task-level `vars:` той же destiny. Это не ошибка (Вариант A однозначен), но почти всегда — недосмотр автора: переименуй один из двух или полагайся на переопределение осознанно.
+
+Резолв file-vars выполняется **один раз на destiny-проход** (per-host, потому что значения могут ссылаться на `soulprint.self`), а не на каждую задачу: file-vars инвариантны по задачам одного прохода.
+
 ## См. также
 
 - [manifest.md](manifest.md) — раскладка папки destiny, где лежит `vars.yml`.

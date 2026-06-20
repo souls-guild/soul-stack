@@ -33,8 +33,17 @@ input:
 # role_distribution (M2-side-effect, keeper/cloud.md); для host-ветки —
 # легитимно пуста (orchestration.md §4.1: role может быть null для хостов,
 # привязанных вне declared-spec).
+#
+# Новая list-форма state_changes (упорядоченные операции). add растит
+# redis_hosts[] на один элемент {sid, role:replica}; on_conflict: skip делает шаг
+# идемпотентным — повторный прогон с тем же SID НЕ задвоит хост (match по sid).
 state_changes:
-  appends: [redis_hosts]
+  - add: redis_hosts
+    value:
+      sid:  "${ vars.new_sid }"
+      role: replica
+    match: "elem.sid == value.sid"
+    on_conflict: skip
 
 # SID добавляемого хоста: spawn-ветка → input.spawn.sid; host-ветка → input.host.sid.
 # Единый vars.new_sid покрывает обе ветки — далее все per-host шаги таргетят
@@ -108,9 +117,9 @@ tasks:
       destiny: redis
       input:
         action:    apply
-        version:   "${ state.redis_version }"
+        version:   "${ incarnation.state.redis_version }"
         password:  "${ input.redis_password }"
-        config:    "${ state.redis_config }"
+        config:    "${ incarnation.state.redis_config }"
 
   # Репликация на новом хосте → на actual-primary существующих. master_addr
   # из probe существующих (register.master_addr), НЕ из declared soulprint.hosts

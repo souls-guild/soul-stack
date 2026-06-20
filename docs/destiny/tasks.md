@@ -157,7 +157,7 @@
   params: { command: "redis-cli INFO memory" }
 
 - name: Collect diagnose result    # обращается к register.ping/repl/mem →
-  module: core.noop                # implicit barrier: ждёт все три треда
+  module: core.noop.run            # implicit barrier: ждёт все три треда
   params: {}
   output:
     ping:        "${ register.ping.stdout }"
@@ -190,7 +190,7 @@
 
 - name: Verify warmup complete
   require: all                # явный barrier — ждать всех parallel-задач
-  module: core.noop
+  module: core.noop.run
   params: {}
 ```
 

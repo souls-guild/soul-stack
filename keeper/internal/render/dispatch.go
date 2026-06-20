@@ -42,7 +42,7 @@ func resolveTargets(engine *cel.Engine, in RenderInput, task config.Task) ([]*to
 	out := make([]*topology.HostFacts, 0, len(targeted))
 	for _, h := range targeted {
 		vars := hostVars(in, h, len(targeted))
-		vars, err = resolveTaskVars(engine, task.Vars, vars)
+		vars, err = resolveTaskVars(engine, fileVarsForHost(in, h), task.Vars, vars)
 		if err != nil {
 			return nil, fmt.Errorf("render: task %q (host %s): %w", task.Name, h.SID, err)
 		}

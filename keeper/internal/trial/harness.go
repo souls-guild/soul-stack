@@ -140,6 +140,11 @@ func renderCase(ctx context.Context, c *Case, caseFile string) (renderedCase, er
 		Hosts:       fixtureHosts(scn.Name, c.Fixtures.Soulprint),
 		Destiny:     destiny,
 		Templates:   templates,
+		// State — fixtures.state как pre-run снимок incarnation.state: доступен в
+		// CEL как `incarnation.state.<path>` (ADR-009/010), тот же, что merge ниже
+		// берёт за stateBefore. nil (кейс без state) → ключ не объявляется
+		// (`incarnation.state.x` = no-such-key), поведение прежних кейсов БИТ-В-БИТ.
+		State: c.Fixtures.State,
 	}
 
 	tasks, _, err := pipeline.Render(ctx, in)
@@ -180,20 +185,33 @@ func RunCase(ctx context.Context, c *Case, caseFile string) (Result, error) {
 	// `register.*` в sets тот же per-host register-контекст, что и в `where:`.
 	in.Ctx = ctx
 	in.RegisterByHost = map[string]map[string]any{trialHostSID: orEmptyMap(c.Mocks.Register)}
-	renderedSets, err := pipeline.RenderStateChanges(in)
+
+	// Рендер state_changes гоняется ВСЕГДА (как прод после барьера), даже без
+	// ассерта: незащищённый `${ input.X }` по optional-без-default input (CEL «no
+	// such key») ловится здесь — слепая зона harness-а, видевшего только tasks.
+	ops, err := pipeline.RenderStateOps(in)
 	if err != nil {
 		return res, fmt.Errorf("trial: render state_changes: %w", err)
 	}
+
+	// assert.state_changes — проекция set-операций (поле→значение, back-compat).
 	if c.Assert.StateChanges != nil {
-		res.Failures = append(res.Failures, compareStateChanges(c.Assert.StateChanges, renderedSets)...)
+		res.Failures = append(res.Failures, compareStateChanges(c.Assert.StateChanges, setOpsProjection(ops))...)
 	}
 
 	// assert.state_after — детерминированный итоговый incarnation.state: базовый
-	// fixtures.state + отрендеренные sets (зеркало прод-коммита, run.go:
-	// mergeStateChanges(stateBefore, renderedSets)). Сверка ПОЛНАЯ (compareState,
-	// как L1): лишний ключ в итоге — расхождение, state фиксируется целиком.
+	// fixtures.state + применённые по порядку операции state_changes (зеркало
+	// прод-коммита, run.go: mergeStateChanges(stateBefore, ops, schema, EvalStateMatch)).
+	// Сверка ПОЛНАЯ (compareState, как L1): лишний ключ — расхождение.
 	if c.Assert.StateAfter != nil {
-		stateAfter := mergeStateChanges(c.Fixtures.State, renderedSets)
+		schema, serr := loadServiceStateSchema(caseFile)
+		if serr != nil {
+			return res, serr
+		}
+		stateAfter, merr := mergeStateChanges(c.Fixtures.State, ops, schema, pipeline.EvalStateMatch, pipeline.EvalStateOpExpr)
+		if merr != nil {
+			return res, fmt.Errorf("trial: apply state_changes: %w", merr)
+		}
 		res.Failures = append(res.Failures, compareState(c.Assert.StateAfter, stateAfter)...)
 	}
 
@@ -238,6 +256,26 @@ func loadServiceDestinyDeps(caseFile string) ([]config.DependencyRef, error) {
 		return nil, fmt.Errorf("trial: service.yml %s невалиден: %s", svcPath, formatDiags(diags))
 	}
 	return manifest.Destiny, nil
+}
+
+// loadServiceStateSchema читает `<service-root>/service.yml` и возвращает его
+// state_schema-map (тип коллекции для add-материализации, зеркало прод
+// art.Manifest.StateSchema). Отсутствие service.yml / state_schema — не ошибка
+// (nil): add в уже существующую коллекцию выводит тип из значения state, schema
+// нужна лишь для материализации отсутствующего поля.
+func loadServiceStateSchema(caseFile string) (map[string]any, error) {
+	svcPath := filepath.Join(serviceRootFor(caseFile), "service.yml")
+	if _, err := os.Stat(svcPath); errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	manifest, _, diags, err := config.LoadServiceManifest(svcPath, config.ValidateOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("trial: загрузка service.yml %s: %w", svcPath, err)
+	}
+	if hasErrors(diags) {
+		return nil, fmt.Errorf("trial: service.yml %s невалиден: %s", svcPath, formatDiags(diags))
+	}
+	return manifest.StateSchema, nil
 }
 
 // fixtureScenarioIncludeResolver — двухуровневый scenario-include-резолвер для L0

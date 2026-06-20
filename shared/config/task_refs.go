@@ -175,10 +175,12 @@ func collectRefs(seq *ast.SequenceNode, pathPrefix string, known map[string]bool
 			case "when", "changed_when", "failed_when", "where":
 				out = append(out, checkPredicateRefs(tok.Value, kv.Value, known, taskPath)...)
 				out = append(out, checkSoulprintRefs(tok.Value, kv.Value, taskPath)...)
+				out = append(out, checkStateRefs(tok.Value, kv.Value, taskPath)...)
 			case "vars", "output", "params":
 				// Интерполяционные source-поля: ${ register.X } в строковых
 				// литералах, рекурсивно по вложенным map/seq.
 				out = append(out, checkInterpRefs(kv.Value, known, taskPath, tok.Value)...)
+				out = append(out, checkInterpStateRefs(kv.Value, taskPath, tok.Value)...)
 			case "apply":
 				// applier-задача: register читается в apply.input (вложенный map).
 				if amm, isMap := kv.Value.(*ast.MappingNode); isMap {
@@ -186,6 +188,7 @@ func collectRefs(seq *ast.SequenceNode, pathPrefix string, known map[string]bool
 						st := sub.Key.GetToken()
 						if st != nil && st.Value == "input" {
 							out = append(out, checkInterpRefs(sub.Value, known, taskPath, "apply.input")...)
+							out = append(out, checkInterpStateRefs(sub.Value, taskPath, "apply.input")...)
 						}
 					}
 				}
@@ -197,6 +200,7 @@ func collectRefs(seq *ast.SequenceNode, pathPrefix string, known map[string]bool
 						if st != nil && st.Value == "until" {
 							out = append(out, checkPredicateRefs("retry.until", sub.Value, known, taskPath)...)
 							out = append(out, checkSoulprintRefs("retry.until", sub.Value, taskPath)...)
+							out = append(out, checkStateRefs("retry.until", sub.Value, taskPath)...)
 						}
 					}
 				}
@@ -213,8 +217,10 @@ func collectRefs(seq *ast.SequenceNode, pathPrefix string, known map[string]bool
 						case "when":
 							out = append(out, checkPredicateRefs("loop.when", sub.Value, known, taskPath)...)
 							out = append(out, checkSoulprintRefs("loop.when", sub.Value, taskPath)...)
+							out = append(out, checkStateRefs("loop.when", sub.Value, taskPath)...)
 						case "items":
 							out = append(out, checkInterpRefs(sub.Value, known, taskPath, "loop.items")...)
+							out = append(out, checkInterpStateRefs(sub.Value, taskPath, "loop.items")...)
 						}
 					}
 				}

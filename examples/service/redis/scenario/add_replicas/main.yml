@@ -59,10 +59,20 @@ input:
     pattern: "^[0-9]+(b|kb|mb|gb)$"
     description: Лимит памяти Redis на новых репликах.
 
-# Новые хосты (role: replica) дописываются в incarnation.state.redis_hosts[]
-# после успешного apply (cross-host барьер — orchestration.md §7).
+# Новые хосты (SID-ы реплик) дописываются в incarnation.state.redis_hosts[]
+# после успешного apply (cross-host барьер — orchestration.md §7). redis_hosts —
+# list of scalars (fqdn) по service.yml state_schema. foreach по input.replicas
+# (list) раскрывается в N add (ADR-057 list-форма; раньше appends был
+# no-op-плейсхолдером — реплики не оседали в state). on_conflict: skip — повтор
+# того же SID не дублирует (идемпотентный повторный прогон, match по elem == sid).
 state_changes:
-  appends: [redis_hosts]
+  - foreach: "${ input.replicas }"
+    as: sid
+    do:
+      - add: redis_hosts
+        value: "${ sid }"
+        match: "elem == sid"
+        on_conflict: skip
 
 tasks:
   # 1. Probe адреса актуального primary НА СУЩЕСТВУЮЩИХ хостах (новые реплики

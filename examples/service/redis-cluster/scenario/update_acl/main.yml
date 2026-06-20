@@ -17,8 +17,24 @@ input:
         state: { type: string, enum: [on, off] }
       required: [acl]
 
+# input.changes — map username → {acl, state?}; патчим КАЖДОГО подходящего юзера
+# своим значением (ADR-057 list-форма). foreach по map даёт биндинг change с
+# .key (username) и .value (объект {acl, state?}); modify по key патчит запись в
+# state.redis_users (map-коллекция). В modify-патче биндинги: key/value —
+# текущая запись state (value.state — прежнее состояние, fallback если
+# change.value.state не передан, т.к. state необязателен в input). expect: one —
+# каждый изменяемый юзер обязан существовать (иначе error_locked: нельзя менять
+# ACL несуществующему).
 state_changes:
-  modifies: [redis_users.*.acl, redis_users.*.state]
+  - foreach: "${ input.changes }"
+    as: change
+    do:
+      - modify: redis_users
+        match: "key == change.key"
+        patch:
+          acl:   "${ change.value.acl }"
+          state: "${ has(change.value.state) ? change.value.state : value.state }"
+        expect: one
 
 tasks:
   # Probe: фактическая роль каждого хоста (actual-роль волатильна, берётся
@@ -37,7 +53,7 @@ tasks:
   # Diff и применение ACL на текущем мастере. run_once: — ровно один хост
   # (первый по SID) из резолва on:+where: (orchestration.md §2). >1 «текущих
   # master» по probe — норма, шаг идёт на одном детерминированном.
-  # state.redis_users — scenario-контекст (текущее состояние из БД, для diff).
+  # incarnation.state.redis_users — read-only снимок состояния из БД (для diff).
   - name: Diff and apply ACL changes on the current master
     on: ["${ incarnation.name }"]
     where: register.redis_role.stdout == 'master'
@@ -47,4 +63,4 @@ tasks:
       input:
         action:  update_acls
         changes: "${ input.changes }"
-        current: "${ state.redis_users }"   # текущее состояние из БД, для diff
+        current: "${ incarnation.state.redis_users }"   # снимок состояния из БД, для diff

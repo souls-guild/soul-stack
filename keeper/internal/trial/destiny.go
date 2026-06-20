@@ -110,6 +110,18 @@ func (r *fixtureDestinyResolver) Resolve(_ context.Context, name string) (*rende
 		return nil, fmt.Errorf("trial: раскрытие include в destiny %q: %s", name, formatDiags(iDiags))
 	}
 
+	// destiny-локалы vars.yml (docs/destiny/vars.md) — зеркало прода
+	// (artifact.DestinyLoader.parseVars): тот же config.LoadDestinyVars, опционален
+	// (нет файла → nil). securejoin клампит выход за пределы dir.
+	varsPath, err := securejoin.SecureJoin(dir, "vars.yml")
+	if err != nil {
+		return nil, fmt.Errorf("trial: небезопасный путь vars.yml фикстуры %q: %w", name, err)
+	}
+	vars, err := config.LoadDestinyVars(varsPath)
+	if err != nil {
+		return nil, fmt.Errorf("trial: vars.yml фикстуры %q: %w", name, err)
+	}
+
 	// .tmpl destiny читаются из её фикстурного каталога dir (одноуровневый
 	// резолв — у destiny нет scenario-local-слоя). securejoin клампит выход за
 	// пределы dir, симметрично прод-снапшоту.
@@ -117,7 +129,7 @@ func (r *fixtureDestinyResolver) Resolve(_ context.Context, name string) (*rende
 		func(rel string) ([]byte, error) { return readWithin(dir, rel) },
 		"",
 	)
-	return &render.ResolvedDestiny{Name: manifest.Name, Tasks: expanded, Input: manifest.Input, Templates: templates}, nil
+	return &render.ResolvedDestiny{Name: manifest.Name, Tasks: expanded, Input: manifest.Input, Vars: vars, Templates: templates}, nil
 }
 
 // locate резолвит каталог destiny по имени: name → destiny[]-запись → file://-URL

@@ -123,6 +123,13 @@ func RenderForHost(ctx context.Context, deps Deps, recipe *applyrun.Recipe, inca
 			ServiceVersion: inc.ServiceVersion,
 		},
 		Hosts: hosts, // ПОЛНЫЙ roster (стратегия Y) — caller фильтрует свой SID
+		// State — снимок incarnation.state для `incarnation.state.<path>` (ADR-009/010).
+		// Acolyte (failover-claim) обязан воспроизвести РОВНО те же params, что
+		// run-goroutine: state коммитится только ПОСЛЕ успешного apply прогона,
+		// поэтому inc.State, загруженный сейчас, == pre-run stateBefore прогона —
+		// read-only снимок идентичен исходному. Без него Acolyte отрендерил бы
+		// `incarnation.state.*` как no-such-key и разошёлся бы с оригиналом.
+		State: inc.State,
 		Ctx:   ctx,
 		Templates: render.NewSnapshotTemplateReader(
 			func(rel string) ([]byte, error) { return artifact.ReadSnapshotFile(art.LocalDir, rel) },

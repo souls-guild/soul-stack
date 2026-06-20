@@ -63,7 +63,7 @@
 # Implicit barrier: эта задача обращается к register.ping/repl/mem,
 # поэтому фреймворк дожидается завершения всех трёх перед стартом.
 - name: Collect diagnose result
-  module: core.noop
+  module: core.noop.run
   when: input.action == 'diagnose'
   params: {}
   output:

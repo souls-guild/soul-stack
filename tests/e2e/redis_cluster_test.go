@@ -22,12 +22,10 @@
 // доказывает redis-cluster probe→where на контракт-тире (drift «register в where
 // всегда пуст» закрыт staged-render-ом, теперь на реальном сервисе).
 //
-// ВАЖНО (находка пилота): `update_acl.state_changes` использует `modifies:`
-// (per-host коллекции), а keeper применяет к state ТОЛЬКО `sets:` (mergeStateChanges,
-// scenario/state.go) — `appends/modifies` помечены future-расширением. Поэтому
-// state.redis_users после update_acl остаётся РАВЕН baseline (assert это
-// фиксирует как текущее контрактное поведение, не как баг этого теста). Переписать
-// сценарий на `sets:` — вне зоны пилота (логику сценария не трогаем).
+// ★ state-read: Passage-1 `apply: input: { current: ${ incarnation.state.redis_users } }`
+// читает read-only снимок incarnation.state в scenario-render CEL (ADR-009/010
+// amendment 2026-06-20, Вариант A). state_changes (ADR-057 CRUD `modify`) патчит
+// redis_users по input.changes — assert ниже фиксирует обновлённый ACL.
 package e2e_test
 
 import (
@@ -73,22 +71,7 @@ func rcBaselineState() map[string]any {
 }
 
 func TestE2EServiceRedisCluster_UpdateAcl(t *testing.T) {
-	// ПИЛОТ-БЛОКЕР (предсуществующий, вне зоны этого ТЗ): update_acl Passage 1 —
-	// `apply: destiny: redis`, а examples/destiny/redis/tasks/main.yml несёт `when:`
-	// на КАЖДОМ `include:` (apply.yml/manage.yml/diagnostic.yml). Раскрытие include
-	// отвергает модификатор на include-узле (shared/config/include_expand.go:
-	// include_modifier_unsupported, "проброс scope/контроля через include вне слайса
-	// B") → render_failed → incarnation error_locked, до dispatch Passage 1.
-	//
-	// Это латентный баг destiny redis (рабочий сервис redis использует redis-single,
-	// не эту destiny — потому раньше не всплывал). Фикс — структурный перенос `when:`
-	// с include-узла на module-задачи внутри подключаемых файлов — меняет логику
-	// shared destiny и нарушает явное архитектурное ограничение (slice B не
-	// реализован), поэтому ВНЕ зоны пилота (ТЗ: redis-cluster — только vault-scope).
-	//
-	// Тело ниже ГОТОВО доказать probe→where ровно как staged-failover, но на реальном
-	// redis-cluster: снять Skip после фикса destiny redis (include+when).
-	t.Skip("blocked: examples/destiny/redis include+when (include_modifier_unsupported) — фикс destiny вне зоны пилота, см. отчёт")
+	t.Skip("БЛОКЕР: loop: внутри destiny не реализован (guardDestinyTask ErrUnsupportedDSL, отложенный слайс E). Целевая update_acls-задача destiny redis использует loop: по ${input.changes}. Цепочка probe→where→modify+state-read+destiny-vars+static-when ДОКАЗАНА до этого слоя. Снять skip после реализации loop-в-destiny.")
 
 	const incName = "redis-cluster-update-acl"
 
@@ -166,12 +149,13 @@ func TestE2EServiceRedisCluster_UpdateAcl(t *testing.T) {
 		t.Fatalf("★ Passage 1: replica получили ApplyRequest (r1=%d r2=%d) — where:'master' НЕ должен таргетить replica", r1P1, r2P1)
 	}
 
-	// state.redis_users НЕ изменился: update_acl объявляет `modifies:`, который
-	// keeper не применяет (только `sets:`). Фиксируем текущее контрактное
-	// поведение — baseline сохранён байт-в-байт (находка пилота, см. шапку).
+	// ★ state.redis_users ПАТЧИТСЯ по input.changes: state_changes foreach по
+	// input.changes + modify: redis_users match key==change.key патчит acl/state
+	// существующего юзера `app` (baseline acl `…+@read` → новый `…+@all`).
+	// Коммит — один раз после последнего Passage (ADR-009 §7).
 	stack.AssertIncarnationState(t, incName, map[string]any{
 		"redis_users": map[string]any{
-			"app": map[string]any{"acl": "on >old-pass ~app:* +@read", "state": "on"},
+			"app": map[string]any{"acl": "on >new-pass ~app:* +@all", "state": "on"},
 		},
 	})
 

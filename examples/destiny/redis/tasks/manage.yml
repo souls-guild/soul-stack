@@ -27,6 +27,26 @@
     cmd: |
       redis-cli -h ${ input.master_addr } ACL SETUSER ${ username } ${ user.acl } ${ user.state == 'on' ? '>on' : 'off' }
 
+# action: update_acls — патч ACL СУЩЕСТВУЮЩИХ юзеров. В отличие от ensure_users
+# (создание широко по incarnation против master_addr), update_acls применяется
+# ЛОКАЛЬНО: scenario уже таргетит этот шаг на текущего мастера (where:
+# role=='master' + run_once, service/redis-cluster/scenario/update_acl), поэтому
+# redis-cli без -h. Та же loop-механика, что ensure_users (как пакетное
+# применение ACL по map). state в changes необязателен (патчим ACL, а on/off
+# хотим сохранить) → дефолт из input.current[username].state; если юзера нет в
+# current (теоретически — scenario гарантирует expect:one) — fallback 'on'.
+- name: Apply ACL patch for each user from input.changes
+  module: core.cmd.shell
+  when: input.action == 'update_acls'
+  no_log: true
+  loop:
+    items: "${ input.changes }"
+    as:    change
+    index_as: username
+  params:
+    cmd: |
+      redis-cli ACL SETUSER ${ username } ${ change.acl } ${ (has(change.state) ? change.state : (has(input.current[username]) ? input.current[username].state : 'on')) == 'on' ? '>on' : 'off' }
+
 - name: Restart redis-server
   module: core.service.restarted
   when: input.action == 'restart'

@@ -4,11 +4,12 @@
 // связывает каноническое имя верхнего уровня (`core.pkg` / `core.file` / …)
 // с реализацией sdk/module.SoulModule.
 //
-// MVP — 18 Soul-side модулей: pkg / file / service / user / group (Core.a.1),
+// MVP — 19 Soul-side модулей: pkg / file / service / user / group (Core.a.1),
 // exec / cmd / cron / mount (Core.a.2), git / archive / sysctl (Core.a.3),
 // url (Core.a.4), line (Core.a.5 — пилот in-place построчной правки, ADR-015),
 // repo / firewall (Core.a.6 — пакетный репозиторий + правило файрвола, ADR-015),
 // http (Core.a.7 — read-probe HTTP, verb probe, changed=false, ADR-015),
+// noop (ADR-015 — no-op/barrier-якорь, verb run, changed=false),
 // augur (ADR-025 — read-probe живого доступа к внешней системе через брокер
 // Augur, verb fetch, changed=false).
 package coremod
@@ -27,6 +28,7 @@ import (
 	httpmod "github.com/souls-guild/soul-stack/soul/internal/coremod/http"
 	"github.com/souls-guild/soul-stack/soul/internal/coremod/line"
 	"github.com/souls-guild/soul-stack/soul/internal/coremod/mount"
+	"github.com/souls-guild/soul-stack/soul/internal/coremod/noop"
 	"github.com/souls-guild/soul-stack/soul/internal/coremod/pkg"
 	"github.com/souls-guild/soul-stack/soul/internal/coremod/repo"
 	"github.com/souls-guild/soul-stack/soul/internal/coremod/service"
@@ -44,7 +46,7 @@ type Registry struct {
 	mods map[string]module.SoulModule
 }
 
-// Default возвращает Registry со всеми 18 Soul-side core-модулями MVP.
+// Default возвращает Registry со всеми 19 Soul-side core-модулями MVP.
 // Используется при wire-up в cmd/soul; в тестах удобнее собрать собственный
 // Registry через NewRegistry с фиксированными зависимостями.
 func Default() *Registry {
@@ -60,6 +62,7 @@ func Default() *Registry {
 		cmd.Name:      cmd.New(),
 		cron.Name:     cron.New(),
 		mount.Name:    mount.New(),
+		noop.Name:     noop.New(),
 		git.Name:      git.New(),
 		archive.Name:  archive.New(),
 		sysctl.Name:   sysctl.New(),

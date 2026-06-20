@@ -100,7 +100,7 @@ JWT-токены, возвращаемые в response body `POST /v1/operators`
 
 Правило — то же, что и для observability (substring-match по sensitive-ключу: `token`/`secret`/`password`/`private_key`/… и vault-ref-маркер `vault:secret/`); чувствительные значения заменяются на `***MASKED***`, несекретные поля и структура объекта сохраняются.
 
-**Маскируется только ответ — в Postgres `state`/`spec` хранятся без изменений** (last known-good для apply / миграций / unlock не должен зависеть от маскинга на чтении). Это второй слой защиты: первый — что чувствительные значения из задач с `no_log: true` физически не попадают в `incarnation.state` (probe-register no_log-задачи не аккумулируется в state-граф, [scenario/orchestration.md §7.1](../scenario/orchestration.md#71-грамматика-state_changes--поле--источник-значения)).
+**Маскируется только ответ — в Postgres `state`/`spec` хранятся без изменений** (last known-good для apply / миграций / unlock не должен зависеть от маскинга на чтении). Это второй слой защиты: первый — что чувствительные значения из задач с `no_log: true` физически не попадают в `incarnation.state` (probe-register no_log-задачи не аккумулируется в state-граф, [scenario/orchestration.md §7.1](../scenario/orchestration.md#71-грамматика-state_changes--список-crud-операций)).
 
 > **Важно для клиента:** JWT, возвращаемый в response body `POST /v1/operators` / `POST /v1/operators/{aid}/issue-token`, **отдаётся один раз** и нигде не сохраняется. Оператор обязан надёжно сохранить токен сразу при получении (file `mode 0400` или secret-manager); потерянный токен восстановить нельзя, только выпустить новый через `operator.issue-token` (от другого Архонта с этим правом).
 
