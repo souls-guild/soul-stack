@@ -23,8 +23,8 @@ input:
     description: Политика вытеснения при достижении maxmemory.
 
 state_changes:
-  sets:
-    redis_config: "${ {'maxmemory': input.maxmemory, 'maxmemory-policy': has(input.maxmemory_policy) ? input.maxmemory_policy : 'noeviction'} }"
+  - set: redis_config
+    value: "${ {'maxmemory': input.maxmemory, 'maxmemory-policy': has(input.maxmemory_policy) ? input.maxmemory_policy : 'noeviction'} }"
 
 tasks:
   # 1. CONFIG SET runtime на каждой ноде (идемпотентно: redis сам no-op при том

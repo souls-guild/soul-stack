@@ -21,17 +21,18 @@ input:
       input, проверяется audit-event-ассертами теста.
 
 # ── Мутация incarnation.state ────────────────────────────────────────────────
-# state_changes.sets фиксируют post-apply снимок (ADR-009 §7.1). Литералы, а
-# не CEL-резолв — состояние «полностью развёрнуто», без вариаций.
+# state_changes фиксируют post-apply снимок (ADR-009 §7.1, ADR-057 list-форма).
+# Литералы, а не CEL-резолв — состояние «полностью развёрнуто», без вариаций.
+# Литерал без ${ … } присваивается как строка (тип в state — string, совпадает с
+# state_schema enum). Для bool используем ${ true } — одиночный ${…} даёт
+# нативный тип (ADR-010).
 state_changes:
-  sets:
-    # state_changes.sets — map поле → строка-выражение (orchestration.md §7.1).
-    # Литерал без ${ … } присваивается как строка (тип в state — string,
-    # совпадает с state_schema enum). Для bool используем ${ true } —
-    # одиночный ${…} даёт нативный тип (ADR-010).
-    nginx_package: installed
-    nginx_service: active
-    nginx_config_managed: "${ true }"
+  - set: nginx_package
+    value: installed
+  - set: nginx_service
+    value: active
+  - set: nginx_config_managed
+    value: "${ true }"
 
 # ── Задачи (inline, ADR-009) ─────────────────────────────────────────────────
 # Все три core-модуля идут inline — переиспользования нет, отдельную destiny

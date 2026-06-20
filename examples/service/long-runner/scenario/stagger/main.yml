@@ -11,9 +11,10 @@ description: >-
   коммитится один раз (single-winner) после завершения последнего хоста.
 
 state_changes:
-  sets:
-    last_run: "stagger"
-    runner_marker: /tmp/long-runner-done.txt
+  - set: last_run
+    value: "stagger"
+  - set: runner_marker
+    value: /tmp/long-runner-done.txt
 
 tasks:
   - name: Staggered sleep per host then write done marker

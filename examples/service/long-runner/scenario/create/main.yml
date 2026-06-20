@@ -5,9 +5,10 @@ description: >-
   staggered/serial_waves.
 
 state_changes:
-  sets:
-    last_run: "create"
-    runner_marker: /tmp/long-runner-init.txt
+  - set: last_run
+    value: "create"
+  - set: runner_marker
+    value: /tmp/long-runner-init.txt
 
 tasks:
   - name: Write init marker on every host

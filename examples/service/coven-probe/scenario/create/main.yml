@@ -6,9 +6,10 @@ description: >-
   mark_a / mark_ab / mark_where.
 
 state_changes:
-  sets:
-    marker_file: /tmp/coven-init.txt
-    last_target: "create"
+  - set: marker_file
+    value: /tmp/coven-init.txt
+  - set: last_target
+    value: "create"
 
 tasks:
   - name: Write init marker on every host of the incarnation

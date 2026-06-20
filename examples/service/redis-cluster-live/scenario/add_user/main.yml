@@ -28,8 +28,8 @@ input:
     description: Полный актуальный список ACL-пользователей (перезаписывается целиком).
 
 state_changes:
-  sets:
-    redis_users: "${ input.users }"
+  - set: redis_users
+    value: "${ input.users }"
 
 tasks:
   # ACL SETUSER на каждой ноде кластера (per-node ACL). loop раскрывается в

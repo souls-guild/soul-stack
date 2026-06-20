@@ -22,9 +22,10 @@ input:
 
 # Что фиксируем в incarnation.state после успешного apply (ADR-009 §7.1).
 state_changes:
-  sets:
-    marker_path:    "${ input.path }"
-    marker_content: "${ input.content }"
+  - set: marker_path
+    value: "${ input.path }"
+  - set: marker_content
+    value: "${ input.content }"
 
 tasks:
   # scenario-include: соседний файл marker.yml раскрывается inline ДО render.

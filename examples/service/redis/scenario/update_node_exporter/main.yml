@@ -61,8 +61,8 @@ input:
 # Фиксируем новую версию в incarnation.state (orchestration.md §7.1). ТОЛЬКО
 # node_exporter_version — остальной state неизменен (re-apply одной destiny).
 state_changes:
-  sets:
-    node_exporter_version: "${ input.node_exporter_version }"
+  - set: node_exporter_version
+    value: "${ input.node_exporter_version }"
 
 tasks:
   # re-apply node-exporter с новой версией. version-aware install в destiny

@@ -63,20 +63,23 @@ input:
             role:  { type: string, enum: [primary, replica] }
 
 # Что сценарий пишет в incarnation.state после успешного apply.
-# sets — map поле→CEL-выражение (orchestration.md §7.1): и какое поле обновить,
-# и откуда значение. В пилоте sets видит только input/incarnation/soulprint.self;
-# soulprint.hosts/vars/essence/state — future (полная грамматика), здесь не используем.
+# set-цепочка (ADR-057 list-форма): какое поле обновить и откуда значение. В
+# пилоте видит только input/incarnation/soulprint.self; soulprint.hosts/vars/
+# essence/state — future (полная грамматика), здесь не используем.
 state_changes:
-  sets:
-    # redis_version/redis_config/redis_hosts — optional-без-default: незащищённый
-    # `${ input.X }` на рендере sets даёт CEL «no such key» при отсутствии ключа
-    # (incarnation → error_locked). Канон has()-guard с нейтральным значением
-    # ("" для string, {} для object, [] для array). redis_users — required:true,
-    # ключ всегда есть → guard не нужен.
-    redis_version: "${ has(input.redis_version) ? input.redis_version : '' }"
-    redis_users:   "${ input.redis_users }"
-    redis_config:  "${ has(input.redis_config) ? input.redis_config : {} }"
-    redis_hosts:   "${ has(input.redis_hosts) ? input.redis_hosts : [] }"
+  # redis_version/redis_config/redis_hosts — optional-без-default: незащищённый
+  # `${ input.X }` на рендере set даёт CEL «no such key» при отсутствии ключа
+  # (incarnation → error_locked). Канон has()-guard с нейтральным значением
+  # ("" для string, {} для object, [] для array). redis_users — required:true,
+  # ключ всегда есть → guard не нужен.
+  - set: redis_version
+    value: "${ has(input.redis_version) ? input.redis_version : '' }"
+  - set: redis_users
+    value: "${ input.redis_users }"
+  - set: redis_config
+    value: "${ has(input.redis_config) ? input.redis_config : {} }"
+  - set: redis_hosts
+    value: "${ has(input.redis_hosts) ? input.redis_hosts : [] }"
 
 tasks:
   # Если нужно — создаём VM через CloudDriver (ADR-017: keeper-side core).

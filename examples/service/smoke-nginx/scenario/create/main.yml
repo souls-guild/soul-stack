@@ -14,9 +14,10 @@ input:
     description: Имя хоста, на котором ожидается выполнение задач scenario.
 
 state_changes:
-  sets:
-    nginx_package: nginx
-    nginx_service: nginx
+  - set: nginx_package
+    value: nginx
+  - set: nginx_service
+    value: nginx
 
 tasks:
   - name: Install nginx package

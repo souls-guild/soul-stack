@@ -5,9 +5,10 @@ description: >-
   cluster-a, хосты cluster-b/cluster-c не тронуты (0 apply_runs, нет файла).
 
 state_changes:
-  sets:
-    marker_file: /tmp/coven-marker.txt
-    last_target: "cluster-a"
+  - set: marker_file
+    value: /tmp/coven-marker.txt
+  - set: last_target
+    value: "cluster-a"
 
 tasks:
   - name: Install redis on cluster-a only

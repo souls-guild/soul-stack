@@ -11,9 +11,10 @@ description: >-
   волн (serial НЕ дробит commit — §2.2.1 инвариант).
 
 state_changes:
-  sets:
-    last_run: "serial_waves"
-    runner_marker: /tmp/long-runner-wave.txt
+  - set: last_run
+    value: "serial_waves"
+  - set: runner_marker
+    value: /tmp/long-runner-wave.txt
 
 tasks:
   - name: Serial wave sleep then write wave marker

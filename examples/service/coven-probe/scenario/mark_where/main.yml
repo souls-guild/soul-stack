@@ -7,9 +7,10 @@ description: >-
   только на cluster-a. cluster-c вне on: вообще не участвует.
 
 state_changes:
-  sets:
-    marker_file: /tmp/coven-marker-where.txt
-    last_target: "on=a,b where=ta-*"
+  - set: marker_file
+    value: /tmp/coven-marker-where.txt
+  - set: last_target
+    value: "on=a,b where=ta-*"
 
 tasks:
   - name: Write marker only on ta-* hosts (where over coven a+b)

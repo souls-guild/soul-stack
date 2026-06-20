@@ -35,17 +35,21 @@ input:
 
 # Что пишем в incarnation.state после успешного apply.
 # ПИЛОТ-ОГРАНИЧЕНИЕ: sets видит только input/incarnation/soulprint.self —
-# soulprint.hosts/vars/essence/state в sets ещё НЕ реализованы (как в committed
-# redis-cluster/create/main.yml). Поэтому cluster_nodes здесь НЕ из
+# soulprint.hosts/vars/essence/state в set-value ещё НЕ реализованы (как в
+# committed redis-cluster/create/main.yml). Поэтому cluster_nodes здесь НЕ из
 # soulprint.hosts; топология фиксируется как [] и наполняется отдельным
 # сценарием/probe при необходимости.
 state_changes:
-  sets:
-    redis_version:    "${ has(input.redis_version) ? input.redis_version : '' }"
-    cluster_replicas: "${ has(input.cluster_replicas) ? input.cluster_replicas : 2 }"
-    redis_users:      "${ [] }"
-    redis_config:     "${ has(input.redis_config) ? input.redis_config : {} }"
-    cluster_nodes:    "${ [] }"
+  - set: redis_version
+    value: "${ has(input.redis_version) ? input.redis_version : '' }"
+  - set: cluster_replicas
+    value: "${ has(input.cluster_replicas) ? input.cluster_replicas : 2 }"
+  - set: redis_users
+    value: "${ [] }"
+  - set: redis_config
+    value: "${ has(input.redis_config) ? input.redis_config : {} }"
+  - set: cluster_nodes
+    value: "${ [] }"
 
 tasks:
   # 1. Установить redis на все ноды.

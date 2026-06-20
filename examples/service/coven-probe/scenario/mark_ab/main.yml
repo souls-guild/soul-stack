@@ -4,9 +4,10 @@ description: >-
   для 6 хостов (cluster-a + cluster-b), cluster-c чист.
 
 state_changes:
-  sets:
-    marker_file: /tmp/coven-marker-ab.txt
-    last_target: "cluster-a+cluster-b"
+  - set: marker_file
+    value: /tmp/coven-marker-ab.txt
+  - set: last_target
+    value: "cluster-a+cluster-b"
 
 tasks:
   - name: Install redis on cluster-a and cluster-b

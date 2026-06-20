@@ -152,11 +152,14 @@ input:
 # После успешного apply Keeper фиксирует, что развёрнуто (ADR-009, §7.1).
 # Form C: map поле→CEL; пилот-контекст — только input/incarnation/soulprint.self.
 state_changes:
-  sets:
-    redis_version:          "${ has(input.redis_version) ? input.redis_version : '' }"
-    node_exporter_version:  "${ input.node_exporter_version }"
-    redis_exporter_version: "${ input.redis_exporter_version }"
-    redis_socket:           "${ input.redis_socket }"
+  - set: redis_version
+    value: "${ has(input.redis_version) ? input.redis_version : '' }"
+  - set: node_exporter_version
+    value: "${ input.node_exporter_version }"
+  - set: redis_exporter_version
+    value: "${ input.redis_exporter_version }"
+  - set: redis_socket
+    value: "${ input.redis_socket }"
 
 tasks:
   # ── 1. Redis (redis-single) ─────────────────────────────────────────────────

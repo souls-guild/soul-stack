@@ -14,8 +14,8 @@ input:
 # §7.1). sets — map поле→CEL-выражение: путь файла берётся литералом (тем же, что
 # в params.path задачи ниже) и попадает в incarnation.state.greeting_file.
 state_changes:
-  sets:
-    greeting_file: /tmp/soul-stack-hello
+  - set: greeting_file
+    value: /tmp/soul-stack-hello
 
 tasks:
   - name: Write greeting file on every host of the incarnation

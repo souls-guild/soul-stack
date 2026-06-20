@@ -34,8 +34,8 @@ input:
 
 # После успешного apply фиксируем актуальный список целиком (orchestration.md §7.1).
 state_changes:
-  sets:
-    redis_users: "${ input.users }"
+  - set: redis_users
+    value: "${ input.users }"
 
 tasks:
   # loop по актуальному списку: одна задача → N RenderedTask (по одной на

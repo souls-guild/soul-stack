@@ -49,9 +49,10 @@ input:
 
 # Фиксируем обновлённые параметры в incarnation.state (orchestration.md §7.1).
 state_changes:
-  sets:
-    redis_maxmemory: "${ input.redis_maxmemory }"
-    redis_config:    "${ has(input.config) ? input.config : {} }"
+  - set: redis_maxmemory
+    value: "${ input.redis_maxmemory }"
+  - set: redis_config
+    value: "${ has(input.config) ? input.config : {} }"
 
 tasks:
   # re-apply redis-single с новым config: redis.conf перерисовывается, redis

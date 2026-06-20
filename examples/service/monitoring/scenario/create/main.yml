@@ -120,10 +120,12 @@ input:
 # ── Мутация incarnation.state ─────────────────────────────────────────────────
 # После успешного apply Keeper фиксирует, что развёрнуто (ADR-009, §7.1).
 state_changes:
-  sets:
-    node_exporter_version:  "${ input.node_exporter_version }"
-    redis_exporter_version: "${ input.redis_exporter_version }"
-    redis_socket:           "${ input.redis_socket }"
+  - set: node_exporter_version
+    value: "${ input.node_exporter_version }"
+  - set: redis_exporter_version
+    value: "${ input.redis_exporter_version }"
+  - set: redis_socket
+    value: "${ input.redis_socket }"
 
 tasks:
   # ── node_exporter ───────────────────────────────────────────────────────────

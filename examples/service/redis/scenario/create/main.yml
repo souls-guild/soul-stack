@@ -140,17 +140,23 @@ input:
 
 # ── Мутация incarnation.state ─────────────────────────────────────────────────
 # После успешного apply Keeper фиксирует, что развёрнуто (ADR-009 §7.1).
-# sets — map поле→CEL: что записать и откуда. На create список ACL-пользователей
-# ещё пуст ([]); он наполняется сценарием add_acl_user.
+# set-цепочка: что записать и откуда (ADR-057 list-форма). На create список
+# ACL-пользователей ещё пуст ([]); он наполняется сценарием add_acl_user.
 state_changes:
-  sets:
-    redis_version:          "${ has(input.redis_version) ? input.redis_version : '' }"
-    node_exporter_version:  "${ input.node_exporter_version }"
-    redis_exporter_version: "${ input.redis_exporter_version }"
-    redis_socket:           "${ input.redis_socket }"
-    redis_maxmemory:        "${ input.redis_maxmemory }"
-    redis_config:           "${ essence.redis_config }"
-    redis_users:            "${ [] }"
+  - set: redis_version
+    value: "${ has(input.redis_version) ? input.redis_version : '' }"
+  - set: node_exporter_version
+    value: "${ input.node_exporter_version }"
+  - set: redis_exporter_version
+    value: "${ input.redis_exporter_version }"
+  - set: redis_socket
+    value: "${ input.redis_socket }"
+  - set: redis_maxmemory
+    value: "${ input.redis_maxmemory }"
+  - set: redis_config
+    value: "${ essence.redis_config }"
+  - set: redis_users
+    value: "${ [] }"
 
 tasks:
   # scenario-include: соседний install.yml (тройка apply:destiny в строгом
