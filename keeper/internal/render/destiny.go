@@ -56,6 +56,8 @@ type DestinyResolver interface {
 //
 // startIndex — сквозной индекс первой destiny-задачи в итоговом плане родителя
 // (RenderedTask.Index/DispatchPlan.TaskIndex монотонно растут по всему плану).
+// loop: на destiny-задаче разворачивается в N RenderedTask (renderLoopTask), idx
+// растёт на число итераций — индексы остаются сквозными (симметрично scenario).
 //
 // targeted — хосты apply-задачи (после резолва on:/where: и run_once: родителя).
 // destiny наследует этот roster; per-task on:/where: внутри destiny в пилоте не
@@ -120,6 +122,20 @@ func (p *Pipeline) renderApplyDestiny(
 	idx := startIndex
 	for i := range resolved.Tasks {
 		task := resolved.Tasks[i]
+
+		// Static-when ПРЕДШЕСТВУЕТ guardDestinyTask (ADR-012(d), тот же инвариант,
+		// что и в scenario-цикле pipeline.go): статически-false `when:` гейтит задачу
+		// off ДО DSL-guard, поэтому unsupported-DSL (`parallel:`) в неактивной ветке
+		// destiny не блокирует активную. Это лечит multi-action destiny redis:
+		// diagnostic.yml несёт `parallel: true`+`when: input.action=='diagnose'`, а
+		// при action=update_acls эти задачи неактивны — раньше guardDestinyTask
+		// отвергал их ErrUnsupportedDSL ещё ДО static-when и ронял весь destiny-проход.
+		if skipped, serr := p.emitStaticWhenSkip(ctx, destinyIn, task, &tasks, &plans, &idx); serr != nil {
+			return nil, nil, serr
+		} else if skipped {
+			continue
+		}
+
 		if gerr := guardDestinyTask(task, i, resolved.Name); gerr != nil {
 			return nil, nil, gerr
 		}
@@ -127,6 +143,22 @@ func (p *Pipeline) renderApplyDestiny(
 		destinyTargeted, terr := resolveTargets(p.cel, destinyIn, task)
 		if terr != nil {
 			return nil, nil, terr
+		}
+
+		// loop: на destiny-задаче (слайс E снят) — render-time fan-out, как в
+		// scenario-цикле (pipeline.go). renderLoopTask path-agnostic: items/when
+		// резолвятся через loopInvariantVars над destinyIn → AllowHosts=false и
+		// пустой Register наследуют изоляцию destiny (soulprint.hosts/register в
+		// items — ошибка изоляции). idx растёт на число развёрнутых итераций.
+		if task.Loop != nil {
+			lt, lp, lerr := p.renderLoopTask(ctx, destinyIn, task, idx, destinyTargeted)
+			if lerr != nil {
+				return nil, nil, lerr
+			}
+			tasks = append(tasks, lt...)
+			plans = append(plans, lp...)
+			idx += len(lt)
+			continue
 		}
 
 		rt, rerr := p.renderTask(ctx, destinyIn, task, idx, destinyTargeted)
@@ -259,11 +291,13 @@ func applyInputContract(values map[string]any, schema config.InputSchemaMap, des
 }
 
 // guardDestinyTask отвергает вложенные DSL-конструкции destiny вне пилот-объёма
-// (block:/loop:/parallel:/вложенный apply:) и scenario-only ключи на destiny-
-// задаче (serial:/run_once: — недопустимы в destiny, docs/destiny/tasks.md §3;
+// (block:/parallel:/вложенный apply:) и scenario-only ключи на destiny-задаче
+// (serial:/run_once: — недопустимы в destiny, docs/destiny/tasks.md §3;
 // serial: scenario-уровня наследуется destiny через параметр renderApplyDestiny,
 // не через поле destiny-задачи). Пилот поддерживает плоский destiny: module-
-// задачи с on:/where:. Вложенные конструкции — слайсы C/E. include: внутри
+// задачи с on:/where: + loop: (слайс E снят — fan-out наследует изоляцию destiny
+// через loopInvariantVars: AllowHosts=false, Register пуст). Остальные вложенные
+// конструкции — слайсы C/…. include: внутри
 // destiny раскрывается ДО render (within-destiny, в DestinyLoader.parseTasks /
 // fixture-резолвере); дошедший до render include — ErrUnexpandedInclude (баг
 // раскрытия), не «вне pilot».
@@ -275,8 +309,6 @@ func guardDestinyTask(task config.Task, idx int, destiny string) error {
 		return fmt.Errorf("%w: в destiny %q (task[%d] %q)", ErrUnexpandedInclude, destiny, idx, task.Name)
 	case task.Block != nil:
 		return fmt.Errorf("%w: block: в destiny %q (task[%d] %q)", ErrUnsupportedDSL, destiny, idx, task.Name)
-	case task.Loop != nil:
-		return fmt.Errorf("%w: loop: в destiny %q (task[%d] %q)", ErrUnsupportedDSL, destiny, idx, task.Name)
 	case task.Parallel:
 		return fmt.Errorf("%w: parallel: в destiny %q (task[%d] %q)", ErrUnsupportedDSL, destiny, idx, task.Name)
 	case task.RunOnce:

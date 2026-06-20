@@ -325,8 +325,9 @@ func TestRender_ApplyDestiny_MixedPlan(t *testing.T) {
 // (apply:destiny → задача destiny сама несёт apply:) → ErrUnsupportedDSL
 // (guardDestinyTask, case task.Apply != nil). apply:destiny — одноуровневая
 // раскладка (V2, ADR-009); рекурсивная вложенность apply вне пилот-объёма.
-// Существующие destiny-guard-тесты покрывают serial/run_once/loop/include внутри
-// destiny, но НЕ вложенный apply — единственную ветку guardDestinyTask без теста.
+// Существующие destiny-guard-тесты покрывают serial/run_once/include внутри
+// destiny (loop теперь ПОДДЕРЖАН — слайс E снят), но НЕ вложенный apply —
+// единственную оставшуюся ветку guardDestinyTask без теста.
 func TestRender_ApplyDestiny_RejectsNestedApply(t *testing.T) {
 	d := flatDestiny()
 	d.Tasks = append(d.Tasks, config.Task{
@@ -350,7 +351,7 @@ func TestRender_ApplyDestiny_RejectsNestedApply(t *testing.T) {
 // TestRender_ApplyDestiny_RejectsNestedBlock — block: внутри destiny →
 // ErrUnsupportedDSL (guardDestinyTask, case task.Block != nil). Дополняет тираж
 // guard-веток: block — единственная оставшаяся непокрытая ветка после
-// apply/include/loop/serial/run_once.
+// apply/include/serial/run_once (loop из guard убран — слайс E снят).
 func TestRender_ApplyDestiny_RejectsNestedBlock(t *testing.T) {
 	d := flatDestiny()
 	d.Tasks = append(d.Tasks, config.Task{

@@ -2,6 +2,7 @@ package render
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
@@ -276,6 +277,205 @@ func TestMixedWhen_NotStatic(t *testing.T) {
 	}
 	if got := tasks[0].Params.GetFields()["cmd"].GetStringValue(); got != "echo bob" {
 		t.Errorf("cmd = %q, want echo bob (прежний путь)", got)
+	}
+}
+
+// TestStaticWhenFalse_UnsupportedDSL_PrecedesGuard — ★ 12-й слой: задача неактивной
+// ветки с unsupported-DSL (`parallel: true`) + статически-false when: → static-when
+// ПРЕДШЕСТВУЕТ guardPilotDSL: задача gated off и скипается ДО guard, не отвергаясь
+// ErrUnsupportedDSL. Активная ветка (другая задача) рендерится. Реверс: до фикса
+// guardPilotDSL отвергал parallel: даже в неактивной ветке и ронял весь Render.
+func TestStaticWhenFalse_UnsupportedDSL_PrecedesGuard(t *testing.T) {
+	manifest := &config.ScenarioManifest{
+		Name: "multi-action-parallel",
+		Tasks: []config.Task{
+			{
+				Name:     "diagnose (parallel, gated off)",
+				When:     "input.action == 'diagnose'", // static-false при action=update_acls
+				Parallel: true,                         // unsupported-DSL — guard отверг бы его ДО фикса
+				Module:   &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{"cmd": "redis-cli ping"}},
+			},
+			{
+				Name:   "active update_acls",
+				When:   "input.action == 'update_acls'",
+				Module: &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{"cmd": "echo ${ input.user }"}},
+			},
+		},
+	}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario:    manifest,
+		Input:       map[string]any{"action": "update_acls", "user": "alice"},
+		Incarnation: IncarnationMeta{Name: "svc"},
+		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
+	}
+	tasks, plans, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render: static-when ДОЛЖЕН предшествовать guardPilotDSL — gated-off parallel-задача не должна ронять Render, got %v", err)
+	}
+	if len(tasks) != 2 || len(plans) != 2 {
+		t.Fatalf("len(tasks)=%d len(plans)=%d, want 2,2 (skip-placeholder + активная)", len(tasks), len(plans))
+	}
+	// Задача 0 — gated-off parallel: skip-placeholder, params не рендерились.
+	if tasks[0].Params != nil {
+		t.Errorf("tasks[0].Params != nil — gated-off parallel должен быть skip-placeholder")
+	}
+	if tasks[0].When != "input.action == 'diagnose'" {
+		t.Errorf("tasks[0].When = %q, want протянутый предикат", tasks[0].When)
+	}
+	if tasks[0].FlowContext == nil {
+		t.Error("tasks[0].FlowContext == nil — Soul нужен flow_context для собственного evalWhen → SKIPPED")
+	}
+	// Задача 1 — активная: рендерится обычным путём.
+	if tasks[1].Params == nil {
+		t.Fatal("tasks[1].Params == nil — активная update_acls должна отрендериться")
+	}
+	if got := tasks[1].Params.GetFields()["cmd"].GetStringValue(); got != "echo alice" {
+		t.Errorf("tasks[1].cmd = %q, want echo alice (активная ветка рендерится)", got)
+	}
+}
+
+// TestStaticWhenTrue_UnsupportedDSL_StillRejected — реверс на over-skip: тот же
+// parallel: + when: при action==diagnose → static-TRUE → задача АКТИВНА → guard
+// ОТВЕРГАЕТ ErrUnsupportedDSL. Per-action валидация: unsupported-DSL отвергается
+// ровно при активации ветки, не маскируется.
+func TestStaticWhenTrue_UnsupportedDSL_StillRejected(t *testing.T) {
+	manifest := &config.ScenarioManifest{
+		Name: "active-parallel",
+		Tasks: []config.Task{
+			{
+				Name:     "diagnose (parallel, ACTIVE)",
+				When:     "input.action == 'diagnose'", // static-TRUE при action=diagnose
+				Parallel: true,
+				Module:   &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{"cmd": "redis-cli ping"}},
+			},
+		},
+	}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario:    manifest,
+		Input:       map[string]any{"action": "diagnose"},
+		Incarnation: IncarnationMeta{Name: "svc"},
+		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
+	}
+	_, _, err := p.Render(context.Background(), in)
+	if !errors.Is(err, ErrUnsupportedDSL) {
+		t.Fatalf("err = %v, want ErrUnsupportedDSL (активная parallel-задача отвергается per-action)", err)
+	}
+}
+
+// TestNonStaticWhen_UnsupportedDSL_StillRejected — не-static when: (`register.x`)
+// + parallel: → задача НЕ статически-false (register известен только Soul-у),
+// минует ранний static-skip → guard отвергает ErrUnsupportedDSL прежним путём.
+// Гарантия, что ранний skip не ослабляет guard для register-/mixed-веток.
+func TestNonStaticWhen_UnsupportedDSL_StillRejected(t *testing.T) {
+	manifest := &config.ScenarioManifest{
+		Name: "register-parallel",
+		Tasks: []config.Task{
+			{
+				Name:     "parallel gated by register",
+				When:     "register.probe.changed", // не статический → Soul-side
+				Parallel: true,
+				Module:   &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{"cmd": "redis-cli ping"}},
+			},
+		},
+	}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario:    manifest,
+		Input:       map[string]any{},
+		Incarnation: IncarnationMeta{Name: "svc"},
+		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
+	}
+	_, _, err := p.Render(context.Background(), in)
+	if !errors.Is(err, ErrUnsupportedDSL) {
+		t.Fatalf("err = %v, want ErrUnsupportedDSL (register-when parallel не статичен → guard отвергает)", err)
+	}
+}
+
+// TestStaticWhenFalse_UnsupportedDSL_PrecedesGuard_Destiny — тот же инвариант в
+// destiny-render-проходе (apply:destiny): gated-off parallel-задача destiny
+// неактивной ветки минует guardDestinyTask, активная задача destiny рендерится.
+// Зеркало диагностики redis-destiny (manage.yml update_acls активна, diagnostic.yml
+// diagnose gated off с parallel:).
+func TestStaticWhenFalse_UnsupportedDSL_PrecedesGuard_Destiny(t *testing.T) {
+	d := &ResolvedDestiny{
+		Name: "multi-action",
+		Input: config.InputSchemaMap{
+			"action": {Type: "string", Required: true},
+			"user":   {Type: "string", Required: false},
+		},
+		Tasks: []config.Task{
+			{
+				Name:     "diagnose (parallel, gated off)",
+				When:     "input.action == 'diagnose'", // static-false при action=update_acls
+				Parallel: true,
+				Module:   &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{"cmd": "redis-cli ping"}},
+			},
+			{
+				Name:   "active update_acls",
+				When:   "input.action == 'update_acls'",
+				Module: &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{"cmd": "echo ${ input.user }"}},
+			},
+		},
+	}
+	res := &stubDestinyResolver{resolved: d}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario: applyScenario("multi-action", map[string]any{
+			"action": "update_acls",
+			"user":   "alice",
+		}),
+		Input:       map[string]any{"action": "update_acls", "user": "alice"},
+		Incarnation: IncarnationMeta{Name: "svc"},
+		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
+		Destiny:     res,
+	}
+	tasks, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render: static-when ДОЛЖЕН предшествовать guardDestinyTask в destiny-проходе, got %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("len(tasks) = %d, want 2 (skip-placeholder destiny + активная destiny)", len(tasks))
+	}
+	if tasks[0].Params != nil {
+		t.Errorf("tasks[0].Params != nil — gated-off parallel destiny должен быть skip-placeholder")
+	}
+	if tasks[1].Params == nil {
+		t.Fatal("tasks[1].Params == nil — активная update_acls destiny должна отрендериться")
+	}
+	if got := tasks[1].Params.GetFields()["cmd"].GetStringValue(); got != "echo alice" {
+		t.Errorf("tasks[1].cmd = %q, want echo alice", got)
+	}
+}
+
+// TestStaticWhenTrue_UnsupportedDSL_StillRejected_Destiny — реверс destiny:
+// активная parallel-задача destiny отвергается guardDestinyTask per-action.
+func TestStaticWhenTrue_UnsupportedDSL_StillRejected_Destiny(t *testing.T) {
+	d := &ResolvedDestiny{
+		Name:  "active",
+		Input: config.InputSchemaMap{"action": {Type: "string", Required: true}},
+		Tasks: []config.Task{
+			{
+				Name:     "diagnose (parallel, ACTIVE)",
+				When:     "input.action == 'diagnose'",
+				Parallel: true,
+				Module:   &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{"cmd": "redis-cli ping"}},
+			},
+		},
+	}
+	res := &stubDestinyResolver{resolved: d}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario:    applyScenario("active", map[string]any{"action": "diagnose"}),
+		Input:       map[string]any{"action": "diagnose"},
+		Incarnation: IncarnationMeta{Name: "svc"},
+		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
+		Destiny:     res,
+	}
+	_, _, err := p.Render(context.Background(), in)
+	if !errors.Is(err, ErrUnsupportedDSL) {
+		t.Fatalf("err = %v, want ErrUnsupportedDSL (активная parallel destiny отвергается per-action)", err)
 	}
 }
 

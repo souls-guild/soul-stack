@@ -323,22 +323,43 @@ func TestRenderLoop_WithRunOnce(t *testing.T) {
 	}
 }
 
-// TestRenderLoop_InDestinyRejected — loop: на задаче внутри destiny отвергается
-// (guardDestinyTask) → ErrUnsupportedDSL: раскрытие loop в destiny вне пилота.
-func TestRenderLoop_InDestinyRejected(t *testing.T) {
+// TestRenderLoop_InDestinyExpands — loop: на задаче внутри destiny РАЗВОРАЧИВАЕТСЯ
+// (слайс E снят, guardDestinyTask больше не режет loop): одна loop-задача destiny
+// даёт N RenderedTask со сквозными индексами, продолжающими предыдущие задачи
+// destiny. items берётся из destiny-input (передан через apply.input). Расширенное
+// покрытие destiny-loop — destiny_loop_test.go; здесь — минимальная регрессия
+// рядом с loop-механикой.
+func TestRenderLoop_InDestinyExpands(t *testing.T) {
 	d := flatDestiny()
+	// destiny-input получает xs (массив items) через apply.input; вторая задача
+	// destiny размножается loop-ом по нему.
+	d.Input["xs"] = &config.InputSchema{Type: "array", Required: true}
 	d.Tasks[1].Loop = &config.LoopSpec{Items: "${ input.xs }", As: "x"}
+	d.Tasks[1].Module.Params["cmd"] = "echo ${ x }"
 	res := &stubDestinyResolver{resolved: d}
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
-		Scenario:    applyScenario("pilot-flat", map[string]any{"marker_file": "/m", "marker_payload": "p"}),
+		Scenario:    applyScenario("pilot-flat", map[string]any{"marker_file": "/m", "marker_payload": "p", "xs": "${ input.xs }"}),
+		Input:       map[string]any{"xs": []any{"a", "b", "c"}},
 		Incarnation: IncarnationMeta{Name: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
-	_, _, err := p.Render(context.Background(), in)
-	if !errors.Is(err, ErrUnsupportedDSL) {
-		t.Fatalf("err = %v, want ErrUnsupportedDSL (loop: на destiny-задаче)", err)
+	tasks, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	// task0 (marker, Index 0) + loop×3 (Index 1,2,3) = 4 задачи, сквозные индексы.
+	if len(tasks) != 4 {
+		t.Fatalf("len(tasks) = %d, want 4 (marker + loop×3 в destiny)", len(tasks))
+	}
+	for i, rt := range tasks {
+		if rt.Index != i {
+			t.Errorf("tasks[%d].Index = %d, want %d (сквозные через destiny-loop)", i, rt.Index, i)
+		}
+	}
+	if cmdOf(t, tasks[1]) != "echo a" || cmdOf(t, tasks[3]) != "echo c" {
+		t.Errorf("destiny-loop commands wrong: %q ... %q", cmdOf(t, tasks[1]), cmdOf(t, tasks[3]))
 	}
 }
 
@@ -530,6 +551,264 @@ func TestRenderLoop_NonCollectionItems(t *testing.T) {
 	}
 	if _, _, err := p.Render(context.Background(), in); err == nil {
 		t.Fatal("ожидали ошибку: items не array/object")
+	}
+}
+
+// whenLoopTask строит module-задачу с loop: + статическим when: для
+// static-when-skip-тестов.
+func whenLoopTask(when string, loop *config.LoopSpec, params map[string]any) config.Task {
+	t := loopTask(loop, params)
+	t.When = when
+	return t
+}
+
+// TestRenderLoop_StaticWhenSkip_UnresolvableItems — ★ баговый кейс (ordering
+// static-when ↔ loop.items): loop-задача со статически-false when: и items на
+// ОТСУТСТВУЮЩИЙ input-ключ. static-when предшествует loop-fan-out (инвариант
+// architect): задача скипается ЦЕЛИКОМ ДО resolveLoopItems, поэтому absent-ключ
+// в items НЕ должен ронять Render. Резолв items здесь падает (нет input.users) →
+// 1 skip-placeholder (Params==nil, When протянут, FlowContext≠nil, Index сквозной).
+func TestRenderLoop_StaticWhenSkip_UnresolvableItems(t *testing.T) {
+	manifest := &config.ScenarioManifest{
+		Name: "x",
+		Tasks: []config.Task{whenLoopTask(
+			"input.action == 'apply'", // static-false при action=update_acls
+			&config.LoopSpec{Items: "${ input.users }", As: "user"},
+			map[string]any{"cmd": "useradd ${ user.name }"},
+		)},
+	}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario:    manifest,
+		Input:       map[string]any{"action": "update_acls"}, // users НЕ передан
+		Incarnation: IncarnationMeta{Name: "svc"},
+		Hosts:       []*topology.HostFacts{host("h", []string{"svc"}, nil)},
+	}
+	tasks, plans, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render: %v (static-when:false должен скипнуть задачу ДО resolveLoopItems, а не падать на no-such-key input.users)", err)
+	}
+	if len(tasks) != 1 || len(plans) != 1 {
+		t.Fatalf("len(tasks)=%d len(plans)=%d, want 1,1 (нерезолвимый items → один skip-placeholder)", len(tasks), len(plans))
+	}
+	rt := tasks[0]
+	if rt.Params != nil {
+		t.Errorf("Params != nil — static-when:false должен скипнуть рендер")
+	}
+	if rt.When != "input.action == 'apply'" {
+		t.Errorf("When = %q, не протянут", rt.When)
+	}
+	if rt.FlowContext == nil {
+		t.Errorf("FlowContext == nil — нужен для Soul-side evalWhen → SKIPPED")
+	}
+	if rt.Index != 0 {
+		t.Errorf("Index = %d, want 0 (сквозной)", rt.Index)
+	}
+	if plans[0].TaskIndex != 0 {
+		t.Errorf("plans[0].TaskIndex = %d, want 0", plans[0].TaskIndex)
+	}
+}
+
+// TestRenderLoop_StaticWhenSkip_UnresolvableItems_ContinuousIndex — нерезолвимый
+// static-skip loop в середине плана: index сквозной (1 placeholder, не N).
+func TestRenderLoop_StaticWhenSkip_UnresolvableItems_ContinuousIndex(t *testing.T) {
+	manifest := &config.ScenarioManifest{
+		Name: "x",
+		Tasks: []config.Task{
+			{Name: "before", Module: &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{"cmd": "pre"}}},
+			whenLoopTask("input.action == 'apply'",
+				&config.LoopSpec{Items: "${ input.users }", As: "user"},
+				map[string]any{"cmd": "useradd ${ user.name }"}),
+			{Name: "after", Module: &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{"cmd": "post"}}},
+		},
+	}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario:    manifest,
+		Input:       map[string]any{"action": "update_acls"},
+		Incarnation: IncarnationMeta{Name: "svc"},
+		Hosts:       []*topology.HostFacts{host("h", []string{"svc"}, nil)},
+	}
+	tasks, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	// before(0) + skip-placeholder(1) + after(2) = 3 задачи.
+	if len(tasks) != 3 {
+		t.Fatalf("len(tasks) = %d, want 3 (before + 1 placeholder + after)", len(tasks))
+	}
+	for i, rt := range tasks {
+		if rt.Index != i {
+			t.Errorf("tasks[%d].Index = %d, want %d", i, rt.Index, i)
+		}
+	}
+	if tasks[1].Params != nil {
+		t.Errorf("placeholder Params != nil")
+	}
+	if cmdOf(t, tasks[2]) != "post" {
+		t.Errorf("after-задача рендерится после placeholder: %q", cmdOf(t, tasks[2]))
+	}
+}
+
+// TestRenderLoop_StaticTrueWhen_FansOut — реверс на классификацию: static-TRUE
+// when: + loop → обычный fan-out N реальных задач (активную ветку не скипаем).
+func TestRenderLoop_StaticTrueWhen_FansOut(t *testing.T) {
+	manifest := &config.ScenarioManifest{
+		Name: "x",
+		Tasks: []config.Task{whenLoopTask(
+			"input.action == 'apply'", // static-TRUE при action=apply
+			&config.LoopSpec{Items: "${ input.users }", As: "user"},
+			map[string]any{"cmd": "useradd ${ user.name }"},
+		)},
+	}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario: manifest,
+		Input: map[string]any{"action": "apply", "users": []any{
+			map[string]any{"name": "alice"},
+			map[string]any{"name": "bob"},
+		}},
+		Incarnation: IncarnationMeta{Name: "svc"},
+		Hosts:       []*topology.HostFacts{host("h", []string{"svc"}, nil)},
+	}
+	tasks, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("len(tasks) = %d, want 2 (static-true → обычный fan-out)", len(tasks))
+	}
+	if cmdOf(t, tasks[0]) != "useradd alice" || cmdOf(t, tasks[1]) != "useradd bob" {
+		t.Errorf("static-true fan-out commands wrong: %q %q", cmdOf(t, tasks[0]), cmdOf(t, tasks[1]))
+	}
+	for i, rt := range tasks {
+		if rt.Params == nil {
+			t.Errorf("tasks[%d].Params == nil — static-true задача должна рендериться", i)
+		}
+	}
+}
+
+// TestRenderLoop_MixedWhen_NotStaticSkipped — реверс на классификацию: mixed-when
+// (input + register) НЕ статический → items резолвится, fan-out обычный (register-
+// зависимый when протягивается строкой, вычисляется Soul-side). При резолвимом
+// items static-skip-ветка НЕ должна срабатывать.
+func TestRenderLoop_MixedWhen_NotStaticSkipped(t *testing.T) {
+	manifest := &config.ScenarioManifest{
+		Name: "x",
+		Tasks: []config.Task{whenLoopTask(
+			"input.action == 'apply' && register.probe.changed",
+			&config.LoopSpec{Items: "${ input.users }", As: "user"},
+			map[string]any{"cmd": "useradd ${ user.name }"},
+		)},
+	}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario: manifest,
+		Input: map[string]any{"action": "create", "users": []any{
+			map[string]any{"name": "alice"},
+		}},
+		Incarnation: IncarnationMeta{Name: "svc"},
+		Hosts:       []*topology.HostFacts{host("h", []string{"svc"}, nil)},
+	}
+	tasks, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	// register-зависимый when → НЕ static-skip: items резолвится, fan-out по нему.
+	if len(tasks) != 1 {
+		t.Fatalf("len(tasks) = %d, want 1 (mixed-when не статический, fan-out по items)", len(tasks))
+	}
+	if tasks[0].Params == nil {
+		t.Errorf("Params == nil — mixed-when не статический, params должны рендериться")
+	}
+	if cmdOf(t, tasks[0]) != "useradd alice" {
+		t.Errorf("command = %q, want 'useradd alice'", cmdOf(t, tasks[0]))
+	}
+}
+
+// TestRenderLoop_StaticWhenSkip_ConsistentAcrossPassages — static-false loop
+// (нерезолвимый items) даёт одинаковый результат при повторном рендере (passage
+// активируется заново). Один input-снимок → один и тот же 1-placeholder skip.
+func TestRenderLoop_StaticWhenSkip_ConsistentAcrossPassages(t *testing.T) {
+	manifest := &config.ScenarioManifest{
+		Name: "x",
+		Tasks: []config.Task{whenLoopTask(
+			"input.action == 'apply'",
+			&config.LoopSpec{Items: "${ input.users }", As: "user"},
+			map[string]any{"cmd": "useradd ${ user.name }"},
+		)},
+	}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario:    manifest,
+		Input:       map[string]any{"action": "update_acls"},
+		Incarnation: IncarnationMeta{Name: "svc"},
+		Hosts:       []*topology.HostFacts{host("h", []string{"svc"}, nil)},
+	}
+	first, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render (passage 0): %v", err)
+	}
+	second, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render (повтор): %v", err)
+	}
+	if len(first) != 1 || len(second) != 1 {
+		t.Fatalf("len first=%d second=%d, want 1,1 (консистентность по проходам)", len(first), len(second))
+	}
+	if first[0].When != second[0].When || first[0].Index != second[0].Index {
+		t.Errorf("placeholder разошёлся между проходами: %+v vs %+v", first[0], second[0])
+	}
+	if first[0].Params != nil || second[0].Params != nil {
+		t.Errorf("Params должны быть nil на обоих проходах")
+	}
+}
+
+// TestRenderLoop_StaticWhenSkip_PreservesOnChanges — guard: static-false loop-
+// задача с onchanges: → skip-placeholder сохраняет requisite-имена (loopSkipPlaceholder
+// протягивает onChangesNames симметрично staticSkipPlaceholder) → финальный
+// resolveOnChanges мапит их в OnChangesIdx. Без протяжки имена терялись бы на
+// placeholder и OnChangesIdx остался бы nil — латентная потеря requisites.
+func TestRenderLoop_StaticWhenSkip_PreservesOnChanges(t *testing.T) {
+	loopT := whenLoopTask(
+		"input.action == 'apply'", // static-false при action=update_acls
+		&config.LoopSpec{Items: "${ input.users }", As: "user"},
+		map[string]any{"cmd": "useradd ${ user.name }"},
+	)
+	loopT.OnChanges = []string{"probe"}
+
+	manifest := &config.ScenarioManifest{
+		Name: "x",
+		Tasks: []config.Task{
+			{
+				Name:     "probe",
+				Register: "probe",
+				Module:   &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{"cmd": "id"}},
+			},
+			loopT,
+		},
+	}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario:    manifest,
+		Input:       map[string]any{"action": "update_acls"}, // users НЕ передан → static-skip ДО resolveLoopItems
+		Incarnation: IncarnationMeta{Name: "svc"},
+		Hosts:       []*topology.HostFacts{host("h", []string{"svc"}, nil)},
+	}
+	tasks, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	// probe(0) + 1 skip-placeholder(1) = 2 задачи.
+	if len(tasks) != 2 {
+		t.Fatalf("len(tasks) = %d, want 2 (probe + 1 placeholder)", len(tasks))
+	}
+	ph := tasks[1]
+	if ph.Params != nil {
+		t.Errorf("placeholder Params != nil — static-when:false должен скипнуть рендер")
+	}
+	if len(ph.OnChangesIdx) != 1 || ph.OnChangesIdx[0] != 0 {
+		t.Fatalf("OnChangesIdx = %v, want [0] (onchanges: [probe] → Index probe-задачи) — requisite-имена потерялись на skip-placeholder", ph.OnChangesIdx)
 	}
 }
 

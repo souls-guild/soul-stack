@@ -71,8 +71,6 @@ func rcBaselineState() map[string]any {
 }
 
 func TestE2EServiceRedisCluster_UpdateAcl(t *testing.T) {
-	t.Skip("БЛОКЕР: loop: внутри destiny не реализован (guardDestinyTask ErrUnsupportedDSL, отложенный слайс E). Целевая update_acls-задача destiny redis использует loop: по ${input.changes}. Цепочка probe→where→modify+state-read+destiny-vars+static-when ДОКАЗАНА до этого слоя. Снять skip после реализации loop-в-destiny.")
-
 	const incName = "redis-cluster-update-acl"
 
 	stack := harness.NewStack(t, harness.Config{

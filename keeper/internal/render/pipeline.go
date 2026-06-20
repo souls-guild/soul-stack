@@ -128,12 +128,27 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 	for i := range in.Scenario.Tasks {
 		task := in.Scenario.Tasks[i]
 
+		passage := taskPassageAt(in.TaskPassage, i)
+		passageStart := len(tasks)
+
+		// Static-when ПРЕДШЕСТВУЕТ guardPilotDSL (ADR-012(d), расширение static-when-
+		// инварианта): статически-false `when:` → задача gated off → скипается ДО
+		// ЛЮБОЙ eager-обработки, включая DSL-guard. Неактивная ветка с unsupported-DSL
+		// (`parallel:`/`block:`) не блокирует активную — её DSL отвергается ТОЛЬКО при
+		// активации (per-action валидация). Это не маскировка: задача физически не
+		// исполняется (parallel: никогда не достигается). isStaticWhen/staticWhenSkips
+		// register-/soulprint-независимы и строят flow_context из input/vars/essence/
+		// incarnation/self — НЕ из DSL-полей, поэтому вызов ДО guard безопасен.
+		if skipped, serr := p.emitStaticWhenSkip(ctx, in, task, &tasks, &plans, &idx); serr != nil {
+			return nil, nil, serr
+		} else if skipped {
+			stampPassage(tasks, passageStart, passage)
+			continue
+		}
+
 		if err := guardPilotDSL(task, i); err != nil {
 			return nil, nil, err
 		}
-
-		passage := taskPassageAt(in.TaskPassage, i)
-		passageStart := len(tasks)
 
 		// Будущий Passage (staged-render, ADR-056 §в.1): register ещё не собран —
 		// НЕ резолвим register-зависимые where:/params: (упали бы на пустом
@@ -469,6 +484,99 @@ func (p *Pipeline) staticWhenSkips(
 		return nil, nil // when:true — задача активна, рендерим params обычным путём.
 	}
 	return firstFC, nil
+}
+
+// emitStaticWhenSkip — ранний static-when placeholder-skip, выполняемый в НАЧАЛЕ
+// итерации обхода задач, ДО guardPilotDSL/guardDestinyTask (ADR-012(d), расширение
+// static-when-инварианта). Если `when:` статический (register-/soulprint-независим)
+// и вычислился в false — задача gated off: эмитим skip-placeholder(ы), мутируя
+// tasks/plans/idx через указатели, и возвращаем skipped=true. Caller делает
+// `continue` БЕЗ guard и БЕЗ рендера — поэтому unsupported-DSL (`parallel:`/`block:`)
+// в неактивной ветке не отвергается (он недостижим — задача не исполняется).
+//
+// Возвращает:
+//   - (false, nil) — НЕ static-skip: when не статический ИЛИ статический-но-true.
+//     Caller идёт обычным путём (guard → resolveTargets → render);
+//   - (true, nil) — задача скипнута, placeholder(ы) уже добавлены;
+//   - (false, err) — ошибка сборки flow_context/eval статического предиката.
+//
+// flow_context строится из in.Hosts (синтетический пустой хост при пустом roster):
+// static-when host-инвариантен (не зависит от soulprint.self), исход одинаков на
+// всех хостах; `self` в placeholder-flow_context Soul читает лишь как данные для
+// собственного evalWhen, который тот же предикат тоже признает false → SKIPPED.
+//
+// loop-задача (task.Loop != nil): N/1 skip-placeholder через loopStaticSkip —
+// паритет Index с активной веткой (резолвимый items → N, нерезолвимый → 1). Это
+// ловит loop ДО renderLoopTask — единственный путь static-skip для loop (внутри
+// renderLoopTask static-when-гейта больше нет). Не-loop задача → один placeholder.
+func (p *Pipeline) emitStaticWhenSkip(
+	ctx context.Context,
+	in RenderInput,
+	task config.Task,
+	tasks *[]*RenderedTask,
+	plans *[]DispatchPlan,
+	idx *int,
+) (bool, error) {
+	if !isStaticWhen(task.When) {
+		return false, nil
+	}
+
+	renderHosts := in.Hosts
+	if len(renderHosts) == 0 {
+		renderHosts = []*topology.HostFacts{{}}
+	}
+	skip, err := p.staticWhenSkips(in, task, renderHosts, len(in.Hosts), nil)
+	if err != nil {
+		return false, err
+	}
+	if skip == nil {
+		return false, nil // static-true → активна, обычный путь.
+	}
+
+	if task.Loop != nil {
+		asName := task.Loop.As
+		if asName == "" {
+			asName = defaultLoopVar
+		}
+		lt, lp, lerr := p.loopStaticSkip(in, task, *idx, in.Hosts, asName, skip)
+		if lerr != nil {
+			return false, lerr
+		}
+		*tasks = append(*tasks, lt...)
+		*plans = append(*plans, lp...)
+		*idx += len(lt)
+		return true, nil
+	}
+
+	*tasks = append(*tasks, p.staticSkipPlaceholder(task, *idx, skip))
+	*plans = append(*plans, DispatchPlan{TaskIndex: *idx})
+	*idx++
+	return true, nil
+}
+
+// staticSkipPlaceholder строит один skip-placeholder для задачи с статически-false
+// when: (Params=nil — рендер пропущен; flow_context первого хоста; протянутые
+// When/ID/Register/requisites). Module берётся при наличии module-задачи (block/
+// parallel-без-module → пустой Module — placeholder валиден, исполнения не будет).
+func (p *Pipeline) staticSkipPlaceholder(task config.Task, idx int, skip *structpb.Struct) *RenderedTask {
+	rt := &RenderedTask{
+		Index:          idx,
+		Name:           task.Name,
+		Register:       task.Register,
+		ID:             task.ID,
+		NoLog:          task.NoLog,
+		Timeout:        task.Timeout,
+		When:           task.When,
+		ChangedWhen:    task.ChangedWhen,
+		FailedWhen:     task.FailedWhen,
+		onChangesNames: task.OnChanges,
+		onFailNames:    task.OnFail,
+		FlowContext:    skip,
+	}
+	if task.Module != nil {
+		rt.Module = task.Module.Module
+	}
+	return rt
 }
 
 // renderKeeperTask рендерит keeper-side задачу (`on: keeper`, docs/keeper/

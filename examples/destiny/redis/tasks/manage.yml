@@ -45,7 +45,7 @@
     index_as: username
   params:
     cmd: |
-      redis-cli ACL SETUSER ${ username } ${ change.acl } ${ (has(change.state) ? change.state : (has(input.current[username]) ? input.current[username].state : 'on')) == 'on' ? '>on' : 'off' }
+      redis-cli ACL SETUSER ${ username } ${ change.acl } ${ (has(change.state) ? change.state : (username in input.current ? input.current[username].state : 'on')) == 'on' ? '>on' : 'off' }
 
 - name: Restart redis-server
   module: core.service.restarted

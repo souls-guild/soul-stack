@@ -276,6 +276,26 @@ loop-переменной → N `RenderedTask`. Оси `loop:` и `serial:` ор
 [orchestration.md §2.2](../scenario/orchestration.md)): весь loop прокатывается
 на каждом хосте волны.
 
+**Static-when предшествует loop-fan-out.** Если task-level `when:` статический
+(register-/soulprint-независимый) и вычисляется в `false`, задача скипается
+ЦЕЛИКОМ **до** резолва `items:` — Вариант b placeholder-skip
+([ADR-012(d)](../adr/0012-keeper-soul-grpc.md)) распространён на loop. Поэтому
+loop-задача неактивной ветки с `items:` на отсутствующий optional-input
+(`items: ${ input.users }` при другом `action`) не падает `no-such-key`, а даёт
+skip-placeholder: N placeholder, если `items:` всё же резолвится (паритет с
+активной веткой), иначе один placeholder за всю задачу.
+
+**Static-when предшествует DSL-валидации.** Тот же static-when-gate срабатывает
+**до** проверки поддержки DSL-конструкций задачи (`guardPilotDSL`/
+`guardDestinyTask`): статически-false задача gated off скипается, даже если несёт
+ещё не поддержанную в пилоте конструкцию (`parallel:`/`block:`). Поэтому
+неактивная ветка multi-action destiny не блокирует рендер активной — неподдержанный
+DSL отвергается `unsupported_dsl` ТОЛЬКО при активации той ветки (per-action
+валидация). Это не маскировка: задача физически не исполняется, до `parallel:`
+поток не доходит. Пример: `diagnose`-ветка с `parallel: true` +
+`when: input.action == 'diagnose'` молча скипается при `action: update_acls`, а
+при `action: diagnose` отвергается как неподдержанная.
+
 ### Базовый синтаксис
 
 ```yaml

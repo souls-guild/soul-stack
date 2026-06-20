@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"sort"
 
+	"google.golang.org/protobuf/types/known/structpb"
+
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 	"github.com/souls-guild/soul-stack/shared/cel"
 	"github.com/souls-guild/soul-stack/shared/config"
@@ -51,6 +53,13 @@ func (p *Pipeline) renderLoopTask(
 		asName = defaultLoopVar
 	}
 
+	// Static-when-false loop-задача сюда НЕ доходит: оба call-site (scenario-цикл
+	// pipeline.go, destiny.go) предваряются emitStaticWhenSkip, который для
+	// статически-false loop эмитит N/1 skip-placeholder через loopStaticSkip и
+	// делает continue ДО renderLoopTask. Поэтому здесь static-when уже гарантированно
+	// активен (true) или отсутствует — повторный static-when-гейт был бы недостижим
+	// и лишь дублировал per-host staticWhenSkips. renderLoopTask видит только
+	// fan-out активной ветки.
 	iters, err := resolveLoopItems(p.cel, in, task.Loop, asName)
 	if err != nil {
 		return nil, nil, fmt.Errorf("render: task %q loop: %w", task.Name, err)
@@ -82,6 +91,74 @@ func (p *Pipeline) renderLoopTask(
 		idx++
 	}
 	return tasks, plans, nil
+}
+
+// loopStaticSkip эмитит skip-placeholder(ы) для loop-задачи со статически-false
+// when: (решение «резолвим→N / нерезолвим→1», architect):
+//
+//   - items РЕЗОЛВИТСЯ (host-инвариантный контекст) → N skip-placeholder по
+//     итерациям со сквозными Index — ПАРИТЕТ с per-iter skip из renderTaskIter,
+//     который раньше получался естественно (когда items резолвился, цикл крутил
+//     renderTaskIter, каждый скипал params). Не схлопываем N→1, чтобы план/Index
+//     совпадали с активной веткой (детерминизм по Passage).
+//   - items НЕ резолвится (no-such-key/non-collection — типично absent optional-
+//     input в неактивной ветке) → НЕ падаем (это и есть исходный баг), эмитим
+//     ОДИН skip-placeholder за всю задачу. Soul вычислит тот же when:false по
+//     flow_context → SKIPPED; loop при skipped-задаче не раскрывается.
+//
+// Все placeholder несут flow_context первого хоста (skip), Params=nil, When/ID/
+// Register/Passage протянуты — как scenario static-when placeholder-skip.
+func (p *Pipeline) loopStaticSkip(
+	in RenderInput,
+	task config.Task,
+	startIndex int,
+	targeted []*topology.HostFacts,
+	asName string,
+	skip *structpb.Struct,
+) ([]*RenderedTask, []DispatchPlan, error) {
+	iters, err := resolveLoopItems(p.cel, in, task.Loop, asName)
+	if err != nil {
+		// Нерезолвимый items в скипнутой задаче — НЕ ошибка: эмитим один placeholder.
+		rt := p.loopSkipPlaceholder(task, startIndex, skip)
+		return []*RenderedTask{rt}, []DispatchPlan{{TaskIndex: startIndex}}, nil
+	}
+
+	tasks := make([]*RenderedTask, 0, len(iters))
+	plans := make([]DispatchPlan, 0, len(iters))
+	idx := startIndex
+	for range iters {
+		tasks = append(tasks, p.loopSkipPlaceholder(task, idx, skip))
+		plans = append(plans, DispatchPlan{TaskIndex: idx})
+		idx++
+	}
+	return tasks, plans, nil
+}
+
+// loopSkipPlaceholder строит один skip-placeholder loop-итерации: Params=nil
+// (рендер пропущен), flow_context первого хоста, протянутые When/ID/Register +
+// onchanges/onfail-имена — напрямую, не заходя в renderTaskIter (один источник
+// Index/Passage; Passage стампится stampPassage в caller-е Render).
+//
+// onChangesNames/onFailNames протягиваются симметрично staticSkipPlaceholder
+// (pipeline.go): без них requisite-имена static-false loop-задачи потерялись бы
+// на skip-placeholder, и финальный resolveOnChanges/resolveOnFail не нашёл бы
+// источники — латентная потеря requisites у loop-задачи с onchanges:/onfail:.
+func (p *Pipeline) loopSkipPlaceholder(task config.Task, idx int, skip *structpb.Struct) *RenderedTask {
+	return &RenderedTask{
+		Index:          idx,
+		Name:           task.Name,
+		Module:         task.Module.Module,
+		Register:       task.Register,
+		ID:             task.ID,
+		NoLog:          task.NoLog,
+		Timeout:        task.Timeout,
+		When:           task.When,
+		ChangedWhen:    task.ChangedWhen,
+		FailedWhen:     task.FailedWhen,
+		onChangesNames: task.OnChanges,
+		onFailNames:    task.OnFail,
+		FlowContext:    skip,
+	}
 }
 
 // resolveLoopItems вычисляет items и раскладывает в упорядоченный список
