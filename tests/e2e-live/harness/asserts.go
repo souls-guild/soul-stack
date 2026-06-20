@@ -109,6 +109,29 @@ func (s *Stack) AssertApplyRunsStatus(t *testing.T, applyID string, expected str
 	}
 }
 
+// AssertApplyHostStatus проверяет статус apply_runs КОНКРЕТНОГО хоста (sid) —
+// в отличие от AssertApplyRunsStatus, требующего единый статус ВСЕХ строк.
+// Нужен прогонам с per-host-where: таргетом ОДНОГО хоста (split-brain guard,
+// failed_when fail-stop): целевой хост = failed, прочие roster-хосты, у которых
+// after on:/where: осталось 0 задач = no_match (не failed).
+func (s *Stack) AssertApplyHostStatus(t *testing.T, applyID, sid, expected string) {
+	t.Helper()
+	CheckApplyRunsStatusValid(t, expected)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var status string
+	err := s.db.QueryRow(ctx,
+		"SELECT status FROM apply_runs WHERE apply_id = $1 AND sid = $2", applyID, sid).Scan(&status)
+	if err != nil {
+		t.Fatalf("AssertApplyHostStatus(apply=%s sid=%s): нет строки apply_runs: %v", applyID, sid, err)
+	}
+	if status != expected {
+		t.Fatalf("AssertApplyHostStatus(apply=%s sid=%s): status=%q, ожидался %q", applyID, sid, status, expected)
+	}
+}
+
 // AssertIncarnationState читает incarnation.state из БД и фейлит, если
 // jsonb-payload не содержит expectedSubset (deep-subset сравнение).
 func (s *Stack) AssertIncarnationState(t *testing.T, name string, expectedSubset map[string]any) {
@@ -636,4 +659,219 @@ func (s *Stack) AssertHostHTTPContains(t *testing.T, soulIdx int, url, substr st
 // substring-ов из тест-fixtures (контролируемый input, не user-data).
 func shellQuote(s string) string {
 	return `'` + strings.ReplaceAll(s, `'`, `'\''`) + `'`
+}
+
+// ── Per-task flow-control asserts (FC-0) ────────────────────────────────────
+//
+// ★ РАЗВЕДКА FC-0. Per-task TaskStatus (SKIPPED/OK/CHANGED/FAILED/TIMED_OUT/
+// CANCELLED) и error.code (flowcontrol.failed_when / flowcontrol.until_exhausted
+// / …) keeper НЕ персистит в отдельную task-таблицу и НЕ кладёт колонкой в
+// apply_runs. Единственная per-task persistence-поверхность — audit_log:
+//
+//   keeper/internal/grpc/events_taskevent.go → handleTaskEvent → AuditWriter.Write(
+//       EventType = "task.executed", Source = "soul_grpc",
+//       CorrelationID = apply_id,
+//       Payload = shared/audit.BuildTaskExecutedPayload{...})
+//
+// Каждая задача (включая SKIPPED — soul эмитит skippedTaskEvent,
+// applyrunner.go) даёт одну строку audit_log. Форма payload зафиксирована
+// shared/audit.BuildTaskExecutedPayload:
+//
+//   {sid, apply_id, task_idx, plan_index, status, passage,
+//    error?:{code, module, message?}, register_data?, suppressed?}
+//
+// где status = keeperv1.TaskStatus.String() (литерал "TASK_STATUS_SKIPPED" и
+// т.п.), error.code = TaskError.code (для no_log error опускает message, но code
+// и module кладёт). Поэтому FC-ассерты per-task читают audit_log, НЕ apply_runs.
+//
+// КЛЮЧ КОРРЕЛЯЦИИ — plan_index (ГЛОБАЛЬНЫЙ сквозной индекс задачи по всему
+// плану, миграции 079/081, ADR-056 §S1). Локальный task_idx неуникален между
+// Passage и между хостами одного Passage (per-host where:), поэтому per-task
+// ассерты ключуются по plan_index. N=1-прогон → plan_index == task_idx.
+
+// taskStatusLiteralByEnum — закрытое множество строковых литералов
+// keeperv1.TaskStatus.String(), которые audit-payload несёт в payload->>'status'.
+// Источник правды — proto/keeper/v1/apply.proto (enum TaskStatus). Дублируется
+// здесь литералом: tests/e2e-live — отдельный go-модуль без зависимости на
+// proto/gen. Fail-early на опечатку в expectation (ADR-039(4), как у
+// validApplyRunsStatus).
+var taskStatusLiteralByEnum = map[string]struct{}{
+	"TASK_STATUS_UNSPECIFIED": {},
+	"TASK_STATUS_OK":          {},
+	"TASK_STATUS_CHANGED":     {},
+	"TASK_STATUS_FAILED":      {},
+	"TASK_STATUS_TIMED_OUT":   {},
+	"TASK_STATUS_SKIPPED":     {},
+	"TASK_STATUS_CANCELLED":   {},
+}
+
+// IsValidTaskStatus — pure-проверка строкового литерала per-task статуса.
+func IsValidTaskStatus(status string) bool {
+	_, ok := taskStatusLiteralByEnum[status]
+	return ok
+}
+
+// AssertTaskStatus проверяет, что per-task статус задачи (apply_id, sid,
+// plan_index, passage) равен wantStatus. Читает audit_log (event_type=
+// task.executed, correlation_id=apply_id), а не apply_runs — keeper персистит
+// per-task TaskStatus ТОЛЬКО в audit (см. doc-comment блока).
+//
+// planIdx — ГЛОБАЛЬНЫЙ сквозной plan_index задачи (не локальный task_idx); для
+// N=1-прогона совпадает с позицией задачи в плане. passage — индекс Passage
+// staged-render (0 = единственный).
+//
+// wantStatus — строковый литерал keeperv1.TaskStatus.String(), например
+// "TASK_STATUS_SKIPPED" / "TASK_STATUS_FAILED" / "TASK_STATUS_CHANGED". Невалидный
+// литерал в expectation → fail-early (опечатка видна сразу).
+//
+// Берём ПОСЛЕДНЮЮ по created_at строку: retry той же задачи эмитит TaskEvent
+// последней попытки (один TaskEvent на task — см. runTaskWithRetry), но дубль
+// под cross-Keeper-роутинг возможен; «последняя побеждает» совпадает с
+// register-семантикой.
+func (s *Stack) AssertTaskStatus(t *testing.T, applyID, sid string, planIdx, passage int, wantStatus string) {
+	t.Helper()
+	if !IsValidTaskStatus(wantStatus) {
+		t.Fatalf("AssertTaskStatus: неизвестный TaskStatus-литерал %q (разрешены: TASK_STATUS_OK/CHANGED/FAILED/TIMED_OUT/SKIPPED/CANCELLED/UNSPECIFIED)", wantStatus)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var status string
+	err := s.db.QueryRow(ctx, `
+		SELECT payload->>'status'
+		FROM audit_log
+		WHERE event_type = 'task.executed'
+		  AND correlation_id = $1
+		  AND payload->>'sid' = $2
+		  AND (payload->>'plan_index')::int = $3
+		  AND (payload->>'passage')::int = $4
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, applyID, sid, planIdx, passage).Scan(&status)
+	if err != nil {
+		s.dumpTaskEvents(ctx, t, applyID, sid)
+		t.Fatalf("AssertTaskStatus(apply=%s sid=%s plan_index=%d passage=%d): нет task.executed-строки в audit_log (задача не исполнялась / TaskEvent не дошёл?): %v",
+			applyID, sid, planIdx, passage, err)
+	}
+	if status != wantStatus {
+		s.dumpTaskEvents(ctx, t, applyID, sid)
+		t.Fatalf("AssertTaskStatus(apply=%s sid=%s plan_index=%d passage=%d): status=%q, ожидался %q",
+			applyID, sid, planIdx, passage, status, wantStatus)
+	}
+}
+
+// AssertTaskErrorCode проверяет error.code per-task задачи (apply_id, sid,
+// plan_index, passage). Доказывает класс падения: flowcontrol.failed_when (бизнес-
+// провал по CEL-предикату) vs flowcontrol.until_exhausted vs модульная ошибка
+// (например "pkg.not_found"). error.code персистится в audit_log payload->'error'
+// ->>'code' (см. shared/audit.BuildTaskExecutedPayload); apply_runs хранит лишь
+// composed error_summary-ТЕКСТ, не структурный code.
+//
+// Для no_log-задачи error.message подавлен, но code и module кладутся — этот
+// assert работает и на no_log-задачах.
+//
+// wantCode — точный литерал TaskError.code, например "flowcontrol.failed_when".
+// Если у задачи нет error (OK/CHANGED/SKIPPED) → error.code отсутствует → fail.
+func (s *Stack) AssertTaskErrorCode(t *testing.T, applyID, sid string, planIdx, passage int, wantCode string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var code string
+	err := s.db.QueryRow(ctx, `
+		SELECT COALESCE(payload->'error'->>'code', '<no-error>')
+		FROM audit_log
+		WHERE event_type = 'task.executed'
+		  AND correlation_id = $1
+		  AND payload->>'sid' = $2
+		  AND (payload->>'plan_index')::int = $3
+		  AND (payload->>'passage')::int = $4
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, applyID, sid, planIdx, passage).Scan(&code)
+	if err != nil {
+		s.dumpTaskEvents(ctx, t, applyID, sid)
+		t.Fatalf("AssertTaskErrorCode(apply=%s sid=%s plan_index=%d passage=%d): нет task.executed-строки в audit_log: %v",
+			applyID, sid, planIdx, passage, err)
+	}
+	if code != wantCode {
+		s.dumpTaskEvents(ctx, t, applyID, sid)
+		t.Fatalf("AssertTaskErrorCode(apply=%s sid=%s plan_index=%d passage=%d): error.code=%q, ожидался %q",
+			applyID, sid, planIdx, passage, code, wantCode)
+	}
+}
+
+// AssertTaskRegisterField читает одно поле register_data задачи из
+// apply_task_register (PK apply_id, sid, plan_index — миграция 079). Возвращает
+// JSON-скаляр поля как строку (register_data->>'<field>'); для stdout / exit_code
+// / ignored_error / changed / failed нужен FC-1/FC-4 (доказать, что register
+// flow-control-задачи несёт ожидаемое значение).
+//
+// register_data — то, что РЕАЛЬНЫЙ soul эмитил в TaskEvent.register_data и keeper
+// собрал (accumulateRegister). НЕ персистируется для задачи без register: (nil
+// register_data → строки нет, UpsertTaskRegister no-op) → assert зафейлит «нет
+// строки».
+//
+// planIdx — ГЛОБАЛЬНЫЙ сквозной plan_index (ключ корреляции, не локальный
+// task_idx). Без разреза по passage: PK уже уникален по plan_index сквозь все
+// Passage (та же находка, что закрыла миграция 079).
+func (s *Stack) AssertTaskRegisterField(t *testing.T, applyID, sid string, planIdx int, field, want string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var got string
+	err := s.db.QueryRow(ctx, `
+		SELECT COALESCE(register_data->>$4, '<null>')
+		FROM apply_task_register
+		WHERE apply_id = $1 AND sid = $2 AND plan_index = $3
+	`, applyID, sid, planIdx, field).Scan(&got)
+	if err != nil {
+		t.Fatalf("AssertTaskRegisterField(apply=%s sid=%s plan_index=%d field=%s): нет register-строки (задача без register:/реальный soul не вернул register?): %v",
+			applyID, sid, planIdx, field, err)
+	}
+	if got != want {
+		t.Fatalf("AssertTaskRegisterField(apply=%s sid=%s plan_index=%d field=%s): %q, ожидалось %q",
+			applyID, sid, planIdx, field, got, want)
+	}
+}
+
+// dumpTaskEvents печатает диагностику: все task.executed-строки прогона по хосту
+// (plan_index/task_idx/passage/status/error.code). Зовётся на фейл per-task
+// assert-ов — без неё «нет строки» немой, видно ли вообще TaskEvent-ы дошли.
+func (s *Stack) dumpTaskEvents(ctx context.Context, t *testing.T, applyID, sid string) {
+	t.Helper()
+	rows, err := s.db.Query(ctx, `
+		SELECT
+			COALESCE(payload->>'plan_index','?'),
+			COALESCE(payload->>'task_idx','?'),
+			COALESCE(payload->>'passage','?'),
+			COALESCE(payload->>'status','?'),
+			COALESCE(payload->'error'->>'code','-')
+		FROM audit_log
+		WHERE event_type = 'task.executed'
+		  AND correlation_id = $1 AND payload->>'sid' = $2
+		ORDER BY created_at ASC
+	`, applyID, sid)
+	if err != nil {
+		t.Logf("dumpTaskEvents(apply=%s sid=%s): query: %v", applyID, sid, err)
+		return
+	}
+	defer rows.Close()
+	var lines []string
+	for rows.Next() {
+		var planIdx, taskIdx, passage, status, code string
+		if err := rows.Scan(&planIdx, &taskIdx, &passage, &status, &code); err != nil {
+			t.Logf("dumpTaskEvents: scan: %v", err)
+			return
+		}
+		lines = append(lines, fmt.Sprintf("plan_index=%s task_idx=%s passage=%s status=%s error_code=%s",
+			planIdx, taskIdx, passage, status, code))
+	}
+	if len(lines) == 0 {
+		t.Logf("dumpTaskEvents(apply=%s sid=%s): НИ ОДНОЙ task.executed-строки", applyID, sid)
+		return
+	}
+	t.Logf("dumpTaskEvents(apply=%s sid=%s) task.executed:\n  %s", applyID, sid, strings.Join(lines, "\n  "))
 }

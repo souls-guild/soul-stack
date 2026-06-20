@@ -726,6 +726,55 @@ func (s *Stack) WaitIncarnationReady(t *testing.T, incarnationName string, timeo
 		incarnationName, timeoutSec, last)
 }
 
+// WaitIncarnationStatus блокируется до перехода incarnation.status в wantStatus.
+//
+// Зеркало WaitIncarnationReady для НЕ-ready-исходов (split-brain guard, failed_when
+// fail-stop): прогон, который ДОЛЖЕН упасть, оставляет incarnation в
+// `error_locked` (run.go §7 — state_changes не коммитятся при terminal-failed
+// барьере).
+//
+// ★ Гонка с seeded-ready. SeedIncarnationReady кладёт incarnation сразу в `ready`;
+// RunScenario возвращает apply_id асинхронно, ПЕРЕД тем как lockRun переведёт
+// `ready → applying → (terminal)`. Наивный поллер ловил начальный `ready` и
+// принимал его за «достигнут не тот терминал». Поэтому ждём в два этапа:
+// сначала наблюдаем `applying` (прогон стартовал и снял начальный статус), и
+// только ПОСЛЕ этого терминал ≠ wantStatus трактуем как регресс flow-control.
+// Если wantStatus == applying — первый этап и есть результат.
+func (s *Stack) WaitIncarnationStatus(t *testing.T, incarnationName, wantStatus string, timeoutSec int) {
+	t.Helper()
+	terminal := map[string]bool{
+		"ready": true, "error_locked": true, "migration_failed": true,
+		"destroy_failed": true, "destroyed": true,
+	}
+	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
+	started := false // прогон снял начальный статус (наблюдён applying или сразу терминал)
+	var last string
+	for time.Now().Before(deadline) {
+		var status string
+		err := s.db.QueryRow(context.Background(),
+			"SELECT status FROM incarnation WHERE name = $1", incarnationName).Scan(&status)
+		if err != nil {
+			t.Fatalf("WaitIncarnationStatus %s: query: %v", incarnationName, err)
+		}
+		last = status
+		if status == wantStatus {
+			return
+		}
+		if status == "applying" {
+			started = true
+		}
+		// Терминал-мисматч считаем регрессом ТОЛЬКО после старта прогона: до старта
+		// это ещё seeded-исходный статус (обычно ready), а не исход прогона.
+		if started && terminal[status] {
+			t.Fatalf("WaitIncarnationStatus %s: достигнут терминальный %q, ожидался %q (flow-control исход разошёлся)",
+				incarnationName, status, wantStatus)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("WaitIncarnationStatus %s: status=%q не достигнут за %ds (последний=%q)",
+		incarnationName, wantStatus, timeoutSec, last)
+}
+
 // stripServiceRef отрезает `@<ref>` (если есть). Operator API создаёт
 // incarnation по bare service-name (ADR-029).
 func stripServiceRef(ref string) string {
