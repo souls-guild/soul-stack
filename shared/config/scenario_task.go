@@ -527,6 +527,7 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 				YAMLPath: pathPrefix + ".register",
 			}))
 		}
+		out = append(out, validateBlockForbiddenKeys(present, pathPrefix)...)
 	}
 
 	// 4) Scenario-дельта: on / serial / run_once. `where:` уже проверен в
@@ -738,6 +739,52 @@ func validateBlockField(kv *ast.MappingValueNode, pathPrefix string) []diag.Diag
 	var out []diag.Diagnostic
 	for i, item := range seq.Values {
 		out = append(out, validateTaskNode(item, fmt.Sprintf("%s.block[%d]", pathPrefix, i))...)
+	}
+	return out
+}
+
+// blockForbiddenKeys — module-специфичные ключи, недопустимые на BLOCK-уровне
+// (fail-closed, destiny/tasks.md §6.5 их на block не упоминает). block не
+// вызывает модуль, поэтому override результата модуля (`changed_when`/
+// `failed_when`), retry/timeout/output/no_log одного вызова и `params:` (аргументы
+// модуля) на нём бессмысленны. Каждый ключ режется кодом `<key>_on_block_invalid`
+// (симметрично register_on_block_invalid). `register:` уже режется отдельно выше.
+//
+// `parallel:` тоже вне pilot block-а (parallel на block — слайс позже) — режется
+// тем же механизмом, кодом parallel_on_block_invalid.
+//
+// Унаследованные block-ом ключи (`when`/`where`/`vars`/`onchanges`/`onfail`/
+// `require`/`on`/`serial`/`run_once`/`name`/`loop`) в список НЕ входят: §6.5
+// явно допускает их на block.
+var blockForbiddenKeys = []string{
+	"changed_when",
+	"failed_when",
+	"retry",
+	"timeout",
+	"output",
+	"no_log",
+	"params",
+	"parallel",
+}
+
+// validateBlockForbiddenKeys поднимает ошибку `<key>_on_block_invalid` для каждого
+// присутствующего module-специфичного ключа на block-задаче (fail-closed, §6.5).
+// Вызывается только когда дискриминатор — block.
+func validateBlockForbiddenKeys(present map[string]*ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
+	var out []diag.Diagnostic
+	for _, key := range blockForbiddenKeys {
+		kv, ok := present[key]
+		if !ok {
+			continue
+		}
+		tok := kv.Key.GetToken()
+		out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:     key + "_on_block_invalid",
+			Message:  fmt.Sprintf("%s: is not allowed on a block task (block does not invoke a module — see docs/destiny/tasks.md §6.5)", key),
+			Hint:     "place module-specific keys on the inner module-task; block: only carries when/where/vars/requisites/serial/run_once",
+			YAMLPath: pathPrefix + "." + key,
+		}))
 	}
 	return out
 }

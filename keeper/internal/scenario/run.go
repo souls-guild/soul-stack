@@ -268,6 +268,21 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	}
 	staged := passage.Count > 1
 
+	// 4.92. Within-block register-зависимость — KEEPER-SIDE FAIL-CLOSED страховка
+	//       (ADR-056, §«Риски — silent-wrong-target»). Потомок block:, читающий
+	//       register СОСЕДНЕГО потомка ТОГО ЖЕ блока, не ловится Stratify (внутри-
+	//       блочное ребро не пересекает границу top-level задач — block атомарен по
+	//       Passage). peer-register становится доступен Soul-side только ПОСЛЕ probe,
+	//       но where/when/params потребителя резолвятся Keeper-side ДО dispatch → where
+	//       отберёт хосты по устаревшему/внешнему register МОЛЧА. soul-lint обязан
+	//       поймать это офлайн; здесь — рантайм-страховка (отказ, не silent-wrong-target).
+	if info, bad := config.WithinBlockRegisterDependency(scn.Tasks); bad {
+		abort(config.CodeWithinBlockRegisterDependency, fmt.Errorf(
+			"scenario %s/%s: задача %q внутри block: читает register %q, эмитнутый соседней %q ТОГО ЖЕ блока — невозможно на render (block атомарен, peer-register доступен только Soul-side ПОСЛЕ probe, а where/when/params резолвятся Keeper-side ДО dispatch); вынесите probe на top-level (разные Passage)",
+			spec.IncarnationName, spec.ScenarioName, info.ReaderName, info.RegisterName, info.EmitterName))
+		return
+	}
+
 	// 4.95. serial + staged (N>1) — 2D serial×passage РЕАЛИЗОВАН (ADR-056 §S4 amend,
 	//       S-2D1). Рестрикт `serial_staged_unsupported` СНЯТ. Оси serial (волны
 	//       ХОСТОВ) и Passage (стратификация ЗАДАЧ) ортогональны и теперь крутятся

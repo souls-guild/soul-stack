@@ -14,9 +14,21 @@ type Passage = config.Passage
 
 // StratifyError-коды — реэкспорт канона shared/config.
 const (
-	StratifyCycle           = config.StratifyCycle
-	StratifyUnknownRegister = config.StratifyUnknownRegister
+	StratifyCycle                     = config.StratifyCycle
+	StratifyUnknownRegister           = config.StratifyUnknownRegister
+	CodeWithinBlockRegisterDependency = config.CodeWithinBlockRegisterDependency
 )
+
+// WithinBlockInfo — alias на [config.WithinBlockInfo] (координаты within-block
+// register-зависимости). Сохранено для keeper-side вызовов/тестов.
+type WithinBlockInfo = config.WithinBlockInfo
+
+// WithinBlockRegisterDependency — alias на канонический детектор
+// [config.WithinBlockRegisterDependency]: потомок block:, читающий register
+// соседнего потомка того же блока (silent-wrong-target).
+func WithinBlockRegisterDependency(tasks []config.Task) (config.WithinBlockInfo, bool) {
+	return config.WithinBlockRegisterDependency(tasks)
+}
 
 // errStratify — alias на [config.StratifyError] (несёт Code/Msg). Имя сохранено
 // для keeper-side тестов (errors.As на *errStratify).

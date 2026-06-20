@@ -232,6 +232,24 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 			continue
 		}
 
+		// block: (pilot C1) — render-time fan-out в плоский слой RenderedTask, как
+		// loop/apply:destiny. targeted уже резолвлен по block.on/block.where +
+		// run_once (выше) — потомки наследуют on/where/run_once бесплатно. width из
+		// block.serial раздаётся всем потомкам. stampPassage клеймит весь fan-out
+		// одним Passage (block атомарен по Passage, ADR-056). Static-when-false
+		// block гасится emitStaticWhenSkip выше (1 placeholder за весь блок).
+		if task.Block != nil {
+			bt, bp, berr := p.renderBlockTask(ctx, in, task, idx, targeted)
+			if berr != nil {
+				return nil, nil, berr
+			}
+			tasks = append(tasks, bt...)
+			plans = append(plans, bp...)
+			idx += len(bt)
+			stampPassage(tasks, passageStart, passage)
+			continue
+		}
+
 		rt, err := p.renderTask(ctx, in, task, idx, targeted)
 		if err != nil {
 			return nil, nil, err
@@ -1291,8 +1309,12 @@ func stateOpVars(ctx map[string]any) cel.Vars {
 // render-фазе (renderLoopTask: одна задача → N RenderedTask по элементам
 // items). loop: на include/apply/block по-прежнему вне pilot-объёма (config-
 // валидатор отвергает loop на не-module-задаче раньше; здесь — defense in depth
-// для apply+loop, дошедшего до render). guard оставлен для слайса C (block/
-// parallel) и пустых задач.
+// для apply+loop, дошедшего до render).
+//
+// block: (pilot C1) здесь НЕ отвергается — он раскрывается render-time fan-out-ом
+// (renderBlockTask, как loop/apply:destiny). parallel: на block по-прежнему вне
+// pilot (case task.Parallel выше ловит блок с parallel:true до block-accept).
+// guard оставлен для parallel:, нераскрытого include: и пустых задач.
 func guardPilotDSL(task config.Task, idx int) error {
 	switch {
 	case task.Apply != nil:
@@ -1304,10 +1326,14 @@ func guardPilotDSL(task config.Task, idx int) error {
 		return nil
 	case task.Include != nil:
 		return fmt.Errorf("%w: (task[%d] %q)", ErrUnexpandedInclude, idx, task.Name)
-	case task.Block != nil:
-		return fmt.Errorf("%w: block: (task[%d] %q)", ErrUnsupportedDSL, idx, task.Name)
 	case task.Parallel:
 		return fmt.Errorf("%w: parallel: (task[%d] %q)", ErrUnsupportedDSL, idx, task.Name)
+	case task.Block != nil:
+		// block-задача валидна (pilot C1); module == nil допустим (discriminator —
+		// block). loop: на block по-прежнему вне pilot — config-валидатор отвергает
+		// loop на не-module-задаче раньше (defense in depth здесь не требуется,
+		// renderBlockTask на block.Loop не смотрит).
+		return nil
 	case task.Module == nil:
 		return fmt.Errorf("%w: task[%d] %q не является module-задачей", ErrUnsupportedDSL, idx, task.Name)
 	}

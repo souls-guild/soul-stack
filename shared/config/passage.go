@@ -71,6 +71,17 @@ const (
 	// стратификация обязана падать явно, а не молча стратифицировать по неполному
 	// графу — silent-wrong-target).
 	StratifyUnknownRegister = "unknown_register_reference"
+	// CodeWithinBlockRegisterDependency — потомок block: читает register, эмитнутый
+	// СОСЕДНИМ потомком ТОГО ЖЕ блока. block атомарен по Passage (весь fan-out в
+	// одном Passage, ADR-056), peer-register доступен только Soul-side ПОСЛЕ probe,
+	// а where/when/params резолвятся Keeper-side ДО dispatch → where отберёт хосты
+	// по устаревшему/внешнему register молча (silent-wrong-target). Fail-closed
+	// reject офлайн (soul-lint) и runtime-страховкой (run.go), а не молчаливый
+	// мисфайр. Лечится выносом probe на top-level (probe и потребитель — разные
+	// Passage; Stratify тогда упорядочит их штатно). Имя кода держим отдельным от
+	// функции-детектора WithinBlockRegisterDependency (одноимённый const+func в
+	// одном пакете недопустим в Go).
+	CodeWithinBlockRegisterDependency = "within_block_register_dependency"
 )
 
 // Stratify вычисляет passage-индексы для плана задач прогона по графу cross-task
@@ -393,4 +404,117 @@ func taskDisplayName(t *Task) string {
 	default:
 		return "<unnamed>"
 	}
+}
+
+// WithinBlockInfo — координаты within-block register-зависимости (для текста
+// abort-а / диагностики линтера).
+type WithinBlockInfo struct {
+	ReaderName   string // имя потомка-читателя register
+	RegisterName string // peer-register, прочитанный читателем
+	EmitterName  string // имя потомка-эмиттера того же блока (или его контейнера)
+}
+
+// WithinBlockRegisterDependency детектирует потомка block:, читающего register,
+// эмитнутый СОСЕДНИМ потомком ТОГО ЖЕ блока (ADR-056, §«Риски — silent-wrong-target»).
+// block — атомарная единица Passage: весь его fan-out (probe-потомок + потребитель)
+// едет ОДНИМ ApplyRequest в одном Passage. peer-register становится доступен только
+// Soul-side ПОСЛЕ probe, тогда как where/when/params потребителя резолвятся Keeper-side
+// ДО dispatch — по пустому/внешнему/устаревшему register МОЛЧА. Stratify это не ловит:
+// внутри-блочное ребро не пересекает границу top-level задач (emitterIndex клеймит весь
+// register block-а индексом КОНТЕЙНЕРА). Поэтому отдельный fail-closed детектор.
+//
+// blockEmits каждого блока строится из ЕГО СТРУКТУРЫ (taskEmittedRegisters минус
+// собственный register контейнера), рекурсивно вглубь — НЕ из глобального emitterIndex.
+// Это критично: внешний top-level probe, эмитящий тот же register-имя, читать из block
+// потомком ВАЛИДНО (probe — отдельный Passage до блока, restart-кейс) и обязан остаться
+// ok==false. Сверка идёт только против register-ов, рождённых ВНУТРИ этого блока.
+//
+// Возвращает координаты первой найденной within-block-зависимости (имя читателя,
+// peer-register, имя эмиттера) и ok=true; ok=false — ни один block-потомок не читает
+// peer-register своего блока. План без block-задач → fast-path ok=false.
+func WithinBlockRegisterDependency(tasks []Task) (info WithinBlockInfo, ok bool) {
+	for i := range tasks {
+		if tasks[i].Block == nil {
+			continue
+		}
+		if bi, bad := blockPeerRegisterRead(&tasks[i]); bad {
+			return bi, true
+		}
+	}
+	return WithinBlockInfo{}, false
+}
+
+// blockPeerRegisterRead проверяет один block-контейнер: читает ли какой-либо его
+// потомок (рекурсивно, любая глубина) register, рождённый ВНУТРИ этого блока соседним
+// потомком. blockEmits — register-имена всего поддерева блока МИНУС собственный
+// register контейнера (это структура ЭТОГО блока, не глобальный emitterIndex). Затем
+// для каждого потомка: childReads (collectTaskReads — все 7 passage-источников;
+// register.self уже отфильтрован ExtractRegisterRefs) пересекается с blockEmits, но БЕЗ
+// собственного register потомка (peer, а не self) → reject. Вложенные блоки: их
+// потомки тоже сверяются против blockEmits внешнего блока (peer внутри = peer снаружи,
+// один Passage), плюс рекурсивный заход ловит peer-зависимость внутри вложенного блока.
+func blockPeerRegisterRead(container *Task) (WithinBlockInfo, bool) {
+	blockEmits := map[string]string{} // register-имя → имя эмитящего потомка
+	for i := range container.Block.Block {
+		collectBlockEmits(&container.Block.Block[i], blockEmits)
+	}
+	if len(blockEmits) == 0 {
+		return WithinBlockInfo{}, false // блок ничего не эмитит — peer-зависимости быть не может.
+	}
+
+	for i := range container.Block.Block {
+		if bi, bad := childPeerRead(&container.Block.Block[i], blockEmits); bad {
+			return bi, true
+		}
+		// Вложенный блок: его внутренние peer-зависимости (полностью внутри него) —
+		// отдельная проверка с собственным blockEmits.
+		if container.Block.Block[i].Block != nil {
+			if bi, bad := blockPeerRegisterRead(&container.Block.Block[i]); bad {
+				return bi, true
+			}
+		}
+	}
+	return WithinBlockInfo{}, false
+}
+
+// collectBlockEmits наполняет emits register-именами, рождёнными внутри потомка блока
+// (его собственный register: + register block-потомков рекурсивно), сопоставляя их с
+// именем потомка-эмиттера для диагностики. last-wins при дубле (симметрия emitterIndex).
+func collectBlockEmits(child *Task, emits map[string]string) {
+	name := taskDisplayName(child)
+	for _, reg := range taskEmittedRegisters(child) {
+		emits[reg] = name
+	}
+}
+
+// childPeerRead проверяет одного потомка блока (рекурсивно вглубь его собственных
+// block-потомков): читает ли он register из blockEmits, который НЕ его собственный
+// (peer, не self). Собственные register потомка исключаются — внутри-задачная self-
+// ссылка не cross-task ребро (register.self уже отфильтрован, но потомок с собственным
+// register: X, читающий register.X в другом поле, тоже не peer-зависимость).
+func childPeerRead(child *Task, blockEmits map[string]string) (WithinBlockInfo, bool) {
+	own := map[string]bool{}
+	for _, reg := range taskEmittedRegisters(child) {
+		own[reg] = true
+	}
+	seen := map[string]bool{}
+	collectTaskReads(child, seen)
+	reads := make([]string, 0, len(seen))
+	for reg := range seen {
+		reads = append(reads, reg)
+	}
+	sort.Strings(reads) // детерминизм диагностики при нескольких peer-ссылках.
+	for _, reg := range reads {
+		if own[reg] {
+			continue
+		}
+		if emitter, peer := blockEmits[reg]; peer {
+			return WithinBlockInfo{
+				ReaderName:   taskDisplayName(child),
+				RegisterName: reg,
+				EmitterName:  emitter,
+			}, true
+		}
+	}
+	return WithinBlockInfo{}, false
 }

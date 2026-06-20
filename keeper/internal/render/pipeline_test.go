@@ -779,16 +779,15 @@ func TestRender_FlowContextVarsLaunderingChangedWhen_Error(t *testing.T) {
 	}
 }
 
-// TestRender_UnsupportedDSL — pilot-guard отвергает block/parallel.
-// serial/run_once сюда больше НЕ входят (реализованы, slice D); loop на
-// module-задаче тоже реализован (slice E1, render-time fan-out) — для него
-// позитивные тесты в loop_test.go, а loop на apply отвергается там же
-// (TestRenderLoop_OnApplyRejected).
+// TestRender_UnsupportedDSL — pilot-guard отвергает parallel.
+// block сюда больше НЕ входит (реализован, pilot C1 — render-time fan-out, см.
+// block_test.go); serial/run_once тоже реализованы (slice D); loop на
+// module-задаче реализован (slice E1) — позитивные тесты в loop_test.go, а loop
+// на apply отвергается там же (TestRenderLoop_OnApplyRejected).
 func TestRender_UnsupportedDSL(t *testing.T) {
 	cases := map[string]config.Task{
 		// apply: с nil-DestinyResolver (Destiny не сконфигурирован) → ErrUnsupportedDSL.
 		"apply":    {Name: "t", Apply: &config.ApplyTask{Destiny: "redis"}},
-		"block":    {Name: "t", Block: &config.BlockTask{}},
 		"parallel": {Name: "t", Module: &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{}}, Parallel: true},
 	}
 	for name, task := range cases {

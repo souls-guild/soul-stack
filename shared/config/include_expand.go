@@ -121,10 +121,10 @@ func (e *includeExpander) expand(tasks []Task, stack []string) []Task {
 	for i := range tasks {
 		task := tasks[i]
 
-		// Не-include или block: splice не нужен. block раскрывается в слайсе C;
-		// здесь passthrough, его отвергнет render-guard (ErrUnsupportedDSL) —
-		// рекурсия в block до слайса C бесполезна и могла бы выдать include-
-		// ошибку раньше понятной «block вне pilot».
+		// Не-include или block: splice не нужен. block раскрывается в render-фазе
+		// (renderBlockTask, как loop) — здесь passthrough. within-block include
+		// в pilot C1 не поддержан (guardPilotBlockChild отвергает include-потомок
+		// как ErrUnexpandedInclude) — рекурсия в block на этом слое не нужна.
 		if task.Include == nil {
 			out = append(out, task)
 			continue

@@ -83,6 +83,24 @@ func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest) []diag.Di
 	// serial×passage реализован — каждый Passage катит свои serial-волны по своему
 	// per-Passage width. Стратификация даёт обычный passage_plan HINT (ниже).
 
+	// Within-block register-зависимость — ОШИБКА (ADR-056, §«Риски — silent-wrong-
+	// target»). Потомок block:, читающий register соседнего потомка ТОГО ЖЕ блока,
+	// невозможен на render: block атомарен по Passage, peer-register доступен Soul-side
+	// только ПОСЛЕ probe, а where/when/params резолвятся Keeper-side ДО dispatch → where
+	// отберёт хосты по устаревшему/внешнему register молча. Stratify это не ловит
+	// (внутри-блочное ребро не пересекает границу top-level задач). Ловим офлайн ДО apply.
+	if info, bad := config.WithinBlockRegisterDependency(tasks); bad {
+		out = append(out, diag.Diagnostic{
+			Level:   diag.LevelError,
+			Phase:   diag.PhaseSemanticValidate,
+			File:    scenarioPath,
+			Code:    config.CodeWithinBlockRegisterDependency,
+			Message: fmt.Sprintf("задача %q внутри block: читает register %q, эмитнутый соседней %q ТОГО ЖЕ блока — невозможно на render (block атомарен, peer-register доступен только Soul-side ПОСЛЕ probe, а where/when/params резолвятся Keeper-side ДО dispatch)", info.ReaderName, info.RegisterName, info.EmitterName),
+			Hint:    "вынесите probe на top-level (probe и потребитель — разные Passage; ADR-056 staged-render тогда упорядочит их штатно)",
+		})
+		return out
+	}
+
 	// Структура passage — HINT (info автору): сколько Passage и по сколько задач.
 	out = append(out, diag.Diagnostic{
 		Level:   diag.LevelHint,

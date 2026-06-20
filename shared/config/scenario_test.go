@@ -2,6 +2,7 @@ package config
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/shared/diag"
@@ -226,6 +227,60 @@ tasks:
 	if !hasCode(diags, "register_on_block_invalid") {
 		dump(t, diags)
 		t.Fatalf("expected register_on_block_invalid")
+	}
+}
+
+// TestLoadScenarioManifest_BlockForbiddenKeys (guard #8) — module-специфичные
+// ключи на block-задаче режутся fail-closed кодом <key>_on_block_invalid
+// (destiny/tasks.md §6.5 их на block не упоминает). parallel: тоже отвергается.
+func TestLoadScenarioManifest_BlockForbiddenKeys(t *testing.T) {
+	cases := map[string]string{
+		"changed_when_on_block_invalid": "changed_when: \"true\"",
+		"failed_when_on_block_invalid":  "failed_when: \"false\"",
+		"retry_on_block_invalid":        "retry: { count: 3 }",
+		"timeout_on_block_invalid":      "timeout: 30s",
+		"output_on_block_invalid":       "output: { x: \"y\" }",
+		"no_log_on_block_invalid":       "no_log: true",
+		"params_on_block_invalid":       "params: { a: 1 }",
+		"parallel_on_block_invalid":     "parallel: true",
+	}
+	for wantCode, line := range cases {
+		t.Run(wantCode, func(t *testing.T) {
+			src := "name: x\ntasks:\n  - " + line + "\n    block:\n      - module: core.exec.run\n        params: { cmd: \"true\" }\n"
+			_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+			if !hasCode(diags, wantCode) {
+				dump(t, diags)
+				t.Fatalf("expected %s", wantCode)
+			}
+		})
+	}
+}
+
+// TestLoadScenarioManifest_BlockInheritedKeysOK — унаследованные ключи (when/
+// where/vars/onchanges/onfail/serial/run_once/name) на block-задаче ВАЛИДНЫ (§6.5
+// явно их допускает) — не должны давать <key>_on_block_invalid.
+func TestLoadScenarioManifest_BlockInheritedKeysOK(t *testing.T) {
+	src := `name: x
+tasks:
+  - module: core.exec.run
+    register: probe
+    params: { cmd: "true" }
+  - name: grp
+    when: "input.go"
+    where: "register.probe.changed"
+    serial: 1
+    vars: { v: "x" }
+    onchanges: [probe]
+    block:
+      - module: core.service.restarted
+        params: { name: redis }
+`
+	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	for _, d := range diags {
+		if d.Level == diag.LevelError && strings.HasSuffix(d.Code, "_on_block_invalid") {
+			dump(t, diags)
+			t.Fatalf("inherited key wrongly rejected: %s", d.Code)
+		}
 	}
 }
 

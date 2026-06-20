@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/shared/diag"
@@ -746,5 +747,210 @@ tasks:
 	}
 	if info.Kind != "onfail" || info.RequisiteName != "deploy" {
 		t.Errorf("info = %+v, want kind=onfail requisite=deploy", info)
+	}
+}
+
+// --- within-block register-зависимость (silent-wrong-target) ---
+
+// TestWithinBlock_PeerReject (guard #1) — ★ ОСНОВНОЙ КЕЙС. probe-потомок эмитит
+// register: role ВНУТРИ блока, соседний потомок ТОГО ЖЕ блока читает
+// where: register.role.* — peer-register недоступен на render (block атомарен,
+// probe ещё не отработал). Детектор обязан reject с точными координатами.
+func TestWithinBlock_PeerReject(t *testing.T) {
+	const src = `
+name: within_block_peer
+state_changes: {}
+tasks:
+  - name: Rolling group
+    on: ["${ incarnation.name }"]
+    block:
+      - name: Probe role inside block
+        module: core.cmd.shell
+        register: role
+        changed_when: false
+        params: { cmd: "redis-cli role | head -1" }
+      - name: Restart on master
+        module: core.service.restarted
+        where: "register.role.stdout == 'master'"
+        params: { name: redis-server }
+`
+	tasks := loadTasks(t, src)
+	info, bad := WithinBlockRegisterDependency(tasks)
+	if !bad {
+		t.Fatalf("WithinBlockRegisterDependency не задетектил peer-register внутри block — silent-wrong-target прошёл бы молча")
+	}
+	if info.RegisterName != "role" {
+		t.Errorf("RegisterName = %q, want role", info.RegisterName)
+	}
+	if info.ReaderName != "Restart on master" {
+		t.Errorf("ReaderName = %q, want \"Restart on master\"", info.ReaderName)
+	}
+	if info.EmitterName != "Probe role inside block" {
+		t.Errorf("EmitterName = %q, want \"Probe role inside block\"", info.EmitterName)
+	}
+}
+
+// TestWithinBlock_ExternalProbeOK (guard #2) — ★ ПРИЁМКА НЕ СЛОМАНА. probe эмитит
+// register: role на TOP-LEVEL (отдельная задача ДО блока), block-потомок читает
+// where: register.role.* — это ВАЛИДНО (probe — отдельный Passage, restart-кейс).
+// Детектор сверяет ТОЛЬКО против register-ов, рождённых ВНУТРИ блока (не глобальный
+// emitterIndex), поэтому внешний probe не ловится → ok==false. Регресс «сломать
+// restart» этим тестом фиксируется.
+func TestWithinBlock_ExternalProbeOK(t *testing.T) {
+	const src = `
+name: external_probe
+state_changes: {}
+tasks:
+  - name: Probe role top-level
+    module: core.cmd.shell
+    on: ["${ incarnation.name }"]
+    register: role
+    changed_when: false
+    params: { cmd: "redis-cli role | head -1" }
+  - name: Rolling group
+    on: ["${ incarnation.name }"]
+    where: "register.role.stdout == 'slave'"
+    block:
+      - name: Restart replica
+        module: core.service.restarted
+        params: { name: redis-server }
+`
+	tasks := loadTasks(t, src)
+	if info, bad := WithinBlockRegisterDependency(tasks); bad {
+		t.Fatalf("WithinBlockRegisterDependency ложно зарепортил внешний top-level probe как peer-зависимость (%+v) — сломал бы валидный restart-кейс", info)
+	}
+}
+
+// TestWithinBlock_RegisterSelfOK (guard #3) — block-потомок читает register.self.*
+// (собственный результат шага, не peer) в retry.until: → ВАЛИДНО. register.self
+// уже отфильтрован ExtractRegisterRefs (collectTaskReads его не вернёт), поэтому
+// детектор не должен на него реагировать → ok==false.
+func TestWithinBlock_RegisterSelfOK(t *testing.T) {
+	const src = `
+name: register_self
+state_changes: {}
+tasks:
+  - name: Rolling group
+    on: ["${ incarnation.name }"]
+    block:
+      - name: Wait until healthy
+        module: core.exec.run
+        changed_when: false
+        retry:
+          count: 12
+          delay: 5s
+          until: "contains(register.self.stdout, 'master_link_status:up')"
+        params: { cmd: redis-cli }
+`
+	tasks := loadTasks(t, src)
+	if info, bad := WithinBlockRegisterDependency(tasks); bad {
+		t.Fatalf("WithinBlockRegisterDependency ложно зарепортил register.self как peer-зависимость (%+v)", info)
+	}
+}
+
+// TestWithinBlock_NestedPeerReject (guard #4) — вложенный block: внутренний
+// потомок читает register, эмитнутый ВНЕШНИМ потомком того же (внешнего) блока →
+// reject. peer внутри вложенного блока = peer снаружи (один Passage у всего блока).
+func TestWithinBlock_NestedPeerReject(t *testing.T) {
+	const src = `
+name: nested_peer
+state_changes: {}
+tasks:
+  - name: Outer group
+    on: ["${ incarnation.name }"]
+    block:
+      - name: Probe role in outer
+        module: core.cmd.shell
+        register: role
+        changed_when: false
+        params: { cmd: "redis-cli role | head -1" }
+      - name: Inner group
+        block:
+          - name: Restart on master deep
+            module: core.service.restarted
+            where: "register.role.stdout == 'master'"
+            params: { name: redis-server }
+`
+	tasks := loadTasks(t, src)
+	info, bad := WithinBlockRegisterDependency(tasks)
+	if !bad {
+		t.Fatalf("WithinBlockRegisterDependency не задетектил peer-register через вложенный block — silent-wrong-target")
+	}
+	if info.RegisterName != "role" {
+		t.Errorf("RegisterName = %q, want role", info.RegisterName)
+	}
+}
+
+// TestWithinBlock_NoRegisterOK (guard #5) — block без единого register: внутри →
+// fast-path ok==false (нечего читать как peer). Ловит регресс, где пустой
+// blockEmits даёт ложное срабатывание.
+func TestWithinBlock_NoRegisterOK(t *testing.T) {
+	const src = `
+name: no_register
+state_changes: {}
+tasks:
+  - name: Rolling group
+    on: ["${ incarnation.name }"]
+    where: "soulprint.self.sid != ''"
+    block:
+      - name: Restart redis
+        module: core.service.restarted
+        params: { name: redis-server }
+      - name: Reload config
+        module: core.exec.run
+        params: { cmd: reload }
+`
+	tasks := loadTasks(t, src)
+	if info, bad := WithinBlockRegisterDependency(tasks); bad {
+		t.Fatalf("WithinBlockRegisterDependency ложно сработал на блок без register (%+v)", info)
+	}
+}
+
+// TestWithinBlock_AcceptanceRestart (guard #6) — ★ ПРИЁМКА: реальный
+// examples/service/redis-cluster/scenario/restart/main.yml (probe redis_role
+// top-level, block с where на внешний register) ВАЛИДЕН → ok==false. Плюс
+// регресс-цикл по ВСЕМ committed example-сценариям: ни один не должен ловиться
+// детектором (иначе валидный пример молча перестал бы прогоняться).
+func TestWithinBlock_AcceptanceRestart(t *testing.T) {
+	restartPath := filepath.FromSlash("../../examples/service/redis-cluster/scenario/restart/main.yml")
+	m, _, diags, err := LoadScenarioManifest(restartPath, ValidateOptions{})
+	if err != nil {
+		t.Fatalf("LoadScenarioManifest(restart): %v", err)
+	}
+	for _, d := range diags {
+		if d.Level == diag.LevelError {
+			t.Fatalf("restart diagnostic (%s): %s", d.Code, d.Message)
+		}
+	}
+	if info, bad := WithinBlockRegisterDependency(m.Tasks); bad {
+		t.Fatalf("ПРИЁМКА СЛОМАНА: restart/main.yml зарепортирован как within-block peer (%+v) — внешний probe redis_role валиден", info)
+	}
+
+	// Регресс приёмки: ни один committed example-сценарий не ловится детектором.
+	all, gerr := filepath.Glob(filepath.FromSlash("../../examples/service/*/scenario/*/main.yml"))
+	if gerr != nil {
+		t.Fatalf("glob examples: %v", gerr)
+	}
+	if len(all) == 0 {
+		t.Fatal("glob examples дал 0 сценариев — путь/раскладка сломаны")
+	}
+	for _, p := range all {
+		em, _, ediags, eerr := LoadScenarioManifest(p, ValidateOptions{})
+		if eerr != nil || em == nil {
+			continue // невалидный/нерезолвимый офлайн пример — не зона этого детектора.
+		}
+		hardErr := false
+		for _, d := range ediags {
+			if d.Level == diag.LevelError {
+				hardErr = true
+				break
+			}
+		}
+		if hardErr {
+			continue
+		}
+		if info, bad := WithinBlockRegisterDependency(em.Tasks); bad {
+			t.Errorf("регресс приёмки: example %s ловится within-block-детектором (%+v) — валидный пример перестал бы прогоняться", p, info)
+		}
 	}
 }
