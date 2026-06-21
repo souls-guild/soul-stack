@@ -820,3 +820,178 @@ func TestIntegration_DeleteAfterTeardown_NotDestroying(t *testing.T) {
 		t.Errorf("incarnation_archive rows = %d, want 0 (no-op archived nothing)", n)
 	}
 }
+
+// seedApplyingWithApplyRun создаёт incarnation в applying + одну apply_runs-строку
+// (apply_id, sid, name). Моделирует осиротевший scenario-run прошлого владельца
+// Voyage (recovery-шов ADR-027(k)).
+func seedApplyingWithApplyRun(t *testing.T, name, applyID, sid string) {
+	t.Helper()
+	ctx := context.Background()
+	seedOperator(t, "archon-alice")
+	creator := "archon-alice"
+	inc := &Incarnation{
+		Name: name, Service: "redis", ServiceVersion: "v1",
+		StateSchemaVersion: 1,
+		State:              map[string]any{"primary": name + "-01"},
+		Status:             StatusApplying, CreatedByAID: &creator,
+	}
+	if err := Create(ctx, integrationPool, inc); err != nil {
+		t.Fatalf("Create applying: %v", err)
+	}
+	if _, err := integrationPool.Exec(ctx, `
+INSERT INTO apply_runs (apply_id, sid, incarnation_name, scenario, status, started_by_aid)
+VALUES ($1, $2, $3, 'create', 'running', $4)`,
+		applyID, sid, name, creator); err != nil {
+		t.Fatalf("seed apply_runs: %v", err)
+	}
+}
+
+// TestIntegration_ReleaseApplyingOrphan_HappyPath — orphan от прошлого attempt
+// (applying + apply_runs (orphanApplyID, name) есть) → снят: applying → ready,
+// state не тронут (last known-good), state_history несёт snapshot снятия.
+func TestIntegration_ReleaseApplyingOrphan_HappyPath(t *testing.T) {
+	resetAll(t)
+	ctx := context.Background()
+	const (
+		name    = "redis-prod"
+		applyID = "01HORPHANAPPLY0000000001"
+	)
+	seedApplyingWithApplyRun(t, name, applyID, name+".host-01")
+
+	if err := ReleaseApplyingOrphan(ctx, integrationPool, name, applyID, "01HORPHANHIST00000000001"); err != nil {
+		t.Fatalf("ReleaseApplyingOrphan: %v", err)
+	}
+
+	got, err := SelectByName(ctx, integrationPool, name)
+	if err != nil {
+		t.Fatalf("SelectByName: %v", err)
+	}
+	if got.Status != StatusReady {
+		t.Errorf("status = %q, want ready (orphan lock снят)", got.Status)
+	}
+	if got.StatusDetails != nil {
+		t.Errorf("status_details = %v, want nil (reset)", got.StatusDetails)
+	}
+	if got.State["primary"] != name+"-01" {
+		t.Errorf("state changed by release: %v (must be untouched last-good)", got.State)
+	}
+	_, total, _ := HistorySelectByName(ctx, integrationPool, name, HistoryFilter{}, 0, 50)
+	if total != 1 {
+		t.Errorf("history rows = %d, want 1 (orphan-release snapshot)", total)
+	}
+}
+
+// TestIntegration_ReleaseApplyingOrphan_LiveRival — FENCING-1: инкарнация в
+// applying, и у неё есть АКТИВНЫЙ (running) apply_run ЧУЖОГО apply_id (живой
+// прогон стартовал между крахом и reclaim) → НЕ снят (no-op), статус остаётся
+// applying. Защита от снятия чужого live-lock.
+func TestIntegration_ReleaseApplyingOrphan_LiveRival(t *testing.T) {
+	resetAll(t)
+	ctx := context.Background()
+	const (
+		name        = "redis-prod"
+		orphanApply = "01HORPHANAPPLY0000000002"
+		rivalApply  = "01HRIVALAPPLY00000000002"
+	)
+	// apply_runs принадлежит ЖИВОМУ прогону (rivalApply, running).
+	seedApplyingWithApplyRun(t, name, rivalApply, name+".host-01")
+
+	// Снимаем orphan-lock по orphanApply — но живой rival держит активную строку.
+	err := ReleaseApplyingOrphan(ctx, integrationPool, name, orphanApply, "01HORPHANHIST00000000002")
+	if !errors.Is(err, ErrOrphanLockNotReleased) {
+		t.Fatalf("err = %v, want ErrOrphanLockNotReleased (live rival)", err)
+	}
+
+	got, err := SelectByName(ctx, integrationPool, name)
+	if err != nil {
+		t.Fatalf("SelectByName: %v", err)
+	}
+	if got.Status != StatusApplying {
+		t.Errorf("status = %q, want applying (live-lock не тронут)", got.Status)
+	}
+	_, total, _ := HistorySelectByName(ctx, integrationPool, name, HistoryFilter{}, 0, 50)
+	if total != 0 {
+		t.Errorf("history rows = %d, want 0 (rollback, ничего не снято)", total)
+	}
+}
+
+// TestIntegration_ReleaseApplyingOrphan_OrphanRunVanished — orphan apply_run уже
+// вычищен reaper-ом (apply_runs=0), но incarnation-lock — бесхозный флаг —
+// остался в applying → снимаем (привязка к orphan дана voyage_targets back-link
+// на стороне caller-а; здесь нет живого rival → снятие безопасно).
+func TestIntegration_ReleaseApplyingOrphan_OrphanRunVanished(t *testing.T) {
+	resetAll(t)
+	ctx := context.Background()
+	const name = "redis-prod"
+	seedOperator(t, "archon-alice")
+	creator := "archon-alice"
+	inc := &Incarnation{
+		Name: name, Service: "redis", ServiceVersion: "v1",
+		StateSchemaVersion: 1,
+		State:              map[string]any{"primary": name + "-01"},
+		Status:             StatusApplying, CreatedByAID: &creator,
+	}
+	if err := Create(ctx, integrationPool, inc); err != nil {
+		t.Fatalf("Create applying: %v", err)
+	}
+	// НИ ОДНОЙ apply_runs-строки (orphan-run вычищен reaper-ом).
+
+	if err := ReleaseApplyingOrphan(ctx, integrationPool, name, "01HORPHANAPPLY0000000005", "01HORPHANHIST00000000005"); err != nil {
+		t.Fatalf("ReleaseApplyingOrphan (orphan-run vanished): %v", err)
+	}
+
+	got, err := SelectByName(ctx, integrationPool, name)
+	if err != nil {
+		t.Fatalf("SelectByName: %v", err)
+	}
+	if got.Status != StatusReady {
+		t.Errorf("status = %q, want ready (бесхозный lock снят)", got.Status)
+	}
+}
+
+// TestIntegration_ReleaseApplyingOrphan_NotApplying — SINGLE-WINNER: честный
+// RunResult прошлого владельца уже финализировал инкарнацию (ready), apply_runs
+// (orphanApplyID, name) есть → снятие no-op (ErrOrphanLockNotReleased), статус
+// не тронут. Гонка закрыта: мы НЕ перетираем чужой терминал.
+func TestIntegration_ReleaseApplyingOrphan_NotApplying(t *testing.T) {
+	resetAll(t)
+	ctx := context.Background()
+	const (
+		name    = "redis-prod"
+		applyID = "01HORPHANAPPLY0000000003"
+	)
+	seedApplyingWithApplyRun(t, name, applyID, name+".host-01")
+	// Честный финал перевёл инкарнацию в ready ДО нашего снятия.
+	if _, err := integrationPool.Exec(ctx,
+		`UPDATE incarnation SET status = 'ready' WHERE name = $1`, name); err != nil {
+		t.Fatalf("simulate honest finalize: %v", err)
+	}
+
+	err := ReleaseApplyingOrphan(ctx, integrationPool, name, applyID, "01HORPHANHIST00000000003")
+	if !errors.Is(err, ErrOrphanLockNotReleased) {
+		t.Fatalf("err = %v, want ErrOrphanLockNotReleased (not applying)", err)
+	}
+
+	got, err := SelectByName(ctx, integrationPool, name)
+	if err != nil {
+		t.Fatalf("SelectByName: %v", err)
+	}
+	if got.Status != StatusReady {
+		t.Errorf("status = %q, want ready (honest finalize не перетёрт)", got.Status)
+	}
+	_, total, _ := HistorySelectByName(ctx, integrationPool, name, HistoryFilter{}, 0, 50)
+	if total != 0 {
+		t.Errorf("history rows = %d, want 0 (no-op, snapshot не пишется)", total)
+	}
+}
+
+// TestIntegration_ReleaseApplyingOrphan_NotFound — инкарнация снесена между
+// reclaim и снятием → ErrIncarnationNotFound.
+func TestIntegration_ReleaseApplyingOrphan_NotFound(t *testing.T) {
+	resetAll(t)
+	err := ReleaseApplyingOrphan(context.Background(), integrationPool, "ghost",
+		"01HORPHANAPPLY0000000004", "01HORPHANHIST00000000004")
+	if !errors.Is(err, ErrIncarnationNotFound) {
+		t.Fatalf("err = %v, want ErrIncarnationNotFound", err)
+	}
+}

@@ -84,9 +84,35 @@ reaper:
 
 Hot-reload. Безопасно в любой момент — правило идемпотентно (только status-update `claimed → planned`, не data-mutation, не удаление). После отката `claimed`-строки протухшего владельца снова застревают, пока правило выключено.
 
+## Voyage-orphan-lock-release — тот же double-apply класс, включён иначе
+
+Этот runbook — про `reclaim_apply_runs` (per-host Ward, default-OFF, гейт выше). Рядом живёт **второй recovery-механизм** с тем же приемлемым double-apply классом, но **включённый принципиально иначе** — оператор обязан понимать разницу.
+
+**Что это.** `reclaim_voyages` ([ADR-043 §8](../adr/0043-voyage.md#adr-043-voyage--унифицированный-батчевый-прогон), [reaper.md → Конфиг](../keeper/reaper.md#конфиг)) возвращает осиротевший `running`-Voyage (владелец-Keeper умер до финализации, lease протух) обратно в `pending`; другой Keeper-инстанс пере-claim-ит его и доисполняет с сохранённого `current_batch_index`. Для `kind=scenario`-Voyage при re-run leg-а реклеймнутый VoyageWorker сталкивается с осиротевшим `incarnation.status='applying'`, оставленным крашнутым прошлым владельцем (single-winner state-commit `applying`→терминал у него не отработал — он умер). **Voyage-orphan-lock-release** ([ADR-027(l)](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim)) — шов, которым VoyageWorker **снимает СВОЙ осиротевший `applying`** перед re-run. Без него reclaimed Voyage зависает («incarnation уже applying»), и сам `reclaim_voyages` оказывается нерабочим.
+
+**Включается иначе, чем `reclaim_apply_runs`:**
+
+| | `reclaim_apply_runs` (этот runbook) | Voyage-orphan-lock-release |
+|---|---|---|
+| Default | **OFF** (map-driven, нужен явный `enabled: true`) | **ON всегда** — встроенный re-run-путь `reclaim_voyages`, нет отдельного выключателя |
+| Гейт перед включением | да, три прод-гейта выше | нет — приходит вместе с `reclaim_voyages` (тот сам default-ON, path-defaulting) |
+| Кто включил на проде | оператор сознательно, под гейтом | **уже включено по умолчанию** |
+
+`reclaim_voyages` default-ON осознанно (целевой масштаб 100k Souls, рестарт/замена Keeper-инстанса — штатное событие, осиротевшие Voyage регулярны → recovery не должен зависеть от ручной записи правила). А раз без orphan-lock-release Voyage-recovery сломан — шов не имеет собственного opt-in.
+
+**Тот же double-apply класс.** При network-partition (живой, но партиционированный прошлый владелец продолжает свой apply, пока наш re-run шлёт второй) на хост может уйти **двойная отправка задания** — ровно как у `reclaim_apply_runs`. От **порчи `incarnation.state`** защищают те же два барьера, что описаны в этом runbook-е для per-host reclaim:
+
+1. **gate-1 attempt-fencing `RunResult`** — stale-`RunResult` прежнего владельца отсекается на приёме по `apply_runs.attempt` (epoch вырос при пере-claim), всплеск `keeper_runresult_stale_total` (см. [Валидация → Epoch-check](#валидация-после-включения)) при failover Voyage ожидаем и означает, что fencing работает;
+2. **идемпотентность модулей** — повторная отправка того же задания на хост не меняет результат при корректно написанном модуле (та же рекомендация, что для command-Voyage в [ADR-043 §8(d)](../adr/0043-voyage.md#adr-043-voyage--унифицированный-батчевый-прогон)).
+
+**Практический вывод оператору.** Этот double-apply класс присутствует на проде **независимо от того, включил ли ты `reclaim_apply_runs`** — он приходит вместе с default-ON `reclaim_voyages`. Раскатка fencing-Soul (гейт 1 выше) и идемпотентность модулей — условие корректности **обоих** механизмов, не только per-host reclaim. Если `reclaim_voyages` по какой-то причине выключен явным `reaper.rules.reclaim_voyages.enabled: false` — orphan-lock-release уходит вместе с ним, но тогда осиротевшие Voyage зависают без recovery (нежелательно на проде).
+
+Нормативная фиксация — [reaper.md → блок Voyage-orphan-lock-release](../keeper/reaper.md#конфиг) и [ADR-027(l)](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim).
+
 ## Связанное
 
-- [ADR-027 — Acolyte / Ward / recovery](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim), amend GATE-1 (deliver-once recovery, 2026-05-25).
+- [ADR-027 — Acolyte / Ward / recovery](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim), amend GATE-1 (deliver-once recovery, 2026-05-25); (l) — Voyage-orphan-lock-release.
+- [ADR-043 §8 — Voyage failover / `reclaim_voyages` default-ON](../adr/0043-voyage.md#adr-043-voyage--унифицированный-батчевый-прогон).
 - [docs/keeper/reaper.md → Включение recovery](../keeper/reaper.md#включение-recovery-recovery-enable) — нормативная фиксация гейта, источник правды.
 - [docs/keeper/reaper.md → Метрики](../keeper/reaper.md#метрики) — canonical-имена метрик Reaper.
 - Параллельные Reaper-правила, которые **не блокируют** включение этого: `mark_disconnected` (Soul heartbeat-выпадение, 90s), `purge_audit_old`, `purge_apply_runs` (30d retention завершённых), `purge_apply_task_register` (1h grace), `purge_old_errands`.

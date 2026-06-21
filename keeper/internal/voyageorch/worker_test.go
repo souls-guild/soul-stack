@@ -49,6 +49,11 @@ type fakeDB struct {
 	// batchProgress — захват UpdateBatchProgress: упорядоченный список
 	// completedBatches-аргументов (current_batch_index) каждого UPDATE-а. Под mu.
 	batchProgress []int
+
+	// queryFn — опциональный hook для Query (SelectTargets в reconcileOrphanLock).
+	// nil → дефолтный "not configured"-error (executeScenario-тесты Query не
+	// используют). Под mu при установке из теста до запуска.
+	queryFn func(sql string, args []any) (pgx.Rows, error)
 }
 
 func (f *fakeDB) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
@@ -150,7 +155,13 @@ func (r ownerScanRow) Scan(dest ...any) error {
 	return nil
 }
 
-func (f *fakeDB) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
+func (f *fakeDB) Query(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
+	f.mu.Lock()
+	fn := f.queryFn
+	f.mu.Unlock()
+	if fn != nil {
+		return fn(sql, args)
+	}
 	return nil, errors.New("fakeDB: Query not configured")
 }
 

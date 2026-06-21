@@ -64,6 +64,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/toll"
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 	keepervault "github.com/souls-guild/soul-stack/keeper/internal/vault"
+	"github.com/souls-guild/soul-stack/keeper/internal/voyage"
 	"github.com/souls-guild/soul-stack/keeper/internal/voyageorch"
 	"github.com/souls-guild/soul-stack/keeper/internal/watchman"
 	"github.com/souls-guild/soul-stack/keeper/migrations"
@@ -4224,6 +4225,11 @@ func (d *daemon) setupVoyageWorker(ctx context.Context) error {
 		pollInterval: pollInterval,
 		logger:       logger,
 	}
+	// OrphanReleaser — recovery-шов ADR-027(k): снятие осиротевшего applying-lock
+	// инкарнации (от scenario-run мёртвого прошлого владельца Voyage) перед re-run.
+	// FENCED single-winner: VerifyOwnership (мы владелец run.Attempt) →
+	// incarnation.ReleaseApplyingOrphan (apply_id-match + CAS).
+	orphanReleaser := &voyageOrphanLockReleaser{pool: d.pool}
 	var commandSpawner voyageorch.CommandSpawner
 	if d.errandDispatcher != nil {
 		commandSpawner = &voyageCommandSpawner{
@@ -4250,6 +4256,7 @@ func (d *daemon) setupVoyageWorker(ctx context.Context) error {
 			ScenarioSpawner: scenarioSpawner,
 			ScenarioAwaiter: incarnationAwaiter,
 			CommandSpawner:  commandSpawner,
+			OrphanReleaser:  orphanReleaser,
 			Audit:           d.auditWriter,
 		}
 		wg.Add(1)
@@ -4382,6 +4389,48 @@ func (s *voyageScenarioSpawner) SpawnScenarioRun(ctx context.Context, voyageID, 
 		return "", fmt.Errorf("voyage scenario spawner: runner.Start: %w", err)
 	}
 	return applyID, nil
+}
+
+// voyageOrphanLockReleaser — production [voyageorch.OrphanLockReleaser]: снятие
+// осиротевшего applying-lock инкарнации перед re-run реклеймнутого Voyage
+// (recovery-шов ADR-027(k)). Две ступени FENCING под одним адаптером:
+//
+//   - FENCING-3 (self-ownership): voyage.VerifyOwnership(voyage_id, kid, attempt)
+//     — мы текущий владелец Voyage с claim-epoch attempt. ErrLeaseLost (нас
+//     самих реклеймнули) → released=false, err=nil: lock НЕ трогаем (его снимет
+//     реальный новый владелец). Транзиентная PG-ошибка → err (fail-closed).
+//   - FENCING-1 + single-winner: incarnation.ReleaseApplyingOrphan
+//     (apply_id-match по apply_runs + atomic CAS applying→ready под FOR UPDATE).
+//     ErrOrphanLockNotReleased (не applying / orphan apply_id не наш / honest-
+//     финал прошлого владельца выиграл строку) → released=false, err=nil (no-op).
+type voyageOrphanLockReleaser struct {
+	pool *pgxpool.Pool
+}
+
+func (r *voyageOrphanLockReleaser) ReleaseOrphanLock(ctx context.Context, voyageID, incarnationName string, attempt int, kid, orphanApplyID string) (bool, error) {
+	// FENCING-3: владелец ли я ещё Voyage с этим claim-epoch. Если нас реклеймнули
+	// (ErrLeaseLost) — НЕ снимаем чужой lock: dangling-lock реконсилит реальный
+	// новый владелец своим проходом.
+	if err := voyage.VerifyOwnership(ctx, r.pool, voyageID, kid, attempt); err != nil {
+		if errors.Is(err, voyage.ErrLeaseLost) {
+			return false, nil
+		}
+		return false, fmt.Errorf("voyage orphan-releaser: verify ownership: %w", err)
+	}
+
+	// FENCING-1 + single-winner CAS снятия.
+	historyID := audit.NewULID()
+	if err := incarnation.ReleaseApplyingOrphan(ctx, r.pool, incarnationName, orphanApplyID, historyID); err != nil {
+		if errors.Is(err, incarnation.ErrOrphanLockNotReleased) {
+			return false, nil
+		}
+		if errors.Is(err, incarnation.ErrIncarnationNotFound) {
+			// Инкарнация снесена между reclaim и снятием — нечего снимать.
+			return false, nil
+		}
+		return false, fmt.Errorf("voyage orphan-releaser: release applying-orphan: %w", err)
+	}
+	return true, nil
 }
 
 // voyagePgIncarnationAwaiter — production [voyageorch.IncarnationAwaiter]: poll

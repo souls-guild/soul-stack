@@ -60,6 +60,12 @@ var (
 	// трактует как no-op (логирует «уже финализировано другим»), как
 	// [DeleteAfterTeardown] трактует RowsAffected==0 для DELETE.
 	ErrAlreadyFinalized = errors.New("incarnation: already finalized by another committer")
+	// ErrOrphanLockNotReleased — снятие осиротевшего applying-lock не состоялось
+	// (single-winner no-op): инкарнация уже НЕ в applying ЛИБО orphan apply_id ей
+	// не принадлежит. НЕ ошибка консистентности — caller (voyageorch recovery-шов,
+	// ADR-027(k)) трактует как «снимать нечего / честный финал прошлого владельца
+	// уже выиграл строку» и продолжает re-run без снятия.
+	ErrOrphanLockNotReleased = errors.New("incarnation: orphan applying-lock not released (no-op)")
 )
 
 const (
@@ -904,6 +910,164 @@ WHERE name = $1
 		return nil, fmt.Errorf("incarnation: commit unlock tx: %w", err)
 	}
 	return &UnlockResult{PreviousStatus: previous, HistoryID: historyID}, nil
+}
+
+// orphanReleaseScenarioLabel — значение `state_history.scenario` для перехода
+// снятия осиротевшего applying-lock (ADR-027(k) recovery-шов). Отдельная метка
+// от unlockScenarioLabel: это НЕ ручной operator-unlock, а автоматическая
+// реконсиляция dangling-lock реклеймнутым Voyage-владельцем — след в истории
+// должен отличаться для триажа.
+const orphanReleaseScenarioLabel = "voyage-orphan-release"
+
+// ReleaseApplyingOrphan атомарно снимает осиротевший applying-lock инкарнации,
+// оставшийся от scenario-run мёртвого Keeper-владельца Voyage (recovery-шов,
+// ADR-027(k) / ADR-043). Реклеймнутый VoyageWorker вызывает это ПЕРЕД повторным
+// спавном per-incarnation scenario-run: без снятия lockRun отвергнет re-run
+// («incarnation уже applying»), и Voyage завис бы навсегда.
+//
+// Снятие = applying → ready (state НЕ трогаем — last known-good сохраняется,
+// симметрично [Unlock]; orphan-прогон мёртвого владельца не доехал до state-
+// commit-а, поэтому last-good = pre-run state). status_details сбрасываются.
+//
+// orphanApplyID — apply_id осиротевшего прогона (back-link из voyage_targets
+// ЭТОГО Voyage от прошлого attempt — caller уже доказал привязку apply_id↔
+// инкарнация↔voyage самим фактом, что взял его из voyage_targets[name]). Caller
+// (voyageorch) обязан провести fencing-проверки (reclaimed-attempt +
+// VerifyOwnership) ДО вызова; здесь — FENCING-1 (защита чужого live-lock) +
+// single-winner CAS под одним FOR UPDATE:
+//
+//   - FENCING-1 (no-live-rival): снимаем lock ТОЛЬКО если у инкарнации НЕТ
+//     активного (не-терминального) apply_run с apply_id ≠ orphanApplyID. Чужой
+//     живой прогон (прямой run / другой Voyage, стартовавший между крахом и
+//     reclaim) держит активную apply_runs-строку СВОЕГО apply_id → её наличие
+//     блокирует снятие ([ErrOrphanLockNotReleased]). Защита от снятия чужого
+//     live-lock. ВАЖНО: проверка НЕ требует, чтобы apply_run orphanApplyID
+//     существовал — строки orphanApplyID может не быть вовсе: её удалил
+//     retention-purge `purge_apply_runs` (миграция 021, сносит ТЕРМИНАЛЬНЫЕ
+//     apply_runs старше 30d) ЛИБО прошлый владелец крашнулся ДО Insert(apply_runs)
+//     (lockRun уже закоммитил applying, apply_run ещё не вставлен). incarnation-
+//     lock — бесхозный флаг (нет владельца/attempt/lease) — остаётся в обоих
+//     случаях; привязку к orphan даёт voyage_targets back-link на стороне
+//     caller-а, а не наличие apply_run. (NB: reaper-правило reclaim_apply_runs
+//     осиротевшую строку НЕ удаляет — оно делает claimed→planned reset «зависших»
+//     планов, не трогая dispatched/running/терминальные; источник «строки нет»
+//     здесь — именно purge-retention или pre-Insert-краш.)
+//   - SINGLE-WINNER: guard `status='applying'` (CAS). Если честный RunResult
+//     прошлого владельца / параллельный финал уже вывел строку из applying —
+//     UPDATE даст RowsAffected==0 → [ErrOrphanLockNotReleased] (no-op, гонка
+//     закрыта, мы НЕ перетираем чужой терминал).
+//
+// Атомарность: одна транзакция SELECT … FOR UPDATE → проверки → INSERT
+// state_history → CAS-UPDATE. FOR UPDATE сериализует снятие относительно
+// конкурентного scenario-runner-а (его lockRun лочит ту же строку).
+//
+// Возврат:
+//   - nil                        — lock снят (applying → ready), re-run может
+//     стартовать.
+//   - [ErrIncarnationNotFound]   — name не существует (инкарнация снесена между
+//     reclaim и снятием).
+//   - [ErrOrphanLockNotReleased] — снимать нечего (не applying / orphan apply_id
+//     не наш): caller продолжает re-run без снятия.
+func ReleaseApplyingOrphan(ctx context.Context, pool TxBeginner, name, orphanApplyID, historyID string) error {
+	if !ValidName(name) {
+		return fmt.Errorf("incarnation: invalid name %q", name)
+	}
+	if orphanApplyID == "" {
+		return fmt.Errorf("incarnation: empty orphan apply_id")
+	}
+	if historyID == "" {
+		return fmt.Errorf("incarnation: empty history_id")
+	}
+
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("incarnation: begin orphan-release tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	const selectForUpdateSQL = `
+SELECT state, status
+FROM incarnation
+WHERE name = $1
+FOR UPDATE
+`
+	var (
+		stateBytes []byte
+		statusStr  string
+	)
+	if err := tx.QueryRow(ctx, selectForUpdateSQL, name).Scan(&stateBytes, &statusStr); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrIncarnationNotFound
+		}
+		return fmt.Errorf("incarnation: orphan-release select: %w", err)
+	}
+	// SINGLE-WINNER fast-path: не в applying — снимать нечего (честный RunResult
+	// прошлого владельца / параллельный финал уже выиграл строку). FOR UPDATE
+	// уже сериализовал нас — статус авторитетен в этой tx.
+	if Status(statusStr) != StatusApplying {
+		return ErrOrphanLockNotReleased
+	}
+
+	// FENCING-1 (no-live-rival): у инкарнации НЕ должно быть активного
+	// (не-терминального) apply_run ЧУЖОГО прогона (apply_id ≠ orphanApplyID).
+	// Если есть — между крахом и reclaim стартовал живой прогон (прямой run /
+	// другой Voyage), его applying-lock НЕ наш orphan → НЕ снимаем. Терминальные
+	// статусы (success/failed/cancelled/orphaned/no_match) живой прогон не
+	// держат — игнорируем. Отсутствие строки orphanApplyID допустимо: её снёс
+	// retention-purge purge_apply_runs (терминальные >30d) ИЛИ прошлый владелец
+	// крашнулся ДО Insert(apply_runs); lock — бесхозный флаг — остаётся.
+	const liveRivalSQL = `
+SELECT EXISTS (
+    SELECT 1 FROM apply_runs
+    WHERE incarnation_name = $1
+      AND apply_id <> $2
+      AND status NOT IN ('success', 'failed', 'cancelled', 'orphaned', 'no_match')
+)
+`
+	var hasRival bool
+	if err := tx.QueryRow(ctx, liveRivalSQL, name, orphanApplyID).Scan(&hasRival); err != nil {
+		return fmt.Errorf("incarnation: orphan-release live-rival check: %w", err)
+	}
+	if hasRival {
+		return ErrOrphanLockNotReleased
+	}
+
+	// state_before == state_after: снятие orphan-lock не меняет state (orphan-
+	// прогон не доехал до commit-а — state остаётся pre-run last-good).
+	// apply_id = orphanApplyID: snapshot перехода коррелирует с осиротевшим
+	// прогоном (схема требует non-null apply_id).
+	const historyInsertSQL = `
+INSERT INTO state_history (
+    history_id, incarnation_name, scenario, state_before, state_after,
+    changed_by_aid, apply_id
+) VALUES ($1, $2, $3, $4, $4, NULL, $5)
+`
+	if _, err := tx.Exec(ctx, historyInsertSQL,
+		historyID, name, orphanReleaseScenarioLabel, stateBytes, orphanApplyID,
+	); err != nil {
+		return fmt.Errorf("incarnation: insert orphan-release state_history: %w", err)
+	}
+
+	// SINGLE-WINNER CAS: applying → ready. RowsAffected==0 невозможен под
+	// FOR UPDATE+ранней проверкой статуса (мы уже видели applying в этой tx), но
+	// guard сохраняем как явный инвариант перехода.
+	const updateSQL = `
+UPDATE incarnation
+SET status = $2, status_details = NULL, updated_at = NOW()
+WHERE name = $1 AND status = 'applying'
+`
+	tag, err := tx.Exec(ctx, updateSQL, name, string(StatusReady))
+	if err != nil {
+		return fmt.Errorf("incarnation: orphan-release update: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrOrphanLockNotReleased
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("incarnation: commit orphan-release tx: %w", err)
+	}
+	return nil
 }
 
 // rerunCreateScenarioLabel — значение `state_history.scenario` для unlock-части

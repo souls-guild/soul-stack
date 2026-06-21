@@ -58,6 +58,13 @@ type VoyageWorker struct {
 	ScenarioSpawner ScenarioSpawner
 	ScenarioAwaiter IncarnationAwaiter
 
+	// OrphanReleaser — recovery-шов ADR-027(k): ПЕРЕД повторным спавном per-
+	// incarnation scenario-run реклеймнутого Voyage снимает осиротевший
+	// applying-lock инкарнации, оставшийся от scenario-run мёртвого прошлого
+	// владельца (FENCED single-winner). nil → детект выключен (поведение как до
+	// фикса; unit-сборка без recovery-шва). Только kind=scenario (S2).
+	OrphanReleaser OrphanLockReleaser
+
 	// CommandSpawner — DI kind=command исполнения (S3): блокирующий спавн
 	// Errand-а на один SID (reuse errand-машинерии, parity
 	// errandrunorch.ErrandSpawner). nil → claim-нутый command-Voyage

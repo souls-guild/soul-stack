@@ -78,6 +78,10 @@ type Stack struct {
 
 	keeperCmd *exec.Cmd
 
+	// keepers — keeper-субпроцессы мульти-кластера (NewMultiKeeperStack).
+	// Пуст для single-keeper Stack (keeperCmd выше). См. multikeeper.go.
+	keepers []*keeperProc
+
 	// souls — pre-auth-зарегистрированные soul-stub-ы (SID + mTLS client-cert),
 	// заполняется NewStack-ом. caBundle — root CA keeper-server-cert-а, общий
 	// для всех (ConnectSoulStub верифицирует server-cert по нему). Используется

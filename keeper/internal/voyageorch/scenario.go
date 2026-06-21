@@ -60,6 +60,31 @@ type ScenarioSpawner interface {
 	SpawnScenarioRun(ctx context.Context, voyageID, incarnationName, scenarioName string, input []byte, startedByAID string, cadenceID *string) (applyID string, err error)
 }
 
+// OrphanLockReleaser снимает осиротевший applying-lock инкарнации, оставшийся от
+// scenario-run мёртвого Keeper-владельца ЭТОГО Voyage прошлого attempt (recovery-
+// шов, ADR-027(k)). Изолирует voyageorch от incarnation/applyrun-CRUD (parity
+// ScenarioSpawner): production wire-up (daemon) даёт адаптер поверх
+// incarnation.ReleaseApplyingOrphan; unit-тесты — fake.
+//
+// orphanApplyID — back-link apply_id осиротевшего прогона из voyage_targets ЭТОГО
+// Voyage (от прошлого attempt). Реализация обязана быть FENCED single-winner:
+// снимает lock ТОЛЬКО когда инкарнация в applying И orphanApplyID ей принадлежит
+// (incarnation.ReleaseApplyingOrphan: FOR UPDATE + apply_id-match + CAS).
+//
+// Контракт возврата:
+//   - released=true  — lock снят (applying → ready), re-run может стартовать;
+//   - released=false, err=nil — снимать нечего (не applying / orphan apply_id не
+//     наш / honest-финал прошлого владельца уже выиграл строку): caller продолжает
+//     re-run БЕЗ снятия (lockRun сам отбракует, если состояние всё ещё не runnable);
+//   - err != nil — CRUD-сбой PG: caller логирует и НЕ спавнит (fail-closed по
+//     инкарнации, не abort всего Voyage).
+//
+// nil-поле → детект осиротевшего lock выключен (unit-тест без recovery-шва /
+// dev-сборка): runOneIncarnation идёт сразу к спавну как до фикса.
+type OrphanLockReleaser interface {
+	ReleaseOrphanLock(ctx context.Context, voyageID, incarnationName string, attempt int, kid string, orphanApplyID string) (released bool, err error)
+}
+
 // IncarnationAwaiter — ждёт terminal-статус одного per-incarnation scenario-run-а
 // по applyID. Production wire-up (S5) даёт реализацию поверх
 // applyrun.SelectStatusesByApplyID (poll до терминала всех хостов инкарнации,
@@ -645,6 +670,19 @@ func (w *VoyageWorker) runOneIncarnationFenced(ctx context.Context, run *voyage.
 // обновляя voyage_targets. Ошибки трекинга (MarkTarget*) логируются, но не валят
 // прогон инкарнации — авторитет исхода = Await (фактический статус apply_runs).
 func (w *VoyageWorker) runOneIncarnation(ctx context.Context, run *voyage.Voyage, name string) targetResult {
+	// Recovery-шов (ADR-027(k)): если на инкарнации висит МОЙ осиротевший
+	// applying-lock от прошлого attempt ЭТОГО Voyage (scenario-run мёртвого
+	// прежнего владельца не доехал до state-commit-а), снимаем его FENCED перед
+	// re-run — иначе lockRun отвергнет спавн («incarnation уже applying») и Voyage
+	// зависнет навсегда. CRUD-сбой реконсиляции → fail-closed по инкарнации (не
+	// спавним, failed), без abort всего Voyage.
+	if rerr := w.reconcileOrphanLock(ctx, run, name); rerr != nil {
+		w.Logger.Warn("voyageorch: реконсиляция осиротевшего applying-lock провалена — scenario-run не отправлен",
+			slog.String("voyage_id", run.VoyageID), slog.String("incarnation", name), slog.Any("error", rerr))
+		w.trackTerminal(ctx, run.VoyageID, name, OutcomeFailed)
+		return targetResult{IncarnationName: name, Outcome: OutcomeFailed}
+	}
+
 	applyID, err := w.ScenarioSpawner.SpawnScenarioRun(ctx, run.VoyageID, name, *run.ScenarioName, run.Input, run.StartedByAID, run.CadenceID)
 	if err != nil {
 		w.Logger.Warn("voyageorch: spawn scenario-run failed",
@@ -675,6 +713,84 @@ func (w *VoyageWorker) runOneIncarnation(ctx context.Context, run *voyage.Voyage
 
 	w.trackTerminal(ctx, run.VoyageID, name, outcome)
 	return targetResult{IncarnationName: name, ApplyID: applyID, Outcome: outcome}
+}
+
+// reconcileOrphanLock — recovery-шов ADR-027(k): детект + FENCED снятие
+// осиротевшего applying-lock инкарнации перед повторным спавном scenario-run
+// реклеймнутого Voyage. Возвращает error ТОЛЬКО на CRUD-сбое PG (caller →
+// fail-closed по инкарнации); «нечего снимать» / «снято» — оба nil.
+//
+// ТРИ FENCING-условия (все обязательны перед снятием, иначе двойной apply на
+// живом):
+//
+//  1. ДЕТЕКТ + apply_id-match: в voyage_targets ЭТОГО voyage_id есть строка
+//     инкарнации с записанным back-link apply_id и НЕ-терминальным статусом
+//     (running/awaiting). Этот apply_id — orphan прошлого attempt ПО ПОСТРОЕНИЮ:
+//     MarkTargetRunning пишет back-link ПОСЛЕ спавна под CAS `v.attempt=$attempt`,
+//     а мы СЕЙЧАС ДО спавна нашего attempt — значит записанный apply_id не наш,
+//     он от прошлого прохода (attempt < run.Attempt). Финальную привязку apply_id
+//     ↔ инкарнация проверяет incarnation.ReleaseApplyingOrphan (apply_runs-EXISTS).
+//  2. reclaimed-attempt + self-ownership: VerifyOwnership(voyage_id, KID,
+//     run.Attempt) — мы текущий владелец Voyage с claim-epoch run.Attempt. Если
+//     нас самих реклеймнули (ErrLeaseLost) — НЕ трогаем lock (его снимет реальный
+//     новый владелец); транзиентная PG-ошибка — fail-closed. Сам факт, что мы в
+//     этой точке как ВЛАДЕЛЕЦ run.Attempt, а back-link уже стоял от чужого
+//     apply_id — подтверждает re-claim (прошлый владелец потерял Voyage, его
+//     RunResult fenced на уровне apply_runs.attempt, ADR-027(g)).
+//  3. single-winner CAS: снятие atomic через incarnation.ReleaseApplyingOrphan
+//     (FOR UPDATE + guard status='applying'). Если честный RunResult прошлого
+//     владельца уже финализировал инкарнацию — снятие no-op (released=false).
+func (w *VoyageWorker) reconcileOrphanLock(ctx context.Context, run *voyage.Voyage, name string) error {
+	if w.OrphanReleaser == nil {
+		return nil // детект выключен (unit / dev без recovery-шва)
+	}
+
+	// ДЕТЕКТ: back-link orphan apply_id из voyage_targets ЭТОГО Voyage. scope мал
+	// (N инкарнаций одного Voyage) — полный SelectTargets + фильтр дешевле узкого
+	// селектора. Нет строки / нет apply_id / target уже терминал → нечего снимать.
+	targets, err := voyage.SelectTargets(ctx, w.Pool, run.VoyageID)
+	if err != nil {
+		return fmt.Errorf("voyageorch: select targets для orphan-детекта: %w", err)
+	}
+	orphanApplyID := ""
+	for i := range targets {
+		t := &targets[i]
+		if t.TargetKind != voyage.TargetKindIncarnation || t.TargetID != name {
+			continue
+		}
+		// Только running/awaiting с записанным back-link — orphan-кандидат.
+		// Терминальный target (succeeded/failed/cancelled/no_match) уже доехал —
+		// инкарнация не висит. ApplyID==nil — спавн прошлого attempt не дошёл до
+		// MarkTargetRunning, lock не выставлен этим Voyage → не наш orphan.
+		if t.ApplyID != nil && *t.ApplyID != "" &&
+			(t.Status == voyage.TargetStatusRunning || t.Status == voyage.TargetStatusAwaiting) {
+			orphanApplyID = *t.ApplyID
+		}
+		break
+	}
+	if orphanApplyID == "" {
+		return nil // нет back-link прошлого attempt — нечего снимать
+	}
+
+	// FENCING-2/3 + single-winner снятие. ReleaseOrphanLock сначала
+	// VerifyOwnership (мы владелец run.Attempt; ErrLeaseLost → released=false,
+	// err=nil — нас реклеймнули, lock не трогаем), затем atomic CAS снятия.
+	released, rerr := w.OrphanReleaser.ReleaseOrphanLock(ctx, run.VoyageID, name, run.Attempt, w.KID, orphanApplyID)
+	if rerr != nil {
+		return rerr
+	}
+	if released {
+		w.Logger.Info("voyageorch: осиротевший applying-lock снят перед re-run (recovery-шов ADR-027(k))",
+			slog.String("voyage_id", run.VoyageID), slog.String("incarnation", name),
+			slog.String("orphan_apply_id", orphanApplyID),
+			slog.String("kid", w.KID), slog.Int("attempt", run.Attempt))
+	} else {
+		w.Logger.Info("voyageorch: осиротевший applying-lock НЕ снят (fenced no-op: не applying / orphan apply_id не наш / нас реклеймнули)",
+			slog.String("voyage_id", run.VoyageID), slog.String("incarnation", name),
+			slog.String("orphan_apply_id", orphanApplyID),
+			slog.String("kid", w.KID), slog.Int("attempt", run.Attempt))
+	}
+	return nil
 }
 
 // trackTerminal best-effort фиксирует терминал target-а в voyage_targets. Ошибка
