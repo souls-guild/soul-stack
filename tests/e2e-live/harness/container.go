@@ -306,6 +306,10 @@ func keeperExtraHosts() []string {
 // keeperEndpointHost() (дефолт host.docker.internal, резолвится через
 // ExtraHosts host-gateway; на WSL2 — реальный хост-IP через E2E_KEEPER_HOST).
 func buildSoulYAML(stack *Stack) string {
+	// metrics.enabled=true → soul поднимает /metrics на loopback 127.0.0.1:9091
+	// (default listen). Порт наружу НЕ публикуется (нет ports-mapping) — scrape
+	// только container-side через Exec(curl). Нужен FC-3-тесту, который читает
+	// soul_apply_task_retries_total; остальным тестам безвреден (loopback-bind).
 	const tmpl = `paths:
   seed: /var/lib/soul-stack/seed
   modules: /var/lib/soul-stack/modules
@@ -320,6 +324,8 @@ keeper:
 logging:
   level: info
   format: text
+metrics:
+  enabled: true
 hot_reload:
   enable_signal: false
   enable_inotify: false

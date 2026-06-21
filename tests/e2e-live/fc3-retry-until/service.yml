@@ -1,0 +1,16 @@
+name: fc3-retry-until
+state_schema_version: 1
+description: >-
+  FC-3 L3b: доказать retry:+until: health-gate на РЕАЛЬНОМ тайминге (real-apply).
+  L3a-stub отдаёт финальный RunResult сразу — retry-петля наружу не наблюдаема и
+  не доказано, что until вычисляется на реальном поднятии сервиса. Здесь probe
+  (core.cmd.shell) с retry:{count,delay,until} бьётся в gate, который физически
+  не готов на 1-й попытке (ready-эпоха записана prepare-задачей в будущее),
+  поэтому until ОБЯЗАН пройти ≥2 попытки прежде чем сматчится.
+
+# state_schema_version=1 → каталог migrations/ не обязателен (ADR-019).
+# Фокус-сценарий не мутирует incarnation.state (commit state — отдельный
+# инвариант, покрыт другими L3a/L3b-тестами).
+state_schema:
+  type: object
+  properties: {}

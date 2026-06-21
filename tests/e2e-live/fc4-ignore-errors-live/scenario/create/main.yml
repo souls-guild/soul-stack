@@ -1,0 +1,25 @@
+name: create
+description: >-
+  FC-4 happy-path: задача с РЕАЛЬНО падающим модулем + failed_when:false. На
+  Soul-е core.exec.run несуществующего бинаря провалит fork/exec (file not
+  found → SendFailed → last.failed=true, moduleErr=module.failed). failed_when
+  "false" перекрывает провал → финальный статус задачи OK → прогон SUCCESS.
+  Исходная ошибка НЕ теряется: applyrunner.go кладёт её в register.<name>.
+  ignored_error, keeper персистит в apply_task_register. register: обязателен,
+  иначе register_data не накапливается.
+
+# Фокус — flow-control-исход и register, state не меняется.
+state_changes: {}
+
+tasks:
+  - name: Deliberately failing task with ignore_errors
+    module: core.exec.run
+    register: fail_probe
+    # ★ ignore_errors: реальный провал модуля подавляется в OK.
+    failed_when: "false"
+    params:
+      # Несуществующий абсолютный путь → exec не найдёт бинарь → res.Err != nil
+      # → util.SendFailed. Это РЕАЛЬНОЕ падение модуля (не exit-code в output:
+      # core.cmd.shell с `exit 1` НЕ падает — кладёт exit_code в output).
+      cmd: /nonexistent/fc4-deliberate-fail
+      args: ["arg-that-never-runs"]

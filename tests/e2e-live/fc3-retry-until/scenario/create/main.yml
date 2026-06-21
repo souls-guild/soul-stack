@@ -1,0 +1,61 @@
+name: create
+description: >-
+  FC-3 retry:+until: health-gate против реального тайминга (L3b capstone).
+
+  Passage-плана нет (один Passage): обе задачи без where:/register-зависимости.
+
+  Задача 0 (prepare gate): пишет НА ХОСТ две метки эпохи — момент старта
+  (/tmp/fc3-start) и ready-эпоху В БУДУЩЕМ (now + GATE_DELAY → /tmp/fc3-ready-at).
+  Детерминированный gate без фонового процесса/гонки: «готов» = настенное время
+  догнало ready-эпоху.
+
+  Задача 1 (probe health-gate): core.cmd.shell с retry:{count,delay,until}.
+  На каждой попытке probe сравнивает now с ready-эпохой: пока now < ready-at →
+  печатает NOTYET (until: == 'READY' ложно → delay → следующая попытка); как
+  только now >= ready-at → печатает READY И записывает СВОЮ done-эпоху в
+  /tmp/fc3-done. until: register.self.stdout == 'READY' матчится ТОЛЬКО на
+  попытке, прошедшей gate. Поскольку gate в будущем относительно prepare, 1-я
+  попытка probe ОБЯЗАНА увидеть NOTYET → реальный retry ≥2 попытки.
+
+# Фокус-сценарий: state не меняется (commit state — отдельный инвариант).
+state_changes: {}
+
+tasks:
+  # ── Задача 0: установить детерминированный health-gate ───────────────────
+  # printf-метки эпох на ХОСТ. GATE_DELAY=6 c, delay probe=2s → probe не может
+  # сматчиться раньше ~3-й попытки (now>=ready-at недостижимо на 1-2 попытках).
+  # rm чистит метки прошлого прогона (повторный create на той же incarnation).
+  - name: Prepare health-gate epochs
+    module: core.cmd.shell
+    changed_when: "false"
+    params:
+      cmd: |
+        rm -f /tmp/fc3-done
+        now=$(date +%s)
+        printf '%s' "$now" > /tmp/fc3-start
+        printf '%s' "$((now + 6))" > /tmp/fc3-ready-at
+
+  # ── Задача 1: probe с retry:+until: бьётся в gate ────────────────────────
+  # changed_when:false — probe чистый health-read, не изменение. retry-бюджет
+  # 20×2s=40s с большим запасом на gate=6s. until: вычисляется ПОСЛЕ каждой
+  # попытки по register.self.stdout (свежий per-attempt register). failed_when
+  # дублирует until-условие как страховка от «исчерпано но OK».
+  - name: Wait until health-gate opens
+    module: core.cmd.shell
+    register: probe
+    changed_when: "false"
+    retry:
+      count: 20
+      delay: 2s
+      until: register.self.stdout == 'READY'
+    failed_when: register.self.stdout != 'READY'
+    params:
+      cmd: |
+        now=$(date +%s)
+        want=$(cat /tmp/fc3-ready-at 2>/dev/null || echo 0)
+        if [ "$now" -ge "$want" ]; then
+          printf '%s' "$now" > /tmp/fc3-done
+          printf READY
+        else
+          printf NOTYET
+        fi

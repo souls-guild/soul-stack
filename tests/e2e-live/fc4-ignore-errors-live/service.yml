@@ -1,0 +1,20 @@
+name: fc4-ignore-errors-live
+state_schema_version: 1
+description: >-
+  FC-4 L3b: доказать failed_when:false = ignore_errors на РЕАЛЬНОМ падении
+  модуля при real-apply. core.exec.run несуществующего бинаря РЕАЛЬНО падает на
+  Soul-е (fork/exec: file not found → SendFailed → last.failed=true), а
+  failed_when:false перекрывает провал в OK и сохраняет исходную ошибку в
+  register.<name>.ignored_error (applyrunner.go buildRegisterData/ignore_errors-
+  аудит). Два сценария-зеркала:
+   - create:   падение + failed_when:false → прогон SUCCESS, ignored_error непуст.
+   - fail_hard: та же задача БЕЗ failed_when → прогон FAILED (контраст,
+     доказывает что подавление делает именно failed_when, а не сам модуль).
+  L3a-stub не вычисляет failed_when → best-effort-семантика на реальном падении
+  и mapping реального stderr/exit-code в ignored_error там не доказаны.
+
+# state_schema_version=1 → каталог migrations/ не обязателен (ADR-019).
+# Фокус — flow-control-исход прогона и register, не мутация incarnation.state.
+state_schema:
+  type: object
+  properties: {}

@@ -1,0 +1,43 @@
+name: when_role_gate
+description: >-
+  FC-5: per-task when-gating по СВЕЖЕМУ register на реальном soul-флоте.
+  Passage 0 — probe `redis-cli role` каждого хоста (register: redis_role).
+  Passage 1 — действие БЕЗ where: (уходит на ВСЕ хосты прогона), gated
+  Soul-side `when: register.redis_role.stdout == 'master'`. На master when=true
+  → задача исполняется (changed_when: false → TASK_STATUS_OK), на репликах
+  when=false → Soul эмитит TASK_STATUS_SKIPPED ДО Apply (mod.Apply не зовётся).
+
+  Ключевое отличие от where (staged-probe-live / update_acl): where режет хост
+  на уровне Keeper-targeting (apply_runs → no_match, задачи нет вовсе), а when
+  отправляет задачу на хост и решает Soul-side — per-task SKIPPED-событие в
+  audit_log, а не отсутствие apply_runs-строки.
+
+# Фокус-сценарий: state не меняется (commit state — отдельный инвариант).
+state_changes: {}
+
+tasks:
+  # ── Passage 0: probe роли per-host РЕАЛЬНЫМ redis ─────────────────────────
+  # `redis-cli role | head -1 | tr -d '\n'` — register.redis_role.stdout без
+  # trailing newline (cmd-модуль stdout НЕ тримит): чистое 'master' / 'slave'.
+  # Полнота probe гарантируется fail-stop барьером Passage 0 (ADR-056 §5).
+  - name: Detect actual redis role per host
+    module: core.cmd.shell
+    register: redis_role
+    changed_when: "false"
+    params:
+      cmd: "redis-cli role | head -1 | tr -d '\\n'"
+
+  # ── Passage 1: действие на ВСЕ хосты, gated Soul-side по when ─────────────
+  # БЕЗ where: задача доходит до каждого хоста прогона. `when` ссылается на
+  # register.redis_role → keeper стратифицирует задачу в Passage 1 (строго ПОСЛЕ
+  # probe Passage 0) и протягивает when как CEL-СТРОКУ в RenderedTask.when (не
+  # вычисляет Keeper-side — register известен только Soul-у). Soul вычисляет when
+  # per-host: master → исполняет (changed_when: false → OK), реплики → SKIPPED.
+  # Маркер-файл — независимое доказательство, что Apply реально шёл на master и
+  # НЕ шёл на репликах (AssertHostFileExists master / отсутствие на репликах).
+  - name: Act on the current master only (when-gated)
+    module: core.cmd.shell
+    when: "register.redis_role.stdout == 'master'"
+    changed_when: "false"
+    params:
+      cmd: "printf when-gate-ran > /tmp/when-gated-acted"
