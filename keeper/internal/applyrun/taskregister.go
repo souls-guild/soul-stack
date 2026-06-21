@@ -52,7 +52,8 @@ DO UPDATE SET task_idx = EXCLUDED.task_idx, register_data = EXCLUDED.register_da
 
 // UpsertTaskRegister пишет (или перезаписывает) register-результат задачи.
 // Перезапись — для retry той же задачи на Soul-стороне: побеждает последний
-// результат (ON CONFLICT по PK (apply_id, sid, task_idx)).
+// результат (ON CONFLICT по PK (apply_id, sid, plan_index) — PK сменён в
+// миграции 079 с task_idx на plan_index).
 //
 // Pre-conditions: непустые ApplyID / SID; неотрицательный TaskIdx; непустой
 // RegisterData (nil/пустой → no-op: register: без данных нечего копить).

@@ -294,10 +294,16 @@ func applyRunSnapshot(t *testing.T, ctx context.Context, pool *pgxpool.Pool, app
 // apply_run (FK на apply_runs(apply_id, sid)). register_data — минимальный
 // непустой jsonb, содержимое для purge-логики не важно (критерий — статус
 // apply_run + finished_at, а не сама register-строка).
+//
+// plan_index — часть PK после миграции 079 (PK сменился с
+// (apply_id, sid, task_idx) на (apply_id, sid, plan_index)). Сидим plan_index =
+// task_idx: для линейного плана (N=1) они совпадают, ровно это и делает backfill
+// 079. Без него две строки одного apply_id с разными task_idx получили бы
+// DEFAULT plan_index 0 и упали в duplicate-key.
 func seedTaskRegister(t *testing.T, ctx context.Context, pool *pgxpool.Pool, applyID, sid string, taskIdx int) {
 	t.Helper()
-	const q = `INSERT INTO apply_task_register (apply_id, sid, task_idx, register_data)
-		VALUES ($1, $2, $3, '{"rc": 0}'::jsonb)`
+	const q = `INSERT INTO apply_task_register (apply_id, sid, task_idx, plan_index, register_data)
+		VALUES ($1, $2, $3, $3, '{"rc": 0}'::jsonb)`
 	if _, err := pool.Exec(ctx, q, applyID, sid, taskIdx); err != nil {
 		t.Fatalf("seed task_register apply_id=%s sid=%s task_idx=%d: %v", applyID, sid, taskIdx, err)
 	}
