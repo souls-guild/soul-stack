@@ -23,15 +23,17 @@
 //
 // СЦЕНАРИЙ (tests/e2e-live/when-gate-live, локальная fixture в зоне теста, НЕ
 // правит committed examples/):
-//   Passage 0 — probe `redis-cli role | head -1 | tr -d '\n'` → register: redis_role
-//               (ЖИВОЙ redis: host-0 master, host-1/2 REPLICAOF host-0 → role
-//               master vs slave). tr -d '\n' — register.stdout без trailing \n.
-//   Passage 1 — задача БЕЗ where:, `when: register.redis_role.stdout == 'master'`,
-//               core.cmd.shell пишет маркер-файл, changed_when: false. keeper
-//               стратифицирует её в Passage 1 (потребитель register строго ПОСЛЕ
-//               probe — soul-lint подтверждает [1 1]) и протягивает when КАК
-//               CEL-СТРОКУ в RenderedTask.when (НЕ вычисляет — register известен
-//               только Soul-у). Soul: master → OK, реплики → SKIPPED.
+//   probe   — `redis-cli role | head -1 | tr -d '\n'` → register: redis_role
+//             (ЖИВОЙ redis: host-0 master, host-1/2 REPLICAOF host-0 → role
+//             master vs slave). tr -d '\n' — register.stdout без trailing \n.
+//   действие — задача БЕЗ where:, `when: register.redis_role.stdout == 'master'`,
+//             core.cmd.shell пишет маркер-файл, changed_when: false. ОБА шага в
+//             ОДНОМ Passage 0: register-зависимый `when:` НЕ расщепляет Passage
+//             (FC-5 narrow-fix, ADR-056:85 — flow-control НЕ passage-определяющий;
+//             soul-lint passage_plan = single-passage, НЕ [1 1] как до фикса).
+//             keeper протягивает when КАК CEL-СТРОКУ в RenderedTask.when (НЕ
+//             вычисляет — register известен только Soul-у), Soul видит register
+//             same-passage в своём ApplyRequest. Soul: master → OK, реплики → SKIPPED.
 //
 // ★ trim: probe-cmd несёт `tr -d '\n'` (cmd-модуль stdout НЕ тримит — та же
 // находка, что у FC-1 update_acl). Без него register.redis_role.stdout = "master\n"
@@ -56,19 +58,28 @@ const (
 	wgService     = "when-gate-live"
 	wgExamplePath = "tests/e2e-live/when-gate-live"
 
-	// План when_role_gate: probe (Passage 0) + when-gated действие (Passage 1).
-	// plan_index — ГЛОБАЛЬНЫЙ сквозной индекс по всему плану (миграция 079,
-	// ADR-056 §S1): probe = 0 (passage 0), действие = 1 (passage 1).
+	// План when_role_gate: probe + when-gated действие — ОБА в Passage 0 (FC-5
+	// narrow-fix, ADR-056:85): register-зависимый `when:` НЕ расщепляет Passage
+	// (flow-control НЕ passage-определяющий), действие без своего where: остаётся
+	// same-passage с probe → Soul видит register same-passage → when работает.
+	// plan_index — ГЛОБАЛЬНЫЙ сквозной индекс по всему плану (миграция 079, §S1):
+	// probe = 0, действие = 1; ОБА passage = 0 (один Passage, soul-lint passage_plan
+	// = single-passage, НЕ [1 1] как до narrow-fix).
 	wgProbePlanIdx   = 0
 	wgProbePassage   = 0
 	wgActionPlanIdx  = 1
-	wgActionPassage  = 1
+	wgActionPassage  = 0
 	wgActionFilePath = "/tmp/when-gated-acted"
 )
 
 func TestFC5WhenGating_LiveRegister(t *testing.T) {
-	t.Skip("БЛОКЕР (structural, needs_architect): when: register.<отдельный-probe> недостижим под staged-render — стратификатор уводит when-потребителя в Passage после probe, Soul cross-passage register не видит → no such key. where: это умеет (Keeper пере-рендер с накопленным register), when: — нет. Решение a(seed register в ApplyRequest)/b(Keeper pre-eval register-when симметрично where)/c(объявить неподдержанным + soul-lint + фикс ADR-056 стр.97) — за architect. Тест воспроизводит cross-passage no-such-key, реактивировать после решения.")
-
+	// FC-5 narrow-fix (ADR-056:85, вариант c): register-зависимый `when:` БОЛЬШЕ НЕ
+	// расщепляет Passage (flow-control убран из collectTaskReads). probe + when-gated
+	// действие (БЕЗ своего where:) теперь SAME-passage (Passage 0) → Soul видит
+	// register same-passage в своём ApplyRequest → when работает: master → OK, реплики
+	// → SKIPPED. Genuinely cross-passage when (probe в раннем Passage по ДРУГОЙ
+	// причине) — UNSUPPORTED, ловится soul-lint/keeper `cross_passage_when_unsupported`
+	// (unit-guard в shared/config + soul-lint testdata, НЕ этот live-сценарий).
 	stack := harness.NewStack(t, harness.Config{
 		ExamplePath: wgExamplePath,
 		ServiceName: wgService,

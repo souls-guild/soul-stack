@@ -1,0 +1,31 @@
+name: cross-passage-when
+state_changes: {}
+tasks:
+  # probe роли — register: role. Сам по себе остаётся в Passage 0.
+  - name: Probe redis role
+    module: core.cmd.shell
+    register: role
+    changed_when: false
+    params:
+      cmd: "redis-cli role | head -1 | tr -d '\n'"
+  # where: register.role — passage-определяющий → role-эмиттер закрепляется в
+  # Passage 0 (program-order), а эта where-задача уезжает в Passage 1. Она же
+  # эмитит register: marker, чтобы потянуть when-задачу ниже в Passage 1.
+  - name: Mark on the current master
+    module: core.cmd.shell
+    where: register.role.stdout == 'master'
+    register: marker
+    changed_when: false
+    params:
+      cmd: "touch /tmp/marked"
+  # when: register.role — genuinely cross-passage: role эмитнут в Passage 0, а эта
+  # задача в Passage 1 (своей register.marker-зависимостью). flow-control = Soul-side
+  # gating, видит только register своего Passage → no such key. cross_passage_when_unsupported.
+  - name: Act when role is master across passages
+    module: core.cmd.shell
+    when: register.role.stdout == 'master'
+    changed_when: false
+    vars:
+      seed: "${ register.marker.stdout }"
+    params:
+      cmd: "touch /tmp/acted"

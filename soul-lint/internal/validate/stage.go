@@ -101,6 +101,26 @@ func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest) []diag.Di
 		return out
 	}
 
+	// Cross-passage when-gating — ОШИБКА (ADR-056:85 amend, FC-5). Задача гейтит
+	// `when:`/`changed_when:`/`failed_when:` по register, эмитнутому в БОЛЕЕ РАННЕМ
+	// Passage. flow-control = Soul-side per-task gating (ADR-012(d)), видит только
+	// register СВОЕГО Passage; cross-passage register ему недоступен (другой
+	// ApplyRequest) → `no such key` молча → задача FAILED. После narrow-fix flow-
+	// control сам Passage НЕ расщепляет, но probe мог уехать в ранний Passage по
+	// ДРУГОЙ причине (иная задача с `where: register.X`). where: это умеет (Keeper
+	// пере-рендерит с накопленным register), when: — нет. Fail-closed reject офлайн.
+	if info, bad := config.CrossPassageWhenGating(tasks, plan); bad {
+		out = append(out, diag.Diagnostic{
+			Level:   diag.LevelError,
+			Phase:   diag.PhaseSemanticValidate,
+			File:    scenarioPath,
+			Code:    config.CodeCrossPassageWhenGating,
+			Message: fmt.Sprintf("задача %q гейтит %s: по register %q из другого Passage (consumer passage %d, источник passage %d) — Soul-side gating видит только свой Passage, cross-passage register ему недоступен → no such key", info.ConsumerName, info.Kind, info.RegisterName, info.ConsumerPassage, info.SourcePassage),
+			Hint:    "when:/changed_when:/failed_when: по register из другого Passage не поддержан (Soul-side gating видит только свой Passage) — используй where: для cross-task register-таргетинга ИЛИ register.self для same-task gating",
+		})
+		return out
+	}
+
 	// Структура passage — HINT (info автору): сколько Passage и по сколько задач.
 	out = append(out, diag.Diagnostic{
 		Level:   diag.LevelHint,

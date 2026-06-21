@@ -283,6 +283,24 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		return
 	}
 
+	// 4.925. Cross-passage when-gating — KEEPER-SIDE FAIL-CLOSED страховка (ADR-056:85
+	//        amend, FC-5). Задача гейтит `when:`/`changed_when:`/`failed_when:` по
+	//        register, эмитнутому в БОЛЕЕ РАННЕМ Passage. flow-control = Soul-side
+	//        per-task gating (ADR-012(d)), видит только register СВОЕГО Passage;
+	//        cross-passage register ему недоступен (другой ApplyRequest) → `no such
+	//        key` молча → задача FAILED. После narrow-fix flow-control сам Passage НЕ
+	//        расщепляет, но probe мог уехать в ранний Passage по ДРУГОЙ причине (иная
+	//        задача с `where: register.X`). where: это умеет (Keeper пере-рендерит с
+	//        накопленным register), when: — нет. soul-lint ловит офлайн; здесь —
+	//        рантайм-страховка (отказ, не молчаливый no-such-key-фейл). Гейт строго
+	//        staged (N=1 → один Passage, cross-passage невозможен).
+	if info, bad := config.CrossPassageWhenGating(scn.Tasks, passage); bad {
+		abort(config.CodeCrossPassageWhenGating, fmt.Errorf(
+			"scenario %s/%s: задача %q гейтит %s: по register %q из другого Passage (consumer passage %d, источник passage %d) — Soul-side gating видит только свой Passage, cross-passage register недоступен → no such key; используйте where: для cross-task register-таргетинга или register.self для same-task gating (ADR-056:85)",
+			spec.IncarnationName, spec.ScenarioName, info.ConsumerName, info.Kind, info.RegisterName, info.ConsumerPassage, info.SourcePassage))
+		return
+	}
+
 	// 4.95. serial + staged (N>1) — 2D serial×passage РЕАЛИЗОВАН (ADR-056 §S4 amend,
 	//       S-2D1). Рестрикт `serial_staged_unsupported` СНЯТ. Оси serial (волны
 	//       ХОСТОВ) и Passage (стратификация ЗАДАЧ) ортогональны и теперь крутятся

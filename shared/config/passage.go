@@ -20,17 +20,27 @@ package config
 //
 // Канонический реестр passage-определяющих register-источников Task (ADR-056):
 //
-//	where · vars · params · apply.input · output · loop.items · block (рекурсия).
+//	where · vars · params · apply.input · output · loop.items · loop.when · block (рекурсия).
 //
-// requisites (`onchanges`/`onfail`/`require`) — НЕ passage-определяющие. Flow-control
-// CEL (`when`/`changed_when`/`failed_when`/`retry.until`/`loop.when`) тоже не
-// определяет passage (исполняется Soul-side), но включён в обход как conservative
-// over-approximation: лишнее ребро может лишь добавить барьер, не пропустить его.
+// Все они резолвятся Keeper-side ДО dispatch, поэтому обязаны видеть register
+// предыдущего Passage → определяют Passage.
 //
-// Инвариант сопровождения: новое keeper-рендеримое register-читающее поле Task
-// обязано синхронно появиться в collectTaskReads (тут) И в collectRefs (cross-ref-
-// валидатор task_refs.go) И в реестре ADR-056 — иначе граф стратификатора и граф
-// линтера разойдутся (guard-тест reads==refs consistency).
+// requisites (`onchanges`/`onfail`/`require`) — НЕ passage-определяющие (адресные
+// ссылки, не интерполяция). Flow-control CEL `when`/`changed_when`/`failed_when`/
+// `retry.until` тоже НЕ определяет passage (ADR-056:85) — это Soul-side per-task
+// gating ([ADR-012(d)], исполняется в срезе одного ApplyRequest из своего register).
+// Они НЕ входят в collectTaskReads: иначе register-зависимый `when` расщеплял бы
+// probe и same-passage потребителя по разным Passage, где Soul cross-passage
+// register не видит → `no such key` (FC-5). Genuinely cross-passage `when`
+// (probe в раннем Passage по ДРУГОЙ причине) — UNSUPPORTED, ловится отдельным
+// детектором CrossPassageWhenGating (fail-closed, симметрия within-block).
+//
+// Инвариант сопровождения: новое keeper-рендеримое passage-определяющее register-
+// читающее поле Task обязано синхронно появиться в collectTaskReads (тут) И в
+// collectRefs (cross-ref-валидатор task_refs.go) И в реестре ADR-056. Flow-control
+// (`when`/`changed_when`/`failed_when`) — НАМЕРЕННАЯ асимметрия: ∈ collectRefs
+// (refs — проверка существования register), но ∉ collectTaskReads (не определяет
+// Passage). Guard-тест reads ⊆ refs (а для flow-control reads ⊊ refs).
 
 import (
 	"fmt"
@@ -82,6 +92,16 @@ const (
 	// функции-детектора WithinBlockRegisterDependency (одноимённый const+func в
 	// одном пакете недопустим в Go).
 	CodeWithinBlockRegisterDependency = "within_block_register_dependency"
+	// CodeCrossPassageWhenGating — задача гейтит `when:`/`changed_when:`/
+	// `failed_when:` по register, эмитнутому в БОЛЕЕ РАННЕМ Passage (ADR-056:85,
+	// FC-5). flow-control = Soul-side per-task gating ([ADR-012(d)]), видит только
+	// register СВОЕГО Passage; cross-passage register ему недоступен (другой
+	// ApplyRequest) → `no such key` молча. После narrow-fix flow-control сам Passage
+	// НЕ расщепляет, но probe мог уехать в ранний Passage по ДРУГОЙ причине (иная
+	// задача с `where: register.X`). Fail-closed reject (офлайн soul-lint + runtime
+	// keeper-страховка), симметрия CodeWithinBlockRegisterDependency. Лечится
+	// where: (cross-task таргетинг) или register.self (same-task gating).
+	CodeCrossPassageWhenGating = "cross_passage_when_unsupported"
 )
 
 // Stratify вычисляет passage-индексы для плана задач прогона по графу cross-task
@@ -250,17 +270,31 @@ func taskRegisterReads(t *Task) []string {
 }
 
 // collectTaskReads наполняет seen register-именами, читаемыми задачей в passage-
-// определяющих источниках (ADR-056-реестр): where / vars / params / apply.input /
-// output / loop.items, рекурсивно через block. Flow-control CEL — conservative
-// over-approx. requisites сюда НЕ входят. Self-фильтрация — в taskRegisterReads.
+// ОПРЕДЕЛЯЮЩИХ источниках (ADR-056-реестр): where / vars / params / apply.input /
+// output / loop.items / loop.when, рекурсивно через block. Self-фильтрация — в
+// taskRegisterReads.
+//
+// Flow-control CEL `when` / `changed_when` / `failed_when` / `retry.until` СЮДА НЕ
+// ВХОДИТ (ADR-056:85 — flow-control НЕ определяет Passage). Это Soul-side per-task
+// gating ([ADR-012(d)](../../docs/adr/0012-keeper-soul-grpc.md)): исполняется в
+// срезе ОДНОГО ApplyRequest из register, накопленного его собственным Passage.
+// Включение этих полей в passage-граф РАСЩЕПЛЯЛО probe и его same-passage when-
+// потребителя по разным Passage (probe→Passage 0, when→Passage 1), где Soul cross-
+// passage register не видит → `no such key` (FC-5). Это нарушало gating-семантику
+// `when` вместо «conservative over-approx». `where` (таргетинг Keeper-side) cross-
+// passage умеет (Keeper пере-рендерит с накопленным register), `when` — нет:
+// асимметрия легитимна, поэтому where остаётся passage-определяющим, а when — нет.
+//
+// requisites (`onchanges`/`onfail`/`require`) сюда НЕ входят по той же причине
+// (адресные ссылки, не интерполяция). loop.when ОСТАЁТСЯ passage-определяющим:
+// fan-out цикла строится Keeper-side ДО dispatch (как loop.items), не Soul-side.
+//
+// Cross-ref-валидатор (config.collectRefs) при этом ОБХОДИТ when/changed_when/
+// failed_when — они register-ЧИТАЮЩИЕ (проверка «register существует»), но НЕ
+// passage-ОПРЕДЕЛЯЮЩИЕ. Эта асимметрия (refs ⊋ passage-reads) — намеренная;
+// guard-инвариант её фиксирует (TestStratify_FlowControlInRefsNotPassageReads).
 func collectTaskReads(t *Task, seen map[string]bool) {
 	addCELRefs(t.Where, seen)
-	addCELRefs(t.When, seen)
-	addCELRefs(t.ChangedWhen, seen)
-	addCELRefs(t.FailedWhen, seen)
-	if t.Retry != nil {
-		addCELRefs(t.Retry.Until, seen)
-	}
 	if t.Loop != nil {
 		addCELRefs(t.Loop.When, seen)
 	}
@@ -368,6 +402,115 @@ type CrossPassageInfo struct {
 	SourcePassage   int
 }
 
+// CrossPassageWhenGating детектирует задачу, чей flow-control CEL (`when:`/
+// `changed_when:`/`failed_when:`) ссылается на cross-task register, эмитнутый в
+// БОЛЕЕ РАННЕМ Passage (ADR-056:85 amend, FC-5 — fail-closed reject genuinely
+// cross-passage when-gating). После narrow-fix flow-control САМ Passage НЕ
+// расщепляет (он ∉ collectTaskReads), поэтому register-зависимый `when` обычно
+// едет SAME-passage с probe → Soul видит register → gating работает (как задумано
+// [ADR-012(d)]). НО probe может оказаться в раннем Passage по ДРУГОЙ причине: иная
+// задача с `where: register.X` (passage-определяющий) загнала эмиттер X в Passage 0,
+// а when-потребитель уехал в Passage 1 по СВОЕЙ register-зависимости. Тогда
+// `when: register.X` — genuinely cross-passage: consumer едет отдельным ApplyRequest,
+// Soul его Passage не видит register X (он в registerByIdx другого Passage) →
+// when молча eval-падает `no such key` / задача FAILED.
+//
+// where это умеет (Keeper пере-рендерит where с накопленным register предыдущего
+// Passage ДО dispatch), when — нет (Soul-side, видит только свой Passage). Поэтому
+// genuinely cross-passage flow-control gating = UNSUPPORTED → fail-closed reject
+// (симметрия within_block_register_dependency и cross_passage_requisite), а не
+// молчаливый мисфайр. Лечится: where: для cross-task register-таргетинга ИЛИ
+// register.self для same-task gating.
+//
+// register.self НЕ считается (ExtractRegisterRefs его режет — same-task). Собственный
+// register задачи тоже исключён (self-ссылка, не cross-task ребро). passage —
+// результат [Stratify] того же плана. Возвращает координаты первой найденной связи
+// и ok=true; ok=false — все flow-control register-ссылки same-passage. N=1
+// (passage.Count==1) → ok=false всегда (один Passage, cross-passage невозможен).
+func CrossPassageWhenGating(tasks []Task, passage Passage) (info CrossPassageWhenInfo, ok bool) {
+	if passage.Count <= 1 || len(passage.TaskPassage) != len(tasks) {
+		return CrossPassageWhenInfo{}, false
+	}
+	emitter := emitterIndex(tasks)
+	for i := range tasks {
+		consumerPassage := passage.TaskPassage[i]
+		own := map[string]bool{}
+		for _, name := range taskEmittedRegisters(&tasks[i]) {
+			own[name] = true
+		}
+		for _, ref := range taskFlowControlReads(&tasks[i]) {
+			if own[ref.name] {
+				continue // собственный register задачи — self-ссылка, не cross-task.
+			}
+			srcIdx, known := emitter[ref.name]
+			if !known {
+				// Висячий register — НЕ наша забота: cross-ref-валидатор / Stratify
+				// ловят unknown_register_reference офлайн. Здесь — только cross-passage
+				// СУЩЕСТВУЮЩЕГО источника.
+				continue
+			}
+			if srcPassage := passage.TaskPassage[srcIdx]; srcPassage != consumerPassage {
+				return CrossPassageWhenInfo{
+					ConsumerName:    taskDisplayName(&tasks[i]),
+					RegisterName:    ref.name,
+					Kind:            ref.kind,
+					ConsumerPassage: consumerPassage,
+					SourcePassage:   srcPassage,
+				}, true
+			}
+		}
+	}
+	return CrossPassageWhenInfo{}, false
+}
+
+// CrossPassageWhenInfo — координаты cross-passage flow-control gating-связи (для
+// текста abort-а / диагностики линтера).
+type CrossPassageWhenInfo struct {
+	ConsumerName    string // имя задачи с flow-control-предикатом
+	RegisterName    string // register-имя, прочитанное предикатом
+	Kind            string // "when" | "changed_when" | "failed_when"
+	ConsumerPassage int
+	SourcePassage   int
+}
+
+// flowControlRead — одна flow-control register-ссылка задачи (cross-task register-
+// имя + поле-источник). retry.until НЕ включается: он гейтит retry внутри одной
+// задачи по её СОБСТВЕННОМУ register.self (cross-task retry.until.register.X
+// бессмыслен — задача не видит чужой результат в своём retry-цикле), поэтому
+// register.self его покрывает, а cross-task ссылка в нём — отдельный класс ошибки
+// (unknown/мисюз), не gating.
+type flowControlRead struct {
+	name string
+	kind string
+}
+
+// taskFlowControlReads собирает cross-task register-имена из `when`/`changed_when`/
+// `failed_when` задачи И её block-потомков (block — атомарная единица Passage,
+// flow-control его потомков адресуется по тем же register-именам). register.self
+// уже отфильтрован ExtractRegisterRefs. Сортировка имён внутри одного поля делает
+// диагностику детерминированной.
+func taskFlowControlReads(t *Task) []flowControlRead {
+	var out []flowControlRead
+	for _, kv := range []struct {
+		expr string
+		kind string
+	}{
+		{t.When, "when"},
+		{t.ChangedWhen, "changed_when"},
+		{t.FailedWhen, "failed_when"},
+	} {
+		for _, name := range ExtractRegisterRefs(kv.expr) {
+			out = append(out, flowControlRead{name: name, kind: kv.kind})
+		}
+	}
+	if t.Block != nil {
+		for i := range t.Block.Block {
+			out = append(out, taskFlowControlReads(&t.Block.Block[i])...)
+		}
+	}
+	return out
+}
+
 // taskRequisite — одна requisite-ссылка задачи (register-имя источника + kind).
 type taskRequisite struct {
 	name string
@@ -418,10 +561,16 @@ type WithinBlockInfo struct {
 // эмитнутый СОСЕДНИМ потомком ТОГО ЖЕ блока (ADR-056, §«Риски — silent-wrong-target»).
 // block — атомарная единица Passage: весь его fan-out (probe-потомок + потребитель)
 // едет ОДНИМ ApplyRequest в одном Passage. peer-register становится доступен только
-// Soul-side ПОСЛЕ probe, тогда как where/when/params потребителя резолвятся Keeper-side
-// ДО dispatch — по пустому/внешнему/устаревшему register МОЛЧА. Stratify это не ловит:
-// внутри-блочное ребро не пересекает границу top-level задач (emitterIndex клеймит весь
-// register block-а индексом КОНТЕЙНЕРА). Поэтому отдельный fail-closed детектор.
+// Soul-side ПОСЛЕ probe, тогда как KEEPER-SIDE-резолвимые поля потребителя (where/
+// params/vars/apply.input — те, что в collectTaskReads) резолвятся ДО dispatch блока —
+// по пустому/внешнему/устаревшему register МОЛЧА. Stratify это не ловит: внутри-блочное
+// ребро не пересекает границу top-level задач (emitterIndex клеймит весь register
+// block-а индексом КОНТЕЙНЕРА). Поэтому отдельный fail-closed детектор.
+//
+// Flow-control `when`/`changed_when`/`failed_when` СЮДА НЕ входит (collectTaskReads его
+// больше не возвращает, FC-5 narrow-fix): within-block `when: register.peer` ВАЛИДЕН —
+// peer-probe исполняется тем же ApplyRequest ДО потребителя, Soul видит peer-register в
+// накопленном срезе блока на момент eval (в отличие от Keeper-side where, который пуст).
 //
 // blockEmits каждого блока строится из ЕГО СТРУКТУРЫ (taskEmittedRegisters минус
 // собственный register контейнера), рекурсивно вглубь — НЕ из глобального emitterIndex.

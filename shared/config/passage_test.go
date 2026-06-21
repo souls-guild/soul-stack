@@ -59,7 +59,6 @@ tasks:
     on: ["${ incarnation.name }"]
     register: redis_role
     changed_when: false
-    failed_when: size(register.redis_role) < incarnation.host_count
     params:
       cmd: "redis-cli role | head -1"
   - name: Diff and apply ACL changes on the current master
@@ -87,7 +86,6 @@ tasks:
     on: ["${ incarnation.name }"]
     register: redis_role
     changed_when: false
-    failed_when: size(register.redis_role) < incarnation.host_count
     params:
       cmd: "redis-cli role | head -1"
   - name: Create the user on the current master
@@ -125,7 +123,6 @@ tasks:
     on: ["${ incarnation.name }"]
     register: redis_role
     changed_when: false
-    failed_when: size(register.redis_role) < incarnation.host_count
     params:
       cmd: "redis-cli role | head -1"
   - name: Rolling-restart replicas one at a time
@@ -162,7 +159,6 @@ tasks:
     on: ["${ incarnation.name }"]
     register: redis_role_after
     changed_when: false
-    failed_when: size(register.redis_role_after) < incarnation.host_count
     params:
       cmd: "redis-cli role | head -1"
   - name: Restart the former master (now a replica)
@@ -557,14 +553,17 @@ tasks:
 }
 
 // TestStratify_ReadsEqRefsConsistency — ★ guard против молчаливого размывания
-// register-графа: множество passage-определяющих source-полей, покрытых
+// register-графа: множество PASSAGE-ОПРЕДЕЛЯЮЩИХ source-полей, покрытых
 // стратификатором (collectTaskReads), ОБЯЗАНО совпадать с покрытыми config-
-// валидатором (collectRefs). Для каждого источникового поля (where / vars /
-// params / apply.input / output / loop.items / block) ghost-register обязан быть
-// пойман ОБОИМИ: Stratify → StratifyUnknownRegister И config-валидатор →
+// валидатором (collectRefs) в этом классе. Для каждого источникового поля (where /
+// vars / params / apply.input / output / loop.items / block) ghost-register обязан
+// быть пойман ОБОИМИ: Stratify → StratifyUnknownRegister И config-валидатор →
 // unknown_register_reference.
 //
-// Поле, добавленное в один обходчик, но не в другой, краснит ровно тот под-тест,
+// Flow-control (when/changed_when/failed_when) сюда НЕ входит — он ∈ collectRefs,
+// но ∉ collectTaskReads (намеренная асимметрия после FC-5 narrow-fix; см.
+// TestStratify_FlowControlInRefsNotPassageReads ниже). Поле passage-определяющего
+// класса, добавленное в один обходчик, но не в другой, краснит ровно тот под-тест,
 // который соответствует расхождению — это и есть инвариант сопровождения ADR-056.
 func TestStratify_ReadsEqRefsConsistency(t *testing.T) {
 	for field, src := range registerSourceFields {
@@ -601,6 +600,212 @@ func TestStratify_ReadsEqRefsConsistency(t *testing.T) {
 				t.Fatalf("Stratify for %q: error code = %v, want %s", field, serr, StratifyUnknownRegister)
 			}
 		})
+	}
+}
+
+// flowControlFields — flow-control source-поля (when / changed_when / failed_when),
+// КАЖДОЕ как минимальная фикстура, где ghost-register встречается ТОЛЬКО в этом
+// поле и НИКТО его не эмитит. После FC-5 narrow-fix flow-control НЕ passage-
+// определяющий (ADR-056:85), но ОСТАЁТСЯ register-читающим (cross-ref-валидатор
+// проверяет существование register). Это фиксирует асимметрию: refs ⊋ passage-reads.
+var flowControlFields = map[string]string{
+	"when": `
+name: fc_when
+tasks:
+  - name: consumer
+    module: core.exec.run
+    when: register.ghost.stdout == 'x'
+    changed_when: false
+    params: { cmd: "true" }
+`,
+	"changed_when": `
+name: fc_changed_when
+tasks:
+  - name: consumer
+    module: core.exec.run
+    changed_when: register.ghost.rc == 0
+    params: { cmd: "true" }
+`,
+	"failed_when": `
+name: fc_failed_when
+tasks:
+  - name: consumer
+    module: core.exec.run
+    changed_when: false
+    failed_when: register.ghost.rc != 0
+    params: { cmd: "true" }
+`,
+}
+
+// TestStratify_FlowControlInRefsNotPassageReads — ★ guard фиксирующий FC-5-асимметрию
+// (ADR-056:85 amend): flow-control `when`/`changed_when`/`failed_when` — register-
+// ЧИТАЮЩИЙ (∈ collectRefs → cross-ref-валидатор ловит ghost), но НЕ passage-
+// ОПРЕДЕЛЯЮЩИЙ (∉ collectTaskReads → Stratify НЕ падает StratifyUnknownRegister и
+// НЕ строит passage-ребро по нему).
+//
+// До narrow-fix flow-control был в collectTaskReads (conservative over-approx) и
+// расщеплял probe↔same-passage-when-потребителя → Soul cross-passage register не
+// видел → `no such key` (FC-5). Регресс «вернуть flow-control в collectTaskReads»
+// этот тест краснит: Stratify начнёт падать на ghost-register в flow-control-поле.
+func TestStratify_FlowControlInRefsNotPassageReads(t *testing.T) {
+	for field, src := range flowControlFields {
+		t.Run(field, func(t *testing.T) {
+			m, _, diags, err := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+			if err != nil {
+				t.Fatalf("LoadScenarioManifestFromBytes: %v", err)
+			}
+			// (а) ∈ refs: cross-ref-валидатор ОБЯЗАН поймать ghost (register-читающее поле).
+			foundUnknown := false
+			for _, d := range diags {
+				if d.Level != diag.LevelError {
+					continue
+				}
+				if d.Code == "unknown_register_reference" {
+					foundUnknown = true
+					continue
+				}
+				t.Fatalf("unexpected error diagnostic (%s): %s — fixture for %q is structurally broken", d.Code, d.Message, field)
+			}
+			if !foundUnknown {
+				t.Errorf("config-validator (collectRefs) did NOT raise unknown_register_reference for ghost in flow-control %q — flow-control dropped out of refs (must stay: register-reading)", field)
+			}
+
+			// (б) ∉ passage-reads: Stratify НЕ падает StratifyUnknownRegister (flow-control
+			// не в collectTaskReads → не строит passage-граф по ghost-register).
+			_, serr := Stratify(m.Tasks)
+			if serr != nil {
+				t.Fatalf("Stratify FAILED on ghost in flow-control %q (%v) — flow-control крадётся обратно в collectTaskReads (passage-определяющий), что вернуло бы FC-5 cross-passage-расщепление", field, serr)
+			}
+		})
+	}
+}
+
+// TestStratify_RegisterDependentWhenDoesNotSplitPassage — ★ КЛЮЧЕВОЙ guard FC-5
+// narrow-fix (ADR-056:85). probe эмитит register: redis_role (Passage 0), задача БЕЗ
+// своего where:/vars/params-register-ребра, но с `when: register.redis_role...`,
+// ОБЯЗАНА остаться в ТОМ ЖЕ Passage 0 — flow-control сам Passage НЕ расщепляет.
+// Тогда Soul видит register same-passage → when работает (как задумано ADR-012(d)).
+//
+// До narrow-fix when загонял потребителя в Passage 1 (Count=2, [0 1]) → cross-passage
+// no-such-key. После — Count=1, обе задачи Passage 0. Регресс краснит на Count!=1.
+func TestStratify_RegisterDependentWhenDoesNotSplitPassage(t *testing.T) {
+	const src = `
+name: when_same_passage
+tasks:
+  - name: Detect actual redis role per host
+    module: core.cmd.shell
+    register: redis_role
+    changed_when: false
+    params: { cmd: "redis-cli role | head -1" }
+  - name: Act on master only (when-gated)
+    module: core.cmd.shell
+    when: register.redis_role.stdout == 'master'
+    changed_when: false
+    params: { cmd: "touch /tmp/acted" }
+`
+	p := stratify(t, src)
+	if p.Count != 1 {
+		t.Fatalf("Count = %d, want 1 — register-зависимый when НЕ должен расщеплять Passage (flow-control НЕ passage-определяющий, ADR-056:85); до narrow-fix было 2 → FC-5 cross-passage no-such-key", p.Count)
+	}
+	for i, pass := range p.TaskPassage {
+		if pass != 0 {
+			t.Errorf("task #%d passage = %d, want 0 (probe и when-потребитель в одном Passage → Soul видит register same-passage)", i, pass)
+		}
+	}
+}
+
+// TestCrossPassageWhenGating_Detect — ★ FC-5 fail-closed детект genuinely cross-
+// passage when (ADR-056:85). probe `role` уезжает в Passage 0, потому что ДРУГАЯ
+// задача таргетит `where: register.role` (passage-определяющий → role-эмиттер
+// program-order остаётся в Passage 0, where-потребитель в Passage 1). when-задача
+// тоже уехала в Passage 1 по СВОЕЙ register-зависимости (vars: register.other) — а
+// `when: register.role` теперь genuinely cross-passage (role в Passage 0, потребитель
+// в Passage 1). Детектор обязан reject с координатами.
+func TestCrossPassageWhenGating_Detect(t *testing.T) {
+	const src = `
+name: cross_passage_when
+state_changes: {}
+tasks:
+  - name: Probe role
+    module: core.cmd.shell
+    register: role
+    changed_when: false
+    params: { cmd: "detect-role" }
+  - name: Where-target on role (forces role into Passage 0)
+    module: core.exec.run
+    where: register.role.stdout == 'master'
+    register: other
+    changed_when: false
+    params: { cmd: "true" }
+  - name: When-gated on role across passages
+    module: core.cmd.shell
+    when: register.role.stdout == 'master'
+    changed_when: false
+    vars:
+      seed: "${ register.other.stdout }"
+    params: { cmd: "true" }
+`
+	tasks := loadTasks(t, src)
+	passage := stratify(t, src)
+	if passage.Count <= 1 {
+		t.Fatalf("ожидался staged-план (Count>1), got Count=%d TaskPassage=%v", passage.Count, passage.TaskPassage)
+	}
+	info, bad := CrossPassageWhenGating(tasks, passage)
+	if !bad {
+		t.Fatalf("CrossPassageWhenGating НЕ задетектил genuinely cross-passage when (register.role из Passage 0, потребитель в Passage 1) — TaskPassage=%v", passage.TaskPassage)
+	}
+	if info.Kind != "when" || info.RegisterName != "role" {
+		t.Errorf("info = %+v, want kind=when register=role", info)
+	}
+	if info.ConsumerPassage == info.SourcePassage {
+		t.Errorf("consumer passage %d == source passage %d, ожидались разные", info.ConsumerPassage, info.SourcePassage)
+	}
+}
+
+// TestCrossPassageWhenGating_SamePassageOK — when по register same-passage (probe и
+// when-потребитель в одном Passage после narrow-fix) → НЕ reject. Это валидный
+// FC-5-кейс: Soul видит register своего Passage.
+func TestCrossPassageWhenGating_SamePassageOK(t *testing.T) {
+	const src = `
+name: when_same_passage_ok
+tasks:
+  - name: Probe role
+    module: core.cmd.shell
+    register: redis_role
+    changed_when: false
+    params: { cmd: "redis-cli role | head -1" }
+  - name: When-gated same passage
+    module: core.cmd.shell
+    when: register.redis_role.stdout == 'master'
+    changed_when: false
+    params: { cmd: "true" }
+`
+	tasks := loadTasks(t, src)
+	passage := stratify(t, src)
+	if _, bad := CrossPassageWhenGating(tasks, passage); bad {
+		t.Fatalf("CrossPassageWhenGating ложно зарепортил same-passage when как cross-passage — после narrow-fix when в одном Passage с probe (TaskPassage=%v)", passage.TaskPassage)
+	}
+}
+
+// TestCrossPassageWhenGating_SelfRegisterOK — failed_when по register.self (same-task
+// результат, идиома remove_replica) → НЕ reject. register.self отфильтрован
+// ExtractRegisterRefs → детектор его не видит. Регресс «ловить register.self» сломал
+// бы валидную защиту (например `failed_when: register.self.stdout == 'master'`).
+func TestCrossPassageWhenGating_SelfRegisterOK(t *testing.T) {
+	const src = `
+name: failed_when_self
+tasks:
+  - name: Refuse to remove the current primary
+    module: core.cmd.shell
+    register: role
+    changed_when: false
+    failed_when: register.self.stdout == 'master'
+    params: { cmd: "redis-cli role | head -1 | tr -d '\n'" }
+`
+	tasks := loadTasks(t, src)
+	passage := stratify(t, src)
+	if _, bad := CrossPassageWhenGating(tasks, passage); bad {
+		t.Fatalf("CrossPassageWhenGating ложно зарепортил register.self (same-task) как cross-passage — сломал бы remove_replica-защиту (TaskPassage=%v)", passage.TaskPassage)
 	}
 }
 
@@ -787,6 +992,39 @@ tasks:
 	}
 	if info.EmitterName != "Probe role inside block" {
 		t.Errorf("EmitterName = %q, want \"Probe role inside block\"", info.EmitterName)
+	}
+}
+
+// TestWithinBlock_WhenPeerOK (guard #1b) — ★ FC-5 SIDE-EFFECT GUARD. probe-потомок
+// эмитит register: role ВНУТРИ блока, соседний потомок ТОГО ЖЕ блока гейтит
+// `when: register.role.stdout == 'master'` (flow-control, НЕ where). После FC-5
+// narrow-fix `when` выпал из collectTaskReads (Soul-side per-task gating) → within-
+// block `when: register.peer` ВАЛИДЕН: peer-probe исполняется тем же ApplyRequest
+// ДО потребителя, Soul видит peer-register в накопленном срезе блока на момент eval.
+// Детектор НЕ должен это отвергать → bad==false. Регресс «вернуть when в
+// collectTaskReads» молча сломал бы within-block when:peer — этот тест краснит.
+func TestWithinBlock_WhenPeerOK(t *testing.T) {
+	const src = `
+name: within_block_when_peer
+state_changes: {}
+tasks:
+  - name: Rolling group
+    on: ["${ incarnation.name }"]
+    block:
+      - name: Probe role inside block
+        module: core.cmd.shell
+        register: role
+        changed_when: false
+        params: { cmd: "redis-cli role | head -1" }
+      - name: Act on master only (when-gated peer)
+        module: core.cmd.shell
+        when: "register.role.stdout == 'master'"
+        changed_when: false
+        params: { cmd: "touch /tmp/acted" }
+`
+	tasks := loadTasks(t, src)
+	if info, bad := WithinBlockRegisterDependency(tasks); bad {
+		t.Fatalf("WithinBlockRegisterDependency ложно зарепортил within-block when:peer как silent-wrong-target (%+v) — после FC-5 narrow-fix when выпал из collectTaskReads, when:peer валиден (Soul-side gating, peer-probe в том же ApplyRequest)", info)
 	}
 }
 

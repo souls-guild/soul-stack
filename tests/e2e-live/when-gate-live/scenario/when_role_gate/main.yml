@@ -1,11 +1,17 @@
 name: when_role_gate
 description: >-
   FC-5: per-task when-gating по СВЕЖЕМУ register на реальном soul-флоте.
-  Passage 0 — probe `redis-cli role` каждого хоста (register: redis_role).
-  Passage 1 — действие БЕЗ where: (уходит на ВСЕ хосты прогона), gated
-  Soul-side `when: register.redis_role.stdout == 'master'`. На master when=true
-  → задача исполняется (changed_when: false → TASK_STATUS_OK), на репликах
-  when=false → Soul эмитит TASK_STATUS_SKIPPED ДО Apply (mod.Apply не зовётся).
+  probe `redis-cli role` каждого хоста (register: redis_role) + действие БЕЗ
+  where: (уходит на ВСЕ хосты прогона), gated Soul-side
+  `when: register.redis_role.stdout == 'master'`. На master when=true → задача
+  исполняется (changed_when: false → TASK_STATUS_OK), на репликах when=false →
+  Soul эмитит TASK_STATUS_SKIPPED ДО Apply (mod.Apply не зовётся).
+
+  ОБА шага — в ОДНОМ Passage 0 (ADR-056:85 narrow-fix): register-зависимый
+  `when:` НЕ расщепляет Passage (flow-control НЕ passage-определяющий), поэтому
+  Soul видит register same-passage в своём ApplyRequest и вычисляет when. Это и
+  есть смысл фикса FC-5 (до него when уводил потребителя в Passage 1 → Soul
+  cross-passage register не видел → no such key).
 
   Ключевое отличие от where (staged-probe-live / update_acl): where режет хост
   на уровне Keeper-targeting (apply_runs → no_match, задачи нет вовсе), а when
@@ -16,10 +22,9 @@ description: >-
 state_changes: {}
 
 tasks:
-  # ── Passage 0: probe роли per-host РЕАЛЬНЫМ redis ─────────────────────────
+  # ── probe роли per-host РЕАЛЬНЫМ redis (Passage 0) ────────────────────────
   # `redis-cli role | head -1 | tr -d '\n'` — register.redis_role.stdout без
   # trailing newline (cmd-модуль stdout НЕ тримит): чистое 'master' / 'slave'.
-  # Полнота probe гарантируется fail-stop барьером Passage 0 (ADR-056 §5).
   - name: Detect actual redis role per host
     module: core.cmd.shell
     register: redis_role
@@ -27,14 +32,15 @@ tasks:
     params:
       cmd: "redis-cli role | head -1 | tr -d '\\n'"
 
-  # ── Passage 1: действие на ВСЕ хосты, gated Soul-side по when ─────────────
+  # ── действие на ВСЕ хосты, gated Soul-side по when (ТОТ ЖЕ Passage 0) ─────
   # БЕЗ where: задача доходит до каждого хоста прогона. `when` ссылается на
-  # register.redis_role → keeper стратифицирует задачу в Passage 1 (строго ПОСЛЕ
-  # probe Passage 0) и протягивает when как CEL-СТРОКУ в RenderedTask.when (не
-  # вычисляет Keeper-side — register известен только Soul-у). Soul вычисляет when
-  # per-host: master → исполняет (changed_when: false → OK), реплики → SKIPPED.
-  # Маркер-файл — независимое доказательство, что Apply реально шёл на master и
-  # НЕ шёл на репликах (AssertHostFileExists master / отсутствие на репликах).
+  # register.redis_role, НО flow-control НЕ passage-определяющий (ADR-056:85
+  # narrow-fix) → задача остаётся в Passage 0 ВМЕСТЕ с probe. keeper протягивает
+  # when как CEL-СТРОКУ в RenderedTask.when (не вычисляет Keeper-side — register
+  # известен только Soul-у), Soul видит register same-passage в своём ApplyRequest
+  # и вычисляет when per-host: master → исполняет (changed_when: false → OK),
+  # реплики → SKIPPED. Маркер-файл — независимое доказательство, что Apply реально
+  # шёл на master и НЕ шёл на репликах.
   - name: Act on the current master only (when-gated)
     module: core.cmd.shell
     when: "register.redis_role.stdout == 'master'"
