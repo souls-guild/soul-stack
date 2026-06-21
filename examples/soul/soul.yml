@@ -34,7 +34,7 @@ keeper:
       priority: 3
 
   retry:
-    max_attempts: 5
+    max_attempts: 2
     backoff:
       initial: 1s
       max: 30s

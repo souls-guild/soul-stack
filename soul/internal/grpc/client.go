@@ -67,7 +67,30 @@ type ClientConfig struct {
 	// [config.DefaultMaxApplySizeMB] (8 MiB). Источник — soul.yml
 	// `keeper.max_apply_size_mb` (config.SoulKeeper.ResolvedMaxApplySize).
 	MaxRecvMsgSize int
+	// MaxAttempts — число попыток dialOne на ОДИН endpoint при retriable-ошибке
+	// (Unavailable/DeadlineExceeded/Internal/… см. isRetriablePerEndpoint),
+	// прежде чем spray-ить к следующему endpoint. Источник — soul.yml
+	// `keeper.retry.max_attempts`. 0 → [defaultMaxAttempts] (резолв в NewClient).
+	// Внешний reconnectLoop остаётся отдельным уровнем повтора между ПОЛНЫМИ
+	// проходами по fallback-list-у (ADR-002).
+	MaxAttempts int
+	// InterAttemptDelay — пауза между попытками к одному endpoint-у. ПЛОСКАЯ
+	// (без экспоненциального роста — рост остаётся внешнему reconnectLoop).
+	// Источник — `keeper.retry.backoff.initial` (реюз, без новых конфиг-ключей).
+	// restart-required: значение фиксируется при сборке Client и НЕ перечитывается
+	// при hot-reload (в отличие от reconnect-backoff, который reconnectLoop берёт
+	// из store per-iteration) — смена `backoff.initial` для inter-attempt delay
+	// требует рестарта soul.
+	InterAttemptDelay time.Duration
+	// InterAttemptJitter — добавлять ли ±25% jitter к InterAttemptDelay.
+	// Источник — `keeper.retry.backoff.jitter`.
+	InterAttemptJitter bool
 }
+
+// defaultMaxAttempts — число попыток dialOne на endpoint при опущенном/нулевом
+// keeper.retry.max_attempts. Консервативное значение: одна повторная попытка
+// после первого retriable-сбоя, дальше spray + внешний reconnectLoop.
+const defaultMaxAttempts = 2
 
 // Client — менеджер EventStream-сессий.
 type Client struct {
@@ -91,6 +114,9 @@ func NewClient(cfg ClientConfig, logger *slog.Logger) (*Client, error) {
 	}
 	if cfg.MaxRecvMsgSize <= 0 {
 		cfg.MaxRecvMsgSize = config.DefaultMaxApplySizeMB * 1024 * 1024
+	}
+	if cfg.MaxAttempts <= 0 {
+		cfg.MaxAttempts = defaultMaxAttempts
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -155,16 +181,47 @@ func (c *Client) DialPriority(ctx context.Context, maxPriority int) (*StreamSess
 		creds := credentials.NewTLS(cfgForAddr)
 
 		tried = true
-		sess, err := c.dialOne(ctx, ep.Addr, creds, kp)
-		if err == nil {
-			sess.priority = normalizedPriority(ep.Priority)
-			c.logger.Info("eventstream: connected",
-				slog.String("addr", ep.Addr),
-				slog.Int("priority", sess.priority),
-				slog.String("kid", sess.KID()),
-				slog.String("session_id", sess.SessionID()),
-			)
-			return sess, nil
+		// Per-endpoint retry (keeper.retry.max_attempts): повторяем dialOne к ОДНОМУ
+		// endpoint-у при retriable-ошибке (transport-flake), прежде чем spray-ить к
+		// следующему. Non-retriable (lease-held / auth / invalid) — break сразу:
+		// повтор к тому же endpoint-у бессмыслен, нужен другой. Это уровень между
+		// одиночным dialOne и внешним reconnectLoop (ADR-002, docs/soul/connection.md).
+		var err error
+		var sess *StreamSession
+		for attempt := 1; attempt <= c.cfg.MaxAttempts; attempt++ {
+			sess, err = c.dialOne(ctx, ep.Addr, creds, kp)
+			if err == nil {
+				sess.priority = normalizedPriority(ep.Priority)
+				c.logger.Info("eventstream: connected",
+					slog.String("addr", ep.Addr),
+					slog.Int("priority", sess.priority),
+					slog.String("kid", sess.KID()),
+					slog.String("session_id", sess.SessionID()),
+				)
+				return sess, nil
+			}
+			if !isRetriablePerEndpoint(err) {
+				// ★ Регресс-guard (7af8e95): lease-held (AlreadyExists) — non-retriable,
+				// поэтому на каждый lease-held endpoint РОВНО один dialOne, allLeaseHeld
+				// копится по одной попытке на endpoint.
+				break
+			}
+			if attempt < c.cfg.MaxAttempts {
+				// Debug, не Warn: промежуточный retry — ожидаемый шум; при больших
+				// fallback-list + сетевом шторме не должен заваливать Warn-лог.
+				// Итоговый «dial failed» (после исчерпания попыток) ниже — Warn.
+				c.logger.Debug("eventstream: dial failed, retrying same endpoint",
+					slog.String("addr", ep.Addr),
+					slog.Int("attempt", attempt),
+					slog.Int("max_attempts", c.cfg.MaxAttempts),
+					slog.Any("error", err),
+				)
+				if !c.sleepInterAttempt(ctx) {
+					// ctx отменён во время паузы — выходим, итог отдаём ниже.
+					dialErrs = append(dialErrs, fmt.Sprintf("%s: %v", ep.Addr, ctx.Err()))
+					return nil, fmt.Errorf("grpc: client: all endpoints failed:\n  - %s", strings.Join(dialErrs, "\n  - "))
+				}
+			}
 		}
 		// spray: AlreadyExists на одном endpoint НЕ прерывает перебор — следующий
 		// endpoint мог уже перехватить lease после force-release. Флаг сбрасываем,
@@ -220,6 +277,58 @@ func IsLeaseHeld(err error) bool {
 // где-либо в chain (dialOne оборачивает recv-ошибку через %w, status сохраняется).
 func isAlreadyExists(err error) bool {
 	return status.Code(err) == codes.AlreadyExists
+}
+
+// isRetriablePerEndpoint решает, повторять ли dialOne к ТОМУ ЖЕ endpoint-у
+// (per-endpoint retry, keeper.retry.max_attempts) или сразу spray-ить к
+// следующему. Матрица нормативна (architect, docs/soul/connection.md):
+//
+//   - НЕ retriable (повтор к тому же endpoint бессмыслен → break, spray дальше):
+//     AlreadyExists (lease-held — другой keeper держит SID-lease),
+//     Unauthenticated / PermissionDenied (auth-проблема не самоисправится),
+//     InvalidArgument / FailedPrecondition / Unimplemented (контрактный отказ).
+//   - retriable (transient transport-flake — повтор может пройти):
+//     Unavailable / DeadlineExceeded / Internal / Unknown / Aborted, а также
+//     локальный handshake-timeout (не gRPC-status: dialOne отдаёт обычный
+//     fmt.Errorf, status.Code → codes.Unknown, попадает в default → retriable).
+//   - default (неклассифицированный код) → retriable, консервативно.
+func isRetriablePerEndpoint(err error) bool {
+	switch status.Code(err) {
+	case codes.AlreadyExists,
+		codes.Unauthenticated,
+		codes.PermissionDenied,
+		codes.InvalidArgument,
+		codes.FailedPrecondition,
+		codes.Unimplemented:
+		return false
+	default:
+		// Unavailable / DeadlineExceeded / Internal / Unknown / Aborted +
+		// handshake-timeout (codes.Unknown) + всё неклассифицированное.
+		return true
+	}
+}
+
+// sleepInterAttempt выдерживает плоскую паузу InterAttemptDelay (±jitter) между
+// попытками к одному endpoint-у, прерываясь по ctx. Возвращает true, если пауза
+// выдержана, false — ctx отменён. Рост cap-а остаётся внешнему reconnectLoop —
+// здесь пауза плоская (reuse backoff.initial).
+func (c *Client) sleepInterAttempt(ctx context.Context) bool {
+	d := c.cfg.InterAttemptDelay
+	if c.cfg.InterAttemptJitter && d > 0 {
+		delta := d / 4
+		d = d + time.Duration(rand.Int64N(int64(delta*2))) - delta
+	}
+	if d <= 0 {
+		return ctx.Err() == nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
 }
 
 // dialOne — одна попытка к одному endpoint-у. Stream живёт под собственным

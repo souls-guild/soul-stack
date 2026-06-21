@@ -38,7 +38,7 @@ keeper:
       priority: 3
 
   retry:
-    max_attempts: 5
+    max_attempts: 2          # per-endpoint попытки до spray; default 2
     backoff:
       initial: 1s
       max: 30s
@@ -72,8 +72,8 @@ Keeper держит два gRPC-listener-а на **разных портах** (
 - `endpoints[].event_stream_port` — порт EventStream-listener-а (mTLS, фаза `soul run`). Обязателен, 1..65535.
 - `endpoints[].bootstrap_port` — порт Bootstrap-listener-а (server-only TLS, фаза `soul init`). Обязателен, 1..65535.
 - `endpoints[].priority` — целое число ≥ 1, по умолчанию `1`. Упорядочивает обе фазы.
-- `retry.max_attempts` — сколько раз подряд пробовать **один** endpoint, прежде чем считать его выбывшим из текущего захода.
-- `retry.backoff.initial` / `retry.backoff.max` / `retry.backoff.jitter` — экспоненциальный бэкофф с jitter между попытками к одному endpoint.
+- `retry.max_attempts` — сколько раз подряд пробовать **один** endpoint при retriable-ошибке (см. §Классификация ошибок), прежде чем spray-ить к следующему endpoint. **Default `2`** (не `5`): per-endpoint упорство держим малым — worst-case failover растёт как `N×max_attempts×handshake_timeout`, а устойчивость даёт spray по fallback-list-у + внешний exponential-reconnect (§Установление первого подключения шаг 5). Опущенное/`0` → `2`.
+- `retry.backoff.initial` / `retry.backoff.max` / `retry.backoff.jitter` — параметры экспоненциального backoff-а между **полными проходами** по fallback-list-у (внешний reconnect-loop, §Установление шаг 5 и §Lease-held). **Между попытками к одному endpoint** (per-endpoint retry) пауза другая: `backoff.initial` берётся **плоско** (без экспоненциального роста), с `±25%` jitter при `backoff.jitter: true`. Рост cap-а — только между полными проходами, не между попытками к одному endpoint. Отдельного конфиг-ключа на inter-attempt-паузу нет (переиспользуется `backoff.initial`/`backoff.jitter`). ⚠️ Inter-attempt-пауза **restart-required**: читается один раз при сборке EventStream-клиента; SIGHUP-hot-reload её не обновляет (в отличие от reconnect-backoff `keeper.retry.backoff.*`, который перечитывается per-iteration).
 - `retry.handshake_timeout` — таймаут на установление TLS+gRPC-соединения с одним endpoint.
 - `failback.enabled` — пытаться ли возвращаться на более предпочтительный приоритет после переключения вниз.
 - `failback.interval` — как часто запускать попытку failback (типично 1h).
@@ -84,10 +84,10 @@ Keeper держит два gRPC-listener-а на **разных портах** (
 ### Установление первого подключения
 
 1. Группируем `endpoints` по `priority`, сортируем приоритеты по возрастанию.
-2. Берём минимальный приоритет, **перемешиваем** его endpoints (shuffle), пробуем **последовательно**: на каждый — per-endpoint retry-policy (`max_attempts` попыток с бэкоффом).
+2. Берём минимальный приоритет, **перемешиваем** его endpoints (shuffle), пробуем **последовательно**: на каждый endpoint — per-endpoint retry-loop (`max_attempts` попыток `dialOne` **подряд** к ТОМУ ЖЕ endpoint-у, между попытками — плоская пауза `backoff.initial ± jitter`). Повтор к тому же endpoint-у делается **только при retriable-ошибке** (§Классификация ошибок); non-retriable (lease-held / auth / контрактный отказ) — сразу spray к следующему endpoint без повтора.
 3. Первый успешно установивший gRPC-стрим побеждает; следующие endpoints не трогаем. Текущий приоритет фиксируется.
-4. Если все endpoints на этом приоритете исчерпали `retry.max_attempts` — переходим на следующий приоритет, повторяем шаг 2 (с новым shuffle).
-5. Если исчерпаны все приоритеты — ждём `retry.backoff.max`, начинаем сначала с минимального приоритета.
+4. Если endpoint исчерпал `retry.max_attempts` (или вернул non-retriable-ошибку) — spray к следующему endpoint этого приоритета; когда все endpoints приоритета выбыли — переходим на следующий приоритет, повторяем шаг 2 (с новым shuffle).
+5. Если исчерпаны все приоритеты — это один полный проход по fallback-list-у; внешний reconnect-loop ждёт `delay` (экспоненциальный рост между проходами, capped к `retry.backoff.max`) и начинает сначала с минимального приоритета. Именно здесь, а НЕ между попытками к одному endpoint, работает экспоненциальный рост backoff-а.
 
 ### Failback (возврат на более предпочтительный приоритет)
 
@@ -96,6 +96,20 @@ Keeper держит два gRPC-listener-а на **разных портах** (
    - по срабатыванию — последовательная попытка по приоритетам **от 1 до current-1**: на каждом приоритете endpoints перемешиваются и пробуются по очереди;
    - первый успех на приоритете K (K < current): открываем новый стрим, **затем** закрываем старый (zero-downtime), `current := K`, таймер запускается заново;
    - если все попытки провалились — ждём следующий `failback.interval ± spray`, без быстрых ретраев. Никуда не спешим.
+
+### Классификация ошибок (что ретраит per-endpoint, что сразу spray)
+
+Per-endpoint retry-loop (шаг 2) повторяет `dialOne` к **тому же** endpoint-у только при transient-ошибке транспорта; неисправимый отказ повтором не лечится — нужен другой endpoint, поэтому такой фейл сразу прерывает loop и переходит к spray. Матрица нормативна (матчинг по gRPC-status-коду):
+
+| Класс | gRPC-коды | Поведение per-endpoint |
+|---|---|---|
+| **retriable** | `Unavailable`, `DeadlineExceeded`, `Internal`, `Unknown`, `Aborted` + локальный handshake-timeout (не gRPC-status → `Unknown`) | повтор к тому же endpoint до `max_attempts`, между попытками — плоская пауза `backoff.initial ± jitter` |
+| **non-retriable (spray-on)** | `AlreadyExists` (lease-held), `Unauthenticated`, `PermissionDenied`, `InvalidArgument`, `FailedPrecondition`, `Unimplemented` | ровно **одна** попытка `dialOne`, дальше сразу spray к следующему endpoint |
+| **default** | любой неклассифицированный код | retriable (консервативно) |
+
+Логика: `Unauthenticated`/`PermissionDenied` — auth-проблема (cert/RBAC), сама не исправится за `backoff.initial`; `InvalidArgument`/`FailedPrecondition`/`Unimplemented` — контрактный отказ; `AlreadyExists` — другой Keeper держит SID-lease (см. §Lease-held ниже). Во всех этих случаях повтор к тому же endpoint бессмыслен. Transient-флейк транспорта (`Unavailable`/timeout/…) — наоборот, второй заход к тому же endpoint часто проходит.
+
+Связь с §Lease-held: `AlreadyExists` намеренно **не ретраится** per-endpoint (ровно один `dialOne` на каждый lease-held endpoint). Это комплементарно lease-held soft-failure backoff-у внешнего reconnect-loop-а — per-endpoint retry не создаёт churn на выживших Keeper-ах, пока lease ещё держится; быстрый возврат после force-release обеспечивает именно модест-cap reconnect-loop-а, а не повтор к одному endpoint.
 
 ### Lease-held soft-failure (reconnect после краха holder-а)
 

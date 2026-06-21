@@ -372,6 +372,16 @@ func runDaemon(args []string) int {
 		fmt.Fprintf(os.Stderr, "soul run: %v\n", err)
 		return exitError
 	}
+
+	// Per-endpoint retry (keeper.retry.max_attempts) + плоская inter-attempt пауза
+	// = reuse backoff.initial/jitter (никаких новых конфиг-ключей). backoff здесь
+	// нужен только для статической сборки ClientConfig; reconnectLoop читает свой
+	// snapshot из store per-iteration (hot-reload).
+	clientBackoff, err := loadBackoff(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "soul run: %v\n", err)
+		return exitError
+	}
 	// SID-резолв: config.sid > os.Hostname (lowercased). Lowercase симметричен
 	// bootstrap.Run (bootstrap.go) — иначе хост с MixedCase-hostname получит на
 	// init и run разный SID. `soul run` не имеет --sid флага (в отличие от init).
@@ -456,14 +466,17 @@ func runDaemon(args []string) int {
 	}()
 
 	client, err := soulgrpc.NewClient(soulgrpc.ClientConfig{
-		Endpoints:        endpoints,
-		SeedCert:         seedPaths.Cert,
-		SeedKey:          seedPaths.Key,
-		CAPath:           seedPaths.CA,
-		HandshakeTimeout: handshakeTimeout,
-		SoulVersion:      soulVersion,
-		SID:              sid,
-		MaxRecvMsgSize:   cfg.Keeper.ResolvedMaxApplySize(),
+		Endpoints:          endpoints,
+		SeedCert:           seedPaths.Cert,
+		SeedKey:            seedPaths.Key,
+		CAPath:             seedPaths.CA,
+		HandshakeTimeout:   handshakeTimeout,
+		SoulVersion:        soulVersion,
+		SID:                sid,
+		MaxRecvMsgSize:     cfg.Keeper.ResolvedMaxApplySize(),
+		MaxAttempts:        resolveMaxAttempts(cfg),
+		InterAttemptDelay:  clientBackoff.initial,
+		InterAttemptJitter: clientBackoff.jitter,
 	}, logger)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "soul run: %v\n", err)
@@ -1379,6 +1392,18 @@ func loadBackoff(cfg *config.SoulConfig) (backoffParams, error) {
 	}
 	b.jitter = bk.Jitter
 	return b, nil
+}
+
+// resolveMaxAttempts — soul.yml::keeper.retry.max_attempts с резолвом 0→2
+// (симметрично дефолту в soulgrpc.NewClient). Опущенный блок retry / нулевое
+// значение → defaultClientMaxAttempts. Валидация (>=1) уже сделана на
+// config-фазе (shared/config/schema.go), здесь только резолв дефолта.
+func resolveMaxAttempts(cfg *config.SoulConfig) int {
+	const defaultClientMaxAttempts = 2
+	if cfg.Keeper.Retry == nil || cfg.Keeper.Retry.MaxAttempts <= 0 {
+		return defaultClientMaxAttempts
+	}
+	return cfg.Keeper.Retry.MaxAttempts
 }
 
 func parseHandshakeTimeout(cfg *config.SoulConfig) (time.Duration, error) {

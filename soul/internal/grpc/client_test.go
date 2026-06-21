@@ -539,11 +539,32 @@ type mockEventStream struct {
 	resultCount int
 	wardCount   int
 	lastWard    *keeperv1.WardRoster
+	// streamCount — число открытых EventStream-вызовов = число dialOne к этому
+	// серверу (каждый dialOne открывает новый stream). Per-endpoint retry-тесты
+	// считают попытки именно по нему.
+	streamCount int
 
 	handler func(*keeperv1.Hello) (*keeperv1.HelloReply, error)
+	// ctxHandler — handshake-handler с доступом к контексту стрима. Нужен hang-
+	// кейсам (per-endpoint failover-latency, ctx-cancel-во-время-dialOne): handler
+	// блокируется на stream.Context().Done(), чтобы сервер разблокировался при
+	// закрытии соединения клиентом (sessCancel/conn.Close в dialOne) и
+	// GracefulStop в stop() не висел. Если задан — приоритетнее handler/default.
+	ctxHandler func(ctx context.Context, hello *keeperv1.Hello) (*keeperv1.HelloReply, error)
+}
+
+// dialCount — потокобезопасное число dialOne (EventStream) к серверу.
+func (m *mockEventStream) dialCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.streamCount
 }
 
 func (m *mockEventStream) EventStream(stream grpc.BidiStreamingServer[keeperv1.FromSoul, keeperv1.FromKeeper]) error {
+	m.mu.Lock()
+	m.streamCount++
+	m.mu.Unlock()
+
 	first, err := stream.Recv()
 	if err != nil {
 		return err
@@ -557,13 +578,20 @@ func (m *mockEventStream) EventStream(stream grpc.BidiStreamingServer[keeperv1.F
 	m.mu.Unlock()
 
 	var reply *keeperv1.HelloReply
-	if m.handler != nil {
+	switch {
+	case m.ctxHandler != nil:
+		r, err := m.ctxHandler(stream.Context(), hello)
+		if err != nil {
+			return err
+		}
+		reply = r
+	case m.handler != nil:
 		r, err := m.handler(hello)
 		if err != nil {
 			return err
 		}
 		reply = r
-	} else {
+	default:
 		reply = &keeperv1.HelloReply{
 			SessionId:  "sess-1",
 			Kid:        "test-kid",
@@ -601,6 +629,47 @@ func (m *mockEventStream) stop() {
 func newMockEventStream(t *testing.T, handler func(*keeperv1.Hello) (*keeperv1.HelloReply, error)) *mockEventStream {
 	t.Helper()
 	return newMockEventStreamWithCA(t, handler, nil)
+}
+
+// newMockEventStreamCtx поднимает mock-сервер с ctx-aware handshake-handler-ом
+// (hang-кейсы failover-latency / ctx-cancel-во-время-dialOne). src — общий
+// CA-материал (как у newMockEventStreamWithCA); nil → свой CA.
+func newMockEventStreamCtx(t *testing.T, ctxHandler func(ctx context.Context, hello *keeperv1.Hello) (*keeperv1.HelloReply, error), src *mockEventStream) *mockEventStream {
+	t.Helper()
+	mk := newMockEventStreamWithCA(t, nil, src)
+	mk.ctxHandler = ctxHandler
+	return mk
+}
+
+// hangHandler — handshake-handler, который НИКОГДА не отвечает: блокируется до
+// закрытия стрима клиентом (sessCancel/conn.Close в dialOne). Клиент всегда
+// срабатывает по своему локальному handshake_timeout (time.After в dialOne) →
+// dialOne отдаёт "handshake timeout" (codes.Unknown → retriable). Серверная
+// горутина разблокируется при разрыве соединения, GracefulStop не висит.
+func hangHandler(ctx context.Context, _ *keeperv1.Hello) (*keeperv1.HelloReply, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// seqHandler — handshake-handler, проигрывающий заданную последовательность
+// исходов по числу dialOne-вызовов к этому серверу. На i-й вызов (1-based)
+// отдаёт codes[i-1]: codes.OK → успешный HelloReply, иначе status.Error(code).
+// За пределами последовательности — последний исход повторяется. Моделирует
+// «один endpoint, разные ошибки на разных attempt-ах» (mixed-errors кейс).
+func seqHandler(seq ...codes.Code) func(*keeperv1.Hello) (*keeperv1.HelloReply, error) {
+	var calls int
+	return func(_ *keeperv1.Hello) (*keeperv1.HelloReply, error) {
+		calls++
+		idx := calls - 1
+		if idx >= len(seq) {
+			idx = len(seq) - 1
+		}
+		code := seq[idx]
+		if code == codes.OK {
+			return &keeperv1.HelloReply{SessionId: "sess-seq", Kid: "test-kid", ServerTime: timestamppb.Now()}, nil
+		}
+		return nil, status.Errorf(code, "seq attempt %d code %s", calls, code)
+	}
 }
 
 // newMockEventStreamWithCA поднимает mock-сервер. Если src != nil, новый сервер
