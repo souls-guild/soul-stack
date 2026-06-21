@@ -37,8 +37,12 @@
       password:  "${ input.password }"
       config:    "${ input.config }"
       # master_addr опционален: пробрасывается caller-ом через input, для реплик.
-      # Если caller не передал — input.master_addr == null, шаблон не рендерит секцию.
-      master_addr: "${ input.master_addr }"
+      # has()-guard обязателен: master_addr НЕ required в input-схеме, и create-
+      # ветка (install.yml) его не передаёт вовсе → незащищённый ${ input.master_addr }
+      # даёт CEL "no such key: master_addr" на render-фазе (incarnation error_locked).
+      # При отсутствии → "" (falsy в шаблоне {{ if .vars.master_addr }} — секция
+      # replication не рендерится; репликацию настраивает redis-replication-config).
+      master_addr: "${ has(input.master_addr) ? input.master_addr : '' }"
 
 # systemd drop-in hardening поверх ДИСТРИБУТИВНОГО юнита redis-server (его нельзя
 # заменять целиком — обновляется с пакетом, несёт ExecStart/Type=notify). Override

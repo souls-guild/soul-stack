@@ -1,0 +1,15 @@
+name: single-user
+description: >
+  foreach по списку из одного элемента: тело цикла выполняется ровно один раз,
+  целевой map содержит единственного пользователя. Промежуточный путь между
+  empty-users (foreach по []) и users-array-to-map (несколько элементов) —
+  ловит off-by-one в материализации ключа foreach.
+
+state_before:
+  redis_users: ["app"]
+  redis_maxmemory: "1gb"
+
+state_after:
+  redis_users:
+    app: { acl: "off ~* &* +@all", state: "off" }
+  redis_maxmemory: "1gb"

@@ -21,10 +21,15 @@ input:
     type: string
     required: true
     secret: true
-    pattern: "^vault:.*"
     # Пароль приходит scoped vault:-ref (default-deny на input без vault_scope —
     # docs/input.md §«vault_scope»). prefix-glob ограничивает резолв ветвью
     # secret/redis/* (per-incarnation путь secret/redis/<inc>#password).
+    # ВНИМАНИЕ: pattern:"^vault:.*" здесь НЕДОПУСТИМ — vault:-ref резолвится в
+    # литерал ДО value-валидации (ResolveInputValuesVault: merge → vault-resolve →
+    # validate), поэтому pattern проверял бы уже-зарезолвленный пароль и всегда
+    # падал ("не соответствует ^vault:.*"). Form-инвариант «только vault:-ref»
+    # движком input-валидации не выразим (зеркало create/main.yml; кандидат на
+    # ключ vault_ref_required вне MVP — см. docs/testing).
     vault_scope: "secret/redis/*"
 
 # Факт о новом хосте (role: replica) пишется в incarnation.state.redis_hosts[]

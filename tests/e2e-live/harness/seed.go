@@ -41,6 +41,54 @@ func (s *Stack) SeedIncarnationReady(t *testing.T, name, service, serviceVersion
 	}
 }
 
+// SpecHostDecl — declared-запись `incarnation.spec.hosts[]` для
+// [Stack.SeedIncarnationForCreate]. Форма зеркалит парсер
+// topology.parseDeclaredRoles (`{sid, role}`, ADR-008); role kebab-case
+// (`primary`/`replica`/...), пустая допустима (хост вне declared-роли).
+type SpecHostDecl struct {
+	SID  string
+	Role string
+}
+
+// SeedIncarnationForCreate вставляет incarnation в status='ready' с ПУСТЫМ state
+// (`{}`) и declared `spec.hosts[]` (роли host-0/host-1/...). Отличие от
+// [Stack.SeedIncarnationReady]: state пуст (create наполнит его сам через
+// state_changes), а spec несёт declared-роли — их читает topology.parseDeclaredRoles
+// при резолве `soulprint.hosts.where("role == 'primary'")` в create-scenario.
+//
+// Зачем отдельный helper: POST /v1/incarnations НЕ принимает declared spec.hosts
+// (ADR-008, ровно как поясняет ТЗ), а bootstrap-create
+// (examples/service/redis-cluster/scenario/create) этим declared-ролям обязан
+// (replication.yml / ensure_users таргетят primary по
+// `soulprint.hosts.where("role == 'primary'")[0]`). Прямой SQL-seed spec.hosts
+// ДО RunScenario(create) закрывает разрыв «declared-роль недоступна офлайн».
+//
+// status='ready' → штатный RunScenario(create) проходит lock-gate (lockRun
+// стартует обычный прогон из ready, run.go), без FromLocked-хака.
+func (s *Stack) SeedIncarnationForCreate(t *testing.T, name, service, serviceVersion string, hosts []SpecHostDecl) {
+	t.Helper()
+	specHosts := make([]map[string]any, 0, len(hosts))
+	for _, h := range hosts {
+		obj := map[string]any{"sid": h.SID}
+		if h.Role != "" {
+			obj["role"] = h.Role
+		}
+		specHosts = append(specHosts, obj)
+	}
+	specJSON, err := json.Marshal(map[string]any{"hosts": specHosts})
+	if err != nil {
+		t.Fatalf("SeedIncarnationForCreate(%s): marshal spec: %v", name, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := s.db.Exec(ctx, `
+		INSERT INTO incarnation (name, service, service_version, spec, state, status)
+		VALUES ($1, $2, $3, $4::jsonb, '{}'::jsonb, 'ready')
+	`, name, service, serviceVersion, string(specJSON)); err != nil {
+		t.Fatalf("SeedIncarnationForCreate(%s): %v", name, err)
+	}
+}
+
 // SeedSoulprint записывает soulprint-факты i-го soul-контейнера напрямую в
 // `souls.soulprint_facts` (форма SoulprintFacts-JSON, CEL `soulprint.self.<path>`,
 // ADR-018). На L3b реальный soul шлёт собственный SoulprintReport при установке

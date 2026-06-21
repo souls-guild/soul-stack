@@ -108,6 +108,40 @@ L3b реализуется итеративно. Карта slice-ов (architec
 | `TestL3bStagedProbeLive_WhereTargetsOnlyMaster` | 2+ | **staged-render probe→where на живом soul** (ADR-056): реальный probe-шаг эмитит per-host register, Passage-действие `where: register.*=='master'` реально применяется ТОЛЬКО на master-хосте. L3b-аналог `TestE2EStagedFailover_2Passage`, но через реальный apply вместо stub. |
 | `TestL3bDriftLive_HelloWorld` | 1 | Drift-check на живом soul: create hello-world (`core.file.present` greeting-файл) → clean baseline → out-of-band мутация файла → `CheckDrift` видит `drifted=1` через реальный `core.file.Plan` → re-apply → `CheckDrift` снова clean. Ловит регресс реального Plan (в отличие от stub-Plan L3a). |
 | `TestE2EBeaconPlugin_FullLoop` | 1 | Реальный `soul_beacon`-плагин (gRPC-over-stdio): inotify-портент → Vigil → Decree → Oracle → fired scenario на живом soul. |
+| `TestL3bRedisClusterCreate_FullLifecycle` | 3 | **SKIPPED (структурный блокер, см. ниже)**. Тело сохранено: документирует целевой create-lifecycle + reusable harness `SeedIncarnationForCreate` (direct-SQL seed declared-роли spec.hosts[]). |
+
+## Известные блокеры покрытия (NOT-L3b-able)
+
+### `redis-cluster` (полный) create — host-вариативный destiny-when (слой 3)
+
+`TestL3bRedisClusterCreate_FullLifecycle` помечен `t.Skip` и **не зачтён** в
+покрытии. Причина — структурный дефект самого сервиса, не теста:
+
+- destiny `redis-replication-config` (`tasks/main.yml`) использует
+  host-вариативный flow-control `when: soulprint.self.<...> != input.master_addr`
+  на multi-host `apply: destiny:`. Движок отвергает это
+  (`guardFlowControlHostInvariant`, split-brain prevention; per-host
+  destiny-dispatch — отложенный engine-feature, отдельный ADR).
+- Канон (ADR-009 / [orchestration §4.1](../../docs/scenario/orchestration.md))
+  intends **host-инвариантную destiny** + per-роль таргетинг на scenario-уровне
+  (`where:`). redis-cluster написан неправильным паттерном.
+- create-lifecycle **покрыт** упрощённым `redis-cluster-LIVE`
+  (`TestL3bRedisClusterLive_ThreeNode`): install redis на 3 ноды + формирование
+  кластера, independent `cluster_state:ok`.
+- Реактивация после: **(a)** рерайт redis-cluster create на per-роль
+  scenario-steps (`where: primary`/`replica` + host-инвариантные destiny) —
+  service-design follow-up; **ЛИБО (b)** per-host destiny-dispatch (engine
+  feature, отложенный ADR).
+
+### Слой-1 находка: form-инвариант «secret = только vault:-ref» неэнфорсим
+
+`pattern: "^vault:.*"` на secret-input (напр. redis_password) **не работает**:
+vault:-ref резолвится в литерал ДО value-валидации
+(`ResolveInputValuesVault`: merge → vault-resolve → validate), поэтому pattern
+проверяет уже-зарезолвленное значение и всегда падает. Pattern убран из
+`scenario/create/main.yml` и `scenario/add_replica/main.yml` (заменён
+комментарием). Кандидат на отдельный input-ключ `vault_ref_required` (валидация
+ДО резолва) — **вне MVP**, needs_architect.
 
 ## Expectations YAML loader (L3b-5)
 

@@ -1,0 +1,22 @@
+name: preserves-unrelated-fields
+description: >
+  Поля state, не упомянутые в transform (rename/set/foreach/delete по
+  redis_users и redis_users_legacy_v1), проходят миграцию нетронутыми.
+  Гарантирует, что forward-only-миграция трогает только целевые ключи и не
+  теряет/не портит соседние данные incarnation.state.
+
+state_before:
+  redis_users: ["app", "monitor"]
+  redis_maxmemory: "512mb"
+  redis_port: 6379
+  cluster_enabled: true
+  replica_of: "node-01"
+
+state_after:
+  redis_users:
+    app:     { acl: "off ~* &* +@all", state: "off" }
+    monitor: { acl: "off ~* &* +@all", state: "off" }
+  redis_maxmemory: "512mb"
+  redis_port: 6379
+  cluster_enabled: true
+  replica_of: "node-01"
