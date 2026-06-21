@@ -46,7 +46,9 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/souls-guild/soul-stack/shared/config"
@@ -57,6 +59,190 @@ import (
 	soulgrpc "github.com/souls-guild/soul-stack/soul/internal/grpc"
 	"github.com/souls-guild/soul-stack/soul/internal/runtime"
 )
+
+// TestReconnect_LeaseHeld_BackoffNotReset — стрим отвергнут AlreadyExists на
+// handshake (SID-lease ещё держит живой holder после краха keeper-а). Soul НЕ
+// долбит выжившего keeper-а на rate ~1/initial: backoff растёт (модест-cap), а не
+// сбрасывается. Доказательство: за окно T число handshake-попыток ограничено
+// растущей задержкой, а не initial-rate. Когда lease снимается (force-release
+// после presence) — Soul переподключается в пределах нескольких секунд (cap),
+// recovery-latency сохранена.
+func TestReconnect_LeaseHeld_BackoffNotReset(t *testing.T) {
+	ca, caKey := mustGenCA(t)
+	clientCertDER, clientKey := mustGenLeaf(t, ca, caKey, "soul-host.example", false)
+	dir := t.TempDir()
+	caPath := writePEMBlock(t, dir, "ca.pem", "CERTIFICATE", ca.Raw)
+	clientCertPath := writePEMBlock(t, dir, "client.crt", "CERTIFICATE", clientCertDER)
+	clientKeyPath := writeRSAPriv(t, dir, "client.key", clientKey)
+
+	srvTLS := serverTLS(t, ca, caKey)
+	srv := startMockKeeper(t, srvTLS, "L")
+	defer srv.stop()
+	srv.rejectLease.Store(true) // lease занят живым holder-ом
+
+	endpoints := []soulgrpc.Endpoint{{Addr: srv.addr, Priority: 1}}
+	logger := testLogger(t)
+	cli, err := soulgrpc.NewClient(soulgrpc.ClientConfig{
+		Endpoints:        endpoints,
+		SeedCert:         clientCertPath,
+		SeedKey:          clientKeyPath,
+		CAPath:           caPath,
+		HandshakeTimeout: 500 * time.Millisecond,
+		SID:              "soul-host.example",
+		SoulVersion:      "0.0.0-test",
+	}, logger)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	// transport-max намеренно МАЛ (20ms): если бы lease-held шёл по обычной
+	// transport-семантике с reset-к-initial, за окно набралось бы ~окно/20ms
+	// попыток. Lease-held cap (leaseHeldBackoffCap, секунды) и отсутствие reset
+	// держат число попыток в единицах. initial=20ms/no-jitter — детерминируем.
+	store := backoffOnlyStore(t, srv.addr, "20ms", "20ms")
+
+	runner := runtime.NewApplyRunner(coremod.Default(), nil)
+	sp := newTestPusher("soul-host.example")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	loopDone := make(chan struct{})
+	go func() {
+		defer close(loopDone)
+		reconnectLoop(ctx, store, cli, runner, nil, sp, nil, nil, nil, nil, logger)
+	}()
+	defer func() {
+		cancel()
+		<-loopDone
+	}()
+
+	// Окно наблюдения 2s. При reset-к-initial(20ms) было бы ~100 попыток. При
+	// lease-held прогрессии (20→40→80→160→320→640→1280→2560→cap=3000) — ≤ ~8.
+	// Порог 25 — щедрый запас над растущей прогрессией, но далеко ниже initial-rate.
+	if !waitFor(func() bool { return srv.helloCount() >= 1 }, 2*time.Second) {
+		t.Fatal("no handshake attempt observed under lease-held")
+	}
+	time.Sleep(2 * time.Second)
+	attempts := srv.helloCount()
+	if attempts > 25 {
+		t.Fatalf("lease-held: %d handshake attempts in ~2s — backoff appears reset to initial (~1/initial spam)", attempts)
+	}
+	t.Logf("lease-held handshake attempts in ~2s window: %d (backoff applied, not reset)", attempts)
+
+	// === recovery-latency: lease снят (force-release) → переподключение за секунды ===
+	srv.rejectLease.Store(false)
+	// cap=leaseHeldBackoffCap (3s) + handshake/запас. Должно успеть.
+	if !waitFor(func() bool { return srv.activeStreams() >= 1 }, leaseHeldBackoffCap+3*time.Second) {
+		t.Fatalf("recovery: did not reconnect within %s after lease released", leaseHeldBackoffCap+3*time.Second)
+	}
+}
+
+// TestReconnect_LeaseHeld_SpraysToOtherEndpoint — AlreadyExists на priority=1
+// endpoint НЕ заклинивает spray/failover: Dial доходит до живого priority=2
+// endpoint-а той же сессией, не дожидаясь снятия lease на первом. Страхует
+// легитимный fallback по fallback-list при lease-held на одном keeper-е.
+func TestReconnect_LeaseHeld_SpraysToOtherEndpoint(t *testing.T) {
+	ca, caKey := mustGenCA(t)
+	clientCertDER, clientKey := mustGenLeaf(t, ca, caKey, "soul-host.example", false)
+	dir := t.TempDir()
+	caPath := writePEMBlock(t, dir, "ca.pem", "CERTIFICATE", ca.Raw)
+	clientCertPath := writePEMBlock(t, dir, "client.crt", "CERTIFICATE", clientCertDER)
+	clientKeyPath := writeRSAPriv(t, dir, "client.key", clientKey)
+
+	srvTLS := serverTLS(t, ca, caKey)
+	// priority=1 — lease-held; priority=2 — живой.
+	leaseHeld := startMockKeeper(t, srvTLS, "P1")
+	defer leaseHeld.stop()
+	leaseHeld.rejectLease.Store(true)
+	alive := startMockKeeper(t, srvTLS, "P2")
+	defer alive.stop()
+
+	endpoints := []soulgrpc.Endpoint{
+		{Addr: leaseHeld.addr, Priority: 1},
+		{Addr: alive.addr, Priority: 2},
+	}
+	logger := testLogger(t)
+	cli, err := soulgrpc.NewClient(soulgrpc.ClientConfig{
+		Endpoints:        endpoints,
+		SeedCert:         clientCertPath,
+		SeedKey:          clientKeyPath,
+		CAPath:           caPath,
+		HandshakeTimeout: 500 * time.Millisecond,
+		SID:              "soul-host.example",
+		SoulVersion:      "0.0.0-test",
+	}, logger)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	// failback disabled тут не нужен — alive это priority=2, failback потащил бы
+	// на priority=1 (lease-held), что усложнит наблюдение. interval большой.
+	store := backoffOnlyStore(t, leaseHeld.addr, "20ms", "200ms")
+
+	runner := runtime.NewApplyRunner(coremod.Default(), nil)
+	sp := newTestPusher("soul-host.example")
+	ctx, cancel := context.WithCancel(context.Background())
+	loopDone := make(chan struct{})
+	go func() {
+		defer close(loopDone)
+		reconnectLoop(ctx, store, cli, runner, nil, sp, nil, nil, nil, nil, logger)
+	}()
+	defer func() {
+		cancel()
+		<-loopDone
+	}()
+
+	// Несмотря на lease-held priority=1, сессия поднимается на живом priority=2.
+	if !waitFor(func() bool { return alive.activeStreams() >= 1 }, 3*time.Second) {
+		t.Fatalf("spray: did not connect to alive priority=2 endpoint; P1-hello=%d P2-active=%d",
+			leaseHeld.helloCount(), alive.activeStreams())
+	}
+}
+
+// testLogger — discard по умолчанию, debug на stderr при -v.
+func testLogger(t *testing.T) *slog.Logger {
+	t.Helper()
+	if testing.Verbose() {
+		return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	}
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// backoffOnlyStore — Store[SoulConfig] с одним endpoint-ом и заданными
+// backoff.initial/max (no-jitter), failback выключен. Для lease-held тестов, где
+// важна именно reconnect-backoff-семантика, а не failback. primaryAddr —
+// единственный endpoint в конфиге; реальный дайлинг идёт через отдельный Client
+// (его endpoints могут включать больше адресов — конфиг лишь источник backoff).
+func backoffOnlyStore(t *testing.T, primaryAddr, initial, max string) *config.Store[config.SoulConfig] {
+	t.Helper()
+	host, port := splitHostPort(t, primaryAddr)
+	yml := fmt.Sprintf(`keeper:
+  endpoints:
+    - host: %s
+      event_stream_port: %d
+      bootstrap_port: %d
+      priority: 1
+  retry:
+    backoff:
+      initial: %s
+      max: %s
+      jitter: false
+  failback:
+    enabled: false
+`, host, port, port, initial, max)
+	path := filepath.Join(t.TempDir(), "soul.yml")
+	if err := os.WriteFile(path, []byte(yml), 0o644); err != nil {
+		t.Fatalf("write soul.yml: %v", err)
+	}
+	store, diags, err := config.LoadSoulStore(path, config.ValidateOptions{})
+	if err != nil {
+		t.Fatalf("LoadSoulStore: %v", err)
+	}
+	for _, d := range diags {
+		if d.Level == diag.LevelError {
+			t.Fatalf("soul.yml has error diag: %s [%s] %s", d.Phase, d.Code, d.Message)
+		}
+	}
+	return store
+}
 
 // TestFailbackIntegration_TwoEndpoints — happy-path конвейера failback:
 // fallback на priority=2 при недоступном priority=1, потом proactive-swap
@@ -173,7 +359,9 @@ type mockKeeper struct {
 	label string
 	addr  string
 
-	active int64 // atomic — счётчик in-flight EventStream-handler-ов
+	active        int64       // atomic — счётчик in-flight EventStream-handler-ов
+	helloAttempts int64       // atomic — счётчик принятых Hello (handshake-попыток)
+	rejectLease   atomic.Bool // когда true — отвергать handshake с AlreadyExists (lease-held)
 
 	srv *grpc.Server
 	ln  *trackingListener
@@ -194,6 +382,12 @@ func (m *mockKeeper) EventStream(stream grpc.BidiStreamingServer[keeperv1.FromSo
 	if hello == nil {
 		return errors.New("expected Hello")
 	}
+	atomic.AddInt64(&m.helloAttempts, 1)
+	// lease-held: отвергаем ДО HelloReply (как keeper при занятом SID-lease —
+	// acquireSoulLease отдаёт AlreadyExists до handshake-reply).
+	if m.rejectLease.Load() {
+		return status.Errorf(codes.AlreadyExists, "soul lease held by another keeper for sid=%q", hello.GetSidEcho())
+	}
 	if err := stream.Send(&keeperv1.FromKeeper{Payload: &keeperv1.FromKeeper_HelloReply{HelloReply: &keeperv1.HelloReply{
 		SessionId:  "sess-" + m.label,
 		Kid:        "kid-" + m.label,
@@ -211,6 +405,8 @@ func (m *mockKeeper) EventStream(stream grpc.BidiStreamingServer[keeperv1.FromSo
 		}
 	}
 }
+
+func (m *mockKeeper) helloCount() int64 { return atomic.LoadInt64(&m.helloAttempts) }
 
 func (m *mockKeeper) activeStreams() int64 { return atomic.LoadInt64(&m.active) }
 

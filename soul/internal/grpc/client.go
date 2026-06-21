@@ -25,8 +25,10 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
@@ -136,6 +138,12 @@ func (c *Client) DialPriority(ctx context.Context, maxPriority int) (*StreamSess
 	}
 
 	var dialErrs []string
+	// allLeaseHeld — все упавшие endpoint-ы вернули AlreadyExists (SID-lease ещё
+	// держит живой/не-истёкший holder, keeper/internal/grpc/eventstream.go).
+	// Спрашиваем итог только когда хоть один endpoint реально пробовался: при
+	// пустом dialErrs (нет подходящих endpoint-ов) флаг остаётся ложным.
+	allLeaseHeld := true
+	tried := false
 	for _, ep := range orderedEndpoints(c.cfg.Endpoints) {
 		if maxPriority > 0 && normalizedPriority(ep.Priority) >= maxPriority {
 			continue
@@ -146,6 +154,7 @@ func (c *Client) DialPriority(ctx context.Context, maxPriority int) (*StreamSess
 		}
 		creds := credentials.NewTLS(cfgForAddr)
 
+		tried = true
 		sess, err := c.dialOne(ctx, ep.Addr, creds, kp)
 		if err == nil {
 			sess.priority = normalizedPriority(ep.Priority)
@@ -157,6 +166,13 @@ func (c *Client) DialPriority(ctx context.Context, maxPriority int) (*StreamSess
 			)
 			return sess, nil
 		}
+		// spray: AlreadyExists на одном endpoint НЕ прерывает перебор — следующий
+		// endpoint мог уже перехватить lease после force-release. Флаг сбрасываем,
+		// как только хоть один фейл — НЕ AlreadyExists (тогда это transport-сбой,
+		// общий backoff-cap, не модест-cap lease-held ветки).
+		if !isAlreadyExists(err) {
+			allLeaseHeld = false
+		}
 		c.logger.Warn("eventstream: dial failed", slog.String("addr", ep.Addr), slog.Any("error", err))
 		dialErrs = append(dialErrs, fmt.Sprintf("%s: %v", ep.Addr, err))
 	}
@@ -165,7 +181,15 @@ func (c *Client) DialPriority(ctx context.Context, maxPriority int) (*StreamSess
 		// ошибка failback-цикла; отличаем от случая «есть, но все упали».
 		return nil, errNoHigherPriority
 	}
-	return nil, fmt.Errorf("grpc: client: all endpoints failed:\n  - %s", strings.Join(dialErrs, "\n  - "))
+	aggregated := fmt.Errorf("grpc: client: all endpoints failed:\n  - %s", strings.Join(dialErrs, "\n  - "))
+	if tried && allLeaseHeld {
+		// Все пробованные endpoint-ы отдали AlreadyExists — оборачиваем sentinel-ом
+		// errLeaseHeld, чтобы reconnect-loop применил модест-cap (быстрый возврат
+		// после истечения presence), не теряя диагностику в aggregated. status в
+		// per-endpoint обёртках уже стёрт (%v), поэтому сигнал несём через sentinel.
+		return nil, fmt.Errorf("%w: %w", errLeaseHeld, aggregated)
+	}
+	return nil, aggregated
 }
 
 // errNoHigherPriority — sentinel-ошибка DialPriority: нет endpoint-ов с
@@ -176,6 +200,26 @@ var errNoHigherPriority = errors.New("grpc: client: no higher-priority endpoint"
 // IsNoHigherPriority — публичный selector над sentinel-ошибкой DialPriority.
 func IsNoHigherPriority(err error) bool {
 	return errors.Is(err, errNoHigherPriority)
+}
+
+// errLeaseHeld — sentinel-ошибка Dial/DialPriority: ВСЕ пробованные endpoint-ы
+// отвергли handshake с gRPC AlreadyExists (SID-lease ещё держит живой/не-
+// истёкший holder, keeper/internal/grpc/eventstream.go::acquireSoulLease). Dial
+// удался на транспорте, но сессия отвергнута — soft-failure для целей backoff:
+// reconnect-loop применяет модест-cap вместо общего transport-cap, чтобы Soul
+// переподключился в пределах секунд после истечения presence (force-release),
+// а не долбил выживших keeper-ов и не ждал раздутый exponential-cap.
+var errLeaseHeld = errors.New("grpc: client: soul lease held by live keeper")
+
+// IsLeaseHeld — публичный selector над sentinel-ошибкой errLeaseHeld.
+func IsLeaseHeld(err error) bool {
+	return errors.Is(err, errLeaseHeld)
+}
+
+// isAlreadyExists — true, если ошибка несёт gRPC-status codes.AlreadyExists
+// где-либо в chain (dialOne оборачивает recv-ошибку через %w, status сохраняется).
+func isAlreadyExists(err error) bool {
+	return status.Code(err) == codes.AlreadyExists
 }
 
 // dialOne — одна попытка к одному endpoint-у. Stream живёт под собственным

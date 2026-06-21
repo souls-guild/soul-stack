@@ -19,7 +19,9 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
@@ -234,6 +236,133 @@ func TestDialPriority_PicksLowerOnly(t *testing.T) {
 	}
 }
 
+// alreadyExistsHandler — handshake-handler, отвергающий Hello с gRPC
+// AlreadyExists (как keeper при занятом SID-lease: acquireSoulLease отдаёт
+// AlreadyExists ДО HelloReply). Возврат error из handler → EventStream сразу
+// return err, стрим закрывается на handshake.
+func alreadyExistsHandler(_ *keeperv1.Hello) (*keeperv1.HelloReply, error) {
+	return nil, status.Errorf(codes.AlreadyExists, "soul lease held by another keeper")
+}
+
+// TestDial_AllEndpointsLeaseHeld_IsLeaseHeld — все endpoint-ы вернули
+// AlreadyExists на handshake → Dial возвращает ошибку, распознаваемую
+// IsLeaseHeld (reconnect-loop применит модест-cap, а не общий transport-cap).
+func TestDial_AllEndpointsLeaseHeld_IsLeaseHeld(t *testing.T) {
+	srv := newMockEventStream(t, alreadyExistsHandler)
+	defer srv.stop()
+
+	cli, err := NewClient(ClientConfig{
+		Endpoints:        []Endpoint{{Addr: srv.addr}},
+		SeedCert:         srv.clientCert,
+		SeedKey:          srv.clientKey,
+		CAPath:           srv.caPath,
+		HandshakeTimeout: 3 * time.Second,
+		SID:              "host.example",
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	_, err = cli.Dial(context.Background())
+	if err == nil {
+		t.Fatal("Dial: expected error (lease held), got nil")
+	}
+	if !IsLeaseHeld(err) {
+		t.Fatalf("Dial err=%v, want IsLeaseHeld", err)
+	}
+}
+
+// TestDial_LeaseHeldOnOneEndpoint_SpraysToOther — AlreadyExists на одном
+// endpoint НЕ заклинивает spray: перебор продолжается, второй (живой) endpoint
+// перехватывает сессию. Это страхует легитимный fallback/spray по fallback-list.
+func TestDial_LeaseHeldOnOneEndpoint_SpraysToOther(t *testing.T) {
+	leaseHeld := newMockEventStream(t, alreadyExistsHandler)
+	defer leaseHeld.stop()
+	// leaseHeld делаем priority=1 (всегда первым в переборе), alive — priority=2
+	// на том же CA; Dial должен пройти мимо lease-held к alive.
+	alive := newMockEventStreamWithCA(t, nil, leaseHeld)
+	defer alive.stop()
+
+	cli, err := NewClient(ClientConfig{
+		Endpoints: []Endpoint{
+			{Addr: leaseHeld.addr, Priority: 1},
+			{Addr: alive.addr, Priority: 2},
+		},
+		SeedCert:         leaseHeld.clientCert,
+		SeedKey:          leaseHeld.clientKey,
+		CAPath:           leaseHeld.caPath,
+		HandshakeTimeout: 3 * time.Second,
+		SID:              "host.example",
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	sess, err := cli.Dial(context.Background())
+	if err != nil {
+		t.Fatalf("Dial: expected fallback to alive endpoint, got err=%v", err)
+	}
+	defer sess.Close()
+	// Дошли до priority=2 (lease-held на priority=1 не заклинил перебор).
+	if sess.Priority() != 2 {
+		t.Errorf("session.Priority = %d, want 2 (sprayed past lease-held endpoint)", sess.Priority())
+	}
+	// Итоговая ошибка не lease-held: успех есть, ошибки нет вовсе.
+}
+
+// TestDial_TransportFailure_NotLeaseHeld — transport-сбой (dead port) НЕ
+// классифицируется как lease-held: reconnect-loop оставит общий transport-cap
+// (регресс-guard на различение soft/transport failure).
+func TestDial_TransportFailure_NotLeaseHeld(t *testing.T) {
+	cert, key, ca := mustWriteClientSeed(t)
+	cli, err := NewClient(ClientConfig{
+		Endpoints:        []Endpoint{{Addr: "127.0.0.1:1"}}, // dead port
+		SeedCert:         cert,
+		SeedKey:          key,
+		CAPath:           ca,
+		HandshakeTimeout: 500 * time.Millisecond,
+		SID:              "host.example",
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	_, err = cli.Dial(context.Background())
+	if err == nil {
+		t.Fatal("Dial: expected transport error, got nil")
+	}
+	if IsLeaseHeld(err) {
+		t.Fatalf("transport failure misclassified as lease-held: %v", err)
+	}
+}
+
+// TestDial_MixedLeaseHeldAndTransport_NotLeaseHeld — один endpoint lease-held,
+// другой transport-сбой → НЕ lease-held (не все фейлы — AlreadyExists, значит
+// есть реальная недоступность, общий transport-cap уместнее модест-cap).
+func TestDial_MixedLeaseHeldAndTransport_NotLeaseHeld(t *testing.T) {
+	leaseHeld := newMockEventStream(t, alreadyExistsHandler)
+	defer leaseHeld.stop()
+
+	cli, err := NewClient(ClientConfig{
+		Endpoints: []Endpoint{
+			{Addr: leaseHeld.addr, Priority: 1},
+			{Addr: "127.0.0.1:1", Priority: 2}, // dead port
+		},
+		SeedCert:         leaseHeld.clientCert,
+		SeedKey:          leaseHeld.clientKey,
+		CAPath:           leaseHeld.caPath,
+		HandshakeTimeout: 500 * time.Millisecond,
+		SID:              "host.example",
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	_, err = cli.Dial(context.Background())
+	if err == nil {
+		t.Fatal("Dial: expected error, got nil")
+	}
+	if IsLeaseHeld(err) {
+		t.Fatalf("mixed lease-held + transport misclassified as lease-held: %v", err)
+	}
+}
+
 func TestStreamSession_PriorityFromDial(t *testing.T) {
 	srv := newMockEventStream(t, nil)
 	defer srv.stop()
@@ -396,6 +525,8 @@ func TestStreamSession_SendWardRoster_Empty(t *testing.T) {
 type mockEventStream struct {
 	keeperv1.UnimplementedKeeperServer
 	addr       string
+	caCert     *x509.Certificate
+	caKey      *rsa.PrivateKey
 	caPath     string
 	clientCert string
 	clientKey  string
@@ -469,16 +600,36 @@ func (m *mockEventStream) stop() {
 
 func newMockEventStream(t *testing.T, handler func(*keeperv1.Hello) (*keeperv1.HelloReply, error)) *mockEventStream {
 	t.Helper()
+	return newMockEventStreamWithCA(t, handler, nil)
+}
 
-	caCert, caKey := mustGenerateCA(t)
+// newMockEventStreamWithCA поднимает mock-сервер. Если src != nil, новый сервер
+// переиспользует CA/cert-материал src (общий trust для теста с несколькими
+// endpoint-ами под одним клиентским CAPath: spray внутри одной клиентской
+// конфигурации не может верифицировать сервера на разных CA). src=nil → свой CA.
+func newMockEventStreamWithCA(t *testing.T, handler func(*keeperv1.Hello) (*keeperv1.HelloReply, error), src *mockEventStream) *mockEventStream {
+	t.Helper()
+
+	var (
+		caCert     *x509.Certificate
+		caKey      *rsa.PrivateKey
+		caPath     string
+		clientCert string
+		clientKey  string
+	)
+	if src != nil {
+		caCert, caKey = src.caCert, src.caKey
+		caPath, clientCert, clientKey = src.caPath, src.clientCert, src.clientKey
+	} else {
+		caCert, caKey = mustGenerateCA(t)
+		clientCertDER, clientKeyRSA := mustGenerateLeafCert(t, caCert, caKey, "soul-host.example", false /* client */)
+		dir := t.TempDir()
+		caPath = writePEM(t, dir, "ca.pem", "CERTIFICATE", caCert.Raw)
+		clientCert = writePEM(t, dir, "client.crt", "CERTIFICATE", clientCertDER)
+		clientKey = writeRSAKey(t, dir, "client.key", clientKeyRSA)
+	}
+
 	serverCertDER, serverKey := mustGenerateLeafCert(t, caCert, caKey, "127.0.0.1", true /* server */)
-	clientCertDER, clientKey := mustGenerateLeafCert(t, caCert, caKey, "soul-host.example", false /* client */)
-
-	dir := t.TempDir()
-	caPath := writePEM(t, dir, "ca.pem", "CERTIFICATE", caCert.Raw)
-	clientCertPath := writePEM(t, dir, "client.crt", "CERTIFICATE", clientCertDER)
-	clientKeyPath := writeRSAKey(t, dir, "client.key", clientKey)
-
 	tlsCert := tls.Certificate{Certificate: [][]byte{serverCertDER}, PrivateKey: serverKey}
 	caPool := x509.NewCertPool()
 	caPool.AddCert(caCert)
@@ -496,9 +647,11 @@ func newMockEventStream(t *testing.T, handler func(*keeperv1.Hello) (*keeperv1.H
 	srv := grpc.NewServer(grpc.Creds(credentials.NewTLS(tlsCfg)))
 	mk := &mockEventStream{
 		addr:       ln.Addr().String(),
+		caCert:     caCert,
+		caKey:      caKey,
 		caPath:     caPath,
-		clientCert: clientCertPath,
-		clientKey:  clientKeyPath,
+		clientCert: clientCert,
+		clientKey:  clientKey,
 		srv:        srv,
 		handler:    handler,
 	}
@@ -584,6 +737,20 @@ func writeRSAKey(t *testing.T, dir, name string, key *rsa.PrivateKey) string {
 		t.Fatalf("write %s: %v", path, err)
 	}
 	return path
+}
+
+// mustWriteClientSeed генерит и пишет на диск клиентский mTLS-seed (cert/key/ca)
+// без подъёма сервера. Для dial-тестов к недоступному endpoint-у, где валиден
+// нужен только клиентский материал. Возвращает пути (cert, key, ca).
+func mustWriteClientSeed(t *testing.T) (cert, key, ca string) {
+	t.Helper()
+	caCert, caKey := mustGenerateCA(t)
+	clientCertDER, clientKeyRSA := mustGenerateLeafCert(t, caCert, caKey, "soul-host.example", false)
+	dir := t.TempDir()
+	ca = writePEM(t, dir, "ca.pem", "CERTIFICATE", caCert.Raw)
+	cert = writePEM(t, dir, "client.crt", "CERTIFICATE", clientCertDER)
+	key = writeRSAKey(t, dir, "client.key", clientKeyRSA)
+	return cert, key, ca
 }
 
 func waitFor(pred func() bool, max time.Duration) bool {

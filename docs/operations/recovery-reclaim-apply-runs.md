@@ -148,6 +148,8 @@ Voyage-orphan-lock-release (выше) закрывает осиротевший 
 
 **Residual — окно ≤Conclave-TTL не ноль.** Шов сокращает окно невидимости, но не обнуляет: prev-holder остаётся «живым» в Conclave до истечения его presence-TTL (30s), и до этого момента новый Keeper честно отдаёт `AlreadyExists`. Это by-design — раньше доказать смерть нельзя без риска split-brain.
 
+**Soul-сторона комплементарна.** Пока keeper отдаёт `AlreadyExists` (lease ещё держится), Soul различает этот lease-held soft-failure от transport-сбоя и ретраит с модест-backoff-cap-ом (3s), а не общим transport-cap-ом (30s) — чтобы переподключиться в пределах секунд после force-release, а не долбить выживших keeper-ов всё presence-окно. См. [docs/soul/connection.md → Lease-held soft-failure](../soul/connection.md#lease-held-soft-failure-reconnect-после-краха-holder-а).
+
 Нормативная фиксация — [naming-rules.md → `eventstream.lease_force_released`](../naming-rules.md#audit-events) и [ADR-027(n)](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim).
 
 ## Связанное

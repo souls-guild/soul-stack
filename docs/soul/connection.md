@@ -97,6 +97,21 @@ Keeper держит два gRPC-listener-а на **разных портах** (
    - первый успех на приоритете K (K < current): открываем новый стрим, **затем** закрываем старый (zero-downtime), `current := K`, таймер запускается заново;
    - если все попытки провалились — ждём следующий `failback.interval ± spray`, без быстрых ретраев. Никуда не спешим.
 
+### Lease-held soft-failure (reconnect после краха holder-а)
+
+Отдельная ветка reconnect-backoff, **внутри** алгоритма выше — не новый параметр, а различение причины фейла Dial.
+
+**Что это.** После краха Keeper-инстанса, который держал стрим (holder), SID-lease этого Soul-а (`soul:<sid>:lock`) живёт до истечения Conclave-presence прежнего holder-а (~30s). Пока lease держится, reconnect того же SID к **выжившим** Keeper-ам отвергается на handshake gRPC-кодом `AlreadyExists` (сессия отброшена, хотя транспорт поднялся). Soul различает этот **lease-held soft-failure** от обычного transport-сбоя.
+
+**Backoff не такой, как у transport-сбоя.** При lease-held Soul **не** капирует backoff общим transport-cap-ом `retry.backoff.max` (по умолчанию 30s), а отдельным модест-cap-ом **3s** (внутренний инвариант, не конфиг-ключ). Цель — recovery-latency:
+
+- не долбить выживших Keeper-ов log-шумом и churn-ом всё presence-окно;
+- переподключиться в пределах секунд после того, как lease освободится, а не ждать раздутый общий cap.
+
+Lease освобождает **keeper-сторона**: после истечения presence прежнего holder-а выживший Keeper делает presence-gated force-release SID-lease-а (доказанно-мёртвый holder → CAS-перехват ключа на новый KID). Soul-сторона комплементарна — терпеливо ретраит с модест-backoff, пока keeper не освободит ключ. Подробности keeper-стороны (presence-gate, split-brain-безопасность, residual-окно ≤Conclave-TTL) — [recovery-reclaim-apply-runs.md → presence-gated force-release SID-lease](../operations/recovery-reclaim-apply-runs.md#presence-gated-force-release-sid-lease--сокращение-окна-невидимости-soul-а).
+
+**Spray не затронут.** `AlreadyExists` на **одном** endpoint не прерывает перебор fallback-list — следующий endpoint мог уже перехватить lease после force-release. Модест-cap включается, только когда **все** пробованные endpoint-ы отдали `AlreadyExists` (значит lease ещё держится везде); если хоть один фейл — не `AlreadyExists`, это transport-сбой → общий exponential до `retry.backoff.max`.
+
 ## Гарантии
 
 - В каждый момент Soul держит ровно один активный стрим к одному Keeper-у.

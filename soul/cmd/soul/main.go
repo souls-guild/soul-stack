@@ -77,6 +77,15 @@ const (
 	defaultSoulMetricsListen = "127.0.0.1:9091"
 )
 
+// leaseHeldBackoffCap — модест-cap reconnect-backoff для lease-held ветки
+// (Dial отвергнут AlreadyExists: SID-lease ещё держит живой holder, см.
+// soulgrpc.IsLeaseHeld). Намеренно мал и НЕ конфигурируем: после краха keeper-а
+// presence истекает за ~30s, после чего force-release освобождает lease — Soul
+// обязан переподключиться в пределах нескольких секунд, а не ждать общий
+// transport-cap (keeper.retry.backoff.max, десятки секунд). Значение не доводим
+// до конфиг-ключа: это внутренний инвариант recovery-latency, а не оператор-tunable.
+const leaseHeldBackoffCap = 3 * time.Second
+
 // soulVersion печатается в Hello.soul_version и BootstrapRequest.soul_version
 // для аудита. Значение по умолчанию — для `go run`/IDE-сборок; в релизных
 // сборках перезаписывается линкером через `-ldflags "-X ...soulVersion=<ver>"`
@@ -733,14 +742,30 @@ func reconnectLoop(ctx context.Context, store *config.Store[config.SoulConfig], 
 		b := resolveBackoff(store, logger)
 		sess, err := client.Dial(ctx)
 		if err != nil {
+			// lease-held (все endpoint-ы отдали AlreadyExists, SID-lease ещё держит
+			// живой/не-истёкший holder после краха keeper-а) — soft-failure: Dial удался
+			// на транспорте, отвергнута только сессия. Капируем backoff модест-значением
+			// leaseHeldBackoffCap, чтобы Soul переподключился в пределах секунд после
+			// истечения presence (force-release), а не долбил выживших keeper-ов всё окно
+			// и не ждал раздутый общий transport-cap (keeper.retry.backoff.max). Общий cap
+			// для transport-сбоев НЕ трогаем — там exponential до max уместен.
+			backoffCap := b.max
+			leaseHeld := soulgrpc.IsLeaseHeld(err)
+			if leaseHeld {
+				backoffCap = leaseHeldBackoffCap
+				if delay > backoffCap {
+					delay = backoffCap
+				}
+			}
 			logger.Warn("soul run: dial failed, will retry",
 				slog.Duration("delay", delay),
+				slog.Bool("lease_held", leaseHeld),
 				slog.Any("error", err),
 			)
 			if !sleepCtx(ctx, withJitter(delay, b.jitter)) {
 				return
 			}
-			delay = nextDelay(delay, b.max)
+			delay = nextDelay(delay, backoffCap)
 			continue
 		}
 		// Успешный dial — сбрасываем backoff к актуальному initial.
