@@ -397,6 +397,41 @@ func (s *Stack) LiveKeeperKIDs() []string {
 	return out
 }
 
+// AllKeeperGRPCAddrs возвращает EventStream-gRPC-адреса всех keeper-ов кластера в
+// порядке spawn-а (mk-00 первым). Зеркало soul.yml::keeper.endpoints — soul-stub
+// использует список для reconnect-fallback при смерти keeper-холдера стрима.
+func (s *Stack) AllKeeperGRPCAddrs() []string {
+	out := make([]string, 0, len(s.keepers))
+	for _, kp := range s.keepers {
+		out = append(out, kp.grpcAddr)
+	}
+	return out
+}
+
+// LiveKeeperGRPCAddrs возвращает EventStream-gRPC-адреса ещё живых keeper-ов
+// (исключая убитых SIGKILL-ом). Для reconnect-fallback стаба после краша holder-а.
+func (s *Stack) LiveKeeperGRPCAddrs() []string {
+	out := make([]string, 0, len(s.keepers))
+	for _, kp := range s.keepers {
+		if !kp.killed {
+			out = append(out, kp.grpcAddr)
+		}
+	}
+	return out
+}
+
+// KeeperKIDForGRPCAddr резолвит EventStream-gRPC-адрес → KID keeper-а (обратный
+// маппинг к AllKeeperGRPCAddrs). Нужен тесту, чтобы по адресу keeper-холдера
+// стрима стаба узнать, какой KID убивать. Пустая строка, если адрес неизвестен.
+func (s *Stack) KeeperKIDForGRPCAddr(addr string) string {
+	for _, kp := range s.keepers {
+		if kp.grpcAddr == addr {
+			return kp.kid
+		}
+	}
+	return ""
+}
+
 // mustWrite пишет файл, fatal при ошибке.
 func mustWrite(t *testing.T, path string, data []byte, mode os.FileMode) {
 	t.Helper()

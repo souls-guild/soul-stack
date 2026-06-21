@@ -17,8 +17,9 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"io"
+	"sort"
 	"sync"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -35,6 +36,36 @@ var ErrAlreadyOpen = errors.New("soulstub: stream already open")
 type Stub struct {
 	SID            string
 	KeeperGRPCAddr string
+
+	// endpoints — fallback-список gRPC-адресов keeper-ов (мульти-keeper, зеркало
+	// soul.yml::keeper.endpoints). Заполняется [SetEndpoints]; используется
+	// reconnectIfBroken для перевыбора живого keeper-а при разрыве стрима.
+	// KeeperGRPCAddr (initial Open) в reconnect НЕ переиспользуется как первый
+	// кандидат — список endpoints авторитетен. Пуст → reconnect выключен (стаб
+	// single-shot, как до WardRoster-расширения).
+	endpoints []string
+
+	// reconnectEnabled — включён ли авто-reconnect+WardRoster при разрыве стрима
+	// (WardRoster dispatched-orphan e2e). Зеркало реального soul/cmd/soul
+	// reconnectLoop→handleSession: на (re)connect-е стаб шлёт Hello, затем СРАЗУ
+	// WardRoster(activeWard). Дефолт false — стаб не реконнектит (recvLoop на
+	// ошибке просто выходит, прежнее L3a-поведение). Включается [EnableReconnect].
+	reconnectEnabled bool
+
+	// holdApply — режим «держать ApplyRequest»: на ApplyRequest стаб НЕ шлёт
+	// RunResult (строка apply_runs остаётся `dispatched`), а лишь регистрирует
+	// apply_id в activeWard. Имитирует Soul, физически принявший задание и ещё не
+	// завершивший Run. Для dispatched-orphan e2e: после SIGKILL keeper-холдера
+	// строка зависает dispatched, reconnect+WardRoster её реконсилит. Дефолт false.
+	// Включается [SetHoldApply].
+	holdApply bool
+
+	// activeWard — набор apply_id, объявляемых стабом ведомыми в WardRoster на
+	// reconnect (зеркало runtime.ApplyRunner.ActiveSet). holdApply пополняет его
+	// на каждом удержанном ApplyRequest; [ClearActiveWard] обнуляет (имитация
+	// рестарта Soul-процесса — in-flight физически нет). Пустой → WardRoster шлёт
+	// пустой набор, keeper терминалит ВСЕ dispatched-строки SID-а (OrphanDispatched).
+	activeWard map[string]int32
 
 	// TLS-материал mTLS-handshake. cert/key — client-cert stub-а (Vault-issued
 	// leaf под SID), caBundle — root CA Keeper-server-cert-а.
@@ -99,6 +130,9 @@ type Stub struct {
 	recorded []Message
 	cancel   context.CancelFunc
 	done     chan struct{}
+	// closed — стаб закрыт (Close вызван). reconnectIfBroken после этого не
+	// поднимает новый стрим (иначе reconnect-цикл пережил бы cleanup-Close).
+	closed bool
 }
 
 // ScriptEntry — одна scripted-реплика stub-а.
@@ -132,8 +166,63 @@ func New(sid, keeperGRPCAddr string, cert, key, caBundle []byte) *Stub {
 		applyStatusBySID:   make(map[string]bool),
 		errandStatusBySID:  make(map[string]keeperv1.ErrandStatus),
 		taskRegisterByName: make(map[string]map[string]map[string]any),
+		activeWard:         make(map[string]int32),
 		done:               make(chan struct{}),
 	}
+}
+
+// SetEndpoints задаёт fallback-список gRPC-адресов keeper-ов для reconnect
+// (мульти-keeper, зеркало soul.yml::keeper.endpoints). Reconnect перебирает их по
+// порядку, выбирая первый дозвонившийся живой keeper. Без вызова reconnect не имеет
+// кандидатов и завершается (стаб остаётся single-shot).
+func (s *Stub) SetEndpoints(addrs []string) {
+	s.mu.Lock()
+	s.endpoints = append([]string(nil), addrs...)
+	s.mu.Unlock()
+}
+
+// EnableReconnect включает авто-reconnect+WardRoster при разрыве стрима (WardRoster
+// dispatched-orphan e2e). На (re)connect-е стаб шлёт Hello, затем СРАЗУ
+// WardRoster(activeWard) — зеркало реального soul/cmd/soul handleSession. Требует
+// заданных [SetEndpoints]. Дефолт выключен.
+func (s *Stub) EnableReconnect(v bool) {
+	s.mu.Lock()
+	s.reconnectEnabled = v
+	s.mu.Unlock()
+}
+
+// SetHoldApply включает режим «держать ApplyRequest»: на ApplyRequest стаб НЕ шлёт
+// RunResult (строка apply_runs остаётся `dispatched`), а регистрирует apply_id в
+// activeWard. Имитирует Soul, принявший задание и не завершивший Run. Для
+// dispatched-orphan e2e (строка зависает dispatched до reconnect+WardRoster).
+func (s *Stub) SetHoldApply(v bool) {
+	s.mu.Lock()
+	s.holdApply = v
+	s.mu.Unlock()
+}
+
+// ClearActiveWard обнуляет набор ведомых apply_id. Имитирует рестарт Soul-процесса:
+// после рестарта in-flight физически нет, и WardRoster на reconnect объявляет
+// пустой набор → keeper терминалит ВСЕ dispatched-строки SID-а (OrphanDispatched).
+// Без вызова reconnect объявит удержанные apply_id ведомыми и keeper их НЕ осиротит
+// (epoch-fenced защита: Soul декларирует, что прогон ведётся).
+func (s *Stub) ClearActiveWard() {
+	s.mu.Lock()
+	s.activeWard = make(map[string]int32)
+	s.mu.Unlock()
+}
+
+// ActiveWardIDs возвращает отсортированный снимок объявляемых ведомыми apply_id
+// (для ассертов теста). Чистая read-проекция, состояние не меняет.
+func (s *Stub) ActiveWardIDs() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.activeWard))
+	for id := range s.activeWard {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // SetTaskRegister задаёт scripted per-task register (staged-render, ADR-056):
@@ -223,6 +312,20 @@ func (s *Stub) Open(ctx context.Context) error {
 		return ErrAlreadyOpen
 	}
 
+	if err := s.dialAndHandshake(ctx, s.KeeperGRPCAddr, false); err != nil {
+		return err
+	}
+
+	go s.recvLoop()
+	return nil
+}
+
+// dialAndHandshake открывает gRPC-стрим к addr, шлёт Hello и (на reconnect-е)
+// WardRoster, и проставляет s.conn/s.stream/s.cancel. Вызывается под s.mu.
+// Общий код initial-Open ([Open]) и reconnect-а (reconnectIfBroken). При
+// sendWardRoster=true СРАЗУ после Hello шлёт WardRoster(activeWard) — зеркало
+// реального soul/cmd/soul handleSession (ПЕРВОЕ app-сообщение после handshake).
+func (s *Stub) dialAndHandshake(ctx context.Context, addr string, sendWardRoster bool) error {
 	clientCert, err := tls.X509KeyPair(s.cert, s.key)
 	if err != nil {
 		return fmt.Errorf("soulstub(%s): X509KeyPair: %w", s.SID, err)
@@ -238,7 +341,7 @@ func (s *Stub) Open(ctx context.Context) error {
 		MinVersion:   tls.VersionTLS13,
 	}
 
-	conn, err := grpc.NewClient(s.KeeperGRPCAddr,
+	conn, err := grpc.NewClient(addr,
 		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
 	)
 	if err != nil {
@@ -273,12 +376,42 @@ func (s *Stub) Open(ctx context.Context) error {
 		return fmt.Errorf("soulstub(%s): send Hello: %w", s.SID, err)
 	}
 
+	// WardRoster (Soul-reconcile, ADR-027(g)): ПЕРВОЕ app-сообщение после
+	// handshake на reconnect-е — снимок ведомых apply_id (ReplaceAll). Зеркало
+	// soul/cmd/soul handleSession (шлёт СРАЗУ после Hello, ДО прочего). Keeper по
+	// нему терминалит осиротевшие dispatched-строки SID-а. На initial-Open не
+	// шлём (ничего ещё не ведётся; реальный Soul тоже шлёт пустой набор, но для
+	// чистоты L3a-контракта прежних тестов сохраняем прежнее initial-поведение).
+	if sendWardRoster {
+		if err := stream.Send(&keeperv1.FromSoul{
+			Payload: &keeperv1.FromSoul_WardRoster{
+				WardRoster: &keeperv1.WardRoster{Active: s.wardRosterActiveLocked()},
+			},
+		}); err != nil {
+			cancel()
+			_ = conn.Close()
+			return fmt.Errorf("soulstub(%s): send WardRoster: %w", s.SID, err)
+		}
+	}
+
 	s.conn = conn
 	s.stream = stream
 	s.cancel = cancel
-
-	go s.recvLoop()
 	return nil
+}
+
+// wardRosterActiveLocked собирает proto-набор ActiveApply из activeWard для
+// WardRoster. Вызывается под s.mu. Пустой набор → nil (явная декларация «ничего
+// не ведётся» — реконсайл осиротит все dispatched-строки SID-а).
+func (s *Stub) wardRosterActiveLocked() []*keeperv1.ActiveApply {
+	if len(s.activeWard) == 0 {
+		return nil
+	}
+	out := make([]*keeperv1.ActiveApply, 0, len(s.activeWard))
+	for id, attempt := range s.activeWard {
+		out = append(out, &keeperv1.ActiveApply{ApplyId: id, Attempt: attempt})
+	}
+	return out
 }
 
 // recvLoop читает сообщения от Keeper-а и реагирует scripted-RunResult-ом на
@@ -288,11 +421,25 @@ func (s *Stub) Open(ctx context.Context) error {
 func (s *Stub) recvLoop() {
 	defer close(s.done)
 	for {
-		frame, err := s.stream.Recv()
+		s.mu.Lock()
+		stream := s.stream
+		s.mu.Unlock()
+		if stream == nil {
+			return
+		}
+
+		frame, err := stream.Recv()
 		if err != nil {
-			if !errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) {
-				// Тест читает Messages() для ассерта — здесь логировать нечем
-				// (нет testing.TB).
+			// Разрыв стрима (clean EOF / транспорт / смерть keeper-холдера). Если
+			// включён reconnect — перевыбираем живой keeper из fallback-списка и
+			// шлём WardRoster (зеркало soul/cmd/soul reconnectLoop→handleSession).
+			// Успех → продолжаем recvLoop на новом стриме; неудача (или reconnect
+			// выключен / Close) → выходим.
+			if errors.Is(err, context.Canceled) {
+				return // Close() отменил session-ctx — штатный выход.
+			}
+			if s.reconnectIfBroken(err) {
+				continue
 			}
 			return
 		}
@@ -311,6 +458,54 @@ func (s *Stub) recvLoop() {
 			s.respondToErrand(er)
 		}
 	}
+}
+
+// reconnectIfBroken перевыбирает живой keeper из fallback-списка endpoints и
+// переустанавливает стрим (Hello + WardRoster), зеркало реального
+// soul/cmd/soul reconnectLoop→handleSession. Возвращает true, если новый стрим
+// поднят (recvLoop продолжает на нём); false — reconnect выключен / нет
+// endpoints / стаб закрыт / все endpoints мертвы.
+//
+// Авто-retry с коротким backoff: после SIGKILL keeper-холдера живые keeper-ы
+// уже подняты, но в момент разрыва TCP к убитому ещё может «дёргаться» — даём
+// несколько попыток в пределах ~5s, как реальный Soul backoff-цикл.
+func (s *Stub) reconnectIfBroken(cause error) bool {
+	s.mu.Lock()
+	if s.closed || !s.reconnectEnabled || len(s.endpoints) == 0 {
+		s.mu.Unlock()
+		return false
+	}
+	// Старый conn закрываем — он указывал на мёртвый/разорванный keeper.
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
+	if s.conn != nil {
+		_ = s.conn.Close()
+		s.conn = nil
+	}
+	s.stream = nil
+	endpoints := append([]string(nil), s.endpoints...)
+	s.mu.Unlock()
+
+	deadline := time.Now().Add(15 * time.Second)
+	for attempt := 0; time.Now().Before(deadline); attempt++ {
+		for _, addr := range endpoints {
+			s.mu.Lock()
+			if s.closed {
+				s.mu.Unlock()
+				return false
+			}
+			err := s.dialAndHandshake(context.Background(), addr, true)
+			s.mu.Unlock()
+			if err == nil {
+				return true
+			}
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	_ = cause
+	return false
 }
 
 // respondToErrand отвечает на ErrandRequest (ADR-033/041) ErrandResult-ом с
@@ -355,6 +550,16 @@ func (s *Stub) respondToApply(req *keeperv1.ApplyRequest) {
 	dryRunPlanSet := s.dryRunPlanSet
 	dryRunChanged := s.dryRunChanged
 	sidOverride, hasSidOverride := s.applyStatusBySID[s.SID]
+	holdApply := s.holdApply
+	if holdApply {
+		// Режим «держать»: задание физически принято (apply_id ведётся), но
+		// RunResult не шлём — строка apply_runs остаётся `dispatched`. Регистрируем
+		// apply_id в activeWard (его эхо attempt — для epoch-fenced WardRoster).
+		// Реальный Soul так же держит apply_id в ActiveSet, пока Run не завершён.
+		s.activeWard[req.GetApplyId()] = req.GetAttempt()
+		s.mu.Unlock()
+		return
+	}
 	s.mu.Unlock()
 
 	// Per-SID override (partial-failure-тесты Tide): этот хост возвращает
@@ -588,6 +793,7 @@ func payloadKind(frame *keeperv1.FromKeeper) string {
 // Close — graceful-shutdown стрима. Безопасен к повторному вызову.
 func (s *Stub) Close() error {
 	s.mu.Lock()
+	s.closed = true // reconnectIfBroken после этого не поднимет новый стрим.
 	cancel := s.cancel
 	conn := s.conn
 	stream := s.stream
