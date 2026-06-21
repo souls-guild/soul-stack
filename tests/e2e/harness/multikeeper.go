@@ -50,6 +50,15 @@ type MultiKeeperConfig struct {
 	// чтобы после SIGKILL владельца протухший claim быстро попал под
 	// reclaim_voyages. Пустой → дефолт 4s.
 	VoyageLeaseTTL time.Duration
+
+	// ReconcileOrphanStaleAfter — `stale_after` Reaper-правила
+	// reconcile_orphan_applying (ADR-027 amend (m)). applying-строка считается
+	// осиротевшей, если applying_since < NOW()-stale_after И presence владельца
+	// мёртв. Дефолт правила — 90s; для standalone-orphan crash-теста ставим
+	// короткий порог (2-5s), чтобы правило сработало вскоре после истечения
+	// Conclave-presence убитого владельца, не ожидая by-design 90s. Пустой →
+	// 3s (короткий тестовый порог, НЕ prod-дефолт правила).
+	ReconcileOrphanStaleAfter time.Duration
 }
 
 // NewMultiKeeperStack поднимает общий PG/Redis/Vault + N keeper-субпроцессов и
@@ -67,6 +76,9 @@ func NewMultiKeeperStack(t *testing.T, cfg MultiKeeperConfig) *Stack {
 	}
 	if cfg.VoyageLeaseTTL <= 0 {
 		cfg.VoyageLeaseTTL = 4 * time.Second
+	}
+	if cfg.ReconcileOrphanStaleAfter <= 0 {
+		cfg.ReconcileOrphanStaleAfter = 3 * time.Second
 	}
 
 	if _, err := locateKeeperBinary(); err != nil {
@@ -143,7 +155,7 @@ func NewMultiKeeperStack(t *testing.T, cfg MultiKeeperConfig) *Stack {
 		if i == 0 {
 			voyageWorkers = 0 // soul-holder не претендует на Voyage
 		}
-		yamlPath, httpURL, grpcAddr := s.buildMultiKeeperYAML(kid, certPath, keyPath, caPath, cfg.VoyageLeaseTTL, voyageWorkers)
+		yamlPath, httpURL, grpcAddr := s.buildMultiKeeperYAML(kid, certPath, keyPath, caPath, cfg.VoyageLeaseTTL, voyageWorkers, cfg.ReconcileOrphanStaleAfter)
 
 		if i == 0 {
 			// Bootstrap первого Архонта — единожды, на primary-конфиге (трогает
@@ -181,7 +193,7 @@ func NewMultiKeeperStack(t *testing.T, cfg MultiKeeperConfig) *Stack {
 // уникальный KID + свои listener-порты, общий PG/Redis/Vault, включённые
 // VoyageWorker-pool (короткий lease) и reaper-правило reclaim_voyages. Пишет
 // YAML в tmpDir/<kid>.yml. Возвращает (yamlPath, httpURL, grpcEventStreamAddr).
-func (s *Stack) buildMultiKeeperYAML(kid, certPath, keyPath, caPath string, leaseTTL time.Duration, voyageWorkers int) (string, string, string) {
+func (s *Stack) buildMultiKeeperYAML(kid, certPath, keyPath, caPath string, leaseTTL time.Duration, voyageWorkers int, reconcileStaleAfter time.Duration) (string, string, string) {
 	bootstrapAddr := allocLoopback(s.t)
 	eventStreamAddr := allocLoopback(s.t)
 	httpAddr := allocLoopback(s.t)
@@ -294,6 +306,9 @@ reaper:
     reclaim_voyages:
       enabled: true
       stale_after: 1s
+    reconcile_orphan_applying:
+      enabled: true
+      stale_after: %s
 `
 	yaml := fmt.Sprintf(tmpl,
 		kid,
@@ -304,6 +319,7 @@ reaper:
 		s.VaultAddr, s.vaultToken,
 		pluginsCacheDir, socketsDir,
 		voyageWorkers, durationYAML(leaseTTL), durationYAML(leaseRenew),
+		durationYAML(reconcileStaleAfter),
 	)
 
 	yamlPath := filepath.Join(s.tmpDir, kid+".yml")

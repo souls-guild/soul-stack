@@ -411,6 +411,16 @@ type eventStreamHandler struct {
 	// Переполнение → AugurReply{ERROR}, без нового спавна (non-blocking
 	// acquire). nil → лимит выключен (старое поведение, dev/unit без Augur).
 	augurSem chan struct{}
+
+	// soulLeaseOwner / instanceAlive — seam-ы presence-gated force-release-а
+	// SID-lease-а (ADR-027 amend (n)) в [acquireSoulLease]. По умолчанию —
+	// прямые [keeperredis.SoulLeaseOwner] / [keeperredis.InstanceAlive];
+	// подменяются в guard-тестах, где нужно воспроизвести гонку смены владельца
+	// и флап Redis именно на presence-чеке (miniredis не даёт инъекцию ошибки
+	// на отдельную команду). Не публичная поверхность — фиксация security-
+	// инвариантов force-release-а тестом.
+	soulLeaseOwner func(context.Context, *keeperredis.Client, string) (string, bool, error)
+	instanceAlive  func(context.Context, *keeperredis.Client, string) (bool, error)
 }
 
 // defaultAugurConcurrency — дефолтный лимит параллельных Augur-обработок (global,
@@ -435,10 +445,12 @@ func newEventStreamHandler(deps EventStreamDeps, logger *slog.Logger) *eventStre
 	}
 
 	return &eventStreamHandler{
-		deps:          deps,
-		logger:        logger,
-		lastSeenFlush: newLastSeenFlusher(flushInterval),
-		augurSem:      augurSem,
+		deps:           deps,
+		logger:         logger,
+		lastSeenFlush:  newLastSeenFlusher(flushInterval),
+		augurSem:       augurSem,
+		soulLeaseOwner: keeperredis.SoulLeaseOwner,
+		instanceAlive:  keeperredis.InstanceAlive,
 	}
 }
 
@@ -976,16 +988,29 @@ func (h *eventStreamHandler) acquireSoulLease(ctx context.Context, sid string) (
 	lease, err := keeperredis.AcquireSoulLease(ctx, h.deps.Redis, sid, h.deps.KID, ttl)
 	if err != nil {
 		if errors.Is(err, keeperredis.ErrLeaseTaken) {
-			h.logger.Warn("eventstream: soul lease held by another keeper",
-				slog.String("sid", sid),
-				slog.String("kid", h.deps.KID),
-			)
-			return nil, status.Errorf(codes.AlreadyExists,
-				"soul lease held by another keeper for sid=%q", sid)
+			// Конкурент держит lease. Прежде чем отдать Soul-у AlreadyExists
+			// (он реконнектится ~TTL), пробуем presence-gated force-release у
+			// ДОКАЗАННО-МЁРТВОГО prev-holder-а (ADR-027 amend (n)): после SIGKILL
+			// holder-а его lease висит до TTL (~60s), блокируя reconnect того же
+			// SID к другому keeper-у и dispatched-orphan-реконсиляцию. Это НЕ
+			// слепой DEL — перехват только при подтверждённой смерти владельца
+			// в Conclave; иначе (жив / неопределённо / своя lease) — старое
+			// поведение AlreadyExists (split-brain guard / fail-safe).
+			forced, ferr := h.tryForceAcquireDeadLease(ctx, sid, ttl)
+			if ferr != nil {
+				return nil, ferr
+			}
+			if forced != nil {
+				lease = forced
+			} else {
+				return nil, status.Errorf(codes.AlreadyExists,
+					"soul lease held by another keeper for sid=%q", sid)
+			}
+		} else {
+			h.logger.Warn("eventstream: soul lease acquire failed",
+				slog.String("sid", sid), slog.Any("error", err))
+			return nil, status.Errorf(codes.Unavailable, "lease acquire failed: %v", err)
 		}
-		h.logger.Warn("eventstream: soul lease acquire failed",
-			slog.String("sid", sid), slog.Any("error", err))
-		return nil, status.Errorf(codes.Unavailable, "lease acquire failed: %v", err)
 	}
 
 	renewEvery := ttl / 3
@@ -1009,6 +1034,105 @@ func (h *eventStreamHandler) acquireSoulLease(ctx context.Context, sid string) (
 				slog.String("sid", sid), slog.Any("error", err))
 		}
 	}, nil
+}
+
+// tryForceAcquireDeadLease — presence-gated перезахват SID-lease-а у доказанно-
+// мёртвого prev-holder-а (ADR-027 amend (n), recovery-backstop S2). Вызывается
+// из [acquireSoulLease] ТОЛЬКО после того, как обычный AcquireSoulLease вернул
+// ErrLeaseTaken.
+//
+// Решает находку «stale SID-lease ~60s»: после SIGKILL holder-а его lease висит
+// до TTL, и reconnect того же SID к другому keeper-у получал бы AlreadyExists
+// (стрим закрывался до Hello → dispatched-orphan-реконсиляция недостижима).
+// Здесь — точечный перехват, но НЕ слепой DEL: владение снимается ровно у того,
+// чью смерть подтвердил Conclave-presence.
+//
+// Возвращает:
+//   - (lease, nil) — force-release удался, lease на собственном KID, audit эмитнут;
+//   - (nil, nil)   — force НЕ применён (prev жив / это self / неопределённость /
+//     гонка смены ключа): caller отдаёт Soul-у AlreadyExists (split-brain guard);
+//   - (nil, err)   — терминальная gRPC-ошибка (на текущих ветках не возникает,
+//     зарезервировано под будущие fatal-условия; сейчас всегда nil-err).
+func (h *eventStreamHandler) tryForceAcquireDeadLease(ctx context.Context, sid string, ttl time.Duration) (*keeperredis.Lease, error) {
+	prevKID, ok, err := h.soulLeaseOwner(ctx, h.deps.Redis, sid)
+	if err != nil {
+		// Не можем установить владельца — fail-safe: не перехватываем.
+		h.logger.Warn("eventstream: soul lease owner lookup failed — yielding AlreadyExists",
+			slog.String("sid", sid), slog.Any("error", err))
+		return nil, nil
+	}
+	if !ok || prevKID == "" {
+		// Ключ исчез между Acquire и GET (TTL истёк прямо сейчас). Не форсим:
+		// caller отдаст AlreadyExists, Soul ретракнётся и обычный Acquire
+		// пройдёт. Без повторного Acquire здесь — без риска цикла.
+		return nil, nil
+	}
+	if prevKID == h.deps.KID {
+		// Reconnect к тому же keeper-у / своя lease — не ложный перехват.
+		h.logger.Warn("eventstream: soul lease still held by self — yielding AlreadyExists (reconnect race / own lease)",
+			slog.String("sid", sid), slog.String("kid", h.deps.KID))
+		return nil, nil
+	}
+
+	alive, err := h.instanceAlive(ctx, h.deps.Redis, prevKID)
+	if err != nil {
+		// Presence-чек упал — fail-safe: НЕ объявлять мёртвым, НЕ перехватывать.
+		h.logger.Warn("eventstream: prev-holder presence check failed — yielding AlreadyExists (fail-safe)",
+			slog.String("sid", sid), slog.String("prev_kid", prevKID), slog.Any("error", err))
+		return nil, nil
+	}
+	if alive {
+		// Живой holder либо partition-с-живым-Conclave — отдаём Soul-у ретраить.
+		h.logger.Warn("eventstream: soul lease held by live keeper — yielding AlreadyExists",
+			slog.String("sid", sid), slog.String("prev_kid", prevKID))
+		return nil, nil
+	}
+
+	lease, ferr := keeperredis.ForceAcquireSoulLease(ctx, h.deps.Redis, sid, prevKID, h.deps.KID, ttl)
+	if ferr != nil {
+		if errors.Is(ferr, keeperredis.ErrLeaseTaken) {
+			// Гонка: между presence-чеком и CAS ключ сменился на третьего
+			// (TTL истёк / другой keeper успел). НЕ перехватываем чужой свежий
+			// lease — fallback на AlreadyExists, без ретрая (без риска цикла).
+			h.logger.Warn("eventstream: force-release lost race — yielding AlreadyExists",
+				slog.String("sid", sid), slog.String("prev_kid", prevKID))
+			return nil, nil
+		}
+		// Прочая Redis-ошибка force-CAS — fail-safe: не перехватываем.
+		h.logger.Warn("eventstream: force-release failed — yielding AlreadyExists",
+			slog.String("sid", sid), slog.String("prev_kid", prevKID), slog.Any("error", ferr))
+		return nil, nil
+	}
+
+	h.logger.Info("eventstream: SID-lease force-released from dead prev-holder",
+		slog.String("sid", sid),
+		slog.String("prev_kid", prevKID),
+		slog.String("new_kid", h.deps.KID),
+	)
+	h.auditLeaseForceReleased(ctx, sid, prevKID)
+	return lease, nil
+}
+
+// auditLeaseForceReleased пишет security-event перехвата владения SID-lease-ом
+// (ADR-027 amend (n)) через тот же [audit.Writer]-путь, что Outbound-форвардер
+// (`source: soul_grpc`). Best-effort: lease уже перезахвачен, fail audit-а не
+// откатывает recovery (паттерн идентичен Outbound apply.dispatched).
+func (h *eventStreamHandler) auditLeaseForceReleased(ctx context.Context, sid, prevKID string) {
+	if err := h.deps.AuditWriter.Write(ctx, &audit.Event{
+		EventType:     audit.EventLeaseForceReleased,
+		Source:        audit.SourceSoulGRPC,
+		CorrelationID: sid,
+		Payload: map[string]any{
+			"sid":      sid,
+			"prev_kid": prevKID,
+			"new_kid":  h.deps.KID,
+		},
+	}); err != nil {
+		h.logger.Warn("eventstream: audit lease_force_released failed (lease already re-acquired)",
+			slog.String("sid", sid),
+			slog.String("prev_kid", prevKID),
+			slog.Any("error", err))
+	}
 }
 
 // renewLeaseLoop — periodic Renew-er. На ErrLeaseLost закрывает done; main

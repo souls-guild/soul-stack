@@ -995,3 +995,128 @@ func TestIntegration_ReleaseApplyingOrphan_NotFound(t *testing.T) {
 		t.Fatalf("err = %v, want ErrIncarnationNotFound", err)
 	}
 }
+
+// readApplyingEpoch читает 4 epoch-колонки applying-флага (ADR-027 amend (m-S1)).
+func readApplyingEpoch(t *testing.T, name string) (applyID, kid *string, attempt *int, since *string) {
+	t.Helper()
+	const q = `
+SELECT applying_apply_id, applying_attempt, applying_by_kid, applying_since::text
+FROM incarnation WHERE name = $1`
+	if err := integrationPool.QueryRow(context.Background(), q, name).Scan(&applyID, &attempt, &kid, &since); err != nil {
+		t.Fatalf("readApplyingEpoch(%s): %v", name, err)
+	}
+	return applyID, kid, attempt, since
+}
+
+// setApplyingEpoch имитирует запись epoch lockRun-ом (scenario.lockApplyingWithEpoch):
+// проставляет все 4 колонки на уже-applying-строке. Нужен, чтобы проверить ОЧИСТКУ
+// epoch в терминалах (UpdateStateFromRun / ReleaseApplyingOrphan).
+func setApplyingEpoch(t *testing.T, name, applyID, kid string) {
+	t.Helper()
+	const q = `
+UPDATE incarnation
+SET applying_apply_id = $2, applying_attempt = 0, applying_by_kid = $3, applying_since = NOW()
+WHERE name = $1`
+	if _, err := integrationPool.Exec(context.Background(), q, name, applyID, kid); err != nil {
+		t.Fatalf("setApplyingEpoch(%s): %v", name, err)
+	}
+}
+
+// TestIntegration_UpdateStateFromRun_ClearsEpoch_OnSuccess — guard ADR-027 amend
+// (m-S1) задача (3): success-терминал прогона (UpdateStateFromRun → ready) ОБНУЛЯЕТ
+// все 4 epoch-колонки атомарно со снятием applying. Это единая точка терминала
+// (commitSuccess зовёт её), очистка здесь покрывает success-путь.
+func TestIntegration_UpdateStateFromRun_ClearsEpoch_OnSuccess(t *testing.T) {
+	resetAll(t)
+	ctx := context.Background()
+	const (
+		name    = "epoch-clear-ok"
+		applyID = "01HEPOCHCLEAR0000000001"
+	)
+	seedApplyingWithApplyRun(t, name, applyID, name+".host-01")
+	setApplyingEpoch(t, name, applyID, "keeper-owner-A")
+
+	stateAfter := map[string]any{"primary": name + "-01", "applied": true}
+	hist := "01HEPOCHHIST00000000001"
+	if err := UpdateStateFromRun(ctx, integrationPool, name, "deploy", applyID,
+		map[string]any{"primary": name + "-01"}, stateAfter,
+		StatusReady, nil, nil, hist); err != nil {
+		t.Fatalf("UpdateStateFromRun: %v", err)
+	}
+
+	got, err := SelectByName(ctx, integrationPool, name)
+	if err != nil {
+		t.Fatalf("SelectByName: %v", err)
+	}
+	if got.Status != StatusReady {
+		t.Errorf("status = %q, want ready", got.Status)
+	}
+	a, k, att, s := readApplyingEpoch(t, name)
+	if a != nil || k != nil || att != nil || s != nil {
+		t.Errorf("epoch не обнулён на success-терминале: apply=%v kid=%v attempt=%v since=%v", a, k, att, s)
+	}
+}
+
+// TestIntegration_UpdateStateFromRun_ClearsEpoch_OnFail — guard ADR-027 amend
+// (m-S1) задача (3): fail-терминал (UpdateStateFromRun → error_locked, путь
+// lockIncarnation) тоже ОБНУЛЯЕТ epoch (та же UpdateStateFromRun-точка для всех
+// терминалов прогона).
+func TestIntegration_UpdateStateFromRun_ClearsEpoch_OnFail(t *testing.T) {
+	resetAll(t)
+	ctx := context.Background()
+	const (
+		name    = "epoch-clear-fail"
+		applyID = "01HEPOCHCLEAR0000000002"
+	)
+	seedApplyingWithApplyRun(t, name, applyID, name+".host-01")
+	setApplyingEpoch(t, name, applyID, "keeper-owner-B")
+
+	stateBefore := map[string]any{"primary": name + "-01"}
+	if err := UpdateStateFromRun(ctx, integrationPool, name, "deploy", applyID,
+		stateBefore, stateBefore, // state не меняем при фейле
+		StatusErrorLocked, map[string]any{"reason": "boom"}, nil, "01HEPOCHHIST00000000002"); err != nil {
+		t.Fatalf("UpdateStateFromRun (fail): %v", err)
+	}
+
+	got, err := SelectByName(ctx, integrationPool, name)
+	if err != nil {
+		t.Fatalf("SelectByName: %v", err)
+	}
+	if got.Status != StatusErrorLocked {
+		t.Errorf("status = %q, want error_locked", got.Status)
+	}
+	a, k, att, s := readApplyingEpoch(t, name)
+	if a != nil || k != nil || att != nil || s != nil {
+		t.Errorf("epoch не обнулён на fail-терминале: apply=%v kid=%v attempt=%v since=%v", a, k, att, s)
+	}
+}
+
+// TestIntegration_ReleaseApplyingOrphan_ClearsEpoch — guard ADR-027 amend (m-S1)
+// задача (3): снятие осиротевшего lock-а (recovery-путь) тоже ОБНУЛЯЕТ epoch
+// вместе со applying→ready. После снятия строка не несёт epoch мёртвого владельца.
+func TestIntegration_ReleaseApplyingOrphan_ClearsEpoch(t *testing.T) {
+	resetAll(t)
+	ctx := context.Background()
+	const (
+		name    = "epoch-clear-orphan"
+		applyID = "01HEPOCHCLEAR0000000003"
+	)
+	seedApplyingWithApplyRun(t, name, applyID, name+".host-01")
+	setApplyingEpoch(t, name, applyID, "keeper-dead-X")
+
+	if err := ReleaseApplyingOrphan(ctx, integrationPool, name, applyID, "01HEPOCHHIST00000000003"); err != nil {
+		t.Fatalf("ReleaseApplyingOrphan: %v", err)
+	}
+
+	got, err := SelectByName(ctx, integrationPool, name)
+	if err != nil {
+		t.Fatalf("SelectByName: %v", err)
+	}
+	if got.Status != StatusReady {
+		t.Errorf("status = %q, want ready", got.Status)
+	}
+	a, k, att, s := readApplyingEpoch(t, name)
+	if a != nil || k != nil || att != nil || s != nil {
+		t.Errorf("epoch не обнулён при orphan-release: apply=%v kid=%v attempt=%v since=%v", a, k, att, s)
+	}
+}

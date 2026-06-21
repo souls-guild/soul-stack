@@ -745,12 +745,25 @@ INSERT INTO state_history (
 	// статусе прогона (applying / destroying). RETURNING name отдаёт строку
 	// победителю; пустой результат (pgx.ErrNoRows) = строки нет ЛИБО статус уже
 	// сменился — различаем добором статуса ниже (паттерн MarkDispatched).
+	// Терминал прогона снимает applying-флаг И ОБНУЛЯЕТ его epoch (ADR-027 amend
+	// (m-S1)): applying_apply_id/applying_attempt/applying_by_kid/applying_since →
+	// NULL атомарно со сменой статуса. Это единая success/fail/abort/RunResult-
+	// терминальная точка прогона (commitSuccess / lockIncarnation /
+	// correlateRunResult зовут UpdateStateFromRun) — очистка здесь покрывает все
+	// выходы из applying, оставляя строку без «зависшего» epoch (иначе следующий
+	// прогон/Reaper увидел бы протухший applying_since от прошлого владельца).
+	// destroying epoch не несёт (lockRun пишет epoch только для applying), но
+	// безусловное обнуление безвредно и держит инвариант «не-applying ⇒ epoch NULL».
 	const updateSQL = `
 UPDATE incarnation
-SET state          = $2,
-    status         = $3,
-    status_details = $4,
-    updated_at     = NOW()
+SET state             = $2,
+    status            = $3,
+    status_details    = $4,
+    applying_apply_id = NULL,
+    applying_attempt  = NULL,
+    applying_by_kid   = NULL,
+    applying_since    = NULL,
+    updated_at        = NOW()
 WHERE name = $1 AND status IN ('applying', 'destroying')
 RETURNING name
 `
@@ -1050,10 +1063,20 @@ INSERT INTO state_history (
 
 	// SINGLE-WINNER CAS: applying → ready. RowsAffected==0 невозможен под
 	// FOR UPDATE+ранней проверкой статуса (мы уже видели applying в этой tx), но
-	// guard сохраняем как явный инвариант перехода.
+	// guard сохраняем как явный инвариант перехода. Epoch applying-флага (ADR-027
+	// amend (m-S1)) обнуляется вместе со снятием applying — симметрично терминалу
+	// UpdateStateFromRun: после снятия orphan-lock строка не должна нести epoch
+	// мёртвого владельца (иначе Reaper увидел бы протухший applying_by_kid на
+	// уже-снятой строке). Покрывает оба пути снятия — Voyage (l) и standalone (m).
 	const updateSQL = `
 UPDATE incarnation
-SET status = $2, status_details = NULL, updated_at = NOW()
+SET status            = $2,
+    status_details    = NULL,
+    applying_apply_id = NULL,
+    applying_attempt  = NULL,
+    applying_by_kid   = NULL,
+    applying_since    = NULL,
+    updated_at        = NOW()
 WHERE name = $1 AND status = 'applying'
 `
 	tag, err := tx.Exec(ctx, updateSQL, name, string(StatusReady))

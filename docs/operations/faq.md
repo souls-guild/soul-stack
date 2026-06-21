@@ -30,14 +30,16 @@
 
 ### Случай 1: `acolytes: 0` в HA-кластере (footgun)
 
-Прогон, созданный на keeper-A, но Soul-агент на стриме keeper-B. Keeper-A держит in-memory run-goroutine, ждёт `RunResult`; `RunResult` приходит на keeper-B (тот, кто держит EventStream Soul-а); keeper-B его не знает, что делать (нет в-memory владельца), молча игнорит. incarnation **навсегда** висит в `applying`.
+Прогон, созданный на keeper-A, но Soul-агент на стриме keeper-B. Keeper-A держит in-memory run-goroutine, ждёт `RunResult`; `RunResult` приходит на keeper-B (тот, кто держит EventStream Soul-а); keeper-B его не знает, что делать (нет в-memory владельца), молча игнорит. incarnation висит в `applying`.
+
+> **Авто-recovery, если владелец прогона МЁРТВ.** Если keeper-владелец прямого `incarnation.run` крашнулся (а не просто молча проигнорил `RunResult`), осиротевший `applying`-lock снимает Reaper-правило `reconcile_orphan_applying` (default-ON, presence-gated, [reaper.md](../keeper/reaper.md#правила)): через ≈`stale_after`+presence-чек оно вернёт incarnation в `ready` без ручного SQL. Ручные шаги ниже нужны, только когда владелец **жив** (`applying_by_kid` ещё в Conclave) — например молчаливый-игнор при `acolytes:0` на живом keeper-B — либо когда epoch неизвестен (`applying_by_kid IS NULL`, см. known-gap в reaper.md).
 
 **Verify через SQL:**
 
 ```sql
--- Найти strung-up incarnation
-SELECT name, applying_started_at, started_by_aid FROM incarnation
-WHERE status = 'applying' AND NOW() - applying_started_at > '15 minutes';
+-- Найти strung-up incarnation + epoch владельца (миграция 082)
+SELECT name, applying_since, applying_by_kid, started_by_aid FROM incarnation
+WHERE status = 'applying' AND NOW() - applying_since > '15 minutes';
 
 -- Найти apply_id и его хосты
 SELECT apply_id, sid, status FROM apply_runs
@@ -50,10 +52,11 @@ WHERE apply_id = (SELECT apply_id FROM apply_runs ORDER BY created_at DESC LIMIT
 
 1. Проверить, что Refuse-guard не сработал (`acolytes: 0` + multi-keeper → должен был отказаться стартовать; если стартовал — значит `allow_unsafe_single_path_multi_keeper: true`).
 2. Зафиксировать `acolytes: > 0` в `keeper.yml` всех инстансов — это не reload-able изменение, требует restart Keeper-кластера ([scaling.md](scaling.md)).
-3. Закрыть зависший прогон вручную:
+3. Закрыть зависший прогон. Эндпоинт `POST /v1/incarnations/{name}/unlock` здесь **не подходит** — он снимает только `error_locked` (`409`, если статус `applying`, [operator-api/incarnations.md → unlock](../keeper/operator-api/incarnations.md#post-v1incarnationsnameunlock--снять-error_locked)). Для висящего `applying` живого владельца API-перехода нет — крайняя мера прямым SQL:
    ```sql
    UPDATE incarnation SET status = 'ready' WHERE name = '<name>' AND status = 'applying';
    ```
+   (Если владелец прогона мёртв — этого делать не нужно, `reconcile_orphan_applying` снимет lock сам, см. врезку выше.)
 4. Investigate через audit-log — кто и когда выставил `allow_unsafe_single_path_multi_keeper`.
 
 ### Случай 2: `claimed`/`dispatched` Ward после crash инстанса

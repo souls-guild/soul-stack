@@ -191,6 +191,8 @@ func TestEmbed_ContainsExpectedMigrations(t *testing.T) {
 		"080_purge_apply_task_register_plan_index.up.sql",
 		"081_add_apply_runs_failed_plan_index.down.sql",
 		"081_add_apply_runs_failed_plan_index.up.sql",
+		"082_add_incarnation_applying_epoch.down.sql",
+		"082_add_incarnation_applying_epoch.up.sql",
 	}
 	if len(names) != len(want) {
 		t.Fatalf("got %d files, want %d: %v", len(names), len(want), names)
@@ -1082,6 +1084,58 @@ func TestEmbed_ApplyRunsFailedPlanIndex(t *testing.T) {
 	}
 	if !strings.Contains(string(d), "DROP COLUMN IF EXISTS failed_plan_index") {
 		t.Errorf("081 down.sql does not drop failed_plan_index; content: %.200s", d)
+	}
+}
+
+// TestEmbed_IncarnationApplyingEpoch — sanity на 082 (ADR-027 amend (m), S0):
+// аддитивная подготовка incarnation под standalone-orphan reconcile. up
+// добавляет четыре NULLABLE applying-epoch колонки (applying_apply_id /
+// applying_attempt / applying_by_kid / applying_since) + partial-индекс под
+// Reaper-scan stale-applying. down (колонки nullable, без constraint → обратим)
+// снимает индекс и колонки.
+func TestEmbed_IncarnationApplyingEpoch(t *testing.T) {
+	b, err := FS.ReadFile("082_add_incarnation_applying_epoch.up.sql")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	body := string(b)
+	for _, frag := range []string{
+		"ALTER TABLE incarnation",
+		"applying_apply_id TEXT",
+		"applying_attempt  INTEGER",
+		"applying_by_kid   TEXT",
+		"applying_since    TIMESTAMPTZ",
+		"CREATE INDEX incarnation_applying_scan_idx",
+		"WHERE status = 'applying'",
+	} {
+		if !strings.Contains(body, frag) {
+			t.Errorf("082 up.sql missing %q; content head: %.500s", frag, body)
+		}
+	}
+	// Колонки nullable: NOT NULL / DEFAULT здесь сломал бы fail-safe (existing
+	// applying-строки с неизвестным epoch правило НЕ реклеймит по NULL by_kid).
+	for _, bad := range []string{
+		"applying_apply_id TEXT NOT NULL",
+		"applying_by_kid   TEXT NOT NULL",
+		"applying_since    TIMESTAMPTZ NOT NULL",
+	} {
+		if strings.Contains(body, bad) {
+			t.Errorf("082 up.sql: applying-epoch колонки должны быть nullable, нашёл %q", bad)
+		}
+	}
+	d, err := FS.ReadFile("082_add_incarnation_applying_epoch.down.sql")
+	if err != nil {
+		t.Fatalf("read down: %v", err)
+	}
+	down := string(d)
+	for _, frag := range []string{
+		"DROP INDEX IF EXISTS incarnation_applying_scan_idx",
+		"DROP COLUMN IF EXISTS applying_apply_id",
+		"DROP COLUMN IF EXISTS applying_since",
+	} {
+		if !strings.Contains(down, frag) {
+			t.Errorf("082 down.sql missing %q; content: %.300s", frag, down)
+		}
 	}
 }
 

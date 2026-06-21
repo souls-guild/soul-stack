@@ -276,6 +276,17 @@ const (
 	// со `status: CANCELLED`.
 	EventApplyCancelled EventType = "apply.cancelled"
 
+	// EventLeaseForceReleased — Keeper-инстанс presence-gated перехватил
+	// SID-lease у ДОКАЗАННО-МЁРТВОГО prev-holder-а на reconnect-е Soul-а
+	// (ADR-027 amend (n), recovery-backstop S2). Security-чувствительная
+	// операция смены владения lease: prev-holder подтверждён мёртвым через
+	// Conclave-presence ([redis.InstanceAlive]), затем CAS-by-prev-holder
+	// перезахватил ключ. `source: soul_grpc`, `archon_aid: NULL`,
+	// `correlation_id = sid`. Payload: `{sid, prev_kid, new_kid}`. Пишется
+	// ТОЛЬКО при успешном force-release (split-brain-отказ / fail-safe не
+	// аудируются — это штатное «отдать Soul-у ретраить»).
+	EventLeaseForceReleased EventType = "eventstream.lease_force_released"
+
 	// EventSoulSeedRotated — Soul инициировал ротацию seed-а через
 	// `SeedRotationRequest` в EventStream, Keeper выпустил новый cert и
 	// supersede-нул предыдущий active (M2.5, ADR-012). `source: soul_grpc`,
@@ -820,6 +831,18 @@ const (
 	// семейств. `source: keeper_internal`, `archon_aid: NULL`. Payload:
 	// `{voyage_id, last_renewed_at, attempt_after}` (parity `tide.reclaimed`).
 	EventVoyageReclaimed EventType = "voyage.reclaimed"
+
+	// EventReconcileOrphanApplyingExecuted — Reaper-правило `reconcile_orphan_applying`
+	// сняло осиротевший applying-lock инкарнации (ADR-027 amend (m)): прямой
+	// (standalone, не под Voyage) scenario-run крашнувшегося Keeper-владельца
+	// оставил `incarnation.status='applying'` навсегда; правило по epoch-колонкам
+	// (`applying_by_kid`/`applying_since`) детектит stale-кандидата, presence-чеком
+	// в Conclave подтверждает смерть владельца и снимает lock (`applying → ready`
+	// через идемпотентный `ReleaseApplyingOrphan`). Область `reaper.*` (recovery-
+	// действие лидера, parity `voyage.reclaimed`). `source: keeper_internal`,
+	// `archon_aid: NULL`. Payload: `{incarnation, prev_kid, apply_id}` —
+	// `prev_kid` = мёртвый `applying_by_kid`, `apply_id` = `applying_apply_id`.
+	EventReconcileOrphanApplyingExecuted EventType = "reaper.reconcile_orphan_applying.executed"
 
 	// EventCadenceCreated — Архонт создал Cadence-расписание (ADR-046 §8) через
 	// Operator API (`POST /v1/cadences`) или MCP-tool. `source: api` или `mcp`,

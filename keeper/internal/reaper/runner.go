@@ -168,6 +168,14 @@ const defaultPurgeOldErrandsMaxAge = 7 * 24 * time.Hour
 // duration-runner-а.
 const defaultReclaimVoyagesLease = time.Minute
 
+// defaultReconcileOrphanApplyingStale — `stale_after` правила
+// `reconcile_orphan_applying` (ADR-027 amend (m)). applying-строка считается
+// stale-кандидатом на снятие осиротевшего lock-а, если applying_since старше
+// этого порога. 90s — parity defaultMarkDisconnectedStale: тот же класс
+// «владелец долго молчит» (presence-чек добивает решение). ВХОДИТ в SQL-предикат
+// (cutoff = NOW()-stale_after), в отличие от lease-аргументов reclaim-правил.
+const defaultReconcileOrphanApplyingStale = 90 * time.Second
+
 // defaultPurgeOrphanEphemeralTidingsGrace — grace правила
 // `purge_orphan_ephemeral_tidings` (ADR-052(g) amendment N2). `max_age`
 // семантически = grace ПОСЛЕ терминала Voyage и ВХОДИТ в предикат (как
@@ -251,6 +259,17 @@ type Deps struct {
 	// Production wire-up передаёт [*EphemeralTidingsPurger] из
 	// [NewEphemeralTidingsPurger] поверх d.pool.
 	OrphanEphemeralTidings *EphemeralTidingsPurger
+
+	// OrphanApplying — зависимость правила `reconcile_orphan_applying` (ADR-027
+	// amend (m)). Снимает осиротевший applying-lock инкарнации от прямого
+	// (standalone, не под Voyage) scenario-run крашнувшегося Keeper-владельца:
+	// stale applying-строка с НЕпустым epoch + presence-смерть владельца в
+	// Conclave → applying→ready. Правило default-ON через path-defaulting
+	// (dispatchReconcileOrphanApplying), как reclaim_voyages, поэтому безусловный
+	// wire-up обязателен. nil → правило деградирует с warn-ом (presence-чек
+	// требует живого Redis). Production wire-up передаёт
+	// [*OrphanApplyingReconciler] из [NewOrphanApplyingReconciler].
+	OrphanApplying *OrphanApplyingReconciler
 }
 
 // Runner — корневая структура. Один экземпляр на keeper-процесс.
@@ -384,10 +403,11 @@ func (r *Runner) dispatch(ctx context.Context, cfg *config.KeeperConfig) {
 	}
 
 	for name, rule := range cfg.Reaper.Rules {
-		// reclaim_voyages — default-ON через path-defaulting в отдельной ветке ниже
-		// (dispatchReclaimVoyages); из основного цикла исключён, чтобы при
+		// reclaim_voyages / reconcile_orphan_applying — default-ON через
+		// path-defaulting в отдельных ветках ниже (dispatchReclaimVoyages /
+		// dispatchReconcileOrphanApplying); из основного цикла исключены, чтобы при
 		// `Enabled:true` правило не исполнилось дважды.
-		if name == "reclaim_voyages" {
+		if name == "reclaim_voyages" || name == "reconcile_orphan_applying" {
 			continue
 		}
 		if !rule.Enabled {
@@ -555,6 +575,7 @@ func (r *Runner) dispatch(ctx context.Context, cfg *config.KeeperConfig) {
 	}
 
 	r.dispatchReclaimVoyages(ctx, cfg, batchSize, dryRun)
+	r.dispatchReconcileOrphanApplying(ctx, cfg, batchSize, dryRun)
 }
 
 // dispatchReclaimVoyages исполняет правило reclaim_voyages с default-ON
@@ -587,6 +608,42 @@ func (r *Runner) dispatchReclaimVoyages(ctx context.Context, cfg *config.KeeperC
 	}
 	r.runDurationRule(ctx, name, rule.StaleAfter, defaultReclaimVoyagesLease, batchSize, dryRun,
 		r.deps.VoyageReclaim.Run)
+}
+
+// dispatchReconcileOrphanApplying исполняет правило reconcile_orphan_applying с
+// default-ON path-defaulting (ADR-027 amend (m), как reclaim_voyages): правило
+// работает, если ключ отсутствует в cfg.Reaper.Rules ИЛИ присутствует с
+// Enabled:true; пропускается ТОЛЬКО при явном Enabled:false. Вызывается из
+// dispatch ОДИН раз после основного цикла (откуда правило исключено через
+// `continue`), двойного запуска при Enabled:true нет.
+//
+// Снятие осиротевшего applying-lock от прямого (standalone) scenario-run
+// крашнувшегося Keeper-владельца (ADR-027 amend (m), docs/keeper/reaper.md):
+// stale applying-строка (applying_since < NOW()-stale_after) с НЕпустым epoch +
+// presence-смерть владельца в Conclave → applying→ready через идемпотентный
+// ReleaseApplyingOrphan. `stale_after` ВХОДИТ в SQL-предикат (cutoff =
+// NOW()-stale_after), default 90s (parity mark_disconnected). nil OrphanApplying
+// → правило деградирует с warn-ом (reconciler не сконфигурирован). Реальный
+// presence-gate против недоступного Redis — на уровне InstanceAlive: ошибка
+// presence-чека ⇒ fail-safe skip кандидата, а не no-op правила.
+//
+// Default-ON безопасен: presence-gate (InstanceAlive=false обязателен) + FENCING-1
+// (no-live-rival) + single-winner CAS внутри ReleaseApplyingOrphan не дают снять
+// живой lock; residual double-apply (network-partition живого владельца) — тот же
+// приемлемый класс, что у reclaim_apply_runs/(l), под защитой gate-1 fencing.
+func (r *Runner) dispatchReconcileOrphanApplying(ctx context.Context, cfg *config.KeeperConfig, batchSize int, dryRun bool) {
+	const name = "reconcile_orphan_applying"
+	rule, ok := cfg.Reaper.Rules[name]
+	if ok && !rule.Enabled {
+		return
+	}
+	if r.deps.OrphanApplying == nil {
+		r.deps.Logger.Warn("reaper: reconcile_orphan_applying пропущено — OrphanApplying не сконфигурирован",
+			slog.String("rule", name))
+		return
+	}
+	r.runDurationRule(ctx, name, rule.StaleAfter, defaultReconcileOrphanApplyingStale, batchSize, dryRun,
+		r.deps.OrphanApplying.Run)
 }
 
 // runDurationRule — общий runner для правил с сигнатурой

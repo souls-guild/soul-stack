@@ -652,6 +652,17 @@ func (r *Runner) lockRun(ctx context.Context, spec RunSpec) (*incarnation.Incarn
 			if got.Status != incarnation.StatusApplying {
 				return fmt.Errorf("%w: %s (rerun expected applying)", ErrNotRunnable, got.Status)
 			}
+			// Запись epoch applying-флага на уже-applying-строку (ADR-027 amend
+			// (m-S1)): UnlockForRerun транзитит error_locked→applying БЕЗ epoch,
+			// поэтому без этого дописывания rerun-create-applying оставался бы с
+			// NULL-epoch и не попадал под reconcile_orphan_applying — краш владельца
+			// mid-rerun-create давал orphan навсегда. lockApplyingWithEpoch WHERE
+			// name=$1 (без status-guard) идемпотентно перезаписывает epoch, статус
+			// остаётся applying. Остаточное микроокно UnlockForRerun-tx↔эта tx
+			// деградирует в тот же NULL-epoch known-gap (не хуже текущего).
+			if uerr := lockApplyingWithEpoch(ctx, tx, spec.IncarnationName, spec.ApplyID, r.kid, 0); uerr != nil {
+				return uerr
+			}
 			inc = got
 			return nil
 		}
@@ -669,7 +680,14 @@ func (r *Runner) lockRun(ctx context.Context, spec RunSpec) (*incarnation.Incarn
 			// destroying / migration_failed / любой будущий статус.
 			return fmt.Errorf("%w: %s", ErrNotRunnable, got.Status)
 		}
-		if uerr := updateStatus(ctx, tx, spec.IncarnationName, incarnation.StatusApplying); uerr != nil {
+		// Перевод в applying + запись epoch applying-флага ОДНИМ UPDATE/одной tx
+		// (ADR-027 amend (m-S1)): apply_id прогона + attempt (echo начального
+		// apply_runs.attempt=0, строки apply_runs ещё нет) + KID этого инстанса
+		// (тот же источник, что lease-holder) + applying_since=NOW(). Reaper-правило
+		// reconcile_orphan_applying по этому epoch различает живой прогон от
+		// осиротевшего lock-а мёртвого владельца. Атомарность с status='applying'
+		// исключает окно applying-без-epoch при крахе до commit.
+		if uerr := lockApplyingWithEpoch(ctx, tx, spec.IncarnationName, spec.ApplyID, r.kid, 0); uerr != nil {
 			return uerr
 		}
 		inc = got

@@ -4830,6 +4830,21 @@ func (d *daemon) setupReaper(ctx context.Context) error {
 			orphanEphemeralTidingsPurger = reaper.NewEphemeralTidingsPurger(d.pool, logger)
 		}
 
+		// OrphanApplying — реализация `reconcile_orphan_applying` (ADR-027 amend
+		// (m)). Снятие осиротевшего applying-lock инкарнации от прямого (standalone)
+		// scenario-run крашнувшегося Keeper-владельца. Default-ON через
+		// path-defaulting в reaper.dispatch, поэтому безусловный wire-up обязателен
+		// (без него default-ON-правило деградировало бы в warn+skip). Зависит от
+		// d.pool (SQL-кандидаты + ReleaseApplyingOrphan as-is) и rc (presence-чек в
+		// Conclave); reaper-ветка стартует только при non-nil Redis, поэтому
+		// presence-клиент всегда non-nil (nil-presence ветка reconciler-а —
+		// test-affordance). Реальный presence-gate против недоступного Redis —
+		// InstanceAlive→error fail-safe skip кандидата, не no-op правила.
+		var orphanApplyingReconciler *reaper.OrphanApplyingReconciler
+		if d.pool != nil {
+			orphanApplyingReconciler = reaper.NewOrphanApplyingReconciler(d.pool, rc, d.auditWriter, logger)
+		}
+
 		runner, err := reaper.NewRunner(reaper.Deps{
 			Purger:                 executor,
 			Redis:                  rc,
@@ -4841,6 +4856,7 @@ func (d *daemon) setupReaper(ctx context.Context) error {
 			OldErrands:             oldErrandsPurger,
 			VoyageReclaim:          d.voyageReclaimer,
 			OrphanEphemeralTidings: orphanEphemeralTidingsPurger,
+			OrphanApplying:         orphanApplyingReconciler,
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "keeper run: build reaper: %v\n", err)

@@ -3,7 +3,7 @@
 - **Контекст.** При HA-кластере Keeper-а нужны: горячий кэш для часто обновляемых полей (heartbeat Souls), механизм lease/lock для координации (кто из Keeper-ов «держит» Soul, кто из Keeper-ов сейчас Жнец), и pub/sub для согласования между инстансами. Делать всё это на PG ведёт к UPDATE-шторму и тяжёлым lock-таблицам.
 - **Решение.** Redis как horizontal-кэш и координационная шина Keeper-кластера. Роли:
   - **(a) Heartbeat-кэш.** `last_seen_at` и `last_seen_by_kid` Souls живут в Redis; периодический flush в Postgres батчем. Запрос «список активных Souls» читается из Redis-структуры (Set/HSET), не из PG.
-  - **(b) Lease на SID.** Какой Keeper держит активный стрим к данному Soul (`SET sid:lock kid NX EX <ttl>` с продлением). При разрыве — TTL истекает, следующий Keeper свободно занимает.
+  - **(b) Lease на SID.** Какой Keeper держит активный стрим к данному Soul (`SET sid:lock kid NX EX <ttl>` с продлением). При разрыве — TTL истекает, следующий Keeper свободно занимает. Force-release при detected-crash reconnect (presence-gated CAS-перезахват у доказанно-мёртвого holder-а, сокращает окно невидимости с TTL SID-lease до TTL Conclave-presence) — см. [ADR-027(n)](0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim).
   - **(c) Pub/Sub.** Сигналы между Keeper-инстансами: «новый Soul зашёл», «Destiny обновлён», «отзыв SoulSeed»; уход от поллинга PG.
   - **(d) Лидер для фоновых задач.** Reaper и подобные одиночные задачи (см. раздел «Reaper / Жнец») берут лидерский lease в Redis.
 - **Обоснование.** Стандартный паттерн «PG как source of truth + Redis как горячий слой» — снимает UPDATE-шторм и даёт дешёвые TTL/lock без нашего велосипеда.

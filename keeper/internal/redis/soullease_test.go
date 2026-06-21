@@ -95,3 +95,108 @@ func TestSoulLeaseOwner_Validation(t *testing.T) {
 		t.Error("empty sid returned no error")
 	}
 }
+
+func TestForceAcquireSoulLease_KeyIsPrevHolder_Reacquires(t *testing.T) {
+	c, mr := newClientMR(t)
+	ctx := context.Background()
+	sid := "host.example.com"
+
+	// Мёртвый prev-holder всё ещё держит ключ (TTL не истёк после crash-а).
+	if _, err := AcquireSoulLease(ctx, c, sid, "kid-dead", 60*time.Second); err != nil {
+		t.Fatalf("seed lease: %v", err)
+	}
+
+	l, err := ForceAcquireSoulLease(ctx, c, sid, "kid-dead", "kid-new", 30*time.Second)
+	if err != nil {
+		t.Fatalf("ForceAcquireSoulLease: %v", err)
+	}
+	if l == nil {
+		t.Fatal("lease = nil on successful re-acquire")
+	}
+	if l.Holder() != "kid-new" {
+		t.Errorf("Holder = %q, want kid-new", l.Holder())
+	}
+	if v, _ := mr.Get(SoulLeaseKey(sid)); v != "kid-new" {
+		t.Errorf("redis value = %q, want kid-new (CAS-by-prev-holder перезахватил)", v)
+	}
+}
+
+func TestForceAcquireSoulLease_KeyChanged_DoesNotReacquire(t *testing.T) {
+	c, mr := newClientMR(t)
+	ctx := context.Background()
+	sid := "host.example.com"
+
+	// В гонке ключ уже сменился: им владеет НЕ доказанно-мёртвый prevKID, а
+	// третий живой Keeper. CAS-by-prev-holder НЕ должен его перетереть.
+	if _, err := AcquireSoulLease(ctx, c, sid, "kid-other", 60*time.Second); err != nil {
+		t.Fatalf("seed lease: %v", err)
+	}
+
+	l, err := ForceAcquireSoulLease(ctx, c, sid, "kid-dead", "kid-new", 30*time.Second)
+	if !errors.Is(err, ErrLeaseTaken) {
+		t.Fatalf("err = %v, want ErrLeaseTaken (ключ принадлежит не-prev-holder-у)", err)
+	}
+	if l != nil {
+		t.Error("lease != nil on failed CAS")
+	}
+	if v, _ := mr.Get(SoulLeaseKey(sid)); v != "kid-other" {
+		t.Errorf("redis value = %q, want kid-other (не перезахвачен)", v)
+	}
+}
+
+func TestForceAcquireSoulLease_KeyAbsent_SetnxAcquires(t *testing.T) {
+	c, mr := newClientMR(t)
+	ctx := context.Background()
+	sid := "host.example.com"
+
+	// prev-holder уже истёк по TTL (ключа нет) → штатный SETNX-захват.
+	l, err := ForceAcquireSoulLease(ctx, c, sid, "kid-dead", "kid-new", 30*time.Second)
+	if err != nil {
+		t.Fatalf("ForceAcquireSoulLease on absent key: %v", err)
+	}
+	if l == nil || l.Holder() != "kid-new" {
+		t.Fatalf("lease=%v, want holder kid-new", l)
+	}
+	if v, _ := mr.Get(SoulLeaseKey(sid)); v != "kid-new" {
+		t.Errorf("redis value = %q, want kid-new (SETNX-захват)", v)
+	}
+}
+
+func TestForceAcquireSoulLease_RenewWorksAfterReacquire(t *testing.T) {
+	c, _ := newClientMR(t)
+	ctx := context.Background()
+	sid := "host.example.com"
+
+	if _, err := AcquireSoulLease(ctx, c, sid, "kid-dead", 60*time.Second); err != nil {
+		t.Fatalf("seed lease: %v", err)
+	}
+	l, err := ForceAcquireSoulLease(ctx, c, sid, "kid-dead", "kid-new", 30*time.Second)
+	if err != nil {
+		t.Fatalf("ForceAcquireSoulLease: %v", err)
+	}
+	// Возвращённый handle принадлежит новому holder-у — Renew по CAS проходит.
+	if err := l.Renew(ctx); err != nil {
+		t.Errorf("Renew after re-acquire: %v (handle должен быть kid-new)", err)
+	}
+}
+
+func TestForceAcquireSoulLease_Validation(t *testing.T) {
+	c, _ := newClientMR(t)
+	ctx := context.Background()
+
+	if _, err := ForceAcquireSoulLease(ctx, nil, "h", "p", "n", time.Second); err == nil {
+		t.Error("nil client: want error")
+	}
+	if _, err := ForceAcquireSoulLease(ctx, c, "", "p", "n", time.Second); err == nil {
+		t.Error("empty sid: want error")
+	}
+	if _, err := ForceAcquireSoulLease(ctx, c, "h", "", "n", time.Second); err == nil {
+		t.Error("empty prevKID: want error")
+	}
+	if _, err := ForceAcquireSoulLease(ctx, c, "h", "p", "", time.Second); err == nil {
+		t.Error("empty newKID: want error")
+	}
+	if _, err := ForceAcquireSoulLease(ctx, c, "h", "p", "n", 0); err == nil {
+		t.Error("zero ttl: want error")
+	}
+}

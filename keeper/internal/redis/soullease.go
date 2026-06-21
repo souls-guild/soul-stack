@@ -160,3 +160,77 @@ func SoulLeaseKey(sid string) string {
 func AcquireSoulLease(ctx context.Context, c *Client, sid, kid string, ttl time.Duration) (*Lease, error) {
 	return Acquire(ctx, c, SoulLeaseKey(sid), kid, ttl)
 }
+
+// forceAcquireSoulLeaseScript — CAS-by-prev-holder перезахват SID-lease.
+// Перезахватывает ключ на `newKID` (ARGV[2]) только в двух случаях:
+//   - ключ всё ещё принадлежит ДОКАЗАННО-МЁРТВОМУ `prevKID` (ARGV[1]) — DEL+SET;
+//   - ключа нет (prev-holder уже истёк по TTL) — SETNX.
+//
+// Если ключ в гонке СМЕНИЛСЯ на третьего владельца (другой Keeper уже
+// перезахватил / Soul реконнектнулся ещё куда-то) — НЕ трогаем (return 0).
+// Это и есть защита от split-brain: слепой DEL чужого живого lease подорвал бы
+// SID-lease-дедуп доставки (ADR-027(n)); здесь снимаем lease ровно у того, чью
+// смерть caller уже подтвердил presence-чеком ([InstanceAlive]).
+//
+// PX (миллисекунды) — как в renewScript: точный sub-second TTL для miniredis-
+// тестов, нулевой overhead в проде.
+var forceAcquireSoulLeaseScript = redis.NewScript(`
+local cur = redis.call("GET", KEYS[1])
+if cur == false then
+	if redis.call("SET", KEYS[1], ARGV[2], "NX", "PX", ARGV[3]) then
+		return 1
+	end
+	return 0
+elseif cur == ARGV[1] then
+	redis.call("SET", KEYS[1], ARGV[2], "PX", ARGV[3])
+	return 1
+else
+	return 0
+end
+`)
+
+// ForceAcquireSoulLease — presence-gated перезахват SID-lease у доказанно-
+// мёртвого prev-holder-а (ADR-027(n), server-side фундамент S0; врезка в
+// acquireSoulLease-handler — S2).
+//
+// Контракт: caller вызывает ЭТО только после того, как:
+//   - обычный [AcquireSoulLease] вернул [ErrLeaseTaken];
+//   - [SoulLeaseOwner] дал `prevKID` — текущего владельца ключа;
+//   - [InstanceAlive](prevKID) подтвердил, что prev-holder МЁРТВ в Conclave.
+//
+// Перезахват атомарен (Lua CAS-by-prev-holder): ключ перетирается на `newKID`
+// ТОЛЬКО если он всё ещё `== prevKID` (или отсутствует — штатный SETNX). Если
+// между presence-чеком и этим вызовом ключ сменился на третьего владельца —
+// возвращается [ErrLeaseTaken] (НЕ перезахватываем чужой живой lease).
+//
+// Успех → `*Lease` на новом holder-е, готовый к Renew/Release (renewal-
+// goroutine handler-а продлевает его как обычный AcquireSoulLease-lease).
+func ForceAcquireSoulLease(ctx context.Context, c *Client, sid, prevKID, newKID string, ttl time.Duration) (*Lease, error) {
+	if c == nil {
+		return nil, errors.New("redis.ForceAcquireSoulLease: nil client")
+	}
+	if sid == "" {
+		return nil, errors.New("redis.ForceAcquireSoulLease: empty sid")
+	}
+	if prevKID == "" {
+		return nil, errors.New("redis.ForceAcquireSoulLease: empty prevKID")
+	}
+	if newKID == "" {
+		return nil, errors.New("redis.ForceAcquireSoulLease: empty newKID")
+	}
+	if ttl <= 0 {
+		return nil, fmt.Errorf("redis.ForceAcquireSoulLease: ttl must be > 0, got %v", ttl)
+	}
+	key := SoulLeaseKey(sid)
+	res, err := forceAcquireSoulLeaseScript.Run(ctx, c.underlying(),
+		[]string{key},
+		prevKID, newKID, ttl.Milliseconds(),
+	).Int64()
+	if err != nil {
+		return nil, fmt.Errorf("redis.ForceAcquireSoulLease %q: %w", key, err)
+	}
+	if res != 1 {
+		return nil, ErrLeaseTaken
+	}
+	return &Lease{client: c, key: key, holder: newKID, ttl: ttl}, nil
+}

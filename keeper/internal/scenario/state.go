@@ -33,6 +33,22 @@ UPDATE incarnation
 SET status = $2, updated_at = NOW()
 WHERE name = $1
 `
+	// lockApplyingWithEpochSQL переводит incarnation в applying И ОДНИМ UPDATE
+	// записывает epoch applying-флага (ADR-027 amend (m-S1)): apply_id / attempt /
+	// KID-владелец / момент взятия lock. Атомарность критична: epoch и status
+	// меняются в одной строке одной tx — окна «applying без epoch» (которое
+	// reconcile_orphan_applying приняло бы за legacy-NULL и НЕ реклеймнуло бы, а
+	// при крахе владельца lock завис бы навсегда) не возникает.
+	lockApplyingWithEpochSQL = `
+UPDATE incarnation
+SET status            = 'applying',
+    applying_apply_id = $2,
+    applying_attempt  = $3,
+    applying_by_kid   = $4,
+    applying_since    = NOW(),
+    updated_at        = NOW()
+WHERE name = $1
+`
 )
 
 // selectForUpdate читает incarnation под FOR UPDATE (защита от параллельных
@@ -89,6 +105,30 @@ func updateStatus(ctx context.Context, tx pgx.Tx, name string, status incarnatio
 	tag, err := tx.Exec(ctx, updateIncarnationStatusSQL, name, string(status))
 	if err != nil {
 		return fmt.Errorf("scenario: update status: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return incarnation.ErrIncarnationNotFound
+	}
+	return nil
+}
+
+// lockApplyingWithEpoch переводит incarnation в applying И в ТОМ ЖЕ UPDATE/той же
+// tx записывает epoch applying-флага (ADR-027 amend (m-S1)): applying_apply_id /
+// applying_attempt / applying_by_kid / applying_since. Это превращает голый
+// applying-bool в inline-epoch, по которому Reaper-правило reconcile_orphan_applying
+// различает «прогон реально идёт» (владелец жив в Conclave) и «владелец мёртв,
+// lock осиротел». КРИТИЧНО: один Exec — крах между записью status и записью epoch
+// невозможен (один UPDATE атомарен), окна applying-без-epoch нет.
+//
+// attempt — echo текущего apply_runs.attempt; на момент lockRun строки apply_runs
+// ещё нет (dispatch вставляет её позже), поэтому это начальный attempt прогона.
+// Колонка пишется для parity apply_runs.attempt (задел под post-MVP epoch-check
+// приёма RunResult); standalone-снятие её НЕ читает — смерть доказывает presence,
+// FENCING-1 фенсит по apply_id.
+func lockApplyingWithEpoch(ctx context.Context, tx pgx.Tx, name, applyID, kid string, attempt int) error {
+	tag, err := tx.Exec(ctx, lockApplyingWithEpochSQL, name, applyID, attempt, kid)
+	if err != nil {
+		return fmt.Errorf("scenario: lock applying with epoch: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return incarnation.ErrIncarnationNotFound

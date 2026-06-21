@@ -98,6 +98,14 @@ func TestEventType_ConstantsStable(t *testing.T) {
 		}
 	}
 
+	// Reaper-recovery область (ADR-027 amend (m)). Имя зафиксировано
+	// пользователем (propose-and-wait): standalone-orphan reconcile снятия
+	// осиротевшего applying-lock. Расхождение = breaking change для существующих
+	// audit-log записей.
+	if string(EventReconcileOrphanApplyingExecuted) != "reaper.reconcile_orphan_applying.executed" {
+		t.Errorf("EventReconcileOrphanApplyingExecuted = %q", EventReconcileOrphanApplyingExecuted)
+	}
+
 	// Synod-область (ADR-049). Имена зафиксированы в docs/naming-rules.md
 	// (Audit-events таблица, `synod.*` блок). Расхождение = breaking change
 	// для существующих audit-log записей.

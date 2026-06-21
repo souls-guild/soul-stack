@@ -100,8 +100,10 @@ func helloAndEventStream(t *testing.T, ctx context.Context, esAddr string, certP
 }
 
 // TestIntegration_EventStream_LeaseConflict_ReturnsAlreadyExists — второй
-// подключающийся Keeper-инстанс к тому же SID получает AlreadyExists
-// (PM-decision 1).
+// подключающийся Keeper-инстанс к тому же SID получает AlreadyExists, когда
+// текущий holder ЖИВ в Conclave (split-brain guard, ADR-027 amend (n)).
+// Presence-gated force-release НЕ срабатывает на живого владельца — иначе
+// дедуп доставки по SID-lease был бы подорван.
 func TestIntegration_EventStream_LeaseConflict_ReturnsAlreadyExists(t *testing.T) {
 	resetAll(t)
 	plain, sid := seedOnboardingFixtures(t)
@@ -122,6 +124,15 @@ func TestIntegration_EventStream_LeaseConflict_ReturnsAlreadyExists(t *testing.T
 
 	caRootPEM := fetchVaultPKIRootCA(t, ctx)
 	rc, _ := newIntegrationRedisClient(t)
+
+	// kid-a жив в Conclave: EventStream-server сам presence не регистрирует
+	// (это делает daemon-wire-up), поэтому в тесте регистрируем явно — иначе
+	// kid-b счёл бы kid-a мёртвым и сделал бы force-release (это покрыто
+	// reconnect-сценарием отдельно). Здесь проверяем именно guard живого
+	// holder-а.
+	if err := keeperredis.RegisterInstance(ctx, rc, "kid-a", "kid-a", 30*time.Second, false); err != nil {
+		t.Fatalf("RegisterInstance(kid-a): %v", err)
+	}
 
 	// Keeper A — захватывает lease, держит стрим открытым.
 	esAddrA, esStopA := startEventStreamServerExt(t, caRootPEM, EventStreamDeps{
@@ -174,6 +185,81 @@ func TestIntegration_EventStream_LeaseConflict_ReturnsAlreadyExists(t *testing.T
 	_, err = streamB.Recv()
 	if got := status.Code(err); got != codes.AlreadyExists {
 		t.Fatalf("B Recv: code = %v, want AlreadyExists (err=%v)", got, err)
+	}
+}
+
+// TestIntegration_EventStream_DeadHolderLease_ForceReleased — находка 2
+// (ADR-027 amend (n)): stale SID-lease мёртвого holder-а перехватывается на
+// reconnect-е того же SID к другому keeper-у. Эмуляция: kid-dead держит lease
+// (как после SIGKILL — ключ висит до TTL), но его Conclave-presence отсутствует
+// (инстанс не renew-ит). Soul переподключается к kid-live → presence-gated
+// force-release → стрим ОТКРЫВАЕТСЯ (HelloReply доходит), а НЕ закрывается с
+// AlreadyExists. Это и снимает ~60s-блокировку dispatched-orphan-реконсиляции.
+func TestIntegration_EventStream_DeadHolderLease_ForceReleased(t *testing.T) {
+	resetAll(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	sid, certPEM, keyPEM := bootstrapForStream(t, ctx)
+
+	caRootPEM := fetchVaultPKIRootCA(t, ctx)
+	rc, _ := newIntegrationRedisClient(t)
+
+	// Мёртвый holder kid-dead: lease висит (crash оставил его до TTL), но
+	// Conclave-presence НЕ зарегистрирована (renewal-goroutine мертва).
+	if _, err := keeperredis.AcquireSoulLease(ctx, rc, sid, "kid-dead", 60*time.Second); err != nil {
+		t.Fatalf("seed dead-holder lease: %v", err)
+	}
+
+	// Живой keeper kid-live принимает reconnect Soul-а.
+	esAddr, esStop := startEventStreamServerExt(t, caRootPEM, EventStreamDeps{
+		SeedDB: integrationPool, SoulDB: integrationPool, Redis: rc,
+		AuditWriter:  auditpg.NewWriter(integrationPool),
+		KID:          "kid-live",
+		SoulLeaseTTL: 5 * time.Second,
+	})
+	defer esStop()
+
+	// helloAndEventStream падает t.Fatal-ом, если HelloReply не пришёл —
+	// успешный возврат = стрим открыт, force-release сработал.
+	stream := helloAndEventStream(t, ctx, esAddr, certPEM, keyPEM)
+	defer drainEventStreamClient(stream)
+
+	// lease перезахвачен на kid-live.
+	if !waitSoulAlive(t, ctx, rc, sid, true) {
+		t.Fatalf("soul offline after reconnect, want online (force-release acquired lease)")
+	}
+	owner, ok, err := keeperredis.SoulLeaseOwner(ctx, rc, sid)
+	if err != nil || !ok {
+		t.Fatalf("SoulLeaseOwner: ok=%v err=%v", ok, err)
+	}
+	if owner != "kid-live" {
+		t.Errorf("lease owner = %q, want kid-live (перехвачен у мёртвого kid-dead)", owner)
+	}
+
+	// Audit `eventstream.lease_force_released` с prev/new KID.
+	deadline := time.Now().Add(3 * time.Second)
+	var (
+		prevKID, newKID string
+		found           bool
+	)
+	for time.Now().Before(deadline) {
+		row := integrationPool.QueryRow(ctx,
+			`SELECT payload->>'prev_kid', payload->>'new_kid'
+			   FROM audit_log
+			  WHERE event_type='eventstream.lease_force_released' AND correlation_id=$1
+			  ORDER BY created_at DESC LIMIT 1`, sid)
+		if err := row.Scan(&prevKID, &newKID); err == nil {
+			found = true
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !found {
+		t.Fatal("audit_log: eventstream.lease_force_released not found")
+	}
+	if prevKID != "kid-dead" || newKID != "kid-live" {
+		t.Errorf("audit prev/new = %q/%q, want kid-dead/kid-live", prevKID, newKID)
 	}
 }
 

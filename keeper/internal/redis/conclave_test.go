@@ -223,6 +223,76 @@ func TestLiveKIDs_Empty(t *testing.T) {
 	}
 }
 
+func TestInstanceAlive_Live(t *testing.T) {
+	c, _ := newClientMR(t)
+	ctx := context.Background()
+
+	if err := RegisterInstance(ctx, c, testKIDa, "m", 30*time.Second, false); err != nil {
+		t.Fatalf("RegisterInstance: %v", err)
+	}
+	alive, err := InstanceAlive(ctx, c, testKIDa)
+	if err != nil {
+		t.Fatalf("InstanceAlive: %v", err)
+	}
+	if !alive {
+		t.Error("InstanceAlive = false on live instance, want true")
+	}
+}
+
+func TestInstanceAlive_Dead(t *testing.T) {
+	c, _ := newClientMR(t)
+	ctx := context.Background()
+
+	// Ключ никогда не регистрировался (или crash-нул и истёк по TTL) → мёртв.
+	alive, err := InstanceAlive(ctx, c, testKIDa)
+	if err != nil {
+		t.Fatalf("InstanceAlive: %v", err)
+	}
+	if alive {
+		t.Error("InstanceAlive = true on absent key, want false (presence-смерть владельца)")
+	}
+}
+
+func TestInstanceAlive_TTLExpiryDead(t *testing.T) {
+	c, mr := newClientMR(t)
+	ctx := context.Background()
+
+	if err := RegisterInstance(ctx, c, testKIDa, "m", 100*time.Millisecond, false); err != nil {
+		t.Fatalf("RegisterInstance: %v", err)
+	}
+	mr.FastForward(200 * time.Millisecond)
+
+	alive, err := InstanceAlive(ctx, c, testKIDa)
+	if err != nil {
+		t.Fatalf("InstanceAlive: %v", err)
+	}
+	if alive {
+		t.Error("InstanceAlive = true after TTL expiry, want false")
+	}
+}
+
+func TestInstanceAlive_RedisErrorPropagates(t *testing.T) {
+	c, mr := newClientMR(t)
+	ctx := context.Background()
+	mr.Close() // Redis недоступен → EXISTS вернёт ошибку.
+
+	if _, err := InstanceAlive(ctx, c, testKIDa); err == nil {
+		t.Error("InstanceAlive on broken Redis: want error (presence-чек fail-safe у caller-а)")
+	}
+}
+
+func TestInstanceAlive_RejectsInvalidArgs(t *testing.T) {
+	c, _ := newClientMR(t)
+	ctx := context.Background()
+
+	if _, err := InstanceAlive(ctx, c, ""); err == nil {
+		t.Error("empty kid: want error")
+	}
+	if _, err := InstanceAlive(ctx, nil, testKIDa); err == nil {
+		t.Error("nil client: want error")
+	}
+}
+
 func TestLiveKIDs_TTLExpiryDropsDead(t *testing.T) {
 	c, mr := newClientMR(t)
 	ctx := context.Background()

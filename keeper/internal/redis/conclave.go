@@ -188,3 +188,32 @@ func CountLive(ctx context.Context, c *Client) (int, error) {
 	}
 	return len(kids), nil
 }
+
+// InstanceAlive — точечный presence-чек одного KID: жив ли keeper-инстанс
+// прямо сейчас (EXISTS его presence-ключа `keeper:instance:<kid>`). Запись
+// существует только пока renewal-goroutine инстанса её продлевает; пропадает
+// на graceful-shutdown ([DeregisterInstance]) либо по TTL-expiry после crash-а.
+//
+// В отличие от [LiveKIDs]/[CountLive] (SCAN всего реестра) — один EXISTS:
+// caller знает конкретный KID и спрашивает только про него. Питает recovery-
+// детект «владелец прогона / стрима доказанно мёртв» (ADR-027 amend (m) —
+// reconcile_orphan_applying presence-gate; amend (n) — force-release SID-lease
+// у мёртвого prev-holder-а). Симметрия с [SoulStreamAlive] (EXISTS по
+// SID-lease-ключу), но другой keyspace — presence keeper-инстансов, не Souls.
+//
+// Возврат ошибки (сетевой/протокольный сбой EXISTS) caller трактует fail-safe:
+// неизвестно — значит НЕ объявлять мёртвым (не реклеймить lock / не снимать
+// lease), чтобы не сорвать живой прогон при флапе Redis.
+func InstanceAlive(ctx context.Context, c *Client, kid string) (bool, error) {
+	if c == nil {
+		return false, errors.New("redis.InstanceAlive: nil client")
+	}
+	if kid == "" {
+		return false, errors.New("redis.InstanceAlive: empty kid")
+	}
+	n, err := c.underlying().Exists(ctx, ConclaveKey(kid)).Result()
+	if err != nil {
+		return false, fmt.Errorf("redis.InstanceAlive: EXISTS %q: %w", ConclaveKey(kid), err)
+	}
+	return n > 0, nil
+}
