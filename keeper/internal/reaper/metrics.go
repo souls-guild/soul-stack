@@ -22,12 +22,20 @@ import (
 // их место в `keeper/internal/reaper`, а не в `shared/obs`.
 //
 // Labels:
-//   - `rule` — canonical имя правила из docs/keeper/reaper.md
-//     (`purge_audit_old`, `expire_pending_seeds`, `purge_used_tokens`,
+//   - `rule` — canonical имя правила из docs/keeper/reaper.md. Closed enum,
+//     cardinality-safe: значения = ровно набор правил, диспетчеризуемых через
+//     runDurationRule / runStatusesRule / runArchiveStateHistory /
+//     runScryBackground в runner.go::dispatch (enum закрыт по runner-dispatch,
+//     не по этому перечню — docstring синхронизируется вручную). Полный набор:
+//     `purge_audit_old`, `expire_pending_seeds`, `purge_used_tokens`,
 //     `purge_souls`, `purge_old_seeds`, `mark_disconnected`,
-//     `purge_apply_runs`, `purge_voyages`, `purge_apply_task_register`,
-//     `reclaim_apply_runs`, `reap_orphan_vault_keys`, `archive_state_history`).
-//     Closed enum, cardinality-safe.
+//     `purge_apply_runs`, `purge_voyages`, `purge_push_runs`,
+//     `purge_incarnation_archive`, `purge_state_history_archive`,
+//     `purge_archived_state_history`, `purge_apply_task_register`,
+//     `reclaim_apply_runs`, `scry_background`, `archive_state_history`,
+//     `purge_orphan_push_runs`, `reap_orphan_vault_keys`, `purge_old_errands`,
+//     `purge_orphan_ephemeral_tidings`, `reclaim_voyages`,
+//     `reconcile_orphan_applying`.
 //
 // `LeaseHeld` — без label-ов: lease — exclusive resource cluster-wide,
 // каждый Keeper-инстанс публикует собственное значение (0/1). Scraper

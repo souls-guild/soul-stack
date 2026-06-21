@@ -546,3 +546,92 @@ func TestIntegration_MigrateApply_CtxCanceled(t *testing.T) {
 		t.Fatalf("повторный Apply после pre-cancel: %v (схема осталась в несогласованном состоянии)", err)
 	}
 }
+
+// TestIntegration_Migrate082_OverPopulated — guard на forward-миграцию 082
+// (ADR-027 amend (m), S0) поверх НЕПУСТОЙ incarnation: до 082 уже существует
+// строка в status='applying' (epoch-колонок ещё нет). После 082 epoch-колонки
+// аддитивны и NULL (без backfill) → эта legacy-строка структурно ИСКЛЮЧАЕТСЯ
+// кандидат-фильтром reconcile_orphan_applying (applying_by_kid IS NOT NULL),
+// поэтому Reaper её НЕ реклеймит (документированный known-gap legacy/pre-082).
+//
+// applyUpTo(81)→insert→applyUpTo(82) на одном источнике iofs: golang-migrate
+// Migrate(version) гонит миграции до точной версии, что даёт точку вставки
+// данных МЕЖДУ шагами (резюз харнесса DownThenUp).
+func TestIntegration_Migrate082_OverPopulated(t *testing.T) {
+	resetSchema(t)
+	ctx := context.Background()
+
+	src, err := iofs.New(migrations.FS, ".")
+	if err != nil {
+		t.Fatalf("iofs.New: %v", err)
+	}
+	migrateURL := strings.Replace(integrationDSN, "postgres://", "pgx5://", 1)
+	mm, err := migrate.NewWithSourceInstance("iofs", src, migrateURL)
+	if err != nil {
+		t.Fatalf("migrate.NewWithSourceInstance: %v", err)
+	}
+	defer mm.Close()
+
+	// Шаг 1: до 081 включительно — incarnation существует, applying-epoch колонок
+	// (082) ещё НЕТ.
+	if err := mm.Migrate(81); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("Migrate(81): %v", err)
+	}
+
+	// Шаг 2: вставляем applying-строку ДО 082 (epoch-колонки физически не
+	// существуют — INSERT их не упоминает). applying — валидный enum с 005.
+	const name = "legacy-applying-082"
+	if _, err := integrationPool.Exec(ctx, `
+INSERT INTO incarnation (name, service, service_version, state_schema_version, state, status)
+VALUES ($1, 'redis', 'v1', 1, '{"primary":"p"}'::jsonb, 'applying')`, name); err != nil {
+		t.Fatalf("insert legacy applying row (до 082): %v", err)
+	}
+
+	// Шаг 3: форвард 082 на НЕПУСТОЙ таблице.
+	if err := mm.Migrate(82); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("Migrate(82): %v", err)
+	}
+
+	// Ассерт A: новые колонки у legacy-строки = NULL (аддитивно, без backfill).
+	var epochAllNull bool
+	if err := integrationPool.QueryRow(ctx, `
+SELECT applying_apply_id IS NULL
+   AND applying_attempt  IS NULL
+   AND applying_by_kid   IS NULL
+   AND applying_since    IS NULL
+FROM incarnation WHERE name = $1`, name).Scan(&epochAllNull); err != nil {
+		t.Fatalf("read epoch-колонок после 082: %v", err)
+	}
+	if !epochAllNull {
+		t.Errorf("epoch-колонки legacy-строки не все NULL после 082 (ожидался отсутствующий backfill)")
+	}
+
+	// Ассерт B: кандидат-фильтр правила reconcile_orphan_applying ИСКЛЮЧАЕТ
+	// legacy-строку. Воспроизводим предикат orphanApplyingCandidatesSQL
+	// (status='applying' AND applying_since < cutoff AND applying_by_kid IS NOT
+	// NULL) — пакет reaper здесь не импортируем (это и есть смысл guard-а: NULL
+	// applying_by_kid структурно вырезает строку из кандидатов).
+	var candidateCount int
+	if err := integrationPool.QueryRow(ctx, `
+SELECT count(*)
+FROM incarnation
+WHERE status = 'applying'
+  AND applying_since < NOW()
+  AND applying_by_kid IS NOT NULL
+  AND name = $1`, name).Scan(&candidateCount); err != nil {
+		t.Fatalf("candidate-filter query: %v", err)
+	}
+	if candidateCount != 0 {
+		t.Errorf("legacy applying-строка попала в кандидаты reconcile (%d), want 0 (NULL applying_by_kid — known-gap, не реклеймится)", candidateCount)
+	}
+
+	// Sanity: строка действительно есть и осталась в applying (миграция не
+	// тронула данные, только схему) — иначе ассерт B был бы ложно-зелёным.
+	var status string
+	if err := integrationPool.QueryRow(ctx, `SELECT status FROM incarnation WHERE name = $1`, name).Scan(&status); err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if status != "applying" {
+		t.Errorf("status legacy-строки = %q, want applying (082 не должна менять данные)", status)
+	}
+}
