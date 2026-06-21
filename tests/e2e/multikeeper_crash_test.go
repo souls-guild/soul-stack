@@ -15,12 +15,12 @@
 //  4. SIGKILL ИМЕННО процесса <owner> (живой флот на soul-holder-е не задет).
 //  5. ASSERT recovery:
 //     (a) reclaim_voyages вернул Voyage в pending → re-claim другим живым KID
-//         (attempt вырос, claimed_by_kid != killed);
+//     (attempt вырос, claimed_by_kid != killed);
 //     (b) Voyage дошёл до терминала succeeded на живом keeper-е;
 //     (c) все voyage_targets succeeded — прогон РЕАЛЬНО доисполнился по каждой
-//         инкарнации (не «формально succeeded на пустом scope»);
+//     инкарнации (не «формально succeeded на пустом scope»);
 //     (d) incarnation.state каждой инкарнации консистентен (status=ready, не
-//         завис в applying).
+//     завис в applying).
 package e2e_test
 
 import (
