@@ -12,16 +12,26 @@ import (
 // при склейке в интерполяции ([templating.md §5]).
 var stringType ref.Type = types.StringType
 
-// CEL-функции в pilot — только стандартная библиотека google/cel-go,
-// подключаемая через cel.StdLib() в [New]. Из неё реально используются
-// выражениями Soul Stack ([templating.md §2.3]):
+// Базовые CEL-функции — из стандартной библиотеки google/cel-go, подключаемой
+// через cel.StdLib() в [New]. Из неё реально используются выражениями Soul Stack
+// ([templating.md §2.3]):
 //
 //   - size(x)            — размер строки/списка/map.
 //   - contains(s, sub)   — подстрока/членство (метод receiver-формы).
 //   - timestamp/duration — арифметика времени.
 //
-// Все они pure: без I/O, сети, sleep. Кастомных функций в pilot нет;
-// расширение списка — через ADR, не молча ([templating.md §2.3]).
+// Все они pure: без I/O, сети, sleep.
+//
+// Кастомные функции Soul Stack живут каждая в своём файле и регистрируются
+// дополнительными EnvOption-ами:
+//
+//   - glob(pattern)      — [glob.go], сопоставление по шаблону.
+//   - vault(path)        — [vault.go], keeper-side чтение Vault KV (macro,
+//                          регистрируется только при Engine с KVReader).
+//   - merge(m, m...)     — [merge.go], SHALLOW last-wins слияние map-ов
+//                          ([ADR-010 Amendment 2026-06-22]).
+//
+// Расширение списка кастомных функций — через ADR, не молча ([templating.md §2.3]).
 //
 // now() из стартового минимума [templating.md §2.3] cel-go как глобальной
 // функции не предоставляет (eval-time время дают через timestamp-литералы

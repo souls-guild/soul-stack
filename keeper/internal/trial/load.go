@@ -122,6 +122,17 @@ func (c *Case) validate() error {
 	if c.Name == "" {
 		return fmt.Errorf("name: обязателен")
 	}
+	// fixtures.soulprint (single-host сахар) и fixtures.hosts (multi-host roster)
+	// взаимоисключены — оба описывают факты хостов прогона; одновременная подача
+	// неоднозначна (один синтетический хост vs N) → strict-ошибка, как unknown-key.
+	if c.Fixtures.Soulprint != nil && len(c.Fixtures.Hosts) > 0 {
+		return fmt.Errorf("fixtures.soulprint и fixtures.hosts взаимоисключены: soulprint — single-host сахар, hosts — multi-host roster")
+	}
+	for i, h := range c.Fixtures.Hosts {
+		if h.SID == "" {
+			return fmt.Errorf("fixtures.hosts[%d]: sid обязателен", i)
+		}
+	}
 	if len(c.Assert.RenderedTasks) == 0 {
 		return fmt.Errorf("assert.rendered_tasks: пуст (пилот L0 сверяет только эту секцию)")
 	}

@@ -1,35 +1,50 @@
-# Baseline-essence сервиса redis (подложка автора). Оператор переопределяет в
-# spec инкарнации; на L0-прогоне ключевые значения дублируются в fixtures кейса.
+# Baseline-essence сервиса redis (подложка автора, концепция defaults роли).
+# Оператор переопределяет в spec инкарнации; на L0-прогоне ключевые значения
+# дублируются в fixtures кейса.
 #
-# Версии пиннятся на конкретные релизы. Для redis — версия пакета redis-server в
-# репозитории дистрибутива; для экспортеров — релизы стороннего ПО с GitHub
-# (ADR-007: версия артефакта Soul Stack — git-ref, но это сторонние релизы,
-# поэтому здесь — обычные значения, а не ref).
-#
-# redis_socket — единая точка интеграции: один и тот же путь идёт в redis-single
-# (unixsocket в redis.conf) и в redis-exporter (--redis.addr=unix://...).
+# Это СЛОЙ ТРАНСЛЯЦИИ простого ввода оператора (architect 2026-06-22): данные-
+# таблицы (persistence_presets, memory_reserve_percent) и merge-подложка
+# redis_config живут здесь, scenario сливает их с вводом через merge() (templating
+# §2.3). НИЧЕГО из этой трансляции не уходит в плагин — она нужна только render-у
+# redis.conf at-create (источник истины).
 
-node_exporter_version:  "1.8.2"
-redis_exporter_version: "1.62.0"
+# Режим развёртывания по умолчанию. В pilot — standalone (единственный
+# реализованный режим).
+redis_type: standalone
 
-redis_socket:    "/var/run/redis/redis-server.sock"
-redis_maxmemory: "256mb"
+# Доля бюджета памяти (input.memory_mb), отдаваемая Redis под maxmemory; остаток —
+# резерв под ОС/накладные. scenario вычисляет maxmemory = memory_mb*pct/100 (МБ).
+memory_reserve_percent: 75
 
-# Архитектура и каталог бинарей экспортеров (одинаковы для обоих).
-arch:    "amd64"
-bin_dir: "/usr/local/bin"
+# Данные-таблица persistence: enum оператора (off/aof/rdb/rdb_aof) → директивы
+# redis.conf. scenario берёт presets[input.persistence] и мержит в redis_config.
+# Значения — строки (range-ятся в redis.conf как `<key> <value>`):
+#   - save: "" отключает RDB-снапшоты; непустая — política save точек.
+#   - appendonly: yes/no включает AOF.
+# rdb_aof = и снапшоты, и AOF (двойная durability).
+persistence_presets:
+  off:
+    save:       ""
+    appendonly: "no"
+  aof:
+    save:       ""
+    appendonly: "yes"
+  rdb:
+    save:       "900 1 300 10 60 10000"
+    appendonly: "no"
+  rdb_aof:
+    save:       "900 1 300 10 60 10000"
+    appendonly: "yes"
 
-# Listen-адреса экспортеров. node_exporter — :9100 (стандартный порт).
-node_exporter_listen:  ":9100"
-redis_exporter_listen: ":9121"
-
-# Textfile-коллекторы железа node-exporter. На VM/в стеке redis железа нет —
-# единая политика []: ставится только ядро node_exporter без oneshot-сборщиков.
-# Тот же список читают create и update_node_exporter (re-apply иначе менял бы
-# набор коллекторов помимо версии).
-node_exporter_collectors: []
-
-# Точечные директивы redis.conf поверх дефолтов Redis (задел под update_config).
+# Merge-подложка redis.conf (defaults роли) — НИЖНИЙ слой merge(): persistence-
+# пресет, вычисленные maxmemory/policy и passthrough оператора наслаиваются
+# поверх. Этот merged итог рендерится в полный redis.conf (destiny `redis`).
 redis_config:
-  maxclients: 10000
-  timeout:    300
+  maxmemory:        "256mb"
+  maxmemory-policy: allkeys-lru
+  maxclients:       10000
+  timeout:          300
+
+# Unix-сокет Redis оставлен в подложке как passthrough-директива redis.conf:
+# попадает в merged-конфиг наравне с прочими (least-privilege локальный путь для
+# redis-cli/экспортера). Оператор отключает, переопределив в redis_settings.

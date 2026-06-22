@@ -234,11 +234,14 @@ func buildEngine(mode engineMode, vars []string, opts ...Option) (*Engine, error
 		envOpts = append(envOpts, vaultEnvOptions()...)
 	}
 	// glob() — pure-функция shell-glob matching ([ADR-040], target.where).
-	// В migration-CEL ([ADR-019]) НЕ регистрируется: миграция — sandbox с минимумом
-	// surface area (только `state` + stdlib-операции), расширение требует отдельного
-	// ADR. Flow-control ([ADR-012(d)]) glob() получает — pure, без внешнего контекста.
+	// merge() — pure SHALLOW last-wins слияние map-ов ([ADR-010 Amendment
+	// 2026-06-22], трансляция простого input → детальный конфиг). Обе pure (без
+	// внешнего контекста), регистрируются в Keeper-full и flow-control env, но
+	// НЕ в migration-CEL ([ADR-019]): миграция — sandbox с минимумом surface area
+	// (только `state` + stdlib-операции), расширение требует отдельного ADR.
 	if !mode.migration {
 		envOpts = append(envOpts, globEnvOptions()...)
+		envOpts = append(envOpts, mergeEnvOptions()...)
 	}
 
 	env, err := cel.NewEnv(envOpts...)

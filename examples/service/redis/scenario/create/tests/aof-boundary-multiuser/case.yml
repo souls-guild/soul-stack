@@ -1,0 +1,168 @@
+# L0-испытание create (standalone) — guard на пробелы покрытия QA 2026-06-22:
+#   - persistence: aof  → save="" + appendonly yes (пресет aof, не rdb);
+#   - memory_mb=64 (ГРАНИЦА min) → 64*75/100=48 → maxmemory "48mb" (НЕ "0mb":
+#     именно ради ненулевого результата стоит min:64, см. input.memory_mb);
+#   - maxmemory_policy НЕ задан → берётся из essence (allkeys-lru), has-guard не
+#     материализует пустой ключ;
+#   - ≥2 ACL-юзера с именами, НАРУШАЮЩИМИ порядок вставки (zeta/alpha/mike) →
+#     users рендерится MAP-ом (детерминизм порядка строк users.acl; прямой
+#     order-guard на отрендеренный файл — destiny_redis_tmpl_test.go).
+name: aof + memory boundary 64mb + essence policy fallback + multi-user map
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network:
+      primary_ip: 10.0.0.5
+    os:
+      arch: amd64
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    secret/redis/create/users/zeta:
+      password: zeta-secret-pass
+    secret/redis/create/users/alpha:
+      password: alpha-secret-pass
+    secret/redis/create/users/mike:
+      password: mike-secret-pass
+  essence:
+    redis_type: standalone
+    memory_reserve_percent: 75
+    persistence_presets:
+      off:
+        save: ""
+        appendonly: "no"
+      aof:
+        save: ""
+        appendonly: "yes"
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+      rdb_aof:
+        save: "900 1 300 10 60 10000"
+        appendonly: "yes"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+  input:
+    redis_type: standalone
+    memory_mb: 64
+    persistence: aof
+    # maxmemory_policy НЕ задан — должен прийти из essence (allkeys-lru).
+    users:
+      zeta:
+        perms: "~* +@all"
+        state: "on"
+      alpha:
+        perms: "~app:* +@read"
+        state: "on"
+      mike:
+        perms: "~m:* +@write"
+        state: "off"
+
+assert:
+  rendered_tasks:
+    - index: 0
+      module: core.pkg.installed
+      params:
+        name: redis-server
+        # version не задан → "" (latest из репо).
+        version: ""
+
+    # users.acl: MAP трёх юзеров. Порядок строк гарантирует range по map (шаблон);
+    # здесь ассертим лишь СОСТАВ map-а (значения order-independent).
+    - index: 2
+      module: core.file.rendered
+      params:
+        path: /etc/redis/users.acl
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            users:
+              zeta:
+                perms: "~* +@all"
+                state: "on"
+                password: zeta-secret-pass
+              alpha:
+                perms: "~app:* +@read"
+                state: "on"
+                password: alpha-secret-pass
+              mike:
+                perms: "~m:* +@write"
+                state: "off"
+                password: mike-secret-pass
+          self:
+            sid: trial-host
+            covens: [create]
+            choirs: []
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # redis.conf: ИТОГ merge() — главный guard этого кейса.
+    - index: 3
+      module: core.file.rendered
+      params:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            password: s3cr3t-redis-pass-create
+            config:
+              # ГРАНИЦА: 64*75/100=48 → "48mb" (НЕ "0mb"). Перекрыл essence "256mb".
+              maxmemory: "48mb"
+              # maxmemory_policy НЕ задан в input → из essence (has-guard: пустой
+              # ключ не материализован, дефолт не затёрт).
+              maxmemory-policy: allkeys-lru
+              maxclients: 10000
+              timeout: 300
+              # persistence-пресет aof: save пуст, appendonly yes.
+              save: ""
+              appendonly: "yes"
+          self:
+            sid: trial-host
+            covens: [create]
+            choirs: []
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+  state_changes:
+    redis_type: standalone
+    redis_version: ""
+    # DRIFT-GUARD: идентичен apply.input.config (index 3).
+    redis_config:
+      maxmemory: "48mb"
+      maxmemory-policy: allkeys-lru
+      maxclients: 10000
+      timeout: 300
+      save: ""
+      appendonly: "yes"
+    redis_users:
+      zeta:
+        perms: "~* +@all"
+        state: "on"
+      alpha:
+        perms: "~app:* +@read"
+        state: "on"
+      mike:
+        perms: "~m:* +@write"
+        state: "off"
+    redis_hosts: []

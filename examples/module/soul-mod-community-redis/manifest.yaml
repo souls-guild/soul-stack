@@ -1,0 +1,167 @@
+# Manifest плагина soul-mod-community-redis (ADR-020 plugin-инфраструктура).
+#
+# ОСНОВНОЙ интерфейс к живому Redis в redis-консолидации (концепция Ansible-роли):
+# scenario сервиса оркеструет порядок/таргетинг, плагин исполняет ОДНУ операцию
+# над одним Redis-инстансом. Сейчас реализованы states command + config +
+# cluster (action create); acl / replica / sentinel / failover — планируются
+# (следующие батчи), их в spec.states пока НЕТ (объявляем только реализованное).
+#
+# СОЗНАТЕЛЬНО БЕЗ dry-run preview: плагин НЕ реализует PlanReadSafe — на dry_run
+# host (Soul) применяет default-deny (задача получает честный «drift не
+# поддержан», а не ложное «нет дрифта»). Решение пользователя 2026-06-22.
+kind: soul_module
+protocol_version: 1                    # compat-флаг SoulModule API; версия артефакта — git ref (ADR-007)
+namespace: community
+name: redis
+
+# Closed enum (ADR-020(f) / docs/keeper/plugins.md → required_capabilities).
+# ТОЛЬКО network_outbound: плагин коннектится к Redis по TCP/unix-сокету. БЕЗ
+# vault_access — пароль приходит УЖЕ зарезолвленным от Keeper (render-фаза
+# vault() в scenario), свой Vault-доступ плагину не нужен (ADR-012, brief).
+required_capabilities:
+  - network_outbound
+
+# Strict-контракт touched-ресурсов (ADR-020(g)): ровно одна пара
+# <resource-type>: <value> на запись. Оба state работают над живым сервисом redis.
+side_effects:
+  - { service: redis-server }
+
+spec:
+  states:
+    # command — raw-команда к Redis. Imperative verb-state (прецедент
+    # core.cmd.shell / core.exec.run / core.http.probe): changed=false по
+    # умолчанию (как probe). Идемпотентность — на совести оператора; плагин лишь
+    # отправляет команду и возвращает её вывод.
+    command:
+      description: |
+        Выполнить raw-команду к Redis (imperative verb-state). По умолчанию
+        changed=false (как probe); оператор отвечает за идемпотентность.
+        Без dry-run preview (плагин не реализует PlanReadSafe).
+      input:
+        addr:
+          type: string
+          required: true
+          description: >-
+            Адрес Redis: host:port (TCP) либо unix-сокет с префиксом
+            "unix:" (напр. unix:/var/run/redis/redis-server.sock).
+        password:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            Пароль Redis (requirepass / ACL). vault-ref в operator-input;
+            keeper резолвит до Apply, плагин получает plaintext (ADR-012).
+            Маскируется в логах/трейсах/UI (secret).
+        username:
+          type: string
+          required: false
+          description: ACL-username для AUTH (если не default-user).
+        db:
+          type: int
+          required: false
+          default: 0
+          description: Номер БД (SELECT) перед командой.
+        args:
+          type: list
+          required: true
+          description: >-
+            Команда массивом аргументов (без shell), напр.
+            ["CONFIG", "SET", "maxmemory", "256mb"]. Первый элемент — verb.
+        changed:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            Пометить результат как changed=true (для команд, реально мутирующих
+            состояние). По умолчанию false (probe-семантика).
+    # config — применить map конфиг-директив через CONFIG SET (+ опц. CONFIG
+    # REWRITE для персиста в redis.conf). Idempotent на стороне Redis: CONFIG SET
+    # повторно с тем же значением — no-op для самого Redis. changed=true, когда
+    # хоть одна директива применена.
+    config:
+      description: |
+        Применить map директив redis.conf через CONFIG SET к живому Redis.
+        Опционально CONFIG REWRITE (persist). Без dry-run preview.
+      input:
+        addr:
+          type: string
+          required: true
+          description: >-
+            Адрес Redis: host:port (TCP) либо unix-сокет с префиксом "unix:".
+        password:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            Пароль Redis (vault-ref в operator-input; keeper резолвит до Apply).
+            Маскируется в логах/трейсах/UI (secret).
+        username:
+          type: string
+          required: false
+          description: ACL-username для AUTH (если не default-user).
+        config:
+          type: map
+          required: true
+          description: >-
+            Директивы redis.conf: { maxmemory: "256mb", maxmemory-policy:
+            allkeys-lru, ... }. Каждая применяется через CONFIG SET <key> <value>.
+        rewrite:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            После CONFIG SET выполнить CONFIG REWRITE (персист в redis.conf).
+            По умолчанию false (изменение только в рантайме).
+    # cluster — собрать hash-slot-кластер Redis (16384 слота) ЦЕЛИКОМ через
+    # go-redis: CLUSTER MEET / ADDSLOTS / REPLICATE + CLUSTER INFO/NODES
+    # (диагностика и идемпотентность). НИКАКОГО redis-cli/shell — capability
+    # остаётся только network_outbound. Раскладка ролей master/replica и слотов
+    # СТРОГО детерминирована (сортировка ключей nodes). Идемпотентен: повторный
+    # create на сформированном кластере → changed=false, no-op.
+    #
+    # action: пока ТОЛЬКО "create". add-node / remove-node / reshard —
+    # ПЛАНИРУЮТСЯ (зеркало redis-cli), в action-enum пока не входят.
+    cluster:
+      description: |
+        Собрать Redis-кластер (action create) из набора nodes через go-redis:
+        MEET (gossip) → ADDSLOTS мастерам → REPLICATE репликам. Раскладка ролей
+        и 16384 слотов детерминирована. Идемпотентен (already-formed → no-op).
+        Без dry-run preview (плагин не реализует PlanReadSafe).
+        add-node/remove-node/reshard — планируются.
+      input:
+        action:
+          type: string
+          required: true
+          description: >-
+            Операция над кластером. Сейчас поддержано только "create" (сборка
+            кластера). add-node / remove-node / reshard — планируются.
+        nodes:
+          type: map
+          required: true
+          description: >-
+            Узлы кластера: map стабильный-ключ (SID/имя) -> { addr: "host:port" }
+            либо { ip: "10.0.0.1", port: 6379 }. Ключи СОРТИРУЮТСЯ —
+            детерминируют раскладку master/replica. addr используется для
+            коннекта, ip+port — для CLUSTER MEET (gossip оперирует ip:port).
+        replicas_per_shard:
+          type: int
+          required: false
+          default: 0
+          description: >-
+            Реплик на один шард. shards = len(nodes) / (1 + replicas_per_shard);
+            len(nodes) обязан делиться на размер шарда. Первые shards нод (по
+            сортировке ключей) — мастера, остальные — реплики round-robin.
+        password:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            Пароль Redis (vault-ref в operator-input; keeper резолвит до Apply).
+            Применяется при коннекте к КАЖДОЙ ноде. Маскируется в логах/трейсах/UI.
+        username:
+          type: string
+          required: false
+          description: ACL-username для AUTH (если не default-user).

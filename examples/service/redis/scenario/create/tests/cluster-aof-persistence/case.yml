@@ -1,0 +1,122 @@
+# L0-испытание create в режиме cluster С PERSISTENCE=aof (пробел покрытия qa
+# 2026-06-22). Cluster на проде обычно appendonly (AOF — точная durability при
+# отказе ноды). Доказываем, что итоговый config КАЖДОГО хоста несёт И
+# cluster-директивы (cluster-enabled/cluster-config-file/cluster-node-timeout), И
+# правильные save/appendonly из aof-пресета (appendonly yes, save "") — два слоя
+# merge() сосуществуют, cluster-блок не затирает persistence-пресет.
+#
+# Топология: shards=3, replicas_per_shard=0 → 3 хоста (size-guard PASS). persistence
+# aof: пресет даёт appendonly "yes" + save "". cluster-блок (последним в merge)
+# добавляет cluster-* поверх — он НЕ трогает appendonly/save (разные ключи).
+name: cluster create with aof persistence keeps cluster + appendonly directives
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-b.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-c.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+    - sid: node-a.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+  essence:
+    redis_type: cluster
+    memory_reserve_percent: 75
+    persistence_presets:
+      off:
+        save: ""
+        appendonly: "no"
+      aof:
+        save: ""
+        appendonly: "yes"
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+      rdb_aof:
+        save: "900 1 300 10 60 10000"
+        appendonly: "yes"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+  input:
+    redis_type: cluster
+    shards: 3
+    replicas_per_shard: 0
+    persistence: aof
+    cluster_node_timeout: 5000
+
+assert:
+  rendered_tasks:
+    # size-guard PASS: 3 == 3*(1+0).
+    - index: 2
+      module: core.cmd.shell
+      params:
+        cmd: 'test "true" = "true" || { echo "topology mismatch: hosts != shards*(1+replicas_per_shard)"; exit 1; }'
+
+    # redis.conf: aof-пресет (appendonly yes / save "") СОСУЩЕСТВУЕТ с
+    # cluster-директивами. announce-ip в config НЕТ — per-host из .tmpl.
+    - index: 6
+      module: core.file.rendered
+      params:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            password: s3cr3t-redis-pass-create
+            config:
+              maxmemory:        "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients:       10000
+              timeout:          300
+              # aof-пресет: AOF включён, RDB-снапшоты выключены.
+              save:             ""
+              appendonly:       "yes"
+              # cluster-директивы поверх — appendonly/save не затронуты.
+              cluster-enabled:      "yes"
+              cluster-config-file:  "nodes.conf"
+              cluster-node-timeout: "5000"
+          self:
+            sid: node-a.example.com
+            covens: [create, redis]
+            choirs: []
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+  state_changes:
+    redis_type: cluster
+    redis_version: ""
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+      save:             ""
+      appendonly:       "yes"
+      cluster-enabled:      "yes"
+      cluster-config-file:  "nodes.conf"
+      cluster-node-timeout: "5000"
+    redis_users: {}
+    redis_hosts: []

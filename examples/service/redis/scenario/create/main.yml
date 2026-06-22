@@ -1,164 +1,214 @@
 name: create
 description: >-
-  Разворачивает стек «Redis + мониторинг» КОМПОЗИЦИЕЙ трёх standalone-destiny
-  через apply:destiny (изолированный render каждой, ADR-009). Порядок строгий:
+  Развернуть Redis (концепция Ansible-роли, redis-консолидация). Оператор задаёт
+  ПРОСТЫЕ типизированные понятия (режим, сколько памяти, какая persistence, какая
+  eviction-политика, какие ACL-юзеры, топология шардов), а сценарий ТРАНСЛИРУЕТ их
+  в детальный redis.conf. Граница (architect 2026-06-22):
 
-    1. redis-single   — ставит redis-server и рендерит redis.conf с unix-сокетом;
-                        пакет создаёт системную группу redis и unix-сокет (770).
-    2. redis-exporter — выделенный пользователь redis-exporter входит в группу
-                        redis ради group-доступа к сокету; ходит в Redis через
-                        --redis.addr=unix://<socket>. ТРЕБУЕТ, чтобы группа/сокет
-                        уже существовали → строго ПОСЛЕ redis-single.
-    3. node-exporter  — метрики хоста, от Redis не зависит, но идёт последним для
-                        детерминированного порядка.
+    - простой слой = строго типизированный структурный `input:` ниже (Named Dict,
+      каждый параметр чёткого типа), НЕ свободный текст;
+    - слой трансляции = тело сценария: данные-таблицы (persistence_presets,
+      memory_reserve_percent) живут в essence; вычисление maxmemory — inline-CEL;
+      слияние слоёв — CEL-функция merge() (SHALLOW last-wins, templating.md §2.3);
+    - итоговый redis_config рендерится в ПОЛНЫЙ redis.conf at-CREATE (источник
+      истины) — здесь merge нужен. CONFIG SET живого инстанса — это day-2
+      update_config (отдельный сценарий), в create плагин config НЕ вызываем.
 
-  Сервис ничего не рендерит сам — только оркеструет порядок apply:destiny и
-  прокидывает каждой destiny её input (версии/сокет/пароль из essence + scenario
-  input). Внутри каждой destiny виден ТОЛЬКО переданный ей apply.input
-  (изоляция, ADR-009): scenario-scope в destiny-env не попадает.
+  ДИСПЕТЧЕР ПО redis_type (2026-06-22): этот файл — диспетчер. Тело прогона вынесено
+  в ветки create/standalone.yml и create/cluster.yml, подключаемые через include:
+  ниже. include: раскрывается БЕЗУСЛОВНО в плоский список ДО render (when: на самой
+  include-задаче запрещён), поэтому ветвление делает не include, а `when:` на каждой
+  задаче ветки: предикат по input.redis_type статичен (isStaticWhen — только
+  input.*), Keeper вычисляет его at-render и гасит неактивную ветку placeholder-skip-
+  ом (ADR-012(d) Вариант b). Оператор всегда зовёт create; режим выбирает redis_type.
+  Порядок include — standalone, потом cluster: standalone-задачи остаются на тех же
+  индексах плана, что и до рефактора (cluster-placeholder-ы добавляются в хвост).
 
-  Пароль Redis НЕ во входном контракте: он лежит в Vault KV по пути, выведенному
-  из incarnation (secret/redis/<incarnation.name>#password), и резолвится
-  KEEPER-SIDE через CEL-функцию vault() в render-фазе (templating.md §2.3/§4) —
-  именно так пароль доезжает на хост уже значением, а не ссылкой (Soul
-  vault-клиент не тянет, ADR-012). Путь строится из доверенного контекста
-  (incarnation), не из operator-input — инъекция в Vault-запрос исключена.
+  Пароли НЕ во входном контракте: лежат в Vault, резолвятся KEEPER-SIDE через CEL
+  vault() в render-фазе (templating.md §2.3/§4) — на хост доезжает уже ЗНАЧЕНИЕ
+  (ADR-012). Путь строится из доверенного контекста (incarnation), не из input.
 
-  Демонстрирует scenario-include (orchestration.md §6): тройка apply:destiny
-  вынесена в соседний install.yml и подключена через include: — раскрывается в
-  плоский список ДО render (двухуровневый резолв scenario-локально → service-level).
-
-# ── Входной контракт (docs/input.md) ──────────────────────────────────────────
-# Версии/пути/listen — с дефолтами (или из essence), точечно переопределяются
-# оператором. Пароль Redis НЕ во input — он берётся из Vault через vault() (см.
-# выше и шаги apply:input в install.yml).
+# ── Входной контракт оператора (docs/input.md) ────────────────────────────────
+# Простые типизированные понятия. Трансляция в redis.conf — в ветках диспетчера.
+# Топология-поля sentinel заведены для стабильности контракта, но в текущем срезе
+# НЕ реализованы (см. пометки «sentinel»). cluster — реализован (ветка cluster.yml).
 input:
-  # Версия НЕОБЯЗАТЕЛЬНА (как в Ansible/Salt): не задана → core.pkg ставит версию
-  # по умолчанию из репозитория (без =version-пина). Pattern допускает
-  # distro-native строку — опциональный epoch `N:` + upstream-версия + опциональная
-  # ревизия (напр. Debian `5:7.0.15-1~deb12u7`); жёсткий semver `7.2.4` версию-пин
-  # ломал на реальном дистрибутиве (apt-get install redis-server=7.2.4 → exit 100).
-  redis_version:
+  redis_type:
+    type: string
+    required: false
+    default: standalone
+    enum: [standalone, sentinel, cluster, sentinel_only]
+    description: >-
+      Режим развёртывания (концепция роли). Реализованы standalone и cluster;
+      sentinel/sentinel_only — следующие батчи (топология + плагинные states),
+      здесь не обрабатываются. redis_type выбирает ветку диспетчера (include:
+      standalone.yml / cluster.yml + when: по redis_type на каждой задаче).
+
+  version:
     type: string
     required: false
     pattern: "^([0-9]+:)?[0-9][A-Za-z0-9.~+-]*$"
     description: >-
       Версия пакета redis-server в репозитории дистрибутива (distro-native, напр.
-      5:7.0.15-1~deb12u7). Необязательна: если не задана — ставится версия по
-      умолчанию из репозитория (поведение latest, core.pkg без =version-пина).
+      5:7.0.15-1~deb12u7). Необязательна: не задана → версия по умолчанию из репо
+      (core.pkg без =version-пина, поведение latest).
 
-  redis_socket:
-    type: string
-    default: /var/run/redis/redis-server.sock
-    pattern: "^/[A-Za-z0-9._/-]+$"
+  memory_mb:
+    type: integer
+    required: false
+    min: 64
     description: >-
-      Путь unix-сокета Redis. Единая точка интеграции: уходит и в redis-single
-      (unixsocket в redis.conf, unixsocketperm 770), и в redis-exporter
-      (--redis.addr=unix://...).
+      Бюджет памяти под Redis на хосте, МБ. maxmemory вычисляется как доля от него
+      (essence.memory_reserve_percent — резерв под ОС) с ЦЕЛОЧИСЛЕННЫМ усечением:
+      maxmemory = int(memory_mb)*int(reserve)/100 + "mb". Нижний пол min:64 не
+      случаен: при слишком малом memory_mb усечение даёт "0mb", а в Redis
+      maxmemory 0 = БЕЗ лимита (обратное намерению ограничить память). 64 МБ при
+      reserve=75 → 48mb — безопасно ненулевой результат. Не задан → директива
+      maxmemory берётся из merge-подложки essence.redis_config.
 
-  redis_maxmemory:
+  persistence:
     type: string
-    default: 256mb
-    pattern: "^[0-9]+(b|kb|mb|gb)$"
-    description: Лимит памяти Redis (формат Redis — 256mb, 4gb, …).
-
-  node_exporter_version:
-    type: string
-    default: "1.8.2"
-    pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-    description: Версия node_exporter (GitHub Releases prometheus/node_exporter).
-
-  # checksum tarball-а node_exporter. core.url.fetched (внутри destiny node-exporter)
-  # верифицирует ДО публикации файла (supply-chain). ОБЯЗАТЕЛЬНЫЙ, без дефолта:
-  # fail-closed — нет хэша → честный отказ, а не fetch с placeholder-ом, который
-  # верификация всё равно отвергнет. Значение — из GitHub-релиза (файл sha256sums)
-  # под пару (version, arch).
-  node_exporter_sha256:
-    type: string
-    required: true
-    pattern: "^sha256:[0-9a-f]{64}$"
+    required: false
+    default: rdb
+    enum: [off, aof, rdb, rdb_aof]
     description: >-
-      SHA-256 tarball-а node_exporter ("sha256:<hex>"), берётся из sha256sums
-      GitHub-релиза prometheus/node_exporter под пару (version, arch).
+      Режим persistence. Транслируется в save/appendonly через
+      essence.persistence_presets[persistence] (данные-таблица).
 
-  redis_exporter_version:
+  maxmemory_policy:
     type: string
-    default: "1.62.0"
-    pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-    description: Версия redis_exporter (GitHub Releases oliver006/redis_exporter).
-
-  # checksum tarball-а redis_exporter. См. примечание выше: ОБЯЗАТЕЛЬНЫЙ, без
-  # дефолта (fail-closed). Значение — из GitHub-релиза (файл sha256sums) под пару
-  # (version, arch).
-  redis_exporter_sha256:
-    type: string
-    required: true
-    pattern: "^sha256:[0-9a-f]{64}$"
+    required: false
+    enum:
+      - noeviction
+      - allkeys-lru
+      - allkeys-lfu
+      - allkeys-random
+      - volatile-lru
+      - volatile-lfu
+      - volatile-random
+      - volatile-ttl
     description: >-
-      SHA-256 tarball-а redis_exporter ("sha256:<hex>"), берётся из sha256sums
-      GitHub-релиза oliver006/redis_exporter под пару (version, arch).
+      Политика вытеснения при достижении maxmemory. Не задана → берётся из
+      merge-подложки essence.redis_config.
 
-  arch:
-    type: string
-    default: amd64
-    enum: [amd64, arm64]
-    description: Архитектура GitHub-релизных tarball-ов экспортеров (amd64|arm64).
-
-  bin_dir:
-    type: string
-    default: /usr/local/bin
-    pattern: "^/[A-Za-z0-9._/-]+$"
-    description: Каталог, куда раскладываются бинарники экспортеров.
-
-  node_exporter_listen:
-    type: string
-    default: ":9100"
-    pattern: "^[A-Za-z0-9._-]*:[0-9]{1,5}$"
+  # ── Топология cluster (режим redis_type=cluster) ─────────────────────────────
+  # Counts задают РАСКЛАДКУ ролей по таргетированным souls (pull-native, Вариант A):
+  # оператор объявляет shards и replicas_per_shard, а сценарий проверяет, что число
+  # хостов roster-а ровно shards*(1+replicas_per_shard) (size-guard cluster.yml), и
+  # строит nodes-MAP для плагина. cloud-создание машин — post-бета.
+  shards:
+    type: integer
+    required: false
+    min: 1
     description: >-
-      Listen-адрес node_exporter (--web.listen-address). По умолчанию :9100
-      (стандартный порт node_exporter).
+      Число master-шардов Redis Cluster (режим cluster). 16384 hash-слота делятся
+      поровну между shards мастерами (раскладку делает плагин community.redis.cluster
+      детерминированно). Размер roster-а прогона обязан быть shards*(1+
+      replicas_per_shard) — иначе size-guard рвёт прогон fail-fast.
 
-  # Textfile-коллекторы железа node-exporter. Дефолт [] (из essence): на VM/в
-  # стеке redis железа нет, ставится только ядро node_exporter. Тот же список
-  # читает update_node_exporter — единая политика collectors (re-apply иначе
-  # менял бы набор коллекторов помимо версии).
-  node_exporter_collectors:
-    type: array
-    default: []
-    items:
-      type: string
-      enum: [smartmon, nvme, ipmi]
+  replicas_per_shard:
+    type: integer
+    required: false
+    min: 0
     description: >-
-      Список textfile-коллекторов node-exporter (smartmon|nvme|ipmi). [] = только
-      ядро node_exporter без oneshot-сборщиков железа.
+      Реплик на один master-шард (режим cluster). 0 — кластер без реплик (только
+      мастера). Состав roster-а: shards мастеров + shards*replicas_per_shard реплик.
 
-  redis_exporter_listen:
-    type: string
-    default: ":9121"
-    pattern: "^[A-Za-z0-9._-]*:[0-9]{1,5}$"
-    description: Listen-адрес redis_exporter (--web.listen-address).
+  cluster_node_timeout:
+    type: integer
+    required: false
+    default: 5000
+    min: 1
+    description: >-
+      Таймаут gossip между нодами кластера, мс (директива cluster-node-timeout
+      redis.conf, режим cluster). Не задан → 5000.
+
+  users:
+    type: object
+    required: false
+    description: >-
+      ACL-пользователи Redis: ключ — имя, значение — {perms, state}. perms —
+      ПОЛНАЯ ACL-строка (не алиас): директивы Redis ACL как есть, напр.
+      "~* +@all" или "~app:* +@read +@write -@dangerous". Рендерятся в users.acl
+      (destiny `redis`); пароль каждого юзера резолвится keeper-side из Vault по
+      конвенции secret/redis/<incarnation>/users/<name>#password.
+    properties: {}
+    additional_properties:
+      type: object
+      required: [perms, state]
+      additional_properties: false
+      properties:
+        perms:
+          type: string
+        state:
+          type: string
+          enum: [on, off]
+
+  redis_settings:
+    type: object
+    required: false
+    description: >-
+      Passthrough-директивы redis.conf от оператора (key→value). Перекрывают
+      дефолты/пресет в итоговом merge (last-wins). Используй для директив, не
+      покрытых простыми полями выше.
+    properties: {}
+    additional_properties: true
 
 # ── Мутация incarnation.state ─────────────────────────────────────────────────
-# После успешного apply Keeper фиксирует, что развёрнуто (ADR-009 §7.1).
-# set-цепочка: что записать и откуда (ADR-057 list-форма). На create список
-# ACL-пользователей ещё пуст ([]); он наполняется сценарием add_acl_user.
+# После успешного apply Keeper фиксирует развёрнутое (ADR-009 §7.1, ADR-057
+# list-форма). redis_config — ИТОГ трансляции (тот же merge(), что ушёл в render
+# redis.conf): повторный apply и day-2-сценарии видят один источник истины.
+# Выражение merge() повторяет apply.input.config веток — общего scenario-var для
+# него нет (scenario-`vars:` только task-level и не виден ни apply.input, ни
+# state_changes; см. resolveApplyInput/stateChangesVars), inline-повтор намеренный.
+#
+# redis_config ветвится по redis_type: standalone — базовый merge (бит-в-бит как
+# до рефактора); cluster — тот же merge + cluster-директивы поверх (тот же набор,
+# что ушёл в apply.input.config ветки cluster.yml — DRIFT-GUARD синхронности). В
+# state cluster-announce-ip НЕ материализуется (host-вариативен; state — per-run,
+# не per-host), остальные cluster-директивы статичны и пишутся.
 state_changes:
+  - set: redis_type
+    value: "${ has(input.redis_type) ? input.redis_type : 'standalone' }"
   - set: redis_version
-    value: "${ has(input.redis_version) ? input.redis_version : '' }"
-  - set: node_exporter_version
-    value: "${ input.node_exporter_version }"
-  - set: redis_exporter_version
-    value: "${ input.redis_exporter_version }"
-  - set: redis_socket
-    value: "${ input.redis_socket }"
-  - set: redis_maxmemory
-    value: "${ input.redis_maxmemory }"
+    value: "${ has(input.version) ? input.version : '' }"
   - set: redis_config
-    value: "${ essence.redis_config }"
+    value: >-
+      ${ (has(input.redis_type) && input.redis_type == 'cluster')
+           ? merge(
+               essence.redis_config,
+               essence.persistence_presets[has(input.persistence) ? input.persistence : 'rdb'],
+               merge(
+                 has(input.memory_mb)
+                   ? { 'maxmemory': string(int(input.memory_mb) * int(essence.memory_reserve_percent) / 100) + 'mb' }
+                   : {},
+                 has(input.maxmemory_policy) ? { 'maxmemory-policy': input.maxmemory_policy } : {}
+               ),
+               has(input.redis_settings) ? input.redis_settings : {},
+               {
+                 'cluster-enabled':      'yes',
+                 'cluster-config-file':  'nodes.conf',
+                 'cluster-node-timeout': string(has(input.cluster_node_timeout) ? int(input.cluster_node_timeout) : 5000)
+               }
+             )
+           : merge(
+               essence.redis_config,
+               essence.persistence_presets[has(input.persistence) ? input.persistence : 'rdb'],
+               merge(
+                 has(input.memory_mb)
+                   ? { 'maxmemory': string(int(input.memory_mb) * int(essence.memory_reserve_percent) / 100) + 'mb' }
+                   : {},
+                 has(input.maxmemory_policy) ? { 'maxmemory-policy': input.maxmemory_policy } : {}
+               ),
+               has(input.redis_settings) ? input.redis_settings : {}
+             ) }
   - set: redis_users
+    value: "${ has(input.users) ? input.users : {} }"
+  - set: redis_hosts
     value: "${ [] }"
 
+# Тело прогона — ветки диспетчера, по одной на режим. Раскрываются inline ДО render
+# (orchestration.md §6); ветвление по redis_type — через `when:` на их задачах.
 tasks:
-  # scenario-include: соседний install.yml (тройка apply:destiny в строгом
-  # порядке) раскрывается inline ДО render.
-  - include: install.yml
+  - include: standalone.yml
+  - include: cluster.yml

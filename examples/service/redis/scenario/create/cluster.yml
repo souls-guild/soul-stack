@@ -1,0 +1,114 @@
+# Ветка диспетчера create — режим cluster (honest hash-slot Redis Cluster, 16384
+# слота; перенос инварианта из прежнего redis-cluster-live). Подключается из
+# main.yml через include: и раскрывается в плоский список ДО render. Каждая задача
+# несёт `when: input.redis_type == 'cluster'` — статический предикат (только
+# input.*), Keeper гасит его placeholder-skip-ом на standalone-прогоне (isStaticWhen)
+# и рендерит на cluster-прогоне. См. standalone.yml — тот же механизм диспетчера.
+#
+# Раскладку ролей master/replica и слотов делает ПЛАГИН (community.redis.cluster
+# action create) детерминированно по сортировке ключей nodes. Scenario лишь строит
+# топологию-MAP (SID→addr) и зовёт плагин run_once на bootstrap-ноде; саму
+# трансляцию (деление 16384 на shards) НЕ повторяет — иначе две раскладки
+# (scenario + плагин) рассинхронятся.
+
+# 1. SIZE-GUARD — ПЕРВОЙ run_once-задачей, fail-fast ДО любого install.
+#    Топология обязана точно совпасть: число таргетированных хостов roster-а ==
+#    shards*(1+replicas_per_shard). Соответствие вычисляется KEEPER-SIDE при RENDER
+#    (там доступен soulprint.hosts — roster прогона; на Soul-е во flow_context его
+#    НЕТ, поэтому Soul-side failed_when тут fail-closed и неприменим). Отрендеренное
+#    булево встраивается в guard-команду: совпало → "true" → test проходит, no-op;
+#    не совпало → "false" → echo + exit 1 рвёт прогон с понятным сообщением.
+#    changed_when:false — это проверка, а не изменение. run_once — guard единый на
+#    прогон, не per-host.
+- name: Guard cluster topology size matches shards and replicas
+  when: "input.redis_type == 'cluster'"
+  run_once: true
+  module: core.cmd.shell
+  changed_when: "false"
+  params:
+    cmd: >-
+      test "${ int(size(soulprint.hosts)) == int(input.shards) * (1 + int(input.replicas_per_shard)) }" = "true" || { echo "topology mismatch: hosts != shards*(1+replicas_per_shard)"; exit 1; }
+
+# 2. Per-host install + render redis.conf (с cluster-директивами) + render
+#    users.acl + systemd. Та же destiny `redis` (режим-агностична), что и
+#    standalone, но merged config ДОПОЛНЕН cluster-директивами поверх базового
+#    merge. Они — обычные ключи config-map-а (destiny range-ит их в redis.conf):
+#      - cluster-enabled yes        — включить cluster-режим инстанса;
+#      - cluster-config-file        — где Redis ведёт топологию (nodes.conf);
+#      - cluster-node-timeout       — таймаут gossip (мс), input или дефолт 5000.
+#    Все три HOST-ИНВАРИАНТНЫ → их корректно гнать через apply.input.config (он
+#    резолвится ОДИН раз на первом по SID хосте, resolveApplyInput targeted[0]).
+#
+#    cluster-announce-ip ЗДЕСЬ НЕТ намеренно: это per-host директива (IP ЭТОЙ
+#    ноды), её рендерит destiny `redis` в redis.conf.tmpl из
+#    `{{ .self.network.primary_ip }}` (render_context.self ПЕР-ХОСТ, симметрично
+#    bind), под гейтом cluster-enabled. Проброс announce-ip через config-map
+#    зафиксировал бы IP первой ноды для ВСЕХ → все анонсируют один адрес →
+#    cluster-bus за NAT/в облаке сломан (TILING-урок qa 2026-06-22).
+#    int() на uint64-операндах cluster_node_timeout — унификация числового типа
+#    (YAML→uint64 в L0, JSON→double в проде), иначе CEL «no such overload».
+- name: Apply redis destiny (cluster install + render redis.conf/users.acl + systemd)
+  when: "input.redis_type == 'cluster'"
+  apply:
+    destiny: redis
+    input:
+      version:  "${ has(input.version) ? input.version : '' }"
+      password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+      config: >-
+        ${ merge(
+             essence.redis_config,
+             essence.persistence_presets[has(input.persistence) ? input.persistence : 'rdb'],
+             merge(
+               has(input.memory_mb)
+                 ? { 'maxmemory': string(int(input.memory_mb) * int(essence.memory_reserve_percent) / 100) + 'mb' }
+                 : {},
+               has(input.maxmemory_policy) ? { 'maxmemory-policy': input.maxmemory_policy } : {}
+             ),
+             has(input.redis_settings) ? input.redis_settings : {},
+             {
+               'cluster-enabled':      'yes',
+               'cluster-config-file':  'nodes.conf',
+               'cluster-node-timeout': string(has(input.cluster_node_timeout) ? int(input.cluster_node_timeout) : 5000)
+             }
+           ) }
+      users: >-
+        ${ has(input.users)
+           ? merge(input.users.map(name, {
+               name: {
+                 'perms':    input.users[name].perms,
+                 'state':    input.users[name].state,
+                 'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+               }
+             }))
+           : {} }
+
+# 3. Health-gate per-host: PING живого Redis после старта (каждая нода обязана
+#    ответить ДО сборки кластера). community.redis.command, retry/until через retry.
+#    addr — localhost (плагин на redis-хосте), пароль — keeper-side vault()-резолв.
+- name: Wait for each cluster node to answer PING
+  when: "input.redis_type == 'cluster'"
+  module: community.redis.command
+  retry: { count: 10, delay: 3s }
+  params:
+    addr:     "127.0.0.1:6379"
+    password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    args:     ["PING"]
+
+# 4. CLUSTER-BUILD — run_once на bootstrap-ноде. Строим nodes-MAP детерминированно
+#    из roster-а прогона (soulprint.hosts): ключ = SID (стабилен и сортируем →
+#    плагин раскладывает master/replica по сортировке ключей детерминированно),
+#    значение = {addr: "<primary_ip>:6379"}. Форма merge(list(map)): .map(...) даёт
+#    СПИСОК одноключевых map-ов SID→{addr}, merge сворачивает в один map (templating
+#    §2.3). Плагин community.redis.cluster (action create) сам шлёт CLUSTER MEET/
+#    ADDSLOTS/REPLICATE по go-redis и делит 16384 слота — scenario топологию НЕ
+#    транслирует, передаёт готовую. Пароль — keeper-side vault()-резолв (плагин
+#    коннектится к каждой ноде; password маскируется, в логи не течёт).
+- name: Build the redis cluster (CLUSTER MEET/ADDSLOTS/REPLICATE)
+  when: "input.redis_type == 'cluster'"
+  run_once: true
+  module: community.redis.cluster
+  params:
+    action:             create
+    nodes:              "${ merge(soulprint.hosts.map(h, { h.sid: { 'addr': h.network.primary_ip + ':6379' } })) }"
+    replicas_per_shard: "${ int(input.replicas_per_shard) }"
+    password:           "${ vault('secret/redis/' + incarnation.name + '#password') }"

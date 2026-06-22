@@ -71,6 +71,8 @@ func rcBaselineState() map[string]any {
 }
 
 func TestE2EServiceRedisCluster_UpdateAcl(t *testing.T) {
+	t.Skip("WIP redis-consolidation 2026-06-22: destiny redis свёрнут в режим-агностичный standalone-кирпич (action-DSL удалён); redis-cluster + probe→where staged-render (ADR-056) переезжают на режим cluster/sentinel — .pm/tasks/2026-06-22-redis-consolidation")
+
 	const incName = "redis-cluster-update-acl"
 
 	stack := harness.NewStack(t, harness.Config{

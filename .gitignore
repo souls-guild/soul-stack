@@ -46,7 +46,11 @@ __pycache__/
 *.swo
 .DS_Store
 
-# compiled example plugin binaries (ADR-011: examples = non-Go only)
-examples/module/**/soul-cloud-*
-examples/module/**/soul-ssh-*
-examples/module/**/soul-mod-*
+# compiled example plugin binaries (ADR-011: examples = non-Go only).
+# Конвенция: бинарь лежит как examples/module/<plugin>/<plugin> (имя == каталог).
+# Паттерн `*/soul-…-*` требует ровно один уровень каталога ПЕРЕД именем бинаря →
+# матчит сам бинарь внутри каталога плагина, но НЕ каталог плагина целиком
+# (иначе `**` скрыл бы ИСХОДНИКИ плагина — main.go/impl.go/manifest.yaml).
+examples/module/*/soul-cloud-*
+examples/module/*/soul-ssh-*
+examples/module/*/soul-mod-*

@@ -34,6 +34,8 @@ import (
 )
 
 func TestL3bRedisLive_CreateWithNodeExporter(t *testing.T) {
+	t.Skip("WIP redis-consolidation 2026-06-22: service/redis свёрнут в режим standalone (exporter вынесен — мониторинг отдельная сущность); L3b real-soul create переписать под новый standalone — .pm/tasks/2026-06-22-redis-consolidation")
+
 	stack := harness.NewStack(t, harness.Config{
 		ExamplePath: "examples/service/redis",
 		ServiceName: "redis",

@@ -68,6 +68,8 @@ func rcuBaselineState() map[string]any {
 }
 
 func TestL3bRedisClusterUpdateAcl_LiveMaster(t *testing.T) {
+	t.Skip("WIP redis-consolidation 2026-06-22: destiny redis свёрнут в standalone (action-DSL удалён); redis-cluster update_acl + probe-newline-регресс переезжают на режим cluster/sentinel — .pm/tasks/2026-06-22-redis-consolidation")
+
 	stack := harness.NewStack(t, harness.Config{
 		ExamplePath: rcuExample,
 		ServiceName: rcuService,

@@ -1,25 +1,22 @@
 name: redis
-description: Install and configure Redis server on a single host
-# Версия destiny — git ref, под которым закоммичен файл (см. ADR-007 в docs/architecture.md).
-# Поле `version:` верхнего уровня намеренно отсутствует.
+description: >-
+  Режим-агностичный per-host кирпич Redis (концепция Ansible-роли, B-гибрид
+  ADR-009): установка пакета + render redis.conf из merged-конфига + render
+  users.acl + systemd hardening drop-in + сервис. ВСЯ оркестрация (топология,
+  rolling-restart, failover, sentinel reconcile, health-gate) живёт в scenario
+  сервиса — здесь только идемпотентный install/render/service одного инстанса.
+
+# Версия destiny — git ref (ADR-007). Поля `version:` верхнего уровня нет.
+# Список задач — в tasks/main.yml. Только core-модули → required_modules: не нужен
+# (community.redis вызывается из scenario сервиса, не из этой destiny).
 #
-# Список задач — НЕ в этом файле. Он живёт в tasks/main.yml; см. docs/architecture.md →
-# «Структура задачи в `tasks:`». Здесь только манифест: input-контракт и required_modules.
-
-# Входной контракт destiny. Проверяется keeper-ом при инвокации и soul-ом
-# перед apply (defense in depth). DSL описан в docs/architecture.md →
-# «Destiny: входной контракт и валидация».
-
-# Эта destiny использует только core-модули, поэтому required_modules: не нужен.
-# Блок required_modules: появляется только когда destiny требует custom-модули
-# из сторонних коллекций — например, required_modules: [wb.haproxy, wb.myapp].
+# PILOT (2026-06-22): путь standalone. Структура заложена расширяемой под
+# sentinel/cluster (отдельные tasks-ветки + sentinel.conf.tmpl) следующими
+# батчами, но СЕЙЧАС реализован только standalone. Конфиг приходит ГОТОВЫМ merged
+# map-ом через apply: input: config: (merge default→preset→вычисления→passthrough
+# делает scenario сервиса) — destiny остаётся «глупой», сама ничего не сливает.
 
 input:
-  action:
-    type: string
-    required: true
-    enum: [apply, ensure_user, ensure_users, update_acls, restart, failover_and_restart, ping, replication_status, diagnose]
-
   version:
     type: string
     required: false
@@ -34,25 +31,26 @@ input:
 
   password:
     type: string
+    required: true
     secret: true
     min_length: 16
+    description: >-
+      Пароль Redis (requirepass). Маскируется в логах/трейсах/UI. Destiny
+      получает УЖЕ зарезолвленное значение: caller-сценарий читает секрет из Vault
+      keeper-side через CEL-функцию vault() в render-фазе (templating.md §2.3/§4)
+      и прокидывает результат в apply:input. Destiny остаётся «глупой» — кладёт
+      готовый пароль в redis.conf, vault-клиент не тянет (ADR-012).
 
-  # ACL для action: ensure_users применяются ПРОТИВ master_addr (а не
-  # локально), чтобы шаг create, идущий широко по incarnation, на репликах
-  # не создавал локальный ACL до репликации (рассинхрон). На любом хосте
-  # incarnation команда уходит на один и тот же master → на репликах
-  # idempotent. scenario вычисляет адрес сам (модель 3-ADDR); destiny не
-  # резолвит. Не required: остальные action (apply/ensure_user/restart/…)
-  # master_addr не используют.
-  master_addr:
-    type: string
-
-  maxmemory:
-    type: string
-    pattern: "^[0-9]+(b|kb|mb|gb)$"          # Redis-формат: 256mb, 4gb, …
-
+  # Merged-конфиг redis.conf: caller (scenario сервиса) сливает default→preset→
+  # вычисления→passthrough через merge() и передаёт ГОТОВЫЙ map. Шаблон range-ит
+  # его ПОСЛЕ базовых директив (last-wins): caller может осознанно переопределить
+  # любую базовую. Пустой/не передан → секция пуста. unixsocket/maxmemory/save/
+  # appendonly/maxmemory-policy — обычные ключи этого map-а (scenario их вычислил).
   config:
     type: object
+    description: >-
+      Готовые директивы redis.conf (merged на стороне scenario сервиса). Каждая
+      пара key→value пишется в redis.conf как есть. Destiny НЕ мержит повторно.
     properties:
       maxclients:
         type: integer
@@ -62,72 +60,32 @@ input:
         min: 0
     additional_properties: true
 
-  user:
-    type: string
-    pattern: "^[a-z_][a-z0-9_-]{0,31}$"
-
-  acl:
-    type: string
-
-  state:
-    type: string
-    enum: [on, off]
-
-  # ACL-пользователи Redis: map по имени юзера → {acl, state}.
-  # tasks/manage.yml итерирует ${ input.users } через `as: user,
-  # index_as: username` и читает ${ user.acl } / ${ user.state }; поэтому
-  # верхний уровень — type=object с additional_properties: <schema>, а
-  # фиксированных properties нет (имена юзеров — произвольные).
+  # ACL-пользователи Redis: MAP имя→{perms, state, password}. scenario строит
+  # этот map из своего typed-map input.users (формой merge(list(map)) над
+  # .map(...)-comprehension) и резолвит password каждого юзера keeper-side из
+  # Vault. Шаблон users.acl.tmpl range-ит MAP (Go сортирует ключи → строки
+  # ACL детерминированы между прогонами — нет ложного change/рестарта) и хеширует
+  # пароль (Redis ACL #<sha256>) — plaintext в файл НЕ пишется. Пустой/не передан
+  # → users.acl без юзеров.
   users:
     type: object
-    description: ACL-пользователи Redis, ключ — имя юзера, значение — {acl, state}.
+    required: false
+    description: >-
+      ACL-пользователи Redis (map имя→{perms, state, password}). Рендерятся в
+      /etc/redis/users.acl (aclfile в redis.conf), порядок строк детерминирован
+      (range по map сортирует ключи). password — зарезолвленный keeper-side
+      секрет (маскируется); в файл пишется его sha256-хеш.
     properties: {}
     additional_properties:
       type: object
+      required: [perms, state, password]
+      additional_properties: false
       properties:
-        acl:
+        perms:
           type: string
         state:
           type: string
           enum: [on, off]
-      required: [acl, state]
-      additional_properties: false
-
-  # action: update_acls — патч ACL у СУЩЕСТВУЮЩИХ юзеров. Применяется на текущем
-  # мастере локально (scenario таргетит where: role=='master' + run_once, см.
-  # service/redis-cluster/scenario/update_acl). changes — map username → {acl,
-  # state?}: state необязателен (меняем только ACL, on/off оставляем как был).
-  # Симметрия с input.users (ensure_users), но state опционален — потому что это
-  # ПАТЧ существующих, а не создание.
-  changes:
-    type: object
-    description: Патч ACL существующих юзеров, ключ — имя юзера, значение — {acl, state?}.
-    properties: {}
-    additional_properties:
-      type: object
-      properties:
-        acl:
+        password:
           type: string
-        state:
-          type: string
-          enum: [on, off]
-      required: [acl]
-      additional_properties: false
-
-  # Текущее состояние redis_users из incarnation.state (scenario пробрасывает
-  # ${ state.redis_users }). Нужно для дефолта state, когда changes[user].state
-  # не передан: берём прежнее on/off из current[user].state, чтобы патч ACL не
-  # сбрасывал юзера в off молча.
-  current:
-    type: object
-    description: Текущее состояние ACL-юзеров (для дефолта state при патче).
-    properties: {}
-    additional_properties:
-      type: object
-      properties:
-        acl:
-          type: string
-        state:
-          type: string
-          enum: [on, off]
-      additional_properties: false
+          secret: true

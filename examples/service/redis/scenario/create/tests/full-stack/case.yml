@@ -1,287 +1,210 @@
-# L0-испытание (Trial, ADR-023) сценария create сервиса redis.
+# L0-испытание (Trial, ADR-023) сценария create сервиса redis (режим standalone,
+# redis-консолидация концепции Ansible-роли). ГЛАВНЫЙ guard этого слайса —
+# трансляция ПРОСТОГО типизированного ввода оператора в детальный redis.conf через
+# merge() (SHALLOW last-wins) + render users.acl с полными ACL-строками.
 #
-# Render-only, герметично. Демонстрирует КОМПОЗИЦИЮ трёх standalone-destiny через
-# apply:destiny (изолированный render каждой, ADR-009): план — это конкатенация
-# задач redis-single (0..6) + redis-exporter (7..12) + node-exporter (13..) со
-# сквозными индексами. Изоляция видна по тому, что params каждой destiny собраны
-# из её apply.input, а не из scenario-scope.
+# Render-only, герметично. План = задачи destiny `redis` (изолированный
+# render-проход, ADR-009) + задача community.redis.command (PING health-gate).
+# Изоляция видна по тому, что params destiny собраны из её apply.input, а не из
+# scenario-scope.
 #
-# node-exporter — destiny (бинарь node_exporter), резолвится per-entry git
-# override в service.yml в examples/destiny/node-exporter/ (НЕ destiny-node-
-# exporter). collectors=[] (essence): ставится только ядро. Шаги коллекторов
-# (when:) при collectors=[] всё равно в плане (L0-render не вычисляет when —
-# предикаты Soul-side), поэтому node-exporter-блок длиннее 10 задач; ассертим
-# только ядро 13..22.
+# Что ассертим (критерий приёмки слайса):
+#   1. ВЫЧИСЛЕННЫЙ maxmemory: memory_mb=1024 * reserve=75 / 100 = 768 → "768mb"
+#      (computed-слой перекрыл essence-дефолт "256mb").
+#   2. save/appendonly из persistence-пресета (rdb): save непустой, appendonly no.
+#   3. LAST-WINS на КОНФЛИКТУЮЩЕМ ключе: timeout есть и в essence-дефолте (300), и
+#      в redis_settings оператора (60) → в merged 60 (passthrough бьёт дефолт).
+#   4. maxmemory-policy из input (volatile-lru) перекрыл essence (allkeys-lru).
+#   5. passthrough redis_settings (tcp-backlog) долетел в merged.
+#   6. users.acl отрендерен с ПОЛНОЙ ACL-строкой оператора; пароль юзера —
+#      keeper-side vault()-резолв по конвенции secret/redis/<inc>/users/<name>.
 #
-# redis-single теперь 7 задач (B2 stateful-hardening): pkg/dir/conf + drop-in
-# (systemd hardening) + daemon-reload + running/restarted. Drop-in (index 3) и
-# daemon-reload (index 4) сдвинули exporter-блоки на +2.
-#
-# Пароль резолвится KEEPER-SIDE через CEL-функцию vault() в render-фазе
-# (templating.md §2.3/§4): scenario строит путь secret/redis/${incarnation.name}
-# и читает поле password. fixtures.vault мокает Vault KV герметично → в плане
-# уже ЗНАЧЕНИЕ пароля (не ссылка), как и доедет на хост (Soul vault-клиент не
-# тянет, ADR-012). incarnation.name в L0 = имя сценария (create).
-#
-# Три destiny — standalone в examples/destiny/, НЕ внутри сервиса. apply:destiny
-# резолвится зеркалом прода (slice A, ADR-023): name → service.yml::destiny[]
-# (redis-single/redis-exporter/node-exporter) + default_destiny_source ниже
-# (file://, путь относительно service-root кейса). Cross-location раскладка
-# (сервис и destiny в разных поддеревьях) теперь резолвится без эвристики.
-name: create composes redis-single + redis-exporter + node-exporter
+# Пароли резолвятся KEEPER-SIDE через CEL vault() в render-фазе (templating.md
+# §2.3/§4): requirepass — secret/redis/<inc>#password; per-user —
+# secret/redis/<inc>/users/<name>#password. incarnation.name в L0 = имя сценария
+# (create). fixtures.vault мокает Vault KV → в плане уже ЗНАЧЕНИЕ (ADR-012).
+name: create translates simple input to merged redis.conf + users.acl
 
-# L0-источник destiny (герметичный file://): каталоги destiny-<name> лежат в
-# examples/destiny/ относительно service-root (examples/service/redis/).
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
-  # redis_version НЕ передан намеренно (required:false) — проверяем поведение
-  # latest: version рендерится в "" → core.pkg ставит без =version-пина. Остальные
-  # параметры (пути/listen) подтягиваются из scenario `input:`-дефолтов резолвером
-  # эффективного input (docs/input.md §«Резолв значений»). sha256 экспортёров
-  # теперь ОБЯЗАТЕЛЕН (required:true, без placeholder-дефолта) — передаём валидный
-  # тестовый 64-hex (L0 render-only, fetch не исполняется).
-  input:
-    node_exporter_sha256:  "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-    redis_exporter_sha256: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
-  # soulprint синтетического L0-хоста: node-exporter apply:input берёт arch из
-  # soulprint.self.os.arch (а не из статичного input.arch). Без этого факта
-  # CEL-render шага упал бы на no-such-key.
   soulprint:
+    network:
+      primary_ip: 10.0.0.5
     os:
       arch: amd64
-  # Мок Vault KV: vault('secret/redis/create#password') резолвится из этого пути
-  # (incarnation.name в L0 = имя сценария create). secret/-префикс снимается
-  # нормализацией fixtureVault — путь логический.
+  # Мок Vault KV: requirepass + пароль ACL-юзера app. secret/-префикс снимается
+  # нормализацией fixtureVault; #-поле — ключ внутри секрета.
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
+    secret/redis/create/users/app:
+      password: app-user-secret-pass
+  # essence — слой трансляции: persistence_presets (данные-таблица),
+  # memory_reserve_percent (резерв ОС), redis_config (merge-подложка дефолтов).
   essence:
+    redis_type: standalone
+    memory_reserve_percent: 75
+    persistence_presets:
+      off:
+        save: ""
+        appendonly: "no"
+      aof:
+        save: ""
+        appendonly: "yes"
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+      rdb_aof:
+        save: "900 1 300 10 60 10000"
+        appendonly: "yes"
     redis_config:
-      maxclients: 10000
-      timeout:    300
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+# Простой типизированный ввод оператора. memory_mb + persistence + policy + один
+# ACL-юзер с полной ACL-строкой + passthrough redis_settings с КОНФЛИКТУЮЩИМ
+# ключом (timeout).
+  input:
+    redis_type: standalone
+    version: "5:7.0.15-1~deb12u7"
+    memory_mb: 1024
+    persistence: rdb
+    maxmemory_policy: volatile-lru
+    users:
+      app:
+        perms: "~app:* +@read +@write -@dangerous"
+        state: "on"
+    redis_settings:
+      timeout: 60
+      tcp-backlog: 511
 
 assert:
   rendered_tasks:
-    # ── redis-single (индексы 0..6) ─────────────────────────────────────────
+    # ── destiny redis (standalone) ──────────────────────────────────────────
     - index: 0
       module: core.pkg.installed
       params:
         name: redis-server
-        # redis_version не передан → has(...) ложно → "" (без пина, latest).
-        version: ""
+        version: "5:7.0.15-1~deb12u7"
 
-    # Каталог unix-сокета (idempotent install -d) — создаётся ДО рендера конфига.
-    - index: 1
-      module: core.exec.run
-      params:
-        creates: /var/run/redis
-        cmd: install
-        args: ["-d", "-o", "redis", "-g", "redis", "-m", "0755", "/var/run/redis"]
+    # index 1 — socket-dir (core.exec.run, when: config.unixsocket): unixsocket в
+    # merged-конфиге НЕТ → static-when-false → placeholder-skip. Не ассертим.
 
-    # redis.conf: socket/maxmemory/config из apply.input; password — из vault-резолва.
+    # users.acl: MAP имя→{perms,state,password} с ПОЛНОЙ ACL-строкой +
+    # keeper-side vault()-пароль. ПОЧЕМУ map, а не список: range по map в шаблоне
+    # сортирует ключи → детерминизм порядка строк (regress-guard на tiling-баг
+    # 2026-06-22; прямой order-guard — destiny_redis_tmpl_test.go).
     - index: 2
       module: core.file.rendered
       params:
-        path: /etc/redis/redis.conf
-        # template_content (literal содержимое .tmpl), доставленное Keeper-ом
-        # (A1, ADR-012(d)): handoff прочитал templates/redis.conf.tmpl из снапшота
-        # destiny и положил содержимое в params (template-путь УДАЛЁН — Soul его
-        # не получает). "<present>" ассертит факт доставки непустого содержимого,
-        # а не template-путь. Сломанный handoff (путь уехал вместо содержимого) →
-        # ключа template_content в рендере нет → кейс падает в L0.
+        path: /etc/redis/users.acl
         template_content: "<present>"
         mode: "0640"
         owner: redis
         group: redis
-        # Корень text/template — render_context {vars,self,role,essence}
-        # (templating.md §3.2, BUG-A fix); плоского params.vars больше нет.
         render_context:
           vars:
-            socket: /var/run/redis/redis-server.sock
-            # Пароль зарезолвлен KEEPER-SIDE через vault('secret/redis/'+incarnation.name
-            # +'#password') в render-фазе → в плане уже ЗНАЧЕНИЕ из fixtures.vault
-            # (не ссылка). Ассерт ловит баг резолва: если vault() не сработает,
-            # значение разойдётся (no_log маскирует только diff при FAIL).
-            password: s3cr3t-redis-pass-create
-            maxmemory: 256mb
-            config:
-              maxclients: 10000
-              timeout: 300
+            users:
+              app:
+                perms: "~app:* +@read +@write -@dangerous"
+                state: "on"
+                # Per-user пароль — keeper-side vault()-резолв (plaintext в плане,
+                # хешируется sha256 уже в шаблоне). Ассерт ловит регресс резолва.
+                password: app-user-secret-pass
           self:
             sid: trial-host
-            covens: []
+            covens: [create]
             choirs: []
             role: ""
-            # os проецируется в self из fixtures.soulprint (нужен node-exporter для
-            # arch); виден во всех render_context.self прогона.
+            network:
+              primary_ip: 10.0.0.5
             os:
               arch: amd64
           role: ""
           essence: {}
 
-    # index 3 — systemd drop-in hardening (core.file.rendered → /etc/systemd/system/
-    # redis-server.service.d/hardening.conf), index 4 — daemon-reload (core.exec.run
-    # systemctl daemon-reload). B2 stateful-hardening; в композите не ассертим
-    # детально (детальная сверка — в redis-single L0 render-defaults).
-    - index: 5
+    # redis.conf: ИТОГ merge(). Здесь живёт главный guard трансляции.
+    - index: 3
+      module: core.file.rendered
+      params:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            password: s3cr3t-redis-pass-create
+            config:
+              # computed: 1024*75/100=768 → "768mb" (перекрыл essence "256mb").
+              maxmemory: "768mb"
+              # input.maxmemory_policy перекрыл essence allkeys-lru.
+              maxmemory-policy: volatile-lru
+              # essence-дефолт без конфликта.
+              maxclients: 10000
+              # LAST-WINS: redis_settings.timeout (60) перекрыл essence (300).
+              timeout: 60
+              # persistence-пресет rdb.
+              save: "900 1 300 10 60 10000"
+              appendonly: "no"
+              # passthrough redis_settings долетел.
+              tcp-backlog: 511
+          self:
+            sid: trial-host
+            covens: [create]
+            choirs: []
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    - index: 7
       module: core.service.running
       params:
         name: redis-server
         enabled: true
 
-    # ── redis-exporter (индексы 7..12) ──────────────────────────────────────
-    # Без core.group/core.user: сервис-аккаунт даёт DynamicUser=yes в unit-е
-    # (гибрид-правило прод-конвенции §2); group-доступ к unix-сокету (770) —
-    # через SupplementaryGroups=redis (статический текст шаблона). Блок — 6 задач
-    # (fetch/extract/install/unit/running/restarted), unit-render на index 10.
-    - index: 7
-      module: core.url.fetched
-
-    # systemd-unit redis_exporter: redis_addr собран CEL-ом из 'unix://'+socket
-    # (та же точка интеграции, что unixsocket в redis.conf).
-    - index: 10
-      module: core.file.rendered
-      params:
-        path: /etc/systemd/system/redis_exporter.service
-        # literal содержимое templates/redis_exporter.service.tmpl, доставленное
-        # Keeper-ом (A1): template-путь удалён, ассертим факт доставки содержимого.
-        template_content: "<present>"
-        mode: "0644"
-        owner: root
-        group: root
-        render_context:
-          vars:
-            bin_dir: /usr/local/bin
-            listen: ":9121"
-            redis_addr: "unix:///var/run/redis/redis-server.sock"
-            # тот же keeper-side vault()-резолв, что и в index 1 → значение в плане.
-            password: s3cr3t-redis-pass-create
-            # extra_args не передан caller-ом → default [] destiny.
-            extra_args: []
-          self:
-            sid: trial-host
-            covens: []
-            choirs: []
-            role: ""
-            os:
-              arch: amd64
-          role: ""
-          essence: {}
-
-    # ── node-exporter (индексы 13..) ────────────────────────────────────────
-    # destiny node-exporter (каталог examples/destiny/node-exporter/, резолвится
-    # per-entry git override в service.yml):
-    # бинарь node_exporter, version-aware install, стабильный сервис-аккаунт
-    # node_exporter, hardened-unit. collectors=[] (essence) → ставится только ядро.
-    #
-    # ВАЖНО про индексы: L0-render НЕ вычисляет when: (предикаты — Soul-side,
-    # исполняются при apply, render/pipeline.go). Поэтому шаги коллекторов
-    # (when: '<c>' in input.collectors) при collectors=[] всё равно присутствуют
-    # в плане — отбракует их хост. Ассертим только ядро (idx 13..21): это путь,
-    # который реально меняется при collectors=[]. Раскладка destiny: install.yml
-    # 13 fetch / 14 extract; account.yml 15 group / 16 user / 17 directory;
-    # service.yml 18 install-бинаря / 19 unit / 20 running / 21 restarted.
-
-    # fetch tarball: URL собран CEL-ом из base_url + version + arch; arch — из
-    # soulprint.self.os.arch (destiny берёт напрямую из soulprint). v-префикс тега
-    # GitHub release: .../download/v1.8.2/node_exporter-1.8.2.linux-amd64.tar.gz.
-    - index: 13
-      module: core.url.fetched
-      params:
-        url: "https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-amd64.tar.gz"
-        path: /tmp/node_exporter-1.8.2.tar.gz
-        checksum: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-        mode: "0644"
-
-    # Стабильный сервис-аккаунт node_exporter (НЕ DynamicUser — textfile-каталог
-    # переживает рестарты): группа ДО пользователя.
-    - index: 15
-      module: core.group.present
-      params:
-        name: node_exporter
-        system: true
-
-    - index: 16
-      module: core.user.present
-      params:
-        name: node_exporter
-        system: true
-        group: node_exporter
-        shell: /usr/sbin/nologin
-        home: /
-
-    # textfile-каталог через декларативное core.file.directory (idempotent по
-    # mode/owner/group, чинит дрейф, поддерживает dry-run).
-    - index: 17
-      module: core.file.directory
-      params:
-        path: /var/lib/node_exporter
-        owner: node_exporter
-        group: node_exporter
-        mode: "0755"
-
-    # version-aware install (service.yml): бинарь раскладывается как node_exporter;
-    # unless-guard пропускает install, если уже стоит нужная версия
-    # (grep -qF 'version 1.8.2 '). Доказывает version-aware установку.
-    - index: 18
-      module: core.cmd.shell
-      params:
-        cmd: "install -m 0755 '/tmp/node_exporter-1.8.2/node_exporter-1.8.2.linux-amd64/node_exporter' '/usr/local/bin/node_exporter'"
-        unless: "test -x /usr/local/bin/node_exporter && /usr/local/bin/node_exporter --version 2>&1 | grep -qF 'version 1.8.2 '"
-
-    # Unit-path — /etc/systemd/system/node_exporter.service, listen :9100.
-    # literal-содержимое .tmpl доставлено Keeper-ом (A1).
-    - index: 19
-      module: core.file.rendered
-      params:
-        path: /etc/systemd/system/node_exporter.service
-        template_content: "<present>"
-        mode: "0644"
-        owner: root
-        group: root
-        render_context:
-          vars:
-            bin_dir: /usr/local/bin
-            user: node_exporter
-            listen: ":9100"
-            textfile_dir: /var/lib/node_exporter
-          self:
-            sid: trial-host
-            covens: []
-            choirs: []
-            role: ""
-            # arch — источник, из которого node-exporter взял URL/install-путь.
-            os:
-              arch: amd64
-          role: ""
-          essence: {}
-
-    # running + restart — по имени юнита node_exporter (ловит регресс имени).
-    # daemon-reload-шага НЕТ: core.service сам reload-ит при смене unit (auto).
-    - index: 20
-      module: core.service.running
-      params:
-        name: node_exporter
-        enabled: true
-
-    - index: 21
+    - index: 8
       module: core.service.restarted
       params:
-        name: node_exporter
+        name: redis-server
 
-  # Регресс на класс багов «state_changes падает на render». redis_version НЕ
-  # передан (latest-путь): незащищённый `${ input.redis_version }` дал бы CEL
-  # «no such key» на рендере sets (incarnation → error_locked). Канон —
-  # `${ has(input.redis_version) ? input.redis_version : '' }`: в state пишется
-  # "" (консистентно с тем, что уходит в core.pkg без =version-пина). Этот ассерт
-  # ловит регресс: до фикса line 131 рендер sets падал ДО сверки значений.
+    # ── community.redis.command (PING health-gate) ──────────────────────────
+    # addr localhost, пароль — тот же requirepass vault()-резолв, args [PING].
+    - index: 9
+      module: community.redis.command
+      params:
+        addr: "127.0.0.1:6379"
+        password: s3cr3t-redis-pass-create
+        args: ["PING"]
+
+  # Регресс на класс багов «state_changes падает на render» + сверка ИТОГА
+  # трансляции, записываемого в incarnation.state (тот же merge(), что ушёл в
+  # render redis.conf — единый источник истины).
+  #
+  # DRIFT-GUARD: redis_config ниже ОБЯЗАН быть БИТ-В-БИТ равен apply.input.config
+  # (index 3 выше) — оба собраны одним inline-merge() в scenario create. Если они
+  # разойдутся (например правка одного merge без другого), day-2-сценарий увидит
+  # ложный дрифт «state ≠ live config». Дублирование значений в ассерте намеренно:
+  # это и есть guard на синхронность двух inline-merge.
   state_changes:
-    redis_version: ""
-    node_exporter_version: "1.8.2"
-    redis_exporter_version: "1.62.0"
-    redis_socket: /var/run/redis/redis-server.sock
-    redis_maxmemory: 256mb
+    redis_type: standalone
+    redis_version: "5:7.0.15-1~deb12u7"
     redis_config:
+      maxmemory: "768mb"
+      maxmemory-policy: volatile-lru
       maxclients: 10000
-      timeout: 300
-    redis_users: []
+      timeout: 60
+      save: "900 1 300 10 60 10000"
+      appendonly: "no"
+      tcp-backlog: 511
+    redis_users:
+      app:
+        perms: "~app:* +@read +@write -@dangerous"
+        state: "on"
+    redis_hosts: []

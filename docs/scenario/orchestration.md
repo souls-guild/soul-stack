@@ -560,10 +560,10 @@ N раз) — последующий слайс (см. §8).
 
 Раскладка: `scenario/<name>/tests/<case>/case.yml`. Формат `case.yml` — `verify:` / `expect:` — **переиспользуется из [destiny/testing.md](../destiny/testing.md)** (отдельного DSL ассерций нет, тот же подход). Дельта scenario:
 
-- **`stand:` расширен на multi-host.** В отличие от одно-хостового destiny-molecule, scenario-тест поднимает **несколько хостов** (топология кластера) — точный формат блока `stand:` для multi-host наследует open Q sandbox из [destiny/testing.md](../destiny/testing.md) (см. §8 ниже).
-- **Ассерты на топологию и `incarnation.state`.** Помимо `output:`-проверок шагов, scenario-тест проверяет результирующую топологию (кто master / replica после операции) и содержимое `incarnation.state` после коммита (см. §7).
+- **L0 render-multi-host исполняется штатным harness.** Roster хостов прогона задаётся `fixtures.hosts: [...]` (host-запись `sid`/`covens`/`role`/`soulprint`/`choirs`, формат — [destiny/testing.md](../destiny/testing.md)). Render-инварианты на топологии (`size(soulprint.hosts)`-guard, `soulprint.hosts.where(...)`-проекция, nodes-детерминизм master/replica, `state_changes` на multi-host) гоняются герметично `soul-trial run`, без docker и без dispatch (amendment 2026-06-22, [ADR-023](../adr/0023-trial-test-runner.md#adr-023-тест-раннер-trial-soul-trial-и-dsl-coverage)).
+- **L3-dispatch остаётся stub.** Docker `stand:` на топологии кластера, ассерты «кто реально master исполняет» (`assert.dispatch`) и committed cross-host `incarnation.state` после барьера (§7) — отложены. Точный формат блока multi-host `stand:` наследует open Q sandbox из [destiny/testing.md](../destiny/testing.md) (см. §8 ниже).
 
-> Это **расширение open Q про sandbox** из [destiny/testing.md](../destiny/testing.md): multi-host стенд и ассерты на топологию/`state` — не закрытое решение, а явно отмеченное расширение незакрытого вопроса. Не закрывается молча; до решения — declarative-stub `stand:`, как в destiny-molecule.
+> Это **расширение open Q про sandbox** из [destiny/testing.md](../destiny/testing.md): **L0 render-multi-host (`fixtures.hosts`) — закрыт** и исполняется штатным harness-ом (герметичный render-уровень). **L3-dispatch** (multi-host docker-стенд, `assert.dispatch`, committed cross-host `state`) — не закрытое решение, явно отмеченное расширение незакрытого вопроса. Не закрывается молча; до решения L3-dispatch — declarative-stub `stand:`, как в destiny-molecule.
 
 ## 7. Инвариант barrier / state-commit
 
@@ -809,7 +809,7 @@ state_changes:        # DEPRECATED-форма (переходный период
   (`include_modifier_unsupported`, §6). Семантика проброса (task-level `vars:`
   видны задачам подключённого файла; `loop:` на `include:` — повтор файла) —
   последующий слайс.
-- **Multi-host sandbox.** Формат блока `stand:` для multi-host scenario-теста и ассерты на топологию/`incarnation.state` — расширение open Q про sandbox из [destiny/testing.md](../destiny/testing.md). Не закрытое решение.
+- **Multi-host sandbox (L3-dispatch).** **L0 render-multi-host (`fixtures.hosts`) — закрыт** (amendment 2026-06-22, [ADR-023](../adr/0023-trial-test-runner.md#adr-023-тест-раннер-trial-soul-trial-и-dsl-coverage)): roster хостов гоняется штатным harness-ом на render-уровне. Открытым остаётся **L3-dispatch**: формат блока docker `stand:` для multi-host scenario-теста, `assert.dispatch` (кто реально master исполняет) и ассерты на committed cross-host `incarnation.state` — расширение open Q про sandbox из [destiny/testing.md](../destiny/testing.md). Не закрытое решение.
 - **Перенос `role/*.yaml` в destiny-`input:`.** Параметры, ранее зависевшие от роли (essence-слой `role/*` удалён, см. [concept.md](concept.md)), переезжают в destiny через `input:` по probe-роли — отдельная задача имплементации (пилот и батч переписывания примеров).
 - **Bootstrap-источник роли на `create` — ЗАКРЫТО.** На `create` redis ещё
   не запущен, probe невозможен → топология (declared-роли + адрес master)

@@ -1,0 +1,87 @@
+# Ветка диспетчера create — режим standalone (redis-консолидация концепции
+# Ansible-роли). Подключается из main.yml через include: и раскрывается в плоский
+# список ДО render (orchestration.md §6). Каждая задача несёт `when:` по redis_type
+# — статический предикат (только input.*), который Keeper вычисляет at-render
+# (isStaticWhen): неактивная ветка (redis_type != standalone) гасится placeholder-
+# skip-ом (ADR-012(d) Вариант b), активная рендерится. Так main.yml инклудит ВСЕ
+# ветки, а исполняется ровно одна — диспетчер без условного include (include:
+# раскрывается безусловно, when: на самой include-задаче запрещён).
+#
+# Дефолт redis_type — standalone (input default + essence), поэтому предикат
+# гейта совпадает с этим дефолтом: not-задан ИЛИ явно 'standalone' → активна.
+#
+# Поведение БИТ-В-БИТ повторяет прежний одиночный main.yml (до рефактора в
+# диспетчер): тот же merge()-перевод простого ввода в redis.conf + users.acl, тот
+# же health-gate PING. См. headerы прежнего main.yml — здесь не дублируем.
+
+# 1. Per-host install + render redis.conf + render users.acl + systemd.
+#    Изолированный render-проход destiny `redis` (ADR-009): внутри видно ТОЛЬКО
+#    переданный apply.input. config — ГОТОВЫЙ merged map (destiny не мержит).
+#
+#    Слой трансляции (merge() SHALLOW last-wins, СЛЕВА НАПРАВО — правый бьёт левый
+#    по ключу верхнего уровня):
+#      1. essence.redis_config             — дефолты автора (defaults роли);
+#      2. persistence_presets[persistence] — save/appendonly выбранного режима;
+#      3. вычисленные maxmemory + policy   — производные от memory_mb / input;
+#      4. input.redis_settings             — passthrough оператора (бьёт всё).
+#    Слой 3 материализует только заданные ключи (has-guard): пустой memory_mb не
+#    уедет строкой "0mb", отсутствующий maxmemory_policy не затрёт дефолт/пресет.
+- name: Apply redis destiny (install + render redis.conf/users.acl + systemd)
+  when: "has(input.redis_type) ? input.redis_type == 'standalone' : true"
+  apply:
+    destiny: redis
+    input:
+      version:  "${ has(input.version) ? input.version : '' }"
+      # Пароль requirepass — keeper-side vault()-резолв (templating.md §2.3/§4):
+      # путь из incarnation (доверенный контекст), в destiny уходит ЗНАЧЕНИЕ.
+      password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+      # Итоговый merged-конфиг. destiny range-ит его в redis.conf как есть.
+      # int(input.memory_mb)*int(reserve)/100: int()-конверсия каждого операнда
+      # унифицирует числовой тип (YAML→uint64 в L0, JSON→double в проде) — без
+      # неё uint*int даёт CEL «no such overload».
+      config: >-
+        ${ merge(
+             essence.redis_config,
+             essence.persistence_presets[has(input.persistence) ? input.persistence : 'rdb'],
+             merge(
+               has(input.memory_mb)
+                 ? { 'maxmemory': string(int(input.memory_mb) * int(essence.memory_reserve_percent) / 100) + 'mb' }
+                 : {},
+               has(input.maxmemory_policy) ? { 'maxmemory-policy': input.maxmemory_policy } : {}
+             ),
+             has(input.redis_settings) ? input.redis_settings : {}
+           ) }
+      # ACL-юзеры → MAP имя→{perms, state, password}. ПОЧЕМУ map, а не список:
+      # users.acl.tmpl range-ит коллекцию построчно, а Go text/template range по
+      # MAP сортирует ключи (детерминизм), по list — наследует недетерминированный
+      # порядок итерации Go-map (templating.md §6) → ложный change → лишний
+      # рестарт Redis (на rolling-restart флоте каскадный). CEL не строит
+      # map-из-map напрямую, но .map(name, {name: {...}}) даёт СПИСОК
+      # одноключевых map-ов, а merge(list(map)) (templating.md §2.3) сворачивает
+      # его в один map имя→объект. Пароль каждого юзера резолвится keeper-side из
+      # Vault по конвенции secret/redis/<incarnation>/users/<name>#password (имя
+      # из доверенного контекста incarnation + ключ users, не из секрет-значения).
+      # В шаблоне пароль хешируется sha256sum (Redis ACL #<hash>) — plaintext в
+      # файл не пишется. Пусто → пустой map (users.acl без юзеров).
+      users: >-
+        ${ has(input.users)
+           ? merge(input.users.map(name, {
+               name: {
+                 'perms':    input.users[name].perms,
+                 'state':    input.users[name].state,
+                 'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+               }
+             }))
+           : {} }
+
+# 2. Health-gate: PING живого Redis после старта (демонстрация плагина
+#    community.redis; raw-команда, конфиг НЕ пишет). addr — localhost (плагин
+#    исполняется на redis-хосте), пароль — тот же keeper-side vault()-резолв.
+- name: Wait for redis to answer PING
+  when: "has(input.redis_type) ? input.redis_type == 'standalone' : true"
+  module: community.redis.command
+  retry: { count: 5, delay: 2s }
+  params:
+    addr:     "127.0.0.1:6379"
+    password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    args:     ["PING"]

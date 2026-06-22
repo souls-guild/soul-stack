@@ -1,46 +1,41 @@
 # L2 fixture (docker-стенд), harness MVP не исполняет — ADR-023 post-MVP.
 name: install-and-ping
 description: |
-  Базовый сценарий жизни destiny на чистом хосте:
-    1. action: apply  — установить redis-server 7.2.4 и поднять сервис.
-    2. action: ping   — убедиться, что отвечает PONG.
+  Базовый сценарий жизни режим-агностичного destiny redis (standalone) на чистом
+  хосте:
+    1. apply destiny redis  — установить redis-server и поднять сервис с
+       отрендеренным redis.conf (TCP 6379 + опц. unix-сокет, requirepass).
+    2. ping                 — убедиться, что отвечает PONG (через redis-cli или
+       community.redis.command — последнее в scenario сервиса).
 
-  Тест прогоняется на эфемерном стенде (см. блок `stand:` ниже),
-  на котором нет ни redis-server-а, ни конфигов. После прохода
-  стенд уничтожается; никакого состояния между кейсами не остаётся.
+  Тест прогоняется на эфемерном стенде (см. блок `stand:` ниже), на котором нет
+  ни redis-server-а, ни конфигов. После прохода стенд уничтожается.
 
 # ─── Стенд ────────────────────────────────────────────────────────────────────
-# Эфемерное окружение, на котором будет применяться destiny.
-# Формат блока `stand:` — open Q №3 в docs/destiny/testing.md
-# (одиночный универсальный образ vs матрица ОС; docker vs cloud-driver vs push-pool).
-# Здесь — иллюстративный минимум: docker, ubuntu-образ, push-режим.
 stand:
   driver: docker                       # docker | podman | cloud:<provider> — open Q
   image:  ubuntu:24.04                 # базовый образ sandbox-хоста
   mode:   push                         # push | pull — как destiny попадает на стенд
-  # mode=push  : keeper.push поднимает ssh-доступ внутрь контейнера и применяет destiny.
-  # mode=pull  : в контейнер ставится soul-агент, он подключается к Keeper-у.
-  # Дефолт под open Q №4 (real vs mock модули) — пока real, других режимов нет.
 
 # ─── Что применяем ────────────────────────────────────────────────────────────
-# Целевой destiny — ../../destiny.yml (тот, рядом с которым лежит этот tests/).
+# Целевой destiny — ../../destiny.yml (режим-агностичный standalone-кирпич).
 # Имя берётся из родительского манифеста; в case достаточно указать input.
+# Контракт нового destiny: version? / password (secret) / maxmemory? / socket? /
+# config (object) / users? (см. destiny.yml). action-DSL удалён в redis-консолидации.
 input:
-  action:   apply
-  version:  "7.2.4"
-  password: "vault:test/redis/password"
+  version:   "7.2.4"
+  password:  "vault:test/redis/password"
   maxmemory: 256mb
+  socket:    /var/run/redis/redis-server.sock
+  config:
+    maxclients: 10000
+    timeout:    300
 
-# Двойной прогон: фреймворк применит destiny с этим input ещё раз и проверит,
-# что во втором применении не было изменений ни в одном шаге. См. open Q №5
-# в docs/destiny/testing.md — пока считаем обязательной частью каждого case.
+# Двойной прогон: фреймворк применит destiny с этим input ещё раз и проверит, что
+# во втором применении не было изменений ни в одном шаге (идемпотентность).
 expect_idempotent: true
 
 # ─── Проверки результата ──────────────────────────────────────────────────────
-# verify — это последовательность задач (как в service tests/smoke.yml):
-# каждая исполняет destiny/модуль на том же стенде и сравнивает поля `output:`
-# через блок `expect:`. Никакого отдельного DSL-я ассерций нет — проверки
-# выражаются через те же destiny, которыми система пользуется в проде.
 verify:
   - name: redis-binary-installed
     apply:
@@ -50,7 +45,7 @@ verify:
         args: ["--version"]
     expect:
       exit_code: 0
-      stdout_contains: "v=7.2.4"        # точные ключи `expect:` — open Q №8 (что измерять)
+      stdout_contains: "v=7.2.4"        # точные ключи `expect:` — open Q №8
 
   - name: redis-service-active
     apply:
@@ -72,17 +67,11 @@ verify:
 
   - name: redis-responds-to-ping
     apply:
-      destiny: redis                    # тот же destiny, с другим action — самосогласованная проверка
+      destiny: core.cmd.shell          # redis-cli по сокету — самосогласованная проверка
       input:
-        action: ping
+        cmd: "redis-cli -s /var/run/redis/redis-server.sock -a vault:test/redis/password PING"
     expect:
-      stdout: "PONG"
+      stdout_contains: "PONG"
 
 # ─── Опциональные соседи рядом с этим файлом ─────────────────────────────────
-#   prepare.yml  — задачи до основного apply (например, поднять Vault-stub
-#                  с тестовым паролем по ссылке vault:test/redis/password).
-#   verify.yml   — если ассерций становится много, можно вынести в отдельный
-#                  файл и подключить `verify: !include verify.yml`.
-#   cleanup.yml  — задачи после verify; обычно не нужны (стенд снесётся весь),
-#                  но полезны если case подложил внешние ресурсы (объекты в S3,
-#                  записи в DNS, реальные облачные VM).
+#   prepare.yml / verify.yml / cleanup.yml — см. docs/destiny/testing.md.

@@ -1,0 +1,126 @@
+# L0-испытание create (standalone) — guard на пробелы покрытия QA 2026-06-22:
+#   - persistence: off → save="" + appendonly no (пресет off);
+#   - memory_mb НЕ задан → maxmemory из essence ("256mb"), has-guard НЕ
+#     материализует computed-слой (нет ложного "0mb");
+#   - maxmemory_policy НЕ задан → из essence (allkeys-lru);
+#   - users НЕ задан (пусто) → users.acl без юзеров (валидный aclfile);
+#     redis_users в state — пустой map.
+name: persistence off + essence maxmemory/policy fallback + empty users
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network:
+      primary_ip: 10.0.0.5
+    os:
+      arch: amd64
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+  essence:
+    redis_type: standalone
+    memory_reserve_percent: 75
+    persistence_presets:
+      off:
+        save: ""
+        appendonly: "no"
+      aof:
+        save: ""
+        appendonly: "yes"
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+      rdb_aof:
+        save: "900 1 300 10 60 10000"
+        appendonly: "yes"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+  input:
+    redis_type: standalone
+    persistence: off
+    # memory_mb и maxmemory_policy НЕ заданы → оба из essence.
+    # users НЕ задан.
+
+assert:
+  rendered_tasks:
+    - index: 0
+      module: core.pkg.installed
+      params:
+        name: redis-server
+        version: ""
+
+    # users.acl: пустой map (users не задан → {}). Шаблон рендерит файл без строк.
+    - index: 2
+      module: core.file.rendered
+      params:
+        path: /etc/redis/users.acl
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            users: {}
+          self:
+            sid: trial-host
+            covens: [create]
+            choirs: []
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # redis.conf: maxmemory/policy ПОЛНОСТЬЮ из essence (computed-слой пуст).
+    - index: 3
+      module: core.file.rendered
+      params:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            password: s3cr3t-redis-pass-create
+            config:
+              # has-guard: memory_mb не задан → computed maxmemory НЕ материализован
+              # → остаётся essence-дефолт "256mb" (НЕ "0mb").
+              maxmemory: "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients: 10000
+              timeout: 300
+              # persistence off.
+              save: ""
+              appendonly: "no"
+          self:
+            sid: trial-host
+            covens: [create]
+            choirs: []
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+  state_changes:
+    redis_type: standalone
+    redis_version: ""
+    redis_config:
+      maxmemory: "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients: 10000
+      timeout: 300
+      save: ""
+      appendonly: "no"
+    # Пустой map юзеров (чистый state).
+    redis_users: {}
+    redis_hosts: []

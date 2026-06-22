@@ -1,25 +1,70 @@
 {{/*
-  Render-time: значения берутся из .vars (явно переданы task-задачей
-  core.file.rendered) и из системного .self (стабильные факты текущего хоста).
-  Это фрагмент-иллюстрация, не полный redis.conf.
+  redis.conf для режим-агностичного standalone-кирпича Redis. Контекст рендера
+  (docs/templating.md §3.2):
+    .vars  — явно переданные core.file.rendered (password, config).
+    .self  — стабильные факты хоста; primary_ip нужен для bind.
+  Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010).
 
-  Доступный контекст рендера — см. docs/templating.md §3.2.
+  Bind на primary_ip + 127.0.0.1: внешние клиенты — по IP хоста, локальные — по
+  loopback.
+
+  ВАЖНО: этот файл ЦЕЛИКОМ заменяет дистрибутивный /etc/redis/redis.conf,
+  поэтому он обязан САМ задавать все критичные для systemd-managed Redis директивы —
+  иначе вступают встроенные дефолты бинаря redis-server, а не дистрибутивные.
+  Конкретно:
+    - `dir /var/lib/redis` — рабочий каталог под RDB/AOF. Встроенный дефолт `dir /`
+      read-only для пользователя redis; при SIGTERM-рестарте Redis пишет финальный
+      RDB-снапшот, падает «Read-only file system» и НЕ выходит → рестарт висит
+      вечно. Каталог создаёт пакет redis (owner redis:redis, mode 0750).
+    - daemonize/supervised/pidfile/logfile — под управление systemd-юнитом
+      redis-server (Type=notify, supervised systemd).
+
+  Persistence (save/appendonly) НЕ зашита здесь: она приходит в .vars.config от
+  persistence-пресета scenario (essence.persistence_presets[input.persistence]) и
+  range-ится ниже вместе с остальным merged-конфигом.
+
+  .vars.config — merged-конфиг от scenario сервиса (default→preset→вычисления→
+  passthrough, слит через merge() в render-фазе). Идёт ПОСЛЕ базовых директив,
+  поэтому caller может осознанно переопределить любую (last-wins в redis.conf).
+  Пусто → секция пуста. unixsocket/unixsocketperm/maxmemory/maxmemory-policy/save/
+  appendonly — обычные ключи этого map-а (их вычислил scenario).
+
+  cluster-announce-ip — ПЕР-ХОСТ-директива (режим cluster): IP, который ЭТА нода
+  анонсирует в gossip cluster-bus. Берётся из .self.network.primary_ip (адрес
+  ИМЕННО этого хоста, render_context.self пер-хост — симметрично bind), а НЕ из
+  .vars.config: apply.input резолвится host-ИНВАРИАНТНО (на первом по SID хосте),
+  поэтому протаскивать announce-ip через config-map нельзя — все ноды получили бы
+  IP первой ноды и cluster-bus за NAT/в облаке сломался бы. Остальные
+  cluster-директивы (cluster-enabled/cluster-config-file/cluster-node-timeout)
+  host-инвариантны → приходят обычными ключами .vars.config. Гейт по
+  `cluster-enabled` в config: вне cluster-режима строки announce-ip нет.
 */}}
 bind {{ .self.network.primary_ip }} 127.0.0.1
 port 6379
 protected-mode yes
 
-maxmemory {{ .vars.maxmemory }}
-maxmemory-policy allkeys-lru
+# Управление через systemd-юнит redis-server (пакет дистрибутива).
+# daemonize no + supervised systemd: redis-server остаётся foreground-процессом и
+# сам уведомляет systemd о готовности (Type=notify в юните).
+daemonize no
+supervised systemd
+pidfile /var/run/redis/redis-server.pid
+logfile /var/log/redis/redis-server.log
+
+# Рабочий каталог под RDB/AOF. КРИТИЧНО: без него Redis пишет дамп в `/`
+# (read-only для redis) и зависает при рестарте. Каталог создаёт пакет redis.
+dir /var/lib/redis
 
 requirepass {{ .vars.password }}
 
+# ACL-юзеры вынесены в отдельный файл (см. destiny task «Render users.acl»).
+aclfile /etc/redis/users.acl
+
+{{- if (index .vars.config "cluster-enabled") }}
+# Режим cluster: эта нода анонсирует СВОЙ primary_ip в gossip (per-host, см. шапку).
+cluster-announce-ip {{ .self.network.primary_ip }}
+{{- end }}
+
 {{ range $key, $value := .vars.config }}
 {{ $key }} {{ $value }}
-{{ end }}
-
-{{/* Replication settings — рендерятся, если task передал master_addr в .vars. */}}
-{{ if .vars.master_addr }}
-replicaof {{ .vars.master_addr }} 6379
-masterauth {{ .vars.password }}
-{{ end }}
+{{- end }}

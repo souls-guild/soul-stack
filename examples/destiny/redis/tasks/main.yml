@@ -1,15 +1,120 @@
-# Диспатч по input.action. include-задача не может нести модификаторы scope/
-# контроля (`when:` и пр.) — раскрытие отвергает их `include_modifier_unsupported`
-# (shared/config/include_expand.go, destiny/tasks.md §4.1). Поэтому include-соседи
-# подключаются БЕЗУСЛОВНО, а гейт по action живёт на module-задачах ВНУТРИ каждого
-# файла (apply.yml/manage.yml/diagnostic.yml) через `when: input.action == '…'`.
-# Семантика прежняя: при заданном action отрабатывают только задачи его файла,
-# остальные `skipped: when` (destiny/tasks.md §6 `when:`).
-- name: Apply Redis configuration
-  include: apply.yml
+# tasks/main.yml — точка входа destiny redis (плоский список module-задач).
+# Видит ТОЛЬКО свой input: (изоляция, ADR-009).
+#
+# Режим-агностичный per-host кирпич, путь standalone (pilot 2026-06-22):
+#   install redis-server → (опц.) каталог сокета → render redis.conf →
+#   render users.acl → systemd hardening drop-in → daemon-reload (onchanges) →
+#   service.running → restart (onchanges конфиг/acl/drop-in).
+# Установка — через пакетный менеджер дистрибутива (declarative, idempotent).
+# Конфиг приходит ГОТОВЫМ merged map-ом через apply: input: config: — destiny
+# ничего не сливает сама (merge делает scenario сервиса).
 
-- name: Manage Redis users and service state
-  include: manage.yml
+# Пакет из репозитория дистрибутива. retry — против флапающего apt/dnf-зеркала.
+# version опционален (required:false): не передан → has(input.version) ложно →
+# version рендерится в "" → core.pkg ставит версию по умолчанию из репо БЕЗ
+# =version-пина (поведение latest). Передан → пин на distro-native строку.
+- name: Install redis-server package
+  module: core.pkg.installed
+  retry: { count: 3, delay: 10s }
+  params:
+    name: redis-server
+    version: "${ has(input.version) ? input.version : '' }"
 
-- name: Run Redis diagnostics
-  include: diagnostic.yml
+# Каталог unix-сокета — ТОЛЬКО если в merged-конфиге есть директива unixsocket.
+# Пакетный systemd создаёт каталог через RuntimeDirectory лишь при старте юнита
+# (хрупко); создаём явно ДО старта, но ПОСЛЕ установки пакета (нужен пользователь/
+# группа redis). `install -d` атомарно и идемпотентно; creates:-якорь делает
+# повторный проход no-op. mode 0755: владелец redis пишет сокет, остальные обходят
+# каталог; доступ к сокету режет unixsocketperm (директива конфига).
+- name: Ensure the redis socket directory exists
+  module: core.exec.run
+  when: has(input.config) && has(input.config.unixsocket)
+  params:
+    creates: /var/run/redis
+    cmd: install
+    args: ["-d", "-o", "redis", "-g", "redis", "-m", "0755", "/var/run/redis"]
+
+# users.acl из переданного MAP ACL-юзеров имя→{perms,state,password} (aclfile в
+# redis.conf). register, чтобы рестартить redis при изменении ACL. owner/group
+# redis, mode 0640 — файл содержит password-хеши, читает только сервис. Шаблон
+# range-ит MAP (Go сортирует ключи → строки ACL детерминированы между прогонами,
+# нет ложного change → нет лишнего рестарта) и хеширует пароль (sha256), plaintext
+# не пишет; пустой map → файл без юзеров (валидный aclfile).
+- name: Render users.acl
+  module: core.file.rendered
+  register: redis_acl
+  params:
+    path: /etc/redis/users.acl
+    template: templates/users.acl.tmpl
+    mode: "0640"
+    owner: redis
+    group: redis
+    vars:
+      users: "${ has(input.users) ? input.users : {} }"
+
+# redis.conf из merged-конфига. register, чтобы рестартить redis только при
+# изменении конфига. owner/group redis, mode 0640 — конфиг читает только сервис.
+- name: Render redis.conf
+  module: core.file.rendered
+  register: redis_conf
+  params:
+    path: /etc/redis/redis.conf
+    template: templates/redis.conf.tmpl
+    mode: "0640"
+    owner: redis
+    group: redis
+    vars:
+      password: "${ input.password }"
+      config:   "${ has(input.config) ? input.config : {} }"
+
+# Каталог drop-in-а systemd. core.file.rendered создаёт только файл, родительский
+# каталог .service.d/ — нет, а дистрибутивный пакет redis-server его не заводит.
+# Создаём явно ДО рендера тем же идемпотентным паттерном (install -d + creates-якорь).
+- name: Ensure the redis-server systemd drop-in directory exists
+  module: core.exec.run
+  params:
+    creates: /etc/systemd/system/redis-server.service.d
+    cmd: install
+    args: ["-d", "-o", "root", "-g", "root", "-m", "0755", "/etc/systemd/system/redis-server.service.d"]
+
+# systemd drop-in hardening поверх ДИСТРИБУТИВНОГО юнита redis-server (его нельзя
+# заменять целиком — обновляется с пакетом, несёт ExecStart/Type=notify). Override
+# мержится в [Service]. stateful-вариант: ProtectSystem=strict + ReadWritePaths под
+# фактические каталоги записи redis (data-dir/socket/pid/log). register — чтобы
+# реактивно дернуть daemon-reload + restart только при изменении. Подробности — в шаблоне.
+- name: Render redis-server systemd hardening drop-in
+  module: core.file.rendered
+  register: redis_hardening
+  params:
+    path: /etc/systemd/system/redis-server.service.d/hardening.conf
+    template: templates/hardening.conf.tmpl
+    mode: "0644"
+    owner: root
+    group: root
+
+# Drop-in меняет загруженный unit → systemd обязан перечитать конфигурацию ДО
+# рестарта. daemon-reload реактивно: onchanges на drop-in-задачу. Не изменился →
+# no-op. argv без shell — метасимволов в команде нет.
+- name: Reload systemd because the hardening drop-in changed
+  module: core.exec.run
+  onchanges: [redis_hardening]
+  params:
+    cmd: systemctl
+    args: ["daemon-reload"]
+
+- name: Ensure redis-server is running and enabled at boot
+  module: core.service.running
+  params:
+    name: redis-server
+    enabled: true
+
+# Рестарт реактивно на изменение конфига/ACL/drop-in: redis.conf и users.acl
+# требуют рестарта (новые директивы/юзеры), а изменённый drop-in вступает в силу
+# только после рестарта (daemon-reload выше лишь перечитал unit). Порядок
+# гарантирован позицией задач.
+- name: Restart redis-server because config or hardening changed
+  module: core.service.restarted
+  onchanges: [redis_conf, redis_acl, redis_hardening]
+  timeout: 30s
+  params:
+    name: redis-server

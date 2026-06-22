@@ -1,0 +1,130 @@
+# L0-испытание create в режиме cluster с РЕПЛИКАМИ: shards=2,
+# replicas_per_shard=1 → топология 2*(1+1)=4 хоста (size-guard проходит).
+# Закрывает non-zero replicas в size-guard (1+int(replicas) != 1) и в nodes-MAP/
+# cluster-build params (replicas_per_shard=1 уходит в плагин, который round-robin
+# раскладывает реплики). render_context.self в config = первый по SID хост
+# (host-инвариант apply.input пилота); cluster-announce-ip в config НЕТ — он
+# per-host в .tmpl (.self.network.primary_ip); nodes — из всего roster-а (4 адреса).
+#
+# Парный с cluster-create-3shards (replicas=0): подтверждает, что size-guard
+# учитывает replicas_per_shard, а не только shards.
+name: cluster create with replicas (2 shards x 1 replica = 4 hosts)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-2.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-4.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.4 }
+        os: { arch: amd64 }
+    - sid: node-1.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-3.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+  essence:
+    redis_type: cluster
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+  input:
+    redis_type: cluster
+    shards: 2
+    replicas_per_shard: 1
+    cluster_node_timeout: 8000
+
+assert:
+  rendered_tasks:
+    # size-guard PASS: 4 == 2*(1+1) → "true".
+    - index: 2
+      module: core.cmd.shell
+      params:
+        cmd: 'test "true" = "true" || { echo "topology mismatch: hosts != shards*(1+replicas_per_shard)"; exit 1; }'
+
+    # redis.conf: cluster-node-timeout из input (8000, не дефолт 5000).
+    # cluster-announce-ip в config НЕТ — per-host, рендерится в .tmpl из
+    # .self.network.primary_ip. render_context.self = первый по SID хост (node-1).
+    - index: 6
+      module: core.file.rendered
+      params:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            password: s3cr3t-redis-pass-create
+            config:
+              maxmemory:        "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients:       10000
+              timeout:          300
+              save:             "900 1 300 10 60 10000"
+              appendonly:       "no"
+              cluster-enabled:      "yes"
+              cluster-config-file:  "nodes.conf"
+              cluster-node-timeout: "8000"
+          self:
+            sid: node-1.example.com
+            covens: [create, redis]
+            choirs: []
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # cluster-build: nodes-MAP всех 4 хостов (детерминирован по SID),
+    # replicas_per_shard=1 уходит в плагин.
+    - index: 13
+      module: community.redis.cluster
+      params:
+        action: create
+        replicas_per_shard: 1
+        password: s3cr3t-redis-pass-create
+        nodes:
+          node-1.example.com: { addr: "10.0.0.1:6379" }
+          node-2.example.com: { addr: "10.0.0.2:6379" }
+          node-3.example.com: { addr: "10.0.0.3:6379" }
+          node-4.example.com: { addr: "10.0.0.4:6379" }
+
+  state_changes:
+    redis_type: cluster
+    redis_version: ""
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+      cluster-enabled:      "yes"
+      cluster-config-file:  "nodes.conf"
+      cluster-node-timeout: "8000"
+    redis_users: {}
+    redis_hosts: []

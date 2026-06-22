@@ -32,7 +32,14 @@ type Case struct {
 // Fixtures — герметичный вход прогона. Все поля опциональны; пустое поле =
 // пустой контекст соответствующей переменной CEL.
 //
-// Soulprint в L0 — факты одного хоста (карта `soulprint.self.<path>`).
+// Soulprint в L0 — факты ОДНОГО хоста (карта `soulprint.self.<path>`),
+// single-host сахар: harness строит roster из одного синтетического хоста.
+// Hosts — multi-host roster прогона (N хостов, render-инварианты топологии:
+// `soulprint.hosts`/`.where(...)`/`size()`/nodes-детерминизм). Soulprint и Hosts
+// ВЗАИМОИСКЛЮЧЕНЫ: оба в одном кейсе → strict-ошибка (validate), в духе
+// strict-декода harness. Соответствует уровню L0 render-only — кто реально
+// master исполняет (dispatch) остаётся L3 ([ADR-023] amendment 2026-06-22).
+//
 // Vault — мок vault-резолва: ключ = logical-path секрета (`secret/<...>`),
 // значение = map полей секрета (форма KV v2 `data.data`).
 //
@@ -52,9 +59,27 @@ type Fixtures struct {
 	Input                map[string]any            `yaml:"input,omitempty"`
 	Essence              map[string]any            `yaml:"essence,omitempty"`
 	Soulprint            map[string]any            `yaml:"soulprint,omitempty"`
+	Hosts                []HostFixture             `yaml:"hosts,omitempty"`
 	Vault                map[string]map[string]any `yaml:"vault,omitempty"`
 	State                map[string]any            `yaml:"state,omitempty"`
 	DefaultDestinySource string                    `yaml:"default_destiny_source,omitempty"`
+}
+
+// HostFixture — одна запись multi-host roster-а L0 (`fixtures.hosts[]`).
+// Зеркало стабильных полей topology.HostFacts, видимых в render
+// (`soulprint.hosts[]`): sid/covens/role/soulprint/choirs.
+//
+// SID обязателен; Covens обязаны нести incarnation.name-метку (имя сценария
+// кейса) — зеркало прод-roster (`rosterSQL WHERE $1 = ANY(coven)`), иначе хост
+// не попадёт в таргет `on:`/`where:`. Role/Soulprint/Choirs опциональны.
+// Порядок roster-а в `soulprint.hosts` детерминирован сортировкой по SID
+// (harness, не порядок в YAML).
+type HostFixture struct {
+	SID       string         `yaml:"sid"`
+	Covens    []string       `yaml:"covens,omitempty"`
+	Role      string         `yaml:"role,omitempty"`
+	Soulprint map[string]any `yaml:"soulprint,omitempty"`
+	Choirs    []string       `yaml:"choirs,omitempty"`
 }
 
 // Mocks — моки для шагов, обращающихся к среде хоста.

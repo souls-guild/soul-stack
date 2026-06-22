@@ -87,6 +87,7 @@ params:
 | `now() -> timestamp` | Возвращает текущее время на момент вычисления выражения (eval-time на каждое обращение, не start-time прогона). | `now() - register.deployed_at > duration("1h")` |
 | `duration(string) -> duration` | Конструктор `duration` из строки (например, `"1h"`, `"30s"`). Используется с `now()` и арифметикой времени. | `duration("30s")` |
 | `vault(path) -> map / value` | **Keeper-side** чтение секрета Vault KV в CEL-render-фазе (фаза 3, см. [§4](#4-соотношение-фаз-обработки-yaml)). Без `#field` возвращает весь map секрета — поле берётся CEL-доступом `.field`; с `#field` в пути — одно значение напрямую. Реальное значение подставляется в params и уходит на Soul; маскируется только на выходе (логи/OTel/UI). `path` — строковый литерал ИЛИ CEL-выражение из **доверенного** контекста (`incarnation`/`vars`, не operator-`input`); резолвится CEL-ом до чтения Vault, инъекции в Vault-запрос нет. См. [ADR-017](adr/0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read). | `${ vault('secret/redis/admin').password }` или `${ vault('secret/redis/admin#password') }` |
+| `merge(m, m...) -> map` ∪ `merge(list(map)) -> map` | Слияние map-ов слева направо по ключу **верхнего уровня** — **SHALLOW** (вложенный map НЕ сливается глубоко: правый целиком замещает совпавший верхний ключ), **last-wins** (правый перекрывает левый). Pure (без I/O/секретов/крипты). Две формы: **varargs** `merge(m, m...)` (≥1 map-аргумент) и **`merge(list(map))`** (ОДИН аргумент-список map-ов, flatten слева направо — для коллекции из `.map(...)`-comprehension, которую в шаблон надо отдать map-ом ради детерминизма порядка, см. [§6](#6-передача-данных-между-движками-конвейер)). Не-map аргумент / элемент → ошибка; пустой список → пустой map. Slot для трансляции «простой типизированный `input` → детальный конфиг»: слить авторский пресет с passthrough-`input`-map. Недоступна в migration-CEL ([ADR-019], sandbox). См. [ADR-010 Amendment 2026-06-22](adr/0010-templating.md). | `${ merge(essence.redis.defaults, input.redis_settings) }`; `${ merge(input.users.map(n, {n: input.users[n]})) }` |
 | `soulprint.self.<path>` | Поля Soulprint текущего хоста. | `soulprint.self.os.family == "debian"` |
 | `soulprint.hosts -> list` | Список хостов прогона со стабильными фактами (scenario-only, см. [orchestration.md §4.1](scenario/orchestration.md#41-soulprinthosts--список-хостов-прогона-scenario-only-аксессор)). | `soulprint.hosts.size()` |
 | `soulprint.where(<predicate>) -> list` | Хосты, удовлетворяющие предикату-**строке** (CEL над стабильным слоем — `covens`/`os.*`/`network.*`); role — declared, доступна через `soulprint.hosts.where(...)` и только в bootstrap-create, см. [orchestration.md §4.1](scenario/orchestration.md#41-soulprinthosts--список-хостов-прогона-scenario-only-аксессор). Предикат — **статический строковый литерал**, раскрываемый на compile-фазе во встроенный CEL filter-comprehension (не runtime-исполнение строки). Keyword-args (`coven=...`) не поддерживаются (CEL не имеет keyword-args). | `soulprint.where("'db' in covens")[0].network.primary_ip` |
@@ -251,7 +252,12 @@ count: "${ input.replicas * 2 }"
 
 hosts: "${ soulprint.where(\"'db' in covens\") }"
 # → hosts: [ {sid: ..., network: {...}}, ... ]   (list)
+
+redis_config: "${ merge(essence.redis.defaults, input.redis_settings) }"
+# → redis_config: { maxmemory: ..., save: ..., ... }   (map)
 ```
+
+Результат `merge(...)` — **map**, поэтому подчиняется правилу (а): в ячейке-одиночке подставляется нативной структурой; склейка map со строкой по правилу (б) — ошибка (нужен вынос в отдельную ячейку).
 
 **(б) В ячейке есть текст рядом с `${ … }`.** Результат **стрингифицируется** и склеивается со строкой.
 
@@ -328,6 +334,12 @@ Runtime-операция использует probe+register (волатильн
 
 Один файл = один движок. Один шаг = один переход CEL → text/template (или вообще без text/template, если шаг не `core.file.rendered`).
 
+#### Коллекции в шаблон — map-ом, не list-ом, если важен детерминизм порядка строк (нормативно)
+
+Go text/template `range` по **map** обходит ключи в **отсортированном** порядке (детерминированно), а по **list** — в порядке итерации источника, который для коллекции, построенной CEL-comprehension `.map(...)` над map, наследует **недетерминированный** порядок итерации Go-map. Следствие: рендер списка из `input.<коллекция>.map(...)` даёт строки файла в случайном порядке между прогонами → ложный `changed` в `core.file.rendered` → лишний `onchanges`-рестарт сервиса (на rolling-restart флоте — каскадный лишний рестарт).
+
+**Правило:** если в шаблон передаётся коллекция, для которой важен стабильный порядок строк (ACL-файлы, списки нод/sentinel, любой построчный конфиг), передавать её **map-ом** (имя→объект), а в шаблоне `range`-ить с ключом (`{{- range $name, $u := .vars.users }}`), а НЕ списком. Коллекцию из `.map(...)`-comprehension (CEL даёт список) свернуть в map формой `merge(list(map))` ([§2.3](#23-зарегистрированные-cel-функции-стартовый-минимум)): `${ merge(input.users.map(name, {name: {...}})) }`. Передача list-ом допустима только там, где порядок задаётся самим автором (литеральный список) и не наследует итерацию map.
+
 ## 7. Security model
 
 ### 7.1. CEL — sandbox by design
@@ -343,7 +355,7 @@ CEL не имеет syscall, файлового и произвольного с
 CEL живёт на двух сторонах ([ADR-012(d)](adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add)), с разными env:
 
 - **Keeper-env** (`shared/cel.New`, + `WithVault`) — полный: render params/`${ … }`, `where:`, `vault(...)`, `soulprint.hosts`/`soulprint.where`. Единственная сторона с внешним доступом (Vault). Один и тот же Keeper-env обслуживает **scenario-проход** (`soulprint.hosts`/`soulprint.where` доступны) и **destiny-проход** (изолированный render-проход `apply: destiny`, V2 ADR-009): в destiny-проходе cross-host аксессоры `soulprint.hosts`/`soulprint.where` **отсекаются** (`AllowHosts=false` → ошибка изоляции), а стабильный self-факт `soulprint.self.*` целевого хоста **остаётся доступен** (ADR-009/ADR-010 amendment 2026-06-18: self — per-host свойство, не scenario-scope; топология прогона приходит в destiny только через `apply: input:`).
-- **Soul flow-control-env** (`shared/cel.NewFlowControl`) — урезанная песочница для предикатов `when:`/`changed_when:`/`failed_when:`. Регистрирует **только** функции без I/O (`size`/`contains`/`has`/`keys`/`values`/comprehensions/конверсии/операторы/`duration`) и переменные `register.*` (Soul собирает из результатов предыдущих задач по register-имени) + контекст из `flow_context` (`input`/`vars`/`essence`/`incarnation` + `soulprint.self`). Запрещены **конструктивно** (символ не зарегистрирован → compile-error «undeclared reference», sandbox-by-undeclaration, как migration-CEL [ADR-019](adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)): `vault(...)`/`now()` (внешний доступ/недетерминизм), `soulprint.hosts`/`soulprint.where` (cross-host scenario-only — изоляция форсится `allowHosts=false`), любой `__`-идентификатор. Soul тянет `cel-go`, но НЕ `vault`-client: Vault-токенов на хосте нет, внешний доступ keeper-only.
+- **Soul flow-control-env** (`shared/cel.NewFlowControl`) — урезанная песочница для предикатов `when:`/`changed_when:`/`failed_when:`. Регистрирует **только** функции без I/O (`size`/`contains`/`has`/`keys`/`values`/comprehensions/конверсии/операторы/`duration`/`glob`/`merge`) и переменные `register.*` (Soul собирает из результатов предыдущих задач по register-имени) + контекст из `flow_context` (`input`/`vars`/`essence`/`incarnation` + `soulprint.self`). Запрещены **конструктивно** (символ не зарегистрирован → compile-error «undeclared reference», sandbox-by-undeclaration, как migration-CEL [ADR-019](adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)): `vault(...)`/`now()` (внешний доступ/недетерминизм), `soulprint.hosts`/`soulprint.where` (cross-host scenario-only — изоляция форсится `allowHosts=false`), любой `__`-идентификатор. Soul тянет `cel-go`, но НЕ `vault`-client: Vault-токенов на хосте нет, внешний доступ keeper-only.
 
 ### 7.2. text/template — sandbox через три барьера
 
