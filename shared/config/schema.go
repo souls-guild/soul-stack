@@ -469,22 +469,24 @@ func schemaValidateSoul(path string, root *ast.MappingNode, c *SoulConfig) []dia
 		} else {
 			out = append(out, checkPort(root, fmt.Sprintf("$.keeper.endpoints[%d].bootstrap_port", i), ep.BootstrapPort)...)
 		}
+		// priority: 0 = «не задано» (normalizedPriority маппит 0→1, default).
+		// Отвергаем только отрицательное; см. docs/soul/connection.md.
 		if ep.Priority < 0 {
 			out = append(out, atPath(root, fmt.Sprintf("$.keeper.endpoints[%d].priority", i), diag.Diagnostic{
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 				Code:    "value_out_of_range",
-				Message: fmt.Sprintf("keeper.endpoints[%d].priority must be >= 1, got %d", i, ep.Priority),
+				Message: fmt.Sprintf("keeper.endpoints[%d].priority must not be negative (0 = не задано → default 1), got %d", i, ep.Priority),
 			}))
 		}
 	}
-	// keeper.retry.max_attempts: 0 = «не задано» (дефолт connection-runner-а).
-	// Отрицательное — невозможное число попыток; молча трактовалось бы как
-	// дефолт либо как «никогда не подключаться».
+	// keeper.retry.max_attempts: 0 = «не задано» (резолв в дефолт connection-runner-а).
+	// Отвергаем только отрицательное — невозможное число попыток; молча
+	// трактовалось бы как дефолт либо как «никогда не подключаться».
 	if c.Keeper.Retry != nil && c.Keeper.Retry.MaxAttempts < 0 {
 		out = append(out, atPath(root, "$.keeper.retry.max_attempts", diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code:    "value_out_of_range",
-			Message: fmt.Sprintf("keeper.retry.max_attempts must be >= 1, got %d", c.Keeper.Retry.MaxAttempts),
+			Message: fmt.Sprintf("keeper.retry.max_attempts must not be negative (0 = не задано → default), got %d", c.Keeper.Retry.MaxAttempts),
 		}))
 	}
 	if c.OTel != nil {
