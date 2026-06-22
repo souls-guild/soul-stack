@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 // O5: числовые поля без диапазон-валидации до усиления (reaper.batch_size,
 // keeper.retry.max_attempts, logging.rotation.max_size_mb/max_files)
@@ -276,6 +279,62 @@ func TestSoulRange_RetryMaxAttemptsPositive_OK(t *testing.T) {
 	if hasCode(diags, "value_out_of_range") {
 		dump(t, diags)
 		t.Fatalf("positive max_attempts must not trigger value_out_of_range")
+	}
+}
+
+// soulEndpointWithPriority — минимальный валидный soul.yml, где у первого
+// endpoint задан priority. priority — поле endpoint (6-пробельный отступ),
+// поэтому его нельзя дописать в конец soulRangeBase (там завершающий
+// keeper.tls на 2-пробельном уровне); строим endpoint-блок целиком.
+func soulEndpointWithPriority(priorityLine string) string {
+	return `sid: redis-01.prod.example.com
+keeper:
+  endpoints:
+    - host: k1.dc1.example
+      event_stream_port: 9443
+      bootstrap_port: 9442
+` + priorityLine + `  tls: { ca: /var/lib/soul-stack/seed/ca.crt }
+`
+}
+
+func TestSoulRange_EndpointPriorityNegative(t *testing.T) {
+	src := soulEndpointWithPriority("      priority: -1\n")
+	_, _, diags, _ := LoadSoulFromBytes("soul.yml", []byte(src), ValidateOptions{})
+	if !hasCodeAt(diags, "value_out_of_range", "$.keeper.endpoints[0].priority") {
+		dump(t, diags)
+		t.Fatalf("expected value_out_of_range for negative keeper.endpoints[0].priority")
+	}
+}
+
+func TestSoulRange_EndpointPriorityDefaultZero_OK(t *testing.T) {
+	// priority: 0 (явный) = «не задано» → normalizedPriority маппит в 1.
+	// КЛЮЧЕВОЙ кейс: 0 допускается, диагностики диапазона быть не должно.
+	src := soulEndpointWithPriority("      priority: 0\n")
+	_, _, diags, _ := LoadSoulFromBytes("soul.yml", []byte(src), ValidateOptions{})
+	if hasCode(diags, "value_out_of_range") {
+		dump(t, diags)
+		t.Fatalf("priority 0 (не задано → default 1) must not trigger value_out_of_range")
+	}
+}
+
+func TestSoulRange_EndpointPriorityOmitted_OK(t *testing.T) {
+	// Опущенный ключ → zero-value 0 → default 1, без диагностик диапазона.
+	src := soulEndpointWithPriority("")
+	_, _, diags, _ := LoadSoulFromBytes("soul.yml", []byte(src), ValidateOptions{})
+	if hasCode(diags, "value_out_of_range") {
+		dump(t, diags)
+		t.Fatalf("omitted endpoint priority must not trigger value_out_of_range")
+	}
+}
+
+func TestSoulRange_EndpointPriorityPositive_OK(t *testing.T) {
+	for _, p := range []int{1, 2} {
+		src := soulEndpointWithPriority(fmt.Sprintf("      priority: %d\n", p))
+		_, _, diags, _ := LoadSoulFromBytes("soul.yml", []byte(src), ValidateOptions{})
+		if hasCode(diags, "value_out_of_range") {
+			dump(t, diags)
+			t.Fatalf("positive endpoint priority %d must not trigger value_out_of_range", p)
+		}
 	}
 }
 
