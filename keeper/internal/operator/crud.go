@@ -101,7 +101,8 @@ type ListFilter struct {
 //
 // Pre-conditions:
 //   - op.AID соответствует [AIDPattern] (валидируется до round-trip).
-//   - op.AuthMethod — один из MVP-enum-ов (jwt / mtls / combined).
+//   - op.AuthMethod — один из enum-ов (jwt / mtls / combined / ldap / oidc;
+//     ldap/oidc — федеративная аутентификация, ADR-058).
 //   - op.DisplayName — непустой (NOT NULL без DEFAULT в схеме).
 //
 // Возврат:
@@ -122,7 +123,7 @@ func Insert(ctx context.Context, db execQueryRower, op *Operator) error {
 		return fmt.Errorf("operator: display_name is empty")
 	}
 	switch op.AuthMethod {
-	case AuthMethodJWT, AuthMethodMTLS, AuthMethodCombined:
+	case AuthMethodJWT, AuthMethodMTLS, AuthMethodCombined, AuthMethodLDAP, AuthMethodOIDC:
 	default:
 		return fmt.Errorf("operator: invalid auth_method %q", op.AuthMethod)
 	}

@@ -35,7 +35,9 @@ func TestNativeEnumConstsPinned(t *testing.T) {
 		// OperatorAuthMethod
 		{"OperatorAuthMethodCombined", string(OperatorAuthMethodCombined), "combined"},
 		{"OperatorAuthMethodJWT", string(OperatorAuthMethodJWT), "jwt"},
+		{"OperatorAuthMethodLDAP", string(OperatorAuthMethodLDAP), "ldap"},
 		{"OperatorAuthMethodMTLS", string(OperatorAuthMethodMTLS), "mtls"},
+		{"OperatorAuthMethodOIDC", string(OperatorAuthMethodOIDC), "oidc"},
 
 		// HeraldType
 		{"HeraldTypeWebhook", string(HeraldTypeWebhook), "webhook"},
