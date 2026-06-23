@@ -20,8 +20,9 @@ import (
 // инициатива Keeper-а). Отделено в системную AID для audit-фильтра.
 //
 // FK на `operators(aid)` для `push_providers.created_by_aid` обязывает строку
-// `archon-system` существовать в реестре до первого auto-import-а; в pilot S7-4
-// это ответственность оператора (миграция reserved-AID — отдельный slice).
+// `archon-system` существовать в реестре до первого auto-import-а. Строка
+// `operators(archon-system, created_via='system', created_by_aid=NULL)` посеяна
+// миграцией 086 (ADR-058(d)) — FK гарантирован после применения миграций.
 const AutoImportSystemAID = "archon-system"
 
 // AutoImporterReader — узкая read-поверхность над storage push_providers,

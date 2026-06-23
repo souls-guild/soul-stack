@@ -72,13 +72,13 @@ var (
 // DEFAULT NOW(), если caller не задал значение — поведение симметрично
 // audit_log в `keeper/internal/auditpg`.
 const insertOperatorSQL = `
-INSERT INTO operators (aid, display_name, auth_method, created_at, created_by_aid, revoked_at, metadata)
-VALUES ($1, $2, $3, COALESCE($4, NOW()), $5, $6, $7)
+INSERT INTO operators (aid, display_name, auth_method, created_at, created_by_aid, created_via, revoked_at, metadata)
+VALUES ($1, $2, $3, COALESCE($4, NOW()), $5, $6, $7, $8)
 `
 
 // selectOperatorByAIDSQL — SELECT всех колонок operators по PK.
 const selectOperatorByAIDSQL = `
-SELECT aid, display_name, auth_method, created_at, created_by_aid, revoked_at, metadata
+SELECT aid, display_name, auth_method, created_at, created_by_aid, created_via, revoked_at, metadata
 FROM operators
 WHERE aid = $1
 `
@@ -128,6 +128,21 @@ func Insert(ctx context.Context, db execQueryRower, op *Operator) error {
 		return fmt.Errorf("operator: invalid auth_method %q", op.AuthMethod)
 	}
 
+	// created_via по умолчанию 'user' (ADR-058(d)): Operator API
+	// (Service.Create) и legacy-вызовы не задают поле — оператор, заведённый
+	// через POST /v1/operators, по определению user. Bootstrap/system/ldap/oidc
+	// проставляют значение явно. Дефолт ставится здесь (а не COALESCE в SQL),
+	// чтобы прикладная валидация ниже всегда видела канонизированное значение.
+	createdVia := op.CreatedVia
+	if createdVia == "" {
+		createdVia = CreatedViaUser
+	}
+	switch createdVia {
+	case CreatedViaBootstrap, CreatedViaUser, CreatedViaLDAP, CreatedViaOIDC, CreatedViaSystem:
+	default:
+		return fmt.Errorf("operator: invalid created_via %q", createdVia)
+	}
+
 	metadataBytes, err := marshalMetadata(op.Metadata)
 	if err != nil {
 		return fmt.Errorf("operator: marshal metadata: %w", err)
@@ -154,6 +169,7 @@ func Insert(ctx context.Context, db execQueryRower, op *Operator) error {
 		string(op.AuthMethod),
 		createdAt,
 		createdByAID,
+		createdVia,
 		revokedAt,
 		metadataBytes,
 	)
@@ -204,6 +220,7 @@ func scanOperator(row pgx.Row) (*Operator, error) {
 		&authMethodStr,
 		&op.CreatedAt,
 		&createdByAID,
+		&op.CreatedVia,
 		&op.RevokedAt,
 		&metadataBytes,
 	)
@@ -248,7 +265,7 @@ func List(ctx context.Context, db execQueryRower, f ListFilter, offset, limit in
 		return nil, 0, fmt.Errorf("operator: list count: %w", err)
 	}
 
-	selectSQL := `SELECT aid, display_name, auth_method, created_at, created_by_aid, revoked_at, metadata
+	selectSQL := `SELECT aid, display_name, auth_method, created_at, created_by_aid, created_via, revoked_at, metadata
 FROM operators` + whereSQL + `
 ORDER BY created_at DESC
 LIMIT $` + intToString(len(args)+1) + ` OFFSET $` + intToString(len(args)+2)

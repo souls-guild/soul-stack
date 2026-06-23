@@ -62,14 +62,27 @@ func TestOperator_IsRevoked(t *testing.T) {
 }
 
 func TestOperator_IsBootstrap(t *testing.T) {
-	first := &Operator{AID: "archon-alice"} // CreatedByAID = nil
+	// ADR-058(d): IsBootstrap определяется по created_via='bootstrap', НЕ по
+	// created_by_aid==nil. Первый Архонт.
+	first := &Operator{AID: "archon-alice", CreatedVia: CreatedViaBootstrap}
 	if !first.IsBootstrap() {
 		t.Error("first operator: IsBootstrap() = false, want true")
 	}
+	// Оператор, созданный другим Архонтом (created_via='user').
 	parent := "archon-alice"
-	derived := &Operator{AID: "archon-bob", CreatedByAID: &parent}
+	derived := &Operator{AID: "archon-bob", CreatedByAID: &parent, CreatedVia: CreatedViaUser}
 	if derived.IsBootstrap() {
 		t.Error("derived operator: IsBootstrap() = true, want false")
+	}
+	// ADR-058(d) guard: archon-system / federated-операторы тоже имеют
+	// created_by_aid=nil, но НЕ являются bootstrap — created_via это различает.
+	sys := &Operator{AID: "archon-system", CreatedVia: CreatedViaSystem}
+	if sys.IsBootstrap() {
+		t.Error("system operator (created_by_aid=nil, created_via=system): IsBootstrap() = true, want false")
+	}
+	fed := &Operator{AID: "alice", CreatedVia: CreatedViaLDAP}
+	if fed.IsBootstrap() {
+		t.Error("federated operator (created_by_aid=nil, created_via=ldap): IsBootstrap() = true, want false")
 	}
 }
 

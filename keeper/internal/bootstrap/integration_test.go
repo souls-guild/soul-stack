@@ -215,11 +215,12 @@ func TestIntegration_Init_HappyPath(t *testing.T) {
 		displayName  string
 		authMethod   string
 		createdByAID *string
+		createdVia   string
 	)
 	row := integrationPool.QueryRow(ctx,
-		`SELECT aid, display_name, auth_method, created_by_aid
+		`SELECT aid, display_name, auth_method, created_by_aid, created_via
 		 FROM operators WHERE aid = $1`, "archon-alice")
-	if err := row.Scan(&aid, &displayName, &authMethod, &createdByAID); err != nil {
+	if err := row.Scan(&aid, &displayName, &authMethod, &createdByAID, &createdVia); err != nil {
 		t.Fatalf("scan operators: %v", err)
 	}
 	if aid != "archon-alice" || displayName != "Alice Admin" || authMethod != "jwt" {
@@ -227,6 +228,11 @@ func TestIntegration_Init_HappyPath(t *testing.T) {
 	}
 	if createdByAID != nil {
 		t.Errorf("created_by_aid = %v, want NULL (bootstrap)", *createdByAID)
+	}
+	// ADR-058(d) guard (кейс 1): первый Архонт пишется с created_via='bootstrap'
+	// (новый bootstrap-инвариант перенесён на это поле, миграция 085).
+	if createdVia != "bootstrap" {
+		t.Errorf("created_via = %q, want \"bootstrap\"", createdVia)
 	}
 
 	// Проверка audit_log.
@@ -397,12 +403,16 @@ func TestIntegration_Init_Concurrent(t *testing.T) {
 	if total != 1 {
 		t.Errorf("operators count = %d, want 1 (только победитель гонки)", total)
 	}
+	// ADR-058(d): bootstrap-инвариант перенесён с `created_by_aid IS NULL` на
+	// `created_via = 'bootstrap'` (миграция 085). Под нагрузкой гонки индекс
+	// `operators_first_archon_idx` (теперь на created_via='bootstrap') пропустил
+	// ровно одного победителя.
 	if err := integrationPool.QueryRow(ctx,
-		`SELECT COUNT(*) FROM operators WHERE created_by_aid IS NULL`).Scan(&bootstrapN); err != nil {
+		`SELECT COUNT(*) FROM operators WHERE created_via = 'bootstrap'`).Scan(&bootstrapN); err != nil {
 		t.Fatalf("count bootstrap operators: %v", err)
 	}
 	if bootstrapN != 1 {
-		t.Errorf("operators с created_by_aid IS NULL = %d, want 1 (bootstrap-инвариант)", bootstrapN)
+		t.Errorf("operators с created_via='bootstrap' = %d, want 1 (bootstrap-инвариант)", bootstrapN)
 	}
 }
 

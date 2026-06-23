@@ -374,7 +374,8 @@ func assertOperatorsSchema(t *testing.T, ctx context.Context) {
 	}
 
 	// Partial unique index — без него нарушится инвариант единственного
-	// bootstrap-Archon-а (ADR-013).
+	// bootstrap-Archon-а. ADR-058(d): предикат перенесён с created_by_aid IS NULL
+	// на created_via='bootstrap' (миграция 085), но индекс остаётся UNIQUE+partial.
 	var isUniquePartial bool
 	err = integrationPool.QueryRow(ctx, `
 		SELECT i.indisunique AND i.indpred IS NOT NULL
@@ -387,7 +388,26 @@ func assertOperatorsSchema(t *testing.T, ctx context.Context) {
 		t.Fatalf("pg_index operators_first_archon_idx: %v", err)
 	}
 	if !isUniquePartial {
-		t.Error("operators_first_archon_idx должен быть UNIQUE + partial (WHERE created_by_aid IS NULL)")
+		t.Error("operators_first_archon_idx должен быть UNIQUE + partial (WHERE created_via = 'bootstrap')")
+	}
+
+	// ADR-058(d) guard (кейс 4): миграция 086 посеяла системного оператора
+	// archon-system с created_via='system' и created_by_aid=NULL.
+	var (
+		sysVia       string
+		sysCreatedBy *string
+	)
+	err = integrationPool.QueryRow(ctx,
+		`SELECT created_via, created_by_aid FROM operators WHERE aid = 'archon-system'`,
+	).Scan(&sysVia, &sysCreatedBy)
+	if err != nil {
+		t.Fatalf("archon-system seed missing (миграция 086): %v", err)
+	}
+	if sysVia != "system" {
+		t.Errorf("archon-system created_via = %q, want \"system\"", sysVia)
+	}
+	if sysCreatedBy != nil {
+		t.Errorf("archon-system created_by_aid = %v, want NULL", *sysCreatedBy)
 	}
 
 	// CHECK aid_format: валидный AID проходит, невалидный отвергается.
@@ -409,19 +429,34 @@ func assertOperatorsSchema(t *testing.T, ctx context.Context) {
 	`); err == nil {
 		t.Error("invalid auth_method accepted, expected CHECK violation")
 	}
-
-	// Инвариант partial unique: второй INSERT с created_by_aid IS NULL —
-	// нарушение (первый archon-test-ok уже занял этот «слот»).
+	// CHECK created_via_valid: значение вне домена отвергается.
 	if _, err := integrationPool.Exec(ctx, `
-		INSERT INTO operators (aid, display_name, auth_method)
-		VALUES ('archon-second-bootstrap', 'Bootstrap?', 'jwt')
+		INSERT INTO operators (aid, display_name, auth_method, created_via)
+		VALUES ('archon-test-bad-via', 'Bad', 'jwt', 'wormhole')
 	`); err == nil {
-		t.Error("второй operator с created_by_aid=NULL принят, ожидали unique violation")
+		t.Error("invalid created_via accepted, expected CHECK violation")
+	}
+
+	// ADR-058(d) инвариант (кейс 1 на уровне БД): второй INSERT с
+	// created_via='bootstrap' — нарушение partial unique (первый bootstrap-«слот»
+	// уже занят archon-test-boot). Наличие НЕ-bootstrap-строк с created_by_aid IS NULL
+	// (archon-system, archon-test-ok) инвариант НЕ нарушает.
+	if _, err := integrationPool.Exec(ctx, `
+		INSERT INTO operators (aid, display_name, auth_method, created_via)
+		VALUES ('archon-test-boot', 'Boot', 'jwt', 'bootstrap')
+	`); err != nil {
+		t.Errorf("первый bootstrap-operator отвергнут: %v", err)
+	}
+	if _, err := integrationPool.Exec(ctx, `
+		INSERT INTO operators (aid, display_name, auth_method, created_via)
+		VALUES ('archon-second-bootstrap', 'Bootstrap?', 'jwt', 'bootstrap')
+	`); err == nil {
+		t.Error("второй operator с created_via='bootstrap' принят, ожидали unique violation")
 	}
 
 	// Cleanup, чтобы не мешать DownThenUp / последующим TestIntegration_*.
 	if _, err := integrationPool.Exec(ctx,
-		`DELETE FROM operators WHERE aid = 'archon-test-ok'`,
+		`DELETE FROM operators WHERE aid IN ('archon-test-ok', 'archon-test-boot')`,
 	); err != nil {
 		t.Fatalf("cleanup operators: %v", err)
 	}

@@ -155,9 +155,13 @@ func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row 
 			if op.RevokedAt != nil {
 				revokedPtr = *op.RevokedAt
 			}
+			createdVia := op.CreatedVia
+			if createdVia == "" {
+				createdVia = operator.CreatedViaUser
+			}
 			return staticRow{values: []any{
 				op.AID, op.DisplayName, string(op.AuthMethod), op.CreatedAt,
-				createdByPtr, revokedPtr, []byte("{}"),
+				createdByPtr, createdVia, revokedPtr, []byte("{}"),
 			}}
 		}
 		return errRow{err: pgx.ErrNoRows}
@@ -234,13 +238,18 @@ func (r *operatorRows) Next() bool {
 
 func (r *operatorRows) Scan(dest ...any) error {
 	op := r.rows[r.idx-1]
+	createdVia := op.CreatedVia
+	if createdVia == "" {
+		createdVia = operator.CreatedViaUser
+	}
 	*dest[0].(*string) = op.AID
 	*dest[1].(*string) = op.DisplayName
 	*dest[2].(*string) = string(op.AuthMethod)
 	*dest[3].(*time.Time) = op.CreatedAt
 	*dest[4].(**string) = op.CreatedByAID
-	*dest[5].(**time.Time) = op.RevokedAt
-	*dest[6].(*[]byte) = []byte("{}")
+	*dest[5].(*string) = createdVia
+	*dest[6].(**time.Time) = op.RevokedAt
+	*dest[7].(*[]byte) = []byte("{}")
 	return nil
 }
 
@@ -633,8 +642,8 @@ func TestOperatorListTyped_200(t *testing.T) {
 	pool := &fakePool{
 		listFn: func() ([]*operator.Operator, int, error) {
 			return []*operator.Operator{
-				{AID: "archon-alice", DisplayName: "Alice", AuthMethod: operator.AuthMethodJWT, CreatedAt: now},
-				{AID: "archon-bob", DisplayName: "Bob", AuthMethod: operator.AuthMethodJWT, CreatedAt: now, CreatedByAID: &created},
+				{AID: "archon-alice", DisplayName: "Alice", AuthMethod: operator.AuthMethodJWT, CreatedAt: now, CreatedVia: operator.CreatedViaBootstrap},
+				{AID: "archon-bob", DisplayName: "Bob", AuthMethod: operator.AuthMethodJWT, CreatedAt: now, CreatedByAID: &created, CreatedVia: operator.CreatedViaUser},
 			}, 2, nil
 		},
 	}
@@ -647,10 +656,10 @@ func TestOperatorListTyped_200(t *testing.T) {
 		t.Fatalf("items=%d total=%d", len(page.Items), page.Total)
 	}
 	if !page.Items[0].BootstrapInitial {
-		t.Errorf("alice should be bootstrap (CreatedByAID==nil)")
+		t.Errorf("alice should be bootstrap (created_via='bootstrap')")
 	}
 	if page.Items[1].BootstrapInitial {
-		t.Errorf("bob should NOT be bootstrap (CreatedByAID set)")
+		t.Errorf("bob should NOT be bootstrap (created_via='user')")
 	}
 }
 

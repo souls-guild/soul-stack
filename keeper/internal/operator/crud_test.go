@@ -162,6 +162,7 @@ func TestInsert_HappyPath_Bootstrap(t *testing.T) {
 		AID:         "archon-alice",
 		DisplayName: "Alice Admin",
 		AuthMethod:  AuthMethodJWT,
+		CreatedVia:  CreatedViaBootstrap,
 		// CreatedByAID = nil → bootstrap, NULL в БД.
 		// CreatedAt zero → DEFAULT NOW().
 	}
@@ -174,8 +175,8 @@ func TestInsert_HappyPath_Bootstrap(t *testing.T) {
 	if !strings.Contains(f.lastExecSQL, "INSERT INTO operators") {
 		t.Errorf("SQL: %q", f.lastExecSQL)
 	}
-	if len(f.lastExecArgs) != 7 {
-		t.Fatalf("args len = %d, want 7", len(f.lastExecArgs))
+	if len(f.lastExecArgs) != 8 {
+		t.Fatalf("args len = %d, want 8", len(f.lastExecArgs))
 	}
 	if f.lastExecArgs[0] != "archon-alice" {
 		t.Errorf("args[0] aid = %v", f.lastExecArgs[0])
@@ -192,11 +193,15 @@ func TestInsert_HappyPath_Bootstrap(t *testing.T) {
 	if f.lastExecArgs[4] != nil {
 		t.Errorf("args[4] created_by_aid = %v, want nil for bootstrap", f.lastExecArgs[4])
 	}
-	if f.lastExecArgs[5] != nil {
-		t.Errorf("args[5] revoked_at = %v, want nil", f.lastExecArgs[5])
+	// created_via явно передан bootstrap (этот тест эмулирует bootstrap-вставку).
+	if f.lastExecArgs[5] != CreatedViaBootstrap {
+		t.Errorf("args[5] created_via = %v, want %q", f.lastExecArgs[5], CreatedViaBootstrap)
 	}
-	if b, ok := f.lastExecArgs[6].([]byte); !ok || string(b) != "{}" {
-		t.Errorf("args[6] metadata = %v (%T), want \"{}\"", f.lastExecArgs[6], f.lastExecArgs[6])
+	if f.lastExecArgs[6] != nil {
+		t.Errorf("args[6] revoked_at = %v, want nil", f.lastExecArgs[6])
+	}
+	if b, ok := f.lastExecArgs[7].([]byte); !ok || string(b) != "{}" {
+		t.Errorf("args[7] metadata = %v (%T), want \"{}\"", f.lastExecArgs[7], f.lastExecArgs[7])
 	}
 }
 
@@ -220,9 +225,13 @@ func TestInsert_PassesCreatedByAIDAndMetadata(t *testing.T) {
 	if f.lastExecArgs[4] != "archon-alice" {
 		t.Errorf("args[4] created_by_aid = %v, want \"archon-alice\"", f.lastExecArgs[4])
 	}
-	b, ok := f.lastExecArgs[6].([]byte)
+	// CreatedVia не задан в Operator-е → default 'user' (ADR-058(d)).
+	if f.lastExecArgs[5] != CreatedViaUser {
+		t.Errorf("args[5] created_via = %v, want %q (default)", f.lastExecArgs[5], CreatedViaUser)
+	}
+	b, ok := f.lastExecArgs[7].([]byte)
 	if !ok {
-		t.Fatalf("args[6] = %T, want []byte", f.lastExecArgs[6])
+		t.Fatalf("args[7] = %T, want []byte", f.lastExecArgs[7])
 	}
 	var got map[string]any
 	if err := json.Unmarshal(b, &got); err != nil {
@@ -257,6 +266,59 @@ func TestInsert_RejectsInvalidAuthMethod(t *testing.T) {
 	}
 	if f.execCalls != 0 {
 		t.Errorf("execCalls = %d on invalid auth_method; want 0", f.execCalls)
+	}
+}
+
+// TestInsert_DefaultsCreatedViaToUser — ADR-058(d) guard (кейс 2): Insert без
+// явного created_via (как из Service.Create / POST /v1/operators) подставляет
+// 'user'. Это легализует существующий путь без правок Service.Create.
+func TestInsert_DefaultsCreatedViaToUser(t *testing.T) {
+	f := &fakeDB{}
+	parent := "archon-alice"
+	op := &Operator{
+		AID:          "archon-bob",
+		DisplayName:  "Bob",
+		AuthMethod:   AuthMethodJWT,
+		CreatedByAID: &parent,
+		// CreatedVia не задан → default 'user'.
+	}
+	if err := Insert(context.Background(), f, op); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	if f.lastExecArgs[5] != CreatedViaUser {
+		t.Errorf("args[5] created_via = %v, want %q", f.lastExecArgs[5], CreatedViaUser)
+	}
+}
+
+// TestInsert_PassesExplicitCreatedVia — ADR-058(d) guard: явно заданный
+// created_via (ldap/system) пробрасывается в Exec как есть.
+func TestInsert_PassesExplicitCreatedVia(t *testing.T) {
+	for _, via := range []CreatedVia{CreatedViaLDAP, CreatedViaOIDC, CreatedViaSystem, CreatedViaBootstrap} {
+		f := &fakeDB{}
+		op := &Operator{AID: "archon-x", DisplayName: "X", AuthMethod: AuthMethodLDAP, CreatedVia: via}
+		if err := Insert(context.Background(), f, op); err != nil {
+			t.Fatalf("Insert(%q): %v", via, err)
+		}
+		if f.lastExecArgs[5] != via {
+			t.Errorf("created_via = %v, want %q", f.lastExecArgs[5], via)
+		}
+	}
+}
+
+// TestInsert_RejectsInvalidCreatedVia — ADR-058(d) guard: значение вне домена
+// отвергается прикладной валидацией до round-trip-а (parity с auth_method).
+func TestInsert_RejectsInvalidCreatedVia(t *testing.T) {
+	f := &fakeDB{}
+	op := &Operator{AID: "archon-alice", DisplayName: "x", AuthMethod: AuthMethodJWT, CreatedVia: "wormhole"}
+	err := Insert(context.Background(), f, op)
+	if err == nil {
+		t.Fatal("Insert with invalid created_via returned nil err")
+	}
+	if !strings.Contains(err.Error(), "created_via") {
+		t.Errorf("err = %v, want substring \"created_via\"", err)
+	}
+	if f.execCalls != 0 {
+		t.Errorf("execCalls = %d on invalid created_via; want 0", f.execCalls)
 	}
 }
 
@@ -340,7 +402,7 @@ func TestSelectByAID_HappyPath(t *testing.T) {
 	f := &fakeDB{
 		rowFunc: func() pgx.Row {
 			return staticRow{values: []any{
-				"archon-bob", "Bob", "jwt", now, any("archon-alice"), any(nil), []byte(`{"team":"ops"}`),
+				"archon-bob", "Bob", "jwt", now, any("archon-alice"), "user", any(nil), []byte(`{"team":"ops"}`),
 			}}
 		},
 	}
@@ -451,7 +513,7 @@ func TestRevoke_AlreadyRevoked(t *testing.T) {
 		rowFunc: func() pgx.Row {
 			// SelectByAID видит уже-revoked-оператора.
 			return staticRow{values: []any{
-				"archon-bob", "Bob", "jwt", now, any(nil), any(now), []byte("{}"),
+				"archon-bob", "Bob", "jwt", now, any(nil), "user", any(now), []byte("{}"),
 			}}
 		},
 	}

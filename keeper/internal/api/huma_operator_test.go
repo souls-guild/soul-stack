@@ -55,10 +55,10 @@ func (opPool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
 		return opIntRow{n: 1}
 	case strings.Contains(sql, "SELECT aid, display_name"):
 		// active archon-bob, created_by_aid NULL (bootstrap_initial=true),
-		// revoked_at NULL, metadata пусто.
+		// created_via='bootstrap' (ADR-058(d)), revoked_at NULL, metadata пусто.
 		return opStaticRow{values: []any{
 			"archon-bob", "Bob", "jwt", opCreatedAt,
-			nil, nil, []byte("{}"),
+			nil, "bootstrap", nil, []byte("{}"),
 		}}
 	}
 	return opStaticRow{err: pgx.ErrNoRows}
@@ -96,8 +96,8 @@ type opIntRow struct{ n int }
 
 func (r opIntRow) Scan(dest ...any) error { *dest[0].(*int) = r.n; return nil }
 
-// opStaticRow — row SELECT operator (7 колонок: aid/display_name/auth_method/
-// created_at/created_by_aid/revoked_at/metadata). nil-значения → NULL.
+// opStaticRow — row SELECT operator (8 колонок: aid/display_name/auth_method/
+// created_at/created_by_aid/created_via/revoked_at/metadata). nil-значения → NULL.
 type opStaticRow struct {
 	values []any
 	err    error
@@ -165,7 +165,7 @@ func (r *opListRows) Next() bool {
 func (r *opListRows) Scan(dest ...any) error {
 	return opStaticRow{values: []any{
 		"archon-bob", "Bob", "jwt", opCreatedAt,
-		nil, nil, []byte("{}"),
+		nil, "bootstrap", nil, []byte("{}"),
 	}}.Scan(dest...)
 }
 func (r *opListRows) Err() error                                   { return nil }

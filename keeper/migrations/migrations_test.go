@@ -195,6 +195,12 @@ func TestEmbed_ContainsExpectedMigrations(t *testing.T) {
 		"082_add_incarnation_applying_epoch.up.sql",
 		"083_operators_auth_method_ldap_oidc.down.sql",
 		"083_operators_auth_method_ldap_oidc.up.sql",
+		"084_operators_created_via.down.sql",
+		"084_operators_created_via.up.sql",
+		"085_operators_bootstrap_index.down.sql",
+		"085_operators_bootstrap_index.up.sql",
+		"086_seed_archon_system.down.sql",
+		"086_seed_archon_system.up.sql",
 	}
 	if len(names) != len(want) {
 		t.Fatalf("got %d files, want %d: %v", len(names), len(want), names)
@@ -289,6 +295,87 @@ func TestEmbed_OperatorsAuthMethodLDAPOIDC(t *testing.T) {
 	}
 	if !strings.Contains(string(d), "'jwt', 'mtls', 'combined'") {
 		t.Errorf("083 down.sql does not restore prior set; content: %.200s", d)
+	}
+}
+
+// TestEmbed_OperatorsCreatedVia — sanity на 084 (ADR-058(d)): колонка
+// created_via с CHECK created_via_valid + reconcile bootstrap-строки.
+func TestEmbed_OperatorsCreatedVia(t *testing.T) {
+	b, err := FS.ReadFile("084_operators_created_via.up.sql")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	body := string(b)
+	for _, frag := range []string{
+		"ADD COLUMN created_via",
+		"created_via_valid",
+		"'bootstrap','user','ldap','oidc','system'",
+		"created_via = 'bootstrap'",
+		"created_via = 'system'",
+	} {
+		if !strings.Contains(body, frag) {
+			t.Errorf("084 up.sql missing %q; content head: %.300s", frag, body)
+		}
+	}
+	d, err := FS.ReadFile("084_operators_created_via.down.sql")
+	if err != nil {
+		t.Fatalf("read down: %v", err)
+	}
+	if !strings.Contains(string(d), "DROP COLUMN created_via") {
+		t.Errorf("084 down.sql does not drop created_via; content: %.200s", d)
+	}
+}
+
+// TestEmbed_OperatorsBootstrapIndex — sanity на 085 (ADR-058(d)): перенос
+// bootstrap-инварианта на created_via='bootstrap'; down возвращает на
+// created_by_aid IS NULL.
+func TestEmbed_OperatorsBootstrapIndex(t *testing.T) {
+	b, err := FS.ReadFile("085_operators_bootstrap_index.up.sql")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	body := string(b)
+	for _, frag := range []string{
+		"DROP INDEX operators_first_archon_idx",
+		"WHERE created_via = 'bootstrap'",
+	} {
+		if !strings.Contains(body, frag) {
+			t.Errorf("085 up.sql missing %q; content head: %.300s", frag, body)
+		}
+	}
+	d, err := FS.ReadFile("085_operators_bootstrap_index.down.sql")
+	if err != nil {
+		t.Fatalf("read down: %v", err)
+	}
+	if !strings.Contains(string(d), "WHERE created_by_aid IS NULL") {
+		t.Errorf("085 down.sql does not restore created_by_aid IS NULL index; content: %.200s", d)
+	}
+}
+
+// TestEmbed_SeedArchonSystem — sanity на 086 (ADR-058(d)): посев
+// системного оператора archon-system (created_via='system').
+func TestEmbed_SeedArchonSystem(t *testing.T) {
+	b, err := FS.ReadFile("086_seed_archon_system.up.sql")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	body := string(b)
+	for _, frag := range []string{
+		"INSERT INTO operators",
+		"'archon-system'",
+		"'system'",
+		"ON CONFLICT (aid) DO NOTHING",
+	} {
+		if !strings.Contains(body, frag) {
+			t.Errorf("086 up.sql missing %q; content head: %.300s", frag, body)
+		}
+	}
+	d, err := FS.ReadFile("086_seed_archon_system.down.sql")
+	if err != nil {
+		t.Fatalf("read down: %v", err)
+	}
+	if !strings.Contains(string(d), "DELETE FROM operators WHERE aid = 'archon-system'") {
+		t.Errorf("086 down.sql does not delete archon-system; content: %.200s", d)
 	}
 }
 
