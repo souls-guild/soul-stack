@@ -23,11 +23,17 @@ import (
 // что отдал внешний IdP, без проектных решений (AID/роли назначает Mapper).
 //
 // Subject — стабильный идентификатор у IdP (OIDC `sub` либо LDAP user-DN).
-// Email / Username — опц. человеко-читаемые поля (источник AID — конфиг).
+// AID — derived проектный идентификатор оператора (operators.aid), выведенный
+// Authenticator-ом из сконфигурированного атрибута/claim (LDAP `aid_attr`,
+// дефолт `uid`; OIDC `aid_claim`). Отделён от Subject, потому что Subject —
+// сырой идентификатор IdP (user-DN), а AID — это то, под чем оператор живёт в
+// реестре и в JWT.sub. Mapper берёт AID именно отсюда.
+// Email / Username — опц. человеко-читаемые поля.
 // Groups — членство во внешних группах (источник role-mapping).
 // Claims — сырые дополнительные claims/атрибуты (для расширяемого маппинга).
 type ExternalIdentity struct {
 	Subject  string
+	AID      string
 	Email    string
 	Username string
 	Groups   []string

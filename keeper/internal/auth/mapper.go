@@ -77,11 +77,11 @@ func NewMapper(cfg MapperConfig) *DBMapper {
 
 // Map реализует [Mapper]: ext → MappedOperator либо sentinel-ошибка.
 //
-// AID берётся из ext.Subject (Authenticator кладёт туда derived-AID из
-// cfg.AIDAttr, см. ldap.Authenticator). Невалидный AID → [ErrAuthFailed]
+// AID берётся из ext.AID (Authenticator выводит его из cfg.AIDAttr, дефолт
+// `uid`, см. ldap.Authenticator). Невалидный AID → [ErrAuthFailed]
 // (anti-oracle: наружу не утекает причина).
 func (m *DBMapper) Map(ctx context.Context, ext ExternalIdentity) (MappedOperator, error) {
-	aid := ext.Subject
+	aid := ext.AID
 	if !operator.ValidAID(aid) {
 		if m.cfg.Logger != nil {
 			m.cfg.Logger.Debug("auth/mapper: derived AID failed validation",

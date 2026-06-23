@@ -121,7 +121,7 @@ func TestMapper_HappyProvision(t *testing.T) {
 	m := newMapper(db, aw, map[string][]string{"ops": {"cluster-admin"}})
 
 	got, err := m.Map(context.Background(), ExternalIdentity{
-		Subject:  "alice",
+		AID:      "alice",
 		Username: "alice",
 		Groups:   []string{"ops"},
 	})
@@ -159,8 +159,8 @@ func TestMapper_NoRoleMappingDoesNotProvision(t *testing.T) {
 	m := newMapper(db, aw, map[string][]string{"ops": {"cluster-admin"}})
 
 	_, err := m.Map(context.Background(), ExternalIdentity{
-		Subject: "bob",
-		Groups:  []string{"interns"}, // не пересекает group_role_map
+		AID:    "bob",
+		Groups: []string{"interns"}, // не пересекает group_role_map
 	})
 	if !errors.Is(err, ErrNoRoleMapping) {
 		t.Fatalf("expected ErrNoRoleMapping, got %v", err)
@@ -184,7 +184,7 @@ func TestMapper_RevokedRejected(t *testing.T) {
 	aw := &fakeAudit{}
 	m := newMapper(db, aw, map[string][]string{"ops": {"cluster-admin"}})
 
-	_, err := m.Map(context.Background(), ExternalIdentity{Subject: "carol", Groups: []string{"ops"}})
+	_, err := m.Map(context.Background(), ExternalIdentity{AID: "carol", Groups: []string{"ops"}})
 	if !errors.Is(err, ErrOperatorRevoked) {
 		t.Fatalf("expected ErrOperatorRevoked, got %v", err)
 	}
@@ -202,7 +202,7 @@ func TestMapper_ExistingActiveNoInsert(t *testing.T) {
 	aw := &fakeAudit{}
 	m := newMapper(db, aw, map[string][]string{"ops": {"read-only"}})
 
-	got, err := m.Map(context.Background(), ExternalIdentity{Subject: "dave", Groups: []string{"ops"}})
+	got, err := m.Map(context.Background(), ExternalIdentity{AID: "dave", Groups: []string{"ops"}})
 	if err != nil {
 		t.Fatalf("Map: %v", err)
 	}
@@ -225,7 +225,7 @@ func TestMapper_ExistingActiveNoInsert(t *testing.T) {
 func TestMapper_InvalidAIDIsOpaque(t *testing.T) {
 	db := &fakeMapperDB{}
 	m := newMapper(db, &fakeAudit{}, map[string][]string{"ops": {"cluster-admin"}})
-	_, err := m.Map(context.Background(), ExternalIdentity{Subject: "BAD/AID", Groups: []string{"ops"}})
+	_, err := m.Map(context.Background(), ExternalIdentity{AID: "BAD/AID", Groups: []string{"ops"}})
 	if !errors.Is(err, ErrAuthFailed) {
 		t.Fatalf("expected ErrAuthFailed for invalid AID, got %v", err)
 	}
@@ -239,7 +239,7 @@ func TestMapper_RolesDedupSorted(t *testing.T) {
 		"ops":    {"cluster-admin", "read-only"},
 		"admins": {"cluster-admin"},
 	})
-	got, err := m.Map(context.Background(), ExternalIdentity{Subject: "eve", Groups: []string{"ops", "admins"}})
+	got, err := m.Map(context.Background(), ExternalIdentity{AID: "eve", Groups: []string{"ops", "admins"}})
 	if err != nil {
 		t.Fatalf("Map: %v", err)
 	}
