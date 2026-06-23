@@ -40,6 +40,9 @@ fixtures:
 
   input:
     redis_type: standalone
+    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
+    # distro-native пин (мажор < 8 → version-gate модулей не активен).
+    version: "7.2.4"
     memory_mb: 512
     persistence: rdb_aof
     redis_settings:
@@ -53,7 +56,7 @@ assert:
       module: core.pkg.installed
       params:
         name: redis-server
-        version: ""
+        version: "7.2.4"
 
     - index: 8
       module: core.file.rendered
@@ -91,7 +94,7 @@ assert:
 
   state_changes:
     redis_type: standalone
-    redis_version: ""
+    redis_version: "7.2.4"
     # DRIFT-GUARD: идентичен apply.input.config (index 3).
     redis_config:
       maxmemory: "1gb"

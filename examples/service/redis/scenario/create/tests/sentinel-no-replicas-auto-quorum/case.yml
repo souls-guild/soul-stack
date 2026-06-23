@@ -34,6 +34,9 @@ fixtures:
 
   input:
     redis_type: sentinel
+    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
+    # distro-native пин (мажор < 8 → version-gate модулей не активен).
+    version: "7.2.4"
     replicas: 0
 
 assert:
@@ -47,7 +50,7 @@ assert:
 
     # REPLICAOF: master_addr = единственный хост (он же master) → плагин no-op
     # (addr==master_addr guard). Здесь ассертим лишь params (host-инвариант).
-    - index: 35
+    - index: 32
       module: community.redis.replica
       params:
         addr: "127.0.0.1:6379"
@@ -56,13 +59,13 @@ assert:
 
     # SENTINEL MONITOR: monitor.ip — единственный хост; auto-quorum = 1/2+1 = 1
     # (sentinel_quorum не задан). master_name по умолчанию mymaster.
-    - index: 36
+    - index: 33
       module: community.redis.sentinel
       params:
         addr: "127.0.0.1:26379"
         master_name: mymaster
         auth_pass: s3cr3t-redis-pass-create
-        redis_version: ""
+        redis_version: "7.2.4"
         monitor:
           ip: 10.0.0.9
           port: 6379
@@ -70,7 +73,7 @@ assert:
 
   state_changes:
     redis_type: sentinel
-    redis_version: ""
+    redis_version: "7.2.4"
     redis_users: {}
     redis_hosts: []
     # auto-quorum НЕ материализуется в state (input-only) → 0; master_name дефолт.

@@ -88,7 +88,7 @@ assert:
           essence: {}
 
     # health-gate на новой ноде: PING живого Redis перед вводом в кластер.
-    - index: 26
+    - index: 23
       module: community.redis.command
       params:
         addr: "127.0.0.1:6379"
@@ -97,7 +97,7 @@ assert:
 
     # ADD-NODE run_once: endpoint-ы из roster по SID. master.addr пуст (авто-выбор
     # наименее загруженного master-а делает плагин — scenario не транслирует).
-    - index: 27
+    - index: 24
       module: community.redis.cluster
       params:
         action: add-node

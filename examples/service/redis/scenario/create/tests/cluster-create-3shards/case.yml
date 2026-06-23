@@ -85,6 +85,9 @@ fixtures:
 
   input:
     redis_type: cluster
+    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
+    # distro-native пин (мажор < 8 → version-gate модулей не активен).
+    version: "7.2.4"
     shards: 3
     replicas_per_shard: 0
     cluster_node_timeout: 5000
@@ -111,7 +114,7 @@ assert:
       module: core.pkg.installed
       params:
         name: redis-server
-        version: ""
+        version: "7.2.4"
 
     # ── cluster destiny: redis.conf с cluster-директивами ───────────────────
     # config-map несёт базовый merge + HOST-ИНВАРИАНТНЫЕ cluster-директивы
@@ -156,7 +159,7 @@ assert:
 
     # ── cluster-build (community.redis.cluster) ─────────────────────────────
     # nodes-MAP: ключ=SID, addr=primary_ip+":6379". Детерминирован по SID.
-    - index: 31
+    - index: 28
       module: community.redis.cluster
       params:
         action: create
@@ -172,7 +175,7 @@ assert:
   # redis_hosts (точные роли раскладывает плагин, в state не фиксируем).
   state_changes:
     redis_type: cluster
-    redis_version: ""
+    redis_version: "7.2.4"
     redis_config:
       maxmemory:        "256mb"
       maxmemory-policy: allkeys-lru

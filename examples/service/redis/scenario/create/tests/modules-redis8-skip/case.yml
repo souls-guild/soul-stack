@@ -90,9 +90,9 @@ assert:
           role: ""
           essence: {}
 
-    # PING на index 26 (как modules-empty): modules-dir gated-placeholder на 25,
+    # PING на index 23 (как modules-empty): modules-dir gated-placeholder на 22,
     # fetch-loop 0 задач (пустой modules после gate).
-    - index: 26
+    - index: 23
       module: community.redis.command
       params:
         addr: "127.0.0.1:6379"

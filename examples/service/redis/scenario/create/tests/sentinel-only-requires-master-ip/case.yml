@@ -1,0 +1,61 @@
+# L0-испытание режима sentinel_only — master_ip ОБЯЗАТЕЛЕН (FAIL-ветка guard).
+# sentinel_only теперь РЕАЛИЗОВАН (ветка sentinel-only.yml), поэтому mode-guard
+# диспетчера на нём проходит no-op-ом (index 0 → "true"). Но sentinel_only требует
+# ВНЕШНИЙ master (input.master_ip): на schema-уровне master_ip остаётся
+# required:false (условную по режиму обязательность схема не выражает), поэтому
+# пропуск ловит master_ip-guard ПЕРВОЙ задачей ветки (index 14): master_ip не задан
+# → булево "false" → cmd принимает форму `test "false" = "true" || { echo ...;
+# exit 1; }` — при исполнении ноды (L2/live) рвёт прогон fail-fast. На L0
+# (render-only) доказывается ТРАНСЛЯЦИЯ guard-а в fail-форму с понятным сообщением.
+#
+# Прежний кейс sentinel-only-not-implemented (mode-guard падал на sentinel_only)
+# переписан: sentinel_only больше НЕ нереализованный режим, его ловит не mode-guard,
+# а master_ip-guard при пропуске обязательного master_ip.
+name: sentinel_only requires master_ip (guard fails when omitted)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.9 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+  essence:
+    redis_type: standalone
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+  # redis_type=sentinel_only БЕЗ master_ip — master_ip-guard обязан сорвать прогон.
+  input:
+    redis_type: sentinel_only
+    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
+    # distro-native пин (мажор < 8 → version-gate модулей не активен).
+    version: "7.2.4"
+
+assert:
+  rendered_tasks:
+    # mode-guard (index 0): sentinel_only РЕАЛИЗОВАН → "true" → no-op (НЕ падает).
+    - index: 0
+      module: core.cmd.shell
+      params:
+        cmd: 'test "true" = "true" || { echo "redis_type=sentinel_only не поддержан (реализованы: standalone, cluster, sentinel, sentinel_only)"; exit 1; }'
+
+    # master_ip-guard FAIL-форма (index 14): master_ip НЕ задан → булево "false" →
+    # echo с понятным сообщением + exit 1. standalone(1-2)/cluster(3-7)/sentinel
+    # (8-13) ветки placeholder-skip на sentinel_only-прогоне.
+    - index: 14
+      module: core.cmd.shell
+      params:
+        cmd: 'test "false" = "true" || { echo "redis_type=sentinel_only требует input.master_ip (адрес ВНЕШНЕГО redis-master)"; exit 1; }'

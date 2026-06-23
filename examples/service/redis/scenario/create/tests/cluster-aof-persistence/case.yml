@@ -55,6 +55,9 @@ fixtures:
 
   input:
     redis_type: cluster
+    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
+    # distro-native пин (мажор < 8 → version-gate модулей не активен).
+    version: "7.2.4"
     shards: 3
     replicas_per_shard: 0
     persistence: aof
@@ -109,7 +112,7 @@ assert:
 
   state_changes:
     redis_type: cluster
-    redis_version: ""
+    redis_version: "7.2.4"
     redis_config:
       maxmemory:        "256mb"
       maxmemory-policy: allkeys-lru

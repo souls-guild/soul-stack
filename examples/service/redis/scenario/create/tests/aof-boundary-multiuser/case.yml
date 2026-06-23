@@ -49,6 +49,9 @@ fixtures:
 
   input:
     redis_type: standalone
+    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
+    # distro-native пин (мажор < 8 → version-gate модулей не активен).
+    version: "7.2.4"
     memory_mb: 64
     persistence: aof
     # maxmemory_policy НЕ задан — должен прийти из essence (allkeys-lru).
@@ -71,7 +74,7 @@ assert:
       params:
         name: redis-server
         # version не задан → "" (latest из репо).
-        version: ""
+        version: "7.2.4"
 
     # users.acl: MAP трёх юзеров. Порядок строк гарантирует range по map (шаблон);
     # здесь ассертим лишь СОСТАВ map-а (значения order-independent).
@@ -148,7 +151,7 @@ assert:
 
   state_changes:
     redis_type: standalone
-    redis_version: ""
+    redis_version: "7.2.4"
     # DRIFT-GUARD: идентичен apply.input.config (index 3).
     redis_config:
       maxmemory: "48mb"

@@ -1,19 +1,20 @@
 # L0-испытание create (standalone) — host-tuning extras ВКЛЮЧЕНЫ (концепция
 # Ansible-роли: transparent-hugepages + logrotate + sysctl, БЕЗ tcp_bbr). Guard на
-# то, что при thp_disable/logrotate_enable/sysctl_enable=true (дефолт) все три блока
-# extras в хвосте destiny `redis` РЕНДЕРЯТСЯ (а не гасятся placeholder-skip-ом).
+# то, что при logrotate_enable/sysctl_enable=true (дефолт) их блоки extras в хвосте
+# destiny `redis` РЕНДЕРЯТСЯ; THP-отключение безусловно (флага нет — всегда активно).
 #
-# Extras — режим-агностичны и host-инвариантны: флаги приходят через apply.input,
-# sysctl_settings — данные-таблица essence (не во входе оператора). Контр-кейс на
-# выключенные флаги — extras-disabled (placeholder-skip).
+# Extras — режим-агностичны и host-инвариантны: opt-out-флаги logrotate/sysctl
+# приходят через apply.input, sysctl_settings — данные-таблица essence (не во входе
+# оператора). Контр-кейс на снятые logrotate/sysctl — extras-disabled (placeholder-
+# skip logrotate/sysctl, THP остаётся активной).
 #
-# Индексы хвоста destiny (standalone-прогон: mode-guard 0, destiny 1..20, PING 21):
-#   15 — render disable-thp.service (core.file.rendered);
-#   16 — daemon-reload (core.exec.run, onchanges на unit);
-#   17 — disable-thp service.running;
-#   18 — render logrotate (/etc/logrotate.d/redis);
-#   19 — render sysctl drop-in (/etc/sysctl.d/30-redis.conf);
-#   20 — sysctl --system (core.exec.run, onchanges на drop-in).
+# Индексы хвоста destiny (standalone-прогон: mode-guard 0, destiny 1..22, PING 23;
+# ручные daemon-reload убраны — core.service делает reload сам):
+#   17 — render disable-thp.service (core.file.rendered);
+#   18 — disable-thp service.running;
+#   19 — render logrotate (/etc/logrotate.d/redis);
+#   20 — render sysctl drop-in (/etc/sysctl.d/30-redis.conf);
+#   21 — sysctl --system (core.exec.run, onchanges на drop-in).
 name: host-tuning extras render when enabled (thp + logrotate + sysctl)
 
 fixtures:
@@ -56,13 +57,16 @@ fixtures:
 
   input:
     redis_type: standalone
+    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
+    # distro-native пин (мажор < 8 → version-gate модулей не активен).
+    version: "7.2.4"
     # Флаги extras не заданы явно → дефолт true (input scenario create default:true),
     # все три блока активны.
 
 assert:
   rendered_tasks:
     # ── transparent-hugepages ───────────────────────────────────────────────
-    - index: 19
+    - index: 17
       module: core.file.rendered
       params:
         path: /etc/systemd/system/disable-thp.service
@@ -71,20 +75,16 @@ assert:
         owner: root
         group: root
 
-    - index: 20
-      module: core.exec.run
-      params:
-        cmd: systemctl
-        args: ["daemon-reload"]
-
-    - index: 21
+    # daemon-reload убран: core.service (daemon_reload: auto) сам перечитывает unit
+    # перед enable/start. disable-thp service.running идёт сразу следом за render.
+    - index: 18
       module: core.service.running
       params:
         name: disable-thp
         enabled: true
 
     # ── logrotate ───────────────────────────────────────────────────────────
-    - index: 22
+    - index: 19
       module: core.file.rendered
       params:
         path: /etc/logrotate.d/redis
@@ -96,7 +96,7 @@ assert:
     # ── sysctl drop-in ──────────────────────────────────────────────────────
     # vars.sysctl_settings — из essence (передан через apply.input). range по map
     # сортирует ключи → drop-in детерминирован.
-    - index: 23
+    - index: 20
       module: core.file.rendered
       params:
         path: /etc/sysctl.d/30-redis.conf
@@ -122,7 +122,7 @@ assert:
           role: ""
           essence: {}
 
-    - index: 24
+    - index: 21
       module: core.exec.run
       params:
         cmd: sysctl

@@ -51,14 +51,14 @@
   apply:
     destiny: redis
     input:
-      version:  "${ has(input.version) ? input.version : '' }"
+      version:  "${ input.version }"
       password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
       # TLS-блок (HOST-ИНВАРИАНТ, см. standalone.yml): tls-port/cert/key/ca +
       # tls-replication yes (master↔replica шифруются). port 0 при tls_only.
       config: >-
         ${ merge(
              essence.redis_config,
-             essence.persistence_presets[has(input.persistence) ? input.persistence : 'rdb'],
+             essence.persistence_presets[input.persistence],
              merge(
                has(input.memory_mb)
                  ? { 'maxmemory': string(int(input.memory_mb) * int(essence.memory_reserve_percent) / 100) + 'mb' }
@@ -93,16 +93,17 @@
       # пустой список. base_url/sha256 host-инвариант → apply.input; арх-URL строит
       # destiny per-host.
       modules: >-
-        ${ (has(input.modules) && !(has(input.version) && input.version != '' && input.version.matches('^([0-9]+:)?(8|9|[1-9][0-9])\\.')))
+        ${ (has(input.modules) && !input.version.matches('^([0-9]+:)?(8|9|[1-9][0-9])\\.'))
            ? input.modules
            : [] }
       modules_base_url: "${ has(input.modules_base_url) ? input.modules_base_url : '' }"
       modules_sha256:   "${ has(input.modules_sha256) ? input.modules_sha256 : {} }"
       # Host-tuning extras (концепция роли), режим-агностичны — те же флаги, что в
       # standalone/cluster. Host-инвариантны → apply.input. sysctl_settings — essence.
-      thp_disable:      "${ has(input.thp_disable) ? input.thp_disable : true }"
-      logrotate_enable: "${ has(input.logrotate_enable) ? input.logrotate_enable : true }"
-      sysctl_enable:    "${ has(input.sysctl_enable) ? input.sysctl_enable : true }"
+      # logrotate_enable/sysctl_enable — default:true → голый input.X. THP убран из
+      # контракта (отключение безусловно в destiny `redis`).
+      logrotate_enable: "${ input.logrotate_enable }"
+      sysctl_enable:    "${ input.sysctl_enable }"
       sysctl_settings:  "${ has(essence.sysctl_settings) ? essence.sysctl_settings : {} }"
       # TLS PEM + флаги — HOST-ИНВАРИАНТ (один cert/CA на кластер) → apply.input
       # (см. standalone.yml). Источник — Vault-пути essence.
@@ -114,7 +115,7 @@
       tls_ca:     "${ (has(essence.tls_enable) && essence.tls_enable) ? vault(essence.tls_ca_ref) : '' }"
       sentinel_enabled: true
       sentinel:
-        master_name: "${ has(input.sentinel_master_name) ? input.sentinel_master_name : 'mymaster' }"
+        master_name: "${ input.sentinel_master_name }"
         # master-election: первый по SID хост = master. HOST-ИНВАРИАНТНО → apply.input.
         master_ip:   "${ soulprint.hosts[0].network.primary_ip }"
         master_port: 6379
@@ -179,9 +180,9 @@
   module: community.redis.sentinel
   params:
     addr:        "127.0.0.1:26379"
-    master_name: "${ has(input.sentinel_master_name) ? input.sentinel_master_name : 'mymaster' }"
+    master_name: "${ input.sentinel_master_name }"
     auth_pass:   "${ vault('secret/redis/' + incarnation.name + '#password') }"
-    redis_version: "${ has(input.version) ? input.version : '' }"
+    redis_version: "${ input.version }"
     monitor:
       # HOST-ИНВАРИАНТНЫЙ адрес master-а (master-election: soulprint.hosts[0]).
       ip:     "${ soulprint.hosts[0].network.primary_ip }"

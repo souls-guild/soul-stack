@@ -71,7 +71,7 @@
   apply:
     destiny: redis
     input:
-      version:  "${ has(input.version) ? input.version : '' }"
+      version:  "${ input.version }"
       password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
       # TLS-блок (HOST-ИНВАРИАНТ, см. standalone.yml). В cluster добавляется
       # tls-cluster yes (узлы шифруют cluster-bus). Идёт ПОСЛЕ cluster-директив,
@@ -79,7 +79,7 @@
       config: >-
         ${ merge(
              essence.redis_config,
-             essence.persistence_presets[has(input.persistence) ? input.persistence : 'rdb'],
+             essence.persistence_presets[input.persistence],
              merge(
                has(input.memory_mb)
                  ? { 'maxmemory': string(int(input.memory_mb) * int(essence.memory_reserve_percent) / 100) + 'mb' }
@@ -90,7 +90,7 @@
              {
                'cluster-enabled':      'yes',
                'cluster-config-file':  'nodes.conf',
-               'cluster-node-timeout': string(has(input.cluster_node_timeout) ? int(input.cluster_node_timeout) : 5000)
+               'cluster-node-timeout': string(int(input.cluster_node_timeout))
              },
              (has(essence.tls_enable) && essence.tls_enable)
                ? merge(
@@ -120,16 +120,17 @@
       # input.version, host-инвариантные base_url/sha256 → apply.input, арх-URL
       # строит destiny per-host). На Redis 8+ → пустой список.
       modules: >-
-        ${ (has(input.modules) && !(has(input.version) && input.version != '' && input.version.matches('^([0-9]+:)?(8|9|[1-9][0-9])\\.')))
+        ${ (has(input.modules) && !input.version.matches('^([0-9]+:)?(8|9|[1-9][0-9])\\.'))
            ? input.modules
            : [] }
       modules_base_url: "${ has(input.modules_base_url) ? input.modules_base_url : '' }"
       modules_sha256:   "${ has(input.modules_sha256) ? input.modules_sha256 : {} }"
       # Host-tuning extras (концепция роли), режим-агностичны — те же флаги, что в
       # standalone-ветке. Host-инвариантны → apply.input. sysctl_settings — essence.
-      thp_disable:      "${ has(input.thp_disable) ? input.thp_disable : true }"
-      logrotate_enable: "${ has(input.logrotate_enable) ? input.logrotate_enable : true }"
-      sysctl_enable:    "${ has(input.sysctl_enable) ? input.sysctl_enable : true }"
+      # logrotate_enable/sysctl_enable — default:true → голый input.X. THP убран из
+      # контракта (отключение безусловно в destiny `redis`).
+      logrotate_enable: "${ input.logrotate_enable }"
+      sysctl_enable:    "${ input.sysctl_enable }"
       sysctl_settings:  "${ has(essence.sysctl_settings) ? essence.sysctl_settings : {} }"
       # TLS PEM + флаги — HOST-ИНВАРИАНТ (один cert/CA на кластер) → apply.input
       # (см. standalone.yml). Источник — Vault-пути essence (доверенный контекст).

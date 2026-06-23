@@ -105,16 +105,17 @@ assert:
           essence: {}
 
     # modules-dir каталог — gated на size(modules)>0, здесь АКТИВНА.
-    - index: 25
-      module: core.exec.run
+    - index: 22
+      module: core.file.directory
       params:
-        creates: /var/lib/redis/modules
-        cmd: install
-        args: ["-d", "-o", "redis", "-g", "redis", "-m", "0750", "/var/lib/redis/modules"]
+        path: /var/lib/redis/modules
+        owner: redis
+        group: redis
+        mode: "0750"
 
     # fetch .so — loop по алиасам (array, порядок списка: search[0], json[1]).
     # URL арх-специфичен (amd64 из soulprint.self), checksum REQUIRED "sha256:<hex>".
-    - index: 26
+    - index: 23
       module: core.url.fetched
       params:
         url: "https://artifacts.example.com/redis/modules/6.2/amd64/redisearch.so"
@@ -124,7 +125,7 @@ assert:
         owner: redis
         group: redis
 
-    - index: 27
+    - index: 24
       module: core.url.fetched
       params:
         url: "https://artifacts.example.com/redis/modules/6.2/amd64/rejson.so"
@@ -134,8 +135,8 @@ assert:
         owner: redis
         group: redis
 
-    # PING сдвинут на +2 (две .so-задачи) относительно базового modules-empty (26).
-    - index: 28
+    # PING сдвинут на +2 (две .so-задачи) относительно базового modules-empty (23).
+    - index: 25
       module: community.redis.command
       params:
         addr: "127.0.0.1:6379"

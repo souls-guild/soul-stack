@@ -92,7 +92,7 @@ assert:
         name: redis-server
         version: "5:7.0.15-1~deb12u7"
 
-    # index 2 — socket-dir (core.exec.run, when: config.unixsocket): unixsocket в
+    # index 2 — socket-dir (core.file.directory, when: config.unixsocket): unixsocket в
     # merged-конфиге НЕТ → static-when-false → placeholder-skip. Не ассертим.
 
     # users.acl: MAP имя→{perms,state,password} с ПОЛНОЙ ACL-строкой +
@@ -167,23 +167,23 @@ assert:
           role: ""
           essence: {}
 
-    - index: 12
+    - index: 11
       module: core.service.running
       params:
         name: redis-server
         enabled: true
 
-    - index: 13
+    - index: 12
       module: core.service.restarted
       params:
         name: redis-server
 
     # ── community.redis.command (PING health-gate) ──────────────────────────
     # addr localhost, пароль — тот же requirepass vault()-резолв, args [PING].
-    # index 15: index 0 — mode-guard; standalone destiny ЭКСПАНДИТСЯ в 14 task-ов
-    # (1..14; +5 gated sentinel-задач в хвосте tasks/main.yml, placeholder-skip на
-    # standalone-прогоне), PING сценария идёт следом (index 15).
-    - index: 26
+    # index 23: index 0 — mode-guard; standalone destiny ЭКСПАНДИТСЯ в 22 task-а
+    # (1..22; sentinel-задачи в хвосте — placeholder-skip на standalone-прогоне;
+    # 3 ручных daemon-reload убраны), PING сценария идёт следом (index 23).
+    - index: 23
       module: community.redis.command
       params:
         addr: "127.0.0.1:6379"

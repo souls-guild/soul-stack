@@ -8,9 +8,11 @@ description: >-
   идёт через плагин `community.redis`; оркестрация (порядок/таргетинг/rolling/
   health-gate) — в scenario сервиса.
 
-  Статус (2026-06-22): scenario `create` реализован для режимов standalone,
-  cluster и sentinel (диспетчер по redis_type). sentinel_only + day-2 scenarios
-  (add_acl_user/update_config/reshard/failover) — backlog
+  Статус (2026-06-23): scenario `create` реализован для ВСЕХ четырёх режимов —
+  standalone, cluster, sentinel и sentinel_only (диспетчер по redis_type). В
+  backlog: day-2 scenarios (update_config/add_user/rolling-restart/failover),
+  плагинные states community.redis.acl и community.redis.failover, а также
+  установка из бинарного дистрибутива (Шаг B припаркован)
   (redis-консолидация .pm/tasks/2026-06-22-redis-consolidation).
 
 # state_schema_version = 1 → каталог migrations/ не обязателен (ADR-019).
@@ -22,8 +24,8 @@ state_schema:
   properties:
     # Режим развёртывания (концепция роли). Порождает производные флаги
     # (deploy_redis/deploy_sentinel/cluster_enabled), уходящие в destiny через
-    # apply: input: в соответствующих scenario. Реализованы standalone/cluster/
-    # sentinel; sentinel_only — backlog.
+    # apply: input: в соответствующих scenario. Реализованы все четыре режима:
+    # standalone/cluster/sentinel/sentinel_only.
     redis_type:
       type: string
       enum: [standalone, sentinel, cluster, sentinel_only]
@@ -57,13 +59,17 @@ state_schema:
         properties:
           sid:  { type: string, format: fqdn }
           role: { type: string, enum: [primary, replica, sentinel] }
-    # Факты sentinel-режима (master_name + quorum monitored master). Наполняется
-    # create при redis_type=sentinel; для прочих режимов отсутствует/пуст.
+    # Факты sentinel-режимов (master_name + quorum monitored master). Наполняется
+    # create при redis_type=sentinel/sentinel_only; для прочих режимов пуст.
+    # master_ip материализуется ТОЛЬКО в sentinel_only (ВНЕШНИЙ master, заданный
+    # оператором явно — единственный факт топологии режима); в режиме sentinel
+    # master выбирается из roster-а (host-вариативен) → master_ip в state не пишется.
     redis_sentinel:
       type: object
       additionalProperties: false
       properties:
         master_name: { type: string }
+        master_ip:   { type: string }
         quorum:      { type: integer }
 
 # Зависимости-destiny (ADR-007: версия зависимости = git ref, не semver-range).

@@ -62,6 +62,9 @@ fixtures:
 
   input:
     redis_type: sentinel
+    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
+    # distro-native пин (мажор < 8 → version-gate модулей не активен).
+    version: "7.2.4"
     replicas: 2
     sentinel_quorum: 2
     sentinel_master_name: mymaster
@@ -121,7 +124,7 @@ assert:
     # master доказано render-ассертом TargetSIDs (TestAcceptance_SentinelReplicaExcludesMaster).
     # Params host-инвариантны → L0 assert by-index сверяет одни и те же params
     # реплик.
-    - index: 35
+    - index: 32
       module: community.redis.replica
       params:
         addr: "127.0.0.1:6379"
@@ -131,13 +134,13 @@ assert:
     # ── SENTINEL MONITOR reconcile (community.redis.sentinel) ───────────────
     # monitor.ip — HOST-ИНВАРИАНТНЫЙ адрес master-а (master-election node-1).
     # quorum=2 (input.sentinel_quorum). auth_pass — keeper-side vault()-резолв.
-    - index: 36
+    - index: 33
       module: community.redis.sentinel
       params:
         addr: "127.0.0.1:26379"
         master_name: mymaster
         auth_pass: s3cr3t-redis-pass-create
-        redis_version: ""
+        redis_version: "7.2.4"
         monitor:
           ip: 10.0.0.1
           port: 6379
@@ -148,7 +151,7 @@ assert:
   # не в state — соответствует cluster-precedent).
   state_changes:
     redis_type: sentinel
-    redis_version: ""
+    redis_version: "7.2.4"
     redis_config:
       maxmemory:        "256mb"
       maxmemory-policy: allkeys-lru

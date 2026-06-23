@@ -19,17 +19,40 @@ description: >-
 # ничего не сливает.
 
 input:
+  # ── Гейт data-плоскости redis-server (режим sentinel_only) ───────────────────
+  # deploy_redis=false → НЕ разворачиваем redis-server (data-плоскость): redis.conf,
+  # users.acl, PEM/TLS data-плоскости, systemd hardening drop-in и core.service
+  # redis-server running/restart — все gated placeholder-skip-ом. Пакет redis при
+  # этом ставится ВСЕГДА (sentinel-демон поставляется ТЕМ ЖЕ пакетом). Так режим
+  # sentinel_only поднимает ТОЛЬКО sentinel-демон (sentinel_enabled=true,
+  # deploy_redis=false), мониторящий ВНЕШНИЙ master (адрес из input.sentinel.*).
+  # default:true — стандартный путь (standalone/cluster/sentinel разворачивают
+  # redis-server). Гейт host-инвариантен → приходит через apply.input. Предикат
+  # static (только input.*) → Keeper гасит data-задачи placeholder-skip-ом без
+  # сдвига индексов (skip занимает слот).
+  deploy_redis:
+    type: boolean
+    required: false
+    default: true
+    description: >-
+      Разворачивать ли data-плоскость redis-server (render redis.conf/users.acl/
+      PEM + systemd-сервис redis-server). По умолчанию true. false (режим
+      sentinel_only) — поднять только sentinel-демон (sentinel_enabled), master
+      внешний. Пакет redis ставится в любом случае (несёт и sentinel-демон).
+
   version:
     type: string
-    required: false
+    required: true
     # distro-native: опциональный epoch `N:` + upstream-версия + опциональная
     # ревизия (напр. Debian `5:7.0.15-1~deb12u7`). Узкий semver ломал version-пин
     # на реальном дистрибутиве (apt-get install redis-server=7.2.4 → exit 100).
     pattern: "^([0-9]+:)?[0-9][A-Za-z0-9.~+-]*$"
     description: >-
-      Версия пакета redis-server в репозитории дистрибутива (distro-native, напр.
-      5:7.0.15-1~deb12u7). Опциональна: если не передана, ставится версия по
-      умолчанию из репозитория (core.pkg без =version-пина).
+      Версия пакета redis-server в репозитории дистрибутива (distro-native пин,
+      напр. 5:7.0.15-1~deb12u7). ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23):
+      core.pkg всегда ставит =version-пин. Поведение «latest из репо» (пустой
+      version → core.pkg без пина) более НЕ доступно — пин фиксирует воспроизводимую
+      инсталляцию.
 
   password:
     type: string
@@ -213,16 +236,10 @@ input:
       pattern: "^[0-9a-f]{64}$"
 
   # ── Host-tuning extras (концепция Ansible-роли) ──────────────────────────────
-  # Режим-агностичные per-host добавки, каждая gated собственным флагом (default
-  # true). Флаги host-инвариантны → приходят через apply.input (scenario сервиса).
-  thp_disable:
-    type: boolean
-    required: false
-    default: true
-    description: >-
-      Отключить Transparent Huge Pages через oneshot-юнит disable-thp (рекомендация
-      Redis: THP даёт latency-спайки на fork RDB/AOF). По умолчанию true.
-
+  # Режим-агностичные per-host добавки. logrotate/sysctl — opt-out (gated своим
+  # флагом, default true; средо-зависимы). THP-отключение БЕЗУСЛОВНО (рекомендация
+  # Redis, не выбор оператора) — флага в контракте нет, задача всегда активна.
+  # Флаги host-инвариантны → приходят через apply.input (scenario сервиса).
   logrotate_enable:
     type: boolean
     required: false

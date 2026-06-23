@@ -41,6 +41,9 @@ fixtures:
 
   input:
     redis_type: standalone
+    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
+    # distro-native пин (мажор < 8 → version-gate модулей не активен).
+    version: "7.2.4"
     persistence: off
     # memory_mb и maxmemory_policy НЕ заданы → оба из essence.
     # users НЕ задан.
@@ -52,7 +55,7 @@ assert:
       module: core.pkg.installed
       params:
         name: redis-server
-        version: ""
+        version: "7.2.4"
 
     # users.acl: пустой map (users не задан → {}). Шаблон рендерит файл без строк.
     - index: 7
@@ -115,7 +118,7 @@ assert:
 
   state_changes:
     redis_type: standalone
-    redis_version: ""
+    redis_version: "7.2.4"
     redis_config:
       maxmemory: "256mb"
       maxmemory-policy: allkeys-lru

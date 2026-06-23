@@ -1,15 +1,18 @@
-# L0-испытание create (standalone) — host-tuning extras ВЫКЛЮЧЕНЫ. Контр-кейс к
-# extras-enabled: при thp_disable/logrotate_enable/sysctl_enable=false все три
-# блока extras в хвосте destiny `redis` static-when-false → placeholder-skip
-# (gated `has(input.<flag>) && input.<flag>`, isStaticWhen). Plan остаётся
-# когерентным: extras-слоты заняты placeholder-ами (НЕ раскрываются, НЕ роняют
-# render), поэтому PING сценария остаётся на index 21 — то же, что в enabled-кейсе.
+# L0-испытание create (standalone) — logrotate/sysctl ВЫКЛЮЧЕНЫ, THP ВСЕГДА активна.
+# Контр-кейс к extras-enabled: logrotate_enable/sysctl_enable=false → их блоки
+# static-when-false → placeholder-skip (gated булевым input.<flag>, isStaticWhen).
+# THP-отключение убрано из операторского контракта (директива 2026-06-23,
+# рекомендация Redis — hardening, не выбор оператора): задачи disable-thp БЕЗ when:,
+# рендерятся ВСЕГДА. Кейс доказывает обе ветки:
+#   - THP (index 17/18) РЕНДЕРИТСЯ (params present, не skip) даже когда прочие
+#     extras сняты — отключение THP безусловно;
+#   - logrotate/sysctl-слоты заняты placeholder-skip-ом (не раскрылись, не упали),
+#     поэтому PING сценария остаётся на index 23 — то же, что в enabled-кейсе.
 #
-# Почему НЕ ассертим params extras-задач: skip-placeholder несёт Module, но
-# Params=nil (рендер пропущен) — harness сверяет только присутствующие в ассерте
-# ключи, отличить skip от render по params нельзя. Доказательство skip —
-# структурное: PING на index 21 (extras-слоты не раскрылись и не упали).
-name: host-tuning extras skip when disabled
+# Индексы хвоста destiny НЕ съехали от снятия when: с THP: gated-форма занимала
+# слот placeholder-skip-ом, безусловная форма занимает тот же слот render-ом —
+# число задач плоского плана неизменно (PING на 23 в обоих кейсах).
+name: logrotate/sysctl skip when disabled, THP always active
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
@@ -45,8 +48,11 @@ fixtures:
 
   input:
     redis_type: standalone
-    # Явно снимаем все три флага → extras static-when-false → placeholder-skip.
-    thp_disable: false
+    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
+    # distro-native пин (мажор < 8 → version-gate модулей не активен).
+    version: "7.2.4"
+    # Снимаем opt-out-флаги logrotate/sysctl → их блоки static-when-false →
+    # placeholder-skip. THP-флага в контракте нет: отключение THP безусловно.
     logrotate_enable: false
     sysctl_enable: false
 
@@ -58,7 +64,7 @@ assert:
       module: core.pkg.installed
       params:
         name: redis-server
-        version: ""
+        version: "7.2.4"
 
     - index: 8
       module: core.file.rendered
@@ -66,10 +72,28 @@ assert:
         path: /etc/redis/redis.conf
         template_content: "<present>"
 
-    # PING на index 21: extras-слоты (15..20) — placeholder-skip, не раскрылись и
-    # не упали. Тот же индекс, что в extras-enabled → доказательство, что хвостовые
-    # extras занимают фиксированное число слотов независимо от флагов (skip vs render).
-    - index: 26
+    # THP ВСЕГДА активна: render disable-thp.service РЕНДЕРИТСЯ (params present),
+    # даже когда logrotate/sysctl сняты. Если бы THP оставалась gated и гасла —
+    # params были бы nil и эти ассерты упали бы (skip vs render по params).
+    - index: 17
+      module: core.file.rendered
+      params:
+        path: /etc/systemd/system/disable-thp.service
+        template_content: "<present>"
+        mode: "0644"
+        owner: root
+        group: root
+
+    - index: 18
+      module: core.service.running
+      params:
+        name: disable-thp
+        enabled: true
+
+    # PING на index 23: logrotate/sysctl-слоты — placeholder-skip, не раскрылись и
+    # не упали; THP-слоты раскрылись render-ом. Тот же индекс, что в extras-enabled
+    # → хвостовые extras занимают фиксированное число слотов независимо от флагов.
+    - index: 23
       module: community.redis.command
       params:
         addr: "127.0.0.1:6379"

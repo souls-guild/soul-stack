@@ -1,0 +1,153 @@
+# L0-испытание create в режиме sentinel_only (redis-консолидация). Тонкий
+# sentinel-слой: ТОЛЬКО sentinel-демон (deploy_redis=false → data-плоскость
+# redis-server НЕ разворачивается), мониторящий ВНЕШНИЙ master из input.master_ip.
+# Multi-host roster (2 хоста) — sentinel-демон на КАЖДОМ; size-guard'а в этом
+# режиме нет (любое число sentinel-ов валидно, кворум считается от их числа).
+#
+# Render-only, герметично. Диспетчер create инклудит standalone/cluster/sentinel/
+# sentinel-only; на sentinel_only-прогоне первые три ветки гаснут placeholder-skip-
+# ом (static-when input.redis_type != 'sentinel_only'), sentinel-only-ветка
+# рендерится. ВНУТРИ destiny `redis` deploy_redis=false гасит data-плоскость
+# (redis.conf/users.acl/PEM/systemd redis-server — placeholder-skip), но пакет redis
+# ставится ВСЕГДА (несёт sentinel-демон) + sentinel.conf/unit/демон (sentinel_enabled).
+#
+# Что ассертим (критерий приёмки слайса):
+#   1. mode-guard (index 0): sentinel_only реализован → "true" → no-op.
+#   2. master_ip-guard (index 14): master_ip задан → "true" → no-op.
+#   3. install redis-server (index 15): пакет ставится ДАЖЕ при deploy_redis=false.
+#   4. sentinel.conf (index 27) РЕНДЕРИТСЯ: monitor ВНЕШНЕГО master 10.9.9.9, quorum
+#      2 (size/2+1 при 2 хостах). data-плоскость redis-server в плане отсутствует
+#      (placeholder-skip — доказано render-acceptance TestAcceptance_SentinelOnlySkipsRedisServer).
+#   5. SENTINEL MONITOR (index 37): monitor.ip = input.master_ip 10.9.9.9 (ВНЕШНИЙ,
+#      НЕ из soulprint.hosts), quorum 2.
+#   6. PONG-gate :26379 (index 38): same-task register.self (PONG), НЕ cross-passage.
+name: sentinel_only deploys only sentinel daemon monitoring external master
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-2.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-1.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+  essence:
+    redis_type: sentinel_only
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+  input:
+    redis_type: sentinel_only
+    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
+    # distro-native пин (мажор < 8 → version-gate модулей не активен).
+    version: "7.2.4"
+    master_ip: 10.9.9.9
+
+assert:
+  rendered_tasks:
+    # mode-guard (index 0): sentinel_only теперь реализован → "true" → no-op.
+    - index: 0
+      module: core.cmd.shell
+      params:
+        cmd: 'test "true" = "true" || { echo "redis_type=sentinel_only не поддержан (реализованы: standalone, cluster, sentinel, sentinel_only)"; exit 1; }'
+
+    # master_ip-guard (index 14): master_ip задан → "true" → no-op. standalone(1-2)/
+    # cluster(3-7)/sentinel(8-13) ветки placeholder-skip на sentinel_only-прогоне.
+    - index: 14
+      module: core.cmd.shell
+      params:
+        cmd: 'test "true" = "true" || { echo "redis_type=sentinel_only требует input.master_ip (адрес ВНЕШНЕГО redis-master)"; exit 1; }'
+
+    # Install redis-server package (index 15 = destiny ordinal 0): пакет ставится
+    # ВСЕГДА — несёт и sentinel-демон. deploy_redis=false его НЕ гасит.
+    - index: 15
+      module: core.pkg.installed
+      params:
+        name: redis-server
+        version: "7.2.4"
+
+    # sentinel.conf (index 27 = destiny ordinal 12, 3 ручных daemon-reload убраны):
+    # РЕНДЕРИТСЯ (sentinel_enabled=true). vars: monitor ВНЕШНЕГО master 10.9.9.9:6379,
+    # master_name mymaster, quorum 2 (size(2)/2+1). announce-ip НЕ в vars — per-host в
+    # sentinel.conf.tmpl из .self. render_context.self = первый по SID хост (node-1,
+    # host-инвариант apply.input). data-плоскость redis-server (redis.conf/users.acl/
+    # systemd) в плане placeholder-skip — TestAcceptance_SentinelOnlySkipsRedisServer.
+    - index: 27
+      module: core.file.rendered
+      params:
+        path: /etc/redis/sentinel.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            master_name: mymaster
+            master_ip: "10.9.9.9"
+            master_port: "6379"
+            quorum: "2"
+            auth_user: ""
+            auth_pass: s3cr3t-redis-pass-create
+            sentinel_config: {}
+          self:
+            sid: node-1.example.com
+            covens: [create, redis]
+            choirs: []
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # SENTINEL MONITOR (index 37): monitor.ip = input.master_ip 10.9.9.9 (ВНЕШНИЙ,
+    # НЕ из soulprint.hosts — master живёт вне прогона). quorum 2 (size/2+1).
+    - index: 37
+      module: community.redis.sentinel
+      params:
+        addr: "127.0.0.1:26379"
+        master_name: mymaster
+        auth_pass: s3cr3t-redis-pass-create
+        redis_version: "7.2.4"
+        monitor:
+          ip: "10.9.9.9"
+          port: 6379
+          quorum: 2
+
+    # PONG-gate :26379 (index 38): same-task register.self (PONG), НЕ cross-passage.
+    - index: 38
+      module: community.redis.command
+      params:
+        addr: "127.0.0.1:26379"
+        args: ["PING"]
+
+  # sentinel_only-факты в state: redis_type sentinel_only + redis_config ПУСТОЙ
+  # (data-плоскости нет) + master_name/master_ip(ВНЕШНИЙ)/quorum + пустые
+  # users/hosts.
+  state_changes:
+    redis_type: sentinel_only
+    redis_version: "7.2.4"
+    redis_config: {}
+    redis_users: {}
+    redis_hosts: []
+    redis_sentinel:
+      master_name: mymaster
+      master_ip: "10.9.9.9"
+      quorum: 0

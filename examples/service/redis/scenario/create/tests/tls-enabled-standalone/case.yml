@@ -50,17 +50,21 @@ fixtures:
 
   input:
     redis_type: standalone
+    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
+    # distro-native пин (мажор < 8 → version-gate модулей не активен).
+    version: "7.2.4"
     persistence: rdb
 
 assert:
   rendered_tasks:
-    # index 3 — TLS dir (core.exec.run, when tls_enable → АКТИВЕН): install -d /etc/redis/tls.
+    # index 3 — TLS dir (core.file.directory, when tls_enable → АКТИВЕН): /etc/redis/tls.
     - index: 3
-      module: core.exec.run
+      module: core.file.directory
       params:
-        creates: /etc/redis/tls
-        cmd: install
-        args: ["-d", "-o", "redis", "-g", "redis", "-m", "0750", "/etc/redis/tls"]
+        path: /etc/redis/tls
+        owner: redis
+        group: redis
+        mode: "0750"
 
     # index 4 — TLS server cert: PEM из vault → render_context.vars.tls_cert (ЦЕЛЫЙ PEM).
     - index: 4
@@ -170,9 +174,9 @@ assert:
           role: ""
           essence: {}
 
-    # index 25 — PING health-gate: при tls_only плагин по TLS (tls=true, addr на
+    # index 23 — PING health-gate: при tls_only плагин по TLS (tls=true, addr на
     # tls_port, tls_ca = CA-PEM из vault). Доказывает «плагин ОБЯЗАН по TLS».
-    - index: 26
+    - index: 23
       module: community.redis.command
       params:
         addr: "127.0.0.1:7379"
@@ -185,7 +189,7 @@ assert:
   # (index 8), включая TLS-директивы + port 0 (host-инвариант → пишутся в state).
   state_changes:
     redis_type: standalone
-    redis_version: ""
+    redis_version: "7.2.4"
     redis_config:
       port: "0"
       tls-port: "7379"

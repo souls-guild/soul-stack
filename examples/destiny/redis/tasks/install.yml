@@ -1,0 +1,32 @@
+# tasks/install.yml — установка пакета redis + каталог unix-сокета. Без register-ов
+# наружу (онбординг артефакта, ничьи onchanges на эти задачи не завязаны).
+
+# Пакет из репозитория дистрибутива. retry — против флапающего apt/dnf-зеркала.
+# version ОБЯЗАТЕЛЕН (required:true, директива пользователя 2026-06-23): всегда
+# присутствует после input-валидации → читается голым input.version. core.pkg
+# всегда ставит distro-native =version-пин (воспроизводимая инсталляция; поведение
+# «latest без пина» более НЕ доступно). БЕЗ deploy_redis-гейта намеренно: пакет
+# redis несёт И redis-server, И redis-sentinel-демон → ставится во ВСЕХ режимах,
+# включая sentinel_only (deploy_redis=false), где разворачивается только демон.
+- name: Install redis-server package
+  module: core.pkg.installed
+  retry: { count: 3, delay: 10s }
+  params:
+    name: redis-server
+    version: "${ input.version }"
+
+# Каталог unix-сокета — ТОЛЬКО если в merged-конфиге есть директива unixsocket.
+# Пакетный systemd создаёт каталог через RuntimeDirectory лишь при старте юнита
+# (хрупко); создаём явно ДО старта, но ПОСЛЕ установки пакета (нужен пользователь/
+# группа redis). Декларативное состояние core.file.directory: idempotent по
+# mode/owner/group, чинит дрейф, поддерживает dry-run (в отличие от императивного
+# core.exec.run install -d). mode 0755: владелец redis пишет сокет, остальные
+# обходят каталог; доступ к сокету режет unixsocketperm (директива конфига).
+- name: Ensure the redis socket directory exists
+  module: core.file.directory
+  when: "(has(input.deploy_redis) ? input.deploy_redis : true) && has(input.config) && has(input.config.unixsocket)"
+  params:
+    path: /var/run/redis
+    owner: redis
+    group: redis
+    mode: "0755"

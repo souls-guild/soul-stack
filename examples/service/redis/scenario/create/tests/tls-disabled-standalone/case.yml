@@ -30,6 +30,9 @@ fixtures:
 
   input:
     redis_type: standalone
+    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
+    # distro-native пин (мажор < 8 → version-gate модулей не активен).
+    version: "7.2.4"
     persistence: rdb
 
 assert:
@@ -70,8 +73,8 @@ assert:
           role: ""
           essence: {}
 
-    # index 25 — PING: tls=false (plain, без tls_ca), addr на 6379 (plain открыт).
-    - index: 26
+    # index 23 — PING: tls=false (plain, без tls_ca), addr на 6379 (plain открыт).
+    - index: 23
       module: community.redis.command
       params:
         addr: "127.0.0.1:6379"
@@ -82,7 +85,7 @@ assert:
 
   state_changes:
     redis_type: standalone
-    redis_version: ""
+    redis_version: "7.2.4"
     # БЕЗ tls-* директив — симметрия с apply.input.config (drift-guard).
     redis_config:
       maxmemory: "256mb"

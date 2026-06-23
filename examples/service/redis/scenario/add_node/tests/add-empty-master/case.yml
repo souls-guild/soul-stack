@@ -42,7 +42,7 @@ fixtures:
 
 assert:
   rendered_tasks:
-    - index: 27
+    - index: 24
       module: community.redis.cluster
       params:
         action: add-node

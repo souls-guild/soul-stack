@@ -40,6 +40,9 @@ fixtures:
 
   input:
     redis_type: cluster
+    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
+    # distro-native пин (мажор < 8 → version-gate модулей не активен).
+    version: "7.2.4"
     # shards НЕ задан намеренно — этот пропуск ловит shards-guard.
 
 assert:

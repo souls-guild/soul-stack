@@ -108,15 +108,16 @@ assert:
           essence: {}
 
     # modules-dir каталог — gated, активна в cluster-modules-прогоне.
-    - index: 29
-      module: core.exec.run
+    - index: 26
+      module: core.file.directory
       params:
-        creates: /var/lib/redis/modules
-        cmd: install
-        args: ["-d", "-o", "redis", "-g", "redis", "-m", "0750", "/var/lib/redis/modules"]
+        path: /var/lib/redis/modules
+        owner: redis
+        group: redis
+        mode: "0750"
 
     # fetch .so json: URL арх-специфичен (amd64 из soulprint первого хоста в L0).
-    - index: 30
+    - index: 27
       module: core.url.fetched
       params:
         url: "https://artifacts.example.com/redis/modules/6.2/amd64/rejson.so"
@@ -126,8 +127,8 @@ assert:
         owner: redis
         group: redis
 
-    # cluster-build сдвинут на +2 (dir + 1 fetch) относительно базового 30.
-    - index: 32
+    # cluster-build сдвинут на +2 (dir + 1 fetch) относительно базового 27.
+    - index: 29
       module: community.redis.cluster
       params:
         action: create

@@ -1,0 +1,76 @@
+# tasks/extras.yml — host-tuning extras (концепция Ansible-роли): THP-юнит +
+# logrotate + sysctl. Режим-АГНОСТИЧНЫ (одинаково полезны standalone/cluster/
+# sentinel). logrotate/sysctl GATED собственным input-флагом (default true в
+# scenario/essence; средо-зависимы → opt-out): выкл флаг → has()/булев guard гасит
+# блок placeholder-skip-ом (слот занят, индексы не съезжают). THP-отключение
+# БЕЗУСЛОВНО (рекомендация Redis, hardening — не выбор оператора): задачи без when:,
+# рендерятся ВСЕГДА (слот тот же, что был у gated-формы — индексы не съезжают).
+#
+# register sysctl→apply живёт В ЭТОМ файле (cross-file register не раскрывается, open
+# Q tasks.md §12). disable-thp daemon-reload УБРАН: core.service (daemon_reload: auto)
+# сам перечитывает unit при смене disable-thp.service ПЕРЕД enable/start.
+
+# transparent-hugepages: oneshot-юнит отключения THP до Redis. БЕЗУСЛОВНО (THP даёт
+# latency-спайки на fork RDB/AOF — рекомендация Redis, hardening для всех режимов).
+- name: Render disable-thp systemd unit
+  module: core.file.rendered
+  params:
+    path: /etc/systemd/system/disable-thp.service
+    template: templates/disable-thp.service.tmpl
+    mode: "0644"
+    owner: root
+    group: root
+
+# core.service сам перечитывает unit (daemon_reload: auto) при смене disable-thp.service
+# перед enable/start. disable-thp — oneshot RemainAfterExit, отрабатывает один раз.
+- name: Ensure disable-thp is running and enabled at boot
+  module: core.service.running
+  params:
+    name: disable-thp
+    enabled: true
+
+# logrotate: ротация лог-файлов redis в /etc/logrotate.d/redis. Гейт
+# input.logrotate_enable (default:true → присутствует после input-валидации →
+# голый булев предикат, без has()-обёртки). mode 0644 owner/group root — стандарт
+# logrotate.d.
+- name: Render redis logrotate config
+  module: core.file.rendered
+  when: input.logrotate_enable
+  params:
+    path: /etc/logrotate.d/redis
+    template: templates/logrotate.tmpl
+    mode: "0644"
+    owner: root
+    group: root
+
+# sysctl: drop-in /etc/sysctl.d/30-redis.conf с kernel-параметрами под Redis.
+# Гейт input.sysctl_enable. core.file.rendered + `sysctl --system` (а не пер-ключ
+# core.sysctl: drop-in несёт ~десяток параметров — отдельный шаг на каждый раздул
+# бы план и сдвинул индексы; rendered+--system применяет весь файл одной задачей,
+# range по MAP детерминирует порядок строк → нет ложного change/повторного reload).
+# sysctl_settings — map kernel-параметр→значение, scenario сервиса передаёт его
+# через apply.input (дефолты — essence.sysctl_settings). register — реактивный reload.
+- name: Render redis sysctl drop-in
+  module: core.file.rendered
+  when: input.sysctl_enable
+  register: redis_sysctl
+  params:
+    path: /etc/sysctl.d/30-redis.conf
+    template: templates/redis.sysctl.conf.tmpl
+    mode: "0644"
+    owner: root
+    group: root
+    vars:
+      sysctl_settings: "${ has(input.sysctl_settings) ? input.sysctl_settings : {} }"
+
+# Применяем drop-in реактивно на его изменение. `sysctl --system` перечитывает все
+# /etc/sysctl.d/*.conf; onchanges → не изменился, no-op. В контейнерах часть vm.*
+# read-only — `-e` (--ignore) глушит ошибки несуществующих/read-only ключей, не
+# валя прогон (поведение ignoreerrors Ansible-роли). argv без shell.
+- name: Apply redis sysctl drop-in because it changed
+  module: core.exec.run
+  when: input.sysctl_enable
+  onchanges: [redis_sysctl]
+  params:
+    cmd: sysctl
+    args: ["-e", "--system"]
