@@ -1,0 +1,51 @@
+# L0-испытание restart: рестарт master-а (probe→where master, run_once). Парный
+# к rolling-restart-replicas — покрывает master-ветку where probe→role. Roster — 2
+# хоста; mocks.register.redis_role.stdout = master → block-потомки (where slave) —
+# placeholder-skip, master-restart (where master, run_once) рендерится.
+#
+# Что ассертим:
+#   1. block-потомки (Restart + Wait) — placeholder-skip (Params == nil): на
+#      master-payload-е where slave не матчит.
+#   2. master-restart (core.service.restarted, where master, run_once) рендерится
+#      (Params != nil): рестарт текущего master-а последним.
+#
+# ВНИМАНИЕ L0-ограничение: mocks.register — ЕДИНЫЙ payload на весь roster (см.
+# rolling-restart-replicas). На master-payload-е оба хоста «master» → master-restart
+# run_once таргетит ОДИН детерминированный (первый по SID). Раскладку доказывает
+# render-ассерт TargetSIDs (TestAcceptance_RestartBlockFanOut).
+name: restart the current master last
+
+fixtures:
+  hosts:
+    - sid: node-1.example.com
+      covens: [restart]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-2.example.com
+      covens: [restart]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+
+  input:
+    reason: "restart master for L0"
+
+mocks:
+  register:
+    redis_role:
+      stdout: master
+
+assert:
+  rendered_tasks:
+    # ── probe (core.cmd.shell): redis-cli role с trim '\n' ───────────────────
+    - index: 0
+      module: core.cmd.shell
+      params:
+        cmd: "redis-cli role | head -1 | tr -d '\\n'"
+
+    # ── master-restart (core.service.restarted, where master, run_once) ──────
+    - index: 3
+      module: core.service.restarted
+      params:
+        name: redis-server

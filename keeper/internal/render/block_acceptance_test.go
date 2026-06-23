@@ -32,8 +32,8 @@ func (redisResolver) Resolve(_ context.Context, name string) (*ResolvedDestiny, 
 }
 
 // TestAcceptance_RestartBlockFanOut — ★ ПРИЁМКА ТЗ: реальный потребитель
-// examples/service/redis-cluster/scenario/restart/main.yml (раньше падал
-// ErrUnsupportedDSL на block) рендерится корректно. Рендерим Passage 1 (где живёт
+// examples/service/redis/scenario/restart/main.yml (block fan-out + serial:1 +
+// унаследованный block.where) рендерится корректно. Рендерим Passage 1 (где живёт
 // block) с per-host register probe (Passage 0): хост a — master, b/c — slave.
 //
 // Доказывает:
@@ -43,7 +43,7 @@ func (redisResolver) Resolve(_ context.Context, name string) (*ResolvedDestiny, 
 //     потомки таргетят ТОЛЬКО slave-хосты (b, c), не master (a);
 //   - serial:1 наследуется: каждый потомок несёт SerialWidth=1.
 func TestAcceptance_RestartBlockFanOut(t *testing.T) {
-	path := filepath.FromSlash("../../../examples/service/redis-cluster/scenario/restart/main.yml")
+	path := filepath.FromSlash("../../../examples/service/redis/scenario/restart/main.yml")
 	m, _, diags, err := config.LoadScenarioManifest(path, config.ValidateOptions{})
 	if err != nil {
 		t.Fatalf("LoadScenarioManifest: %v", err)
@@ -70,7 +70,7 @@ func TestAcceptance_RestartBlockFanOut(t *testing.T) {
 			host("c.example.com", []string{"redis-prod"}, nil),
 		},
 		TaskPassage:   plan.TaskPassage,
-		ActivePassage: 1, // Passage 1 — где живёт block (см. passage_plan [0 1 1 1 2]).
+		ActivePassage: 1, // Passage 1 — где живёт block (passage_plan [0 1 1]: probe→block+restart-master).
 		// Per-host register Passage 0 (probe redis_role): a=master, b/c=slave.
 		RegisterByHost: map[string]map[string]any{
 			"a.example.com": {"redis_role": map[string]any{"stdout": "master"}},

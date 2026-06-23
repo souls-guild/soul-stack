@@ -1,0 +1,91 @@
+name: restart
+description: >-
+  Day-2: rolling-restart Redis без изменения конфига (режимы sentinel/cluster —
+  multi-host master-replica). Перенос идиомы probe→where rolling-restart из
+  прежнего redis-cluster (ADR-056/008): фактическая роль каждого хоста ВОЛАТИЛЬНА
+  (после возможного failover declared-роль create уже неверна), поэтому роль
+  берётся ЖИВЫМ probe непосредственно перед таргетингом, а не из incarnation.state.
+
+  Таргетинг — на весь incarnation (on: incarnation.name): прогон зовётся на всех
+  Soul-ов инкарнации, probe раскладывает их на master/slave по живому ответу
+  redis-cli role. Это режим-агностично и НЕ конфликтует с тем, как create
+  раскладывал роли (cluster — по SID, sentinel — declared hosts[0]): day-2 probe
+  перезамеряет роль заново на каждом хосте.
+
+  Реплики рестартятся ПО ОДНОЙ (block + serial:1: волна = {рестарт, health-gate}),
+  master рестартится ОТДЕЛЬНОЙ задачей ПОСЛЕ всех реплик (rolling-инвариант
+  «master последним»). state не меняется — только запись в state_history.
+
+  ★ Граница (architect 2026-06-22, redis-консолидация): живой failover (SENTINEL
+  FAILOVER / CLUSTER FAILOVER до рестарта master-а) идёт через плагин
+  community.redis (verb failover) — он в backlog сервиса (service.yml: «плагинные
+  states community.redis.acl и community.redis.failover»). Пока failover-verb нет,
+  master рестартится напрямую (краткая недоступность на рестарт). re-probe +
+  failover-волну добавит follow-up при появлении плагин-verb-а.
+
+# Формат блока — docs/input.md.
+input:
+  reason:
+    type: string
+    default: "manual restart"
+
+# state не меняется — только лог в state_history с пометкой.
+state_changes: {}
+
+tasks:
+  # Probe: фактическая роль каждого хоста (actual-роль волатильна, берётся живым
+  # probe непосредственно перед таргетингом — concept.md, ADR-008). Полнота probe
+  # гарантируется fail-stop барьером (ADR-056 §5): упавший probe на любом хосте →
+  # barrier → error_locked, where-Passage не стартует. tr -d '\n' — register.stdout
+  # без trailing newline (where сравнивает == 'slave'/'master'; без trim не матчит,
+  # recon §2.4).
+  - name: Detect actual redis role per host
+    module: core.cmd.shell
+    on: ["${ incarnation.name }"]
+    register: redis_role
+    changed_when: false
+    params:
+      cmd: "redis-cli role | head -1 | tr -d '\\n'"
+
+  # Rolling-restart реплик по одному хосту (serial: 1). serial: на block: катит
+  # весь блок целиком по одному набору хостов перед следующей волной
+  # (orchestration.md §2, Вариант A: волна = {изменить, проверить здоровье}).
+  # block.where (slave) наследуется обоими потомками — рендерятся ТОЛЬКО на
+  # репликах, master в этой волне не трогается.
+  - name: Rolling-restart replicas one at a time
+    on: ["${ incarnation.name }"]
+    where: register.redis_role.stdout == 'slave'
+    serial: 1
+    block:
+      - name: Restart redis-server
+        module: core.service.restarted
+        params:
+          name: redis-server
+      # Health-gate: бюджет времени и условие здоровья — унаследованный retry:+until:
+      # на probe-шаге (count × delay = бюджет, until: = условие). register.self.* —
+      # собственный результат шага (destiny/tasks.md §9, §10).
+      - name: Wait until replica is healthy again
+        module: core.exec.run
+        on: ["${ incarnation.name }"]
+        changed_when: false
+        retry:
+          count: 12
+          delay: 5s
+          until: contains(register.self.stdout, 'master_link_status:up')
+        failed_when: "!contains(register.self.stdout, 'master_link_status:up')"
+        params:
+          cmd: redis-cli
+          args: ["INFO", "replication"]
+
+  # Рестарт master-а ПОСЛЕ всех реплик (rolling-инвариант «master последним»).
+  # run_once: — ровно один хост (первый по SID) из резолва on:+where:
+  # (orchestration.md §2). >1 «текущих master» по probe — норма (cluster
+  # multi-master), шаг идёт на одном детерминированном за прогон; на multi-master
+  # cluster полный rolling по мастерам — follow-up вместе с failover-verb.
+  - name: Restart the current master last
+    module: core.service.restarted
+    on: ["${ incarnation.name }"]
+    where: register.redis_role.stdout == 'master'
+    run_once: true
+    params:
+      name: redis-server

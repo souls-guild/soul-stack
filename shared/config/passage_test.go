@@ -1145,12 +1145,12 @@ tasks:
 }
 
 // TestWithinBlock_AcceptanceRestart (guard #6) — ★ ПРИЁМКА: реальный
-// examples/service/redis-cluster/scenario/restart/main.yml (probe redis_role
-// top-level, block с where на внешний register) ВАЛИДЕН → ok==false. Плюс
-// регресс-цикл по ВСЕМ committed example-сценариям: ни один не должен ловиться
-// детектором (иначе валидный пример молча перестал бы прогоняться).
+// examples/service/redis/scenario/restart/main.yml (probe redis_role top-level,
+// block с where на внешний register) ВАЛИДЕН → ok==false. Плюс регресс-цикл по
+// ВСЕМ committed example-сценариям: ни один не должен ловиться детектором (иначе
+// валидный пример молча перестал бы прогоняться).
 func TestWithinBlock_AcceptanceRestart(t *testing.T) {
-	restartPath := filepath.FromSlash("../../examples/service/redis-cluster/scenario/restart/main.yml")
+	restartPath := filepath.FromSlash("../../examples/service/redis/scenario/restart/main.yml")
 	m, _, diags, err := LoadScenarioManifest(restartPath, ValidateOptions{})
 	if err != nil {
 		t.Fatalf("LoadScenarioManifest(restart): %v", err)

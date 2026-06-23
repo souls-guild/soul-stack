@@ -1,0 +1,62 @@
+# L0-испытание restart: rolling-restart реплик (probe→where→block+serial:1).
+# Render-only, герметично. Roster прогона — 2 хоста. Probe-роль каждого хоста
+# подаётся как mocks.register (L0-проброс готового register-payload-а probe-шага,
+# без исполнения redis-cli на хосте): redis_role.stdout = slave → block-потомки
+# (where slave) рендерятся, master-restart (where master) — placeholder-skip.
+#
+# Что ассертим (критерий приёмки переноса идиомы):
+#   1. probe-шаг (core.cmd.shell) — redis-cli role с trim '\n' (без trim where не
+#      матчит, recon §2.4).
+#   2. block fan-out: 2 потомка (Restart + Wait) разворачиваются в RenderedTask по
+#      сквозным индексам (block fan-out + serial:1 наследование доказаны
+#      render-ассертом TargetSIDs/SerialWidth в block_acceptance_test.go).
+#   3. master-restart (core.service.restarted, where master) — placeholder-skip на
+#      slave-payload-е (Params == nil): на slave-roster-е задача не таргетит никого.
+#
+# ВНИМАНИЕ L0-ограничение: mocks.register — ЕДИНЫЙ payload, применяется ко всем
+# хостам roster-а одинаково (probe-per-host = dispatch-слой L3, вне пилота). Поэтому
+# where матчит весь roster (все slave) либо никого; раскладку master/slave по разным
+# хостам доказывает render-ассерт TargetSIDs (TestAcceptance_RestartBlockFanOut).
+name: rolling-restart replicas one at a time
+
+fixtures:
+  hosts:
+    - sid: node-1.example.com
+      covens: [restart]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-2.example.com
+      covens: [restart]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+
+  input:
+    reason: "rolling restart for L0"
+
+mocks:
+  register:
+    redis_role:
+      stdout: slave
+
+assert:
+  rendered_tasks:
+    # ── probe (core.cmd.shell): redis-cli role с trim '\n' ───────────────────
+    - index: 0
+      module: core.cmd.shell
+      params:
+        cmd: "redis-cli role | head -1 | tr -d '\\n'"
+
+    # ── block-потомок 1: Restart redis-server (core.service.restarted) ───────
+    - index: 1
+      module: core.service.restarted
+      params:
+        name: redis-server
+
+    # ── block-потомок 2: health-gate (core.exec.run INFO replication) ────────
+    - index: 2
+      module: core.exec.run
+      params:
+        cmd: redis-cli
+        args: ["INFO", "replication"]

@@ -1,5 +1,5 @@
 name: redis
-state_schema_version: 1
+state_schema_version: 2
 description: >-
   Redis по концепции Ansible-роли: ОДИН сервис на все режимы развёртывания
   (redis_type ∈ standalone/sentinel/cluster/sentinel_only). Per-host install +
@@ -15,7 +15,9 @@ description: >-
   установка из бинарного дистрибутива (Шаг B припаркован)
   (redis-консолидация .pm/tasks/2026-06-22-redis-consolidation).
 
-# state_schema_version = 1 → каталог migrations/ не обязателен (ADR-019).
+# state_schema_version = 2: миграция 001_to_002 (migrations/001_to_002.yml) —
+# демо-цель грамматики DSL (rename + set + foreach + delete, ADR-019). v1→v2
+# переводит redis_users из списка имён в map name → {perms, state} (forward-only).
 # incarnation.state фиксирует, что развёрнуто, чтобы оператор видел инсталляцию и
 # повторный apply был idempotent.
 state_schema:
