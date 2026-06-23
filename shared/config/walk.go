@@ -52,6 +52,13 @@ var stateChangesType = reflect.TypeOf(StateChanges{})
 // sequence-of-struct и не нашёл бы соответствия mapping-узлу (ложные unknown_key).
 var computeBlockType = reflect.TypeOf(ComputeBlock(nil))
 
+// validateRuleSliceType — точка остановки reflect-walker-а для `validate:`.
+// У блока собственный AST-валидатор validateValidateBlock (требует that/message,
+// компилирует that input-only). Generic-walker по slice-of-struct ловил бы только
+// unknown_key, но дублировал бы его с validateValidateBlock на ту же line/col —
+// suppress (симметрично stateChangesType/computeBlockType).
+var validateRuleSliceType = reflect.TypeOf([]ValidateRule(nil))
+
 // walkUnknownKeys обходит AST-mapping `root` и yaml-теги типа `cfg`,
 // собирая `unknown_key` диагностики для ключей, которых нет в Go-структуре.
 //
@@ -167,6 +174,11 @@ func walkValueAgainstType(n ast.Node, t reflect.Type, path string) []diag.Diagno
 	// ComputeBlock — собственный UnmarshalYAML (mapping имя→выражение) + валидатор
 	// validateComputeBlock; generic-walker как по slice-of-struct сюда не заходит.
 	if t == computeBlockType {
+		return nil
+	}
+	// []ValidateRule — собственный AST-валидатор validateValidateBlock; generic-
+	// walker по slice-of-struct сюда не заходит (дублировал бы unknown_key).
+	if t == validateRuleSliceType {
 		return nil
 	}
 
