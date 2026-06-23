@@ -116,7 +116,7 @@ func (a *fakeAudit) has(t audit.EventType) bool {
 }
 
 func newMapper(db operator.ExecQueryRower, aw audit.Writer, grm map[string][]string) *DBMapper {
-	return NewMapper(MapperConfig{GroupRoleMap: grm, DB: db, Audit: aw})
+	return NewMapper(MapperConfig{Method: operator.AuthMethodLDAP, GroupRoleMap: grm, DB: db, Audit: aw})
 }
 
 // TestMapper_HappyProvision — юзер в группе → auto-provision (Insert вызван с

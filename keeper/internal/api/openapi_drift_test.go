@@ -105,6 +105,12 @@ var pathAllowlist = map[route]string{
 	// но в роутере отсутствует. ВНЕ /v1 (публичный вход, RequireJWT неприменим).
 	{method: http.MethodPost, path: "/auth/ldap/login"}: "ADR-058 LDAP login: роут подключён ТОЛЬКО при non-nil LDAPAuth (опц. блок auth.ldap в keeper.yml)",
 
+	// auth.oidc эндпоинты (ADR-058 стадия 2): подключены ТОЛЬКО при non-nil
+	// OIDCAuth (опц. блок auth.oidc + Redis); drift-test собирает router с
+	// OIDCAuth=nil → в спеке объявлены (prefix /auth), в роутере отсутствуют.
+	{method: http.MethodGet, path: "/auth/oidc/login"}:    "ADR-058 OIDC login: роут подключён ТОЛЬКО при non-nil OIDCAuth (опц. блок auth.oidc + Redis)",
+	{method: http.MethodGet, path: "/auth/oidc/callback"}: "ADR-058 OIDC callback: роут подключён ТОЛЬКО при non-nil OIDCAuth (опц. блок auth.oidc + Redis)",
+
 	// voyage.*-роуты подключаются ТОЛЬКО при non-nil voyageH (ADR-043 S5);
 	// drift-test собирает router с voyageH=nil, поэтому в спеке объявлены, но в
 	// роутере отсутствуют — документированный «opt-in»-блок (паттерн
@@ -198,6 +204,7 @@ func collectRoutes(t *testing.T) map[route]struct{} {
 		nil,   // tempoVoyagePreviewLimits — nil допустим (RateLimit при nil-limiter не вызывает provider)
 		false, // webUIEnabled — /ui вне /v1, drift-walker его не видит; держим выключенным для чистоты периметра
 		nil,   // ldapAuth (LDAP не сконфигурирован в тесте)
+		nil,   // oidcAuth (OIDC не сконфигурирован в тесте)
 		nil,   // logger — допустим nil (handler-ы получают io.Discard внутри)
 	)
 

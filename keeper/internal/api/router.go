@@ -133,7 +133,7 @@ const (
 // Health/meta вынесены вне `/v1/*` по operator-api.md § Health / Meta.
 // chi.NotFound и chi.MethodNotAllowed заменены на problem+json-handlers,
 // чтобы 404/405 не приходили в text/plain default-формате stdlib.
-func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.OperatorHandler, incH *handlers.IncarnationHandler, soulH *handlers.SoulHandler, roleH *handlers.RoleHandler, synodH *handlers.SynodHandler, sigilH *handlers.SigilHandler, sigilKeyH *handlers.SigilKeyHandler, serviceH *handlers.ServiceHandler, provisioningPolicyH *handlers.ProvisioningPolicyHandler, augurH *handlers.AugurHandler, oracleH *handlers.OracleHandler, pushH *handlers.PushHandler, pushProviderH *handlers.PushProviderHandler, errandH *handlers.ErrandHandler, voyageH *handlers.VoyageHandler, cadenceH *handlers.CadenceHandler, auditH *handlers.AuditHandler, choirH *handlers.ChoirHandler, heraldH *handlers.HeraldHandler, moduleCatalogH *handlers.ModuleCatalogHandler, moduleFormPrepH *handlers.ModuleFormPrepHandler, permCatalogH *handlers.PermissionCatalogHandler, eventTypeCatalogH *handlers.EventTypeCatalogHandler, meH *handlers.MyPermissionsHandler, enforcer RBACProvider, auditWriter audit.Writer, metricsHTTP *obs.HTTPMetrics, tollDegraded toll.DegradedReader, tempoLimiter apimiddleware.RateLimiter, tempoMetrics apimiddleware.RateLimitMetrics, tempoVoyageCreateLimits func() apimiddleware.RateLimitLimits, tempoVoyagePreviewLimits func() apimiddleware.RateLimitLimits, webUIEnabled bool, ldapAuth *LDAPAuthDeps, logger *slog.Logger) http.Handler {
+func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.OperatorHandler, incH *handlers.IncarnationHandler, soulH *handlers.SoulHandler, roleH *handlers.RoleHandler, synodH *handlers.SynodHandler, sigilH *handlers.SigilHandler, sigilKeyH *handlers.SigilKeyHandler, serviceH *handlers.ServiceHandler, provisioningPolicyH *handlers.ProvisioningPolicyHandler, augurH *handlers.AugurHandler, oracleH *handlers.OracleHandler, pushH *handlers.PushHandler, pushProviderH *handlers.PushProviderHandler, errandH *handlers.ErrandHandler, voyageH *handlers.VoyageHandler, cadenceH *handlers.CadenceHandler, auditH *handlers.AuditHandler, choirH *handlers.ChoirHandler, heraldH *handlers.HeraldHandler, moduleCatalogH *handlers.ModuleCatalogHandler, moduleFormPrepH *handlers.ModuleFormPrepHandler, permCatalogH *handlers.PermissionCatalogHandler, eventTypeCatalogH *handlers.EventTypeCatalogHandler, meH *handlers.MyPermissionsHandler, enforcer RBACProvider, auditWriter audit.Writer, metricsHTTP *obs.HTTPMetrics, tollDegraded toll.DegradedReader, tempoLimiter apimiddleware.RateLimiter, tempoMetrics apimiddleware.RateLimitMetrics, tempoVoyageCreateLimits func() apimiddleware.RateLimitLimits, tempoVoyagePreviewLimits func() apimiddleware.RateLimitLimits, webUIEnabled bool, ldapAuth *LDAPAuthDeps, oidcAuth *OIDCAuthDeps, logger *slog.Logger) http.Handler {
 	r := chi.NewRouter()
 
 	// huma error-override (ADR-054, FULL-TYPED): глобальный huma.NewError →
@@ -193,14 +193,21 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 
 	// /auth/* — федеративная аутентификация (ADR-058) ВНЕ /v1: публичный вход
 	// (сам логин, JWT ещё нет — RequireJWT неприменим, parity /healthz). Монтируется
-	// ТОЛЬКО при non-nil ldapAuth (keeper.yml::auth.ldap задан); иначе способ логина
-	// недоступен (ADR-053 OPTIONAL-tier). Anti-DoS body-limit стоит (credentials —
-	// малый JSON), но без metrics/RBAC/audit-middleware (/v1-обвязка): audit логина
-	// пишет сам handler (operator.login).
-	if ldapAuth != nil {
+	// при non-nil ldapAuth (POST /auth/ldap/login) И/ИЛИ non-nil oidcAuth
+	// (GET /auth/oidc/{login,callback}); иначе способ логина недоступен (ADR-053
+	// OPTIONAL-tier). Anti-DoS body-limit стоит (credentials/callback-query — малые),
+	// но без metrics/RBAC/audit-middleware (/v1-обвязка): audit логина пишет сам
+	// handler (operator.login). Каждый способ — отдельная huma.API на той же
+	// chi-группе (раздельные dump-таргеты в fullSpecGroups).
+	if ldapAuth != nil || oidcAuth != nil {
 		r.Route("/auth", func(r chi.Router) {
 			r.Use(maxBodyMiddleware(v1RequestBodyLimit))
-			registerHumaLDAPLogin(newHumaAuthAPI(r), ldapAuth)
+			if ldapAuth != nil {
+				registerHumaLDAPLogin(newHumaAuthAPI(r), ldapAuth)
+			}
+			if oidcAuth != nil {
+				registerHumaOIDCLogin(newHumaAuthAPI(r), oidcAuth)
+			}
 		})
 	}
 

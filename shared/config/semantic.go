@@ -130,6 +130,12 @@ func semanticValidateKeeper(c *KeeperConfig, root *ast.MappingNode) []diag.Diagn
 		out = append(out, checkAuthLDAP(root, c.Auth.LDAP)...)
 	}
 
+	// auth.oidc (ADR-058 стадия 2): issuer HTTPS-only + обязательность
+	// client_id/redirect_url + vault-ref форма client_secret_ref/ca_ref.
+	if c.Auth != nil && c.Auth.OIDC != nil {
+		out = append(out, checkAuthOIDC(root, c.Auth.OIDC)...)
+	}
+
 	// Cross-field: audit.retention_days alias на reaper.rules.purge_audit_old.max_age.
 	if c.Audit != nil && c.Reaper != nil {
 		if rule, ok := c.Reaper.Rules["purge_audit_old"]; ok && rule.MaxAge != "" && c.Audit.RetentionDays != 0 {
@@ -269,6 +275,56 @@ func checkAuthLDAP(root *ast.MappingNode, l *KeeperAuthLDAP) []diag.Diagnostic {
 			Message: "auth.ldap.tls.insecure_skip_verify: true disables LDAPS certificate verification (dev-only)",
 			Hint:    "production must verify the server certificate; set a tls.ca_ref instead",
 		}))
+	}
+
+	return out
+}
+
+// checkAuthOIDC — semantic-проверки блока auth.oidc (ADR-058(b)/(e), стадия 2).
+//
+// Безопасный периметр (ADR-058(g), «безопасность на первом месте»):
+//   - issuer — только HTTPS (ERROR иначе): discovery/JWKS/token-exchange ходят
+//     к IdP, plaintext недопустим (MITM на id_token);
+//   - client_id и redirect_url обязательны (ERROR);
+//   - client_secret_ref (опц., public-client может не иметь) и tls.ca_ref —
+//     vault-ref формы.
+//
+// PKCE обязателен на уровне реализации (auth/oidc всегда шлёт S256-challenge),
+// поэтому config-флага use_pkce НЕТ — он не оставлен оператору на выбор
+// (ADR-058 развилка №6 разрешена в пользу «обязателен»).
+//
+// Резолв *_ref + discovery → auth/oidc.Config — load-time в daemon (setupOIDCAuth),
+// здесь только статическая форма/инварианты.
+func checkAuthOIDC(root *ast.MappingNode, o *KeeperAuthOIDC) []diag.Diagnostic {
+	var out []diag.Diagnostic
+
+	if !strings.HasPrefix(o.Issuer, "https://") {
+		out = append(out, atPath(root, "$.auth.oidc.issuer", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+			Code:    "oidc_issuer_not_https",
+			Message: fmt.Sprintf("auth.oidc.issuer %q must be https:// (OIDC discovery/JWKS over TLS)", o.Issuer),
+			Hint:    "use https://idp.example.com/realms/...",
+		}))
+	}
+	if o.ClientID == "" {
+		out = append(out, atPath(root, "$.auth.oidc.client_id", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+			Code:    "oidc_client_id_required",
+			Message: "auth.oidc.client_id is required",
+		}))
+	}
+	if o.RedirectURL == "" {
+		out = append(out, atPath(root, "$.auth.oidc.redirect_url", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+			Code:    "oidc_redirect_url_required",
+			Message: "auth.oidc.redirect_url is required (e.g. https://keeper.example.com/auth/oidc/callback)",
+		}))
+	}
+	if o.ClientSecretRef != "" {
+		out = append(out, checkVaultRef(root, "$.auth.oidc.client_secret_ref", o.ClientSecretRef)...)
+	}
+	if o.TLS.CARef != "" {
+		out = append(out, checkVaultRef(root, "$.auth.oidc.tls.ca_ref", o.TLS.CARef)...)
 	}
 
 	return out

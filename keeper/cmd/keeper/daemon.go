@@ -32,6 +32,7 @@ import (
 	keeperaugur "github.com/souls-guild/soul-stack/keeper/internal/augur"
 	keeperauth "github.com/souls-guild/soul-stack/keeper/internal/auth"
 	keeperldap "github.com/souls-guild/soul-stack/keeper/internal/auth/ldap"
+	keeperoidc "github.com/souls-guild/soul-stack/keeper/internal/auth/oidc"
 	"github.com/souls-guild/soul-stack/keeper/internal/bootstrap"
 	"github.com/souls-guild/soul-stack/keeper/internal/cadence"
 	"github.com/souls-guild/soul-stack/keeper/internal/cloudinit"
@@ -3731,6 +3732,16 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		return errSetupFailed
 	}
 
+	// OIDC-аутентификация операторов (ADR-058 стадия 2): собираем при наличии
+	// auth.oidc И живого Redis (flow-state store cluster-shared). discovery к IdP
+	// + резолв client_secret_ref/ca_ref. При отсутствии блока/Redis — nil
+	// (эндпоинты не монтируются, ADR-053 OPTIONAL-tier).
+	oidcAuth, err := d.setupOIDCAuth(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "keeper run: setup OIDC auth: %v\n", err)
+		return errSetupFailed
+	}
+
 	srv, err := api.NewServer(cfg.Listen.OpenAPI, api.Deps{
 		JWTVerifier:         d.verifier,
 		JWTIssuer:           d.issuer,
@@ -3847,6 +3858,9 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		// LDAPAuth — федеративная LDAP-аутентификация (ADR-058). nil при
 		// отсутствии auth.ldap → endpoint /auth/ldap/login не монтируется.
 		LDAPAuth: ldapAuth,
+		// OIDCAuth — федеративная OIDC-аутентификация (ADR-058 стадия 2). nil при
+		// отсутствии auth.oidc / Redis → /auth/oidc/{login,callback} не монтируются.
+		OIDCAuth: oidcAuth,
 		// ProvisioningPolicyReader — снимок политики provisioning_allowed_methods
 		// для GET /v1/provisioning-policy + гейта POST /v1/operators (ADR-058 Часть
 		// B). Тот же serviceHolder, что несёт service-каталог: политика — well-known
@@ -3916,6 +3930,7 @@ func (d *daemon) setupLDAPAuth(ctx context.Context) (*api.LDAPAuthDeps, error) {
 	}
 
 	mapper := keeperauth.NewMapper(keeperauth.MapperConfig{
+		Method:       operator.AuthMethodLDAP,
 		GroupRoleMap: l.GroupRoleMap,
 		DB:           d.pool,
 		Audit:        d.auditWriter,
@@ -3928,6 +3943,111 @@ func (d *daemon) setupLDAPAuth(ctx context.Context) (*api.LDAPAuthDeps, error) {
 	})
 
 	return &api.LDAPAuthDeps{
+		Authenticator: authn,
+		Mapper:        mapper,
+		Issuer:        d.issuer,
+		TTL:           d.ttlDefault,
+		Audit:         d.auditWriter,
+		Logger:        d.logger,
+	}, nil
+}
+
+// oidcFlowTTL — TTL записи flow-state (state→nonce/PKCE) в Redis (ADR-058(b):
+// «~5 мин»). Ограничивает окно незавершённого login-flow: пользователь должен
+// пройти IdP-аутентификацию и вернуться на callback за это время, иначе state
+// истечёт и callback отвергнется (повторный login генерит свежий state).
+const oidcFlowTTL = 5 * time.Minute
+
+// oidcFlowStoreAdapter мостит oidc.FlowStore (узкий контракт пакета auth/oidc,
+// типы FlowState) на redis.OIDCFlowStore (типы redis.OIDCFlowState). Конвертация
+// нужна, чтобы auth/oidc не импортировал keeper/internal/redis (layering).
+type oidcFlowStoreAdapter struct {
+	store *keeperredis.OIDCFlowStore
+}
+
+func (a oidcFlowStoreAdapter) Save(ctx context.Context, state string, fs keeperoidc.FlowState) error {
+	return a.store.Save(ctx, state, keeperredis.OIDCFlowState{Nonce: fs.Nonce, CodeVerifier: fs.CodeVerifier})
+}
+
+func (a oidcFlowStoreAdapter) Consume(ctx context.Context, state string) (keeperoidc.FlowState, error) {
+	rs, err := a.store.Consume(ctx, state)
+	if err != nil {
+		// Маппим redis-not-found на oidc-not-found (CompleteLogin санитизирует в
+		// auth.ErrAuthFailed); прочее — наверх как есть.
+		if errors.Is(err, keeperredis.ErrOIDCFlowNotFound) {
+			return keeperoidc.FlowState{}, keeperoidc.ErrFlowNotFound
+		}
+		return keeperoidc.FlowState{}, err
+	}
+	return keeperoidc.FlowState{Nonce: rs.Nonce, CodeVerifier: rs.CodeVerifier}, nil
+}
+
+// setupOIDCAuth собирает зависимости OIDC-логина (ADR-058 стадия 2) из
+// keeper.yml::auth.oidc. Возвращает (nil, nil) при отсутствии блока ИЛИ
+// отсутствии Redis (flow-state store cluster-shared — без Redis OIDC невозможен,
+// ADR-006/053; эндпоинты тогда не монтируются, Keeper стартует). discovery к IdP
+// (сетевой вызов) + резолв client_secret_ref/ca_ref из Vault.
+func (d *daemon) setupOIDCAuth(ctx context.Context) (*api.OIDCAuthDeps, error) {
+	if d.cfg.Auth == nil || d.cfg.Auth.OIDC == nil {
+		return nil, nil
+	}
+	if d.redisClient == nil {
+		// OIDC требует cluster-shared flow-state store. Без Redis молча не
+		// монтируем (как OPTIONAL-деградация), но предупреждаем оператора: блок
+		// auth.oidc задан, а способ логина не поднимется.
+		d.logger.Warn("auth.oidc сконфигурирован, но Redis недоступен — OIDC-логин не смонтирован (flow-state store требует Redis)")
+		return nil, nil
+	}
+	o := d.cfg.Auth.OIDC
+
+	var clientSecret string
+	if o.ClientSecretRef != "" {
+		s, err := readVaultField(ctx, d.vc, o.ClientSecretRef, "client_secret")
+		if err != nil {
+			return nil, fmt.Errorf("auth.oidc.client_secret_ref: %w", err)
+		}
+		clientSecret = s
+	}
+	var caPEM []byte
+	if o.TLS.CARef != "" {
+		ca, err := readVaultField(ctx, d.vc, o.TLS.CARef, "ca")
+		if err != nil {
+			return nil, fmt.Errorf("auth.oidc.tls.ca_ref: %w", err)
+		}
+		caPEM = []byte(ca)
+	}
+
+	flowStore, err := keeperredis.NewOIDCFlowStore(d.redisClient, oidcFlowTTL)
+	if err != nil {
+		return nil, fmt.Errorf("auth.oidc flow store: %w", err)
+	}
+
+	authn, err := keeperoidc.New(ctx, keeperoidc.Config{
+		Issuer:       o.Issuer,
+		ClientID:     o.ClientID,
+		ClientSecret: clientSecret,
+		RedirectURL:  o.RedirectURL,
+		Scopes:       o.Scopes,
+		TLSCA:        caPEM,
+		AIDClaim:     o.AIDClaim,
+		GroupsClaim:  o.GroupsClaim,
+	}, oidcFlowStoreAdapter{store: flowStore}, d.logger)
+	if err != nil {
+		return nil, err
+	}
+
+	mapper := keeperauth.NewMapper(keeperauth.MapperConfig{
+		Method:       operator.AuthMethodOIDC,
+		GroupRoleMap: o.GroupRoleMap,
+		DB:           d.pool,
+		Audit:        d.auditWriter,
+		// ProvisioningGate — политика provisioning_allowed_methods (метод "oidc"),
+		// тот же serviceHolder-снимок, что у LDAP-mapper-а и POST /v1/operators.
+		ProvisioningGate: d.serviceHolder,
+		Logger:           d.logger,
+	})
+
+	return &api.OIDCAuthDeps{
 		Authenticator: authn,
 		Mapper:        mapper,
 		Issuer:        d.issuer,

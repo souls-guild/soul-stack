@@ -993,6 +993,7 @@ func TestHumaSoul_Exec_ChiCoexistence(t *testing.T) {
 		nil,   // tempoVoyagePreviewLimits
 		false, // webUIEnabled — /ui вне интереса soul-роутинг-теста
 		nil,   // ldapAuth (LDAP не сконфигурирован в тесте)
+		nil,   // oidcAuth (OIDC не сконфигурирован в тесте)
 		nil,   // logger
 	)
 	routes, ok := h.(chi.Routes)

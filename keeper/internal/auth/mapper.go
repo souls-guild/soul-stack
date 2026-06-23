@@ -24,7 +24,16 @@ type ProvisioningGate interface {
 
 // MapperConfig — зависимости [DBMapper].
 type MapperConfig struct {
-	// GroupRoleMap — внешняя группа → RBAC-роли (config auth.ldap.group_role_map).
+	// Method — федеративный метод этого mapper-а (ADR-058(a)): operator.AuthMethodLDAP
+	// либо operator.AuthMethodOIDC. Определяет, какой `auth_method`/`created_via`
+	// пишется в строку при auto-provision и какой метод проверяется в
+	// ProvisioningGate. Один [DBMapper] обслуживает один метод (LDAP-mapper и
+	// OIDC-mapper конструируются отдельно daemon-ом с одинаковой логикой). Пустое
+	// значение → провижининг отвергается ([ErrAuthFailed], defense-in-depth: mapper
+	// без явного метода не должен молча создавать оператора неизвестного источника).
+	Method operator.AuthMethod
+
+	// GroupRoleMap — внешняя группа → RBAC-роли (config auth.{ldap,oidc}.group_role_map).
 	// Источник ролей federated-оператора (ADR-058(d), развилка №2: роли из групп).
 	GroupRoleMap map[string][]string
 
@@ -48,8 +57,10 @@ type MapperConfig struct {
 	Logger *slog.Logger
 }
 
-// DBMapper отображает внешнюю identity (LDAP) на operators(aid) + роли
-// (ADR-058(d)). Реализует [Mapper].
+// DBMapper отображает внешнюю identity (LDAP либо OIDC) на operators(aid) + роли
+// (ADR-058(d)). Реализует [Mapper]. Логика для обоих методов одинакова; различает
+// их только cfg.Method (записывается в auth_method/created_via, проверяется
+// ProvisioningGate-ом).
 //
 // Решения стадии 1 (ADR-058):
 //   - provisioning — auto-provision по группам (развилка №1): первый логин
@@ -80,6 +91,11 @@ func NewMapper(cfg MapperConfig) *DBMapper {
 // `uid`, см. ldap.Authenticator). Невалидный AID → [ErrAuthFailed]
 // (anti-oracle: наружу не утекает причина).
 func (m *DBMapper) Map(ctx context.Context, ext ExternalIdentity) (MappedOperator, error) {
+	if m.cfg.Method == "" {
+		// Defense-in-depth: mapper без явного метода не должен молча создавать
+		// оператора неизвестного источника. daemon всегда выставляет Method.
+		return MappedOperator{}, ErrAuthFailed
+	}
 	aid := ext.AID
 	if !operator.ValidAID(aid) {
 		if m.cfg.Logger != nil {
@@ -118,19 +134,20 @@ func (m *DBMapper) Map(ctx context.Context, ext ExternalIdentity) (MappedOperato
 	}
 }
 
-// provision создаёт нового federated-оператора (auth_method=ldap) + membership
+// provision создаёт нового federated-оператора (auth_method=cfg.Method) + membership
 // + audit `operator.provisioned`.
 //
-// created_via=ldap, created_by_aid=NULL (ADR-058(d)): federated-login инициирован
-// внешним IdP, оператора-инициатора нет. NULL у created_by_aid теперь легален для
-// не-bootstrap-строк — bootstrap-инвариант перенесён на created_via='bootstrap'
-// (миграция 085), поэтому отдельный reserved-AID-маркер больше не нужен. Источник
-// атрибутируется самим created_via.
+// created_via=string(cfg.Method) (ldap|oidc), created_by_aid=NULL (ADR-058(d)):
+// federated-login инициирован внешним IdP, оператора-инициатора нет. NULL у
+// created_by_aid теперь легален для не-bootstrap-строк — bootstrap-инвариант
+// перенесён на created_via='bootstrap' (миграция 085), поэтому отдельный
+// reserved-AID-маркер больше не нужен. Источник атрибутируется самим created_via.
 func (m *DBMapper) provision(ctx context.Context, aid string, ext ExternalIdentity, roles []string) (MappedOperator, error) {
+	method := string(m.cfg.Method)
 	// Гейт политики provisioning_allowed_methods (ADR-058 Часть B): ТОЛЬКО на
 	// создании. ДО Insert — оператор не должен появиться при запрещённом методе.
 	// gate==nil → пропускаем (политика не сконфигурирована, back-compat).
-	if m.cfg.ProvisioningGate != nil && !m.cfg.ProvisioningGate.ProvisioningMethodAllowed("ldap") {
+	if m.cfg.ProvisioningGate != nil && !m.cfg.ProvisioningGate.ProvisioningMethodAllowed(method) {
 		return MappedOperator{}, ErrProvisioningDisabled
 	}
 
@@ -138,13 +155,15 @@ func (m *DBMapper) provision(ctx context.Context, aid string, ext ExternalIdenti
 	if displayName == "" {
 		displayName = aid
 	}
+	// created_via — строка того же домена, что и auth_method (ldap|oidc); enum
+	// CreatedVia — alias на string, значения совпадают (ADR-058(d)).
 	op := &operator.Operator{
 		AID:          aid,
 		DisplayName:  displayName,
-		AuthMethod:   operator.AuthMethodLDAP,
+		AuthMethod:   m.cfg.Method,
 		CreatedByAID: nil,
-		CreatedVia:   operator.CreatedViaLDAP,
-		Metadata:     map[string]any{"federated_source": "ldap"},
+		CreatedVia:   method,
+		Metadata:     map[string]any{"federated_source": method},
 	}
 	if err := operator.Insert(ctx, m.cfg.DB, op); err != nil {
 		return MappedOperator{}, fmt.Errorf("auth/mapper: provision insert: %w", err)
@@ -162,7 +181,7 @@ func (m *DBMapper) provision(ctx context.Context, aid string, ext ExternalIdenti
 		ArchonAID: aid,
 		Payload: map[string]any{
 			"aid":          aid,
-			"auth_method":  string(operator.AuthMethodLDAP),
+			"auth_method":  method,
 			"display_name": displayName,
 			"roles":        roles,
 			"groups":       ext.Groups,

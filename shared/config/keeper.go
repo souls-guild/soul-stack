@@ -886,14 +886,16 @@ func (a KeeperVaultAuth) ResolvedAuthMethod() string {
 //
 // `ldap` — федеративная LDAP-аутентификация (ADR-058, стадия 1 реализована:
 // semantic-валидация + резолв в auth/ldap.Config + endpoint /auth/ldap/login).
-// `oidc` — ★ СКЕЛЕТ стадии 2 (ADR-058 proposed): YAML-форма без обработки.
+// `oidc` — федеративная OAuth2/OIDC-аутентификация (ADR-058 стадия 2 реализована:
+// semantic-валидация + discovery + резолв в auth/oidc.Config + эндпоинты
+// /auth/oidc/{login,callback}; PKCE always-on; требует Redis).
 // Оба блока опциональны: не заданы → способ логина недоступен, Keeper стартует
 // (ADR-053 OPTIONAL-tier). Secret-поля — через `*_ref`
 // (`vault:<mount>/<path>[#field]`, резолв load-time как `redis.password_ref`).
 type KeeperAuth struct {
 	JWT  *KeeperAuthJWT  `yaml:"jwt,omitempty"`
-	LDAP *KeeperAuthLDAP `yaml:"ldap,omitempty"` // ADR-058 draft
-	OIDC *KeeperAuthOIDC `yaml:"oidc,omitempty"` // ADR-058 draft
+	LDAP *KeeperAuthLDAP `yaml:"ldap,omitempty"` // ADR-058 стадия 1
+	OIDC *KeeperAuthOIDC `yaml:"oidc,omitempty"` // ADR-058 стадия 2
 }
 
 type KeeperAuthJWT struct {
@@ -934,22 +936,28 @@ type KeeperAuthLDAPTLS struct {
 	InsecureSkipVerify bool   `yaml:"insecure_skip_verify,omitempty"` // dev-only (WARN)
 }
 
-// KeeperAuthOIDC — ★ СКЕЛЕТ конфига OIDC-аутентификации (ADR-058(b)/(e), draft).
-// `issuer` — только HTTPS (discovery base). Секрет — `client_secret_ref` (Vault).
-// `tls.ca_ref` — опц. кастомный CA IdP.
+// KeeperAuthOIDC — конфиг OIDC-аутентификации (ADR-058(b)/(e), стадия 2
+// реализована). `issuer` — только HTTPS (discovery base). Секрет —
+// `client_secret_ref` (Vault, опц. для public-client). `tls.ca_ref` — опц.
+// кастомный CA IdP.
 //
-// TODO(ADR-058 impl): semantic-валидация (issuer https-only, обязательность
-// client_id/redirect_url, `*_ref`-формат); discovery+резолв → auth/oidc.Config.
+// PKCE (S256) — всегда включён реализацией (auth/oidc), оператору НЕ оставлен на
+// выбор (ADR-058 развилка №6 разрешена в пользу «обязателен»); config-флага
+// use_pkce поэтому нет. OIDC требует живого Redis (cluster-shared flow-state
+// store nonce/PKCE) — без Redis эндпоинты не монтируются (ADR-053 OPTIONAL-tier).
+//
+// Semantic-валидация (semantic.go::checkAuthOIDC): issuer https-only,
+// обязательность client_id/redirect_url, vault-ref форма client_secret_ref/ca_ref.
+// Резолв *_ref + discovery → auth/oidc.Config — load-time в daemon (setupOIDCAuth).
 type KeeperAuthOIDC struct {
 	Issuer          string              `yaml:"issuer"`                      // https://idp/realms/...
 	ClientID        string              `yaml:"client_id"`                   //
-	ClientSecretRef string              `yaml:"client_secret_ref,omitempty"` // vault-ref
+	ClientSecretRef string              `yaml:"client_secret_ref,omitempty"` // vault-ref (опц., public-client)
 	RedirectURL     string              `yaml:"redirect_url"`                // https://keeper/auth/oidc/callback
 	Scopes          []string            `yaml:"scopes,omitempty"`            // openid, email, profile, groups
 	TLS             KeeperAuthOIDCTLS   `yaml:"tls,omitempty"`               //
-	AIDClaim        string              `yaml:"aid_claim,omitempty"`         // sub | email | preferred_username
-	GroupsClaim     string              `yaml:"groups_claim,omitempty"`      // groups
-	UsePKCE         bool                `yaml:"use_pkce,omitempty"`          // рекомендуется true
+	AIDClaim        string              `yaml:"aid_claim,omitempty"`         // sub | email | preferred_username (дефолт sub)
+	GroupsClaim     string              `yaml:"groups_claim,omitempty"`      // claim с группами (дефолт groups)
 	GroupRoleMap    map[string][]string `yaml:"group_role_map,omitempty"`    // внешняя группа → RBAC-роли
 }
 

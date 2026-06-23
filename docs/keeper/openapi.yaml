@@ -3927,6 +3927,89 @@ paths:
       summary: Логин оператора через LDAP
       tags:
         - auth
+  /auth/oidc/callback:
+    get:
+      description: Валидирует id_token (JWKS-подпись/iss/aud/exp/nonce), маппит на operators(aid)+роли, выпускает внутренний JWT в HttpOnly+Secure cookie и редиректит (302) в UI. Ошибка валидации/маппинга → 401/403.
+      operationId: oidcCallback
+      parameters:
+        - description: authorization code от IdP
+          explode: false
+          in: query
+          name: code
+          schema:
+            description: authorization code от IdP
+            type: string
+        - description: opaque CSRF-state, выданный на /auth/oidc/login
+          explode: false
+          in: query
+          name: state
+          schema:
+            description: opaque CSRF-state, выданный на /auth/oidc/login
+            type: string
+        - description: код ошибки от IdP (если аутентификация отклонена)
+          explode: false
+          in: query
+          name: error
+          schema:
+            description: код ошибки от IdP (если аутентификация отклонена)
+            type: string
+      responses:
+        "302":
+          description: Found
+          headers:
+            Location:
+              schema:
+                type: string
+            Set-Cookie:
+              schema:
+                type: string
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: OIDC-callback оператора
+      tags:
+        - auth
+  /auth/oidc/login:
+    get:
+      description: "Федеративная аутентификация (ADR-058): генерирует state+nonce+PKCE и редиректит (302) на authorization_endpoint внешнего IdP."
+      operationId: oidcLogin
+      responses:
+        "302":
+          description: Found
+          headers:
+            Location:
+              schema:
+                type: string
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Старт OIDC-логина оператора
+      tags:
+        - auth
   /v1/audit:
     get:
       description: Read-only-лента audit_log с фильтрами (type/source multi-OR, archon_aid/correlation_id/payload_herald/payload_voyage exact, started_after/before RFC3339) и пагинацией. Permission audit.read. Read-only, без audit (чтение не пишется — рекурсия).

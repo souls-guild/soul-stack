@@ -18,7 +18,7 @@ func (g fakeGate) ProvisioningMethodAllowed(method string) bool {
 }
 
 func newMapperWithGate(db operator.ExecQueryRower, grm map[string][]string, gate ProvisioningGate) *DBMapper {
-	return NewMapper(MapperConfig{GroupRoleMap: grm, DB: db, Audit: &fakeAudit{}, ProvisioningGate: gate})
+	return NewMapper(MapperConfig{Method: operator.AuthMethodLDAP, GroupRoleMap: grm, DB: db, Audit: &fakeAudit{}, ProvisioningGate: gate})
 }
 
 // TestMapper_LdapDisabled_ProvisionRejected — B5 кейс 2: политика без ldap →

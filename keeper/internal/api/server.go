@@ -324,6 +324,13 @@ type Deps struct {
 	// при наличии auth.ldap (резолв bind_password_ref/ca_ref из Vault).
 	LDAPAuth *LDAPAuthDeps
 
+	// OIDCAuth — федеративная OIDC-аутентификация операторов (ADR-058 стадия 2,
+	// GET /auth/oidc/{login,callback}). При nil эндпоинты не монтируются (opt-in,
+	// как LDAPAuth): keeper.yml::auth.oidc не задан → способ недоступен, Keeper
+	// стартует (ADR-053 OPTIONAL-tier). daemon собирает поле при наличии auth.oidc
+	// И живого Redis (flow-state store cluster-shared): без Redis OIDC недоступен.
+	OIDCAuth *OIDCAuthDeps
+
 	// ProvisioningPolicyReader — read-снимок политики provisioning_allowed_methods
 	// для GET /v1/provisioning-policy (ADR-058 Часть B). Реализуется
 	// *serviceregistry.Holder (cluster-консистентный atomic-снимок). PUT пишет через
@@ -674,7 +681,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 		}
 	}
 
-	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, augurH, oracleH, pushH, pushProviderH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, logger)
+	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, augurH, oracleH, pushH, pushProviderH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, logger)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,

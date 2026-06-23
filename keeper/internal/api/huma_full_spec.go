@@ -295,6 +295,13 @@ func fullSpecGroups() []specGroup {
 			registerHumaLDAPLogin(api, ldapAuthSpecStub())
 			return nil
 		}},
+		// OIDC-эндпоинты (ADR-058 стадия 2): /auth/oidc/{login,callback}. Отдельная
+		// группа от LDAP, чтобы huma-API не делила операции — каждый домен дампит
+		// свои пути (LDAP-POST и OIDC-GET не пересекаются по path).
+		{"/auth", func(api huma.API) error {
+			registerHumaOIDCLogin(api, oidcAuthSpecStub())
+			return nil
+		}},
 	}
 }
 
