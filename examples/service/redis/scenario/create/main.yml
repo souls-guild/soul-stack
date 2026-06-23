@@ -269,6 +269,28 @@ input:
       type: string
       pattern: "^[0-9a-f]{64}$"
 
+# ── Декларативные input-инварианты (validate:, ADR-009 amendment 2026-06-23) ──────
+# validate: — кросс-полевые предусловия ВВОДА, не выразимые одним schema-ключом и
+# не покрываемые required_when (присутствие) или enum/min/max (одно поле). Контекст
+# правила — INPUT-ONLY (только input.*; essence/soulprint/roster недоступны —
+# структурный CEL-барьер). Первый провал → 422 validation_failed ДО коммита
+# incarnation и ДО applying (как required_when), оператору с message правила.
+#
+# Граница с assert: (ниже, в ветках): assert — про ТОПОЛОГИЮ прогона (size-guard
+# сверяет size(soulprint.hosts) с 1+replicas / shards*(1+replicas_per_shard)),
+# нужен полный scenario-контекст с soulprint.hosts. validate здесь — про САМ ВВОД
+# (соотношение чисел), вычислимо ДО резолва roster.
+validate:
+  # Кворум sentinel-ов не может превышать ЧИСЛО sentinel-ов (1 master-хост +
+  # replicas реплик-хостов = 1+replicas sentinel-демонов в режиме sentinel).
+  # Иначе failover НИКОГДА не сработает: кворум недостижим даже при всех живых.
+  # Проверяем ТОЛЬКО когда quorum задан явно (has()) и режим sentinel — иначе
+  # auto-quorum (size/2+1) корректен по построению, а прочие режимы quorum не
+  # используют. Не выразимо min/max (потолок — другое поле) и не required_when
+  # (это не про присутствие, а про соотношение).
+  - that: "!has(input.sentinel_quorum) || input.redis_type != 'sentinel' || int(input.sentinel_quorum) <= 1 + int(input.replicas)"
+    message: "sentinel_quorum не может превышать число sentinel-ов (1 + replicas): кворум станет недостижим и failover не сработает"
+
 # ── Host-tuning extras (концепция Ansible-роли) ──────────────────────────────────
 # Режим-агностичные per-host добавки — THP-отключение, logrotate, sysctl — БЕЗУСЛОВНЫ
 # (рекомендация Redis / hardening, не выбор оператора): флагов в операторском

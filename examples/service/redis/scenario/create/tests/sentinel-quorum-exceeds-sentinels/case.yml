@@ -1,0 +1,60 @@
+# L0-испытание top-level validate:-секции (ADR-009 amendment 2026-06-23, DSL wave 2):
+# FAIL-ветка кросс-полевого input-инварианта «sentinel_quorum <= 1 + replicas».
+#
+# Режим sentinel, replicas=1 → число sentinel-демонов = 1+1 = 2. Оператор задаёт
+# sentinel_quorum=3 (> 2): кворум недостижим даже при всех живых, failover никогда
+# не сработает. validate:-правило create/main.yml ловит это НА INPUT-ВАЛИДАЦИИ
+# (config.EvalValidateRules, input-only eval) ДО render и ДО построения плана —
+# понятным сообщением, симметрично required_when.
+#
+# Контраст с size-guard (assert:): size-guard сверяет ЧИСЛО ХОСТОВ roster-а с
+# 1+replicas (полный scenario-контекст, soulprint.hosts), а validate здесь — про
+# САМ ВВОД (соотношение двух input-чисел), вычислимо ДО резолва roster. Поэтому
+# именно validate:, а не assert:.
+#
+# В trial-harness validate-провал пробрасывается тем же каналом, что required_when
+# (renderCase → config.EvalValidateRules), и ловится expect_render_error.
+name: sentinel_quorum exceeds sentinel count (aborts at input validation)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  # 2 хоста (1 master + 1 replica): топология 1+1=2 валидна (size-guard прошёл бы),
+  # но quorum=3 > 2 — рвёт раньше, на validate.
+  hosts:
+    - sid: node-1.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-2.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+  essence:
+    redis_type: sentinel
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+  # quorum=3 при 1+replicas=2 sentinel-ах → validate-правило false.
+  input:
+    redis_type: sentinel
+    version: "7.2.4"
+    replicas: 1
+    sentinel_quorum: 3
+    sentinel_master_name: mymaster
+
+# Прогон обрывается на validate: первое правило false. Подстрока — message правила
+# (create/main.yml validate[0]).
+expect_render_error: "sentinel_quorum не может превышать число sentinel-ов"
