@@ -1,15 +1,20 @@
 # L0-испытание restart: rolling-restart реплик (probe→where→block+serial:1).
 # Render-only, герметично. Roster прогона — 2 хоста. Probe-роль каждого хоста
 # подаётся как mocks.register (L0-проброс готового register-payload-а probe-шага,
-# без исполнения redis-cli на хосте): redis_role.stdout = slave → block-потомки
-# (where slave) рендерятся, master-restart (where master) — placeholder-skip.
+# без исполнения community.redis.role на хосте): redis_role.role = slave →
+# block-потомки (where slave) рендерятся, master-restart (where master) —
+# placeholder-skip.
 #
-# Что ассертим (критерий приёмки переноса идиомы):
-#   1. probe-шаг (core.cmd.shell) — redis-cli role с trim '\n' (без trim where не
-#      матчит, recon §2.4).
-#   2. block fan-out: 2 потомка (Restart + Wait) разворачиваются в RenderedTask по
-#      сквозным индексам (block fan-out + serial:1 наследование доказаны
-#      render-ассертом TargetSIDs/SerialWidth в block_acceptance_test.go).
+# ★ Probe — community.redis.role (go-redis INFO replication), НЕ raw redis-cli:
+# поле register.redis_role.role (Output плагина), НЕ .stdout. Health-gate —
+# community.redis.pinged (PING→PONG), НЕ core.exec.run redis-cli.
+#
+# Что ассертим (критерий приёмки переноса shell→плагин):
+#   1. probe-шаг (community.redis.role) рендерит params коннекта (addr localhost,
+#      пароль из vault, plaintext-ветка при отсутствии essence.tls_enable).
+#   2. block fan-out: 2 потомка (Restart + Wait-PONG) разворачиваются в
+#      RenderedTask по сквозным индексам (block fan-out + serial:1 наследование
+#      доказаны render-ассертом TargetSIDs/SerialWidth в block_acceptance_test.go).
 #   3. master-restart (core.service.restarted, where master) — placeholder-skip на
 #      slave-payload-е (Params == nil): на slave-roster-е задача не таргетит никого.
 #
@@ -35,18 +40,28 @@ fixtures:
   input:
     reason: "rolling restart for L0"
 
+  # Пароль Redis — probe и health-gate резолвят vault('secret/redis/restart#password')
+  # (incarnation.name == имя сценария == restart). essence.tls_enable не задан →
+  # plaintext-ветка коннекта (addr 127.0.0.1:6379, tls=false, tls_ca='').
+  vault:
+    secret/redis/restart:
+      password: fixture-redis-pass-16+
+
 mocks:
   register:
     redis_role:
-      stdout: slave
+      role: slave
 
 assert:
   rendered_tasks:
-    # ── probe (core.cmd.shell): redis-cli role с trim '\n' ───────────────────
+    # ── probe (community.redis.role): go-redis INFO replication, без redis-cli ──
     - index: 0
-      module: core.cmd.shell
+      module: community.redis.role
       params:
-        cmd: "redis-cli role | head -1 | tr -d '\\n'"
+        addr: "127.0.0.1:6379"
+        password: fixture-redis-pass-16+
+        tls: false
+        tls_ca: ""
 
     # ── block-потомок 1: Restart redis-server (core.service.restarted) ───────
     - index: 1
@@ -54,9 +69,11 @@ assert:
       params:
         name: redis-server
 
-    # ── block-потомок 2: health-gate (core.exec.run INFO replication) ────────
+    # ── block-потомок 2: health-gate (community.redis.pinged PING→PONG) ───────
     - index: 2
-      module: core.exec.run
+      module: community.redis.pinged
       params:
-        cmd: redis-cli
-        args: ["INFO", "replication"]
+        addr: "127.0.0.1:6379"
+        password: fixture-redis-pass-16+
+        tls: false
+        tls_ca: ""
