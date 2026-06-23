@@ -193,6 +193,8 @@ func TestEmbed_ContainsExpectedMigrations(t *testing.T) {
 		"081_add_apply_runs_failed_plan_index.up.sql",
 		"082_add_incarnation_applying_epoch.down.sql",
 		"082_add_incarnation_applying_epoch.up.sql",
+		"083_operators_auth_method_ldap_oidc.down.sql",
+		"083_operators_auth_method_ldap_oidc.up.sql",
 	}
 	if len(names) != len(want) {
 		t.Fatalf("got %d files, want %d: %v", len(names), len(want), names)
@@ -261,6 +263,32 @@ func TestEmbed_OperatorsTable(t *testing.T) {
 	}
 	if !strings.Contains(string(d), "DROP TABLE IF EXISTS operators") {
 		t.Errorf("down.sql does not drop operators; content: %.200s", d)
+	}
+}
+
+// TestEmbed_OperatorsAuthMethodLDAPOIDC — sanity на 083 (ADR-058): only-add
+// расширение CHECK auth_method_valid значениями `ldap`/`oidc`. Up расширяет
+// набор, down возвращает к прежнему (jwt/mtls/combined).
+func TestEmbed_OperatorsAuthMethodLDAPOIDC(t *testing.T) {
+	b, err := FS.ReadFile("083_operators_auth_method_ldap_oidc.up.sql")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	body := string(b)
+	for _, frag := range []string{
+		"DROP CONSTRAINT auth_method_valid",
+		"'jwt', 'mtls', 'combined', 'ldap', 'oidc'",
+	} {
+		if !strings.Contains(body, frag) {
+			t.Errorf("083 up.sql missing %q; content head: %.300s", frag, body)
+		}
+	}
+	d, err := FS.ReadFile("083_operators_auth_method_ldap_oidc.down.sql")
+	if err != nil {
+		t.Fatalf("read down: %v", err)
+	}
+	if !strings.Contains(string(d), "'jwt', 'mtls', 'combined'") {
+		t.Errorf("083 down.sql does not restore prior set; content: %.200s", d)
 	}
 }
 
