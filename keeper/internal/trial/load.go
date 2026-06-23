@@ -143,8 +143,16 @@ func (c *Case) validate() error {
 		}
 		seenSID[h.SID] = struct{}{}
 	}
+	// expect_render_error (ожидаем render-abort) ⊕ assert.rendered_tasks (ожидаем
+	// план) — противоположные исходы, в одном кейсе бессмысленны (ADR-023 amendment).
+	if c.ExpectRenderError != "" {
+		if len(c.Assert.RenderedTasks) > 0 || c.Assert.StateChanges != nil || c.Assert.StateAfter != nil {
+			return fmt.Errorf("expect_render_error и assert.* взаимоисключены: expect_render_error ожидает обрыв рендера, assert.* — успешный план/итог")
+		}
+		return nil
+	}
 	if len(c.Assert.RenderedTasks) == 0 {
-		return fmt.Errorf("assert.rendered_tasks: пуст (L0 требует план задач; state_changes/state_after — дополнительные секции)")
+		return fmt.Errorf("assert.rendered_tasks: пуст (L0 требует план задач; state_changes/state_after — дополнительные секции; либо задай expect_render_error для fail-кейса)")
 	}
 	for i, et := range c.Assert.RenderedTasks {
 		if et.Module == "" {

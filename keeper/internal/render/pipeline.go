@@ -131,6 +131,27 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 		passage := taskPassageAt(in.TaskPassage, i)
 		passageStart := len(tasks)
 
+		// assert-задача (ADR-009 amendment 2026-06-23) — keeper-side render-time
+		// precondition. Обрабатывается ДО emitStaticWhenSkip/guardPilotDSL: assert НЕ
+		// emit RenderedTask (это проверка, не задача), поэтому НЕЛЬЗЯ дать
+		// emitStaticWhenSkip эмитить под неё placeholder. evalAssertTask сам соблюдает
+		// `when:`-гейт (static-when-false → assert не вычисляется), а на провале
+		// предиката возвращает ErrAssertFailed (render обрывается, idx не растёт).
+		// idx/tasks/plans НЕ меняются — задачи после assert сдвигаются на её позицию.
+		//
+		// RUN-LEVEL «один раз»: в staged-render Render зовётся per-Passage с растущим
+		// ActivePassage; assert вычисляем ТОЛЬКО когда его Passage активен (иначе
+		// повтор на каждом Passage). Не-staged (TaskPassage==nil: Trial/Acolyte/
+		// CheckDrift) → passage всегда 0 == ActivePassage 0 → один проход, БИТ-В-БИТ.
+		if IsAssertTask(task) {
+			if in.TaskPassage == nil || passage == in.ActivePassage {
+				if err := p.evalAssertTask(in, task); err != nil {
+					return nil, nil, err
+				}
+			}
+			continue
+		}
+
 		// Static-when ПРЕДШЕСТВУЕТ guardPilotDSL (ADR-012(d), расширение static-when-
 		// инварианта): статически-false `when:` → задача gated off → скипается ДО
 		// ЛЮБОЙ eager-обработки, включая DSL-guard. Неактивная ветка с unsupported-DSL
@@ -595,6 +616,119 @@ func (p *Pipeline) staticSkipPlaceholder(task config.Task, idx int, skip *struct
 		rt.Module = task.Module.Module
 	}
 	return rt
+}
+
+// EvalAsserts вычисляет ТОЛЬКО assert-задачи scenario (ADR-009 amendment
+// 2026-06-23, двухточечная eval) — без эмита RenderedTask и без vault-resolve/
+// dispatch/on-where. Переиспользуется pre-flight-гейтом create-прогона
+// (request-путь, ДО коммита incarnation — keeper/internal/scenario.PreflightAssert):
+// тот же source-of-truth вычисления предиката, что и render-ветка ([Render] →
+// [evalAssertTask]), без диалекта.
+//
+// Контракт совпадает с assert-веткой Render бит-в-бит: проходит scenario.Tasks по
+// порядку, для каждой [IsAssertTask]-задачи зовёт общий [evalAssertTask] (тот же
+// when:-гейт, тот же run-level CEL-контекст с soulprint.hosts). Первый false →
+// [ErrAssertFailed] (обрыв, текст = message + индекс/текст предиката). Не-assert
+// задачи пропускаются (pre-flight не рендерит их — это делает Render на старте
+// прогона). Все assert true / scenario без assert → nil (большинство сценариев —
+// no-op, как и требует пилот).
+//
+// NOT staged: pre-flight всегда не-staged (один проход, TaskPassage=nil), assert —
+// run-level «один раз на прогон» по построению; passage-фильтр Render-а здесь не
+// нужен (он защищает от повтора assert на каждом Passage staged-прохода, чего в
+// pre-flight нет). nil-Scenario → ошибка (структурный отказ caller-а, как в Render).
+func (p *Pipeline) EvalAsserts(ctx context.Context, in RenderInput) error {
+	if in.Scenario == nil {
+		return fmt.Errorf("render: scenario manifest is nil")
+	}
+	in.Ctx = ctx // assert.that[] может звать vault() — прокинуть отмену/таймаут
+	for i := range in.Scenario.Tasks {
+		task := in.Scenario.Tasks[i]
+		if !IsAssertTask(task) {
+			continue
+		}
+		if err := p.evalAssertTask(in, task); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// evalAssertTask вычисляет assert-задачу (ADR-009 amendment 2026-06-23) —
+// keeper-side render-time precondition прогона. RUN-LEVEL (один раз, не per-host):
+// проверяет инвариант топологии прогона, а не per-host-предикат.
+//
+// Гейт `when:` соблюдён: если when статический (register-/soulprint-независимый,
+// isStaticWhen) и вычислился в false — assert НЕ вычисляется (placeholder-skip
+// неактивной ветки, как у обычной задачи: cluster-assert на standalone-прогоне
+// молчит). when пустой или статически-true → assert вычисляется. Non-static when
+// (register/soulprint-зависимый) на assert вне pilot-объёма — assert run-level и
+// register-карта неполна; такой when трактуется как «активен» (предикаты всё равно
+// вычисляются), вырожденный кейс не валим, но в пилоте он не используется.
+//
+// Предикаты `that[]` вычисляются в ПОЛНОМ scenario-CEL-контексте, включая
+// soulprint.hosts (AllowHosts=!destinyIsolated — как evalWhere/resolveTargets):
+// run-level контекст строится hostVars-ом по ПЕРВОМУ хосту roster-а (self здесь
+// не используется предикатами топологии; size(soulprint.hosts) host-инвариантен).
+// Первый false → ErrAssertFailed (render обрывается ДО dispatch): текст = message
+// (или дефолт) + индекс/текст непрошедшего предиката. Все true → nil (assert
+// «исчезает» из плана, RenderedTask не эмитится — это делает caller через continue).
+func (p *Pipeline) evalAssertTask(in RenderInput, task config.Task) error {
+	// Гейт when: статически-false → assert не вычисляется (неактивный режим).
+	if isStaticWhen(task.When) {
+		renderHosts := in.Hosts
+		if len(renderHosts) == 0 {
+			renderHosts = []*topology.HostFacts{{}}
+		}
+		fc, err := buildFlowContext(in, renderHosts[0], hostVars(in, renderHosts[0], len(in.Hosts)), len(in.Hosts))
+		if err != nil {
+			return fmt.Errorf("render: assert %q: when flow_context: %w", task.Name, err)
+		}
+		pass, err := evalStaticWhen(task.When, fc)
+		if err != nil {
+			return fmt.Errorf("render: assert %q: static-when %q: %w", task.Name, task.When, err)
+		}
+		if !pass {
+			return nil // when:false — assert неактивен (placeholder-skip-семантика).
+		}
+	}
+
+	// Run-level контекст: первый хост roster-а (или синтетический пустой при пустом
+	// roster). soulprint.hosts проецируется из in.Hosts (AllowHosts=true в scenario-
+	// проходе), size(soulprint.hosts) host-инвариантен — выбор первого хоста для self
+	// на результат топологических предикатов не влияет.
+	host := &topology.HostFacts{}
+	if len(in.Hosts) > 0 {
+		host = in.Hosts[0]
+	}
+	vars := hostVars(in, host, len(in.Hosts))
+	vars, err := resolveTaskVars(p.cel, fileVarsForHost(in, host), task.Vars, vars)
+	if err != nil {
+		return fmt.Errorf("render: assert %q: %w", task.Name, err)
+	}
+
+	for i, pred := range task.Assert.That {
+		ok, err := evalBoolExpr(p.cel, "assert.that", pred, vars)
+		if err != nil {
+			return fmt.Errorf("render: assert %q: %w", task.Name, err)
+		}
+		if !ok {
+			return fmt.Errorf("%w: %s (предикат that[%d] %q вычислился в false)", ErrAssertFailed, assertMessage(task), i, pred)
+		}
+	}
+	return nil
+}
+
+// assertMessage — человекочитаемое сообщение провала assert: авторский message
+// или дефолт по имени задачи (если message опущен).
+func assertMessage(task config.Task) string {
+	if task.Assert != nil && task.Assert.Message != "" {
+		return task.Assert.Message
+	}
+	if task.Name != "" {
+		return fmt.Sprintf("assert %q не прошёл", task.Name)
+	}
+	return "assert-предикат не прошёл"
 }
 
 // renderKeeperTask рендерит keeper-side задачу (`on: keeper`, docs/keeper/

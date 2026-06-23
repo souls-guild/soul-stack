@@ -130,6 +130,36 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 				autoCreate = art.Manifest.Lifecycle.AutoCreateEnabled()
 			}
 		}
+
+		// Pre-flight assert-гейт (ADR-009/ADR-027 amendment 2026-06-23, форма A):
+		// ПОСЛЕ ValidateInput (input материализован) и ДО incarnation.Create/Start —
+		// синхронно вычисляем assert-предикаты сценария create в scenario-CEL-
+		// контексте (roster connected-souls по covens incarnation = soulprint.hosts).
+		// Любой false → 422 assert_failed БЕЗ записи incarnation и БЕЗ fail-статуса
+		// (отказ на этапе модели, не postfactum error_locked через async render).
+		// Гейтится autoCreate: при autoCreate=false прогон create не стартует —
+		// проверять инвариант прогона незачем. pre-flight опционален (type-assertion
+		// над runner-ом): runner без PreflightAssert / сценарий без assert-задач →
+		// no-op. render-assert остаётся fail-safe для TOCTOU (roster изменился между
+		// pre-flight и стартом goroutine).
+		if autoCreate {
+			if pf, ok := h.runner.(AssertPreflighter); ok {
+				if err := pf.PreflightAssert(ctx, scenario.RunSpec{
+					IncarnationName: req.Name,
+					ServiceRef:      serviceRef,
+					ScenarioName:    scenario.CreateScenarioName,
+					Input:           input,
+					StartedByAID:    claims.Subject,
+				}); err != nil {
+					if errors.Is(err, scenario.ErrAssertFailed) {
+						return zero, incProblem(problem.TypeAssertFailed, err.Error())
+					}
+					h.logger.Error("incarnation.create: pre-flight assert failed",
+						slog.String("name", req.Name), slog.String("service", req.Service), slog.Any("error", err))
+					return zero, incProblem(problem.TypeInternalError, "pre-flight assert evaluation failed")
+				}
+			}
+		}
 	}
 
 	spec := map[string]any{}

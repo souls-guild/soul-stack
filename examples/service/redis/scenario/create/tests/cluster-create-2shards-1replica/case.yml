@@ -61,16 +61,14 @@ fixtures:
 assert:
   rendered_tasks:
     # index 0 — mode-guard (cluster → no-op); index 3 — shards-guard PASS.
-    # size-guard PASS: 4 == 2*(1+1) → "true", теперь на index 4.
-    - index: 4
-      module: core.cmd.shell
-      params:
-        cmd: 'test "true" = "true" || { echo "topology mismatch: hosts != shards*(1+replicas_per_shard)"; exit 1; }'
+    # size-guard PASS: 4 == 2*(1+1) → assert that[0] true (теперь assert:, не задача —
+    # ADR-009 amendment): render проходит, в план НЕ эмитится → задачи cluster-ветки
+    # сдвинуты на −1 (redis.conf 12→11, cluster-build 28→27).
 
     # redis.conf: cluster-node-timeout из input (8000, не дефолт 5000).
     # cluster-announce-ip в config НЕТ — per-host, рендерится в .tmpl из
     # .self.network.primary_ip. render_context.self = первый по SID хост (node-1).
-    - index: 12
+    - index: 11
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -105,8 +103,8 @@ assert:
           essence: {}
 
     # cluster-build: nodes-MAP всех 4 хостов (детерминирован по SID),
-    # replicas_per_shard=1 уходит в плагин.
-    - index: 28
+    # replicas_per_shard=1 уходит в плагин. Был index 28 (−1 после удаления size-guard).
+    - index: 27
       module: community.redis.cluster
       params:
         action: create

@@ -77,14 +77,10 @@ fixtures:
 assert:
   rendered_tasks:
     # index 0 — mode-guard (cluster → no-op); index 3 — shards-guard PASS.
-    # size-guard PASS, теперь на index 4.
-    - index: 4
-      module: core.cmd.shell
-      params:
-        cmd: 'test "true" = "true" || { echo "topology mismatch: hosts != shards*(1+replicas_per_shard)"; exit 1; }'
+    # size-guard PASS: assert: (ADR-009 amendment) — НЕ задача → redis.conf 12→11.
 
     # redis.conf: cluster-блок ПОБЕДИЛ враждебный redis_settings (last-wins).
-    - index: 12
+    - index: 11
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf

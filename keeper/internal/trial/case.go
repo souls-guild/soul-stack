@@ -27,7 +27,19 @@ type Case struct {
 	Name     string      `yaml:"name"`
 	Fixtures Fixtures    `yaml:"fixtures"`
 	Mocks    Mocks       `yaml:"mocks,omitempty"`
-	Assert   AssertBlock `yaml:"assert"`
+	Assert   AssertBlock `yaml:"assert,omitempty"`
+
+	// ExpectRenderError — кейс ОЖИДАЕТ, что Keeper-side render ОБОРВЁТСЯ ошибкой,
+	// содержащей эту подстроку (ADR-023 amendment 2026-06-23). Enabler fail-кейсов
+	// механизмов, падающих на render: assert: (ADR-009 amendment) и будущий
+	// required_when. Render-успех при заданном ExpectRenderError → FAIL кейса;
+	// render-ошибка без подстроки → FAIL; render-ошибка с подстрокой → PASS.
+	//
+	// Взаимоисключим с assert.rendered_tasks: «ожидаем abort» и «ожидаем план» —
+	// противоположные исходы (validate отвергает оба в одном кейсе). При
+	// ExpectRenderError секция assert пуста (плана нет). Опционально (omitempty):
+	// обычные L0-кейсы его не несут — путь рендера БИТ-В-БИТ.
+	ExpectRenderError string `yaml:"expect_render_error,omitempty"`
 }
 
 // Fixtures — герметичный вход прогона. Все поля опциональны; пустое поле =

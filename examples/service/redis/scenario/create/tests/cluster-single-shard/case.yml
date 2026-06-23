@@ -44,14 +44,12 @@ fixtures:
 assert:
   rendered_tasks:
     # index 0 — mode-guard (cluster → no-op); index 3 — shards-guard PASS.
-    # size-guard PASS: 1 == 1*(1+0), теперь на index 4.
-    - index: 4
-      module: core.cmd.shell
-      params:
-        cmd: 'test "true" = "true" || { echo "topology mismatch: hosts != shards*(1+replicas_per_shard)"; exit 1; }'
+    # size-guard PASS: 1 == 1*(1+0) → assert that[0] true (assert:, не задача —
+    # ADR-009 amendment): render проходит, в план НЕ эмитится → задачи сдвинуты на
+    # −1 (redis.conf 12→11, cluster-build 28→27).
 
     # redis.conf: cluster-директивы; render_context.self = единственный хост.
-    - index: 12
+    - index: 11
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -85,8 +83,8 @@ assert:
           role: ""
           essence: {}
 
-    # cluster-build: nodes-MAP с единственной записью.
-    - index: 28
+    # cluster-build: nodes-MAP с единственной записью. Был index 28 (−1 после size-guard).
+    - index: 27
       module: community.redis.cluster
       params:
         action: create

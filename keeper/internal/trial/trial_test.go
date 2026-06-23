@@ -556,6 +556,111 @@ assert:
 	}
 }
 
+// assertMain — scenario с assert-задачей (ADR-009 amendment 2026-06-23): render
+// обрывается, если число хостов roster-а != input.want_hosts.
+const assertMain = `name: create
+input:
+  want_hosts:
+    type: integer
+    required: true
+tasks:
+  - name: topology guard
+    assert:
+      that:
+        - "size(soulprint.hosts) == int(input.want_hosts)"
+      message: "topology mismatch: hosts != want_hosts"
+  - name: write marker
+    module: core.file.present
+    params:
+      path: /tmp/soul-stack-marker
+      content: ok
+`
+
+// TestRunCase_ExpectRenderError_Match — assert-провал обрывает render; кейс с
+// expect_render_error на совпадающую подстроку → PASS (ADR-023 amendment).
+func TestRunCase_ExpectRenderError_Match(t *testing.T) {
+	caseDir := writeScenarioTree(t, assertMain, `name: assert aborts render
+fixtures:
+  input:
+    want_hosts: 3
+  hosts:
+    - { sid: a.example.com, covens: [create] }
+    - { sid: b.example.com, covens: [create] }
+expect_render_error: "topology mismatch"
+`)
+	results, err := Run(context.Background(), caseDir)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !results[0].Pass {
+		t.Fatalf("ожидали PASS (render оборвался с подстрокой): %v", results[0].Failures)
+	}
+}
+
+// TestRunCase_ExpectRenderError_RenderSucceeds — expect_render_error задан, но
+// render УСПЕШЕН (топология совпала) → FAIL (ожидался abort, его не было).
+func TestRunCase_ExpectRenderError_RenderSucceeds(t *testing.T) {
+	caseDir := writeScenarioTree(t, assertMain, `name: assert passes but error expected
+fixtures:
+  input:
+    want_hosts: 2
+  hosts:
+    - { sid: a.example.com, covens: [create] }
+    - { sid: b.example.com, covens: [create] }
+expect_render_error: "topology mismatch"
+`)
+	results, err := Run(context.Background(), caseDir)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if results[0].Pass {
+		t.Fatal("ожидали FAIL: render успешен, а кейс ждал обрыв")
+	}
+}
+
+// TestRunCase_ExpectRenderError_WrongSubstring — render оборвался, но подстрока
+// ошибки не совпала с ожиданием → FAIL (ловит подмену сообщения).
+func TestRunCase_ExpectRenderError_WrongSubstring(t *testing.T) {
+	caseDir := writeScenarioTree(t, assertMain, `name: assert aborts but wrong substring
+fixtures:
+  input:
+    want_hosts: 5
+  hosts:
+    - { sid: a.example.com, covens: [create] }
+expect_render_error: "completely different text"
+`)
+	results, err := Run(context.Background(), caseDir)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if results[0].Pass {
+		t.Fatal("ожидали FAIL: render оборвался, но подстрока не совпала")
+	}
+}
+
+// TestLoadCase_ExpectRenderErrorConflictsWithRenderedTasks — expect_render_error и
+// assert.rendered_tasks в одном кейсе — strict-ошибка валидации (противоположные
+// исходы).
+func TestLoadCase_ExpectRenderErrorConflictsWithRenderedTasks(t *testing.T) {
+	caseDir := writeScenarioTree(t, assertMain, `name: conflict
+fixtures:
+  input:
+    want_hosts: 2
+expect_render_error: "topology mismatch"
+assert:
+  rendered_tasks:
+    - index: 0
+      module: core.file.present
+`)
+	_, _, err := LoadCase(caseDir)
+	if err == nil {
+		t.Fatal("ожидали ошибку валидации: expect_render_error ⊕ assert.rendered_tasks")
+	}
+	if !strings.Contains(err.Error(), "взаимоисключены") {
+		t.Errorf("ошибка не про взаимоисключение: %v", err)
+	}
+}
+
 // TestRun_MixedL0L2Tree — рекурсивный прогон дерева с L0- и L2-кейсами: L0
 // исполняются, L2 (маркер stand:/verify:) пропускаются с пометкой Skipped, нет
 // краша на strict-декоде L2-кейса. Регресс на mixed-дерево examples/.

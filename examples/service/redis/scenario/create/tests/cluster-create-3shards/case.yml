@@ -4,21 +4,19 @@
 #
 # Render-only, герметично. Диспетчер create инклудит standalone.yml + cluster.yml;
 # на cluster-прогоне standalone-ветка гасится placeholder-skip-ом (static-when
-# input.redis_type != 'standalone'), cluster-ветка рендерится. План:
-#   index 0  — standalone apply destiny (СКИП, placeholder);
-#   index 1  — standalone PING (СКИП, placeholder);
-#   index 2  — cluster size-guard (core.cmd.shell, render-наблюдаемое булево);
-#   index 3  — cluster destiny: core.pkg.installed;
-#   index 5  — cluster destiny: users.acl (core.file.rendered);
-#   index 6  — cluster destiny: redis.conf (core.file.rendered, cluster-директивы);
-#   index 17 — cluster PING (community.redis.command);
-#   index 18 — cluster-build (community.redis.cluster action create, nodes-MAP).
-# (destiny redis экспандится в 14 task-ов после +5 gated sentinel-задач в хвосте
-#  tasks/main.yml, поэтому PING/cluster-build съехали с 12/13 на 17/18.)
+# input.redis_type != 'standalone'), cluster-ветка рендерится. size-guard теперь
+# assert: (keeper-side render-time precondition, ADR-009 amendment 2026-06-23): он
+# НЕ emit RenderedTask, поэтому задачи cluster-ветки сдвинуты на −1 относительно
+# прежнего плана. Ключевые индексы (после −1):
+#   index 0  — mode-guard диспетчера (core.cmd.shell, no-op на реализованном режиме);
+#   index 3  — cluster shards-guard (core.cmd.shell, has(input.shards));
+#   index 4  — cluster destiny: core.pkg.installed (был 5);
+#   index 11 — cluster destiny: redis.conf (core.file.rendered, cluster-директивы; был 12);
+#   index 27 — cluster-build (community.redis.cluster action create, nodes-MAP; был 28).
 #
 # Что ассертим (критерий приёмки слайса):
-#   1. size-guard PASS-форма: cmd сверяет int(size(hosts))==int(shards)*(1+
-#      int(replicas)) → отрендеренное булево "true" (3 == 3*(1+0)) → test проходит.
+#   1. size-guard PASS: assert that[0] (size(hosts)==shards*(1+replicas), 3==3*(1+0))
+#      → true → render проходит, cluster-build на месте; провал ловит mismatch-кейс.
 #   2. HOST-ИНВАРИАНТНЫЕ cluster-директивы в render_context.vars.config: cluster-enabled
 #      yes / cluster-config-file nodes.conf / cluster-node-timeout (input или 5000).
 #      cluster-announce-ip в config НЕТ — он per-host и рендерится в .tmpl из
@@ -102,15 +100,15 @@ assert:
       params:
         cmd: 'test "true" = "true" || { echo "redis_type=cluster требует input.shards (число master-шардов, min 1)"; exit 1; }'
 
-    # ── size-guard (core.cmd.shell) ─────────────────────────────────────────
-    # 3 == 3*(1+0) → "true" встроено в test; ветка совпадения. Теперь на index 4.
-    - index: 4
-      module: core.cmd.shell
-      params:
-        cmd: 'test "true" = "true" || { echo "topology mismatch: hosts != shards*(1+replicas_per_shard)"; exit 1; }'
+    # ── size-guard теперь assert: (ADR-009 amendment 2026-06-23) ─────────────
+    # 3 == 3*(1+0) → assert that[0] true → render проходит, задача в план НЕ
+    # эмитится (assert — проверка). Поэтому НЕТ index 4 size-guard-а, и все задачи
+    # cluster-ветки ПОСЛЕ него сдвинулись на −1: pkg 5→4, redis.conf 12→11,
+    # cluster-build 28→27. Провал size-guard (mismatch) ловит cluster-size-guard-
+    # mismatch через expect_render_error.
 
-    # ── cluster destiny: пакет ──────────────────────────────────────────────
-    - index: 5
+    # ── cluster destiny: пакет (был index 5, теперь 4 после −1) ─────────────
+    - index: 4
       module: core.pkg.installed
       params:
         name: redis-server
@@ -123,7 +121,7 @@ assert:
     # .self.network.primary_ip (см. destiny_redis_tmpl_test.go: per-host announce).
     # render_context.self здесь = первый по SID хост (node-a, host-инвариант
     # apply.input в пилоте), но СЛОЙ .tmpl на Soul-е возьмёт self КАЖДОГО хоста.
-    - index: 12
+    - index: 11
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -159,7 +157,8 @@ assert:
 
     # ── cluster-build (community.redis.cluster) ─────────────────────────────
     # nodes-MAP: ключ=SID, addr=primary_ip+":6379". Детерминирован по SID.
-    - index: 28
+    # Был index 28 — после удаления size-guard-задачи из плана сдвинулся на −1.
+    - index: 27
       module: community.redis.cluster
       params:
         action: create

@@ -56,6 +56,14 @@ func TestGolden_ScenarioExample(t *testing.T) {
 	runExpect(t, "../../testdata/scenario-golden/redis-create.yml", KindScenario, false, ExitOK, nil)
 }
 
+// TestGolden_ScenarioAssertPrecondition — assert-задача (ADR-009 amendment
+// 2026-06-23): валидная форма (that[] CEL-bool со soulprint.hosts, message-строка)
+// проходит линт (ExitOK). Реверс (assert ошибочно зарезан) → ExitHasErrors → тест
+// падает.
+func TestGolden_ScenarioAssertPrecondition(t *testing.T) {
+	runExpect(t, "../../testdata/scenario-golden/assert-precondition.yml", KindScenario, false, ExitOK, nil)
+}
+
 // TestGolden_ScenarioIncarnationStateRead — `incarnation.state.<path>` (read-only
 // снимок incarnation.state в scenario render, ADR-009/010 Вариант A) ВАЛИДЕН в
 // предикате и apply.input. Контракт: каноническая форма НЕ ловится

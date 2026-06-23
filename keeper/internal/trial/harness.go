@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	securejoin "github.com/cyphar/filepath-securejoin"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -171,6 +172,21 @@ func RunCase(ctx context.Context, c *Case, caseFile string) (Result, error) {
 	res := Result{Case: c.Name}
 
 	rc, err := renderCase(ctx, c, caseFile)
+
+	// expect_render_error (ADR-023 amendment): кейс ОЖИДАЕТ обрыв рендера
+	// (assert:-провал / required_when). Render-успех → FAIL; ошибка без подстроки
+	// → FAIL; ошибка с подстрокой → PASS. Coverage пуст (план не построен), но кейс
+	// проходит. Сверяем raw-ошибку renderCase до её оборачивания в return err ниже.
+	if c.ExpectRenderError != "" {
+		if err == nil {
+			res.Failures = append(res.Failures, fmt.Sprintf("ожидался обрыв рендера с подстрокой %q, но render успешен", c.ExpectRenderError))
+		} else if !strings.Contains(err.Error(), c.ExpectRenderError) {
+			res.Failures = append(res.Failures, fmt.Sprintf("ожидалась ошибка рендера с подстрокой %q, получено: %v", c.ExpectRenderError, err))
+		}
+		res.Pass = len(res.Failures) == 0
+		return res, nil
+	}
+
 	if err != nil {
 		return res, err
 	}

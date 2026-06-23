@@ -176,6 +176,28 @@ func collectRefs(seq *ast.SequenceNode, pathPrefix string, known map[string]bool
 				out = append(out, checkPredicateRefs(tok.Value, kv.Value, known, taskPath)...)
 				out = append(out, checkSoulprintRefs(tok.Value, kv.Value, taskPath)...)
 				out = append(out, checkStateRefs(tok.Value, kv.Value, taskPath)...)
+			case "assert":
+				// assert.that[] — список CEL-bool-предикатов (render-time precondition,
+				// ADR-009 amendment). Каждый предикат проверяется как `where:`:
+				// register-ссылки против known + soulprint/state-каноны. assert вычисляется
+				// Keeper-side (как where:) — cross-passage register умеет (re-render с
+				// накопленным register), поэтому register-чтение в that легально.
+				if amm, isMap := kv.Value.(*ast.MappingNode); isMap {
+					for _, sub := range amm.Values {
+						st := sub.Key.GetToken()
+						if st == nil || st.Value != "that" {
+							continue
+						}
+						if seq, isSeq := sub.Value.(*ast.SequenceNode); isSeq {
+							for j, item := range seq.Values {
+								kind := fmt.Sprintf("assert.that[%d]", j)
+								out = append(out, checkPredicateRefs(kind, item, known, taskPath)...)
+								out = append(out, checkSoulprintRefs(kind, item, taskPath)...)
+								out = append(out, checkStateRefs(kind, item, taskPath)...)
+							}
+						}
+					}
+				}
 			case "vars", "output", "params":
 				// Интерполяционные source-поля: ${ register.X } в строковых
 				// литералах, рекурсивно по вложенным map/seq.

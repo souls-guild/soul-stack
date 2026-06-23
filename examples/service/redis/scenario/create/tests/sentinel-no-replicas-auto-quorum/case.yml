@@ -41,16 +41,18 @@ fixtures:
 
 assert:
   rendered_tasks:
-    # index 0 — mode-guard (sentinel → no-op); cluster-ветка placeholder-skip
-    # (слоты 1..7). sentinel size-guard PASS теперь на index 8: 1 == 1+0 → "true".
-    - index: 8
+    # index 0 — mode-guard (sentinel → no-op); standalone+cluster ветки placeholder-skip.
+    # cluster size-guard переведён в assert: (ADR-009 amendment) — больше НЕ занимает
+    # слот → задачи после cluster-ветки сдвинуты на −1: sentinel size-guard 8→7,
+    # replica 32→31, sentinel-monitor 33→32. 1 == 1+0 → "true".
+    - index: 7
       module: core.cmd.shell
       params:
         cmd: 'test "true" = "true" || { echo "topology mismatch: hosts != 1 + replicas"; exit 1; }'
 
     # REPLICAOF: master_addr = единственный хост (он же master) → плагин no-op
     # (addr==master_addr guard). Здесь ассертим лишь params (host-инвариант).
-    - index: 32
+    - index: 31
       module: community.redis.replica
       params:
         addr: "127.0.0.1:6379"
@@ -58,8 +60,8 @@ assert:
         password: s3cr3t-redis-pass-create
 
     # SENTINEL MONITOR: monitor.ip — единственный хост; auto-quorum = 1/2+1 = 1
-    # (sentinel_quorum не задан). master_name по умолчанию mymaster.
-    - index: 33
+    # (sentinel_quorum не задан). master_name по умолчанию mymaster. Был index 33 (−1).
+    - index: 32
       module: community.redis.sentinel
       params:
         addr: "127.0.0.1:26379"

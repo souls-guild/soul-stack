@@ -52,10 +52,12 @@ assert:
       params:
         cmd: 'test "true" = "true" || { echo "redis_type=sentinel_only не поддержан (реализованы: standalone, cluster, sentinel, sentinel_only)"; exit 1; }'
 
-    # master_ip-guard FAIL-форма (index 14): master_ip НЕ задан → булево "false" →
-    # echo с понятным сообщением + exit 1. standalone(1-2)/cluster(3-7)/sentinel
-    # (8-13) ветки placeholder-skip на sentinel_only-прогоне.
-    - index: 14
+    # master_ip-guard FAIL-форма (index 13): master_ip НЕ задан → булево "false" →
+    # echo с понятным сообщением + exit 1. standalone(1-2)/cluster(3-6)/sentinel
+    # (7-12) ветки placeholder-skip на sentinel_only-прогоне. cluster size-guard
+    # переведён в assert: (ADR-009 amendment) — cluster-ветка на 1 задачу короче →
+    # master_ip-guard сдвинут с index 14 на 13.
+    - index: 13
       module: core.cmd.shell
       params:
         cmd: 'test "false" = "true" || { echo "redis_type=sentinel_only требует input.master_ip (адрес ВНЕШНЕГО redis-master)"; exit 1; }'

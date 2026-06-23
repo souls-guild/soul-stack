@@ -262,6 +262,115 @@ func TestHumaIncarnation_Create_RBACDeny_403_NoAudit(t *testing.T) {
 	}
 }
 
+// === MIDDLEWARE-AUDIT: create — pre-flight assert-гейт (ADR-009/027 amend, форма A) ===
+
+// _ — compile-time guard: реальный *scenario.Runner ОБЯЗАН удовлетворять
+// handlers.AssertPreflighter (handler берёт pre-flighter type-assertion-ом из
+// runner-а, type-set которого статически не сверяется при присваивании в
+// ScenarioStarter). Drift сигнатуры Runner.PreflightAssert ↔ интерфейса
+// ловится здесь при сборке, а не молчаливым no-op pre-flight в проде.
+var _ handlers.AssertPreflighter = (*scenario.Runner)(nil)
+
+// incPreflightLoader — ServiceSnapshotLoader-стаб, отдающий МИНИМАЛЬНЫЙ валидный
+// scenario create/main.yml (без input-схемы → ValidateInput проходит). Нужен,
+// потому что create при не-nil runner+loader делает sync ValidateInput ДО
+// pre-flight; incTestLoader.ReadFile возвращает пустые байты (невалидный
+// scenario → 500 на парсе). pre-flight же тут — стаб incPreflightStarter, не
+// читает scenario через этот loader.
+type incPreflightLoader struct{}
+
+func (incPreflightLoader) Load(_ context.Context, ref artifact.ServiceRef) (*artifact.ServiceArtifact, error) {
+	return &artifact.ServiceArtifact{Ref: ref}, nil
+}
+func (incPreflightLoader) LoadMigrationChain(_ *artifact.ServiceArtifact, _, _ int) (statemigrate.Chain, error) {
+	return statemigrate.Chain{}, nil
+}
+func (incPreflightLoader) ReadFile(_ *artifact.ServiceArtifact, _ string) ([]byte, error) {
+	return []byte("name: create\ntasks:\n  - name: noop\n    module: core.exec.run\n    params: { cmd: \"true\" }\n"), nil
+}
+
+// incPreflightStarter — ScenarioStarter + AssertPreflighter-стаб: pre-flight
+// возвращает preflightErr (nil → проходит), Start учитывает факт вызова в started.
+type incPreflightStarter struct {
+	preflightErr error
+	started      *bool
+}
+
+func (s *incPreflightStarter) Start(_ context.Context, _ scenario.RunSpec) error {
+	if s.started != nil {
+		*s.started = true
+	}
+	return nil
+}
+func (s *incPreflightStarter) StartDestroy(_ context.Context, _ scenario.RunSpec) error { return nil }
+func (s *incPreflightStarter) PreflightAssert(_ context.Context, _ scenario.RunSpec) error {
+	return s.preflightErr
+}
+
+// TestHumaIncarnation_Create_PreflightAssertFail_422 — pre-flight assert false на
+// СОЗДАНИИ → 422 assert_failed, incarnation НЕ создана (insertRow НЕ вызван),
+// Start НЕ запущен, audit на 4xx НЕ пишется. ГЛАВНЫЙ инвариант формы A: отказ на
+// этапе модели ДО коммита, без fail-статуса error_locked.
+func TestHumaIncarnation_Create_PreflightAssertFail_422(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	inserted := false
+	started := false
+	db := &incTestDB{insertRow: func() pgx.Row {
+		inserted = true
+		return staticRow2(time.Now(), time.Now())
+	}}
+	starter := &incPreflightStarter{
+		preflightErr: scenario.ErrAssertFailed, // топология не сходится
+		started:      &started,
+	}
+	incH := handlers.NewIncarnationHandler(db, starter, nil, nil, &incTestResolver{ok: true}, incPreflightLoader{}, auditCap, nil, nil)
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations", strings.NewReader(`{"name":"redis-cluster","service":"redis"}`))
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422 assert_failed; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "assert-failed") {
+		t.Errorf("body не несёт problem-type assert-failed: %s", rec.Body.String())
+	}
+	if inserted {
+		t.Error("ИНВАРИАНТ НАРУШЕН: incarnation создана (insertRow вызван) на assert-fail — должно быть НЕ создано")
+	}
+	if started {
+		t.Error("ИНВАРИАНТ НАРУШЕН: scenario create запущен на assert-fail — Start не должен вызываться")
+	}
+	if len(auditCap.Events()) != 0 {
+		t.Errorf("audit записан на 422 assert-fail — middleware не пишет на 4xx")
+	}
+}
+
+// TestHumaIncarnation_Create_PreflightAssertPass_202 — pre-flight проходит
+// (топология сходится) → create работает как раньше: 202 + apply_id, incarnation
+// создана, Start запущен. Контроль, что pre-flight не ломает happy-path.
+func TestHumaIncarnation_Create_PreflightAssertPass_202(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	started := false
+	db := &incTestDB{insertRow: func() pgx.Row { return staticRow2(time.Now(), time.Now()) }}
+	starter := &incPreflightStarter{preflightErr: nil, started: &started}
+	incH := handlers.NewIncarnationHandler(db, starter, nil, nil, &incTestResolver{ok: true}, incPreflightLoader{}, auditCap, nil, nil)
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations", strings.NewReader(`{"name":"redis-prod","service":"redis"}`))
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body=%s", rec.Code, rec.Body.String())
+	}
+	if !started {
+		t.Error("Start не запущен на assert-pass — happy-path сломан")
+	}
+	assertMiddlewareAudit(t, auditCap, audit.EventIncarnationCreated, "name")
+}
+
 // === MIDDLEWARE-AUDIT: unlock ===
 
 func TestHumaIncarnation_Unlock_WireAndMiddlewareAudit(t *testing.T) {

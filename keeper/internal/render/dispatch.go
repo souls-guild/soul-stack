@@ -73,6 +73,14 @@ func IsKeeperTask(task config.Task) bool {
 	return ok && s == keeperOnLiteral
 }
 
+// IsAssertTask сообщает, является ли задача assert-проверкой (ADR-009 amendment
+// 2026-06-23): дискриминатор `assert:`. assert вычисляется Keeper-side на render-
+// фазе как run-level precondition и НЕ emit RenderedTask — поэтому отводится из
+// общего цикла Render до guard/static-when-обработки (см. evalAssertTask).
+func IsAssertTask(task config.Task) bool {
+	return task.Assert != nil
+}
+
 // resolveOn преобразует значение `on:` в список Coven-меток. Возвращаемый
 // nil/empty означает «нет фильтра по ковенам» (весь incarnation, только при
 // опущенном on:). Корневая метка `${ incarnation.name }` НЕ отбрасывается

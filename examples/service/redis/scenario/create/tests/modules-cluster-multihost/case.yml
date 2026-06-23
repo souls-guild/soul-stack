@@ -71,8 +71,11 @@ fixtures:
 
 assert:
   rendered_tasks:
+    # size-guard теперь assert: (ADR-009 amendment) — НЕ задача в плане → задачи
+    # cluster-ветки сдвинуты на −1 (redis.conf 12→11, modules-dir 26→25,
+    # fetch .so 27→26, cluster-build 29→28).
     # redis.conf несёт cluster-директивы + vars.loadmodules ([rejson.so]).
-    - index: 12
+    - index: 11
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -107,8 +110,8 @@ assert:
           role: ""
           essence: {}
 
-    # modules-dir каталог — gated, активна в cluster-modules-прогоне.
-    - index: 26
+    # modules-dir каталог — gated, активна в cluster-modules-прогоне. Был index 26 (−1).
+    - index: 25
       module: core.file.directory
       params:
         path: /var/lib/redis/modules
@@ -116,8 +119,8 @@ assert:
         group: redis
         mode: "0750"
 
-    # fetch .so json: URL арх-специфичен (amd64 из soulprint первого хоста в L0).
-    - index: 27
+    # fetch .so json: URL арх-специфичен (amd64 из soulprint первого хоста в L0). Был 27 (−1).
+    - index: 26
       module: core.url.fetched
       params:
         url: "https://artifacts.example.com/redis/modules/6.2/amd64/rejson.so"
@@ -127,8 +130,8 @@ assert:
         owner: redis
         group: redis
 
-    # cluster-build сдвинут на +2 (dir + 1 fetch) относительно базового 27.
-    - index: 29
+    # cluster-build: был index 29 (−1 после удаления size-guard-задачи из плана).
+    - index: 28
       module: community.redis.cluster
       params:
         action: create

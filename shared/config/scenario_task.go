@@ -54,6 +54,18 @@ type Task struct {
 	Apply   *ApplyTask   `yaml:"apply,omitempty"`
 	Include *IncludeTask `yaml:"include,omitempty"`
 	Block   *BlockTask   `yaml:"block,omitempty"`
+	Assert  *AssertSpec  `yaml:"assert,omitempty"`
+}
+
+// AssertSpec — keeper-side render-time precondition прогона (ADR-009 amendment
+// 2026-06-23). `that` — список CEL-bool-предикатов (вся строка = CEL без обёртки,
+// как `where:`), все обязаны быть true на render-фазе Keeper (полный scenario-
+// контекст, soulprint.hosts доступен — AllowHosts=true). Первый false обрывает
+// render понятной ошибкой; assert НЕ emit RenderedTask (проверка, не задача).
+// Дискриминатор задачи — взаимоисключим с module/apply/include/block.
+type AssertSpec struct {
+	That    []string `yaml:"that"`
+	Message string   `yaml:"message,omitempty"`
 }
 
 // ModuleTask — задача-вызов state-модуля. `params:` живёт здесь же
@@ -450,8 +462,11 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 		}))
 	}
 
-	// 2) Discriminator: ровно один из {module, apply, include, block}.
-	discrKeys := []string{"module", "apply", "include", "block"}
+	// 2) Discriminator: ровно один из {module, apply, include, block, assert}.
+	// `assert:` — render-time precondition (ADR-009 amendment): проверка, а НЕ
+	// исполняемая задача, поэтому делит дискриминатор-слот с остальными видами
+	// (взаимоисключим с module/apply/include/block).
+	discrKeys := []string{"module", "apply", "include", "block", "assert"}
 	var found []string
 	for _, k := range discrKeys {
 		if _, ok := present[k]; ok {
@@ -468,7 +483,7 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 		out = append(out, diagAt(line, col, diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code:     "task_discriminator_missing",
-			Message:  "task must declare exactly one of: module / apply / include / block",
+			Message:  "task must declare exactly one of: module / apply / include / block / assert",
 			Hint:     "see docs/destiny/tasks.md §2 and docs/scenario/orchestration.md §2",
 			YAMLPath: pathPrefix,
 		}))
@@ -480,7 +495,7 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 			out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 				Code:     "task_discriminator_multiple",
-				Message:  fmt.Sprintf("task declares multiple discriminators: %v — exactly one of {module, apply, include, block} is allowed", found),
+				Message:  fmt.Sprintf("task declares multiple discriminators: %v — exactly one of {module, apply, include, block, assert} is allowed", found),
 				Hint:     "see docs/destiny/tasks.md §2",
 				YAMLPath: pathPrefix + "." + found[i],
 			}))
@@ -509,6 +524,9 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 	}
 	if kv, ok := present["apply"]; ok {
 		out = append(out, validateApplyField(kv, pathPrefix)...)
+	}
+	if kv, ok := present["assert"]; ok {
+		out = append(out, validateAssertField(kv, pathPrefix)...)
 	}
 	if kv, ok := present["include"]; ok {
 		out = append(out, validateIncludeField(kv, pathPrefix)...)
@@ -694,6 +712,107 @@ func validateApplyField(kv *ast.MappingValueNode, pathPrefix string) []diag.Diag
 			Message:  "apply.destiny is required",
 			Hint:     "apply: { destiny: <name>, input: { ... } }",
 			YAMLPath: pathPrefix + ".apply.destiny",
+		}))
+	}
+	return out
+}
+
+// validateAssertField — assert-задача (render-time precondition, ADR-009
+// amendment 2026-06-23): `assert: { that: [<CEL-bool>…], message?: <str> }`.
+//
+// `that` — обязателен, непустой список строк (каждая строка целиком = CEL-bool,
+// разбор CEL отложен на render-фазу — как `where:`). `message` — опционален,
+// строка (дефолт-сообщение, если опущен). Прочие ключи внутри assert: —
+// unknown_key (fail-closed).
+func validateAssertField(kv *ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
+	mm, ok := kv.Value.(*ast.MappingNode)
+	if !ok {
+		tok := kv.Value.GetToken()
+		return []diag.Diagnostic{diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:     "type_mismatch",
+			Message:  "assert: must be a mapping with that: + optional message:",
+			YAMLPath: pathPrefix + ".assert",
+		})}
+	}
+	var out []diag.Diagnostic
+	var hasThat bool
+	for _, sub := range mm.Values {
+		tok := sub.Key.GetToken()
+		if tok == nil {
+			continue
+		}
+		switch tok.Value {
+		case "that":
+			hasThat = true
+			seq, isSeq := sub.Value.(*ast.SequenceNode)
+			if !isSeq {
+				vt := sub.Value.GetToken()
+				out = append(out, diagAt(vt.Position.Line, vt.Position.Column, diag.Diagnostic{
+					Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+					Code:     "type_mismatch",
+					Message:  "assert.that must be a non-empty list of CEL-bool predicate strings",
+					YAMLPath: pathPrefix + ".assert.that",
+				}))
+				continue
+			}
+			if len(seq.Values) == 0 {
+				vt := sub.Value.GetToken()
+				out = append(out, diagAt(vt.Position.Line, vt.Position.Column, diag.Diagnostic{
+					Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+					Code:     "missing_required_field",
+					Message:  "assert.that must not be empty (at least one CEL-bool predicate)",
+					Hint:     "assert: { that: [ \"<cel>\" ], message: \"...\" }",
+					YAMLPath: pathPrefix + ".assert.that",
+				}))
+				continue
+			}
+			for j, item := range seq.Values {
+				if _, isStr := item.(*ast.StringNode); isStr {
+					continue
+				}
+				it := item.GetToken()
+				line, col := 0, 0
+				if it != nil {
+					line, col = it.Position.Line, it.Position.Column
+				}
+				out = append(out, diagAt(line, col, diag.Diagnostic{
+					Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+					Code:     "type_mismatch",
+					Message:  fmt.Sprintf("assert.that[%d]: must be a string (CEL-bool predicate)", j),
+					YAMLPath: fmt.Sprintf("%s.assert.that[%d]", pathPrefix, j),
+				}))
+			}
+		case "message":
+			if _, isStr := sub.Value.(*ast.StringNode); !isStr {
+				if _, isNull := sub.Value.(*ast.NullNode); !isNull {
+					vt := sub.Value.GetToken()
+					out = append(out, diagAt(vt.Position.Line, vt.Position.Column, diag.Diagnostic{
+						Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+						Code:     "type_mismatch",
+						Message:  "assert.message must be a string",
+						YAMLPath: pathPrefix + ".assert.message",
+					}))
+				}
+			}
+		default:
+			out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+				Code:     "unknown_key",
+				Message:  `unknown field "` + tok.Value + `" in assert:`,
+				Hint:     "assert: accepts only that: + message:",
+				YAMLPath: pathPrefix + ".assert." + tok.Value,
+			}))
+		}
+	}
+	if !hasThat {
+		tok := kv.Key.GetToken()
+		out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:     "missing_required_field",
+			Message:  "assert.that is required",
+			Hint:     "assert: { that: [ \"<cel>\" ], message: \"...\" }",
+			YAMLPath: pathPrefix + ".assert.that",
 		}))
 	}
 	return out

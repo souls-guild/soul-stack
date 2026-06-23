@@ -76,6 +76,14 @@ const RunSentinelSID = "__run__"
 // sentinel от ErrUnsupportedDSL: include поддержан, просто должен прийти раскрытым.
 var ErrUnexpandedInclude = errors.New("render: include-задача дошла до render нераскрытой")
 
+// ErrAssertFailed — assert-задача (ADR-009 amendment 2026-06-23) не прошла:
+// хотя бы один предикат `that[]` вычислился в false на render-фазе. Render
+// обрывается ДО dispatch — ни одной задачи на Soul не уходит, прогон не стартует
+// («fail на этапе модели»). Это НЕ баг автора рендера и НЕ граница pilot-а, а
+// объявленная DSL-семантика: caller (scenario.run / trial) отличает провал
+// инварианта от внутренней ошибки и сообщает оператору message + текст предиката.
+var ErrAssertFailed = errors.New("render: assert не прошёл")
+
 // IncarnationMeta — фактологические поля incarnation, доступные в CEL как
 // `incarnation.<path>` ([ADR-010]). Pipeline разворачивает их в map для
 // cel.Vars.Incarnation; host_count подставляется автоматически из числа

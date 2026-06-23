@@ -34,6 +34,7 @@ scenario/<name>/
 | `on:` | `keeper` ИЛИ list of coven-id ИЛИ опущен | всем видам задач | опционально (опущен = весь incarnation) |
 | `where:` | string (predicate-expr) | всем видам задач | опционально |
 | `apply:` | map (`destiny:` + `input:`) | задаче-applier | альтернатива `module:` |
+| `assert:` | map (`that:` + `message:`) | assert-задаче | альтернатива `module:`/`apply:`/`include:`/`block:` (см. §2.3) |
 | `serial:` | int (1..M) ИЛИ string `"<N>%"` | module/apply/`block:`-задаче | опционально (опущен = вся ширина таргета) *Гранулярность — per-Passage min-width (в N=1 = per-RUN), см. подраздел §2.2.1 ниже* |
 | `run_once:` | bool, default `false` | module/apply/`block:`-задаче | опционально |
 
@@ -75,6 +76,32 @@ Applier-задача может нести унаследованный из DSL
 Если destiny не объявила top-level `output:` — `register.<имя>.*` содержит только стандартные `.changed`/`.failed`; прикладных полей через `register.<имя>.<поле>` не будет (ошибка валидации при обращении к необъявленному полю).
 
 > Когда писать `apply:`, а когда инлайн `module:` — см. границу-рекомендацию в [concept.md](concept.md) ([ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация)). Снятие старого инварианта «scenario только `apply:`» означает: `module:` (включая изменяющие модули) в scenario теперь легален.
+
+### 2.3. `assert:` — render-time precondition
+
+```yaml
+- name: топология cluster совпадает
+  when: "input.redis_type == 'cluster'"
+  assert:
+    that:
+      - "size(soulprint.hosts) == (has(input.shards) ? int(input.shards) : 0) * (1 + int(input.replicas_per_shard))"
+    message: "topology mismatch: hosts != shards*(1+replicas_per_shard)"
+```
+
+`assert:` — **проверка инварианта прогона на этапе модели** (форма Ansible-модуля `assert`, [ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) amendment 2026-06-23). Это **пятый дискриминатор** задачи: `assert:` взаимоисключим с `module:`/`apply:`/`include:`/`block:` (assert — проверка, не исполняемая работа).
+
+- **`that:`** — непустой список CEL-bool-предикатов (каждая строка целиком = CEL, без обёртки `${ … }`, как `where:`). Все обязаны быть `true`.
+- **`message:`** — опциональное человекочитаемое сообщение в тексте ошибки при провале (если опущено — дефолт-сообщение).
+
+**Семантика:**
+
+- **Вычисляется Keeper-side на render-фазе**, в полном scenario-CEL-контексте — **включая `soulprint.hosts`** (`AllowHosts=true`, как `where:`): assert видит roster прогона (топологию), в отличие от Soul-side flow-control, которому `soulprint.hosts` недоступен.
+- **Run-level** (один раз на прогон, не per-host): assert проверяет инвариант топологии прогона, а не per-host-предикат.
+- **Первый `false` обрывает render** понятной ошибкой (`message` + текст непрошедшего предиката). **Ни одной задачи на Soul не уходит** — прогон не стартует (fail на этапе модели). Все `true` → задача «исчезает» из плана: assert **не emit RenderedTask** (это проверка, не задача), индексы последующих задач под неё позицию НЕ резервируют.
+- **Гейтится `when:`** как любая задача: статически-false `when:` (placeholder-skip, напр. `when: input.redis_type == 'cluster'` на standalone-прогоне) → assert НЕ вычисляется.
+- **Не wire-сущность.** assert не меняет proto Keeper↔Soul и Soul-контракт (render-конструкция, как `block:`).
+
+**Мотив.** Замена `core.cmd.shell`-guard-хака (`test "${ <cel> }" = "true" || { echo ...; exit 1; }` — произвольный shell на Soul ради control-flow) на декларативную keeper-side проверку: меньше attack-surface (нет shell-исполнения ради проверки), отказ переносится с хоста на модель (раньше и понятнее).
 
 ### 2.2. Cross-host модель исполнения шага
 

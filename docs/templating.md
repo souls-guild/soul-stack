@@ -25,11 +25,12 @@
 
 Эти ключи принимают **строку, целиком трактуемую как CEL-выражение** — без обёртки `${ … }`. Все возвращают `bool` (кроме `until:`, см. ниже).
 
-Колонка **«Сторона»** — где вычисляется выражение по границе [ADR-012(d)](adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add) «по внешнему доступу»: `where:` — Keeper (резолв таргета на render-фазе); `when:`/`changed_when:`/`failed_when:`/`until:` — **Soul** (flow-control: зависят от `register.*` — результатов предыдущих задач, известных только на Soul во время прогона; вычисляются sandboxed cel-go-песочницей `shared/cel.NewFlowControl`, см. [§4](#4-соотношение-фаз-обработки-yaml) и [§7.1](#71-cel--sandbox-by-design)).
+Колонка **«Сторона»** — где вычисляется выражение по границе [ADR-012(d)](adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add) «по внешнему доступу»: `where:` и `assert.that[]` — Keeper (вычисляются на render-фазе; обоим доступен полный scenario-контекст, включая `soulprint.hosts` — `AllowHosts=true`); `when:`/`changed_when:`/`failed_when:`/`until:` — **Soul** (flow-control: зависят от `register.*` — результатов предыдущих задач, известных только на Soul во время прогона; вычисляются sandboxed cel-go-песочницей `shared/cel.NewFlowControl`, см. [§4](#4-соотношение-фаз-обработки-yaml) и [§7.1](#71-cel--sandbox-by-design)).
 
 | Ключ | Возвращает | Сторона | Где используется | Источник |
 |---|---|---|---|---|
 | `where:` | bool | Keeper | per-host фильтр таргета шага сценария | [scenario/orchestration.md §4](scenario/orchestration.md#4-волатильный-предикат--where) |
+| `assert.that[]` | bool | Keeper | render-time precondition прогона (каждый элемент списка — отдельный CEL-bool; первый `false` обрывает render) | [scenario/orchestration.md §2.3](scenario/orchestration.md#23-assert--render-time-precondition) |
 | `when:` | bool | Soul | делать ли шаг вообще (gating ДО Apply) | [destiny/tasks.md §9](destiny/tasks.md#9-прочность-и-контроль-исполнения) |
 | `changed_when:` | bool | Soul | определение `changed`-статуса шага по результату | [destiny/tasks.md §9](destiny/tasks.md#9-прочность-и-контроль-исполнения) |
 | `failed_when:` | bool | Soul | определение `failed`-статуса шага по результату | [destiny/tasks.md §9](destiny/tasks.md#9-прочность-и-контроль-исполнения) |
