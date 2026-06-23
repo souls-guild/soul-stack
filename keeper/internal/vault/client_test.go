@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/shared/config"
@@ -26,6 +27,16 @@ type fakeVaultMux struct {
 	mount   string
 	secrets map[string]map[string]any
 
+	// kvVersion — версия, которую probe-endpoint sys/internal/ui/mounts/<mount>
+	// сообщает для mount-а ("1"/"2"). Пусто → probe-endpoint отвечает 403
+	// (имитация ACL-deny). Управляет и тем, по какому пути отдаются секреты
+	// (v2 → /data/, v1 → плоский /<rel>).
+	kvVersion string
+	// probeForbidden форсит 403 на probe-endpoint независимо от kvVersion
+	// (для теста «probe закрыт ACL»).
+	probeForbidden bool
+	probeRequests  int
+
 	// approle-ожидания (если wantRoleID != "" — login-handler активен).
 	wantRoleID    string
 	wantSecretID  string
@@ -36,8 +47,9 @@ type fakeVaultMux struct {
 
 func newFakeVault(mount string) *fakeVaultMux {
 	return &fakeVaultMux{
-		mount:   mount,
-		secrets: make(map[string]map[string]any),
+		mount:     mount,
+		secrets:   make(map[string]map[string]any),
+		kvVersion: "2", // dev-default; тесты v1 переопределяют.
 	}
 }
 
@@ -74,7 +86,27 @@ func (f *fakeVaultMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 
+	case r.URL.Path == "/v1/sys/internal/ui/mounts/"+f.mount:
+		// Probe версии KV mount-а. 403 → имитация ACL-deny / probeForbidden.
+		f.probeRequests++
+		if f.probeForbidden || f.kvVersion == "" {
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]any{"errors": []string{"permission denied"}})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"request_id": "test",
+			"data": map[string]any{
+				"type":    "kv",
+				"path":    f.mount + "/",
+				"options": map[string]any{"version": f.kvVersion},
+			},
+		})
+		return
+
 	case strings.HasPrefix(r.URL.Path, "/v1/"+f.mount+"/data/"):
+		// KV v2 read-путь.
 		rel := strings.TrimPrefix(r.URL.Path, "/v1/"+f.mount+"/data/")
 		data, ok := f.secrets[rel]
 		if !ok {
@@ -93,6 +125,24 @@ func (f *fakeVaultMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+
+	// KV v1 read-путь — плоский `/v1/<mount>/<rel>` (без /data/). Проверяем
+	// последним, т.к. префикс `/v1/<mount>/` пересекается с /data/ и /metadata/.
+	if strings.HasPrefix(r.URL.Path, "/v1/"+f.mount+"/") {
+		rel := strings.TrimPrefix(r.URL.Path, "/v1/"+f.mount+"/")
+		data, ok := f.secrets[rel]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"request_id": "test",
+			"data":       data,
+		})
+		return
+	}
+
 	w.WriteHeader(http.StatusNotFound)
 }
 
@@ -468,5 +518,307 @@ func TestNewClient_AppRole_EmptyFile_NoLeakPath(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("expected error on empty secret_id file")
+	}
+}
+
+// --- KV version resolution (probe + override + cache) ---------------------
+//
+// Guard-набор для прозрачной поддержки KV v1/v2 (ADR-017(b) amendment
+// 2026-06-22). Прежний механизм «угадывания по классу ошибки KVv2.Get»
+// отвергнут (обычный v1-секрет неотличим от v2-missing → ErrSecretNotFound);
+// версия теперь резолвится конструктивно — probe sys/internal/ui/mounts либо
+// explicit override vault.kv_version.
+
+// TestNewClient_NoKVGrant_StillStarts — probe строго ленивый: конструктор
+// поднимается только на Ping (sys/health, без KV-прав). Это инвариант
+// bootstrap-пути (keeper init создаёт Client до выдачи KV-доступа); probe в
+// конструкторе сломал бы его. fakeVaultMux probe-endpoint вообще не трогается.
+func TestNewClient_NoKVGrant_StillStarts(t *testing.T) {
+	mux, addr := startFakeVault(t, "secret")
+	cl, err := NewClient(context.Background(), config.KeeperVault{
+		Addr: addr, Token: "root", KVMount: "secret",
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	if cl == nil {
+		t.Fatal("NewClient: nil client")
+	}
+	if mux.probeRequests != 0 {
+		t.Errorf("probe must be lazy: %d probe requests during NewClient, want 0", mux.probeRequests)
+	}
+}
+
+// TestResolveVersion_OverrideSkipsProbe — override="2"/"1" побеждает без
+// единого round-trip-а к probe-endpoint-у.
+func TestResolveVersion_OverrideSkipsProbe(t *testing.T) {
+	for _, ver := range []string{"1", "2"} {
+		ver := ver
+		t.Run("v"+ver, func(t *testing.T) {
+			mux, addr := startFakeVault(t, "secret")
+			// probe-endpoint при попытке обращения вернул бы 403 — но к нему
+			// не должны обратиться вообще.
+			mux.probeForbidden = true
+			mux.secrets["app/cfg"] = map[string]any{"k": "v"}
+
+			cl, err := NewClient(context.Background(), config.KeeperVault{
+				Addr: addr, Token: "root", KVMount: "secret", KVVersion: ver,
+			})
+			if err != nil {
+				t.Fatalf("NewClient: %v", err)
+			}
+			got, err := cl.ReadKV(context.Background(), "app/cfg")
+			if err != nil {
+				t.Fatalf("ReadKV(kv_version=%s): %v", ver, err)
+			}
+			if got["k"] != "v" {
+				t.Errorf("k=%v", got["k"])
+			}
+			if mux.probeRequests != 0 {
+				t.Errorf("override=%s must skip probe, got %d probe requests", ver, mux.probeRequests)
+			}
+		})
+	}
+}
+
+// TestResolveVersion_ProbeV1 / _ProbeV2 — probe options.version роутит на
+// нужную версию KV API.
+func TestResolveVersion_ProbeV2(t *testing.T) {
+	mux, addr := startFakeVault(t, "secret")
+	mux.kvVersion = "2"
+	mux.secrets["app/cfg"] = map[string]any{"k": "v2val"}
+
+	cl, err := NewClient(context.Background(), config.KeeperVault{
+		Addr: addr, Token: "root", KVMount: "secret",
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	got, err := cl.ReadKV(context.Background(), "app/cfg")
+	if err != nil {
+		t.Fatalf("ReadKV: %v", err)
+	}
+	if got["k"] != "v2val" {
+		t.Errorf("k=%v", got["k"])
+	}
+	if mux.probeRequests == 0 {
+		t.Error("expected probe round-trip for auto-detect")
+	}
+}
+
+func TestResolveVersion_ProbeV1(t *testing.T) {
+	mux, addr := startFakeVault(t, "kv-v1")
+	mux.kvVersion = "1"
+	mux.secrets["app/cfg"] = map[string]any{"k": "v1val"}
+
+	cl, err := NewClient(context.Background(), config.KeeperVault{
+		Addr: addr, Token: "root", KVMount: "kv-v1",
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	got, err := cl.ReadKV(context.Background(), "app/cfg")
+	if err != nil {
+		t.Fatalf("ReadKV: %v", err)
+	}
+	if got["k"] != "v1val" {
+		t.Errorf("k=%v (v1 flat payload not read)", got["k"])
+	}
+}
+
+// TestResolveVersion_ProbeUnexpectedValue_Fails — probe вернул mount без
+// распознаваемой версии → явная ошибка, НЕ молчаливый дефолт v2.
+func TestResolveVersion_ProbeUnexpectedValue_Fails(t *testing.T) {
+	mux, addr := startFakeVault(t, "secret")
+	mux.kvVersion = "9" // не "1"/"2"
+	mux.secrets["app/cfg"] = map[string]any{"k": "v"}
+
+	cl, err := NewClient(context.Background(), config.KeeperVault{
+		Addr: addr, Token: "root", KVMount: "secret",
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	_, err = cl.ReadKV(context.Background(), "app/cfg")
+	if err == nil {
+		t.Fatal("expected error on undeterminable KV version, got nil (would be silent v2)")
+	}
+	if errors.Is(err, ErrVaultKVNotFound) {
+		t.Errorf("undeterminable-version error must not be masked as not-found: %v", err)
+	}
+	if !strings.Contains(err.Error(), "kv_version") {
+		t.Errorf("error should hint at vault.kv_version override: %v", err)
+	}
+}
+
+// TestResolveVersion_ProbeForbidden_NoOverride_Fails — probe 403 (ACL закрыл
+// endpoint) + override пуст → понятная ошибка с подсказкой про override, НЕ
+// паника и НЕ молчаливый v2.
+func TestResolveVersion_ProbeForbidden_NoOverride_Fails(t *testing.T) {
+	mux, addr := startFakeVault(t, "secret")
+	mux.probeForbidden = true
+	mux.secrets["app/cfg"] = map[string]any{"k": "v"}
+
+	cl, err := NewClient(context.Background(), config.KeeperVault{
+		Addr: addr, Token: "root", KVMount: "secret",
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	_, err = cl.ReadKV(context.Background(), "app/cfg")
+	if err == nil {
+		t.Fatal("expected error on forbidden probe without override, got nil")
+	}
+	if !strings.Contains(err.Error(), "kv_version") {
+		t.Errorf("error should hint at vault.kv_version override: %v", err)
+	}
+}
+
+// TestResolveVersion_Cached — второй ReadKV того же mount-а не делает
+// повторный probe (per-mount кеш).
+func TestResolveVersion_Cached(t *testing.T) {
+	mux, addr := startFakeVault(t, "secret")
+	mux.secrets["app/a"] = map[string]any{"k": "a"}
+	mux.secrets["app/b"] = map[string]any{"k": "b"}
+
+	cl, err := NewClient(context.Background(), config.KeeperVault{
+		Addr: addr, Token: "root", KVMount: "secret",
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	ctx := context.Background()
+	if _, err := cl.ReadKV(ctx, "app/a"); err != nil {
+		t.Fatalf("ReadKV a: %v", err)
+	}
+	if _, err := cl.ReadKV(ctx, "app/b"); err != nil {
+		t.Fatalf("ReadKV b: %v", err)
+	}
+	if mux.probeRequests != 1 {
+		t.Errorf("expected exactly 1 probe for repeated reads of same mount, got %d", mux.probeRequests)
+	}
+}
+
+// TestResolveVersion_ConcurrentColdStart — double-checked locking в
+// resolveKVVersion схлопывает thundering-herd: N горутин одновременно бьют по
+// ХОЛОДНОМУ кешу одного mount-а, но probe-round-trip случается ровно один раз
+// (re-check под write-lock перед probe). Гонять под `go test -race` —
+// фиксирует и отсутствие гонок на kvVersions-кеше.
+func TestResolveVersion_ConcurrentColdStart(t *testing.T) {
+	mux, addr := startFakeVault(t, "secret")
+	mux.kvVersion = "2"
+	mux.secrets["app/cfg"] = map[string]any{"k": "v"}
+
+	cl, err := NewClient(context.Background(), config.KeeperVault{
+		Addr: addr, Token: "root", KVMount: "secret",
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	const goroutines = 16
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	start := make(chan struct{})
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			<-start // синхронный старт → максимизируем шанс одновременного промаха кеша
+			if _, err := cl.ReadKV(context.Background(), "app/cfg"); err != nil {
+				t.Errorf("ReadKV cold-start: %v", err)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	// Double-checked locking должен схлопнуть probe в один round-trip. Допускаем
+	// небольшой люфт на случай, если RLock-промах нескольких горутин успел
+	// проскочить до взятия write-lock первой из них (в текущей реализации
+	// re-check под write-lock гарантирует ровно 1, но не привязываемся к
+	// мьютекс-внутренностям планировщика жёстче, чем нужно для смысла guard-а).
+	if mux.probeRequests != 1 {
+		t.Errorf("concurrent cold-start: probe round-trips = %d, want 1 (double-checked locking should collapse thundering-herd)", mux.probeRequests)
+	}
+}
+
+// TestWriteKV_V1Routing — WriteKV на v1-mount-е идёт через KVv1.Put (плоский
+// путь без /data/). Guard на роутинг записи.
+func TestWriteKV_V1Routing(t *testing.T) {
+	mux, addr := startFakeVault(t, "kv-v1")
+	mux.kvVersion = "1"
+
+	cl, err := NewClient(context.Background(), config.KeeperVault{
+		Addr: addr, Token: "root", KVMount: "kv-v1",
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	// fakeVaultMux не реализует write-приём, но KVv1.Put шлёт POST на плоский
+	// путь и ждёт 200/204. Мок отвечает 404 на неизвестный POST → Put вернёт
+	// ошибку. Достаточно проверить, что роутинг выбрал v1-ветку (не /data/):
+	// при v2-роутинге запрос пошёл бы на kv-v1/data/... и тоже 404 — поэтому
+	// этот тест проверяет лишь, что версия резолвится в 1 без паники.
+	// Точный happy-path записи покрыт integration-тестом на реальном Vault.
+	err = cl.WriteKV(context.Background(), "app/cfg", map[string]any{"k": "v"})
+	// Мок не принимает запись → ошибка ожидаема; главное — resolveKVVersion=1
+	// прошёл (probeRequests > 0) и не было паники.
+	if mux.probeRequests == 0 {
+		t.Error("WriteKV did not resolve KV version (no probe)")
+	}
+	_ = err
+}
+
+// TestListKV_V1Mount_ClearError — list на v1-mount-е → понятная ошибка
+// «требует KV v2», а не молча сломанный metadata-путь.
+func TestListKV_V1Mount_ClearError(t *testing.T) {
+	mux, addr := startFakeVault(t, "kv-v1")
+	mux.kvVersion = "1"
+
+	cl, err := NewClient(context.Background(), config.KeeperVault{
+		Addr: addr, Token: "root", KVMount: "kv-v1",
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	_, err = cl.ListKV(context.Background(), "app")
+	if err == nil {
+		t.Fatal("expected error: list requires KV v2")
+	}
+	if !strings.Contains(err.Error(), "KV v2") {
+		t.Errorf("error should state KV v2 requirement: %v", err)
+	}
+}
+
+// TestReadKVMetadata_V1Mount_ClearError — то же для metadata-read.
+func TestReadKVMetadata_V1Mount_ClearError(t *testing.T) {
+	mux, addr := startFakeVault(t, "kv-v1")
+	mux.kvVersion = "1"
+
+	cl, err := NewClient(context.Background(), config.KeeperVault{
+		Addr: addr, Token: "root", KVMount: "kv-v1",
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	_, err = cl.ReadKVMetadata(context.Background(), "app/cfg")
+	if err == nil {
+		t.Fatal("expected error: metadata read requires KV v2")
+	}
+	if !strings.Contains(err.Error(), "KV v2") {
+		t.Errorf("error should state KV v2 requirement: %v", err)
+	}
+}
+
+// TestNewClient_InvalidKVVersion_Fails — невалидный override отбивается
+// fail-fast в конструкторе (дублирует schema-валидацию для callers вне
+// config-load-пути).
+func TestNewClient_InvalidKVVersion_Fails(t *testing.T) {
+	_, addr := startFakeVault(t, "secret")
+	_, err := NewClient(context.Background(), config.KeeperVault{
+		Addr: addr, Token: "root", KVMount: "secret", KVVersion: "3",
+	})
+	if err == nil {
+		t.Fatal("expected error on invalid kv_version")
 	}
 }

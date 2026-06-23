@@ -48,10 +48,11 @@ func mustStruct(t *testing.T, m map[string]any) *structpb.Struct {
 	return s
 }
 
-// kvV2 строит KV v2 ответ ({"data": {...}, "metadata": {...}}) как его отдаёт
-// hashicorp/vault api.
-func kvV2(data map[string]any) map[string]any {
-	return map[string]any{"data": data, "metadata": map[string]any{"version": float64(1)}}
+// flatSecret — то, что реально отдаёт vault.Client.ReadKV: плоский payload
+// (поля секрета), без обёртки `{data,metadata}`. Версия KV резолвится внутри
+// Client прозрачно (ADR-017(b) amendment 2026-06-22), модуль её не видит.
+func flatSecret(data map[string]any) map[string]any {
+	return data
 }
 
 func TestValidate_RequiresPathAndState(t *testing.T) {
@@ -69,7 +70,7 @@ func TestValidate_RequiresPathAndState(t *testing.T) {
 }
 
 func TestApply_ReadKVv2_AllFields(t *testing.T) {
-	fv := &fakeVault{resp: kvV2(map[string]any{
+	fv := &fakeVault{resp: flatSecret(map[string]any{
 		"username": "admin",
 		"password": "s3cret",
 	})}
@@ -122,7 +123,7 @@ func TestApply_ReadKVv2_AllFields(t *testing.T) {
 }
 
 func TestApply_FieldsFilter(t *testing.T) {
-	fv := &fakeVault{resp: kvV2(map[string]any{
+	fv := &fakeVault{resp: flatSecret(map[string]any{
 		"username": "admin",
 		"password": "s3cret",
 		"extra":    "noise",
@@ -148,6 +149,43 @@ func TestApply_FieldsFilter(t *testing.T) {
 	}
 }
 
+// TestApply_FieldsFilter_MissingRequestedKey — запрошенное в `fields`, но
+// отсутствующее в секрете поле silently пропускается (не failure, не попадает в
+// output): caller хотел опциональные поля, на чтение secret уже потрачен
+// audit-event. Присутствующие из запрошенных — отдаются.
+func TestApply_FieldsFilter_MissingRequestedKey(t *testing.T) {
+	fv := &fakeVault{resp: flatSecret(map[string]any{
+		"password": "s3cret",
+	})}
+	m := coremodvault.New(fv, &fakeAudit{})
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State: "kv-read",
+		Params: mustStruct(t, map[string]any{
+			"path":   "secret/redis/admin",
+			"fields": []any{"password", "absent"},
+		}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	ev := stream.Last()
+	if ev.Failed {
+		t.Fatalf("missing requested field must not fail task, got %+v", ev)
+	}
+	out := ev.Output.AsMap()
+	data := out["data"].(map[string]any)
+	if _, has := data["absent"]; has {
+		t.Error("absent requested field must not appear in data")
+	}
+	if data["password"] != "s3cret" {
+		t.Errorf("present requested field dropped: data=%v", data)
+	}
+	fields := out["fields"].([]any)
+	if len(fields) != 1 || fields[0].(string) != "password" {
+		t.Errorf("fields output should list only present keys, got %v", fields)
+	}
+}
+
 func TestApply_VaultError(t *testing.T) {
 	fv := &fakeVault{err: errors.New("forbidden")}
 	m := coremodvault.New(fv, &fakeAudit{})
@@ -164,7 +202,7 @@ func TestApply_VaultError(t *testing.T) {
 }
 
 func TestApply_AuditWriteError_FailsTask(t *testing.T) {
-	fv := &fakeVault{resp: kvV2(map[string]any{"k": "v"})}
+	fv := &fakeVault{resp: flatSecret(map[string]any{"k": "v"})}
 	fa := &fakeAudit{err: errors.New("pg down")}
 	m := coremodvault.New(fv, fa)
 	stream := internaltest.NewApplyStream()
@@ -180,7 +218,7 @@ func TestApply_AuditWriteError_FailsTask(t *testing.T) {
 }
 
 func TestApply_NilAudit_OK(t *testing.T) {
-	fv := &fakeVault{resp: kvV2(map[string]any{"k": "v"})}
+	fv := &fakeVault{resp: flatSecret(map[string]any{"k": "v"})}
 	m := coremodvault.New(fv, nil)
 	stream := internaltest.NewApplyStream()
 	if err := m.Apply(&pluginv1.ApplyRequest{
@@ -195,9 +233,12 @@ func TestApply_NilAudit_OK(t *testing.T) {
 	}
 }
 
-func TestApply_KVv1_Fallback(t *testing.T) {
-	// KV v1 — без обёртки data/metadata.
-	fv := &fakeVault{resp: map[string]any{"k": "v"}}
+func TestApply_PlainPayload_PassedThrough(t *testing.T) {
+	// ReadKV всегда отдаёт плоский payload (v1 и v2 одинаково — версия
+	// резолвится в vault.Client). Модуль кладёт его в data как есть, без
+	// разворачивания обёртки. Прежний extractKVData-fallback убран как
+	// латентный баг (обёртки {data,metadata} в ReadKV никогда не было).
+	fv := &fakeVault{resp: flatSecret(map[string]any{"k": "v"})}
 	m := coremodvault.New(fv, &fakeAudit{})
 	stream := internaltest.NewApplyStream()
 	if err := m.Apply(&pluginv1.ApplyRequest{

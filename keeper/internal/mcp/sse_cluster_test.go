@@ -169,12 +169,12 @@ func TestIntegration_SSE_ClusterMode_EndToEnd(t *testing.T) {
 	ctxClient, cancelClient := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancelClient()
 
-	cA, err := keeperredis.NewClient(ctxClient, keeperredis.Config{Addr: redisAddr})
+	cA, err := keeperredis.NewClient(ctxClient, keeperredis.Config{Addr: redisAddr}, nil)
 	if err != nil {
 		t.Fatalf("NewClient(A): %v", err)
 	}
 	defer cA.Close()
-	cB, err := keeperredis.NewClient(ctxClient, keeperredis.Config{Addr: redisAddr})
+	cB, err := keeperredis.NewClient(ctxClient, keeperredis.Config{Addr: redisAddr}, nil)
 	if err != nil {
 		t.Fatalf("NewClient(B): %v", err)
 	}

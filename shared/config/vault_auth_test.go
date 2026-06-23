@@ -180,6 +180,50 @@ func TestVaultAuth_Token_UnusedAppRoleFields_Warn(t *testing.T) {
 	}
 }
 
+func TestVaultKVVersion_Empty_AutoDetect_OK(t *testing.T) {
+	// Без kv_version — auto (probe на runtime). Старые конфиги работают.
+	src := keeperWithVault(`  addr: "https://v:8200"
+  token: "root"`)
+	cfg, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
+	if diag.HasErrors(diags) {
+		dump(t, diags)
+		t.Fatalf("kv_version опущен должен быть валиден (auto-detect)")
+	}
+	if cfg.Vault.KVVersion != "" {
+		t.Errorf("KVVersion = %q, want empty", cfg.Vault.KVVersion)
+	}
+}
+
+func TestVaultKVVersion_Explicit_OK(t *testing.T) {
+	for _, v := range []string{"1", "2"} {
+		v := v
+		t.Run("v"+v, func(t *testing.T) {
+			src := keeperWithVault(`  addr: "https://v:8200"
+  token: "root"
+  kv_version: "` + v + `"`)
+			cfg, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
+			if diag.HasErrors(diags) {
+				dump(t, diags)
+				t.Fatalf("kv_version=%q должен быть валиден", v)
+			}
+			if cfg.Vault.KVVersion != v {
+				t.Errorf("KVVersion = %q, want %q", cfg.Vault.KVVersion, v)
+			}
+		})
+	}
+}
+
+func TestVaultKVVersion_Invalid_Rejected(t *testing.T) {
+	src := keeperWithVault(`  addr: "https://v:8200"
+  token: "root"
+  kv_version: "3"`)
+	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
+	if !hasCodeAt(diags, "vault_kv_version_invalid", "$.vault.kv_version") {
+		dump(t, diags)
+		t.Fatalf("ожидался vault_kv_version_invalid на kv_version=3")
+	}
+}
+
 // Секрет (значение secret_id) в принципе не задаётся в keeper.yml — только
 // путь/имя env. Проверяем, что схема не имеет поля для plaintext secret_id:
 // попытка задать его ловится как unknown_key, а не молча принимается.

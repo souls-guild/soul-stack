@@ -154,7 +154,7 @@ Keeper-side core-модули регистрируются в keeper-side Regist
 
 ## `core.vault.kv-read`
 
-Явное чтение секрета из Vault KV v2 на keeper-стороне с обязательной записью audit-event-а `vault.kv-read` (ADR-017(b)). **Keeper-side**, диспетчер `on: keeper`. Registry-ключ — base `core.vault`; state `kv-read` (verb) приходит из суффикса адреса. Существует параллельно с implicit `${ vault(...) }` в CEL: implicit-форма дёшева для рендера, но не оставляет audit-записи; этот модуль — explicit-форма для compliance-аккуратного чтения. Read-only (`changed=false` всегда). Полный per-module справочник с params/output/security — [docs/module/core/vault/README.md](../module/core/vault/README.md).
+Явное чтение секрета из Vault KV (v1/v2, версия mount-а определяется автоматически) на keeper-стороне с обязательной записью audit-event-а `vault.kv-read` (ADR-017(b)). **Keeper-side**, диспетчер `on: keeper`. Registry-ключ — base `core.vault`; state `kv-read` (verb) приходит из суффикса адреса. Существует параллельно с implicit `${ vault(...) }` в CEL: implicit-форма дёшева для рендера, но не оставляет audit-записи; этот модуль — explicit-форма для compliance-аккуратного чтения. Read-only (`changed=false` всегда). Полный per-module справочник с params/output/security — [docs/module/core/vault/README.md](../module/core/vault/README.md).
 
 ## См. также
 

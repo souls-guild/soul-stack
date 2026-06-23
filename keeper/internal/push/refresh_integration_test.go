@@ -44,7 +44,7 @@ func TestRefresh_RedisRoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	client, err := keeperredis.NewClient(ctx, keeperredis.Config{Addr: mr.Addr()})
+	client, err := keeperredis.NewClient(ctx, keeperredis.Config{Addr: mr.Addr()}, nil)
 	if err != nil {
 		t.Fatalf("keeperredis.NewClient: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestRefresh_RedisRoundTrip_DegradedOnSpawnFail(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	client, err := keeperredis.NewClient(ctx, keeperredis.Config{Addr: mr.Addr()})
+	client, err := keeperredis.NewClient(ctx, keeperredis.Config{Addr: mr.Addr()}, nil)
 	if err != nil {
 		t.Fatalf("keeperredis.NewClient: %v", err)
 	}

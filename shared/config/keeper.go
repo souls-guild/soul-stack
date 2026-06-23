@@ -799,9 +799,29 @@ type KeeperPostgresPool struct {
 }
 
 // KeeperRedis — горячий слой и координация.
+//
+// `mode` выбирает топологию Redis (ADR-006 amendment):
+//   - `standalone` (default, пусто/опущено = standalone — forward-compat для
+//     старых конфигов) — один узел, адрес в `addr`.
+//   - `sentinel` — Redis Sentinel HA: клиент находит master через sentinel-узлы.
+//     Требует `master_name` + `sentinels` (адреса sentinel-узлов host:port);
+//     `addr` в этом режиме не используется. Пароль самих sentinel-узлов —
+//     `sentinel_password_ref` (опц.), пароль Redis — `password_ref`.
+//   - `cluster` — Redis Cluster: шардирование по слотам. Требует `nodes`
+//     (адреса узлов кластера host:port для bootstrap-discovery); `addr` не
+//     используется. `sentinel_*` к cluster-режиму не относятся.
+//
+// `password_ref` / `sentinel_password_ref` — vault-ref формы
+// `vault:<mount>/<path>[#field]` (или plaintext в тестах); резолв — на
+// `keeper/internal/redis.NewClient` через keeper-vault-клиент.
 type KeeperRedis struct {
-	Addr        string `yaml:"addr"`
-	PasswordRef string `yaml:"password_ref"`
+	Mode                string   `yaml:"mode,omitempty"`
+	Addr                string   `yaml:"addr"`
+	PasswordRef         string   `yaml:"password_ref"`
+	MasterName          string   `yaml:"master_name,omitempty"`
+	Sentinels           []string `yaml:"sentinels,omitempty"`
+	Nodes               []string `yaml:"nodes,omitempty"`
+	SentinelPasswordRef string   `yaml:"sentinel_password_ref,omitempty"`
 }
 
 // KeeperVault — обязательная зависимость Keeper-а.
@@ -816,19 +836,26 @@ type KeeperRedis struct {
 // Forward-compat: keeper.yml без блока `auth` (или с пустым `auth.method`)
 // трактуется как `method=token` — старые конфиги работают без правок.
 //
-// `kv_mount` — mount point для Vault KV v2 secrets engine, default "secret".
+// `kv_mount` — mount point для Vault KV v1/v2 secrets engine, default "secret"
+// (версия определяется автоматически через `sys/internal/ui/mounts`; override —
+// `vault.kv_version`).
+//
+// `kv_version` — опциональный escape-hatch: пусто/опущено → версия KV mount-а
+// резолвится probe-ом через `sys/internal/ui/mounts/<mount>`; заданное `"1"`/`"2"`
+// форсирует версию без probe (нужно, когда ACL закрывает probe-endpoint).
 //
 // `pki_mount` / `pki_role` — mount + role PKI engine, через который Keeper
 // подписывает CSR Soul-ов при онбординге (`Bootstrap`-RPC, ADR-012(b)).
 // Default `pki_role` пустой; semantic-фаза не валидирует ROLE — Vault
 // сам отвергает запрос на несуществующий role.
 type KeeperVault struct {
-	Addr     string          `yaml:"addr"`
-	Token    string          `yaml:"token,omitempty"`
-	KVMount  string          `yaml:"kv_mount,omitempty"`
-	Auth     KeeperVaultAuth `yaml:"auth"`
-	PKIMount string          `yaml:"pki_mount"`
-	PKIRole  string          `yaml:"pki_role,omitempty"`
+	Addr      string          `yaml:"addr"`
+	Token     string          `yaml:"token,omitempty"`
+	KVMount   string          `yaml:"kv_mount,omitempty"`
+	KVVersion string          `yaml:"kv_version,omitempty"`
+	Auth      KeeperVaultAuth `yaml:"auth"`
+	PKIMount  string          `yaml:"pki_mount"`
+	PKIRole   string          `yaml:"pki_role,omitempty"`
 
 	// InputDenyPaths — опц. расширение hard deny-list для scoped-резолва
 	// `vault:`-ref в operator-input (docs/input.md → «vault_scope», форк C).

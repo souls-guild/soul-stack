@@ -34,6 +34,7 @@ import (
 	vaultapi "github.com/hashicorp/vault/api"
 	tcvault "github.com/testcontainers/testcontainers-go/modules/vault"
 
+	"github.com/souls-guild/soul-stack/shared/cel"
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
@@ -145,6 +146,202 @@ func provisionPKI(ctx context.Context, api *vaultapi.Client) error {
 		return fmt.Errorf("create role: %w", err)
 	}
 	return nil
+}
+
+// --- KV v1/v2 прозрачность (ADR-017(b) amendment 2026-06-22) -------------
+//
+// Главный guard-набор: probe-механизм читает ОБЕ версии KV прозрачно. Прежний
+// «угадывание по классу ошибки KVv2.Get» отвергнут — обычный v1-секрет был
+// неотличим от v2-missing (ErrSecretNotFound) и НИКОГДА не читался.
+
+// mountV1 поднимает дополнительный KV v1 mount `kv-v1` (один раз) и
+// возвращает наш Client, нацеленный на него. v2-mount `secret/` поднят
+// dev-режимом по умолчанию.
+func newV1MountClient(ctx context.Context, t *testing.T) *Client {
+	t.Helper()
+	const mount = "kv-v1"
+	// Mount идемпотентен в пределах прогона: повторный Mount даст ошибку
+	// "path is already in use" — её игнорируем (mount уже есть).
+	err := integrationAPI.Sys().Mount(mount, &vaultapi.MountInput{
+		Type:    "kv",
+		Options: map[string]string{"version": "1"},
+	})
+	if err != nil && !strings.Contains(err.Error(), "already in use") {
+		t.Fatalf("mount %s: %v", mount, err)
+	}
+
+	cl, err := NewClient(ctx, config.KeeperVault{
+		Addr:    integrationClient.c.Address(),
+		Token:   integrationToken,
+		KVMount: mount,
+	})
+	if err != nil {
+		t.Fatalf("NewClient(kv-v1): %v", err)
+	}
+	return cl
+}
+
+// TestReadKV_V1Mount — главный guard: обычный секрет на KV v1 читается. Ровно
+// то, что прежний дизайн НИКОГДА не читал (v1-секрет ≡ v2-missing для эвристики).
+func TestReadKV_V1Mount(t *testing.T) {
+	ctx := context.Background()
+	cl := newV1MountClient(ctx, t)
+
+	want := map[string]any{"password": "v1-secret", "user": "redis"}
+	if err := integrationAPI.KVv1("kv-v1").Put(ctx, "redis/admin", want); err != nil {
+		t.Fatalf("seed KVv1 Put: %v", err)
+	}
+
+	got, err := cl.ReadKV(ctx, "redis/admin")
+	if err != nil {
+		t.Fatalf("ReadKV v1: %v", err)
+	}
+	if got["password"] != "v1-secret" || got["user"] != "redis" {
+		t.Errorf("v1 payload = %v, want flat %v", got, want)
+	}
+	// Logical-форма пути — тот же результат.
+	got2, err := cl.ReadKV(ctx, "kv-v1/redis/admin")
+	if err != nil {
+		t.Fatalf("ReadKV v1 (logical): %v", err)
+	}
+	if got2["password"] != "v1-secret" {
+		t.Errorf("v1 logical payload = %v", got2)
+	}
+}
+
+// TestWriteKV_V1Mount — главный write-guard: запись на KV v1 ложится end-to-end
+// и читается обратно плоско. До этого v1-запись была доказана только unit-
+// роутингом (TestWriteKV_V1Routing глушит результат на mock-е); это реальный
+// путь записи приватника Sigil на v1-mount (KVv1.Put, плоский путь без /data/).
+func TestWriteKV_V1Mount(t *testing.T) {
+	ctx := context.Background()
+	cl := newV1MountClient(ctx, t)
+
+	want := map[string]any{"signing_key": "v1-write-secret", "key_id": "sigil-01"}
+	if err := cl.WriteKV(ctx, "sigil-keys/written-v1", want); err != nil {
+		t.Fatalf("WriteKV v1: %v", err)
+	}
+
+	// Сверка низкоуровневым клиентом — то, что реально легло на v1-mount.
+	got, err := integrationAPI.KVv1("kv-v1").Get(ctx, "sigil-keys/written-v1")
+	if err != nil {
+		t.Fatalf("low-level KVv1 Get: %v", err)
+	}
+	if got == nil || got.Data == nil {
+		t.Fatal("KVv1 Get: nil secret after WriteKV")
+	}
+	if got.Data["signing_key"] != "v1-write-secret" || got.Data["key_id"] != "sigil-01" {
+		t.Errorf("v1 stored payload = %v, want %v", got.Data, want)
+	}
+
+	// И через наш ReadKV (round-trip целиком через клиент): плоский payload.
+	back, err := cl.ReadKV(ctx, "sigil-keys/written-v1")
+	if err != nil {
+		t.Fatalf("ReadKV after WriteKV v1: %v", err)
+	}
+	if back["signing_key"] != "v1-write-secret" {
+		t.Errorf("v1 read-back payload = %v", back)
+	}
+}
+
+// TestVaultCEL_HashField_V1Mount — `#field`-селектор vault('kv-v1/x#field')
+// поверх РЕАЛЬНОГО v1-mount-а: путь splitVaultField → ReadKV (v1-routing) →
+// извлечение одного поля. До этого #field был покрыт только на v2 (version-
+// agnostic stubKV в shared/cel не моделирует routing). Здесь KVReader — наш
+// настоящий v1-Client, поэтому проверка закрывает v1-ветку end-to-end.
+func TestVaultCEL_HashField_V1Mount(t *testing.T) {
+	ctx := context.Background()
+	cl := newV1MountClient(ctx, t)
+
+	if err := integrationAPI.KVv1("kv-v1").Put(ctx, "redis/hashfield", map[string]any{
+		"password": "v1-hashed-secret",
+		"user":     "redis",
+	}); err != nil {
+		t.Fatalf("seed KVv1 Put: %v", err)
+	}
+
+	eng, err := cel.New(cel.WithVault(cl))
+	if err != nil {
+		t.Fatalf("cel.New(WithVault): %v", err)
+	}
+
+	// #field → одно поле напрямую.
+	out, err := eng.EvalInterpolation("${ vault('kv-v1/redis/hashfield#password') }", cel.Vars{Ctx: ctx})
+	if err != nil {
+		t.Fatalf("EvalInterpolation #field v1: %v", err)
+	}
+	if out != "v1-hashed-secret" {
+		t.Errorf("vault(#field) on v1 = %v, want v1-hashed-secret", out)
+	}
+
+	// Без #field — весь map, доступ к полю CEL-выражением (та же v1-ветка).
+	out2, err := eng.EvalInterpolation("${ vault('kv-v1/redis/hashfield').user }", cel.Vars{Ctx: ctx})
+	if err != nil {
+		t.Fatalf("EvalInterpolation .field v1: %v", err)
+	}
+	if out2 != "redis" {
+		t.Errorf("vault().user on v1 = %v, want redis", out2)
+	}
+}
+
+// TestReadKV_V2Mount — регресс-guard: v2-mount продолжает читаться через probe.
+func TestReadKV_V2Mount(t *testing.T) {
+	ctx := context.Background()
+	want := map[string]any{"signing_key": "v2-secret"}
+	if _, err := integrationAPI.KVv2("secret").Put(ctx, "keeper/v2probe", want); err != nil {
+		t.Fatalf("seed KVv2 Put: %v", err)
+	}
+	got, err := integrationClient.ReadKV(ctx, "keeper/v2probe")
+	if err != nil {
+		t.Fatalf("ReadKV v2: %v", err)
+	}
+	if got["signing_key"] != "v2-secret" {
+		t.Errorf("v2 payload = %v", got)
+	}
+}
+
+// TestReadKV_V2Missing_NotMaskedAsV1 — инвариант держится КОНСТРУКТИВНО:
+// missing-секрет на v2 → ErrVaultKVNotFound (а не «деградация в v1-чтение»),
+// потому что версию даёт probe sys/internal/ui/mounts, а не класс ошибки
+// KVv2.Get. Именно этот случай ломал прежнюю эвристику.
+func TestReadKV_V2Missing_NotMaskedAsV1(t *testing.T) {
+	_, err := integrationClient.ReadKV(context.Background(), "keeper/definitely-missing-v2")
+	if !errors.Is(err, ErrVaultKVNotFound) {
+		t.Fatalf("v2 missing: err=%v, want ErrVaultKVNotFound (probe резолвит v2 конструктивно)", err)
+	}
+}
+
+// TestReadKV_ExplicitVersionOverride — kv_version="1" форсит v1-роутинг без
+// probe. Для жёсткой проверки «probe не вызван» поднимаем Client на mount, у
+// которого probe-endpoint вернул бы v2 (secret/), но читать его как v1 нельзя —
+// поэтому override проверяем на реальном v1-mount с принудительным kv_version.
+func TestReadKV_ExplicitVersionOverride(t *testing.T) {
+	ctx := context.Background()
+	const mount = "kv-v1"
+	err := integrationAPI.Sys().Mount(mount, &vaultapi.MountInput{
+		Type: "kv", Options: map[string]string{"version": "1"},
+	})
+	if err != nil && !strings.Contains(err.Error(), "already in use") {
+		t.Fatalf("mount %s: %v", mount, err)
+	}
+	if err := integrationAPI.KVv1(mount).Put(ctx, "ov/x", map[string]any{"k": "ov"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	cl, err := NewClient(ctx, config.KeeperVault{
+		Addr: integrationClient.c.Address(), Token: integrationToken,
+		KVMount: mount, KVVersion: "1",
+	})
+	if err != nil {
+		t.Fatalf("NewClient override: %v", err)
+	}
+	got, err := cl.ReadKV(ctx, "ov/x")
+	if err != nil {
+		t.Fatalf("ReadKV override=1: %v", err)
+	}
+	if got["k"] != "ov" {
+		t.Errorf("override payload = %v", got)
+	}
 }
 
 func TestIntegration_VaultReadKV_RoundTrip(t *testing.T) {

@@ -111,7 +111,7 @@ func TestIntegration_TempoMW_FailOpenOnRedisDown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	c, err := NewClient(ctx, Config{Addr: integrationAddr})
+	c, err := NewClient(ctx, Config{Addr: integrationAddr}, nil)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}

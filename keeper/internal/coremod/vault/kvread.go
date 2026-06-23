@@ -2,7 +2,7 @@
 // (ADR-017, docs/architecture.md → ADR-017).
 //
 // Состояние:
-//   - kv-read: прочитать секрет из Vault KV v2 на keeper-стороне и
+//   - kv-read: прочитать секрет из Vault KV (v1/v2) на keeper-стороне и
 //     отдать в register-output задачи.
 //
 // Зачем существует, если в CEL есть implicit `${ vault(...) }`:
@@ -101,14 +101,10 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		return util.SendFailed(stream, err.Error())
 	}
 
-	raw, err := m.Vault.ReadKV(ctx, path)
-	if err != nil {
-		return util.SendFailed(stream, fmt.Sprintf("vault read %q: %v", path, err))
-	}
-
-	// KV v2 формат: data.data → user-payload. ReadKV возвращает Secret.Data,
-	// который у KV v2 = {"data": {...}, "metadata": {...}}. Достаём data.
-	payload, err := extractKVData(raw)
+	// ReadKV отдаёт развёрнутый плоский payload (поля секрета) для ОБЕИХ
+	// версий KV — версия резолвится прозрачно в vault.Client (ADR-017(b),
+	// amendment 2026-06-22). Здесь обёртки `{data,metadata}` уже нет.
+	payload, err := m.Vault.ReadKV(ctx, path)
 	if err != nil {
 		return util.SendFailed(stream, fmt.Sprintf("vault read %q: %v", path, err))
 	}
@@ -138,24 +134,6 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		"fields": toAnySlice(fields),
 	}
 	return util.SendFinal(stream, false, resp)
-}
-
-// extractKVData аккуратно достаёт `data` из KV v2 secret-response. Vault
-// клиент возвращает map[string]any с верхним ключом `data` (вложенный
-// payload) + `metadata`. Если raw — не KV v2 формат (legacy KV v1, кто-то
-// разрешит mount), отдаём raw как есть.
-func extractKVData(raw map[string]any) (map[string]any, error) {
-	if raw == nil {
-		return map[string]any{}, nil
-	}
-	if inner, ok := raw["data"]; ok {
-		if m, ok := inner.(map[string]any); ok {
-			return m, nil
-		}
-		return nil, fmt.Errorf("kv v2 data: expected object, got %T", inner)
-	}
-	// Fallback — KV v1 (без обёртки data/metadata).
-	return raw, nil
 }
 
 // filterFields оставляет только указанные ключи. Пустой/nil wanted → весь payload.

@@ -190,7 +190,7 @@ func TestIntegration_PerCovenTrigger_WithWebhook(t *testing.T) {
 	defer srv.Close()
 
 	// 2. Redis-клиент.
-	rc, err := keeperredis.NewClient(ctx, keeperredis.Config{Addr: integrationAddr})
+	rc, err := keeperredis.NewClient(ctx, keeperredis.Config{Addr: integrationAddr}, nil)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}

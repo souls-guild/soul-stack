@@ -26,7 +26,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 const (
@@ -147,35 +150,86 @@ func DeregisterInstance(ctx context.Context, c *Client, kid string) error {
 // count=100 — hint размера батча per-итерация (Redis волен вернуть больше/
 // меньше). Дубли KID-ов между батчами SCAN-а (возможны при rehash) свёрнуты
 // через set.
+//
+// Cluster-режим (ADR-006 amendment): presence-ключи разных KID садятся в РАЗНЫЕ
+// слоты (нет общего hash-tag — это намеренно: иначе весь presence-keyspace осел
+// бы на один узел). Обычный SCAN на `*redis.ClusterClient` обходит только ОДИН
+// узел → недосчёт presence → тихо ломает refuse-guard «я не один» (ADR-027) и
+// soul-shedding. Поэтому в cluster SCAN идёт per-master через [ClusterClient.ForEachMaster]
+// и объединяется (дедуп тем же seen-set). Type-switch — по факт-типу underlying().
 func LiveKIDs(ctx context.Context, c *Client) ([]string, error) {
 	if c == nil {
 		return nil, errors.New("redis.LiveKIDs: nil client")
 	}
+	// seen дедуплицирует KID-ы: между батчами SCAN-а (rehash) и между master-
+	// узлами кластера. mu защищает обновление под конкурентным ForEachMaster.
+	var mu sync.Mutex
 	seen := make(map[string]struct{})
 	var kids []string
+	collect := func(kid string) {
+		if kid == "" {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if _, dup := seen[kid]; dup {
+			return
+		}
+		seen[kid] = struct{}{}
+		kids = append(kids, kid)
+	}
+
+	if cc, ok := c.underlying().(*redis.ClusterClient); ok {
+		// SCAN на каждом master-узле кластера: ключи разных KID шардированы по
+		// слотам, один узел видит лишь свою долю. ForEachMaster вызывает fn
+		// конкурентно по узлам — collect синхронизирован через mu.
+		err := cc.ForEachMaster(ctx, func(ctx context.Context, node *redis.Client) error {
+			kidsOnNode, err := scanKIDs(ctx, node)
+			if err != nil {
+				return err
+			}
+			for _, kid := range kidsOnNode {
+				collect(kid)
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, fmt.Errorf("redis.LiveKIDs: ForEachMaster SCAN: %w", err)
+		}
+		return kids, nil
+	}
+
+	nodeKIDs, err := scanKIDs(ctx, c.underlying())
+	if err != nil {
+		return nil, fmt.Errorf("redis.LiveKIDs: SCAN: %w", err)
+	}
+	for _, kid := range nodeKIDs {
+		collect(kid)
+	}
+	return kids, nil
+}
+
+// scanKIDs выполняет курсорный SCAN по `keeper:instance:*` на ОДНОМ узле и
+// возвращает обрезанные KID-ы (с возможными дублями между батчами — дедуп на
+// стороне вызывающего). `s` — UniversalClient (весь кластер) либо `*redis.Client`
+// (один master-узел из ForEachMaster).
+func scanKIDs(ctx context.Context, s redis.Cmdable) ([]string, error) {
+	var out []string
 	var cursor uint64
 	for {
-		keys, next, err := c.underlying().Scan(ctx, cursor, conclaveKeyPrefix+"*", 100).Result()
+		keys, next, err := s.Scan(ctx, cursor, conclaveKeyPrefix+"*", 100).Result()
 		if err != nil {
-			return nil, fmt.Errorf("redis.LiveKIDs: SCAN: %w", err)
+			return nil, err
 		}
 		for _, k := range keys {
-			kid := k[len(conclaveKeyPrefix):]
-			if kid == "" {
-				continue
-			}
-			if _, dup := seen[kid]; dup {
-				continue
-			}
-			seen[kid] = struct{}{}
-			kids = append(kids, kid)
+			out = append(out, k[len(conclaveKeyPrefix):])
 		}
 		cursor = next
 		if cursor == 0 {
 			break
 		}
 	}
-	return kids, nil
+	return out, nil
 }
 
 // CountLive возвращает число живых keeper-инстансов (= len([LiveKIDs])).

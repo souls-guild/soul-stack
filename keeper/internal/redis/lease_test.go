@@ -24,7 +24,7 @@ func newClientMR(t *testing.T) (*Client, *miniredis.Miniredis) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	c, err := NewClient(ctx, Config{Addr: mr.Addr()})
+	c, err := NewClient(ctx, Config{Addr: mr.Addr()}, nil)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}

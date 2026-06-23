@@ -42,7 +42,7 @@ func newBridgeRedis(t *testing.T) (*keeperredis.Client, *miniredis.Miniredis) {
 	mr := miniredis.RunT(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	c, err := keeperredis.NewClient(ctx, keeperredis.Config{Addr: mr.Addr()})
+	c, err := keeperredis.NewClient(ctx, keeperredis.Config{Addr: mr.Addr()}, nil)
 	if err != nil {
 		t.Fatalf("redis NewClient: %v", err)
 	}

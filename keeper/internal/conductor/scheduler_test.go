@@ -21,7 +21,7 @@ func silentLogger() *slog.Logger {
 func newTestRedis(t *testing.T) (*redis.Client, *miniredis.Miniredis) {
 	t.Helper()
 	mr := miniredis.RunT(t)
-	c, err := redis.NewClient(context.Background(), redis.Config{Addr: mr.Addr()})
+	c, err := redis.NewClient(context.Background(), redis.Config{Addr: mr.Addr()}, nil)
 	if err != nil {
 		t.Fatalf("redis.NewClient: %v", err)
 	}

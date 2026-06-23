@@ -71,7 +71,7 @@ core — только `on: keeper`.
 | [`core.soul.registered`](core/soul/README.md) | `registered` | Привязка SID к coven-меткам реестра souls. |
 | [`core.cloud.provisioned`](core/cloud/README.md) | `created` / `destroyed` | Cloud-инстанс через CloudDriver-плагин. |
 | [`core.choir`](core/choir/README.md) | `present` / `absent` | Членство Voice-а (SID) в Choir-е инкарнации (ADR-044). |
-| [`core.vault.kv-read`](core/vault/README.md) | `kv-read` (verb) | Чтение секрета из Vault KV v2 на keeper-стороне. |
+| [`core.vault.kv-read`](core/vault/README.md) | `kv-read` (verb) | Чтение секрета из Vault KV (v1/v2, auto-detect) на keeper-стороне. |
 
 ## core-beacon
 
