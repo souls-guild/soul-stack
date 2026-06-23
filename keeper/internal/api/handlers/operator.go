@@ -62,6 +62,15 @@ type RBACSource interface {
 	RolesOf(aid string) []string
 }
 
+// ProvisioningGate — узкая поверхность политики provisioning_allowed_methods
+// (ADR-058 Часть B): гейтит ветку СОЗДАНИЯ оператора. Реализуется
+// *serviceregistry.Holder; объявлена локально, чтобы handlers не тянул
+// serviceregistry. nil → гейт выключен (политика не сконфигурирована /
+// тесты, back-compat — CreateTyped пропускает).
+type ProvisioningGate interface {
+	ProvisioningMethodAllowed(method string) bool
+}
+
 // OperatorHandler — три endpoint-а Operator API. Делегирует бизнес-логику
 // в [operator.Service].
 //
@@ -70,6 +79,20 @@ type RBACSource interface {
 type OperatorHandler struct {
 	svc    *operator.Service
 	logger *slog.Logger
+
+	// gate — политика provisioning_allowed_methods (ADR-058 Часть B), гейтит
+	// CreateTyped (метод "user"). nil → гейт выключен (back-compat). Инжектится
+	// через [SetProvisioningGate] late-binding-ом: Holder в `keeper run`
+	// поднимается отдельным setup-шагом, конструктор сигнатуру не меняет.
+	gate ProvisioningGate
+}
+
+// SetProvisioningGate late-binding-ом подключает политику provisioning_allowed_methods
+// (ADR-058 Часть B). nil — снять гейт (back-compat: создание любым методом).
+// Вызывается из `keeper run` после подъёма serviceregistry.Holder. Идемпотентен;
+// потокобезопасность не требуется — вызов до старта HTTP-сервера.
+func (h *OperatorHandler) SetProvisioningGate(gate ProvisioningGate) {
+	h.gate = gate
 }
 
 // NewOperatorHandler создаёт handler. ttlDefault — TTL JWT-токенов.
@@ -159,6 +182,15 @@ func (h *OperatorHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, r
 	if len(req.DisplayName) > maxDisplayNameLen {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
 			fmt.Sprintf("field 'display_name' must be at most %d characters", maxDisplayNameLen))}
+	}
+
+	// Гейт политики provisioning_allowed_methods (ADR-058 Часть B): создание
+	// оператора через Operator API — метод "user" (created_via=user). gate==nil →
+	// пропускаем (политика не сконфигурирована, back-compat). bootstrap-путь
+	// (`keeper init`) сюда НЕ заходит — он не вызывает CreateTyped.
+	if h.gate != nil && !h.gate.ProvisioningMethodAllowed("user") {
+		return zero, &problemError{problem.New(problem.TypeProvisioningMethodDisabled, "",
+			"operator provisioning via 'user' method is disabled by policy")}
 	}
 
 	res, err := h.svc.Create(ctx, operator.CreateInput{

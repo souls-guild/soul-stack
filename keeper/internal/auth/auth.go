@@ -87,4 +87,12 @@ var (
 	ErrOperatorNotProvisioned = errors.New("auth: operator not pre-registered")
 	// ErrNoRoleMapping — у внешней identity нет ни одной маппящейся роли.
 	ErrNoRoleMapping = errors.New("auth: no role mapping for external identity")
+	// ErrProvisioningDisabled — политика provisioning_allowed_methods запретила
+	// СОЗДАНИЕ оператора этим методом (ADR-058 Часть B). Возвращается Mapper-ом из
+	// ветки provision (новый оператор НЕ создаётся), ТОЛЬКО на создании —
+	// существующий оператор логинится независимо от политики. НЕ auth-failure
+	// пользователя, а policy: endpoint маппит её в осмысленный 403, а не в
+	// санитизированный 401 (anti-oracle к policy неприменим — факт «метод выключен»
+	// не утечка чужих credentials).
+	ErrProvisioningDisabled = errors.New("auth: operator provisioning is disabled for this method by policy")
 )

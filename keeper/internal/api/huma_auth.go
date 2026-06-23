@@ -158,6 +158,12 @@ func ldapLoginProblem(err error) huma.StatusError {
 		return humaProblemError{Details: problemWithStatus(problem.TypeForbidden, http.StatusForbidden, "no mapped group")}
 	case errors.Is(err, auth.ErrOperatorRevoked):
 		return humaProblemError{Details: problemWithStatus(problem.TypeForbidden, http.StatusForbidden, "operator revoked")}
+	// ErrProvisioningDisabled — политика provisioning_allowed_methods запретила
+	// auto-provision этим методом (ADR-058 Часть B). 403 с осмысленным detail
+	// (НЕ санитизированный 401): это policy-отказ, не bad-credentials — anti-oracle
+	// неприменим (факт «метод выключен» не раскрывает чужих секретов).
+	case errors.Is(err, auth.ErrProvisioningDisabled):
+		return humaProblemError{Details: problemWithStatus(problem.TypeProvisioningMethodDisabled, http.StatusForbidden, "operator provisioning is disabled for this method by policy")}
 	default:
 		return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "internal error")}
 	}

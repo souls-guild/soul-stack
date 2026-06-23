@@ -12,6 +12,16 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
+// ProvisioningGate — узкая поверхность проверки политики provisioning_allowed_methods
+// (ADR-058 Часть B). Реализуется *serviceregistry.Holder; объявлена интерфейсом,
+// чтобы auth-пакет не тянул serviceregistry и тестировался с fake-гейтом.
+// ProvisioningMethodAllowed("ldap") отвечает, разрешено ли СОЗДАВАТЬ federated-
+// оператора (auto-provision). nil-gate трактуется вызывающим как «пропускать»
+// (back-compat: политика не сконфигурирована).
+type ProvisioningGate interface {
+	ProvisioningMethodAllowed(method string) bool
+}
+
 // MapperConfig — зависимости [DBMapper].
 type MapperConfig struct {
 	// GroupRoleMap — внешняя группа → RBAC-роли (config auth.ldap.group_role_map).
@@ -26,6 +36,13 @@ type MapperConfig struct {
 
 	// Audit — куда писать `operator.provisioned` (login пишет endpoint).
 	Audit audit.Writer
+
+	// ProvisioningGate — политика provisioning_allowed_methods (ADR-058 Часть B):
+	// гейтит ТОЛЬКО ветку provision (auto-create нового federated-оператора).
+	// nil → гейт выключен (политика не сконфигурирована, back-compat). Existing-
+	// оператор (case err==nil в Map) гейт НЕ задействует — логинится независимо
+	// от политики.
+	ProvisioningGate ProvisioningGate
 
 	// Logger — debug-трасса (без секретов).
 	Logger *slog.Logger
@@ -110,6 +127,13 @@ func (m *DBMapper) Map(ctx context.Context, ext ExternalIdentity) (MappedOperato
 // (миграция 085), поэтому отдельный reserved-AID-маркер больше не нужен. Источник
 // атрибутируется самим created_via.
 func (m *DBMapper) provision(ctx context.Context, aid string, ext ExternalIdentity, roles []string) (MappedOperator, error) {
+	// Гейт политики provisioning_allowed_methods (ADR-058 Часть B): ТОЛЬКО на
+	// создании. ДО Insert — оператор не должен появиться при запрещённом методе.
+	// gate==nil → пропускаем (политика не сконфигурирована, back-compat).
+	if m.cfg.ProvisioningGate != nil && !m.cfg.ProvisioningGate.ProvisioningMethodAllowed("ldap") {
+		return MappedOperator{}, ErrProvisioningDisabled
+	}
+
 	displayName := ext.Username
 	if displayName == "" {
 		displayName = aid
