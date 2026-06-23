@@ -1,0 +1,179 @@
+package handlers
+
+import (
+	"context"
+	"errors"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+
+	keeperjwt "github.com/souls-guild/soul-stack/keeper/internal/jwt"
+	"github.com/souls-guild/soul-stack/keeper/internal/serviceregistry"
+)
+
+// provPool — fake ServicePool: SetSetting (upsert) успешен; QueryRow на upsert
+// сканит RETURNING updated_at.
+type provPool struct {
+	setSQLSeen *string
+	setValue   *string
+}
+
+func (p *provPool) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+	return pgconn.CommandTag{}, nil
+}
+
+func (p *provPool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
+	if p.setSQLSeen != nil {
+		*p.setSQLSeen = sql
+	}
+	// upsertSettingSQL: $1=key, $2=value, $3=updated_by_aid.
+	if len(args) >= 2 && p.setValue != nil {
+		if v, ok := args[1].(string); ok {
+			*p.setValue = v
+		}
+	}
+	return provScanRow{}
+}
+
+func (p *provPool) Query(context.Context, string, ...any) (pgx.Rows, error) {
+	return nil, errors.New("provPool.Query unused")
+}
+
+type provScanRow struct{}
+
+func (provScanRow) Scan(dest ...any) error {
+	// RETURNING updated_at.
+	for _, d := range dest {
+		if tp, ok := d.(*time.Time); ok {
+			*tp = time.Now()
+		}
+	}
+	return nil
+}
+
+// countingInv — счётчик cluster-invalidate.
+type countingInv struct{ calls atomic.Int64 }
+
+func (c *countingInv) Invalidate(context.Context) { c.calls.Add(1) }
+
+// provReader — fake ProvisioningPolicyReader (для previous-payload + GET).
+type provReader struct {
+	methods []string
+	set     bool
+}
+
+func (r provReader) ProvisioningPolicy() ([]string, bool) { return r.methods, r.set }
+
+func provClaims(aid string) *keeperjwt.Claims { return &keeperjwt.Claims{Subject: aid} }
+
+// TestProvisioningPut_InvalidateAndAuditPayload — B5 кейс 6: PUT записывает CSV
+// через Service.SetSetting (invalidate вызван — counting-invalidator) + AuditPayload
+// несёт allowed_methods + previous. Сам event provisioning.policy_changed пишет
+// huma-audit-middleware (вариант B) из этого AuditPayload — здесь проверяем, что
+// payload корректен и непустой (S6-инвариант «есть что писать»).
+func TestProvisioningPut_InvalidateAndAuditPayload(t *testing.T) {
+	var seenValue string
+	pool := &provPool{setValue: &seenValue}
+	svc, err := serviceregistry.NewService(serviceregistry.ServiceDeps{Pool: pool})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	inv := &countingInv{}
+	svc.SetInvalidator(inv)
+
+	reader := provReader{methods: []string{"oidc"}, set: true} // прежняя политика
+	h := NewProvisioningPolicyHandler(reader, svc, nil)
+
+	reply, err := h.PutTyped(context.Background(), provClaims("archon-alice"),
+		ProvisioningPolicyUpdateInput{AllowedMethods: []string{"user", "ldap"}})
+	if err != nil {
+		t.Fatalf("PutTyped: %v", err)
+	}
+
+	// invalidate вызван ровно один раз (cluster-wide refresh снимка).
+	if got := inv.calls.Load(); got != 1 {
+		t.Errorf("invalidate calls = %d, want 1", got)
+	}
+	// записан нормализованный CSV (отсортированный set).
+	if seenValue != "ldap,user" {
+		t.Errorf("SetSetting value = %q, want %q", seenValue, "ldap,user")
+	}
+
+	// AuditPayload: новый список + previous.
+	p := reply.AuditPayload()
+	am, ok := p["allowed_methods"].([]string)
+	if !ok || len(am) != 2 {
+		t.Errorf("audit allowed_methods = %v, want [ldap user]", p["allowed_methods"])
+	}
+	prev, ok := p["previous"].([]string)
+	if !ok || len(prev) != 1 || prev[0] != "oidc" {
+		t.Errorf("audit previous = %v, want [oidc]", p["previous"])
+	}
+
+	// 200-тело: policy_set=true, список нормализован.
+	if !reply.Body.PolicySet {
+		t.Error("reply.Body.PolicySet = false, want true")
+	}
+}
+
+// TestProvisioningPut_EmptyList_422 — B5 anti-lockout: пустой список → 422
+// validation-failed, SetSetting НЕ вызван.
+func TestProvisioningPut_EmptyList_422(t *testing.T) {
+	var seenValue string
+	pool := &provPool{setValue: &seenValue}
+	svc, err := serviceregistry.NewService(serviceregistry.ServiceDeps{Pool: pool})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	inv := &countingInv{}
+	svc.SetInvalidator(inv)
+	h := NewProvisioningPolicyHandler(provReader{}, svc, nil)
+
+	_, err = h.PutTyped(context.Background(), provClaims("archon-alice"),
+		ProvisioningPolicyUpdateInput{AllowedMethods: nil})
+	if err == nil {
+		t.Fatal("PutTyped пустой список err=nil, want 422 (anti-lockout)")
+	}
+	d, ok := AsProblemDetails(err)
+	if !ok || d.Status != 422 {
+		t.Fatalf("err = %v, want 422 validation-failed", err)
+	}
+	if inv.calls.Load() != 0 {
+		t.Errorf("invalidate вызван при отказе, want 0 (запись не состоялась)")
+	}
+	if seenValue != "" {
+		t.Errorf("SetSetting вызван (value=%q), want пусто", seenValue)
+	}
+}
+
+// TestProvisioningPut_InvalidMethod_422 — метод вне домена → 422, без записи.
+func TestProvisioningPut_InvalidMethod_422(t *testing.T) {
+	pool := &provPool{}
+	svc, err := serviceregistry.NewService(serviceregistry.ServiceDeps{Pool: pool})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	h := NewProvisioningPolicyHandler(provReader{}, svc, nil)
+
+	_, err = h.PutTyped(context.Background(), provClaims("archon-alice"),
+		ProvisioningPolicyUpdateInput{AllowedMethods: []string{"user", "bootstrap"}})
+	d, ok := AsProblemDetails(err)
+	if !ok || d.Status != 422 {
+		t.Fatalf("err = %v, want 422 (bootstrap нельзя задать в политике)", err)
+	}
+}
+
+// TestProvisioningGet_DefaultPolicySetFalse — GET при не заданной политике →
+// policy_set=false. B5 кейс 7 (handler-проекция).
+func TestProvisioningGet_DefaultPolicySetFalse(t *testing.T) {
+	pool := &provPool{}
+	svc, _ := serviceregistry.NewService(serviceregistry.ServiceDeps{Pool: pool})
+	h := NewProvisioningPolicyHandler(provReader{set: false}, svc, nil)
+	view := h.GetTyped()
+	if view.PolicySet {
+		t.Errorf("PolicySet = true, want false (политика не задана)")
+	}
+}

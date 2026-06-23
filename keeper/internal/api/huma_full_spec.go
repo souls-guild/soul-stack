@@ -172,6 +172,12 @@ func fullSpecGroups() []specGroup {
 			registerHumaServiceDependencies(api, stub)
 			return nil
 		}},
+		{"/v1/provisioning-policy", func(api huma.API) error {
+			stub := handlers.ProvisioningPolicySpecStub()
+			registerHumaProvisioningPolicyGet(api, stub)
+			registerHumaProvisioningPolicyPut(api, stub)
+			return nil
+		}},
 		{"/v1/modules", func(api huma.API) error {
 			stub := handlers.ModuleCatalogSpecStub()
 			registerHumaModuleList(api, stub)

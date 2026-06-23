@@ -172,6 +172,7 @@ func collectRoutes(t *testing.T) map[route]struct{} {
 		stubSigilHandler(t),
 		stubSigilKeyHandler(t),
 		stubServiceHandler(t),
+		stubProvisioningPolicyHandler(t),
 		stubAugurHandler(t),
 		stubOracleHandler(t),
 		nil, // pushH — push.*-роуты подключаются только при non-nil pushH (router.go); сейчас в allowlist
@@ -196,7 +197,7 @@ func collectRoutes(t *testing.T) map[route]struct{} {
 		nil,   // tempoVoyageCreateLimits — nil допустим (RateLimit при nil-limiter не вызывает provider)
 		nil,   // tempoVoyagePreviewLimits — nil допустим (RateLimit при nil-limiter не вызывает provider)
 		false, // webUIEnabled — /ui вне /v1, drift-walker его не видит; держим выключенным для чистоты периметра
-		nil, // ldapAuth (LDAP не сконфигурирован в тесте)
+		nil,   // ldapAuth (LDAP не сконфигурирован в тесте)
 		nil,   // logger — допустим nil (handler-ы получают io.Discard внутри)
 	)
 
@@ -310,6 +311,23 @@ func stubServiceHandler(t *testing.T) *handlers.ServiceHandler {
 }
 
 type stubServicePool struct{ serviceregistry.ServicePool }
+
+// stubProvisioningPolicyHandler собирает ProvisioningPolicyHandler через
+// serviceregistry.Service со stub-pool + stub-reader. Методы при обходе дерева не
+// вызываются — нужен лишь non-nil handler, чтобы provisioning-policy-роуты
+// зарегистрировались (drift роутер↔full-spec). ADR-058 Часть B.
+func stubProvisioningPolicyHandler(t *testing.T) *handlers.ProvisioningPolicyHandler {
+	t.Helper()
+	svc, err := serviceregistry.NewService(serviceregistry.ServiceDeps{Pool: stubServicePool{}})
+	if err != nil {
+		t.Fatalf("serviceregistry.NewService(stub): %v", err)
+	}
+	return handlers.NewProvisioningPolicyHandler(stubProvisioningReader{}, svc, nil)
+}
+
+type stubProvisioningReader struct{}
+
+func (stubProvisioningReader) ProvisioningPolicy() ([]string, bool) { return nil, false }
 
 // stubAugurHandler собирает AugurHandler через augur.Service со stub-pool.
 // Методы pool при обходе дерева не вызываются — нужен лишь non-nil service,

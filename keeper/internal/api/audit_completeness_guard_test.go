@@ -128,6 +128,9 @@ var auditedWriteRoutes = map[route]auditedRoute{
 	{http.MethodPatch, "/v1/services/{name}"}:  {events: []audit.EventType{audit.EventServiceUpdated}},
 	{http.MethodDelete, "/v1/services/{name}"}: {events: []audit.EventType{audit.EventServiceDeregistered}},
 
+	// provisioning-policy (middleware-audit; PUT мутирующий, GET — read). ADR-058 Часть B.
+	{http.MethodPut, "/v1/provisioning-policy"}: {events: []audit.EventType{audit.EventProvisioningPolicyChanged}},
+
 	// augur (middleware-audit).
 	{http.MethodPost, "/v1/augur/omens"}:          {events: []audit.EventType{audit.EventOmenCreated}},
 	{http.MethodDelete, "/v1/augur/omens/{name}"}: {events: []audit.EventType{audit.EventOmenRevoked}},

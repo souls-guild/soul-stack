@@ -53,7 +53,7 @@ func TestHumaIncarnation_ChiCoexistence(t *testing.T) {
 		incH,
 		handlers.NewSoulHandler(nil, nil, nil, nil),
 		stubRoleHandler(t), stubSynodHandler(t), stubSigilHandler(t), stubSigilKeyHandler(t),
-		stubServiceHandler(t), stubAugurHandler(t), stubOracleHandler(t),
+		stubServiceHandler(t), nil, stubAugurHandler(t), stubOracleHandler(t),
 		nil,                                     // pushH
 		nil,                                     // pushProviderH
 		nil,                                     // errandH
@@ -76,7 +76,7 @@ func TestHumaIncarnation_ChiCoexistence(t *testing.T) {
 		nil,   // tempoVoyageCreateLimits
 		nil,   // tempoVoyagePreviewLimits
 		false, // webUIEnabled — /ui вне интереса incarnation-роутинг-теста
-		nil, // ldapAuth (LDAP не сконфигурирован в тесте)
+		nil,   // ldapAuth (LDAP не сконфигурирован в тесте)
 		nil,   // logger
 	)
 	routes, ok := h.(chi.Routes)

@@ -133,7 +133,7 @@ const (
 // Health/meta вынесены вне `/v1/*` по operator-api.md § Health / Meta.
 // chi.NotFound и chi.MethodNotAllowed заменены на problem+json-handlers,
 // чтобы 404/405 не приходили в text/plain default-формате stdlib.
-func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.OperatorHandler, incH *handlers.IncarnationHandler, soulH *handlers.SoulHandler, roleH *handlers.RoleHandler, synodH *handlers.SynodHandler, sigilH *handlers.SigilHandler, sigilKeyH *handlers.SigilKeyHandler, serviceH *handlers.ServiceHandler, augurH *handlers.AugurHandler, oracleH *handlers.OracleHandler, pushH *handlers.PushHandler, pushProviderH *handlers.PushProviderHandler, errandH *handlers.ErrandHandler, voyageH *handlers.VoyageHandler, cadenceH *handlers.CadenceHandler, auditH *handlers.AuditHandler, choirH *handlers.ChoirHandler, heraldH *handlers.HeraldHandler, moduleCatalogH *handlers.ModuleCatalogHandler, moduleFormPrepH *handlers.ModuleFormPrepHandler, permCatalogH *handlers.PermissionCatalogHandler, eventTypeCatalogH *handlers.EventTypeCatalogHandler, meH *handlers.MyPermissionsHandler, enforcer RBACProvider, auditWriter audit.Writer, metricsHTTP *obs.HTTPMetrics, tollDegraded toll.DegradedReader, tempoLimiter apimiddleware.RateLimiter, tempoMetrics apimiddleware.RateLimitMetrics, tempoVoyageCreateLimits func() apimiddleware.RateLimitLimits, tempoVoyagePreviewLimits func() apimiddleware.RateLimitLimits, webUIEnabled bool, ldapAuth *LDAPAuthDeps, logger *slog.Logger) http.Handler {
+func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.OperatorHandler, incH *handlers.IncarnationHandler, soulH *handlers.SoulHandler, roleH *handlers.RoleHandler, synodH *handlers.SynodHandler, sigilH *handlers.SigilHandler, sigilKeyH *handlers.SigilKeyHandler, serviceH *handlers.ServiceHandler, provisioningPolicyH *handlers.ProvisioningPolicyHandler, augurH *handlers.AugurHandler, oracleH *handlers.OracleHandler, pushH *handlers.PushHandler, pushProviderH *handlers.PushProviderHandler, errandH *handlers.ErrandHandler, voyageH *handlers.VoyageHandler, cadenceH *handlers.CadenceHandler, auditH *handlers.AuditHandler, choirH *handlers.ChoirHandler, heraldH *handlers.HeraldHandler, moduleCatalogH *handlers.ModuleCatalogHandler, moduleFormPrepH *handlers.ModuleFormPrepHandler, permCatalogH *handlers.PermissionCatalogHandler, eventTypeCatalogH *handlers.EventTypeCatalogHandler, meH *handlers.MyPermissionsHandler, enforcer RBACProvider, auditWriter audit.Writer, metricsHTTP *obs.HTTPMetrics, tollDegraded toll.DegradedReader, tempoLimiter apimiddleware.RateLimiter, tempoMetrics apimiddleware.RateLimitMetrics, tempoVoyageCreateLimits func() apimiddleware.RateLimitLimits, tempoVoyagePreviewLimits func() apimiddleware.RateLimitLimits, webUIEnabled bool, ldapAuth *LDAPAuthDeps, logger *slog.Logger) http.Handler {
 	r := chi.NewRouter()
 
 	// huma error-override (ADR-054, FULL-TYPED): глобальный huma.NewError →
@@ -894,6 +894,33 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 					apimiddleware.RequirePermission(enforcer, "service", "list", apimiddleware.NoSelector),
 				).Group(func(r chi.Router) {
 					registerHumaServiceDependencies(newHumaCadenceAPI(r), serviceH)
+				})
+			})
+		}
+
+		// /v1/provisioning-policy — runtime-политика способов СОЗДАНИЯ операторов
+		// (provisioning_allowed_methods, ADR-058 Часть B). Подключается только при
+		// non-nil provisioningPolicyH (Deps.ProvisioningPolicyReader + ServiceSvc
+		// прокинуты). Selector — NoSelector: политика кластер-уровневая (как
+		// operator.* / role.*).
+		//
+		// GET — read (permission provisioning.read, БЕЗ audit, паттерн service.list).
+		// PUT — WRITE+AUDIT вариант B (permission provisioning.update, event
+		// provisioning.policy_changed; huma-audit-middleware на своей chi-группе,
+		// как service.update). Каждый роут — СВОЯ chi-группа со своим RBAC; huma
+		// наследует chi-middleware группы.
+		if provisioningPolicyH != nil {
+			r.Route("/provisioning-policy", func(r chi.Router) {
+				r.With(
+					apimiddleware.RequirePermission(enforcer, "provisioning", "read", apimiddleware.NoSelector),
+				).Group(func(r chi.Router) {
+					registerHumaProvisioningPolicyGet(newHumaCadenceAPI(r), provisioningPolicyH)
+				})
+
+				r.With(
+					apimiddleware.RequirePermission(enforcer, "provisioning", "update", apimiddleware.NoSelector),
+				).Group(func(r chi.Router) {
+					registerHumaProvisioningPolicyPut(newHumaProvisioningAPI(r, auditWriter, audit.EventProvisioningPolicyChanged, logger), provisioningPolicyH)
 				})
 			})
 		}

@@ -3847,6 +3847,13 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		// LDAPAuth — федеративная LDAP-аутентификация (ADR-058). nil при
 		// отсутствии auth.ldap → endpoint /auth/ldap/login не монтируется.
 		LDAPAuth: ldapAuth,
+		// ProvisioningPolicyReader — снимок политики provisioning_allowed_methods
+		// для GET /v1/provisioning-policy + гейта POST /v1/operators (ADR-058 Часть
+		// B). Тот же serviceHolder, что несёт service-каталог: политика — well-known
+		// скаляр того же снимка, отдельной wire-инвалидации НЕ нужно (PUT через
+		// ServiceSvc.SetSetting publish-ит общий service-invalidate-канал →
+		// Holder.refresh перечитывает ВСЕ well-known скаляры, включая политику).
+		ProvisioningPolicyReader: d.serviceHolder,
 	}, logger)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: build HTTP server: %v\n", err)
@@ -3912,7 +3919,12 @@ func (d *daemon) setupLDAPAuth(ctx context.Context) (*api.LDAPAuthDeps, error) {
 		GroupRoleMap: l.GroupRoleMap,
 		DB:           d.pool,
 		Audit:        d.auditWriter,
-		Logger:       d.logger,
+		// ProvisioningGate — политика provisioning_allowed_methods (ADR-058 Часть B):
+		// гейтит auto-provision нового federated-оператора (метод "ldap"). Тот же
+		// serviceHolder-снимок, что и для POST /v1/operators / GET-эндпоинта.
+		// serviceHolder поднят в setupServiceRegistry ДО setupHTTPServer/setupLDAPAuth.
+		ProvisioningGate: d.serviceHolder,
+		Logger:           d.logger,
 	})
 
 	return &api.LDAPAuthDeps{
