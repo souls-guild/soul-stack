@@ -930,6 +930,15 @@ const (
 	EventTidingUpdated EventType = "tiding.updated"
 	EventTidingDeleted EventType = "tiding.deleted"
 
+	// EventProvisioningPolicyChanged — Архонт сменил политику способов СОЗДАНИЯ
+	// операторов (`provisioning_allowed_methods` в keeper_settings, ADR-058 Часть B)
+	// через `PUT /v1/provisioning-policy`. `source: api`, `archon_aid` — инициатор.
+	// Payload: `{allowed_methods, previous?}` — `allowed_methods` (новый список из
+	// {user,ldap,oidc}) и `previous` (прежний список, если политика была задана) не
+	// секрет, логируются. Мутация security-чувствительная (управляет доступом к
+	// заведению операторов) — обязательно аудируется.
+	EventProvisioningPolicyChanged EventType = "provisioning.policy_changed"
+
 	// EventOperatorLogin — оператор успешно прошёл федеративную аутентификацию
 	// (LDAP search-bind, ADR-058) и получил внутренний JWT через
 	// `POST /auth/ldap/login`. Пишется endpoint-ом ПОСЛЕ выпуска JWT (одно
