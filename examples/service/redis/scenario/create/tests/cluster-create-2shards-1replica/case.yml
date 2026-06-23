@@ -68,7 +68,7 @@ assert:
     # redis.conf: cluster-node-timeout из input (8000, не дефолт 5000).
     # cluster-announce-ip в config НЕТ — per-host, рендерится в .tmpl из
     # .self.network.primary_ip. render_context.self = первый по SID хост (node-1).
-    - index: 10
+    - index: 9
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -104,7 +104,7 @@ assert:
 
     # cluster-build: nodes-MAP всех 4 хостов (детерминирован по SID),
     # replicas_per_shard=1 уходит в плагин. index 26 (−2 от исходного плана).
-    - index: 26
+    - index: 25
       module: community.redis.cluster
       params:
         action: create

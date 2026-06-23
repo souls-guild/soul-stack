@@ -75,7 +75,7 @@ assert:
     # обе задачи позиций не занимают → cluster-ветка сдвинута на −2 (redis.conf→10,
     # modules-dir→24, fetch .so→25, cluster-build→27).
     # redis.conf несёт cluster-директивы + vars.loadmodules ([rejson.so]).
-    - index: 10
+    - index: 9
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -111,7 +111,7 @@ assert:
           essence: {}
 
     # modules-dir каталог — gated, активна в cluster-modules-прогоне. index 24 (−2).
-    - index: 24
+    - index: 23
       module: core.file.directory
       params:
         path: /var/lib/redis/modules
@@ -120,7 +120,7 @@ assert:
         mode: "0750"
 
     # fetch .so json: URL арх-специфичен (amd64 из soulprint первого хоста в L0). index 25 (−2).
-    - index: 25
+    - index: 24
       module: core.url.fetched
       params:
         url: "https://artifacts.example.com/redis/modules/6.2/amd64/rejson.so"
@@ -131,7 +131,7 @@ assert:
         group: redis
 
     # cluster-build: index 27 (−2 от исходного плана).
-    - index: 27
+    - index: 26
       module: community.redis.cluster
       params:
         action: create

@@ -52,13 +52,13 @@ fixtures:
 assert:
   rendered_tasks:
     # index 0 — mode-guard диспетчера (standalone реализован → no-op). Не ассертим.
-    - index: 1
+    - index: 0
       module: core.pkg.installed
       params:
         name: redis-server
         version: "7.2.4"
 
-    - index: 8
+    - index: 7
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf

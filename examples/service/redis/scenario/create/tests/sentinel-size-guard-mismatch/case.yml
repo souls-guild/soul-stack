@@ -1,8 +1,9 @@
-# L0-испытание size-guard create в режиме sentinel — FAIL-ветка (mismatch).
+# L0-испытание size-guard create в режиме sentinel — FAIL-ветка (mismatch), assert:.
 # Roster из 3 хостов, но replicas=1 → ожидается 1+1=2 хоста. 3 != 2 → size-guard
-# вычисляет булево "false", cmd принимает форму `test "false" = "true" || { echo
-# ...; exit 1; }` — при исполнении ноды (L2/live) рвёт прогон fail-fast ДО любого
-# install. На L0 (render-only) доказывается ТРАНСЛЯЦИЯ guard-а в fail-форму.
+# (assert:, ADR-009 amendment 2026-06-23; тот же механизм, что cluster size-guard)
+# вычисляет предикат that[0] в FALSE на РЕНДЕРЕ Keeper-side → render ОБРЫВАЕТСЯ
+# ошибкой с message "topology mismatch: ..." ДО dispatch (ни одной задачи на Soul).
+# harness ассертит обрыв через expect_render_error (ADR-023 amendment).
 #
 # Парный с sentinel-create-1master-2replica (true-ветка): тот же guard-предикат
 # (size == 1 + replicas), противоположный исход — обе полярности покрыты.
@@ -46,16 +47,7 @@ fixtures:
     version: "7.2.4"
     replicas: 1
 
-assert:
-  rendered_tasks:
-    # index 0 — mode-guard (sentinel → no-op); standalone+cluster ветки
-    # placeholder-skip. sentinel size-guard FAIL-форма на index 6: cluster size-guard
-    # переведён в assert: (ADR-009 amendment) И cluster shards-guard УБРАН (required_when
-    # в main.yml) — обе задачи cluster-ветки больше НЕ занимают слот → все задачи после
-    # cluster-ветки, включая sentinel, сдвинуты на −2 от исходного плана. 3 == 1+1 → false
-    # → "false" встроено в test. (Сам sentinel size-guard остаётся core.cmd.shell —
-    # перевод в assert: отложен на тираж.)
-    - index: 6
-      module: core.cmd.shell
-      params:
-        cmd: 'test "false" = "true" || { echo "topology mismatch: hosts != 1 + replicas"; exit 1; }'
+# Render ОБРЫВАЕТСЯ assert-провалом sentinel size-guard-а: ожидаем ошибку рендера с
+# message из assert. expect_render_error взаимоисключим с assert.rendered_tasks
+# (плана нет — прогон не стартовал).
+expect_render_error: "topology mismatch: hosts != 1 + replicas"

@@ -44,7 +44,7 @@ assert:
     # (Полное доказательство «нет tls-строк» — на redis.conf ниже.)
 
     # index 8 — redis.conf: merged config БЕЗ tls-* и БЕЗ port 0 (plain открыт).
-    - index: 8
+    - index: 7
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -74,7 +74,7 @@ assert:
           essence: {}
 
     # index 23 — PING: tls=false (plain, без tls_ca), addr на 6379 (plain открыт).
-    - index: 23
+    - index: 22
       module: community.redis.command
       params:
         addr: "127.0.0.1:6379"

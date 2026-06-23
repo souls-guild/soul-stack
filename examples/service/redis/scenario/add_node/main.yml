@@ -61,16 +61,16 @@ input:
 # «Топология pilot»). add_node меняет живую топологию кластера, не декларацию.
 
 tasks:
-  # 1. GUARD — new_node_sid и seed_sid обязаны быть в roster и различаться.
-  #    Соответствие вычисляется KEEPER-SIDE при render (там доступен soulprint.hosts);
-  #    булево встраивается в guard-команду (тот же приём, что size-guard create).
+  # 1. GUARD — new_node_sid и seed_sid обязаны быть в roster и различаться (assert:,
+  #    ADR-009 amendment 2026-06-23; тот же механизм, что size-guard create). Предикат
+  #    вычисляется KEEPER-SIDE на РЕНДЕРЕ (там доступен soulprint.hosts; на Soul-е его
+  #    НЕТ). false ОБРЫВАЕТ render с message ДО любого dispatch — раньше и понятнее,
+  #    чем shell-test на хосте. assert НЕ emit RenderedTask.
   - name: Guard new_node and seed are distinct members of the run roster
-    run_once: true
-    module: core.cmd.shell
-    changed_when: "false"
-    params:
-      cmd: >-
-        test "${ input.new_node_sid != input.seed_sid && size(soulprint.hosts.where("sid == input.new_node_sid")) == 1 && size(soulprint.hosts.where("sid == input.seed_sid")) == 1 }" = "true" || { echo "add_node guard: new_node_sid/seed_sid must be distinct hosts of the run roster"; exit 1; }
+    assert:
+      that:
+        - 'input.new_node_sid != input.seed_sid && size(soulprint.hosts.where("sid == input.new_node_sid")) == 1 && size(soulprint.hosts.where("sid == input.seed_sid")) == 1'
+      message: "add_node guard: new_node_sid/seed_sid must be distinct hosts of the run roster"
 
   # 2. Per-host install + render redis.conf (cluster-директивы) + systemd на НОВОЙ
   #    ноде (таргет по стабильному SID). Та же режим-агностичная destiny `redis`,

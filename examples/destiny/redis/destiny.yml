@@ -236,26 +236,11 @@ input:
       pattern: "^[0-9a-f]{64}$"
 
   # ── Host-tuning extras (концепция Ansible-роли) ──────────────────────────────
-  # Режим-агностичные per-host добавки. logrotate/sysctl — opt-out (gated своим
-  # флагом, default true; средо-зависимы). THP-отключение БЕЗУСЛОВНО (рекомендация
-  # Redis, не выбор оператора) — флага в контракте нет, задача всегда активна.
-  # Флаги host-инвариантны → приходят через apply.input (scenario сервиса).
-  logrotate_enable:
-    type: boolean
-    required: false
-    default: true
-    description: >-
-      Ставить logrotate-конфиг /etc/logrotate.d/redis (ротация /var/log/redis/*.log,
-      copytruncate). По умолчанию true.
-
-  sysctl_enable:
-    type: boolean
-    required: false
-    default: true
-    description: >-
-      Ставить drop-in /etc/sysctl.d/30-redis.conf с kernel-параметрами под Redis и
-      применять `sysctl --system`. По умолчанию true. Значения — sysctl_settings.
-
+  # Режим-агностичные per-host добавки. THP-отключение / logrotate / sysctl —
+  # БЕЗУСЛОВНЫ (рекомендация Redis / hardening, не выбор оператора): флагов в
+  # контракте нет, задачи всегда активны. sysctl_settings — данные-таблица значений
+  # kernel-параметров, host-инвариантна → приходит через apply.input (scenario
+  # сервиса), сами параметры применяются всегда.
   sysctl_settings:
     type: object
     required: false
@@ -263,7 +248,6 @@ input:
       Kernel-параметры под Redis (map имя→значение), рендерятся в
       /etc/sysctl.d/30-redis.conf. Значения — СТРОКИ (multi-value параметры через
       пробел). Передаются scenario сервиса (дефолты — essence.sysctl_settings).
-      Задействованы только при sysctl_enable=true.
     properties: {}
     additional_properties: true
 

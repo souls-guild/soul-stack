@@ -43,16 +43,16 @@ input:
       (топология + идемпотентность) и FORGET. Должен отличаться от remove_node_sid.
 
 tasks:
-  # 1. GUARD — remove_node_sid и seed_sid обязаны быть в roster и различаться.
-  #    Соответствие вычисляется KEEPER-SIDE при render (там доступен soulprint.hosts);
-  #    булево встраивается в guard-команду (тот же приём, что guard add_node).
+  # 1. GUARD — remove_node_sid и seed_sid обязаны быть в roster и различаться (assert:,
+  #    ADR-009 amendment 2026-06-23; тот же механизм, что guard add_node). Предикат
+  #    вычисляется KEEPER-SIDE на РЕНДЕРЕ (там доступен soulprint.hosts; на Soul-е его
+  #    НЕТ). false ОБРЫВАЕТ render с message ДО любого dispatch — раньше и понятнее,
+  #    чем shell-test на хосте. assert НЕ emit RenderedTask.
   - name: Guard remove_node and seed are distinct members of the run roster
-    run_once: true
-    module: core.cmd.shell
-    changed_when: "false"
-    params:
-      cmd: >-
-        test "${ input.remove_node_sid != input.seed_sid && size(soulprint.hosts.where("sid == input.remove_node_sid")) == 1 && size(soulprint.hosts.where("sid == input.seed_sid")) == 1 }" = "true" || { echo "remove_node guard: remove_node_sid/seed_sid must be distinct hosts of the run roster"; exit 1; }
+    assert:
+      that:
+        - 'input.remove_node_sid != input.seed_sid && size(soulprint.hosts.where("sid == input.remove_node_sid")) == 1 && size(soulprint.hosts.where("sid == input.seed_sid")) == 1'
+      message: "remove_node guard: remove_node_sid/seed_sid must be distinct hosts of the run roster"
 
   # 2. REMOVE-NODE — run_once. Endpoint-ы строятся из roster (soulprint.hosts) по
   #    SID: node (удаляемая) и seed = {addr: "<primary_ip>:6379"}. Это ГОТОВАЯ

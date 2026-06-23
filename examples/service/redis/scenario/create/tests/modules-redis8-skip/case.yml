@@ -59,7 +59,7 @@ fixtures:
 assert:
   rendered_tasks:
     # redis.conf БЕЗ loadmodules (version-gate → пустой список): vars.loadmodules: [].
-    - index: 8
+    - index: 7
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -92,7 +92,7 @@ assert:
 
     # PING на index 23 (как modules-empty): modules-dir gated-placeholder на 22,
     # fetch-loop 0 задач (пустой modules после gate).
-    - index: 23
+    - index: 22
       module: community.redis.command
       params:
         addr: "127.0.0.1:6379"

@@ -80,12 +80,15 @@ passthrough-директивы оператора, SHALLOW last-wins ([templatin
 | `master_port` | integer, опц., default `6379`, min `1` | **(sentinel_only)** порт внешнего redis-master; уходит в `sentinel.conf` и в `community.redis.sentinel` (`monitor.port`) |
 | `users` | map `имя → {perms, state}` | ACL-юзеры; `perms` — полная ACL-строка Redis, `state` ∈ `on`/`off` |
 | `redis_settings` | object (passthrough) | произвольные директивы `redis.conf` key→value; **бьют всё** в итоговом merge |
-| `logrotate_enable` | boolean, default `true` | **(host-tuning)** ставить logrotate-конфиг `/etc/logrotate.d/redis`; opt-out, если ротация делается вне Soul Stack |
-| `sysctl_enable` | boolean, default `true` | **(host-tuning)** ставить drop-in `/etc/sysctl.d/30-redis.conf` (kernel-tuning под Redis) и применять `sysctl --system`; opt-out |
+| `modules` | array enum `search`/`json`/`timeseries`/`bloom`, опц. | **(Redis-модули)** алиасы загружаемых модулей (RediSearch/RedisJSON/RedisTimeSeries/RedisBloom) для Redis < 8; на Redis 8+ игнорируется (модули встроены). Пусто/не задан → модули не подключаются |
+| `modules_base_url` | string, обяз. при непустом `modules` | **(Redis-модули)** базовый URL источника `.so` (без арх-сегмента); destiny строит полный URL per-host как `<base_url>/<arch>/<имя.so>` |
+| `modules_sha256` | map `алиас → SHA-256` (голый hex), обяз. для каждого `modules` | **(Redis-модули)** контрольная сумма каждого `.so` (fail-closed: `core.url.fetched` верифицирует, mismatch → падение) |
 
-Параметра `thp_disable` **нет**: отключение Transparent Huge Pages — безусловный
-hardening-шаг (рекомендация Redis — THP даёт latency-спайки на fork RDB/AOF), а не
-выбор оператора. Подробнее — [«Host-tuning extras»](#host-tuning-extras).
+Параметров `logrotate_enable` / `sysctl_enable` / `thp_disable` во входном контракте
+**нет**: отключение Transparent Huge Pages, logrotate-конфиг и sysctl-тюнинг — **безусловный
+baseline** (рекомендация Redis / hardening, выровнено по sysctl-блоку Ansible-роли), а не
+операторский выбор. Эти задачи всегда активны и приходят в destiny через `apply.input`.
+Подробнее — [«Host-tuning extras»](#host-tuning-extras).
 
 Топология cluster задаётся **счётчиками** (`shards` + `replicas_per_shard`),
 а не списком хостов: сценарий проверяет, что число таргетированных souls roster-а
@@ -182,28 +185,30 @@ Master-election (кто master) — первый по SID хост; раскла
 ## Host-tuning extras
 
 Режим-агностичные per-host добавки, общие для всех режимов — реализованы в
-[`destiny/redis/tasks/extras.yml`](../../destiny/redis/tasks/extras.yml). Делятся на
-безусловный hardening и opt-out-тюнинг:
+[`destiny/redis/tasks/extras.yml`](../../destiny/redis/tasks/extras.yml). Все три —
+**безусловный baseline** (рекомендация Redis / hardening, не операторский выбор):
+operator-флагов нет, задачи рендерятся **всегда**.
 
 - **THP — безусловно.** Отключение Transparent Huge Pages — drop-in hardening
   (oneshot systemd-юнит `disable-thp.service` + `core.service.running enabled`),
-  рендерится **всегда**, без operator-флага. Это рекомендация Redis (THP даёт
-  latency-спайки на fork RDB/AOF), а не операторский выбор — поэтому параметра
-  `thp_disable` во входном контракте **нет**.
-- **logrotate — opt-out** (`logrotate_enable`, default `true`). Конфиг
-  `/etc/logrotate.d/redis` (ротация `/var/log/redis/*.log`, `copytruncate`). Снять
-  флаг, если ротация делается вне Soul Stack.
-- **sysctl — opt-out** (`sysctl_enable`, default `true`). Drop-in
-  `/etc/sysctl.d/30-redis.conf` + реактивный `sysctl -e --system` на его изменение
-  (`-e` глушит read-only/несуществующие ключи в контейнерах, не валя прогон). Набор
-  и значения kernel-параметров **выровнены 1:1 по sysctl-блоку Ansible-роли redis**
-  (память/fork-overcommit, swappiness, сетевые буферы, бэклоги, TCP-стек); источник
-  значений — данные-таблица [`essence/_default.yaml → sysctl_settings`](essence/_default.yaml)
-  (не во входе оператора — tuning под Redis, не операционный выбор). Блок `tcp_bbr`
-  роли НЕ перенесён (зависит от модуля ядра `tcp_bbr`, на Debian не загружен по
-  умолчанию) — отложен.
+  рендерится всегда. Это рекомендация Redis (THP даёт latency-спайки на fork
+  RDB/AOF), а не операторский выбор — поэтому параметра `thp_disable` во входном
+  контракте **нет**.
+- **logrotate — безусловно.** Конфиг `/etc/logrotate.d/redis` (ротация
+  `/var/log/redis/*.log`, `copytruncate`), рендерится всегда. Прежнего флага
+  `logrotate_enable` (opt-out) больше **нет** — задание `logrotate_enable: false`
+  отклонит input-валидация Keeper-а как `unknown_key`.
+- **sysctl — безусловно.** Drop-in `/etc/sysctl.d/30-redis.conf` + реактивный
+  `sysctl -e --system` на его изменение (`-e` глушит read-only/несуществующие ключи
+  в контейнерах, не валя прогон), рендерится всегда. Набор и значения kernel-
+  параметров **выровнены 1:1 по sysctl-блоку Ansible-роли redis** (память/fork-
+  overcommit, swappiness, сетевые буферы, бэклоги, TCP-стек); источник значений —
+  данные-таблица [`essence/_default.yaml → sysctl_settings`](essence/_default.yaml)
+  (не во входе оператора — tuning под Redis, не операционный выбор). Прежнего флага
+  `sysctl_enable` (opt-out) больше **нет**. Блок `tcp_bbr` роли НЕ перенесён
+  (зависит от модуля ядра `tcp_bbr`, на Debian не загружен по умолчанию) — отложен.
 
-Все три флага host-инвариантны → приходят в destiny через `apply.input`.
+Все три набора значений host-инвариантны → приходят в destiny через `apply.input`.
 
 ## Сценарии
 

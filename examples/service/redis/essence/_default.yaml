@@ -62,7 +62,8 @@ redis_config:
 
 # Данные-таблица kernel-параметров под Redis. scenario передаёт этот map в destiny
 # `redis` через apply.input.sysctl_settings → рендерится в /etc/sysctl.d/30-redis.conf
-# и применяется `sysctl --system` (gated input.sysctl_enable). Значения — СТРОКИ
+# и применяется `sysctl --system` БЕЗУСЛОВНО (host-tuning — рекомендация Redis, не
+# выбор оператора; операторского флага sysctl_enable нет). Значения — СТРОКИ
 # (multi-value параметры через пробел); range по map в шаблоне сортирует ключи
 # (детерминизм). Не во входе оператора: tuning под Redis, не операционный выбор.
 #

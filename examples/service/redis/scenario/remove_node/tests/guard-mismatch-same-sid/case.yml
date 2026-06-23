@@ -1,7 +1,9 @@
-# L0-испытание remove_node: GUARD-провал. remove_node_sid == seed_sid → guard
-# рендерится в "false" → отрендеренная команда даёт echo+exit 1 (на исполнении
-# порвёт прогон). Покрывает FALSE-ветку guard-предиката (парный с happy-кейсом).
-# Соответствие вычисляется KEEPER-SIDE при render (soulprint.hosts доступен).
+# L0-испытание remove_node: GUARD-провал. remove_node_sid == seed_sid → assert-guard
+# (ADR-009 amendment 2026-06-23) вычисляет предикат that[0] в FALSE на РЕНДЕРЕ
+# Keeper-side → render ОБРЫВАЕТСЯ ошибкой с message ДО любого dispatch (ни одной
+# задачи на Soul). Покрывает FALSE-ветку guard-предиката (парный с happy-кейсом).
+# Соответствие вычисляется KEEPER-SIDE при render (soulprint.hosts доступен);
+# harness ассертит обрыв через expect_render_error (ADR-023 amendment).
 name: remove_node guard fails when remove_node equals seed
 
 fixtures:
@@ -35,10 +37,7 @@ fixtures:
     remove_node_sid: node-3.example.com
     seed_sid: node-3.example.com
 
-assert:
-  rendered_tasks:
-    # GUARD рендерится в "false" → test "false" = "true" не проходит → echo+exit 1.
-    - index: 0
-      module: core.cmd.shell
-      params:
-        cmd: 'test "false" = "true" || { echo "remove_node guard: remove_node_sid/seed_sid must be distinct hosts of the run roster"; exit 1; }'
+# Render ОБРЫВАЕТСЯ assert-провалом guard-а: ожидаем ошибку рендера с message из
+# assert. expect_render_error взаимоисключим с assert.rendered_tasks (плана нет —
+# прогон не стартовал).
+expect_render_error: "remove_node guard: remove_node_sid/seed_sid must be distinct hosts of the run roster"

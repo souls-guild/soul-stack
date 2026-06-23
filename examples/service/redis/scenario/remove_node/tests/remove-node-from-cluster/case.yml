@@ -44,14 +44,11 @@ fixtures:
 
 assert:
   rendered_tasks:
-    # GUARD: remove_node != seed, оба в roster → "true" (test проходит, no-op).
-    - index: 0
-      module: core.cmd.shell
-      params:
-        cmd: 'test "true" = "true" || { echo "remove_node guard: remove_node_sid/seed_sid must be distinct hosts of the run roster"; exit 1; }'
-
+    # GUARD теперь assert: (remove_node != seed, оба в roster → that[0] true → render
+    # проходит, задача в план НЕ эмитится) → REMOVE-NODE сдвинут на −1 (1→0).
+    #
     # REMOVE-NODE run_once: endpoint-ы из roster по SID. node=node-3, seed=node-1.
-    - index: 1
+    - index: 0
       module: community.redis.cluster
       params:
         action: remove-node

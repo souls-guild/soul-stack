@@ -64,7 +64,7 @@ assert:
     # amendment) — обе задачи позиций не занимают → cluster-ветка сдвинута на −2 от
     # исходного плана (redis.conf→10, cluster-build→26).
     # redis.conf: merged config с cluster + TLS (вкл. tls-cluster yes) + port 0.
-    - index: 10
+    - index: 9
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -104,7 +104,7 @@ assert:
     # cluster-build: nodes-MAP на tls_port (7379), tls=true + tls_ca (плагин по TLS) +
     # mTLS client-cert (tls_cert/tls_key для взаимного cluster-bus, tls-cluster yes).
     # index 26 (−2 от исходного плана).
-    - index: 26
+    - index: 25
       module: community.redis.cluster
       params:
         action: create

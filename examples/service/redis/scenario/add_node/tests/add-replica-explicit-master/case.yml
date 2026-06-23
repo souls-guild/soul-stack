@@ -44,8 +44,9 @@ fixtures:
 
 assert:
   rendered_tasks:
+    # GUARD теперь assert: (в план не эмитится) → индекс add-node сдвинут на −1 (24→23).
     # ADD-NODE: master.addr = primary_ip хоста node-2 (явный master_sid).
-    - index: 24
+    - index: 23
       module: community.redis.cluster
       params:
         action: add-node

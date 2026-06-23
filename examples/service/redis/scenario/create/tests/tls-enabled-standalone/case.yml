@@ -58,7 +58,7 @@ fixtures:
 assert:
   rendered_tasks:
     # index 3 — TLS dir (core.file.directory, when tls_enable → АКТИВЕН): /etc/redis/tls.
-    - index: 3
+    - index: 2
       module: core.file.directory
       params:
         path: /etc/redis/tls
@@ -67,7 +67,7 @@ assert:
         mode: "0750"
 
     # index 4 — TLS server cert: PEM из vault → render_context.vars.tls_cert (ЦЕЛЫЙ PEM).
-    - index: 4
+    - index: 3
       module: core.file.rendered
       params:
         path: /etc/redis/tls/redis.crt
@@ -91,7 +91,7 @@ assert:
           essence: {}
 
     # index 5 — TLS private key: секрет-PEM из vault → render_context.vars.tls_key.
-    - index: 5
+    - index: 4
       module: core.file.rendered
       params:
         path: /etc/redis/tls/redis.key
@@ -115,7 +115,7 @@ assert:
           essence: {}
 
     # index 6 — TLS CA cert.
-    - index: 6
+    - index: 5
       module: core.file.rendered
       params:
         path: /etc/redis/tls/ca.crt
@@ -139,7 +139,7 @@ assert:
           essence: {}
 
     # index 8 — redis.conf: merged config несёт TLS-директивы + port 0 (tls_only).
-    - index: 8
+    - index: 7
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -176,7 +176,7 @@ assert:
 
     # index 23 — PING health-gate: при tls_only плагин по TLS (tls=true, addr на
     # tls_port, tls_ca = CA-PEM из vault). Доказывает «плагин ОБЯЗАН по TLS».
-    - index: 23
+    - index: 22
       module: community.redis.command
       params:
         addr: "127.0.0.1:7379"

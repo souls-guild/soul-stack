@@ -42,7 +42,8 @@ fixtures:
 
 assert:
   rendered_tasks:
-    - index: 24
+    # GUARD теперь assert: (в план не эмитится) → индекс add-node сдвинут на −1 (24→23).
+    - index: 23
       module: community.redis.cluster
       params:
         action: add-node

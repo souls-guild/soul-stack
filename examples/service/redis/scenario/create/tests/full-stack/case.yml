@@ -86,7 +86,7 @@ assert:
     # нереализованный redis_type. standalone реализован → "true" → no-op. Не ассертим.
 
     # ── destiny redis (standalone) ──────────────────────────────────────────
-    - index: 1
+    - index: 0
       module: core.pkg.installed
       params:
         name: redis-server
@@ -99,7 +99,7 @@ assert:
     # keeper-side vault()-пароль. ПОЧЕМУ map, а не список: range по map в шаблоне
     # сортирует ключи → детерминизм порядка строк (regress-guard на tiling-баг
     # 2026-06-22; прямой order-guard — destiny_redis_tmpl_test.go).
-    - index: 7
+    - index: 6
       module: core.file.rendered
       params:
         path: /etc/redis/users.acl
@@ -129,7 +129,7 @@ assert:
           essence: {}
 
     # redis.conf: ИТОГ merge(). Здесь живёт главный guard трансляции.
-    - index: 8
+    - index: 7
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -167,13 +167,13 @@ assert:
           role: ""
           essence: {}
 
-    - index: 11
+    - index: 10
       module: core.service.running
       params:
         name: redis-server
         enabled: true
 
-    - index: 12
+    - index: 11
       module: core.service.restarted
       params:
         name: redis-server
@@ -183,7 +183,7 @@ assert:
     # index 23: index 0 — mode-guard; standalone destiny ЭКСПАНДИТСЯ в 22 task-а
     # (1..22; sentinel-задачи в хвосте — placeholder-skip на standalone-прогоне;
     # 3 ручных daemon-reload убраны), PING сценария идёт следом (index 23).
-    - index: 23
+    - index: 22
       module: community.redis.command
       params:
         addr: "127.0.0.1:6379"

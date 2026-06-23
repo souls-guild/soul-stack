@@ -50,15 +50,12 @@ fixtures:
 
 assert:
   rendered_tasks:
-    # GUARD: new_node != seed, оба в roster → "true" (test проходит, no-op).
-    - index: 0
-      module: core.cmd.shell
-      params:
-        cmd: 'test "true" = "true" || { echo "add_node guard: new_node_sid/seed_sid must be distinct hosts of the run roster"; exit 1; }'
-
+    # GUARD теперь assert: (new_node != seed, оба в roster → that[0] true → render
+    # проходит, задача в план НЕ эмитится) — все индексы ниже сдвинуты на −1.
+    #
     # redis.conf рендерится на НОВОЙ ноде (render_context.self = node-9).
     # config = incarnation.state.redis_config (cluster-директивы), не перевычислен.
-    - index: 8
+    - index: 7
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -88,7 +85,7 @@ assert:
           essence: {}
 
     # health-gate на новой ноде: PING живого Redis перед вводом в кластер.
-    - index: 23
+    - index: 22
       module: community.redis.command
       params:
         addr: "127.0.0.1:6379"
@@ -97,7 +94,7 @@ assert:
 
     # ADD-NODE run_once: endpoint-ы из roster по SID. master.addr пуст (авто-выбор
     # наименее загруженного master-а делает плагин — scenario не транслирует).
-    - index: 24
+    - index: 23
       module: community.redis.cluster
       params:
         action: add-node

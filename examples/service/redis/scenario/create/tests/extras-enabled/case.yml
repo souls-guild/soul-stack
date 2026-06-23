@@ -1,12 +1,12 @@
-# L0-испытание create (standalone) — host-tuning extras ВКЛЮЧЕНЫ (концепция
-# Ansible-роли: transparent-hugepages + logrotate + sysctl, БЕЗ tcp_bbr). Guard на
-# то, что при logrotate_enable/sysctl_enable=true (дефолт) их блоки extras в хвосте
-# destiny `redis` РЕНДЕРЯТСЯ; THP-отключение безусловно (флага нет — всегда активно).
+# L0-испытание create (standalone) — host-tuning extras БЕЗУСЛОВНЫ (концепция
+# Ansible-роли: transparent-hugepages + logrotate + sysctl, БЕЗ tcp_bbr). Все три
+# extras — рекомендация Redis / hardening, НЕ выбор оператора: операторских флагов
+# нет, задачи в хвосте destiny `redis` рендерятся ВСЕГДА (никакого toggle, поэтому
+# контр-кейса на «отключено» больше нет). Guard на то, что THP + logrotate + sysctl
+# рендерятся при дефолтном входе.
 #
-# Extras — режим-агностичны и host-инвариантны: opt-out-флаги logrotate/sysctl
-# приходят через apply.input, sysctl_settings — данные-таблица essence (не во входе
-# оператора). Контр-кейс на снятые logrotate/sysctl — extras-disabled (placeholder-
-# skip logrotate/sysctl, THP остаётся активной).
+# Extras — режим-агностичны и host-инвариантны; sysctl_settings — данные-таблица
+# essence (не во входе оператора), доезжает в destiny через apply.input.
 #
 # Индексы хвоста destiny (standalone-прогон: mode-guard 0, destiny 1..22, PING 23;
 # ручные daemon-reload убраны — core.service делает reload сам):
@@ -15,7 +15,7 @@
 #   19 — render logrotate (/etc/logrotate.d/redis);
 #   20 — render sysctl drop-in (/etc/sysctl.d/30-redis.conf);
 #   21 — sysctl --system (core.exec.run, onchanges на drop-in).
-name: host-tuning extras render when enabled (thp + logrotate + sysctl)
+name: host-tuning extras always render (thp + logrotate + sysctl)
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
@@ -60,13 +60,12 @@ fixtures:
     # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
     # distro-native пин (мажор < 8 → version-gate модулей не активен).
     version: "7.2.4"
-    # Флаги extras не заданы явно → дефолт true (input scenario create default:true),
-    # все три блока активны.
+    # Флагов extras в контракте больше НЕТ: THP/logrotate/sysctl безусловны.
 
 assert:
   rendered_tasks:
     # ── transparent-hugepages ───────────────────────────────────────────────
-    - index: 17
+    - index: 16
       module: core.file.rendered
       params:
         path: /etc/systemd/system/disable-thp.service
@@ -77,14 +76,14 @@ assert:
 
     # daemon-reload убран: core.service (daemon_reload: auto) сам перечитывает unit
     # перед enable/start. disable-thp service.running идёт сразу следом за render.
-    - index: 18
+    - index: 17
       module: core.service.running
       params:
         name: disable-thp
         enabled: true
 
-    # ── logrotate ───────────────────────────────────────────────────────────
-    - index: 19
+    # ── logrotate (безусловно) ──────────────────────────────────────────────
+    - index: 18
       module: core.file.rendered
       params:
         path: /etc/logrotate.d/redis
@@ -93,10 +92,10 @@ assert:
         owner: root
         group: root
 
-    # ── sysctl drop-in ──────────────────────────────────────────────────────
+    # ── sysctl drop-in (безусловно) ─────────────────────────────────────────
     # vars.sysctl_settings — из essence (передан через apply.input). range по map
     # сортирует ключи → drop-in детерминирован.
-    - index: 20
+    - index: 19
       module: core.file.rendered
       params:
         path: /etc/sysctl.d/30-redis.conf
@@ -122,8 +121,18 @@ assert:
           role: ""
           essence: {}
 
-    - index: 21
+    - index: 20
       module: core.exec.run
       params:
         cmd: sysctl
         args: ["-e", "--system"]
+
+    # PING на index 23: extras занимают фиксированное число хвостовых слотов
+    # (5 задач, все безусловны) — ловит сдвиг плана, если кто-то добавит/уберёт
+    # extras-задачу.
+    - index: 22
+      module: community.redis.command
+      params:
+        addr: "127.0.0.1:6379"
+        password: s3cr3t-redis-pass-create
+        args: ["PING"]
