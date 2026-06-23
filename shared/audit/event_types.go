@@ -929,4 +929,22 @@ const (
 	EventTidingCreated EventType = "tiding.created"
 	EventTidingUpdated EventType = "tiding.updated"
 	EventTidingDeleted EventType = "tiding.deleted"
+
+	// EventOperatorLogin — оператор успешно прошёл федеративную аутентификацию
+	// (LDAP search-bind, ADR-058) и получил внутренний JWT через
+	// `POST /auth/ldap/login`. Пишется endpoint-ом ПОСЛЕ выпуска JWT (одно
+	// событие на успешный логин). `source: api`, `archon_aid` = аутентифицированный
+	// AID. Payload: `{method, aid, provisioned}` — `method` ∈ `ldap` (OIDC стадия 2);
+	// `provisioned` = true, если этот логин auto-провизионил нового оператора.
+	// Пароль / bind-creds / группы-секреты в payload НЕ кладутся (security-гигиена).
+	EventOperatorLogin EventType = "operator.login"
+
+	// EventOperatorProvisioned — auto-provision нового Архонта при первом
+	// федеративном логине (ADR-058): внешняя identity в группе из group_role_map
+	// → вставка строки `operators` с `auth_method=ldap` и ролями из групп. Пишется
+	// Mapper-ом при создании строки (одно событие на provision; login фиксируется
+	// отдельным `operator.login`). `source: api`, `archon_aid` = новый AID. Payload:
+	// `{aid, auth_method, display_name, roles, groups}` — роли/группы не секрет;
+	// пароль / bind-creds в payload НЕ кладутся.
+	EventOperatorProvisioned EventType = "operator.provisioned"
 )
