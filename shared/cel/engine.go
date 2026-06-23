@@ -235,13 +235,16 @@ func buildEngine(mode engineMode, vars []string, opts ...Option) (*Engine, error
 	}
 	// glob() — pure-функция shell-glob matching ([ADR-040], target.where).
 	// merge() — pure SHALLOW last-wins слияние map-ов ([ADR-010 Amendment
-	// 2026-06-22], трансляция простого input → детальный конфиг). Обе pure (без
+	// 2026-06-22], трансляция простого input → детальный конфиг). default() —
+	// pure macro «значение-или-дефолт» ([ADR-010 Amendment 2026-06-23], parity
+	// Ansible `| default()`; compile-time rewrite в has(x)?x:y). Все pure (без
 	// внешнего контекста), регистрируются в Keeper-full и flow-control env, но
 	// НЕ в migration-CEL ([ADR-019]): миграция — sandbox с минимумом surface area
 	// (только `state` + stdlib-операции), расширение требует отдельного ADR.
 	if !mode.migration {
 		envOpts = append(envOpts, globEnvOptions()...)
 		envOpts = append(envOpts, mergeEnvOptions()...)
+		envOpts = append(envOpts, defaultEnvOptions()...)
 	}
 
 	env, err := cel.NewEnv(envOpts...)

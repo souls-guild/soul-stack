@@ -328,7 +328,7 @@ state_changes:
                    : {},
                  has(input.maxmemory_policy) ? { 'maxmemory-policy': input.maxmemory_policy } : {}
                ),
-               has(input.redis_settings) ? input.redis_settings : {},
+               default(input.redis_settings, {}),
                {
                  'cluster-enabled':      'yes',
                  'cluster-config-file':  'nodes.conf',
@@ -337,7 +337,7 @@ state_changes:
                (has(essence.tls_enable) && essence.tls_enable)
                  ? merge(
                      {
-                       'tls-port':         string(has(essence.tls_port) ? int(essence.tls_port) : 7379),
+                       'tls-port':         string(int(default(essence.tls_port, 7379))),
                        'tls-cert-file':    '/etc/redis/tls/redis.crt',
                        'tls-key-file':     '/etc/redis/tls/redis.key',
                        'tls-ca-cert-file': '/etc/redis/tls/ca.crt',
@@ -357,11 +357,11 @@ state_changes:
                    : {},
                  has(input.maxmemory_policy) ? { 'maxmemory-policy': input.maxmemory_policy } : {}
                ),
-               has(input.redis_settings) ? input.redis_settings : {},
+               default(input.redis_settings, {}),
                (has(essence.tls_enable) && essence.tls_enable)
                  ? merge(
                      {
-                       'tls-port':         string(has(essence.tls_port) ? int(essence.tls_port) : 7379),
+                       'tls-port':         string(int(default(essence.tls_port, 7379))),
                        'tls-cert-file':    '/etc/redis/tls/redis.crt',
                        'tls-key-file':     '/etc/redis/tls/redis.key',
                        'tls-ca-cert-file': '/etc/redis/tls/ca.crt',
@@ -372,7 +372,7 @@ state_changes:
                  : {}
              ) }
   - set: redis_users
-    value: "${ has(input.users) ? input.users : {} }"
+    value: "${ default(input.users, {}) }"
   # redis_hosts пустой во ВСЕХ режимах: state_changes рендерятся per-host с
   # soulprint.SELF (AllowHosts=false, orchestration.md §7.1) — roster soulprint.hosts
   # тут НЕДОСТУПЕН (граница: state — per-run, роли раскладывает apply-сторона).
@@ -392,13 +392,13 @@ state_changes:
       ${ (input.redis_type == 'sentinel_only')
            ? {
                'master_name': input.sentinel_master_name,
-               'master_ip':   has(input.master_ip) ? input.master_ip : '',
-               'quorum':      has(input.sentinel_quorum) ? int(input.sentinel_quorum) : 0
+               'master_ip':   default(input.master_ip, ''),
+               'quorum':      int(default(input.sentinel_quorum, 0))
              }
            : (input.redis_type == 'sentinel')
            ? {
                'master_name': input.sentinel_master_name,
-               'quorum':      has(input.sentinel_quorum) ? int(input.sentinel_quorum) : 0
+               'quorum':      int(default(input.sentinel_quorum, 0))
              }
            : {} }
 

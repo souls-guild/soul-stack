@@ -71,7 +71,7 @@
       # контракта (отключение безусловно в destiny `redis`).
       logrotate_enable: "${ input.logrotate_enable }"
       sysctl_enable:    "${ input.sysctl_enable }"
-      sysctl_settings:  "${ has(essence.sysctl_settings) ? essence.sysctl_settings : {} }"
+      sysctl_settings:  "${ default(essence.sysctl_settings, {}) }"
       # TLS data-плоскости redis-server тут не разворачивается (deploy_redis=false →
       # PEM-задачи placeholder-skip). sentinel-демон TLS (:26379) — отдельный
       # follow-up (brief). Отдаём tls_enable=false → TLS-задачи destiny gated off.
@@ -85,7 +85,7 @@
         # has()-обёртка — RENDER-safety: master_ip обязателен (enforced master_ip-
         # guard выше run-time), но при пропуске render не должен падать CEL «no such
         # key» — отдаём "" (прогон уже рвёт guard с понятным сообщением).
-        master_ip:   "${ has(input.master_ip) ? input.master_ip : '' }"
+        master_ip:   "${ default(input.master_ip, '') }"
         master_port: "${ int(input.master_port) }"
         # quorum: input или большинство sentinel-ов прогона (size/2+1).
         quorum:      "${ has(input.sentinel_quorum) ? int(input.sentinel_quorum) : (int(size(soulprint.hosts)) / 2 + 1) }"
@@ -109,7 +109,7 @@
     monitor:
       # ВНЕШНИЙ master (host-инвариант): input.master_ip, НЕ soulprint.hosts.
       # has()-обёртка — render-safety (см. apply.input.sentinel.master_ip выше).
-      ip:     "${ has(input.master_ip) ? input.master_ip : '' }"
+      ip:     "${ default(input.master_ip, '') }"
       port:   "${ int(input.master_port) }"
       quorum: "${ has(input.sentinel_quorum) ? int(input.sentinel_quorum) : (int(size(soulprint.hosts)) / 2 + 1) }"
 

@@ -65,11 +65,11 @@
                  : {},
                has(input.maxmemory_policy) ? { 'maxmemory-policy': input.maxmemory_policy } : {}
              ),
-             has(input.redis_settings) ? input.redis_settings : {},
+             default(input.redis_settings, {}),
              (has(essence.tls_enable) && essence.tls_enable)
                ? merge(
                    {
-                     'tls-port':         string(has(essence.tls_port) ? int(essence.tls_port) : 7379),
+                     'tls-port':         string(int(default(essence.tls_port, 7379))),
                      'tls-cert-file':    '/etc/redis/tls/redis.crt',
                      'tls-key-file':     '/etc/redis/tls/redis.key',
                      'tls-ca-cert-file': '/etc/redis/tls/ca.crt',
@@ -96,20 +96,20 @@
         ${ (has(input.modules) && !input.version.matches('^([0-9]+:)?(8|9|[1-9][0-9])\\.'))
            ? input.modules
            : [] }
-      modules_base_url: "${ has(input.modules_base_url) ? input.modules_base_url : '' }"
-      modules_sha256:   "${ has(input.modules_sha256) ? input.modules_sha256 : {} }"
+      modules_base_url: "${ default(input.modules_base_url, '') }"
+      modules_sha256:   "${ default(input.modules_sha256, {}) }"
       # Host-tuning extras (концепция роли), режим-агностичны — те же флаги, что в
       # standalone/cluster. Host-инвариантны → apply.input. sysctl_settings — essence.
       # logrotate_enable/sysctl_enable — default:true → голый input.X. THP убран из
       # контракта (отключение безусловно в destiny `redis`).
       logrotate_enable: "${ input.logrotate_enable }"
       sysctl_enable:    "${ input.sysctl_enable }"
-      sysctl_settings:  "${ has(essence.sysctl_settings) ? essence.sysctl_settings : {} }"
+      sysctl_settings:  "${ default(essence.sysctl_settings, {}) }"
       # TLS PEM + флаги — HOST-ИНВАРИАНТ (один cert/CA на кластер) → apply.input
       # (см. standalone.yml). Источник — Vault-пути essence.
-      tls_enable: "${ has(essence.tls_enable) ? essence.tls_enable : false }"
-      tls_only:   "${ has(essence.tls_only) ? essence.tls_only : false }"
-      tls_port:   "${ has(essence.tls_port) ? int(essence.tls_port) : 7379 }"
+      tls_enable: "${ default(essence.tls_enable, false) }"
+      tls_only:   "${ default(essence.tls_only, false) }"
+      tls_port:   "${ int(default(essence.tls_port, 7379)) }"
       tls_cert:   "${ (has(essence.tls_enable) && essence.tls_enable) ? vault(essence.tls_cert_ref) : '' }"
       tls_key:    "${ (has(essence.tls_enable) && essence.tls_enable) ? vault(essence.tls_key_ref) : '' }"
       tls_ca:     "${ (has(essence.tls_enable) && essence.tls_enable) ? vault(essence.tls_ca_ref) : '' }"
@@ -133,9 +133,9 @@
   module: community.redis.command
   retry: { count: 10, delay: 3s }
   params:
-    addr:     "${ (has(essence.tls_enable) && essence.tls_enable) ? '127.0.0.1:' + string(has(essence.tls_port) ? int(essence.tls_port) : 7379) : '127.0.0.1:6379' }"
+    addr:     "${ (has(essence.tls_enable) && essence.tls_enable) ? '127.0.0.1:' + string(int(default(essence.tls_port, 7379))) : '127.0.0.1:6379' }"
     password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
-    tls:      "${ has(essence.tls_enable) ? essence.tls_enable : false }"
+    tls:      "${ default(essence.tls_enable, false) }"
     tls_ca:   "${ (has(essence.tls_enable) && essence.tls_enable) ? vault(essence.tls_ca_ref) : '' }"
     args:     ["PING"]
 
@@ -162,10 +162,10 @@
   where: "soulprint.self.sid != soulprint.hosts[0].sid"
   module: community.redis.replica
   params:
-    addr:        "${ (has(essence.tls_enable) && essence.tls_enable) ? '127.0.0.1:' + string(has(essence.tls_port) ? int(essence.tls_port) : 7379) : '127.0.0.1:6379' }"
-    master_addr: "${ soulprint.hosts[0].network.primary_ip + ':' + ((has(essence.tls_enable) && essence.tls_enable) ? string(has(essence.tls_port) ? int(essence.tls_port) : 7379) : '6379') }"
+    addr:        "${ (has(essence.tls_enable) && essence.tls_enable) ? '127.0.0.1:' + string(int(default(essence.tls_port, 7379))) : '127.0.0.1:6379' }"
+    master_addr: "${ soulprint.hosts[0].network.primary_ip + ':' + ((has(essence.tls_enable) && essence.tls_enable) ? string(int(default(essence.tls_port, 7379))) : '6379') }"
     password:    "${ vault('secret/redis/' + incarnation.name + '#password') }"
-    tls:         "${ has(essence.tls_enable) ? essence.tls_enable : false }"
+    tls:         "${ default(essence.tls_enable, false) }"
     tls_ca:      "${ (has(essence.tls_enable) && essence.tls_enable) ? vault(essence.tls_ca_ref) : '' }"
 
 # 5. SENTINEL MONITOR reconcile: plugin community.redis.sentinel на КАЖДОМ хосте
