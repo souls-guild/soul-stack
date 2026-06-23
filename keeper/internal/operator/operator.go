@@ -77,8 +77,10 @@ func ValidAID(aid string) bool { return aidRe.MatchString(aid) }
 // (ADR-014, docs/keeper/storage.md → таблица operators).
 //
 // JSON-теги — для будущего Operator API (M0.6). NULL-семантика SQL
-// маппится в указатели: CreatedByAID = nil у первого bootstrap-Archon-а,
-// RevokedAt = nil у активного.
+// маппится в указатели: CreatedByAID = nil у первого bootstrap-Archon-а
+// и у прочих строк без родителя (archon-system, федеративные — ADR-058(d)
+// легализовал NULL для не-bootstrap), RevokedAt = nil у активного.
+// «Это первый Архонт» определяется через CreatedVia, не через nil-родителя.
 type Operator struct {
 	AID          string         `json:"aid"`
 	DisplayName  string         `json:"display_name"`

@@ -13,7 +13,8 @@ import (
 
 // ErrOperatorAlreadyExists — UNIQUE-violation (`23505`) при Insert: AID
 // уже занят либо повторно вставляется bootstrap (partial unique index
-// `operators_first_archon_idx` на `created_by_aid IS NULL`).
+// `operators_first_archon_idx WHERE created_via='bootstrap'` — миграции
+// 084/085, ADR-058(d): инвариант перенесён с `created_by_aid IS NULL`).
 var ErrOperatorAlreadyExists = errors.New("operator: AID already exists")
 
 // ErrOperatorNotFound — SELECT не нашёл строку по AID. Возвращается
@@ -107,7 +108,8 @@ type ListFilter struct {
 //
 // Возврат:
 //   - [ErrOperatorAlreadyExists] на UNIQUE-violation (PK или
-//     partial unique index `operators_first_archon_idx`).
+//     partial unique index `operators_first_archon_idx WHERE
+//     created_via='bootstrap'` — миграции 084/085, ADR-058(d)).
 //   - wrapped fmt.Errorf на FK-violation (`created_by_aid` ссылается на
 //     несуществующий AID) с упоминанием SQLSTATE — caller может
 //     различить случай через сообщение.
