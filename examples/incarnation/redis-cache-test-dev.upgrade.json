@@ -1,12 +1,6 @@
 {
-  "_comment": "POST /v1/incarnation/upgrade — переход incarnation на новую версию service (с прогоном миграций state_schema)",
+  "_comment": "POST /v1/incarnations/{name}/upgrade — перевод incarnation на новую версию service (git-ref) одной tx + прогон миграций state_schema (ADR-019). to_version — git-ref сервиса (не номер state_schema_version); миграция 001_to_002 (state_schema v1 -> v2: redis_users список имён -> map name->{perms,state}) прогоняется, когда incarnation, созданный на более раннем ref со state_schema_version=1, переводится на ref консолидированного redis (state_schema_version=2). Тело: только name (echo, игнорируется) + to_version; прочие поля -> 400 (additionalProperties:false).",
 
   "name": "test-cache-redis-cl-dev",
-  "to_version": "v1.5.0",
-
-  "options": {
-    "dry_run": false,
-    "archon_aid": "archon-db-01",
-    "reason": "Pin to latest stable; state schema migrates 1 → 2"
-  }
+  "to_version": "v1.0.0"
 }
