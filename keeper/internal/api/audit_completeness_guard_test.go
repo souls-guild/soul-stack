@@ -69,6 +69,11 @@ var auditedWriteRoutes = map[route]auditedRoute{
 	{http.MethodPost, "/v1/operators/{aid}/revoke"}:      {events: []audit.EventType{audit.EventOperatorRevoked}},
 	{http.MethodPost, "/v1/operators/{aid}/issue-token"}: {events: []audit.EventType{audit.EventOperatorTokenIssued}},
 
+	// auth (self-audit внутри handler-а: login пишет operator.login после выпуска
+	// JWT, ВНЕ /v1, без middleware-audit-навески — ADR-058). provision (operator.
+	// provisioned) пишет Mapper, не endpoint — у этого роута одно login-событие.
+	{http.MethodPost, "/auth/ldap/login"}: {events: []audit.EventType{audit.EventOperatorLogin}, note: "self-audit: handler пишет operator.login после выпуска JWT (ADR-058, вне /v1)"},
+
 	// roles (middleware-audit).
 	{http.MethodPost, "/v1/roles"}:                          {events: []audit.EventType{audit.EventRoleCreated}},
 	{http.MethodDelete, "/v1/roles/{name}"}:                 {events: []audit.EventType{audit.EventRoleDeleted}},

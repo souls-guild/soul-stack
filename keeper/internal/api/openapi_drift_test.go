@@ -100,6 +100,11 @@ var pathAllowlist = map[route]string{
 	// и `POST /v1/push/apply` уже в allowlist выше.
 	{method: http.MethodGet, path: "/v1/push-runs"}: "UI-4 Push-runs global list: роут подключён ТОЛЬКО при non-nil pushH",
 
+	// auth.ldap login: роут подключён ТОЛЬКО при non-nil LDAPAuth (ADR-058);
+	// drift-test собирает router с LDAPAuth=nil → объявлен в спеке (prefix /auth),
+	// но в роутере отсутствует. ВНЕ /v1 (публичный вход, RequireJWT неприменим).
+	{method: http.MethodPost, path: "/auth/ldap/login"}: "ADR-058 LDAP login: роут подключён ТОЛЬКО при non-nil LDAPAuth (опц. блок auth.ldap в keeper.yml)",
+
 	// voyage.*-роуты подключаются ТОЛЬКО при non-nil voyageH (ADR-043 S5);
 	// drift-test собирает router с voyageH=nil, поэтому в спеке объявлены, но в
 	// роутере отсутствуют — документированный «opt-in»-блок (паттерн
@@ -191,6 +196,7 @@ func collectRoutes(t *testing.T) map[route]struct{} {
 		nil,   // tempoVoyageCreateLimits — nil допустим (RateLimit при nil-limiter не вызывает provider)
 		nil,   // tempoVoyagePreviewLimits — nil допустим (RateLimit при nil-limiter не вызывает provider)
 		false, // webUIEnabled — /ui вне /v1, drift-walker его не видит; держим выключенным для чистоты периметра
+		nil, // ldapAuth (LDAP не сконфигурирован в тесте)
 		nil,   // logger — допустим nil (handler-ы получают io.Discard внутри)
 	)
 

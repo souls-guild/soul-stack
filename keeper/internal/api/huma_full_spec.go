@@ -281,6 +281,14 @@ func fullSpecGroups() []specGroup {
 			registerHumaPushRunsList(api, handlers.PushSpecStub())
 			return nil
 		}},
+
+		// auth.* — федеративная аутентификация ВНЕ /v1 (ADR-058): группа на
+		// r.Route("/auth"), Operation.Path относителен (/ldap/login) → полный URL
+		// /auth/ldap/login. prefix "/auth", чтобы попасть в committed openapi.yaml.
+		{"/auth", func(api huma.API) error {
+			registerHumaLDAPLogin(api, ldapAuthSpecStub())
+			return nil
+		}},
 	}
 }
 

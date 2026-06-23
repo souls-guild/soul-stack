@@ -30,6 +30,8 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/auditpg"
 	keeperaugur "github.com/souls-guild/soul-stack/keeper/internal/augur"
+	keeperauth "github.com/souls-guild/soul-stack/keeper/internal/auth"
+	keeperldap "github.com/souls-guild/soul-stack/keeper/internal/auth/ldap"
 	"github.com/souls-guild/soul-stack/keeper/internal/bootstrap"
 	"github.com/souls-guild/soul-stack/keeper/internal/cadence"
 	"github.com/souls-guild/soul-stack/keeper/internal/cloudinit"
@@ -3699,7 +3701,7 @@ func sigilKeyVaultMount(s *config.KeeperSigil) string {
 // setupAPIServer — Operator API HTTP-сервер. RedisPinger передаётся только при
 // живом клиенте (typed-nil-guard). srv.Start() дёргается оркестратором
 // последним (блокирующий main loop), вне «setup».
-func (d *daemon) setupAPIServer(_ context.Context) error {
+func (d *daemon) setupAPIServer(ctx context.Context) error {
 	cfg := d.cfg
 	logger := d.logger
 	// RedisPinger для `/readyz`: передаём как health.Pinger ТОЛЬКО при живом
@@ -3718,6 +3720,15 @@ func (d *daemon) setupAPIServer(_ context.Context) error {
 	var soulPresence handlers.SoulPresence
 	if d.redisClient != nil {
 		soulPresence = topologyLeaseChecker{rc: d.redisClient}
+	}
+
+	// LDAP-аутентификация операторов (ADR-058): собираем при наличии auth.ldap.
+	// Резолв bind_password_ref/ca_ref из Vault + сборка Authenticator+Mapper.
+	// При отсутствии блока — nil (endpoint не монтируется, ADR-053 OPTIONAL-tier).
+	ldapAuth, err := d.setupLDAPAuth(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "keeper run: setup LDAP auth: %v\n", err)
+		return errSetupFailed
 	}
 
 	srv, err := api.NewServer(cfg.Listen.OpenAPI, api.Deps{
@@ -3833,6 +3844,9 @@ func (d *daemon) setupAPIServer(_ context.Context) error {
 		// /ui не монтируется. UI вшит в бинарь (go:embed) — внешнего бэкенда не
 		// требует, в отличие от Tempo/Toll.
 		WebUIEnabled: cfg.WebUIMounted(),
+		// LDAPAuth — федеративная LDAP-аутентификация (ADR-058). nil при
+		// отсутствии auth.ldap → endpoint /auth/ldap/login не монтируется.
+		LDAPAuth: ldapAuth,
 	}, logger)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: build HTTP server: %v\n", err)
@@ -3840,6 +3854,112 @@ func (d *daemon) setupAPIServer(_ context.Context) error {
 	}
 	d.apiServer = srv
 	return nil
+}
+
+// setupLDAPAuth собирает зависимости LDAP-логина (ADR-058) из keeper.yml::
+// auth.ldap. Возвращает (nil, nil) при отсутствии блока — endpoint тогда не
+// монтируется (ADR-053 OPTIONAL-tier, keeper стартует). Резолв секретов из
+// Vault (bind_password_ref → field `password`; tls.ca_ref → field `ca`),
+// зеркало bootstrap.LoadSigningKey (ParseRef → ReadKV → значение).
+func (d *daemon) setupLDAPAuth(ctx context.Context) (*api.LDAPAuthDeps, error) {
+	if d.cfg.Auth == nil || d.cfg.Auth.LDAP == nil {
+		return nil, nil
+	}
+	l := d.cfg.Auth.LDAP
+
+	bindPassword, err := readVaultField(ctx, d.vc, l.BindPasswordRef, "password")
+	if err != nil {
+		return nil, fmt.Errorf("auth.ldap.bind_password_ref: %w", err)
+	}
+	var caPEM []byte
+	if l.TLS.CARef != "" {
+		ca, err := readVaultField(ctx, d.vc, l.TLS.CARef, "ca")
+		if err != nil {
+			return nil, fmt.Errorf("auth.ldap.tls.ca_ref: %w", err)
+		}
+		caPEM = []byte(ca)
+	}
+
+	timeout := 0
+	if l.Timeout != "" {
+		dur, perr := config.ParseDuration(l.Timeout)
+		if perr != nil {
+			return nil, fmt.Errorf("auth.ldap.timeout: %w", perr)
+		}
+		timeout = int(dur / time.Second)
+	}
+
+	authn, err := keeperldap.New(keeperldap.Config{
+		URL:                l.URL,
+		StartTLS:           l.StartTLS,
+		TLSCA:              caPEM,
+		InsecureSkipVerify: l.TLS.InsecureSkipVerify,
+		BindMode:           keeperldap.BindMode(l.BindMode),
+		BindDN:             l.BindDN,
+		BindPassword:       bindPassword,
+		BaseDN:             l.BaseDN,
+		UserFilter:         l.UserFilter,
+		GroupFilter:        l.GroupFilter,
+		GroupAttr:          l.GroupAttr,
+		AIDAttr:            l.AIDAttr,
+		TimeoutSeconds:     timeout,
+	}, d.logger)
+	if err != nil {
+		return nil, err
+	}
+
+	mapper := keeperauth.NewMapper(keeperauth.MapperConfig{
+		GroupRoleMap: l.GroupRoleMap,
+		DB:           d.pool,
+		Audit:        d.auditWriter,
+		Logger:       d.logger,
+	})
+
+	return &api.LDAPAuthDeps{
+		Authenticator: authn,
+		Mapper:        mapper,
+		Issuer:        d.issuer,
+		TTL:           d.ttlDefault,
+		Audit:         d.auditWriter,
+		Logger:        d.logger,
+	}, nil
+}
+
+// readVaultField резолвит vault-ref (ParseRef → ReadKV) и достаёт строковое
+// значение поля field; при единственном строковом значении в KV — берёт его
+// (удобство dev-секретов с произвольным ключом). Зеркало
+// bootstrap.LoadSigningKey по структуре.
+func readVaultField(ctx context.Context, vc *keepervault.Client, ref, field string) (string, error) {
+	if vc == nil {
+		return "", fmt.Errorf("vault client is nil")
+	}
+	if ref == "" {
+		return "", fmt.Errorf("ref is empty")
+	}
+	path, err := keepervault.ParseRef(ref)
+	if err != nil {
+		return "", err
+	}
+	kv, err := vc.ReadKV(ctx, path)
+	if err != nil {
+		return "", fmt.Errorf("read vault %q: %w", path, err)
+	}
+	if v, ok := kv[field].(string); ok && v != "" {
+		return v, nil
+	}
+	// fallback: единственное строковое значение.
+	var only string
+	count := 0
+	for _, raw := range kv {
+		if s, ok := raw.(string); ok && s != "" {
+			only = s
+			count++
+		}
+	}
+	if count == 1 {
+		return only, nil
+	}
+	return "", fmt.Errorf("field %q not found (or ambiguous) in vault %q", field, path)
 }
 
 // setupMCPServer — MCP listener (M0.7.a). Поднимается только при заданном

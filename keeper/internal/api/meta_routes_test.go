@@ -95,6 +95,7 @@ func metaRouter(t *testing.T, verifier *keeperjwt.Verifier) http.Handler {
 		nil,   // tempoVoyageCreateLimits
 		nil,   // tempoVoyagePreviewLimits
 		false, // webUIEnabled — meta-тесты /ui не проверяют (guard в webui_routes_test.go)
+		nil, // ldapAuth (LDAP не сконфигурирован в тесте)
 		nil,   // logger
 	)
 }

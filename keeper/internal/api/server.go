@@ -316,6 +316,13 @@ type Deps struct {
 	// — осознанный «не монтировать»: /ui для них не нужен, mount требует embed-
 	// дерева. Внешнего бэкенда тоггл не требует (UI вшит в бинарь).
 	WebUIEnabled bool
+
+	// LDAPAuth — федеративная LDAP-аутентификация операторов (ADR-058,
+	// POST /auth/ldap/login). При nil endpoint не монтируется (opt-in-домен,
+	// паттерн pushH/errandH): keeper.yml::auth.ldap не задан → способ логина
+	// недоступен, Keeper стартует (ADR-053 OPTIONAL-tier). daemon собирает поле
+	// при наличии auth.ldap (резолв bind_password_ref/ca_ref из Vault).
+	LDAPAuth *LDAPAuthDeps
 }
 
 // RBACProvider — общая поверхность rbac-сервиса, нужная и middleware-у
@@ -643,7 +650,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 		}
 	}
 
-	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, roleH, synodH, sigilH, sigilKeyH, serviceH, augurH, oracleH, pushH, pushProviderH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, logger)
+	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, roleH, synodH, sigilH, sigilKeyH, serviceH, augurH, oracleH, pushH, pushProviderH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, logger)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,
