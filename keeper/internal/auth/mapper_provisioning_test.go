@@ -21,6 +21,43 @@ func newMapperWithGate(db operator.ExecQueryRower, grm map[string][]string, gate
 	return NewMapper(MapperConfig{Method: operator.AuthMethodLDAP, GroupRoleMap: grm, DB: db, Audit: &fakeAudit{}, ProvisioningGate: gate})
 }
 
+func newOIDCMapperWithGate(db operator.ExecQueryRower, grm map[string][]string, gate ProvisioningGate) *DBMapper {
+	return NewMapper(MapperConfig{Method: operator.AuthMethodOIDC, GroupRoleMap: grm, DB: db, Audit: &fakeAudit{}, ProvisioningGate: gate})
+}
+
+// TestMapper_OIDCDisabled_ProvisionRejected — ADR-058 стадия 2: политика без
+// oidc → auto-provision НОВОГО OIDC-оператора отвергнут (ErrProvisioningDisabled),
+// строка operators НЕ создаётся. Гейт проверяет именно метод "oidc" (а не ldap).
+func TestMapper_OIDCDisabled_ProvisionRejected(t *testing.T) {
+	db := &fakeMapperDB{existing: nil}
+	gate := fakeGate{allowed: map[string]bool{"user": true, "ldap": true}} // oidc запрещён
+	m := newOIDCMapperWithGate(db, map[string][]string{"ops": {"cluster-admin"}}, gate)
+
+	_, err := m.Map(context.Background(), ExternalIdentity{AID: "newbie", Username: "newbie", Groups: []string{"ops"}})
+	if !errors.Is(err, ErrProvisioningDisabled) {
+		t.Fatalf("Map err=%v, want ErrProvisioningDisabled", err)
+	}
+	if len(db.inserts) != 0 {
+		t.Errorf("Insert вызван %d раз, want 0 (provision отвергнут ДО Insert)", len(db.inserts))
+	}
+}
+
+// TestMapper_OIDCAllowed_ProvisionSucceeds — позитив: oidc∈methods → provision
+// проходит, оператор создаётся.
+func TestMapper_OIDCAllowed_ProvisionSucceeds(t *testing.T) {
+	db := &fakeMapperDB{existing: nil}
+	gate := fakeGate{allowed: map[string]bool{"oidc": true}}
+	m := newOIDCMapperWithGate(db, map[string][]string{"ops": {"cluster-admin"}}, gate)
+
+	got, err := m.Map(context.Background(), ExternalIdentity{AID: "alice", Username: "alice", Groups: []string{"ops"}})
+	if err != nil {
+		t.Fatalf("Map: %v", err)
+	}
+	if !got.Provisioned || len(db.inserts) != 1 {
+		t.Errorf("Provisioned=%v inserts=%d, want true/1", got.Provisioned, len(db.inserts))
+	}
+}
+
 // TestMapper_LdapDisabled_ProvisionRejected — B5 кейс 2: политика без ldap →
 // auto-provision НОВОГО federated-оператора отвергнут (ErrProvisioningDisabled),
 // строка operators НЕ создаётся (Insert не вызван).

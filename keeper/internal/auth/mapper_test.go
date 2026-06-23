@@ -301,3 +301,48 @@ func TestMapper_RolesDedupSorted(t *testing.T) {
 		}
 	}
 }
+
+// TestMapper_OIDCProvisionStampsOIDC — ADR-058 стадия 2 guard: mapper с
+// Method=oidc провижинит оператора с auth_method=oidc И created_via=oidc
+// (источник атрибутируется методом, не хардкодом ldap). Доказывает generalize
+// mapper-а под оба метода.
+func TestMapper_OIDCProvisionStampsOIDC(t *testing.T) {
+	db := &fakeMapperDB{existing: nil} // not found → provision
+	aw := &fakeAudit{}
+	m := NewMapper(MapperConfig{
+		Method:       operator.AuthMethodOIDC,
+		GroupRoleMap: map[string][]string{"ops": {"cluster-admin"}},
+		DB:           db,
+		Audit:        aw,
+	})
+
+	got, err := m.Map(context.Background(), ExternalIdentity{AID: "alice", Username: "alice", Groups: []string{"ops"}})
+	if err != nil {
+		t.Fatalf("Map: %v", err)
+	}
+	if !got.Provisioned {
+		t.Fatal("expected Provisioned=true")
+	}
+	if len(db.inserts) != 1 {
+		t.Fatalf("expected 1 Insert, got %d", len(db.inserts))
+	}
+	if db.inserts[0].authMethod != string(operator.AuthMethodOIDC) {
+		t.Errorf("Insert auth_method = %q, want oidc", db.inserts[0].authMethod)
+	}
+	if db.inserts[0].createdVia != operator.CreatedViaOIDC {
+		t.Errorf("Insert created_via = %v, want %q", db.inserts[0].createdVia, operator.CreatedViaOIDC)
+	}
+}
+
+// TestMapper_EmptyMethodRejected — defense-in-depth guard: mapper без явного
+// Method не должен молча создавать оператора (ErrAuthFailed, Insert не вызван).
+func TestMapper_EmptyMethodRejected(t *testing.T) {
+	db := &fakeMapperDB{existing: nil}
+	m := NewMapper(MapperConfig{GroupRoleMap: map[string][]string{"ops": {"cluster-admin"}}, DB: db, Audit: &fakeAudit{}})
+	if _, err := m.Map(context.Background(), ExternalIdentity{AID: "alice", Groups: []string{"ops"}}); !errors.Is(err, ErrAuthFailed) {
+		t.Fatalf("empty Method must fail with ErrAuthFailed, got %v", err)
+	}
+	if len(db.inserts) != 0 {
+		t.Errorf("empty Method must not provision, got %d inserts", len(db.inserts))
+	}
+}
