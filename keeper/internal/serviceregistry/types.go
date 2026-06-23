@@ -12,7 +12,9 @@ package serviceregistry
 
 import (
 	"errors"
+	"fmt"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -39,6 +41,15 @@ var (
 	ErrSettingNotFound = errors.New("serviceregistry: setting key not found")
 	// ErrInvalidSettingKey — key не по формату keeper_settings_key_format.
 	ErrInvalidSettingKey = errors.New("serviceregistry: invalid setting key")
+
+	// ErrEmptyProvisioningMethods — ключ provisioning_allowed_methods ЗАДАН, но
+	// распарсенный набор пуст (значение пустое / только пробелы / только запятые).
+	// Это config-ERROR (anti-lockout): пустая политика заблокировала бы СОЗДАНИЕ
+	// операторов всеми методами (user/ldap/oidc) — оператор не должен залочить
+	// себя молча. Дефолт «всё разрешено» сигнализируется ОТСУТСТВИЕМ ключа, а не
+	// пустым значением.
+	ErrInvalidProvisioningMethod = errors.New("serviceregistry: provisioning method must be one of {user,ldap,oidc}")
+	ErrEmptyProvisioningMethods  = errors.New("serviceregistry: provisioning_allowed_methods is set but empty (anti-lockout)")
 )
 
 // NamePattern — каноническая форма имени Service-а: совпадает с CHECK
@@ -68,7 +79,53 @@ func ValidSettingKey(key string) bool { return settingKeyRe.MatchString(key) }
 const (
 	// SettingDefaultDestinySource — дефолтный git-источник Destiny.
 	SettingDefaultDestinySource = "default_destiny_source"
+
+	// SettingProvisioningAllowedMethods — CSV из домена {user,ldap,oidc}: список
+	// разрешённых способов СОЗДАНИЯ оператора (created_via-методов). Гейтит только
+	// ветку создания (POST /v1/operators → "user"; federated auto-provision →
+	// "ldap"/"oidc"); bootstrap/system НЕ гейтятся никогда. ОТСУТСТВИЕ ключа =
+	// всё разрешено (back-compat); ЗАДАН-но-пустой = config-error
+	// ([ErrEmptyProvisioningMethods], anti-lockout). Семантика парсинга —
+	// [ParseProvisioningMethods].
+	SettingProvisioningAllowedMethods = "provisioning_allowed_methods"
 )
+
+// provisioningMethodDomain — закрытый набор created_via-методов, которые можно
+// указать в политике provisioning_allowed_methods. bootstrap/system сюда НЕ
+// входят: они не гейтятся (bootstrap первого Архонта через `keeper init`,
+// system — внутренние записи) — попытка задать их в политике = ошибка.
+var provisioningMethodDomain = map[string]struct{}{
+	"user": {},
+	"ldap": {},
+	"oidc": {},
+}
+
+// ParseProvisioningMethods парсит CSV-значение политики provisioning_allowed_methods
+// в set разрешённых методов. Семантика:
+//   - split по ',', trim пробелов, отбрасывание пустых элементов, lowercase;
+//   - каждый элемент валидируется против [provisioningMethodDomain] ({user,ldap,
+//     oidc}); невалидный → [ErrInvalidProvisioningMethod];
+//   - пустой результат (csv="" / только запятые-пробелы) → [ErrEmptyProvisioningMethods].
+//
+// «Ключ отсутствует» обрабатывается ВЫШЕ (PoolSource.Load: ErrSettingNotFound →
+// политика не задана), сюда передаётся только заданное значение.
+func ParseProvisioningMethods(csv string) (map[string]bool, error) {
+	out := make(map[string]bool)
+	for _, part := range strings.Split(csv, ",") {
+		m := strings.ToLower(strings.TrimSpace(part))
+		if m == "" {
+			continue
+		}
+		if _, ok := provisioningMethodDomain[m]; !ok {
+			return nil, fmt.Errorf("%w: %q", ErrInvalidProvisioningMethod, m)
+		}
+		out[m] = true
+	}
+	if len(out) == 0 {
+		return nil, ErrEmptyProvisioningMethods
+	}
+	return out, nil
+}
 
 // ServiceEntry — runtime-представление строки реестра service_registry. Несёт
 // git-координаты Service-а (Name/Git/Ref, ADR-007) плюс audit-метаданные;
