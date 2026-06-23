@@ -59,7 +59,15 @@ func TestAcceptance_RestartBlockFanOut(t *testing.T) {
 		t.Fatalf("Stratify: %v", err)
 	}
 
-	p := NewPipeline(nil, newEngine(t), nil, nil)
+	// Health-gate block-потомок (community.redis.pinged) рендерит params с
+	// vault('secret/redis/redis-prod#password') — движок с фикстурным KVReader-ом
+	// (паттерн TestAcceptance_SentinelReplicaExcludesMaster). essence не задан →
+	// essence.tls_enable отсутствует → plaintext-ветка (default false).
+	engine, err := cel.New(cel.WithVault(stubKV{"secret/redis/redis-prod": {"password": "fixture-redis-pass-16+"}}))
+	if err != nil {
+		t.Fatalf("cel.New(WithVault): %v", err)
+	}
+	p := NewPipeline(stubKV{}, engine, nil, nil)
 	in := RenderInput{
 		Scenario:    m,
 		Input:       map[string]any{},
@@ -71,11 +79,13 @@ func TestAcceptance_RestartBlockFanOut(t *testing.T) {
 		},
 		TaskPassage:   plan.TaskPassage,
 		ActivePassage: 1, // Passage 1 — где живёт block (passage_plan [0 1 1]: probe→block+restart-master).
-		// Per-host register Passage 0 (probe redis_role): a=master, b/c=slave.
+		// Per-host register Passage 0 (probe redis_role через community.redis.role):
+		// a=master, b/c=slave. Поле register.redis_role.role (Output плагина), НЕ
+		// .stdout (shell-probe заменён на community.redis.role, go-redis INFO replication).
 		RegisterByHost: map[string]map[string]any{
-			"a.example.com": {"redis_role": map[string]any{"stdout": "master"}},
-			"b.example.com": {"redis_role": map[string]any{"stdout": "slave"}},
-			"c.example.com": {"redis_role": map[string]any{"stdout": "slave"}},
+			"a.example.com": {"redis_role": map[string]any{"role": "master"}},
+			"b.example.com": {"redis_role": map[string]any{"role": "slave"}},
+			"c.example.com": {"redis_role": map[string]any{"role": "slave"}},
 		},
 		Destiny: redisResolver{},
 	}
@@ -98,7 +108,7 @@ func TestAcceptance_RestartBlockFanOut(t *testing.T) {
 			continue
 		}
 		switch tk.Name {
-		case "Restart redis-server", "Wait until replica is healthy again":
+		case "Restart redis-server", "Wait until replica answers PONG again":
 			blockChildren[tk.Name] = tk
 			blockPlans[tk.Name] = &plans[i]
 		}

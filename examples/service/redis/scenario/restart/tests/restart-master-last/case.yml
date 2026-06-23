@@ -1,12 +1,17 @@
 # L0-испытание restart: рестарт master-а (probe→where master, run_once). Парный
 # к rolling-restart-replicas — покрывает master-ветку where probe→role. Roster — 2
-# хоста; mocks.register.redis_role.stdout = master → block-потомки (where slave) —
+# хоста; mocks.register.redis_role.role = master → block-потомки (where slave) —
 # placeholder-skip, master-restart (where master, run_once) рендерится.
 #
+# ★ Probe — community.redis.role (go-redis INFO replication), НЕ raw redis-cli:
+# поле register.redis_role.role (Output плагина), НЕ .stdout.
+#
 # Что ассертим:
-#   1. block-потомки (Restart + Wait) — placeholder-skip (Params == nil): на
+#   1. probe (community.redis.role) рендерит params коннекта (addr localhost,
+#      пароль из vault, plaintext-ветка).
+#   2. block-потомки (Restart + Wait-PONG) — placeholder-skip (Params == nil): на
 #      master-payload-е where slave не матчит.
-#   2. master-restart (core.service.restarted, where master, run_once) рендерится
+#   3. master-restart (core.service.restarted, where master, run_once) рендерится
 #      (Params != nil): рестарт текущего master-а последним.
 #
 # ВНИМАНИЕ L0-ограничение: mocks.register — ЕДИНЫЙ payload на весь roster (см.
@@ -31,18 +36,28 @@ fixtures:
   input:
     reason: "restart master for L0"
 
+  # Пароль Redis — probe резолвит vault('secret/redis/restart#password')
+  # (incarnation.name == имя сценария == restart). essence.tls_enable не задан →
+  # plaintext-ветка коннекта.
+  vault:
+    secret/redis/restart:
+      password: fixture-redis-pass-16+
+
 mocks:
   register:
     redis_role:
-      stdout: master
+      role: master
 
 assert:
   rendered_tasks:
-    # ── probe (core.cmd.shell): redis-cli role с trim '\n' ───────────────────
+    # ── probe (community.redis.role): go-redis INFO replication, без redis-cli ──
     - index: 0
-      module: core.cmd.shell
+      module: community.redis.role
       params:
-        cmd: "redis-cli role | head -1 | tr -d '\\n'"
+        addr: "127.0.0.1:6379"
+        password: fixture-redis-pass-16+
+        tls: false
+        tls_ca: ""
 
     # ── master-restart (core.service.restarted, where master, run_once) ──────
     - index: 3
