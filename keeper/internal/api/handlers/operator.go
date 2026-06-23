@@ -379,6 +379,7 @@ type OperatorView struct {
 	BootstrapInitial bool
 	CreatedAt        time.Time
 	CreatedByAID     *string
+	CreatedVia       string
 	DisplayName      string
 	Metadata         map[string]any
 	RevokedAt        *time.Time
@@ -391,6 +392,7 @@ func toOperatorView(op *operator.Operator) OperatorView {
 		AuthMethod:       string(op.AuthMethod),
 		CreatedAt:        op.CreatedAt.UTC().Truncate(time.Second),
 		CreatedByAID:     op.CreatedByAID,
+		CreatedVia:       op.CreatedVia,
 		BootstrapInitial: op.IsBootstrap(),
 		Metadata:         op.Metadata,
 	}

@@ -41,13 +41,14 @@ func TestGoldenWire_OperatorReply(t *testing.T) {
 		OperatorCreateReply{AID: "archon-alice", CreatedAt: ts, CreatedByAID: aid, DisplayName: "Alice", JWT: "ey.tok", Roles: nil},
 		`{"aid":"archon-alice","created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-bob","display_name":"Alice","jwt":"ey.tok"}`)
 
-	// --- Operator (GET + list-element): enum auth_method + omitempty nullable ---
+	// --- Operator (GET + list-element): enum auth_method + omitempty nullable +
+	// created_via (ВСЕГДА присутствует, без omitempty) ---
 	goldenOperatorWire(t, "Operator/full",
-		Operator{AID: "archon-alice", AuthMethod: OperatorAuthMethod("jwt"), BootstrapInitial: false, CreatedAt: ts, CreatedByAID: &aid, DisplayName: "Alice", Metadata: &meta, RevokedAt: &ts2},
-		`{"aid":"archon-alice","auth_method":"jwt","bootstrap_initial":false,"created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-bob","display_name":"Alice","metadata":{"team":"ops","tier":1},"revoked_at":"2026-06-13T01:02:03.456789012Z"}`)
+		Operator{AID: "archon-alice", AuthMethod: OperatorAuthMethod("jwt"), BootstrapInitial: false, CreatedAt: ts, CreatedByAID: &aid, CreatedVia: "user", DisplayName: "Alice", Metadata: &meta, RevokedAt: &ts2},
+		`{"aid":"archon-alice","auth_method":"jwt","bootstrap_initial":false,"created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-bob","created_via":"user","display_name":"Alice","metadata":{"team":"ops","tier":1},"revoked_at":"2026-06-13T01:02:03.456789012Z"}`)
 	goldenOperatorWire(t, "Operator/bootstrap_nil_optionals",
-		Operator{AID: "archon-alice", AuthMethod: OperatorAuthMethod("jwt"), BootstrapInitial: true, CreatedAt: ts, CreatedByAID: nil, DisplayName: "Alice", Metadata: nil, RevokedAt: nil},
-		`{"aid":"archon-alice","auth_method":"jwt","bootstrap_initial":true,"created_at":"2026-06-14T12:34:56.789012345Z","display_name":"Alice"}`)
+		Operator{AID: "archon-alice", AuthMethod: OperatorAuthMethod("jwt"), BootstrapInitial: true, CreatedAt: ts, CreatedByAID: nil, CreatedVia: "bootstrap", DisplayName: "Alice", Metadata: nil, RevokedAt: nil},
+		`{"aid":"archon-alice","auth_method":"jwt","bootstrap_initial":true,"created_at":"2026-06-14T12:34:56.789012345Z","created_via":"bootstrap","display_name":"Alice"}`)
 
 	// --- IssueTokenReply: date-time + SENSITIVE jwt ---
 	goldenOperatorWire(t, "IssueTokenReply",

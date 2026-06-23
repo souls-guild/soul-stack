@@ -324,7 +324,7 @@ func TestHumaOperator_List_GoldenWire(t *testing.T) {
 		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	const golden = `{"items":[{"aid":"archon-bob","auth_method":"jwt","bootstrap_initial":true,"created_at":"2026-06-13T10:00:00Z","display_name":"Bob"}],"limit":50,"offset":0,"total":1}`
+	const golden = `{"items":[{"aid":"archon-bob","auth_method":"jwt","bootstrap_initial":true,"created_at":"2026-06-13T10:00:00Z","created_via":"bootstrap","display_name":"Bob"}],"limit":50,"offset":0,"total":1}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire-дрейф operator.list:\n got  = %s\n want = %s", got, golden)
 	}
@@ -427,7 +427,7 @@ func TestHumaOperator_Get_GoldenWire(t *testing.T) {
 		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	const golden = `{"aid":"archon-bob","auth_method":"jwt","bootstrap_initial":true,"created_at":"2026-06-13T10:00:00Z","display_name":"Bob"}`
+	const golden = `{"aid":"archon-bob","auth_method":"jwt","bootstrap_initial":true,"created_at":"2026-06-13T10:00:00Z","created_via":"bootstrap","display_name":"Bob"}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire-дрейф operator.get:\n got  = %s\n want = %s", got, golden)
 	}
