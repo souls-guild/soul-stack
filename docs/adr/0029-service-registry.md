@@ -26,6 +26,15 @@
 
   **(f) `default_module_source` не переносится.** Мёртвое поле без потребителя — упраздняется без замены (не появляется ни в `keeper_settings`, ни в API). Если резолв модулей через шаблон понадобится — заводится отдельным решением как новый well-known ключ `keeper_settings` (расширение без миграции).
 
+  **(g) Well-known ключи `keeper_settings` (растущий список).** Таблица `keeper_settings` — нетипизированный key-value (см. (a)/(b)); новые well-known ключи добавляются **без миграции таблицы** (только новая строка + потребитель). Зафиксированные ключи:
+
+  | Ключ | Значение | Семантика |
+  |---|---|---|
+  | **`default_destiny_source`** | git-source-строка | MVP-скаляр: дефолтный источник Destiny-каталога для резолва `apply: destiny` (ADR-009, (c)). absent → потребитель использует per-entry `destiny[].git`. |
+  | **`provisioning_allowed_methods`** | CSV из домена `{user, ldap, oidc}` | Политика разрешённых методов **СОЗДАНИЯ** оператора ([ADR-058(i)](0058-operator-auth-ldap-oidc.md#adr-058-федеративная-аутентификация-операторов-archon--ldap--oauth2oidc)). **absent** → все способы разрешены (back-compat). **Заданный-но-пустой** → config-error на load снимка (anti-lockout: нельзя запретить все методы создания). `bootstrap`/`system` в домен НЕ входят (никогда не гейтятся). Гейтит только ветку создания оператора; runtime-управление — `GET`/`PUT /v1/provisioning-policy`. |
+
+  Снимок `serviceregistry.Holder` парсит оба ключа на build (как `DefaultDestinySource()`); геттеры синхронные (lock-free atomic.Pointer.Load).
+
 - **Обоснование.** Зеркально [ADR-028](0028-rbac-storage.md#adr-028-rbac-storage--postgres): соответствие [ADR-005](0005-storage-postgres.md#adr-005-хранилище-состояния-keeper--postgres) (managed runtime-state в Postgres) и [ADR-002](0002-transport-grpc-ha.md#adr-002-транспорт-keeper--souls--grpc-bidirectional-stream-поверх-mtls-ha-кластер-keeper) (общий PG → реестр одинаков на всём кластере без раскатки YAML по нодам). Service встаёт в один ряд с Incarnation/Provider/Profile — все managed через API, source of truth — БД, git хранит только код Service-репо (граница git↔Postgres сохранена: в БД координаты `name → git@ref`, не код).
 
 - **Реконсиляция ADR.**
