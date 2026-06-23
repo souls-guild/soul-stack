@@ -34,7 +34,7 @@ import (
 //
 // Исполняется ДО host-dispatch-а (run.go): keeper-шаги в реальных сценариях идут
 // первыми (provision/coven-bind → затем apply на хостах, см.
-// redis-cluster/create). Cross-task chaining keeper-register → host-render
+// redis/create). Cross-task chaining keeper-register → host-render
 // в пилоте недоступен (in.Register пуст — future), поэтому порядок «keeper, потом
 // hosts» функционально достаточен.
 //

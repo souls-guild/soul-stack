@@ -64,7 +64,7 @@ Backend берётся из soulprint-факта `os.pkg_mgr` (**primary**, [ADR
     version: "${ has(input.version) ? input.version : '' }"
 ```
 
-(из [`examples/destiny/redis-single/tasks/main.yml`](../../../../examples/destiny/redis-single/tasks/main.yml))
+(рабочая установка `redis-server` — в [`examples/destiny/redis/tasks/install.yml`](../../../../examples/destiny/redis/tasks/install.yml); там `version` сделан `required: true` и читается голым `input.version`, без тернара — это выбор destiny, а не ограничение модуля: пустой `version` ставит дефолт из репо)
 
 ## Безопасность
 

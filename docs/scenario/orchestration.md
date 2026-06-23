@@ -487,7 +487,7 @@ register.<X>.map(k, register.<X>[k].stdout).filter(v, v != '')[0]
   пусто (на репликах probe primary-адреса печатает пустую строку), берёт первый
   оставшийся.
 
-Пример (`add_replicas`, primary discovery):
+Пример (primary discovery перед точечной переконфигурацией реплик):
 
 ```yaml
 - name: Detect actual redis primary address on existing hosts
@@ -503,7 +503,7 @@ register.<X>.map(k, register.<X>[k].stdout).filter(v, v != '')[0]
   on: ["${ incarnation.name }"]
   where: soulprint.self.sid in input.replicas
   apply:
-    destiny: redis-replication-config
+    destiny: redis
     input:
       master_addr: "${ register.master_addr.map(k, register.master_addr[k].stdout).filter(v, v != '')[0] }"
 ```

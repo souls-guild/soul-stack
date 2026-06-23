@@ -16,11 +16,10 @@ import (
 // `a0af3d90ec118aafd`: L3a/L3b — независимые test-frequencies (stub vs real soul),
 // общий harness недоступен через module-границу.
 //
-// Зачем seed нужен на L3b: сервисы вроде examples/service/redis-cluster имеют
-// create-сценарий, неприменимый офлайн (cloud-spawn / declared-primary / probe на
-// ещё-не-запущенном redis), поэтому incarnation засевается напрямую с baseline
-// state, а тестируется мутирующий сценарий (update_acl) поверх живого redis,
-// поднятого отдельно.
+// Зачем seed нужен на L3b: некоторые сервисы имеют create-сценарий, неприменимый
+// офлайн (cloud-spawn / declared-primary / probe на ещё-не-запущенном демоне),
+// поэтому incarnation засевается напрямую с baseline state, а тестируется
+// мутирующий сценарий поверх живого демона, поднятого отдельно.
 
 // SeedIncarnationReady вставляет готовую (status='ready') incarnation с baseline
 // state напрямую в Postgres. spec — пустой `{}` (для мутирующих сценариев spec
@@ -57,11 +56,10 @@ type SpecHostDecl struct {
 // при резолве `soulprint.hosts.where("role == 'primary'")` в create-scenario.
 //
 // Зачем отдельный helper: POST /v1/incarnations НЕ принимает declared spec.hosts
-// (ADR-008, ровно как поясняет ТЗ), а bootstrap-create
-// (examples/service/redis-cluster/scenario/create) этим declared-ролям обязан
-// (replication.yml / ensure_users таргетят primary по
-// `soulprint.hosts.where("role == 'primary'")[0]`). Прямой SQL-seed spec.hosts
-// ДО RunScenario(create) закрывает разрыв «declared-роль недоступна офлайн».
+// (ADR-008, ровно как поясняет ТЗ), а bootstrap-create-сценарии, таргетящие
+// primary по `soulprint.hosts.where("role == 'primary'")[0]`, этим declared-ролям
+// обязаны. Прямой SQL-seed spec.hosts ДО RunScenario(create) закрывает разрыв
+// «declared-роль недоступна офлайн».
 //
 // status='ready' → штатный RunScenario(create) проходит lock-gate (lockRun
 // стартует обычный прогон из ready, run.go), без FromLocked-хака.

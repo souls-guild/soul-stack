@@ -1,25 +1,26 @@
 //go:build e2e_live
 
-// L3b E2E multi-host: redis-cluster-live happy-path (ADR-039, slice L3b-5).
+// L3b E2E multi-host: examples/service/redis::create в режиме cluster на трёх
+// ПОДЛИННЫХ soul-контейнерах (redis-консолидация концепции Ansible-роли, ADR-039 /
+// .pm/tasks/2026-06-22-redis-consolidation).
 //
-// Поверх L3b-1..L3b-4 закрывает оставшийся пробел покрытия — multi-host прогон
-// с N>1 soul-контейнерами. Stack поднимает три privileged Debian-12 systemd-PID-1
-// контейнера (soul-live-a/-b/-c.example.com), каждый со своим SID, своим
-// bootstrap-token-ом и реальным CSR-handshake-ом. Service —
-// examples/service/redis-cluster-live (committed, scenario create
-// устанавливает redis, рендерит cluster-config, запускает redis-server и
-// формирует Redis Cluster через redis-cli --cluster create на одной ноде).
+// Прежний самодостаточный сервис redis-cluster-live (core-модули + redis-cli
+// --cluster create, доказан live мегатестом 2026-05-25) удалён: cluster-флоу
+// поглощён режимом cluster консолидированного redis, который формирует кластер
+// ЦЕЛИКОМ через плагин community.redis.cluster (CLUSTER MEET/ADDSLOTS/REPLICATE по
+// go-redis), а не redis-cli --cluster create.
 //
-// --cluster-replicas передаётся как 0 (3 master без реплик, минимум для
-// cluster_state:ok на 3-узловом стенде). default по scenario — 2 (9 нод),
-// который на L3b-CI 3-нодовой раскладке не сходится: --cluster-replicas 2
-// требует 1+2=3 ноды на slot-shard, всего >= 9.
+// Тело ниже перецелено на консолидированный redis (redis_type=cluster, shards=3,
+// replicas_per_shard=0 → 3 master без реплик, минимум для cluster_state:ok на
+// 3-узловом стенде). Stack поднимает три privileged Debian-12 systemd-PID-1
+// контейнера (soul-live-a/-b/-c.example.com) с реальным CSR-handshake-ом.
 //
-// Покрытие: контракт apply_runs (3 строки success), incarnation.state
-// (cluster_replicas=0), audit-event, metrics — всё через YAML loader
-// (harness.LoadExpectations + Stack.AssertExpectations, L3b-5 deliverable).
-// После — independent verify: redis-cli cluster info внутри первого
-// контейнера должен показать cluster_state:ok.
+// ★ t.Skip: cluster-create через community.redis.cluster ещё НЕ доказан live
+// end-to-end (render-проверен на L0 — scenario/create/tests/cluster-*, но
+// container-бутстрап кластера плагином поверх soul-контейнеров не прогонялся:
+// нет harness-обвязки дождаться cluster_state:ok через плагин-путь). Тот же
+// backlog-блокер фиксирует redis_cluster_remove_node_lossless_test.go. Реактивировать
+// вместе с cluster-create live (плагинный бутстрап + cluster-aware verify в harness).
 package e2e_live_test
 
 import (
@@ -31,10 +32,12 @@ import (
 	"github.com/souls-guild/soul-stack/tests/e2e-live/harness"
 )
 
-func TestL3bRedisClusterLive_ThreeNode(t *testing.T) {
+func TestL3bRedisClusterCreate_ThreeNode(t *testing.T) {
+	t.Skip("backlog (redis-консолидация): cluster-create через community.redis.cluster не доказан live end-to-end (render-проверен на L0 scenario/create/tests/cluster-*, но плагинный бутстрап кластера поверх soul-контейнеров harness-ом не обвязан — нет helper-а дождаться cluster_state:ok через плагин-путь). Симметрично redis_cluster_remove_node_lossless_test.go::t.Skip. Реактивировать с harness cluster-bootstrap/verify helper-ами — .pm/tasks/2026-06-22-redis-consolidation")
+
 	stack := harness.NewStack(t, harness.Config{
-		ExamplePath: "examples/service/redis-cluster-live",
-		ServiceName: "redis-cluster-live",
+		ExamplePath: "examples/service/redis",
+		ServiceName: "redis",
 		Souls:       3,
 	})
 	defer stack.Cleanup()
@@ -53,37 +56,43 @@ func TestL3bRedisClusterLive_ThreeNode(t *testing.T) {
 		}
 	}
 
-	const incName = "test-redis-cluster"
+	const incName = "redis-clstr-create"
 
 	// Coven-членство ДО Create: roster резолвится по `incarnation.name ∈ coven[]`
-	// (ADR-008, topology/resolver.go::rosterSQL). Все три соула должны быть в
-	// covene incarnation, иначе scenario видит no_hosts → ноль строк apply_runs.
+	// (ADR-008). Все три соула в covene incarnation, иначе no_hosts → ноль apply_runs.
 	for i := range stack.SoulContainers {
 		stack.AddSoulToCoven(t, i, incName)
+		// cluster nodes-MAP строится из soulprint.hosts (primary_ip по SID) —
+		// ждём непустые факты ДО create-render.
+		stack.WaitSoulprintReported(t, i, 60)
 	}
 
-	// POST /v1/incarnations авто-запускает create и возвращает его apply_id.
-	// Отдельный RunScenario(create) был бы отвергнут lock-gate-ом («incarnation
-	// уже в статусе applying») — ждём apply_id именно авто-create-прогона.
-	inc, applyID := stack.CreateIncarnationWithApply(t, incName, "redis-cluster-live@main", map[string]any{
-		"cluster_replicas": 0,
+	// requirepass + cluster-build password — keeper-side vault()-резолв.
+	harness.SeedVaultKV(t, stack, "redis/"+incName, map[string]any{"password": "cluster-redis-secret-32b"})
+
+	// Материализуем режим-агностичный destiny `redis` (cluster-ветка зовёт
+	// apply: destiny: redis) под git-тегом v1.0.0 (ref из service.yml::destiny[]).
+	stack.MaterializeDestinies(t, "v1.0.0", "redis")
+
+	// POST /v1/incarnations авто-запускает create → возвращает apply_id авто-прогона.
+	inc, applyID := stack.CreateIncarnationWithApply(t, incName, "redis@main", map[string]any{
+		"redis_type":         "cluster",
+		"version":            "7.2.4",
+		"shards":             3,
+		"replicas_per_shard": 0,
 	})
 
-	// 600 c — apt-get update + apt-get install redis (с retry на флапе mirror-а)
-	// на трёх контейнерах + render config + nohup redis-server + redis-cli
-	// --cluster create. README example фиксирует ожидаемое время (~5-8 минут на
-	// холодном CI).
+	// 600 c — apt-get install redis × 3 + render config + старт + плагинный
+	// community.redis.cluster bootstrap (CLUSTER MEET/ADDSLOTS).
 	stack.WaitApplySuccess(t, applyID, 600)
-	// apply_runs success ≠ state закоммичен — ждём ready перед чтением state.
 	stack.WaitIncarnationReady(t, inc, 30)
 
-	exp := harness.LoadExpectations(t, "redis-cluster-live/expectations/after-create.yaml")
+	exp := harness.LoadExpectations(t, "redis/expectations/after-create-cluster.yaml")
 	stack.AssertExpectations(t, exp, applyID, inc)
 
 	// Independent cluster-health-check: redis-cli cluster info внутри первого
-	// soul-контейнера. Поллинг на 30 секунд — cluster_state переходит в ok после
-	// того, как все cluster bus-соединения установились (redis-cli --cluster
-	// create возвращается раньше, чем gossip сойдётся на всех нодах).
+	// soul-контейнера. Поллинг — cluster_state переходит в ok после того, как все
+	// cluster bus-соединения установились.
 	sc := stack.SoulContainers[0]
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

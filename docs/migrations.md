@@ -11,17 +11,16 @@ State_schema-миграция преобразует `incarnation.state` (jsonb 
 `<service-repo>/migrations/<NNN>_to_<MMM>.yml` — один файл = один шаг миграции. Цепочка `001 → 002 → 003 → ...` прогоняется keeper-ом последовательно при upgrade.
 
 ```
-redis-cluster/
-├── service.yml                            # state_schema_version: 3
+redis/
+├── service.yml                            # state_schema_version: 2
 ├── migrations/
 │   ├── 001_to_002.yml                     # описанный ниже формат
-│   ├── 001_to_002/                        # тесты этой миграции
-│   │   └── tests/
-│   │       ├── users-array-to-map.yml
-│   │       └── empty-users.yml
-│   ├── 002_to_003.yml
-│   └── 002_to_003/
-│       └── tests/...
+│   └── 001_to_002/                        # тесты этой миграции
+│       └── tests/
+│           ├── users-list-to-map.yml
+│           ├── single-user.yml
+│           ├── empty-users.yml
+│           └── preserves-unrelated-fields.yml
 └── ...
 ```
 
@@ -169,4 +168,4 @@ state_after:
 - [`docs/architecture.md` → §«Versioning и миграции state_schema»](architecture.md#versioning-и-миграции-state_schema) — высокоуровневое описание (`state_schema_version`, upgrade-механизм, atomicity).
 - [`docs/architecture.md` → §«`state_history`»](architecture.md#state_history--журнал-изменений-state) — журнал, через который доступно восстановление при инциденте.
 - [`docs/templating.md`](templating.md) — CEL общая спека.
-- [`examples/service/redis-cluster/migrations/`](../examples/service/redis-cluster/migrations/) — пример.
+- [`examples/service/redis/migrations/`](../examples/service/redis/migrations/) — пример (миграция `001_to_002`: `redis_users` из списка имён в map `name → {perms, state}` через `foreach`).

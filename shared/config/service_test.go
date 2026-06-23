@@ -8,7 +8,7 @@ import (
 )
 
 func TestLoadServiceManifest_Golden(t *testing.T) {
-	path := filepath.FromSlash("../../examples/service/redis-cluster/service.yml")
+	path := filepath.FromSlash("../../examples/service/redis/service.yml")
 	cfg, doc, diags, err := LoadServiceManifest(path, ValidateOptions{})
 	if err != nil {
 		t.Fatalf("io error: %v", err)
@@ -22,19 +22,19 @@ func TestLoadServiceManifest_Golden(t *testing.T) {
 		}
 		t.Fatalf("expected 0 errors on golden service example, got %d diagnostics", len(diags))
 	}
-	if cfg.Name != "redis-cluster" {
-		t.Errorf("name: got %q want redis-cluster", cfg.Name)
+	if cfg.Name != "redis" {
+		t.Errorf("name: got %q want redis", cfg.Name)
 	}
 	if cfg.StateSchemaVersion != 2 {
 		t.Errorf("state_schema_version: got %d want 2", cfg.StateSchemaVersion)
 	}
-	if len(cfg.Destiny) != 2 {
-		t.Errorf("destiny len: got %d want 2", len(cfg.Destiny))
+	if len(cfg.Destiny) != 1 {
+		t.Errorf("destiny len: got %d want 1", len(cfg.Destiny))
 	}
-	if cfg.Destiny[0].Name != "redis" || cfg.Destiny[0].Ref != "v2.0.0" {
+	if cfg.Destiny[0].Name != "redis" || cfg.Destiny[0].Ref != "v1.0.0" {
 		t.Errorf("destiny[0]: %#v", cfg.Destiny[0])
 	}
-	if len(cfg.Modules) != 1 || cfg.Modules[0].Name != "wb.redis-failover" || cfg.Modules[0].Ref != "v1.2.0" {
+	if len(cfg.Modules) != 1 || cfg.Modules[0].Name != "community.redis" || cfg.Modules[0].Ref != "v1.0.0" {
 		t.Errorf("modules: %#v", cfg.Modules)
 	}
 }
@@ -85,7 +85,7 @@ state_schema:
 // TestLoadServiceManifest_Lifecycle — блок lifecycle с обоими флагами
 // принимается (НЕ unknown_key), флаги декодятся в *bool.
 func TestLoadServiceManifest_Lifecycle(t *testing.T) {
-	src := `name: redis-cluster
+	src := `name: svc-golden
 state_schema_version: 1
 state_schema:
   type: object
@@ -112,7 +112,7 @@ lifecycle:
 // TestLoadServiceManifest_LifecycleAbsent — без блока lifecycle оба флага
 // дефолтно true (backcompat), nil-safe аксессоры работают.
 func TestLoadServiceManifest_LifecycleAbsent(t *testing.T) {
-	src := "name: redis-cluster\nstate_schema_version: 1\nstate_schema:\n  type: object\n"
+	src := "name: svc-golden\nstate_schema_version: 1\nstate_schema:\n  type: object\n"
 	cfg, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
@@ -130,7 +130,7 @@ func TestLoadServiceManifest_LifecycleAbsent(t *testing.T) {
 // TestLoadServiceManifest_LifecycleUnknownKey — опечатка под lifecycle:
 // (напр. auto_creat) ловится reflect-walker-ом как unknown_key.
 func TestLoadServiceManifest_LifecycleUnknownKey(t *testing.T) {
-	src := `name: redis-cluster
+	src := `name: svc-golden
 state_schema_version: 1
 state_schema:
   type: object
@@ -149,7 +149,7 @@ func TestLoadServiceManifest_DeprecatedKeys(t *testing.T) {
 	for _, key := range cases {
 		key := key
 		t.Run(key, func(t *testing.T) {
-			src := "name: redis-cluster\nstate_schema_version: 1\nstate_schema:\n  type: object\n" + key + ": foo\n"
+			src := "name: svc-golden\nstate_schema_version: 1\nstate_schema:\n  type: object\n" + key + ": foo\n"
 			_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 			found := false
 			for _, d := range diags {
@@ -169,7 +169,7 @@ func TestLoadServiceManifest_DeprecatedKeys(t *testing.T) {
 func TestLoadServiceManifest_DeprecatedKeyNoDuplicate(t *testing.T) {
 	// Аналог destiny: deprecated top-level ключ должен дать ровно одну
 	// диагностику (от schemaValidateService с hint), а не дубль из reflect-walker-а.
-	src := `name: redis-cluster
+	src := `name: svc-golden
 state_schema_version: 1
 state_schema:
   type: object
@@ -189,7 +189,7 @@ tasks: foo
 }
 
 func TestLoadServiceManifest_MissingStateSchemaVersion(t *testing.T) {
-	src := `name: redis-cluster
+	src := `name: svc-golden
 state_schema:
   type: object
 `
@@ -201,7 +201,7 @@ state_schema:
 }
 
 func TestLoadServiceManifest_BadStateSchemaVersion(t *testing.T) {
-	src := `name: redis-cluster
+	src := `name: svc-golden
 state_schema_version: 0
 state_schema:
   type: object
@@ -214,7 +214,7 @@ state_schema:
 }
 
 func TestLoadServiceManifest_MissingStateSchema(t *testing.T) {
-	src := `name: redis-cluster
+	src := `name: svc-golden
 state_schema_version: 1
 `
 	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
@@ -225,7 +225,7 @@ state_schema_version: 1
 }
 
 func TestLoadServiceManifest_StateSchemaNotObject(t *testing.T) {
-	src := `name: redis-cluster
+	src := `name: svc-golden
 state_schema_version: 1
 state_schema:
   type: string
@@ -239,7 +239,7 @@ state_schema:
 
 func TestLoadServiceManifest_StateSchemaNullValue(t *testing.T) {
 	// state_schema: (null) — присутствует ключ, но не mapping.
-	src := `name: redis-cluster
+	src := `name: svc-golden
 state_schema_version: 1
 state_schema:
 `
@@ -252,7 +252,7 @@ state_schema:
 
 func TestLoadServiceManifest_StateSchemaNoType(t *testing.T) {
 	// type на корне отсутствует — `state_schema_root_not_object` (как root not object).
-	src := `name: redis-cluster
+	src := `name: svc-golden
 state_schema_version: 1
 state_schema:
   properties:
@@ -267,7 +267,7 @@ state_schema:
 
 func TestLoadServiceManifest_StateSchemaRequiredNotArray(t *testing.T) {
 	// required должен быть массивом строк; nested-схема (под `users`) → recursive.
-	src := `name: redis-cluster
+	src := `name: svc-golden
 state_schema_version: 1
 state_schema:
   type: object
@@ -286,7 +286,7 @@ state_schema:
 func TestLoadServiceManifest_StateSchemaPropertiesRecursive(t *testing.T) {
 	// Корректный nested state_schema со вложенными properties/required/items.
 	// Регрессия: рекурсия не должна добавлять ложные diagnostics.
-	src := `name: redis-cluster
+	src := `name: svc-golden
 state_schema_version: 2
 state_schema:
   type: object
@@ -310,7 +310,7 @@ state_schema:
 }
 
 func TestLoadServiceManifest_DestinyBadRef(t *testing.T) {
-	src := `name: redis-cluster
+	src := `name: svc-golden
 state_schema_version: 1
 state_schema:
   type: object
@@ -332,7 +332,7 @@ destiny:
 }
 
 func TestLoadServiceManifest_DestinyBadName(t *testing.T) {
-	src := `name: redis-cluster
+	src := `name: svc-golden
 state_schema_version: 1
 state_schema:
   type: object
@@ -354,7 +354,7 @@ destiny:
 }
 
 func TestLoadServiceManifest_ModuleBadName(t *testing.T) {
-	src := `name: redis-cluster
+	src := `name: svc-golden
 state_schema_version: 1
 state_schema:
   type: object
@@ -377,7 +377,7 @@ modules:
 
 func TestLoadServiceManifest_ModuleNamespacedName(t *testing.T) {
 	// Двухуровневая форма — единственная валидная для modules[] (strict).
-	src := `name: redis-cluster
+	src := `name: svc-golden
 state_schema_version: 1
 state_schema:
   type: object
@@ -393,7 +393,7 @@ modules:
 
 func TestLoadServiceManifest_ModuleSingleLevelName(t *testing.T) {
 	// Одноуровневая форма больше не принимается (strict <ns>.<module>).
-	src := `name: redis-cluster
+	src := `name: svc-golden
 state_schema_version: 1
 state_schema:
   type: object
@@ -416,7 +416,7 @@ modules:
 
 func TestLoadServiceManifest_ModuleUnderscoreInName(t *testing.T) {
 	// underscore запрещён обеими частями (kebab-case naming-rules.md §57/§186).
-	src := `name: redis-cluster
+	src := `name: svc-golden
 state_schema_version: 1
 state_schema:
   type: object
@@ -438,7 +438,7 @@ modules:
 }
 
 func TestLoadServiceManifest_DependencyMissingName(t *testing.T) {
-	src := `name: redis-cluster
+	src := `name: svc-golden
 state_schema_version: 1
 state_schema:
   type: object
@@ -462,7 +462,7 @@ destiny:
 // TestLoadServiceManifest_DestinyGitOverride — per-entry git override валиден
 // для destiny[] (гибрид источника, override default_destiny_source).
 func TestLoadServiceManifest_DestinyGitOverride(t *testing.T) {
-	src := `name: redis-cluster
+	src := `name: svc-golden
 state_schema_version: 1
 state_schema:
   type: object
@@ -482,7 +482,7 @@ destiny:
 // TestLoadServiceManifest_ModuleGitRejected — per-entry git override запрещён
 // для modules[] (поддержан только destiny[]); один unknown_key на $.modules[0].git.
 func TestLoadServiceManifest_ModuleGitRejected(t *testing.T) {
-	src := `name: redis-cluster
+	src := `name: svc-golden
 state_schema_version: 1
 state_schema:
   type: object
@@ -505,7 +505,7 @@ modules:
 // TestLoadServiceManifest_ModuleCoreModule — core-модули в `modules:` не
 // перечисляются (ADR-009/ADR-015), отдельный код вместо name_invalid_format.
 func TestLoadServiceManifest_ModuleCoreModule(t *testing.T) {
-	src := `name: redis-cluster
+	src := `name: svc-golden
 state_schema_version: 1
 state_schema:
   type: object
@@ -637,7 +637,7 @@ destiny:
 }
 
 func TestLoadServiceManifest_UnknownTopKey(t *testing.T) {
-	src := `name: redis-cluster
+	src := `name: svc-golden
 state_schema_version: 1
 state_schema:
   type: object

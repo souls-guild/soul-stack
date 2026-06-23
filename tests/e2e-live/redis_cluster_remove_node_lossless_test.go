@@ -13,10 +13,10 @@
 // доказывает ТОЛЬКО последовательность команд: что "user 42" уходит в MIGRATE
 // одним KEYS-аргументом. Он НЕ доказывает лосслесс РЕАЛЬНЫХ данных — что после
 // remove-node ключ физически доступен на новом владельце и DBSIZE сходится. Это
-// — задача L3c (живой redis-cluster, independent verify через redis-cli).
+// — задача L3c (живой Redis Cluster, independent verify через redis-cli).
 //
 // ★ ИНВАРИАНТ (что обязан проверить разблокированный тест):
-//  1. Поднять РЕАЛЬНЫЙ redis-cluster через community.redis scenario `create`
+//  1. Поднять РЕАЛЬНЫЙ Redis Cluster через community.redis scenario `create`
 //     (examples/service/redis, redis_type=cluster) на soul-контейнерах —
 //     ≥3 master со слотами + ≥1 удаляемый master со слотами.
 //  2. Записать N ключей в слоты УДАЛЯЕМОГО master-а, ОБЯЗАТЕЛЬНО включая:
@@ -78,7 +78,7 @@ func TestL3cRedisClusterRemoveNode_SlotMigrationLossless(t *testing.T) {
 	// Когда cluster-create станет применим live и harness обзаведётся
 	// cluster-aware helper-ами, тело ниже станет boilerplate.
 	const (
-		incName    = "redis-cluster-remove-lossless"
+		incName    = "redis-remove-node-lossless"
 		rcService  = "redis"
 		rcExample  = "examples/service/redis"
 		removeSID  = "soul-live-c.example.com" // удаляемый master со слотами
@@ -101,7 +101,7 @@ func TestL3cRedisClusterRemoveNode_SlotMigrationLossless(t *testing.T) {
 
 	// (1) bootstrap cluster-mode redis через scenario create (redis_type=cluster).
 	//     TODO(L3c-future): нужен helper, гарантирующий cluster_state:ok через
-	//     community.redis (а не redis-cli --cluster create из redis-cluster-live).
+	//     community.redis (плагинный cluster-bootstrap, не redis-cli --cluster create).
 	createID := stack.RunScenario(t, incName, "create", map[string]any{
 		"redis_type":     "cluster",
 		"redis_password": "vault:secret/redis/" + incName + "#password",

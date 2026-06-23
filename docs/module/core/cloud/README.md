@@ -139,18 +139,9 @@ fqdn — шаг падает (нельзя использовать как SID).
     count:    "${ input.spawn.count }"
 ```
 
-(адаптировано из [`examples/service/redis-cluster/scenario/create/main.yml`](../../../../examples/service/redis-cluster/scenario/create/main.yml);
-пример в репозитории дополнительно передаёт `role_distribution`/`sid` —
-модуль эти params **не читает**, см. deferred-заметку ниже).
-
-> **Deferred (backlog).** Примеры scenario (`create/main.yml`,
-> `add_replica/main.yml`) передают в `params` ключи `sid` и
-> `role_distribution`. Текущая реализация `provisioned.go` их **не читает**
-> (для `created` валидируются только `provider`/`profile`/`count`).
-> Документировать `role_distribution`/`sid` в таблице params нельзя без
-> подтверждения контракта — расхождение код↔пример отложено в backlog как
-> отдельное решение (либо чистить ключи в примерах, либо вводить их в
-> контракт модуля).
+(из [`examples/service/example-cloud-bootstrap/scenario/create/main.yml`](../../../../examples/service/example-cloud-bootstrap/scenario/create/main.yml);
+пример передаёт ровно `provider`/`profile`/`count` — это полный набор params,
+которые `provisioned.go` валидирует для `created`).
 
 ## См. также
 

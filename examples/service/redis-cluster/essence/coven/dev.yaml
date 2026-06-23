@@ -1,6 +1,0 @@
-# Для всех incarnation в dev-окружении.
-
-redis_config:
-  loglevel: "verbose"
-
-env: "dev"

@@ -101,7 +101,7 @@ SoulSeed модуль **не** выписывает
     coven: ["${ incarnation.name }"]
 ```
 
-(из [`examples/service/redis-cluster/scenario/add_replica/main.yml`](../../../../examples/service/redis-cluster/scenario/add_replica/main.yml))
+(см. [`examples/destiny/coven-assign/tasks/main.yml`](../../../../examples/destiny/coven-assign/tasks/main.yml) — destiny-обёртка вокруг `core.soul.registered`, и [`examples/service/keeper-register/scenario/create/main.yml`](../../../../examples/service/keeper-register/scenario/create/main.yml) — keeper-side dispatch в scenario)
 
 ## См. также
 

@@ -183,14 +183,14 @@ ref**, а не из локальной директории. `make dev-provision
 |---|---|---|---|
 | service `hello-world` | `file:///tmp/keeper-dev/repos/hello-world` | `main` | `examples/service/hello-world` |
 | service `redis` | `file:///tmp/keeper-dev/repos/redis` | `main` | `examples/service/redis` |
-| destiny `redis-single` | `file:///tmp/keeper-dev/destiny/redis-single` | `v1.0.0` | `examples/destiny/redis-single` |
+| destiny `redis` | `file:///tmp/keeper-dev/destiny/redis` | `v1.0.0` | `examples/destiny/redis` |
 | destiny `redis-exporter` | `file:///tmp/keeper-dev/destiny/redis-exporter` | `v1.0.0` | `examples/destiny/redis-exporter` |
 | destiny `node-exporter` | `file:///tmp/keeper-dev/destiny/node-exporter` | `v1.0.0` | `examples/destiny/node-exporter` |
 
 destiny-URL — это `default_destiny_source` (`file:///tmp/keeper-dev/destiny/{name}`)
 с подстановкой `{name}` из `redis/service.yml::destiny[]`; ref `v1.0.0`
-там же объявлен. Каталог destiny-репо называется по `{name}` (`redis-single`),
-**не** по examples-имени (`redis-single`).
+там же объявлен. Каталог destiny-репо называется по `{name}` (`redis`), и каталог
+в `examples/` теперь тоже голый `{name}` (`redis`, без приставки `destiny-`).
 
 Provision создаёт репо детерминированно (фиксированные author/date → стабильный
 commit-SHA при неизменном содержимом): повторный `make dev-provision` не плодит

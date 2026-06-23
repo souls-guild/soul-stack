@@ -9,10 +9,11 @@ import (
 )
 
 func TestLoadScenarioManifest_Golden(t *testing.T) {
-	// Локальная patched-копия (soul-lint/testdata/scenario-golden/) — оригинал
-	// `examples/service/redis-cluster/scenario/create/main.yml` имеет
-	// deviation от input.md (`type: object` без `properties:`); правка
-	// examples — out of scope M1.2.c (delegation §«Что НЕ делаешь»).
+	// Локальная patched-копия golden (soul-lint/testdata/scenario-golden/):
+	// самодостаточный фикстур redis-create, исторически снятый с redis-cluster
+	// create-сценария. Деривация от исходника намеренная — оригинал имел
+	// deviation от input.md (`type: object` без `properties:`), здесь форма
+	// исправлена под нормативную схему.
 	path := filepath.FromSlash("../../soul-lint/testdata/scenario-golden/redis-create.yml")
 	cfg, doc, diags, err := LoadScenarioManifest(path, ValidateOptions{})
 	if err != nil {

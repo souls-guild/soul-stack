@@ -72,7 +72,7 @@ day-2) и `reshard` (перенос N слотов с master-а на master, day
 > **★ Идемпотентность.** `create`/`add-node`/`remove-node` **идемпотентны** —
 > повторный apply на сошедшемся входе даёт `changed=false` (no-op), их безопасно
 > держать в converge. **`reshard` — НЕТ.** Это императивная **exec-style** day-2
-> операция (как старый `redis-cluster-live` без `unless`): повторный apply
+> операция (exec-style без `unless`): повторный apply
 > сдвинет **ещё** `slots` слотов с `from` на `to`. Оператор зовёт reshard
 > **явно**, ровно столько раз, сколько нужно переносов; reshard **не** часть
 > converge-цикла.

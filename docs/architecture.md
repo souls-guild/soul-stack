@@ -582,7 +582,7 @@ Service — это **тип сервиса** (Redis HA, PostgreSQL, Vector-colle
 ### Раскладка репозитория
 
 ```
-redis-cluster/
+redis/
 ├── service.yml                         # манифест: name, state/host schemas, destiny, modules (версия = git tag, см. ADR-007)
 ├── essence/                            # параметры в иерархии (см. «Essence: pipeline сборки»)
 │   ├── _stack.yaml                     # ОПЦИОНАЛЬНО: декларативный pipeline сборки
@@ -596,16 +596,15 @@ redis-cluster/
 ├── scenario/                           # auto-discover из директории, имя папки = имя сценария
 │   ├── create/
 │   │   ├── main.yml                    # точка входа: input + state_changes + tasks (всё inline)
-│   │   ├── install.yml                 # переиспользуемые блоки (include из main.yml)
+│   │   ├── standalone.yml              # переиспользуемые блоки режима (include из main.yml)
 │   │   ├── templates/                  # ОПЦ.: scenario-локальные шаблоны (двухуровневый резолв)
 │   │   ├── vars.yml                    # ОПЦ.: scenario-локалы
-│   │   ├── tests/                      # ОПЦ.: тесты сценария (см. scenario/orchestration.md)
-│   │   └── replication.yml
-│   ├── add_user/
+│   │   └── tests/                      # ОПЦ.: тесты сценария (см. scenario/orchestration.md)
+│   ├── add_node/
 │   │   └── main.yml
-│   ├── update_acl/
+│   ├── remove_node/
 │   │   └── main.yml
-│   ├── add_replica/
+│   ├── reshard/
 │   │   └── main.yml
 │   └── restart/
 │       └── main.yml
@@ -613,10 +612,9 @@ redis-cluster/
 │   └── user.yaml
 ├── migrations/                         # миграции state_schema между версиями
 │   ├── 001_to_002.yml
-│   └── 002_to_003.yml
-└── tests/
-    ├── smoke.yml
-    └── chaos.yml
+│   └── 001_to_002/
+│       └── tests/                      # тесты миграции (см. migrations.md)
+└── ...
 ```
 
 Каждая папка `scenario/<name>/` — отдельная операция (CRUD-style) над сервисом. `main.yml` — точка входа сценария: содержит **inline** `input`, `state_changes` и `tasks`. Соседние `*.yml` — sub-tasks, инклудятся через `include:` в `main.yml`. Перечислять сценарии в `service.yml` не нужно — keeper находит их auto-discover-ом по структуре каталога.
@@ -624,44 +622,44 @@ redis-cluster/
 ### `service.yml` — манифест
 
 ```yaml
-name: redis-cluster
+name: redis
 state_schema_version: 2               # версия структуры incarnation.state, не версия сервиса (см. ADR-007)
 
 # Структура incarnation.state в БД
 state_schema:
   type: object
-  required: [redis_version, redis_users, redis_config, redis_hosts]
+  required: [redis_type, redis_config]
   properties:
+    redis_type: { type: string, enum: [standalone, sentinel, cluster, sentinel_only] }
     redis_version: { type: string }
-    redis_users:
+    redis_config:
+      type: object
+      additionalProperties: true
+    redis_users:                      # map username → {perms, state}
       type: object
       additionalProperties:
         type: object
-        required: [acl, state]
+        required: [perms, state]
         properties:
-          acl:   { type: string }
+          perms: { type: string }
           state: { type: string, enum: [on, off] }
-    redis_config:
-      type: object
-      additionalProperties: { type: string }
     redis_hosts:
       type: array
       items:
         type: object
         properties:
           sid:  { type: string }
-          role: { type: string, enum: [primary, replica] }
+          role: { type: string, enum: [primary, replica, sentinel] }
 
 # Артефакты-зависимости — ref: git tag или branch (см. ADR-007).
 # Никаких semver-range — точный ref и ничего больше.
 destiny:
-  - { name: redis,                    ref: v2.0.0 }
-  - { name: redis-replication-config, ref: v1.0.0 }
+  - { name: redis, ref: v1.0.0 }      # режим-агностичный кирпич: install + render redis.conf
   # cloud-create — НЕ destiny-зависимость: это шаг scenario `core.cloud.provisioned`
   # (on: keeper, CloudDriver-плагин), см. ADR-017.
 
 modules:                              # custom-модули
-  - { name: redis-failover, ref: v1.2.0 }
+  - { name: community.redis, ref: v1.0.0 }  # живой Redis-рантайм (CONFIG SET, ACL, cluster, sentinel)
 
 # ОПЦИОНАЛЬНО: политика жизненного цикла инкарнаций (отсутствие блока = оба true).
 lifecycle:
