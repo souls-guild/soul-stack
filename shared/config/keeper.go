@@ -884,13 +884,12 @@ func (a KeeperVaultAuth) ResolvedAuthMethod() string {
 //
 // `jwt` — внутренний JWT-issuer (ADR-014), действующая часть.
 //
-// `ldap` / `oidc` — ★ СКЕЛЕТ под ADR-058 (СТАТУС: draft, федеративная
-// аутентификация). Опциональные блоки: не заданы → способ логина недоступен,
-// Keeper стартует (ADR-053 OPTIONAL-tier). Secret-поля — через `*_ref`
+// `ldap` — федеративная LDAP-аутентификация (ADR-058, стадия 1 реализована:
+// semantic-валидация + резолв в auth/ldap.Config + endpoint /auth/ldap/login).
+// `oidc` — ★ СКЕЛЕТ стадии 2 (ADR-058 proposed): YAML-форма без обработки.
+// Оба блока опциональны: не заданы → способ логина недоступен, Keeper стартует
+// (ADR-053 OPTIONAL-tier). Secret-поля — через `*_ref`
 // (`vault:<mount>/<path>[#field]`, резолв load-time как `redis.password_ref`).
-// Semantic-валидация (`*_ref`, TLS-required, взаимоисключимость) и резолв в
-// auth/ldap.Config / auth/oidc.Config добавляются ТОЛЬКО после одобрения
-// ADR-058 — сейчас это лишь YAML-форма без обработки.
 type KeeperAuth struct {
 	JWT  *KeeperAuthJWT  `yaml:"jwt,omitempty"`
 	LDAP *KeeperAuthLDAP `yaml:"ldap,omitempty"` // ADR-058 draft
@@ -904,13 +903,15 @@ type KeeperAuthJWT struct {
 	TTLBootstrap  string `yaml:"ttl_bootstrap,omitempty"`
 }
 
-// KeeperAuthLDAP — ★ СКЕЛЕТ конфига LDAP-аутентификации (ADR-058(c)/(e), draft).
-// TLS обязателен: `ldaps://` ЛИБО `ldap://` + `start_tls: true`. Секреты —
-// `bind_password_ref` (Vault). `tls.ca_ref` — опц. CA-bundle для LDAPS.
+// KeeperAuthLDAP — конфиг LDAP-аутентификации (ADR-058(c)/(e), стадия 1
+// реализована). TLS обязателен: `ldaps://` ЛИБО `ldap://` + `start_tls: true`.
+// Секреты — `bind_password_ref` (Vault). `tls.ca_ref` — опц. CA-bundle для LDAPS.
 //
-// TODO(ADR-058 impl): semantic-валидация (ldaps-vs-start_tls взаимоискл.,
-// bind_mode=search ⇒ bind_dn+bind_password_ref, insecure_skip_verify → WARN);
-// резолв *_ref + ca_ref → auth/ldap.Config.
+// Semantic-валидация (semantic.go::checkAuthLDAP): ldaps-vs-start_tls взаимоискл.,
+// bind_mode=search ⇒ bind_dn+bind_password_ref, TLS-required, insecure_skip_verify
+// → WARN. Резолв *_ref + ca_ref → auth/ldap.Config — load-time в daemon
+// (setupLDAPAuth). bind_mode=direct (поле user_dn_template) отложен (стадия 1 —
+// только search).
 type KeeperAuthLDAP struct {
 	URL             string              `yaml:"url"`                         // ldaps://host:636 | ldap://host:389
 	StartTLS        bool                `yaml:"start_tls,omitempty"`         // StartTLS поверх ldap://
