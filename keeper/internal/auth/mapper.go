@@ -12,24 +12,6 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// FederatedSourceAID — служебный AID, под которым auto-provision записывает
-// `created_by_aid` федеративно-заведённого оператора (ADR-058(g)). Не настоящий
-// Архонт-инициатор (federated-login инициирован внешним IdP, не оператором), а
-// маркер источника для audit-trail.
-//
-// Совпадает с конвенцией [push.AutoImportSystemAID] = "archon-system":
-// system-инициированные вставки в проекте уже атрибутируются этому
-// reserved-AID. `created_by_aid` НЕ может быть NULL (partial unique index
-// `operators_first_archon_idx` держит инвариант единственного bootstrap-Archon-а,
-// ADR-013) и НЕ может равняться самому aid (CHECK `self_reference_ok`), поэтому
-// нужен существующий не-self маркер.
-//
-// ВНИМАНИЕ (ADR-013-инвариант): строка `archon-system` должна существовать в
-// реестре `operators` до первого provision (FK `created_by_aid_fk`). Её посев
-// без нарушения bootstrap-индекса — отдельное архитектурное решение (см. отчёт
-// developer-а: needs_architect). Без неё provision вернёт FK-violation.
-const FederatedSourceAID = "archon-system"
-
 // MapperConfig — зависимости [DBMapper].
 type MapperConfig struct {
 	// GroupRoleMap — внешняя группа → RBAC-роли (config auth.ldap.group_role_map).
@@ -120,18 +102,24 @@ func (m *DBMapper) Map(ctx context.Context, ext ExternalIdentity) (MappedOperato
 }
 
 // provision создаёт нового federated-оператора (auth_method=ldap) + membership
-// + audit `operator.provisioned`. created_by_aid = [FederatedSourceAID].
+// + audit `operator.provisioned`.
+//
+// created_via=ldap, created_by_aid=NULL (ADR-058(d)): federated-login инициирован
+// внешним IdP, оператора-инициатора нет. NULL у created_by_aid теперь легален для
+// не-bootstrap-строк — bootstrap-инвариант перенесён на created_via='bootstrap'
+// (миграция 085), поэтому отдельный reserved-AID-маркер больше не нужен. Источник
+// атрибутируется самим created_via.
 func (m *DBMapper) provision(ctx context.Context, aid string, ext ExternalIdentity, roles []string) (MappedOperator, error) {
 	displayName := ext.Username
 	if displayName == "" {
 		displayName = aid
 	}
-	source := FederatedSourceAID
 	op := &operator.Operator{
 		AID:          aid,
 		DisplayName:  displayName,
 		AuthMethod:   operator.AuthMethodLDAP,
-		CreatedByAID: &source,
+		CreatedByAID: nil,
+		CreatedVia:   operator.CreatedViaLDAP,
 		Metadata:     map[string]any{"federated_source": "ldap"},
 	}
 	if err := operator.Insert(ctx, m.cfg.DB, op); err != nil {

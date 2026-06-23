@@ -30,6 +30,7 @@ type insertCapture struct {
 	aid        string
 	authMethod string
 	createdBy  any
+	createdVia any
 }
 
 func (f *fakeMapperDB) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
@@ -38,11 +39,12 @@ func (f *fakeMapperDB) Exec(_ context.Context, sql string, args ...any) (pgconn.
 	}
 	switch {
 	case strings.Contains(sql, "INSERT INTO operators"):
-		// args: aid, display_name, auth_method, created_at, created_by_aid, revoked_at, metadata
+		// args: aid, display_name, auth_method, created_at, created_by_aid, created_via, revoked_at, metadata
 		f.inserts = append(f.inserts, &insertCapture{
 			aid:        toStr(args[0]),
 			authMethod: toStr(args[2]),
 			createdBy:  args[4],
+			createdVia: args[5],
 		})
 	case strings.Contains(sql, "rbac_role_operators") || strings.Contains(sql, "INSERT INTO rbac"):
 		f.grants++
@@ -78,14 +80,19 @@ func (r *fakeOperatorRow) Scan(dest ...any) error {
 	if r.op == nil {
 		return pgx.ErrNoRows
 	}
-	// порядок: aid, display_name, auth_method, created_at, created_by_aid, revoked_at, metadata
+	// порядок: aid, display_name, auth_method, created_at, created_by_aid, created_via, revoked_at, metadata
+	createdVia := r.op.CreatedVia
+	if createdVia == "" {
+		createdVia = operator.CreatedViaUser
+	}
 	*(dest[0].(*string)) = r.op.AID
 	*(dest[1].(*string)) = r.op.DisplayName
 	*(dest[2].(*string)) = string(r.op.AuthMethod)
 	*(dest[3].(*time.Time)) = r.op.CreatedAt
 	*(dest[4].(**string)) = r.op.CreatedByAID
-	*(dest[5].(**time.Time)) = r.op.RevokedAt
-	*(dest[6].(*[]byte)) = []byte("{}")
+	*(dest[5].(*string)) = createdVia
+	*(dest[6].(**time.Time)) = r.op.RevokedAt
+	*(dest[7].(*[]byte)) = []byte("{}")
 	return nil
 }
 
@@ -137,8 +144,15 @@ func TestMapper_HappyProvision(t *testing.T) {
 	if db.inserts[0].authMethod != string(operator.AuthMethodLDAP) {
 		t.Errorf("Insert auth_method = %q, want ldap", db.inserts[0].authMethod)
 	}
-	if db.inserts[0].createdBy != FederatedSourceAID {
-		t.Errorf("Insert created_by_aid = %v, want %q (not nil, not self)", db.inserts[0].createdBy, FederatedSourceAID)
+	// ADR-058(d): federated-provision пишет created_by_aid=NULL (нет
+	// оператора-инициатора) + created_via='ldap'. Раньше тут стоял
+	// reserved-AID archon-system из-за старого bootstrap-индекса; индекс
+	// перенесён на created_via='bootstrap' (миграция 085), NULL легален.
+	if db.inserts[0].createdBy != nil {
+		t.Errorf("Insert created_by_aid = %v, want nil (federated, no initiator)", db.inserts[0].createdBy)
+	}
+	if db.inserts[0].createdVia != operator.CreatedViaLDAP {
+		t.Errorf("Insert created_via = %v, want %q", db.inserts[0].createdVia, operator.CreatedViaLDAP)
 	}
 	if got.Roles == nil || got.Roles[0] != "cluster-admin" {
 		t.Errorf("roles = %v, want [cluster-admin]", got.Roles)
@@ -148,6 +162,40 @@ func TestMapper_HappyProvision(t *testing.T) {
 	}
 	if db.grants < 1 {
 		t.Errorf("expected at least 1 role grant, got %d", db.grants)
+	}
+}
+
+// TestMapper_TwoFederatedProvisionsBothNullCreatedBy — ADR-058(d) guard (кейс 3):
+// два разных federated-оператора провижинятся подряд, оба с created_by_aid=NULL.
+// До ADR-058(d) это было невозможно: partial unique index `operators_first_archon_idx`
+// держался на `created_by_aid IS NULL` → второй NULL ловился как UNIQUE-violation.
+// После переноса индекса на created_via='bootstrap' (миграция 085) NULL у
+// created_by_aid легален для federated-строк — оба provision формируют
+// created_by_aid=nil + created_via=ldap.
+func TestMapper_TwoFederatedProvisionsBothNullCreatedBy(t *testing.T) {
+	db := &fakeMapperDB{existing: nil} // оба SELECT → not found → provision
+	aw := &fakeAudit{}
+	m := newMapper(db, aw, map[string][]string{"ops": {"read-only"}})
+
+	for _, aid := range []string{"alice", "bob"} {
+		got, err := m.Map(context.Background(), ExternalIdentity{AID: aid, Username: aid, Groups: []string{"ops"}})
+		if err != nil {
+			t.Fatalf("Map(%q): %v", aid, err)
+		}
+		if !got.Provisioned {
+			t.Errorf("Map(%q): Provisioned=false, want true", aid)
+		}
+	}
+	if len(db.inserts) != 2 {
+		t.Fatalf("expected 2 federated Inserts, got %d", len(db.inserts))
+	}
+	for i, ins := range db.inserts {
+		if ins.createdBy != nil {
+			t.Errorf("insert[%d] created_by_aid = %v, want nil (federated, no initiator)", i, ins.createdBy)
+		}
+		if ins.createdVia != operator.CreatedViaLDAP {
+			t.Errorf("insert[%d] created_via = %v, want %q", i, ins.createdVia, operator.CreatedViaLDAP)
+		}
 	}
 }
 
