@@ -1,6 +1,6 @@
 # ADR-058. Федеративная аутентификация операторов (Archon) — LDAP + OAuth2/OIDC
 
-> **Статус: accepted + end-to-end (LDAP, стадия 1) / proposed (OIDC, стадия 2).** LDAP-аутентификация **реализована и доведена end-to-end** (search-bind, auto-provision по группам **с посевом строки `operators`**, cookie-доставка JWT) — блокер посева системного оператора `archon-system` **закрыт** (`created_via`-релакс bootstrap-индекса, миграция 086; см. ниже в (d)). Не только existing-оператор-логин, но и первый federated-логин нового оператора создаёт строку `operators` и работает целиком. OIDC остаётся черновиком стадии 2 (скелет `auth/oidc` + config `auth.oidc` присутствуют, реальная логика не написана). Развилки LDAP-части разрешены (см. блок «Развилки»); развилки, специфичные для OIDC (имя enum-значения, PKCE), остаются открытыми до стадии 2.
+> **Статус: accepted + end-to-end (LDAP, стадия 1 / OIDC, стадия 2).** LDAP- и OIDC-аутентификация **реализованы и доведены end-to-end**. LDAP: search-bind, auto-provision по группам **с посевом строки `operators`**, cookie-доставка JWT — блокер посева системного оператора `archon-system` **закрыт** (`created_via`-релакс bootstrap-индекса, миграция 086; см. ниже в (d)). OIDC (стадия 2): authorization-code flow с **обязательным PKCE (S256)**, discovery (`go-oidc/v3`) + JWKS-валидация `id_token` (подпись/iss/aud/exp/nonce), cluster-shared server-side flow-state store на Redis (state→nonce/PKCE-verifier, single-use GETDEL, TTL 5m), эндпоинты `GET /auth/oidc/{login,callback}`, cookie-доставка JWT (`SameSite=Lax` — переживает cross-site redirect от IdP). Mapper обобщён под оба метода (`auth_method`/`created_via` = `ldap`|`oidc` из `cfg.Method`). Все развилки разрешены: enum-имя — `oidc` (закреплено), PKCE — обязателен (config-флага нет, оператору не оставлен).
 
 - **Контекст.** Identity-модель оператора зафиксирована в [ADR-013](0013-bootstrap-archon.md) (Bootstrap первого Архонта через `keeper init --archon`) и [ADR-014](0014-operator-identity.md) (реестр `operators` в Postgres: `aid` PK, `auth_method` enum, JWT-credential MVP с claims `iss`/`sub`/`iat`/`exp`/`roles`/`bootstrap_initial`, signing key из Vault KV `secret/keeper/jwt-signing-key`). `auth_method` уже несёт расширяемый enum (`jwt` реализован, `mtls`/`combined` заявлены post-MVP как only-add). RBAC ([ADR-028](0028-rbac-storage.md)/[ADR-047](0047-purview.md)) оперирует ролями по AID и не зависит от способа аутентификации.
 
@@ -42,16 +42,16 @@
 
   Это additive-расширение в духе ADR-014 (mTLS/combined уже заявлены post-MVP через тот же enum). Реализовано: Go-const `operator.AuthMethod` (`AuthMethodLDAP`/`AuthMethodOIDC`), `operator.Insert` принимает оба, huma-enum `OperatorAuthMethod` + query-фильтр list `enum:"jwt,mtls,combined,ldap,oidc"` (`huma_enums.go`/`huma_operator_op.go`), SQL `CHECK auth_method_valid` расширен миграцией **083** (only-add, forward-only). `oidc` заведён сразу (стадия 2), чтобы имплементация OIDC не трогала enum/CHECK повторно. `auth_method` в строке `operators` фиксирует, каким способом оператор пришёл (для аудита и UI); сам внутренний JWT после выпуска одинаков для всех методов.
 
-  > **Развилка имени:** `oidc` против `oauth2`. Рекомендуется **`oidc`** — Keeper полагается на OIDC id_token (identity layer над OAuth2), а не на чистый OAuth2 access-token. «oauth2» точнее для авторизации-без-identity, что нам не подходит. Финальное имя — propose-and-wait (новая сущность в словаре enum, [naming-rules.md](../naming-rules.md)).
+  > **Имя enum:** `oidc` (закреплено) против `oauth2`. Выбрано **`oidc`** — Keeper полагается на OIDC id_token (identity layer над OAuth2), а не на чистый OAuth2 access-token. «oauth2» точнее для авторизации-без-identity, что нам не подходит.
 
-- **(b) OAuth2/OIDC — authorization-code flow (логин человека-Архонта).**
+- **(b) OAuth2/OIDC — authorization-code flow с PKCE (логин человека-Архонта). РЕАЛИЗОВАНО (стадия 2).**
 
-  1. `GET /auth/oidc/login` (публичный) → Keeper генерирует `state` + `nonce` + PKCE `code_verifier`, кладёт их в короткоживущий server-side store (Redis, TTL ~5 мин, ADR-006 как координационный слой), редиректит на `authorization_endpoint` IdP с `code_challenge`.
+  1. `GET /auth/oidc/login` (публичный) → Keeper генерирует `state` + `nonce` + PKCE `code_verifier` (256-битные crypto/rand), кладёт `{state→(nonce,verifier)}` в server-side flow-state store (Redis `OIDCFlowStore`, TTL 5 мин, ADR-006), редиректит на `authorization_endpoint` IdP с S256 `code_challenge`. `code_verifier`/`nonce` НЕ покидают сервер (в URL только `state` + `code_challenge`).
   2. Архонт аутентифицируется у IdP.
-  3. `GET /auth/oidc/callback?code=...&state=...` (публичный) → Keeper: проверяет `state` (CSRF), обменивает `code` на токены (`code_verifier`), **валидирует `id_token`**: подпись через JWKS (`jwks_uri` из discovery), `iss` == сконфигурированный issuer, `aud` == client_id, `exp`/`iat`, `nonce` == сохранённый. Извлекает `sub` + сконфигурированные claim-поля (email / preferred_username / groups).
-  4. **Маппинг** на `operators(aid)` + роли (см. (e)). Выпускает **внутренний JWT** через `jwt.Issuer`. Возврат: либо JSON `{jwt: ...}` (для API/UI fetch), либо set-cookie + redirect на UI (форма доставки — развилка (g)).
+  3. `GET /auth/oidc/callback?code=...&state=...` (публичный) → Keeper: **Consume `state`** из store (`GETDEL` — атомарно читает И удаляет, single-use: anti-CSRF + anti-replay; неизвестный/потреблённый/истёкший → отказ), обменивает `code` на токены с `code_verifier` (**PKCE-enforced**: без verifier IdP отвергает обмен), **валидирует `id_token`** через `go-oidc` verifier: подпись через JWKS (`jwks_uri` из discovery), `iss` == issuer, `aud` == client_id, `exp`/`iat`; затем **сверяет `nonce`** (anti-replay id_token). Извлекает `sub` + сконфигурированные claim-поля (`aid_claim` дефолт `sub` → AID, email/preferred_username/`groups_claim`).
+  4. **Маппинг** на `operators(aid)` + роли (общий `auth.DBMapper`, `Method=oidc`; auto-provision по группам, см. (e)/(i)). Выпускает **внутренний JWT** через `jwt.Issuer`, кладёт в HttpOnly+Secure cookie `soul_session` (`SameSite=Lax`, чтобы cookie доехала на cross-site redirect от IdP; `Strict` срезал бы её) и редиректит на `/ui` (302). JSON-токена в теле нет (cookie-only, parity LDAP). PKCE **обязателен** — config-флага нет (развилка №6 разрешена в пользу «обязателен»). OIDC требует живого Redis (flow-store cluster-shared, ADR-053 OPTIONAL-tier): без Redis эндпоинты не монтируются.
 
-  **Библиотеки:** `github.com/coreos/go-oidc/v3` (discovery + JWKS + id_token verify, Apache-2.0) + `golang.org/x/oauth2` (code-exchange, BSD-3 — совместимо с Apache-2.0). Discovery (`/.well-known/openid-configuration`) кешируется; JWKS — с TTL + key-rotation refetch (даёт go-oidc).
+  **Библиотеки (добавлены стадией 2):** `github.com/coreos/go-oidc/v3` (discovery + JWKS + id_token verify, Apache-2.0) + `golang.org/x/oauth2` (code-exchange + PKCE-хелперы `GenerateVerifier`/`S256ChallengeOption`, BSD-3 — совместимо с Apache-2.0). Discovery (`/.well-known/openid-configuration`) — сетевой вызов на load-time (`setupOIDCAuth`); JWKS — с TTL + key-rotation refetch (даёт go-oidc). Кастомный CA IdP (`tls.ca_ref`) прокидывается в discovery/JWKS/token-exchange через `oidc.ClientContext`. Раскладка: `keeper/internal/auth/oidc` (authenticator) + `keeper/internal/redis/oidcflow.go` (store) + `keeper/internal/api/huma_oidc.go` (эндпоинты).
 
 - **(c) LDAP (bind + group→role). РЕАЛИЗОВАНО (стадия 1).**
 
@@ -104,39 +104,40 @@
         keeper-admins: [cluster-admin]
         keeper-ops: [operator]
 
-    oidc:                                 # НОВОЕ (опц. блок)
-      issuer: https://keycloak.example.com/realms/soulstack   # discovery base
+    oidc:                                 # НОВОЕ (опц. блок, требует Redis)
+      issuer: https://keycloak.example.com/realms/soulstack   # discovery base (HTTPS-only)
       client_id: soul-stack-keeper
-      client_secret_ref: vault:secret/keeper/oidc-client-secret
+      client_secret_ref: vault:secret/keeper/oidc-client-secret  # опц. (public-client может без него)
       redirect_url: https://keeper.example.com/auth/oidc/callback
       scopes: [openid, email, profile, groups]
       tls:
         ca_ref: vault:secret/keeper/oidc-idp-ca   # опц. кастомный CA для IdP
-      aid_claim: email                    # claim → AID (sub | email | preferred_username)
-      groups_claim: groups                # claim → список групп для role-map
-      use_pkce: true
+      aid_claim: preferred_username       # claim → AID (sub | email | preferred_username; дефолт sub)
+      groups_claim: groups                # claim → список групп для role-map (дефолт groups)
       group_role_map:
         /keeper-admins: [cluster-admin]
         /keeper-ops: [operator]
   ```
 
-  Оба блока **опциональны** ([ADR-053](0053-dependency-tiers.md) tier: OPTIONAL-with-degradation — не задан → способ логина просто недоступен, Keeper стартует). Semantic-валидация `auth.ldap` **реализована** (`shared/config/semantic.go::checkAuthLDAP`): TLS-required (`ldaps://` ЛИБО `ldap://`+`start_tls`, иначе ERROR `ldap_plaintext_forbidden`), взаимоисключимость `ldaps://`+`start_tls` (ERROR `ldap_tls_conflict`), `bind_mode=search` (или пусто=дефолт) требует `bind_dn`+`bind_password_ref`, `*_ref` через `checkVaultRef`, `timeout` — duration-формат, `insecure_skip_verify=true` → WARN. Резолв `bind_password_ref`/`tls.ca_ref` из Vault — на load-time в daemon (`setupLDAPAuth`, зеркало `bootstrap.LoadSigningKey`). Hot-reload — через тот же `Store[T]` (ADR-021).
+  > PKCE (S256) включён реализацией всегда — config-флага `use_pkce` нет (оператору не оставлен на выбор, ADR-058 развилка №6 разрешена в пользу «обязателен»).
+
+  Оба блока **опциональны** ([ADR-053](0053-dependency-tiers.md) tier: OPTIONAL-with-degradation — не задан → способ логина просто недоступен, Keeper стартует; OIDC дополнительно требует Redis для flow-store). Semantic-валидация `auth.ldap` **реализована** (`shared/config/semantic.go::checkAuthLDAP`): TLS-required (`ldaps://` ЛИБО `ldap://`+`start_tls`, иначе ERROR `ldap_plaintext_forbidden`), взаимоисключимость `ldaps://`+`start_tls` (ERROR `ldap_tls_conflict`), `bind_mode=search` (или пусто=дефолт) требует `bind_dn`+`bind_password_ref`, `*_ref` через `checkVaultRef`, `timeout` — duration-формат, `insecure_skip_verify=true` → WARN. Semantic-валидация `auth.oidc` **реализована** (`checkAuthOIDC`): `issuer` HTTPS-only (ERROR `oidc_issuer_not_https`), обязательность `client_id`/`redirect_url` (ERROR `oidc_client_id_required`/`oidc_redirect_url_required`), `client_secret_ref`/`tls.ca_ref` через `checkVaultRef` (secret опционален для public-client). Резолв `*_ref` из Vault + discovery → `auth/{ldap,oidc}.Config` — на load-time в daemon (`setupLDAPAuth`/`setupOIDCAuth`, зеркало `bootstrap.LoadSigningKey`). Hot-reload — через тот же `Store[T]` (ADR-021).
 
 - **(f) API-поверхность (новые публичные `/auth/*` эндпоинты вне `/v1`).** Регистрируются на root-уровне chi-роутера (parity `/healthz`/`/docs`/`/ui` — БЕЗ `RequireJWT`/RBAC, см. [router.go](../../keeper/internal/api/router.go)):
 
   | метод + путь | auth | назначение |
   |---|---|---|
-  | `GET /auth/methods` | публичный | backend-driven каталог доступных способов логина ([ADR-042](0042-backend-driven-ui.md)): какие из `password`/`ldap`/`oidc` сконфигурированы; для UI login-формы |
-  | `GET /auth/oidc/login` | публичный | старт OIDC code-flow (redirect на IdP) |
-  | `GET /auth/oidc/callback` | публичный | OIDC-callback, валидация id_token, выпуск внутреннего JWT |
+  | `GET /auth/methods` | публичный | backend-driven каталог доступных способов логина ([ADR-042](0042-backend-driven-ui.md)): какие из `password`/`ldap`/`oidc` сконфигурированы; для UI login-формы — **follow-up** |
+  | `GET /auth/oidc/login` | публичный | **РЕАЛИЗОВАНО:** старт OIDC code-flow с PKCE (302 redirect на IdP) |
+  | `GET /auth/oidc/callback` | публичный | **РЕАЛИЗОВАНО:** OIDC-callback, валидация id_token, выпуск внутреннего JWT в cookie (302 на /ui) |
   | `POST /auth/ldap/login` | публичный (HTTPS) | **РЕАЛИЗОВАНО:** LDAP search-bind, выпуск внутреннего JWT в cookie |
 
-  `POST /auth/ldap/login` реализован (`huma_auth.go`): ROOT-mount вне `/v1` (parity `/healthz`, без `RequireJWT`/RBAC/metrics; anti-DoS body-limit стоит), монтируется только при non-nil `LDAPAuth` (opt-in, как `pushH`/`errandH`). FULL-TYPED huma-операция; в committed `docs/keeper/openapi.yaml` (группа `prefix /auth` в `fullSpecGroups`). Защита: TLS-required, body-лимит; rate-limit/lockout по username (anti-bruteforce) — follow-up. Успешный login пишет audit `operator.login` (`source: api`, payload `{method, aid, provisioned}` — без секретов). OIDC-эндпоинты (`/auth/methods`, `/auth/oidc/*`) — стадия 2 (защита через `state`/`nonce`/PKCE). MCP-поверхность **не трогаем** — MCP принимает уже выпущенный внутренний JWT. OpenAPI — `/auth/*` регистрируются huma-операциями, попадают в `/openapi.yaml` автоматически (ADR-054).
+  `POST /auth/ldap/login` (`huma_auth.go`) и `GET /auth/oidc/{login,callback}` (`huma_oidc.go`) реализованы: ROOT-mount вне `/v1` (parity `/healthz`, без `RequireJWT`/RBAC/metrics; anti-DoS body-limit стоит), монтируются только при non-nil `LDAPAuth`/`OIDCAuth` (opt-in, как `pushH`/`errandH`; OIDC дополнительно требует Redis). FULL-TYPED huma-операции; в committed `docs/keeper/openapi.yaml` (группы `prefix /auth` в `fullSpecGroups`). Защита: TLS-required, body-лимит, OIDC — `state`(single-use)/`nonce`/PKCE. Успешный login пишет audit `operator.login` (`source: api`, payload `{method, aid, provisioned}` — без секретов). `GET /auth/methods` (backend-driven каталог) + rate-limit/lockout по username (anti-bruteforce) — follow-up. MCP-поверхность **не трогаем** — MCP принимает уже выпущенный внутренний JWT. OpenAPI — `/auth/*` регистрируются huma-операциями, попадают в `/openapi.yaml` автоматически (ADR-054).
 
 - **(g) Модель безопасности (security-critical, «безопасность на первом месте»).**
 
   - **TLS везде:** LDAPS/StartTLS обязателен (plaintext-LDAP запрещён конфиг-валидацией); OIDC IdP — только HTTPS issuer; `/auth/ldap/login` — только поверх HTTPS-listener Keeper-а.
-  - **OIDC id_token validation:** подпись через JWKS, pin `iss`, pin `aud`==client_id, `exp`/`iat`, `nonce`-match (anti-replay), `state`-match (anti-CSRF), PKCE (anti code-interception).
+  - **OIDC id_token validation (РЕАЛИЗОВАНО):** подпись через JWKS, pin `iss`, pin `aud`==client_id, `exp`/`iat` (go-oidc verifier), `nonce`-match (anti-replay), `state`-match single-use через GETDEL (anti-CSRF + anti-replay code), PKCE S256 обязателен (anti code-interception). Любая причина отказа санитизируется в `auth.ErrAuthFailed` наружу (anti-oracle); детали — debug-лог без токенов. Guard-тесты: `keeper/internal/auth/oidc/oidc_test.go` (mock-IdP на TLS-httptest + JWKS) покрывают bad-signature/expired/wrong-aud/nonce-mismatch/state-mismatch/single-use/PKCE-enforced.
   - **Секреты не в логах:** `bind_password`/`client_secret`/введённые пароли/выпущенный JWT — масккаются (как `OperatorCreateReply.JWT`, ADR-014); resolve через Vault, plaintext в конфиге нет.
   - **Anti-bruteforce:** rate-limit + lockout по username на `/auth/ldap/login`; throttle на OIDC-callback.
   - **Таймауты:** на LDAP-connect/bind, OIDC token-exchange, JWKS-fetch — чтобы недоступность IdP не вешала Keeper.
@@ -154,7 +155,7 @@
   | `github.com/go-ldap/ldap/v3` | LDAP bind / search | MIT | ✅ |
   | `github.com/golang-jwt/jwt/v5` | внутренний JWT (уже в проекте, ADR-014) | MIT | ✅ |
 
-  Все совместимы с Apache-2.0; CLA пока не требуется (ADR-016). `go-ldap/v3` **добавлен** в `keeper/go.mod` (стадия 1). `go-oidc/v3` + `x/oauth2` — добавляются на стадии 2 (OIDC; пакет-скелет `auth/oidc` компилируется без них).
+  Все совместимы с Apache-2.0; CLA пока не требуется (ADR-016). `go-ldap/v3` **добавлен** в `keeper/go.mod` (стадия 1). `go-oidc/v3` + `x/oauth2` **добавлены** в `keeper/go.mod` (стадия 2). Тесты используют `github.com/go-jose/go-jose/v4` (транзитивная зависимость go-oidc, Apache-2.0) для подписи id_token mock-IdP.
 
 - **(i) Политика провижининга операторов (РЕАЛИЗОВАНО, Часть B).** Кластер-уровневый гейт «какими методами вообще можно СОЗДАВАТЬ оператора» — отдельно от того, какие способы логина сконфигурированы.
 
@@ -180,11 +181,11 @@
   8. **Библиотека LDAP → РЕШЕНО: `github.com/go-ldap/ldap/v3`.**
   9. **Config-форма `auth.ldap` → РЕШЕНО** (одобрена YAML-схема из (e)).
 
-  Остаются (стадия 2, OIDC):
+  Разрешено (стадия 2, OIDC):
 
-  3. **Имя enum-значения:** `oidc` vs `oauth2` (заведено `oidc`; финальная фиксация в словаре — при имплементации OIDC).
-  6. **PKCE для OIDC:** обязателен (рекомендуется) или опц.
-  - **Библиотеки OIDC:** `go-oidc/v3` + `x/oauth2` (подтверждение при стадии 2).
+  3. **Имя enum-значения → РЕШЕНО: `oidc`** (закреплено; Keeper полагается на OIDC id_token, не на чистый OAuth2 access-token).
+  6. **PKCE для OIDC → РЕШЕНО: обязателен** (S256 always-on, config-флага нет — оператору не оставлен на выбор; защита от code-interception на первом месте).
+  - **Библиотеки OIDC → РЕШЕНО: `go-oidc/v3` + `x/oauth2`** (добавлены в `keeper/go.mod`).
 
   Разрешено (стадия 1, посев + провижининг):
 
