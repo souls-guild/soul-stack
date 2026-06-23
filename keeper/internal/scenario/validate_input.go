@@ -23,6 +23,21 @@ import (
 // sentinel + [ValidateInput] закрывают дыру: проверка идёт sync ДО мутации.
 var ErrInputInvalid = errors.New("scenario: input invalid")
 
+// ErrValidateFailed — декларативное правило top-level секции `validate:` (ADR-009
+// amendment 2026-06-23, DSL wave 2) не прошло на pre-flight-гейте request-пути:
+// input-инвариант сценария нарушен (например, кросс-полевое предусловие «port
+// обязателен, если tls выключен»). HTTP-handler маппит в 422 `validation_failed`
+// (тот же класс, что input_invalid — семантика входа не сходится; URN
+// `validation-failed`), ОТДЕЛЬНО от ErrAssertFailed (assert — топология/roster,
+// полный контекст). incarnation НЕ создаётся, error_locked НЕ ставится — отказ
+// на этапе модели ДО коммита и ДО applying.
+//
+// Отдельный sentinel от ErrInputInvalid: оба → 422, но различимы для handler-а
+// (разный detail-текст: «input не матчит схему» vs «input-инвариант сценария
+// нарушен»). validate: ДОПОЛНЯЕТ input-схему и required_when, не заменяет
+// (input-only eval, config.EvalValidateRules).
+var ErrValidateFailed = errors.New("scenario: validate rule failed")
+
 // InputScenarioLoader — узкая поверхность [artifact.ServiceLoader], нужная
 // [ValidateInput]: материализовать снапшот service-ref-а и прочитать
 // scenario/<name>/main.yml. *artifact.ServiceLoader удовлетворяет; unit-тесты
@@ -50,6 +65,13 @@ type InputScenarioLoader interface {
 // раскрытие не требуется (include приносит tasks, не input-схему). Ошибки
 // загрузки/парсинга снапшота возвращаются как есть (handler → 500/502); ошибка
 // собственно value-валидации оборачивается в [ErrInputInvalid] (handler → 422).
+//
+// ПОСЛЕ успешной value-валидации тем же проходом (без второй загрузки снапшота)
+// вычисляются декларативные правила top-level `validate:`-секции над СМЕРЖЕННЫМ
+// input (input-only eval, config.EvalValidateRules). Первый провал →
+// [ErrValidateFailed] (handler → 422 validation_failed). Порядок строгий:
+// сначала schema/required/type, потом validate-инварианты — правило `that` пишут
+// в расчёте на корректные типы (input.port > 0 бессмысленно, если port не число).
 func ValidateInput(ctx context.Context, loader InputScenarioLoader, ref artifact.ServiceRef, scenarioName string, provided map[string]any) error {
 	if loader == nil {
 		// Без loader-а sync-валидация невозможна — НЕ молча пропускаем (это и
@@ -78,8 +100,22 @@ func ValidateInput(ctx context.Context, loader InputScenarioLoader, ref artifact
 
 	// merge дефолтов + required + value-валидация (type/enum/pattern/length,
 	// рекурсивно вглубь array/object). vault-ref не резолвится (string-pass).
-	if _, verr := config.ResolveInputValues(scn.Input, provided); verr != nil {
+	merged, verr := config.ResolveInputValues(scn.Input, provided)
+	if verr != nil {
 		return fmt.Errorf("%w: %v", ErrInputInvalid, verr)
+	}
+
+	// validate: — декларативные input-инварианты поверх смерженного input
+	// (input-only CEL-sandbox). no-op для сценариев без validate-секции.
+	fail, evErr := config.EvalValidateRules(scn.Validate, merged)
+	if evErr != nil {
+		// Сбой компиляции/eval (after schema-валидации почти невозможен — config-
+		// валидатор уже компилировал that input-only; non-bool that отбивается на
+		// load) — внутренний сбой pre-flight (handler → 500), НЕ validation_failed.
+		return fmt.Errorf("scenario: validate rules %s/%s: %w", scenarioName, rel, evErr)
+	}
+	if fail != nil {
+		return fmt.Errorf("%w: %s", ErrValidateFailed, fail.Error())
 	}
 	return nil
 }

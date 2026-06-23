@@ -116,6 +116,9 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 				if errors.Is(err, scenario.ErrInputInvalid) {
 					return zero, incProblem(problem.TypeValidationFailed, "input_invalid: "+err.Error())
 				}
+				if errors.Is(err, scenario.ErrValidateFailed) {
+					return zero, incProblem(problem.TypeValidationFailed, "validation_failed: "+err.Error())
+				}
 				h.logger.Error("incarnation.create: input validation failed",
 					slog.String("name", req.Name), slog.String("service", req.Service), slog.Any("error", err))
 				return zero, incProblem(problem.TypeInternalError, "validate scenario create input failed")
@@ -285,6 +288,9 @@ func (h *IncarnationHandler) RunTyped(ctx context.Context, claims *jwt.Claims, n
 		if err := scenario.ValidateInput(ctx, h.loader, serviceRef, scenarioName, input); err != nil {
 			if errors.Is(err, scenario.ErrInputInvalid) {
 				return zero, incProblem(problem.TypeValidationFailed, "input_invalid: "+err.Error())
+			}
+			if errors.Is(err, scenario.ErrValidateFailed) {
+				return zero, incProblem(problem.TypeValidationFailed, "validation_failed: "+err.Error())
 			}
 			h.logger.Error("incarnation.run: input validation failed",
 				slog.String("name", name), slog.String("scenario", scenarioName), slog.Any("error", err))

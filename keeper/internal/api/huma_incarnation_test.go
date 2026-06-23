@@ -347,6 +347,103 @@ func TestHumaIncarnation_Create_PreflightAssertFail_422(t *testing.T) {
 	}
 }
 
+// incValidateLoader — ServiceSnapshotLoader-стаб с scenario create/main.yml,
+// несущим top-level validate:-правило (кросс-полевой инвариант «port обязателен,
+// если tls выключен»). ValidateInput на create-пути читает этот scenario и
+// прогоняет validate-правила над смерженным input (input-only eval).
+type incValidateLoader struct{}
+
+func (incValidateLoader) Load(_ context.Context, ref artifact.ServiceRef) (*artifact.ServiceArtifact, error) {
+	return &artifact.ServiceArtifact{Ref: ref}, nil
+}
+func (incValidateLoader) LoadMigrationChain(_ *artifact.ServiceArtifact, _, _ int) (statemigrate.Chain, error) {
+	return statemigrate.Chain{}, nil
+}
+func (incValidateLoader) ReadFile(_ *artifact.ServiceArtifact, _ string) ([]byte, error) {
+	return []byte(`name: create
+input:
+  tls: { type: boolean, default: false }
+  port: { type: integer, default: 0 }
+validate:
+  - that: "input.tls || input.port > 0"
+    message: "either enable tls or set a positive port"
+tasks:
+  - name: noop
+    module: core.exec.run
+    params: { cmd: "true" }
+`), nil
+}
+
+// TestHumaIncarnation_Create_ValidateRuleFail_422 — top-level validate:-правило
+// не прошло на request-пути → 422 validation-failed ДО коммита, incarnation НЕ
+// создана, Start НЕ запущен, audit на 4xx НЕ пишется. validate: симметрично
+// pre-flight assert (форма A), но input-only и через ValidateInput (DSL wave 2).
+func TestHumaIncarnation_Create_ValidateRuleFail_422(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	inserted := false
+	started := false
+	db := &incTestDB{insertRow: func() pgx.Row {
+		inserted = true
+		return staticRow2(time.Now(), time.Now())
+	}}
+	starter := &incPreflightStarter{preflightErr: nil, started: &started}
+	incH := handlers.NewIncarnationHandler(db, starter, nil, nil, &incTestResolver{ok: true}, incValidateLoader{}, auditCap, nil, nil)
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
+
+	rec := httptest.NewRecorder()
+	// input БЕЗ port и БЕЗ tls → defaults (tls=false, port=0) → правило false.
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations", strings.NewReader(`{"name":"redis-prod","service":"redis"}`))
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422 validation-failed; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "validation-failed") {
+		t.Errorf("body не несёт problem-type validation-failed: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "either enable tls or set a positive port") {
+		t.Errorf("body не несёт message правила: %s", rec.Body.String())
+	}
+	if inserted {
+		t.Error("ИНВАРИАНТ НАРУШЕН: incarnation создана на validate-fail — должно быть НЕ создано")
+	}
+	if started {
+		t.Error("ИНВАРИАНТ НАРУШЕН: scenario create запущен на validate-fail — Start не должен вызываться")
+	}
+	if len(auditCap.Events()) != 0 {
+		t.Errorf("audit записан на 422 validate-fail — middleware не пишет на 4xx")
+	}
+}
+
+// TestHumaIncarnation_Create_ValidateRulePass_202 — validate:-правило проходит
+// (port>0) → create работает как раньше: 202, incarnation создана, Start запущен.
+func TestHumaIncarnation_Create_ValidateRulePass_202(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	inserted := false
+	started := false
+	db := &incTestDB{insertRow: func() pgx.Row {
+		inserted = true
+		return staticRow2(time.Now(), time.Now())
+	}}
+	starter := &incPreflightStarter{preflightErr: nil, started: &started}
+	incH := handlers.NewIncarnationHandler(db, starter, nil, nil, &incTestResolver{ok: true}, incValidateLoader{}, auditCap, nil, nil)
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations", strings.NewReader(`{"name":"redis-prod","service":"redis","input":{"port":6379}}`))
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 (validate passes); body=%s", rec.Code, rec.Body.String())
+	}
+	if !inserted {
+		t.Error("incarnation не создана на validate-pass — happy-path сломан")
+	}
+	if !started {
+		t.Error("Start не запущен на validate-pass — happy-path сломан")
+	}
+}
+
 // TestHumaIncarnation_Create_PreflightAssertPass_202 — pre-flight проходит
 // (топология сходится) → create работает как раньше: 202 + apply_id, incarnation
 // создана, Start запущен. Контроль, что pre-flight не ломает happy-path.
