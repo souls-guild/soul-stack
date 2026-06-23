@@ -66,6 +66,14 @@ const (
 )
 
 // OperatorAuthMethod — метод аутентификации оператора (ADR-014). INLINE-enum.
+//
+// ★ ADR-058 (СТАТУС: draft) добавит сюда only-add значения `ldap`/`oidc`
+// (федеративная аутентификация, см. operator.AuthMethodLDAP/OIDC). НЕ добавляем
+// их СЕЙЧАС: они должны идти В ПАРЕ с расширением OpenAPI-enum struct-тега
+// `enum:"jwt,mtls,combined"` (huma_operator_op.go list-фильтр) — а это правка
+// committed openapi.yaml (check-openapi) и прод-контракта. Делается единым
+// шагом ТОЛЬКО после одобрения ADR-058, чтобы const-набор huma-слоя не разошёлся
+// с wire-enum фильтра.
 type OperatorAuthMethod string
 
 const (

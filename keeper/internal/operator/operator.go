@@ -22,6 +22,14 @@ const (
 	AuthMethodJWT      AuthMethod = "jwt"
 	AuthMethodMTLS     AuthMethod = "mtls"
 	AuthMethodCombined AuthMethod = "combined"
+
+	// ★ СКЕЛЕТ под ADR-058 (СТАТУС: draft) — федеративная аутентификация.
+	// Only-add расширение enum (как mTLS/combined post-MVP в ADR-014):
+	// фиксирует, каким внешним способом оператор пришёл. Сам внутренний JWT
+	// после выпуска одинаков. SQL CHECK `auth_method IN (...)` расширяется
+	// отдельной only-add миграцией ТОЛЬКО после одобрения ADR-058.
+	AuthMethodLDAP AuthMethod = "ldap" // ADR-058 draft
+	AuthMethodOIDC AuthMethod = "oidc" // ADR-058 draft
 )
 
 // AIDPattern — форма Archon ID (ADR-014 amendment 2026-05-29): первый
