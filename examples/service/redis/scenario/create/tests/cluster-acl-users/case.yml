@@ -70,15 +70,22 @@ fixtures:
 
 assert:
   rendered_tasks:
+    # index 0 — mode-guard (cluster реализован → no-op); index 3 — shards-guard
+    # PASS (shards задан). size-guard теперь на index 4.
+    - index: 3
+      module: core.cmd.shell
+      params:
+        cmd: 'test "true" = "true" || { echo "redis_type=cluster требует input.shards (число master-шардов, min 1)"; exit 1; }'
+
     # size-guard PASS.
-    - index: 2
+    - index: 4
       module: core.cmd.shell
       params:
         cmd: 'test "true" = "true" || { echo "topology mismatch: hosts != shards*(1+replicas_per_shard)"; exit 1; }'
 
     # users.acl: MAP имя→{perms,state,password} с per-user vault-паролями.
     # zeta/alpha — каждый со СВОИМ резолвнутым паролем (нет cross-leak).
-    - index: 5
+    - index: 7
       module: core.file.rendered
       params:
         path: /etc/redis/users.acl
@@ -111,7 +118,7 @@ assert:
 
     # redis.conf: cluster-директивы СОСУЩЕСТВУЮТ с ACL (разные файлы). В config
     # НЕ должно быть per-user пароля (он только в users.acl, хешем).
-    - index: 6
+    - index: 8
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf

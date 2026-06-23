@@ -1,0 +1,59 @@
+# L0-испытание add_node: РЕПЛИКА с ЯВНЫМ master (master_sid задан → master.addr
+# = primary_ip соответствующего хоста). Парный с add-replica-auto-master:
+# подтверждает, что master_sid протаскивается в master.addr (ветка has(master_sid)
+# тернара), а не пустую строку. Плагин по этому addr резолвит node-id master-а.
+name: add replica node (explicit master)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-1.example.com
+      covens: [add_node, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-2.example.com
+      covens: [add_node, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-9.example.com
+      covens: [add_node, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.9 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/add_node:
+      password: s3cr3t-redis-pass-addnode
+  state:
+    redis_type: cluster
+    redis_version: ""
+    redis_config:
+      maxmemory: "256mb"
+      cluster-enabled: "yes"
+      cluster-config-file: "nodes.conf"
+      cluster-node-timeout: "5000"
+    redis_users: {}
+    redis_hosts: []
+
+  input:
+    new_node_sid: node-9.example.com
+    seed_sid: node-1.example.com
+    role: replica
+    master_sid: node-2.example.com
+
+assert:
+  rendered_tasks:
+    # ADD-NODE: master.addr = primary_ip хоста node-2 (явный master_sid).
+    - index: 16
+      module: community.redis.cluster
+      params:
+        action: add-node
+        role: replica
+        password: s3cr3t-redis-pass-addnode
+        new_node:
+          addr: "10.0.0.9:6379"
+        seed:
+          addr: "10.0.0.1:6379"
+        master:
+          addr: "10.0.0.2:6379"

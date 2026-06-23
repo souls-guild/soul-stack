@@ -47,14 +47,15 @@ fixtures:
 
 assert:
   rendered_tasks:
-    - index: 0
+    # index 0 — mode-guard диспетчера (standalone реализован → no-op). Не ассертим.
+    - index: 1
       module: core.pkg.installed
       params:
         name: redis-server
         version: ""
 
     # users.acl: пустой map (users не задан → {}). Шаблон рендерит файл без строк.
-    - index: 2
+    - index: 3
       module: core.file.rendered
       params:
         path: /etc/redis/users.acl
@@ -78,7 +79,7 @@ assert:
           essence: {}
 
     # redis.conf: maxmemory/policy ПОЛНОСТЬЮ из essence (computed-слой пуст).
-    - index: 3
+    - index: 4
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf

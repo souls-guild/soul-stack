@@ -201,6 +201,146 @@ func TestRedisUsersAcl_Empty(t *testing.T) {
 	}
 }
 
+// TestSentinelConf_AnnounceIP_PerHost — ПРЯМОЙ regress-guard на tiling-баг
+// host-инвариантного sentinel announce-ip (brief «Sentinel-режим», аналог
+// cluster-announce-ip). Корень потенциального бага: если announce-ip протащить
+// через apply.input (резолвится host-ИНВАРИАНТНО на первом по SID хосте), ВСЕ
+// sentinel-ы анонсировали бы IP первой ноды → gossip за NAT/в облаке сломан.
+//
+// Фикс: `sentinel announce-ip` рендерится в sentinel.conf.tmpl из
+// `{{ .self.network.primary_ip }}` (render_context.self ПЕР-ХОСТ, симметрично
+// bind/cluster-announce-ip). Тест рендерит РЕАЛЬНЫЙ sentinel.conf.tmpl с РАЗНЫМ
+// .self для двух хостов: каждый обязан анонсировать СВОЙ primary_ip. monitor.ip
+// (master), наоборот, HOST-ИНВАРИАНТНЫЙ — один и тот же у обоих.
+func TestSentinelConf_AnnounceIP_PerHost(t *testing.T) {
+	// HOST-ИНВАРИАНТНЫЕ vars монитора (одинаковы у всех хостов, как из apply.input).
+	monitorVars := map[string]any{
+		"master_name":     "mymaster",
+		"master_ip":       "10.0.0.1", // адрес master (один на кластер)
+		"master_port":     "6379",
+		"quorum":          "2",
+		"auth_user":       "",
+		"auth_pass":       "",
+		"sentinel_config": map[string]any{},
+	}
+
+	type hostCase struct {
+		sid string
+		ip  string
+	}
+	hosts := []hostCase{
+		{sid: "node-a.example.com", ip: "10.0.0.5"},
+		{sid: "node-b.example.com", ip: "10.0.0.6"},
+	}
+
+	for _, h := range hosts {
+		vars := map[string]any{}
+		for k, v := range monitorVars {
+			vars[k] = v
+		}
+		root := map[string]any{
+			"self": map[string]any{"network": map[string]any{"primary_ip": h.ip}},
+			"vars": vars,
+		}
+		out := renderRedisTmpl(t, "sentinel.conf.tmpl", root)
+
+		// announce-ip — СВОЙ primary_ip этого хоста.
+		if !strings.Contains(out, "sentinel announce-ip "+h.ip) {
+			t.Fatalf("хост %s: нет своей announce-ip-строки %q:\n%s", h.sid, h.ip, out)
+		}
+		for _, other := range hosts {
+			if other.ip != h.ip && strings.Contains(out, "sentinel announce-ip "+other.ip) {
+				t.Fatalf("хост %s анонсирует ЧУЖОЙ IP %s — announce-ip host-инвариантен (баг):\n%s", h.sid, other.ip, out)
+			}
+		}
+		// monitor.ip (master) — HOST-ИНВАРИАНТНЫЙ: у обоих хостов один и тот же.
+		if !strings.Contains(out, "sentinel monitor mymaster 10.0.0.1 6379 2") {
+			t.Fatalf("хост %s: нет sentinel monitor master 10.0.0.1:\n%s", h.sid, out)
+		}
+	}
+}
+
+// TestSentinelConf_DirectivesDeterministicOrder — стартовые директивы
+// sentinel_config range-ятся по MAP в ОТСОРТИРОВАННОМ порядке (детерминизм — нет
+// ложного change/рестарта), а при пустом auth_pass строки auth-pass нет (gate).
+// Прямой guard на детерминизм директив (аналог users.acl order-guard). Маскинг
+// здесь НЕ проверяется (это выходной слой Soul/Keeper, не render-фаза) — в файл
+// auth-pass пишется как есть (нужно для AUTH sentinel-а на master).
+func TestSentinelConf_DirectivesDeterministicOrder(t *testing.T) {
+	root := map[string]any{
+		"self": map[string]any{"network": map[string]any{"primary_ip": "10.0.0.5"}},
+		"vars": map[string]any{
+			"master_name": "mymaster",
+			"master_ip":   "10.0.0.1",
+			"master_port": "6379",
+			"quorum":      "2",
+			"auth_user":   "sentinel",
+			"auth_pass":   "",
+			// Намеренно не отсортированы: range по MAP обязан отсортировать ключи.
+			"sentinel_config": map[string]any{
+				"sentinel down-after-milliseconds mymaster": "12000",
+				"loglevel":                           "notice",
+				"sentinel failover-timeout mymaster": "70000",
+			},
+		},
+	}
+	const runs = 12
+	var first string
+	for i := 0; i < runs; i++ {
+		out := renderRedisTmpl(t, "sentinel.conf.tmpl", root)
+		if i == 0 {
+			first = out
+		} else if out != first {
+			t.Fatalf("прогон %d дал ИНОЙ вывод (недетерминизм директив):\n--- 0 ---\n%s\n--- %d ---\n%s", i, first, i, out)
+		}
+	}
+	// loglevel < sentinel down... < sentinel failover... — порядок sorted-ключей.
+	iLog := strings.Index(first, "loglevel notice")
+	iDown := strings.Index(first, "down-after-milliseconds mymaster 12000")
+	iFail := strings.Index(first, "failover-timeout mymaster 70000")
+	if iLog < 0 || iDown < 0 || iFail < 0 {
+		t.Fatalf("нет ожидаемых директив:\n%s", first)
+	}
+	if !(iLog < iDown && iDown < iFail) {
+		t.Fatalf("директивы не в отсортированном порядке (loglevel<down<failover):\n%s", first)
+	}
+	// auth-pass пуст → строки auth-pass нет.
+	if strings.Contains(first, "sentinel auth-pass") {
+		t.Fatalf("пустой auth_pass: строки auth-pass быть не должно:\n%s", first)
+	}
+}
+
+// TestSentinelConf_AuthRendered — ПОЗИТИВНЫЙ guard auth-блока: при НЕпустых
+// auth_user/auth_pass обе директивы `sentinel auth-user`/`sentinel auth-pass`
+// рендерятся с именем мониторимого master-а (симметрия с пустым случаем в
+// DirectivesDeterministicOrder, где обеих строк нет). Ловит регресс гейта
+// `{{- if .vars.auth_X }}` и потерю master_name в auth-строках. AUTH sentinel-а
+// на master требуется при requirepass — без этих строк failover молча сломается.
+func TestSentinelConf_AuthRendered(t *testing.T) {
+	root := map[string]any{
+		"self": map[string]any{"network": map[string]any{"primary_ip": "10.0.0.5"}},
+		"vars": map[string]any{
+			"master_name":     "mymaster",
+			"master_ip":       "10.0.0.1",
+			"master_port":     "6379",
+			"quorum":          "2",
+			"auth_user":       "sentinel-user",
+			"auth_pass":       "s3cr3t-sentinel-pass",
+			"sentinel_config": map[string]any{},
+		},
+	}
+	out := renderRedisTmpl(t, "sentinel.conf.tmpl", root)
+
+	// auth-user — с именем мониторимого master-а.
+	if !strings.Contains(out, "sentinel auth-user mymaster sentinel-user") {
+		t.Fatalf("нет строки auth-user с master_name:\n%s", out)
+	}
+	// auth-pass — с именем мониторимого master-а.
+	if !strings.Contains(out, "sentinel auth-pass mymaster s3cr3t-sentinel-pass") {
+		t.Fatalf("нет строки auth-pass с master_name:\n%s", out)
+	}
+}
+
 // nonEmptyLines — непустые строки рендера (отбрасывает blank-строки от
 // {{- -}}-обрамления комментария шаблона).
 func nonEmptyLines(s string) []string {

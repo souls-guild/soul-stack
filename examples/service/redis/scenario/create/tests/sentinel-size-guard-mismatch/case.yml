@@ -1,0 +1,54 @@
+# L0-испытание size-guard create в режиме sentinel — FAIL-ветка (mismatch).
+# Roster из 3 хостов, но replicas=1 → ожидается 1+1=2 хоста. 3 != 2 → size-guard
+# вычисляет булево "false", cmd принимает форму `test "false" = "true" || { echo
+# ...; exit 1; }` — при исполнении ноды (L2/live) рвёт прогон fail-fast ДО любого
+# install. На L0 (render-only) доказывается ТРАНСЛЯЦИЯ guard-а в fail-форму.
+#
+# Парный с sentinel-create-1master-2replica (true-ветка): тот же guard-предикат
+# (size == 1 + replicas), противоположный исход — обе полярности покрыты.
+name: sentinel size-guard fails on topology mismatch (3 hosts != 1 + 1 replica)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-1.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+    - sid: node-2.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+    - sid: node-3.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+  essence:
+    redis_type: sentinel
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+  input:
+    redis_type: sentinel
+    replicas: 1
+
+assert:
+  rendered_tasks:
+    # index 0 — mode-guard (sentinel → no-op); cluster-ветка placeholder-skip
+    # (слоты 1..7). sentinel size-guard FAIL-форма теперь на index 8: 3 == 1+1 →
+    # false → "false" встроено в test.
+    - index: 8
+      module: core.cmd.shell
+      params:
+        cmd: 'test "false" = "true" || { echo "topology mismatch: hosts != 1 + replicas"; exit 1; }'

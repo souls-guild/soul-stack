@@ -8,9 +8,10 @@ description: >-
   идёт через плагин `community.redis`; оркестрация (порядок/таргетинг/rolling/
   health-gate) — в scenario сервиса.
 
-  PILOT (2026-06-22): реализован режим standalone, scenario `create`. sentinel /
-  cluster / sentinel_only + scenarios add_acl_user/update_config/reshard/failover —
-  следующие батчи (redis-консолидация .pm/tasks/2026-06-22-redis-consolidation).
+  Статус (2026-06-22): scenario `create` реализован для режимов standalone,
+  cluster и sentinel (диспетчер по redis_type). sentinel_only + day-2 scenarios
+  (add_acl_user/update_config/reshard/failover) — backlog
+  (redis-консолидация .pm/tasks/2026-06-22-redis-consolidation).
 
 # state_schema_version = 1 → каталог migrations/ не обязателен (ADR-019).
 # incarnation.state фиксирует, что развёрнуто, чтобы оператор видел инсталляцию и
@@ -21,7 +22,8 @@ state_schema:
   properties:
     # Режим развёртывания (концепция роли). Порождает производные флаги
     # (deploy_redis/deploy_sentinel/cluster_enabled), уходящие в destiny через
-    # apply: input: в соответствующих scenario. В pilot — только standalone.
+    # apply: input: в соответствующих scenario. Реализованы standalone/cluster/
+    # sentinel; sentinel_only — backlog.
     redis_type:
       type: string
       enum: [standalone, sentinel, cluster, sentinel_only]
@@ -44,8 +46,9 @@ state_schema:
           perms: { type: string }
           state: { type: string, enum: [on, off] }
         additionalProperties: false
-    # Хосты топологии (sid + роль). Для standalone — один primary; для sentinel/
-    # cluster наполняется сценариями add_replicas/build (следующие батчи).
+    # Хосты топологии (sid + роль). Для standalone — один primary; для cluster/
+    # sentinel наполняется сценарием create (раскладка ролей по таргетированным
+    # souls). Точная роль каждого SID в state — follow-up.
     redis_hosts:
       type: array
       items:
@@ -54,6 +57,14 @@ state_schema:
         properties:
           sid:  { type: string, format: fqdn }
           role: { type: string, enum: [primary, replica, sentinel] }
+    # Факты sentinel-режима (master_name + quorum monitored master). Наполняется
+    # create при redis_type=sentinel; для прочих режимов отсутствует/пуст.
+    redis_sentinel:
+      type: object
+      additionalProperties: false
+      properties:
+        master_name: { type: string }
+        quorum:      { type: integer }
 
 # Зависимости-destiny (ADR-007: версия зависимости = git ref, не semver-range).
 # Резолв git-URL — гибрид (docs/keeper/config.md::default_destiny_source):

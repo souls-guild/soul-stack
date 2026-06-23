@@ -20,8 +20,8 @@ func parseConnConfig(s *structpb.Struct) (connConfig, error) {
 	}
 	return connConfig{
 		addr:     addr,
-		username: firstString(f["username"]),
-		password: firstString(f["password"]),
+		username: stringOrEmpty(f["username"]),
+		password: stringOrEmpty(f["password"]),
 		db:       intOrDefault(f["db"], 0),
 	}, nil
 }
@@ -69,8 +69,9 @@ func stringValue(v *structpb.Value) (string, bool) {
 	return "", false
 }
 
-// firstString — строковое значение или "" (для опциональных полей).
-func firstString(v *structpb.Value) string {
+// stringOrEmpty — строковое значение или "" (для опциональных полей). НЕ берёт
+// "первый элемент" — отдаёт строку как есть либо "" для не-строки/nil.
+func stringOrEmpty(v *structpb.Value) string {
 	s, _ := stringValue(v)
 	return s
 }
@@ -130,6 +131,20 @@ func nodeSpecs(v *structpb.Value) map[string]map[string]*structpb.Value {
 		out[k] = inner.StructValue.GetFields()
 	}
 	return out
+}
+
+// nodeSpec — поля одной вложенной ноды-спецификации ({addr|ip+port}) из
+// structpb-map. Параллель nodeSpecs, но для ОДНОГО узла (add-node: new_node/seed/
+// master). nil → пустой map (caller трактует как «не задано»).
+func nodeSpec(v *structpb.Value) map[string]*structpb.Value {
+	if v == nil {
+		return nil
+	}
+	sv, ok := v.GetKind().(*structpb.Value_StructValue)
+	if !ok {
+		return nil
+	}
+	return sv.StructValue.GetFields()
 }
 
 func boolOrDefault(v *structpb.Value, def bool) bool {

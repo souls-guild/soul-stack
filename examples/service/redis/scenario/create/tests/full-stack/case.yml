@@ -82,21 +82,24 @@ fixtures:
 
 assert:
   rendered_tasks:
+    # index 0 — mode-guard (core.cmd.shell, БЕЗ when:): диспетчер ловит
+    # нереализованный redis_type. standalone реализован → "true" → no-op. Не ассертим.
+
     # ── destiny redis (standalone) ──────────────────────────────────────────
-    - index: 0
+    - index: 1
       module: core.pkg.installed
       params:
         name: redis-server
         version: "5:7.0.15-1~deb12u7"
 
-    # index 1 — socket-dir (core.exec.run, when: config.unixsocket): unixsocket в
+    # index 2 — socket-dir (core.exec.run, when: config.unixsocket): unixsocket в
     # merged-конфиге НЕТ → static-when-false → placeholder-skip. Не ассертим.
 
     # users.acl: MAP имя→{perms,state,password} с ПОЛНОЙ ACL-строкой +
     # keeper-side vault()-пароль. ПОЧЕМУ map, а не список: range по map в шаблоне
     # сортирует ключи → детерминизм порядка строк (regress-guard на tiling-баг
     # 2026-06-22; прямой order-guard — destiny_redis_tmpl_test.go).
-    - index: 2
+    - index: 3
       module: core.file.rendered
       params:
         path: /etc/redis/users.acl
@@ -126,7 +129,7 @@ assert:
           essence: {}
 
     # redis.conf: ИТОГ merge(). Здесь живёт главный guard трансляции.
-    - index: 3
+    - index: 4
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -163,20 +166,23 @@ assert:
           role: ""
           essence: {}
 
-    - index: 7
+    - index: 8
       module: core.service.running
       params:
         name: redis-server
         enabled: true
 
-    - index: 8
+    - index: 9
       module: core.service.restarted
       params:
         name: redis-server
 
     # ── community.redis.command (PING health-gate) ──────────────────────────
     # addr localhost, пароль — тот же requirepass vault()-резолв, args [PING].
-    - index: 9
+    # index 15: index 0 — mode-guard; standalone destiny ЭКСПАНДИТСЯ в 14 task-ов
+    # (1..14; +5 gated sentinel-задач в хвосте tasks/main.yml, placeholder-skip на
+    # standalone-прогоне), PING сценария идёт следом (index 15).
+    - index: 15
       module: community.redis.command
       params:
         addr: "127.0.0.1:6379"
@@ -208,3 +214,5 @@ assert:
         perms: "~app:* +@read +@write -@dangerous"
         state: "on"
     redis_hosts: []
+    # standalone — не sentinel → redis_sentinel пуст.
+    redis_sentinel: {}

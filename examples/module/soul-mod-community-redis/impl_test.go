@@ -18,12 +18,16 @@ const secretPass = "vault-resolved-supersecret-9f3a7c1e2b"
 // fakeConn — in-memory redisConn: пишет каждый вызов Do, отдаёт скриптованные
 // ответы. seenPassword фиксируем, чтобы доказать: пароль уходит в коннект, но НЕ
 // в аргументы команд.
+//
+// configLive моделирует текущие значения CONFIG GET <param> (для честного diff
+// config-state): пусто/нет ключа → пара "param " (значение "").
 type fakeConn struct {
-	cfg     connConfig
-	calls   [][]any
-	results map[string]string // ключ — args[0]; "" → echo "OK"
-	doErr   error
-	closed  bool
+	cfg        connConfig
+	calls      [][]any
+	results    map[string]string // ключ — args[0]; "" → echo "OK"
+	configLive map[string]string // CONFIG GET <param> → текущее значение
+	doErr      error
+	closed     bool
 }
 
 func (f *fakeConn) Do(_ context.Context, args ...any) (string, error) {
@@ -39,6 +43,23 @@ func (f *fakeConn) Do(_ context.Context, args ...any) (string, error) {
 		return r, nil
 	}
 	return "OK", nil
+}
+
+// ConfigGet — типизированный путь: отдаёт {param: value} из configLive БЕЗ
+// space-join, поэтому многословные значения (save) сохраняются целиком (паритет
+// с реальным go-redis ConfigGet → map[string]string). Записываем вызов в calls,
+// чтобы diff-проба CONFIG GET оставалась видимой для assert.
+func (f *fakeConn) ConfigGet(_ context.Context, param string) (map[string]string, error) {
+	f.calls = append(f.calls, []any{"CONFIG", "GET", param})
+	if f.doErr != nil {
+		return nil, f.doErr
+	}
+	return map[string]string{param: f.configLive[param]}, nil
+}
+
+// GetKeysInSlot — command/config-тесты слоты не мигрируют, стаб под интерфейс.
+func (f *fakeConn) GetKeysInSlot(_ context.Context, _, _ int) ([]string, error) {
+	return nil, nil
 }
 
 func (f *fakeConn) Close() error { f.closed = true; return nil }
@@ -237,13 +258,126 @@ func TestApplyConfig_HappyPath_ChangedTrue(t *testing.T) {
 	if fin == nil || fin.Failed || !fin.Changed {
 		t.Fatalf("ждали успех changed=true, got %+v", fin)
 	}
-	// Две директивы → два CONFIG SET (детерминированный порядок по ключу).
-	wantSets := [][]any{
+	// Честный diff: live пуст → обе директивы отличаются → GET перед каждым SET,
+	// затем SET (детерминированный порядок по ключу).
+	wantCalls := [][]any{
+		{"CONFIG", "GET", "maxmemory"},
 		{"CONFIG", "SET", "maxmemory", "256mb"},
+		{"CONFIG", "GET", "maxmemory-policy"},
 		{"CONFIG", "SET", "maxmemory-policy", "allkeys-lru"},
 	}
-	assertCalls(t, conn, wantSets)
+	assertCalls(t, conn, wantCalls)
 	assertNoCommandCarriesSecret(t, conn)
+}
+
+// TestApplyConfig_NoOpWhenLiveMatches — честный diff: live уже на желаемом
+// значении → CONFIG SET НЕ вызывается, changed=false (идемпотентность, M3-фикс).
+func TestApplyConfig_NoOpWhenLiveMatches(t *testing.T) {
+	conn := &fakeConn{configLive: map[string]string{
+		"maxmemory":        "256mb",
+		"maxmemory-policy": "allkeys-lru",
+	}}
+	m := newModule(conn)
+	stream := &applyStream{}
+
+	err := m.Apply(&pluginv1.ApplyRequest{
+		State: "config",
+		Params: mustStruct(t, map[string]any{
+			"addr": "127.0.0.1:6379",
+			"config": map[string]any{
+				"maxmemory":        "256mb",
+				"maxmemory-policy": "allkeys-lru",
+			},
+		}),
+	}, stream)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	fin := stream.final()
+	if fin == nil || fin.Failed {
+		t.Fatalf("ждали успех, got %+v", fin)
+	}
+	if fin.Changed {
+		t.Error("ждали changed=false: live уже на желаемом (no-op, M3 честный diff)")
+	}
+	if hasCall(conn.calls, "CONFIG", "SET") {
+		t.Errorf("no-op нарушен: CONFIG SET вызван при совпадении live: %v", conn.calls)
+	}
+	// GET по обеим директивам всё равно прошёл (diff-проба).
+	if !hasCall(conn.calls, "CONFIG", "GET", "maxmemory") {
+		t.Errorf("CONFIG GET maxmemory должен выполниться для diff: %v", conn.calls)
+	}
+}
+
+// TestApplyConfig_PartialDiff — часть директив совпала, часть нет: SET только для
+// реально отличающихся, changed=true, count — по применённым.
+func TestApplyConfig_PartialDiff(t *testing.T) {
+	conn := &fakeConn{configLive: map[string]string{
+		"maxmemory":        "256mb",      // совпадёт → no-op
+		"maxmemory-policy": "noeviction", // отличается → SET
+	}}
+	m := newModule(conn)
+	stream := &applyStream{}
+
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State: "config",
+		Params: mustStruct(t, map[string]any{
+			"addr": "127.0.0.1:6379",
+			"config": map[string]any{
+				"maxmemory":        "256mb",
+				"maxmemory-policy": "allkeys-lru",
+			},
+		}),
+	}, stream)
+
+	fin := stream.final()
+	if fin == nil || fin.Failed || !fin.Changed {
+		t.Fatalf("ждали успех changed=true (одна директива отличается), got %+v", fin)
+	}
+	if hasCall(conn.calls, "CONFIG", "SET", "maxmemory", "256mb") {
+		t.Errorf("совпавшую директиву не должны SET-ить: %v", conn.calls)
+	}
+	if !hasCall(conn.calls, "CONFIG", "SET", "maxmemory-policy", "allkeys-lru") {
+		t.Errorf("отличающуюся директиву должны SET-ить: %v", conn.calls)
+	}
+	if got := fin.GetOutput().GetFields()["count"].GetNumberValue(); got != 1 {
+		t.Errorf("count=%v, ждали 1 (одна применённая директива)", got)
+	}
+}
+
+// TestApplyConfig_MultiwordValueNoOp — P3-регресс: многословное значение
+// (save "900 1 300 10 60 10000") при space-join+strings.Fields рассыпалось бы в
+// перепутанные пары → current != want → ложный CONFIG SET (потеря
+// идемпотентности на day-2 update_config). Типизированный ConfigGet сохраняет
+// значение целиком → live == want → no-op.
+func TestApplyConfig_MultiwordValueNoOp(t *testing.T) {
+	const save = "900 1 300 10 60 10000"
+	conn := &fakeConn{configLive: map[string]string{"save": save}}
+	m := newModule(conn)
+	stream := &applyStream{}
+
+	err := m.Apply(&pluginv1.ApplyRequest{
+		State: "config",
+		Params: mustStruct(t, map[string]any{
+			"addr":   "127.0.0.1:6379",
+			"config": map[string]any{"save": save},
+		}),
+	}, stream)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	fin := stream.final()
+	if fin == nil || fin.Failed {
+		t.Fatalf("ждали успех, got %+v", fin)
+	}
+	if fin.Changed {
+		t.Error("ждали changed=false: live save совпадает с желаемым (многословное значение сохранено целиком)")
+	}
+	if hasCall(conn.calls, "CONFIG", "SET") {
+		t.Errorf("ложный CONFIG SET на совпавшем многословном значении (P3): %v", conn.calls)
+	}
 }
 
 func TestApplyConfig_NumericValueStringified(t *testing.T) {
@@ -262,7 +396,8 @@ func TestApplyConfig_NumericValueStringified(t *testing.T) {
 	if fin := stream.final(); fin == nil || fin.Failed {
 		t.Fatalf("ждали успех, got %+v", fin)
 	}
-	if len(conn.calls) != 1 || conn.calls[0][3] != "20000" {
+	// GET (live пуст) + SET со стрингифицированным значением.
+	if !hasCall(conn.calls, "CONFIG", "SET", "maxclients", "20000") {
 		t.Errorf("ждали CONFIG SET maxclients 20000 (стрингифицировано), got %v", conn.calls)
 	}
 }
@@ -354,6 +489,141 @@ func TestApply_NoEventCarriesSecret(t *testing.T) {
 			assertEventsNoSecret(t, stream)
 			assertNoCommandCarriesSecret(t, conn)
 		})
+	}
+}
+
+// TestApplyConfig_SecretLeakInDriverError_Redacted — драйвер вернул ошибку,
+// СОДЕРЖАЩУЮ значение директивы (requirepass): applyConfig обязан вырезать его
+// через redactError. Доказывает, что error-path config-state симметричен
+// replica/cluster/sentinel (M4, defense-in-depth).
+func TestApplyConfig_SecretLeakInDriverError_Redacted(t *testing.T) {
+	conn := &leakyConfigConn{secret: secretPass}
+	m := &RedisModule{
+		connect: func(_ context.Context, cfg connConfig) (redisConn, error) { return conn, nil },
+	}
+	stream := &applyStream{}
+
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State: "config",
+		Params: mustStruct(t, map[string]any{
+			"addr":   "127.0.0.1:6379",
+			"config": map[string]any{"requirepass": secretPass},
+		}),
+	}, stream)
+
+	fin := stream.final()
+	if fin == nil || !fin.Failed {
+		t.Fatalf("ждали failed=true, got %+v", fin)
+	}
+	if strings.Contains(fin.GetMessage(), secretPass) {
+		t.Errorf("значение директивы (секрет) утекло в Message ошибки: %q", fin.GetMessage())
+	}
+	if !strings.Contains(fin.GetMessage(), "***") {
+		t.Errorf("ждали маску *** в редактированной ошибке, got %q", fin.GetMessage())
+	}
+}
+
+// leakyConfigConn моделирует драйвер, эхающий значение SET-аргумента в текст
+// ошибки (worst-case для проверки redactError на error-path config-state).
+type leakyConfigConn struct {
+	secret string
+}
+
+func (c *leakyConfigConn) Do(_ context.Context, args ...any) (string, error) {
+	if len(args) >= 4 && args[0] == "CONFIG" && args[1] == "SET" {
+		val, _ := args[3].(string)
+		return "", errors.New("ERR could not set value to " + val) // эхает секрет
+	}
+	return "OK", nil
+}
+
+// ConfigGet — live пуст → diff сработает, applyConfig дойдёт до CONFIG SET.
+func (c *leakyConfigConn) ConfigGet(_ context.Context, param string) (map[string]string, error) {
+	return map[string]string{param: ""}, nil
+}
+func (c *leakyConfigConn) GetKeysInSlot(_ context.Context, _, _ int) ([]string, error) {
+	return nil, nil
+}
+func (c *leakyConfigConn) Close() error { return nil }
+
+// --- redactError: регресс для коротких паролей-подстрок ---
+
+// TestRedactError_ShortPasswordSubstring — пароль-подстрока, совпадающая с частью
+// безобидного текста ("6379" в "127.0.0.1:6379"), при ReplaceAll затрёт И адрес.
+// Тест ФИКСИРУЕТ текущее поведение (хрупкость ReplaceAll на коротких секретах):
+// маскируется ЛЮБОЕ вхождение подстроки. Инвариант ИБ соблюдён (секрет не виден),
+// ценой возможной чрезмерной маскировки диагностики. Регресс ловит изменение.
+func TestRedactError_ShortPasswordSubstring(t *testing.T) {
+	err := errors.New("dial 127.0.0.1:6379: connection refused")
+	got := redactError(err, "6379")
+	if strings.Contains(got, "6379") {
+		t.Errorf("секрет-подстрока должна быть вырезана отовсюду, got %q", got)
+	}
+	// Документируем over-masking: адрес тоже задет — ОЖИДАЕМО при коротком секрете.
+	if !strings.Contains(got, "127.0.0.1:***") {
+		t.Errorf("ждали затёртый порт (over-masking фиксируется): %q", got)
+	}
+	// Пустой пароль — no-op.
+	if redactError(errors.New("plain error"), "") != "plain error" {
+		t.Error("пустой пароль должен быть no-op для redactError")
+	}
+}
+
+// --- valueToString / args со значением, содержащим пробел ---
+
+// TestStringList_PreservesValueWithSpace — guard: значение элемента args с
+// пробелом ("hello world") приходит ОДНИМ аргументом команды и не теряет
+// структуру (каждый элемент списка = отдельный arg, без склейки/Fields).
+func TestStringList_PreservesValueWithSpace(t *testing.T) {
+	conn := &fakeConn{}
+	m := newModule(conn)
+	stream := &applyStream{}
+
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State: "command",
+		Params: mustStruct(t, map[string]any{
+			"addr": "127.0.0.1:6379",
+			"args": []any{"SET", "greeting", "hello world"},
+		}),
+	}, stream)
+
+	if len(conn.calls) != 1 {
+		t.Fatalf("ждали один вызов команды, got %v", conn.calls)
+	}
+	call := conn.calls[0]
+	if len(call) != 3 {
+		t.Fatalf("ждали 3 аргумента (SET greeting 'hello world'), got %d: %v", len(call), call)
+	}
+	if call[2] != "hello world" {
+		t.Errorf("значение с пробелом потеряло структуру: arg[2]=%v (ждали 'hello world')", call[2])
+	}
+}
+
+// TestStringMap_NumericAndStringValuesStringified — guard valueToString в составе
+// config-map: число и bool стрингифицируются предсказуемо (256 не 256.000000;
+// true не пусто) — Redis ждёт строки.
+func TestStringMap_NumericAndStringValuesStringified(t *testing.T) {
+	conn := &fakeConn{}
+	m := newModule(conn)
+	stream := &applyStream{}
+
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State: "config",
+		Params: mustStruct(t, map[string]any{
+			"addr": "127.0.0.1:6379",
+			"config": map[string]any{
+				"maxclients":             20000,      // число → "20000"
+				"appendfsync":            "everysec", // строка как есть
+				"lazyfree-lazy-eviction": true,       // bool → "true" (оператор предупреждён: Redis ждёт yes/no — это его выбор)
+			},
+		}),
+	}, stream)
+
+	if !hasCall(conn.calls, "CONFIG", "SET", "maxclients", "20000") {
+		t.Errorf("число должно стать '20000': %v", conn.calls)
+	}
+	if !hasCall(conn.calls, "CONFIG", "SET", "appendfsync", "everysec") {
+		t.Errorf("строка как есть: %v", conn.calls)
 	}
 }
 

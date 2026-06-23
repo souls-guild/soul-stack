@@ -44,7 +44,3 @@ redis_config:
   maxmemory-policy: allkeys-lru
   maxclients:       10000
   timeout:          300
-
-# Unix-сокет Redis оставлен в подложке как passthrough-директива redis.conf:
-# попадает в merged-конфиг наравне с прочими (least-privilege локальный путь для
-# redis-cli/экспортера). Оператор отключает, переопределив в redis_settings.

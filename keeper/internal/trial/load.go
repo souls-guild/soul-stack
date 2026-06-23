@@ -128,13 +128,23 @@ func (c *Case) validate() error {
 	if c.Fixtures.Soulprint != nil && len(c.Fixtures.Hosts) > 0 {
 		return fmt.Errorf("fixtures.soulprint и fixtures.hosts взаимоисключены: soulprint — single-host сахар, hosts — multi-host roster")
 	}
+	// SID-уникальность roster-а: дубль валит детерминизм. RegisterByHost —
+	// карта по SID (harness), второй хост с тем же SID перезаписывает первый;
+	// сортировка soulprint.hosts по SID делает порядок дублей неустойчивым.
+	// Strict-ошибка (как взаимоисключение single/multi), а не молчаливое
+	// схлопывание.
+	seenSID := make(map[string]struct{}, len(c.Fixtures.Hosts))
 	for i, h := range c.Fixtures.Hosts {
 		if h.SID == "" {
 			return fmt.Errorf("fixtures.hosts[%d]: sid обязателен", i)
 		}
+		if _, dup := seenSID[h.SID]; dup {
+			return fmt.Errorf("fixtures.hosts[%d]: дублирующийся sid %q (sid в roster-е обязан быть уникальным)", i, h.SID)
+		}
+		seenSID[h.SID] = struct{}{}
 	}
 	if len(c.Assert.RenderedTasks) == 0 {
-		return fmt.Errorf("assert.rendered_tasks: пуст (пилот L0 сверяет только эту секцию)")
+		return fmt.Errorf("assert.rendered_tasks: пуст (L0 требует план задач; state_changes/state_after — дополнительные секции)")
 	}
 	for i, et := range c.Assert.RenderedTasks {
 		if et.Module == "" {

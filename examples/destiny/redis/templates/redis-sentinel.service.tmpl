@@ -1,0 +1,43 @@
+{{/*
+  systemd-юнит redis-sentinel (режим sentinel). В отличие от redis-server (его
+  юнит несёт дистрибутивный пакет), отдельный sentinel-демон в этой раскладке
+  управляется СВОИМ юнитом — пакет не всегда заводит redis-sentinel.service под
+  нужный конфиг. Полный юнит, не drop-in.
+
+  Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010). Контекста
+  .vars/.self юнит не использует (статичен): путь конфига фиксирован
+  /etc/redis/sentinel.conf, рендерится отдельной задачей destiny.
+
+  Type=notify + supervised systemd в sentinel.conf: redis-sentinel остаётся
+  foreground-процессом и сам уведомляет systemd о готовности.
+*/}}
+[Unit]
+Description=Redis Sentinel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/redis-sentinel /etc/redis/sentinel.conf --supervised systemd
+ExecStop=/usr/bin/redis-cli -p 26379 shutdown nosave
+Restart=always
+User=redis
+Group=redis
+RuntimeDirectory=redis
+RuntimeDirectoryMode=0755
+
+# systemd-hardening (симметрично hardening drop-in redis-server).
+ProtectSystem=strict
+ReadWritePaths=/var/lib/redis /var/log/redis /var/run/redis
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

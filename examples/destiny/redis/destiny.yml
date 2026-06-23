@@ -10,11 +10,13 @@ description: >-
 # Список задач — в tasks/main.yml. Только core-модули → required_modules: не нужен
 # (community.redis вызывается из scenario сервиса, не из этой destiny).
 #
-# PILOT (2026-06-22): путь standalone. Структура заложена расширяемой под
-# sentinel/cluster (отдельные tasks-ветки + sentinel.conf.tmpl) следующими
-# батчами, но СЕЙЧАС реализован только standalone. Конфиг приходит ГОТОВЫМ merged
-# map-ом через apply: input: config: (merge default→preset→вычисления→passthrough
-# делает scenario сервиса) — destiny остаётся «глупой», сама ничего не сливает.
+# Режим-агностична: один и тот же кирпич обслуживает standalone, cluster и
+# sentinel (последний — через sentinel_enabled + sentinel.conf.tmpl/unit, gated-
+# задачи в хвосте tasks/main.yml). Режим выбирает scenario сервиса передачей флагов
+# и cluster-/sentinel-директив в config; destiny сама режим не знает. Конфиг
+# приходит ГОТОВЫМ merged map-ом через apply: input: config: (merge default→preset→
+# вычисления→passthrough делает scenario сервиса) — destiny остаётся «глупой», сама
+# ничего не сливает.
 
 input:
   version:
@@ -89,3 +91,57 @@ input:
         password:
           type: string
           secret: true
+
+  # ── Sentinel (режим sentinel) ────────────────────────────────────────────────
+  # Эти поля задействованы ТОЛЬКО когда sentinel_enabled=true (gated-задачи ниже
+  # в tasks/main.yml). Вне sentinel-режима не передаются → has()-guard в задачах
+  # гасит рендер sentinel.conf/unit. Структура — режим-агностичный кирпич остаётся
+  # «глупым»: scenario сервиса вычисляет master-election и передаёт ГОТОВЫЕ значения.
+  sentinel_enabled:
+    type: boolean
+    required: false
+    default: false
+    description: >-
+      Включить рендер sentinel.conf + redis-sentinel.service + запуск демона
+      (режим sentinel). По умолчанию false (standalone/cluster — без sentinel).
+
+  sentinel:
+    type: object
+    # Поле опционально (field-level required отсутствует → false): передаётся
+    # только в sentinel-режиме (gated на sentinel_enabled). Когда передано —
+    # master_ip обязателен (object-level required: [...] ниже). Один ключ
+    # `required` может нести ЛИБО bool (опциональность поля), ЛИБО список
+    # обязательных под-ключей object-а — здесь выбрана списочная форма, поэтому
+    # `required: false` отсутствует (опциональность достигается дефолтом).
+    description: >-
+      Параметры monitored master для sentinel.conf. master_ip/master_port —
+      HOST-ИНВАРИАНТНЫЙ адрес master-а кластера (один на кластер, scenario
+      резолвит run_once). announce-ip НЕ здесь: он per-host, рендерится из
+      .self.network.primary_ip. config — стартовые директивы sentinel.conf
+      (файловая форма). auth_pass — зарезолвленный keeper-side секрет (маскируется).
+    # master_ip обязателен: sentinel без monitored master бессмыслен, а задача
+    # рендера sentinel.conf берёт ${ input.sentinel.master_ip } БЕЗ has()-guard
+    # (gated на sentinel_enabled). Required ловит пропуск адреса понятной
+    # schema-ошибкой ДО render, а не криптичным CEL «no such key» в шаблоне.
+    required: [master_ip]
+    additional_properties: false
+    properties:
+      master_name:
+        type: string
+      master_ip:
+        type: string
+      master_port:
+        type: integer
+        min: 1
+      quorum:
+        type: integer
+        min: 1
+      auth_user:
+        type: string
+      auth_pass:
+        type: string
+        secret: true
+      config:
+        type: object
+        properties: {}
+        additional_properties: true

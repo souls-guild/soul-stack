@@ -1,0 +1,56 @@
+# L0-испытание add_node: добавить новую ноду как пустой MASTER (role=master).
+# add-node слоты НЕ двигает (перенос слотов — отдельный reshard, follow-up):
+# scenario лишь передаёт role=master, master.addr пуст (для master не нужен).
+name: add empty master node
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-1.example.com
+      covens: [add_node, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-2.example.com
+      covens: [add_node, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-9.example.com
+      covens: [add_node, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.9 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/add_node:
+      password: s3cr3t-redis-pass-addnode
+  state:
+    redis_type: cluster
+    redis_version: ""
+    redis_config:
+      maxmemory: "256mb"
+      cluster-enabled: "yes"
+      cluster-config-file: "nodes.conf"
+      cluster-node-timeout: "5000"
+    redis_users: {}
+    redis_hosts: []
+
+  input:
+    new_node_sid: node-9.example.com
+    seed_sid: node-1.example.com
+    role: master
+
+assert:
+  rendered_tasks:
+    - index: 16
+      module: community.redis.cluster
+      params:
+        action: add-node
+        role: master
+        password: s3cr3t-redis-pass-addnode
+        new_node:
+          addr: "10.0.0.9:6379"
+        seed:
+          addr: "10.0.0.1:6379"
+        master:
+          addr: ""

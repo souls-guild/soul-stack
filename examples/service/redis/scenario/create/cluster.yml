@@ -11,15 +11,34 @@
 # трансляцию (деление 16384 на shards) НЕ повторяет — иначе две раскладки
 # (scenario + плагин) рассинхронятся.
 
-# 1. SIZE-GUARD — ПЕРВОЙ run_once-задачей, fail-fast ДО любого install.
-#    Топология обязана точно совпасть: число таргетированных хостов roster-а ==
-#    shards*(1+replicas_per_shard). Соответствие вычисляется KEEPER-SIDE при RENDER
-#    (там доступен soulprint.hosts — roster прогона; на Soul-е во flow_context его
-#    НЕТ, поэтому Soul-side failed_when тут fail-closed и неприменим). Отрендеренное
-#    булево встраивается в guard-команду: совпало → "true" → test проходит, no-op;
-#    не совпало → "false" → echo + exit 1 рвёт прогон с понятным сообщением.
-#    changed_when:false — это проверка, а не изменение. run_once — guard единый на
-#    прогон, не per-host.
+# 1. SHARDS-GUARD — shards обязателен в режиме cluster. shards остаётся
+#    required:false без default в input-схеме (min:1 + раскладка ролей, симметрии с
+#    standalone нет), поэтому отсутствие shards = осмысленная ошибка оператора, а
+#    НЕ дефолтное значение. Без этого guard-а size-guard ниже взял бы int(input.shards)
+#    по отсутствующему ключу → CEL «no such key» при render (криптично). Guard
+#    вычисляет has(input.shards) KEEPER-SIDE и при отсутствии рвёт прогон понятным
+#    echo. ПЕРВОЙ run_once-задачей cluster-ветки, ДО size-guard.
+- name: Guard cluster requires shards
+  when: "input.redis_type == 'cluster'"
+  run_once: true
+  module: core.cmd.shell
+  changed_when: "false"
+  params:
+    cmd: >-
+      test "${ has(input.shards) }" = "true" || { echo "redis_type=cluster требует input.shards (число master-шардов, min 1)"; exit 1; }
+
+# 2. SIZE-GUARD — fail-fast ДО любого install. Топология обязана точно совпасть:
+#    число таргетированных хостов roster-а == shards*(1+replicas_per_shard).
+#    Соответствие вычисляется KEEPER-SIDE при RENDER (там доступен soulprint.hosts —
+#    roster прогона; на Soul-е во flow_context его НЕТ, поэтому Soul-side failed_when
+#    тут fail-closed и неприменим). Отрендеренное булево встраивается в guard-команду:
+#    совпало → "true" → test проходит, no-op; не совпало → "false" → echo + exit 1
+#    рвёт прогон с понятным сообщением. changed_when:false — это проверка, а не
+#    изменение. run_once — guard единый на прогон, не per-host.
+#    int(input.shards) обёрнут has()-тернаром (→0 при отсутствии): если shards не
+#    задан, прогон уже рвёт shards-guard выше, но size-guard всё равно РЕНДЕРИТСЯ
+#    (активная cluster-задача, не placeholder-skip) — тернар держит CEL валидным.
+#    replicas_per_shard имеет default:0 → int() безопасен без обёртки.
 - name: Guard cluster topology size matches shards and replicas
   when: "input.redis_type == 'cluster'"
   run_once: true
@@ -27,7 +46,7 @@
   changed_when: "false"
   params:
     cmd: >-
-      test "${ int(size(soulprint.hosts)) == int(input.shards) * (1 + int(input.replicas_per_shard)) }" = "true" || { echo "topology mismatch: hosts != shards*(1+replicas_per_shard)"; exit 1; }
+      test "${ int(size(soulprint.hosts)) == (has(input.shards) ? int(input.shards) : 0) * (1 + int(input.replicas_per_shard)) }" = "true" || { echo "topology mismatch: hosts != shards*(1+replicas_per_shard)"; exit 1; }
 
 # 2. Per-host install + render redis.conf (с cluster-директивами) + render
 #    users.acl + systemd. Та же destiny `redis` (режим-агностична), что и

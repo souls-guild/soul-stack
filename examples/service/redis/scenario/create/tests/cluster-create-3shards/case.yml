@@ -11,8 +11,10 @@
 #   index 3  — cluster destiny: core.pkg.installed;
 #   index 5  — cluster destiny: users.acl (core.file.rendered);
 #   index 6  — cluster destiny: redis.conf (core.file.rendered, cluster-директивы);
-#   index 12 — cluster PING (community.redis.command);
-#   index 13 — cluster-build (community.redis.cluster action create, nodes-MAP).
+#   index 17 — cluster PING (community.redis.command);
+#   index 18 — cluster-build (community.redis.cluster action create, nodes-MAP).
+# (destiny redis экспандится в 14 task-ов после +5 gated sentinel-задач в хвосте
+#  tasks/main.yml, поэтому PING/cluster-build съехали с 12/13 на 17/18.)
 #
 # Что ассертим (критерий приёмки слайса):
 #   1. size-guard PASS-форма: cmd сверяет int(size(hosts))==int(shards)*(1+
@@ -89,15 +91,23 @@ fixtures:
 
 assert:
   rendered_tasks:
+    # ── mode-guard (index 0) + shards-guard (index 3) ───────────────────────
+    # index 0 — mode-guard диспетчера (cluster реализован → no-op).
+    # shards-guard PASS: shards задан → "true".
+    - index: 3
+      module: core.cmd.shell
+      params:
+        cmd: 'test "true" = "true" || { echo "redis_type=cluster требует input.shards (число master-шардов, min 1)"; exit 1; }'
+
     # ── size-guard (core.cmd.shell) ─────────────────────────────────────────
-    # 3 == 3*(1+0) → "true" встроено в test; ветка совпадения.
-    - index: 2
+    # 3 == 3*(1+0) → "true" встроено в test; ветка совпадения. Теперь на index 4.
+    - index: 4
       module: core.cmd.shell
       params:
         cmd: 'test "true" = "true" || { echo "topology mismatch: hosts != shards*(1+replicas_per_shard)"; exit 1; }'
 
     # ── cluster destiny: пакет ──────────────────────────────────────────────
-    - index: 3
+    - index: 5
       module: core.pkg.installed
       params:
         name: redis-server
@@ -110,7 +120,7 @@ assert:
     # .self.network.primary_ip (см. destiny_redis_tmpl_test.go: per-host announce).
     # render_context.self здесь = первый по SID хост (node-a, host-инвариант
     # apply.input в пилоте), но СЛОЙ .tmpl на Soul-е возьмёт self КАЖДОГО хоста.
-    - index: 6
+    - index: 8
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -145,7 +155,7 @@ assert:
 
     # ── cluster-build (community.redis.cluster) ─────────────────────────────
     # nodes-MAP: ключ=SID, addr=primary_ip+":6379". Детерминирован по SID.
-    - index: 13
+    - index: 20
       module: community.redis.cluster
       params:
         action: create

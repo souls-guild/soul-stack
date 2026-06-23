@@ -39,9 +39,17 @@ import (
 //
 // Безопасность ([ADR-010 Amendment 2026-06-22], security-blocker): merge()
 // сохраняет ключи верхнего уровня без переименования, поэтому merged-map с
-// vault-значением ($ vault(...) под ключом назначения) маскируется выходным
-// слоем (shared/audit.MaskSecrets — по sensitive-имени ключа и vault-ref-маркеру)
-// идентично прямому ${ vault(...) }. Секрет не протекает в логи/OTel/RunResult.
+// vault-значением (${ vault(...) } под SENSITIVE-ключом назначения — password/
+// secret/token/…) маскируется выходным слоем (shared/audit.MaskSecrets по
+// sensitive-имени ключа) идентично прямому ${ vault(...) } под тем же ключом.
+//
+// vault-ref-маркерная ветвь MaskSecrets ([vaultRefRe]) здесь НЕ срабатывает:
+// vault() резолвится в plaintext keeper-side, в merged-map попадает уже значение
+// секрета, а не строка-ссылка `vault:<mount>/…`. Поэтому секрет под НЕ-sensitive
+// ключом НЕ маскируется — это инвариант авторов сценариев (класть секрет под
+// secret-именованный ключ), а НЕ ответственность merge(). Доказано
+// [TestMerge_SecretMaskedSameAsDirectVault] (sensitive-ключ маскируется) +
+// [TestMerge_SecretUnderNonSensitiveKeyNotMasked] (несекретный ключ — нет).
 //
 // Регистрируется в основном scenario/destiny-режиме (Keeper full env) и в
 // flow-control-режиме ([NewFlowControl], [ADR-012(d)]): pure-функция без внешнего

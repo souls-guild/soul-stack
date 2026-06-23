@@ -21,7 +21,8 @@ package trial
 // Fixtures задают весь герметичный контекст прогона (input/essence/soulprint/
 // vault). Mocks.Register — register-контекст probe-шагов для `where:`/`when:`
 // (в L0-пилоте проброс готового register-payload-а, без исполнения probe).
-// Assert — ожидаемый результат; в пилоте используется только RenderedTasks.
+// Assert — ожидаемый результат; L0 сверяет RenderedTasks, StateChanges и
+// StateAfter (см. AssertBlock).
 type Case struct {
 	Name     string      `yaml:"name"`
 	Fixtures Fixtures    `yaml:"fixtures"`
@@ -37,8 +38,8 @@ type Case struct {
 // Hosts — multi-host roster прогона (N хостов, render-инварианты топологии:
 // `soulprint.hosts`/`.where(...)`/`size()`/nodes-детерминизм). Soulprint и Hosts
 // ВЗАИМОИСКЛЮЧЕНЫ: оба в одном кейсе → strict-ошибка (validate), в духе
-// strict-декода harness. Соответствует уровню L0 render-only — кто реально
-// master исполняет (dispatch) остаётся L3 ([ADR-023] amendment 2026-06-22).
+// strict-декода harness. Соответствует уровню L0 render-only — какой хост
+// реально исполняет (dispatch) остаётся L3 ([ADR-023] amendment 2026-06-22).
 //
 // Vault — мок vault-резолва: ключ = logical-path секрета (`secret/<...>`),
 // значение = map полей секрета (форма KV v2 `data.data`).

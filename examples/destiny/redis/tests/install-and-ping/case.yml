@@ -18,18 +18,24 @@ stand:
   mode:   push                         # push | pull — как destiny попадает на стенд
 
 # ─── Что применяем ────────────────────────────────────────────────────────────
-# Целевой destiny — ../../destiny.yml (режим-агностичный standalone-кирпич).
+# Целевой destiny — ../../destiny.yml (режим-агностичный кирпич).
 # Имя берётся из родительского манифеста; в case достаточно указать input.
-# Контракт нового destiny: version? / password (secret) / maxmemory? / socket? /
-# config (object) / users? (см. destiny.yml). action-DSL удалён в redis-консолидации.
+# Контракт нового destiny (см. destiny.yml): version? / password (secret) /
+# config (object — ГОТОВЫЙ merged redis.conf, БЕЗ top-level maxmemory/socket:
+# это обычные ключи внутри config) / users? / sentinel_enabled? / sentinel?.
+# В реальном прогоне config мержит scenario сервиса; здесь передаём готовый map.
+# action-DSL удалён в redis-консолидации.
 input:
-  version:   "7.2.4"
-  password:  "vault:test/redis/password"
-  maxmemory: 256mb
-  socket:    /var/run/redis/redis-server.sock
+  version:  "7.2.4"
+  password: "vault:test/redis/password"
   config:
+    maxmemory:  256mb
     maxclients: 10000
     timeout:    300
+    # unixsocket — обычный ключ merged-конфига (не отдельное top-level поле). Задан
+    # → destiny создаёт каталог сокета (task gated на config.unixsocket) и redis
+    # слушает сокет; verify ниже пингует именно по нему. Не задан → ping по TCP.
+    unixsocket: /var/run/redis/redis-server.sock
 
 # Двойной прогон: фреймворк применит destiny с этим input ещё раз и проверит, что
 # во втором применении не было изменений ни в одном шаге (идемпотентность).
@@ -66,6 +72,9 @@ verify:
       stdout: "640 redis:redis"
 
   - name: redis-responds-to-ping
+    # Пинг по unix-сокету валиден ТОЛЬКО потому, что config.unixsocket задан в input
+    # выше (destiny создала каталог сокета, redis слушает сокет). Без config.unixsocket
+    # сокет-файла нет → проверять надо по TCP (redis-cli -h 127.0.0.1 -p 6379).
     apply:
       destiny: core.cmd.shell          # redis-cli по сокету — самосогласованная проверка
       input:

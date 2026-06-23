@@ -3,9 +3,10 @@
 // (концепция Ansible-роли). Scenario сервиса оркеструет порядок/таргетинг,
 // плагин исполняет ОДНУ операцию над одним инстансом.
 //
-// PILOT (2026-06-22): реализованы два state — `command` (raw verb-state,
-// changed=false по умолчанию) и `config` (CONFIG SET из map). acl / cluster /
-// replica / sentinel / failover — следующие батчи.
+// States: `command` (raw verb-state, changed=false по умолчанию), `config`
+// (CONFIG SET из map), `cluster` (см. cluster.go), `replica` (REPLICAOF, см.
+// replica.go), `sentinel` (SENTINEL MONITOR/SET reconcile, см. sentinel.go).
+// acl / failover — следующие батчи.
 //
 // СОЗНАТЕЛЬНО без dry-run preview: плагин на BaseModule НЕ реализует PlanReadSafe
 // → host применяет default-deny (на dry_run задача получает честный «drift не
@@ -51,6 +52,19 @@ type redisConn interface {
 	// ответа Redis (или ошибку). Строка идёт в ApplyEvent.Output — это ответ
 	// сервера, не секрет оператора.
 	Do(ctx context.Context, args ...any) (string, error)
+	// ConfigGet читает CONFIG GET <param> через ТИПИЗИРОВАННЫЙ путь драйвера
+	// (go-redis отдаёт map[string]string нативно). НЕ через Do+strings.Fields:
+	// многословные значения (напр. save "900 1 300 10 60 10000") при space-join +
+	// Fields рассыпаются в перепутанные пары → ложный CONFIG SET, потеря
+	// идемпотентности на day-2 update_config.
+	ConfigGet(ctx context.Context, param string) (map[string]string, error)
+	// GetKeysInSlot читает CLUSTER GETKEYSINSLOT <slot> <count> через
+	// ТИПИЗИРОВАННЫЙ путь драйвера ([]string нативно). НЕ через Do+strings.Fields:
+	// ключ Redis — произвольная байт-строка и может содержать пробел/\t/\n; при
+	// space-join + Fields ключ "user 42" рассыпался бы в два токена → MIGRATE по
+	// несуществующим ключам → ключ НЕ переносится, а SETSLOT NODE всё равно отдаёт
+	// слот → ПОТЕРЯ ДАННЫХ. Native-path сохраняет разделители (симметрия с ConfigGet).
+	GetKeysInSlot(ctx context.Context, slot, count int) ([]string, error)
 	Close() error
 }
 
@@ -84,8 +98,12 @@ func (m *RedisModule) Validate(_ context.Context, req *pluginv1.ValidateRequest)
 	case "cluster":
 		// cluster коннектится к нодам из nodes-map, единый addr не требуется.
 		errs = append(errs, validateCluster(f)...)
+	case "replica":
+		errs = append(errs, validateReplica(f)...)
+	case "sentinel":
+		errs = append(errs, validateSentinel(f)...)
 	default:
-		errs = append(errs, fmt.Sprintf("unknown state %q (expected command|config|cluster)", req.GetState()))
+		errs = append(errs, fmt.Sprintf("unknown state %q (expected command|config|cluster|replica|sentinel)", req.GetState()))
 	}
 
 	if len(errs) > 0 {
@@ -121,8 +139,12 @@ func (m *RedisModule) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStream
 		return m.applyCommand(ctx, stream, conn, req.GetParams())
 	case "config":
 		return m.applyConfig(ctx, stream, conn, req.GetParams())
+	case "replica":
+		return m.applyReplica(ctx, stream, conn, req.GetParams())
+	case "sentinel":
+		return m.applySentinel(ctx, stream, conn, req.GetParams())
 	default:
-		return sendFailure(stream, fmt.Sprintf("unknown state %q (expected command|config|cluster)", req.GetState()))
+		return sendFailure(stream, fmt.Sprintf("unknown state %q (expected command|config|cluster|replica|sentinel)", req.GetState()))
 	}
 }
 
@@ -156,10 +178,14 @@ func (m *RedisModule) applyCommand(ctx context.Context, stream grpc.ServerStream
 	})
 }
 
-// applyConfig — CONFIG SET по каждой директиве (+ опц. CONFIG REWRITE). Порядок
-// детерминированный (отсортированные ключи) ради воспроизводимого вывода.
-// changed=true при ≥1 применённой директиве. Значения директив в события идут —
-// это конфиг redis, не пароль; password в cfg отдельно и не светится.
+// applyConfig — честный diff: CONFIG GET текущего значения каждой директивы,
+// CONFIG SET только реально отличающихся (no-op → changed=false, идемпотентно как
+// reconcileGlobals / cluster / replica / sentinel). Порядок детерминированный
+// (отсортированные ключи) ради воспроизводимого вывода. Опц. CONFIG REWRITE
+// выполняется только если хоть одна директива применена (нет дрифта между live и
+// redis.conf, который надо персистить). Значения директив в Output идут — это
+// конфиг redis, не пароль; но error-path санитизируется redactError по значению
+// директивы (defense-in-depth: значение могло прийти из vault, напр. requirepass).
 func (m *RedisModule) applyConfig(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], conn redisConn, params *structpb.Struct) error {
 	f := params.GetFields()
 	directives := stringMap(f["config"])
@@ -170,23 +196,46 @@ func (m *RedisModule) applyConfig(ctx context.Context, stream grpc.ServerStreami
 
 	applied := make([]string, 0, len(directives))
 	for _, key := range sortedKeys(directives) {
-		if _, err := conn.Do(ctx, "CONFIG", "SET", key, directives[key]); err != nil {
-			return sendFailure(stream, fmt.Sprintf("CONFIG SET %s: %v", key, err))
+		want := directives[key]
+		current, err := configGet(ctx, conn, key)
+		if err != nil {
+			// redactError по значению директивы: defense-in-depth — значение могло
+			// прийти из vault (requirepass/masterauth), а текст ошибки драйвера его
+			// эхать (симметрия с replica/cluster/sentinel error-path).
+			return sendFailure(stream, fmt.Sprintf("CONFIG GET %s: %s", key, redactError(err, want)))
+		}
+		if current == want {
+			continue // no-op: live уже на желаемом значении
+		}
+		if _, err := conn.Do(ctx, "CONFIG", "SET", key, want); err != nil {
+			return sendFailure(stream, fmt.Sprintf("CONFIG SET %s: %s", key, redactError(err, want)))
 		}
 		applied = append(applied, key)
 	}
 
-	if rewrite {
+	if rewrite && len(applied) > 0 {
 		if _, err := conn.Do(ctx, "CONFIG", "REWRITE"); err != nil {
 			return sendFailure(stream, fmt.Sprintf("CONFIG REWRITE: %v", err))
 		}
 	}
 
-	return sendOutcome(stream, true, fmt.Sprintf("CONFIG SET applied: %s", strings.Join(applied, ",")), map[string]any{
+	return sendOutcome(stream, len(applied) > 0, fmt.Sprintf("CONFIG SET applied: %s", strings.Join(applied, ",")), map[string]any{
 		"applied": strings.Join(applied, ","),
 		"count":   int64(len(applied)),
-		"rewrite": rewrite,
+		"rewrite": rewrite && len(applied) > 0,
 	})
+}
+
+// configGet читает CONFIG GET <param> → текущее значение или "" (параметр пуст/нет).
+// Использует ТИПИЗИРОВАННЫЙ ConfigGet драйвера (map[string]string), а НЕ
+// Do+strings.Fields: многословные значения (save "900 1 300 10 60 10000") при
+// space-join + Fields рассыпались бы в перепутанные пары → ложный CONFIG SET.
+func configGet(ctx context.Context, conn redisConn, param string) (string, error) {
+	m, err := conn.ConfigGet(ctx, param)
+	if err != nil {
+		return "", err
+	}
+	return m[param], nil
 }
 
 func (m *RedisModule) openConn(ctx context.Context, cfg connConfig) (redisConn, error) {
@@ -232,6 +281,34 @@ func (r *realConn) Do(ctx context.Context, args ...any) (string, error) {
 		return "", err
 	}
 	return stringifyResult(res), nil
+}
+
+// ConfigGet — типизированный CONFIG GET через go-redis (map[string]string).
+// Значения сохраняются целиком, включая многословные (save). redis.Nil →
+// пустой map (параметр без значения).
+func (r *realConn) ConfigGet(ctx context.Context, param string) (map[string]string, error) {
+	m, err := r.c.ConfigGet(ctx, param).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return map[string]string{}, nil
+		}
+		return nil, err
+	}
+	return m, nil
+}
+
+// GetKeysInSlot — типизированный CLUSTER GETKEYSINSLOT через go-redis ([]string).
+// Ключи возвращаются целиком, включая пробельные символы в имени. redis.Nil →
+// пустой срез (слот опустошён).
+func (r *realConn) GetKeysInSlot(ctx context.Context, slot, count int) ([]string, error) {
+	keys, err := r.c.ClusterGetKeysInSlot(ctx, slot, count).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return keys, nil
 }
 
 func (r *realConn) Close() error { return r.c.Close() }

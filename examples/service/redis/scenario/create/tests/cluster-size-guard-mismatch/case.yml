@@ -52,9 +52,14 @@ fixtures:
 
 assert:
   rendered_tasks:
-    # size-guard FAIL-форма: 4 == 3*(1+0) → false → "false" встроено в test.
-    # При исполнении сработает || { echo ...; exit 1; } — fail-fast.
-    - index: 2
+    # index 0 — mode-guard (cluster → no-op); index 3 — shards-guard PASS (shards
+    # задан). size-guard FAIL-форма теперь на index 4: 4 == 3*(1+0) → false →
+    # "false" встроено в test. При исполнении сработает || { echo ...; exit 1; }.
+    - index: 3
+      module: core.cmd.shell
+      params:
+        cmd: 'test "true" = "true" || { echo "redis_type=cluster требует input.shards (число master-шардов, min 1)"; exit 1; }'
+    - index: 4
       module: core.cmd.shell
       params:
         cmd: 'test "false" = "true" || { echo "topology mismatch: hosts != shards*(1+replicas_per_shard)"; exit 1; }'

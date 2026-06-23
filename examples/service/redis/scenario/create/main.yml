@@ -30,8 +30,10 @@ description: >-
 
 # ── Входной контракт оператора (docs/input.md) ────────────────────────────────
 # Простые типизированные понятия. Трансляция в redis.conf — в ветках диспетчера.
-# Топология-поля sentinel заведены для стабильности контракта, но в текущем срезе
-# НЕ реализованы (см. пометки «sentinel»). cluster — реализован (ветка cluster.yml).
+# Реализованы режимы standalone (standalone.yml), cluster (cluster.yml) и sentinel
+# (sentinel.yml). sentinel_only enum-значение зарезервировано под следующий батч и
+# пока НЕ обрабатывается — guard первой задачей диспетчера рвёт прогон с понятным
+# сообщением, если выбран нереализованный режим (а не молчаливый зелёный no-op).
 input:
   redis_type:
     type: string
@@ -39,10 +41,11 @@ input:
     default: standalone
     enum: [standalone, sentinel, cluster, sentinel_only]
     description: >-
-      Режим развёртывания (концепция роли). Реализованы standalone и cluster;
-      sentinel/sentinel_only — следующие батчи (топология + плагинные states),
-      здесь не обрабатываются. redis_type выбирает ветку диспетчера (include:
-      standalone.yml / cluster.yml + when: по redis_type на каждой задаче).
+      Режим развёртывания (концепция роли). Реализованы standalone, cluster и
+      sentinel (master-replica + sentinel-демон); sentinel_only — следующий батч,
+      здесь не обрабатывается. redis_type выбирает ветку диспетчера (include:
+      standalone.yml / cluster.yml / sentinel.yml + when: по redis_type на каждой
+      задаче).
 
   version:
     type: string
@@ -109,10 +112,13 @@ input:
   replicas_per_shard:
     type: integer
     required: false
+    default: 0
     min: 0
     description: >-
-      Реплик на один master-шард (режим cluster). 0 — кластер без реплик (только
-      мастера). Состав roster-а: shards мастеров + shards*replicas_per_shard реплик.
+      Реплик на один master-шард (режим cluster). 0 (дефолт) — кластер без реплик
+      (только мастера). Состав roster-а: shards мастеров + shards*replicas_per_shard
+      реплик. default:0 — чтобы size-guard читал int(input.replicas_per_shard) без
+      has()-обвязки (контраст: shards остаётся guard-only, см. shards-guard cluster.yml).
 
   cluster_node_timeout:
     type: integer
@@ -122,6 +128,40 @@ input:
     description: >-
       Таймаут gossip между нодами кластера, мс (директива cluster-node-timeout
       redis.conf, режим cluster). Не задан → 5000.
+
+  # ── Топология sentinel (режим redis_type=sentinel) ───────────────────────────
+  # Counts задают РАСКЛАДКУ ролей по таргетированным souls (pull-native, Вариант A):
+  # 1 master + replicas реплик. size-guard create/sentinel.yml проверяет, что число
+  # хостов roster-а ровно 1+replicas. master-election (кто master) — run_once по
+  # sort soulprint.hosts (первый по SID); на create роль declared (probe невозможен,
+  # redis ещё не поднят). sentinel-демон поднимается на КАЖДОМ хосте.
+  replicas:
+    type: integer
+    required: false
+    default: 0
+    min: 0
+    description: >-
+      Реплик master-а (режим sentinel). 0 (дефолт) — только master (без реплик).
+      Состав roster-а прогона: 1 master + replicas реплик (size-guard сверяет
+      size(soulprint.hosts) == 1+replicas). default:0 — чтобы size-guard читал
+      int(input.replicas) без has()-обвязки.
+
+  sentinel_quorum:
+    type: integer
+    required: false
+    min: 1
+    description: >-
+      Quorum sentinel-ов для признания master down (режим sentinel). Не задан →
+      вычисляется size(soulprint.hosts)/2+1 (большинство). Передаётся в плагин
+      community.redis.sentinel (SENTINEL MONITOR quorum) и в sentinel.conf.
+
+  sentinel_master_name:
+    type: string
+    required: false
+    default: mymaster
+    description: >-
+      Логическое имя monitored master в Sentinel (режим sentinel). По умолчанию
+      mymaster. Уходит в sentinel.conf и в community.redis.sentinel (master_name).
 
   users:
     type: object
@@ -204,11 +244,47 @@ state_changes:
              ) }
   - set: redis_users
     value: "${ has(input.users) ? input.users : {} }"
+  # redis_hosts пустой во ВСЕХ режимах: state_changes рендерятся per-host с
+  # soulprint.SELF (AllowHosts=false, orchestration.md §7.1) — roster soulprint.hosts
+  # тут НЕДОСТУПЕН (граница: state — per-run, роли раскладывает apply-сторона).
+  # Точные declared-роли sentinel (master-election) живут в apply.input.sentinel,
+  # не в state (симметрично cluster, где роли раскладывает плагин).
   - set: redis_hosts
     value: "${ [] }"
+  # redis_sentinel: факты monitored master (только режим sentinel). quorum берётся
+  # ТОЛЬКО из input (size(soulprint.hosts) в state_changes недоступен, см. выше):
+  # задан → пишем его; не задан → 0 (auto-quorum size/2+1 вычисляется в apply, в
+  # state не материализуется). Вне sentinel-режима — пустой объект.
+  - set: redis_sentinel
+    value: >-
+      ${ (has(input.redis_type) && input.redis_type == 'sentinel')
+           ? {
+               'master_name': has(input.sentinel_master_name) ? input.sentinel_master_name : 'mymaster',
+               'quorum':      has(input.sentinel_quorum) ? int(input.sentinel_quorum) : 0
+             }
+           : {} }
 
 # Тело прогона — ветки диспетчера, по одной на режим. Раскрываются inline ДО render
 # (orchestration.md §6); ветвление по redis_type — через `when:` на их задачах.
 tasks:
+  # GUARD режима — ПЕРВОЙ задачей диспетчера, БЕЗ when: (рендерится при ЛЮБОМ
+  # redis_type). Ловит footgun «нереализованный режим = тихий зелёный no-op»:
+  # ветки standalone/cluster/sentinel все gated на свой redis_type, поэтому при
+  # redis_type вне этого набора (напр. sentinel_only — запланирован отдельным
+  # батчем) ВСЕ ветки гаснут placeholder-skip-ом и create проходит зелёным, НИЧЕГО
+  # не развернув. Guard вычисляет KEEPER-SIDE булево «режим реализован» (тот же
+  # render-в-cmd-форму паттерн, что size-guard веток): реализован → "true" → test
+  # проходит, no-op; не реализован → "false" → echo с конкретным redis_type +
+  # exit 1 рвут прогон fail-fast. Перечень mode-литералов синхронен enum
+  # input.redis_type МИНУС sentinel_only (его ветки ещё нет). changed_when:false —
+  # проверка, run_once — guard единый на прогон.
+  - name: Guard redis_type is an implemented mode
+    run_once: true
+    module: core.cmd.shell
+    changed_when: "false"
+    params:
+      cmd: >-
+        test "${ (has(input.redis_type) ? input.redis_type : 'standalone') == 'standalone' || (has(input.redis_type) ? input.redis_type : 'standalone') == 'cluster' || (has(input.redis_type) ? input.redis_type : 'standalone') == 'sentinel' }" = "true" || { echo "redis_type=${ has(input.redis_type) ? input.redis_type : 'standalone' } ещё не реализован (поддержаны: standalone, cluster, sentinel)"; exit 1; }
   - include: standalone.yml
   - include: cluster.yml
+  - include: sentinel.yml

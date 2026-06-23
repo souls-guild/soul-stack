@@ -439,6 +439,67 @@ func TestMerge_SecretMaskedSameAsDirectVault(t *testing.T) {
 	}
 }
 
+// TestMerge_SecretUnderNonSensitiveKeyNotMasked — НЕГАТИВНЫЙ guard инварианта
+// границы: секрет, попавший в merged-map под НЕ-sensitive ключом, выходным слоем
+// НЕ маскируется. vault() резолвится в plaintext keeper-side, в map ложится
+// значение секрета (без `vault:`-маркера) — vault-ref-ветвь MaskSecrets не
+// срабатывает, sensitive-ключевая ветвь не матчит несекретное имя. Это
+// ОТВЕТСТВЕННОСТЬ АВТОРА СЦЕНАРИЯ (класть секрет под secret-именованный ключ), а
+// не merge(). Тест фиксирует, что merge() границу маскинга НЕ расширяет и НЕ
+// сужает — поведение симметрично прямому ${ vault(...) } под тем же ключом.
+func TestMerge_SecretUnderNonSensitiveKeyNotMasked(t *testing.T) {
+	kv := &stubKV{secrets: map[string]map[string]any{
+		"secret/redis/admin": {"password": "s3cr3t-plaintext"},
+	}}
+	e := newVaultEngine(t, kv)
+
+	// Эталон: прямой vault под НЕ-sensitive ключом `maxmemory` тоже НЕ
+	// маскируется — merge() обязан вести себя так же.
+	direct, err := e.EvalInterpolation("${ vault('secret/redis/admin#password') }", Vars{})
+	if err != nil {
+		t.Fatalf("eval direct vault: %v", err)
+	}
+	directPayload := map[string]any{"maxmemory": direct}
+	if audit.MaskSecrets(directPayload)["maxmemory"] != "s3cr3t-plaintext" {
+		t.Fatal("эталон: прямой vault под НЕ-sensitive ключом замаскирован — модель маскинга изменилась")
+	}
+
+	// Тот же секрет через merge() под НЕ-sensitive ключом `maxmemory`.
+	merged, err := e.EvalInterpolation(
+		`${ merge(input.defaults, {'maxmemory': vault('secret/redis/admin#password')}) }`,
+		Vars{Input: map[string]any{
+			"defaults": map[string]any{"appendonly": "yes"},
+		}},
+	)
+	if err != nil {
+		t.Fatalf("eval merge+vault: %v", err)
+	}
+	mergedMap := merged.(map[string]any)
+	maskedMerged := audit.MaskSecrets(mergedMap)
+	// Инвариант: под НЕ-sensitive ключом секрет проходит насквозь (merge не
+	// добавляет маскинг, как и прямой vault). Корректность — на авторе сценария.
+	if maskedMerged["maxmemory"] != "s3cr3t-plaintext" {
+		t.Fatalf("merged.maxmemory = %v, want plaintext (несекретный ключ — merge не маскирует, симметрия с прямым vault)",
+			maskedMerged["maxmemory"])
+	}
+}
+
+// TestMerge_ZeroArgs — нижняя граница арности: merge() без аргументов →
+// compile-ошибка no-such-overload (overload-ы объявлены для 1..mergeMaxArity,
+// нулевой не объявлен). Симметрично верхней границе TestMerge_TooManyVarargs.
+func TestMerge_ZeroArgs(t *testing.T) {
+	e := newEngine(t)
+
+	_, err := e.EvalExpression(`merge()`, Vars{})
+	if err == nil {
+		t.Fatal("merge() без аргументов: ожидалась compile-ошибка no-such-overload, получено nil")
+	}
+	var ce *ErrCompile
+	if !errors.As(err, &ce) {
+		t.Fatalf("merge(): ошибка = %v, want *ErrCompile (no such overload)", err)
+	}
+}
+
 // TestMerge_UndeclaredInMigration — migration-CEL ([ADR-019]) hermetic:
 // merge() НЕ зарегистрирована (см. buildEngine). Вызов → compile-ошибка
 // no such overload, симметрично glob()/vault()-guard-у миграционного env

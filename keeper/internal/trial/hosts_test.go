@@ -22,7 +22,7 @@ tasks:
 `
 
 // hostsWhereMain — scenario, фильтрующий roster по declared-роли: cross-host
-// проекция soulprint.hosts.where(...) в params (master-discovery идиома).
+// проекция soulprint.hosts.where(...) в params (primary-discovery идиома).
 const hostsWhereMain = `name: create
 input: {}
 tasks:
@@ -73,7 +73,7 @@ fixtures:
       role: replica
       soulprint:
         network: { primary_ip: 10.0.0.2 }
-    - sid: master-1.example.com
+    - sid: primary-1.example.com
       covens: [create]
       role: primary
       soulprint:
@@ -211,6 +211,35 @@ assert:
 	}
 	if !strings.Contains(err.Error(), "sid") {
 		t.Fatalf("ожидали сообщение про обязательный sid, получили: %v", err)
+	}
+}
+
+// TestLoadCase_RejectsDuplicateSID — две host-записи roster-а с одинаковым sid →
+// strict-ошибка. Дубль схлопывает RegisterByHost (карта по SID) и делает порядок
+// soulprint.hosts недетерминированным → недопустим.
+func TestLoadCase_RejectsDuplicateSID(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, caseFileName)
+	if err := os.WriteFile(file, []byte(`name: dup sid
+fixtures:
+  hosts:
+    - sid: node-1.example.com
+      covens: [create]
+    - sid: node-1.example.com
+      covens: [create]
+assert:
+  rendered_tasks:
+    - index: 0
+      module: core.exec.run
+`), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, _, err := LoadCase(file)
+	if err == nil {
+		t.Fatalf("ожидали ошибку на дублирующийся sid")
+	}
+	if !strings.Contains(err.Error(), "дублирующийся sid") {
+		t.Fatalf("ожидали сообщение про дублирующийся sid, получили: %v", err)
 	}
 }
 

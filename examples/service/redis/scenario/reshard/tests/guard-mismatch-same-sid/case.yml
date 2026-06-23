@@ -1,0 +1,45 @@
+# L0-испытание reshard: GUARD-провал. from_sid == to_sid → guard рендерится в
+# "false" → отрендеренная команда даёт echo+exit 1 (на исполнении порвёт прогон).
+# Покрывает FALSE-ветку guard-предиката (парный с happy-кейсом). Соответствие
+# вычисляется KEEPER-SIDE при render (soulprint.hosts доступен).
+name: reshard guard fails when from equals to
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-1.example.com
+      covens: [reshard, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-2.example.com
+      covens: [reshard, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/reshard:
+      password: s3cr3t-redis-pass-reshard
+  state:
+    redis_type: cluster
+    redis_version: ""
+    redis_config:
+      maxmemory: "256mb"
+      cluster-enabled: "yes"
+      cluster-config-file: "nodes.conf"
+      cluster-node-timeout: "5000"
+    redis_users: {}
+    redis_hosts: []
+
+  input:
+    from_sid: node-1.example.com
+    to_sid: node-1.example.com
+    slots: 50
+
+assert:
+  rendered_tasks:
+    # GUARD рендерится в "false" → test "false" = "true" не проходит → echo+exit 1.
+    - index: 0
+      module: core.cmd.shell
+      params:
+        cmd: 'test "false" = "true" || { echo "reshard guard: from_sid/to_sid must be distinct hosts of the run roster"; exit 1; }'

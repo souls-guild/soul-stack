@@ -37,6 +37,24 @@ BIN_DIR := bin
 # Путь к собранному офлайн-линтеру (используется таргетом `lint`).
 LINT_BIN := soul-lint/$(BIN_DIR)/soul-lint
 
+# Путь к собранному L0-runner-у (используется таргетом `trial`). Бинарь собирается
+# в рамках `build`, как и soul-lint.
+TRIAL_BIN := keeper/$(BIN_DIR)/soul-trial
+
+# Сервисы, ИСКЛЮЧЁННЫЕ из гейтового прогона `trial` (см. таргет). Это НЕ «зелёный
+# по умолчанию» — список явный и громкий: каждый skip печатается с причиной, чтобы
+# исключение было видно в логе CI и не маскировало новый регресс.
+#
+# `redis-monitored` — устаревший сервис redis-эпохи, удаляется ПОСЛЕДНИМ батчем
+# консолидации (brief.md: «удаление старых сервисов — последним»). Его single-host
+# L0-кейс ассертит self.covens: [] — это латентно-НЕВЕРНОЕ ожидание: harness
+# (fixtureHosts) с самого начала инжектит incarnation.name-метку в covens
+# синтетического trial-host (зеркало прод-roster `WHERE $1 = ANY(coven)`),
+# self.covens НИКОГДА не был []. monitoring имел ту же латентную ошибку и уже
+# исправлен (covens: [create]) — снят из списка. redis-monitored НЕ чиним (вот-вот
+# удаляется), держим в skip до удаления.
+TRIAL_SKIP := redis-monitored
+
 # Версия сборки. По умолчанию выводится из git: ближайший тег + короткий хеш,
 # суффикс `-dirty` при незакоммиченных правках (`git describe`). На голом
 # чекауте без тегов выпадет короткий хеш (`--always`). Переопределяется снаружи:
@@ -70,7 +88,7 @@ PKG_DIR  := $(DIST_DIR)/pkg
 # окружения для ${ARCH}-подстановки в deploy/nfpm/*.yaml.
 PKG_ARCH ?= amd64
 
-.PHONY: gen build build-soulctl build-linux test test-race test-integration e2e e2e-live e2e-k8s docker-build-keeper docker-build-soul tidy check check-fmt vet check-gen check-doc-links check-vuln lint dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand gen-openapi check-openapi check-template sync-webui check-webui sbom pkg sign stress load-test help
+.PHONY: gen build build-soulctl build-linux test test-plugins test-race test-integration e2e e2e-live e2e-k8s docker-build-keeper docker-build-soul tidy check check-fmt vet check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand gen-openapi check-openapi check-template sync-webui check-webui sbom pkg sign stress load-test help
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -152,6 +170,33 @@ test:
 		echo "go test ./... in $$m"; \
 		(cd $$m && go test ./...) || exit 1; \
 	done
+
+# Тесты community-плагинов examples/module/* — каждый ОТДЕЛЬНЫЙ go.mod ВНЕ go.work
+# (ADR-016: community-плагины тянут ядро как обычную зависимость, не workspace-member).
+# Поэтому гоняются с `GOWORK=off` per-module, а НЕ через MODULES-список `make test`
+# (тот их вообще не видит). Покрывает в т.ч. security-guard на маскинг секретов
+# плагина community.redis (59 тест-функций), которые иначе остались бы вне гейта.
+#
+# Skip-on-unresolvable: cloud/ssh-плагины (soul-cloud-*/soul-ssh-*) standalone-offline
+# не резолвятся (workspace-пины go.mod расходятся со standalone-tidy, нужна сеть).
+# `go list ./...` под GOWORK=off у них падает → пропускаем ГРОМКО с warning (тот же
+# приём, что `go list` empty → skip в `test`/`vet`). Это НЕ молчаливое прощение: skip
+# печатается, а резолвящийся offline плагин (community.redis) под него не попадает —
+# его регресс гейт ловит. Merge()-тесты НЕ здесь: они в shared/cel (workspace,
+# покрыты `make test`), дублировать не нужно.
+# `-count=1` — без кеша (плагин может зависеть от внешнего fake-состояния).
+test-plugins:
+	@for d in examples/module/*/go.mod; do \
+		[ -e "$$d" ] || continue; \
+		m=$$(dirname "$$d"); \
+		if ! (cd "$$m" && GOWORK=off go list ./... >/dev/null 2>&1); then \
+			echo "skip $$m (standalone-offline не резолвится — GOWORK=off go list упал; cloud/ssh-плагин или go.mod-drift)"; \
+			continue; \
+		fi; \
+		echo "GOWORK=off go test -count=1 ./... in $$m"; \
+		(cd "$$m" && GOWORK=off go test -count=1 ./...) || exit 1; \
+	done
+	@echo "test-plugins: community-плагины (resolvable offline) зелёные"
 
 # Прогон тестов с race detector — отдельным таргетом, чтобы обычный `make test`
 # оставался быстрым. CI должен гонять оба: `test` (быстро, на каждый push) и
@@ -531,12 +576,15 @@ sign:
 	@exit 0
 
 # Единый локальный CI-гейт. Порядок: дешёвые статические проверки → сборка →
-# тесты → drift-проверки → supply-chain-скан → lint корпуса examples/.
+# тесты (workspace + community-плагины) → drift-проверки → supply-chain-скан →
+# lint корпуса examples/ → L0-испытания (soul-trial).
 # `test-integration` сюда НЕ входит — он требует docker (см. комментарий к
 # `test`); гонять отдельно. Release/packaging-таргеты (sbom/pkg/sign) сюда НЕ
 # входят — внешний tooling. `check-vuln` требует доступ к vuln.go.dev — offline
 # пропускается через SKIP_VULNCHECK=1 (см. таргет), в CI гонит реально.
-check: check-fmt vet build test check-gen check-openapi check-template check-webui check-doc-links check-vuln lint
+# `test-plugins` — go.mod-плагины вне go.work (GOWORK=off). `trial` — L0-render
+# по корпусу examples/service/ (ловит сломанные case.yml-ассерты).
+check: check-fmt vet build test test-plugins check-gen check-openapi check-template check-webui check-doc-links check-vuln lint trial
 	@echo "check: все проверки пройдены"
 
 # gofmt-форматирование по всем модулям. `gofmt -l` печатает только файлы,
@@ -655,6 +703,35 @@ lint: build
 	done
 	@echo "lint: корпус examples/ валиден"
 
+# L0-испытания (soul-trial, ADR-023): render-only, герметичные. Гоняем рекурсивно
+# по КАЖДОМУ сервису examples/service/<svc> с хотя бы одним tests/<case>/case.yml.
+# Бинарь soul-trial собирается в рамках `build` (зависимость). Раньше эти кейсы
+# жили ВНЕ гейта (`make lint` = только soul-lint-схема, `make test` = go test) —
+# поэтому сломанные ассерты (напр. off-by-5 индексы add_node после sentinel-слайса)
+# оставались зелёными. Теперь гейт реально исполняет L0.
+#
+# L2 (stand-based, требуют поднятый стенд) harness пропускает сам — в гейт не
+# тащим; ценность гейта — service-level L0 render-инварианты.
+#
+# Skip-list ($(TRIAL_SKIP)) печатается ГРОМКО per-service: исключение видно в логе,
+# не маскирует регресс. Сервис без case.yml тихо пропускается (нечего гонять).
+trial: build
+	@for svc in examples/service/*/; do \
+		name=$$(basename "$$svc"); \
+		skip=""; \
+		for s in $(TRIAL_SKIP); do [ "$$s" = "$$name" ] && skip=1; done; \
+		if [ -n "$$skip" ]; then \
+			echo "SKIP trial $$name (в TRIAL_SKIP — pre-existing L0-drift, см. Makefile-комментарий)"; \
+			continue; \
+		fi; \
+		if ! find "$$svc" -name case.yml | grep -q .; then \
+			continue; \
+		fi; \
+		echo "soul-trial run $$svc"; \
+		$(TRIAL_BIN) run "$$svc" || exit 1; \
+	done
+	@echo "trial: L0-испытания корпуса examples/service/ пройдены"
+
 # --- Нагрузочное тестирование (soul-legion) ---
 # Однокнопочный прогон нагрузочного генератора soul-legion (tests/load/, ADR-004:
 # test-only, НЕ поставочный бинарь; вне MODULES — `make check` его не трогает).
@@ -768,6 +845,7 @@ help:
 	@echo "  build             собрать keeper / soul-trial / soul / soul-lint / soulctl"
 	@echo "  build-soulctl     собрать только soulctl (клиентский CLI оператора)"
 	@echo "  test              go test ./... по всем модулям (без docker)"
+	@echo "  test-plugins      GOWORK=off go test по go.mod-плагинам examples/module/* (community.redis)"
 	@echo "  test-race         go test -race ./..."
 	@echo "  test-integration  go test -tags=integration (testcontainers, нужен docker)"
 	@echo "  e2e               L3a E2E pilot (tests/e2e, -tags=e2e, нужен docker для имп-slice)"
@@ -779,13 +857,14 @@ help:
 	@echo "  tidy              go mod tidy по всем модулям"
 	@echo ""
 	@echo "Проверки/гейт:"
-	@echo "  check             единый локальный CI-гейт (fmt+vet+build+test+openapi+gen+lint)"
+	@echo "  check             единый локальный CI-гейт (fmt+vet+build+test+test-plugins+openapi+gen+lint+trial)"
 	@echo "  check-fmt         gofmt -l по всем модулям (fail на неотформатированных)"
 	@echo "  vet               go vet ./... по всем модулям"
 	@echo "  check-gen         идемпотентность протогена (gen-drift в proto/gen/go)"
 	@echo "  check-doc-links   целостность внутренних doc-ссылок (markdown + Go-комментарии)"
 	@echo "  check-vuln        govulncheck supply-chain по всем модулям (offline: SKIP_VULNCHECK=1)"
 	@echo "  lint              soul-lint по корпусу examples/ (destiny/service/manifest/scenario)"
+	@echo "  trial             soul-trial L0-испытания по корпусу examples/service/ (render-инварианты)"
 	@echo ""
 	@echo "Локальный dev-стек:"
 	@echo "  dev-up            docker compose up -d (PG / Vault / Redis)"

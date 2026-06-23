@@ -1,0 +1,61 @@
+# L0-испытание shards-guard create в режиме cluster — FAIL-ветка (shards не задан).
+# shards остаётся required:false без default в input-схеме (min:1 + раскладка ролей
+# по хостам), поэтому ОТСУТСТВИЕ shards = осмысленная ошибка оператора, а не дефолт.
+# Без shards-guard size-guard ниже взял бы int(input.shards) по отсутствующему ключу
+# → CEL «no such key» при render (криптично, ловится только разбором стека).
+# shards-guard (ПЕРВАЯ run_once-задача cluster-ветки) вычисляет has(input.shards)
+# KEEPER-SIDE; для cluster-без-shards → "false" → встроенное в cmd
+# `test "false" = "true" || { echo ...; exit 1; }` рвёт прогон fail-fast при
+# исполнении ноды. На L0 (render-only) доказывается, что cluster-без-shards
+# РЕНДЕРИТСЯ (size-guard ниже не падает CEL-ошибкой благодаря has()-тернару) и
+# guard переведён в понятную fail-форму.
+#
+# Парный с cluster-single-shard (true-ветка shards-guard): тот же предикат
+# has(input.shards), противоположный исход.
+name: cluster shards-guard fails when shards is omitted
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.9 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+  essence:
+    redis_type: cluster
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+  input:
+    redis_type: cluster
+    # shards НЕ задан намеренно — этот пропуск ловит shards-guard.
+
+assert:
+  rendered_tasks:
+    # index 0 — mode-guard (cluster реализован → no-op).
+    # shards-guard FAIL-форма (index 3): has(input.shards) ложно → "false" → echo
+    # с понятным сообщением + exit 1.
+    - index: 3
+      module: core.cmd.shell
+      params:
+        cmd: 'test "false" = "true" || { echo "redis_type=cluster требует input.shards (число master-шардов, min 1)"; exit 1; }'
+
+    # size-guard РЕНДЕРИТСЯ (активная cluster-задача, не placeholder-skip), CEL не
+    # падает: int(input.shards) обёрнут has()-тернаром (→0). 1 == 0*(1+0) → false →
+    # "false". При исполнении сюда не дойдёт (shards-guard выше уже рвёт прогон).
+    - index: 4
+      module: core.cmd.shell
+      params:
+        cmd: 'test "false" = "true" || { echo "topology mismatch: hosts != shards*(1+replicas_per_shard)"; exit 1; }'

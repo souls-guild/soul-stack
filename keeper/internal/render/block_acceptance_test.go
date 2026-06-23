@@ -3,10 +3,12 @@ package render
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
+	"github.com/souls-guild/soul-stack/shared/cel"
 	"github.com/souls-guild/soul-stack/shared/config"
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
@@ -120,5 +122,172 @@ func TestAcceptance_RestartBlockFanOut(t *testing.T) {
 		if pl.SerialWidth != 1 {
 			t.Errorf("block-потомок %q SerialWidth = %d, want 1 (унаследован block.serial:1)", name, pl.SerialWidth)
 		}
+	}
+}
+
+// redisSentinelResolver — минимальный DestinyResolver для apply:destiny: redis в
+// sentinel-acceptance: принимает apply:input sentinel-ветки (version/password/
+// config/users/sentinel_enabled/sentinel) через permissive-схему. Тело destiny
+// неважно (один module-шаг) — assert на ТАРГЕТ top-level REPLICAOF-задачи
+// sentinel.yml, а не на destiny-задачи.
+type redisSentinelResolver struct{}
+
+func (redisSentinelResolver) Resolve(_ context.Context, name string) (*ResolvedDestiny, error) {
+	if name != "redis" {
+		return nil, errors.New("unknown destiny " + name)
+	}
+	return &ResolvedDestiny{
+		Name: "redis",
+		Tasks: []config.Task{
+			{Name: "redis-step", Module: &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{}}},
+		},
+		Input: config.InputSchemaMap{
+			"version":          {Type: "string"},
+			"password":         {Type: "string"},
+			"config":           {Type: "object", AdditionalProperties: true},
+			"users":            {Type: "object", AdditionalProperties: true},
+			"sentinel_enabled": {Type: "boolean"},
+			"sentinel":         {Type: "object", AdditionalProperties: true},
+		},
+	}, nil
+}
+
+// TestAcceptance_SentinelReplicaExcludesMaster — ★ P0-РЕГРЕСС (master НЕ
+// реплицирует сам себя). Реальный потребитель
+// examples/service/redis/scenario/create/main.yml в режиме sentinel на multi-host
+// roster-е (1 master + 2 replica). Раньше REPLICAOF-задача шла на ВСЕХ хостах
+// (addr=127.0.0.1:6379, master_addr=primary_ip ⇒ на master-узле addr!=master_addr
+// ⇒ плагин-guard НЕ срабатывал ⇒ REPLICAOF на самом master-е). Фикс — scenario
+// `where: soulprint.self.sid != soulprint.hosts[0].sid` на REPLICAOF-задаче.
+//
+// Доказывает на РЕАЛЬНОЙ комбинации (это маскировал unit-тест с addr==master_addr,
+// которой в prod нет): отрендеренная задача community.redis.replica таргетит
+// ТОЛЬКО реплики (node-2/node-3), а на выбранном master (node-1, первый по SID)
+// ОТСУТСТВУЕТ — DispatchPlan.TargetSIDs её не содержит.
+func TestAcceptance_SentinelReplicaExcludesMaster(t *testing.T) {
+	path := filepath.FromSlash("../../../examples/service/redis/scenario/create/main.yml")
+	m, _, diags, err := config.LoadScenarioManifest(path, config.ValidateOptions{})
+	if err != nil {
+		t.Fatalf("LoadScenarioManifest: %v", err)
+	}
+	for _, d := range diags {
+		if d.Level == diag.LevelError {
+			t.Fatalf("scenario diagnostic (%s): %s", d.Code, d.Message)
+		}
+	}
+
+	// include: standalone.yml / cluster.yml / sentinel.yml — раскрытие в плоский
+	// список ДО render (как прод/трайл). Резолвер читает ветки из каталога create.
+	scenarioDir := filepath.Dir(path)
+	expanded, idiags := config.ExpandIncludes(m.Tasks, func(name string) ([]byte, string, error) {
+		full := filepath.Join(scenarioDir, name)
+		data, rerr := os.ReadFile(full)
+		return data, full, rerr
+	})
+	for _, d := range idiags {
+		if d.Level == diag.LevelError {
+			t.Fatalf("ExpandIncludes diagnostic (%s): %s", d.Code, d.Message)
+		}
+	}
+	m.Tasks = expanded
+
+	// Roster sentinel-режима: 3 хоста (1 master + 2 replica), В ПОРЯДКЕ ПО SID —
+	// зеркало прод-roster (topology.LoadIncarnationHosts: ORDER BY sid ASC).
+	// soulprint.hosts проецирует in.Hosts КАК ЕСТЬ (не сортирует), поэтому
+	// master-election soulprint.hosts[0] = node-1 опирается именно на этот порядок.
+	node := func(sid, ip string) *topology.HostFacts {
+		return host(sid, []string{"redis"}, map[string]any{"network": map[string]any{"primary_ip": ip}})
+	}
+	hosts := []*topology.HostFacts{
+		node("node-1.example.com", "10.0.0.1"),
+		node("node-2.example.com", "10.0.0.2"),
+		node("node-3.example.com", "10.0.0.3"),
+	}
+
+	// apply:input sentinel-ветки тянет vault('secret/redis/redis#password') —
+	// движок собираем с фикстурным KVReader-ом (паттерн trial.fixtureVault).
+	engine, err := cel.New(cel.WithVault(stubKV{"secret/redis/redis": {"password": "fixture-redis-pass-16+"}}))
+	if err != nil {
+		t.Fatalf("cel.New(WithVault): %v", err)
+	}
+	p := NewPipeline(stubKV{}, engine, nil, nil)
+	in := RenderInput{
+		Scenario:    m,
+		Input:       map[string]any{"redis_type": "sentinel", "replicas": 2, "sentinel_quorum": 2, "sentinel_master_name": "mymaster"},
+		Essence:     redisSentinelEssence(),
+		Incarnation: IncarnationMeta{Name: "redis", Service: "redis"},
+		Hosts:       hosts,
+		Destiny:     redisSentinelResolver{},
+	}
+
+	tasks, plans, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render (приёмка create/main.yml sentinel): %v", err)
+	}
+
+	byIndex := map[int]*RenderedTask{}
+	for _, tk := range tasks {
+		byIndex[tk.Index] = tk
+	}
+	var replicaPlan *DispatchPlan
+	for i := range plans {
+		if tk := byIndex[plans[i].TaskIndex]; tk != nil && tk.Module == "community.redis.replica" {
+			replicaPlan = &plans[i]
+		}
+	}
+	if replicaPlan == nil {
+		t.Fatal("REPLICAOF-задача (community.redis.replica) не найдена в отрендеренном плане")
+	}
+
+	// master НЕ в таргете: where исключил node-1 (первый по SID).
+	const masterSID = "node-1.example.com"
+	for _, sid := range replicaPlan.TargetSIDs {
+		if sid == masterSID {
+			t.Errorf("REPLICAOF таргетит master %s — where (self.sid != hosts[0].sid) не исключил master (P0: master реплицирует сам себя)", masterSID)
+		}
+	}
+	// Ровно две реплики в таргете.
+	if len(replicaPlan.TargetSIDs) != 2 {
+		t.Errorf("REPLICAOF таргетит %v, want ровно 2 реплики (node-2, node-3) без master", replicaPlan.TargetSIDs)
+	}
+	for _, want := range []string{"node-2.example.com", "node-3.example.com"} {
+		found := false
+		for _, sid := range replicaPlan.TargetSIDs {
+			if sid == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("REPLICAOF не таргетит реплику %s: TargetSIDs=%v", want, replicaPlan.TargetSIDs)
+		}
+	}
+}
+
+// stubKV — герметичный KVReader (cel.KVReader + render.KVReader) для
+// acceptance-теста: статическая карта path→секрет. vault()-функция передаёт path
+// без `#field`-фрагмента; ключи здесь хранятся в logical-форме (secret/...).
+type stubKV map[string]map[string]any
+
+func (k stubKV) ReadKV(_ context.Context, path string) (map[string]any, error) {
+	if v, ok := k[path]; ok {
+		return v, nil
+	}
+	return nil, errors.New("stubKV: нет секрета " + path)
+}
+
+// redisSentinelEssence — essence-подложка create-сценария redis (persistence
+// presets + reserve + базовый redis_config), нужна для merge() в apply:input.
+func redisSentinelEssence() map[string]any {
+	return map[string]any{
+		"memory_reserve_percent": 75,
+		"persistence_presets": map[string]any{
+			"rdb": map[string]any{"save": "900 1 300 10 60 10000", "appendonly": "no"},
+		},
+		"redis_config": map[string]any{
+			"maxmemory":        "256mb",
+			"maxmemory-policy": "allkeys-lru",
+			"maxclients":       10000,
+			"timeout":          300,
+		},
 	}
 }

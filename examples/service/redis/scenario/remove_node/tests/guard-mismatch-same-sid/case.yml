@@ -1,0 +1,44 @@
+# L0-испытание remove_node: GUARD-провал. remove_node_sid == seed_sid → guard
+# рендерится в "false" → отрендеренная команда даёт echo+exit 1 (на исполнении
+# порвёт прогон). Покрывает FALSE-ветку guard-предиката (парный с happy-кейсом).
+# Соответствие вычисляется KEEPER-SIDE при render (soulprint.hosts доступен).
+name: remove_node guard fails when remove_node equals seed
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-1.example.com
+      covens: [remove_node, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-3.example.com
+      covens: [remove_node, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/remove_node:
+      password: s3cr3t-redis-pass-removenode
+  state:
+    redis_type: cluster
+    redis_version: ""
+    redis_config:
+      maxmemory: "256mb"
+      cluster-enabled: "yes"
+      cluster-config-file: "nodes.conf"
+      cluster-node-timeout: "5000"
+    redis_users: {}
+    redis_hosts: []
+
+  input:
+    remove_node_sid: node-3.example.com
+    seed_sid: node-3.example.com
+
+assert:
+  rendered_tasks:
+    # GUARD рендерится в "false" → test "false" = "true" не проходит → echo+exit 1.
+    - index: 0
+      module: core.cmd.shell
+      params:
+        cmd: 'test "false" = "true" || { echo "remove_node guard: remove_node_sid/seed_sid must be distinct hosts of the run roster"; exit 1; }'
