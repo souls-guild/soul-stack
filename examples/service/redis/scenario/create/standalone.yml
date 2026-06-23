@@ -39,6 +39,13 @@
       # int(input.memory_mb)*int(reserve)/100: int()-конверсия каждого операнда
       # унифицирует числовой тип (YAML→uint64 в L0, JSON→double в проде) — без
       # неё uint*int даёт CEL «no such overload».
+      # TLS-директивы — HOST-ИНВАРИАНТ (один cert/порт на кластер) → идут в config
+      # через merge (apply.input резолвится на targeted[0], для одного-на-всех
+      # значения это КОРРЕКТНО; per-host через config гнать НЕЛЬЗЯ — tiling-урок,
+      # но cert/порт per-host НЕ бывают). При tls_enable добавляем tls-port/
+      # tls-cert-file/tls-key-file/tls-ca-cert-file/tls-replication; при tls_only —
+      # `port 0` (plain закрыт). Слой TLS идёт ПОСЛЕ redis_settings → оператор не
+      # ломает TLS-директивы passthrough-ом (last-wins на TLS-домене).
       config: >-
         ${ merge(
              essence.redis_config,
@@ -49,7 +56,19 @@
                  : {},
                has(input.maxmemory_policy) ? { 'maxmemory-policy': input.maxmemory_policy } : {}
              ),
-             has(input.redis_settings) ? input.redis_settings : {}
+             has(input.redis_settings) ? input.redis_settings : {},
+             (has(essence.tls_enable) && essence.tls_enable)
+               ? merge(
+                   {
+                     'tls-port':         string(has(essence.tls_port) ? int(essence.tls_port) : 7379),
+                     'tls-cert-file':    '/etc/redis/tls/redis.crt',
+                     'tls-key-file':     '/etc/redis/tls/redis.key',
+                     'tls-ca-cert-file': '/etc/redis/tls/ca.crt',
+                     'tls-replication':  'yes'
+                   },
+                   (has(essence.tls_only) && essence.tls_only) ? { 'port': '0' } : {}
+                 )
+               : {}
            ) }
       # ACL-юзеры → MAP имя→{perms, state, password}. ПОЧЕМУ map, а не список:
       # users.acl.tmpl range-ит коллекцию построчно, а Go text/template range по
@@ -73,15 +92,58 @@
                }
              }))
            : {} }
+      # Redis-модули (Redis < 8). VERSION-GATE: на Redis 8+ модули встроены →
+      # передаём destiny ПУСТОЙ список (.so не качается, loadmodule не пишется).
+      # Гейт по input.version (мажор >= 8: epoch-префикс N: + 8|9|двузначный мажор).
+      # version не задан → НЕ гейтим (fail-closed на Redis: .so против 8+-бинаря
+      # отклонит сам сервер при старте). modules_base_url/modules_sha256 — host-
+      # инвариант (один источник/арх на кластер) → apply.input; arch-специфичный
+      # URL строит destiny per-host из soulprint.self.os.arch. checksum REQUIRED
+      # каждого .so — fail-closed (core.url.fetched верифицирует SHA-256).
+      modules: >-
+        ${ (has(input.modules) && !(has(input.version) && input.version != '' && input.version.matches('^([0-9]+:)?(8|9|[1-9][0-9])\\.')))
+           ? input.modules
+           : [] }
+      modules_base_url: "${ has(input.modules_base_url) ? input.modules_base_url : '' }"
+      modules_sha256:   "${ has(input.modules_sha256) ? input.modules_sha256 : {} }"
+      # Host-tuning extras (концепция роли). Флаги host-инвариантны → apply.input.
+      # sysctl_settings — данные-таблица essence (passthrough оператора отложен,
+      # essence-дефолт покрывает Redis-tuning). Дефолты флагов: default:true в input
+      # сценария → присутствуют после merge-фазы (guard не нужен), но has()-обёртка
+      # держит ветку корректной и при явном снятии флага оператором.
+      thp_disable:      "${ has(input.thp_disable) ? input.thp_disable : true }"
+      logrotate_enable: "${ has(input.logrotate_enable) ? input.logrotate_enable : true }"
+      sysctl_enable:    "${ has(input.sysctl_enable) ? input.sysctl_enable : true }"
+      sysctl_settings:  "${ has(essence.sysctl_settings) ? essence.sysctl_settings : {} }"
+      # TLS PEM-материал — HOST-ИНВАРИАНТ (один cert/CA на кластер) → apply.input.
+      # Источник — Vault-ПУТИ из essence (essence.tls_*_ref — доверенный контекст
+      # автора, не operator-input → vault() принимает их динамическим аргументом).
+      # vault() резолвит PEM в render-фазе keeper-side, в destiny уходит ЦЕЛЫЙ PEM
+      # (как requirepass). PEM-vars (tls_cert/tls_key/tls_ca) — secret-имена →
+      # маскируются выходным слоем (shared/audit), в логи/OTel/RunResult не текут.
+      tls_enable: "${ has(essence.tls_enable) ? essence.tls_enable : false }"
+      tls_only:   "${ has(essence.tls_only) ? essence.tls_only : false }"
+      tls_port:   "${ has(essence.tls_port) ? int(essence.tls_port) : 7379 }"
+      tls_cert:   "${ (has(essence.tls_enable) && essence.tls_enable) ? vault(essence.tls_cert_ref) : '' }"
+      tls_key:    "${ (has(essence.tls_enable) && essence.tls_enable) ? vault(essence.tls_key_ref) : '' }"
+      tls_ca:     "${ (has(essence.tls_enable) && essence.tls_enable) ? vault(essence.tls_ca_ref) : '' }"
 
 # 2. Health-gate: PING живого Redis после старта (демонстрация плагина
 #    community.redis; raw-команда, конфиг НЕ пишет). addr — localhost (плагин
 #    исполняется на redis-хосте), пароль — тот же keeper-side vault()-резолв.
+#    ★ ИБ (anti-downgrade): tls/tls_ca/порт гейтятся на essence.tls_ENABLE, НЕ
+#    tls_only. TLS включён → плагин ОБЯЗАН коннектиться по TLS (tls=true + addr на
+#    tls_port + tls_ca для verify), иначе при tls_enable=true && tls_only=false
+#    (plain ещё открыт) плагин ушёл бы PLAINTEXT-ом на 6379 → AUTH-пароль открытым
+#    текстом по сети (plaintext-downgrade). TLS выключен → PING по 6379 без TLS
+#    (back-compat). tls_ca — secret-имя (маскируется); vault(essence.tls_ca_ref).
 - name: Wait for redis to answer PING
   when: "has(input.redis_type) ? input.redis_type == 'standalone' : true"
   module: community.redis.command
   retry: { count: 5, delay: 2s }
   params:
-    addr:     "127.0.0.1:6379"
+    addr:     "${ (has(essence.tls_enable) && essence.tls_enable) ? '127.0.0.1:' + string(has(essence.tls_port) ? int(essence.tls_port) : 7379) : '127.0.0.1:6379' }"
     password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    tls:      "${ has(essence.tls_enable) ? essence.tls_enable : false }"
+    tls_ca:   "${ (has(essence.tls_enable) && essence.tls_enable) ? vault(essence.tls_ca_ref) : '' }"
     args:     ["PING"]

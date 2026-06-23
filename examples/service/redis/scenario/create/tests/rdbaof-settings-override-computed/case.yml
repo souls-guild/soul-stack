@@ -55,7 +55,7 @@ assert:
         name: redis-server
         version: ""
 
-    - index: 4
+    - index: 8
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -66,6 +66,7 @@ assert:
         render_context:
           vars:
             password: s3cr3t-redis-pass-create
+            loadmodules: []
             config:
               # COMPUTED был "384mb" (512*75/100), но redis_settings (самый правый
               # слой merge) перекрыл его на "1gb". LAST-WINS на computed-слое.

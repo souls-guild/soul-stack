@@ -1,0 +1,15 @@
+{{- /*
+  CA-сертификат TLS-кластера Redis (PEM). Рендерится в /etc/redis/tls/ca.crt
+  (mode 0600, owner redis) под гейтом tls_enable. Контекст рендера
+  (docs/templating.md §3.2):
+    .vars.tls_ca — PEM CA-сертификата (зарезолвлен scenario из Vault через
+                   ${ vault(essence.tls_ca_ref) } в render-фазе).
+  Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010).
+
+  Var-имя `tls_ca` (не голое `ca`): маскинг по имени ключа (tls[_-]?(key|cert|ca)).
+
+  CA проверяет сертификаты пиров (директива tls-ca-cert-file redis.conf
+  указывает на этот файл; нужна для tls-replication/tls-cluster — узлы валидируют
+  друг друга). PEM пишется ЦЕЛИКОМ. HOST-ИНВАРИАНТ: один CA на кластер.
+*/ -}}
+{{ .vars.tls_ca }}

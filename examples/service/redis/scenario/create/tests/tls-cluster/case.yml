@@ -1,0 +1,136 @@
+# L0-испытание: TLS cluster (only-TLS). Guard: при tls_enable+tls_only в режиме
+# cluster merged config несёт TLS-директивы ВКЛЮЧАЯ tls-cluster yes (cluster-bus
+# шифруется) + port 0 (plain закрыт); cluster-build плагин коннектится к нодам ПО
+# TLS (tls=true, tls_ca, addr-ы на tls_port). cert/CA/порт — host-инвариант (один
+# на кластер) → через apply.input (резолв на targeted[0] корректен).
+name: tls cluster adds tls-cluster directive and builds over TLS on tls_only
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-b.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-c.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+    - sid: node-a.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    secret/services/redis/tls:
+      cert: "-----BEGIN CERTIFICATE-----\nSERVERCERT\n-----END CERTIFICATE-----"
+      key:  "-----BEGIN PRIVATE KEY-----\nSERVERKEY\n-----END PRIVATE KEY-----"
+      ca:   "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+  essence:
+    redis_type: cluster
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    tls_enable: true
+    tls_only:   true
+    tls_port:   7379
+    tls_cert_ref: "secret/services/redis/tls#cert"
+    tls_key_ref:  "secret/services/redis/tls#key"
+    tls_ca_ref:   "secret/services/redis/tls#ca"
+
+  input:
+    redis_type: cluster
+    shards: 3
+    replicas_per_shard: 0
+    cluster_node_timeout: 5000
+
+assert:
+  rendered_tasks:
+    # redis.conf: merged config с cluster + TLS (вкл. tls-cluster yes) + port 0.
+    - index: 12
+      module: core.file.rendered
+      params:
+        path: /etc/redis/redis.conf
+        render_context:
+          vars:
+            password: s3cr3t-redis-pass-create
+            loadmodules: []
+            config:
+              port: "0"
+              tls-port: "7379"
+              tls-cert-file: /etc/redis/tls/redis.crt
+              tls-key-file: /etc/redis/tls/redis.key
+              tls-ca-cert-file: /etc/redis/tls/ca.crt
+              tls-replication: "yes"
+              tls-cluster: "yes"
+              maxmemory:        "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients:       10000
+              timeout:          300
+              save:             "900 1 300 10 60 10000"
+              appendonly:       "no"
+              cluster-enabled:      "yes"
+              cluster-config-file:  "nodes.conf"
+              cluster-node-timeout: "5000"
+          self:
+            sid: node-a.example.com
+            covens: [create, redis]
+            choirs: []
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # cluster-build: nodes-MAP на tls_port (7379), tls=true + tls_ca (плагин по TLS) +
+    # mTLS client-cert (tls_cert/tls_key для взаимного cluster-bus, tls-cluster yes).
+    - index: 31
+      module: community.redis.cluster
+      params:
+        action: create
+        replicas_per_shard: 0
+        password: s3cr3t-redis-pass-create
+        tls: true
+        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+        tls_cert: "-----BEGIN CERTIFICATE-----\nSERVERCERT\n-----END CERTIFICATE-----"
+        tls_key: "-----BEGIN PRIVATE KEY-----\nSERVERKEY\n-----END PRIVATE KEY-----"
+        nodes:
+          node-a.example.com: { addr: "10.0.0.1:7379" }
+          node-b.example.com: { addr: "10.0.0.2:7379" }
+          node-c.example.com: { addr: "10.0.0.3:7379" }
+
+  state_changes:
+    redis_type: cluster
+    redis_version: ""
+    redis_config:
+      port: "0"
+      tls-port: "7379"
+      tls-cert-file: /etc/redis/tls/redis.crt
+      tls-key-file: /etc/redis/tls/redis.key
+      tls-ca-cert-file: /etc/redis/tls/ca.crt
+      tls-replication: "yes"
+      tls-cluster: "yes"
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+      cluster-enabled:      "yes"
+      cluster-config-file:  "nodes.conf"
+      cluster-node-timeout: "5000"
+    redis_users: {}
+    redis_hosts: []

@@ -256,11 +256,56 @@ stderr. Ошибки коннекта санитизируются (`redactError
 `sentinel_set`/…), не их секретные значения; `replica` ставит `masterauth`
 аргументом `CONFIG SET` (нужно Redis для синхронизации), но в события его не пишет.
 
+## TLS-коннект (концепция Ansible-роли redis: `redis_tls_*`)
+
+Все states (`command`/`config`/`cluster`/`replica`/`sentinel`) принимают **общие**
+TLS-параметры коннекта. По умолчанию TLS выключен (plaintext, back-compat); при
+`tls: true` плагин коннектится к Redis по TLS.
+
+| Параметр | Тип | По умолчанию | Назначение |
+|---|---|---|---|
+| `tls` | bool | `false` | Коннектиться по TLS. **Обязателен в only-TLS** (Redis `port 0`, plain закрыт): без него плагин не достучится. |
+| `tls_ca` | string (secret, PEM) | — | CA-сертификат для проверки серверного (RootCAs). При частном PKI практически обязателен. |
+| `tls_cert` | string (secret, PEM) | — | Client-сертификат для mTLS (опц., **только вместе** с `tls_key`). |
+| `tls_key` | string (secret, PEM) | — | Client-ключ для mTLS (опц., **только вместе** с `tls_cert`). |
+| `tls_skip_verify` | bool | `false` | **ЯВНЫЙ opt-out** проверки серверного сертификата. По умолчанию проверка **включена** (default secure). |
+
+Модель безопасности (security-инвариант: insecure = явный opt-out, default secure):
+при `tls: true` плагин по умолчанию **проверяет** серверный сертификат (`RootCAs`
+из `tls_ca`). Отключить проверку можно **только** явным `tls_skip_verify: true`.
+`tls_cert`+`tls_key` задаются строго вместе (один без другого → ошибка валидации
+конфигурации, без утечки PEM в текст).
+
+PEM приходит **целиком** в params: scenario резолвит его из Vault через
+`${ vault(...) }` в render-фазе и кладёт PEM в `apply.input` (как `requirepass`) —
+плагин свой Vault-доступ не тянет (capability остаётся `network_outbound`). В
+манифесте `tls_ca`/`tls_cert`/`tls_key` помечены `secret: true` + `pattern:
+"^vault:.*"` (декларация secret-источника); маскинг — по **имени ключа**:
+`shared/audit` маскирует `tls_key`/`tls_cert`/`tls_ca` в логах/OTel/RunResult/UI.
+Код-инвариант (L0): PEM client-ключ не попадает в `ApplyEvent`/ошибки коннекта
+(TLS-handshake-ошибка санитизируется `redactError` по `password` **и** PEM-ключу).
+
+**Mutual cluster-bus поддержан.** При взаимной аутентификации нод (Redis
+`tls-cluster yes`) ноды требуют клиентский сертификат от того, кто к ним
+коннектится. Scenario сервиса `redis` в шаге `cluster` `action: create`
+пробрасывает плагину `tls_cert`/`tls_key` (резолв из тех же
+`vault(essence.tls_cert_ref/tls_key_ref)`, что и серверный PEM redis.conf) —
+плагин строит mTLS-пару (`tls.go`: client-cert добавляется, когда заданы **оба**
+`tls_cert`+`tls_key`). Без mutual-bus эти параметры не мешают handshake
+(используются только если сервер их запросил). `cert`/`key` host-инвариантны
+(один на кластер) → корректно идут через `apply.input`.
+
+**Anti-downgrade (ИБ).** Подключения плагина в scenario `redis` гейтятся на
+`essence.tls_enable`, **не** `tls_only`: при `tls_enable: true` плагин коннектится
+по TLS даже когда plain-порт ещё открыт (`tls_only: false`). Иначе AUTH-пароль ушёл
+бы по сети plaintext-ом (plaintext-downgrade). Порт коннекта — `tls_port` при
+`tls_enable`, иначе plain `6379`.
+
 ## Capabilities / side-effects
 
-- `required_capabilities: [network_outbound]` — TCP/unix-коннект к Redis (для
-  `cluster` — коннект к каждой ноде из `nodes`). **Без** `vault_access` (пароль
-  резолвит Keeper), **без** `exec_subprocess` / `fs_write_root` (плагин не
+- `required_capabilities: [network_outbound]` — TCP/unix/**TLS**-коннект к Redis
+  (для `cluster` — коннект к каждой ноде из `nodes`). **Без** `vault_access` (пароль
+  и PEM резолвит Keeper), **без** `exec_subprocess` / `fs_write_root` (плагин не
   запускает подпроцессы — `cluster` идёт целиком через go-redis, не через
   `redis-cli` — и не пишет на FS).
 - `side_effects: [{ service: redis-server }]` — все state работают над живым

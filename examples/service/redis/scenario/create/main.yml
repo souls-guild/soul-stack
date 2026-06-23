@@ -194,6 +194,74 @@ input:
     properties: {}
     additional_properties: true
 
+  # ── Redis-модули (концепция Ansible-роли redis: redis_module_*) ──────────────
+  # Загружаемые модули RediSearch/RedisJSON/RedisTimeSeries/RedisBloom как .so
+  # (Redis < 8). VERSION-GATE: на Redis 8+ модули ВСТРОЕНЫ — сценарий передаёт
+  # destiny пустой список (см. modules_for_redis в ветках диспетчера). Гейт по
+  # input.version (мажор >= 8), упрощённо: полную version-matrix совместимости НЕ
+  # тащим (brief), version не задан → не гейтим (fail-closed на Redis: .so против
+  # 8+-бинаря отклонит сам сервер). modules_base_url/modules_sha256 обязательны при
+  # непустом modules — destiny верифицирует SHA-256 каждого .so (fail-closed).
+  modules:
+    type: array
+    required: false
+    description: >-
+      Алиасы Redis-модулей для подключения (Redis < 8): search (RediSearch),
+      json (RedisJSON), timeseries (RedisTimeSeries), bloom (RedisBloom). Пусто/не
+      задан → модули не подключаются. На Redis 8+ игнорируется (модули встроены).
+    items:
+      type: string
+      enum: [search, json, timeseries, bloom]
+
+  modules_base_url:
+    type: string
+    required: false
+    description: >-
+      Базовый URL источника .so-модулей (без арх-сегмента). destiny `redis` строит
+      полный URL per-host как <base_url>/<arch>/<имя.so>. Обязателен при непустом
+      modules.
+
+  modules_sha256:
+    type: object
+    required: false
+    description: >-
+      Маппинг алиас→SHA-256 .so-объекта (голый hex). ОБЯЗАТЕЛЕН для каждого
+      подключаемого модуля (fail-closed: core.url.fetched верифицирует, mismatch →
+      падение). Соответствует паре (version, arch) кластера.
+    properties: {}
+    additional_properties:
+      type: string
+      pattern: "^[0-9a-f]{64}$"
+
+  # ── Host-tuning extras (концепция Ansible-роли) ──────────────────────────────
+  # Режим-агностичные per-host добавки. Все три включены по умолчанию (рекомендация
+  # Redis): оператор снимает флаг, если хост-тюнинг делается вне Soul Stack.
+  # Транслируются в destiny `redis` через apply.input (host-инвариантны). Значения
+  # sysctl-параметров — данные-таблица essence.sysctl_settings (не во входе оператора).
+  thp_disable:
+    type: boolean
+    required: false
+    default: true
+    description: >-
+      Отключить Transparent Huge Pages на хосте (oneshot-юнит disable-thp).
+      Рекомендация Redis. По умолчанию true.
+
+  logrotate_enable:
+    type: boolean
+    required: false
+    default: true
+    description: >-
+      Поставить logrotate-конфиг для логов Redis (/etc/logrotate.d/redis).
+      По умолчанию true.
+
+  sysctl_enable:
+    type: boolean
+    required: false
+    default: true
+    description: >-
+      Применить kernel-параметры под Redis (/etc/sysctl.d/30-redis.conf + sysctl
+      --system). Значения — essence.sysctl_settings. По умолчанию true.
+
 # ── Мутация incarnation.state ─────────────────────────────────────────────────
 # После успешного apply Keeper фиксирует развёрнутое (ADR-009 §7.1, ADR-057
 # list-форма). redis_config — ИТОГ трансляции (тот же merge(), что ушёл в render
@@ -212,6 +280,12 @@ state_changes:
     value: "${ has(input.redis_type) ? input.redis_type : 'standalone' }"
   - set: redis_version
     value: "${ has(input.version) ? input.version : '' }"
+  # TLS-директивы (host-инвариант: один cert/порт на кластер) пишутся в state так
+  # же, как ушли в apply.input.config веток — DRIFT-GUARD синхронности (state ≡
+  # live config). TLS-блок: standalone/sentinel — без tls-cluster; cluster — с
+  # tls-cluster yes. port 0 при tls_only. TLS off (essence.tls_enable отсутствует/
+  # false) → merge({}) → нет директив (бит-в-бит как до TLS-слоя). cluster-announce-ip
+  # в state НЕ пишется (host-вариативен) — TLS-cert/порт, наоборот, host-инвариантны.
   - set: redis_config
     value: >-
       ${ (has(input.redis_type) && input.redis_type == 'cluster')
@@ -229,7 +303,20 @@ state_changes:
                  'cluster-enabled':      'yes',
                  'cluster-config-file':  'nodes.conf',
                  'cluster-node-timeout': string(has(input.cluster_node_timeout) ? int(input.cluster_node_timeout) : 5000)
-               }
+               },
+               (has(essence.tls_enable) && essence.tls_enable)
+                 ? merge(
+                     {
+                       'tls-port':         string(has(essence.tls_port) ? int(essence.tls_port) : 7379),
+                       'tls-cert-file':    '/etc/redis/tls/redis.crt',
+                       'tls-key-file':     '/etc/redis/tls/redis.key',
+                       'tls-ca-cert-file': '/etc/redis/tls/ca.crt',
+                       'tls-replication':  'yes',
+                       'tls-cluster':      'yes'
+                     },
+                     (has(essence.tls_only) && essence.tls_only) ? { 'port': '0' } : {}
+                   )
+                 : {}
              )
            : merge(
                essence.redis_config,
@@ -240,7 +327,19 @@ state_changes:
                    : {},
                  has(input.maxmemory_policy) ? { 'maxmemory-policy': input.maxmemory_policy } : {}
                ),
-               has(input.redis_settings) ? input.redis_settings : {}
+               has(input.redis_settings) ? input.redis_settings : {},
+               (has(essence.tls_enable) && essence.tls_enable)
+                 ? merge(
+                     {
+                       'tls-port':         string(has(essence.tls_port) ? int(essence.tls_port) : 7379),
+                       'tls-cert-file':    '/etc/redis/tls/redis.crt',
+                       'tls-key-file':     '/etc/redis/tls/redis.key',
+                       'tls-ca-cert-file': '/etc/redis/tls/ca.crt',
+                       'tls-replication':  'yes'
+                     },
+                     (has(essence.tls_only) && essence.tls_only) ? { 'port': '0' } : {}
+                   )
+                 : {}
              ) }
   - set: redis_users
     value: "${ has(input.users) ? input.users : {} }"

@@ -79,7 +79,7 @@ assert:
 
     # ── sentinel destiny: redis.conf (sentinel-режим: НЕТ cluster-директив) ──
     # render_context.self = первый по SID хост (node-1, host-инвариант apply.input).
-    - index: 12
+    - index: 16
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -90,6 +90,7 @@ assert:
         render_context:
           vars:
             password: s3cr3t-redis-pass-create
+            loadmodules: []
             config:
               maxmemory:        "256mb"
               maxmemory-policy: allkeys-lru
@@ -120,7 +121,7 @@ assert:
     # master доказано render-ассертом TargetSIDs (TestAcceptance_SentinelReplicaExcludesMaster).
     # Params host-инвариантны → L0 assert by-index сверяет одни и те же params
     # реплик.
-    - index: 24
+    - index: 35
       module: community.redis.replica
       params:
         addr: "127.0.0.1:6379"
@@ -130,7 +131,7 @@ assert:
     # ── SENTINEL MONITOR reconcile (community.redis.sentinel) ───────────────
     # monitor.ip — HOST-ИНВАРИАНТНЫЙ адрес master-а (master-election node-1).
     # quorum=2 (input.sentinel_quorum). auth_pass — keeper-side vault()-резолв.
-    - index: 25
+    - index: 36
       module: community.redis.sentinel
       params:
         addr: "127.0.0.1:26379"

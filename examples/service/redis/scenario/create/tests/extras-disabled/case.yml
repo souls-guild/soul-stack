@@ -1,0 +1,77 @@
+# L0-испытание create (standalone) — host-tuning extras ВЫКЛЮЧЕНЫ. Контр-кейс к
+# extras-enabled: при thp_disable/logrotate_enable/sysctl_enable=false все три
+# блока extras в хвосте destiny `redis` static-when-false → placeholder-skip
+# (gated `has(input.<flag>) && input.<flag>`, isStaticWhen). Plan остаётся
+# когерентным: extras-слоты заняты placeholder-ами (НЕ раскрываются, НЕ роняют
+# render), поэтому PING сценария остаётся на index 21 — то же, что в enabled-кейсе.
+#
+# Почему НЕ ассертим params extras-задач: skip-placeholder несёт Module, но
+# Params=nil (рендер пропущен) — harness сверяет только присутствующие в ассерте
+# ключи, отличить skip от render по params нельзя. Доказательство skip —
+# структурное: PING на index 21 (extras-слоты не раскрылись и не упали).
+name: host-tuning extras skip when disabled
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network:
+      primary_ip: 10.0.0.5
+    os:
+      arch: amd64
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+  essence:
+    redis_type: standalone
+    memory_reserve_percent: 75
+    persistence_presets:
+      off:
+        save: ""
+        appendonly: "no"
+      aof:
+        save: ""
+        appendonly: "yes"
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+      rdb_aof:
+        save: "900 1 300 10 60 10000"
+        appendonly: "yes"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+  input:
+    redis_type: standalone
+    # Явно снимаем все три флага → extras static-when-false → placeholder-skip.
+    thp_disable: false
+    logrotate_enable: false
+    sysctl_enable: false
+
+assert:
+  rendered_tasks:
+    # Базовый standalone-кирпич не задет выключением extras: пакет/redis.conf
+    # рендерятся как обычно (extras — отдельные хвостовые задачи).
+    - index: 1
+      module: core.pkg.installed
+      params:
+        name: redis-server
+        version: ""
+
+    - index: 8
+      module: core.file.rendered
+      params:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+
+    # PING на index 21: extras-слоты (15..20) — placeholder-skip, не раскрылись и
+    # не упали. Тот же индекс, что в extras-enabled → доказательство, что хвостовые
+    # extras занимают фиксированное число слотов независимо от флагов (skip vs render).
+    - index: 26
+      module: community.redis.command
+      params:
+        addr: "127.0.0.1:6379"
+        password: s3cr3t-redis-pass-create
+        args: ["PING"]

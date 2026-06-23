@@ -120,7 +120,7 @@ assert:
     # .self.network.primary_ip (см. destiny_redis_tmpl_test.go: per-host announce).
     # render_context.self здесь = первый по SID хост (node-a, host-инвариант
     # apply.input в пилоте), но СЛОЙ .tmpl на Soul-е возьмёт self КАЖДОГО хоста.
-    - index: 8
+    - index: 12
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -131,6 +131,7 @@ assert:
         render_context:
           vars:
             password: s3cr3t-redis-pass-create
+            loadmodules: []
             config:
               maxmemory:        "256mb"
               maxmemory-policy: allkeys-lru
@@ -155,7 +156,7 @@ assert:
 
     # ── cluster-build (community.redis.cluster) ─────────────────────────────
     # nodes-MAP: ключ=SID, addr=primary_ip+":6379". Детерминирован по SID.
-    - index: 20
+    - index: 31
       module: community.redis.cluster
       params:
         action: create

@@ -34,6 +34,76 @@
     cmd: install
     args: ["-d", "-o", "redis", "-g", "redis", "-m", "0755", "/var/run/redis"]
 
+# ── TLS PEM-материал (концепция Ansible-роли redis: redis_tls_*) ───────────────
+# Рендерим cert/key/CA в /etc/redis/tls/ ДО redis.conf и старта сервиса: redis.conf
+# (директивы tls-cert-file/tls-key-file/tls-ca-cert-file приходят в config от
+# scenario) ссылается на эти файлы — при tls_enable Redis обязан их найти на старте,
+# иначе падает «can't open the TLS certificate». Все три gated на tls_enable +
+# register'ятся → рестарт реактивен на смену cert (см. restart-onchanges ниже).
+# HOST-ИНВАРИАНТ (один cert/CA на кластер): PEM приходит через apply.input
+# (scenario резолвит из Vault), НЕ per-host .self — tiling-урок.
+
+# Каталог /etc/redis/tls — core.file.rendered создаёт только файл, не родительский
+# каталог. Создаём явно тем же идемпотентным паттерном (install -d + creates-якорь).
+# mode 0750 owner redis: PEM (вкл. приватный ключ) читает только сервис.
+- name: Ensure the redis TLS directory exists
+  module: core.exec.run
+  when: has(input.tls_enable) && input.tls_enable
+  params:
+    creates: /etc/redis/tls
+    cmd: install
+    args: ["-d", "-o", "redis", "-g", "redis", "-m", "0750", "/etc/redis/tls"]
+
+# Серверный сертификат. mode 0600 owner redis (cert не секрет, но держим режим
+# единым со всем TLS-каталогом). register — рестарт при ротации cert. var-имя
+# `tls_cert` (не голое `cert`) — каталог маскинга shared/audit ловит секрет ПО
+# ИМЕНИ ключа (regex tls[_-]?(key|cert|ca)); голое `cert` под фильтр не попадало
+# бы → PEM утёк бы в логи/OTel/RunResult.
+- name: Render TLS server certificate
+  module: core.file.rendered
+  when: has(input.tls_enable) && input.tls_enable
+  register: redis_tls_cert
+  params:
+    path: /etc/redis/tls/redis.crt
+    template: templates/tls-cert.crt.tmpl
+    mode: "0600"
+    owner: redis
+    group: redis
+    vars:
+      tls_cert: "${ has(input.tls_cert) ? input.tls_cert : '' }"
+
+# Приватный ключ — СЕКРЕТ. mode 0600 owner redis. var-имя `tls_key` маскируется
+# выходным слоем ПО ИМЕНИ ключа (shared/audit regex tls[_-]?(key|cert|ca));
+# прежнее голое `key` под фильтр НЕ попадало → приватный PEM-ключ утекал в
+# логи/OTel/RunResult. register — рестарт при ротации.
+- name: Render TLS server private key
+  module: core.file.rendered
+  when: has(input.tls_enable) && input.tls_enable
+  register: redis_tls_key
+  params:
+    path: /etc/redis/tls/redis.key
+    template: templates/tls-key.key.tmpl
+    mode: "0600"
+    owner: redis
+    group: redis
+    vars:
+      tls_key: "${ has(input.tls_key) ? input.tls_key : '' }"
+
+# CA-сертификат кластера (валидация пиров для tls-replication/tls-cluster).
+# var-имя `tls_ca` — та же причина: маскинг по имени (tls[_-]?(key|cert|ca)).
+- name: Render TLS CA certificate
+  module: core.file.rendered
+  when: has(input.tls_enable) && input.tls_enable
+  register: redis_tls_ca
+  params:
+    path: /etc/redis/tls/ca.crt
+    template: templates/tls-ca.crt.tmpl
+    mode: "0600"
+    owner: redis
+    group: redis
+    vars:
+      tls_ca: "${ has(input.tls_ca) ? input.tls_ca : '' }"
+
 # users.acl из переданного MAP ACL-юзеров имя→{perms,state,password} (aclfile в
 # redis.conf). register, чтобы рестартить redis при изменении ACL. owner/group
 # redis, mode 0640 — файл содержит password-хеши, читает только сервис. Шаблон
@@ -66,6 +136,18 @@
     vars:
       password: "${ input.password }"
       config:   "${ has(input.config) ? input.config : {} }"
+      # Директивы loadmodule (Redis < 8) — отдельной секцией шаблона (НЕ ключи
+      # config-map: range `{{key}} {{value}}` дал бы хвостовой пробел у loadmodule
+      # без значения). Пути .so вычисляются из input.modules (алиасы) + фиксированной
+      # таблицы имён .so + modules_dir — host-инвариантны (без arch в пути). Пусто/
+      # Redis 8+ (scenario передаёт modules=[]) → пустой список → секции нет.
+      loadmodules: >-
+        ${ has(input.modules)
+           ? input.modules.map(item,
+               (has(input.modules_dir) ? input.modules_dir : '/var/lib/redis/modules')
+               + '/'
+               + {'search': 'redisearch.so', 'json': 'rejson.so', 'timeseries': 'redistimeseries.so', 'bloom': 'redisbloom.so'}[item])
+           : [] }
 
 # Каталог drop-in-а systemd. core.file.rendered создаёт только файл, родительский
 # каталог .service.d/ — нет, а дистрибутивный пакет redis-server его не заводит.
@@ -112,9 +194,14 @@
 # требуют рестарта (новые директивы/юзеры), а изменённый drop-in вступает в силу
 # только после рестарта (daemon-reload выше лишь перечитал unit). Порядок
 # гарантирован позицией задач.
+# Рестарт реактивно на изменение конфига/ACL/drop-in/TLS-материала: redis.conf,
+# users.acl, hardening drop-in и любой из TLS PEM-файлов требуют рестарта (новые
+# директивы/юзеры/сертификаты вступают в силу только после перезапуска). TLS-
+# register'ы добавлены в onchanges, чтобы ротация cert/key/CA дёргала рестарт; вне
+# tls_enable эти задачи placeholder-skip → register пуст → onchanges их не считает.
 - name: Restart redis-server because config or hardening changed
   module: core.service.restarted
-  onchanges: [redis_conf, redis_acl, redis_hardening]
+  onchanges: [redis_conf, redis_acl, redis_hardening, redis_tls_cert, redis_tls_key, redis_tls_ca]
   timeout: 30s
   params:
     name: redis-server
@@ -185,3 +272,147 @@
   timeout: 30s
   params:
     name: redis-sentinel
+
+# ── Host-tuning extras (концепция Ansible-роли) ─────────────────────────────────
+# Per-host config-ish добавки, режим-АГНОСТИЧНЫ: одинаково полезны standalone/
+# cluster/sentinel. Каждый блок GATED собственным input-флагом (default true в
+# scenario/essence) и стоит В ХВОСТЕ tasks/main.yml намеренно: добавление задач в
+# хвост НЕ сдвигает индексы standalone/cluster/sentinel-задач выше (L0-кейсы ассертят
+# по index). Флаги host-инвариантны (одно значение на весь прогон) → корректно
+# приходят через apply.input (а не per-host .self — tiling-урок). Выкл флаг →
+# has()/булев guard гасит блок placeholder-skip-ом.
+
+# transparent-hugepages: oneshot-юнит отключения THP до Redis. Гейт input.thp_disable.
+- name: Render disable-thp systemd unit
+  module: core.file.rendered
+  when: has(input.thp_disable) && input.thp_disable
+  register: redis_thp_unit
+  params:
+    path: /etc/systemd/system/disable-thp.service
+    template: templates/disable-thp.service.tmpl
+    mode: "0644"
+    owner: root
+    group: root
+
+# Новый/изменённый юнит → systemd обязан перечитать конфигурацию ДО enable+start.
+- name: Reload systemd because the disable-thp unit changed
+  module: core.exec.run
+  when: has(input.thp_disable) && input.thp_disable
+  onchanges: [redis_thp_unit]
+  params:
+    cmd: systemctl
+    args: ["daemon-reload"]
+
+- name: Ensure disable-thp is running and enabled at boot
+  module: core.service.running
+  when: has(input.thp_disable) && input.thp_disable
+  params:
+    name: disable-thp
+    enabled: true
+
+# logrotate: ротация лог-файлов redis в /etc/logrotate.d/redis. Гейт
+# input.logrotate_enable. mode 0644 owner/group root — стандарт logrotate.d.
+- name: Render redis logrotate config
+  module: core.file.rendered
+  when: has(input.logrotate_enable) && input.logrotate_enable
+  params:
+    path: /etc/logrotate.d/redis
+    template: templates/logrotate.tmpl
+    mode: "0644"
+    owner: root
+    group: root
+
+# sysctl: drop-in /etc/sysctl.d/30-redis.conf с kernel-параметрами под Redis.
+# Гейт input.sysctl_enable. core.file.rendered + `sysctl --system` (а не пер-ключ
+# core.sysctl: drop-in несёт ~десяток параметров — отдельный шаг на каждый раздул
+# бы план и сдвинул индексы; rendered+--system применяет весь файл одной задачей,
+# range по MAP детерминирует порядок строк → нет ложного change/повторного reload).
+# sysctl_settings — map kernel-параметр→значение, scenario сервиса передаёт его
+# через apply.input (дефолты — essence.sysctl_settings). register — реактивный reload.
+- name: Render redis sysctl drop-in
+  module: core.file.rendered
+  when: has(input.sysctl_enable) && input.sysctl_enable
+  register: redis_sysctl
+  params:
+    path: /etc/sysctl.d/30-redis.conf
+    template: templates/redis.sysctl.conf.tmpl
+    mode: "0644"
+    owner: root
+    group: root
+    vars:
+      sysctl_settings: "${ has(input.sysctl_settings) ? input.sysctl_settings : {} }"
+
+# Применяем drop-in реактивно на его изменение. `sysctl --system` перечитывает все
+# /etc/sysctl.d/*.conf; onchanges → не изменился, no-op. В контейнерах часть vm.*
+# read-only — `-e` (--ignore) глушит ошибки несуществующих/read-only ключей, не
+# валя прогон (поведение ignoreerrors Ansible-роли). argv без shell.
+- name: Apply redis sysctl drop-in because it changed
+  module: core.exec.run
+  when: has(input.sysctl_enable) && input.sysctl_enable
+  onchanges: [redis_sysctl]
+  params:
+    cmd: sysctl
+    args: ["-e", "--system"]
+
+# ── Redis-модули (концепция Ansible-роли redis: загрузка .so RediSearch/RedisJSON/
+# RedisTimeSeries/RedisBloom на Redis < 8) ──────────────────────────────────────
+# Gated на НЕпустой input.modules и стоят В ХВОСТЕ tasks/main.yml намеренно:
+# добавление задач в хвост НЕ сдвигает индексы standalone/cluster/sentinel/extras
+# задач выше (L0-кейсы ассертят по index — кроме одного фиксированного сдвига от
+# каталог-задачи ниже, см. её комментарий). HOST-ИНВАРИАНТ (один набор модулей на
+# кластер) → modules/modules_*/loadmodules приходят через apply.input.
+#
+# VERSION-GATE (упрощение, см. brief): на Redis 8+ модули ВСТРОЕНЫ в сервер — .so
+# не качаем и loadmodule НЕ пишем. Гейт делает scenario сервиса по input.version
+# (мажор < 8 → передаёт modules/loadmodules; 8+ → пустые списки). Полную
+# version-matrix НЕ тащим: gate по мажору версии + fail-closed на самом Redis (если
+# .so несовместим — сервер не стартует и рестарт-задача упадёт явно), без probe-
+# matrix совместимости каждого модуля с каждой минорной версией.
+
+# Каталог .so-модулей. core.file.rendered/url.fetched создают только файл, не
+# родительский каталог. Создаём явно тем же идемпотентным паттерном (install -d +
+# creates-якорь), что socket-/TLS-/drop-in-каталоги. owner redis: .so читает сервис.
+#
+# ★ ИНДЕКС: эта задача gated на size(input.modules)>0 → вне modules-режима она
+# placeholder-skip (ОДНА задача в плане, не ноль). Это даёт ЕДИНЫЙ фиксированный
+# сдвиг +1 терминальных индексов (PING/cluster-build/sentinel-state) во всех
+# кейсах. fetch-задача ниже под loop: при пустом modules даёт 0 задач, поэтому она
+# индексы НЕ сдвигает.
+- name: Ensure the redis modules directory exists
+  module: core.exec.run
+  when: "size(has(input.modules) ? input.modules : []) > 0"
+  params:
+    creates: "${ has(input.modules_dir) ? input.modules_dir : '/var/lib/redis/modules' }"
+    cmd: install
+    args:
+      - "-d"
+      - "-o"
+      - redis
+      - "-g"
+      - redis
+      - "-m"
+      - "0750"
+      - "${ has(input.modules_dir) ? input.modules_dir : '/var/lib/redis/modules' }"
+
+# Скачивание .so каждого модуля. loop: по алиасам input.modules (пусто → 0 задач,
+# индексы не сдвигаются). Имя .so-файла — фиксированная таблица имён Redis-модулей
+# (map-литерал ниже), индексируется алиасом. URL АРХ-СПЕЦИФИЧЕН и строится PER-HOST
+# из soulprint.self.os.arch (soulprint доступен в destiny-CEL — прецедент arch-
+# резолва node-exporter): modules_base_url/<arch>/<имя.so>. checksum REQUIRED —
+# обёрнут в "sha256:<hex>" под контракт core.url.fetched (fail-closed: mismatch →
+# задача падает, целевой путь нетронут; modules_sha256[item] обязателен per-item,
+# отсутствие отсечёт schema/CEL). mode 0750 owner redis: .so читает только сервис.
+# register не нужен — loadmodule-директива в redis.conf уже триггерит рестарт через
+# redis_conf-register; повторная загрузка идемпотентна (checksum-якорь no-op).
+- name: Fetch redis module shared object
+  module: core.url.fetched
+  loop:
+    items: "${ has(input.modules) ? input.modules : [] }"
+    as: item
+  params:
+    url:      "${ input.modules_base_url + '/' + soulprint.self.os.arch + '/' + {'search': 'redisearch.so', 'json': 'rejson.so', 'timeseries': 'redistimeseries.so', 'bloom': 'redisbloom.so'}[item] }"
+    path:     "${ (has(input.modules_dir) ? input.modules_dir : '/var/lib/redis/modules') + '/' + {'search': 'redisearch.so', 'json': 'rejson.so', 'timeseries': 'redistimeseries.so', 'bloom': 'redisbloom.so'}[item] }"
+    checksum: "${ 'sha256:' + input.modules_sha256[item] }"
+    mode:     "0750"
+    owner:    redis
+    group:    redis

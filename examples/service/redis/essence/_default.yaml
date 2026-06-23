@@ -36,6 +36,21 @@ persistence_presets:
     save:       "900 1 300 10 60 10000"
     appendonly: "yes"
 
+# TLS (концепция Ansible-роли redis: defaults redis_tls_*). Источник PEM —
+# Vault-ПУТИ (не сам PEM): scenario резолвит их через ${ vault(<ref>) } в render-
+# фазе и передаёт ЦЕЛЫЕ PEM в destiny/плагин. Пути — доверенный контекст автора
+# (essence), не operator-input → vault() принимает их динамическим аргументом
+# (templating.md §2.3). Форма ref — "<mount>/<path>#<field>" (как requirepass).
+# tls_enable/tls_only по умолчанию false (plaintext); tls_port — 7379 (как роль).
+tls_enable: false
+tls_only:   false
+tls_port:   7379
+# Vault-пути источника PEM (заполнить под реальную инсталляцию). Дефолт —
+# конвенция secret/services/redis/tls (симметрия с secret/redis/<inc> паролей).
+tls_cert_ref: "secret/services/redis/tls#cert"
+tls_key_ref:  "secret/services/redis/tls#key"
+tls_ca_ref:   "secret/services/redis/tls#ca"
+
 # Merge-подложка redis.conf (defaults роли) — НИЖНИЙ слой merge(): persistence-
 # пресет, вычисленные maxmemory/policy и passthrough оператора наслаиваются
 # поверх. Этот merged итог рендерится в полный redis.conf (destiny `redis`).
@@ -44,3 +59,25 @@ redis_config:
   maxmemory-policy: allkeys-lru
   maxclients:       10000
   timeout:          300
+
+# Данные-таблица kernel-параметров под Redis (концепция sysctl-блока Ansible-роли,
+# БЕЗ tcp_bbr — отложен). scenario передаёт этот map в destiny `redis` через
+# apply.input.sysctl_settings → рендерится в /etc/sysctl.d/30-redis.conf и
+# применяется `sysctl --system` (gated input.sysctl_enable). Значения — СТРОКИ
+# (multi-value параметры через пробел); range по map в шаблоне сортирует ключи
+# (детерминизм). Не во входе оператора: tuning под Redis, не операционный выбор.
+sysctl_settings:
+  # Память и процессы (критично для fork RDB/AOF и больших инстансов).
+  vm.overcommit_memory:  "1"
+  vm.swappiness:         "1"
+  vm.max_map_count:      "262144"
+  vm.vfs_cache_pressure: "200"
+  # Сетевые буферы и очереди (производительность под нагрузкой).
+  net.core.somaxconn:          "65535"
+  net.core.netdev_max_backlog: "20000"
+  net.core.rmem_max:           "134217728"
+  net.core.wmem_max:           "134217728"
+  net.ipv4.tcp_max_syn_backlog: "65535"
+  # TCP-стек.
+  net.ipv4.tcp_tw_reuse:    "1"
+  net.ipv4.tcp_fin_timeout: "30"

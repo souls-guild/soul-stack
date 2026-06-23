@@ -75,7 +75,7 @@ assert:
 
     # users.acl: MAP трёх юзеров. Порядок строк гарантирует range по map (шаблон);
     # здесь ассертим лишь СОСТАВ map-а (значения order-independent).
-    - index: 3
+    - index: 7
       module: core.file.rendered
       params:
         path: /etc/redis/users.acl
@@ -111,7 +111,7 @@ assert:
           essence: {}
 
     # redis.conf: ИТОГ merge() — главный guard этого кейса.
-    - index: 4
+    - index: 8
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -122,6 +122,7 @@ assert:
         render_context:
           vars:
             password: s3cr3t-redis-pass-create
+            loadmodules: []
             config:
               # ГРАНИЦА: 64*75/100=48 → "48mb" (НЕ "0mb"). Перекрыл essence "256mb".
               maxmemory: "48mb"

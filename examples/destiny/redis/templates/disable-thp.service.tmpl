@@ -1,0 +1,39 @@
+{{/*
+  systemd-юнит отключения Transparent Huge Pages (THP) для Redis. Образец —
+  Ansible templates/transparent-hugepages.service.j2 роли redis. Контекст рендера
+  (docs/templating.md §3.2):
+    .vars  — пуст (статический юнит, под input не параметризуется);
+    .self  — стабильные факты хоста (здесь не используются).
+  Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010).
+
+  ПОЧЕМУ. Redis официально рекомендует отключать THP: при включённом THP
+  copy-on-write fork (RDB-снапшот / AOF-rewrite) трогает большие страницы целиком,
+  что даёт latency-спайки и раздувает память. Отключение — на уровне хоста, до
+  старта redis-server, поэтому ставится отдельным oneshot-юнитом до сервиса.
+
+  Type=oneshot + RemainAfterExit=yes: юнит однократно пишет `never` в sysfs и
+  считается «активным» после выхода. ExecStart с ведущим `-` (`ExecStart=-…`):
+  на ядрах без THP файлов sysfs нет — минус глушит ошибку, юнит не валит загрузку
+  (поведение Ansible-роли: на таких ядрах THP и так отключён). DefaultDependencies=no
+  + After=sysinit.target/local-fs.target: применяем максимально рано, до redis.
+
+  Гейт Before/RequiredBy redis-server намеренно НЕ ставим. destiny режим-агностична
+  и не знает имени основного сервиса в каждом режиме; порядок «THP до Redis»
+  обеспечивается позицией задач в tasks/main.yml (юнит enable+start стоит ДО
+  основного service.running основного кирпича по факту хвостового размещения,
+  а сам oneshot WantedBy=multi-user.target доезжает на загрузке).
+*/}}
+[Unit]
+Description=Disable Transparent Huge Pages (THP) for Redis
+DefaultDependencies=no
+After=sysinit.target local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=-/bin/sh -c 'echo never > /sys/kernel/mm/transparent_hugepage/enabled'
+ExecStart=-/bin/sh -c 'echo never > /sys/kernel/mm/transparent_hugepage/defrag'
+ExecStart=-/bin/sh -c 'echo 0 > /sys/kernel/mm/transparent_hugepage/khugepaged/defrag'
+
+[Install]
+WantedBy=multi-user.target

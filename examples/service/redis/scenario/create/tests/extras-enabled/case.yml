@@ -1,0 +1,129 @@
+# L0-испытание create (standalone) — host-tuning extras ВКЛЮЧЕНЫ (концепция
+# Ansible-роли: transparent-hugepages + logrotate + sysctl, БЕЗ tcp_bbr). Guard на
+# то, что при thp_disable/logrotate_enable/sysctl_enable=true (дефолт) все три блока
+# extras в хвосте destiny `redis` РЕНДЕРЯТСЯ (а не гасятся placeholder-skip-ом).
+#
+# Extras — режим-агностичны и host-инвариантны: флаги приходят через apply.input,
+# sysctl_settings — данные-таблица essence (не во входе оператора). Контр-кейс на
+# выключенные флаги — extras-disabled (placeholder-skip).
+#
+# Индексы хвоста destiny (standalone-прогон: mode-guard 0, destiny 1..20, PING 21):
+#   15 — render disable-thp.service (core.file.rendered);
+#   16 — daemon-reload (core.exec.run, onchanges на unit);
+#   17 — disable-thp service.running;
+#   18 — render logrotate (/etc/logrotate.d/redis);
+#   19 — render sysctl drop-in (/etc/sysctl.d/30-redis.conf);
+#   20 — sysctl --system (core.exec.run, onchanges на drop-in).
+name: host-tuning extras render when enabled (thp + logrotate + sysctl)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network:
+      primary_ip: 10.0.0.5
+    os:
+      arch: amd64
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+  essence:
+    redis_type: standalone
+    memory_reserve_percent: 75
+    persistence_presets:
+      off:
+        save: ""
+        appendonly: "no"
+      aof:
+        save: ""
+        appendonly: "yes"
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+      rdb_aof:
+        save: "900 1 300 10 60 10000"
+        appendonly: "yes"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    # Данные-таблица sysctl (усечённая для теста, детерминизм порядка строк
+    # проверяет render_context.vars.sysctl_settings ниже).
+    sysctl_settings:
+      vm.overcommit_memory: "1"
+      vm.swappiness:        "1"
+      net.core.somaxconn:   "65535"
+
+  input:
+    redis_type: standalone
+    # Флаги extras не заданы явно → дефолт true (input scenario create default:true),
+    # все три блока активны.
+
+assert:
+  rendered_tasks:
+    # ── transparent-hugepages ───────────────────────────────────────────────
+    - index: 19
+      module: core.file.rendered
+      params:
+        path: /etc/systemd/system/disable-thp.service
+        template_content: "<present>"
+        mode: "0644"
+        owner: root
+        group: root
+
+    - index: 20
+      module: core.exec.run
+      params:
+        cmd: systemctl
+        args: ["daemon-reload"]
+
+    - index: 21
+      module: core.service.running
+      params:
+        name: disable-thp
+        enabled: true
+
+    # ── logrotate ───────────────────────────────────────────────────────────
+    - index: 22
+      module: core.file.rendered
+      params:
+        path: /etc/logrotate.d/redis
+        template_content: "<present>"
+        mode: "0644"
+        owner: root
+        group: root
+
+    # ── sysctl drop-in ──────────────────────────────────────────────────────
+    # vars.sysctl_settings — из essence (передан через apply.input). range по map
+    # сортирует ключи → drop-in детерминирован.
+    - index: 23
+      module: core.file.rendered
+      params:
+        path: /etc/sysctl.d/30-redis.conf
+        template_content: "<present>"
+        mode: "0644"
+        owner: root
+        group: root
+        render_context:
+          vars:
+            sysctl_settings:
+              vm.overcommit_memory: "1"
+              vm.swappiness:        "1"
+              net.core.somaxconn:   "65535"
+          self:
+            sid: trial-host
+            covens: [create]
+            choirs: []
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    - index: 24
+      module: core.exec.run
+      params:
+        cmd: sysctl
+        args: ["-e", "--system"]

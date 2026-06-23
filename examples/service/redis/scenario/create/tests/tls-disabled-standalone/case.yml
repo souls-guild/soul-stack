@@ -1,0 +1,96 @@
+# L0-испытание (Trial, ADR-023): TLS ВЫКЛЮЧЕН (default). Guard: при tls_enable=false
+# (essence не задаёт tls_enable) TLS-render-задачи placeholder-skip (не рендерятся,
+# файлы /etc/redis/tls/* НЕ создаются), а merged config НЕ несёт tls-* директив и
+# НЕ ставит port 0 (plain открыт). Это back-compat: инсталляция без TLS не меняется.
+name: tls disabled keeps plaintext config without tls directives or pem files
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network:
+      primary_ip: 10.0.0.5
+    os:
+      arch: amd64
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+  essence:
+    redis_type: standalone
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    # tls_enable НЕ задан → default false. tls_*_ref не нужны (vault не вызывается).
+
+  input:
+    redis_type: standalone
+    persistence: rdb
+
+assert:
+  rendered_tasks:
+    # index 4 (TLS cert render) — gated на tls_enable=false → placeholder-skip:
+    # модуль НЕ исполняется. Trial-харнесс ассертит params пустыми (skip-placeholder).
+    # Главное: задача НЕ рендерит файл (params=map[] на skip). Ассертим, что на этом
+    # индексе НЕ настоящий core.file.rendered с PEM — модуль есть, но params пусты.
+    # (Полное доказательство «нет tls-строк» — на redis.conf ниже.)
+
+    # index 8 — redis.conf: merged config БЕЗ tls-* и БЕЗ port 0 (plain открыт).
+    - index: 8
+      module: core.file.rendered
+      params:
+        path: /etc/redis/redis.conf
+        render_context:
+          vars:
+            password: s3cr3t-redis-pass-create
+            # Ровно дефолтные директивы — НИ ОДНОЙ tls-* и НЕТ ключа port (plain
+            # порт задаёт redis.conf.tmpl статикой `port 6379`, не config-ключом).
+            loadmodules: []
+            config:
+              maxmemory: "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients: 10000
+              timeout: 300
+              save: "900 1 300 10 60 10000"
+              appendonly: "no"
+          self:
+            sid: trial-host
+            covens: [create]
+            choirs: []
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # index 25 — PING: tls=false (plain, без tls_ca), addr на 6379 (plain открыт).
+    - index: 26
+      module: community.redis.command
+      params:
+        addr: "127.0.0.1:6379"
+        password: s3cr3t-redis-pass-create
+        tls: false
+        tls_ca: ""
+        args: ["PING"]
+
+  state_changes:
+    redis_type: standalone
+    redis_version: ""
+    # БЕЗ tls-* директив — симметрия с apply.input.config (drift-guard).
+    redis_config:
+      maxmemory: "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients: 10000
+      timeout: 300
+      save: "900 1 300 10 60 10000"
+      appendonly: "no"
+    redis_users: {}
+    redis_hosts: []
+    redis_sentinel: {}

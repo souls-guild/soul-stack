@@ -73,6 +73,9 @@
     input:
       version:  "${ has(input.version) ? input.version : '' }"
       password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+      # TLS-блок (HOST-ИНВАРИАНТ, см. standalone.yml). В cluster добавляется
+      # tls-cluster yes (узлы шифруют cluster-bus). Идёт ПОСЛЕ cluster-директив,
+      # но домены разные (tls-* vs cluster-enabled/...) — не конфликтуют.
       config: >-
         ${ merge(
              essence.redis_config,
@@ -88,7 +91,20 @@
                'cluster-enabled':      'yes',
                'cluster-config-file':  'nodes.conf',
                'cluster-node-timeout': string(has(input.cluster_node_timeout) ? int(input.cluster_node_timeout) : 5000)
-             }
+             },
+             (has(essence.tls_enable) && essence.tls_enable)
+               ? merge(
+                   {
+                     'tls-port':         string(has(essence.tls_port) ? int(essence.tls_port) : 7379),
+                     'tls-cert-file':    '/etc/redis/tls/redis.crt',
+                     'tls-key-file':     '/etc/redis/tls/redis.key',
+                     'tls-ca-cert-file': '/etc/redis/tls/ca.crt',
+                     'tls-replication':  'yes',
+                     'tls-cluster':      'yes'
+                   },
+                   (has(essence.tls_only) && essence.tls_only) ? { 'port': '0' } : {}
+                 )
+               : {}
            ) }
       users: >-
         ${ has(input.users)
@@ -100,17 +116,45 @@
                }
              }))
            : {} }
+      # Redis-модули (Redis < 8), version-gate — см. standalone.yml (тот же гейт по
+      # input.version, host-инвариантные base_url/sha256 → apply.input, арх-URL
+      # строит destiny per-host). На Redis 8+ → пустой список.
+      modules: >-
+        ${ (has(input.modules) && !(has(input.version) && input.version != '' && input.version.matches('^([0-9]+:)?(8|9|[1-9][0-9])\\.')))
+           ? input.modules
+           : [] }
+      modules_base_url: "${ has(input.modules_base_url) ? input.modules_base_url : '' }"
+      modules_sha256:   "${ has(input.modules_sha256) ? input.modules_sha256 : {} }"
+      # Host-tuning extras (концепция роли), режим-агностичны — те же флаги, что в
+      # standalone-ветке. Host-инвариантны → apply.input. sysctl_settings — essence.
+      thp_disable:      "${ has(input.thp_disable) ? input.thp_disable : true }"
+      logrotate_enable: "${ has(input.logrotate_enable) ? input.logrotate_enable : true }"
+      sysctl_enable:    "${ has(input.sysctl_enable) ? input.sysctl_enable : true }"
+      sysctl_settings:  "${ has(essence.sysctl_settings) ? essence.sysctl_settings : {} }"
+      # TLS PEM + флаги — HOST-ИНВАРИАНТ (один cert/CA на кластер) → apply.input
+      # (см. standalone.yml). Источник — Vault-пути essence (доверенный контекст).
+      tls_enable: "${ has(essence.tls_enable) ? essence.tls_enable : false }"
+      tls_only:   "${ has(essence.tls_only) ? essence.tls_only : false }"
+      tls_port:   "${ has(essence.tls_port) ? int(essence.tls_port) : 7379 }"
+      tls_cert:   "${ (has(essence.tls_enable) && essence.tls_enable) ? vault(essence.tls_cert_ref) : '' }"
+      tls_key:    "${ (has(essence.tls_enable) && essence.tls_enable) ? vault(essence.tls_key_ref) : '' }"
+      tls_ca:     "${ (has(essence.tls_enable) && essence.tls_enable) ? vault(essence.tls_ca_ref) : '' }"
 
 # 3. Health-gate per-host: PING живого Redis после старта (каждая нода обязана
 #    ответить ДО сборки кластера). community.redis.command, retry/until через retry.
 #    addr — localhost (плагин на redis-хосте), пароль — keeper-side vault()-резолв.
+#    ★ ИБ (anti-downgrade): tls/tls_ca/порт гейтятся на essence.tls_ENABLE, НЕ
+#    tls_only (TLS включён → плагин ОБЯЗАН по TLS; при tls_only=false plain ещё
+#    открыт, но AUTH-пароль по plaintext недопустим). addr на tls_port + tls_ca (CA-PEM).
 - name: Wait for each cluster node to answer PING
   when: "input.redis_type == 'cluster'"
   module: community.redis.command
   retry: { count: 10, delay: 3s }
   params:
-    addr:     "127.0.0.1:6379"
+    addr:     "${ (has(essence.tls_enable) && essence.tls_enable) ? '127.0.0.1:' + string(has(essence.tls_port) ? int(essence.tls_port) : 7379) : '127.0.0.1:6379' }"
     password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    tls:      "${ has(essence.tls_enable) ? essence.tls_enable : false }"
+    tls_ca:   "${ (has(essence.tls_enable) && essence.tls_enable) ? vault(essence.tls_ca_ref) : '' }"
     args:     ["PING"]
 
 # 4. CLUSTER-BUILD — run_once на bootstrap-ноде. Строим nodes-MAP детерминированно
@@ -122,12 +166,25 @@
 #    ADDSLOTS/REPLICATE по go-redis и делит 16384 слота — scenario топологию НЕ
 #    транслирует, передаёт готовую. Пароль — keeper-side vault()-резолв (плагин
 #    коннектится к каждой ноде; password маскируется, в логи не течёт).
+#    ★ ИБ (anti-downgrade): tls/tls_ca/порт nodes гейтятся на essence.tls_ENABLE,
+#    НЕ tls_only — TLS включён → плагин ОБЯЗАН коннектиться к нодам по TLS (иначе
+#    AUTH-пароль к каждой ноде ушёл бы plaintext-ом). addr-ы строятся на tls_port,
+#    передаём tls=true + tls_ca (CA-PEM для verify).
+#    ★ mTLS cluster-bus: при включённом tls-cluster (взаимная аутентификация нод)
+#    плагину нужен КЛИЕНТСКИЙ cert — пробрасываем tls_cert/tls_key (резолв из тех же
+#    vault(essence.tls_cert_ref/tls_key_ref), что redis.conf). Плагин строит mTLS-пару
+#    ТОЛЬКО когда заданы ОБА (tls.go: certPEM+keyPEM); без mutual-bus они не мешают
+#    handshake. cert/key host-инвариантны (один на кластер) → apply.input корректен.
 - name: Build the redis cluster (CLUSTER MEET/ADDSLOTS/REPLICATE)
   when: "input.redis_type == 'cluster'"
   run_once: true
   module: community.redis.cluster
   params:
     action:             create
-    nodes:              "${ merge(soulprint.hosts.map(h, { h.sid: { 'addr': h.network.primary_ip + ':6379' } })) }"
+    nodes:              "${ merge(soulprint.hosts.map(h, { h.sid: { 'addr': h.network.primary_ip + ':' + ((has(essence.tls_enable) && essence.tls_enable) ? string(has(essence.tls_port) ? int(essence.tls_port) : 7379) : '6379') } })) }"
     replicas_per_shard: "${ int(input.replicas_per_shard) }"
     password:           "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    tls:                "${ has(essence.tls_enable) ? essence.tls_enable : false }"
+    tls_ca:             "${ (has(essence.tls_enable) && essence.tls_enable) ? vault(essence.tls_ca_ref) : '' }"
+    tls_cert:           "${ (has(essence.tls_enable) && essence.tls_enable) ? vault(essence.tls_cert_ref) : '' }"
+    tls_key:            "${ (has(essence.tls_enable) && essence.tls_enable) ? vault(essence.tls_key_ref) : '' }"

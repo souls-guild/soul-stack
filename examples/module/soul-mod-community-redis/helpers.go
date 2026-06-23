@@ -23,6 +23,7 @@ func parseConnConfig(s *structpb.Struct) (connConfig, error) {
 		username: stringOrEmpty(f["username"]),
 		password: stringOrEmpty(f["password"]),
 		db:       intOrDefault(f["db"], 0),
+		tls:      parseTLS(f),
 	}, nil
 }
 
@@ -34,14 +35,18 @@ func validateAddr(f map[string]*structpb.Value) []string {
 	return nil
 }
 
-// redactError вырезает пароль из текста ошибки. go-redis формирует ошибки
-// коннекта по полям *redis.Options; на некоторых путях (dial-фейл с
-// authentication) текст теоретически может содержать кредлы — fail-safe
-// заменяем подстроку пароля на "***". Пустой пароль — no-op.
-func redactError(err error, password string) string {
+// redactError вырезает секреты из текста ошибки. go-redis формирует ошибки
+// коннекта по полям *redis.Options / *tls.Config; на некоторых путях (dial-фейл
+// с authentication, TLS-handshake) текст теоретически может содержать кредлы —
+// fail-safe заменяем подстроку каждого секрета на "***". Вариадик: вызывается и
+// с одним паролем (redactError(err, password)), и с парой пароль+PEM-ключ
+// (redactError(err, password, keyPEM) на TLS-коннекте). Пустые секреты — no-op.
+func redactError(err error, secrets ...string) string {
 	msg := err.Error()
-	if password != "" {
-		msg = strings.ReplaceAll(msg, password, "***")
+	for _, s := range secrets {
+		if s != "" {
+			msg = strings.ReplaceAll(msg, s, "***")
+		}
 	}
 	return msg
 }

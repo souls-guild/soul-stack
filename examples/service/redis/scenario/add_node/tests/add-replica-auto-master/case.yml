@@ -58,7 +58,7 @@ assert:
 
     # redis.conf рендерится на НОВОЙ ноде (render_context.self = node-9).
     # config = incarnation.state.redis_config (cluster-директивы), не перевычислен.
-    - index: 4
+    - index: 8
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -69,6 +69,7 @@ assert:
         render_context:
           vars:
             password: s3cr3t-redis-pass-addnode
+            loadmodules: []
             config:
               maxmemory: "256mb"
               cluster-enabled: "yes"
@@ -87,7 +88,7 @@ assert:
           essence: {}
 
     # health-gate на новой ноде: PING живого Redis перед вводом в кластер.
-    - index: 15
+    - index: 26
       module: community.redis.command
       params:
         addr: "127.0.0.1:6379"
@@ -96,7 +97,7 @@ assert:
 
     # ADD-NODE run_once: endpoint-ы из roster по SID. master.addr пуст (авто-выбор
     # наименее загруженного master-а делает плагин — scenario не транслирует).
-    - index: 16
+    - index: 27
       module: community.redis.cluster
       params:
         action: add-node

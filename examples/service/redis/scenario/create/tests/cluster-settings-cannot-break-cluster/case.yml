@@ -81,7 +81,7 @@ assert:
         cmd: 'test "true" = "true" || { echo "topology mismatch: hosts != shards*(1+replicas_per_shard)"; exit 1; }'
 
     # redis.conf: cluster-блок ПОБЕДИЛ враждебный redis_settings (last-wins).
-    - index: 8
+    - index: 12
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -92,6 +92,7 @@ assert:
         render_context:
           vars:
             password: s3cr3t-redis-pass-create
+            loadmodules: []
             config:
               maxmemory:        "256mb"
               maxmemory-policy: allkeys-lru

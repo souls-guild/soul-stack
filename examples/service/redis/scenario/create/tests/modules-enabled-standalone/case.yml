@@ -1,0 +1,157 @@
+# L0-испытание create (standalone) — Redis-МОДУЛИ ВКЛЮЧЕНЫ (концепция Ansible-роли
+# redis: RediSearch/RedisJSON загружаемыми .so на Redis < 8). Guard на то, что при
+# непустом input.modules:
+#   1. каталог modules_dir создаётся (gated-задача, активна — НЕ placeholder);
+#   2. каждый алиас → отдельная core.url.fetched задача (loop) с REQUIRED sha256
+#      (форма "sha256:<hex>", fail-closed) и АРХ-СПЕЦИФИЧНЫМ URL из soulprint.self.os.arch;
+#   3. в redis.conf приходят пути loadmodule (vars.loadmodules) — рендер директив
+#      делает шаблон отдельной секцией (без хвостового пробела, см. tmpl-тест).
+#
+# version=5:6.2.7 — мажор 6 (< 8) → version-gate НЕ гасит модули (контр-кейс
+# modules-redis8-skip доказывает обратную ветку). modules_base_url/modules_sha256 —
+# host-инвариант → apply.input; arch (amd64 из soulprint) подставляется в URL destiny
+# per-host.
+#
+# ИНДЕКСЫ (standalone-прогон, modules=[json, search] → 2 .so-задачи):
+#   0  — mode-guard;
+#   1..24 — destiny redis (redis.conf=8 с loadmodules; sysctl-apply=24);
+#   25 — modules-dir (core.exec.run, gated, АКТИВНА);
+#   26 — fetch .so json   (loop[0], алфавит: json < search);
+#   27 — fetch .so search (loop[1]);
+#   28 — PING (community.redis.command, сдвинут +2 относительно базового modules-empty 26).
+name: modules enabled standalone fetches .so and renders loadmodule directives
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network:
+      primary_ip: 10.0.0.5
+    os:
+      arch: amd64
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+  essence:
+    redis_type: standalone
+    memory_reserve_percent: 75
+    persistence_presets:
+      off:
+        save: ""
+        appendonly: "no"
+      aof:
+        save: ""
+        appendonly: "yes"
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+      rdb_aof:
+        save: "900 1 300 10 60 10000"
+        appendonly: "yes"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+  input:
+    redis_type: standalone
+    version: "5:6.2.7"
+    # Алиасы намеренно НЕ в алфавитном порядке (search до json): loop сортирует
+    # array по порядку списка как есть (array → as=элемент по индексу), а
+    # loadmodules.map сохраняет порядок input.modules. Здесь проверяем именно ЭТОТ
+    # порядок (search первым → redisearch.so первым в loadmodules).
+    modules: [search, json]
+    modules_base_url: "https://artifacts.example.com/redis/modules/6.2"
+    modules_sha256:
+      search: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      json:   "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+assert:
+  rendered_tasks:
+    # redis.conf несёт vars.loadmodules — пути .so в ПОРЯДКЕ input.modules
+    # (search → redisearch.so первым). Директивы loadmodule рендерит шаблон отдельной
+    # секцией (чистота — destiny_redis_tmpl_test.go).
+    - index: 8
+      module: core.file.rendered
+      params:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            password: s3cr3t-redis-pass-create
+            loadmodules:
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/rejson.so
+            config:
+              maxmemory: "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients: 10000
+              timeout: 300
+              save: "900 1 300 10 60 10000"
+              appendonly: "no"
+          self:
+            sid: trial-host
+            covens: [create]
+            choirs: []
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # modules-dir каталог — gated на size(modules)>0, здесь АКТИВНА.
+    - index: 25
+      module: core.exec.run
+      params:
+        creates: /var/lib/redis/modules
+        cmd: install
+        args: ["-d", "-o", "redis", "-g", "redis", "-m", "0750", "/var/lib/redis/modules"]
+
+    # fetch .so — loop по алиасам (array, порядок списка: search[0], json[1]).
+    # URL арх-специфичен (amd64 из soulprint.self), checksum REQUIRED "sha256:<hex>".
+    - index: 26
+      module: core.url.fetched
+      params:
+        url: "https://artifacts.example.com/redis/modules/6.2/amd64/redisearch.so"
+        path: /var/lib/redis/modules/redisearch.so
+        checksum: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        mode: "0750"
+        owner: redis
+        group: redis
+
+    - index: 27
+      module: core.url.fetched
+      params:
+        url: "https://artifacts.example.com/redis/modules/6.2/amd64/rejson.so"
+        path: /var/lib/redis/modules/rejson.so
+        checksum: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        mode: "0750"
+        owner: redis
+        group: redis
+
+    # PING сдвинут на +2 (две .so-задачи) относительно базового modules-empty (26).
+    - index: 28
+      module: community.redis.command
+      params:
+        addr: "127.0.0.1:6379"
+        password: s3cr3t-redis-pass-create
+        args: ["PING"]
+
+  state_changes:
+    redis_type: standalone
+    redis_version: "5:6.2.7"
+    redis_config:
+      maxmemory: "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients: 10000
+      timeout: 300
+      save: "900 1 300 10 60 10000"
+      appendonly: "no"
+    redis_users: {}
+    redis_hosts: []
+    redis_sentinel: {}

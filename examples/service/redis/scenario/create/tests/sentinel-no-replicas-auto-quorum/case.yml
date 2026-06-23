@@ -47,7 +47,7 @@ assert:
 
     # REPLICAOF: master_addr = единственный хост (он же master) → плагин no-op
     # (addr==master_addr guard). Здесь ассертим лишь params (host-инвариант).
-    - index: 24
+    - index: 35
       module: community.redis.replica
       params:
         addr: "127.0.0.1:6379"
@@ -56,7 +56,7 @@ assert:
 
     # SENTINEL MONITOR: monitor.ip — единственный хост; auto-quorum = 1/2+1 = 1
     # (sentinel_quorum не задан). master_name по умолчанию mymaster.
-    - index: 25
+    - index: 36
       module: community.redis.sentinel
       params:
         addr: "127.0.0.1:26379"

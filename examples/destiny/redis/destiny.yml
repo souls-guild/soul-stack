@@ -92,6 +92,164 @@ input:
           type: string
           secret: true
 
+  # ── TLS (концепция Ansible-роли redis: redis_tls_*) ──────────────────────────
+  # PEM-материал и директивы TLS — HOST-ИНВАРИАНТ (один cert/CA/порт на кластер) →
+  # приходят через apply.input (scenario резолвит PEM из Vault в render-фазе). Гейт
+  # tls_enable на трёх PEM-render-задачах (в хвосте tasks/main.yml). Сами TLS-
+  # директивы (tls-port/tls-cert-file/...) — обычные ключи merged config (scenario
+  # кладёт их в config); destiny их range-ит в redis.conf как любые директивы.
+  # tls_only НЕ читается destiny как отдельная задача — он лишь меняет config
+  # (scenario ставит `port 0` при tls_only), здесь объявлен для контракта/доки.
+  tls_enable:
+    type: boolean
+    required: false
+    default: false
+    description: >-
+      Включить TLS: рендерить PEM-файлы /etc/redis/tls/{redis.crt,redis.key,ca.crt}
+      (mode 0600 owner redis) и (через config) TLS-директивы redis.conf. По
+      умолчанию false (plaintext).
+
+  tls_only:
+    type: boolean
+    required: false
+    default: false
+    description: >-
+      Только-TLS: plain-порт закрыт (`port 0` в config, ставит scenario). Плагин
+      community.redis ОБЯЗАН коннектиться по TLS. Объявлено для контракта; destiny
+      его прямо не читает (эффект — в merged config от scenario).
+
+  tls_port:
+    type: integer
+    required: false
+    default: 7379
+    min: 1
+    description: >-
+      TLS-порт Redis (директива tls-port redis.conf, приходит в config от
+      scenario). По умолчанию 7379 (как redis_tls_port роли).
+
+  tls_cert:
+    type: string
+    required: false
+    secret: true
+    description: >-
+      PEM серверного сертификата (рендерится в /etc/redis/tls/redis.crt).
+      Зарезолвлен keeper-side из Vault (render-фаза vault()); маскируется.
+
+  tls_key:
+    type: string
+    required: false
+    secret: true
+    description: >-
+      PEM приватного ключа серверного сертификата (рендерится в
+      /etc/redis/tls/redis.key, mode 0600). Секрет; маскируется, в файл — как есть.
+
+  tls_ca:
+    type: string
+    required: false
+    secret: true
+    description: >-
+      PEM CA-сертификата кластера (рендерится в /etc/redis/tls/ca.crt). Узлы
+      валидируют сертификаты пиров по нему (tls-replication/tls-cluster).
+
+  # ── Redis-модули (концепция Ansible-роли redis: redis_module_*) ──────────────
+  # На Redis < 8 модули (RediSearch / RedisJSON / RedisTimeSeries / RedisBloom)
+  # подключаются как загружаемые .so-объекты: их .so качаются в modules_dir и
+  # подключаются директивой loadmodule в redis.conf. На Redis 8+ модули ВСТРОЕНЫ в
+  # сервер — .so не качаем и loadmodule НЕ пишем (version-gate делает scenario: на
+  # 8+ передаёт modules=[] и loadmodules=[]). HOST-ИНВАРИАНТ (один набор модулей на
+  # кластер) → приходят через apply.input, не per-host .self (tiling-урок).
+  #
+  # modules — короткие алиасы. Имя .so-файла каждого алиаса — фиксированная таблица
+  # имён Redis-модулей (НЕ operator-трансляция) → живёт в destiny (тут). URL .so
+  # АРХ-СПЕЦИФИЧЕН: destiny строит его per-host из modules_base_url + СВОЕГО
+  # soulprint.self.os.arch + имени файла (soulprint доступен в destiny-CEL —
+  # прецедент arch-резолва node-exporter), поэтому mixed-arch incarnation корректен
+  # (каждый хост качает .so под свою арх). checksum (modules_sha256) — host-инвариант
+  # (для архитектуры кластера) → apply.input, как single sha256 redis-exporter.
+  modules:
+    type: array
+    required: false
+    description: >-
+      Алиасы Redis-модулей для загрузки (Redis < 8). Пусто/не передан → модули не
+      качаются и не подключаются. На Redis 8+ scenario передаёт пустой список
+      (модули встроены в сервер).
+    items:
+      type: string
+      enum: [search, json, timeseries, bloom]
+
+  modules_dir:
+    type: string
+    required: false
+    default: /var/lib/redis/modules
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: >-
+      Каталог, куда раскладываются .so Redis-модулей (концепция redis_module_dir
+      роли). По умолчанию /var/lib/redis/modules.
+
+  modules_base_url:
+    type: string
+    required: false
+    description: >-
+      Базовый URL источника .so Redis-модулей (без арх-сегмента). destiny строит
+      полный URL каждого модуля как modules_base_url/<arch>/<имя.so>, где arch —
+      soulprint.self.os.arch ЭТОГО хоста. Обязателен, если modules непуст.
+
+  # checksum каждого .so — ОБЯЗАТЕЛЬНЫЙ, fail-closed (прецедент redis-exporter):
+  # core.url.fetched верифицирует SHA-256 ДО публикации файла, mismatch → задача
+  # падает (целевой путь нетронут). Без placeholder-дефолта: нет хэша → честный
+  # schema-отказ, а не fetch с заведомо отвергаемым плейсхолдером. Форма значения —
+  # голый hex (destiny оборачивает в "sha256:<hex>" под контракт core.url.fetched).
+  modules_sha256:
+    type: object
+    required: false
+    description: >-
+      Маппинг алиас→SHA-256 .so-объекта (голый hex, обязателен для каждого
+      загружаемого модуля). Соответствует паре (version, arch) кластера; берётся из
+      sha256sums источника модулей. Host-инвариант (одна арх на кластер в типичном
+      случае) → приходит через apply.input.
+    properties: {}
+    additional_properties:
+      type: string
+      pattern: "^[0-9a-f]{64}$"
+
+  # ── Host-tuning extras (концепция Ansible-роли) ──────────────────────────────
+  # Режим-агностичные per-host добавки, каждая gated собственным флагом (default
+  # true). Флаги host-инвариантны → приходят через apply.input (scenario сервиса).
+  thp_disable:
+    type: boolean
+    required: false
+    default: true
+    description: >-
+      Отключить Transparent Huge Pages через oneshot-юнит disable-thp (рекомендация
+      Redis: THP даёт latency-спайки на fork RDB/AOF). По умолчанию true.
+
+  logrotate_enable:
+    type: boolean
+    required: false
+    default: true
+    description: >-
+      Ставить logrotate-конфиг /etc/logrotate.d/redis (ротация /var/log/redis/*.log,
+      copytruncate). По умолчанию true.
+
+  sysctl_enable:
+    type: boolean
+    required: false
+    default: true
+    description: >-
+      Ставить drop-in /etc/sysctl.d/30-redis.conf с kernel-параметрами под Redis и
+      применять `sysctl --system`. По умолчанию true. Значения — sysctl_settings.
+
+  sysctl_settings:
+    type: object
+    required: false
+    description: >-
+      Kernel-параметры под Redis (map имя→значение), рендерятся в
+      /etc/sysctl.d/30-redis.conf. Значения — СТРОКИ (multi-value параметры через
+      пробел). Передаются scenario сервиса (дефолты — essence.sysctl_settings).
+      Задействованы только при sysctl_enable=true.
+    properties: {}
+    additional_properties: true
+
   # ── Sentinel (режим sentinel) ────────────────────────────────────────────────
   # Эти поля задействованы ТОЛЬКО когда sentinel_enabled=true (gated-задачи ниже
   # в tasks/main.yml). Вне sentinel-режима не передаются → has()-guard в задачах

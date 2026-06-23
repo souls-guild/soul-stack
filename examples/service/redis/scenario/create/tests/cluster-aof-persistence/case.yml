@@ -71,7 +71,7 @@ assert:
 
     # redis.conf: aof-пресет (appendonly yes / save "") СОСУЩЕСТВУЕТ с
     # cluster-директивами. announce-ip в config НЕТ — per-host из .tmpl.
-    - index: 8
+    - index: 12
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -82,6 +82,7 @@ assert:
         render_context:
           vars:
             password: s3cr3t-redis-pass-create
+            loadmodules: []
             config:
               maxmemory:        "256mb"
               maxmemory-policy: allkeys-lru

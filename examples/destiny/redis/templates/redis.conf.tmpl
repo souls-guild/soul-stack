@@ -65,6 +65,19 @@ aclfile /etc/redis/users.acl
 cluster-announce-ip {{ .self.network.primary_ip }}
 {{- end }}
 
+{{/*
+  Redis-модули (Redis < 8): директивы loadmodule идут ОТДЕЛЬНОЙ секцией, а НЕ
+  ключами .vars.config — у loadmodule нет значения, а range config-а печатает
+  `{{key}} {{value}}` (с пустым value → хвостовой пробел). .vars.loadmodules —
+  готовый список путей .so (вычислен scenario, host-инвариант). Пусто/не передан →
+  секции нет. На Redis 8+ scenario передаёт пустой список (модули встроены).
+  `index .vars "loadmodules"` (built-in, как cluster-enabled выше): на отсутствующем
+  ключе возвращает nil без ошибки в strict-mode (в отличие от `.vars.loadmodules`).
+*/}}
+{{- range (index .vars "loadmodules") }}
+loadmodule {{ . }}
+{{- end }}
+
 {{ range $key, $value := .vars.config }}
 {{ $key }} {{ $value }}
 {{- end }}

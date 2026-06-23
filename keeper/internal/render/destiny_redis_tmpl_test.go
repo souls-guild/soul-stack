@@ -341,6 +341,145 @@ func TestSentinelConf_AuthRendered(t *testing.T) {
 	}
 }
 
+// TestRedisSysctl_DeterministicOrder — детерминизм drop-in /etc/sysctl.d/30-redis.conf
+// (host-tuning extras). Тот же class-of-bug, что users.acl/sentinel.conf: range по
+// MAP в шаблоне обязан сортировать ключи, иначе порядок строк недетерминирован →
+// core.file.rendered фиксирует ложный change → лишний `sysctl --system`. Рендерит
+// РЕАЛЬНЫЙ redis.sysctl.conf.tmpl многократно с НАМЕРЕННО неотсортированным map-ом.
+func TestRedisSysctl_DeterministicOrder(t *testing.T) {
+	root := map[string]any{
+		"self": map[string]any{},
+		"vars": map[string]any{
+			// Намеренно не отсортированы: range по MAP обязан отсортировать ключи.
+			"sysctl_settings": map[string]any{
+				"vm.swappiness":        "1",
+				"net.core.somaxconn":   "65535",
+				"vm.overcommit_memory": "1",
+			},
+		},
+	}
+	const runs = 12
+	var first string
+	for i := 0; i < runs; i++ {
+		out := renderRedisTmpl(t, "redis.sysctl.conf.tmpl", root)
+		if i == 0 {
+			first = out
+		} else if out != first {
+			t.Fatalf("прогон %d дал ИНОЙ вывод (недетерминизм sysctl):\n--- 0 ---\n%s\n--- %d ---\n%s", i, first, i, out)
+		}
+	}
+	// Отсортированный порядок ключей: net.core.somaxconn < vm.overcommit_memory < vm.swappiness.
+	iSom := strings.Index(first, "net.core.somaxconn = 65535")
+	iOver := strings.Index(first, "vm.overcommit_memory = 1")
+	iSwap := strings.Index(first, "vm.swappiness = 1")
+	if iSom < 0 || iOver < 0 || iSwap < 0 {
+		t.Fatalf("нет ожидаемых sysctl-строк:\n%s", first)
+	}
+	if !(iSom < iOver && iOver < iSwap) {
+		t.Fatalf("sysctl-параметры не в отсортированном порядке:\n%s", first)
+	}
+}
+
+// TestRedisConf_Loadmodule_NoTrailingSpace — ПРЯМОЙ guard на чистоту директив
+// loadmodule (Redis-модули, Redis < 8). Корень потенциального бага (brief
+// «Модули-нюанс»): если loadmodule класть КЛЮЧОМ config-map, range шаблона
+// `{{$key}} {{$value}}` с пустым value печатает `loadmodule /path.so ` — хвостовой
+// пробел. Любая нестабильность хвоста (пробел/нет) → ложный change core.file.rendered
+// → лишний рестарт Redis.
+//
+// Фикс: loadmodule вынесен в ОТДЕЛЬНУЮ секцию шаблона из списка .vars.loadmodules
+// (`loadmodule {{ . }}` — без хвостового value). Тест рендерит РЕАЛЬНЫЙ
+// redis.conf.tmpl и доказывает: (а) строки loadmodule БЕЗ хвостового пробела;
+// (б) порядок строк = порядок списка (детерминизм между прогонами); (в) пути
+// присутствуют целиком.
+func TestRedisConf_Loadmodule_NoTrailingSpace(t *testing.T) {
+	loadmodules := []any{
+		"/var/lib/redis/modules/redisearch.so",
+		"/var/lib/redis/modules/rejson.so",
+	}
+	root := map[string]any{
+		"self": map[string]any{"network": map[string]any{"primary_ip": "10.0.0.1"}},
+		"vars": map[string]any{
+			"password":    "s3cr3t-redis-pass",
+			"config":      map[string]any{"maxmemory": "256mb"},
+			"loadmodules": loadmodules,
+		},
+	}
+
+	const runs = 12
+	var first string
+	for i := 0; i < runs; i++ {
+		out := renderRedisTmpl(t, "redis.conf.tmpl", root)
+		if i == 0 {
+			first = out
+		} else if out != first {
+			t.Fatalf("прогон %d дал ИНОЙ вывод (недетерминизм loadmodule):\n--- 0 ---\n%s\n--- %d ---\n%s", i, first, i, out)
+		}
+	}
+
+	var modLines []string
+	for _, ln := range strings.Split(first, "\n") {
+		if strings.HasPrefix(ln, "loadmodule") {
+			modLines = append(modLines, ln)
+		}
+	}
+	if len(modLines) != 2 {
+		t.Fatalf("ожидалось 2 строки loadmodule, получено %d:\n%s", len(modLines), first)
+	}
+	// (а) Хвостового пробела нет — строка заканчивается ровно на .so.
+	for _, ln := range modLines {
+		if ln != strings.TrimRight(ln, " ") {
+			t.Fatalf("строка loadmodule с хвостовым пробелом: %q", ln)
+		}
+		if !strings.HasSuffix(ln, ".so") {
+			t.Fatalf("строка loadmodule не заканчивается на .so: %q", ln)
+		}
+	}
+	// (б) Порядок строк = порядок списка (детерминизм списка, а не итерации map).
+	want := []string{
+		"loadmodule /var/lib/redis/modules/redisearch.so",
+		"loadmodule /var/lib/redis/modules/rejson.so",
+	}
+	for i := range want {
+		if modLines[i] != want[i] {
+			t.Fatalf("строка %d = %q, want %q (порядок списка)", i, modLines[i], want[i])
+		}
+	}
+}
+
+// TestRedisConf_Loadmodule_EmptyAndAbsent — без модулей секции loadmodule в
+// redis.conf нет в обоих случаях: ключ loadmodules задан пустым списком (Redis 8+:
+// scenario передаёт []) И ключ вовсе отсутствует в .vars (`index .vars
+// "loadmodules"` на отсутствующем ключе возвращает nil без ошибки в strict-mode,
+// симметрично cluster-enabled-гейту). Прямой guard на version-gate-ветку (8+ → нет
+// loadmodule) и на back-compat рендер без modules-vars.
+func TestRedisConf_Loadmodule_EmptyAndAbsent(t *testing.T) {
+	base := func(loadmodules any) map[string]any {
+		vars := map[string]any{
+			"password": "s3cr3t-redis-pass",
+			"config":   map[string]any{"maxmemory": "256mb"},
+		}
+		if loadmodules != nil {
+			vars["loadmodules"] = loadmodules
+		}
+		return map[string]any{
+			"self": map[string]any{"network": map[string]any{"primary_ip": "10.0.0.1"}},
+			"vars": vars,
+		}
+	}
+
+	cases := map[string]any{
+		"empty list (Redis 8+ gate)": []any{},
+		"absent key (no modules)":    nil,
+	}
+	for name, lm := range cases {
+		out := renderRedisTmpl(t, "redis.conf.tmpl", base(lm))
+		if strings.Contains(out, "loadmodule") {
+			t.Fatalf("%s: директива loadmodule не должна присутствовать:\n%s", name, out)
+		}
+	}
+}
+
 // nonEmptyLines — непустые строки рендера (отбрасывает blank-строки от
 // {{- -}}-обрамления комментария шаблона).
 func nonEmptyLines(s string) []string {

@@ -68,13 +68,14 @@ type redisConn interface {
 	Close() error
 }
 
-// connConfig — параметры коннекта. password держится отдельно и НИКОГДА не
-// логируется / не кладётся в события (ИБ-инвариант ADR-010).
+// connConfig — параметры коннекта. password и tls.*PEM держатся отдельно и
+// НИКОГДА не логируются / не кладутся в события (ИБ-инвариант ADR-010).
 type connConfig struct {
 	addr     string // host:port или unix:/path
 	username string
 	password string
 	db       int
+	tls      tlsParams // TLS-параметры (enabled=false → plaintext-коннект)
 }
 
 // Validate — runtime-проверки поверх статических от soul-lint. Возвращает
@@ -130,7 +131,9 @@ func (m *RedisModule) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStream
 	}
 	conn, err := m.openConn(ctx, cfg)
 	if err != nil {
-		return sendFailure(stream, "connect: "+redactError(err, cfg.password))
+		// Редактируем И пароль, И PEM client-key: TLS-handshake-ошибка теоретически
+		// может нести client-key (ИБ-инвариант ADR-010, как пароль).
+		return sendFailure(stream, "connect: "+redactError(err, cfg.password, cfg.tls.keyPEM))
 	}
 	defer func() { _ = conn.Close() }()
 
@@ -259,6 +262,14 @@ func defaultConnect(ctx context.Context, cfg connConfig) (redisConn, error) {
 		opts.Network = "tcp"
 		opts.Addr = cfg.addr
 	}
+	// TLS: при tls=true go-redis коннектится по TLS (RootCAs/client-cert/
+	// skip_verify из cfg.tls). Это ОБЯЗАТЕЛЬНО для only-TLS (port 0): без
+	// tls.Config go-redis шлёт plaintext и упирается в закрытый plain-порт.
+	tlsCfg, err := buildTLSConfig(cfg.tls)
+	if err != nil {
+		return nil, err
+	}
+	opts.TLSConfig = tlsCfg
 	c := redis.NewClient(opts)
 	if err := c.Ping(ctx).Err(); err != nil {
 		_ = c.Close()

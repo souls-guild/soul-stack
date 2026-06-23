@@ -55,7 +55,7 @@ assert:
         version: ""
 
     # users.acl: пустой map (users не задан → {}). Шаблон рендерит файл без строк.
-    - index: 3
+    - index: 7
       module: core.file.rendered
       params:
         path: /etc/redis/users.acl
@@ -79,7 +79,7 @@ assert:
           essence: {}
 
     # redis.conf: maxmemory/policy ПОЛНОСТЬЮ из essence (computed-слой пуст).
-    - index: 4
+    - index: 8
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -90,6 +90,7 @@ assert:
         render_context:
           vars:
             password: s3cr3t-redis-pass-create
+            loadmodules: []
             config:
               # has-guard: memory_mb не задан → computed maxmemory НЕ материализован
               # → остаётся essence-дефолт "256mb" (НЕ "0mb").

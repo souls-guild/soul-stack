@@ -99,7 +99,7 @@ assert:
     # keeper-side vault()-пароль. ПОЧЕМУ map, а не список: range по map в шаблоне
     # сортирует ключи → детерминизм порядка строк (regress-guard на tiling-баг
     # 2026-06-22; прямой order-guard — destiny_redis_tmpl_test.go).
-    - index: 3
+    - index: 7
       module: core.file.rendered
       params:
         path: /etc/redis/users.acl
@@ -129,7 +129,7 @@ assert:
           essence: {}
 
     # redis.conf: ИТОГ merge(). Здесь живёт главный guard трансляции.
-    - index: 4
+    - index: 8
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -140,6 +140,7 @@ assert:
         render_context:
           vars:
             password: s3cr3t-redis-pass-create
+            loadmodules: []
             config:
               # computed: 1024*75/100=768 → "768mb" (перекрыл essence "256mb").
               maxmemory: "768mb"
@@ -166,13 +167,13 @@ assert:
           role: ""
           essence: {}
 
-    - index: 8
+    - index: 12
       module: core.service.running
       params:
         name: redis-server
         enabled: true
 
-    - index: 9
+    - index: 13
       module: core.service.restarted
       params:
         name: redis-server
@@ -182,7 +183,7 @@ assert:
     # index 15: index 0 — mode-guard; standalone destiny ЭКСПАНДИТСЯ в 14 task-ов
     # (1..14; +5 gated sentinel-задач в хвосте tasks/main.yml, placeholder-skip на
     # standalone-прогоне), PING сценария идёт следом (index 15).
-    - index: 15
+    - index: 26
       module: community.redis.command
       params:
         addr: "127.0.0.1:6379"

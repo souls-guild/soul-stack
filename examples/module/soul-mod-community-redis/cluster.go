@@ -235,8 +235,17 @@ func (m *RedisModule) applyClusterCreate(ctx context.Context, stream grpc.Server
 		return sendFailure(stream, redactError(err, password))
 	}
 
+	tlsP := parseTLS(f)
 	connect := func(node clusterNode) (redisConn, error) {
-		return m.openConn(ctx, connConfig{addr: node.addr, username: username, password: password})
+		conn, err := m.openConn(ctx, connConfig{addr: node.addr, username: username, password: password, tls: tlsP})
+		if err != nil {
+			// TLS-handshake-ошибка теоретически может нести PEM client-key —
+			// редактируем его ПРЯМО в connect, чтобы любой caller (probe/
+			// formCluster/migrate) получил уже-санированную ошибку (ключ
+			// password уже редактируется их собственными redactError по тексту).
+			return nil, fmt.Errorf("%s", redactError(err, tlsP.keyPEM))
+		}
+		return conn, nil
 	}
 
 	// Идемпотентность: спросим первый мастер о текущем состоянии кластера.
@@ -290,8 +299,17 @@ func (m *RedisModule) applyClusterAddNode(ctx context.Context, stream grpc.Serve
 		return sendFailure(stream, redactError(err, password))
 	}
 
+	tlsP := parseTLS(f)
 	connect := func(node clusterNode) (redisConn, error) {
-		return m.openConn(ctx, connConfig{addr: node.addr, username: username, password: password})
+		conn, err := m.openConn(ctx, connConfig{addr: node.addr, username: username, password: password, tls: tlsP})
+		if err != nil {
+			// TLS-handshake-ошибка теоретически может нести PEM client-key —
+			// редактируем его ПРЯМО в connect, чтобы любой caller (probe/
+			// formCluster/migrate) получил уже-санированную ошибку (ключ
+			// password уже редактируется их собственными redactError по тексту).
+			return nil, fmt.Errorf("%s", redactError(err, tlsP.keyPEM))
+		}
+		return conn, nil
 	}
 
 	seedConn, err := connect(seed)
@@ -384,8 +402,17 @@ func (m *RedisModule) applyClusterRemoveNode(ctx context.Context, stream grpc.Se
 		return sendFailure(stream, redactError(err, password))
 	}
 
+	tlsP := parseTLS(f)
 	connect := func(node clusterNode) (redisConn, error) {
-		return m.openConn(ctx, connConfig{addr: node.addr, username: username, password: password})
+		conn, err := m.openConn(ctx, connConfig{addr: node.addr, username: username, password: password, tls: tlsP})
+		if err != nil {
+			// TLS-handshake-ошибка теоретически может нести PEM client-key —
+			// редактируем его ПРЯМО в connect, чтобы любой caller (probe/
+			// formCluster/migrate) получил уже-санированную ошибку (ключ
+			// password уже редактируется их собственными redactError по тексту).
+			return nil, fmt.Errorf("%s", redactError(err, tlsP.keyPEM))
+		}
+		return conn, nil
 	}
 
 	seedConn, err := connect(seed)
@@ -463,8 +490,17 @@ func (m *RedisModule) applyClusterReshard(ctx context.Context, stream grpc.Serve
 		return sendFailure(stream, "params.slots: must be an integer >= 1")
 	}
 
+	tlsP := parseTLS(f)
 	connect := func(node clusterNode) (redisConn, error) {
-		return m.openConn(ctx, connConfig{addr: node.addr, username: username, password: password})
+		conn, err := m.openConn(ctx, connConfig{addr: node.addr, username: username, password: password, tls: tlsP})
+		if err != nil {
+			// TLS-handshake-ошибка теоретически может нести PEM client-key —
+			// редактируем его ПРЯМО в connect, чтобы любой caller (probe/
+			// formCluster/migrate) получил уже-санированную ошибку (ключ
+			// password уже редактируется их собственными redactError по тексту).
+			return nil, fmt.Errorf("%s", redactError(err, tlsP.keyPEM))
+		}
+		return conn, nil
 	}
 
 	fromConn, err := connect(from)

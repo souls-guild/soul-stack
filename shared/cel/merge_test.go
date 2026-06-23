@@ -439,6 +439,71 @@ func TestMerge_SecretMaskedSameAsDirectVault(t *testing.T) {
 	}
 }
 
+// TestMerge_TLSKeyMaskedSameAsDirectVault — BLOCKER masking-guard (redis-
+// консолидация TLS): PEM client-key, попавший в merged-map через
+// merge(defaults, {tls_key: vault(...)}), маскируется выходным слоем
+// (shared/audit.MaskSecrets) ИДЕНТИЧНО прямому ${ vault(...) } под ключом
+// tls_key — НЕ протекает в логи/OTel/RunResult. Доказывает, что merge() границу
+// маскинга для TLS PEM не расширяет/не сужает: tls_key — sensitive-имя ключа
+// (sensitiveKeyRe расширен фрагментом tls[_-]?(key|cert|ca)), значит и под merge,
+// и при прямой подстановке маскинг одинаков. Класс merge-masking-guard.
+func TestMerge_TLSKeyMaskedSameAsDirectVault(t *testing.T) {
+	const pem = "-----BEGIN PRIVATE KEY-----\nMIIE-plaintext\n-----END PRIVATE KEY-----"
+	kv := &stubKV{secrets: map[string]map[string]any{
+		"secret/services/redis/tls": {"key": pem, "cert": "CERTPEM", "ca": "CAPEM"},
+	}}
+	e := newVaultEngine(t, kv)
+
+	// Эталон: прямой ${ vault(...) } под ключом tls_key.
+	direct, err := e.EvalInterpolation("${ vault('secret/services/redis/tls#key') }", Vars{})
+	if err != nil {
+		t.Fatalf("eval direct vault: %v", err)
+	}
+	if direct != pem {
+		t.Fatalf("direct vault резолвнул %v, want PEM plaintext (keeper-side)", direct)
+	}
+	maskedDirect := audit.MaskSecrets(map[string]any{"tls_key": direct})
+	if maskedDirect["tls_key"] == pem {
+		t.Fatal("эталон: прямой tls_key НЕ замаскирован — слой маскинга TLS сломан (sensitiveKeyRe не ловит tls_key)")
+	}
+
+	// Тот же PEM через merge(defaults, {tls_key/tls_cert/tls_ca: vault(...)}).
+	merged, err := e.EvalInterpolation(
+		`${ merge(input.defaults, {
+			'tls_key':  vault('secret/services/redis/tls#key'),
+			'tls_cert': vault('secret/services/redis/tls#cert'),
+			'tls_ca':   vault('secret/services/redis/tls#ca')
+		}) }`,
+		Vars{Input: map[string]any{
+			"defaults": map[string]any{"tls-port": "7379"},
+		}},
+	)
+	if err != nil {
+		t.Fatalf("eval merge+vault: %v", err)
+	}
+	mergedMap := merged.(map[string]any)
+	// Контроль: PEM реально попал в merged-map plaintext (до маскинга).
+	if mergedMap["tls_key"] != pem {
+		t.Fatalf("merged.tls_key = %v, want PEM plaintext (vault резолвится в merge)", mergedMap["tls_key"])
+	}
+
+	maskedMerged := audit.MaskSecrets(mergedMap)
+	if maskedMerged["tls_key"] != maskedDirect["tls_key"] {
+		t.Fatalf("merged.tls_key замаскирован как %v, прямой как %v — РАСХОЖДЕНИЕ (PEM течёт через merge)",
+			maskedMerged["tls_key"], maskedDirect["tls_key"])
+	}
+	if maskedMerged["tls_key"] == pem {
+		t.Fatal("merged.tls_key НЕ замаскирован — PEM client-key протекает через merge()")
+	}
+	// cert/ca тоже маскируются (secret-имена); несекретный tls-port — насквозь.
+	if maskedMerged["tls_cert"] == "CERTPEM" || maskedMerged["tls_ca"] == "CAPEM" {
+		t.Fatalf("tls_cert/tls_ca НЕ замаскированы: cert=%v ca=%v", maskedMerged["tls_cert"], maskedMerged["tls_ca"])
+	}
+	if maskedMerged["tls-port"] != "7379" {
+		t.Fatalf("несекретный tls-port замаскирован: %v (over-masking)", maskedMerged["tls-port"])
+	}
+}
+
 // TestMerge_SecretUnderNonSensitiveKeyNotMasked — НЕГАТИВНЫЙ guard инварианта
 // границы: секрет, попавший в merged-map под НЕ-sensitive ключом, выходным слоем
 // НЕ маскируется. vault() резолвится в plaintext keeper-side, в map ложится

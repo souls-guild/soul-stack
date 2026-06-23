@@ -85,7 +85,7 @@ assert:
 
     # users.acl: MAP имя→{perms,state,password} с per-user vault-паролями.
     # zeta/alpha — каждый со СВОИМ резолвнутым паролем (нет cross-leak).
-    - index: 7
+    - index: 11
       module: core.file.rendered
       params:
         path: /etc/redis/users.acl
@@ -118,7 +118,7 @@ assert:
 
     # redis.conf: cluster-директивы СОСУЩЕСТВУЮТ с ACL (разные файлы). В config
     # НЕ должно быть per-user пароля (он только в users.acl, хешем).
-    - index: 8
+    - index: 12
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -129,6 +129,7 @@ assert:
         render_context:
           vars:
             password: s3cr3t-redis-pass-create
+            loadmodules: []
             config:
               maxmemory:        "256mb"
               maxmemory-policy: allkeys-lru
