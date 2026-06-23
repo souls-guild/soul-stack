@@ -124,6 +124,12 @@ func semanticValidateKeeper(c *KeeperConfig, root *ast.MappingNode) []diag.Diagn
 		}
 	}
 
+	// auth.ldap (ADR-058): TLS-required + взаимоисключимость транспорта +
+	// search-bind ⇒ bind_dn+bind_password_ref + vault-ref форма + insecure WARN.
+	if c.Auth != nil && c.Auth.LDAP != nil {
+		out = append(out, checkAuthLDAP(root, c.Auth.LDAP)...)
+	}
+
 	// Cross-field: audit.retention_days alias на reaper.rules.purge_audit_old.max_age.
 	if c.Audit != nil && c.Reaper != nil {
 		if rule, ok := c.Reaper.Rules["purge_audit_old"]; ok && rule.MaxAge != "" && c.Audit.RetentionDays != 0 {
@@ -185,6 +191,84 @@ func semanticValidateSoul(c *SoulConfig, root *ast.MappingNode) []diag.Diagnosti
 	if c.PluginRuntime != nil {
 		out = append(out, checkDuration(root, "$.plugin_runtime.startup_timeout", c.PluginRuntime.StartupTimeout)...)
 		out = append(out, checkDuration(root, "$.plugin_runtime.shutdown_grace", c.PluginRuntime.ShutdownGrace)...)
+	}
+
+	return out
+}
+
+// checkAuthLDAP — semantic-проверки блока auth.ldap (ADR-058, search-bind).
+//
+// Безопасный периметр (ADR-058(g), «безопасность на первом месте»):
+//   - TLS обязателен: url начинается с `ldaps://` ЛИБО start_tls: true; иначе
+//     plaintext LDAP запрещён (ERROR) — пароли оператора не должны ходить
+//     открыто;
+//   - `ldaps://` и start_tls взаимоисключимы (ERROR) — StartTLS поверх уже
+//     зашифрованного канала бессмысленен и ошибочен;
+//   - bind_mode пуст или `search` (дефолт) ⇒ требует bind_dn+bind_password_ref;
+//   - vault-ref форма bind_password_ref и tls.ca_ref;
+//   - insecure_skip_verify: true → WARN (dev-only, не для прод).
+//
+// Резолв *_ref + сборка *tls.Config — на load-time в daemon (ADR-058(e),
+// стиль redis.password_ref); здесь только статическая форма/инварианты.
+func checkAuthLDAP(root *ast.MappingNode, l *KeeperAuthLDAP) []diag.Diagnostic {
+	var out []diag.Diagnostic
+
+	isLDAPS := strings.HasPrefix(l.URL, "ldaps://")
+	isPlainLDAP := strings.HasPrefix(l.URL, "ldap://")
+
+	// TLS-required: либо ldaps://, либо ldap://+start_tls.
+	if !isLDAPS && !(isPlainLDAP && l.StartTLS) {
+		out = append(out, atPath(root, "$.auth.ldap.url", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+			Code:    "ldap_plaintext_forbidden",
+			Message: fmt.Sprintf("plaintext LDAP forbidden: url %q must be ldaps:// or ldap:// with start_tls: true", l.URL),
+			Hint:    "use ldaps://host:636, or ldap://host:389 with start_tls: true",
+		}))
+	}
+
+	// ldaps:// и start_tls взаимоисключимы.
+	if isLDAPS && l.StartTLS {
+		out = append(out, atPath(root, "$.auth.ldap.start_tls", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+			Code:    "ldap_tls_conflict",
+			Message: "ldaps:// url and start_tls: true are mutually exclusive",
+			Hint:    "ldaps:// already encrypts the channel; drop start_tls",
+		}))
+	}
+
+	// bind_mode пуст (=search дефолт) или search ⇒ service-account обязателен.
+	if l.BindMode == "" || l.BindMode == "search" {
+		if l.BindDN == "" {
+			out = append(out, atPath(root, "$.auth.ldap.bind_dn", diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+				Code:    "ldap_search_requires_bind_dn",
+				Message: "bind_mode=search requires bind_dn (service-account DN)",
+			}))
+		}
+		if l.BindPasswordRef == "" {
+			out = append(out, atPath(root, "$.auth.ldap.bind_password_ref", diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+				Code:    "ldap_search_requires_bind_password",
+				Message: "bind_mode=search requires bind_password_ref (vault-ref)",
+			}))
+		}
+	}
+
+	if l.BindPasswordRef != "" {
+		out = append(out, checkVaultRef(root, "$.auth.ldap.bind_password_ref", l.BindPasswordRef)...)
+	}
+	if l.TLS.CARef != "" {
+		out = append(out, checkVaultRef(root, "$.auth.ldap.tls.ca_ref", l.TLS.CARef)...)
+	}
+	out = append(out, checkDuration(root, "$.auth.ldap.timeout", l.Timeout)...)
+
+	if l.TLS.InsecureSkipVerify {
+		out = append(out, atPath(root, "$.auth.ldap.tls.insecure_skip_verify", diag.Diagnostic{
+			Level: diag.LevelWarning, Phase: diag.PhaseSemanticValidate,
+			Code:    "ldap_insecure_skip_verify",
+			Message: "auth.ldap.tls.insecure_skip_verify: true disables LDAPS certificate verification (dev-only)",
+			Hint:    "production must verify the server certificate; set a tls.ca_ref instead",
+		}))
 	}
 
 	return out
