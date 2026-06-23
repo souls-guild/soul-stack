@@ -4,10 +4,10 @@
 // плагин исполняет ОДНУ операцию над одним инстансом.
 //
 // States: `command` (raw verb-state, changed=false по умолчанию), `pinged` /
-// `role` (read-probe, changed=false конструктивно, см. probe.go), `config`
-// (CONFIG SET из map), `cluster` (см. cluster.go), `replica` (REPLICAOF, см.
-// replica.go), `sentinel` (SENTINEL MONITOR/SET reconcile, см. sentinel.go).
-// acl / failover — следующие батчи.
+// `role` / `replica-synced` (read-probe, changed=false конструктивно, см.
+// probe.go), `config` (CONFIG SET из map), `cluster` (см. cluster.go), `replica`
+// (REPLICAOF, см. replica.go), `sentinel` (SENTINEL MONITOR/SET reconcile, см.
+// sentinel.go). acl / failover — следующие батчи.
 //
 // СОЗНАТЕЛЬНО без dry-run preview: плагин на BaseModule НЕ реализует PlanReadSafe
 // → host применяет default-deny (на dry_run задача получает честный «drift не
@@ -92,7 +92,7 @@ func (m *RedisModule) Validate(_ context.Context, req *pluginv1.ValidateRequest)
 		if len(stringList(f["args"])) == 0 {
 			errs = append(errs, "params.args: must be a non-empty list (e.g. [\"PING\"])")
 		}
-	case "pinged", "role":
+	case "pinged", "role", "replica-synced":
 		// Read-probe: единственное обязательное — addr (PING / INFO replication
 		// сами по себе аргументов не требуют).
 		errs = append(errs, validateAddr(f)...)
@@ -109,7 +109,7 @@ func (m *RedisModule) Validate(_ context.Context, req *pluginv1.ValidateRequest)
 	case "sentinel":
 		errs = append(errs, validateSentinel(f)...)
 	default:
-		errs = append(errs, fmt.Sprintf("unknown state %q (expected command|pinged|role|config|cluster|replica|sentinel)", req.GetState()))
+		errs = append(errs, fmt.Sprintf("unknown state %q (expected command|pinged|role|replica-synced|config|cluster|replica|sentinel)", req.GetState()))
 	}
 
 	if len(errs) > 0 {
@@ -149,6 +149,8 @@ func (m *RedisModule) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStream
 		return m.applyPinged(ctx, stream, conn, req.GetParams())
 	case "role":
 		return m.applyRole(ctx, stream, conn, req.GetParams())
+	case "replica-synced":
+		return m.applyReplicaSynced(ctx, stream, conn, req.GetParams())
 	case "config":
 		return m.applyConfig(ctx, stream, conn, req.GetParams())
 	case "replica":
@@ -156,7 +158,7 @@ func (m *RedisModule) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStream
 	case "sentinel":
 		return m.applySentinel(ctx, stream, conn, req.GetParams())
 	default:
-		return sendFailure(stream, fmt.Sprintf("unknown state %q (expected command|pinged|role|config|cluster|replica|sentinel)", req.GetState()))
+		return sendFailure(stream, fmt.Sprintf("unknown state %q (expected command|pinged|role|replica-synced|config|cluster|replica|sentinel)", req.GetState()))
 	}
 }
 

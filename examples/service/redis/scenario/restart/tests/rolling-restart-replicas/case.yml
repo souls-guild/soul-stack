@@ -6,8 +6,9 @@
 # placeholder-skip.
 #
 # ★ Probe — community.redis.role (go-redis INFO replication), НЕ raw redis-cli:
-# поле register.redis_role.role (Output плагина), НЕ .stdout. Health-gate —
-# community.redis.pinged (PING→PONG), НЕ core.exec.run redis-cli.
+# поле register.redis_role.role (Output плагина), НЕ .stdout. Slave-health-gate —
+# community.redis.replica-synced (СТРОГИЙ ресинк-гейт master_link_status:up,
+# решение пользователя 2026-06-23), НЕ pinged/PONG и НЕ core.exec.run redis-cli.
 #
 # Что ассертим (критерий приёмки переноса shell→плагин):
 #   1. probe-шаг (community.redis.role) рендерит params коннекта (addr localhost,
@@ -69,9 +70,10 @@ assert:
       params:
         name: redis-server
 
-    # ── block-потомок 2: health-gate (community.redis.pinged PING→PONG) ───────
+    # ── block-потомок 2: slave-health-gate (community.redis.replica-synced) ───
+    #    СТРОГИЙ ресинк-гейт (master_link_status:up), НЕ pinged/PONG.
     - index: 2
-      module: community.redis.pinged
+      module: community.redis.replica-synced
       params:
         addr: "127.0.0.1:6379"
         password: fixture-redis-pass-16+

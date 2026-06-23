@@ -8,10 +8,23 @@ description: >-
 
   ★ Все взаимодействия с Redis — через плагин community.redis (go-redis), НЕ
   raw redis-cli/core.cmd.shell: probe роли — community.redis.role (INFO
-  replication), health-gate — community.redis.pinged (PING→PONG). redis-cli на
-  хост не улетает (анти-паттерн, решение пользователя 2026-06-23). Сам рестарт
+  replication); health-gate реплики — community.redis.replica-synced (СТРОГИЙ
+  ресинк-гейт: master_link_status:up — реплика догнала master-а, не просто
+  «демон ответил PONG»); рестарт master-а последним — community.redis.pinged
+  (у master-а нет master_link_status; PONG = верный liveness master-а). redis-cli
+  на хост не улетает (анти-паттерн, решение пользователя 2026-06-23). Сам рестарт
   демона — core.service.restarted (это host-операция над systemd-юнитом, не
   взаимодействие с Redis-протоколом).
+
+  ★ Ресинк-гейт (решение пользователя 2026-06-23): срез D ослабил slave-health-gate
+  до pinged/PONG (демон жив); вернули СТРОГУЮ семантику replica-synced
+  (master_link_status:up) — rolling-restart не идёт к следующей реплике, пока
+  текущая не РЕСИНКНУЛАСЬ с master-ом. master рестартится отдельной задачей с
+  pinged: у master-а поля master_link_status нет, PONG — корректный liveness.
+
+  ★ Имя state — `replica-synced` (kebab-case), НЕ snake: грамматика module-address
+  `<ns>.<module>.<state>` в soul-lint требует kebab во всех сегментах (прецедент
+  core.vault.kv-read). community.redis.replica-synced — единственная валидная форма.
 
   Таргетинг — на весь incarnation (on опущен = весь incarnation, ADR-008/009):
   прогон зовётся на всех Soul-ах инкарнации, probe раскладывает их на
@@ -72,19 +85,21 @@ tasks:
         module: core.service.restarted
         params:
           name: redis-server
-      # Health-gate: дождаться, пока рестартнутая реплика снова отвечает PONG
-      # (демон поднялся и принимает коннекты). community.redis.pinged (PING→PONG),
-      # НЕ raw redis-cli. Бюджет времени и условие здоровья — унаследованный
-      # retry:+until: на этом шаге (count × delay = бюджет, until: = условие).
-      # register.self.result — собственный результат шага (PONG).
-      - name: Wait until replica answers PONG again
-        module: community.redis.pinged
+      # Health-gate: дождаться, пока рестартнутая реплика РЕСИНКНУЛАСЬ с master-ом
+      # (master_link_status:up), а не просто подняла демон. community.redis.replica-synced
+      # (INFO replication), НЕ raw redis-cli и НЕ pinged (PONG слаб — демон жив, но
+      # мог ещё не догнать master после рестарта; rolling не должен идти к следующей
+      # реплике, пока текущая не догнала). Бюджет времени и условие — унаследованный
+      # retry:+until: (count × delay = бюджет, until: = условие). register.self.synced
+      # — собственный результат шага (bool).
+      - name: Wait until replica resynced with master
+        module: community.redis.replica-synced
         changed_when: false
         retry:
           count: 12
           delay: 5s
-          until: "register.self.result == 'PONG'"
-        failed_when: "register.self.result != 'PONG'"
+          until: "register.self.synced == true"
+        failed_when: "register.self.synced != true"
         params:
           addr:     "${ (has(essence.tls_enable) && essence.tls_enable) ? '127.0.0.1:' + string(int(default(essence.tls_port, 7379))) : '127.0.0.1:6379' }"
           password: "${ vault('secret/redis/' + incarnation.name + '#password') }"

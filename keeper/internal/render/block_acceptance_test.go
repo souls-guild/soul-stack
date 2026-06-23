@@ -59,7 +59,7 @@ func TestAcceptance_RestartBlockFanOut(t *testing.T) {
 		t.Fatalf("Stratify: %v", err)
 	}
 
-	// Health-gate block-потомок (community.redis.pinged) рендерит params с
+	// Health-gate block-потомок (community.redis.replica-synced) рендерит params с
 	// vault('secret/redis/redis-prod#password') — движок с фикстурным KVReader-ом
 	// (паттерн TestAcceptance_SentinelReplicaExcludesMaster). essence не задан →
 	// essence.tls_enable отсутствует → plaintext-ветка (default false).
@@ -108,7 +108,7 @@ func TestAcceptance_RestartBlockFanOut(t *testing.T) {
 			continue
 		}
 		switch tk.Name {
-		case "Restart redis-server", "Wait until replica answers PONG again":
+		case "Restart redis-server", "Wait until replica resynced with master":
 			blockChildren[tk.Name] = tk
 			blockPlans[tk.Name] = &plans[i]
 		}

@@ -2,8 +2,8 @@
 #
 # ОСНОВНОЙ интерфейс к живому Redis в redis-консолидации (концепция Ansible-роли):
 # scenario сервиса оркеструет порядок/таргетинг, плагин исполняет ОДНУ операцию
-# над одним Redis-инстансом. Сейчас реализованы states command + pinged/role
-# (read-probe) + config + cluster (action create + add-node + remove-node +
+# над одним Redis-инстансом. Сейчас реализованы states command + pinged/role/
+# replica-synced (read-probe) + config + cluster (action create + add-node + remove-node +
 # reshard) + replica (REPLICAOF) + sentinel (MONITOR/SET reconcile); acl /
 # failover — планируются (следующие батчи), их в spec.states пока НЕТ (объявляем
 # только реализованное).
@@ -17,7 +17,7 @@ namespace: community
 name: redis
 
 # TLS-коннект (концепция Ansible-роли redis: defaults redis_tls_*). Все states
-# (command/pinged/role/config/cluster/replica/sentinel) принимают ОБЩИЕ TLS-параметры коннекта:
+# (command/pinged/role/replica-synced/config/cluster/replica/sentinel) принимают ОБЩИЕ TLS-параметры коннекта:
 #   - tls             (bool, default false) — коннектиться по TLS. В режиме only-TLS
 #                     (redis `port 0`, plain закрыт) ОБЯЗАТЕЛЕН — иначе плагин не
 #                     достучится. tls=false → plaintext (back-compat).
@@ -254,6 +254,89 @@ spec:
             Пароль Redis (vault-ref; keeper резолвит до Apply). Маскируется —
             не попадает в события/логи (INFO replication роль-секретом не несёт,
             но коннект-ошибка теоретически могла бы — redactError).
+        username:
+          type: string
+          required: false
+          description: ACL-username для AUTH (если не default-user).
+        db:
+          type: int
+          required: false
+          default: 0
+          description: Номер БД (SELECT) перед INFO.
+        # TLS-параметры коннекта — общие (объявление-канон в command).
+        tls:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            Коннектиться к Redis по TLS. Обязателен в only-TLS (port 0).
+            По умолчанию false (plaintext).
+        tls_ca:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM CA-сертификата для проверки серверного сертификата (RootCAs).
+            Маскируется (secret). Резолвится keeper-side из Vault (render-фаза).
+        tls_cert:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM client-сертификата для mTLS (опц., только вместе с tls_key).
+            Маскируется (secret).
+        tls_key:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM client-ключа для mTLS (опц., только вместе с tls_cert).
+            Маскируется (secret); в события/ошибки не попадает.
+        tls_skip_verify:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            ЯВНЫЙ opt-out проверки серверного сертификата. По умолчанию false
+            (проверка включена — default secure).
+    # replica-synced — restart health-gate реплики через go-redis INFO
+    # replication: master_link_status == "up" (реплика РЕСИНКНУЛАСЬ с master-ом).
+    # Строже pinged (PONG = демон жив, но мог ещё не догнать master после
+    # рестарта). Read-only, changed=false КОНСТРУКТИВНО. Output.synced bool +
+    # master_link_status строкой для диагностики.
+    # ★ Граница master/slave: поле master_link_status есть ТОЛЬКО у реплики
+    # (role:slave) — у master-а его нет. State предназначен для slave-пути
+    # (restart block.where slave). Поля нет (master/нештатный INFO) → synced=false
+    # с явной причиной в Message (НЕ тихий success), чтобы health-gate реплики не
+    # прошёл на не-реплике. TLS — общие параметры коннекта (как pinged/command).
+    replica-synced:
+      description: |
+        Restart health-gate реплики через go-redis INFO replication: проверяет
+        master_link_status == "up" (реплика догнала master-а после рестарта).
+        Read-only, changed=false конструктивно (probe). Output.synced (bool) —
+        условие для health-gate (until: register.self.synced == true);
+        Output.master_link_status (строка) — для диагностики. master_link_status
+        присутствует ТОЛЬКО у реплики: на master-е (поля нет) synced=false с
+        причиной в Message — state применяется на slave-пути rolling-restart.
+        Без dry-run preview.
+      input:
+        addr:
+          type: string
+          required: true
+          description: >-
+            Адрес Redis: host:port (TCP) либо unix-сокет с префиксом "unix:".
+        password:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            Пароль Redis (vault-ref; keeper резолвит до Apply). Маскируется —
+            не попадает в события/логи (INFO replication секрет не несёт, но
+            коннект-ошибка теоретически могла бы — redactError).
         username:
           type: string
           required: false

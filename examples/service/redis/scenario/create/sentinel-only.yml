@@ -107,14 +107,17 @@
       quorum: "${ has(input.sentinel_quorum) ? int(input.sentinel_quorum) : (int(size(soulprint.hosts)) / 2 + 1) }"
 
 # 3. Health-gate per-host: SENTINEL отвечает PONG на :26379 (демон поднялся и
-#    сконфигурирован). ★ СТРОГО same-task register.self (НЕ cross-passage
-#    flow-control, ADR-056 cross_passage_when_unsupported): «дождаться N sentinel»
-#    НЕ выражаем — проверяем ТОЛЬКО свой локальный sentinel. Паттерн перенесён из
-#    старого redis-sentinel/create (верный same-task health-gate). retry/until +
-#    failed_when по register.self.result этой же задачи.
+#    сконфигурирован). community.redis.pinged (PING→PONG), НЕ raw command args:[PING]
+#    — единая идиома health-gate через плагин-state (консистентность с restart-
+#    сценарием, «всё через плагин-states»). Output.result == 'PONG' — то же поле,
+#    что отдавал command, поэтому register.self.result в until/failed_when работает
+#    без правок. ★ СТРОГО same-task register.self (НЕ cross-passage flow-control,
+#    ADR-056 cross_passage_when_unsupported): «дождаться N sentinel» НЕ выражаем —
+#    проверяем ТОЛЬКО свой локальный sentinel. retry/until + failed_when по
+#    register.self.result этой же задачи.
 - name: Wait until each sentinel answers PONG on :26379
   when: "input.redis_type == 'sentinel_only'"
-  module: community.redis.command
+  module: community.redis.pinged
   changed_when: false
   retry:
     count: 12
@@ -123,4 +126,3 @@
   failed_when: "register.self.result != 'PONG'"
   params:
     addr: "127.0.0.1:26379"
-    args: ["PING"]

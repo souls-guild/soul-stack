@@ -62,33 +62,30 @@ fixtures:
 
 assert:
   rendered_tasks:
-    # mode-guard (index 0): sentinel_only теперь реализован → "true" → no-op.
-    # master_ip-guard УБРАН — обязательность master_ip декларативна через
-    # required_when в main.yml (input.redis_type == 'sentinel_only'); пропуск рвёт
-    # прогон на input-валидации ДО render (см. sentinel-only-requires-master-ip).
-    - index: 0
-      module: core.cmd.shell
-      params:
-        cmd: 'test "true" = "true" || { echo "redis_type=sentinel_only не поддержан (реализованы: standalone, cluster, sentinel, sentinel_only)"; exit 1; }'
-
-    # Install redis-server package (index 12): пакет ставится ВСЕГДА — несёт и
+    # Mode-guard УБРАН (enum input.redis_type ловит неизвестный режим на input-
+    # валидации) И sentinel size-guard переведён в assert: (ADR-009 amendment) — ОБА в
+    # план НЕ эмитятся. master_ip-guard уже убран (required_when в main.yml). Обе
+    # удалённые задачи в include-порядке (mode-guard диспетчера + sentinel-ветка) идут
+    # ДО sentinel_only-ветки и раньше занимали слоты placeholder-skip-ом — поэтому
+    # задачи sentinel_only сдвинуты на −2: install 12→10, sentinel.conf 24→22,
+    # SENTINEL MONITOR 34→32, PONG-gate 35→33.
+    #
+    # Install redis-server package (index 10): пакет ставится ВСЕГДА — несёт и
     # sentinel-демон. deploy_redis=false его НЕ гасит. standalone/cluster/sentinel
-    # ветки placeholder-skip на sentinel_only-прогоне. После удаления из плана
-    # cluster size-guard (assert:) и master_ip-guard (required_when) индексы
-    # sentinel_only-ветки сдвинуты на −2 от исходного плана.
-    - index: 12
+    # ветки placeholder-skip на sentinel_only-прогоне.
+    - index: 10
       module: core.pkg.installed
       params:
         name: redis-server
         version: "7.2.4"
 
-    # sentinel.conf (index 24): РЕНДЕРИТСЯ (sentinel_enabled=true). vars: monitor
+    # sentinel.conf (index 23): РЕНДЕРИТСЯ (sentinel_enabled=true). vars: monitor
     # ВНЕШНЕГО master 10.9.9.9:6379, master_name mymaster, quorum 2 (size(2)/2+1).
     # announce-ip НЕ в vars — per-host в sentinel.conf.tmpl из .self. render_context.self
     # = первый по SID хост (node-1, host-инвариант apply.input). data-плоскость
     # redis-server (redis.conf/users.acl/systemd) в плане placeholder-skip —
-    # TestAcceptance_SentinelOnlySkipsRedisServer. index 24 (−2 от исходного плана).
-    - index: 24
+    # TestAcceptance_SentinelOnlySkipsRedisServer. index 22 (−2: mode-guard + sentinel-guard).
+    - index: 22
       module: core.file.rendered
       params:
         path: /etc/redis/sentinel.conf
@@ -117,10 +114,10 @@ assert:
           role: ""
           essence: {}
 
-    # SENTINEL MONITOR (index 34): monitor.ip = input.master_ip 10.9.9.9 (ВНЕШНИЙ,
+    # SENTINEL MONITOR (index 32): monitor.ip = input.master_ip 10.9.9.9 (ВНЕШНИЙ,
     # НЕ из soulprint.hosts — master живёт вне прогона). quorum 2 (size/2+1).
-    # index 34 (−2 от исходного плана).
-    - index: 34
+    # index 32 (−2: mode-guard + sentinel-guard).
+    - index: 32
       module: community.redis.sentinel
       params:
         addr: "127.0.0.1:26379"
@@ -132,13 +129,13 @@ assert:
           port: 6379
           quorum: 2
 
-    # PONG-gate :26379 (index 35): same-task register.self (PONG), НЕ cross-passage.
-    # index 35 (−2 от исходного плана).
-    - index: 35
-      module: community.redis.command
+    # PONG-gate :26379 (index 33): same-task register.self (PONG), НЕ cross-passage.
+    # community.redis.pinged (единая идиома health-gate через плагин-state, НЕ raw
+    # command args:[PING]). index 33 (−2: mode-guard + sentinel-guard).
+    - index: 33
+      module: community.redis.pinged
       params:
         addr: "127.0.0.1:26379"
-        args: ["PING"]
 
   # sentinel_only-факты в state: redis_type sentinel_only + redis_config ПУСТОЙ
   # (data-плоскости нет) + master_name/master_ip(ВНЕШНИЙ)/quorum + пустые

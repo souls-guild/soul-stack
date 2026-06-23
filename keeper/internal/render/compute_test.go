@@ -136,12 +136,10 @@ func TestCompute_SameValueInTasksAndStateChanges(t *testing.T) {
 }
 
 // ★ Барьер изоляции #1: compute НЕ протекает в изолированный destiny-проход.
-// Задача apply:destiny с шагом, ссылающимся на compute.cfg внутри destiny, видит
-// no-such-key (destinyIn.Compute=nil). Проверяем, что Render родителя сам compute
-// резолвит (apply.input компонует значение), но внутри destiny compute недоступен.
+// Структурный: destinyIn (destiny.go:99-107) НЕ несёт поле Compute, поэтому
+// resolveCompute для destiny-входа даёт nil — `compute.<name>` внутри destiny =
+// штатный no-such-key.
 func TestCompute_NotLeakingIntoDestiny(t *testing.T) {
-	// Достаточно проверить, что resolveCompute для изолированного destiny-входа
-	// (Scenario без compute, Compute=nil) даёт nil — destiny compute не несёт.
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	destinyIn := RenderInput{
 		Scenario:        &config.ScenarioManifest{Name: "redis"},
@@ -154,5 +152,92 @@ func TestCompute_NotLeakingIntoDestiny(t *testing.T) {
 	}
 	if got != nil {
 		t.Fatalf("★ destiny compute = %#v, want nil (изоляция: compute не протекает в destiny)", got)
+	}
+}
+
+// ★ Барьер изоляции #1 (ПОЗИТИВНЫЙ, end-to-end): сценарий с НЕпустым compute: +
+// apply:destiny, чей destiny-шаг ссылается на ${ compute.x } — полный Render
+// падает no-such-key (destinyIn.Compute не пробрасывается, destiny.go:99-107).
+// Доказывает структурную изоляцию НА РЕАЛЬНОМ проходе (не только resolveCompute
+// в вакууме): родитель compute резолвит (apply.input компонует значение), а
+// внутри destiny `compute.*` недоступен — значение НЕ доезжает.
+func TestCompute_NotLeakingIntoDestiny_RenderThrough(t *testing.T) {
+	// destiny ссылается на compute.cfg, которого в изолированном env нет.
+	leaky := flatDestiny()
+	leaky.Tasks[0].Module.Params["content"] = "${ compute.cfg }"
+	res := &stubDestinyResolver{resolved: leaky}
+
+	scenario := applyScenario("pilot-flat", map[string]any{"marker_file": "/m", "marker_payload": "p"})
+	// НЕпустой compute: на родителе — он резолвится в scenario-scope, но в destiny
+	// НЕ пробрасывается.
+	scenario.Compute = config.ComputeBlock{
+		{Name: "cfg", Value: "${ merge(essence.base, {}) }"},
+	}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario:    scenario,
+		Essence:     map[string]any{"base": map[string]any{"appendonly": "yes"}},
+		Incarnation: IncarnationMeta{Name: "svc"},
+		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
+		Destiny:     res,
+	}
+
+	_, _, err := p.Render(context.Background(), in)
+	if err == nil {
+		t.Fatal("★ Render: ожидалась ошибка — destiny не должна видеть compute (изоляция, compute.* недоступен в destiny-проходе)")
+	}
+}
+
+// ★ Forward-reference запрещён: compute[i] ссылается на compute[j], объявленный
+// ПОЗЖЕ → no-such-key (резолв строго в порядке объявления, acc копит только уже
+// вычисленное). Доказывает, что forward-ref не «подхватывает» позднее значение
+// тихо, а честно падает.
+func TestResolveCompute_ForwardReferenceIsNoSuchKey(t *testing.T) {
+	manifest := &config.ScenarioManifest{
+		Name: "create",
+		Compute: config.ComputeBlock{
+			// early ссылается на late, объявленный ниже — на момент резолва early
+			// в acc его ещё нет.
+			{Name: "early", Value: "${ compute.late }"},
+			{Name: "late", Value: "ready"},
+		},
+	}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario: manifest,
+		Hosts:    []*topology.HostFacts{host("h1", []string{"create"}, nil)},
+		Ctx:      context.Background(),
+	}
+	_, err := p.resolveCompute(in)
+	if err == nil {
+		t.Fatal("★ ожидалась ошибка: forward-reference compute.late из compute.early (объявлен позже)")
+	}
+	if !strings.Contains(err.Error(), "compute.early") {
+		t.Fatalf("ошибка должна указывать на compute.early, получено: %v", err)
+	}
+}
+
+// ★ Битый CEL внутри compute-выражения → ошибка обёрнута как render: compute.<name>:
+// (а не паника/тихий пропуск). Доказывает, что синтаксическая ошибка выражения
+// атрибутируется конкретной compute-записи.
+func TestResolveCompute_BrokenCELWrapped(t *testing.T) {
+	manifest := &config.ScenarioManifest{
+		Name: "create",
+		Compute: config.ComputeBlock{
+			{Name: "bad", Value: "${ 1 + + }"}, // синтаксически невалидное CEL
+		},
+	}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario: manifest,
+		Hosts:    []*topology.HostFacts{host("h1", []string{"create"}, nil)},
+		Ctx:      context.Background(),
+	}
+	_, err := p.resolveCompute(in)
+	if err == nil {
+		t.Fatal("★ ожидалась ошибка на битом CEL внутри compute.bad")
+	}
+	if !strings.Contains(err.Error(), "render: compute.bad") {
+		t.Fatalf("ошибка должна быть обёрнута как 'render: compute.bad: ...', получено: %v", err)
 	}
 }
