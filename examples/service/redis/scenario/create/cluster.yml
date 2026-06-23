@@ -11,41 +11,29 @@
 # трансляцию (деление 16384 на shards) НЕ повторяет — иначе две раскладки
 # (scenario + плагин) рассинхронятся.
 
-# 1. SHARDS-GUARD — shards обязателен в режиме cluster. shards остаётся
-#    required:false без default в input-схеме (min:1 + раскладка ролей, симметрии с
-#    standalone нет), поэтому отсутствие shards = осмысленная ошибка оператора, а
-#    НЕ дефолтное значение. Без этого guard-а size-guard ниже взял бы int(input.shards)
-#    по отсутствующему ключу → CEL «no such key» при render (криптично). Guard
-#    вычисляет has(input.shards) KEEPER-SIDE и при отсутствии рвёт прогон понятным
-#    echo. ПЕРВОЙ run_once-задачей cluster-ветки, ДО size-guard.
-- name: Guard cluster requires shards
-  when: "input.redis_type == 'cluster'"
-  run_once: true
-  module: core.cmd.shell
-  changed_when: "false"
-  params:
-    cmd: >-
-      test "${ has(input.shards) }" = "true" || { echo "redis_type=cluster требует input.shards (число master-шардов, min 1)"; exit 1; }
-
-# 2. SIZE-GUARD — fail-fast ДО любого install (assert:, ADR-009 amendment 2026-06-23).
+# 1. SIZE-GUARD — fail-fast ДО любого install (assert:, ADR-009 amendment 2026-06-23).
 #    Топология обязана точно совпасть: число таргетированных хостов roster-а ==
 #    shards*(1+replicas_per_shard). Соответствие проверяется KEEPER-SIDE на РЕНДЕРЕ —
 #    там доступен soulprint.hosts (roster прогона; на Soul-е во flow_context его НЕТ,
 #    поэтому Soul-side failed_when тут неприменим). assert.that[] — предикат «совпало»;
 #    false ОБРЫВАЕТ render (НИ одной задачи на Soul, прогон не стартует) с message.
 #    Это «fail на этапе модели» — раньше и понятнее, чем shell-guard на хосте.
-#    Прежняя реализация (core.cmd.shell test "${ <cel> }" = "true" || exit 1) заменена:
-#    декларативная keeper-side проверка вместо произвольного shell ради control-flow
-#    (меньше attack-surface). assert НЕ emit RenderedTask — задачи cluster-ветки после
-#    него сдвигаются на его позицию (−1 индекс относительно прежнего плана).
-#    int(input.shards) обёрнут has()-тернаром (→0 при отсутствии): держит CEL валидным,
-#    если shards не задан (shards-guard выше владеет этим случаем).
+#    assert НЕ emit RenderedTask — задачи cluster-ветки после него сдвигаются на его
+#    позицию (−1 индекс относительно прежнего плана).
+#
+#    ОБЯЗАТЕЛЬНОСТЬ shards — декларативно через required_when в main.yml (ADR-009
+#    amendment 2026-06-23): `shards: required_when: "input.redis_type == 'cluster'"`.
+#    Прежний shards-guard (core.cmd.shell с has(input.shards) || exit 1) УБРАН:
+#    отсутствие shards в режиме cluster ловит input-валидация Keeper-а ДО render —
+#    оператор получает понятный отказ раньше и без произвольного shell на хосте.
+#    Поэтому int(input.shards) здесь читается голым (shards гарантированно присутствует
+#    в cluster-прогоне, дошедшем до render); has()-тернар больше не нужен.
 #    replicas_per_shard имеет default:0 → int() безопасен без обёртки.
 - name: Guard cluster topology size matches shards and replicas
   when: "input.redis_type == 'cluster'"
   assert:
     that:
-      - "size(soulprint.hosts) == (has(input.shards) ? int(input.shards) : 0) * (1 + int(input.replicas_per_shard))"
+      - "size(soulprint.hosts) == int(input.shards) * (1 + int(input.replicas_per_shard))"
     message: "topology mismatch: hosts != shards*(1+replicas_per_shard)"
 
 # 2. Per-host install + render redis.conf (с cluster-директивами) + render

@@ -49,6 +49,15 @@ type InputSchema struct {
 	Required      bool     `yaml:"-"`
 	RequiredProps []string `yaml:"-"`
 	requiredKind  requiredKind
+
+	// RequiredWhen — CEL-предикат над `input.*`: параметр обязателен, КОГДА
+	// предикат истинен (docs/input.md → «Условная обязательность»). Применим к
+	// любому type. Условная пара безусловного Required: тот всегда обязателен,
+	// этот — при истинном предикате. Контекст предиката — только input.* (это
+	// input-валидация, не render): прочие имена → compile-ошибка узкого env
+	// (см. requireInputValues / input_required_when.go). Пустая строка =
+	// отсутствие ключа.
+	RequiredWhen string `yaml:"required_when,omitempty"`
 	// rawRequired сохраняет исходный AST-узел `required:` до классификации
 	// в `requiredKind`. Используется в `validateInputSchemaNode`, чтобы
 	// поднять `input_required_value_invalid`, когда значение не bool и не
@@ -132,7 +141,7 @@ var (
 	// Используется для unknown_key-проверки (вне reflect-walker, потому
 	// что у InputSchema особый смысл `required` и рекурсивные поля).
 	inputSchemaKnownKeys = map[string]bool{
-		"type": true, "required": true, "default": true, "enum": true,
+		"type": true, "required": true, "required_when": true, "default": true, "enum": true,
 		"secret": true, "description": true,
 
 		"pattern": true, "format": true, "min_length": true,
@@ -375,6 +384,13 @@ func validateInputSchemaNode(s *InputSchema, node *ast.MappingNode, path string)
 				}))
 			}
 		}
+	}
+
+	// required_when — статически парсимый CEL над input.* (docs/input.md →
+	// «Условная обязательность»). Применим к любому type, поэтому проверяется до
+	// per-type-fork. Непарсимое/недопустимое выражение → input_required_when_invalid.
+	if kv, ok := present["required_when"]; ok {
+		out = append(out, validateRequiredWhen(s, kv, path)...)
 	}
 
 	// type — enum.

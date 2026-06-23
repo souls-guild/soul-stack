@@ -49,12 +49,13 @@ fixtures:
 assert:
   rendered_tasks:
     # index 0 — mode-guard (sentinel → no-op); standalone+cluster ветки
-    # placeholder-skip. sentinel size-guard FAIL-форма на index 7 (cluster size-guard
-    # переведён в assert: и больше НЕ занимает слот в плане — все задачи после cluster-
-    # ветки, включая sentinel, сдвинуты на −1; прежде было index 8). 3 == 1+1 → false
-    # → "false" встроено в test. (Сам sentinel size-guard в этом слайсе НЕ трогаем —
+    # placeholder-skip. sentinel size-guard FAIL-форма на index 6: cluster size-guard
+    # переведён в assert: (ADR-009 amendment) И cluster shards-guard УБРАН (required_when
+    # в main.yml) — обе задачи cluster-ветки больше НЕ занимают слот → все задачи после
+    # cluster-ветки, включая sentinel, сдвинуты на −2 от исходного плана. 3 == 1+1 → false
+    # → "false" встроено в test. (Сам sentinel size-guard остаётся core.cmd.shell —
     # перевод в assert: отложен на тираж.)
-    - index: 7
+    - index: 6
       module: core.cmd.shell
       params:
         cmd: 'test "false" = "true" || { echo "topology mismatch: hosts != 1 + replicas"; exit 1; }'

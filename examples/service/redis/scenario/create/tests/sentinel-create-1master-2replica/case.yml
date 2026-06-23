@@ -74,18 +74,19 @@ assert:
     # ── size-guard (core.cmd.shell) ─────────────────────────────────────────
     # index 0 — mode-guard диспетчера (sentinel реализован → no-op); standalone+cluster
     # ветки placeholder-skip. cluster size-guard переведён в assert: (ADR-009 amendment)
-    # и больше НЕ занимает слот в плане → ВСЕ задачи после cluster-ветки (sentinel,
-    # sentinel_only) сдвинуты на −1: sentinel size-guard 8→7, redis.conf 16→15,
-    # replica 32→31, sentinel-monitor 33→32. (Сам sentinel size-guard в этом слайсе НЕ
-    # переводим в assert: — тираж отложен.) 3 == 1 + 2 → "true".
-    - index: 7
+    # И cluster shards-guard УБРАН (required_when в main.yml) — обе задачи cluster-ветки
+    # больше НЕ занимают слот в плане → ВСЕ задачи после cluster-ветки (sentinel,
+    # sentinel_only) сдвинуты на −2 от исходного плана: sentinel size-guard→6,
+    # redis.conf→14, replica→30, sentinel-monitor→31. (Сам sentinel size-guard в этом
+    # слайсе остаётся core.cmd.shell-задачей — тираж в assert: отложен.) 3 == 1 + 2 → "true".
+    - index: 6
       module: core.cmd.shell
       params:
         cmd: 'test "true" = "true" || { echo "topology mismatch: hosts != 1 + replicas"; exit 1; }'
 
     # ── sentinel destiny: redis.conf (sentinel-режим: НЕТ cluster-директив) ──
     # render_context.self = первый по SID хост (node-1, host-инвариант apply.input).
-    - index: 15
+    - index: 14
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -126,8 +127,8 @@ assert:
     # срабатывает, реальная защита — этот where. Per-host отсутствие задачи на
     # master доказано render-ассертом TargetSIDs (TestAcceptance_SentinelReplicaExcludesMaster).
     # Params host-инвариантны → L0 assert by-index сверяет одни и те же params
-    # реплик. Был index 32 (−1 после перевода cluster size-guard в assert:).
-    - index: 31
+    # реплик. index 30 (−2 от исходного плана).
+    - index: 30
       module: community.redis.replica
       params:
         addr: "127.0.0.1:6379"
@@ -137,8 +138,8 @@ assert:
     # ── SENTINEL MONITOR reconcile (community.redis.sentinel) ───────────────
     # monitor.ip — HOST-ИНВАРИАНТНЫЙ адрес master-а (master-election node-1).
     # quorum=2 (input.sentinel_quorum). auth_pass — keeper-side vault()-резолв.
-    # Был index 33 (−1 после перевода cluster size-guard в assert:).
-    - index: 32
+    # index 31 (−2 от исходного плана).
+    - index: 31
       module: community.redis.sentinel
       params:
         addr: "127.0.0.1:26379"

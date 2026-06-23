@@ -1,25 +1,21 @@
 # L0-испытание cluster-без-shards — FAIL-ветка. shards остаётся required:false без
-# default в input-схеме (min:1 + раскладка ролей по хостам), поэтому ОТСУТСТВИЕ
-# shards = осмысленная ошибка оператора, а не дефолт.
+# default в input-схеме (min:1 + раскладка ролей по хостам), но несёт
+# required_when: "input.redis_type == 'cluster'" — условную обязательность по режиму
+# (ADR-009 amendment 2026-06-23). Поэтому ОТСУТСТВИЕ shards в режиме cluster =
+# осмысленная ошибка оператора, а не дефолт.
 #
-# ★ ПОВЕДЕНИЕ ПОСЛЕ перевода size-guard в assert: (ADR-009 amendment 2026-06-23):
-# size-guard теперь keeper-side render-time precondition (assert:), вычисляется
-# ДО dispatch. При cluster-без-shards его предикат that[0] =
-#   size(soulprint.hosts) == (has(input.shards) ? int : 0) * (1 + int(replicas))
-# = 1 == 0*(1+0) = false → render ОБРЫВАЕТСЯ с message "topology mismatch" РАНЬШЕ,
-# чем shards-guard (отдельная core.cmd.shell-задача) доедет до Soul. Прежде (size-
-# guard = shell-задача) этот кейс ассертил ДВА отрендеренных guard-а в fail-форме;
-# теперь render не доходит до плана — ассертим обрыв через expect_render_error.
+# ★ ПОВЕДЕНИЕ: shards-специфичную диагностику даёт required_when на INPUT-ВАЛИДАЦИИ
+# (config.ResolveInputValues → requireInputValues), которая идёт ДО render: предикат
+# input.redis_type == 'cluster' истинен, shards не передан и без default → прогон
+# обрывается понятным сообщением «input "shards" обязателен...» РАНЬШЕ, чем дойдёт до
+# render и size-guard assert (1 != 0*1). В trial-harness эта input-ошибка пробрасывается
+# через renderCase (config.ResolveInputValues) и ловится тем же expect_render_error.
+# Прежде (size-guard shell-задача / без required_when) кейс ассертил отрендеренный
+# guard / обрыв на size-guard "topology mismatch"; теперь required_when отсекает раньше.
 #
-# shards-guard (core.cmd.shell, has(input.shards)) ОСТАЁТСЯ в сценарии (отдельная
-# фича required_when — следующий слайс); но на render он рендерится ДО assert и при
-# его провале прогон всё равно обрывается на assert. Итог для оператора один:
-# cluster-без-shards не стартует. Точечную shards-специфичную диагностику вернёт
-# required_when, когда заменит shards-guard.
-#
-# Парный с cluster-single-shard (shards задан): там render проходит, cluster-build
-# на месте.
-name: cluster without shards aborts render at size-guard assert
+# Парный с cluster-single-shard (shards задан): там input-валидация проходит, render
+# идёт, cluster-build на месте.
+name: cluster without shards aborts at input validation (required_when)
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
@@ -50,8 +46,10 @@ fixtures:
     # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
     # distro-native пин (мажор < 8 → version-gate модулей не активен).
     version: "7.2.4"
-    # shards НЕ задан намеренно — 1 хост != 0*(1+0) → size-guard assert обрывает render.
+    # shards НЕ задан намеренно — required_when (input.redis_type == 'cluster')
+    # делает его обязательным в режиме cluster → input-валидация рвёт прогон ДО render.
 
-# Render обрывается assert-провалом size-guard-а (1 != 0). has()-тернар держит CEL
-# валидным при отсутствии shards (иначе int(input.shards) дал бы no-such-key).
-expect_render_error: "topology mismatch"
+# Прогон обрывается на input-валидации: required_when shards истинен (режим cluster),
+# значение не передано и без default. Подстрока — узнаваемая форма required-сообщения
+# requireInputValues (input_value.go), включающая сам предикат required_when.
+expect_render_error: "input \"shards\" обязателен, но не передан и не имеет default (required_when: input.redis_type == 'cluster')"

@@ -22,22 +22,12 @@
 #   НЕ через apply.input. Граница: «значение одно для всех» → apply.input; «у
 #   каждого своё» → .self.
 
-# 1. MASTER_IP-GUARD — master_ip ОБЯЗАТЕЛЕН в режиме sentinel_only. На schema-уровне
-#    master_ip остаётся required:false (условную по режиму обязательность схема не
-#    выражает), поэтому пропуск ловит этот guard: вычисляет has(input.master_ip)
-#    KEEPER-SIDE и при отсутствии рвёт прогон понятным echo (а не криптичным CEL
-#    «no such key» в apply.input.sentinel.master_ip ниже). ПЕРВОЙ run_once-задачей
-#    ветки, ДО любого install. changed_when:false — проверка, не изменение.
-- name: Guard sentinel_only requires master_ip
-  when: "input.redis_type == 'sentinel_only'"
-  run_once: true
-  module: core.cmd.shell
-  changed_when: "false"
-  params:
-    cmd: >-
-      test "${ has(input.master_ip) }" = "true" || { echo "redis_type=sentinel_only требует input.master_ip (адрес ВНЕШНЕГО redis-master)"; exit 1; }
-
-# 2. Per-host install пакета + render sentinel.conf + redis-sentinel unit + запуск
+# master_ip ОБЯЗАТЕЛЕН в режиме sentinel_only — enforced условной обязательностью
+# `required_when: "input.redis_type == 'sentinel_only'"` в input-схеме (main.yml).
+# Пропуск рвёт прогон на input-валидации ДО рендера понятным сообщением; прежний
+# keeper-side shell-guard убран (симметрично cluster shards-guard).
+#
+# 1. Per-host install пакета + render sentinel.conf + redis-sentinel unit + запуск
 #    демона. Та же destiny `redis` (режим-агностична), но deploy_redis=false (БЕЗ
 #    redis-server data-плоскости: redis.conf/users.acl/PEM/systemd redis-server →
 #    placeholder-skip) + sentinel_enabled=true. Пакет redis ставится ВСЕГДА (несёт
@@ -91,7 +81,7 @@
         quorum:      "${ has(input.sentinel_quorum) ? int(input.sentinel_quorum) : (int(size(soulprint.hosts)) / 2 + 1) }"
         auth_pass:   "${ vault('secret/redis/' + incarnation.name + '#password') }"
 
-# 3. SENTINEL MONITOR reconcile: plugin community.redis.sentinel на КАЖДОМ хосте
+# 2. SENTINEL MONITOR reconcile: plugin community.redis.sentinel на КАЖДОМ хосте
 #    (каждый sentinel-демон мониторит ВНЕШНИЙ master). addr — локальный sentinel
 #    (127.0.0.1:26379, per-host инвариант); monitor.ip — input.master_ip (ВНЕШНИЙ
 #    master, НЕ из soulprint.hosts: master живёт вне прогона). quorum — input или
@@ -113,7 +103,7 @@
       port:   "${ int(input.master_port) }"
       quorum: "${ has(input.sentinel_quorum) ? int(input.sentinel_quorum) : (int(size(soulprint.hosts)) / 2 + 1) }"
 
-# 4. Health-gate per-host: SENTINEL отвечает PONG на :26379 (демон поднялся и
+# 3. Health-gate per-host: SENTINEL отвечает PONG на :26379 (демон поднялся и
 #    сконфигурирован). ★ СТРОГО same-task register.self (НЕ cross-passage
 #    flow-control, ADR-056 cross_passage_when_unsupported): «дождаться N sentinel»
 #    НЕ выражаем — проверяем ТОЛЬКО свой локальный sentinel. Паттерн перенесён из

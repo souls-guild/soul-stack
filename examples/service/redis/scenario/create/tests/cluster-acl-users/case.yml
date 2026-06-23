@@ -1,9 +1,9 @@
 # L0-испытание create в режиме cluster С ACL-ЮЗЕРАМИ (пробел покрытия qa
 # 2026-06-22). Доказываем, что в cluster-режиме:
-#   1. users.acl рендерится из MAP имя→{perms,state,password} (index 5) — тот же
+#   1. users.acl рендерится из MAP имя→{perms,state,password} (index 9) — тот же
 #      детерминированный map-рендер, что и standalone (range по map → сортировка
 #      ключей); cluster не ломает ACL-проход.
-#   2. cluster-директивы в redis.conf (index 6) СОСУЩЕСТВУЮТ с ACL-юзерами —
+#   2. cluster-директивы в redis.conf (index 10) СОСУЩЕСТВУЮТ с ACL-юзерами —
 #      это разные файлы (users.acl и redis.conf), оба рендерятся в одном прогоне.
 #   3. per-user пароль резолвится keeper-side vault() по конвенции
 #      secret/redis/<inc>/users/<name>#password; в users.acl он пишется ХЕШЕМ
@@ -73,19 +73,14 @@ fixtures:
 
 assert:
   rendered_tasks:
-    # index 0 — mode-guard (cluster реализован → no-op); index 3 — shards-guard
-    # PASS (shards задан).
-    - index: 3
-      module: core.cmd.shell
-      params:
-        cmd: 'test "true" = "true" || { echo "redis_type=cluster требует input.shards (число master-шардов, min 1)"; exit 1; }'
-
-    # size-guard PASS: теперь assert: (ADR-009 amendment) — НЕ задача, в план не
-    # эмитится → задачи cluster-ветки сдвинуты на −1 (users.acl 11→10, redis.conf 12→11).
+    # index 0 — mode-guard (cluster реализован → no-op). shards-guard УБРАН
+    # (required_when в main.yml ловит пропуск shards на input-валидации); size-guard
+    # PASS — assert: (НЕ задача, в план не эмитится). Обе задачи позиций не занимают
+    # → cluster-ветка сдвинута на −2 от исходного плана (users.acl→9, redis.conf→10).
 
     # users.acl: MAP имя→{perms,state,password} с per-user vault-паролями.
     # zeta/alpha — каждый со СВОИМ резолвнутым паролем (нет cross-leak).
-    - index: 10
+    - index: 9
       module: core.file.rendered
       params:
         path: /etc/redis/users.acl
@@ -117,8 +112,8 @@ assert:
           essence: {}
 
     # redis.conf: cluster-директивы СОСУЩЕСТВУЮТ с ACL (разные файлы). В config
-    # НЕ должно быть per-user пароля (он только в users.acl, хешем). Был index 12 (−1).
-    - index: 11
+    # НЕ должно быть per-user пароля (он только в users.acl, хешем). index 10 (−2).
+    - index: 10
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf

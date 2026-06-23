@@ -43,13 +43,13 @@ fixtures:
 
 assert:
   rendered_tasks:
-    # index 0 — mode-guard (cluster → no-op); index 3 — shards-guard PASS.
-    # size-guard PASS: 1 == 1*(1+0) → assert that[0] true (assert:, не задача —
-    # ADR-009 amendment): render проходит, в план НЕ эмитится → задачи сдвинуты на
-    # −1 (redis.conf 12→11, cluster-build 28→27).
+    # index 0 — mode-guard (cluster → no-op). shards-guard УБРАН (required_when в
+    # main.yml ловит пропуск shards на input-валидации); size-guard PASS: 1 == 1*(1+0)
+    # → assert that[0] true (assert:, не задача — ADR-009 amendment). Обе задачи позиций
+    # не занимают → cluster-ветка сдвинута на −2 от исходного плана.
 
     # redis.conf: cluster-директивы; render_context.self = единственный хост.
-    - index: 11
+    - index: 10
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -83,8 +83,8 @@ assert:
           role: ""
           essence: {}
 
-    # cluster-build: nodes-MAP с единственной записью. Был index 28 (−1 после size-guard).
-    - index: 27
+    # cluster-build: nodes-MAP с единственной записью. index 26 (−2 от исходного плана).
+    - index: 26
       module: community.redis.cluster
       params:
         action: create

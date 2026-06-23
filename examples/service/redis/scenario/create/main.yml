@@ -106,12 +106,14 @@ input:
   shards:
     type: integer
     required: false
+    required_when: "input.redis_type == 'cluster'"
     min: 1
     description: >-
       Число master-шардов Redis Cluster (режим cluster). 16384 hash-слота делятся
       поровну между shards мастерами (раскладку делает плагин community.redis.cluster
       детерминированно). Размер roster-а прогона обязан быть shards*(1+
-      replicas_per_shard) — иначе size-guard рвёт прогон fail-fast.
+      replicas_per_shard) — иначе size-guard рвёт прогон fail-fast. Обязателен при
+      redis_type=cluster (required_when) — пропуск рвёт прогон на input-валидации.
 
   replicas_per_shard:
     type: integer
@@ -173,17 +175,20 @@ input:
   # redis-server НЕ ставим), мониторящий ВНЕШНИЙ master. Адрес master-а оператор
   # задаёт явно (master_ip) — он НЕ выбирается из roster-а (master живёт вне этого
   # прогона). master_ip — HOST-ИНВАРИАНТ (один на кластер) → apply.input. REQUIRED
-  # при sentinel_only — enforced guard-задачей sentinel-only.yml (schema-уровень
-  # required нельзя сделать условным по режиму). sentinel-демон поднимается на
+  # при sentinel_only — enforced условной обязательностью `required_when`
+  # (input.redis_type == 'sentinel_only'): пропуск рвёт прогон на input-валидации
+  # ДО рендера понятным сообщением. sentinel-демон поднимается на
   # КАЖДОМ таргетированном хосте; size-guard в этом режиме НЕ нужен (любое число
   # sentinel-ов валидно — кворум считается от их количества).
   master_ip:
     type: string
     required: false
+    required_when: "input.redis_type == 'sentinel_only'"
     description: >-
       IP/адрес ВНЕШНЕГО redis-master, который мониторит sentinel-кластер (режим
-      sentinel_only). Обязателен при sentinel_only (guard рвёт прогон при пропуске).
-      В прочих режимах не используется (master выбирается из roster-а).
+      sentinel_only). Обязателен при sentinel_only (required_when рвёт прогон на
+      input-валидации при пропуске). В прочих режимах не используется (master
+      выбирается из roster-а).
 
   master_port:
     type: integer

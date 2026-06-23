@@ -1,17 +1,18 @@
-# L0-испытание режима sentinel_only — master_ip ОБЯЗАТЕЛЕН (FAIL-ветка guard).
-# sentinel_only теперь РЕАЛИЗОВАН (ветка sentinel-only.yml), поэтому mode-guard
-# диспетчера на нём проходит no-op-ом (index 0 → "true"). Но sentinel_only требует
-# ВНЕШНИЙ master (input.master_ip): на schema-уровне master_ip остаётся
-# required:false (условную по режиму обязательность схема не выражает), поэтому
-# пропуск ловит master_ip-guard ПЕРВОЙ задачей ветки (index 14): master_ip не задан
-# → булево "false" → cmd принимает форму `test "false" = "true" || { echo ...;
-# exit 1; }` — при исполнении ноды (L2/live) рвёт прогон fail-fast. На L0
-# (render-only) доказывается ТРАНСЛЯЦИЯ guard-а в fail-форму с понятным сообщением.
+# L0-испытание режима sentinel_only — master_ip ОБЯЗАТЕЛЕН (FAIL-ветка). sentinel_only
+# РЕАЛИЗОВАН (ветка sentinel-only.yml). Но sentinel_only требует ВНЕШНИЙ master
+# (input.master_ip): на schema-уровне master_ip остаётся required:false, но несёт
+# required_when: "input.redis_type == 'sentinel_only'" — условную обязательность по
+# режиму (ADR-009 amendment 2026-06-23). Пропуск master_ip в этом режиме рвёт прогон
+# на INPUT-ВАЛИДАЦИИ (config.ResolveInputValues → requireInputValues) ДО render,
+# понятным сообщением; прежний keeper-side shell master_ip-guard убран.
 #
-# Прежний кейс sentinel-only-not-implemented (mode-guard падал на sentinel_only)
-# переписан: sentinel_only больше НЕ нереализованный режим, его ловит не mode-guard,
-# а master_ip-guard при пропуске обязательного master_ip.
-name: sentinel_only requires master_ip (guard fails when omitted)
+# В trial-harness эта input-ошибка пробрасывается через renderCase
+# (config.ResolveInputValues) и ловится тем же expect_render_error.
+#
+# Прежний кейс (master_ip-guard как отрендеренная core.cmd.shell-задача в fail-форме)
+# переписан: обязательность теперь декларативна (required_when), отсекает раньше — до
+# построения плана.
+name: sentinel_only requires master_ip (aborts at input validation)
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
@@ -37,27 +38,15 @@ fixtures:
       maxclients:       10000
       timeout:          300
 
-  # redis_type=sentinel_only БЕЗ master_ip — master_ip-guard обязан сорвать прогон.
+  # redis_type=sentinel_only БЕЗ master_ip — required_when обязан сорвать прогон на
+  # input-валидации ДО render.
   input:
     redis_type: sentinel_only
     # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
     # distro-native пин (мажор < 8 → version-gate модулей не активен).
     version: "7.2.4"
 
-assert:
-  rendered_tasks:
-    # mode-guard (index 0): sentinel_only РЕАЛИЗОВАН → "true" → no-op (НЕ падает).
-    - index: 0
-      module: core.cmd.shell
-      params:
-        cmd: 'test "true" = "true" || { echo "redis_type=sentinel_only не поддержан (реализованы: standalone, cluster, sentinel, sentinel_only)"; exit 1; }'
-
-    # master_ip-guard FAIL-форма (index 13): master_ip НЕ задан → булево "false" →
-    # echo с понятным сообщением + exit 1. standalone(1-2)/cluster(3-6)/sentinel
-    # (7-12) ветки placeholder-skip на sentinel_only-прогоне. cluster size-guard
-    # переведён в assert: (ADR-009 amendment) — cluster-ветка на 1 задачу короче →
-    # master_ip-guard сдвинут с index 14 на 13.
-    - index: 13
-      module: core.cmd.shell
-      params:
-        cmd: 'test "false" = "true" || { echo "redis_type=sentinel_only требует input.master_ip (адрес ВНЕШНЕГО redis-master)"; exit 1; }'
+# Прогон обрывается на input-валидации: required_when master_ip истинен (режим
+# sentinel_only), значение не передано и без default. Подстрока — узнаваемая форма
+# required-сообщения requireInputValues (input_value.go), включающая сам предикат.
+expect_render_error: "input \"master_ip\" обязателен, но не передан и не имеет default (required_when: input.redis_type == 'sentinel_only')"

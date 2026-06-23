@@ -76,11 +76,13 @@ fixtures:
 
 assert:
   rendered_tasks:
-    # index 0 — mode-guard (cluster → no-op); index 3 — shards-guard PASS.
-    # size-guard PASS: assert: (ADR-009 amendment) — НЕ задача → redis.conf 12→11.
+    # index 0 — mode-guard (cluster → no-op). shards-guard УБРАН (required_when в
+    # main.yml ловит пропуск shards на input-валидации); size-guard PASS — assert:
+    # (ADR-009 amendment) НЕ задача. Обе задачи позиций не занимают → cluster-ветка
+    # сдвинута на −2 от исходного плана (redis.conf→10).
 
     # redis.conf: cluster-блок ПОБЕДИЛ враждебный redis_settings (last-wins).
-    - index: 11
+    - index: 10
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
