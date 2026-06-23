@@ -46,6 +46,12 @@ var taskType = reflect.TypeOf(Task{})
 // JSON-выводе.
 var stateChangesType = reflect.TypeOf(StateChanges{})
 
+// computeBlockType — точка остановки reflect-walker-а. `compute:` — YAML-mapping
+// `<имя>: <выражение>` со своим UnmarshalYAML (ComputeBlock) и валидатором
+// validateComputeBlock. Без suppress generic-walker увидел бы []ComputeVar как
+// sequence-of-struct и не нашёл бы соответствия mapping-узлу (ложные unknown_key).
+var computeBlockType = reflect.TypeOf(ComputeBlock(nil))
+
 // walkUnknownKeys обходит AST-mapping `root` и yaml-теги типа `cfg`,
 // собирая `unknown_key` диагностики для ключей, которых нет в Go-структуре.
 //
@@ -156,6 +162,11 @@ func walkValueAgainstType(n ast.Node, t reflect.Type, path string) []diag.Diagno
 	}
 	// StateChanges — собственный валидатор validateStateChanges с hint-ом.
 	if t == stateChangesType {
+		return nil
+	}
+	// ComputeBlock — собственный UnmarshalYAML (mapping имя→выражение) + валидатор
+	// validateComputeBlock; generic-walker как по slice-of-struct сюда не заходит.
+	if t == computeBlockType {
 		return nil
 	}
 

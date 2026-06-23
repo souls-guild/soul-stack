@@ -21,20 +21,21 @@
 # DECLARED: первый по SID хост (soulprint.hosts[0]) = master. soulprint.hosts уже
 # отсортирован по SID (cel_render.go), порядок детерминирован.
 
-# 1. SIZE-GUARD — ПЕРВОЙ run_once-задачей, fail-fast ДО любого install. Топология
-#    sentinel-режима: 1 master + replicas реплик → size(soulprint.hosts) == 1+replicas.
-#    Соответствие вычисляется KEEPER-SIDE при RENDER (soulprint.hosts доступен).
-#    Отрендеренное булево встраивается в guard-команду: совпало → "true" → test
-#    проходит; не совпало → "false" → echo + exit 1 рвёт прогон. int() от uint64
-#    (YAML→uint64 в L0, JSON→double в проде) унифицирует числовой тип CEL.
+# 1. SIZE-GUARD — fail-fast ДО любого install (assert:, ADR-009 amendment 2026-06-23;
+#    тот же механизм, что size-guard cluster.yml). Топология sentinel-режима: 1 master
+#    + replicas реплик → size(soulprint.hosts) == 1+replicas. Предикат вычисляется
+#    KEEPER-SIDE на РЕНДЕРЕ (там доступен soulprint.hosts; на Soul-е во flow_context
+#    его НЕТ → Soul-side failed_when неприменим). false ОБРЫВАЕТ render (НИ одной
+#    задачи на Soul, прогон не стартует) с message — раньше и понятнее, чем shell-guard
+#    на хосте. assert НЕ emit RenderedTask — задачи sentinel-ветки после него позиций
+#    не занимают. int() от uint64 (YAML→uint64 в L0, JSON→double в проде) унифицирует
+#    числовой тип CEL.
 - name: Guard sentinel topology size matches one master and replicas
   when: "input.redis_type == 'sentinel'"
-  run_once: true
-  module: core.cmd.shell
-  changed_when: "false"
-  params:
-    cmd: >-
-      test "${ int(size(soulprint.hosts)) == 1 + int(input.replicas) }" = "true" || { echo "topology mismatch: hosts != 1 + replicas"; exit 1; }
+  assert:
+    that:
+      - "int(size(soulprint.hosts)) == 1 + int(input.replicas)"
+    message: "topology mismatch: hosts != 1 + replicas"
 
 # 2. Per-host install + render redis.conf + users.acl + sentinel.conf + units.
 #    Та же destiny `redis` (режим-агностична), что standalone, но с
@@ -53,32 +54,12 @@
     input:
       version:  "${ input.version }"
       password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
-      # TLS-блок (HOST-ИНВАРИАНТ, см. standalone.yml): tls-port/cert/key/ca +
-      # tls-replication yes (master↔replica шифруются). port 0 при tls_only.
-      config: >-
-        ${ merge(
-             essence.redis_config,
-             essence.persistence_presets[input.persistence],
-             merge(
-               has(input.memory_mb)
-                 ? { 'maxmemory': string(int(input.memory_mb) * int(essence.memory_reserve_percent) / 100) + 'mb' }
-                 : {},
-               has(input.maxmemory_policy) ? { 'maxmemory-policy': input.maxmemory_policy } : {}
-             ),
-             default(input.redis_settings, {}),
-             (has(essence.tls_enable) && essence.tls_enable)
-               ? merge(
-                   {
-                     'tls-port':         string(int(default(essence.tls_port, 7379))),
-                     'tls-cert-file':    '/etc/redis/tls/redis.crt',
-                     'tls-key-file':     '/etc/redis/tls/redis.key',
-                     'tls-ca-cert-file': '/etc/redis/tls/ca.crt',
-                     'tls-replication':  'yes'
-                   },
-                   (has(essence.tls_only) && essence.tls_only) ? { 'port': '0' } : {}
-                 )
-               : {}
-           ) }
+      # Единый compute.redis_config (объявлен ОДИН раз в main.yml compute:, ADR-009):
+      # тот же map, что уйдёт в state_changes.redis_config — drift «state ≡ live
+      # config» снят самим compute. Для sentinel compute.redis_config = базовый merge
+      # (БЕЗ cluster-директив; tls-replication yes при TLS, port 0 при tls_only).
+      # HOST-ИНВАРИАНТ → apply.input на targeted[0] корректен.
+      config: "${ compute.redis_config }"
       users: >-
         ${ has(input.users)
            ? merge(input.users.map(name, {
@@ -98,12 +79,10 @@
            : [] }
       modules_base_url: "${ default(input.modules_base_url, '') }"
       modules_sha256:   "${ default(input.modules_sha256, {}) }"
-      # Host-tuning extras (концепция роли), режим-агностичны — те же флаги, что в
-      # standalone/cluster. Host-инвариантны → apply.input. sysctl_settings — essence.
-      # logrotate_enable/sysctl_enable — default:true → голый input.X. THP убран из
-      # контракта (отключение безусловно в destiny `redis`).
-      logrotate_enable: "${ input.logrotate_enable }"
-      sysctl_enable:    "${ input.sysctl_enable }"
+      # Host-tuning extras (концепция роли), режим-агностичны — как в standalone/cluster.
+      # THP/logrotate/sysctl БЕЗУСЛОВНЫ (рекомендация Redis / hardening) — операторских
+      # флагов нет, задачи destiny `redis` всегда активны. sysctl_settings — essence,
+      # host-инвариантна → apply.input.
       sysctl_settings:  "${ default(essence.sysctl_settings, {}) }"
       # TLS PEM + флаги — HOST-ИНВАРИАНТ (один cert/CA на кластер) → apply.input
       # (см. standalone.yml). Источник — Vault-пути essence.

@@ -32,9 +32,9 @@ description: >-
 # Простые типизированные понятия. Трансляция в redis.conf — в ветках диспетчера.
 # Реализованы ВСЕ четыре режима: standalone (standalone.yml), cluster (cluster.yml),
 # sentinel (sentinel.yml), sentinel_only (sentinel-only.yml — только sentinel-демон,
-# мониторящий ВНЕШНИЙ master из input.master_ip). guard первой задачей диспетчера
-# рвёт прогон с понятным сообщением, если выбран реально-неизвестный режим (а не
-# молчаливый зелёный no-op).
+# мониторящий ВНЕШНИЙ master из input.master_ip). Неизвестный режим отвергается
+# input-валидацией Keeper-а (enum redis_type ниже) ДО рендера — понятным отказом,
+# а не молчаливым зелёным no-op (все ветки gated на свой redis_type).
 input:
   redis_type:
     type: string
@@ -269,113 +269,109 @@ input:
       type: string
       pattern: "^[0-9a-f]{64}$"
 
-  # ── Host-tuning extras (концепция Ansible-роли) ──────────────────────────────
-  # Режим-агностичные per-host добавки. logrotate/sysctl включены по умолчанию
-  # (средо-зависимы): оператор снимает флаг, если хост-тюнинг делается вне Soul
-  # Stack. Транслируются в destiny `redis` через apply.input (host-инвариантны).
-  # Значения sysctl-параметров — данные-таблица essence.sysctl_settings (не во
-  # входе оператора). THP-отключение БЕЗУСЛОВНО (рекомендация Redis, hardening — не
-  # выбор оператора): флага thp_disable в контракте НЕТ, задача всегда активна.
-  logrotate_enable:
-    type: boolean
-    required: false
-    default: true
-    description: >-
-      Поставить logrotate-конфиг для логов Redis (/etc/logrotate.d/redis).
-      По умолчанию true.
+# ── Host-tuning extras (концепция Ansible-роли) ──────────────────────────────────
+# Режим-агностичные per-host добавки — THP-отключение, logrotate, sysctl — БЕЗУСЛОВНЫ
+# (рекомендация Redis / hardening, не выбор оператора): флагов в операторском
+# контракте НЕТ, задачи всегда активны. Значения sysctl-параметров — данные-таблица
+# essence.sysctl_settings (не во входе оператора), транслируются в destiny `redis`
+# через apply.input (host-инвариантны).
 
-  sysctl_enable:
-    type: boolean
-    required: false
-    default: true
-    description: >-
-      Применить kernel-параметры под Redis (/etc/sysctl.d/30-redis.conf + sysctl
-      --system). Значения — essence.sysctl_settings. По умолчанию true.
+# ── Вычисляемые scenario-vars (compute:, ADR-009 amendment 2026-06-23) ────────────
+# `compute:` резолвится KEEPER-SIDE ОДИН раз на прогон в рун-уровневом контексте
+# (input/essence/incarnation — БЕЗ soulprint, барьер host-инвариантности) и виден
+# как `compute.<name>` И в apply.input веток, И в state_changes ниже. Это снимает
+# дублирование большого merge()-перевода: он объявлен ЗДЕСЬ ОДИН раз, ветки и state
+# ссылаются `${ compute.redis_config }` — drift «state ≡ live config» снят самим
+# compute (одно значение, не два синхронизируемых выражения).
+#
+# compute.redis_config — ИТОГ трансляции простого ввода в redis.conf-map. Ветвится
+# по input.redis_type:
+#   - sentinel_only → ПУСТОЙ {} (data-плоскость redis-server не разворачивается,
+#     redis.conf не рендерится; в этом режиме config: ветки = минимальная
+#     essence-подложка, а state удовлетворяется присутствием ключа = {});
+#   - cluster → базовый merge + cluster-директивы (cluster-enabled/config-file/
+#     node-timeout) + tls-cluster yes при TLS;
+#   - standalone/sentinel → базовый merge (без cluster-директив).
+# Слои merge (SHALLOW last-wins, слева направо): essence.redis_config (дефолты) →
+# persistence-пресет → вычисленные maxmemory/policy (has-guard) → input.redis_settings
+# (passthrough оператора) → TLS-блок (после redis_settings, оператор не ломает TLS).
+# cluster-announce-ip в config НЕ материализуется (per-host → шаблон .self), TLS
+# cert/порт host-инвариантны.
+compute:
+  redis_config: >-
+    ${ (input.redis_type == 'sentinel_only')
+         ? {}
+         : (input.redis_type == 'cluster')
+         ? merge(
+             essence.redis_config,
+             essence.persistence_presets[input.persistence],
+             merge(
+               has(input.memory_mb)
+                 ? { 'maxmemory': string(int(input.memory_mb) * int(essence.memory_reserve_percent) / 100) + 'mb' }
+                 : {},
+               has(input.maxmemory_policy) ? { 'maxmemory-policy': input.maxmemory_policy } : {}
+             ),
+             default(input.redis_settings, {}),
+             {
+               'cluster-enabled':      'yes',
+               'cluster-config-file':  'nodes.conf',
+               'cluster-node-timeout': string(int(input.cluster_node_timeout))
+             },
+             (has(essence.tls_enable) && essence.tls_enable)
+               ? merge(
+                   {
+                     'tls-port':         string(int(default(essence.tls_port, 7379))),
+                     'tls-cert-file':    '/etc/redis/tls/redis.crt',
+                     'tls-key-file':     '/etc/redis/tls/redis.key',
+                     'tls-ca-cert-file': '/etc/redis/tls/ca.crt',
+                     'tls-replication':  'yes',
+                     'tls-cluster':      'yes'
+                   },
+                   (has(essence.tls_only) && essence.tls_only) ? { 'port': '0' } : {}
+                 )
+               : {}
+           )
+         : merge(
+             essence.redis_config,
+             essence.persistence_presets[input.persistence],
+             merge(
+               has(input.memory_mb)
+                 ? { 'maxmemory': string(int(input.memory_mb) * int(essence.memory_reserve_percent) / 100) + 'mb' }
+                 : {},
+               has(input.maxmemory_policy) ? { 'maxmemory-policy': input.maxmemory_policy } : {}
+             ),
+             default(input.redis_settings, {}),
+             (has(essence.tls_enable) && essence.tls_enable)
+               ? merge(
+                   {
+                     'tls-port':         string(int(default(essence.tls_port, 7379))),
+                     'tls-cert-file':    '/etc/redis/tls/redis.crt',
+                     'tls-key-file':     '/etc/redis/tls/redis.key',
+                     'tls-ca-cert-file': '/etc/redis/tls/ca.crt',
+                     'tls-replication':  'yes'
+                   },
+                   (has(essence.tls_only) && essence.tls_only) ? { 'port': '0' } : {}
+                 )
+               : {}
+           ) }
 
 # ── Мутация incarnation.state ─────────────────────────────────────────────────
 # После успешного apply Keeper фиксирует развёрнутое (ADR-009 §7.1, ADR-057
-# list-форма). redis_config — ИТОГ трансляции (тот же merge(), что ушёл в render
-# redis.conf): повторный apply и day-2-сценарии видят один источник истины.
-# Выражение merge() повторяет apply.input.config веток — общего scenario-var для
-# него нет (scenario-`vars:` только task-level и не виден ни apply.input, ни
-# state_changes; см. resolveApplyInput/stateChangesVars), inline-повтор намеренный.
-#
-# redis_config ветвится по redis_type: standalone — базовый merge (бит-в-бит как
-# до рефактора); cluster — тот же merge + cluster-директивы поверх (тот же набор,
-# что ушёл в apply.input.config ветки cluster.yml — DRIFT-GUARD синхронности). В
-# state cluster-announce-ip НЕ материализуется (host-вариативен; state — per-run,
-# не per-host), остальные cluster-директивы статичны и пишутся.
+# list-форма). redis_config — ИТОГ трансляции (тот же compute.redis_config, что ушёл
+# в render redis.conf веток standalone/cluster/sentinel): повторный apply и day-2-
+# сценарии видят один источник истины. Раньше выражение merge() ДУБЛИРОВАЛОСЬ здесь
+# и в apply.input.config веток (DRIFT-GUARD руками); теперь оно объявлено ОДИН раз в
+# compute: выше — drift снят самим compute. В sentinel_only compute.redis_config = {}
+# (config: ветки = минимальная essence-подложка, а state — пустой объект: data-
+# плоскости нет, required-ключ удовлетворён присутствием).
 state_changes:
   - set: redis_type
     value: "${ input.redis_type }"
   - set: redis_version
     value: "${ input.version }"
-  # TLS-директивы (host-инвариант: один cert/порт на кластер) пишутся в state так
-  # же, как ушли в apply.input.config веток — DRIFT-GUARD синхронности (state ≡
-  # live config). TLS-блок: standalone/sentinel — без tls-cluster; cluster — с
-  # tls-cluster yes. port 0 при tls_only. TLS off (essence.tls_enable отсутствует/
-  # false) → merge({}) → нет директив (бит-в-бит как до TLS-слоя). cluster-announce-ip
-  # в state НЕ пишется (host-вариативен) — TLS-cert/порт, наоборот, host-инвариантны.
-  # sentinel_only — ПУСТОЙ {} перед cluster-/standalone-ветками: data-плоскости
-  # redis-server нет (deploy_redis=false → redis.conf не рендерится), state required
-  # удовлетворяется присутствием ключа.
+  # redis_config ≡ apply.input.config веток: единый compute.redis_config (см. выше).
   - set: redis_config
-    value: >-
-      ${ (input.redis_type == 'sentinel_only')
-           ? {}
-           : (input.redis_type == 'cluster')
-           ? merge(
-               essence.redis_config,
-               essence.persistence_presets[input.persistence],
-               merge(
-                 has(input.memory_mb)
-                   ? { 'maxmemory': string(int(input.memory_mb) * int(essence.memory_reserve_percent) / 100) + 'mb' }
-                   : {},
-                 has(input.maxmemory_policy) ? { 'maxmemory-policy': input.maxmemory_policy } : {}
-               ),
-               default(input.redis_settings, {}),
-               {
-                 'cluster-enabled':      'yes',
-                 'cluster-config-file':  'nodes.conf',
-                 'cluster-node-timeout': string(int(input.cluster_node_timeout))
-               },
-               (has(essence.tls_enable) && essence.tls_enable)
-                 ? merge(
-                     {
-                       'tls-port':         string(int(default(essence.tls_port, 7379))),
-                       'tls-cert-file':    '/etc/redis/tls/redis.crt',
-                       'tls-key-file':     '/etc/redis/tls/redis.key',
-                       'tls-ca-cert-file': '/etc/redis/tls/ca.crt',
-                       'tls-replication':  'yes',
-                       'tls-cluster':      'yes'
-                     },
-                     (has(essence.tls_only) && essence.tls_only) ? { 'port': '0' } : {}
-                   )
-                 : {}
-             )
-           : merge(
-               essence.redis_config,
-               essence.persistence_presets[input.persistence],
-               merge(
-                 has(input.memory_mb)
-                   ? { 'maxmemory': string(int(input.memory_mb) * int(essence.memory_reserve_percent) / 100) + 'mb' }
-                   : {},
-                 has(input.maxmemory_policy) ? { 'maxmemory-policy': input.maxmemory_policy } : {}
-               ),
-               default(input.redis_settings, {}),
-               (has(essence.tls_enable) && essence.tls_enable)
-                 ? merge(
-                     {
-                       'tls-port':         string(int(default(essence.tls_port, 7379))),
-                       'tls-cert-file':    '/etc/redis/tls/redis.crt',
-                       'tls-key-file':     '/etc/redis/tls/redis.key',
-                       'tls-ca-cert-file': '/etc/redis/tls/ca.crt',
-                       'tls-replication':  'yes'
-                     },
-                     (has(essence.tls_only) && essence.tls_only) ? { 'port': '0' } : {}
-                   )
-                 : {}
-             ) }
+    value: "${ compute.redis_config }"
   - set: redis_users
     value: "${ default(input.users, {}) }"
   # redis_hosts пустой во ВСЕХ режимах: state_changes рендерятся per-host с
@@ -409,26 +405,13 @@ state_changes:
 
 # Тело прогона — ветки диспетчера, по одной на режим. Раскрываются inline ДО render
 # (orchestration.md §6); ветвление по redis_type — через `when:` на их задачах.
+#
+# Mode-guard (прежняя core.cmd.shell-задача «режим реализован») УБРАН: неизвестный
+# redis_type отвергает input-валидация Keeper-а по enum redis_type ([standalone,
+# cluster, sentinel, sentinel_only]) ДО рендера — раньше и понятнее, чем shell-test
+# на Soul. Все ветки gated на свой redis_type, enum гарантирует попадание в одну из
+# них (тихого зелёного no-op быть не может).
 tasks:
-  # GUARD режима — ПЕРВОЙ задачей диспетчера, БЕЗ when: (рендерится при ЛЮБОМ
-  # redis_type). Ловит footgun «нереализованный режим = тихий зелёный no-op»:
-  # ветки standalone/cluster/sentinel/sentinel_only все gated на свой redis_type,
-  # поэтому при redis_type вне этого набора ВСЕ ветки гаснут placeholder-skip-ом и
-  # create проходит зелёным, НИЧЕГО не развернув. Guard вычисляет KEEPER-SIDE булево
-  # «режим реализован» (тот же render-в-cmd-форму паттерн, что size-guard веток):
-  # реализован → "true" → test проходит, no-op; не реализован → "false" → echo с
-  # конкретным redis_type + exit 1 рвут прогон fail-fast. Перечень mode-литералов
-  # синхронен enum input.redis_type (все четыре режима реализованы) — guard
-  # отвергает только реально-неизвестные значения. changed_when:false — проверка,
-  # run_once — guard единый на прогон. input.redis_type читается голым (default:
-  # standalone материализуется input-валидацией ДО CEL → has()-guard избыточен).
-  - name: Guard redis_type is an implemented mode
-    run_once: true
-    module: core.cmd.shell
-    changed_when: "false"
-    params:
-      cmd: >-
-        test "${ input.redis_type == 'standalone' || input.redis_type == 'cluster' || input.redis_type == 'sentinel' || input.redis_type == 'sentinel_only' }" = "true" || { echo "redis_type=${ input.redis_type } не поддержан (реализованы: standalone, cluster, sentinel, sentinel_only)"; exit 1; }
   - include: standalone.yml
   - include: cluster.yml
   - include: sentinel.yml

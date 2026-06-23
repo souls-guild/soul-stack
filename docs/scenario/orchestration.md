@@ -38,6 +38,8 @@ scenario/<name>/
 | `serial:` | int (1..M) ИЛИ string `"<N>%"` | module/apply/`block:`-задаче | опционально (опущен = вся ширина таргета) *Гранулярность — per-Passage min-width (в N=1 = per-RUN), см. подраздел §2.2.1 ниже* |
 | `run_once:` | bool, default `false` | module/apply/`block:`-задаче | опционально |
 
+Сверх per-задачных ключей у scenario есть **top-level** `compute:` — блок вычисляемых vars прогона (§2.4).
+
 Всё остальное в scenario-задаче — ровно то же, что в destiny-задаче, с той же семантикой ([destiny/tasks.md §3–§10](../destiny/tasks.md#3-полный-список-блоков-задачи)). Расхождения с destiny явно перечислены в §6 (резолв ресурсов) и §10 (шаблонный контекст).
 
 ### 2.1. `apply:` — вызов destiny
@@ -240,6 +242,39 @@ Per-incarnation state-commit (ADR-043 §7/§8) фиксирует state посл
 `retry: { count:, delay:, until: C' }`, где `C'` переписан с удалённого
 `soulprint.self.*` на `register.self.*` свежего probe
 ([ADR-008](../adr/0008-coven-stable-tags.md#adr-008-coven--только-стабильные-логические-теги)).
+
+### 2.4. `compute:` — вычисляемые vars прогона
+
+`compute:` — **top-level** блок сценария (рядом с `input:`/`state_changes:`/`tasks:`, **не** per-задачный ключ): map `<имя>: <CEL-выражение>`, который Keeper резолвит **ОДИН раз на прогон** и делает доступным как `compute.<имя>` в `apply: input:` и в `state_changes` ([ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) amendment 2026-06-23).
+
+```yaml
+name: create
+compute:
+  redis_config: >-
+    ${ merge(essence.redis_config,
+             essence.persistence_presets[input.persistence],
+             default(input.redis_settings, {})) }
+state_changes:
+  - set: redis_config
+    value: "${ compute.redis_config }"     # ← тот же compute
+tasks:
+  - apply:
+      destiny: redis
+      input:
+        config: "${ compute.redis_config }" # ← и здесь тот же compute
+```
+
+**Зачем.** `apply: input:` и `state_changes` — **разные** CEL-контексты, и ни один из них **не видит** task-level `vars:` (`vars:` — scope одной задачи, §10). Общее выражение (большой `merge()`-перевод простого ввода в `redis.conf`) пришлось бы писать **дважды** и синхронизировать руками. `compute:` объявляет его **один раз** — drift «state ≡ live config» снимается самим механизмом, а не дисциплиной автора.
+
+**Контекст резолва — рун-уровневый, БЕЗ `soulprint`.** `compute:` вычисляется в контексте `input.*` / `essence.*` / `incarnation.*` / `register.*` — **без** `soulprint.self` / `soulprint.hosts`. Это **структурный барьер host-инвариантности**: ссылка на `soulprint.*` в compute-выражении → CEL no-such-key. Следствие — `compute.<имя>` **одинаков для всех хостов**, поэтому одно и то же значение корректно уходит и в `apply: input:` (резолвится на первом по `SID` хосте таргета), и в `state_changes` (per-RUN, не per-host). Per-host значения, как и раньше, выражаются прямым per-host CEL в `params:` / шаблонном `.self`, не через `compute:`.
+
+**Порядок объявления значим.** `compute[i]` может ссылаться на ранее объявленный `compute[j]` (j<i) как `${ compute.<имя_j> }` (накопление слева направо). Ссылка вперёд → no-such-key.
+
+**Изоляция от destiny ([ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) V2).** `compute:` — **scenario-сущность**: внутрь изолированного destiny-прохода (`apply: { destiny: … }`) она **не протекает**. Destiny видит только **результат** — то, что scenario передал через `apply: input:`. Внутри destiny `compute.<имя>` → no-such-key (как `register.*`/`essence.*` — §10).
+
+**Имена.** Имя compute-var — CEL-field-доступный идентификатор (буквы/цифры/`_`, начинается с буквы или `_`); дефис/точка запрещены (сломали бы `compute.<имя>`). Имя не должно затенять корневые контекст-имена (`input`/`register`/`incarnation`/`soulprint`/`essence`/`vars`/`compute`).
+
+> **Граница `compute:` ↔ `vars:`.** Task-level `vars:` (§10, [destiny/tasks.md §9](../destiny/tasks.md#9-прочность-и-контроль-исполнения)) — локальны для одной задачи и **видны только в её** `params:`. `compute:` — рун-уровневые, видны в `apply: input:` **и** `state_changes`. Если значение нужно и в state, и в передаче destiny — это `compute:`; если только внутри `params:` одной задачи — `vars:`.
 
 ## 3. Таргет шага — `on:`
 
@@ -640,8 +675,9 @@ Non-string результат CEL (число/bool/list/map) — по прави
 [ADR-010](../adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов) (вся ячейка = один `${…}` → нативный тип).
 
 **Полный контекст** — `input.*` / `incarnation.*` / `soulprint.self.*` /
-`register.*` / `vars.*` / `essence.*`. Поверх него в `match`/`patch`/`value`
-действуют **локальные биндинги текущего элемента коллекции**:
+`register.*` / `vars.*` / `essence.*` / `compute.*` (§2.4). Поверх него в
+`match`/`patch`/`value` действуют **локальные биндинги текущего элемента
+коллекции**:
 
 | Биндинг | Семантика |
 |---|---|

@@ -51,16 +51,19 @@
       # прочие режимы (используется sentinel-демоном для AUTH к master через auth_pass).
       password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
       # config — минимальная essence-подложка (redis.conf gated off, не рендерится).
+      # НЕ compute.redis_config: в sentinel_only тот = {} (data-плоскости нет), а
+      # destiny-контракт требует непустой config-параметр для совместимости схемы.
+      # state_changes.redis_config получит {} (compute.redis_config), это намеренно
+      # отличается от этой подложки — state отражает «redis-server не развёрнут».
       config:   "${ essence.redis_config }"
       users:    "${ {} }"
       modules:  "${ [] }"
       modules_base_url: "${ '' }"
       modules_sha256:   "${ {} }"
-      # Host-tuning extras режим-агностичны — те же флаги, что в прочих ветках.
-      # logrotate_enable/sysctl_enable — default:true → голый input.X. THP убран из
-      # контракта (отключение безусловно в destiny `redis`).
-      logrotate_enable: "${ input.logrotate_enable }"
-      sysctl_enable:    "${ input.sysctl_enable }"
+      # Host-tuning extras режим-агностичны — как в прочих ветках. THP/logrotate/sysctl
+      # БЕЗУСЛОВНЫ (рекомендация Redis / hardening) — операторских флагов нет, задачи
+      # destiny `redis` всегда активны. sysctl_settings — essence, host-инвариантна →
+      # apply.input.
       sysctl_settings:  "${ default(essence.sysctl_settings, {}) }"
       # TLS data-плоскости redis-server тут не разворачивается (deploy_redis=false →
       # PEM-задачи placeholder-skip). sentinel-демон TLS (:26379) — отдельный

@@ -36,41 +36,13 @@
       # Пароль requirepass — keeper-side vault()-резолв (templating.md §2.3/§4):
       # путь из incarnation (доверенный контекст), в destiny уходит ЗНАЧЕНИЕ.
       password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
-      # Итоговый merged-конфиг. destiny range-ит его в redis.conf как есть.
-      # int(input.memory_mb)*int(reserve)/100: int()-конверсия каждого операнда
-      # унифицирует числовой тип (YAML→uint64 в L0, JSON→double в проде) — без
-      # неё uint*int даёт CEL «no such overload».
-      # TLS-директивы — HOST-ИНВАРИАНТ (один cert/порт на кластер) → идут в config
-      # через merge (apply.input резолвится на targeted[0], для одного-на-всех
-      # значения это КОРРЕКТНО; per-host через config гнать НЕЛЬЗЯ — tiling-урок,
-      # но cert/порт per-host НЕ бывают). При tls_enable добавляем tls-port/
-      # tls-cert-file/tls-key-file/tls-ca-cert-file/tls-replication; при tls_only —
-      # `port 0` (plain закрыт). Слой TLS идёт ПОСЛЕ redis_settings → оператор не
-      # ломает TLS-директивы passthrough-ом (last-wins на TLS-домене).
-      config: >-
-        ${ merge(
-             essence.redis_config,
-             essence.persistence_presets[input.persistence],
-             merge(
-               has(input.memory_mb)
-                 ? { 'maxmemory': string(int(input.memory_mb) * int(essence.memory_reserve_percent) / 100) + 'mb' }
-                 : {},
-               has(input.maxmemory_policy) ? { 'maxmemory-policy': input.maxmemory_policy } : {}
-             ),
-             default(input.redis_settings, {}),
-             (has(essence.tls_enable) && essence.tls_enable)
-               ? merge(
-                   {
-                     'tls-port':         string(int(default(essence.tls_port, 7379))),
-                     'tls-cert-file':    '/etc/redis/tls/redis.crt',
-                     'tls-key-file':     '/etc/redis/tls/redis.key',
-                     'tls-ca-cert-file': '/etc/redis/tls/ca.crt',
-                     'tls-replication':  'yes'
-                   },
-                   (has(essence.tls_only) && essence.tls_only) ? { 'port': '0' } : {}
-                 )
-               : {}
-           ) }
+      # Итоговый merged-конфиг — единый compute.redis_config (объявлен ОДИН раз в
+      # main.yml compute:, ADR-009): тот же map, что уйдёт в state_changes.redis_config
+      # — drift «state ≡ live config» снят самим compute. destiny range-ит его в
+      # redis.conf как есть. Для standalone compute.redis_config = базовый merge (без
+      # cluster-директив; TLS-блок при tls_enable). HOST-ИНВАРИАНТ → apply.input
+      # резолвится на targeted[0], для одного-на-всех значения это КОРРЕКТНО.
+      config: "${ compute.redis_config }"
       # ACL-юзеры → MAP имя→{perms, state, password}. ПОЧЕМУ map, а не список:
       # users.acl.tmpl range-ит коллекцию построчно, а Go text/template range по
       # MAP сортирует ключи (детерминизм), по list — наследует недетерминированный
@@ -107,14 +79,11 @@
            : [] }
       modules_base_url: "${ default(input.modules_base_url, '') }"
       modules_sha256:   "${ default(input.modules_sha256, {}) }"
-      # Host-tuning extras (концепция роли). Флаги host-инвариантны → apply.input.
-      # sysctl_settings — данные-таблица essence (passthrough оператора отложен,
-      # essence-дефолт покрывает Redis-tuning). logrotate_enable/sysctl_enable —
-      # default:true в input сценария → присутствуют после input-валидации (ДО CEL)
-      # → читаются голым input.X без has()-обёртки. THP убран из контракта (отключение
-      # безусловно в destiny `redis`).
-      logrotate_enable: "${ input.logrotate_enable }"
-      sysctl_enable:    "${ input.sysctl_enable }"
+      # Host-tuning extras (концепция роли). THP/logrotate/sysctl БЕЗУСЛОВНЫ
+      # (рекомендация Redis / hardening) — операторских флагов нет, задачи destiny
+      # `redis` всегда активны. sysctl_settings — данные-таблица essence (passthrough
+      # оператора отложен, essence-дефолт покрывает Redis-tuning), host-инвариантна →
+      # apply.input.
       sysctl_settings:  "${ default(essence.sysctl_settings, {}) }"
       # TLS PEM-материал — HOST-ИНВАРИАНТ (один cert/CA на кластер) → apply.input.
       # Источник — Vault-ПУТИ из essence (essence.tls_*_ref — доверенный контекст

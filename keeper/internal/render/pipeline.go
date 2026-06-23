@@ -116,6 +116,15 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 
 	in.Ctx = ctx // прокинуть в CEL vault() (отмена/таймаут ReadKV)
 
+	// compute: резолвится ОДИН раз на прогон (рун-уровневый контекст без soulprint,
+	// барьер host-инвариантности) ДО рендера задач — результат `compute.<name>`
+	// виден в apply.input/where/params всех хостов через hostVars (ADR-009).
+	computed, cerr := p.resolveCompute(in)
+	if cerr != nil {
+		return nil, nil, cerr
+	}
+	in.Compute = computed
+
 	tasks := make([]*RenderedTask, 0, len(in.Scenario.Tasks))
 	plans := make([]DispatchPlan, 0, len(in.Scenario.Tasks))
 	idx := 0
@@ -642,6 +651,13 @@ func (p *Pipeline) EvalAsserts(ctx context.Context, in RenderInput) error {
 		return fmt.Errorf("render: scenario manifest is nil")
 	}
 	in.Ctx = ctx // assert.that[] может звать vault() — прокинуть отмену/таймаут
+	// compute: доступен в assert.that[] так же, как в params/where (один резолв,
+	// рун-уровневый контекст без soulprint). Идемпотентно с Render/RenderStateOps.
+	computed, cerr := p.resolveCompute(in)
+	if cerr != nil {
+		return cerr
+	}
+	in.Compute = computed
 	for i := range in.Scenario.Tasks {
 		task := in.Scenario.Tasks[i]
 		if !IsAssertTask(task) {
@@ -1096,6 +1112,17 @@ func (p *Pipeline) RenderStateOps(in RenderInput) ([]RenderedOp, error) {
 		return nil, nil
 	}
 
+	// compute: резолвится так же, как в Render (один раз, рун-уровневый контекст без
+	// soulprint) — RenderStateOps зовётся отдельно после барьера (run.go) с тем же
+	// RenderInput, но без предыдущего Render-прохода. Идемпотентно: если caller уже
+	// заполнил in.Compute, resolveCompute вернёт его как есть. Так `compute.<name>`
+	// в state_changes даёт ТО ЖЕ значение, что в apply.input (drift-guard снят compute).
+	computed, cerr := p.resolveCompute(in)
+	if cerr != nil {
+		return nil, cerr
+	}
+	in.Compute = computed
+
 	if sc.IsList {
 		return p.renderStateOpsList(in, hosts, sc.Ops)
 	}
@@ -1331,6 +1358,7 @@ func (p *Pipeline) stateContextSnapshot(in RenderInput, hosts []*topology.HostFa
 	putIfSet("incarnation", vars.Incarnation)
 	putIfSet("essence", vars.Essence)
 	putIfSet("vars", vars.Vars)
+	putIfSet("compute", vars.Compute)
 	if vars.SoulprintSelf != nil {
 		ctx["soulprint"] = map[string]any{"self": vars.SoulprintSelf}
 	}
@@ -1407,6 +1435,7 @@ func stateOpVars(ctx map[string]any) cel.Vars {
 		Incarnation: asMap("incarnation"),
 		Essence:     asMap("essence"),
 		Vars:        asMap("vars"),
+		Compute:     asMap("compute"),
 	}
 	if sp, ok := ctx["soulprint"].(map[string]any); ok {
 		if self, ok := sp["self"].(map[string]any); ok {
@@ -1417,7 +1446,7 @@ func stateOpVars(ctx map[string]any) cel.Vars {
 	loop := map[string]any{}
 	for k, val := range ctx {
 		switch k {
-		case "input", "register", "incarnation", "essence", "vars", "soulprint":
+		case "input", "register", "incarnation", "essence", "vars", "compute", "soulprint":
 			continue
 		}
 		loop[k] = val

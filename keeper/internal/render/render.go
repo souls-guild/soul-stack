@@ -168,6 +168,18 @@ type RenderInput struct {
 	// синтетический пустой хост (where: отфильтровал всех) → ключ "".
 	DestinyVarsResolved map[string]map[string]any
 
+	// Compute — резолвленные scenario-level `compute:`-переменные (ADR-009
+	// amendment 2026-06-23): имя→значение, вычисленные ОДИН раз на прогон в
+	// рун-уровневом контексте (input/register/incarnation/essence — БЕЗ soulprint,
+	// структурный барьер host-инвариантности). Заполняется [Pipeline.resolveCompute]
+	// в начале [Pipeline.Render] и [Pipeline.RenderStateOps]; кладётся в каждый
+	// per-host контекст (hostVars) и в state_changes-контекст (stateChangesVars) как
+	// `compute.<name>`. В изолированном destiny-проходе (renderApplyDestiny) НЕ
+	// пробрасывается — destiny видит результат compute только через apply.input
+	// (ADR-009 V2). nil ⇒ `compute.<name>` = штатный no-such-key (scenario без
+	// compute:, backward-compat бит-в-бит).
+	Compute map[string]any
+
 	// destinyIsolated помечает изолированный destiny-проход (renderApplyDestiny).
 	// Неэкспортируемое: внешние caller-ы (scenario-runner, trial) всегда дают
 	// scenario-проход (zero-value false → soulprint.hosts доступен и проецируется

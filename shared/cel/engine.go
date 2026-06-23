@@ -53,6 +53,7 @@ var contextVars = []string{
 	"soulprint",
 	"essence",
 	"vars",
+	"compute",
 }
 
 // migrationVars — переменные контекста migration-режима ([NewMigration],

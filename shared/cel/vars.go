@@ -56,6 +56,15 @@ type Vars struct {
 	Vars           map[string]any
 	Loop           map[string]any
 
+	// Compute — scenario-level вычисляемые переменные (`compute:`, ADR-009
+	// amendment 2026-06-23): резолвленные Keeper-ом ОДИН раз на прогон в
+	// рун-уровневом контексте (без soulprint), доступны в CEL как
+	// `compute.<name>`. Scope — apply.input И state_changes (host-инвариантны по
+	// построению). nil/пустой ⇒ `compute.<name>` даёт штатный no-such-key. В
+	// destiny-проходе НЕ пробрасывается (изоляция: destiny видит результат только
+	// через apply.input).
+	Compute map[string]any
+
 	// State — корень incarnation.state в migration-режиме ([NewMigration],
 	// [ADR-019]): в CEL доступен как `state.<path>` (мутируемый по ходу
 	// операций миграции). Используется ТОЛЬКО Engine-ом, собранным через
@@ -108,6 +117,7 @@ func (v Vars) activation(migration bool) map[string]any {
 			"soulprint":   map[string]any{"self": orEmpty(v.SoulprintSelf), "hosts": orEmptyHosts(v.SoulprintHosts)},
 			"essence":     orEmpty(v.Essence),
 			"vars":        orEmpty(v.Vars),
+			"compute":     orEmpty(v.Compute),
 		}
 	}
 	for name, val := range v.Loop {
