@@ -103,8 +103,9 @@ assert:
 
     # cluster-build: nodes-MAP на tls_port (7379), tls=true + tls_ca (плагин по TLS) +
     # mTLS client-cert (tls_cert/tls_key для взаимного cluster-bus, tls-cluster yes).
-    # index 26 (−2 от исходного плана).
-    - index: 25
+    # index 24 (−2 guard + −1 extras-sysctl сжаты 2→1 задачи core.sysctl.applied).
+    - index: 24
+
       module: community.redis.cluster
       params:
         action: create

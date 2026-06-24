@@ -8,7 +8,8 @@
 #   - modules-dir gated на size(modules)>0 → placeholder-skip (НЕ создаёт каталог);
 #   - fetch-loop по пустому списку → 0 задач;
 #   - vars.loadmodules = [] → секции loadmodule в redis.conf нет.
-# План идентичен modules-empty: PING на index 26 (modules-dir placeholder на 25).
+# План идентичен modules-empty: PING на index 21 (modules-dir placeholder на 20;
+# extras-sysctl сжаты 2→1 задачи core.sysctl.applied → хвост после sysctl −1).
 #
 # Упрощение (brief): version-gate по input.version (мажор), полную version-matrix
 # совместимости модулей НЕ тащим. version не задан → НЕ гейтим (fail-closed на Redis).
@@ -90,9 +91,11 @@ assert:
           role: ""
           essence: {}
 
-    # PING на index 23 (как modules-empty): modules-dir gated-placeholder на 22,
-    # fetch-loop 0 задач (пустой modules после gate).
-    - index: 22
+    # PING на index 21 (как modules-empty): modules-dir gated-placeholder на 20,
+    # fetch-loop 0 задач (пустой modules после gate). Хвост после sysctl −1
+    # (extras-sysctl сжаты 2→1 задачи core.sysctl.applied).
+    - index: 21
+
       module: community.redis.command
       params:
         addr: "127.0.0.1:6379"

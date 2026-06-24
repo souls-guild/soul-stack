@@ -73,8 +73,10 @@ assert:
           role: ""
           essence: {}
 
-    # index 23 — PING: tls=false (plain, без tls_ca), addr на 6379 (plain открыт).
-    - index: 22
+    # index 21 — PING: tls=false (plain, без tls_ca), addr на 6379 (plain открыт).
+    # Сдвиг −1 (extras-sysctl сжаты 2→1 задачи core.sysctl.applied).
+    - index: 21
+
       module: community.redis.command
       params:
         addr: "127.0.0.1:6379"

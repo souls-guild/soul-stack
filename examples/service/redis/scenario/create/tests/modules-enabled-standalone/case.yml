@@ -2,8 +2,10 @@
 # redis: RediSearch/RedisJSON загружаемыми .so на Redis < 8). Guard на то, что при
 # непустом input.modules:
 #   1. каталог modules_dir создаётся (gated-задача, активна — НЕ placeholder);
-#   2. каждый алиас → отдельная core.url.fetched задача (loop) с REQUIRED sha256
-#      (форма "sha256:<hex>", fail-closed) и АРХ-СПЕЦИФИЧНЫМ URL из soulprint.self.os.arch;
+#   2. каждый алиас → отдельная core.url.fetched задача (loop); sha256 ЗАДАН →
+#      checksum "sha256:<hex>" (fail-closed integrity-verify) + АРХ-СПЕЦИФИЧНЫЙ
+#      URL из soulprint.self.os.arch (контр-кейс modules-no-checksum: sha256 не
+#      задан → пустой checksum, content-идемпотентность без verify);
 #   3. в redis.conf приходят пути loadmodule (vars.loadmodules) — рендер директив
 #      делает шаблон отдельной секцией (без хвостового пробела, см. tmpl-тест).
 #
@@ -12,13 +14,14 @@
 # host-инвариант → apply.input; arch (amd64 из soulprint) подставляется в URL destiny
 # per-host.
 #
-# ИНДЕКСЫ (standalone-прогон, modules=[json, search] → 2 .so-задачи):
+# ИНДЕКСЫ (standalone-прогон, modules=[search, json] → 2 .so-задачи; extras-sysctl
+# сжаты 2→1 задачи core.sysctl.applied → весь хвост после sysctl −1):
 #   0  — mode-guard;
-#   1..24 — destiny redis (redis.conf=8 с loadmodules; sysctl-apply=24);
-#   25 — modules-dir (core.exec.run, gated, АКТИВНА);
-#   26 — fetch .so json   (loop[0], алфавит: json < search);
-#   27 — fetch .so search (loop[1]);
-#   28 — PING (community.redis.command, сдвинут +2 относительно базового modules-empty 26).
+#   1..19 — destiny redis (redis.conf=7 с loadmodules; sysctl-apply=19);
+#   20 — modules-dir (core.file.directory, gated, АКТИВНА);
+#   21 — fetch .so search (loop[0], порядок input.modules: search < json);
+#   22 — fetch .so json   (loop[1]);
+#   23 — PING (community.redis.command, сдвинут +2 относительно базового modules-empty 21).
 name: modules enabled standalone fetches .so and renders loadmodule directives
 
 fixtures:
@@ -105,7 +108,8 @@ assert:
           essence: {}
 
     # modules-dir каталог — gated на size(modules)>0, здесь АКТИВНА.
-    - index: 21
+    - index: 20
+
       module: core.file.directory
       params:
         path: /var/lib/redis/modules
@@ -114,8 +118,10 @@ assert:
         mode: "0750"
 
     # fetch .so — loop по алиасам (array, порядок списка: search[0], json[1]).
-    # URL арх-специфичен (amd64 из soulprint.self), checksum REQUIRED "sha256:<hex>".
-    - index: 22
+    # URL арх-специфичен (amd64 из soulprint.self); sha256 ЗАДАН → checksum
+    # "sha256:<hex>" (fail-closed integrity-verify).
+    - index: 21
+
       module: core.url.fetched
       params:
         url: "https://artifacts.example.com/redis/modules/6.2/amd64/redisearch.so"
@@ -125,7 +131,8 @@ assert:
         owner: redis
         group: redis
 
-    - index: 23
+    - index: 22
+
       module: core.url.fetched
       params:
         url: "https://artifacts.example.com/redis/modules/6.2/amd64/rejson.so"
@@ -135,8 +142,9 @@ assert:
         owner: redis
         group: redis
 
-    # PING сдвинут на +2 (две .so-задачи) относительно базового modules-empty (23).
-    - index: 24
+    # PING сдвинут на +2 (две .so-задачи) относительно базового modules-empty (21).
+    - index: 23
+
       module: community.redis.command
       params:
         addr: "127.0.0.1:6379"

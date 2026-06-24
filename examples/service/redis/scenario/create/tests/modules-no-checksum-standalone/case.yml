@@ -93,7 +93,8 @@ assert:
           essence: {}
 
     # modules-dir каталог — gated на size(modules)>0, здесь АКТИВНА.
-    - index: 21
+    - index: 20
+
       module: core.file.directory
       params:
         path: /var/lib/redis/modules
@@ -105,7 +106,8 @@ assert:
     # checksum ПУСТ ("") — modules_sha256 не передан: core.url.fetched качает по
     # content-идемпотентности (пустой checksum = absent, OptStringParam). Именно
     # пустую строку и доказывает кейс (assert сверяет ключ checksum точно).
-    - index: 22
+    - index: 21
+
       module: core.url.fetched
       params:
         url: "https://artifacts.example.com/redis/modules/6.2/amd64/redisearch.so"
@@ -115,7 +117,8 @@ assert:
         owner: redis
         group: redis
 
-    - index: 23
+    - index: 22
+
       module: core.url.fetched
       params:
         url: "https://artifacts.example.com/redis/modules/6.2/amd64/rejson.so"
@@ -126,7 +129,8 @@ assert:
         group: redis
 
     # PING сдвинут на +2 (две .so-задачи), как в modules-enabled-standalone.
-    - index: 24
+    - index: 23
+
       module: community.redis.command
       params:
         addr: "127.0.0.1:6379"

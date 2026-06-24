@@ -44,12 +44,14 @@ assert:
     # Mode-guard УБРАН (enum) И sentinel size-guard переведён в assert: (ADR-009
     # amendment) — ОБА в план НЕ эмитятся. cluster size-guard (assert:) + shards-guard
     # (required_when) слот не занимали. 1 == 1+0 → sentinel guard that[0] true → render
-    # проходит. Сдвиг: задачи после guard −2 (mode-guard + sentinel-guard): replica
-    # 30→28, sentinel-monitor 31→29.
+    # проходит. Сдвиг: задачи после guard −2 (mode-guard + sentinel-guard) + −1
+    # (extras-sysctl сжаты 2→1 задачи core.sysctl.applied): replica 30→27,
+    # sentinel-monitor 31→28.
     #
     # REPLICAOF: master_addr = единственный хост (он же master) → плагин no-op
-    # (addr==master_addr guard). Здесь ассертим лишь params (host-инвариант). index 28.
-    - index: 28
+    # (addr==master_addr guard). Здесь ассертим лишь params (host-инвариант). index 27.
+    - index: 27
+
       module: community.redis.replica
       params:
         addr: "127.0.0.1:6379"
@@ -57,8 +59,9 @@ assert:
         password: s3cr3t-redis-pass-create
 
     # SENTINEL MONITOR: monitor.ip — единственный хост; auto-quorum = 1/2+1 = 1
-    # (sentinel_quorum не задан). master_name по умолчанию mymaster. index 29.
-    - index: 29
+    # (sentinel_quorum не задан). master_name по умолчанию mymaster. index 28.
+    - index: 28
+
       module: community.redis.sentinel
       params:
         addr: "127.0.0.1:26379"

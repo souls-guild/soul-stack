@@ -8,13 +8,13 @@
 # Extras — режим-агностичны и host-инвариантны; sysctl_settings — данные-таблица
 # essence (не во входе оператора), доезжает в destiny через apply.input.
 #
-# Индексы хвоста destiny (standalone-прогон: mode-guard 0, destiny 1..22, PING 23;
-# ручные daemon-reload убраны — core.service делает reload сам):
-#   17 — render disable-thp.service (core.file.rendered);
-#   18 — disable-thp service.running;
-#   19 — render logrotate (/etc/logrotate.d/redis);
-#   20 — render sysctl drop-in (/etc/sysctl.d/30-redis.conf);
-#   21 — sysctl --system (core.exec.run, onchanges на drop-in).
+# Индексы хвоста destiny (standalone-прогон: mode-guard 0, destiny 1..21, PING 22;
+# ручные daemon-reload убраны — core.service делает reload сам; sysctl — ОДНА
+# задача core.sysctl.applied, модуль сам пишет drop-in + reload):
+#   16 — render disable-thp.service (core.file.rendered);
+#   17 — disable-thp service.running;
+#   18 — render logrotate (/etc/logrotate.d/redis);
+#   19 — sysctl bulk drop-in (core.sysctl.applied, /etc/sysctl.d/30-redis.conf).
 name: host-tuning extras always render (thp + logrotate + sysctl)
 
 fixtures:
@@ -92,45 +92,27 @@ assert:
         owner: root
         group: root
 
-    # ── sysctl drop-in (безусловно) ─────────────────────────────────────────
-    # vars.sysctl_settings — из essence (передан через apply.input). range по map
-    # сортирует ключи → drop-in детерминирован.
+    # ── sysctl bulk drop-in (безусловно) ────────────────────────────────────
+    # core.sysctl.applied: модуль сам пишет детерминированный drop-in из map
+    # (sorted keys) + точечный sysctl -p при изменении (reload: auto), сам change
+    # не помечает. settings — из essence (передан через apply.input). ignore_failures
+    # → `sysctl -e -p` (контейнерный режим). render_context уехал внутрь модуля —
+    # на L0 проверяем CEL-резолв settings (default(input.sysctl_settings, {})).
     - index: 19
-      module: core.file.rendered
+      module: core.sysctl.applied
       params:
-        path: /etc/sysctl.d/30-redis.conf
-        template_content: "<present>"
-        mode: "0644"
-        owner: root
-        group: root
-        render_context:
-          vars:
-            sysctl_settings:
-              vm.overcommit_memory: "1"
-              vm.swappiness:        "1"
-              net.core.somaxconn:   "65535"
-          self:
-            sid: trial-host
-            covens: [create]
-            choirs: []
-            role: ""
-            network:
-              primary_ip: 10.0.0.5
-            os:
-              arch: amd64
-          role: ""
-          essence: {}
+        filename: 30-redis
+        reload: auto
+        ignore_failures: true
+        settings:
+          vm.overcommit_memory: "1"
+          vm.swappiness:        "1"
+          net.core.somaxconn:   "65535"
 
-    - index: 20
-      module: core.exec.run
-      params:
-        cmd: sysctl
-        args: ["-e", "--system"]
-
-    # PING на index 23: extras занимают фиксированное число хвостовых слотов
-    # (5 задач, все безусловны) — ловит сдвиг плана, если кто-то добавит/уберёт
+    # PING на index 22: extras занимают фиксированное число хвостовых слотов
+    # (4 задачи, все безусловны) — ловит сдвиг плана, если кто-то добавит/уберёт
     # extras-задачу.
-    - index: 22
+    - index: 21
       module: community.redis.command
       params:
         addr: "127.0.0.1:6379"

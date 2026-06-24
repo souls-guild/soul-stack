@@ -83,8 +83,10 @@ assert:
           role: ""
           essence: {}
 
-    # cluster-build: nodes-MAP с единственной записью. index 26 (−2 от исходного плана).
-    - index: 25
+    # cluster-build: nodes-MAP с единственной записью. index 24 (−2 guard + −1
+    # extras-sysctl сжаты 2→1 задачи core.sysctl.applied).
+    - index: 24
+
       module: community.redis.cluster
       params:
         action: create

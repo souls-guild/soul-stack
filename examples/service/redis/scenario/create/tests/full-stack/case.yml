@@ -180,10 +180,12 @@ assert:
 
     # ── community.redis.command (PING health-gate) ──────────────────────────
     # addr localhost, пароль — тот же requirepass vault()-резолв, args [PING].
-    # index 23: index 0 — mode-guard; standalone destiny ЭКСПАНДИТСЯ в 22 task-а
-    # (1..22; sentinel-задачи в хвосте — placeholder-skip на standalone-прогоне;
-    # 3 ручных daemon-reload убраны), PING сценария идёт следом (index 23).
-    - index: 22
+    # index 21: index 0 — mode-guard; standalone destiny ЭКСПАНДИТСЯ в 21 task-у
+    # (1..21; sentinel-задачи в хвосте — placeholder-skip на standalone-прогоне;
+    # 3 ручных daemon-reload убраны; extras-sysctl сжаты 2→1 задачи
+    # core.sysctl.applied), PING сценария идёт следом (index 21).
+    - index: 21
+
       module: community.redis.command
       params:
         addr: "127.0.0.1:6379"

@@ -138,9 +138,11 @@ assert:
           role: ""
           essence: {}
 
-    # index 23 — PING health-gate: при tls_only плагин по TLS (tls=true, addr на
+    # index 21 — PING health-gate: при tls_only плагин по TLS (tls=true, addr на
     # tls_port, tls_ca = CA-PEM из vault). Доказывает «плагин ОБЯЗАН по TLS».
-    - index: 22
+    # Сдвиг −1 (extras-sysctl сжаты 2→1 задачи core.sysctl.applied).
+    - index: 21
+
       module: community.redis.command
       params:
         addr: "127.0.0.1:7379"
