@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"sort"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/souls-guild/soul-stack/keeper/internal/operator"
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 	"github.com/souls-guild/soul-stack/shared/audit"
@@ -20,6 +22,13 @@ import (
 // (back-compat: политика не сконфигурирована).
 type ProvisioningGate interface {
 	ProvisioningMethodAllowed(method string) bool
+}
+
+// Txer — узкая фабрика транзакций (подмножество pgxpool.Pool), нужная для
+// атомарной реконсиляции ролей. *pgxpool.Pool удовлетворяет автоматически.
+// Объявлена интерфейсом, чтобы auth-пакет не тянул pgxpool в зависимости.
+type Txer interface {
+	BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error)
 }
 
 // MapperConfig — зависимости [DBMapper].
@@ -38,10 +47,19 @@ type MapperConfig struct {
 	GroupRoleMap map[string][]string
 
 	// DB — write/read-поверхность реестра operators + rbac_role_operators.
-	// Реальный pgxpool.Pool удовлетворяет интерфейсу; provision идёт одной
-	// транзакцией снаружи здесь не нужен — Insert+Grant выполняются
-	// последовательно (federated-provision редок, не hot-path).
+	// Реальный pgxpool.Pool удовлетворяет интерфейсу.
 	DB operator.ExecQueryRower
+
+	// Tx — фабрика транзакций для атомарной реконсиляции ролей (HIGH-1,
+	// ADR-058(d)): grant новых + scoped-revoke ушедших выполняются в ОДНОЙ
+	// транзакции, иначе сбой между grant и revoke оставил бы membership
+	// рассогласованным. Реальный *pgxpool.Pool удовлетворяет (BeginTx).
+	//
+	// nil → fallback на не-транзакционный grant-only-путь поверх DB (back-compat
+	// для unit-тестов с fake-DB без BeginTx): реконсиляция-revoke тогда не
+	// выполняется, но существующий guard «grant из групп» сохраняется. daemon
+	// всегда выставляет Tx (d.pool), поэтому в проде реконсиляция атомарна.
+	Tx Txer
 
 	// Audit — куда писать `operator.provisioned` (login пишет endpoint).
 	Audit audit.Writer
@@ -78,11 +96,28 @@ type MapperConfig struct {
 // чтобы login-событие не задваивалось.
 type DBMapper struct {
 	cfg MapperConfig
+	// managedRoles — объединение values(group_role_map): домен ролей, которым
+	// УПРАВЛЯЕТ этот federated-mapper (HIGH-1, ADR-058(d)). Реконсиляция-revoke
+	// трогает ТОЛЬКО роли из этого набора — роли, выданные Synod/вручную/иным
+	// путём вне group_role_map, не снимаются. Считается один раз в NewMapper.
+	managedRoles map[string]struct{}
 }
 
 // NewMapper конструирует DBMapper.
 func NewMapper(cfg MapperConfig) *DBMapper {
-	return &DBMapper{cfg: cfg}
+	return &DBMapper{cfg: cfg, managedRoles: managedRoleSet(cfg.GroupRoleMap)}
+}
+
+// managedRoleSet собирает множество всех ролей, упомянутых в значениях
+// group_role_map — домен, которым управляет federated-реконсиляция (HIGH-1).
+func managedRoleSet(grm map[string][]string) map[string]struct{} {
+	set := make(map[string]struct{})
+	for _, roles := range grm {
+		for _, role := range roles {
+			set[role] = struct{}{}
+		}
+	}
+	return set
 }
 
 // Map реализует [Mapper]: ext → MappedOperator либо sentinel-ошибка.
@@ -117,10 +152,30 @@ func (m *DBMapper) Map(ctx context.Context, ext ExternalIdentity) (MappedOperato
 		if op.IsRevoked() {
 			return MappedOperator{}, ErrOperatorRevoked
 		}
-		// Существующий активный оператор: роли — из групп (источник ролей =
-		// группы, развилка №2). Membership синхронизируем (идемпотентный grant),
-		// чтобы внешняя смена групп отражалась в RBAC при следующем логине.
-		if err := m.syncRoles(ctx, aid, roles); err != nil {
+		// CRIT-1 (account-takeover, ADR-058(d) revocation-инвариант усилен):
+		// federated-путь обслуживает ТОЛЬКО операторов, заведённых ЭТИМ же
+		// federated-методом. Если existing-оператор живёт под другим auth_method
+		// (bootstrap/system `jwt`, mTLS, ИЛИ другой federated-метод), отказываем —
+		// иначе любой, кто контролирует внешний IdP, мог бы выпустить себе валидную
+		// derived-AID, совпавшую с AID привилегированного оператора (например,
+		// bootstrap cluster-admin), и присвоить его сессию. ErrAuthFailed
+		// (anti-oracle: наружу 401 без причины — не раскрываем, что AID существует
+		// под другим методом). Bootstrap (`auth_method=jwt`) и `archon-system`/
+		// system-операторы тем самым защищены автоматически: их auth_method ∉
+		// {ldap,oidc}, federated-mapper их не примет.
+		if op.AuthMethod != m.cfg.Method {
+			if m.cfg.Logger != nil {
+				m.cfg.Logger.Warn("auth/mapper: federated login rejected — AID belongs to a different auth_method",
+					slog.String("aid", aid),
+					slog.String("mapper_method", string(m.cfg.Method)))
+			}
+			return MappedOperator{}, ErrAuthFailed
+		}
+		// Существующий активный оператор того же метода: роли — из групп
+		// (источник ролей = группы, развилка №2). Membership реконсилируем
+		// (grant новых + scoped-revoke ушедших, HIGH-1), чтобы внешняя смена
+		// групп отражалась в RBAC при следующем логине.
+		if err := m.reconcileRoles(ctx, aid, roles); err != nil {
 			return MappedOperator{}, err
 		}
 		return MappedOperator{AID: aid, Roles: roles, Provisioned: false}, nil
@@ -168,7 +223,10 @@ func (m *DBMapper) provision(ctx context.Context, aid string, ext ExternalIdenti
 	if err := operator.Insert(ctx, m.cfg.DB, op); err != nil {
 		return MappedOperator{}, fmt.Errorf("auth/mapper: provision insert: %w", err)
 	}
-	if err := m.syncRoles(ctx, aid, roles); err != nil {
+	// Свежесозданный оператор: ролей ещё нет, реконсилировать-revoke нечего —
+	// grant-only поверх DB (та же транзакционность снаружи не нужна, federated-
+	// provision редок).
+	if err := m.grantRoles(ctx, m.cfg.DB, aid, roles); err != nil {
 		return MappedOperator{}, err
 	}
 
@@ -198,15 +256,98 @@ func (m *DBMapper) provision(ctx context.Context, aid string, ext ExternalIdenti
 	return MappedOperator{AID: aid, Roles: roles, Provisioned: true}, nil
 }
 
-// syncRoles делает идемпотентный grant каждой роли (membership-авторитет —
-// rbac_role_operators, ADR-028(c)). granted_by_aid = nil (federated-membership
-// без оператора-инициатора). Невалидное имя роли в config → ошибка конфигурации.
-func (m *DBMapper) syncRoles(ctx context.Context, aid string, roles []string) error {
+// reconcileRoles приводит ПРЯМОЙ membership оператора (rbac_role_operators) к
+// набору `want` (роли из текущих групп пользователя) — grant новых + scoped-
+// revoke ушедших (HIGH-1, реализация ADR-058(d) «роли = внешние группы»).
+//
+// Scope revoke (КРИТИЧНО): снимаются ТОЛЬКО роли из домена, которым управляет
+// этот mapper (m.managedRoles = объединение values(group_role_map)). Роли,
+// выданные Synod / вручную / иным путём ВНЕ group_role_map, НЕ трогаются —
+// federated-реконсиляция владеет лишь своим доменом.
+//
+// Алгоритм: revoke = (текущий прямой membership ∩ managedRoles) \ want;
+// grant = want \ текущий. Обе мутации — в ОДНОЙ транзакции (Tx-фабрика):
+// сбой между grant и revoke не должен оставить membership рассогласованным.
+//
+// Tx==nil (unit-тест с fake-DB без BeginTx) → fallback на grant-only поверх DB
+// (back-compat): revoke не выполняется, но grant из групп сохраняется. daemon
+// всегда выставляет Tx, поэтому в проде реконсиляция атомарна и со снятием.
+func (m *DBMapper) reconcileRoles(ctx context.Context, aid string, want []string) error {
+	for _, role := range want {
+		if !rbac.ValidRoleName(role) {
+			return fmt.Errorf("auth/mapper: invalid role name %q in group_role_map", role)
+		}
+	}
+
+	if m.cfg.Tx == nil {
+		// Back-compat без транзакции: только grant (revoke требует чтения текущего
+		// membership + атомарности с grant — без Tx не гарантируем).
+		return m.grantRoles(ctx, m.cfg.DB, aid, want)
+	}
+
+	tx, err := m.cfg.Tx.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("auth/mapper: begin reconcile tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op после Commit
+
+	current, err := rbac.DirectRolesOf(ctx, tx, aid)
+	if err != nil {
+		return err
+	}
+
+	wantSet := make(map[string]struct{}, len(want))
+	for _, r := range want {
+		wantSet[r] = struct{}{}
+	}
+	currentSet := make(map[string]struct{}, len(current))
+	for _, r := range current {
+		currentSet[r] = struct{}{}
+	}
+
+	// Revoke: текущие роли в managed-домене, которых больше нет в want.
+	for _, role := range current {
+		if _, managed := m.managedRoles[role]; !managed {
+			continue // вне group_role_map-домена — не наша зона (Synod/ручная)
+		}
+		if _, keep := wantSet[role]; keep {
+			continue
+		}
+		if err := rbac.RevokeOperator(ctx, tx, role, aid); err != nil {
+			// Пары может уже не быть (гонка с ручным revoke) — это ок, не валим.
+			if errors.Is(err, rbac.ErrRoleOperatorNotFound) {
+				continue
+			}
+			return fmt.Errorf("auth/mapper: reconcile revoke role %q: %w", role, err)
+		}
+	}
+
+	// Grant: роли из want, которых ещё нет (идемпотентно, но пропускаем уже-есть).
+	for _, role := range want {
+		if _, have := currentSet[role]; have {
+			continue
+		}
+		if err := rbac.GrantOperator(ctx, tx, role, aid, nil); err != nil {
+			return fmt.Errorf("auth/mapper: reconcile grant role %q: %w", role, err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("auth/mapper: commit reconcile tx: %w", err)
+	}
+	return nil
+}
+
+// grantRoles делает идемпотентный grant каждой роли поверх db (pool ИЛИ tx).
+// granted_by_aid = nil (federated-membership без оператора-инициатора).
+// Используется provision-путём (свежий оператор) и Tx==nil-fallback-ом
+// reconcileRoles. Невалидное имя роли — ошибка конфигурации.
+func (m *DBMapper) grantRoles(ctx context.Context, db operator.ExecQueryRower, aid string, roles []string) error {
 	for _, role := range roles {
 		if !rbac.ValidRoleName(role) {
 			return fmt.Errorf("auth/mapper: invalid role name %q in group_role_map", role)
 		}
-		if err := rbac.GrantOperator(ctx, m.cfg.DB, role, aid, nil); err != nil {
+		if err := rbac.GrantOperator(ctx, db, role, aid, nil); err != nil {
 			return fmt.Errorf("auth/mapper: grant role %q: %w", role, err)
 		}
 	}
