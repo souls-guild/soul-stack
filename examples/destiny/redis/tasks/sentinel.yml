@@ -10,55 +10,63 @@
 #   §12). Явного daemon-reload-шага НЕТ: core.service (daemon_reload: auto) сам
 #   перечитывает unit при смене redis-sentinel.service ПЕРЕД restart, поэтому рестарт
 #   после смены юнита идёт ЧЕРЕЗ core.service.restarted (а не raw exec).
+#
+# ★ ОДИН gate sentinel_enabled на всю группу (#8 DRY): прежде каждая из четырёх задач
+# повторяла `default(input.sentinel_enabled, false)` в своём when — теперь все они
+# собраны во ВНЕШНИЙ block с этим when (ADR-009 block static-skip), ядро вливает gate
+# в каждого потомка через AND. Вне sentinel-режима → весь block static-skip
+# placeholder-ом (per-потомок, register потомков виден снаружи — flat-register-scope
+# инвариантен static-skip). Индексы не сдвигаются (block раскрывается в плоский список
+# тех же задач). Рестарт-задача — ПОСЛЕДНИЙ потомок, onchanges на register'ы соседей.
+- name: Run the redis-sentinel daemon
+  when: "default(input.sentinel_enabled, false)"
+  block:
+    # sentinel.conf из переданных параметров master-а. register — рестартить демон при
+    # изменении. announce-ip рендерится в шаблоне per-host из .self (НЕ из vars).
+    - name: Render sentinel.conf
+      module: core.file.rendered
+      register: redis_sentinel_conf
+      params:
+        path: /etc/redis/sentinel.conf
+        template: templates/sentinel.conf.tmpl
+        mode: "0640"
+        owner: redis
+        group: redis
+        vars:
+          master_name: "${ default(input.sentinel.master_name, 'mymaster') }"
+          master_ip:   "${ input.sentinel.master_ip }"
+          # master_port/quorum — has()?string(X):Y: then-ветка вызов string(), НЕ голый
+          # X → default() (select-chain-only) тут неприменим, оставлено тернаром.
+          master_port: "${ has(input.sentinel.master_port) ? string(input.sentinel.master_port) : '6379' }"
+          quorum:      "${ has(input.sentinel.quorum) ? string(input.sentinel.quorum) : '2' }"
+          auth_user:   "${ default(input.sentinel.auth_user, '') }"
+          auth_pass:   "${ default(input.sentinel.auth_pass, '') }"
+          sentinel_config: "${ default(input.sentinel.config, {}) }"
 
-# sentinel.conf из переданных параметров master-а. register — рестартить демон при
-# изменении. announce-ip рендерится в шаблоне per-host из .self (НЕ из vars).
-- name: Render sentinel.conf
-  module: core.file.rendered
-  when: has(input.sentinel_enabled) && input.sentinel_enabled
-  register: redis_sentinel_conf
-  params:
-    path: /etc/redis/sentinel.conf
-    template: templates/sentinel.conf.tmpl
-    mode: "0640"
-    owner: redis
-    group: redis
-    vars:
-      master_name: "${ has(input.sentinel.master_name) ? input.sentinel.master_name : 'mymaster' }"
-      master_ip:   "${ input.sentinel.master_ip }"
-      master_port: "${ has(input.sentinel.master_port) ? string(input.sentinel.master_port) : '6379' }"
-      quorum:      "${ has(input.sentinel.quorum) ? string(input.sentinel.quorum) : '2' }"
-      auth_user:   "${ has(input.sentinel.auth_user) ? input.sentinel.auth_user : '' }"
-      auth_pass:   "${ has(input.sentinel.auth_pass) ? input.sentinel.auth_pass : '' }"
-      sentinel_config: "${ has(input.sentinel.config) ? input.sentinel.config : {} }"
+    # Полный systemd-юнит redis-sentinel (пакет не всегда заводит его под наш конфиг).
+    # register — рестарт реактивно на изменение юнита (daemon-reload при смене unit
+    # core.service делает сам перед рестартом).
+    - name: Render redis-sentinel systemd unit
+      module: core.file.rendered
+      register: redis_sentinel_unit
+      params:
+        path: /etc/systemd/system/redis-sentinel.service
+        template: templates/redis-sentinel.service.tmpl
+        mode: "0644"
+        owner: root
+        group: root
 
-# Полный systemd-юнит redis-sentinel (пакет не всегда заводит его под наш конфиг).
-# register — рестарт реактивно на изменение юнита (daemon-reload при смене unit
-# core.service делает сам перед рестартом).
-- name: Render redis-sentinel systemd unit
-  module: core.file.rendered
-  when: has(input.sentinel_enabled) && input.sentinel_enabled
-  register: redis_sentinel_unit
-  params:
-    path: /etc/systemd/system/redis-sentinel.service
-    template: templates/redis-sentinel.service.tmpl
-    mode: "0644"
-    owner: root
-    group: root
+    - name: Ensure redis-sentinel is running and enabled at boot
+      module: core.service.running
+      params:
+        name: redis-sentinel
+        enabled: true
 
-- name: Ensure redis-sentinel is running and enabled at boot
-  module: core.service.running
-  when: has(input.sentinel_enabled) && input.sentinel_enabled
-  params:
-    name: redis-sentinel
-    enabled: true
-
-# Рестарт реактивно на изменение sentinel.conf или юнита. core.service при смене
-# unit сам делает daemon-reload перед рестартом.
-- name: Restart redis-sentinel because config or unit changed
-  module: core.service.restarted
-  when: has(input.sentinel_enabled) && input.sentinel_enabled
-  onchanges: [redis_sentinel_conf, redis_sentinel_unit]
-  timeout: 30s
-  params:
-    name: redis-sentinel
+    # Рестарт реактивно на изменение sentinel.conf или юнита. core.service при смене
+    # unit сам делает daemon-reload перед рестартом.
+    - name: Restart redis-sentinel because config or unit changed
+      module: core.service.restarted
+      onchanges: [redis_sentinel_conf, redis_sentinel_unit]
+      timeout: 30s
+      params:
+        name: redis-sentinel
