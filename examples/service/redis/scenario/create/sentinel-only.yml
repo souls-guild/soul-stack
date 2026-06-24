@@ -43,7 +43,13 @@
   apply:
     destiny: redis
     input:
-      version:  "${ input.version }"
+      # version: distro-пин (method=package). При method=binary absent → has()-guard ''.
+      version:  "${ has(input.version) ? input.version : '' }"
+      # install: способ установки (package default / binary), as-is в destiny-диспетч.
+      # sentinel_only ставит ТОЛЬКО sentinel-демон — но в binary-ветке install.yml
+      # бинарь redis-sentinel раскладывается во ВСЕХ режимах (как distro-пакет несёт
+      # оба демона), и sentinel.yml ждёт его на месте.
+      install:  "${ default(input.install, {}) }"
       # deploy_redis=false: data-плоскость redis-server НЕ разворачивается.
       deploy_redis: false
       # requirepass НЕ применяется (нет redis-server), но destiny-контракт требует
@@ -99,7 +105,7 @@
     addr:        "127.0.0.1:26379"
     master_name: "${ input.sentinel_master_name }"
     auth_pass:   "${ vault('secret/redis/' + incarnation.name + '#password') }"
-    redis_version: "${ input.version }"
+    redis_version: "${ compute.redis_version }"
     monitor:
       # ВНЕШНИЙ master (host-инвариант): input.master_ip, НЕ soulprint.hosts.
       # has()-обёртка — render-safety (см. apply.input.sentinel.master_ip выше).

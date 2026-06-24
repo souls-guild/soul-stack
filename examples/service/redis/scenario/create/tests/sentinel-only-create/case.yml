@@ -86,7 +86,7 @@ assert:
     # = первый по SID хост (node-1, host-инвариант apply.input). data-плоскость
     # redis-server (redis.conf/users.acl/systemd) в плане placeholder-skip —
     # TestAcceptance_SentinelOnlySkipsRedisServer. index 22 (−2: mode-guard + sentinel-guard).
-    - index: 22
+    - index: 29
       module: core.file.rendered
       params:
         path: /etc/redis/sentinel.conf
@@ -119,7 +119,7 @@ assert:
     # НЕ из soulprint.hosts — master живёт вне прогона). quorum 2 (size/2+1).
     # Сдвиг −1 относительно прежнего 32: extras-sysctl сжаты 2→1 задачи
     # (core.sysctl.applied вместо rendered+exec).
-    - index: 31
+    - index: 38
       module: community.redis.sentinel
       params:
         addr: "127.0.0.1:26379"
@@ -134,7 +134,7 @@ assert:
     # PONG-gate :26379 (index 32): same-task register.self (PONG), НЕ cross-passage.
     # community.redis.pinged (единая идиома health-gate через плагин-state, НЕ raw
     # command args:[PING]). Сдвиг −1 (extras-sysctl 2→1 задачи).
-    - index: 32
+    - index: 39
       module: community.redis.pinged
       params:
         addr: "127.0.0.1:26379"

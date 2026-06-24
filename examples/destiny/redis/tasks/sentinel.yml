@@ -5,11 +5,14 @@
 # передаёт ГОТОВЫЕ master_ip/master_port — destiny остаётся режим-агностичным
 # «глупым» кирпичом.
 #
-# ★ register'ы redis_sentinel_conf/redis_sentinel_unit и их onchanges-рестарт живут
-#   В ЭТОМ файле: ядро НЕ раскрывает register через границу include (open Q tasks.md
-#   §12). Явного daemon-reload-шага НЕТ: core.service (daemon_reload: auto) сам
-#   перечитывает unit при смене redis-sentinel.service ПЕРЕД restart, поэтому рестарт
-#   после смены юнита идёт ЧЕРЕЗ core.service.restarted (а не raw exec).
+# ★ register'ы redis_sentinel_conf/redis_sentinel_unit и их onchanges-рестарт ОБЯЗАНЫ
+#   жить В ЭТОМ файле: register-ссылки в onchanges валидирует ЗАГРУЗОЧНЫЙ per-file
+#   линтер (validateTaskRefs, shared/config/destiny_tasks.go) — cross-file onchanges
+#   отвергается как unknown_register_reference. Within-destiny include уплощается ДО
+#   render (tasks.md §4) — keeper-side registerIndex плоский, — но проверка ссылок
+#   остаётся per-file. Явного daemon-reload-шага НЕТ: core.service (daemon_reload: auto)
+#   сам перечитывает unit при смене redis-sentinel.service ПЕРЕД restart, поэтому
+#   рестарт после смены юнита идёт ЧЕРЕЗ core.service.restarted (а не raw exec).
 #
 # ★ ОДИН gate sentinel_enabled на всю группу (#8 DRY): прежде каждая из четырёх задач
 # повторяла `default(input.sentinel_enabled, false)` в своём when — теперь все они
@@ -45,7 +48,9 @@
 
     # Полный systemd-юнит redis-sentinel (пакет не всегда заводит его под наш конфиг).
     # register — рестарт реактивно на изменение юнита (daemon-reload при смене unit
-    # core.service делает сам перед рестартом).
+    # core.service делает сам перед рестартом). sentinel_bin/cli_bin — путь бинарей:
+    # /usr/bin при install.method=package (distro-пакет), /usr/local/bin при binary
+    # (install.yml разложил их туда). Так один юнит-шаблон обслуживает обе ветки.
     - name: Render redis-sentinel systemd unit
       module: core.file.rendered
       register: redis_sentinel_unit
@@ -55,6 +60,12 @@
         mode: "0644"
         owner: root
         group: root
+        # has()-цепочка (НЕ default(input.install.method, …)): сам input.install может
+        # отсутствовать целиком (корень) → default() упал бы no-such-key. binary →
+        # /usr/local/bin (install.yml разложил туда), иначе /usr/bin (distro-пакет).
+        vars:
+          sentinel_bin: "${ has(input.install) && has(input.install.method) && input.install.method == 'binary' ? '/usr/local/bin' : '/usr/bin' }"
+          cli_bin:      "${ has(input.install) && has(input.install.method) && input.install.method == 'binary' ? '/usr/local/bin' : '/usr/bin' }"
 
     - name: Ensure redis-sentinel is running and enabled at boot
       module: core.service.running

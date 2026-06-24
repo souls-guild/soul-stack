@@ -82,7 +82,7 @@ assert:
     # сдвинута на −2 от исходного плана (redis.conf→10).
 
     # redis.conf: cluster-блок ПОБЕДИЛ враждебный redis_settings (last-wins).
-    - index: 9
+    - index: 16
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf

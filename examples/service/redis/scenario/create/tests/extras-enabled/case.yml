@@ -65,7 +65,7 @@ fixtures:
 assert:
   rendered_tasks:
     # ── transparent-hugepages ───────────────────────────────────────────────
-    - index: 16
+    - index: 23
       module: core.file.rendered
       params:
         path: /etc/systemd/system/disable-thp.service
@@ -76,14 +76,14 @@ assert:
 
     # daemon-reload убран: core.service (daemon_reload: auto) сам перечитывает unit
     # перед enable/start. disable-thp service.running идёт сразу следом за render.
-    - index: 17
+    - index: 24
       module: core.service.running
       params:
         name: disable-thp
         enabled: true
 
     # ── logrotate (безусловно) ──────────────────────────────────────────────
-    - index: 18
+    - index: 25
       module: core.file.rendered
       params:
         path: /etc/logrotate.d/redis
@@ -98,7 +98,7 @@ assert:
     # не помечает. settings — из essence (передан через apply.input). ignore_failures
     # → `sysctl -e -p` (контейнерный режим). render_context уехал внутрь модуля —
     # на L0 проверяем CEL-резолв settings (default(input.sysctl_settings, {})).
-    - index: 19
+    - index: 26
       module: core.sysctl.applied
       params:
         filename: 30-redis
@@ -112,7 +112,7 @@ assert:
     # PING на index 22: extras занимают фиксированное число хвостовых слотов
     # (4 задачи, все безусловны) — ловит сдвиг плана, если кто-то добавит/уберёт
     # extras-задачу.
-    - index: 21
+    - index: 28
       module: community.redis.command
       params:
         addr: "127.0.0.1:6379"

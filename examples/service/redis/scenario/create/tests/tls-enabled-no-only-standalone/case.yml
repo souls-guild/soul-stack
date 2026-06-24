@@ -54,7 +54,7 @@ assert:
   rendered_tasks:
     # index 8 — redis.conf: TLS-директивы есть, но `port` НЕ обнулён (plain открыт,
     # tls_only=false). КРИТИЧНО: отсутствие `port 0` отличает не-only-TLS от only-TLS.
-    - index: 7
+    - index: 14
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -91,7 +91,7 @@ assert:
     # false!), addr на tls_port 7379 (НЕ plain 6379), tls_ca = CA-PEM. Под прежним
     # гейтом (tls_only) тут было бы tls=false, addr=6379 → plaintext AUTH.
     # Сдвиг −1 (extras-sysctl сжаты 2→1 задачи core.sysctl.applied).
-    - index: 21
+    - index: 28
 
       module: community.redis.command
       params:

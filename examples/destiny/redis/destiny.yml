@@ -42,17 +42,77 @@ input:
 
   version:
     type: string
-    required: true
+    # ОБЯЗАТЕЛЬНА ТОЛЬКО для install.method=package (required_when): distro-native
+    # пин читает её голым input.version (см. install.yml package-ветка). При
+    # install.method=binary distro-пакет НЕ ставится — версия бинаря приходит в
+    # install.version (upstream-semver), а это поле не используется. required_when
+    # context — input-only (default() недоступен) → absent-нормализация has()-цепочкой:
+    # «package» истинно, когда install не передан / method не задан / method=='package'.
+    required_when: "!has(input.install) || !has(input.install.method) || input.install.method == 'package'"
     # distro-native: опциональный epoch `N:` + upstream-версия + опциональная
     # ревизия (напр. Debian `5:7.0.15-1~deb12u7`). Узкий semver ломал version-пин
     # на реальном дистрибутиве (apt-get install redis-server=7.2.4 → exit 100).
     pattern: "^([0-9]+:)?[0-9][A-Za-z0-9.~+-]*$"
     description: >-
       Версия пакета redis-server в репозитории дистрибутива (distro-native пин,
-      напр. 5:7.0.15-1~deb12u7). ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23):
-      core.pkg всегда ставит =version-пин. Поведение «latest из репо» (пустой
-      version → core.pkg без пина) более НЕ доступно — пин фиксирует воспроизводимую
-      инсталляцию.
+      напр. 5:7.0.15-1~deb12u7). ОБЯЗАТЕЛЬНА при install.method=package (директива
+      пользователя 2026-06-23): core.pkg всегда ставит =version-пин. Поведение
+      «latest из репо» (пустой version → core.pkg без пина) более НЕ доступно. При
+      install.method=binary НЕ используется (версия бинаря — в install.version).
+
+  # ── install: способ установки redis (концепция Ansible-роли redis_install_*) ──
+  # Способ доставки бинарей redis: distro-пакет (default, поведение-сохраняющее) ИЛИ
+  # upstream-tarball (opt-in). Прецедент binary-install — node-exporter (install.yml:
+  # core.url.fetched → core.archive.extracted → install -m0755). Гейт install.method —
+  # host-инвариант (один способ установки на кластер) → приходит через apply.input.
+  # Предикат method static (только input.*) → Keeper гасит неактивную ветку install.yml
+  # placeholder-skip-ом без сдвига индексов.
+  #
+  # ★ binary-ветка САМА несёт всё, что distro-пакет даёт даром: systemd-юнит
+  # redis-server.service (+ redis-sentinel.service в sentinel-режиме), distro-юзер/
+  # группу redis. Имя юнита — redis-server (НЕ redis), чтобы server.yml hardening
+  # drop-in (/etc/systemd/system/redis-server.service.d/) и core.service redis-server
+  # рестарт работали В ОБЕИХ ветках без ветвления.
+  install:
+    type: object
+    required: false
+    additional_properties: false
+    description: >-
+      Способ установки redis (концепция redis_install_* роли). method: package
+      (default) — distro-пакет redis-server (поведение-сохраняющее); binary — upstream-
+      tarball (base_url + version + soulprint.self.os.arch → /usr/local/bin + свой
+      systemd-юнит + distro-юзер/группа redis). base_url/version/sha256 нужны лишь при
+      method=binary. Пустой/не передан → method=package.
+    properties:
+      method:
+        type: string
+        enum: [package, binary]
+      base_url:
+        type: string
+        description: >-
+          Базовый URL источника tarball-а redis (без version/arch-сегментов). destiny
+          строит полный URL per-host как <base_url>/redis-<version>-<arch>.tar.gz, где
+          arch — soulprint.self.os.arch. Обязателен при method=binary.
+      version:
+        type: string
+        # upstream-semver (напр. 7.2.4) — ОТДЕЛЬНО от top-level version (distro-epoch):
+        # бинарный tarball именуется upstream-версией, не distro-ревизией. method=binary
+        # → пишется в URL и в version-guard install бинаря.
+        pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        description: >-
+          Upstream-версия redis для tarball-а (semver, напр. 7.2.4). Обязательна при
+          method=binary. ОТДЕЛЬНА от top-level version (distro-epoch) — разные
+          форматы (#4 version-pattern).
+      sha256:
+        type: string
+        # ОПЦИОНАЛЬНЫЙ (как modules_sha256, #14): задан → core.url.fetched fail-closed
+        # integrity-verify; не задан → content-идемпотентность (без verify, доверие
+        # HTTPS + store). Голый hex (destiny оборачивает в "sha256:<hex>").
+        pattern: "^[0-9a-f]{64}$"
+        description: >-
+          SHA-256 tarball-а redis (голый hex), ОПЦИОНАЛЬНЫЙ. Задан → fail-closed verify
+          скачанного tarball-а; не задан → загрузка по content-идемпотентности (без
+          verify). Соответствует паре (version, arch).
 
   password:
     type: string
