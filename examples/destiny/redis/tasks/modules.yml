@@ -36,12 +36,24 @@
 # индексы не сдвигаются). Имя .so-файла — фиксированная таблица имён Redis-модулей
 # (map-литерал ниже), индексируется алиасом. URL АРХ-СПЕЦИФИЧЕН и строится PER-HOST
 # из soulprint.self.os.arch (soulprint доступен в destiny-CEL — прецедент arch-
-# резолва node-exporter): modules_base_url/<arch>/<имя.so>. checksum REQUIRED —
-# обёрнут в "sha256:<hex>" под контракт core.url.fetched (fail-closed: mismatch →
-# задача падает, целевой путь нетронут; modules_sha256[item] обязателен per-item,
-# отсутствие отсечёт schema/CEL). mode 0750 owner redis: .so читает только сервис.
-# register не нужен — loadmodule-директива в redis.conf уже триггерит рестарт через
-# redis_conf-register; повторная загрузка идемпотентна (checksum-якорь no-op).
+# резолва node-exporter): modules_base_url/<arch>/<имя.so>. mode 0750 owner redis:
+# .so читает только сервис. register не нужен — loadmodule-директива в redis.conf
+# уже триггерит рестарт через redis_conf-register; повторная загрузка идемпотентна.
+#
+# checksum — ОПЦИОНАЛЬНЫЙ (директива пользователя 2026-06-24: получать sha256 каждого
+# .so под пару (version, arch) — дорого; если он нужен лишь чтобы повторно не качать,
+# core.url.fetched и без него идемпотентен по СОДЕРЖИМОМУ). Две ветки одной CEL-ячейки:
+#   - modules_sha256[item] ЗАДАН → "sha256:<hex>": fail-closed integrity-verify по
+#     временному файлу ДО публикации (mismatch → задача падает, целевой путь нетронут,
+#     supply-chain);
+#   - НЕ задан → пустая строка: core.url.fetched трактует пустой checksum как
+#     отсутствие (OptStringParam) и качает по content-идемпотентности (скачивает во
+#     temp → сравнивает SHA-256 с существующим → запись только при diff). Без
+#     integrity-verify — доверяем HTTPS + доверенному store источника.
+# Guard через has(input.modules_sha256) (field-selection) + `item in …` (membership):
+# has() в CEL принимает только селектор поля, НЕ index-выражение has(m[k]); наличие
+# ключа в map проверяется оператором `in`. Сам input.modules_sha256 может
+# отсутствовать целиком — has() ловит это до индексации (иначе CEL «no such key»).
 - name: Fetch redis module shared object
   module: core.url.fetched
   loop:
@@ -50,7 +62,7 @@
   params:
     url:      "${ input.modules_base_url + '/' + soulprint.self.os.arch + '/' + {'search': 'redisearch.so', 'json': 'rejson.so', 'timeseries': 'redistimeseries.so', 'bloom': 'redisbloom.so'}[item] }"
     path:     "${ default(input.modules_dir, '/var/lib/redis/modules') + '/' + {'search': 'redisearch.so', 'json': 'rejson.so', 'timeseries': 'redistimeseries.so', 'bloom': 'redisbloom.so'}[item] }"
-    checksum: "${ 'sha256:' + input.modules_sha256[item] }"
+    checksum: "${ (has(input.modules_sha256) && item in input.modules_sha256) ? 'sha256:' + input.modules_sha256[item] : '' }"
     mode:     "0750"
     owner:    redis
     group:    redis
