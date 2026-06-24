@@ -52,13 +52,45 @@ input:
 
   version:
     type: string
-    required: true
+    # ОБЯЗАТЕЛЬНА ТОЛЬКО для install.method=package (required_when, input-only):
+    # distro-пин. При install.method=binary версия бинаря — в install.version
+    # (upstream-semver). absent-нормализация has()-цепочкой (default() в required_when
+    # недоступен).
+    required_when: "!has(input.install) || !has(input.install.method) || input.install.method == 'package'"
     pattern: "^([0-9]+:)?[0-9][A-Za-z0-9.~+-]*$"
     description: >-
       Версия пакета redis-server в репозитории дистрибутива (distro-native пин,
-      напр. 5:7.0.15-1~deb12u7). ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23):
-      core.pkg всегда ставит =version-пин (воспроизводимая инсталляция). Поведение
-      «latest из репо» (пустой version → core.pkg без пина) более НЕ доступно.
+      напр. 5:7.0.15-1~deb12u7). ОБЯЗАТЕЛЬНА при install.method=package (директива
+      пользователя 2026-06-23): core.pkg всегда ставит =version-пин. Поведение
+      «latest из репо» более НЕ доступно. При install.method=binary НЕ используется
+      (версия бинаря — в install.version).
+
+  # ── install: способ установки redis (default package) ────────────────────────
+  # package (default, поведение-сохраняющее) — distro-пакет; binary — upstream-tarball.
+  # Прокидывается as-is в destiny `redis` (apply.input.install) во всех ветках.
+  # base_url/version/sha256 нужны лишь при method=binary. Имя файла tarball-а строит
+  # destiny per-host из soulprint.self.os.arch (host-инвариант источник → apply.input).
+  install:
+    type: object
+    required: false
+    additional_properties: false
+    description: >-
+      Способ установки redis. method: package (default) — distro-пакет redis-server;
+      binary — upstream-tarball (base_url + version + arch). base_url/version/sha256
+      нужны при method=binary. sha256 опционален (fail-closed verify, иначе content-
+      идемпотентность). Пустой → method=package.
+    properties:
+      method:
+        type: string
+        enum: [package, binary]
+      base_url:
+        type: string
+      version:
+        type: string
+        pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+      sha256:
+        type: string
+        pattern: "^[0-9a-f]{64}$"
 
   memory_mb:
     type: integer
@@ -345,6 +377,14 @@ validate:
   - that: "!(has(input.tls) && has(input.tls.only) && input.tls.only) || (has(input.tls) && has(input.tls.enable) && input.tls.enable)"
     message: "tls.only требует tls.enable: только-TLS без включённого TLS закрывает plain-порт и не открывает TLS — у Redis не остаётся ни одного listener-а"
 
+  # install.method=binary требует base_url И version: без них destiny нечем строить URL
+  # tarball-а. Не выразимо required_when (это про присутствие ОДНОГО поля; здесь — два
+  # поля обязательны при значении ТРЕТЬЕГО, install.method) и не enum/min. input-only:
+  # has()-цепочка нормализует absent install/method (default() в validate недоступен) —
+  # «binary» истинно лишь когда install dict есть И method задан И == 'binary'.
+  - that: "!(has(input.install) && has(input.install.method) && input.install.method == 'binary') || (has(input.install.base_url) && has(input.install.version))"
+    message: "install.method=binary требует install.base_url и install.version: без них не из чего собрать URL upstream-tarball-а redis"
+
 # ── Host-tuning extras (концепция Ansible-роли) ──────────────────────────────────
 # Режим-агностичные per-host добавки — THP-отключение, logrotate, sysctl — БЕЗУСЛОВНЫ
 # (рекомендация Redis / hardening, не выбор оператора): флагов в операторском
@@ -386,6 +426,13 @@ compute:
   # САМОГО input.tls упал бы CEL «no such key: tls» (default ловит только отсутствие
   # ЛИСТА на существующем map, не отсутствие корня). default(input.tls, {}) даёт пустой
   # map, тогда default(tls_in.enable, …) корректно ловит отсутствие листа enable.
+  # ── Эффективная версия redis: distro-пин (method=package) ЛИБО upstream-semver
+  # (method=binary, из install.version). Объявлена ОДИН раз — state_changes.redis_version
+  # и param redis_version плагина читают её, не повторяя has()-каскад. package →
+  # input.version (required_when=package, присутствует); binary → input.version absent →
+  # install.version. has()-цепочка (default() ловит no-such-key только в первом
+  # аргументе — input.version отсутствует целиком в binary, не лист).
+  redis_version: "${ has(input.version) ? input.version : (has(input.install) && has(input.install.version) ? input.install.version : '') }"
   tls_in:      "${ default(input.tls, {}) }"
   tls_on:      "${ default(compute.tls_in.enable, default(essence.tls_enable, false)) }"
   tls_only_on: "${ default(compute.tls_in.only, default(essence.tls_only, false)) }"
@@ -468,7 +515,7 @@ state_changes:
   - set: redis_type
     value: "${ input.redis_type }"
   - set: redis_version
-    value: "${ input.version }"
+    value: "${ compute.redis_version }"
   # redis_config ≡ apply.input.config веток: единый compute.redis_config (см. выше).
   - set: redis_config
     value: "${ compute.redis_config }"

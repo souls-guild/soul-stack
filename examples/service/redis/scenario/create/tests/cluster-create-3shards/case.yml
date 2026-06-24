@@ -118,7 +118,7 @@ assert:
     # .self.network.primary_ip (см. destiny_redis_tmpl_test.go: per-host announce).
     # render_context.self здесь = первый по SID хост (node-a, host-инвариант
     # apply.input в пилоте), но СЛОЙ .tmpl на Soul-е возьмёт self КАЖДОГО хоста.
-    - index: 9
+    - index: 16
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -157,7 +157,7 @@ assert:
     # index 24 — после удаления из плана size-guard (assert:) и shards-guard
     # (required_when) cluster-ветка −2; extras-sysctl сжаты 2→1 задачи
     # core.sysctl.applied → ещё −1.
-    - index: 24
+    - index: 31
 
       module: community.redis.cluster
       params:

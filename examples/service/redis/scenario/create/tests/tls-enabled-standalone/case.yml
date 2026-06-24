@@ -61,7 +61,7 @@ fixtures:
 assert:
   rendered_tasks:
     # index 3 — TLS dir (core.file.directory, when tls.enable → АКТИВЕН): /etc/redis/tls.
-    - index: 2
+    - index: 9
       module: core.file.directory
       params:
         path: /etc/redis/tls
@@ -72,7 +72,7 @@ assert:
     # index 4 — TLS server cert: core.file.present, content = vault(tls.cert_ref) →
     # ЦЕЛЫЙ PEM в ячейке content (НЕ .tmpl/render_context: PEM через vault() в ячейке,
     # seal-маскинг vault-слоем).
-    - index: 3
+    - index: 10
       module: core.file.present
       params:
         path: /etc/redis/tls/redis.crt
@@ -83,7 +83,7 @@ assert:
 
     # index 5 — TLS private key: core.file.present, content = vault(tls.key_ref) →
     # секрет-PEM в ячейке (sealed vault-слоем).
-    - index: 4
+    - index: 11
       module: core.file.present
       params:
         path: /etc/redis/tls/redis.key
@@ -93,7 +93,7 @@ assert:
         group: redis
 
     # index 6 — TLS CA cert: core.file.present, content = vault(tls.ca_ref).
-    - index: 5
+    - index: 12
       module: core.file.present
       params:
         path: /etc/redis/tls/ca.crt
@@ -103,7 +103,7 @@ assert:
         group: redis
 
     # index 8 — redis.conf: merged config несёт TLS-директивы + port 0 (tls_only).
-    - index: 7
+    - index: 14
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -141,7 +141,7 @@ assert:
     # index 21 — PING health-gate: при tls_only плагин по TLS (tls=true, addr на
     # tls_port, tls_ca = CA-PEM из vault). Доказывает «плагин ОБЯЗАН по TLS».
     # Сдвиг −1 (extras-sysctl сжаты 2→1 задачи core.sysctl.applied).
-    - index: 21
+    - index: 28
 
       module: community.redis.command
       params:

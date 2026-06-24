@@ -99,7 +99,7 @@ assert:
     # keeper-side vault()-пароль. ПОЧЕМУ map, а не список: range по map в шаблоне
     # сортирует ключи → детерминизм порядка строк (regress-guard на tiling-баг
     # 2026-06-22; прямой order-guard — destiny_redis_tmpl_test.go).
-    - index: 6
+    - index: 13
       module: core.file.rendered
       params:
         path: /etc/redis/users.acl
@@ -129,7 +129,7 @@ assert:
           essence: {}
 
     # redis.conf: ИТОГ merge(). Здесь живёт главный guard трансляции.
-    - index: 7
+    - index: 14
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -167,25 +167,23 @@ assert:
           role: ""
           essence: {}
 
-    - index: 10
+    - index: 17
       module: core.service.running
       params:
         name: redis-server
         enabled: true
 
-    - index: 11
+    - index: 18
       module: core.service.restarted
       params:
         name: redis-server
 
     # ── community.redis.command (PING health-gate) ──────────────────────────
     # addr localhost, пароль — тот же requirepass vault()-резолв, args [PING].
-    # index 21: index 0 — mode-guard; standalone destiny ЭКСПАНДИТСЯ в 21 task-у
-    # (1..21; sentinel-задачи в хвосте — placeholder-skip на standalone-прогоне;
-    # 3 ручных daemon-reload убраны; extras-sysctl сжаты 2→1 задачи
-    # core.sysctl.applied), PING сценария идёт следом (index 21).
-    - index: 21
-
+    # index 28: standalone destiny занимает индексы 0..27 (pkg=0, binary-ветка 1..7
+    # placeholder-skip, socket-dir 8, server.yml 9..18, sentinel 19..22 skip, extras
+    # 23..26, modules 27 skip), PING сценария идёт следом (index 28).
+    - index: 28
       module: community.redis.command
       params:
         addr: "127.0.0.1:6379"

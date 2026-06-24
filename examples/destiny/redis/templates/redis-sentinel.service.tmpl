@@ -4,9 +4,12 @@
   управляется СВОИМ юнитом — пакет не всегда заводит redis-sentinel.service под
   нужный конфиг. Полный юнит, не drop-in.
 
-  Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010). Контекста
-  .vars/.self юнит не использует (статичен): путь конфига фиксирован
-  /etc/redis/sentinel.conf, рендерится отдельной задачей destiny.
+  Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010). Путь конфига
+  фиксирован /etc/redis/sentinel.conf. .vars несёт ТОЛЬКО пути бинарей:
+    .vars.sentinel_bin — путь redis-sentinel (/usr/bin при install.method=package,
+                         /usr/local/bin при binary — где их разложил install.yml);
+    .vars.cli_bin      — путь redis-cli (для ExecStop shutdown).
+  Так один юнит-шаблон обслуживает обе install-ветки без дубля.
 
   Type=notify + supervised systemd в sentinel.conf: redis-sentinel остаётся
   foreground-процессом и сам уведомляет systemd о готовности.
@@ -18,8 +21,8 @@ Wants=network-online.target
 
 [Service]
 Type=notify
-ExecStart=/usr/bin/redis-sentinel /etc/redis/sentinel.conf --supervised systemd
-ExecStop=/usr/bin/redis-cli -p 26379 shutdown nosave
+ExecStart={{ .vars.sentinel_bin }}/redis-sentinel /etc/redis/sentinel.conf --supervised systemd
+ExecStop={{ .vars.cli_bin }}/redis-cli -p 26379 shutdown nosave
 Restart=always
 User=redis
 Group=redis

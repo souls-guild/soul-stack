@@ -1,11 +1,15 @@
 # tasks/server.yml — data-плоскость redis-server (gated deploy_redis): TLS PEM +
 # users.acl + redis.conf + systemd hardening drop-in + сервис redis-server.
 #
-# ★ ВСЕ register'ы (redis_tls_cert/redis_tls_key/redis_tls_ca/redis_acl/redis_conf/
-#   redis_hardening) и их onchanges-рестарт ОБЯЗАНЫ жить В ЭТОМ файле: ядро НЕ
-#   раскрывает register через границу include (cross-file register — нерешённый
-#   open Q docs/destiny/tasks.md §12). Вынеси TLS-PEM в отдельный файл от рестарта —
-#   ротация cert/key/CA молча перестанет рестартить redis (security-регрессия).
+# ★ register'ы (redis_tls_cert/redis_tls_key/redis_tls_ca/redis_acl/redis_conf/
+#   redis_hardening) и их onchanges-рестарт ОБЯЗАНЫ жить В ЭТОМ файле: register-ссылки
+#   в onchanges валидирует ЗАГРУЗОЧНЫЙ per-file линтер (validateTaskRefs,
+#   shared/config/destiny_tasks.go) — cross-file onchanges (register в соседнем
+#   include-файле) отвергается как unknown_register_reference. Within-destiny include
+#   уплощается в плоский план ДО render (tasks.md §4) — keeper-side registerIndex
+#   плоский, — но проверка ссылок остаётся per-file (тот же инвариант, что у
+#   node-exporter). Вынеси TLS-PEM в отдельный файл от рестарта — ротация cert/key/CA
+#   молча перестанет рестартить redis (security-регрессия).
 #
 # Явного daemon-reload-шага НЕТ: core.service (daemon_reload: auto, default) сам
 # перечитывает конфигурацию systemd при смене hardening drop-in ПЕРЕД restart.
@@ -213,7 +217,15 @@
     # живут в nested TLS-block выше → ротация cert/key/CA дёргает рестарт; вне
     # tls.enable nested block раскрывается в per-потомок placeholder-ы, register
     # потомков виден этой задаче снаружи nested block (onchanges резолвится, но потомки
-    # skip → не считаются changed). Порядок гарантирован позицией задач.
+    # skip → не считаются changed).
+    #
+    # ★ Рестарт на смену БИНАРЯ/ЮНИТА binary-ветки (redis_binaries/redis_server_unit)
+    # НЕ здесь: их register'ы живут в install.yml, а cross-file onchanges отвергает
+    # ЗАГРУЗОЧНЫЙ per-file линтер (validateTaskRefs, shared/config/destiny_tasks.go) —
+    # register должен быть в ОДНОМ файле со своим onchanges-потребителем (тот же
+    # инвариант, что у node-exporter: install-register живёт рядом с рестартом).
+    # Поэтому binary-ветка несёт СВОЙ рестарт redis-server в install.yml. Порядок
+    # гарантирован позицией задач.
     - name: Restart redis-server because config or hardening changed
       module: core.service.restarted
       onchanges: [redis_conf, redis_acl, redis_hardening, redis_tls_cert, redis_tls_key, redis_tls_ca]

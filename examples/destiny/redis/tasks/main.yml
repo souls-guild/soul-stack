@@ -10,15 +10,21 @@
 #
 # Обзор конвейера (порядок include = порядок задач; от него зависят финальные
 # индексы плоского плана, на которые ассертят L0-кейсы):
-#   install.yml  — core.pkg.installed redis-server + каталог unix-сокета;
+#   install.yml  — установка бинарей redis (диспетч по install.method: package-block
+#                  default = core.pkg.installed redis-server; binary-block opt-in =
+#                  url.fetched→archive.extracted→user/group→install -m0755→свой
+#                  redis-server.service + СВОЙ рестарт на смену бинаря/юнита, register
+#                  redis_binaries/redis_server_unit) + каталог unix-сокета (обе ветки).
+#                  ★ binary-ветка несёт СВОЙ рестарт здесь, а не дёргает server.yml:
+#                  register-ссылки в onchanges линтер (validateTaskRefs) проверяет
+#                  per-file — cross-file onchanges отвергается (тот же инвариант, что
+#                  у node-exporter: install-register рядом с рестартом);
 #   server.yml   — data-плоскость redis-server (gated deploy_redis ОДНИМ внешним
 #                  block-ом): TLS-каталог + 3 PEM-задачи (cert/key/ca, в nested
 #                  tls.enable-block) → users.acl → redis.conf → systemd hardening
-#                  drop-in → core.service.running/restarted. ВСЕ register'ы
-#                  redis_* и их onchanges-рестарт ОБЯЗАНЫ жить В ЭТОМ файле: ядро НЕ
-#                  раскрывает register через границу include (cross-file register —
-#                  open Q tasks.md §12). Разрыв границы расцепил бы ротацию cert от
-#                  рестарта (security-регрессия);
+#                  drop-in → core.service.running/restarted. register'ы redis_* и их
+#                  onchanges-рестарт ОБЯЗАНЫ жить В ЭТОМ файле (per-file линтер ссылок):
+#                  разрыв расцепил бы ротацию cert от рестарта (security-регрессия);
 #   sentinel.yml — sentinel-демон (gated sentinel_enabled): sentinel.conf + unit +
 #                  core.service.running/restarted. register'ы redis_sentinel_* и их
 #                  onchanges — здесь;

@@ -78,7 +78,7 @@ assert:
 
     # users.acl: MAP трёх юзеров. Порядок строк гарантирует range по map (шаблон);
     # здесь ассертим лишь СОСТАВ map-а (значения order-independent).
-    - index: 6
+    - index: 13
       module: core.file.rendered
       params:
         path: /etc/redis/users.acl
@@ -114,7 +114,7 @@ assert:
           essence: {}
 
     # redis.conf: ИТОГ merge() — главный guard этого кейса.
-    - index: 7
+    - index: 14
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf

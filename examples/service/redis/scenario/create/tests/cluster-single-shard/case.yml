@@ -49,7 +49,7 @@ assert:
     # не занимают → cluster-ветка сдвинута на −2 от исходного плана.
 
     # redis.conf: cluster-директивы; render_context.self = единственный хост.
-    - index: 9
+    - index: 16
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -85,7 +85,7 @@ assert:
 
     # cluster-build: nodes-MAP с единственной записью. index 24 (−2 guard + −1
     # extras-sysctl сжаты 2→1 задачи core.sysctl.applied).
-    - index: 24
+    - index: 31
 
       module: community.redis.cluster
       params:

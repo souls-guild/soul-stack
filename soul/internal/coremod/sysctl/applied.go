@@ -76,6 +76,18 @@ func (m *Module) applyApplied(req *pluginv1.ApplyRequest, stream grpc.ServerStre
 		return util.SendFailed(stream, err.Error())
 	}
 
+	// Пустой набор (len==0): ранний no-op. Не пишем пустой drop-in и не reload-им
+	// (general-purpose edge: bulk-задача без параметров — нечего применять; пустой
+	// файл /etc/sysctl.d/<f>.conf — мусор, а reload на нём бессмыслен). changed=false:
+	// состояние «нет параметров» уже выполнено отсутствием записи. Симметрично с
+	// idempotent-веткой ensureDropIn (нет изменения → нет reload).
+	if len(settings) == 0 {
+		return util.SendFinal(stream, false, map[string]any{
+			"path":     dropInPath(m.Dir, fname),
+			"settings": 0,
+		})
+	}
+
 	path := dropInPath(m.Dir, fname)
 	want := renderDropIn(settings)
 
@@ -126,6 +138,12 @@ func (m *Module) planApplied(req *pluginv1.PlanRequest, stream grpc.ServerStream
 	}
 	if _, err := reloadMode(req.Params); err != nil {
 		return util.PlanFailed(err.Error())
+	}
+
+	// Пустой набор → no-op (drift=false), симметрично applyApplied: нечего применять,
+	// пустой drop-in не пишется, значит и дрейфа нет.
+	if len(settings) == 0 {
+		return util.SendPlanFinal(stream, false)
 	}
 
 	path := dropInPath(m.Dir, fname)

@@ -32,7 +32,13 @@
   apply:
     destiny: redis
     input:
-      version:  "${ input.version }"
+      # version: distro-пин (method=package). При method=binary absent (required_when=
+      # package) → has()-guard даёт '' (destiny не использует его в binary-ветке).
+      version:  "${ has(input.version) ? input.version : '' }"
+      # install: способ установки (package default / binary). Прокидывается as-is —
+      # destiny диспетчит по install.method (package-block / binary-block install.yml).
+      # not-передан → destiny default(install.method,'package')=package.
+      install:  "${ default(input.install, {}) }"
       # Пароль requirepass — keeper-side vault()-резолв (templating.md §2.3/§4):
       # путь из incarnation (доверенный контекст), в destiny уходит ЗНАЧЕНИЕ.
       password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
@@ -67,14 +73,14 @@
            : {} }
       # Redis-модули (Redis < 8). VERSION-GATE: на Redis 8+ модули встроены →
       # передаём destiny ПУСТОЙ список (.so не качается, loadmodule не пишется).
-      # Гейт по input.version (мажор >= 8: epoch-префикс N: + 8|9|двузначный мажор).
-      # version обязателен (required:true в input-схеме, всегда непустой) → проверка
-      # непустоты не нужна, гейтим прямо matches() по мажору. modules_base_url/modules_sha256 — host-
-      # инвариант (один источник/арх на кластер) → apply.input; arch-специфичный
-      # URL строит destiny per-host из soulprint.self.os.arch. checksum REQUIRED
-      # каждого .so — fail-closed (core.url.fetched верифицирует SHA-256).
+      # Гейт по compute.redis_version (эффективная версия — distro-пин или upstream-
+      # semver, объявлена в main.yml compute:): мажор >= 8 (epoch-префикс N: + 8|9|
+      # двузначный мажор). Через compute, а не input.version напрямую: version теперь
+      # required_when=package, в binary-режиме отсутствует — compute даёт строку
+      # (пустую при неизвестной версии → matches=false → модули проходят). modules_base_url/
+      # modules_sha256 — host-инвариант → apply.input; arch-URL строит destiny per-host.
       modules: >-
-        ${ (has(input.modules) && !input.version.matches('^([0-9]+:)?(8|9|[1-9][0-9])\\.'))
+        ${ (has(input.modules) && !compute.redis_version.matches('^([0-9]+:)?(8|9|[1-9][0-9])\\.'))
            ? input.modules
            : [] }
       modules_base_url: "${ default(input.modules_base_url, '') }"

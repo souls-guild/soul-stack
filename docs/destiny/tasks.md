@@ -90,7 +90,17 @@
   раскрывается при загрузке destiny-артефакта (до фазы render), так же как
   scenario-include ([scenario/orchestration.md §6](../scenario/orchestration.md#6-двухуровневый-резолв-ресурсов)):
   include-задача заменяется задачами подключённого файла inline, на их месте;
-  render получает плоский список без `include:`-узлов.
+  render получает плоский список без `include:`-узлов. После уплощения keeper-side
+  `registerIndex` и стратификатор плоские: `register:` адресуется по индексу в плане.
+- **Проверка register-ссылок остаётся per-file (cross-file `onchanges` отвергается).**
+  `register`-ссылки в `onchanges:`/`onfail:`/`require:` и CEL-предикатах валидирует
+  **загрузочный** линтер (`validateTaskRefs` в `shared/config/destiny_tasks.go`) на
+  уровне **одного файла**. `onchanges:` в одном include-файле на `register:`, объявленный
+  в **другом** include-файле, поднимает `unknown_register_reference` — несмотря на то,
+  что после уплощения оба попадают в общий план. Практический инвариант: **`register:`
+  и его `onchanges:`-потребитель держатся в одном файле `tasks/<name>.yml`** (эталоны —
+  `examples/destiny/node-exporter` и `examples/destiny/redis`: install-register и рестарт
+  живут вместе). Расширение этого до cross-file-адресации — open Q §12.
 - **Правила:**
   - относительные пути за пределы `tasks/` запрещены (`../...`, абсолютные);
     резолв строго внутри каталога `tasks/` снапшота (securejoin-кламп);
@@ -751,7 +761,7 @@ DSL-ядро задач выше — общее для destiny и scenario ([ADR
 ### Requisites
 - **`prereq:`** (Salt) — обратное `require:` (А ждёт изменений в Б; если Б собирается меняться, А выполняется первым). Нужно ли.
 - **Wildcard в requisites.** `onchanges: [redis_*]` — все register-id-ы по префиксу. Удобно, но усложняет валидацию.
-- **Cross-file адресация.** `onchanges: [other-file.task]` или строго в пределах одного `tasks/main.yml`-дерева?
+- **Cross-file адресация.** Сейчас: register-ссылка в `onchanges:`/`onfail:`/`require:` валидируется **per-file** (загрузочный `validateTaskRefs`), поэтому ссылка на `register:` из соседнего include-файла отвергается (`unknown_register_reference`) — register и его потребитель обязаны быть в одном файле (см. §4 `include:`). Open Q: вводить ли явную cross-file-адресацию (валидация ссылок по уплощённому плану, а не per-file) — keeper-side `registerIndex` после уплощения это уже позволил бы, но статическая проверка ссылок осталась бы сложнее.
 
 ### Block — error-handling
 - **`rescue:`** (Ansible) — список задач, выполняемых при fail внутри `block:`. Сейчас не закреплён; обходимся `onfail:`-задачами после block-а. Нужно ли вводить как явный синтаксис.

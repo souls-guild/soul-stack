@@ -72,7 +72,7 @@ assert:
 
     # redis.conf: aof-пресет (appendonly yes / save "") СОСУЩЕСТВУЕТ с
     # cluster-директивами. announce-ip в config НЕТ — per-host из .tmpl.
-    - index: 9
+    - index: 16
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf

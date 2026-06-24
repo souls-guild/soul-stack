@@ -52,7 +52,10 @@
   apply:
     destiny: redis
     input:
-      version:  "${ input.version }"
+      # version: distro-пин (method=package). При method=binary absent → has()-guard ''.
+      version:  "${ has(input.version) ? input.version : '' }"
+      # install: способ установки (package default / binary), as-is в destiny-диспетч.
+      install:  "${ default(input.install, {}) }"
       password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
       # Единый compute.redis_config (объявлен ОДИН раз в main.yml compute:, ADR-009):
       # тот же map, что уйдёт в state_changes.redis_config — drift «state ≡ live
@@ -70,11 +73,11 @@
                }
              }))
            : {} }
-      # Redis-модули (Redis < 8), version-gate — см. standalone.yml. На Redis 8+ →
-      # пустой список. base_url/sha256 host-инвариант → apply.input; арх-URL строит
-      # destiny per-host.
+      # Redis-модули (Redis < 8), version-gate — см. standalone.yml (гейт по
+      # compute.redis_version). На Redis 8+ → пустой список. base_url/sha256
+      # host-инвариант → apply.input; арх-URL строит destiny per-host.
       modules: >-
-        ${ (has(input.modules) && !input.version.matches('^([0-9]+:)?(8|9|[1-9][0-9])\\.'))
+        ${ (has(input.modules) && !compute.redis_version.matches('^([0-9]+:)?(8|9|[1-9][0-9])\\.'))
            ? input.modules
            : [] }
       modules_base_url: "${ default(input.modules_base_url, '') }"
@@ -164,7 +167,7 @@
     addr:        "127.0.0.1:26379"
     master_name: "${ input.sentinel_master_name }"
     auth_pass:   "${ vault('secret/redis/' + incarnation.name + '#password') }"
-    redis_version: "${ input.version }"
+    redis_version: "${ compute.redis_version }"
     monitor:
       # HOST-ИНВАРИАНТНЫЙ адрес master-а (master-election: soulprint.hosts[0]).
       ip:     "${ soulprint.hosts[0].network.primary_ip }"

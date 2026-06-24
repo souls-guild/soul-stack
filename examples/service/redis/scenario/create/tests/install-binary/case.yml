@@ -1,0 +1,129 @@
+# L0-испытание (Trial, ADR-023): install.method=binary (upstream-tarball). Guard:
+# binary-ветка install.yml активна (url.fetched → archive.extracted → group → user →
+# install -m0755 → свой redis-server.service + СВОЙ рестарт), а package-ветка
+# (core.pkg.installed, index 0) — placeholder-skip (params пусты). Прецедент binary-
+# install — node-exporter. URL собирается per-host из base_url + install.version +
+# soulprint.self.os.arch. version (top-level distro-пин) НЕ передан — required_when=
+# package, при method=binary не обязателен; redis_version в state берётся из
+# install.version (compute.redis_version).
+#
+# ★ Cross-file register guard: register'ы redis_binaries/redis_server_unit (install.yml)
+# читает onchanges рестарт-задачи В ТОМ ЖЕ install.yml (НЕ server.yml) — этот кейс
+# рендерится без unknown_register_reference, фиксируя «register + его onchanges-
+# потребитель живут в одном файле» как инвариант (per-file линтер validateTaskRefs).
+name: install method binary fetches upstream tarball and lays out binaries with own unit
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network:
+      primary_ip: 10.0.0.5
+    os:
+      arch: amd64
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+  essence:
+    redis_type: standalone
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory: "256mb"
+
+  # version (top-level distro-пин) НЕ передан: method=binary → required_when=package
+  # не срабатывает. install.version (upstream-semver) несёт версию tarball-а.
+  input:
+    redis_type: standalone
+    persistence: rdb
+    install:
+      method: binary
+      base_url: "https://downloads.example.com/redis"
+      version: "7.2.4"
+
+assert:
+  rendered_tasks:
+    # index 0 — package-ветка (core.pkg.installed): method=binary → placeholder-skip.
+    - index: 0
+      module: core.pkg.installed
+
+    # index 1 — Fetch redis tarball: URL из base_url + version + arch (amd64). checksum
+    # пуст (sha256 не задан → content-идемпотентность). path во /tmp.
+    - index: 1
+      module: core.url.fetched
+      params:
+        url: "https://downloads.example.com/redis/redis-7.2.4-amd64.tar.gz"
+        path: "/tmp/redis-7.2.4.tar.gz"
+        checksum: ""
+        mode: "0644"
+
+    # index 2 — Extract redis tarball во /tmp/redis-7.2.4.
+    - index: 2
+      module: core.archive.extracted
+      params:
+        path: "/tmp/redis-7.2.4.tar.gz"
+        dest: "/tmp/redis-7.2.4"
+
+    # index 3 — distro-группа redis (system).
+    - index: 3
+      module: core.group.present
+      params:
+        name: redis
+        system: true
+
+    # index 4 — distro-юзер redis (system, nologin).
+    - index: 4
+      module: core.user.present
+      params:
+        name: redis
+        group: redis
+        system: true
+        shell: /usr/sbin/nologin
+        home: /var/lib/redis
+
+    # index 5 — install -m0755 трёх бинарей в /usr/local/bin. register redis_binaries.
+    - index: 5
+      module: core.cmd.shell
+      params:
+        cmd: >-
+          install -m 0755 '/tmp/redis-7.2.4/redis-server'   /usr/local/bin/redis-server &&
+          install -m 0755 '/tmp/redis-7.2.4/redis-cli'      /usr/local/bin/redis-cli &&
+          install -m 0755 '/tmp/redis-7.2.4/redis-sentinel' /usr/local/bin/redis-sentinel
+
+    # index 6 — свой systemd-юнит redis-server.service (binary install). register
+    # redis_server_unit. Имя юнита redis-server → hardening drop-in/core.service в обеих
+    # ветках работают.
+    - index: 6
+      module: core.file.rendered
+      params:
+        path: /etc/systemd/system/redis-server.service
+        template_content: "<present>"
+        mode: "0644"
+        owner: root
+        group: root
+
+    # index 7 — рестарт redis-server на смену бинаря/юнита (binary-локальный onchanges
+    # на redis_binaries/redis_server_unit, оба из ЭТОГО файла — cross-file guard).
+    - index: 7
+      module: core.service.restarted
+      params:
+        name: redis-server
+
+    # index 14 — redis.conf на месте: data-плоскость одинакова в обеих ветках
+    # (install.method меняет только установку бинарей, не render redis.conf).
+    - index: 14
+      module: core.file.rendered
+
+  state_changes:
+    redis_type: standalone
+    # redis_version из install.version (compute.redis_version: binary → upstream-semver).
+    redis_version: "7.2.4"
+    redis_config:
+      maxmemory: "256mb"
+      save: "900 1 300 10 60 10000"
+      appendonly: "no"
+    redis_users: {}
+    redis_hosts: []
+    redis_sentinel: {}

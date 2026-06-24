@@ -1,10 +1,13 @@
 # tasks/install.yml — скачивание и распаковка релизного tarball-а node_exporter.
-# Тройка установки разнесена по границе include из-за ограничения ядра: register
-# одного include-файла НЕ виден в onchanges другого (cross-file register —
-# нерешённый open Q docs/destiny/tasks.md §12; рабочий корпус держит register и
-# его onchanges-потребителя в одном файле). Раскладка бинаря (register
-# node_exporter_bin) живёт в service.yml рядом с рестартом, который на неё
-# реагирует. Здесь — только сетевая часть (fetch) + распаковка, без register-ов.
+# Тройка установки разнесена по границе include из-за ЗАГРУЗОЧНОГО per-file линтера:
+# register-ссылки в onchanges валидируются на уровне ОДНОГО файла (validateTaskRefs,
+# shared/config/destiny_tasks.go) — onchanges в одном include-файле на register из
+# ДРУГОГО отвергается как unknown_register_reference. (Within-destiny include
+# уплощается в плоский план ДО render — tasks.md §4, — keeper-side registerIndex
+# плоский, — но проверка ссылок остаётся per-file.) Поэтому register и его onchanges-
+# потребитель держатся в одном файле: раскладка бинаря (register node_exporter_bin)
+# живёт в service.yml рядом с рестартом, который на неё реагирует. Здесь — только
+# сетевая часть (fetch) + распаковка, без register-ов.
 #
 # arch для URL берётся из soulprint.self.os.arch (soulprint доступен в destiny-CEL).
 
