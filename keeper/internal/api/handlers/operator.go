@@ -62,6 +62,15 @@ type RBACSource interface {
 	RolesOf(aid string) []string
 }
 
+// ProvisioningGate — узкая поверхность политики provisioning_allowed_methods
+// (ADR-058 Часть B): гейтит ветку СОЗДАНИЯ оператора. Реализуется
+// *serviceregistry.Holder; объявлена локально, чтобы handlers не тянул
+// serviceregistry. nil → гейт выключен (политика не сконфигурирована /
+// тесты, back-compat — CreateTyped пропускает).
+type ProvisioningGate interface {
+	ProvisioningMethodAllowed(method string) bool
+}
+
 // OperatorHandler — три endpoint-а Operator API. Делегирует бизнес-логику
 // в [operator.Service].
 //
@@ -70,6 +79,20 @@ type RBACSource interface {
 type OperatorHandler struct {
 	svc    *operator.Service
 	logger *slog.Logger
+
+	// gate — политика provisioning_allowed_methods (ADR-058 Часть B), гейтит
+	// CreateTyped (метод "user"). nil → гейт выключен (back-compat). Инжектится
+	// через [SetProvisioningGate] late-binding-ом: Holder в `keeper run`
+	// поднимается отдельным setup-шагом, конструктор сигнатуру не меняет.
+	gate ProvisioningGate
+}
+
+// SetProvisioningGate late-binding-ом подключает политику provisioning_allowed_methods
+// (ADR-058 Часть B). nil — снять гейт (back-compat: создание любым методом).
+// Вызывается из `keeper run` после подъёма serviceregistry.Holder. Идемпотентен;
+// потокобезопасность не требуется — вызов до старта HTTP-сервера.
+func (h *OperatorHandler) SetProvisioningGate(gate ProvisioningGate) {
+	h.gate = gate
 }
 
 // NewOperatorHandler создаёт handler. ttlDefault — TTL JWT-токенов.
@@ -159,6 +182,15 @@ func (h *OperatorHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, r
 	if len(req.DisplayName) > maxDisplayNameLen {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
 			fmt.Sprintf("field 'display_name' must be at most %d characters", maxDisplayNameLen))}
+	}
+
+	// Гейт политики provisioning_allowed_methods (ADR-058 Часть B): создание
+	// оператора через Operator API — метод "user" (created_via=user). gate==nil →
+	// пропускаем (политика не сконфигурирована, back-compat). bootstrap-путь
+	// (`keeper init`) сюда НЕ заходит — он не вызывает CreateTyped.
+	if h.gate != nil && !h.gate.ProvisioningMethodAllowed("user") {
+		return zero, &problemError{problem.New(problem.TypeProvisioningMethodDisabled, "",
+			"operator provisioning via 'user' method is disabled by policy")}
 	}
 
 	res, err := h.svc.Create(ctx, operator.CreateInput{
@@ -335,18 +367,22 @@ func (h *OperatorHandler) IssueTokenTyped(ctx context.Context, claims *jwt.Claim
 
 // OperatorView — ПЛОСКАЯ wire-форма Operator-а (list-item / get-200), handler-
 // native PILOT (заменяет Operator-алиас). Nullable-поля отражают NULL в БД:
-// created_by_aid (NULL у первого bootstrap-Архонта), revoked_at (NULL у
-// активного). bootstrap_initial — derived-флаг (CreatedByAID==nil) для UI
-// (отдельной колонки в БД нет — ADR-013 фиксирует факт через
-// `created_by_aid IS NULL` + partial unique index). Пакет api проецирует
-// OperatorView → native-схему Operator (register-func), wire-форма (UTC +
-// Truncate(Second) на date-time) фиксируется здесь.
+// created_by_aid (NULL у bootstrap/system/federated — ADR-058(d) легализовал
+// NULL для не-bootstrap-строк), revoked_at (NULL у активного). bootstrap_initial —
+// derived-флаг `op.IsBootstrap()` (created_via='bootstrap') для UI: отдельной
+// колонки в БД нет, единственность первого Архонта гарантирует partial unique
+// index `WHERE created_via='bootstrap'` (ADR-013/ADR-014 amendment 2026-06-23,
+// миграция 085). Признак перенесён с прежнего `created_by_aid IS NULL` —
+// иначе federated/system-операторы с NULL-родителем давали ложный bootstrap-флаг.
+// Пакет api проецирует OperatorView → native-схему Operator (register-func),
+// wire-форма (UTC + Truncate(Second) на date-time) фиксируется здесь.
 type OperatorView struct {
 	AID              string
 	AuthMethod       string
 	BootstrapInitial bool
 	CreatedAt        time.Time
 	CreatedByAID     *string
+	CreatedVia       string
 	DisplayName      string
 	Metadata         map[string]any
 	RevokedAt        *time.Time
@@ -359,6 +395,7 @@ func toOperatorView(op *operator.Operator) OperatorView {
 		AuthMethod:       string(op.AuthMethod),
 		CreatedAt:        op.CreatedAt.UTC().Truncate(time.Second),
 		CreatedByAID:     op.CreatedByAID,
+		CreatedVia:       op.CreatedVia,
 		BootstrapInitial: op.IsBootstrap(),
 		Metadata:         op.Metadata,
 	}

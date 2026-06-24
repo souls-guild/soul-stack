@@ -171,9 +171,13 @@ func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row 
 			if op.RevokedAt != nil {
 				revokedPtr = *op.RevokedAt
 			}
+			createdVia := op.CreatedVia
+			if createdVia == "" {
+				createdVia = operator.CreatedViaUser
+			}
 			return staticRow{values: []any{
 				op.AID, op.DisplayName, string(op.AuthMethod), op.CreatedAt,
-				createdByPtr, revokedPtr, []byte("{}"),
+				createdByPtr, createdVia, revokedPtr, []byte("{}"),
 			}}
 		}
 		return errRow{err: pgx.ErrNoRows}

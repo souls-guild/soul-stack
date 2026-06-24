@@ -226,7 +226,10 @@ func Init(ctx context.Context, cfg Config) (*Result, error) {
 		AID:         cfg.ArchonAID,
 		DisplayName: displayName,
 		AuthMethod:  operator.AuthMethodJWT,
+		CreatedVia:  operator.CreatedViaBootstrap,
 		// CreatedByAID = nil (первый bootstrap-Archon, ADR-013/014).
+		// Bootstrap-инвариант (ровно один) держится индексом
+		// `operators_first_archon_idx` на created_via='bootstrap' (миграция 085).
 		// CreatedAt zero → DEFAULT NOW() в БД.
 	}
 	if err := operator.Insert(ctx, tx, op); err != nil {

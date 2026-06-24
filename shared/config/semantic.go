@@ -124,6 +124,24 @@ func semanticValidateKeeper(c *KeeperConfig, root *ast.MappingNode) []diag.Diagn
 		}
 	}
 
+	// auth.ldap (ADR-058): TLS-required + взаимоисключимость транспорта +
+	// search-bind ⇒ bind_dn+bind_password_ref + vault-ref форма + insecure WARN.
+	if c.Auth != nil && c.Auth.LDAP != nil {
+		out = append(out, checkAuthLDAP(root, c.Auth.LDAP)...)
+	}
+
+	// auth.oidc (ADR-058 стадия 2): issuer HTTPS-only + обязательность
+	// client_id/redirect_url + vault-ref форма client_secret_ref/ca_ref.
+	if c.Auth != nil && c.Auth.OIDC != nil {
+		out = append(out, checkAuthOIDC(root, c.Auth.OIDC)...)
+	}
+
+	// auth.rate_limit (ADR-058(g), HIGH-3): duration-формат lockout-окна/backoff-а.
+	if c.Auth != nil && c.Auth.RateLimit != nil {
+		out = append(out, checkDuration(root, "$.auth.rate_limit.lockout_window", c.Auth.RateLimit.LockoutWindow)...)
+		out = append(out, checkDuration(root, "$.auth.rate_limit.lockout_backoff", c.Auth.RateLimit.LockoutBackoff)...)
+	}
+
 	// Cross-field: audit.retention_days alias на reaper.rules.purge_audit_old.max_age.
 	if c.Audit != nil && c.Reaper != nil {
 		if rule, ok := c.Reaper.Rules["purge_audit_old"]; ok && rule.MaxAge != "" && c.Audit.RetentionDays != 0 {
@@ -185,6 +203,161 @@ func semanticValidateSoul(c *SoulConfig, root *ast.MappingNode) []diag.Diagnosti
 	if c.PluginRuntime != nil {
 		out = append(out, checkDuration(root, "$.plugin_runtime.startup_timeout", c.PluginRuntime.StartupTimeout)...)
 		out = append(out, checkDuration(root, "$.plugin_runtime.shutdown_grace", c.PluginRuntime.ShutdownGrace)...)
+	}
+
+	return out
+}
+
+// checkAuthLDAP — semantic-проверки блока auth.ldap (ADR-058, search-bind).
+//
+// Безопасный периметр (ADR-058(g), «безопасность на первом месте»):
+//   - TLS обязателен: url начинается с `ldaps://` ЛИБО start_tls: true; иначе
+//     plaintext LDAP запрещён (ERROR) — пароли оператора не должны ходить
+//     открыто;
+//   - `ldaps://` и start_tls взаимоисключимы (ERROR) — StartTLS поверх уже
+//     зашифрованного канала бессмысленен и ошибочен;
+//   - bind_mode пуст или `search` (дефолт) ⇒ требует bind_dn+bind_password_ref;
+//   - vault-ref форма bind_password_ref и tls.ca_ref;
+//   - insecure_skip_verify: true → WARN (dev-only, не для прод).
+//
+// Резолв *_ref + сборка *tls.Config — на load-time в daemon (ADR-058(e),
+// стиль redis.password_ref); здесь только статическая форма/инварианты.
+func checkAuthLDAP(root *ast.MappingNode, l *KeeperAuthLDAP) []diag.Diagnostic {
+	var out []diag.Diagnostic
+
+	isLDAPS := strings.HasPrefix(l.URL, "ldaps://")
+	isPlainLDAP := strings.HasPrefix(l.URL, "ldap://")
+
+	// TLS-required: либо ldaps://, либо ldap://+start_tls.
+	if !isLDAPS && !(isPlainLDAP && l.StartTLS) {
+		out = append(out, atPath(root, "$.auth.ldap.url", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+			Code:    "ldap_plaintext_forbidden",
+			Message: fmt.Sprintf("plaintext LDAP forbidden: url %q must be ldaps:// or ldap:// with start_tls: true", l.URL),
+			Hint:    "use ldaps://host:636, or ldap://host:389 with start_tls: true",
+		}))
+	}
+
+	// ldaps:// и start_tls взаимоисключимы.
+	if isLDAPS && l.StartTLS {
+		out = append(out, atPath(root, "$.auth.ldap.start_tls", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+			Code:    "ldap_tls_conflict",
+			Message: "ldaps:// url and start_tls: true are mutually exclusive",
+			Hint:    "ldaps:// already encrypts the channel; drop start_tls",
+		}))
+	}
+
+	// bind_mode вне {"", "search"} → ERROR на load (а не runtime в ldap.New):
+	// стадия 1 ADR-058(c) поддерживает только search-bind; direct-bind отложен
+	// без breaking change. `user_dn_template` в конфиге остаётся как
+	// placeholder под будущий direct-режим, но НЕ активируется bind_mode-ом.
+	if l.BindMode != "" && l.BindMode != "search" {
+		out = append(out, atPath(root, "$.auth.ldap.bind_mode", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+			Code:    "ldap_bind_mode_unsupported",
+			Message: fmt.Sprintf("auth.ldap.bind_mode %q is unsupported: only \"search\" (or empty=default) is implemented in stage 1", l.BindMode),
+			Hint:    "set bind_mode: search (direct-bind is deferred)",
+		}))
+	}
+
+	// bind_mode пуст (=search дефолт) или search ⇒ service-account обязателен.
+	if l.BindMode == "" || l.BindMode == "search" {
+		if l.BindDN == "" {
+			out = append(out, atPath(root, "$.auth.ldap.bind_dn", diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+				Code:    "ldap_search_requires_bind_dn",
+				Message: "bind_mode=search requires bind_dn (service-account DN)",
+			}))
+		}
+		if l.BindPasswordRef == "" {
+			out = append(out, atPath(root, "$.auth.ldap.bind_password_ref", diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+				Code:    "ldap_search_requires_bind_password",
+				Message: "bind_mode=search requires bind_password_ref (vault-ref)",
+			}))
+		}
+	}
+
+	if l.BindPasswordRef != "" {
+		out = append(out, checkVaultRef(root, "$.auth.ldap.bind_password_ref", l.BindPasswordRef)...)
+	}
+	if l.TLS.CARef != "" {
+		out = append(out, checkVaultRef(root, "$.auth.ldap.tls.ca_ref", l.TLS.CARef)...)
+	}
+	out = append(out, checkDuration(root, "$.auth.ldap.timeout", l.Timeout)...)
+
+	if l.TLS.InsecureSkipVerify {
+		out = append(out, atPath(root, "$.auth.ldap.tls.insecure_skip_verify", diag.Diagnostic{
+			Level: diag.LevelWarning, Phase: diag.PhaseSemanticValidate,
+			Code:    "ldap_insecure_skip_verify",
+			Message: "auth.ldap.tls.insecure_skip_verify: true disables LDAPS certificate verification (dev-only)",
+			Hint:    "production must verify the server certificate; set a tls.ca_ref instead",
+		}))
+	}
+
+	return out
+}
+
+// checkAuthOIDC — semantic-проверки блока auth.oidc (ADR-058(b)/(e), стадия 2).
+//
+// Безопасный периметр (ADR-058(g), «безопасность на первом месте»):
+//   - issuer — только HTTPS (ERROR иначе): discovery/JWKS/token-exchange ходят
+//     к IdP, plaintext недопустим (MITM на id_token);
+//   - client_id и redirect_url обязательны (ERROR);
+//   - client_secret_ref (опц., public-client может не иметь) и tls.ca_ref —
+//     vault-ref формы.
+//
+// PKCE обязателен на уровне реализации (auth/oidc всегда шлёт S256-challenge),
+// поэтому config-флага use_pkce НЕТ — он не оставлен оператору на выбор
+// (ADR-058 развилка №6 разрешена в пользу «обязателен»).
+//
+// Резолв *_ref + discovery → auth/oidc.Config — load-time в daemon (setupOIDCAuth),
+// здесь только статическая форма/инварианты.
+func checkAuthOIDC(root *ast.MappingNode, o *KeeperAuthOIDC) []diag.Diagnostic {
+	var out []diag.Diagnostic
+
+	if !strings.HasPrefix(o.Issuer, "https://") {
+		out = append(out, atPath(root, "$.auth.oidc.issuer", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+			Code:    "oidc_issuer_not_https",
+			Message: fmt.Sprintf("auth.oidc.issuer %q must be https:// (OIDC discovery/JWKS over TLS)", o.Issuer),
+			Hint:    "use https://idp.example.com/realms/...",
+		}))
+	}
+	if o.ClientID == "" {
+		out = append(out, atPath(root, "$.auth.oidc.client_id", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+			Code:    "oidc_client_id_required",
+			Message: "auth.oidc.client_id is required",
+		}))
+	}
+	if o.RedirectURL == "" {
+		out = append(out, atPath(root, "$.auth.oidc.redirect_url", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+			Code:    "oidc_redirect_url_required",
+			Message: "auth.oidc.redirect_url is required (e.g. https://keeper.example.com/auth/oidc/callback)",
+		}))
+	}
+	if o.ClientSecretRef != "" {
+		out = append(out, checkVaultRef(root, "$.auth.oidc.client_secret_ref", o.ClientSecretRef)...)
+	}
+	if o.TLS.CARef != "" {
+		out = append(out, checkVaultRef(root, "$.auth.oidc.tls.ca_ref", o.TLS.CARef)...)
+	}
+
+	// aid_claim из user-mutable claim → identity-spoofing-риск (WARN). `sub`
+	// (дефолт, MED-фикс) — иммутабельный субъект IdP; email/preferred_username
+	// пользователь/админ IdP может переназначить, и тогда чужой человек,
+	// получив этот email/username у IdP, залогинится под существующим AID.
+	switch o.AIDClaim {
+	case "email", "preferred_username":
+		out = append(out, atPath(root, "$.auth.oidc.aid_claim", diag.Diagnostic{
+			Level: diag.LevelWarning, Phase: diag.PhaseSemanticValidate,
+			Code:    "oidc_aid_claim_mutable",
+			Message: fmt.Sprintf("auth.oidc.aid_claim=%q is user-mutable (identity-spoofing risk): a reassigned %s lets a different person log in as the same AID", o.AIDClaim, o.AIDClaim),
+			Hint:    "prefer the immutable subject identifier: aid_claim: sub (default)",
+		}))
 	}
 
 	return out

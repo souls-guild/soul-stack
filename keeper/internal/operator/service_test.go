@@ -185,9 +185,13 @@ func (p *svcPool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 		if op.RevokedAt != nil {
 			revoked = *op.RevokedAt
 		}
+		createdVia := op.CreatedVia
+		if createdVia == "" {
+			createdVia = CreatedViaUser
+		}
 		return staticRow{values: []any{
 			op.AID, op.DisplayName, string(op.AuthMethod), op.CreatedAt,
-			createdBy, revoked, []byte("{}"),
+			createdBy, createdVia, revoked, []byte("{}"),
 		}}
 	}
 	return errRow{err: errors.New("svcPool.QueryRow: unexpected SQL: " + sql)}

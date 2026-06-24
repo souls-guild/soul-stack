@@ -25,6 +25,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 	"github.com/souls-guild/soul-stack/keeper/internal/api/health"
+	apimiddleware "github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
 	keeperjwt "github.com/souls-guild/soul-stack/keeper/internal/jwt"
 )
 
@@ -72,7 +73,7 @@ func metaRouter(t *testing.T, verifier *keeperjwt.Verifier) http.Handler {
 		handlers.NewIncarnationHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil),
 		handlers.NewSoulHandler(nil, nil, nil, nil),
 		stubRoleHandler(t), stubSynodHandler(t), stubSigilHandler(t), stubSigilKeyHandler(t),
-		stubServiceHandler(t), stubAugurHandler(t), stubOracleHandler(t),
+		stubServiceHandler(t), nil, stubAugurHandler(t), stubOracleHandler(t),
 		nil, // pushH
 		nil, // pushProviderH
 		nil, // errandH
@@ -95,7 +96,11 @@ func metaRouter(t *testing.T, verifier *keeperjwt.Verifier) http.Handler {
 		nil,   // tempoVoyageCreateLimits
 		nil,   // tempoVoyagePreviewLimits
 		false, // webUIEnabled — meta-тесты /ui не проверяют (guard в webui_routes_test.go)
-		nil,   // logger
+		nil,   // ldapAuth (LDAP не сконфигурирован в тесте)
+		nil,   // oidcAuth (OIDC не сконфигурирован в тесте)
+		nil,                                  // loginGuard (anti-bruteforce off в тесте)
+		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
+		nil,                                  // logger
 	)
 }
 

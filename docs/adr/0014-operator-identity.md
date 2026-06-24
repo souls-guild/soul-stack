@@ -83,3 +83,15 @@ RBAC-снимка (B2, `rbac:invalidate`, [ADR-028(d)](0028-rbac-storage.md#adr-
 
 **JWT TTL остаётся defense-in-depth.** Рекомендация — снизить default
 `auth.jwt.ttl_default` до 1h на проде.
+
+**Amendment 2026-06-23: поле `operators.created_via` + перенос bootstrap-инварианта + расширение `auth_method` enum.**
+
+Под модель провижининга операторов ([ADR-058](0058-operator-auth-ldap-oidc.md#adr-058-федеративная-аутентификация-операторов-archon--ldap--oauth2oidc)):
+
+- **`auth_method` enum расширен (only-add)** значениями `ldap` / `oidc` (SQL CHECK `auth_method_valid`, миграция 083) — оператор, заведённый федеративным способом, фиксирует им свой способ логина; внутренний JWT после выпуска одинаков (форма (a)/(b) выше неизменна). Это additive-расширение в духе уже заявленных в (a) `mtls`/`combined`. **Security-инвариант (CRIT-fix 2026-06-24, ADR-058(d)):** federated-login обслуживает ТОЛЬКО операторов с совпадающим `auth_method` — bootstrap/system (`jwt`), mTLS и оператор другого federated-метода НЕ присваиваются совпавшим derived-AID (anti account-takeover).
+
+Реестр `operators` получает новое поле:
+
+- **`created_via`** — TEXT NOT NULL DEFAULT `'user'`, домен `{bootstrap, user, ldap, oidc, system}` (CHECK `created_via_valid`). Семантика — **«откуда заведён оператор»**, ортогонально `auth_method` (**«чем оператор логинится»**). Примеры: bootstrap-Архонт (`keeper init`) → `created_via='bootstrap'`, `auth_method='jwt'`; оператор через `POST /v1/operators` → `'user'`; LDAP auto-provision → `'ldap'`; системный `archon-system` → `'system'`. DEFAULT `'user'` — безопасный fallback для строк, заведённых через Operator API. Введено миграцией **084** (ADD COLUMN + CHECK + reconcile существующих: `created_by_aid IS NULL → 'bootstrap'`, `aid='archon-system' → 'system'`).
+
+- **Bootstrap-инвариант перенесён на `created_via`.** Прежняя формулировка (`(c)` / Trade-offs выше) — «ровно одна запись с `created_by_aid IS NULL`», гарантированная partial unique index `operators_first_archon_idx` `WHERE created_by_aid IS NULL`. Теперь инвариант звучит как **«ровно один оператор с `created_via='bootstrap'`»**, индекс перенесён на `WHERE created_via='bootstrap'` (миграция **085**). Следствие: federated-операторы (`created_via='ldap'/'oidc'`) и системные (`created_via='system'`) ставят **`created_by_aid=NULL` легально** — раньше это ломало bootstrap-индекс на втором таком операторе. CHECK `self_reference_ok` (`created_by_aid != aid`) **остаётся** без изменений. Где выше в этом ADR сказано «`created_by_aid IS NULL` только у первого Архонта» — теперь читается как «`created_via='bootstrap'` только у первого Архонта».

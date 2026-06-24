@@ -26,6 +26,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
+	apimiddleware "github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
 	"github.com/souls-guild/soul-stack/keeper/internal/augur"
 	"github.com/souls-guild/soul-stack/keeper/internal/oracle"
 	"github.com/souls-guild/soul-stack/keeper/internal/pluginhost"
@@ -100,6 +101,17 @@ var pathAllowlist = map[route]string{
 	// и `POST /v1/push/apply` уже в allowlist выше.
 	{method: http.MethodGet, path: "/v1/push-runs"}: "UI-4 Push-runs global list: роут подключён ТОЛЬКО при non-nil pushH",
 
+	// auth.ldap login: роут подключён ТОЛЬКО при non-nil LDAPAuth (ADR-058);
+	// drift-test собирает router с LDAPAuth=nil → объявлен в спеке (prefix /auth),
+	// но в роутере отсутствует. ВНЕ /v1 (публичный вход, RequireJWT неприменим).
+	{method: http.MethodPost, path: "/auth/ldap/login"}: "ADR-058 LDAP login: роут подключён ТОЛЬКО при non-nil LDAPAuth (опц. блок auth.ldap в keeper.yml)",
+
+	// auth.oidc эндпоинты (ADR-058 стадия 2): подключены ТОЛЬКО при non-nil
+	// OIDCAuth (опц. блок auth.oidc + Redis); drift-test собирает router с
+	// OIDCAuth=nil → в спеке объявлены (prefix /auth), в роутере отсутствуют.
+	{method: http.MethodGet, path: "/auth/oidc/login"}:    "ADR-058 OIDC login: роут подключён ТОЛЬКО при non-nil OIDCAuth (опц. блок auth.oidc + Redis)",
+	{method: http.MethodGet, path: "/auth/oidc/callback"}: "ADR-058 OIDC callback: роут подключён ТОЛЬКО при non-nil OIDCAuth (опц. блок auth.oidc + Redis)",
+
 	// voyage.*-роуты подключаются ТОЛЬКО при non-nil voyageH (ADR-043 S5);
 	// drift-test собирает router с voyageH=nil, поэтому в спеке объявлены, но в
 	// роутере отсутствуют — документированный «opt-in»-блок (паттерн
@@ -167,6 +179,7 @@ func collectRoutes(t *testing.T) map[route]struct{} {
 		stubSigilHandler(t),
 		stubSigilKeyHandler(t),
 		stubServiceHandler(t),
+		stubProvisioningPolicyHandler(t),
 		stubAugurHandler(t),
 		stubOracleHandler(t),
 		nil, // pushH — push.*-роуты подключаются только при non-nil pushH (router.go); сейчас в allowlist
@@ -191,7 +204,11 @@ func collectRoutes(t *testing.T) map[route]struct{} {
 		nil,   // tempoVoyageCreateLimits — nil допустим (RateLimit при nil-limiter не вызывает provider)
 		nil,   // tempoVoyagePreviewLimits — nil допустим (RateLimit при nil-limiter не вызывает provider)
 		false, // webUIEnabled — /ui вне /v1, drift-walker его не видит; держим выключенным для чистоты периметра
-		nil,   // logger — допустим nil (handler-ы получают io.Discard внутри)
+		nil,   // ldapAuth (LDAP не сконфигурирован в тесте)
+		nil,   // oidcAuth (OIDC не сконфигурирован в тесте)
+		nil,                                  // loginGuard (anti-bruteforce off в тесте)
+		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
+		nil,                                  // logger — допустим nil (handler-ы получают io.Discard внутри)
 	)
 
 	routes, ok := h.(chi.Routes)
@@ -304,6 +321,23 @@ func stubServiceHandler(t *testing.T) *handlers.ServiceHandler {
 }
 
 type stubServicePool struct{ serviceregistry.ServicePool }
+
+// stubProvisioningPolicyHandler собирает ProvisioningPolicyHandler через
+// serviceregistry.Service со stub-pool + stub-reader. Методы при обходе дерева не
+// вызываются — нужен лишь non-nil handler, чтобы provisioning-policy-роуты
+// зарегистрировались (drift роутер↔full-spec). ADR-058 Часть B.
+func stubProvisioningPolicyHandler(t *testing.T) *handlers.ProvisioningPolicyHandler {
+	t.Helper()
+	svc, err := serviceregistry.NewService(serviceregistry.ServiceDeps{Pool: stubServicePool{}})
+	if err != nil {
+		t.Fatalf("serviceregistry.NewService(stub): %v", err)
+	}
+	return handlers.NewProvisioningPolicyHandler(stubProvisioningReader{}, svc, nil)
+}
+
+type stubProvisioningReader struct{}
+
+func (stubProvisioningReader) ProvisioningPolicy() ([]string, bool) { return nil, false }
 
 // stubAugurHandler собирает AugurHandler через augur.Service со stub-pool.
 // Методы pool при обходе дерева не вызываются — нужен лишь non-nil service,

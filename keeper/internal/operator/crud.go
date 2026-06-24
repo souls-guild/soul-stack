@@ -13,7 +13,8 @@ import (
 
 // ErrOperatorAlreadyExists — UNIQUE-violation (`23505`) при Insert: AID
 // уже занят либо повторно вставляется bootstrap (partial unique index
-// `operators_first_archon_idx` на `created_by_aid IS NULL`).
+// `operators_first_archon_idx WHERE created_via='bootstrap'` — миграции
+// 084/085, ADR-058(d): инвариант перенесён с `created_by_aid IS NULL`).
 var ErrOperatorAlreadyExists = errors.New("operator: AID already exists")
 
 // ErrOperatorNotFound — SELECT не нашёл строку по AID. Возвращается
@@ -72,13 +73,13 @@ var (
 // DEFAULT NOW(), если caller не задал значение — поведение симметрично
 // audit_log в `keeper/internal/auditpg`.
 const insertOperatorSQL = `
-INSERT INTO operators (aid, display_name, auth_method, created_at, created_by_aid, revoked_at, metadata)
-VALUES ($1, $2, $3, COALESCE($4, NOW()), $5, $6, $7)
+INSERT INTO operators (aid, display_name, auth_method, created_at, created_by_aid, created_via, revoked_at, metadata)
+VALUES ($1, $2, $3, COALESCE($4, NOW()), $5, $6, $7, $8)
 `
 
 // selectOperatorByAIDSQL — SELECT всех колонок operators по PK.
 const selectOperatorByAIDSQL = `
-SELECT aid, display_name, auth_method, created_at, created_by_aid, revoked_at, metadata
+SELECT aid, display_name, auth_method, created_at, created_by_aid, created_via, revoked_at, metadata
 FROM operators
 WHERE aid = $1
 `
@@ -101,12 +102,14 @@ type ListFilter struct {
 //
 // Pre-conditions:
 //   - op.AID соответствует [AIDPattern] (валидируется до round-trip).
-//   - op.AuthMethod — один из MVP-enum-ов (jwt / mtls / combined).
+//   - op.AuthMethod — один из enum-ов (jwt / mtls / combined / ldap / oidc;
+//     ldap/oidc — федеративная аутентификация, ADR-058).
 //   - op.DisplayName — непустой (NOT NULL без DEFAULT в схеме).
 //
 // Возврат:
 //   - [ErrOperatorAlreadyExists] на UNIQUE-violation (PK или
-//     partial unique index `operators_first_archon_idx`).
+//     partial unique index `operators_first_archon_idx WHERE
+//     created_via='bootstrap'` — миграции 084/085, ADR-058(d)).
 //   - wrapped fmt.Errorf на FK-violation (`created_by_aid` ссылается на
 //     несуществующий AID) с упоминанием SQLSTATE — caller может
 //     различить случай через сообщение.
@@ -122,9 +125,24 @@ func Insert(ctx context.Context, db execQueryRower, op *Operator) error {
 		return fmt.Errorf("operator: display_name is empty")
 	}
 	switch op.AuthMethod {
-	case AuthMethodJWT, AuthMethodMTLS, AuthMethodCombined:
+	case AuthMethodJWT, AuthMethodMTLS, AuthMethodCombined, AuthMethodLDAP, AuthMethodOIDC:
 	default:
 		return fmt.Errorf("operator: invalid auth_method %q", op.AuthMethod)
+	}
+
+	// created_via по умолчанию 'user' (ADR-058(d)): Operator API
+	// (Service.Create) и legacy-вызовы не задают поле — оператор, заведённый
+	// через POST /v1/operators, по определению user. Bootstrap/system/ldap/oidc
+	// проставляют значение явно. Дефолт ставится здесь (а не COALESCE в SQL),
+	// чтобы прикладная валидация ниже всегда видела канонизированное значение.
+	createdVia := op.CreatedVia
+	if createdVia == "" {
+		createdVia = CreatedViaUser
+	}
+	switch createdVia {
+	case CreatedViaBootstrap, CreatedViaUser, CreatedViaLDAP, CreatedViaOIDC, CreatedViaSystem:
+	default:
+		return fmt.Errorf("operator: invalid created_via %q", createdVia)
 	}
 
 	metadataBytes, err := marshalMetadata(op.Metadata)
@@ -153,6 +171,7 @@ func Insert(ctx context.Context, db execQueryRower, op *Operator) error {
 		string(op.AuthMethod),
 		createdAt,
 		createdByAID,
+		createdVia,
 		revokedAt,
 		metadataBytes,
 	)
@@ -203,6 +222,7 @@ func scanOperator(row pgx.Row) (*Operator, error) {
 		&authMethodStr,
 		&op.CreatedAt,
 		&createdByAID,
+		&op.CreatedVia,
 		&op.RevokedAt,
 		&metadataBytes,
 	)
@@ -247,7 +267,7 @@ func List(ctx context.Context, db execQueryRower, f ListFilter, offset, limit in
 		return nil, 0, fmt.Errorf("operator: list count: %w", err)
 	}
 
-	selectSQL := `SELECT aid, display_name, auth_method, created_at, created_by_aid, revoked_at, metadata
+	selectSQL := `SELECT aid, display_name, auth_method, created_at, created_by_aid, created_via, revoked_at, metadata
 FROM operators` + whereSQL + `
 ORDER BY created_at DESC
 LIMIT $` + intToString(len(args)+1) + ` OFFSET $` + intToString(len(args)+2)

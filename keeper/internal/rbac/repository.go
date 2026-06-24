@@ -451,6 +451,40 @@ func GrantOperator(ctx context.Context, db ExecQueryRower, roleName, aid string,
 	return nil
 }
 
+// selectDirectRolesOfSQL — имена ПРЯМЫХ membership-ролей одного AID
+// (rbac_role_operators). НЕ включает роли через Synod (ADR-049) — federated-
+// реконсиляция (HIGH-1, ADR-058(d)) реконсилирует только прямой membership,
+// управляемый group_role_map, и не должна трогать Synod-выданные роли.
+const selectDirectRolesOfSQL = `SELECT role_name FROM rbac_role_operators WHERE aid = $1`
+
+// DirectRolesOf возвращает имена ролей, привязанных к AID ПРЯМОЙ membership-
+// строкой rbac_role_operators (без Synod-разворота). Используется federated-
+// реконсиляцией (auth/mapper.go, HIGH-1) для вычисления роли, которые надо
+// снять, когда внешние группы пользователя изменились.
+//
+// db может быть pool ИЛИ tx (pgx.Tx удовлетворяет ExecQueryRower) — caller
+// читает текущий membership и пишет grant/revoke в ОДНОЙ транзакции.
+func DirectRolesOf(ctx context.Context, db ExecQueryRower, aid string) ([]string, error) {
+	rows, err := db.Query(ctx, selectDirectRolesOfSQL, aid)
+	if err != nil {
+		return nil, fmt.Errorf("rbac: select direct roles of %q: %w", aid, wrapPgErr(err))
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("rbac: scan direct role of %q: %w", aid, err)
+		}
+		out = append(out, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rbac: iterate direct roles of %q: %w", aid, err)
+	}
+	return out, nil
+}
+
 // wrapPgErr добавляет SQLSTATE в сообщение, если ошибка — pgconn.PgError.
 // Это упрощает диагностику «таблица rbac_* не существует» (миграция не
 // применена) от транспортных сбоев.

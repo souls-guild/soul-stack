@@ -172,6 +172,12 @@ func fullSpecGroups() []specGroup {
 			registerHumaServiceDependencies(api, stub)
 			return nil
 		}},
+		{"/v1/provisioning-policy", func(api huma.API) error {
+			stub := handlers.ProvisioningPolicySpecStub()
+			registerHumaProvisioningPolicyGet(api, stub)
+			registerHumaProvisioningPolicyPut(api, stub)
+			return nil
+		}},
 		{"/v1/modules", func(api huma.API) error {
 			stub := handlers.ModuleCatalogSpecStub()
 			registerHumaModuleList(api, stub)
@@ -279,6 +285,21 @@ func fullSpecGroups() []specGroup {
 		// /push-runs в Operation, отдельная группа от /v1/push apply/get.
 		{"/v1", func(api huma.API) error {
 			registerHumaPushRunsList(api, handlers.PushSpecStub())
+			return nil
+		}},
+
+		// auth.* — федеративная аутентификация ВНЕ /v1 (ADR-058): группа на
+		// r.Route("/auth"), Operation.Path относителен (/ldap/login) → полный URL
+		// /auth/ldap/login. prefix "/auth", чтобы попасть в committed openapi.yaml.
+		{"/auth", func(api huma.API) error {
+			registerHumaLDAPLogin(api, ldapAuthSpecStub())
+			return nil
+		}},
+		// OIDC-эндпоинты (ADR-058 стадия 2): /auth/oidc/{login,callback}. Отдельная
+		// группа от LDAP, чтобы huma-API не делила операции — каждый домен дампит
+		// свои пути (LDAP-POST и OIDC-GET не пересекаются по path).
+		{"/auth", func(api huma.API) error {
+			registerHumaOIDCLogin(api, oidcAuthSpecStub())
 			return nil
 		}},
 	}

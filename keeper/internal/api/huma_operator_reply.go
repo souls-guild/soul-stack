@@ -42,13 +42,17 @@ type OperatorCreateReply struct {
 // Operator — native тело GET /v1/operators/{aid} (и element list-envelope). Форма 1:1
 // с прежним wire: auth_method — native enum OperatorAuthMethod (schema `type: string`);
 // created_by_aid/metadata/revoked_at — С omitempty (nil → ключ опущен). created_at —
-// наносекундный time-wire.
+// наносекундный time-wire. created_via — ВСЕГДА присутствует (NOT NULL DEFAULT 'user'
+// в схеме, ADR-058(d)); плоская string с enum-тегом (домен совпадает с SQL CHECK
+// `created_via_valid` и доменными константами operator.CreatedVia*) — для клиент-
+// кодогена, БЕЗ named-типа (отличает источник заведения от auth_method).
 type Operator struct {
 	AID              string                  `json:"aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
 	AuthMethod       OperatorAuthMethod      `json:"auth_method"`
 	BootstrapInitial bool                    `json:"bootstrap_initial"`
 	CreatedAt        time.Time               `json:"created_at"`
 	CreatedByAID     *string                 `json:"created_by_aid,omitempty" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
+	CreatedVia       string                  `json:"created_via" enum:"bootstrap,user,ldap,oidc,system"`
 	DisplayName      string                  `json:"display_name"`
 	Metadata         *map[string]interface{} `json:"metadata,omitempty"`
 	RevokedAt        *time.Time              `json:"revoked_at,omitempty"`

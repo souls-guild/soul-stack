@@ -107,6 +107,7 @@ func TestIntegration_Insert_Bootstrap_AndSelect(t *testing.T) {
 		AID:         "archon-alice",
 		DisplayName: "Alice Admin",
 		AuthMethod:  AuthMethodJWT,
+		CreatedVia:  CreatedViaBootstrap,
 	}
 	if err := Insert(ctx, integrationPool, op); err != nil {
 		t.Fatalf("Insert: %v", err)
@@ -125,8 +126,13 @@ func TestIntegration_Insert_Bootstrap_AndSelect(t *testing.T) {
 	if got.AuthMethod != AuthMethodJWT {
 		t.Errorf("AuthMethod = %q", got.AuthMethod)
 	}
+	// Bootstrap-оператор определяется через created_via='bootstrap'
+	// (ADR-058(d) / ADR-013-amendment), а не через created_by_aid IS NULL.
+	if got.CreatedVia != CreatedViaBootstrap {
+		t.Errorf("CreatedVia = %q, want %q (bootstrap)", got.CreatedVia, CreatedViaBootstrap)
+	}
 	if got.CreatedByAID != nil {
-		t.Errorf("CreatedByAID = %v, want nil (bootstrap)", got.CreatedByAID)
+		t.Errorf("CreatedByAID = %v, want nil", got.CreatedByAID)
 	}
 	if got.RevokedAt != nil {
 		t.Errorf("RevokedAt = %v, want nil", got.RevokedAt)
@@ -152,17 +158,20 @@ func TestIntegration_Insert_DuplicateAID(t *testing.T) {
 
 func TestIntegration_Insert_SecondBootstrapBlocked(t *testing.T) {
 	// Партиальный unique index `operators_first_archon_idx` запрещает
-	// второго bootstrap-оператора (AID разный, но created_by_aid IS NULL).
+	// второго оператора с `created_via='bootstrap'` (миграции 084/085,
+	// ADR-058(d) / ADR-013-amendment). Инвариант перенесён с
+	// `created_by_aid IS NULL` на `created_via='bootstrap'`: оба оператора
+	// должны быть явно помечены bootstrap, иначе индекс не задействуется.
 	resetOperators(t)
 	ctx := context.Background()
 
 	if err := Insert(ctx, integrationPool,
-		&Operator{AID: "archon-alice", DisplayName: "Alice", AuthMethod: AuthMethodJWT},
+		&Operator{AID: "archon-alice", DisplayName: "Alice", AuthMethod: AuthMethodJWT, CreatedVia: CreatedViaBootstrap},
 	); err != nil {
 		t.Fatalf("Insert#1: %v", err)
 	}
 	err := Insert(ctx, integrationPool,
-		&Operator{AID: "archon-charlie", DisplayName: "Charlie", AuthMethod: AuthMethodJWT},
+		&Operator{AID: "archon-charlie", DisplayName: "Charlie", AuthMethod: AuthMethodJWT, CreatedVia: CreatedViaBootstrap},
 	)
 	if !errors.Is(err, ErrOperatorAlreadyExists) {
 		t.Fatalf("Insert#2 bootstrap: err = %v, want ErrOperatorAlreadyExists", err)

@@ -3,6 +3,7 @@ package serviceregistry
 import (
 	"context"
 	"log/slog"
+	"sort"
 	"sync/atomic"
 	"time"
 )
@@ -46,6 +47,14 @@ type Snapshot struct {
 	// defaultDestinySource — скаляр keeper_settings[default_destiny_source];
 	// "" = настройка не задана (строки в keeper_settings нет).
 	defaultDestinySource string
+
+	// provisioningMethods — политика provisioning_allowed_methods (set
+	// разрешённых created_via-методов СОЗДАНИЯ оператора). nil-map =
+	// настройка НЕ задана (ключа в keeper_settings нет) → всё разрешено
+	// (back-compat). non-nil = политика задана, разрешены ровно эти методы.
+	// Битый-непустой ключ Load НЕ публикует (возвращает ошибку), поэтому
+	// non-nil здесь всегда непустой набор из домена {user,ldap,oidc}.
+	provisioningMethods map[string]bool
 }
 
 // PoolSource — [SnapshotSource] поверх pgx-pool (реальный источник в `keeper
@@ -73,10 +82,37 @@ func (s PoolSource) Load(ctx context.Context) (*Snapshot, error) {
 		return nil, err
 	}
 
+	// provisioning_allowed_methods: ErrSettingNotFound → политика не задана
+	// (nil-map, всё разрешено, back-compat). Найден → парсим: битый/пустой
+	// (ErrEmptyProvisioningMethods / ErrInvalidProvisioningMethod) пробрасываем,
+	// чтобы Holder НЕ опубликовал битый снимок (на старте NewHolder → fatal —
+	// anti-lockout «не стартуем с битой политикой»; в runtime недостижимо, т.к.
+	// PUT валидирует ДО записи, см. ProvisioningPolicyHandler).
+	provMethods, err := loadProvisioningMethods(ctx, s.DB)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Snapshot{
 		services:             services,
 		defaultDestinySource: dds,
+		provisioningMethods:  provMethods,
 	}, nil
+}
+
+// loadProvisioningMethods читает и парсит политику provisioning_allowed_methods.
+// ErrSettingNotFound → (nil, nil) (политика не задана, всё разрешено); найден →
+// [ParseProvisioningMethods] (битый/пустой → ошибка), прочие ошибки БД —
+// пробрасываются.
+func loadProvisioningMethods(ctx context.Context, db ExecQueryRower) (map[string]bool, error) {
+	set, err := GetSetting(ctx, db, SettingProvisioningAllowedMethods)
+	if err != nil {
+		if isSettingNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return ParseProvisioningMethods(set.Value)
 }
 
 // loadSettingValue читает значение настройки по ключу; ErrSettingNotFound →
@@ -285,4 +321,48 @@ func (h *Holder) Resolve(name string) (ServiceEntry, bool) {
 // из текущего снимка; "" = настройка не задана. Геттер СИНХРОННЫЙ.
 func (h *Holder) DefaultDestinySource() string {
 	return h.current().defaultDestinySource
+}
+
+// ProvisioningMethodAllowed — разрешено ли СОЗДАВАТЬ оператора методом method
+// текущей политикой provisioning_allowed_methods. Геттер СИНХРОННЫЙ
+// (atomic-снимок без блокировки). Семантика:
+//   - bootstrap/system → ВСЕГДА true (не гейтятся политикой никогда: bootstrap
+//     первого Архонта через `keeper init`, system — внутренние записи);
+//   - политика не задана (nil-map, ключа в keeper_settings нет) → true (дефолт
+//     «всё разрешено», back-compat);
+//   - политика задана → method ∈ set.
+//
+// nil-получатель (gate не сконфигурирован / тесты) — true (back-compat,
+// gate==nil трактуется вызывающим как «пропускать»).
+func (h *Holder) ProvisioningMethodAllowed(method string) bool {
+	if method == "bootstrap" || method == "system" {
+		return true
+	}
+	if h == nil {
+		return true
+	}
+	methods := h.current().provisioningMethods
+	if methods == nil {
+		return true
+	}
+	return methods[method]
+}
+
+// ProvisioningPolicy возвращает текущую политику для GET-эндпоинта: отсортированный
+// список разрешённых методов и флаг set (задана ли политика). set=false → политика
+// не задана (дефолт «всё разрешено»), methods=nil. Геттер СИНХРОННЫЙ.
+func (h *Holder) ProvisioningPolicy() (methods []string, set bool) {
+	if h == nil {
+		return nil, false
+	}
+	m := h.current().provisioningMethods
+	if m == nil {
+		return nil, false
+	}
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out, true
 }

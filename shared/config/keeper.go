@@ -879,10 +879,116 @@ func (a KeeperVaultAuth) ResolvedAuthMethod() string {
 	return a.Method
 }
 
-// KeeperAuth — JWT-аутентификация операторов (ADR-014).
+// KeeperAuth — аутентификация операторов (Archon).
 // У Soul блока `auth:` нет — Soul аутентифицируется через mTLS / SoulSeed.
+//
+// `jwt` — внутренний JWT-issuer (ADR-014), действующая часть.
+//
+// `ldap` — федеративная LDAP-аутентификация (ADR-058, стадия 1 реализована:
+// semantic-валидация + резолв в auth/ldap.Config + endpoint /auth/ldap/login).
+// `oidc` — федеративная OAuth2/OIDC-аутентификация (ADR-058 стадия 2 реализована:
+// semantic-валидация + discovery + резолв в auth/oidc.Config + эндпоинты
+// /auth/oidc/{login,callback}; PKCE always-on; требует Redis).
+// Оба блока опциональны: не заданы → способ логина недоступен, Keeper стартует
+// (ADR-053 OPTIONAL-tier). Secret-поля — через `*_ref`
+// (`vault:<mount>/<path>[#field]`, резолв load-time как `redis.password_ref`).
 type KeeperAuth struct {
-	JWT *KeeperAuthJWT `yaml:"jwt,omitempty"`
+	JWT  *KeeperAuthJWT  `yaml:"jwt,omitempty"`
+	LDAP *KeeperAuthLDAP `yaml:"ldap,omitempty"` // ADR-058 стадия 1
+	OIDC *KeeperAuthOIDC `yaml:"oidc,omitempty"` // ADR-058 стадия 2
+
+	// RateLimit — anti-bruteforce публичных login-эндпоинтов (ADR-058(g),
+	// HIGH-3). Per-IP + per-username троттл частоты попыток + lockout после серии
+	// неудач. Опционально: nil/опущено → дефолты [DefaultAuthLoginRL*]
+	// (default-ON, footgun-guard как Tempo/Toll). Фактически поднимается только
+	// при наличии Redis (limiter cluster-shared, gate в daemon); без Redis —
+	// login-эндпоинты деградируют без throttle (как Tempo passthrough), что
+	// согласуется с тем, что OIDC и так требует Redis. Hot-reloadable.
+	RateLimit *KeeperAuthLoginRateLimit `yaml:"rate_limit,omitempty"`
+}
+
+// Дефолты anti-bruteforce login-лимита (ADR-058(g), HIGH-3). Подобраны под
+// «человек со сбитым паролем не упрётся, брутфорс/перебор username режется».
+const (
+	// DefaultAuthLoginRLRate — refill-скорость троттла попыток (попыток/сек) на
+	// один принципал (IP или username). 0.5 rps = в среднем попытка раз в 2с.
+	DefaultAuthLoginRLRate = 0.5
+
+	// DefaultAuthLoginRLBurst — глубина бакета попыток (одномоментная пачка).
+	DefaultAuthLoginRLBurst = 10
+
+	// DefaultAuthLoginLockoutThreshold — число подряд неудачных логинов в окне,
+	// после которого принципал блокируется.
+	DefaultAuthLoginLockoutThreshold = 5
+
+	// DefaultAuthLoginLockoutWindow — окно подсчёта неудач (скользящее по TTL).
+	DefaultAuthLoginLockoutWindow = 15 * time.Minute
+
+	// DefaultAuthLoginLockoutBackoff — длительность блокировки после достижения
+	// порога неудач.
+	DefaultAuthLoginLockoutBackoff = 15 * time.Minute
+)
+
+// KeeperAuthLoginRateLimit — настройки anti-bruteforce login-эндпоинтов
+// (ADR-058(g), HIGH-3). Все поля опциональны, опущенные/нулевые → [Default*].
+type KeeperAuthLoginRateLimit struct {
+	// Enabled — флаг включения. nil/опущено → true (default-ON, footgun-guard).
+	// Явный `false` — opt-out (dev). Фактический подъём требует Redis (daemon).
+	Enabled *bool `yaml:"enabled,omitempty"`
+
+	// Rate / Burst — троттл частоты ПОПЫТОК на принципал (token-bucket).
+	Rate  float64 `yaml:"rate,omitempty"`
+	Burst int     `yaml:"burst,omitempty"`
+
+	// LockoutThreshold — число неудач в окне до блокировки.
+	LockoutThreshold int `yaml:"lockout_threshold,omitempty"`
+
+	// LockoutWindow / LockoutBackoff — окно счёта неудач и длительность блока
+	// (duration-convention: Go-duration или `<N>d`).
+	LockoutWindow  string `yaml:"lockout_window,omitempty"`
+	LockoutBackoff string `yaml:"lockout_backoff,omitempty"`
+}
+
+// LoginRateLimitEnabled — эффективный флаг (nil-блок/nil-поле → true).
+func (a *KeeperAuth) LoginRateLimitEnabled() bool {
+	if a == nil || a.RateLimit == nil || a.RateLimit.Enabled == nil {
+		return true
+	}
+	return *a.RateLimit.Enabled
+}
+
+// ResolvedLoginRateLimit возвращает эффективные параметры throttle+lockout:
+// опущенные/нулевые поля → [DefaultAuthLogin*]. Duration-поля парсятся; невалид
+// (не должен дойти — semantic-валидация) → дефолт. Чистый резолв для
+// daemon-wiring (читается один раз на сборке middleware, не hot-path).
+func (a *KeeperAuth) ResolvedLoginRateLimit() (rate float64, burst, threshold int, window, backoff time.Duration) {
+	rate, burst = DefaultAuthLoginRLRate, DefaultAuthLoginRLBurst
+	threshold = DefaultAuthLoginLockoutThreshold
+	window, backoff = DefaultAuthLoginLockoutWindow, DefaultAuthLoginLockoutBackoff
+	if a == nil || a.RateLimit == nil {
+		return rate, burst, threshold, window, backoff
+	}
+	rl := a.RateLimit
+	if rl.Rate > 0 {
+		rate = rl.Rate
+	}
+	if rl.Burst > 0 {
+		burst = rl.Burst
+	}
+	if rl.LockoutThreshold > 0 {
+		threshold = rl.LockoutThreshold
+	}
+	if rl.LockoutWindow != "" {
+		if d, err := ParseDuration(rl.LockoutWindow); err == nil && d > 0 {
+			window = d
+		}
+	}
+	if rl.LockoutBackoff != "" {
+		if d, err := ParseDuration(rl.LockoutBackoff); err == nil && d > 0 {
+			backoff = d
+		}
+	}
+	return rate, burst, threshold, window, backoff
 }
 
 type KeeperAuthJWT struct {
@@ -890,6 +996,66 @@ type KeeperAuthJWT struct {
 	Issuer        string `yaml:"issuer,omitempty"`
 	TTLDefault    string `yaml:"ttl_default,omitempty"`
 	TTLBootstrap  string `yaml:"ttl_bootstrap,omitempty"`
+}
+
+// KeeperAuthLDAP — конфиг LDAP-аутентификации (ADR-058(c)/(e), стадия 1
+// реализована). TLS обязателен: `ldaps://` ЛИБО `ldap://` + `start_tls: true`.
+// Секреты — `bind_password_ref` (Vault). `tls.ca_ref` — опц. CA-bundle для LDAPS.
+//
+// Semantic-валидация (semantic.go::checkAuthLDAP): ldaps-vs-start_tls взаимоискл.,
+// bind_mode=search ⇒ bind_dn+bind_password_ref, TLS-required, insecure_skip_verify
+// → WARN. Резолв *_ref + ca_ref → auth/ldap.Config — load-time в daemon
+// (setupLDAPAuth). bind_mode=direct (поле user_dn_template) отложен (стадия 1 —
+// только search).
+type KeeperAuthLDAP struct {
+	URL             string              `yaml:"url"`                         // ldaps://host:636 | ldap://host:389
+	StartTLS        bool                `yaml:"start_tls,omitempty"`         // StartTLS поверх ldap://
+	TLS             KeeperAuthLDAPTLS   `yaml:"tls,omitempty"`               //
+	BindMode        string              `yaml:"bind_mode,omitempty"`         // search | direct
+	BindDN          string              `yaml:"bind_dn,omitempty"`           // service-account DN (search)
+	BindPasswordRef string              `yaml:"bind_password_ref,omitempty"` // vault-ref (search)
+	BaseDN          string              `yaml:"base_dn,omitempty"`           //
+	UserFilter      string              `yaml:"user_filter,omitempty"`       // (uid=%s)
+	UserDNTemplate  string              `yaml:"user_dn_template,omitempty"`  // uid=%s,ou=people,... (direct)
+	GroupFilter     string              `yaml:"group_filter,omitempty"`      // (member=%s)
+	GroupAttr       string              `yaml:"group_attr,omitempty"`        // cn
+	AIDAttr         string              `yaml:"aid_attr,omitempty"`          // uid | mail → AID
+	Timeout         string              `yaml:"timeout,omitempty"`           // duration
+	GroupRoleMap    map[string][]string `yaml:"group_role_map,omitempty"`    // внешняя группа → RBAC-роли
+}
+
+type KeeperAuthLDAPTLS struct {
+	CARef              string `yaml:"ca_ref,omitempty"`               // vault-ref CA-bundle
+	InsecureSkipVerify bool   `yaml:"insecure_skip_verify,omitempty"` // dev-only (WARN)
+}
+
+// KeeperAuthOIDC — конфиг OIDC-аутентификации (ADR-058(b)/(e), стадия 2
+// реализована). `issuer` — только HTTPS (discovery base). Секрет —
+// `client_secret_ref` (Vault, опц. для public-client). `tls.ca_ref` — опц.
+// кастомный CA IdP.
+//
+// PKCE (S256) — всегда включён реализацией (auth/oidc), оператору НЕ оставлен на
+// выбор (ADR-058 развилка №6 разрешена в пользу «обязателен»); config-флага
+// use_pkce поэтому нет. OIDC требует живого Redis (cluster-shared flow-state
+// store nonce/PKCE) — без Redis эндпоинты не монтируются (ADR-053 OPTIONAL-tier).
+//
+// Semantic-валидация (semantic.go::checkAuthOIDC): issuer https-only,
+// обязательность client_id/redirect_url, vault-ref форма client_secret_ref/ca_ref.
+// Резолв *_ref + discovery → auth/oidc.Config — load-time в daemon (setupOIDCAuth).
+type KeeperAuthOIDC struct {
+	Issuer          string              `yaml:"issuer"`                      // https://idp/realms/...
+	ClientID        string              `yaml:"client_id"`                   //
+	ClientSecretRef string              `yaml:"client_secret_ref,omitempty"` // vault-ref (опц., public-client)
+	RedirectURL     string              `yaml:"redirect_url"`                // https://keeper/auth/oidc/callback
+	Scopes          []string            `yaml:"scopes,omitempty"`            // openid, email, profile, groups
+	TLS             KeeperAuthOIDCTLS   `yaml:"tls,omitempty"`               //
+	AIDClaim        string              `yaml:"aid_claim,omitempty"`         // sub | email | preferred_username (дефолт sub)
+	GroupsClaim     string              `yaml:"groups_claim,omitempty"`      // claim с группами (дефолт groups)
+	GroupRoleMap    map[string][]string `yaml:"group_role_map,omitempty"`    // внешняя группа → RBAC-роли
+}
+
+type KeeperAuthOIDCTLS struct {
+	CARef string `yaml:"ca_ref,omitempty"` // vault-ref кастомного CA IdP
 }
 
 // KeeperSigil — подпись допусков плагинов (ADR-026, печать доверия Sigil).

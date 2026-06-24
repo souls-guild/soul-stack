@@ -66,12 +66,21 @@ const (
 )
 
 // OperatorAuthMethod — метод аутентификации оператора (ADR-014). INLINE-enum.
+//
+// ADR-058 (LDAP-часть принята) добавил only-add значения `ldap`/`oidc`
+// (федеративная аутентификация, см. operator.AuthMethodLDAP/OIDC). Пара к этому
+// расширению — OpenAPI-enum struct-тег `enum:"jwt,mtls,combined,ldap,oidc"`
+// (huma_operator_op.go list-фильтр) + committed openapi.yaml: const-набор
+// huma-слоя обязан совпадать с wire-enum фильтра. `oidc` заведён сразу (стадия 2
+// ADR-058), чтобы дальнейшая имплементация OIDC не трогала контракт повторно.
 type OperatorAuthMethod string
 
 const (
 	OperatorAuthMethodCombined OperatorAuthMethod = "combined"
 	OperatorAuthMethodJWT      OperatorAuthMethod = "jwt"
+	OperatorAuthMethodLDAP     OperatorAuthMethod = "ldap"
 	OperatorAuthMethodMTLS     OperatorAuthMethod = "mtls"
+	OperatorAuthMethodOIDC     OperatorAuthMethod = "oidc"
 )
 
 // HeraldType — тип канала уведомлений (Herald, ADR-052). INLINE-enum.

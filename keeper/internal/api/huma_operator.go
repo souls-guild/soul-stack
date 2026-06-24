@@ -169,6 +169,7 @@ func newOperator(v handlers.OperatorView) Operator {
 		BootstrapInitial: v.BootstrapInitial,
 		CreatedAt:        v.CreatedAt,
 		CreatedByAID:     v.CreatedByAID,
+		CreatedVia:       v.CreatedVia,
 		DisplayName:      v.DisplayName,
 		RevokedAt:        v.RevokedAt,
 	}

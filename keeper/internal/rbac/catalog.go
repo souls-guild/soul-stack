@@ -32,6 +32,7 @@ import "sort"
 //   - cadence (6): create / list / update / delete / enable / disable (ADR-046, S4; enable/disable — amendment 2026-06-02);
 //   - herald (5): create / read / list / update / delete (ADR-052, S4);
 //   - tiding (5): create / read / list / update / delete (ADR-052, S4);
+//   - provisioning (2): read / update (ADR-058 Часть B — политика способов создания операторов);
 //   - audit (1): read;
 //   - provider/profile (2): create / create.
 //
@@ -268,6 +269,15 @@ var AllowedPermissions = map[string]struct{}{
 	"tiding.list":   {},
 	"tiding.update": {},
 	"tiding.delete": {},
+
+	// provisioning.* — runtime-управление политикой способов СОЗДАНИЯ операторов
+	// (`provisioning_allowed_methods` в keeper_settings, ADR-058 Часть B). resource
+	// — `provisioning`; actions — read (`GET /v1/provisioning-policy`) / update
+	// (`PUT /v1/provisioning-policy`). Селектор — NoSelector: политика кластер-
+	// уровневая (как operator.* / role.*). update аудируется
+	// (`provisioning.policy_changed`), read — нет.
+	"provisioning.read":   {},
+	"provisioning.update": {},
 
 	// audit.* — read-only-доступ к `audit_log` (`GET /v1/audit`). Селектор —
 	// NoSelector в MVP: фильтрация по archon_aid делается query-param-ом, а

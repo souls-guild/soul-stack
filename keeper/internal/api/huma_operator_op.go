@@ -71,10 +71,11 @@ func operatorCreateOperation() huma.Operation {
 // поле несёт `query:"<name>"` → huma биндит из url.Values и валидирует по схеме.
 //
 // Семантика bind-фазы (parity легаси List → ListTyped):
-//   - AuthMethod несёт `enum:"jwt,mtls,combined"` — значение вне набора → 422
+//   - AuthMethod несёт `enum:"jwt,mtls,combined,ldap,oidc"` — значение вне набора → 422
 //     (schema-validate enum-mismatch, НЕ parse) → error-override классифицирует как
 //     TypeValidationFailed (КЛЮЧЕВОЙ контракт: enum→422, как audit source). Пустой →
-//     фильтр не применяется. enum-набор = доменный operator.AuthMethod{JWT,MTLS,Combined};
+//     фильтр не применяется. enum-набор = доменный operator.AuthMethod{JWT,MTLS,Combined,
+//     LDAP,OIDC}; ldap/oidc — федеративная аутентификация (ADR-058), only-add к прежнему;
 //   - Revoked — bool: huma parseInto на bad-value даёт "invalid boolean …" → 400
 //     (hasQueryParseError). Опущен → false (только активные, parity легаси);
 //   - Offset/Limit — int32 (НЕ Go-int: huma на int эмитит int64, committed-спека
@@ -84,7 +85,7 @@ func operatorCreateOperation() huma.Operation {
 //     на 422, а легаси ParsePage даёт 400) — enforce-ит ДОМЕННАЯ ListTyped через
 //     CheckPageBounds тем же сообщением → 400.
 type operatorListInput struct {
-	AuthMethod string `query:"auth_method" enum:"jwt,mtls,combined" doc:"фильтр по форме credential; значение вне enum → 422"`
+	AuthMethod string `query:"auth_method" enum:"jwt,mtls,combined,ldap,oidc" doc:"фильтр по форме credential; значение вне enum → 422"`
 	Revoked    bool   `query:"revoked" doc:"включать ревокнутых (false — только активные); bad-value → 400"`
 	Offset     int32  `query:"offset" default:"0" doc:"сдвиг от начала набора, ≥0 (совпадает с shared/api.ParsePage; out-of-range → 400)"`
 	Limit      int32  `query:"limit" default:"50" doc:"размер страницы 1..1000 (совпадает с shared/api.ParsePage; out-of-range → 400)"`

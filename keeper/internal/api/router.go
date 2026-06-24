@@ -133,7 +133,7 @@ const (
 // Health/meta вынесены вне `/v1/*` по operator-api.md § Health / Meta.
 // chi.NotFound и chi.MethodNotAllowed заменены на problem+json-handlers,
 // чтобы 404/405 не приходили в text/plain default-формате stdlib.
-func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.OperatorHandler, incH *handlers.IncarnationHandler, soulH *handlers.SoulHandler, roleH *handlers.RoleHandler, synodH *handlers.SynodHandler, sigilH *handlers.SigilHandler, sigilKeyH *handlers.SigilKeyHandler, serviceH *handlers.ServiceHandler, augurH *handlers.AugurHandler, oracleH *handlers.OracleHandler, pushH *handlers.PushHandler, pushProviderH *handlers.PushProviderHandler, errandH *handlers.ErrandHandler, voyageH *handlers.VoyageHandler, cadenceH *handlers.CadenceHandler, auditH *handlers.AuditHandler, choirH *handlers.ChoirHandler, heraldH *handlers.HeraldHandler, moduleCatalogH *handlers.ModuleCatalogHandler, moduleFormPrepH *handlers.ModuleFormPrepHandler, permCatalogH *handlers.PermissionCatalogHandler, eventTypeCatalogH *handlers.EventTypeCatalogHandler, meH *handlers.MyPermissionsHandler, enforcer RBACProvider, auditWriter audit.Writer, metricsHTTP *obs.HTTPMetrics, tollDegraded toll.DegradedReader, tempoLimiter apimiddleware.RateLimiter, tempoMetrics apimiddleware.RateLimitMetrics, tempoVoyageCreateLimits func() apimiddleware.RateLimitLimits, tempoVoyagePreviewLimits func() apimiddleware.RateLimitLimits, webUIEnabled bool, logger *slog.Logger) http.Handler {
+func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.OperatorHandler, incH *handlers.IncarnationHandler, soulH *handlers.SoulHandler, roleH *handlers.RoleHandler, synodH *handlers.SynodHandler, sigilH *handlers.SigilHandler, sigilKeyH *handlers.SigilKeyHandler, serviceH *handlers.ServiceHandler, provisioningPolicyH *handlers.ProvisioningPolicyHandler, augurH *handlers.AugurHandler, oracleH *handlers.OracleHandler, pushH *handlers.PushHandler, pushProviderH *handlers.PushProviderHandler, errandH *handlers.ErrandHandler, voyageH *handlers.VoyageHandler, cadenceH *handlers.CadenceHandler, auditH *handlers.AuditHandler, choirH *handlers.ChoirHandler, heraldH *handlers.HeraldHandler, moduleCatalogH *handlers.ModuleCatalogHandler, moduleFormPrepH *handlers.ModuleFormPrepHandler, permCatalogH *handlers.PermissionCatalogHandler, eventTypeCatalogH *handlers.EventTypeCatalogHandler, meH *handlers.MyPermissionsHandler, enforcer RBACProvider, auditWriter audit.Writer, metricsHTTP *obs.HTTPMetrics, tollDegraded toll.DegradedReader, tempoLimiter apimiddleware.RateLimiter, tempoMetrics apimiddleware.RateLimitMetrics, tempoVoyageCreateLimits func() apimiddleware.RateLimitLimits, tempoVoyagePreviewLimits func() apimiddleware.RateLimitLimits, webUIEnabled bool, ldapAuth *LDAPAuthDeps, oidcAuth *OIDCAuthDeps, loginGuard apimiddleware.LoginGuard, loginLimitCfg apimiddleware.AuthLoginLimitConfig, logger *slog.Logger) http.Handler {
 	r := chi.NewRouter()
 
 	// huma error-override (ADR-054, FULL-TYPED): глобальный huma.NewError →
@@ -189,6 +189,43 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 	// → 404 (API-периметр /v1 не затрагивается ни в одном случае).
 	if webUIEnabled {
 		webui.Mount(r)
+	}
+
+	// /auth/* — федеративная аутентификация (ADR-058) ВНЕ /v1: публичный вход
+	// (сам логин, JWT ещё нет — RequireJWT неприменим, parity /healthz). Монтируется
+	// при non-nil ldapAuth (POST /auth/ldap/login) И/ИЛИ non-nil oidcAuth
+	// (GET /auth/oidc/{login,callback}); иначе способ логина недоступен (ADR-053
+	// OPTIONAL-tier). Anti-DoS body-limit стоит (credentials/callback-query — малые),
+	// но без metrics/RBAC/audit-middleware (/v1-обвязка): audit логина пишет сам
+	// handler (operator.login).
+	//
+	// ANTI-BRUTEFORCE (ADR-058(g), HIGH-3): AuthLoginLimit per-IP+per-username
+	// throttle + lockout (loginGuard, fail-closed на lockout, fail-open на throttle).
+	// loginGuard=nil (нет Redis) → passthrough. Каждый способ — СВОЯ chi-подгруппа,
+	// чтобы навесить разный экстрактор username (LDAP — из тела; OIDC — нет) и
+	// общий guard; раздельные dump-таргеты huma.API в fullSpecGroups.
+	if ldapAuth != nil || oidcAuth != nil {
+		r.Route("/auth", func(r chi.Router) {
+			r.Use(maxBodyMiddleware(v1RequestBodyLimit))
+			if ldapAuth != nil {
+				// LDAP: throttle+lockout с per-username (из JSON-тела) + запись
+				// неудач (401/403). Своя chi-группа под middleware.
+				r.Group(func(r chi.Router) {
+					r.Use(apimiddleware.AuthLoginLimit(loginGuard, loginLimitCfg, apimiddleware.LDAPUsernameExtractor, true, logger))
+					registerHumaLDAPLogin(newHumaAuthAPI(r), ldapAuth)
+				})
+			}
+			if oidcAuth != nil {
+				// OIDC: throttle+lockout per-IP (username приходит от IdP, не из
+				// запроса → extractUsername=nil). recordFailures=true: на /login
+				// (302) неудачи нет (isAuthFailure(302)=false → no-op), на /callback
+				// 401/403 пишется счётчик. /login-throttle гасит flow-state-flood.
+				r.Group(func(r chi.Router) {
+					r.Use(apimiddleware.AuthLoginLimit(loginGuard, loginLimitCfg, nil, true, logger))
+					registerHumaOIDCLogin(newHumaAuthAPI(r), oidcAuth)
+				})
+			}
+		})
 	}
 
 	// /v1/* — auth + RBAC + audit. Selector-extractor для operator
@@ -881,6 +918,33 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 					apimiddleware.RequirePermission(enforcer, "service", "list", apimiddleware.NoSelector),
 				).Group(func(r chi.Router) {
 					registerHumaServiceDependencies(newHumaCadenceAPI(r), serviceH)
+				})
+			})
+		}
+
+		// /v1/provisioning-policy — runtime-политика способов СОЗДАНИЯ операторов
+		// (provisioning_allowed_methods, ADR-058 Часть B). Подключается только при
+		// non-nil provisioningPolicyH (Deps.ProvisioningPolicyReader + ServiceSvc
+		// прокинуты). Selector — NoSelector: политика кластер-уровневая (как
+		// operator.* / role.*).
+		//
+		// GET — read (permission provisioning.read, БЕЗ audit, паттерн service.list).
+		// PUT — WRITE+AUDIT вариант B (permission provisioning.update, event
+		// provisioning.policy_changed; huma-audit-middleware на своей chi-группе,
+		// как service.update). Каждый роут — СВОЯ chi-группа со своим RBAC; huma
+		// наследует chi-middleware группы.
+		if provisioningPolicyH != nil {
+			r.Route("/provisioning-policy", func(r chi.Router) {
+				r.With(
+					apimiddleware.RequirePermission(enforcer, "provisioning", "read", apimiddleware.NoSelector),
+				).Group(func(r chi.Router) {
+					registerHumaProvisioningPolicyGet(newHumaCadenceAPI(r), provisioningPolicyH)
+				})
+
+				r.With(
+					apimiddleware.RequirePermission(enforcer, "provisioning", "update", apimiddleware.NoSelector),
+				).Group(func(r chi.Router) {
+					registerHumaProvisioningPolicyPut(newHumaProvisioningAPI(r, auditWriter, audit.EventProvisioningPolicyChanged, logger), provisioningPolicyH)
 				})
 			})
 		}

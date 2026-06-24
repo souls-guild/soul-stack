@@ -316,6 +316,40 @@ type Deps struct {
 	// — осознанный «не монтировать»: /ui для них не нужен, mount требует embed-
 	// дерева. Внешнего бэкенда тоггл не требует (UI вшит в бинарь).
 	WebUIEnabled bool
+
+	// LDAPAuth — федеративная LDAP-аутентификация операторов (ADR-058,
+	// POST /auth/ldap/login). При nil endpoint не монтируется (opt-in-домен,
+	// паттерн pushH/errandH): keeper.yml::auth.ldap не задан → способ логина
+	// недоступен, Keeper стартует (ADR-053 OPTIONAL-tier). daemon собирает поле
+	// при наличии auth.ldap (резолв bind_password_ref/ca_ref из Vault).
+	LDAPAuth *LDAPAuthDeps
+
+	// OIDCAuth — федеративная OIDC-аутентификация операторов (ADR-058 стадия 2,
+	// GET /auth/oidc/{login,callback}). При nil эндпоинты не монтируются (opt-in,
+	// как LDAPAuth): keeper.yml::auth.oidc не задан → способ недоступен, Keeper
+	// стартует (ADR-053 OPTIONAL-tier). daemon собирает поле при наличии auth.oidc
+	// И живого Redis (flow-state store cluster-shared): без Redis OIDC недоступен.
+	OIDCAuth *OIDCAuthDeps
+
+	// LoginGuard — anti-bruteforce-примитив публичных login-эндпоинтов (ADR-058(g),
+	// HIGH-3): per-IP+per-username throttle + lockout. Реализуется *redis.LoginGuard.
+	// nil (нет Redis) → login-эндпоинты без throttle (passthrough, как Tempo при
+	// nil-limiter). daemon собирает при живом Redis. Используется только при
+	// смонтированных /auth-роутах (non-nil LDAPAuth/OIDCAuth).
+	LoginGuard apimiddleware.LoginGuard
+
+	// LoginLimitCfg — статические параметры anti-bruteforce-лимита (резолв из
+	// config.KeeperAuth.ResolvedLoginRateLimit()). Читается один раз на сборке
+	// middleware (login редок, не hot-path).
+	LoginLimitCfg apimiddleware.AuthLoginLimitConfig
+
+	// ProvisioningPolicyReader — read-снимок политики provisioning_allowed_methods
+	// для GET /v1/provisioning-policy (ADR-058 Часть B). Реализуется
+	// *serviceregistry.Holder (cluster-консистентный atomic-снимок). PUT пишет через
+	// [ServiceSvc].SetSetting. provisioning-policy-роуты монтируются только при
+	// non-nil ProvisioningPolicyReader И non-nil ServiceSvc (нужны оба: чтение +
+	// запись). nil → группа не подключается (unit-тесты без serviceregistry).
+	ProvisioningPolicyReader handlers.ProvisioningPolicyReader
 }
 
 // RBACProvider — общая поверхность rbac-сервиса, нужная и middleware-у
@@ -450,6 +484,14 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 		Vault: deps.VaultPinger,
 	})
 	opH := handlers.NewOperatorHandler(deps.OperatorDB, deps.JWTIssuer, deps.RBAC, deps.TTLDefault, logger)
+	// Гейт политики provisioning_allowed_methods на POST /v1/operators (ADR-058
+	// Часть B): тот же снимок политики (Holder), что и для GET-эндпоинта.
+	// ProvisioningPolicyReader (Holder) реализует и узкий gate-интерфейс
+	// (ProvisioningMethodAllowed) — выставляем через type-assert. nil-reader / не-
+	// Holder → gate не выставлен (back-compat: CreateTyped пропускает).
+	if gate, ok := deps.ProvisioningPolicyReader.(handlers.ProvisioningGate); ok && gate != nil {
+		opH.SetProvisioningGate(gate)
+	}
 	incH := handlers.NewIncarnationHandler(deps.IncarnationDB, deps.ScenarioRunner, deps.ScenarioDestroyer, deps.ScenarioDrift, deps.ServiceRegistry, deps.ServiceLoader, deps.AuditWriter, deps.RBAC, logger)
 	soulH := handlers.NewSoulHandler(deps.SoulDB, deps.RBAC, deps.SoulPresence, logger)
 
@@ -491,6 +533,14 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	var serviceH *handlers.ServiceHandler
 	if deps.ServiceSvc != nil {
 		serviceH = handlers.NewServiceHandler(deps.ServiceSvc, deps.ServiceRefs, deps.ServiceScenarios, deps.ServiceStateSchema, deps.ServiceDependencies, logger)
+	}
+
+	// provisioningPolicyH опционален: GET читает снимок политики (Holder), PUT
+	// пишет её через тот же ServiceSvc.SetSetting (+ cluster-invalidate). Нужны
+	// оба — при nil любого provisioning-policy-роуты не монтируются (ADR-058 Часть B).
+	var provisioningPolicyH *handlers.ProvisioningPolicyHandler
+	if deps.ProvisioningPolicyReader != nil && deps.ServiceSvc != nil {
+		provisioningPolicyH = handlers.NewProvisioningPolicyHandler(deps.ProvisioningPolicyReader, deps.ServiceSvc, logger)
 	}
 
 	// augurH опционален: при nil AugurSvc augur.*-роуты не подключаются
@@ -643,7 +693,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 		}
 	}
 
-	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, roleH, synodH, sigilH, sigilKeyH, serviceH, augurH, oracleH, pushH, pushProviderH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, logger)
+	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, augurH, oracleH, pushH, pushProviderH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.LoginGuard, deps.LoginLimitCfg, logger)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,

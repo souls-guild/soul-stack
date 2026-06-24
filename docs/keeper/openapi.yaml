@@ -1332,6 +1332,22 @@ components:
         - expires_at
         - jwt
       type: object
+    LDAPLoginRequest:
+      additionalProperties: false
+      properties:
+        password:
+          description: пароль (не логируется, не возвращается)
+          format: password
+          minLength: 1
+          type: string
+        username:
+          description: имя пользователя для LDAP search-bind
+          minLength: 1
+          type: string
+      required:
+        - username
+        - password
+      type: object
     ModuleCatalogItem:
       additionalProperties: false
       properties:
@@ -1606,6 +1622,14 @@ components:
         created_by_aid:
           pattern: ^[a-z0-9][a-z0-9._@-]{1,127}$
           type: string
+        created_via:
+          enum:
+            - bootstrap
+            - user
+            - ldap
+            - oidc
+            - system
+          type: string
         display_name:
           type: string
         metadata:
@@ -1619,6 +1643,7 @@ components:
         - auth_method
         - bootstrap_initial
         - created_at
+        - created_via
         - display_name
       type: object
     OperatorCreateReply:
@@ -1823,6 +1848,39 @@ components:
         - namespace
         - ref
         - sha256
+      type: object
+    ProvisioningPolicyReply:
+      additionalProperties: false
+      properties:
+        allowed_methods:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        policy_set:
+          type: boolean
+      required:
+        - allowed_methods
+        - policy_set
+      type: object
+    ProvisioningPolicyUpdateRequest:
+      additionalProperties: false
+      properties:
+        allowed_methods:
+          description: "разрешённые способы создания оператора (anti-lockout: непустой список из {user,ldap,oidc})"
+          items:
+            enum:
+              - user
+              - ldap
+              - oidc
+            type: string
+          minItems: 1
+          type:
+            - array
+            - "null"
+      required:
+        - allowed_methods
       type: object
     PushApplyReply:
       additionalProperties: false
@@ -3825,6 +3883,151 @@ info:
   version: v1
 openapi: 3.1.0
 paths:
+  /auth/ldap/login:
+    post:
+      description: "Федеративная аутентификация (ADR-058): LDAP search-bind → маппинг на operators(aid)+роли → внутренний JWT в HttpOnly+Secure cookie. Тело ответа пустое."
+      operationId: ldapLogin
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LDAPLoginRequest"
+        required: true
+      responses:
+        "204":
+          description: No Content
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Too Many Requests
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Логин оператора через LDAP
+      tags:
+        - auth
+  /auth/oidc/callback:
+    get:
+      description: Валидирует id_token (JWKS-подпись/iss/aud/exp/nonce), маппит на operators(aid)+роли, выпускает внутренний JWT в HttpOnly+Secure cookie и редиректит (302) в UI. Ошибка валидации/маппинга → 401/403.
+      operationId: oidcCallback
+      parameters:
+        - description: authorization code от IdP
+          explode: false
+          in: query
+          name: code
+          schema:
+            description: authorization code от IdP
+            type: string
+        - description: opaque CSRF-state, выданный на /auth/oidc/login
+          explode: false
+          in: query
+          name: state
+          schema:
+            description: opaque CSRF-state, выданный на /auth/oidc/login
+            type: string
+        - description: код ошибки от IdP (если аутентификация отклонена)
+          explode: false
+          in: query
+          name: error
+          schema:
+            description: код ошибки от IdP (если аутентификация отклонена)
+            type: string
+      responses:
+        "302":
+          description: Found
+          headers:
+            Location:
+              schema:
+                type: string
+            Set-Cookie:
+              schema:
+                type: string
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Too Many Requests
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: OIDC-callback оператора
+      tags:
+        - auth
+  /auth/oidc/login:
+    get:
+      description: "Федеративная аутентификация (ADR-058): генерирует state+nonce+PKCE и редиректит (302) на authorization_endpoint внешнего IdP."
+      operationId: oidcLogin
+      responses:
+        "302":
+          description: Found
+          headers:
+            Location:
+              schema:
+                type: string
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Too Many Requests
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Старт OIDC-логина оператора
+      tags:
+        - auth
   /v1/audit:
     get:
       description: Read-only-лента audit_log с фильтрами (type/source multi-OR, archon_aid/correlation_id/payload_herald/payload_voyage exact, started_after/before RFC3339) и пагинацией. Permission audit.read. Read-only, без audit (чтение не пишется — рекурсия).
@@ -6600,6 +6803,8 @@ paths:
               - jwt
               - mtls
               - combined
+              - ldap
+              - oidc
             type: string
         - description: включать ревокнутых (false — только активные); bad-value → 400
           explode: false
@@ -7030,6 +7235,81 @@ paths:
       summary: Отозвать Sigil
       tags:
         - plugin
+  /v1/provisioning-policy:
+    get:
+      description: "Текущий список разрешённых способов СОЗДАНИЯ оператора (provisioning_allowed_methods, ADR-058 Часть B). policy_set=false → политика не задана (дефолт: все способы разрешены). Permission provisioning.read. Read-only, без audit."
+      operationId: getProvisioningPolicy
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProvisioningPolicyReply"
+          description: OK
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Политика способов создания операторов
+      tags:
+        - provisioning
+    put:
+      description: Replace-семантика списка разрешённых способов СОЗДАНИЯ оператора (provisioning_allowed_methods, ADR-058 Часть B). Permission provisioning.update. 422 — пустой список (anti-lockout) или метод вне {user,ldap,oidc}. Гейтит ТОЛЬКО создание оператора; существующие логинятся независимо от политики.
+      operationId: updateProvisioningPolicy
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProvisioningPolicyUpdateRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProvisioningPolicyReply"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Bad Request
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Сменить политику способов создания операторов
+      tags:
+        - provisioning
   /v1/push-providers:
     get:
       description: Реестр Push-Provider-ов с пагинацией и фильтром name_pattern (ADR-032 S7-2). Permission push-provider.list. Read-only, без audit.

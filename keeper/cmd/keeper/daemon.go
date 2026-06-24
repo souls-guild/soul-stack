@@ -30,6 +30,9 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/auditpg"
 	keeperaugur "github.com/souls-guild/soul-stack/keeper/internal/augur"
+	keeperauth "github.com/souls-guild/soul-stack/keeper/internal/auth"
+	keeperldap "github.com/souls-guild/soul-stack/keeper/internal/auth/ldap"
+	keeperoidc "github.com/souls-guild/soul-stack/keeper/internal/auth/oidc"
 	"github.com/souls-guild/soul-stack/keeper/internal/bootstrap"
 	"github.com/souls-guild/soul-stack/keeper/internal/cadence"
 	"github.com/souls-guild/soul-stack/keeper/internal/cloudinit"
@@ -383,6 +386,12 @@ type daemon struct {
 	// stateless — rate/burst читаются на каждом запросе из config.Store
 	// (hot-reload, ADR-050(f)).
 	tempoLimiter *keeperredis.TokenBucket
+
+	// loginGuard — Redis anti-bruteforce-примитив публичных login-эндпоинтов
+	// (ADR-058(g), HIGH-3). Конструируется в setupLoginGuard ТОЛЬКО при Redis
+	// И auth.rate_limit.enabled (default-ON). Инжектится в api.Deps.LoginGuard;
+	// без Redis → nil → login без throttle (passthrough).
+	loginGuard *keeperredis.LoginGuard
 
 	// --- acolyte (ADR-027) ---
 	acolytePool *acolyte.Pool
@@ -3002,6 +3011,67 @@ func tempoLimiterOrNil(tb *keeperredis.TokenBucket) apimiddleware.RateLimiter {
 	return tb
 }
 
+// setupLoginGuard конструирует Redis anti-bruteforce-примитив login-эндпоинтов
+// (ADR-058(g), HIGH-3). Gate-цепочка (как setupTempo):
+//   - auth-блока нет / login-эндпоинты не нужны → пропускаем (нечего защищать);
+//   - `auth.rate_limit.enabled: false` → не конструируется (явный opt-out);
+//   - нет Redis-клиента → не конструируется (lockout cluster-shared живёт в
+//     Redis; без него middleware passthrough — login без throttle).
+//
+// При gate-ах d.loginGuard остаётся nil → api.Deps.LoginGuard nil → middleware
+// passthrough. Порядок: ПОСЛЕ setupRedis, ДО setupAPIServer.
+func (d *daemon) setupLoginGuard(_ context.Context) error {
+	logger := d.logger
+	if d.cfg.Auth == nil {
+		return nil // нет auth-блока — login-эндпоинты не монтируются
+	}
+	if !d.cfg.Auth.LoginRateLimitEnabled() {
+		logger.Info("keeper run: auth login rate-limit disabled (auth.rate_limit.enabled=false)")
+		return nil
+	}
+	if d.redisClient == nil {
+		logger.Info("keeper run: auth login rate-limit disabled (no Redis client) — login endpoints without throttle")
+		return nil
+	}
+	guard, err := keeperredis.NewLoginGuard(d.redisClient)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "keeper run: build login guard: %v\n", err)
+		return errSetupFailed
+	}
+	d.loginGuard = guard
+	rate, burst, threshold, window, backoff := d.cfg.Auth.ResolvedLoginRateLimit()
+	logger.Info("keeper run: auth login rate-limit active (/auth/*)",
+		slog.Float64("rate", rate), slog.Int("burst", burst),
+		slog.Int("lockout_threshold", threshold),
+		slog.Duration("lockout_window", window),
+		slog.Duration("lockout_backoff", backoff))
+	return nil
+}
+
+// loginGuardOrNil — typed-nil-guard для интерфейса [apimiddleware.LoginGuard]
+// (паттерн tempoLimiterOrNil): возвращает «настоящий nil-интерфейс» при
+// nil-guard, чтобы AuthLoginLimit-фабрика распознала passthrough.
+func loginGuardOrNil(g *keeperredis.LoginGuard) apimiddleware.LoginGuard {
+	if g == nil {
+		return nil
+	}
+	return g
+}
+
+// loginLimitCfg резолвит статические параметры anti-bruteforce-лимита из config
+// в форму apimiddleware.AuthLoginLimitConfig (читается один раз на сборке
+// middleware, не hot-path). nil-auth → дефолты (ResolvedLoginRateLimit nil-safe).
+func (d *daemon) loginLimitCfg() apimiddleware.AuthLoginLimitConfig {
+	rate, burst, threshold, window, backoff := d.cfg.Auth.ResolvedLoginRateLimit()
+	return apimiddleware.AuthLoginLimitConfig{
+		Rate:             rate,
+		Burst:            burst,
+		LockoutThreshold: threshold,
+		LockoutWindow:    window,
+		LockoutBackoff:   backoff,
+	}
+}
+
 // tollDurationOrDefault — парсит config-строку duration-формата с fallback на
 // дефолт. Стиль `watchmanInterval`-резолвера (semantic-фаза уже отвергла
 // невалидный формат, остаётся отрезать пустое/<=0).
@@ -3699,7 +3769,7 @@ func sigilKeyVaultMount(s *config.KeeperSigil) string {
 // setupAPIServer — Operator API HTTP-сервер. RedisPinger передаётся только при
 // живом клиенте (typed-nil-guard). srv.Start() дёргается оркестратором
 // последним (блокирующий main loop), вне «setup».
-func (d *daemon) setupAPIServer(_ context.Context) error {
+func (d *daemon) setupAPIServer(ctx context.Context) error {
 	cfg := d.cfg
 	logger := d.logger
 	// RedisPinger для `/readyz`: передаём как health.Pinger ТОЛЬКО при живом
@@ -3718,6 +3788,25 @@ func (d *daemon) setupAPIServer(_ context.Context) error {
 	var soulPresence handlers.SoulPresence
 	if d.redisClient != nil {
 		soulPresence = topologyLeaseChecker{rc: d.redisClient}
+	}
+
+	// LDAP-аутентификация операторов (ADR-058): собираем при наличии auth.ldap.
+	// Резолв bind_password_ref/ca_ref из Vault + сборка Authenticator+Mapper.
+	// При отсутствии блока — nil (endpoint не монтируется, ADR-053 OPTIONAL-tier).
+	ldapAuth, err := d.setupLDAPAuth(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "keeper run: setup LDAP auth: %v\n", err)
+		return errSetupFailed
+	}
+
+	// OIDC-аутентификация операторов (ADR-058 стадия 2): собираем при наличии
+	// auth.oidc И живого Redis (flow-state store cluster-shared). discovery к IdP
+	// + резолв client_secret_ref/ca_ref. При отсутствии блока/Redis — nil
+	// (эндпоинты не монтируются, ADR-053 OPTIONAL-tier).
+	oidcAuth, err := d.setupOIDCAuth(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "keeper run: setup OIDC auth: %v\n", err)
+		return errSetupFailed
 	}
 
 	srv, err := api.NewServer(cfg.Listen.OpenAPI, api.Deps{
@@ -3833,6 +3922,24 @@ func (d *daemon) setupAPIServer(_ context.Context) error {
 		// /ui не монтируется. UI вшит в бинарь (go:embed) — внешнего бэкенда не
 		// требует, в отличие от Tempo/Toll.
 		WebUIEnabled: cfg.WebUIMounted(),
+		// LDAPAuth — федеративная LDAP-аутентификация (ADR-058). nil при
+		// отсутствии auth.ldap → endpoint /auth/ldap/login не монтируется.
+		LDAPAuth: ldapAuth,
+		// OIDCAuth — федеративная OIDC-аутентификация (ADR-058 стадия 2). nil при
+		// отсутствии auth.oidc / Redis → /auth/oidc/{login,callback} не монтируются.
+		OIDCAuth: oidcAuth,
+		// LoginGuard / LoginLimitCfg — anti-bruteforce публичных login-эндпоинтов
+		// (ADR-058(g), HIGH-3). nil-guard (нет Redis / auth.rate_limit.enabled=false)
+		// → login без throttle (passthrough). loginGuardOrNil — typed-nil-guard.
+		LoginGuard:    loginGuardOrNil(d.loginGuard),
+		LoginLimitCfg: d.loginLimitCfg(),
+		// ProvisioningPolicyReader — снимок политики provisioning_allowed_methods
+		// для GET /v1/provisioning-policy + гейта POST /v1/operators (ADR-058 Часть
+		// B). Тот же serviceHolder, что несёт service-каталог: политика — well-known
+		// скаляр того же снимка, отдельной wire-инвалидации НЕ нужно (PUT через
+		// ServiceSvc.SetSetting publish-ит общий service-invalidate-канал →
+		// Holder.refresh перечитывает ВСЕ well-known скаляры, включая политику).
+		ProvisioningPolicyReader: d.serviceHolder,
 	}, logger)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: build HTTP server: %v\n", err)
@@ -3840,6 +3947,228 @@ func (d *daemon) setupAPIServer(_ context.Context) error {
 	}
 	d.apiServer = srv
 	return nil
+}
+
+// setupLDAPAuth собирает зависимости LDAP-логина (ADR-058) из keeper.yml::
+// auth.ldap. Возвращает (nil, nil) при отсутствии блока — endpoint тогда не
+// монтируется (ADR-053 OPTIONAL-tier, keeper стартует). Резолв секретов из
+// Vault (bind_password_ref → field `password`; tls.ca_ref → field `ca`),
+// зеркало bootstrap.LoadSigningKey (ParseRef → ReadKV → значение).
+func (d *daemon) setupLDAPAuth(ctx context.Context) (*api.LDAPAuthDeps, error) {
+	if d.cfg.Auth == nil || d.cfg.Auth.LDAP == nil {
+		return nil, nil
+	}
+	l := d.cfg.Auth.LDAP
+
+	bindPassword, err := readVaultField(ctx, d.vc, l.BindPasswordRef, "password")
+	if err != nil {
+		return nil, fmt.Errorf("auth.ldap.bind_password_ref: %w", err)
+	}
+	var caPEM []byte
+	if l.TLS.CARef != "" {
+		ca, err := readVaultField(ctx, d.vc, l.TLS.CARef, "ca")
+		if err != nil {
+			return nil, fmt.Errorf("auth.ldap.tls.ca_ref: %w", err)
+		}
+		caPEM = []byte(ca)
+	}
+
+	timeout := 0
+	if l.Timeout != "" {
+		dur, perr := config.ParseDuration(l.Timeout)
+		if perr != nil {
+			return nil, fmt.Errorf("auth.ldap.timeout: %w", perr)
+		}
+		timeout = int(dur / time.Second)
+	}
+
+	authn, err := keeperldap.New(keeperldap.Config{
+		URL:                l.URL,
+		StartTLS:           l.StartTLS,
+		TLSCA:              caPEM,
+		InsecureSkipVerify: l.TLS.InsecureSkipVerify,
+		BindMode:           keeperldap.BindMode(l.BindMode),
+		BindDN:             l.BindDN,
+		BindPassword:       bindPassword,
+		BaseDN:             l.BaseDN,
+		UserFilter:         l.UserFilter,
+		GroupFilter:        l.GroupFilter,
+		GroupAttr:          l.GroupAttr,
+		AIDAttr:            l.AIDAttr,
+		TimeoutSeconds:     timeout,
+	}, d.logger)
+	if err != nil {
+		return nil, err
+	}
+
+	mapper := keeperauth.NewMapper(keeperauth.MapperConfig{
+		Method:       operator.AuthMethodLDAP,
+		GroupRoleMap: l.GroupRoleMap,
+		DB:           d.pool,
+		// Tx — атомарная реконсиляция ролей (grant+scoped-revoke в одной
+		// транзакции, HIGH-1/ADR-058(d)). *pgxpool.Pool удовлетворяет BeginTx.
+		Tx:    d.pool,
+		Audit: d.auditWriter,
+		// ProvisioningGate — политика provisioning_allowed_methods (ADR-058 Часть B):
+		// гейтит auto-provision нового federated-оператора (метод "ldap"). Тот же
+		// serviceHolder-снимок, что и для POST /v1/operators / GET-эндпоинта.
+		// serviceHolder поднят в setupServiceRegistry ДО setupHTTPServer/setupLDAPAuth.
+		ProvisioningGate: d.serviceHolder,
+		Logger:           d.logger,
+	})
+
+	return &api.LDAPAuthDeps{
+		Authenticator: authn,
+		Mapper:        mapper,
+		Issuer:        d.issuer,
+		TTL:           d.ttlDefault,
+		Audit:         d.auditWriter,
+		Logger:        d.logger,
+	}, nil
+}
+
+// oidcFlowTTL — TTL записи flow-state (state→nonce/PKCE) в Redis (ADR-058(b):
+// «~5 мин»). Ограничивает окно незавершённого login-flow: пользователь должен
+// пройти IdP-аутентификацию и вернуться на callback за это время, иначе state
+// истечёт и callback отвергнется (повторный login генерит свежий state).
+const oidcFlowTTL = 5 * time.Minute
+
+// oidcFlowStoreAdapter мостит oidc.FlowStore (узкий контракт пакета auth/oidc,
+// типы FlowState) на redis.OIDCFlowStore (типы redis.OIDCFlowState). Конвертация
+// нужна, чтобы auth/oidc не импортировал keeper/internal/redis (layering).
+type oidcFlowStoreAdapter struct {
+	store *keeperredis.OIDCFlowStore
+}
+
+func (a oidcFlowStoreAdapter) Save(ctx context.Context, state string, fs keeperoidc.FlowState) error {
+	return a.store.Save(ctx, state, keeperredis.OIDCFlowState{Nonce: fs.Nonce, CodeVerifier: fs.CodeVerifier})
+}
+
+func (a oidcFlowStoreAdapter) Consume(ctx context.Context, state string) (keeperoidc.FlowState, error) {
+	rs, err := a.store.Consume(ctx, state)
+	if err != nil {
+		// Маппим redis-not-found на oidc-not-found (CompleteLogin санитизирует в
+		// auth.ErrAuthFailed); прочее — наверх как есть.
+		if errors.Is(err, keeperredis.ErrOIDCFlowNotFound) {
+			return keeperoidc.FlowState{}, keeperoidc.ErrFlowNotFound
+		}
+		return keeperoidc.FlowState{}, err
+	}
+	return keeperoidc.FlowState{Nonce: rs.Nonce, CodeVerifier: rs.CodeVerifier}, nil
+}
+
+// setupOIDCAuth собирает зависимости OIDC-логина (ADR-058 стадия 2) из
+// keeper.yml::auth.oidc. Возвращает (nil, nil) при отсутствии блока ИЛИ
+// отсутствии Redis (flow-state store cluster-shared — без Redis OIDC невозможен,
+// ADR-006/053; эндпоинты тогда не монтируются, Keeper стартует). discovery к IdP
+// (сетевой вызов) + резолв client_secret_ref/ca_ref из Vault.
+func (d *daemon) setupOIDCAuth(ctx context.Context) (*api.OIDCAuthDeps, error) {
+	if d.cfg.Auth == nil || d.cfg.Auth.OIDC == nil {
+		return nil, nil
+	}
+	if d.redisClient == nil {
+		// OIDC требует cluster-shared flow-state store. Без Redis молча не
+		// монтируем (как OPTIONAL-деградация), но предупреждаем оператора: блок
+		// auth.oidc задан, а способ логина не поднимется.
+		d.logger.Warn("auth.oidc сконфигурирован, но Redis недоступен — OIDC-логин не смонтирован (flow-state store требует Redis)")
+		return nil, nil
+	}
+	o := d.cfg.Auth.OIDC
+
+	var clientSecret string
+	if o.ClientSecretRef != "" {
+		s, err := readVaultField(ctx, d.vc, o.ClientSecretRef, "client_secret")
+		if err != nil {
+			return nil, fmt.Errorf("auth.oidc.client_secret_ref: %w", err)
+		}
+		clientSecret = s
+	}
+	var caPEM []byte
+	if o.TLS.CARef != "" {
+		ca, err := readVaultField(ctx, d.vc, o.TLS.CARef, "ca")
+		if err != nil {
+			return nil, fmt.Errorf("auth.oidc.tls.ca_ref: %w", err)
+		}
+		caPEM = []byte(ca)
+	}
+
+	flowStore, err := keeperredis.NewOIDCFlowStore(d.redisClient, oidcFlowTTL)
+	if err != nil {
+		return nil, fmt.Errorf("auth.oidc flow store: %w", err)
+	}
+
+	authn, err := keeperoidc.New(ctx, keeperoidc.Config{
+		Issuer:       o.Issuer,
+		ClientID:     o.ClientID,
+		ClientSecret: clientSecret,
+		RedirectURL:  o.RedirectURL,
+		Scopes:       o.Scopes,
+		TLSCA:        caPEM,
+		AIDClaim:     o.AIDClaim,
+		GroupsClaim:  o.GroupsClaim,
+	}, oidcFlowStoreAdapter{store: flowStore}, d.logger)
+	if err != nil {
+		return nil, err
+	}
+
+	mapper := keeperauth.NewMapper(keeperauth.MapperConfig{
+		Method:       operator.AuthMethodOIDC,
+		GroupRoleMap: o.GroupRoleMap,
+		DB:           d.pool,
+		// Tx — атомарная реконсиляция ролей (grant+scoped-revoke, HIGH-1/ADR-058(d)).
+		Tx:    d.pool,
+		Audit: d.auditWriter,
+		// ProvisioningGate — политика provisioning_allowed_methods (метод "oidc"),
+		// тот же serviceHolder-снимок, что у LDAP-mapper-а и POST /v1/operators.
+		ProvisioningGate: d.serviceHolder,
+		Logger:           d.logger,
+	})
+
+	return &api.OIDCAuthDeps{
+		Authenticator: authn,
+		Mapper:        mapper,
+		Issuer:        d.issuer,
+		TTL:           d.ttlDefault,
+		Audit:         d.auditWriter,
+		Logger:        d.logger,
+	}, nil
+}
+
+// readVaultField резолвит vault-ref (ParseRef → ReadKV) и достаёт строковое
+// значение поля field; при единственном строковом значении в KV — берёт его
+// (удобство dev-секретов с произвольным ключом). Зеркало
+// bootstrap.LoadSigningKey по структуре.
+func readVaultField(ctx context.Context, vc *keepervault.Client, ref, field string) (string, error) {
+	if vc == nil {
+		return "", fmt.Errorf("vault client is nil")
+	}
+	if ref == "" {
+		return "", fmt.Errorf("ref is empty")
+	}
+	path, err := keepervault.ParseRef(ref)
+	if err != nil {
+		return "", err
+	}
+	kv, err := vc.ReadKV(ctx, path)
+	if err != nil {
+		return "", fmt.Errorf("read vault %q: %w", path, err)
+	}
+	if v, ok := kv[field].(string); ok && v != "" {
+		return v, nil
+	}
+	// fallback: единственное строковое значение.
+	var only string
+	count := 0
+	for _, raw := range kv {
+		if s, ok := raw.(string); ok && s != "" {
+			only = s
+			count++
+		}
+	}
+	if count == 1 {
+		return only, nil
+	}
+	return "", fmt.Errorf("field %q not found (or ambiguous) in vault %q", field, path)
 }
 
 // setupMCPServer — MCP listener (M0.7.a). Поднимается только при заданном

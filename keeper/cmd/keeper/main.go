@@ -394,6 +394,11 @@ func runDaemon(args []string) int {
 		// setupRedis (limiter живёт в Redis; без Redis → nil → middleware
 		// passthrough), ДО setupAPIServer (api.Deps читает d.tempoLimiter).
 		d.setupTempo,
+		// setupLoginGuard — anti-bruteforce-лимитер публичных login-эндпоинтов
+		// (ADR-058(g), HIGH-3). ПОСЛЕ setupRedis (lockout cluster-shared в Redis;
+		// без Redis → nil → login без throttle), ДО setupAPIServer (api.Deps
+		// читает d.loginGuard).
+		d.setupLoginGuard,
 		d.setupGRPCEventStream,
 		// finalizePushOrchestrator — собирает *pushorch.PushRun после поднятия
 		// topologyResolver (setupGRPCEventStream). Идёт ДО setupAPIServer/

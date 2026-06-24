@@ -273,6 +273,51 @@ func TestIntegration_DeleteRole_NotFound(t *testing.T) {
 	}
 }
 
+// TestIntegration_DirectRolesOf — новый helper (HIGH-1 federated-реконсиляция):
+// возвращает прямые membership-роли AID; revoke снимает; чужой AID — пусто.
+func TestIntegration_DirectRolesOf(t *testing.T) {
+	resetRBAC(t)
+	ctx := context.Background()
+	seedOperator(t, "archon-bob", nil)
+	insertRole(t, "operator", "soul.list")
+	insertRole(t, "auditor", "audit.read")
+
+	if err := GrantOperator(ctx, integrationPool, "operator", "archon-bob", nil); err != nil {
+		t.Fatalf("grant operator: %v", err)
+	}
+	if err := GrantOperator(ctx, integrationPool, "auditor", "archon-bob", nil); err != nil {
+		t.Fatalf("grant auditor: %v", err)
+	}
+
+	roles, err := DirectRolesOf(ctx, integrationPool, "archon-bob")
+	if err != nil {
+		t.Fatalf("DirectRolesOf: %v", err)
+	}
+	if len(roles) != 2 {
+		t.Fatalf("DirectRolesOf = %v, want 2 roles", roles)
+	}
+
+	if err := RevokeOperator(ctx, integrationPool, "auditor", "archon-bob"); err != nil {
+		t.Fatalf("revoke auditor: %v", err)
+	}
+	roles, err = DirectRolesOf(ctx, integrationPool, "archon-bob")
+	if err != nil {
+		t.Fatalf("DirectRolesOf after revoke: %v", err)
+	}
+	if len(roles) != 1 || roles[0] != "operator" {
+		t.Fatalf("after revoke DirectRolesOf = %v, want [operator]", roles)
+	}
+
+	// Чужой AID — пусто (без ошибки).
+	other, err := DirectRolesOf(ctx, integrationPool, "archon-nobody")
+	if err != nil {
+		t.Fatalf("DirectRolesOf unknown: %v", err)
+	}
+	if len(other) != 0 {
+		t.Errorf("unknown AID must have no direct roles, got %v", other)
+	}
+}
+
 func TestIntegration_DeleteRole_Builtin(t *testing.T) {
 	resetRBAC(t)
 	s := newService(t)

@@ -969,7 +969,7 @@ func TestHumaSoul_Exec_ChiCoexistence(t *testing.T) {
 		handlers.NewIncarnationHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil),
 		handlers.NewSoulHandler(nil, nil, nil, nil),
 		stubRoleHandler(t), stubSynodHandler(t), stubSigilHandler(t), stubSigilKeyHandler(t),
-		stubServiceHandler(t), stubAugurHandler(t), stubOracleHandler(t),
+		stubServiceHandler(t), nil, stubAugurHandler(t), stubOracleHandler(t),
 		nil,                                      // pushH
 		nil,                                      // pushProviderH
 		handlers.NewErrandHandler(nil, nil, nil), // errandH non-nil → exec монтируется на huma
@@ -992,7 +992,11 @@ func TestHumaSoul_Exec_ChiCoexistence(t *testing.T) {
 		nil,   // tempoVoyageCreateLimits
 		nil,   // tempoVoyagePreviewLimits
 		false, // webUIEnabled — /ui вне интереса soul-роутинг-теста
-		nil,   // logger
+		nil,   // ldapAuth (LDAP не сконфигурирован в тесте)
+		nil,   // oidcAuth (OIDC не сконфигурирован в тесте)
+		nil,                                  // loginGuard (anti-bruteforce off в тесте)
+		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
+		nil,                                  // logger
 	)
 	routes, ok := h.(chi.Routes)
 	if !ok {
