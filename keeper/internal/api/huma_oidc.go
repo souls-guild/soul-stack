@@ -71,7 +71,9 @@ func oidcLoginOperation() huma.Operation {
 		Description:   "Федеративная аутентификация (ADR-058): генерирует state+nonce+PKCE и редиректит (302) на authorization_endpoint внешнего IdP.",
 		Tags:          []string{"auth"},
 		DefaultStatus: http.StatusFound,
-		Errors:        []int{http.StatusInternalServerError},
+		// 429 — anti-bruteforce throttle (AuthLoginLimit middleware, HIGH-3:
+		// гасит flow-state-flood на старте login-flow).
+		Errors: []int{http.StatusTooManyRequests, http.StatusInternalServerError},
 	}
 }
 
@@ -100,7 +102,8 @@ func oidcCallbackOperation() huma.Operation {
 		Description:   "Валидирует id_token (JWKS-подпись/iss/aud/exp/nonce), маппит на operators(aid)+роли, выпускает внутренний JWT в HttpOnly+Secure cookie и редиректит (302) в UI. Ошибка валидации/маппинга → 401/403.",
 		Tags:          []string{"auth"},
 		DefaultStatus: http.StatusFound,
-		Errors:        []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError},
+		// 429 — anti-bruteforce throttle/lockout (AuthLoginLimit middleware, HIGH-3).
+		Errors: []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests, http.StatusInternalServerError},
 	}
 }
 
@@ -147,15 +150,11 @@ func registerHumaOIDCLogin(humaAPI huma.API, d *OIDCAuthDeps) {
 			return nil, huma.NewError(http.StatusInternalServerError, "internal error")
 		}
 
-		cookie := &http.Cookie{
-			Name:     sessionCookieName,
-			Value:    token,
-			Path:     "/",
-			HttpOnly: true,
-			Secure:   true, // TLS-required периметр (ADR-002 mTLS/HTTPS)
-			SameSite: http.SameSiteLaxMode, // Lax: cookie доезжает на cross-site redirect от IdP (Strict бы её срезал)
-			Expires:  time.Now().Add(d.TTL),
-		}
+		// ЕДИНАЯ cookie-фабрика (newSessionCookie): SameSite=Strict симметрично LDAP
+		// (MED-фикс рассинхрона, ADR-058(g)). Strict безопасен для callback-а:
+		// cookie СТАВИТСЯ на ответе callback-а, а ОТПРАВЛЯЕТСЯ на последующей
+		// same-site навигации /ui (302). См. doc newSessionCookie.
+		cookie := newSessionCookie(token, d.TTL)
 
 		if d.Audit != nil {
 			ev := &audit.Event{

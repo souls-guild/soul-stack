@@ -28,6 +28,28 @@ import (
 // доставка, JSON-токена в теле нет). `soul_session` — собственное имя сессии.
 const sessionCookieName = "soul_session"
 
+// newSessionCookie собирает Set-Cookie с внутренним JWT — ЕДИНАЯ точка для LDAP и
+// OIDC (ADR-058(g)/(№4): симметрия способов логина обязательна). HttpOnly+Secure+
+// `SameSite=Strict`+`Path=/`.
+//
+// SameSite=Strict безопасен и для OIDC-callback (MED-фикс рассинхрона Lax↔Strict,
+// 2026-06-24): SameSite ограничивает ОТПРАВКУ cookie на cross-site-запрос, а не её
+// УСТАНОВКУ. На cross-site top-level redirect от IdP мы cookie СТАВИМ (Set-Cookie на
+// ответе callback-а), а не читаем; следующий шаг — same-site top-level навигация на
+// `/ui` (302 Location), на которой Strict-cookie ОТПРАВЛЯЕТСЯ. Прежний Lax на OIDC
+// был избыточной послаблением и расходился с LDAP — устранено.
+func newSessionCookie(token string, ttl time.Duration) *http.Cookie {
+	return &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true, // TLS-required периметр (ADR-002 mTLS/HTTPS)
+		SameSite: http.SameSiteStrictMode,
+		Expires:  time.Now().Add(ttl),
+	}
+}
+
 // LDAPAuthDeps — зависимости endpoint-а LDAP-логина. При nil-значении в
 // [Deps.LDAPAuth] endpoint не монтируется (opt-in-паттерн, как pushH/errandH).
 type LDAPAuthDeps struct {
@@ -85,7 +107,8 @@ func ldapLoginOperation() huma.Operation {
 		Description:   "Федеративная аутентификация (ADR-058): LDAP search-bind → маппинг на operators(aid)+роли → внутренний JWT в HttpOnly+Secure cookie. Тело ответа пустое.",
 		Tags:          []string{"auth"},
 		DefaultStatus: http.StatusNoContent,
-		Errors:        []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError},
+		// 429 — anti-bruteforce throttle/lockout (AuthLoginLimit middleware, HIGH-3).
+		Errors: []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests, http.StatusInternalServerError},
 	}
 }
 
@@ -114,15 +137,7 @@ func registerHumaLDAPLogin(humaAPI huma.API, d *LDAPAuthDeps) {
 			return nil, huma.NewError(http.StatusInternalServerError, "internal error")
 		}
 
-		cookie := &http.Cookie{
-			Name:     sessionCookieName,
-			Value:    token,
-			Path:     "/",
-			HttpOnly: true,
-			Secure:   true, // TLS-required периметр (ADR-002 mTLS/HTTPS)
-			SameSite: http.SameSiteStrictMode,
-			Expires:  time.Now().Add(d.TTL),
-		}
+		cookie := newSessionCookie(token, d.TTL)
 
 		// audit operator.login (после выпуска JWT). БЕЗ пароля/bind-creds;
 		// группы — не секрет, но для гигиены кладём только method/aid/provisioned.

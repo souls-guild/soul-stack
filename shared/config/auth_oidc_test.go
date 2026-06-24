@@ -16,7 +16,7 @@ const oidcValidBlock = `auth:
     redirect_url: "https://keeper.example.com/auth/oidc/callback"
     scopes: ["openid", "email", "groups"]
     groups_claim: groups
-    aid_claim: preferred_username
+    aid_claim: sub
     group_role_map:
       ops: ["cluster-admin"]
 `
@@ -105,5 +105,29 @@ func TestKeeperAuthOIDC_PublicClientNoSecret(t *testing.T) {
 	if diag.HasErrors(diags) {
 		dump(t, diags)
 		t.Fatalf("public-client (no client_secret_ref) must be valid; got errors")
+	}
+}
+
+// TestKeeperAuthOIDC_MutableAIDClaimWarns — aid_claim из user-mutable claim
+// (email / preferred_username) → WARN (identity-spoofing-риск, MED-фикс), НЕ
+// ERROR (оператор может осознанно выбрать). `sub` (дефолт) — без WARN.
+func TestKeeperAuthOIDC_MutableAIDClaimWarns(t *testing.T) {
+	for _, claim := range []string{"email", "preferred_username"} {
+		src := keeperBaseRequired + `auth:
+  oidc:
+    issuer: "https://idp.example.com/realms/soul"
+    client_id: soul-keeper
+    redirect_url: "https://keeper.example.com/auth/oidc/callback"
+    aid_claim: ` + claim + `
+`
+		_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", []byte(src), ValidateOptions{})
+		if diag.HasErrors(diags) {
+			dump(t, diags)
+			t.Fatalf("aid_claim=%s must WARN, not error", claim)
+		}
+		if !hasCode(diags, "oidc_aid_claim_mutable") {
+			dump(t, diags)
+			t.Fatalf("expected oidc_aid_claim_mutable WARN for aid_claim=%s", claim)
+		}
 	}
 }

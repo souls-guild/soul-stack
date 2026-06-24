@@ -107,8 +107,11 @@ func TestOIDCCallback_SetsSecureCookieAndRedirects(t *testing.T) {
 	if !c.Secure {
 		t.Errorf("cookie must be Secure")
 	}
-	if c.SameSite != http.SameSiteLaxMode {
-		t.Errorf("cookie SameSite = %v, want Lax (cross-site redirect from IdP)", c.SameSite)
+	// MED-фикс (2026-06-24): SameSite унифицирован со Strict (parity LDAP,
+	// ADR-058(g)). Strict безопасен на callback-е: cookie СТАВИТСЯ на ответе
+	// callback-а, ОТПРАВЛЯЕТСЯ на последующей same-site навигации /ui (302).
+	if c.SameSite != http.SameSiteStrictMode {
+		t.Errorf("cookie SameSite = %v, want Strict (унифицировано с LDAP, MED-фикс)", c.SameSite)
 	}
 	if strings.Contains(rec.Body.String(), "ey.oidc.jwt") {
 		t.Errorf("JWT must NOT be in response body (cookie-only)")
