@@ -11,10 +11,10 @@
 # Обзор конвейера (порядок include = порядок задач; от него зависят финальные
 # индексы плоского плана, на которые ассертят L0-кейсы):
 #   install.yml  — core.pkg.installed redis-server + каталог unix-сокета;
-#   server.yml   — data-плоскость redis-server (gated deploy_redis): TLS-каталог +
-#                  3 PEM-задачи (cert/key/ca, per-task when) → users.acl → redis.conf
-#                  → systemd hardening drop-in → core.service.running/restarted. ВСЕ
-#                  register'ы
+#   server.yml   — data-плоскость redis-server (gated deploy_redis ОДНИМ внешним
+#                  block-ом): TLS-каталог + 3 PEM-задачи (cert/key/ca, в nested
+#                  tls.enable-block) → users.acl → redis.conf → systemd hardening
+#                  drop-in → core.service.running/restarted. ВСЕ register'ы
 #                  redis_* и их onchanges-рестарт ОБЯЗАНЫ жить В ЭТОМ файле: ядро НЕ
 #                  раскрывает register через границу include (cross-file register —
 #                  open Q tasks.md §12). Разрыв границы расцепил бы ротацию cert от

@@ -22,11 +22,19 @@
 # mode/owner/group, чинит дрейф, поддерживает dry-run (в отличие от императивного
 # core.exec.run install -d). mode 0755: владелец redis пишет сокет, остальные
 # обходят каталог; доступ к сокету режет unixsocketperm (директива конфига).
+# Путь/владелец/режим каталога — task-vars (именованные, а не хардкод инлайн в
+# params): socket_dir переиспользуется при будущих ссылках, owner/group/mode редактся
+# в одном месте.
 - name: Ensure the redis socket directory exists
   module: core.file.directory
-  when: "(has(input.deploy_redis) ? input.deploy_redis : true) && has(input.config) && has(input.config.unixsocket)"
+  when: "default(input.deploy_redis, true) && has(input.config) && has(input.config.unixsocket)"
+  vars:
+    socket_dir: /var/run/redis
+    dir_owner: redis
+    dir_group: redis
+    dir_mode: "0755"
   params:
-    path: /var/run/redis
-    owner: redis
-    group: redis
-    mode: "0755"
+    path: "${ vars.socket_dir }"
+    owner: "${ vars.dir_owner }"
+    group: "${ vars.dir_group }"
+    mode: "${ vars.dir_mode }"

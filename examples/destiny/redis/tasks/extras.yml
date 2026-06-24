@@ -56,7 +56,7 @@
     owner: root
     group: root
     vars:
-      sysctl_settings: "${ has(input.sysctl_settings) ? input.sysctl_settings : {} }"
+      sysctl_settings: "${ default(input.sysctl_settings, {}) }"
 
 # Применяем drop-in реактивно на его изменение. `sysctl --system` перечитывает все
 # /etc/sysctl.d/*.conf; onchanges → не изменился, no-op. В контейнерах часть vm.*
