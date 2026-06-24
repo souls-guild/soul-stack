@@ -1,0 +1,110 @@
+# L0-испытание add_node: присоединить новую ноду как РЕПЛИКУ с АВТО-выбором
+# master (master_sid не задан → master.addr пуст → плагин балансирует сам).
+# Roster прогона — 3 хоста (две существующие ноды + новичок node-9). Таргет
+# destiny-задачи — ТОЛЬКО новичок (where soulprint.self.sid == new_node_sid):
+# render_context.self = node-9, cluster-announce-ip в .tmpl возьмётся из ЕГО
+# primary_ip (TILING-урок: per-host через .self, не apply.input).
+#
+# Конфиг redis.conf берётся из incarnation.state.redis_config (источник истины,
+# зафиксированный create) — НЕ перевычисляется → нет drift render↔state.
+# nodes-endpoint-ы add-node строятся из roster (soulprint.hosts) по SID:
+# new_node=node-9, seed=node-1; master.addr пуст (авто-выбор).
+name: add replica node (auto-pick master)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-1.example.com
+      covens: [add_node, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-2.example.com
+      covens: [add_node, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-9.example.com
+      covens: [add_node, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.9 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/add_node:
+      password: s3cr3t-redis-pass-addnode
+  state:
+    redis_type: cluster
+    redis_version: ""
+    redis_config:
+      maxmemory: "256mb"
+      cluster-enabled: "yes"
+      cluster-config-file: "nodes.conf"
+      cluster-node-timeout: "5000"
+    redis_users: {}
+    redis_hosts: []
+
+  input:
+    new_node_sid: node-9.example.com
+    seed_sid: node-1.example.com
+    role: replica
+
+assert:
+  rendered_tasks:
+    # GUARD теперь assert: (new_node != seed, оба в roster → that[0] true → render
+    # проходит, задача в план НЕ эмитится) — все индексы ниже сдвинуты на −1.
+    #
+    # redis.conf рендерится на НОВОЙ ноде (render_context.self = node-9).
+    # config = incarnation.state.redis_config (cluster-директивы), не перевычислен.
+    - index: 14
+      module: core.file.rendered
+      params:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            password: s3cr3t-redis-pass-addnode
+            loadmodules: []
+            config:
+              maxmemory: "256mb"
+              cluster-enabled: "yes"
+              cluster-config-file: "nodes.conf"
+              cluster-node-timeout: "5000"
+          self:
+            sid: node-9.example.com
+            covens: [add_node, redis]
+            choirs: []
+            role: ""
+            network:
+              primary_ip: 10.0.0.9
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # health-gate на новой ноде: PING живого Redis перед вводом в кластер.
+    # Сдвиг −1 (extras-sysctl 2→1 задачи, core.sysctl.applied).
+    - index: 28
+      module: community.redis.command
+      params:
+        addr: "127.0.0.1:6379"
+        password: s3cr3t-redis-pass-addnode
+        args: ["PING"]
+
+    # ADD-NODE run_once: endpoint-ы из roster по SID. master.addr пуст (авто-выбор
+    # наименее загруженного master-а делает плагин — scenario не транслирует).
+    # Сдвиг −1 (extras-sysctl 2→1 задачи, core.sysctl.applied).
+    - index: 29
+      module: community.redis.cluster
+      params:
+        action: add-node
+        role: replica
+        password: s3cr3t-redis-pass-addnode
+        new_node:
+          addr: "10.0.0.9:6379"
+        seed:
+          addr: "10.0.0.1:6379"
+        master:
+          addr: ""

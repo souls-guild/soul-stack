@@ -1,9 +1,0 @@
-# Для всех incarnation, у которых среди coven-меток есть "prod"
-
-redis_config:
-  loglevel: "notice"
-  slowlog-log-slower-than: "10000"
-  slowlog-max-len: "128"
-
-# Перебивает baseline для prod-окружений
-env: "prod"

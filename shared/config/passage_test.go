@@ -12,8 +12,8 @@ import (
 // config-а), падая на любой error-диагностике. Фикстуры guard-тестов — inline, а
 // НЕ загрузка из examples/**: examples — WIP-зона пользователя (uncommitted
 // правки), guard-инвариант на silent-wrong-target обязан быть детерминирован и не
-// зависеть от состояния примеров. redis-cluster-фикстуры ниже воспроизводят
-// committed-форму examples/service/redis-cluster/scenario/{...}/main.yml.
+// зависеть от состояния примеров. Фикстуры ниже — синтетические, воспроизводящие
+// 3-Passage re-probe-идиому (исторически redis-cluster restart).
 func loadTasks(t *testing.T, src string) []Task {
 	t.Helper()
 	m, _, diags, err := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
@@ -37,7 +37,7 @@ func stratify(t *testing.T, src string) Passage {
 	return p
 }
 
-// --- redis-cluster фикстуры (committed-форма examples) ---
+// --- синтетические фикстуры 3-Passage re-probe (исторически redis-cluster restart) ---
 
 const redisUpdateACL = `
 name: update_acl
@@ -226,7 +226,7 @@ func TestStratify_RedisRestart(t *testing.T) {
 // register.X, её passage ОБЯЗАН быть СТРОГО больше passage probe, эмитящего X.
 // Регресс, отправивший потребителя в <= passage probe, означает резолв where: по
 // пустому/устаревшему register → разрушительная операция на нерезолвнутом таргете
-// МОЛЧА. Проверяется на всех redis-cluster-фикстурах через прямой обход графа.
+// МОЛЧА. Проверяется на всех синтетических фикстурах через прямой обход графа.
 func TestStratify_InvariantConsumerStrictlyAfterProbe(t *testing.T) {
 	fixtures := map[string]string{
 		"update_acl": redisUpdateACL,
@@ -1145,12 +1145,12 @@ tasks:
 }
 
 // TestWithinBlock_AcceptanceRestart (guard #6) — ★ ПРИЁМКА: реальный
-// examples/service/redis-cluster/scenario/restart/main.yml (probe redis_role
-// top-level, block с where на внешний register) ВАЛИДЕН → ok==false. Плюс
-// регресс-цикл по ВСЕМ committed example-сценариям: ни один не должен ловиться
-// детектором (иначе валидный пример молча перестал бы прогоняться).
+// examples/service/redis/scenario/restart/main.yml (probe redis_role top-level,
+// block с where на внешний register) ВАЛИДЕН → ok==false. Плюс регресс-цикл по
+// ВСЕМ committed example-сценариям: ни один не должен ловиться детектором (иначе
+// валидный пример молча перестал бы прогоняться).
 func TestWithinBlock_AcceptanceRestart(t *testing.T) {
-	restartPath := filepath.FromSlash("../../examples/service/redis-cluster/scenario/restart/main.yml")
+	restartPath := filepath.FromSlash("../../examples/service/redis/scenario/restart/main.yml")
 	m, _, diags, err := LoadScenarioManifest(restartPath, ValidateOptions{})
 	if err != nil {
 		t.Fatalf("LoadScenarioManifest(restart): %v", err)

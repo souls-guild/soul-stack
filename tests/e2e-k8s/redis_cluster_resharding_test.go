@@ -13,17 +13,20 @@ import (
 
 // TestL3cRedisCluster_Resharding — L3c-5 part B: портирование мега-теста
 // 2026-05-25 (project_megatest_ha_scale_2026_05_25.md) в kind. 3 Soul-pod →
-// scenario `create` из redis-cluster-live (3-master cluster,
-// --cluster-replicas 0) → assert `cluster_state:ok` через `redis-cli cluster
-// info` в одном из pod-ов.
+// scenario `create` консолидированного redis (redis_type=cluster, 3-master
+// cluster, replicas_per_shard=0) → assert `cluster_state:ok` через `redis-cli
+// cluster info` в одном из pod-ов.
+//
+// Прежний самодостаточный cluster-сервис удалён (redis-консолидация): cluster-флоу
+// поглощён режимом cluster консолидированного redis.
 //
 // Pre-requisites:
-//   - service-catalog c записью `redis-cluster-live` (POST /v1/services).
-//   - keeper-pod ДОЛЖЕН видеть git-repo `redis-cluster-live`. В L3b
-//     это file://-URL на host-side bare-repo (см. tests/e2e-live/harness/
-//     git.go); в kind-cluster file:// из pod-а недоступен — host-FS отсутствует.
-//     Нужен либо in-cluster git-server pod (sidecar/standalone), либо
-//     mount/projected-volume с пред-сделанным bare-repo.
+//   - service-catalog c записью `redis` (POST /v1/services).
+//   - keeper-pod ДОЛЖЕН видеть git-repo `redis`. В L3b это file://-URL на
+//     host-side bare-repo (см. tests/e2e-live/harness/git.go); в kind-cluster
+//     file:// из pod-а недоступен — host-FS отсутствует. Нужен либо in-cluster
+//     git-server pod (sidecar/standalone), либо mount/projected-volume с
+//     пред-сделанным bare-repo.
 //
 // L3c-5 НЕ закрывает git-server infra для kind. Тест в текущем виде —
 // каркас с t.Skip и понятной диагностикой; реальный прогон — L3c-future
@@ -41,8 +44,8 @@ func TestL3cRedisCluster_Resharding(t *testing.T) {
 	// harness.DeployGitServerPod + Stack.RegisterService с in-cluster URL,
 	// этот код станет boilerplate.
 	stack := harness.NewStack(t, harness.Config{
-		ExamplePath: "examples/service/redis-cluster-live",
-		ServiceName: "redis-cluster-live",
+		ExamplePath: "examples/service/redis",
+		ServiceName: "redis",
 		Souls:       3,
 	})
 	certPEM, keyPEM, caPEM := stack.DeployInfra(t)
@@ -54,11 +57,17 @@ func TestL3cRedisCluster_Resharding(t *testing.T) {
 		t.Fatalf("DeployMultiSoul: ожидалось 3 SID, получено %d", len(sids))
 	}
 
-	incName := stack.CreateIncarnation(t, "test-redis-cluster", "redis-cluster-live@main", map[string]any{
-		"cluster_replicas": 0,
+	incName := stack.CreateIncarnation(t, "test-redis-resharding", "redis@main", map[string]any{
+		"redis_type":         "cluster",
+		"version":            "7.2.4",
+		"shards":             3,
+		"replicas_per_shard": 0,
 	})
 	applyID := stack.RunScenario(t, incName, "create", map[string]any{
-		"cluster_replicas": 0,
+		"redis_type":         "cluster",
+		"version":            "7.2.4",
+		"shards":             3,
+		"replicas_per_shard": 0,
 	})
 	stack.WaitApplySuccess(t, applyID, 600)
 

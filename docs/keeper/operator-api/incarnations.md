@@ -24,20 +24,19 @@ Permission: `incarnation.create`. MCP-tool: `keeper.incarnation.create`.
 ```json
 {
   "name": "redis-prod",
-  "service": "redis-cluster",
+  "service": "redis",
   "covens": ["prod", "dc-eu-west"],
   "input": {
     "spawn": {
       "provider": "aws-prod",
       "profile": "redis-medium-eu",
-      "count": 3,
-      "role_distribution": { "master": 1, "replica": 2 }
+      "count": 3
     }
   }
 }
 ```
 
-**RBAC coven-scope (ADR-008 amendment a).** `covens` задаёт env-теги, по которым RBAC ограничивает incarnation-операции. Эффективный scope incarnation = `covens ∪ {name}` (имя — корневая Coven-метка). Роль `incarnation.* on coven=prod` получает доступ к incarnation-ам с `prod` в declared `covens` (или с именем `prod`); роль `incarnation.* on service=redis-cluster` — ко всем incarnation сервиса `redis-cluster` независимо от тегов. На **create** scope проверяется по `service` + declared `covens ∪ {name}` из тела: оператор со scope `coven=prod` не может создать incarnation с `covens=["dev"]` (получит `403 forbidden`) — это защита от privilege-escalation через тег вне своего scope. Подробности — [rbac.md → Грамматика селектора](../rbac.md#грамматика-селектора).
+**RBAC coven-scope (ADR-008 amendment a).** `covens` задаёт env-теги, по которым RBAC ограничивает incarnation-операции. Эффективный scope incarnation = `covens ∪ {name}` (имя — корневая Coven-метка). Роль `incarnation.* on coven=prod` получает доступ к incarnation-ам с `prod` в declared `covens` (или с именем `prod`); роль `incarnation.* on service=redis` — ко всем incarnation сервиса `redis` независимо от тегов. На **create** scope проверяется по `service` + declared `covens ∪ {name}` из тела: оператор со scope `coven=prod` не может создать incarnation с `covens=["dev"]` (получит `403 forbidden`) — это защита от privilege-escalation через тег вне своего scope. Подробности — [rbac.md → Грамматика селектора](../rbac.md#грамматика-селектора).
 
 **Response `202 Accepted`:**
 

@@ -1,0 +1,84 @@
+# L0-испытание create в режиме sentinel БЕЗ реплик (replicas=0 → ровно 1 хост,
+# size-guard 1 == 1+0). sentinel_quorum НЕ задан → auto-quorum в apply =
+# size(soulprint.hosts)/2+1 = 1/2+1 = 1 (CONFIG MONITOR quorum). В state quorum=0
+# (state_changes не видит soulprint.hosts — input-only; auto вычисляется в apply,
+# см. main.yml). sentinel_master_name НЕ задан → дефолт mymaster.
+#
+# Покрывает: replicas=0 граница size-guard; auto-quorum (без input.sentinel_quorum);
+# default master_name; single-host roster (1 sentinel мониторит сам себя как master).
+name: sentinel create no replicas, auto quorum and default master name
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.9 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+  essence:
+    redis_type: sentinel
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+  input:
+    redis_type: sentinel
+    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
+    # distro-native пин (мажор < 8 → version-gate модулей не активен).
+    version: "7.2.4"
+    replicas: 0
+
+assert:
+  rendered_tasks:
+    # Mode-guard УБРАН (enum) И sentinel size-guard переведён в assert: (ADR-009
+    # amendment) — ОБА в план НЕ эмитятся. cluster size-guard (assert:) + shards-guard
+    # (required_when) слот не занимали. 1 == 1+0 → sentinel guard that[0] true → render
+    # проходит. Сдвиг: задачи после guard −2 (mode-guard + sentinel-guard) + −1
+    # (extras-sysctl сжаты 2→1 задачи core.sysctl.applied): replica 30→27,
+    # sentinel-monitor 31→28.
+    #
+    # REPLICAOF: master_addr = единственный хост (он же master) → плагин no-op
+    # (addr==master_addr guard). Здесь ассертим лишь params (host-инвариант). index 27.
+    - index: 34
+
+      module: community.redis.replica
+      params:
+        addr: "127.0.0.1:6379"
+        master_addr: "10.0.0.9:6379"
+        password: s3cr3t-redis-pass-create
+
+    # SENTINEL MONITOR: monitor.ip — единственный хост; auto-quorum = 1/2+1 = 1
+    # (sentinel_quorum не задан). master_name по умолчанию mymaster. index 28.
+    - index: 35
+
+      module: community.redis.sentinel
+      params:
+        addr: "127.0.0.1:26379"
+        master_name: mymaster
+        auth_pass: s3cr3t-redis-pass-create
+        redis_version: "7.2.4"
+        monitor:
+          ip: 10.0.0.9
+          port: 6379
+          quorum: 1
+
+  state_changes:
+    redis_type: sentinel
+    redis_version: "7.2.4"
+    redis_users: {}
+    redis_hosts: []
+    # auto-quorum НЕ материализуется в state (input-only) → 0; master_name дефолт.
+    redis_sentinel:
+      master_name: mymaster
+      quorum: 0

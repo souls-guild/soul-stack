@@ -1,0 +1,16 @@
+name: users-list-to-map
+description: >
+  Базовый случай: список имён пользователей переходит в map с per-user perms.
+  Несколько пользователей — foreach по элементам списка.
+
+state_before:
+  redis_users: ["app", "monitor"]
+  redis_type: standalone
+  redis_version: "7.2.4"
+
+state_after:
+  redis_users:
+    app:     { perms: "off ~* &* +@all", state: "off" }
+    monitor: { perms: "off ~* &* +@all", state: "off" }
+  redis_type: standalone
+  redis_version: "7.2.4"

@@ -1,0 +1,114 @@
+# L0-испытание restart: rolling-restart реплик НА TLS-инстансе. Парный guard к
+# rolling-restart-replicas (plaintext) — покрывает TLS-ветку дискриминатора
+# day-2-гейта. Render-only, герметично. Roster — 2 хоста, probe-роль = slave.
+#
+# ★ Инвариант (day-2-конвенция, docs/destiny/production-conventions.md §7a, ADR-057
+# amendment): дискриминатор TLS берётся из ИМЕНОВАННОГО поля РАЗВЁРНУТОГО
+# incarnation.state.tls (state_schema v3), НЕ из essence и НЕ парсингом redis_config.
+# create записал в state.tls операторское TLS-намерение (enable/port); day-2 restart
+# обязан коннектиться плагином ПО TLS, иначе plaintext-коннект на TLS-only Redis провалит
+# health-gate (а AUTH plaintext при открытом plain-порту — утечка пароля). Этот кейс
+# доказывает, что при state.tls.enable=true probe/health-gate рендерятся tls:true,
+# addr на state.tls.port, tls_ca = PEM CA.
+#
+# ★ Дискриминатор — `default(incarnation.state.tls.enable, false)` (ИМЕНОВАННЫЙ
+# read-model v3, без bracket-нотации дефисного ключа). state.tls.port — INTEGER (7379)
+# → addr конкатенирует через string(...). tls_ca — PEM CA из vault(essence.tls_ca_ref)
+# (плагин ждёт PEM-содержимое, НЕ путь): секрет в state не лежит, резолвится тем же
+# ref-ом, что и create.
+#
+# Что ассертим (критерий приёмки TLS-ветки гейта):
+#   1. probe (community.redis.role): tls=true, addr 127.0.0.1:7379 (НЕ plain 6379),
+#      tls_ca = PEM CA из Vault.
+#   2. block-потомок 1: Restart redis-server (core.service.restarted).
+#   3. block-потомок 2: health-gate (community.redis.replica-synced) с теми же
+#      TLS-params (tls=true, addr на tls-port, tls_ca = PEM).
+#
+# ВНИМАНИЕ L0-ограничение: mocks.register — ЕДИНЫЙ payload на весь roster (как в
+# rolling-restart-replicas). redis_role.role = slave → block-потомки (where slave)
+# рендерятся, master-restart (where master) — placeholder-skip.
+name: rolling-restart replicas over TLS reads tls-port from incarnation.state
+
+fixtures:
+  hosts:
+    - sid: node-1.example.com
+      covens: [restart]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-2.example.com
+      covens: [restart]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+
+  input:
+    reason: "rolling restart over TLS for L0"
+
+  # Развёрнутый incarnation.state v3 (от create с включённым TLS): ИМЕНОВАННОЕ поле
+  # state.tls несёт enable=true + port=7379 (INTEGER). День-2 гейт смотрит СЮДА (не в
+  # essence, не парсит redis_config) — это и есть проверяемый инвариант. redis_config
+  # (write-model) присутствует тоже (реалистичный v3-state), но дискриминатор его
+  # больше НЕ читает.
+  state:
+    redis_type: standalone
+    redis_version: "7.2.4"
+    tls:
+      enable:   true
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      tls-port:         "7379"
+      tls-cert-file:    /etc/redis/tls/redis.crt
+      tls-key-file:     /etc/redis/tls/redis.key
+      tls-ca-cert-file: /etc/redis/tls/ca.crt
+      tls-replication:  "yes"
+
+  # essence.tls_ca_ref — Vault-ПУТЬ источника PEM CA (author-context, host-инвариант):
+  # day-2 резолвит его через vault() ровно как create. Сам PEM — в fixtures.vault ниже.
+  essence:
+    tls_ca_ref: "secret/services/redis/tls#ca"
+
+  # Пароль (secret/redis/restart#password, incarnation.name == restart) + PEM CA
+  # (secret/services/redis/tls#ca, по essence.tls_ca_ref).
+  vault:
+    secret/redis/restart:
+      password: fixture-redis-pass-16+
+    secret/services/redis/tls:
+      ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+
+mocks:
+  register:
+    redis_role:
+      role: slave
+
+assert:
+  rendered_tasks:
+    # ── probe (community.redis.role): ПО TLS (tls-port в state.redis_config) ──
+    - index: 0
+      module: community.redis.role
+      params:
+        addr: "127.0.0.1:7379"
+        password: fixture-redis-pass-16+
+        tls: true
+        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+
+    # ── block-потомок 1: Restart redis-server (core.service.restarted) ───────
+    - index: 1
+      module: core.service.restarted
+      params:
+        name: redis-server
+
+    # ── block-потомок 2: slave-health-gate (community.redis.replica-synced) ПО TLS ──
+    - index: 2
+      module: community.redis.replica-synced
+      params:
+        addr: "127.0.0.1:7379"
+        password: fixture-redis-pass-16+
+        tls: true
+        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"

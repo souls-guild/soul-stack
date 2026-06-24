@@ -1,0 +1,53 @@
+# L0-испытание size-guard create в режиме sentinel — FAIL-ветка (mismatch), assert:.
+# Roster из 3 хостов, но replicas=1 → ожидается 1+1=2 хоста. 3 != 2 → size-guard
+# (assert:, ADR-009 amendment 2026-06-23; тот же механизм, что cluster size-guard)
+# вычисляет предикат that[0] в FALSE на РЕНДЕРЕ Keeper-side → render ОБРЫВАЕТСЯ
+# ошибкой с message "topology mismatch: ..." ДО dispatch (ни одной задачи на Soul).
+# harness ассертит обрыв через expect_render_error (ADR-023 amendment).
+#
+# Парный с sentinel-create-1master-2replica (true-ветка): тот же guard-предикат
+# (size == 1 + replicas), противоположный исход — обе полярности покрыты.
+name: sentinel size-guard fails on topology mismatch (3 hosts != 1 + 1 replica)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-1.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+    - sid: node-2.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+    - sid: node-3.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+  essence:
+    redis_type: sentinel
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+  input:
+    redis_type: sentinel
+    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
+    # distro-native пин (мажор < 8 → version-gate модулей не активен).
+    version: "7.2.4"
+    replicas: 1
+
+# Render ОБРЫВАЕТСЯ assert-провалом sentinel size-guard-а: ожидаем ошибку рендера с
+# message из assert. expect_render_error взаимоисключим с assert.rendered_tasks
+# (плана нет — прогон не стартовал).
+expect_render_error: "topology mismatch: hosts != 1 + replicas"

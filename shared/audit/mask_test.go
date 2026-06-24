@@ -253,6 +253,94 @@ func TestMaskSecrets_SubstringKeys(t *testing.T) {
 	}
 }
 
+func TestMaskSecrets_TLSPEMKeys(t *testing.T) {
+	// redis-консолидация TLS (community.redis): PEM-материал коннекта приходит в
+	// params под ключами tls_key / tls_cert / tls_ca. Голый фрагмент key/cert/ca
+	// в каталог не входит, поэтому добавлен tls[_-]?(key|cert|ca) — иначе целый
+	// приватный ключ утекал бы plaintext в логи/OTel/RunResult (модель маскинга —
+	// ИМЯ ключа). Это BLOCKER masking-guard класса merge-masking.
+	const pemKey = "-----BEGIN PRIVATE KEY-----\nMIIE...\n-----END PRIVATE KEY-----"
+	const pemCert = "-----BEGIN CERTIFICATE-----\nMIID...\n-----END CERTIFICATE-----"
+	in := map[string]any{
+		"tls_key":     pemKey,
+		"tls_cert":    pemCert,
+		"tls_ca":      pemCert,
+		"tls-key":     pemKey,  // дефисная форма
+		"tls_ca_data": pemCert, // *-data форма
+		// Несекретные TLS-параметры коннекта — НЕ маскируются (булевы/числа/имена).
+		"tls":             true,
+		"tls_enable":      true,
+		"tls_port":        7379,
+		"tls_skip_verify": false,
+	}
+	out := MaskSecrets(in)
+
+	for _, k := range []string{"tls_key", "tls_cert", "tls_ca", "tls-key", "tls_ca_data"} {
+		if out[k] != maskedValue {
+			t.Errorf("%s = %v, want %q (PEM-материал обязан маскироваться)", k, out[k], maskedValue)
+		}
+	}
+	if out["tls"] != true {
+		t.Errorf("tls = %v, want passthrough (флаг, не секрет)", out["tls"])
+	}
+	if out["tls_enable"] != true {
+		t.Errorf("tls_enable = %v, want passthrough (флаг)", out["tls_enable"])
+	}
+	if out["tls_port"] != 7379 {
+		t.Errorf("tls_port = %v, want passthrough (число)", out["tls_port"])
+	}
+	if out["tls_skip_verify"] != false {
+		t.Errorf("tls_skip_verify = %v, want passthrough (булев флаг verify)", out["tls_skip_verify"])
+	}
+}
+
+// TestMaskSecrets_RedisRenderContextTLSVars фиксирует ИБ-фикс redis-консолидации
+// (medium-secrets): PEM render-vars destiny `redis` переименованы cert/key/ca →
+// tls_cert/tls_key/tls_ca, чтобы каталог маскинга ловил их ПО ИМЕНИ. Тест
+// моделирует форму payload core.file.rendered (render_context.vars с PEM) и
+// доказывает контраст:
+//   - голые cert/key/ca (как было ДО фикса) НЕ маскируются → leak в логи/OTel/
+//     RunResult (демонстрация закрытой дыры);
+//   - tls_cert/tls_key/tls_ca (как стало ПОСЛЕ фикса) маскируются.
+func TestMaskSecrets_RedisRenderContextTLSVars(t *testing.T) {
+	const pemKey = "-----BEGIN PRIVATE KEY-----\nSERVERKEY\n-----END PRIVATE KEY-----"
+	const pemCert = "-----BEGIN CERTIFICATE-----\nSERVERCERT\n-----END CERTIFICATE-----"
+	const pemCA = "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+
+	// payload в форме core.file.rendered: params.render_context.vars.{tls_*}.
+	payload := map[string]any{
+		"path": "/etc/redis/tls/redis.key",
+		"render_context": map[string]any{
+			"vars": map[string]any{
+				"tls_cert": pemCert,
+				"tls_key":  pemKey,
+				"tls_ca":   pemCA,
+			},
+		},
+	}
+	out := MaskSecrets(payload)
+	vars := out["render_context"].(map[string]any)["vars"].(map[string]any)
+	for _, k := range []string{"tls_cert", "tls_key", "tls_ca"} {
+		if vars[k] != maskedValue {
+			t.Errorf("render_context.vars.%s = %v, want %q (PEM обязан маскироваться по имени)", k, vars[k], maskedValue)
+		}
+	}
+	if out["path"] != "/etc/redis/tls/redis.key" {
+		t.Errorf("path = %v, want passthrough", out["path"])
+	}
+
+	// Контраст: ПРЕЖНИЕ голые имена cert/key/ca под фильтр НЕ попадают (дыра,
+	// которую закрыло переименование). Если этот ассерт когда-нибудь упадёт —
+	// каталог расширился и var-имена можно вернуть к голым; пока он стережёт
+	// причину, по которой имена обязаны нести tls_-префикс.
+	bareOut := MaskSecrets(map[string]any{"cert": pemCert, "key": pemKey, "ca": pemCA})
+	for _, k := range []string{"cert", "key", "ca"} {
+		if bareOut[k] == maskedValue {
+			t.Errorf("голое %q замаскировалось — каталог расширился, проверь обоснование префикса tls_", k)
+		}
+	}
+}
+
 func TestMaskSecrets_BootstrapTokenExact(t *testing.T) {
 	// Конкретный кейс из verification-плана: {"bootstrap_token":"secret123"}
 	// → {"bootstrap_token":"***MASKED***"}.

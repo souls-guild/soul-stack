@@ -9,7 +9,7 @@ import (
 )
 
 // loopDestiny — destiny с одной loop:-задачей по input.changes (зеркало
-// service/redis-cluster scenario update_acl → destiny update_acls). Каждый item
+// service/redis scenario update_acl → destiny update_acls). Каждый item
 // разворачивается в отдельную RenderedTask. input.changes передаётся через
 // apply.input родителя.
 func loopDestiny() *ResolvedDestiny {

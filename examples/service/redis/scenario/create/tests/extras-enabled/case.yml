@@ -1,0 +1,120 @@
+# L0-испытание create (standalone) — host-tuning extras БЕЗУСЛОВНЫ (концепция
+# Ansible-роли: transparent-hugepages + logrotate + sysctl, БЕЗ tcp_bbr). Все три
+# extras — рекомендация Redis / hardening, НЕ выбор оператора: операторских флагов
+# нет, задачи в хвосте destiny `redis` рендерятся ВСЕГДА (никакого toggle, поэтому
+# контр-кейса на «отключено» больше нет). Guard на то, что THP + logrotate + sysctl
+# рендерятся при дефолтном входе.
+#
+# Extras — режим-агностичны и host-инвариантны; sysctl_settings — данные-таблица
+# essence (не во входе оператора), доезжает в destiny через apply.input.
+#
+# Индексы хвоста destiny (standalone-прогон: mode-guard 0, destiny 1..21, PING 22;
+# ручные daemon-reload убраны — core.service делает reload сам; sysctl — ОДНА
+# задача core.sysctl.applied, модуль сам пишет drop-in + reload):
+#   16 — render disable-thp.service (core.file.rendered);
+#   17 — disable-thp service.running;
+#   18 — render logrotate (/etc/logrotate.d/redis);
+#   19 — sysctl bulk drop-in (core.sysctl.applied, /etc/sysctl.d/30-redis.conf).
+name: host-tuning extras always render (thp + logrotate + sysctl)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network:
+      primary_ip: 10.0.0.5
+    os:
+      arch: amd64
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+  essence:
+    redis_type: standalone
+    memory_reserve_percent: 75
+    persistence_presets:
+      off:
+        save: ""
+        appendonly: "no"
+      aof:
+        save: ""
+        appendonly: "yes"
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+      rdb_aof:
+        save: "900 1 300 10 60 10000"
+        appendonly: "yes"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    # Данные-таблица sysctl (усечённая для теста, детерминизм порядка строк
+    # проверяет render_context.vars.sysctl_settings ниже).
+    sysctl_settings:
+      vm.overcommit_memory: "1"
+      vm.swappiness:        "1"
+      net.core.somaxconn:   "65535"
+
+  input:
+    redis_type: standalone
+    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
+    # distro-native пин (мажор < 8 → version-gate модулей не активен).
+    version: "7.2.4"
+    # Флагов extras в контракте больше НЕТ: THP/logrotate/sysctl безусловны.
+
+assert:
+  rendered_tasks:
+    # ── transparent-hugepages ───────────────────────────────────────────────
+    - index: 23
+      module: core.file.rendered
+      params:
+        path: /etc/systemd/system/disable-thp.service
+        template_content: "<present>"
+        mode: "0644"
+        owner: root
+        group: root
+
+    # daemon-reload убран: core.service (daemon_reload: auto) сам перечитывает unit
+    # перед enable/start. disable-thp service.running идёт сразу следом за render.
+    - index: 24
+      module: core.service.running
+      params:
+        name: disable-thp
+        enabled: true
+
+    # ── logrotate (безусловно) ──────────────────────────────────────────────
+    - index: 25
+      module: core.file.rendered
+      params:
+        path: /etc/logrotate.d/redis
+        template_content: "<present>"
+        mode: "0644"
+        owner: root
+        group: root
+
+    # ── sysctl bulk drop-in (безусловно) ────────────────────────────────────
+    # core.sysctl.applied: модуль сам пишет детерминированный drop-in из map
+    # (sorted keys) + точечный sysctl -p при изменении (reload: auto), сам change
+    # не помечает. settings — из essence (передан через apply.input). ignore_failures
+    # → `sysctl -e -p` (контейнерный режим). render_context уехал внутрь модуля —
+    # на L0 проверяем CEL-резолв settings (default(input.sysctl_settings, {})).
+    - index: 26
+      module: core.sysctl.applied
+      params:
+        filename: 30-redis
+        reload: auto
+        ignore_failures: true
+        settings:
+          vm.overcommit_memory: "1"
+          vm.swappiness:        "1"
+          net.core.somaxconn:   "65535"
+
+    # PING на index 22: extras занимают фиксированное число хвостовых слотов
+    # (4 задачи, все безусловны) — ловит сдвиг плана, если кто-то добавит/уберёт
+    # extras-задачу.
+    - index: 28
+      module: community.redis.command
+      params:
+        addr: "127.0.0.1:6379"
+        password: s3cr3t-redis-pass-create
+        args: ["PING"]

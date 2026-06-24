@@ -34,7 +34,7 @@ import (
 //
 // Исполняется ДО host-dispatch-а (run.go): keeper-шаги в реальных сценариях идут
 // первыми (provision/coven-bind → затем apply на хостах, см.
-// redis-cluster/create). Cross-task chaining keeper-register → host-render
+// redis/create). Cross-task chaining keeper-register → host-render
 // в пилоте недоступен (in.Register пуст — future), поэтому порядок «keeper, потом
 // hosts» функционально достаточен.
 //
@@ -284,7 +284,11 @@ func composeKeeperFailure(rt *render.RenderedTask, message string) string {
 	if message == "" {
 		return head
 	}
-	return head + ": " + maskErrText(fmt.Errorf("%s", message))
+	// sealed-пути этого прогона keeper-task summary не получает (узкая точка
+	// сборки текста ошибки task'а) → nil: vault+regex слои + regex-аларм (ADR-010
+	// §7.4). Зарезолвленный keeper-task message — message модуля, не значение по
+	// sealed-пути; vault-ref/sensitive-by-name закрыты этими слоями.
+	return head + ": " + maskErrText(fmt.Errorf("%s", message), nil)
 }
 
 // keeperApplyStream — in-proc реализация grpc.ServerStreamingServer[ApplyEvent]

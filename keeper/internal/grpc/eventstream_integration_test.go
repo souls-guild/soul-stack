@@ -60,7 +60,7 @@ func drainEventStreamClient(stream keeperv1.Keeper_EventStreamClient) {
 func newIntegrationRedisClient(t *testing.T) (*keeperredis.Client, *miniredis.Miniredis) {
 	t.Helper()
 	mr := miniredis.RunT(t)
-	c, err := keeperredis.NewClient(context.Background(), keeperredis.Config{Addr: mr.Addr()})
+	c, err := keeperredis.NewClient(context.Background(), keeperredis.Config{Addr: mr.Addr()}, nil)
 	if err != nil {
 		t.Fatalf("redis NewClient: %v", err)
 	}

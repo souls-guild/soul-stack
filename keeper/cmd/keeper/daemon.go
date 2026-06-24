@@ -1052,6 +1052,10 @@ func (d *daemon) setupMetricsRegistry(_ context.Context) error {
 	// keeper_render_*-метрики render-пайплайна — на тот же registry; дескриптор
 	// инжектится в render.NewPipeline ниже (горячий путь CEL+template-рендера).
 	d.renderMetrics = render.RegisterRenderMetrics(metricsReg)
+	// keeper_mask_regex_fallback_total + process-global audit.SetSealHooks —
+	// наблюдаемость regex-last-resort слоя secret-маскинга (ADR-010 §7.4, слой 4).
+	// На тот же registry; logger — канал warn-лога fallback-а.
+	setupMaskMetrics(metricsReg, d.logger)
 	// keeper_vault_*-метрики чтения KV — на тот же registry; vc поднят выше
 	// (до создания registry, т.к. нужен для DSN-резолва), поэтому метрики
 	// подключаются сеттером SetMetrics здесь, после регистрации.
@@ -2016,7 +2020,23 @@ func (d *daemon) setupGRPCBootstrap(ctx context.Context) error {
 	return nil
 }
 
-// setupRedis — Redis-клиент (nil-fallback при пустом addr) + apply-events bus.
+// redisConfigured — задана ли в конфиге рабочая Redis-топология. Заменяет
+// прежний `cfg.Redis.Addr != ""`: для sentinel/cluster адрес лежит в
+// `sentinels`/`nodes`, а `addr` пуст. Пустой весь блок (dev без Redis) →
+// деградация (см. setupRedis). Полную валидацию режима делает config-фаза
+// (shared/config::validateRedis); здесь — только «надо ли вообще поднимать».
+func redisConfigured(r config.KeeperRedis) bool {
+	switch r.Mode {
+	case keeperredis.ModeSentinel:
+		return len(r.Sentinels) > 0
+	case keeperredis.ModeCluster:
+		return len(r.Nodes) > 0
+	default: // standalone / пусто
+		return r.Addr != ""
+	}
+}
+
+// setupRedis — Redis-клиент (nil-fallback при отсутствии топологии) + apply-events bus.
 // Клиент общий для Outbound / EventStream / SoulLease / Reaper. rbac-pub/sub
 // подключается отдельно (setupRBACInvalidation).
 func (d *daemon) setupRedis(ctx context.Context) error {
@@ -2024,15 +2044,22 @@ func (d *daemon) setupRedis(ctx context.Context) error {
 	logger := d.logger
 	// Redis-клиент поднимается до Outbound / EventStream, потому что
 	// cluster-mode routing (ADR-002 HA) и SoulLease используют один и
-	// тот же клиент. Reaper-блок ниже переиспользует его же. При
-	// `cfg.Redis.Addr == ""` (dev без Redis) клиент остаётся nil —
-	// Outbound деградирует до single-instance lookup, EventStream
-	// поднимается без SoulLease / heartbeat-кэша / cluster-subscribe.
-	if cfg.Redis.Addr != "" {
+	// тот же клиент. Reaper-блок ниже переиспользует его же. При пустом
+	// redis-блоке (нет addr/sentinels/nodes — dev без Redis) клиент
+	// остаётся nil: Outbound деградирует до single-instance lookup,
+	// EventStream поднимается без SoulLease / heartbeat-кэша / cluster-
+	// subscribe. `d.vc` (vault-клиент) поднят раньше (setupVault) — нужен
+	// для резолва `password_ref: vault:...`.
+	if redisConfigured(cfg.Redis) {
 		rc, err := keeperredis.NewClient(ctx, keeperredis.Config{
-			Addr:        cfg.Redis.Addr,
-			PasswordRef: cfg.Redis.PasswordRef,
-		})
+			Mode:                cfg.Redis.Mode,
+			Addr:                cfg.Redis.Addr,
+			PasswordRef:         cfg.Redis.PasswordRef,
+			MasterName:          cfg.Redis.MasterName,
+			Sentinels:           cfg.Redis.Sentinels,
+			Nodes:               cfg.Redis.Nodes,
+			SentinelPasswordRef: cfg.Redis.SentinelPasswordRef,
+		}, d.vc)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "keeper run: redis client: %v\n", err)
 			return errSetupFailed
@@ -2040,7 +2067,7 @@ func (d *daemon) setupRedis(ctx context.Context) error {
 		d.redisClient = rc
 		d.cleanups.push(func() { _ = rc.Close() })
 	} else {
-		logger.Warn("keeper run: redis disabled (listen.redis.addr is empty) — cluster-mode routing / SoulLease / heartbeat-cache disabled")
+		logger.Warn("keeper run: redis disabled (redis block has no addr/sentinels/nodes) — cluster-mode routing / SoulLease / heartbeat-cache disabled")
 	}
 
 	// Apply-events bus (M0.7.c) — общий между EventStream-handler-ом

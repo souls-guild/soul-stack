@@ -170,13 +170,12 @@ Soulprint — наш аналог Salt grains: факты о хосте, кот�
 
 | Use-case | Поле | Файл |
 |---|---|---|
-| Essence pipeline — ступень по OS | `soulprint.self.os.family` | `examples/service/redis-cluster/essence/_stack.yaml:14` |
-| Essence pipeline — расчёт maxmemory | `soulprint.self.memory.total_mb` | `examples/service/redis-cluster/essence/_stack.yaml:28` |
-| Probe self-check в destiny | `soulprint.self.network.primary_ip != input.master_addr` | `examples/destiny/redis-replication-config/tasks/main.yml` |
-| Render config через `.tmpl` | `.self.network.primary_ip` | `examples/destiny/redis/templates/redis.conf.tmpl` |
-| Scenario `where:` по SID | `soulprint.self.sid == input.target_sid` | `examples/service/redis-cluster/scenario/add_replica/main.yml` |
-| Scenario probe master | `soulprint.hosts.where("role == 'primary'")[0].network.primary_ip` | `scenario/create/main.yml`, `scenario/create/replication.yml` |
-| Smoke-test «ровно один primary» | `size(soulprint.hosts.where("role == 'primary'")) == 1` | `tests/smoke.yml:45` |
+| Destiny строит arch-специфичный URL (Redis-модули) | `soulprint.self.os.arch` | `examples/destiny/redis/tasks/modules.yml`, `examples/destiny/redis/destiny.yml` |
+| Render config через `.tmpl` (bind/announce) | `.self.network.primary_ip` | `examples/destiny/redis/templates/redis.conf.tmpl` |
+| Scenario `where:` по SID (таргетинг новой ноды) | `soulprint.self.sid == input.new_node_sid` | `examples/service/redis/scenario/add_node/main.yml` |
+| Scenario roster → endpoint-map по хостам | `soulprint.hosts.map(h, { h.sid: { 'addr': h.network.primary_ip + ':6379' } })` | `examples/service/redis/scenario/create/cluster.yml` |
+| Scenario guard «оба SID — члены roster-а» | `size(soulprint.hosts.where("sid == input.new_node_sid")) == 1` | `examples/service/redis/scenario/add_node/main.yml` |
+| Scenario master-election (declared, первый по SID) | `soulprint.hosts[0]` | `examples/service/redis/scenario/create/sentinel.yml` |
 | core.pkg.installed → native pkg-mgr | `soulprint.self.os.pkg_mgr` | внутри core-модуля |
 | core.service.* → init system | `soulprint.self.os.init_system` | внутри core-модуля |
 

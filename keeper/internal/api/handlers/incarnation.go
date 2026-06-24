@@ -51,6 +51,20 @@ type ScenarioStarter interface {
 	Start(ctx context.Context, spec scenario.RunSpec) error
 }
 
+// AssertPreflighter — узкая поверхность scenario.Runner для pre-flight-гейта
+// `assert:` (ADR-009/ADR-027 amendment 2026-06-23, форма A): синхронное
+// вычисление assert-предикатов сценария на СОЗДАНИИ прогона (request-путь, ДО
+// коммита incarnation). Реализуется *scenario.Runner (метод PreflightAssert);
+// Create-handler берёт его опционально type-assertion-ом из runner-а, поэтому
+// тестовые ScenarioStarter-fake без этого метода продолжают работать (pre-flight
+// тогда пропускается — no-op, как в M0.6c-1 stub-режиме без runner-а).
+//
+// Возвращает scenario.ErrAssertFailed на провале предиката (handler → 422
+// assert_failed); прочие ошибки — внутренний сбой pre-flight (handler → 500).
+type AssertPreflighter interface {
+	PreflightAssert(ctx context.Context, spec scenario.RunSpec) error
+}
+
 // DestroyStarter — узкая поверхность scenario.Runner, нужная Destroy-handler-у:
 // async-запуск teardown-прогона scenario `destroy` в режиме TerminalDestroy
 // (S-D2b). Отдельный интерфейс от [ScenarioStarter]: Destroy использует

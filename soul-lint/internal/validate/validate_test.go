@@ -43,17 +43,25 @@ func TestGolden_DestinyExample_FromRepo(t *testing.T) {
 }
 
 func TestGolden_ServiceExample(t *testing.T) {
-	runExpect(t, "../../testdata/service-golden/redis-cluster.yml", KindService, false, ExitOK, nil)
+	runExpect(t, "../../testdata/service-golden/redis-ha.yml", KindService, false, ExitOK, nil)
 }
 
 func TestGolden_ServiceExample_FromRepo(t *testing.T) {
-	// Полный пример из examples/service/redis-cluster/service.yml
-	// должен валидироваться напрямую с 0 diagnostics — контракт регрессии.
-	runExpect(t, "../../../examples/service/redis-cluster/service.yml", KindService, false, ExitOK, nil)
+	// Полный пример из examples/service/redis/service.yml (консолидированный
+	// redis) должен валидироваться напрямую с 0 diagnostics — контракт регрессии.
+	runExpect(t, "../../../examples/service/redis/service.yml", KindService, false, ExitOK, nil)
 }
 
 func TestGolden_ScenarioExample(t *testing.T) {
 	runExpect(t, "../../testdata/scenario-golden/redis-create.yml", KindScenario, false, ExitOK, nil)
+}
+
+// TestGolden_ScenarioAssertPrecondition — assert-задача (ADR-009 amendment
+// 2026-06-23): валидная форма (that[] CEL-bool со soulprint.hosts, message-строка)
+// проходит линт (ExitOK). Реверс (assert ошибочно зарезан) → ExitHasErrors → тест
+// падает.
+func TestGolden_ScenarioAssertPrecondition(t *testing.T) {
+	runExpect(t, "../../testdata/scenario-golden/assert-precondition.yml", KindScenario, false, ExitOK, nil)
 }
 
 // TestGolden_ScenarioIncarnationStateRead — `incarnation.state.<path>` (read-only

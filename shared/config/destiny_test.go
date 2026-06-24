@@ -25,16 +25,57 @@ func TestLoadDestinyManifest_Golden(t *testing.T) {
 	if cfg.Name != "redis" {
 		t.Errorf("name: got %q want redis", cfg.Name)
 	}
-	// Smoke-check рекурсивного декода input.action.enum.
-	action := cfg.Input["action"]
-	if action == nil {
-		t.Fatal("input.action missing")
+
+	// Smoke-check глубокого рекурсивного декода: input.users —
+	// type=object с additional_properties→object (typed-контракт нового
+	// destiny/redis, без устаревшего action-DSL). Проверяем самый глубокий
+	// enum: users → additional_properties → properties["state"].enum.
+	users := cfg.Input["users"]
+	if users == nil {
+		t.Fatal("input.users missing")
 	}
-	if action.Type != "string" {
-		t.Errorf("input.action.type: got %q want string", action.Type)
+	if users.Type != "object" {
+		t.Errorf("input.users.type: got %q want object", users.Type)
 	}
-	if len(action.Enum) == 0 {
-		t.Errorf("input.action.enum must be non-empty")
+	ap, ok := users.AdditionalProperties.(*InputSchema)
+	if !ok {
+		t.Fatalf("input.users.additional_properties must decode to *InputSchema (schema-form), got %T", users.AdditionalProperties)
+	}
+	if ap.Type != "object" {
+		t.Errorf("input.users.additional_properties.type: got %q want object", ap.Type)
+	}
+	state := ap.Properties["state"]
+	if state == nil {
+		t.Fatal("input.users.additional_properties.properties.state missing")
+	}
+	if state.Type != "string" {
+		t.Errorf("input.users.…state.type: got %q want string", state.Type)
+	}
+	if len(state.Enum) == 0 {
+		t.Errorf("input.users.…state.enum must be non-empty")
+	}
+
+	// Golden стережёт ключевые ограничения typed-контракта.
+	version := cfg.Input["version"]
+	if version == nil || version.Pattern == "" {
+		t.Errorf("input.version.pattern must be present")
+	}
+	password := cfg.Input["password"]
+	if password == nil {
+		t.Fatal("input.password missing")
+	}
+	if !password.Secret {
+		t.Errorf("input.password.secret must be true")
+	}
+	if password.MinLength == nil || *password.MinLength != 16 {
+		t.Errorf("input.password.min_length: got %v want 16", password.MinLength)
+	}
+	conf := cfg.Input["config"]
+	if conf == nil {
+		t.Fatal("input.config missing")
+	}
+	if apBool, ok := conf.AdditionalProperties.(bool); !ok || !apBool {
+		t.Errorf("input.config.additional_properties must decode to bool true, got %T %v", conf.AdditionalProperties, conf.AdditionalProperties)
 	}
 }
 

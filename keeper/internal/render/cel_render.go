@@ -200,6 +200,7 @@ func hostVars(in RenderInput, host *topology.HostFacts, hostCount int) cel.Vars 
 		SoulprintSelf:  soulprintSelfMap(host),
 		SoulprintHosts: soulprintHosts(in),
 		Essence:        in.Essence,
+		Compute:        in.Compute,
 		Ctx:            in.Ctx,
 		AllowHosts:     !in.destinyIsolated,
 	}
@@ -405,6 +406,7 @@ func stateChangesVars(in RenderInput, host *topology.HostFacts) cel.Vars {
 		Incarnation:   incarnationVars(in, len(in.Hosts)),
 		SoulprintSelf: soulprintSelfMap(host),
 		Essence:       in.Essence,
+		Compute:       in.Compute,
 		Ctx:           in.Ctx,
 	}
 }

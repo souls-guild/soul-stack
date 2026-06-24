@@ -599,7 +599,7 @@ func TestIntegration_MarkDisconnected_LeaseAware(t *testing.T) {
 	}
 	resetIdentityTables(t, ctx, pool)
 
-	rc, err := keeperredis.NewClient(ctx, keeperredis.Config{Addr: integrationRedisAddr})
+	rc, err := keeperredis.NewClient(ctx, keeperredis.Config{Addr: integrationRedisAddr}, nil)
 	if err != nil {
 		t.Fatalf("redis.NewClient: %v", err)
 	}
@@ -660,7 +660,7 @@ func TestIntegration_MarkDisconnected_LeaseAware_Reconnect(t *testing.T) {
 	}
 	resetIdentityTables(t, ctx, pool)
 
-	rc, err := keeperredis.NewClient(ctx, keeperredis.Config{Addr: integrationRedisAddr})
+	rc, err := keeperredis.NewClient(ctx, keeperredis.Config{Addr: integrationRedisAddr}, nil)
 	if err != nil {
 		t.Fatalf("redis.NewClient: %v", err)
 	}
@@ -720,7 +720,7 @@ func TestIntegration_MarkDisconnected_LeaseAware_Bidirectional(t *testing.T) {
 	}
 	resetIdentityTables(t, ctx, pool)
 
-	rc, err := keeperredis.NewClient(ctx, keeperredis.Config{Addr: integrationRedisAddr})
+	rc, err := keeperredis.NewClient(ctx, keeperredis.Config{Addr: integrationRedisAddr}, nil)
 	if err != nil {
 		t.Fatalf("redis.NewClient: %v", err)
 	}

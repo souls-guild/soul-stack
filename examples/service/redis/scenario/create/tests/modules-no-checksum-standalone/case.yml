@@ -1,0 +1,152 @@
+# L0-испытание create (standalone) — Redis-МОДУЛИ БЕЗ sha256 (checksum ОПЦИОНАЛЕН,
+# директива пользователя 2026-06-24). Контр-кейс к modules-enabled-standalone (там
+# modules_sha256 ЗАДАН → checksum "sha256:<hex>", fail-closed). Здесь оператор
+# input.modules_sha256 НЕ передаёт вовсе → задача fetch передаёт ПУСТОЙ checksum, и
+# core.url.fetched качает .so по СОДЕРЖИМОМУ (content-идемпотентность: скачать во temp
+# → сравнить SHA-256 с существующим → запись только при diff), без integrity-verify.
+#
+# Guard на то, что при непустом input.modules и ОТСУТСТВУЮЩЕМ modules_sha256:
+#   1. рендер проходит (CEL-ячейка checksum НЕ падает no-such-key — has()-guard);
+#   2. каждый алиас → core.url.fetched с checksum: "" (пусто = absent для модуля);
+#   3. остальное (modules-dir, loadmodules в redis.conf, URL из arch) — как с sha256.
+#
+# version=5:6.2.7 — мажор 6 (< 8), version-gate модули НЕ гасит (как в базовом modules-
+# кейсе). modules=[search, json] — тот же порядок и индексы, что modules-enabled-
+# standalone (отличие ровно одно: пустой checksum vs "sha256:<hex>").
+name: modules without sha256 render empty checksum and fetch by content idempotency
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network:
+      primary_ip: 10.0.0.5
+    os:
+      arch: amd64
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+  essence:
+    redis_type: standalone
+    memory_reserve_percent: 75
+    persistence_presets:
+      off:
+        save: ""
+        appendonly: "no"
+      aof:
+        save: ""
+        appendonly: "yes"
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+      rdb_aof:
+        save: "900 1 300 10 60 10000"
+        appendonly: "yes"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+  input:
+    redis_type: standalone
+    version: "5:6.2.7"
+    # modules заданы, modules_sha256 — НЕТ (опционален). Порядок [search, json]
+    # сохраняется в loadmodules; в fetch-задачах checksum пуст (absent для каждого).
+    modules: [search, json]
+    modules_base_url: "https://artifacts.example.com/redis/modules/6.2"
+
+assert:
+  rendered_tasks:
+    # redis.conf несёт vars.loadmodules — пути .so в ПОРЯДКЕ input.modules
+    # (search → redisearch.so первым). loadmodules от наличия sha256 НЕ зависят.
+    - index: 14
+      module: core.file.rendered
+      params:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            password: s3cr3t-redis-pass-create
+            loadmodules:
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/rejson.so
+            config:
+              maxmemory: "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients: 10000
+              timeout: 300
+              save: "900 1 300 10 60 10000"
+              appendonly: "no"
+          self:
+            sid: trial-host
+            covens: [create]
+            choirs: []
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # modules-dir каталог — gated на size(modules)>0, здесь АКТИВНА.
+    - index: 27
+
+      module: core.file.directory
+      params:
+        path: /var/lib/redis/modules
+        owner: redis
+        group: redis
+        mode: "0750"
+
+    # fetch .so — loop по алиасам (search[0], json[1]). URL арх-специфичен (amd64).
+    # checksum ПУСТ ("") — modules_sha256 не передан: core.url.fetched качает по
+    # content-идемпотентности (пустой checksum = absent, OptStringParam). Именно
+    # пустую строку и доказывает кейс (assert сверяет ключ checksum точно).
+    - index: 28
+
+      module: core.url.fetched
+      params:
+        url: "https://artifacts.example.com/redis/modules/6.2/amd64/redisearch.so"
+        path: /var/lib/redis/modules/redisearch.so
+        checksum: ""
+        mode: "0750"
+        owner: redis
+        group: redis
+
+    - index: 29
+
+      module: core.url.fetched
+      params:
+        url: "https://artifacts.example.com/redis/modules/6.2/amd64/rejson.so"
+        path: /var/lib/redis/modules/rejson.so
+        checksum: ""
+        mode: "0750"
+        owner: redis
+        group: redis
+
+    # PING сдвинут на +2 (две .so-задачи), как в modules-enabled-standalone.
+    - index: 30
+
+      module: community.redis.command
+      params:
+        addr: "127.0.0.1:6379"
+        password: s3cr3t-redis-pass-create
+        args: ["PING"]
+
+  state_changes:
+    redis_type: standalone
+    redis_version: "5:6.2.7"
+    redis_config:
+      maxmemory: "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients: 10000
+      timeout: 300
+      save: "900 1 300 10 60 10000"
+      appendonly: "no"
+    redis_users: {}
+    redis_hosts: []
+    redis_sentinel: {}

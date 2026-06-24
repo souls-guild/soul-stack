@@ -11,9 +11,10 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
-// fixtureDir — путь к реальным фикстурам redis-cluster (авторитет над
-// docs-примерами).
-const fixtureDir = "../../../examples/service/redis-cluster/migrations"
+// fixtureDir — путь к реальным фикстурам консолидированного redis (авторитет
+// над docs-примерами). Миграция 001_to_002 — демо грамматики DSL (rename + set +
+// foreach + delete), перенос инварианта из прежнего redis-cluster.
+const fixtureDir = "../../../examples/service/redis/migrations"
 
 func mustEvaluator(t *testing.T) Evaluator {
 	t.Helper()
@@ -45,14 +46,15 @@ type migrationTestCase struct {
 	StateAfter  map[string]any `yaml:"state_after"`
 }
 
-// TestApply_RealFixture_UsersArrayToMap — прогон реальной миграции 001_to_002
-// на её основном кейсе: единственный источник истины семантики foreach
-// list→element. Авторитет над docs-примерами (assert против фикстуры).
-func TestApply_RealFixture_UsersArrayToMap(t *testing.T) {
+// TestApply_RealFixture_UsersListToMap — прогон реальной миграции 001_to_002 на
+// её основном кейсе: единственный источник истины семантики foreach list→element
+// (имя пользователя → ключ map-а). Авторитет над docs-примерами (assert против
+// фикстуры).
+func TestApply_RealFixture_UsersListToMap(t *testing.T) {
 	mig := mustParseFile(t, filepath.Join(fixtureDir, "001_to_002.yml"))
 	ev := mustEvaluator(t)
 
-	path := filepath.Join(fixtureDir, "001_to_002", "tests", "users-array-to-map.yml")
+	path := filepath.Join(fixtureDir, "001_to_002", "tests", "users-list-to-map.yml")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read case: %v", err)
@@ -69,22 +71,22 @@ func TestApply_RealFixture_UsersArrayToMap(t *testing.T) {
 	assertDeepEqualJSON(t, res.FinalState, tc.StateAfter)
 }
 
-// TestApply_RealFixture_EmptyUsers — пустой список пользователей даёт пустой
-// map. Миграция 001_to_002 явным `set state.redis_users {}` ПЕРЕД foreach
-// материализует целевой ключ (intent «users стали map»), поэтому foreach по []
+// TestApply_RealFixture_EmptyUsers — пустой список пользователей даёт пустой map.
+// Миграция 001_to_002 явным `set state.redis_users {}` ПЕРЕД foreach
+// материализует целевой ключ (intent «список стал map»), поэтому foreach по []
 // (no-op) оставляет redis_users: {}, а не отсутствие ключа.
 func TestApply_RealFixture_EmptyUsers(t *testing.T) {
 	mig := mustParseFile(t, filepath.Join(fixtureDir, "001_to_002.yml"))
 	ev := mustEvaluator(t)
 
-	in := map[string]any{"redis_users": []any{}, "redis_maxmemory": "256mb"}
+	in := map[string]any{"redis_users": []any{}, "redis_type": "cluster"}
 	res, err := Apply(context.Background(), in, Chain{mig}, ev)
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	assertDeepEqualJSON(t, res.FinalState, map[string]any{
-		"redis_users":     map[string]any{},
-		"redis_maxmemory": "256mb",
+		"redis_users": map[string]any{},
+		"redis_type":  "cluster",
 	})
 }
 
@@ -97,17 +99,17 @@ func TestApply_EmptyForeachNoMaterialize(t *testing.T) {
 	mig := &Migration{FromVersion: 1, ToVersion: 2, Transform: []Op{
 		{Rename: &RenameOp{From: "state.redis_users", To: "state.redis_users_legacy_v1"}},
 		{Foreach: &ForeachOp{In: "${ state.redis_users_legacy_v1 }", As: "user_name", Do: []Op{
-			{Set: &SetOp{Path: "state.redis_users.${ user_name }", Value: map[string]any{"acl": "x"}}},
+			{Set: &SetOp{Path: "state.redis_users.${ user_name }", Value: map[string]any{"perms": "x"}}},
 		}}},
 		{Delete: &DeleteOp{Path: "state.redis_users_legacy_v1"}},
 	}}
 
-	in := map[string]any{"redis_users": []any{}, "redis_maxmemory": "256mb"}
+	in := map[string]any{"redis_users": []any{}, "redis_type": "cluster"}
 	res, err := Apply(context.Background(), in, Chain{mig}, ev)
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	assertDeepEqualJSON(t, res.FinalState, map[string]any{"redis_maxmemory": "256mb"})
+	assertDeepEqualJSON(t, res.FinalState, map[string]any{"redis_type": "cluster"})
 }
 
 // TestApply_DoesNotMutateInput — входной state caller-а не мутируется.
@@ -115,8 +117,8 @@ func TestApply_DoesNotMutateInput(t *testing.T) {
 	mig := mustParseFile(t, filepath.Join(fixtureDir, "001_to_002.yml"))
 	ev := mustEvaluator(t)
 
-	in := map[string]any{"redis_users": []any{"app"}, "redis_maxmemory": "512mb"}
-	snapshot := map[string]any{"redis_users": []any{"app"}, "redis_maxmemory": "512mb"}
+	in := map[string]any{"redis_users": []any{"app"}, "redis_type": "standalone"}
+	snapshot := map[string]any{"redis_users": []any{"app"}, "redis_type": "standalone"}
 
 	if _, err := Apply(context.Background(), in, Chain{mig}, ev); err != nil {
 		t.Fatalf("Apply: %v", err)

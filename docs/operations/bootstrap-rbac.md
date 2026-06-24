@@ -87,7 +87,7 @@ curl -X POST https://keeper.internal:8080/v1/roles \
   -d '{
     "name": "db-operator",
     "permissions": [
-      "incarnation.* on service=redis-cluster,vault-cluster",
+      "incarnation.* on service=redis,vault-cluster",
       "soul.list"
     ]
   }'
@@ -104,7 +104,7 @@ Permission-строка с селектором — единственный м�
 | Полный admin кластера | `*` |
 | Только чтение всех Souls | `soul.list` |
 | Apply на конкретный coven | `incarnation.run on coven=prod-eu-west` |
-| Apply на конкретный сервис в любом coven | `incarnation.* on service=redis-cluster` |
+| Apply на конкретный сервис в любом coven | `incarnation.* on service=redis` |
 | Создание / отзыв Архонтов | `operator.create`, `operator.revoke`, `operator.issue-token` |
 | Управление ролями | `role.create`, `role.delete`, `role.update`, `role.grant-operator`, `role.revoke-operator` |
 | Чтение audit-log (когда `GET /v1/audit` появится) | `audit.read` |

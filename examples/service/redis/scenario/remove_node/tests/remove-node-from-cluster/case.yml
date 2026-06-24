@@ -1,0 +1,59 @@
+# L0-испытание remove_node: вывести ноду из кластера. Roster прогона — 3 хоста;
+# удаляем node-3, контактируем через seed node-1. Scenario строит ГОТОВУЮ
+# топологию-map (node/seed = primary_ip:6379 по SID из roster) и зовёт плагин
+# run_once. Решение «реплика → просто FORGET / master со слотами → миграция + FORGET»
+# принимает ПЛАГИН в рантайме (CLUSTER NODES) — на L0 не видно (render не исполняет
+# Redis); ветки миграции/FORGET доказаны плагин-тестами (cluster_test.go).
+name: remove node from cluster
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-1.example.com
+      covens: [remove_node, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-2.example.com
+      covens: [remove_node, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-3.example.com
+      covens: [remove_node, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/remove_node:
+      password: s3cr3t-redis-pass-removenode
+  state:
+    redis_type: cluster
+    redis_version: ""
+    redis_config:
+      maxmemory: "256mb"
+      cluster-enabled: "yes"
+      cluster-config-file: "nodes.conf"
+      cluster-node-timeout: "5000"
+    redis_users: {}
+    redis_hosts: []
+
+  input:
+    remove_node_sid: node-3.example.com
+    seed_sid: node-1.example.com
+
+assert:
+  rendered_tasks:
+    # GUARD теперь assert: (remove_node != seed, оба в roster → that[0] true → render
+    # проходит, задача в план НЕ эмитится) → REMOVE-NODE сдвинут на −1 (1→0).
+    #
+    # REMOVE-NODE run_once: endpoint-ы из roster по SID. node=node-3, seed=node-1.
+    - index: 0
+      module: community.redis.cluster
+      params:
+        action: remove-node
+        password: s3cr3t-redis-pass-removenode
+        node:
+          addr: "10.0.0.3:6379"
+        seed:
+          addr: "10.0.0.1:6379"

@@ -1,0 +1,56 @@
+# tasks/extras.yml — host-tuning extras (концепция Ansible-роли): THP-юнит +
+# logrotate + sysctl. Режим-АГНОСТИЧНЫ (одинаково полезны standalone/cluster/
+# sentinel). Все три БЕЗУСЛОВНЫ (рекомендация Redis / hardening — не выбор оператора):
+# задачи без when:, рендерятся ВСЕГДА. Операторских флагов logrotate_enable/
+# sysctl_enable в контракте больше НЕТ.
+#
+# disable-thp daemon-reload УБРАН: core.service (daemon_reload: auto) сам
+# перечитывает unit при смене disable-thp.service ПЕРЕД enable/start.
+
+# transparent-hugepages: oneshot-юнит отключения THP до Redis. БЕЗУСЛОВНО (THP даёт
+# latency-спайки на fork RDB/AOF — рекомендация Redis, hardening для всех режимов).
+- name: Render disable-thp systemd unit
+  module: core.file.rendered
+  params:
+    path: /etc/systemd/system/disable-thp.service
+    template: templates/disable-thp.service.tmpl
+    mode: "0644"
+    owner: root
+    group: root
+
+# core.service сам перечитывает unit (daemon_reload: auto) при смене disable-thp.service
+# перед enable/start. disable-thp — oneshot RemainAfterExit, отрабатывает один раз.
+- name: Ensure disable-thp is running and enabled at boot
+  module: core.service.running
+  params:
+    name: disable-thp
+    enabled: true
+
+# logrotate: ротация лог-файлов redis в /etc/logrotate.d/redis. БЕЗУСЛОВНО (как
+# THP — host-tuning не выбор оператора). mode 0644 owner/group root — стандарт
+# logrotate.d.
+- name: Render redis logrotate config
+  module: core.file.rendered
+  params:
+    path: /etc/logrotate.d/redis
+    template: templates/logrotate.tmpl
+    mode: "0644"
+    owner: root
+    group: root
+
+# sysctl: bulk-набор kernel-параметров под Redis ОДНИМ drop-in
+# /etc/sysctl.d/30-redis.conf. БЕЗУСЛОВНО (как THP/logrotate). core.sysctl.applied
+# сам владеет drop-in: пишет детерминированный файл (sorted keys → нет ложного
+# change), реактивно перечитывает его `sysctl -p <file>` точечно при изменении
+# (reload: auto), сам change не помечает. В контейнерах часть vm.* read-only —
+# ignore_failures даёт `sysctl -e -p` (--ignore глушит read-only/несуществующие
+# ключи, не валя прогон; поведение ignoreerrors Ansible-роли).
+# sysctl_settings — map kernel-параметр→значение, scenario сервиса передаёт его
+# через apply.input (дефолты — essence.sysctl_settings).
+- name: Apply redis sysctl kernel parameters
+  module: core.sysctl.applied
+  params:
+    filename: 30-redis
+    reload: auto
+    ignore_failures: true
+    settings: "${ default(input.sysctl_settings, {}) }"

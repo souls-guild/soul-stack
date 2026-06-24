@@ -1,36 +1,27 @@
 {
-  "_comment": "POST /v1/incarnation/create — создание нового Redis-кластера через cloud-spawn",
+  "_comment": "POST /v1/incarnation/create — создание Redis Cluster (консолидированный service redis, redis_type=cluster)",
 
   "name": "test-cache-redis-cl-dev",
-  "service": "redis-cluster",
-  "service_version": ">= 1.4",
+  "service": "redis",
+  "service_version": "v1.0.0",
   "scenario": "create",
 
   "inputs": {
-    "redis_version": "7.2.4",
-    "redis_password": "vault:secret/redis/test-cache-dev/password",
-    "redis_users": {
+    "redis_type": "cluster",
+    "version": "5:7.0.15-1~deb12u7",
+    "memory_mb": 2048,
+    "maxmemory_policy": "allkeys-lru",
+    "shards": 3,
+    "replicas_per_shard": 1,
+    "users": {
       "app": {
-        "acl": "on ~cache:* +@read +@write -@dangerous",
+        "perms": "on ~cache:* +@read +@write -@dangerous",
         "state": "on"
       },
       "monitor": {
-        "acl": "on ~* +ping +info +client",
+        "perms": "on ~* +ping +info +client",
         "state": "on"
       }
-    },
-    "redis_config": {
-      "maxmemory": "2gb",
-      "maxmemory-policy": "allkeys-lru"
-    },
-    "spawn": {
-      "provider": "aws-prod",
-      "profile": "redis-medium-eu",
-      "count": 3,
-      "role_distribution": [
-        { "index": "0",   "role": "primary" },
-        { "index": "1-2", "role": "replica" }
-      ]
     }
   }
 }

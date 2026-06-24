@@ -1,0 +1,165 @@
+# L0-испытание create (cluster, multi-host) — Redis-МОДУЛИ на кластере. Guard на то,
+# что в cluster-режиме (3 хоста, shards=3) модули качаются и loadmodule-директивы
+# приходят в redis.conf наравне с cluster-директивами. Per-host arch в URL: все
+# хосты amd64 (homogeneous), arch берётся из soulprint.self.os.arch — render_context
+# L0 несёт self первого по SID хоста (node-a), но СЛОЙ .tmpl на Soul-е возьмёт arch
+# КАЖДОГО хоста (mixed-arch корректен — URL строит destiny per-host, не apply.input).
+#
+# ИНДЕКСЫ (cluster-прогон, modules=[json]→1 .so-задача). shards-guard УБРАН
+# (required_when в main.yml) + size-guard — assert: (ADR-009 amendment): обе задачи
+# позиций в плане НЕ занимают → −2 от исходного плана; extras-sysctl сжаты 2→1
+# задачи core.sysctl.applied → хвост после sysctl ещё −1:
+#   0 mode-guard; 1..2 standalone-ветка (СКИП);
+#   3..22 cluster destiny (redis.conf=10 с loadmodules);
+#   22 modules-dir (gated, АКТИВНА);
+#   23 fetch .so json (loop, 1 задача);
+#   24 cluster PING; 25 cluster-build.
+name: cluster modules fetch .so and add loadmodule alongside cluster directives
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-b.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-c.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+    - sid: node-a.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+  essence:
+    redis_type: cluster
+    memory_reserve_percent: 75
+    persistence_presets:
+      off:
+        save: ""
+        appendonly: "no"
+      aof:
+        save: ""
+        appendonly: "yes"
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+      rdb_aof:
+        save: "900 1 300 10 60 10000"
+        appendonly: "yes"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+  input:
+    redis_type: cluster
+    version: "5:6.2.7"
+    shards: 3
+    replicas_per_shard: 0
+    cluster_node_timeout: 5000
+    modules: [json]
+    modules_base_url: "https://artifacts.example.com/redis/modules/6.2"
+    modules_sha256:
+      json: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+assert:
+  rendered_tasks:
+    # shards-guard УБРАН (required_when) + size-guard assert: (ADR-009 amendment) —
+    # обе задачи позиций не занимают → cluster-ветка сдвинута на −2 (redis.conf→10,
+    # modules-dir→24, fetch .so→25, cluster-build→27).
+    # redis.conf несёт cluster-директивы + vars.loadmodules ([rejson.so]).
+    - index: 16
+      module: core.file.rendered
+      params:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            password: s3cr3t-redis-pass-create
+            loadmodules:
+              - /var/lib/redis/modules/rejson.so
+            config:
+              maxmemory:        "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients:       10000
+              timeout:          300
+              save:             "900 1 300 10 60 10000"
+              appendonly:       "no"
+              cluster-enabled:      "yes"
+              cluster-config-file:  "nodes.conf"
+              cluster-node-timeout: "5000"
+          self:
+            sid: node-a.example.com
+            covens: [create, redis]
+            choirs: []
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # modules-dir каталог — gated, активна в cluster-modules-прогоне. index 22
+    # (−2 guard + −1 extras-sysctl 2→1 задачи).
+    - index: 29
+
+      module: core.file.directory
+      params:
+        path: /var/lib/redis/modules
+        owner: redis
+        group: redis
+        mode: "0750"
+
+    # fetch .so json: URL арх-специфичен (amd64 из soulprint первого хоста в L0).
+    # index 23 (−2 guard + −1 extras-sysctl).
+    - index: 30
+
+      module: core.url.fetched
+      params:
+        url: "https://artifacts.example.com/redis/modules/6.2/amd64/rejson.so"
+        path: /var/lib/redis/modules/rejson.so
+        checksum: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        mode: "0750"
+        owner: redis
+        group: redis
+
+    # cluster-build: index 25 (−2 guard + −1 extras-sysctl 2→1 задачи).
+    - index: 32
+
+      module: community.redis.cluster
+      params:
+        action: create
+        replicas_per_shard: 0
+        password: s3cr3t-redis-pass-create
+        nodes:
+          node-a.example.com: { addr: "10.0.0.1:6379" }
+          node-b.example.com: { addr: "10.0.0.2:6379" }
+          node-c.example.com: { addr: "10.0.0.3:6379" }
+
+  state_changes:
+    redis_type: cluster
+    redis_version: "5:6.2.7"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+      cluster-enabled:      "yes"
+      cluster-config-file:  "nodes.conf"
+      cluster-node-timeout: "5000"
+    redis_users: {}
+    redis_hosts: []

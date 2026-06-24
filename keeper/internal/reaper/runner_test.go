@@ -261,7 +261,7 @@ func newTestStore(t *testing.T, body string) *config.Store[config.KeeperConfig] 
 func newTestRedis(t *testing.T) *redis.Client {
 	t.Helper()
 	mr := miniredis.RunT(t)
-	c, err := redis.NewClient(context.Background(), redis.Config{Addr: mr.Addr()})
+	c, err := redis.NewClient(context.Background(), redis.Config{Addr: mr.Addr()}, nil)
 	if err != nil {
 		t.Fatalf("redis.NewClient: %v", err)
 	}
@@ -472,7 +472,7 @@ func TestRunner_LeaseLost_StopsLoopAndReacquires(t *testing.T) {
 
 	// Используем общий miniredis, чтобы достучаться до ключа извне.
 	mr := miniredis.RunT(t)
-	c, err := redis.NewClient(context.Background(), redis.Config{Addr: mr.Addr()})
+	c, err := redis.NewClient(context.Background(), redis.Config{Addr: mr.Addr()}, nil)
 	if err != nil {
 		t.Fatalf("redis.NewClient: %v", err)
 	}
@@ -560,7 +560,7 @@ func TestRunner_PurgerError_LoopContinues(t *testing.T) {
 func TestRunner_AcquireConflict_BlockedWhileHeld(t *testing.T) {
 	store := newTestStore(t, testKeeperYAML)
 	mr := miniredis.RunT(t)
-	c, err := redis.NewClient(context.Background(), redis.Config{Addr: mr.Addr()})
+	c, err := redis.NewClient(context.Background(), redis.Config{Addr: mr.Addr()}, nil)
 	if err != nil {
 		t.Fatalf("redis.NewClient: %v", err)
 	}

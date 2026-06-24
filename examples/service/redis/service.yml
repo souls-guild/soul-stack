@@ -1,67 +1,170 @@
 name: redis
-state_schema_version: 1
+state_schema_version: 3
 description: >-
-  Redis с мониторингом на одной VM (Linux/systemd), собранный КОМПОЗИЦИЕЙ трёх
-  переиспользуемых standalone-destiny через apply:destiny (ADR-009, изолированный
-  render каждой destiny):
-    - redis-single   — redis-server из пакета дистрибутива + redis.conf с unix-сокетом;
-    - redis-exporter — Prometheus redis_exporter, ходит в Redis через unix-сокет;
-    - node-exporter  — Prometheus node_exporter (метрики хоста).
-  В отличие от redis-monitored (инлайн-вариант), здесь сервис ничего не
-  рендерит сам — он только оркеструет порядок apply:destiny и прокидывает каждой
-  destiny её input. Точка интеграции redis ↔ redis_exporter — путь unix-сокета
-  (essence.redis_socket): он уходит и в redis-single (unixsocket в redis.conf),
-  и в redis-exporter (--redis.addr=unix://...).
+  Redis по концепции Ansible-роли: ОДИН сервис на все режимы развёртывания
+  (redis_type ∈ standalone/sentinel/cluster/sentinel_only). Per-host install +
+  render redis.conf делает destiny `redis` (режим-агностичный кирпич, ADR-009
+  B-гибрид); ЖИВОЙ Redis-рантайм (CONFIG SET, ACL, cluster, sentinel, failover)
+  идёт через плагин `community.redis`; оркестрация (порядок/таргетинг/rolling/
+  health-gate) — в scenario сервиса.
 
-# state_schema_version = 1 → каталог migrations/ не обязателен (ADR-019).
-# incarnation.state фиксирует, что развёрнуто (версии трёх компонентов + сокет +
-# актуальный список ACL-пользователей), чтобы оператор видел инсталляцию и чтобы
+  Статус (2026-06-23): scenario `create` реализован для ВСЕХ четырёх режимов —
+  standalone, cluster, sentinel и sentinel_only (диспетчер по redis_type). В
+  backlog: day-2 scenarios (update_config/add_user/rolling-restart/failover),
+  плагинные states community.redis.acl и community.redis.failover, а также
+  установка из бинарного дистрибутива (Шаг B припаркован)
+  (redis-консолидация .pm/tasks/2026-06-22-redis-consolidation).
+
+# state_schema_version = 3: цепочка миграций forward-only (ADR-019).
+#   - 001_to_002 (migrations/001_to_002.yml): redis_users из списка имён в map
+#     name → {perms, state} (демо-грамматики DSL — rename + set + foreach + delete).
+#   - 002_to_003 (migrations/002_to_003.yml): «richer state» — opaque redis_config
+#     ДОПОЛНЯЕТСЯ ИМЕНОВАННЫМИ полями намерения (read-model day-2): tls/install/
+#     persistence/memory_mb/maxmemory_policy/modules/sysctl_settings + топология
+#     (shards/replicas/sentinel_quorum). Best-effort: извлекаемое — из redis_config/
+#     redis_sentinel, неизвлекаемое — консервативный default (см. описание миграции).
+# incarnation.state фиксирует, что развёрнуто, чтобы оператор видел инсталляцию и
 # повторный apply был idempotent.
+#
+# ГРАНИЦА двух представлений конфига (architect a9e1c2c6):
+#   - redis_config (opaque, additionalProperties:true) — ВЫЧИСЛЕННЫЙ ИТОГ трансляции
+#     простого ввода в redis.conf-map (что реально уйдёт в render и CONFIG SET). Это
+#     write-model «как развёрнуто».
+#   - именованные поля (tls/install/persistence/...) — НАМЕРЕНИЕ оператора в простых
+#     типизированных понятиях (read-model). День-2-сценарии читают их именованно
+#     (restart — state.tls, будущие update_config — state.install/persistence/memory_mb).
+# ОБА представления заполняются из ОДНОГО compute-прохода create (compute.*): namedfields
+# и redis_config считаются из тех же compute.tls_*/input.* — рассинхрона между ними нет.
 state_schema:
   type: object
-  required: [redis_version, node_exporter_version, redis_exporter_version, redis_socket]
+  required: [redis_type, redis_config]
   properties:
-    redis_version:          { type: string }
-    node_exporter_version:  { type: string }
-    redis_exporter_version: { type: string }
-    redis_socket:           { type: string }
-    redis_maxmemory:        { type: string }
-    # ACL-пользователи Redis: актуальный список, который сценарий add_acl_user
-    # перезаписывает целиком (оператор передаёт полный список — см. сценарий).
-    redis_users:
-      type: array
-      items:
-        type: object
-        required: [name, acl]
-        properties:
-          name: { type: string }
-          acl:  { type: string }
+    # Режим развёртывания (концепция роли). Порождает производные флаги
+    # (deploy_redis/deploy_sentinel/cluster_enabled), уходящие в destiny через
+    # apply: input: в соответствующих scenario. Реализованы все четыре режима:
+    # standalone/cluster/sentinel/sentinel_only.
+    redis_type:
+      type: string
+      enum: [standalone, sentinel, cluster, sentinel_only]
+    redis_version:
+      type: string
+    # Итоговый конфиг redis.conf (merged default→preset→user из essence). Уходит и
+    # в render destiny `redis`, и в community.redis.config (CONFIG SET к живому Redis).
     redis_config:
       type: object
       additionalProperties: true
-    # Хосты-реплики, добавленные сценарием add_replicas (role: replica). Дописываются
-    # через state_changes.appends после успешного apply (cross-host барьер).
+
+    # ── Именованные поля намерения (read-model, v3) ───────────────────────────
+    # Простые типизированные понятия оператора, рядом с opaque redis_config. День-2-
+    # сценарии читают их ИМЕНОВАННО (не парсят redis_config). Заполняются create из
+    # тех же compute.*/input, что и redis_config (один источник истины, без drift).
+
+    # TLS-намерение: включён ли TLS, закрыт ли plain-порт, на каком TLS-порту, и
+    # Vault-ПУТИ серверного cert/key/CA (НЕ сам PEM — секрет в state не лежит, ИБ).
+    # Заполняется из compute.tls_on/tls_only_on/tls_port/tls_*_ref (те же значения,
+    # что ушли в TLS-блок redis_config). day-2 restart читает state.tls.enable/port.
+    tls:
+      type: object
+      additionalProperties: false
+      properties:
+        enable:   { type: boolean }
+        only:     { type: boolean }
+        port:     { type: integer }
+        cert_ref: { type: string }
+        key_ref:  { type: string }
+        ca_ref:   { type: string }
+    # Способ установки redis (package — distro-пакет; binary — upstream-tarball).
+    # base_url/version/sha256 материализуются при method=binary. Из default(input.
+    # install, {method:package}). day-2 update_config читает state.install.method.
+    install:
+      type: object
+      additionalProperties: false
+      properties:
+        method:   { type: string, enum: [package, binary] }
+        base_url: { type: string }
+        version:  { type: string }
+        sha256:   { type: string }
+    # Режим persistence (концепция роли). Из input.persistence (default rdb).
+    persistence:
+      type: string
+      enum: [off, aof, rdb, rdb_aof]
+    # Бюджет памяти под Redis, МБ. Из input.memory_mb; не задан → отсутствует/0.
+    memory_mb:
+      type: integer
+      minimum: 64
+    # Политика вытеснения. Из input.maxmemory_policy; не задан → пустая строка
+    # (директива берётся из merge-подложки essence — в namedfields маркируется
+    # отсутствием явного выбора оператора).
+    maxmemory_policy:
+      type: string
+    # Подключённые Redis-модули (Redis < 8). Алиасы из input.modules; пусто → [].
+    modules:
+      type: array
+      items:
+        type: string
+        enum: [search, json, timeseries, bloom]
+    # Применённые kernel-параметры под Redis (host-tuning). Из essence.sysctl_settings
+    # (тот же map, что ушёл в destiny через apply.input). key→value (строки).
+    sysctl_settings:
+      type: object
+      additionalProperties:
+        type: string
+
+    # ── Топология (counts, v3) ────────────────────────────────────────────────
+    # Раскладка ролей по таргетированным souls. Из input.shards/replicas/
+    # sentinel_quorum (см. input create). Режим-зависимы: cluster использует shards/
+    # replicas (replicas_per_shard), sentinel — replicas/sentinel_quorum; для прочих
+    # режимов — 0. Не задан в input → 0 (auto-quorum sentinel вычисляется в apply,
+    # в namedfields материализуется 0 как «оператор не зафиксировал явно»).
+    shards:          { type: integer }
+    replicas:        { type: integer }
+    sentinel_quorum: { type: integer }
+
+    # ACL-пользователи Redis: map username → {perms, state}. perms — полная ACL-
+    # строка (директивы Redis ACL как есть). Наполняется create из input.users;
+    # пароли — НЕ в state (keeper-side Vault, ADR-012).
+    redis_users:
+      type: object
+      additionalProperties:
+        type: object
+        required: [perms, state]
+        properties:
+          perms: { type: string }
+          state: { type: string, enum: [on, off] }
+        additionalProperties: false
+    # Хосты топологии (sid + роль). Для standalone — один primary; для cluster/
+    # sentinel наполняется сценарием create (раскладка ролей по таргетированным
+    # souls). Точная роль каждого SID в state — follow-up.
     redis_hosts:
       type: array
-      items: { type: string, format: fqdn }
+      items:
+        type: object
+        required: [sid, role]
+        properties:
+          sid:  { type: string, format: fqdn }
+          role: { type: string, enum: [primary, replica, sentinel] }
+    # Факты sentinel-режимов (master_name + quorum monitored master). Наполняется
+    # create при redis_type=sentinel/sentinel_only; для прочих режимов пуст.
+    # master_ip материализуется ТОЛЬКО в sentinel_only (ВНЕШНИЙ master, заданный
+    # оператором явно — единственный факт топологии режима); в режиме sentinel
+    # master выбирается из roster-а (host-вариативен) → master_ip в state не пишется.
+    redis_sentinel:
+      type: object
+      additionalProperties: false
+      properties:
+        master_name: { type: string }
+        master_ip:   { type: string }
+        quorum:      { type: integer }
 
 # Зависимости-destiny (ADR-007: версия зависимости = git ref, не semver-range).
 # Резолв git-URL — гибрид (docs/keeper/config.md::default_destiny_source):
-#  - запись без git: → git-URL = default_destiny_source + {name} (keeper.yml);
-#  - запись c git:    → override, git-URL берётся напрямую.
-# ref берётся из записи в обоих случаях. apply:destiny ссылается ТОЛЬКО на имена,
-# объявленные здесь (иначе резолвер отвергает зависимость).
-#
-# Все три destiny — standalone в examples/destiny/ (НЕ внутри этого сервиса):
-# default_destiny_source указывает на их каталог. В dev keeper.dev.yml это
-# file:///.../examples/destiny/{name}; в проде — git@.../{name}.git.
+# запись без git: → default_destiny_source + {name}; с git: → override.
+# `redis` — режим-агностичный standalone-кирпич в examples/destiny/redis/.
 destiny:
-  - { name: redis-single,             ref: v1.0.0 }
-  - { name: redis-exporter,           ref: v1.0.0 }
-  # node-exporter (бинарь node_exporter, version-aware install, textfile-
-  # коллекторы), каталог examples/destiny/node-exporter/. Резолвится через
-  # default_destiny_source как и остальные (шаблон {name} → каталог node-exporter).
-  - { name: node-exporter,            ref: v1.0.0 }
-  # Настройка replicaof на репликах (сценарий add_replicas). Переиспользуемая
-  # standalone-destiny (как и тройка выше), резолвится через default_destiny_source.
-  - { name: redis-replication-config, ref: v1.0.0 }
+  - { name: redis, ref: v1.0.0 }
+
+# Custom-модули сервиса. Двухуровневая форма <namespace>.<module> (kebab-case)
+# обязательна (docs/service/manifest.md → modules[]). community.redis — ОСНОВНОЙ
+# интерфейс к живому Redis (examples/module/soul-mod-community-redis/).
+modules:
+  - { name: community.redis, ref: v1.0.0 }

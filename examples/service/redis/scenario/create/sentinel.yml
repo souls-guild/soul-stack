@@ -1,0 +1,194 @@
+# Ветка диспетчера create — режим sentinel (master-replica + sentinel-демон;
+# перенос redis-cluster (master-replica) + redis-sentinel прежних сервисов).
+# Подключается из main.yml через include: и раскрывается в плоский список ДО
+# render. Каждая задача несёт `when: input.redis_type == 'sentinel'` — статический
+# предикат (только input.*), Keeper гасит его placeholder-skip-ом на standalone/
+# cluster-прогоне (isStaticWhen) и рендерит на sentinel-прогоне.
+#
+# ★ АНТИ-TILING-урок (qa 2026-06-22, brief «Sentinel-режим»): граница apply.input
+#   vs шаблон .self строго по «одно значение для всех» / «у каждого своё»:
+#   - master_addr / monitor.ip — HOST-ИНВАРИАНТНЫ (ОДИН master на кластер) →
+#     резолвятся run_once (master-election: soulprint.hosts[0], первый по SID) и
+#     гонятся через apply.input. resolveApplyInput резолвит apply.input на первом
+#     по SID хосте (targeted[0]) — для host-инвариантного значения это КОРРЕКТНО
+#     (одно и то же значение у всех).
+#   - announce-ip — ПЕР-ХОСТ (IP ИМЕННО этого sentinel-а в gossip) → рендерится в
+#     шаблоне destiny из {{ .self.network.primary_ip }} (render_context.self
+#     пер-хост), НЕ через apply.input (там зафиксировался бы IP первой ноды → все
+#     анонсируют один адрес → gossip за NAT/в облаке сломан).
+#
+# master-election: probe НЕВОЗМОЖЕН на create (redis ещё не поднят) → роль
+# DECLARED: первый по SID хост (soulprint.hosts[0]) = master. soulprint.hosts уже
+# отсортирован по SID (cel_render.go), порядок детерминирован.
+
+# 1. SIZE-GUARD — fail-fast ДО любого install (assert:, ADR-009 amendment 2026-06-23;
+#    тот же механизм, что size-guard cluster.yml). Топология sentinel-режима: 1 master
+#    + replicas реплик → size(soulprint.hosts) == 1+replicas. Предикат вычисляется
+#    KEEPER-SIDE на РЕНДЕРЕ (там доступен soulprint.hosts; на Soul-е во flow_context
+#    его НЕТ → Soul-side failed_when неприменим). false ОБРЫВАЕТ render (НИ одной
+#    задачи на Soul, прогон не стартует) с message — раньше и понятнее, чем shell-guard
+#    на хосте. assert НЕ emit RenderedTask — задачи sentinel-ветки после него позиций
+#    не занимают. int() от uint64 (YAML→uint64 в L0, JSON→double в проде) унифицирует
+#    числовой тип CEL.
+- name: Guard sentinel topology size matches one master and replicas
+  when: "input.redis_type == 'sentinel'"
+  assert:
+    that:
+      - "int(size(soulprint.hosts)) == 1 + int(input.replicas)"
+    message: "topology mismatch: hosts != 1 + replicas"
+
+# 2. Per-host install + render redis.conf + users.acl + sentinel.conf + units.
+#    Та же destiny `redis` (режим-агностична), что standalone, но с
+#    sentinel_enabled=true → дополнительно рендерится sentinel.conf + redis-sentinel
+#    unit и поднимается демон. config — базовый merge (БЕЗ cluster-директив:
+#    sentinel-режим — обычный standalone redis + отдельный sentinel-демон).
+#
+#    sentinel.master_ip — HOST-ИНВАРИАНТНЫЙ адрес master-а (master-election:
+#    soulprint.hosts[0].network.primary_ip, первый по SID). Резолвится run_once и
+#    одинаков у всех хостов → через apply.input КОРРЕКТЕН. announce-ip НЕ здесь —
+#    per-host в sentinel.conf.tmpl из .self.network.primary_ip.
+- name: Apply redis destiny (install + render redis.conf/users.acl/sentinel.conf + systemd)
+  when: "input.redis_type == 'sentinel'"
+  apply:
+    destiny: redis
+    input:
+      # version: distro-пин (method=package). При method=binary absent → has()-guard ''.
+      version:  "${ has(input.version) ? input.version : '' }"
+      # install: способ установки (package default / binary), as-is в destiny-диспетч.
+      install:  "${ default(input.install, {}) }"
+      password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+      # Единый compute.redis_config (объявлен ОДИН раз в main.yml compute:, ADR-009):
+      # тот же map, что уйдёт в state_changes.redis_config — drift «state ≡ live
+      # config» снят самим compute. Для sentinel compute.redis_config = базовый merge
+      # (БЕЗ cluster-директив; tls-replication yes при TLS, port 0 при tls_only).
+      # HOST-ИНВАРИАНТ → apply.input на targeted[0] корректен.
+      config: "${ compute.redis_config }"
+      users: >-
+        ${ has(input.users)
+           ? merge(input.users.map(name, {
+               name: {
+                 'perms':    input.users[name].perms,
+                 'state':    input.users[name].state,
+                 'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+               }
+             }))
+           : {} }
+      # Redis-модули (Redis < 8), version-gate — см. standalone.yml (гейт по
+      # compute.redis_version). На Redis 8+ → пустой список. base_url/sha256
+      # host-инвариант → apply.input; арх-URL строит destiny per-host.
+      modules: >-
+        ${ (has(input.modules) && !compute.redis_version.matches('^([0-9]+:)?(8|9|[1-9][0-9])\\.'))
+           ? input.modules
+           : [] }
+      modules_base_url: "${ default(input.modules_base_url, '') }"
+      modules_sha256:   "${ default(input.modules_sha256, {}) }"
+      # Host-tuning extras (концепция роли), режим-агностичны — как в standalone/cluster.
+      # THP/logrotate/sysctl БЕЗУСЛОВНЫ (рекомендация Redis / hardening) — операторских
+      # флагов нет, задачи destiny `redis` всегда активны. sysctl_settings — essence,
+      # host-инвариантна → apply.input.
+      sysctl_settings:  "${ default(essence.sysctl_settings, {}) }"
+      # TLS — единый dict (enable/only/port + cert_ref/key_ref/ca_ref) — см. standalone.
+      # HOST-ИНВАРИАНТ → apply.input. enable/only/port — compute-vars (input.tls.* бьёт
+      # essence). cert_ref/key_ref/ca_ref — Vault-ПУТИ (destiny читает PEM через vault()
+      # в ячейке content, seal-маскинг). refs из input.tls.* с дефолтом essence.tls_*_ref.
+      tls:
+        enable:   "${ compute.tls_on }"
+        only:     "${ compute.tls_only_on }"
+        port:     "${ compute.tls_port }"
+        cert_ref: "${ compute.tls_cert_ref }"
+        key_ref:  "${ compute.tls_key_ref }"
+        ca_ref:   "${ compute.tls_ca_ref }"
+      sentinel_enabled: true
+      sentinel:
+        master_name: "${ input.sentinel_master_name }"
+        # master-election: первый по SID хост = master. HOST-ИНВАРИАНТНО → apply.input.
+        master_ip:   "${ soulprint.hosts[0].network.primary_ip }"
+        master_port: 6379
+        quorum:      "${ has(input.sentinel_quorum) ? int(input.sentinel_quorum) : (int(size(soulprint.hosts)) / 2 + 1) }"
+        auth_pass:   "${ vault('secret/redis/' + incarnation.name + '#password') }"
+
+# 3. Health-gate per-host: PING живого Redis после старта (каждый узел обязан
+#    ответить ДО привязки реплик/настройки sentinel). community.redis.command,
+#    retry/until через retry. addr — localhost (плагин на redis-хосте).
+#    ★ ИБ (anti-downgrade): tls/tls_ca/порт гейтятся на compute.tls_on (TLS ВКЛЮЧЁН),
+#    НЕ tls_only — TLS включён → плагин ОБЯЗАН по TLS (иначе AUTH-пароль plaintext-ом).
+#    PING по compute.tls_port + tls=true + tls_ca (vault(ref) в scenario-проходе).
+- name: Wait for each redis node to answer PING
+  when: "input.redis_type == 'sentinel'"
+  module: community.redis.command
+  retry: { count: 10, delay: 3s }
+  params:
+    addr:     "${ compute.tls_on ? '127.0.0.1:' + string(compute.tls_port) : '127.0.0.1:6379' }"
+    password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    tls:      "${ compute.tls_on }"
+    tls_ca:   "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
+    args:     ["PING"]
+
+# 4. REPLICAOF реплик: plugin community.redis.replica ТОЛЬКО на репликах. addr —
+#    локальный инстанс (127.0.0.1:6379, per-host инвариант); master_addr —
+#    HOST-ИНВАРИАНТНЫЙ адрес master-а (master-election soulprint.hosts[0]).
+#
+#    ★ P0-ИНВАРИАНТ (master НЕ реплицирует сам себя): `where:` исключает
+#    выбранного master по SID — задача рендерится ТОЛЬКО на репликах
+#    (placeholder-skip на master-хосте). master_addr=primary_ip (напр. 10.0.0.1),
+#    а addr=127.0.0.1:6379 → на master-узле addr != master_addr, поэтому
+#    плагин-guard (replica.go: addr==master_addr → no-op) НЕ сработал бы и сделал
+#    бы REPLICAOF на самом master-е (реплика из себя). Реальная защита — этот
+#    `where:`, плагин-guard остаётся defense-in-depth. master SID — то же
+#    выражение master-election (soulprint.hosts[0]), но `.sid` вместо primary_ip.
+#    Предикат — top-level where-ключ (строка), НЕ CEL-map-литерал
+#    (rewriteHostsWhere не переписывает .where внутри map-литерала).
+#    ★ ИБ (anti-downgrade): tls/tls_ca/порт гейтятся на compute.tls_on (TLS ВКЛЮЧЁН),
+#    НЕ tls_only — TLS включён → плагин коннектится к локальному redis И к master-у по
+#    TLS (иначе masterauth/REPLICAOF и репликация ушли бы plaintext-ом). addr/
+#    master_addr на compute.tls_port; tls_ca — CA-PEM (vault(ref), verify master).
+- name: Make replicas follow the elected master (REPLICAOF)
+  when: "input.redis_type == 'sentinel'"
+  where: "soulprint.self.sid != soulprint.hosts[0].sid"
+  module: community.redis.replica
+  params:
+    addr:        "${ compute.tls_on ? '127.0.0.1:' + string(compute.tls_port) : '127.0.0.1:6379' }"
+    master_addr: "${ soulprint.hosts[0].network.primary_ip + ':' + (compute.tls_on ? string(compute.tls_port) : '6379') }"
+    password:    "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    tls:         "${ compute.tls_on }"
+    tls_ca:      "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
+
+# 5. SENTINEL MONITOR reconcile: plugin community.redis.sentinel на КАЖДОМ хосте
+#    (каждый sentinel-демон мониторит master). addr — локальный sentinel
+#    (127.0.0.1:26379, per-host инвариант); monitor.ip — HOST-ИНВАРИАНТНЫЙ адрес
+#    master-а (master-election). quorum — input или большинство size/2+1. auth_pass
+#    — keeper-side vault()-резолв (маскируется, в логи не течёт). Алгоритм
+#    reconcile (MONITOR/REMOVE+MONITOR/SET/CONFIG SET) перенесён 1:1 из Ansible
+#    redis_sentinel_update.py (см. плагин sentinel.go).
+- name: Configure each sentinel to monitor the elected master (SENTINEL MONITOR)
+  when: "input.redis_type == 'sentinel'"
+  module: community.redis.sentinel
+  params:
+    addr:        "127.0.0.1:26379"
+    master_name: "${ input.sentinel_master_name }"
+    auth_pass:   "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    redis_version: "${ compute.redis_version }"
+    monitor:
+      # HOST-ИНВАРИАНТНЫЙ адрес master-а (master-election: soulprint.hosts[0]).
+      ip:     "${ soulprint.hosts[0].network.primary_ip }"
+      port:   6379
+      quorum: "${ has(input.sentinel_quorum) ? int(input.sentinel_quorum) : (int(size(soulprint.hosts)) / 2 + 1) }"
+
+# 6. Health-gate per-host: SENTINEL отвечает PONG на :26379 (демон поднялся и
+#    сконфигурирован). ★ СТРОГО same-task register.self (НЕ cross-passage
+#    flow-control, ADR-056 cross_passage_when_unsupported): «дождаться N sentinel»
+#    НЕ выражаем — проверяем ТОЛЬКО свой локальный sentinel. Паттерн перенесён из
+#    старого redis-sentinel/create (верный same-task health-gate). retry/until +
+#    failed_when по register.self.result этой же задачи.
+- name: Wait until each sentinel answers PONG on :26379
+  when: "input.redis_type == 'sentinel'"
+  module: community.redis.command
+  changed_when: false
+  retry:
+    count: 12
+    delay: 2s
+    until: "register.self.result == 'PONG'"
+  failed_when: "register.self.result != 'PONG'"
+  params:
+    addr: "127.0.0.1:26379"
+    args: ["PING"]

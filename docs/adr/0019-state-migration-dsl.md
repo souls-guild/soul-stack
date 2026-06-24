@@ -1,6 +1,6 @@
 # ADR-019. State_schema migration DSL
 
-- **Контекст.** [ADR-009](0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) упоминает «плоский DSL: `rename`/`set`/`delete`/`move`» как формат `migrations/<NNN>_to_<MMM>.yml`. Но текущий пример `examples/service/redis-cluster/migrations/001_to_002.yml` использует `{% for %}` (Jinja2-стиль из эпохи до ADR-010) — что **не помещается в плоский DSL**. Этот пример был сознательно НЕ тронут во время массовой миграции под ADR-010 (помечен «out of scope, open Q №18»). Реальные сценарии state_schema-миграций включают преобразование коллекций, вычисления от старых полей, splits/merges структур — плоского DSL не хватает.
+- **Контекст.** [ADR-009](0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) упоминает «плоский DSL: `rename`/`set`/`delete`/`move`» как формат `migrations/<NNN>_to_<MMM>.yml`. Но прежний пример migration-файла redis-сервиса использовал `{% for %}` (Jinja2-стиль из эпохи до ADR-010) — что **не помещается в плоский DSL**. Этот пример был сознательно НЕ тронут во время массовой миграции под ADR-010 (помечен «out of scope, open Q №18»). Реальные сценарии state_schema-миграций включают преобразование коллекций, вычисления от старых полей, splits/merges структур — плоского DSL не хватает.
 - **Решение.**
 
   **(a) Грамматика DSL — плоский + CEL-выражения + структурный `foreach` (MVP).**
@@ -38,7 +38,7 @@
 - **Consequences.**
   - `docs/migrations.md` — новый файл (нормативная спецификация формата).
   - `docs/architecture.md` § «Versioning и миграции state_schema» — обновляется ссылкой на ADR-019 (старое описание «плоский DSL» → «по ADR-019»).
-  - `examples/service/redis-cluster/migrations/001_to_002.yml` переписывается под грамматику (a) (вместо `{% for %}`-Jinja — структурный `foreach`).
+  - Пример migration-файла redis-сервиса переписывается под грамматику (a) (вместо `{% for %}`-Jinja — структурный `foreach`). Реализован в [`examples/service/redis/migrations/001_to_002.yml`](../../examples/service/redis/migrations/001_to_002.yml) после redis-консолидации (`redis_users` из списка имён в map `name → {perms, state}`).
   - Open Q №18 закрыт.
   - Соул-side изоляция: миграция = keeper-side, никаких изменений в `proto/keeper/v1/`.
 - **Trade-offs.**

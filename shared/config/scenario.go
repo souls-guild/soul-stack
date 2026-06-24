@@ -26,9 +26,71 @@ type ScenarioManifest struct {
 	Name         string         `yaml:"name"`
 	Description  string         `yaml:"description,omitempty"`
 	Input        InputSchemaMap `yaml:"input,omitempty"`
+	Validate     []ValidateRule `yaml:"validate,omitempty"`
 	StateChanges *StateChanges  `yaml:"state_changes,omitempty"`
+	Compute      ComputeBlock   `yaml:"compute,omitempty"`
 	Vars         map[string]any `yaml:"vars,omitempty"`
 	Tasks        []Task         `yaml:"tasks"`
+}
+
+// ValidateRule — одно правило top-level scenario-секции `validate:` (ADR-009
+// amendment 2026-06-23, DSL wave 2). Декларативная input-валидация «должно быть
+// X, не Y» вместо россыпи assert-задач: список правил `[{that, message}]`, каждое
+// `that` — CEL-bool-предикат (вся строка = CEL без обёртки, как `where:`/`assert.
+// that`), `message` — человекочитаемая причина отказа при `that == false`.
+//
+// КОНТЕКСТ ПРАВИЛА — INPUT-ONLY: env несёт ЕДИНСТВЕННУЮ переменную `input`
+// (тот же узкий cel-go-sandbox, что `required_when` — input_required_when.go).
+// validate: покрывает ИНВАРИАНТЫ ВВОДА (кросс-полевые предусловия, не выразимые
+// одиночным schema-ключом — например, «`port` обязателен, если `tls` выключен»).
+// Ссылка на essence/soulprint/register/vault в `that` → compile-ошибка undeclared
+// reference (структурный барьер необъявленностью, не текстовый guard). Топология/
+// roster-проверки остаются за `assert:` (у него полный scenario-CEL-контекст с
+// soulprint.hosts) — validate: ДОПОЛНЯЕТ, не заменяет ни assert, ни required_when.
+//
+// КОГДА: pre-flight на CreateTyped/RunTyped (request-путь) — первый провалившийся
+// rule даёт HTTP 422 validation_failed ДО коммита incarnation и ДО applying (как
+// required_when и pre-flight assert, БЕЗ error_locked). Вычисление детерминировано
+// от input (config.EvalValidateRules) — двухточечная render-fail-safe не нужна
+// (input не меняется между request-путём и стартом goroutine, в отличие от roster
+// у assert).
+type ValidateRule struct {
+	That    string `yaml:"that"`
+	Message string `yaml:"message"`
+}
+
+// ComputeBlock — scenario-level вычисляемые переменные (`compute:`, ADR-009
+// amendment 2026-06-23). Каждая запись — `<имя>: <CEL-выражение>`: Keeper резолвит
+// её ОДИН раз на прогон в РУН-УРОВНЕВОМ scenario-контексте (input/essence/
+// incarnation/register), затем результат доступен как `compute.<имя>` в
+// `apply.input` И в `state_changes` (cel_render.resolveCompute).
+//
+// Назначение — снять дублирование общего выражения, которое иначе пишут дважды
+// (apply.input и state_changes не видят task-level `vars:`): объявить большой
+// merge() один раз и сослаться `${ compute.<имя> }`.
+//
+// Барьер изоляции (architect aebb2d39 §5):
+//   - compute НЕ протекает в изолированный destiny-проход (destiny видит только
+//     результат через apply.input — RenderInput.Compute там не пробрасывается,
+//     ADR-009 V2);
+//   - резолв-контекст compute РУН-УРОВНЕВЫЙ (БЕЗ soulprint.self/soulprint.hosts):
+//     compute host-инвариантна по построению, поэтому одно и то же значение
+//     корректно уходит и в apply.input (резолв на targeted[0]), и в state_changes
+//     (per-run, не per-host). Ссылка на soulprint.* в compute → CEL no-such-key
+//     (структурный барьер, не текстовый guard).
+//
+// Порядок объявления значим: compute[i] может ссылаться на ранее объявленный
+// compute[j] (j < i) как `${ compute.<имя_j> }`. Поэтому хранится упорядоченным
+// списком (не map: декод сохраняет порядок ключей YAML).
+type ComputeBlock []ComputeVar
+
+// ComputeVar — одна запись `compute:`-блока (имя + CEL-выражение). Value —
+// строка-CEL (`${ … }`-интерполяция ИЛИ нативное выражение), резолвится
+// cel_render.resolveCompute. Литерал-значение (число/bool/коллекция) тоже
+// допустимо — non-string проходит насквозь как в `vars:`.
+type ComputeVar struct {
+	Name  string
+	Value any
 }
 
 // StateChanges — декларация мутаций `incarnation.state`, которые сценарий
@@ -62,6 +124,30 @@ type StateChanges struct {
 	Sets     map[string]string `yaml:"sets,omitempty"`
 	Appends  []string          `yaml:"appends,omitempty"`
 	Modifies []string          `yaml:"modifies,omitempty"`
+}
+
+// UnmarshalYAML декодирует `compute:` как mapping `<имя>: <выражение>` в
+// УПОРЯДОЧЕННЫЙ список ComputeVar (порядок ключей YAML сохраняется — compute[i]
+// может ссылаться на ранее объявленный compute[j], j<i). Значение — строка-CEL
+// либо литерал (non-string проходит насквозь как в `vars:`). Не-mapping узел
+// (scalar/sequence) → пустой блок: validateComputeBlock поднимет type_mismatch по
+// yaml_path. Ключ без значения / пустой ключ пропускается (валидатор поднимет
+// диагностику).
+func (c *ComputeBlock) UnmarshalYAML(node ast.Node) error {
+	mm, ok := node.(*ast.MappingNode)
+	if !ok {
+		return nil
+	}
+	out := make(ComputeBlock, 0, len(mm.Values))
+	for _, kv := range mm.Values {
+		tok := kv.Key.GetToken()
+		if tok == nil || tok.Value == "" {
+			continue
+		}
+		out = append(out, ComputeVar{Name: tok.Value, Value: nodeToAny(kv.Value)})
+	}
+	*c = out
+	return nil
 }
 
 // StateVerb — глагол одной операции state_changes (новая list-форма).
@@ -465,9 +551,19 @@ func schemaValidateScenario(path string, root *ast.MappingNode, m *ScenarioManif
 		out = append(out, validateStateChanges(root, "$.state_changes")...)
 	}
 
+	// 4a) `compute:` — структурная валидация (только если ключ есть).
+	if topKeys["compute"] {
+		out = append(out, validateComputeBlock(root, "$.compute")...)
+	}
+
 	// 5) `input:` — общий валидатор схемы.
 	if topKeys["input"] {
 		out = append(out, validateInputSchemaMap(m.Input, findInputMapping(root, "input"), "$.input")...)
+	}
+
+	// 5a) `validate:` — top-level список input-инвариантов (только если ключ есть).
+	if topKeys["validate"] {
+		out = append(out, validateValidateBlock(root, "$.validate")...)
 	}
 
 	// 6) `tasks[]` — полиморфная валидация каждой задачи.
@@ -478,6 +574,91 @@ func schemaValidateScenario(path string, root *ast.MappingNode, m *ScenarioManif
 		}
 	}
 
+	return out
+}
+
+// reComputeName — имя compute-переменной: должно быть CEL-полем-доступным
+// (`compute.<name>`), то есть идентификатор snake/camel, начинающийся с буквы или
+// `_`. Цифры/буквы/подчёркивание внутри. Дефис/точка/пробел запрещены (сломали бы
+// `compute.<name>`-доступ в CEL).
+var reComputeName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// computeReservedNames — имена, которые compute-переменная перекрывать нельзя:
+// корневые контекст-имена CEL (input/register/incarnation/soulprint/essence/vars)
+// + сам корень `compute`. Compute-переменные кладутся под `compute.<name>`, но имя
+// `compute` как переменная затёрло бы весь блок — запрещаем для самодокументируемости.
+var computeReservedNames = map[string]bool{
+	"input": true, "register": true, "incarnation": true,
+	"soulprint": true, "essence": true, "vars": true, "compute": true,
+}
+
+// validateComputeBlock — проверка структуры `compute:`-блока (ADR-009 amendment
+// 2026-06-23): mapping `<имя>: <CEL-выражение|литерал>`. Имя — CEL-field-доступный
+// идентификатор (reComputeName), не из computeReservedNames; дубликат имени —
+// ошибка (затёр бы ранний compute). Значение-строка — непустое; non-string литерал
+// валиден (проходит насквозь как vars). Не-mapping блок → type_mismatch.
+func validateComputeBlock(root *ast.MappingNode, pathPrefix string) []diag.Diagnostic {
+	node := findValueNode(root, "compute")
+	mm, ok := node.(*ast.MappingNode)
+	if !ok {
+		line, col := 0, 0
+		if vt := node.GetToken(); vt != nil {
+			line, col = vt.Position.Line, vt.Position.Column
+		}
+		return []diag.Diagnostic{diagAt(line, col, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:     "type_mismatch",
+			Message:  "compute must be a mapping of <name> → CEL-expression",
+			Hint:     "compute: { <name>: \"${ ... }\" } — scenario-level computed vars (ADR-009)",
+			YAMLPath: pathPrefix,
+		})}
+	}
+
+	var out []diag.Diagnostic
+	seen := make(map[string]bool, len(mm.Values))
+	for _, kv := range mm.Values {
+		tok := kv.Key.GetToken()
+		if tok == nil {
+			continue
+		}
+		name := tok.Value
+		switch {
+		case computeReservedNames[name]:
+			out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+				Code:     "reserved_binding_name",
+				Message:  fmt.Sprintf("compute.%s shadows a reserved CEL context name", name),
+				Hint:     "reserved: input, register, incarnation, soulprint, essence, vars, compute",
+				YAMLPath: pathPrefix + "." + name,
+			}))
+		case !reComputeName.MatchString(name):
+			out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+				Code:     "name_invalid_format",
+				Message:  fmt.Sprintf("compute name %q is not a valid CEL identifier", name),
+				Hint:     "use letters/digits/underscore, start with a letter or _ (accessed as compute.<name>)",
+				YAMLPath: pathPrefix + "." + name,
+			}))
+		case seen[name]:
+			out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+				Code:     "duplicate_key",
+				Message:  fmt.Sprintf("compute.%s is declared more than once", name),
+				YAMLPath: pathPrefix + "." + name,
+			}))
+		}
+		seen[name] = true
+
+		// Значение: строка-CEL должна быть непустой; non-string литерал валиден.
+		if sn, isStr := kv.Value.(*ast.StringNode); isStr && sn.Value == "" {
+			out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+				Code:     "empty_value",
+				Message:  fmt.Sprintf("compute.%s must be a non-empty expression", name),
+				YAMLPath: pathPrefix + "." + name,
+			}))
+		}
+	}
 	return out
 }
 

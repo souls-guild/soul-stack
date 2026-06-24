@@ -1,0 +1,295 @@
+package render
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/topology"
+	"github.com/souls-guild/soul-stack/shared/config"
+)
+
+// Guard-тесты механизма block: ВНУТРИ destiny-прохода (ADR-009 amendment
+// 2026-06-24, architect a9b54bbf). Синтетические inline-destiny через
+// stubDestinyResolver — НЕ redis. Покрывают:
+//
+//	(a) block.when AND-merge с child.when → gated when на потомке;
+//	(b) register потомка block виден onchanges-задаче СНАРУЖИ block (flat scope);
+//	(c) block.when static-false → per-потомок skip-placeholder-ы, register потомка
+//	    виден снаружи (flat-register-scope инвариантен относительно static-skip);
+//	    +c2 onchanges снаружи резолвится, +c3 опечатка register по-прежнему падает;
+//	(d) where/serial/run_once/on/parallel/loop/include/apply на destiny-block или
+//	    потомке → ErrUnsupportedDSL;
+//	(e) вложенный block разворачивается каскадом со сквозными Index.
+
+// blockDestiny — destiny с одной block-задачей внутри tasks[].
+func blockDestiny(name string, tasks ...config.Task) *ResolvedDestiny {
+	return &ResolvedDestiny{
+		Name:  name,
+		Input: config.InputSchemaMap{"enabled": {Type: "bool", Default: true}},
+		Tasks: tasks,
+	}
+}
+
+// renderBlockDestiny — общий прогон Render над scenario с одной apply:destiny,
+// чья destiny несёт переданные tasks. Возвращает плоский план.
+func renderBlockDestiny(t *testing.T, d *ResolvedDestiny, applyInput map[string]any, hosts ...*topology.HostFacts) ([]*RenderedTask, []DispatchPlan, error) {
+	t.Helper()
+	if len(hosts) == 0 {
+		hosts = []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)}
+	}
+	res := &stubDestinyResolver{resolved: d}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario:    applyScenario(d.Name, applyInput),
+		Incarnation: IncarnationMeta{Name: "svc"},
+		Hosts:       hosts,
+		Destiny:     res,
+	}
+	return p.Render(context.Background(), in)
+}
+
+// (a) block.when AND-merge с child.when: потомок несёт `(<block>) && (<child>)`
+// как CEL-строку When (Keeper не вычисляет register-зависимый when, ADR-012(d)).
+// when здесь register-зависимый (register.probe.*) — НЕ static, поэтому реально
+// протягивается на потомок, а не гасится placeholder-ом.
+func TestRenderDestinyBlock_WhenAndMerge(t *testing.T) {
+	inner := moduleTask("restart", "core.service.restarted")
+	inner.When = "register.probe.changed"
+	block := config.Task{
+		Name:  "grp",
+		When:  "register.cfg.changed",
+		Block: &config.BlockTask{Block: []config.Task{inner}},
+	}
+	d := blockDestiny("with-block", block)
+
+	tasks, _, err := renderBlockDestiny(t, d, map[string]any{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("len(tasks) = %d, want 1 (один block-потомок)", len(tasks))
+	}
+	want := "(register.cfg.changed) && (register.probe.changed)"
+	if tasks[0].When != want {
+		t.Errorf("tasks[0].When = %q, want %q (AND-merge block.when ∧ child.when)", tasks[0].When, want)
+	}
+	if tasks[0].Module != "core.service.restarted" {
+		t.Errorf("tasks[0].Module = %q, want core.service.restarted", tasks[0].Module)
+	}
+}
+
+// (b) register потомка block виден onchanges-задаче СНАРУЖИ block (кейс #10).
+// flat register-scope: задача внутри block регистрирует value, рестарт-задача
+// ПОСЛЕ block (вне него) ссылается на этот register через onchanges →
+// resolveOnChanges мапит имя в Index источника внутри block.
+func TestRenderDestinyBlock_FlatRegisterScope(t *testing.T) {
+	probe := moduleTask("probe", "core.exec.run")
+	probe.Register = "tls_changed"
+	block := config.Task{
+		Name:  "tls-grp",
+		Block: &config.BlockTask{Block: []config.Task{probe}},
+	}
+	restart := moduleTask("restart", "core.service.restarted")
+	restart.OnChanges = []string{"tls_changed"} // ссылка на register ВНУТРИ block.
+	d := blockDestiny("tls-flat", block, restart)
+
+	tasks, _, err := renderBlockDestiny(t, d, map[string]any{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("len(tasks) = %d, want 2 (block-потомок probe + restart снаружи)", len(tasks))
+	}
+	if tasks[0].Register != "tls_changed" {
+		t.Errorf("tasks[0].Register = %q, want tls_changed (потомок block виден в плоском плане)", tasks[0].Register)
+	}
+	if len(tasks[1].OnChangesIdx) != 1 || tasks[1].OnChangesIdx[0] != 0 {
+		t.Errorf("restart.OnChangesIdx = %v, want [0] — register потомка block виден onchanges СНАРУЖИ block", tasks[1].OnChangesIdx)
+	}
+}
+
+// (c) block.when static-false → per-потомок skip-placeholder-ы (НЕ один за весь
+// блок): block.when вливается в каждого потомка через AND, static-when каждого
+// становится false, и каждый child эмитит СВОЙ placeholder со своим register. when
+// статичен (input.enabled — нет register/soulprint), при enabled=false каждый
+// потомок гасится своим placeholder-ом. register потомка ВИДЕН снаружи (flat scope
+// инвариантен относительно static-skip — исправляемый дефект block-static-skip).
+func TestRenderDestinyBlock_StaticWhenFalse_PerChild(t *testing.T) {
+	probe := moduleTask("inner", "core.service.restarted")
+	probe.Register = "inner_reg"
+	block := config.Task{
+		Name:  "grp",
+		When:  "input.enabled",
+		Block: &config.BlockTask{Block: []config.Task{probe}},
+	}
+	d := blockDestiny("gated", block)
+
+	tasks, plans, err := renderBlockDestiny(t, d, map[string]any{"enabled": false})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if len(tasks) != 1 || len(plans) != 1 {
+		t.Fatalf("len(tasks)=%d plans=%d, want 1/1 (per-потомок placeholder)", len(tasks), len(plans))
+	}
+	if tasks[0].FlowContext == nil {
+		t.Errorf("placeholder должен нести FlowContext (static-skip)")
+	}
+	if tasks[0].Register != "inner_reg" {
+		t.Errorf("tasks[0].Register = %q, want inner_reg — register потомка виден на skip-placeholder", tasks[0].Register)
+	}
+	if tasks[0].Params != nil {
+		t.Errorf("tasks[0].Params = %v, want nil (static-skip placeholder)", tasks[0].Params)
+	}
+	if len(plans[0].TargetSIDs) != 0 {
+		t.Errorf("placeholder.TargetSIDs = %v, want пусто (не диспатчится)", plans[0].TargetSIDs)
+	}
+}
+
+// (c2) static-false destiny-block + onchanges СНАРУЖИ на register потомка (кейс
+// #10, зеркало scenario): render НЕ падает ErrOnChangesUnknownRegister, register
+// потомка резолвится в OnChangesIdx у задачи после блока. Это и есть исправляемый
+// латентный дефект block-static-skip в destiny-слое.
+func TestRenderDestinyBlock_StaticWhenFalse_PreservesRegister(t *testing.T) {
+	probe := moduleTask("probe", "core.exec.run")
+	probe.Register = "tls_changed"
+	block := config.Task{
+		Name:  "tls-grp",
+		When:  "input.enabled",
+		Block: &config.BlockTask{Block: []config.Task{probe}},
+	}
+	restart := moduleTask("restart", "core.service.restarted")
+	restart.OnChanges = []string{"tls_changed"}
+	d := blockDestiny("tls-gated", block, restart)
+
+	tasks, _, err := renderBlockDestiny(t, d, map[string]any{"enabled": false})
+	if err != nil {
+		t.Fatalf("Render НЕ должен падать на register потомка static-false destiny-block: %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("len(tasks) = %d, want 2 (skip-placeholder потомка + restart)", len(tasks))
+	}
+	if tasks[0].Register != "tls_changed" {
+		t.Errorf("tasks[0].Register = %q, want tls_changed (register потомка виден через skip-placeholder)", tasks[0].Register)
+	}
+	if len(tasks[1].OnChangesIdx) != 1 || tasks[1].OnChangesIdx[0] != 0 {
+		t.Errorf("restart.OnChangesIdx = %v, want [0] — register потомка static-false destiny-block резолвится снаружи", tasks[1].OnChangesIdx)
+	}
+}
+
+// (c3, негатив) onchanges на ЗАВЕДОМО несуществующий register (опечатка) ПО-ПРЕЖНЕМУ
+// падает ErrOnChangesUnknownRegister — фикс block-static-skip НЕ ослабил валидацию.
+// Гарантирует, что раскрытие static-false block в per-потомок placeholder-ы не
+// маскирует опечатки register-id.
+func TestRenderDestinyBlock_StaticWhenFalse_UnknownRegisterStillFails(t *testing.T) {
+	probe := moduleTask("probe", "core.exec.run")
+	probe.Register = "tls_changed"
+	block := config.Task{
+		Name:  "tls-grp",
+		When:  "input.enabled",
+		Block: &config.BlockTask{Block: []config.Task{probe}},
+	}
+	restart := moduleTask("restart", "core.service.restarted")
+	restart.OnChanges = []string{"typo_changed"} // опечатка: такого register нет
+	d := blockDestiny("tls-typo", block, restart)
+
+	_, _, err := renderBlockDestiny(t, d, map[string]any{"enabled": false})
+	if err == nil {
+		t.Fatal("Render: ожидалась ошибка на несуществующий onchanges register, got nil")
+	}
+	if !errors.Is(err, ErrOnChangesUnknownRegister) {
+		t.Errorf("err = %v, want ErrOnChangesUnknownRegister (валидация не ослаблена static-skip)", err)
+	}
+}
+
+// (d) scenario-оркестрация на destiny-block ИЛИ его потомке → ErrUnsupportedDSL.
+// Граница ключей render-слоя (config-слой общий и эти ключи там валидны).
+func TestRenderDestinyBlock_RejectsScenarioKeys(t *testing.T) {
+	leaf := func() config.Task { return moduleTask("leaf", "core.exec.run") }
+
+	cases := []struct {
+		name  string
+		block config.Task
+	}{
+		{"where_on_block", config.Task{Name: "g", Where: "soulprint.self.os.family=='debian'", Block: &config.BlockTask{Block: []config.Task{leaf()}}}},
+		{"serial_on_block", config.Task{Name: "g", Serial: 2, Block: &config.BlockTask{Block: []config.Task{leaf()}}}},
+		{"run_once_on_block", config.Task{Name: "g", RunOnce: true, Block: &config.BlockTask{Block: []config.Task{leaf()}}}},
+		{"on_on_block", config.Task{Name: "g", On: []string{"svc"}, Block: &config.BlockTask{Block: []config.Task{leaf()}}}},
+		{"parallel_on_block", config.Task{Name: "g", Parallel: true, Block: &config.BlockTask{Block: []config.Task{leaf()}}}},
+		{"loop_on_block", config.Task{Name: "g", Loop: &config.LoopSpec{Items: "${ [1,2] }"}, Block: &config.BlockTask{Block: []config.Task{leaf()}}}},
+		{"where_on_child", config.Task{Name: "g", Block: &config.BlockTask{Block: []config.Task{withWhere(leaf(), "soulprint.self.os.family=='debian'")}}}},
+		{"serial_on_child", config.Task{Name: "g", Block: &config.BlockTask{Block: []config.Task{withSerial(leaf(), 2)}}}},
+		{"run_once_on_child", config.Task{Name: "g", Block: &config.BlockTask{Block: []config.Task{withRunOnce(leaf())}}}},
+		{"on_on_child", config.Task{Name: "g", Block: &config.BlockTask{Block: []config.Task{withOn(leaf(), []string{"svc"})}}}},
+		{"parallel_on_child", config.Task{Name: "g", Block: &config.BlockTask{Block: []config.Task{withParallel(leaf())}}}},
+		{"loop_on_child", config.Task{Name: "g", Block: &config.BlockTask{Block: []config.Task{withLoop(leaf())}}}},
+		{"apply_on_child", config.Task{Name: "g", Block: &config.BlockTask{Block: []config.Task{{Name: "ap", Apply: &config.ApplyTask{Destiny: "other"}}}}}},
+		{"include_on_child", config.Task{Name: "g", Block: &config.BlockTask{Block: []config.Task{{Name: "inc", Include: &config.IncludeTask{Include: "x.yml"}}}}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := blockDestiny("rej", tc.block)
+			_, _, err := renderBlockDestiny(t, d, map[string]any{})
+			// include даёт ErrUnexpandedInclude (баг раскрытия), остальное —
+			// ErrUnsupportedDSL. Оба — отказ, проверяем по конкретной семье.
+			wantInclude := tc.name == "include_on_child"
+			switch {
+			case wantInclude && !errors.Is(err, ErrUnexpandedInclude):
+				t.Fatalf("err = %v, want ErrUnexpandedInclude", err)
+			case !wantInclude && !errors.Is(err, ErrUnsupportedDSL):
+				t.Fatalf("err = %v, want ErrUnsupportedDSL (scenario-ключ %s)", err, tc.name)
+			}
+		})
+	}
+}
+
+// (e) вложенный block разворачивается каскадом: внешний when ∧ внутренний block-when
+// ∧ лист-when → тройной AND на листе; Index сквозной.
+func TestRenderDestinyBlock_Nested(t *testing.T) {
+	leaf := moduleTask("leaf", "core.exec.run")
+	leaf.When = "register.c.changed"
+	innerBlock := config.Task{
+		Name:  "inner",
+		When:  "register.b.changed",
+		Block: &config.BlockTask{Block: []config.Task{leaf}},
+	}
+	sibling := moduleTask("sib", "core.exec.run")
+	outerBlock := config.Task{
+		Name:  "outer",
+		When:  "register.a.changed",
+		Block: &config.BlockTask{Block: []config.Task{sibling, innerBlock}},
+	}
+	d := blockDestiny("nested", outerBlock)
+
+	tasks, _, err := renderBlockDestiny(t, d, map[string]any{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("len(tasks) = %d, want 2 (sibling + leaf вложенного block)", len(tasks))
+	}
+	if tasks[0].Index != 0 || tasks[1].Index != 1 {
+		t.Errorf("indices = %d,%d, want 0,1 (сквозные)", tasks[0].Index, tasks[1].Index)
+	}
+	// sibling: только внешний when.
+	if tasks[0].When != "register.a.changed" {
+		t.Errorf("sibling.When = %q, want register.a.changed", tasks[0].When)
+	}
+	// leaf: outer ∧ inner ∧ leaf. Каскад: outer влит в inner-block (→ (a)&&(b)),
+	// затем результат влит в лист (→ ((a)&&(b))&&(c)).
+	want := "((register.a.changed) && (register.b.changed)) && (register.c.changed)"
+	if tasks[1].When != want {
+		t.Errorf("leaf.When = %q, want %q (тройной AND каскадом)", tasks[1].When, want)
+	}
+}
+
+// Хелперы-мутаторы для матрицы (d): возвращают копию задачи с одним scenario-ключом.
+func withWhere(t config.Task, w string) config.Task { t.Where = w; return t }
+func withSerial(t config.Task, s int) config.Task   { t.Serial = s; return t }
+func withRunOnce(t config.Task) config.Task         { t.RunOnce = true; return t }
+func withOn(t config.Task, on []string) config.Task { t.On = on; return t }
+func withParallel(t config.Task) config.Task        { t.Parallel = true; return t }
+func withLoop(t config.Task) config.Task {
+	t.Loop = &config.LoopSpec{Items: "${ [1,2] }"}
+	return t
+}

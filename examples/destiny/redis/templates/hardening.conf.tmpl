@@ -5,7 +5,7 @@
   Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010).
 
   ПОЧЕМУ drop-in, а не свой unit. Redis ставится дистрибутивным пакетом
-  (core.pkg.installed redis-server, tasks/apply.yml) вместе с его systemd-юнитом
+  (core.pkg.installed redis-server, tasks/main.yml) вместе с его systemd-юнитом
   redis-server.service. Дистрибутивный unit заменять целиком нельзя — он несёт
   ExecStart/Type=notify/RuntimeDirectory и обновляется вместе с пакетом. Поэтому
   hardening доезжает override-ом: /etc/systemd/system/redis-server.service.d/
@@ -24,9 +24,9 @@
   Stateful-вариант блока: ProtectSystem=strict + ReadWritePaths под фактические
   каталоги записи redis. БЕЗ ReadWritePaths strict делает весь / только-чтение и
   redis не сможет писать RDB/AOF/socket/pid/log — прод-инцидент. RW-пути — дефолтные
-  каталоги дистрибутивного redis-пакета (vars.yml: redis_data_dir /var/lib/redis,
-  redis_log_dir /var/log/redis; pidfile/socket под /var/run/redis). Перечислены
-  каталоги этих путей, и только они.
+  каталоги дистрибутивного redis-пакета: data-dir /var/lib/redis, log /var/log/redis,
+  pidfile/socket под /var/run/redis (redis.conf.tmpl). Перечислены каталоги этих
+  путей, и только они.
 
   MemoryDenyWriteExecute НЕ ставим намеренно (в отличие от Go-бинарей exporter-ов).
   redis — на C, использует jemalloc и поддерживает loadable-модули; MDWE запрещает

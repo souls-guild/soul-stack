@@ -1,0 +1,117 @@
+# L0-испытание create (standalone) — VERSION-GATE Redis 8+: модули ВСТРОЕНЫ в
+# сервер → .so НЕ качаем и loadmodule НЕ пишем, ДАЖЕ если оператор задал
+# input.modules. Контр-кейс к modules-enabled-standalone (Redis 6, модули активны).
+#
+# Корень гейта: scenario вычисляет modules_for_redis = redis8plus ? [] : input.modules,
+# где redis8plus матчит version по regex ^([0-9]+:)?(8|9|двузначный мажор)\. На
+# version=8.0.0 → modules → [] → destiny получает пустой modules/loadmodules:
+#   - modules-dir gated на size(modules)>0 → placeholder-skip (НЕ создаёт каталог);
+#   - fetch-loop по пустому списку → 0 задач;
+#   - vars.loadmodules = [] → секции loadmodule в redis.conf нет.
+# План идентичен modules-empty: PING на index 21 (modules-dir placeholder на 20;
+# extras-sysctl сжаты 2→1 задачи core.sysctl.applied → хвост после sysctl −1).
+#
+# Упрощение (brief): version-gate по input.version (мажор), полную version-matrix
+# совместимости модулей НЕ тащим. version не задан → НЕ гейтим (fail-closed на Redis).
+name: redis 8 version gate skips module download even when modules requested
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network:
+      primary_ip: 10.0.0.5
+    os:
+      arch: amd64
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+  essence:
+    redis_type: standalone
+    memory_reserve_percent: 75
+    persistence_presets:
+      off:
+        save: ""
+        appendonly: "no"
+      aof:
+        save: ""
+        appendonly: "yes"
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+      rdb_aof:
+        save: "900 1 300 10 60 10000"
+        appendonly: "yes"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+  input:
+    redis_type: standalone
+    version: "8.0.0"
+    # Оператор ЗАДАЛ модули, но Redis 8+ → version-gate их гасит.
+    modules: [search, json]
+    modules_base_url: "https://artifacts.example.com/redis/modules/8.0"
+    modules_sha256:
+      search: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      json:   "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+assert:
+  rendered_tasks:
+    # redis.conf БЕЗ loadmodules (version-gate → пустой список): vars.loadmodules: [].
+    - index: 14
+      module: core.file.rendered
+      params:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            password: s3cr3t-redis-pass-create
+            loadmodules: []
+            config:
+              maxmemory: "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients: 10000
+              timeout: 300
+              save: "900 1 300 10 60 10000"
+              appendonly: "no"
+          self:
+            sid: trial-host
+            covens: [create]
+            choirs: []
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # PING на index 21 (как modules-empty): modules-dir gated-placeholder на 20,
+    # fetch-loop 0 задач (пустой modules после gate). Хвост после sysctl −1
+    # (extras-sysctl сжаты 2→1 задачи core.sysctl.applied).
+    - index: 28
+
+      module: community.redis.command
+      params:
+        addr: "127.0.0.1:6379"
+        password: s3cr3t-redis-pass-create
+        args: ["PING"]
+
+  state_changes:
+    redis_type: standalone
+    redis_version: "8.0.0"
+    redis_config:
+      maxmemory: "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients: 10000
+      timeout: 300
+      save: "900 1 300 10 60 10000"
+      appendonly: "no"
+    redis_users: {}
+    redis_hosts: []
+    redis_sentinel: {}

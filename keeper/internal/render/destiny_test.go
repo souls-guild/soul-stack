@@ -348,26 +348,5 @@ func TestRender_ApplyDestiny_RejectsNestedApply(t *testing.T) {
 	}
 }
 
-// TestRender_ApplyDestiny_RejectsNestedBlock — block: внутри destiny →
-// ErrUnsupportedDSL (guardDestinyTask, case task.Block != nil). Дополняет тираж
-// guard-веток: block — единственная оставшаяся непокрытая ветка после
-// apply/include/serial/run_once (loop из guard убран — слайс E снят).
-func TestRender_ApplyDestiny_RejectsNestedBlock(t *testing.T) {
-	d := flatDestiny()
-	d.Tasks = append(d.Tasks, config.Task{
-		Name:  "nested block",
-		Block: &config.BlockTask{Block: []config.Task{}},
-	})
-	res := &stubDestinyResolver{resolved: d}
-	p := NewPipeline(nil, newEngine(t), nil, nil)
-	in := RenderInput{
-		Scenario:    applyScenario("pilot-flat", map[string]any{"marker_file": "/m", "marker_payload": "p"}),
-		Incarnation: IncarnationMeta{Name: "svc"},
-		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
-		Destiny:     res,
-	}
-	_, _, err := p.Render(context.Background(), in)
-	if !errors.Is(err, ErrUnsupportedDSL) {
-		t.Fatalf("err = %v, want ErrUnsupportedDSL (block: в destiny)", err)
-	}
-}
+// block: внутри destiny теперь ПОДДЕРЖАН (ADR-009 amendment 2026-06-24) —
+// guard-тесты механизма в destiny_block_test.go.

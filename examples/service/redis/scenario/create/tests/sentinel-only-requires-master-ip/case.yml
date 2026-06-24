@@ -1,0 +1,52 @@
+# L0-испытание режима sentinel_only — master_ip ОБЯЗАТЕЛЕН (FAIL-ветка). sentinel_only
+# РЕАЛИЗОВАН (ветка sentinel-only.yml). Но sentinel_only требует ВНЕШНИЙ master
+# (input.master_ip): на schema-уровне master_ip остаётся required:false, но несёт
+# required_when: "input.redis_type == 'sentinel_only'" — условную обязательность по
+# режиму (ADR-009 amendment 2026-06-23). Пропуск master_ip в этом режиме рвёт прогон
+# на INPUT-ВАЛИДАЦИИ (config.ResolveInputValues → requireInputValues) ДО render,
+# понятным сообщением; прежний keeper-side shell master_ip-guard убран.
+#
+# В trial-harness эта input-ошибка пробрасывается через renderCase
+# (config.ResolveInputValues) и ловится тем же expect_render_error.
+#
+# Прежний кейс (master_ip-guard как отрендеренная core.cmd.shell-задача в fail-форме)
+# переписан: обязательность теперь декларативна (required_when), отсекает раньше — до
+# построения плана.
+name: sentinel_only requires master_ip (aborts at input validation)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.9 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+  essence:
+    redis_type: standalone
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+  # redis_type=sentinel_only БЕЗ master_ip — required_when обязан сорвать прогон на
+  # input-валидации ДО render.
+  input:
+    redis_type: sentinel_only
+    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
+    # distro-native пин (мажор < 8 → version-gate модулей не активен).
+    version: "7.2.4"
+
+# Прогон обрывается на input-валидации: required_when master_ip истинен (режим
+# sentinel_only), значение не передано и без default. Подстрока — узнаваемая форма
+# required-сообщения requireInputValues (input_value.go), включающая сам предикат.
+expect_render_error: "input \"master_ip\" обязателен, но не передан и не имеет default (required_when: input.redis_type == 'sentinel_only')"

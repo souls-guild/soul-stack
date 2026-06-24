@@ -1,0 +1,121 @@
+# L0-испытание (Trial, ADR-023): ★ ANTI-DOWNGRADE guard (ИБ-фикс medium-crypto).
+# Комбинация tls_enable=true && tls_only=FALSE (plain-порт ещё открыт): доказываем,
+# что health-gate PING плагина коннектится ПО TLS, а НЕ plaintext-ом. Прежде tls/
+# addr/tls_ca гейтились на essence.tls_only → при tls_only=false плагин уходил
+# PLAINTEXT-ом на 6379 → AUTH-пароль открытым текстом по сети (downgrade). Теперь
+# гейт на essence.tls_ENABLE: TLS включён → плагин ОБЯЗАН по TLS (tls=true, addr на
+# tls_port, tls_ca). redis.conf при этом БЕЗ `port 0` (plain открыт, не only-TLS) —
+# отличие от tls-enabled-standalone (там tls_only=true → port 0).
+name: tls enabled without tls_only still connects plugin over TLS (no plaintext downgrade)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network:
+      primary_ip: 10.0.0.5
+    os:
+      arch: amd64
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    secret/services/redis/tls:
+      cert: "-----BEGIN CERTIFICATE-----\nSERVERCERT\n-----END CERTIFICATE-----"
+      key:  "-----BEGIN PRIVATE KEY-----\nSERVERKEY\n-----END PRIVATE KEY-----"
+      ca:   "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+  essence:
+    redis_type: standalone
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    # TLS ВКЛЮЧЁН, но НЕ only-TLS: plain-порт 6379 ещё открыт. Плагин всё равно
+    # обязан коннектиться по TLS (anti-downgrade) — это и проверяет кейс.
+    tls_enable: true
+    tls_only:   false
+    tls_port:   7379
+    tls_cert_ref: "secret/services/redis/tls#cert"
+    tls_key_ref:  "secret/services/redis/tls#key"
+    tls_ca_ref:   "secret/services/redis/tls#ca"
+
+  input:
+    redis_type: standalone
+    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
+    # distro-native пин (мажор < 8 → version-gate модулей не активен).
+    version: "7.2.4"
+    persistence: rdb
+
+assert:
+  rendered_tasks:
+    # index 8 — redis.conf: TLS-директивы есть, но `port` НЕ обнулён (plain открыт,
+    # tls_only=false). КРИТИЧНО: отсутствие `port 0` отличает не-only-TLS от only-TLS.
+    - index: 14
+      module: core.file.rendered
+      params:
+        path: /etc/redis/redis.conf
+        render_context:
+          vars:
+            password: s3cr3t-redis-pass-create
+            loadmodules: []
+            config:
+              # НЕТ ключа `port` (plain открыт) — anti-проверка downgrade-режима.
+              tls-port: "7379"
+              tls-cert-file: /etc/redis/tls/redis.crt
+              tls-key-file: /etc/redis/tls/redis.key
+              tls-ca-cert-file: /etc/redis/tls/ca.crt
+              tls-replication: "yes"
+              maxmemory: "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients: 10000
+              timeout: 300
+              save: "900 1 300 10 60 10000"
+              appendonly: "no"
+          self:
+            sid: trial-host
+            covens: [create]
+            choirs: []
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # index 21 — PING health-gate: ★ ДОКАЗАТЕЛЬСТВО anti-downgrade. tls=true (НЕ
+    # false!), addr на tls_port 7379 (НЕ plain 6379), tls_ca = CA-PEM. Под прежним
+    # гейтом (tls_only) тут было бы tls=false, addr=6379 → plaintext AUTH.
+    # Сдвиг −1 (extras-sysctl сжаты 2→1 задачи core.sysctl.applied).
+    - index: 28
+
+      module: community.redis.command
+      params:
+        addr: "127.0.0.1:7379"
+        password: s3cr3t-redis-pass-create
+        tls: true
+        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+        args: ["PING"]
+
+  state_changes:
+    redis_type: standalone
+    redis_version: "7.2.4"
+    redis_config:
+      tls-port: "7379"
+      tls-cert-file: /etc/redis/tls/redis.crt
+      tls-key-file: /etc/redis/tls/redis.key
+      tls-ca-cert-file: /etc/redis/tls/ca.crt
+      tls-replication: "yes"
+      maxmemory: "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients: 10000
+      timeout: 300
+      save: "900 1 300 10 60 10000"
+      appendonly: "no"
+    redis_users: {}
+    redis_hosts: []
+    redis_sentinel: {}

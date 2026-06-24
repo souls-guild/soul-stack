@@ -1,0 +1,12 @@
+name: empty-users
+description: >
+  Пустой список пользователей: rename + set {} материализуют целевой redis_users
+  как пустой map (intent «список стал map»), foreach по [] — no-op.
+
+state_before:
+  redis_users: []
+  redis_type: cluster
+
+state_after:
+  redis_users: {}
+  redis_type: cluster

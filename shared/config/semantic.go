@@ -42,6 +42,9 @@ func semanticValidateKeeper(c *KeeperConfig, root *ast.MappingNode) []diag.Diagn
 	if c.Redis.PasswordRef != "" {
 		out = append(out, checkVaultRef(root, "$.redis.password_ref", c.Redis.PasswordRef)...)
 	}
+	if c.Redis.SentinelPasswordRef != "" {
+		out = append(out, checkVaultRef(root, "$.redis.sentinel_password_ref", c.Redis.SentinelPasswordRef)...)
+	}
 	if c.Auth != nil && c.Auth.JWT != nil && c.Auth.JWT.SigningKeyRef != "" {
 		out = append(out, checkVaultRef(root, "$.auth.jwt.signing_key_ref", c.Auth.JWT.SigningKeyRef)...)
 	}

@@ -1,0 +1,135 @@
+# Ветка диспетчера create — режим sentinel_only (тонкий sentinel-слой: ТОЛЬКО
+# sentinel-демон, БЕЗ data-плоскости redis-server; мониторит ВНЕШНИЙ master из
+# input.master_ip). Перенос прежнего сервиса redis-sentinel (только демон).
+# Подключается из main.yml через include: и раскрывается в плоский список ДО render.
+# Каждая задача несёт `when: input.redis_type == 'sentinel_only'` — статический
+# предикат (только input.*), Keeper гасит его placeholder-skip-ом на остальных
+# режимах (isStaticWhen) и рендерит на sentinel_only-прогоне.
+#
+# Отличие от sentinel.yml:
+#   - deploy_redis=false → destiny НЕ разворачивает redis-server (redis.conf/
+#     users.acl/PEM/systemd redis-server — placeholder-skip); ставится только пакет
+#     (несёт sentinel-демон) + sentinel.conf/unit/демон (sentinel_enabled=true).
+#   - НЕТ master-election: master ВНЕШНИЙ (вне этого прогона), адрес задаёт оператор
+#     явно (input.master_ip). roster-а с master/replica тут нет.
+#   - НЕТ REPLICAOF (нет локального redis-server для репликации).
+#   - НЕТ size-guard: любое число sentinel-ов валидно (кворум считается от их числа).
+#
+# ★ АНТИ-TILING-урок (brief «Sentinel-режим»): master_addr / monitor.ip —
+#   HOST-ИНВАРИАНТНЫ (ОДИН внешний master на кластер) → через apply.input
+#   (resolveApplyInput на targeted[0] даёт верное одно значение). announce-ip —
+#   ПЕР-ХОСТ → рендерится в sentinel.conf.tmpl из {{ .self.network.primary_ip }},
+#   НЕ через apply.input. Граница: «значение одно для всех» → apply.input; «у
+#   каждого своё» → .self.
+
+# master_ip ОБЯЗАТЕЛЕН в режиме sentinel_only — enforced условной обязательностью
+# `required_when: "input.redis_type == 'sentinel_only'"` в input-схеме (main.yml).
+# Пропуск рвёт прогон на input-валидации ДО рендера понятным сообщением; прежний
+# keeper-side shell-guard убран (симметрично cluster shards-guard).
+#
+# 1. Per-host install пакета + render sentinel.conf + redis-sentinel unit + запуск
+#    демона. Та же destiny `redis` (режим-агностична), но deploy_redis=false (БЕЗ
+#    redis-server data-плоскости: redis.conf/users.acl/PEM/systemd redis-server →
+#    placeholder-skip) + sentinel_enabled=true. Пакет redis ставится ВСЕГДА (несёт
+#    sentinel-демон). config БАЗОВЫЙ-пустой намеренно: redis.conf не рендерится
+#    (deploy_redis=false), но destiny требует config-параметр в контракте — отдаём
+#    минимум (merge essence-подложки) для совместимости схемы; он на data-плоскость
+#    НЕ влияет (рендер redis.conf gated off).
+#
+#    sentinel.master_ip — ВНЕШНИЙ master (host-инвариант) → apply.input корректен.
+#    announce-ip НЕ здесь — per-host в sentinel.conf.tmpl из .self.network.primary_ip.
+- name: Apply redis destiny (install package + render sentinel.conf + sentinel daemon, no redis-server)
+  when: "input.redis_type == 'sentinel_only'"
+  apply:
+    destiny: redis
+    input:
+      # version: distro-пин (method=package). При method=binary absent → has()-guard ''.
+      version:  "${ has(input.version) ? input.version : '' }"
+      # install: способ установки (package default / binary), as-is в destiny-диспетч.
+      # sentinel_only ставит ТОЛЬКО sentinel-демон — но в binary-ветке install.yml
+      # бинарь redis-sentinel раскладывается во ВСЕХ режимах (как distro-пакет несёт
+      # оба демона), и sentinel.yml ждёт его на месте.
+      install:  "${ default(input.install, {}) }"
+      # deploy_redis=false: data-плоскость redis-server НЕ разворачивается.
+      deploy_redis: false
+      # requirepass НЕ применяется (нет redis-server), но destiny-контракт требует
+      # password (min_length 16): отдаём тот же keeper-side vault()-резолв, что и
+      # прочие режимы (используется sentinel-демоном для AUTH к master через auth_pass).
+      password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+      # config — минимальная essence-подложка (redis.conf gated off, не рендерится).
+      # НЕ compute.redis_config: в sentinel_only тот = {} (data-плоскости нет), а
+      # destiny-контракт требует непустой config-параметр для совместимости схемы.
+      # state_changes.redis_config получит {} (compute.redis_config), это намеренно
+      # отличается от этой подложки — state отражает «redis-server не развёрнут».
+      config:   "${ essence.redis_config }"
+      users:    "${ {} }"
+      modules:  "${ [] }"
+      modules_base_url: "${ '' }"
+      modules_sha256:   "${ {} }"
+      # Host-tuning extras режим-агностичны — как в прочих ветках. THP/logrotate/sysctl
+      # БЕЗУСЛОВНЫ (рекомендация Redis / hardening) — операторских флагов нет, задачи
+      # destiny `redis` всегда активны. sysctl_settings — essence, host-инвариантна →
+      # apply.input.
+      sysctl_settings:  "${ default(essence.sysctl_settings, {}) }"
+      # TLS data-плоскости redis-server тут не разворачивается (deploy_redis=false →
+      # PEM-block placeholder-skip; к тому же block ещё и gated на deploy_redis).
+      # sentinel-демон TLS (:26379) — отдельный follow-up (brief). dict `tls` НЕ
+      # передаём (absent → destiny default(input.tls.enable,false) → TLS off); это
+      # чище, чем tls:{enable:false} — тот потребовал бы object-level required
+      # cert_ref/key_ref/ca_ref без реальной надобности.
+      # ── Sentinel-демон (мониторит ВНЕШНИЙ master) ───────────────────────────
+      sentinel_enabled: true
+      sentinel:
+        master_name: "${ input.sentinel_master_name }"
+        # ВНЕШНИЙ master — оператор задал явно. HOST-ИНВАРИАНТНО → apply.input.
+        # has()-обёртка — RENDER-safety: master_ip обязателен (enforced master_ip-
+        # guard выше run-time), но при пропуске render не должен падать CEL «no such
+        # key» — отдаём "" (прогон уже рвёт guard с понятным сообщением).
+        master_ip:   "${ default(input.master_ip, '') }"
+        master_port: "${ int(input.master_port) }"
+        # quorum: input или большинство sentinel-ов прогона (size/2+1).
+        quorum:      "${ has(input.sentinel_quorum) ? int(input.sentinel_quorum) : (int(size(soulprint.hosts)) / 2 + 1) }"
+        auth_pass:   "${ vault('secret/redis/' + incarnation.name + '#password') }"
+
+# 2. SENTINEL MONITOR reconcile: plugin community.redis.sentinel на КАЖДОМ хосте
+#    (каждый sentinel-демон мониторит ВНЕШНИЙ master). addr — локальный sentinel
+#    (127.0.0.1:26379, per-host инвариант); monitor.ip — input.master_ip (ВНЕШНИЙ
+#    master, НЕ из soulprint.hosts: master живёт вне прогона). quorum — input или
+#    большинство size/2+1. auth_pass — keeper-side vault()-резолв (маскируется).
+#    Алгоритм reconcile (MONITOR/REMOVE+MONITOR/SET) перенесён 1:1 из Ansible
+#    redis_sentinel_update.py (см. плагин sentinel.go) — тот же state, что в sentinel.
+- name: Configure each sentinel to monitor the external master (SENTINEL MONITOR)
+  when: "input.redis_type == 'sentinel_only'"
+  module: community.redis.sentinel
+  params:
+    addr:        "127.0.0.1:26379"
+    master_name: "${ input.sentinel_master_name }"
+    auth_pass:   "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    redis_version: "${ compute.redis_version }"
+    monitor:
+      # ВНЕШНИЙ master (host-инвариант): input.master_ip, НЕ soulprint.hosts.
+      # has()-обёртка — render-safety (см. apply.input.sentinel.master_ip выше).
+      ip:     "${ default(input.master_ip, '') }"
+      port:   "${ int(input.master_port) }"
+      quorum: "${ has(input.sentinel_quorum) ? int(input.sentinel_quorum) : (int(size(soulprint.hosts)) / 2 + 1) }"
+
+# 3. Health-gate per-host: SENTINEL отвечает PONG на :26379 (демон поднялся и
+#    сконфигурирован). community.redis.pinged (PING→PONG), НЕ raw command args:[PING]
+#    — единая идиома health-gate через плагин-state (консистентность с restart-
+#    сценарием, «всё через плагин-states»). Output.result == 'PONG' — то же поле,
+#    что отдавал command, поэтому register.self.result в until/failed_when работает
+#    без правок. ★ СТРОГО same-task register.self (НЕ cross-passage flow-control,
+#    ADR-056 cross_passage_when_unsupported): «дождаться N sentinel» НЕ выражаем —
+#    проверяем ТОЛЬКО свой локальный sentinel. retry/until + failed_when по
+#    register.self.result этой же задачи.
+- name: Wait until each sentinel answers PONG on :26379
+  when: "input.redis_type == 'sentinel_only'"
+  module: community.redis.pinged
+  changed_when: false
+  retry:
+    count: 12
+    delay: 2s
+    until: "register.self.result == 'PONG'"
+  failed_when: "register.self.result != 'PONG'"
+  params:
+    addr: "127.0.0.1:26379"

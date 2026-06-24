@@ -240,8 +240,17 @@ func mergeInputDefaults(schema InputSchemaMap, provided map[string]any) map[stri
 	return out
 }
 
-// requireInputValues — шаг 2: параметр с required:true без значения и без
-// default → ошибка (после merge — значит ни provided, ни default не дали его).
+// requireInputValues — шаг 2: параметр с required:true (безусловно) или с
+// required_when, чей предикат над смерженным input истинен (условно), без
+// значения и без default → ошибка (после merge — значит ни provided, ни default
+// не дали его).
+//
+// required_when вычисляется ПОСЛЕ mergeInputDefaults (дефолты материализованы) —
+// предикат видит эффективный input. Контекст предиката — только input.* (узкий
+// CEL-env, input_required_when.go); это input-валидация, не render. Сообщение
+// несёт ту же узнаваемую форму «обязателен, но не передан и не имеет default»,
+// что и безусловный required — downstream-детект (checkdrift.isInputRequiredErr)
+// ловит оба единым матчингом.
 func requireInputValues(schema InputSchemaMap, merged map[string]any) error {
 	for name, s := range schema {
 		if s == nil {
@@ -252,6 +261,15 @@ func requireInputValues(schema InputSchemaMap, merged map[string]any) error {
 		}
 		if s.requiredKind == requiredBool && s.Required {
 			return fmt.Errorf("input %q обязателен, но не передан и не имеет default", name)
+		}
+		if s.RequiredWhen != "" {
+			required, err := evalRequiredWhen(s.RequiredWhen, merged)
+			if err != nil {
+				return fmt.Errorf("input %q: вычисление required_when: %w", name, err)
+			}
+			if required {
+				return fmt.Errorf("input %q обязателен, но не передан и не имеет default (required_when: %s)", name, s.RequiredWhen)
+			}
 		}
 	}
 	return nil

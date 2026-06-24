@@ -1,31 +1,32 @@
 //go:build e2e
 
-// L3a контракт-e2e: examples/service/redis-cluster — мутирующий scenario
-// `update_acl` на контракт-тире staged-render (probe→where, ADR-056).
+// L3a контракт-e2e: examples/service/redis::create в режиме cluster
+// (redis-консолидация концепции Ansible-роли, ADR-039 /
+// .pm/tasks/2026-06-22-redis-consolidation).
 //
-// В отличие от redis-cluster-live (целиком на core-модулях, один host) этот
-// сервис — оригинальный redis-cluster с `apply: destiny: redis`, vault-scoped
-// `redis_password` и declared-ролями. Его `create` в L3a недоступен (cloud-spawn /
-// declared-primary / probe на ещё-не-запущенном redis), поэтому incarnation
-// засевается напрямую в Postgres (SeedIncarnationReady) с baseline state, а
-// проверяется именно `update_acl`:
+// cluster — honest hash-slot Redis Cluster: диспетчер create инклудит ветку
+// create/cluster.yml (standalone/sentinel/sentinel_only гасятся static-when
+// placeholder-skip-ом). Multi-host roster (3 хоста): shards=3, replicas_per_shard=0
+// → топология ровно 3*(1+0)=3 (size-guard проходит). Контракт проверяет keeper-side
+// цепочку render→dispatch→RunResult→state для cluster-ветки на 3-узловой фикстуре,
+// НЕ реальную gossip-топологию (это L3b-live, tests/e2e-live).
 //
-//   - Passage 0 — probe "Detect actual redis role per host" (on: incarnation,
-//     без where): три хоста, host-0 эмитит redis_role.stdout='master',
-//     host-1/host-2 — 'replica' (per-host register через SetTaskRegister);
-//     failed_when: size(register.redis_role) < host_count → нужны ВСЕ три ответа.
-//   - Passage 1 — "Diff and apply ACL changes on the current master"
-//     (where: register.redis_role.stdout=='master', run_once: true): ACL-apply
-//     должен затаргетиться ТОЛЬКО на host-0.
+// Прежние отдельные сервисы redis-cluster / redis-cluster-live удалены: их
+// cluster-флоу поглощён режимом cluster консолидированного redis (диспетчер по
+// redis_type + day-2 scenarios add_node/remove_node/reshard). Probe→where
+// (оригинальный redis-cluster update_acl) перенесён на rolling-restart сценарий
+// стадии A (scenario/restart) — здесь не дублируется.
 //
-// ★ ASSERT: Passage-1 ApplyRequest пришёл ТОЛЬКО master-хосту (host-0) — это
-// доказывает redis-cluster probe→where на контракт-тире (drift «register в where
-// всегда пуст» закрыт staged-render-ом, теперь на реальном сервисе).
-//
-// ★ state-read: Passage-1 `apply: input: { current: ${ incarnation.state.redis_users } }`
-// читает read-only снимок incarnation.state в scenario-render CEL (ADR-009/010
-// amendment 2026-06-20, Вариант A). state_changes (ADR-057 CRUD `modify`) патчит
-// redis_users по input.changes — assert ниже фиксирует обновлённый ACL.
+// Flow:
+//  1. NewStack: PG+Redis+Vault testcontainers + Keeper + 3 soul-stub.
+//  2. Seed Vault (requirepass) + soulprint(os/net) + Coven на каждом из трёх.
+//  3. MaterializeDestinies(redis) + RegisterService(redis).
+//  4. ConnectSoulStub + LoadApplyScript на каждом хосте (default-success покрывает
+//     все задачи cluster-ветки; cluster-build run_once приходит на бутстрап-ноду).
+//  5. CreateIncarnationWithApply(redis_type=cluster, shards=3) → авто-create →
+//     WaitApplySuccess → WaitIncarnationReady.
+//  6. Asserts: apply_runs success / incarnation.state{redis_type=cluster,
+//     cluster-директивы в redis_config} / audit / metric.
 package e2e_test
 
 import (
@@ -34,132 +35,99 @@ import (
 	"github.com/souls-guild/soul-stack/tests/e2e/harness"
 )
 
-const (
-	rcService = "redis-cluster"
-	rcExample = "examples/service/redis-cluster"
-)
-
-// rcSoulprintOS — минимальный os-факт хоста redis-cluster. pkg_mgr/init_system
-// нужны core.pkg/core.service внутри destiny redis; primary_ip — стабильный
-// soulprint-факт (на L3a `where:` идёт по register-у probe, не по нему, но факт
-// присутствует как у настоящего хоста).
-func rcSoulprintOS(ip string) map[string]any {
-	return map[string]any{
-		"os": map[string]any{
-			"family":      "debian",
-			"distro":      "debian",
-			"version":     "12",
-			"arch":        "amd64",
-			"pkg_mgr":     "apt",
-			"init_system": "systemd",
-		},
-		"network": map[string]any{"primary_ip": ip},
-	}
-}
-
-// rcBaselineState — incarnation.state до update_acl (один предсуществующий юзер
-// app, чтобы redis_users было непустым и видна неизменность после `modifies`).
-func rcBaselineState() map[string]any {
-	return map[string]any{
-		"redis_version": "7.2.4",
-		"redis_users": map[string]any{
-			"app": map[string]any{"acl": "on >old-pass ~app:* +@read", "state": "on"},
-		},
-		"redis_config": map[string]any{"appendonly": "yes"},
-		"redis_hosts":  []any{},
-	}
-}
-
-func TestE2EServiceRedisCluster_UpdateAcl(t *testing.T) {
-	const incName = "redis-cluster-update-acl"
-
+func TestE2EServiceRedis_CreateCluster(t *testing.T) {
 	stack := harness.NewStack(t, harness.Config{
-		ExamplePath: rcExample,
+		ExamplePath: "examples/service/redis",
 		Souls:       3,
 	})
 	defer stack.Cleanup()
 
+	const incName = "redis-clstr"
+
+	// requirepass читается keeper-side через
+	// vault('secret/redis/'+incarnation.name+'#password') (cluster.yml apply.input
+	// + cluster-build password). Без секрета render-фаза падает «vault-ref: KV path
+	// not found». rel БЕЗ mount/`data/`-префикса — SeedVaultKV добавляет их (KV v2).
+	harness.SeedVaultKV(t, stack, "redis/"+incName, map[string]any{
+		"password": "e2e-cluster-secret",
+	})
+
 	// soulprint + Coven-членство (roster по incarnation.name, ADR-008) для всех трёх.
-	ips := []string{"10.0.0.10", "10.0.0.11", "10.0.0.12"}
+	// network.primary_ip нужен render redis.conf.tmpl (cluster-announce-ip per-host)
+	// и cluster nodes-MAP (soulprint.hosts.map по SID). pkg_mgr/init_system —
+	// core.pkg/core.service keeper-side (ADR-018).
+	ips := []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"}
 	for i := 0; i < 3; i++ {
-		stack.SeedSoulprint(t, i, rcSoulprintOS(ips[i]))
+		stack.SeedSoulprint(t, i, map[string]any{
+			"os": map[string]any{
+				"family":      "debian",
+				"distro":      "debian",
+				"version":     "12",
+				"arch":        "amd64",
+				"pkg_mgr":     "apt",
+				"init_system": "systemd",
+			},
+			"network": map[string]any{"primary_ip": ips[i]},
+		})
 		stack.AddSoulToCoven(t, i, incName)
 	}
 
-	// apply: destiny: redis (update_acl Passage 1) требует резолва destiny-репо.
-	// Материализуем `redis` под git-тегом v2.0.0 (service.yml::destiny[].ref) и
-	// ставим default_destiny_source — ДО RegisterService (invalidate подтянет снимок).
-	stack.MaterializeDestinies(t, "v2.0.0", "redis")
-	stack.RegisterService(t, rcService, rcExample)
+	// Материализуем режим-агностичный destiny `redis` (cluster-ветка зовёт
+	// apply: destiny: redis) + ставим default_destiny_source. ДО RegisterService.
+	stack.MaterializeDestinies(t, "v1.0.0", "redis")
+	stack.RegisterService(t, "redis", "examples/service/redis")
 
-	// Пароль доступен scoped vault:-ref (vault_scope: secret/redis/* на redis_password).
-	// update_acl его НЕ использует, но seed-им путь, чтобы доказать достижимость
-	// vault-scope-канала, разблокированного STEP 1 (create/add_replica его читают).
-	harness.SeedVaultKV(t, stack, "redis/"+incName, map[string]any{"password": "s3cr3t-redis-pass"})
+	// Три live-стрима. Все задачи cluster-ветки приходят по wire; cluster-build
+	// (community.redis.cluster, run_once) приезжает на бутстрап-ноду. default-success
+	// (LoadApplyScript) покрывает все задачи каждого стрима — на L3a реализм
+	// per-task не проверяется, важен lifecycle apply_runs success.
+	for i := 0; i < 3; i++ {
+		stub := stack.ConnectSoulStub(t, i)
+		harness.LoadApplyScript(stub, "create", redisClusterCreateTasks())
+	}
 
-	// Прямой seed ready-incarnation с baseline state (create в L3a недоступен).
-	stack.SeedIncarnationReady(t, incName, rcService, "main", rcBaselineState())
-
-	// Три live-стрима. host-0 — master, host-1/host-2 — replica.
-	master := stack.ConnectSoulStub(t, 0)
-	replica1 := stack.ConnectSoulStub(t, 1)
-	replica2 := stack.ConnectSoulStub(t, 2)
-	master.SetApplyDefaultSuccess(true)
-	replica1.SetApplyDefaultSuccess(true)
-	replica2.SetApplyDefaultSuccess(true)
-
-	// Per-host probe-register на задаче probe (Passage 0). Все три ОБЯЗАНЫ ответить
-	// (failed_when: size < host_count), но only-master матчит where: Passage 1.
-	const probeTask = "Detect actual redis role per host"
-	master.SetTaskRegister(probeTask, map[string]any{"stdout": "master", "changed": false, "failed": false})
-	replica1.SetTaskRegister(probeTask, map[string]any{"stdout": "replica", "changed": false, "failed": false})
-	replica2.SetTaskRegister(probeTask, map[string]any{"stdout": "replica", "changed": false, "failed": false})
-
-	// changes — map username → {acl,state}. update_acl применяет их к мастеру.
-	applyID := stack.RunScenario(t, incName, "update_acl", map[string]any{
-		"changes": map[string]any{
-			"app": map[string]any{"acl": "on >new-pass ~app:* +@all", "state": "on"},
-		},
+	// Простой типизированный ввод режима cluster: shards=3, replicas_per_shard=0 →
+	// топология 3*(1+0)=3, ровно совпадает с roster-ом (size-guard PASS).
+	inc, applyID := stack.CreateIncarnationWithApply(t, incName, "redis@main", map[string]any{
+		"redis_type":           "cluster",
+		"version":              "7.2.4",
+		"shards":               3,
+		"replicas_per_shard":   0,
+		"cluster_node_timeout": 5000,
 	})
 
 	stack.WaitApplySuccess(t, applyID, 60)
 	stack.AssertApplyRunsStatus(t, applyID, "success")
-	stack.WaitIncarnationReady(t, incName, 30)
-
-	// ★ Passage 0 (probe): ApplyRequest пришёл ВСЕМ трём хостам (probe без where).
-	mP0 := applyRequestsForPassage(master, 0)
-	r1P0 := applyRequestsForPassage(replica1, 0)
-	r2P0 := applyRequestsForPassage(replica2, 0)
-	if mP0 == 0 || r1P0 == 0 || r2P0 == 0 {
-		t.Fatalf("Passage 0: probe должен прийти всем — master=%d replica1=%d replica2=%d", mP0, r1P0, r2P0)
-	}
-
-	// ★ Passage 1 (ACL-apply): ApplyRequest ТОЛЬКО master-хосту. where:
-	// register.redis_role.stdout=='master' + run_once резолвнулись per-host
-	// register-ом Passage 0. Это и есть доказательство redis-cluster probe→where.
-	mP1 := applyRequestsForPassage(master, 1)
-	r1P1 := applyRequestsForPassage(replica1, 1)
-	r2P1 := applyRequestsForPassage(replica2, 1)
-	if mP1 == 0 {
-		t.Fatalf("★ Passage 1: master НЕ получил ApplyRequest — staged where не затаргетил master (probe→where drift)")
-	}
-	if r1P1 != 0 || r2P1 != 0 {
-		t.Fatalf("★ Passage 1: replica получили ApplyRequest (r1=%d r2=%d) — where:'master' НЕ должен таргетить replica", r1P1, r2P1)
-	}
-
-	// ★ state.redis_users ПАТЧИТСЯ по input.changes: state_changes foreach по
-	// input.changes + modify: redis_users match key==change.key патчит acl/state
-	// существующего юзера `app` (baseline acl `…+@read` → новый `…+@all`).
-	// Коммит — один раз после последнего Passage (ADR-009 §7).
-	stack.AssertIncarnationState(t, incName, map[string]any{
-		"redis_users": map[string]any{
-			"app": map[string]any{"acl": "on >new-pass ~app:* +@all", "state": "on"},
+	// apply_runs success ≠ incarnation.state закоммичен: ждём ready перед чтением.
+	stack.WaitIncarnationReady(t, inc, 30)
+	// cluster-факты: redis_type + cluster-директивы в redis_config (host-инвариантные:
+	// cluster-enabled/cluster-config-file/cluster-node-timeout). announce-ip per-host
+	// в state НЕ пишется. users/hosts пусты (точные роли раскладывает плагин).
+	stack.AssertIncarnationState(t, inc, map[string]any{
+		"redis_type": "cluster",
+		"redis_config": map[string]any{
+			"cluster-enabled":      "yes",
+			"cluster-config-file":  "nodes.conf",
+			"cluster-node-timeout": "5000",
 		},
 	})
-
-	stack.AssertAuditEvent(t, "incarnation.scenario_started", map[string]any{
-		"scenario": "update_acl",
+	stack.AssertAuditEvent(t, "incarnation.created", map[string]any{
 		"apply_id": applyID,
 	})
 	stack.AssertMetricGE(t, `keeper_scenario_runs_total{result="ok"}`, 1)
+}
+
+// redisClusterCreateTasks — scripted success по task-name ключевых задач
+// cluster-ветки create: install redis (destiny redis), render redis.conf
+// (cluster-директивы), health-gate PING, cluster-build (community.redis.cluster).
+// default-success (LoadApplyScript) покрывает остальные задачи destiny и
+// when:-погашенные ветки standalone/sentinel/sentinel_only.
+func redisClusterCreateTasks() []harness.TaskResponse {
+	return []harness.TaskResponse{
+		{TaskName: "Install redis-server package", StateChanges: map[string]any{"packages": []any{map[string]any{"redis-server": "installed"}}}},
+		{TaskName: "Render redis.conf"},
+		{TaskName: "Ensure redis-server is running and enabled at boot", StateChanges: map[string]any{"services": []any{map[string]any{"redis-server": "running"}}}},
+		{TaskName: "Wait for each cluster node to answer PING"},
+		{TaskName: "Build the redis cluster (CLUSTER MEET/ADDSLOTS/REPLICATE)"},
+	}
 }

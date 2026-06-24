@@ -37,9 +37,13 @@ import (
 //
 // Static-when-false потомок: emitStaticWhenSkip в начале цикла эмитит
 // placeholder(ы) ДО guard/render — симметрично top-level Render-циклу (неактивная
-// ветка с unsupported-DSL не блокирует активную). Block-level static-when:false
-// гасится в Render-цикле (emitStaticWhenSkip top-level) ДО вызова renderBlockTask:
-// ровно 1 placeholder за весь блок, сюда такой блок не доходит.
+// ветка с unsupported-DSL не блокирует активную). Block-level static-when:false НЕ
+// гасится emitStaticWhenSkip (она пропускает block-задачу): static-false block
+// доходит сюда, mergeBlockInheritance вливает block.when в КАЖДОГО потомка через
+// AND, static-when каждого потомка становится false, и каждый child эмитит СВОЙ
+// skip-placeholder с register/requisites через walkBlockChildren. Так register
+// потомков static-false block виден снаружи (flat-register-scope инвариантен
+// относительно static-skip — паттерн loopStaticSkip).
 func (p *Pipeline) renderBlockTask(
 	ctx context.Context,
 	in RenderInput,
@@ -49,6 +53,67 @@ func (p *Pipeline) renderBlockTask(
 ) ([]*RenderedTask, []DispatchPlan, error) {
 	width := serialWidth(blockTask.Serial, len(targeted))
 
+	// childTarget: потомок резолвит свой on:/where:/run_once: против хостов блока
+	// (scenario-оркестрация внутри block разрешена — orchestration.md §2.2.2);
+	// блок СУЖАЕТ roster потомка.
+	childTarget := func(child config.Task) ([]*topology.HostFacts, error) {
+		return p.blockChildTargets(in, child, targeted)
+	}
+	// childRecurse: вложенный block → рекурсия того же renderBlockTask.
+	childRecurse := func(child config.Task, idx int, childTargeted []*topology.HostFacts) ([]*RenderedTask, []DispatchPlan, error) {
+		return p.renderBlockTask(ctx, in, child, idx, childTargeted)
+	}
+	return p.walkBlockChildren(ctx, in, blockTask, startIndex, width, guardPilotBlockChild, childTarget, childRecurse)
+}
+
+// blockChildGuard — проверка вида потомка block-а перед рендером. scenario-слой
+// (renderBlockTask) подставляет guardPilotBlockChild (разрешает apply/scenario-
+// оркестрацию потомка); destiny-слой (renderDestinyBlock) — guardDestinyBlockChild
+// (отвергает scenario-ключи). idx — позиция потомка для диагностики, blockName —
+// имя контейнера.
+type blockChildGuard func(child config.Task, idx int, blockName string) error
+
+// blockChildTargeter резолвит roster потомка block-а. scenario-слой сужает roster
+// по on:/where:/run_once: потомка; destiny-слой наследует roster блока ЦЕЛИКОМ
+// (block в destiny НЕ несёт оркестрацию — отвергнута guard-ом).
+type blockChildTargeter func(child config.Task) ([]*topology.HostFacts, error)
+
+// blockChildRecurser рендерит ВЛОЖЕННЫЙ block-потомок (child.Block != nil). Каждый
+// слой подставляет свою рекурсию (renderBlockTask / renderDestinyBlock), чтобы
+// наследование каскадом не разъехалось между слоями.
+type blockChildRecurser func(child config.Task, idx int, childTargeted []*topology.HostFacts) ([]*RenderedTask, []DispatchPlan, error)
+
+// walkBlockChildren — ЕДИНЫЙ обход потомков block-а для обоих слоёв (scenario и
+// destiny). Source-of-truth порядка обработки потомка, чтобы наследование block
+// не разъехалось между renderBlockTask и renderDestinyBlock (drift-риск major):
+//
+//	mergeBlockInheritance(blockTask, child)   — влить when/where/vars/requisites
+//	→ emitStaticWhenSkip(child)               — AND-when мог стать static-false
+//	→ guard(child)                            — граница ключей слоя (callback)
+//	→ render: вложенный block (recurse) / apply / module
+//
+// Слоевая разница вынесена в три callback-а:
+//   - guard: какие виды/ключи потомка допустимы (scenario vs destiny-граница);
+//   - target: как резолвится roster потомка (сужение on/where vs наследование);
+//   - recurse: чем рендерится вложенный block (рекурсия того же слоя).
+//
+// width — ширина волны контейнера (serial: блока для scenario / serial: apply-
+// задачи для destiny): протягивается в каждый DispatchPlan потомка (block НЕ несёт
+// свой serial у потомков — наследует ширину контейнера). idx сквозной.
+//
+// apply-потомок: renderApplyDestiny ВСЕГДА разрешён только когда guard его пропустил
+// (destiny-guard отвергает apply на потомке — вложенный apply в destiny запрещён,
+// guardDestinyTask); поэтому ветка child.Apply достижима лишь в scenario-слое.
+func (p *Pipeline) walkBlockChildren(
+	ctx context.Context,
+	in RenderInput,
+	blockTask config.Task,
+	startIndex int,
+	width int,
+	guard blockChildGuard,
+	target blockChildTargeter,
+	recurse blockChildRecurser,
+) ([]*RenderedTask, []DispatchPlan, error) {
 	tasks := make([]*RenderedTask, 0, len(blockTask.Block.Block))
 	plans := make([]DispatchPlan, 0, len(blockTask.Block.Block))
 	idx := startIndex
@@ -65,24 +130,20 @@ func (p *Pipeline) renderBlockTask(
 			continue
 		}
 
-		if gerr := guardPilotBlockChild(child, i, blockTask.Name); gerr != nil {
+		if gerr := guard(child, i, blockTask.Name); gerr != nil {
 			return nil, nil, gerr
 		}
 
 		// Вложенный block: рекурсия — наследование каскадом (внешний предикат уже
-		// влит в child mergeBlockInheritance, теперь child раздаёт его своим потомкам).
-		// Таргет резолвится на child (унаследованный where), width пересчитывается из
-		// child.Serial; block без своего serial: наследует ширину родителя через
-		// уже влитый serial? Нет — serial НЕ наследуется в child (mergeBlockInheritance
-		// его не трогает): вложенный block без serial: едет своей шириной (0 = одной
-		// волной). Это согласовано с per-Passage min-width: оба блока в одном Passage,
-		// effectiveSerialWidth возьмёт минимум положительных среди ВСЕХ задач Passage.
+		// влит в child через mergeBlockInheritance, теперь child раздаёт его своим
+		// потомкам). serial НЕ наследуется в child (mergeBlockInheritance его не
+		// трогает): вложенный block без serial: едет своей шириной (0 = одной волной).
 		if child.Block != nil {
-			childTargeted, terr := p.blockChildTargets(in, child, targeted)
+			childTargeted, terr := target(child)
 			if terr != nil {
 				return nil, nil, terr
 			}
-			bt, bp, berr := p.renderBlockTask(ctx, in, child, idx, childTargeted)
+			bt, bp, berr := recurse(child, idx, childTargeted)
 			if berr != nil {
 				return nil, nil, berr
 			}
@@ -92,12 +153,13 @@ func (p *Pipeline) renderBlockTask(
 			continue
 		}
 
-		childTargeted, terr := p.blockChildTargets(in, child, targeted)
+		childTargeted, terr := target(child)
 		if terr != nil {
 			return nil, nil, terr
 		}
 
 		// apply-потомок: изолированный render-проход destiny с унаследованным width.
+		// Достижимо только в scenario-слое (destiny-guard отвергает apply на потомке).
 		if child.Apply != nil {
 			dt, dp, derr := p.renderApplyDestiny(ctx, in, child.Apply, idx, childTargeted, width)
 			if derr != nil {

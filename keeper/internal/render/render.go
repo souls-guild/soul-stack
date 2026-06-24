@@ -76,6 +76,14 @@ const RunSentinelSID = "__run__"
 // sentinel от ErrUnsupportedDSL: include поддержан, просто должен прийти раскрытым.
 var ErrUnexpandedInclude = errors.New("render: include-задача дошла до render нераскрытой")
 
+// ErrAssertFailed — assert-задача (ADR-009 amendment 2026-06-23) не прошла:
+// хотя бы один предикат `that[]` вычислился в false на render-фазе. Render
+// обрывается ДО dispatch — ни одной задачи на Soul не уходит, прогон не стартует
+// («fail на этапе модели»). Это НЕ баг автора рендера и НЕ граница pilot-а, а
+// объявленная DSL-семантика: caller (scenario.run / trial) отличает провал
+// инварианта от внутренней ошибки и сообщает оператору message + текст предиката.
+var ErrAssertFailed = errors.New("render: assert не прошёл")
+
 // IncarnationMeta — фактологические поля incarnation, доступные в CEL как
 // `incarnation.<path>` ([ADR-010]). Pipeline разворачивает их в map для
 // cel.Vars.Incarnation; host_count подставляется автоматически из числа
@@ -160,6 +168,18 @@ type RenderInput struct {
 	// синтетический пустой хост (where: отфильтровал всех) → ключ "".
 	DestinyVarsResolved map[string]map[string]any
 
+	// Compute — резолвленные scenario-level `compute:`-переменные (ADR-009
+	// amendment 2026-06-23): имя→значение, вычисленные ОДИН раз на прогон в
+	// рун-уровневом контексте (input/register/incarnation/essence — БЕЗ soulprint,
+	// структурный барьер host-инвариантности). Заполняется [Pipeline.resolveCompute]
+	// в начале [Pipeline.Render] и [Pipeline.RenderStateOps]; кладётся в каждый
+	// per-host контекст (hostVars) и в state_changes-контекст (stateChangesVars) как
+	// `compute.<name>`. В изолированном destiny-проходе (renderApplyDestiny) НЕ
+	// пробрасывается — destiny видит результат compute только через apply.input
+	// (ADR-009 V2). nil ⇒ `compute.<name>` = штатный no-such-key (scenario без
+	// compute:, backward-compat бит-в-бит).
+	Compute map[string]any
+
 	// destinyIsolated помечает изолированный destiny-проход (renderApplyDestiny).
 	// Неэкспортируемое: внешние caller-ы (scenario-runner, trial) всегда дают
 	// scenario-проход (zero-value false → soulprint.hosts доступен и проецируется
@@ -187,6 +207,16 @@ type RenderInput struct {
 	// накопленным register резолвит их полноценно. nil-TaskPassage → ActivePassage
 	// игнорируется (не-staged: все задачи Passage 0 рендерятся как сейчас, БИТ-В-БИТ).
 	ActivePassage int
+
+	// Sealed — аккумулятор sealed-путей render-прогона (seal / sealed-paths,
+	// [ADR-010] §7.4). Render помечает в нём путь ячейки params, чьё СЫРОЕ
+	// `${ … }`-значение читает secret-источник (secret-input/vault()/транзитивно
+	// vars). Caller (scenario.run) создаёт [NewSealedSet], кладёт сюда и после
+	// Render использует Sealed.Paths() для seal-aware маскинга наблюдаемых каналов
+	// (audit.MaskSecretsSealed). nil ⇒ коллекция выключена (push/trial/Acolyte/
+	// CheckDrift — seal не нужен, поведение БИТ-В-БИТ). Указатель шарится между
+	// passages staged-render-а: пути накапливаются по всем Passage одного прогона.
+	Sealed *SealedSet
 }
 
 // RenderedTask — задача после Keeper-side CEL-рендера, промежуточное

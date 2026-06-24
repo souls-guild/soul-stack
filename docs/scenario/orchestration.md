@@ -34,8 +34,11 @@ scenario/<name>/
 | `on:` | `keeper` ИЛИ list of coven-id ИЛИ опущен | всем видам задач | опционально (опущен = весь incarnation) |
 | `where:` | string (predicate-expr) | всем видам задач | опционально |
 | `apply:` | map (`destiny:` + `input:`) | задаче-applier | альтернатива `module:` |
+| `assert:` | map (`that:` + `message:`) | assert-задаче | альтернатива `module:`/`apply:`/`include:`/`block:` (см. §2.3) |
 | `serial:` | int (1..M) ИЛИ string `"<N>%"` | module/apply/`block:`-задаче | опционально (опущен = вся ширина таргета) *Гранулярность — per-Passage min-width (в N=1 = per-RUN), см. подраздел §2.2.1 ниже* |
 | `run_once:` | bool, default `false` | module/apply/`block:`-задаче | опционально |
+
+Сверх per-задачных ключей у scenario есть **top-level** блоки: `compute:` — вычисляемые vars прогона (§2.4); `validate:` — декларативные input-инварианты (§2.5).
 
 Всё остальное в scenario-задаче — ровно то же, что в destiny-задаче, с той же семантикой ([destiny/tasks.md §3–§10](../destiny/tasks.md#3-полный-список-блоков-задачи)). Расхождения с destiny явно перечислены в §6 (резолв ресурсов) и §10 (шаблонный контекст).
 
@@ -75,6 +78,32 @@ Applier-задача может нести унаследованный из DSL
 Если destiny не объявила top-level `output:` — `register.<имя>.*` содержит только стандартные `.changed`/`.failed`; прикладных полей через `register.<имя>.<поле>` не будет (ошибка валидации при обращении к необъявленному полю).
 
 > Когда писать `apply:`, а когда инлайн `module:` — см. границу-рекомендацию в [concept.md](concept.md) ([ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация)). Снятие старого инварианта «scenario только `apply:`» означает: `module:` (включая изменяющие модули) в scenario теперь легален.
+
+### 2.3. `assert:` — render-time precondition
+
+```yaml
+- name: топология cluster совпадает
+  when: "input.redis_type == 'cluster'"
+  assert:
+    that:
+      - "size(soulprint.hosts) == (has(input.shards) ? int(input.shards) : 0) * (1 + int(input.replicas_per_shard))"
+    message: "topology mismatch: hosts != shards*(1+replicas_per_shard)"
+```
+
+`assert:` — **проверка инварианта прогона на этапе модели** (форма Ansible-модуля `assert`, [ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) amendment 2026-06-23). Это **пятый дискриминатор** задачи: `assert:` взаимоисключим с `module:`/`apply:`/`include:`/`block:` (assert — проверка, не исполняемая работа).
+
+- **`that:`** — непустой список CEL-bool-предикатов (каждая строка целиком = CEL, без обёртки `${ … }`, как `where:`). Все обязаны быть `true`.
+- **`message:`** — опциональное человекочитаемое сообщение в тексте ошибки при провале (если опущено — дефолт-сообщение).
+
+**Семантика:**
+
+- **Вычисляется Keeper-side на render-фазе**, в полном scenario-CEL-контексте — **включая `soulprint.hosts`** (`AllowHosts=true`, как `where:`): assert видит roster прогона (топологию), в отличие от Soul-side flow-control, которому `soulprint.hosts` недоступен.
+- **Run-level** (один раз на прогон, не per-host): assert проверяет инвариант топологии прогона, а не per-host-предикат.
+- **Первый `false` обрывает render** понятной ошибкой (`message` + текст непрошедшего предиката). **Ни одной задачи на Soul не уходит** — прогон не стартует (fail на этапе модели). Все `true` → задача «исчезает» из плана: assert **не emit RenderedTask** (это проверка, не задача), индексы последующих задач под неё позицию НЕ резервируют.
+- **Гейтится `when:`** как любая задача: статически-false `when:` (placeholder-skip, напр. `when: input.redis_type == 'cluster'` на standalone-прогоне) → assert НЕ вычисляется.
+- **Не wire-сущность.** assert не меняет proto Keeper↔Soul и Soul-контракт (render-конструкция, как `block:`).
+
+**Мотив.** Замена `core.cmd.shell`-guard-хака (`test "${ <cel> }" = "true" || { echo ...; exit 1; }` — произвольный shell на Soul ради control-flow) на декларативную keeper-side проверку: меньше attack-surface (нет shell-исполнения ради проверки), отказ переносится с хоста на модель (раньше и понятнее).
 
 ### 2.2. Cross-host модель исполнения шага
 
@@ -213,6 +242,73 @@ Per-incarnation state-commit (ADR-043 §7/§8) фиксирует state посл
 `retry: { count:, delay:, until: C' }`, где `C'` переписан с удалённого
 `soulprint.self.*` на `register.self.*` свежего probe
 ([ADR-008](../adr/0008-coven-stable-tags.md#adr-008-coven--только-стабильные-логические-теги)).
+
+### 2.4. `compute:` — вычисляемые vars прогона
+
+`compute:` — **top-level** блок сценария (рядом с `input:`/`state_changes:`/`tasks:`, **не** per-задачный ключ): map `<имя>: <CEL-выражение>`, который Keeper резолвит **ОДИН раз на прогон** и делает доступным как `compute.<имя>` в `apply: input:` и в `state_changes` ([ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) amendment 2026-06-23).
+
+```yaml
+name: create
+compute:
+  redis_config: >-
+    ${ merge(essence.redis_config,
+             essence.persistence_presets[input.persistence],
+             default(input.redis_settings, {})) }
+state_changes:
+  - set: redis_config
+    value: "${ compute.redis_config }"     # ← тот же compute
+tasks:
+  - apply:
+      destiny: redis
+      input:
+        config: "${ compute.redis_config }" # ← и здесь тот же compute
+```
+
+**Зачем.** `apply: input:` и `state_changes` — **разные** CEL-контексты, и ни один из них **не видит** task-level `vars:` (`vars:` — scope одной задачи, §10). Общее выражение (большой `merge()`-перевод простого ввода в `redis.conf`) пришлось бы писать **дважды** и синхронизировать руками. `compute:` объявляет его **один раз** — drift «state ≡ live config» снимается самим механизмом, а не дисциплиной автора.
+
+**Контекст резолва — рун-уровневый, БЕЗ `soulprint`.** `compute:` вычисляется в контексте `input.*` / `essence.*` / `incarnation.*` / `register.*` — **без** `soulprint.self` / `soulprint.hosts`. Это **структурный барьер host-инвариантности**: ссылка на `soulprint.*` в compute-выражении → CEL no-such-key. Следствие — `compute.<имя>` **одинаков для всех хостов**, поэтому одно и то же значение корректно уходит и в `apply: input:` (резолвится на первом по `SID` хосте таргета), и в `state_changes` (per-RUN, не per-host). Per-host значения, как и раньше, выражаются прямым per-host CEL в `params:` / шаблонном `.self`, не через `compute:`.
+
+**Порядок объявления значим.** `compute[i]` может ссылаться на ранее объявленный `compute[j]` (j<i) как `${ compute.<имя_j> }` (накопление слева направо). Ссылка вперёд → no-such-key.
+
+**Изоляция от destiny ([ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) V2).** `compute:` — **scenario-сущность**: внутрь изолированного destiny-прохода (`apply: { destiny: … }`) она **не протекает**. Destiny видит только **результат** — то, что scenario передал через `apply: input:`. Внутри destiny `compute.<имя>` → no-such-key (как `register.*`/`essence.*` — §10).
+
+**Имена.** Имя compute-var — CEL-field-доступный идентификатор (буквы/цифры/`_`, начинается с буквы или `_`); дефис/точка запрещены (сломали бы `compute.<имя>`). Имя не должно затенять корневые контекст-имена (`input`/`register`/`incarnation`/`soulprint`/`essence`/`vars`/`compute`).
+
+> **Граница `compute:` ↔ `vars:`.** Task-level `vars:` (§10, [destiny/tasks.md §9](../destiny/tasks.md#9-прочность-и-контроль-исполнения)) — локальны для одной задачи и **видны только в её** `params:`. `compute:` — рун-уровневые, видны в `apply: input:` **и** `state_changes`. Если значение нужно и в state, и в передаче destiny — это `compute:`; если только внутри `params:` одной задачи — `vars:`.
+
+### 2.5. `validate:` — декларативные input-инварианты
+
+`validate:` — **top-level** секция сценария (рядом с `input:`): список правил `[{that: <CEL-bool>, message: <str>}]`, каждое — **инвариант ВВОДА**, который обязан быть истинным ([ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) amendment 2026-06-23). Первый `false` отклоняет прогон оператору как **422 `validation-failed`** — **до коммита incarnation и до applying**, с `message` правила.
+
+```yaml
+name: create
+input:
+  redis_type: { type: string, default: standalone, enum: [standalone, sentinel, cluster, sentinel_only] }
+  replicas:        { type: integer, default: 0, min: 0 }
+  sentinel_quorum: { type: integer, required: false, min: 1 }
+validate:
+  - that: "!has(input.sentinel_quorum) || input.redis_type != 'sentinel' || int(input.sentinel_quorum) <= 1 + int(input.replicas)"
+    message: "sentinel_quorum не может превышать число sentinel-ов (1 + replicas): кворум станет недостижим"
+tasks: [ ... ]
+```
+
+**Зачем.** Покрывает **кросс-полевые** предусловия «должно быть X, не Y», не выразимые одиночным schema-ключом (`enum`/`min`/`max` — про **одно** поле, потолок здесь — **другое** поле) и не покрываемые `required_when` (про **присутствие** поля, не про **соотношение** значений). До `validate:` такой инвариант пришлось бы городить keeper-side shell-стражем (`core.cmd.shell ... || exit 1`) или ронять непонятным runtime-фейлом постфактум.
+
+**Контекст правила — INPUT-ONLY.** `that` видит **только `input.*`** (тот же узкий cel-go-sandbox, что `required_when`). Ссылка на `essence.*`/`soulprint.*`/`register.*`/`vault()`/`now()` → CEL-ошибка undeclared reference — **структурный input-only-барьер необъявленностью**, не текстовый guard. Топология/roster-проверки (`size(soulprint.hosts) == …`) — **не сюда**, а в `assert:` (§2.3): у него полный scenario-контекст с `soulprint.hosts`.
+
+**Когда — pre-flight на request-пути.** Вычисляется в той же фазе, что `required_when` (`scenario.ValidateInput`): ПОСЛЕ merge дефолтов / required / type-валидации над **смерженным** input, ДО коммита incarnation и входа в `applying`. Покрывает оба пути — `POST /v1/incarnations` (create) и `POST .../scenarios/{scenario}` (run). Render fail-safe (как у `assert:`) **не нужен**: `validate:` детерминировано от `input.*`, который между request-путём и стартом прогона не меняется (в отличие от roster у assert — TOCTOU).
+
+**Форма правила.** `that` — обязательная непустая CEL-bool-строка (вся строка = CEL без обёртки, как `where:`). `message` — **обязательная** непустая строка (в отличие от опционального `assert.message`: у assert есть имя задачи как fallback, у validate-правила имени нет → 422 был бы анонимен). Несколько правил — первый `false` выигрывает (короткое замыкание по порядку объявления).
+
+> **Граница `validate:` ↔ `required_when` ↔ `assert:`.** Три механизма, три разные ниши:
+>
+> | Механизм | Контекст | Что проверяет | Код ошибки |
+> |---|---|---|---|
+> | `required_when` (input-schema ключ, [docs/input.md](../input.md)) | input-only | **присутствие** поля при условии над другими input | 422 `validation-failed` |
+> | `validate:` (top-level секция) | input-only | **кросс-полевой инвариант** ВВОДА (соотношение значений) | 422 `validation-failed` |
+> | `assert:` (task-дискриминатор, §2.3) | полный (`soulprint.hosts`) | **инвариант ТОПОЛОГИИ** прогона (roster) | 422 `assert-failed` |
+>
+> `validate:` ДОПОЛНЯЕТ, не заменяет: «обязателен ли port?» → `required_when`; «не превышает ли quorum число sentinel-ов?» → `validate:`; «сошёлся ли roster под N-шардовый кластер?» → `assert:`.
 
 ## 3. Таргет шага — `on:`
 
@@ -460,7 +556,7 @@ register.<X>.map(k, register.<X>[k].stdout).filter(v, v != '')[0]
   пусто (на репликах probe primary-адреса печатает пустую строку), берёт первый
   оставшийся.
 
-Пример (`add_replicas`, primary discovery):
+Пример (primary discovery перед точечной переконфигурацией реплик):
 
 ```yaml
 - name: Detect actual redis primary address on existing hosts
@@ -476,7 +572,7 @@ register.<X>.map(k, register.<X>[k].stdout).filter(v, v != '')[0]
   on: ["${ incarnation.name }"]
   where: soulprint.self.sid in input.replicas
   apply:
-    destiny: redis-replication-config
+    destiny: redis
     input:
       master_addr: "${ register.master_addr.map(k, register.master_addr[k].stdout).filter(v, v != '')[0] }"
 ```
@@ -560,10 +656,10 @@ N раз) — последующий слайс (см. §8).
 
 Раскладка: `scenario/<name>/tests/<case>/case.yml`. Формат `case.yml` — `verify:` / `expect:` — **переиспользуется из [destiny/testing.md](../destiny/testing.md)** (отдельного DSL ассерций нет, тот же подход). Дельта scenario:
 
-- **`stand:` расширен на multi-host.** В отличие от одно-хостового destiny-molecule, scenario-тест поднимает **несколько хостов** (топология кластера) — точный формат блока `stand:` для multi-host наследует open Q sandbox из [destiny/testing.md](../destiny/testing.md) (см. §8 ниже).
-- **Ассерты на топологию и `incarnation.state`.** Помимо `output:`-проверок шагов, scenario-тест проверяет результирующую топологию (кто master / replica после операции) и содержимое `incarnation.state` после коммита (см. §7).
+- **L0 render-multi-host исполняется штатным harness.** Roster хостов прогона задаётся `fixtures.hosts: [...]` (host-запись `sid`/`covens`/`role`/`soulprint`/`choirs`, формат — [destiny/testing.md](../destiny/testing.md)). Render-инварианты на топологии (`size(soulprint.hosts)`-guard, `soulprint.hosts.where(...)`-проекция, nodes-детерминизм master/replica, `state_changes` на multi-host) гоняются герметично `soul-trial run`, без docker и без dispatch (amendment 2026-06-22, [ADR-023](../adr/0023-trial-test-runner.md#adr-023-тест-раннер-trial-soul-trial-и-dsl-coverage)).
+- **L3-dispatch остаётся stub.** Docker `stand:` на топологии кластера, ассерты «кто реально master исполняет» (`assert.dispatch`) и committed cross-host `incarnation.state` после барьера (§7) — отложены. Точный формат блока multi-host `stand:` наследует open Q sandbox из [destiny/testing.md](../destiny/testing.md) (см. §8 ниже).
 
-> Это **расширение open Q про sandbox** из [destiny/testing.md](../destiny/testing.md): multi-host стенд и ассерты на топологию/`state` — не закрытое решение, а явно отмеченное расширение незакрытого вопроса. Не закрывается молча; до решения — declarative-stub `stand:`, как в destiny-molecule.
+> Это **расширение open Q про sandbox** из [destiny/testing.md](../destiny/testing.md): **L0 render-multi-host (`fixtures.hosts`) — закрыт** и исполняется штатным harness-ом (герметичный render-уровень). **L3-dispatch** (multi-host docker-стенд, `assert.dispatch`, committed cross-host `state`) — не закрытое решение, явно отмеченное расширение незакрытого вопроса. Не закрывается молча; до решения L3-dispatch — declarative-stub `stand:`, как в destiny-molecule.
 
 ## 7. Инвариант barrier / state-commit
 
@@ -613,8 +709,9 @@ Non-string результат CEL (число/bool/list/map) — по прави
 [ADR-010](../adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов) (вся ячейка = один `${…}` → нативный тип).
 
 **Полный контекст** — `input.*` / `incarnation.*` / `soulprint.self.*` /
-`register.*` / `vars.*` / `essence.*`. Поверх него в `match`/`patch`/`value`
-действуют **локальные биндинги текущего элемента коллекции**:
+`register.*` / `vars.*` / `essence.*` / `compute.*` (§2.4). Поверх него в
+`match`/`patch`/`value` действуют **локальные биндинги текущего элемента
+коллекции**:
 
 | Биндинг | Семантика |
 |---|---|
@@ -809,7 +906,7 @@ state_changes:        # DEPRECATED-форма (переходный период
   (`include_modifier_unsupported`, §6). Семантика проброса (task-level `vars:`
   видны задачам подключённого файла; `loop:` на `include:` — повтор файла) —
   последующий слайс.
-- **Multi-host sandbox.** Формат блока `stand:` для multi-host scenario-теста и ассерты на топологию/`incarnation.state` — расширение open Q про sandbox из [destiny/testing.md](../destiny/testing.md). Не закрытое решение.
+- **Multi-host sandbox (L3-dispatch).** **L0 render-multi-host (`fixtures.hosts`) — закрыт** (amendment 2026-06-22, [ADR-023](../adr/0023-trial-test-runner.md#adr-023-тест-раннер-trial-soul-trial-и-dsl-coverage)): roster хостов гоняется штатным harness-ом на render-уровне. Открытым остаётся **L3-dispatch**: формат блока docker `stand:` для multi-host scenario-теста, `assert.dispatch` (кто реально master исполняет) и ассерты на committed cross-host `incarnation.state` — расширение open Q про sandbox из [destiny/testing.md](../destiny/testing.md). Не закрытое решение.
 - **Перенос `role/*.yaml` в destiny-`input:`.** Параметры, ранее зависевшие от роли (essence-слой `role/*` удалён, см. [concept.md](concept.md)), переезжают в destiny через `input:` по probe-роли — отдельная задача имплементации (пилот и батч переписывания примеров).
 - **Bootstrap-источник роли на `create` — ЗАКРЫТО.** На `create` redis ещё
   не запущен, probe невозможен → топология (declared-роли + адрес master)

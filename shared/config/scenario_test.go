@@ -9,10 +9,11 @@ import (
 )
 
 func TestLoadScenarioManifest_Golden(t *testing.T) {
-	// Локальная patched-копия (soul-lint/testdata/scenario-golden/) — оригинал
-	// `examples/service/redis-cluster/scenario/create/main.yml` имеет
-	// deviation от input.md (`type: object` без `properties:`); правка
-	// examples — out of scope M1.2.c (delegation §«Что НЕ делаешь»).
+	// Локальная patched-копия golden (soul-lint/testdata/scenario-golden/):
+	// самодостаточный фикстур redis-create, исторически снятый с redis-cluster
+	// create-сценария. Деривация от исходника намеренная — оригинал имел
+	// deviation от input.md (`type: object` без `properties:`), здесь форма
+	// исправлена под нормативную схему.
 	path := filepath.FromSlash("../../soul-lint/testdata/scenario-golden/redis-create.yml")
 	cfg, doc, diags, err := LoadScenarioManifest(path, ValidateOptions{})
 	if err != nil {
@@ -184,6 +185,66 @@ tasks:
 	}
 	if len(cfg.Tasks[3].Block.Block) != 1 {
 		t.Errorf("block content not captured: %#v", cfg.Tasks[3].Block.Block)
+	}
+}
+
+// TestLoadScenarioManifest_AssertTask — assert-задача (ADR-009 amendment
+// 2026-06-23): валидная форма парсится в AssertSpec (дискриминатор assert).
+func TestLoadScenarioManifest_AssertTask(t *testing.T) {
+	src := `name: x
+tasks:
+  - name: topology guard
+    when: "input.redis_type == 'cluster'"
+    assert:
+      that:
+        - "size(soulprint.hosts) == int(input.shards)"
+      message: "topology mismatch"
+`
+	cfg, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	if diag.HasErrors(diags) {
+		dump(t, diags)
+		t.Fatalf("expected no errors on valid assert task")
+	}
+	if cfg.Tasks[0].Assert == nil {
+		t.Fatalf("Assert field not populated: %#v", cfg.Tasks[0])
+	}
+	if len(cfg.Tasks[0].Assert.That) != 1 {
+		t.Errorf("Assert.That = %#v, want 1 predicate", cfg.Tasks[0].Assert.That)
+	}
+	if cfg.Tasks[0].Assert.Message != "topology mismatch" {
+		t.Errorf("Assert.Message = %q", cfg.Tasks[0].Assert.Message)
+	}
+}
+
+// TestLoadScenarioManifest_AssertEmptyThat — пустой that[] → ошибка
+// (assert требует хотя бы один предикат).
+func TestLoadScenarioManifest_AssertEmptyThat(t *testing.T) {
+	src := `name: x
+tasks:
+  - assert:
+      that: []
+`
+	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	if !hasCode(diags, "missing_required_field") {
+		dump(t, diags)
+		t.Fatalf("expected missing_required_field on empty assert.that")
+	}
+}
+
+// TestLoadScenarioManifest_AssertWithModuleConflict — assert ⊕ module:
+// (assert — дискриминатор, взаимоисключим с module/apply/include/block).
+func TestLoadScenarioManifest_AssertWithModuleConflict(t *testing.T) {
+	src := `name: x
+tasks:
+  - module: core.exec.run
+    params: { cmd: "true" }
+    assert:
+      that: [ "true" ]
+`
+	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	if !hasCode(diags, "task_discriminator_multiple") {
+		dump(t, diags)
+		t.Fatalf("expected task_discriminator_multiple for assert + module")
 	}
 }
 

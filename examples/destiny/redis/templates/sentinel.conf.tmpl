@@ -1,0 +1,47 @@
+{{/*
+  sentinel.conf для redis-sentinel-демона (режим sentinel). Образец —
+  Ansible templates/sentinel.conf.j2 роли redis. Контекст рендера
+  (docs/templating.md §3.2):
+    .vars  — явно переданные core.file.rendered (sentinel_config, monitor, auth).
+    .self  — стабильные факты ЭТОГО хоста; primary_ip нужен для announce-ip.
+  Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010).
+
+  ПЕР-ХОСТ vs HOST-ИНВАРИАНТ (TILING-урок qa 2026-06-22):
+    - sentinel announce-ip — ПЕР-ХОСТ (IP ИМЕННО этого sentinel-а в gossip), берётся
+      из .self.network.primary_ip (render_context.self пер-хост), НЕ из apply.input
+      (apply.input резолвится host-инвариантно на первом по SID хосте → все sentinel-ы
+      получили бы один IP → анонс сломан за NAT/в облаке).
+    - sentinel monitor <master>: его адрес (monitor.ip/port) — HOST-ИНВАРИАНТНЫЙ
+      (ОДИН master на кластер), приходит обычными .vars (apply.input корректен).
+
+  .vars.sentinel_config — отсортированный map стартовых директив sentinel.conf
+  (детерминизм: range по MAP сортирует ключи → нет ложного change/рестарта).
+  Содержит startup-only директивы (dir/loglevel/down-after-milliseconds/...);
+  monitor/auth выносятся ОТДЕЛЬНЫМИ строками ниже (для них нужно имя master + quorum).
+*/}}
+port 26379
+
+# Под управление systemd-юнитом redis-sentinel (Type=notify, supervised systemd).
+daemonize no
+supervised systemd
+pidfile /var/run/redis/redis-sentinel.pid
+logfile /var/log/redis/redis-sentinel.log
+dir /var/lib/redis
+
+# Стартовые директивы из переданного map (отсортированы range-ом по ключам).
+{{- range $key, $value := .vars.sentinel_config }}
+{{ $key }} {{ $value }}
+{{- end }}
+
+# ПЕР-ХОСТ: этот sentinel анонсирует СВОЙ primary_ip в gossip (симметрично bind redis.conf).
+sentinel announce-ip {{ .self.network.primary_ip }}
+
+# Monitored master (HOST-ИНВАРИАНТНЫЙ адрес: один master на кластер).
+# auth-user/auth-pass — для AUTH sentinel-а на master (требуется при requirepass).
+sentinel monitor {{ .vars.master_name }} {{ .vars.master_ip }} {{ .vars.master_port }} {{ .vars.quorum }}
+{{- if .vars.auth_user }}
+sentinel auth-user {{ .vars.master_name }} {{ .vars.auth_user }}
+{{- end }}
+{{- if .vars.auth_pass }}
+sentinel auth-pass {{ .vars.master_name }} {{ .vars.auth_pass }}
+{{- end }}

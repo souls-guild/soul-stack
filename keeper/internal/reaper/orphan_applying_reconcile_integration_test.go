@@ -95,7 +95,7 @@ func newReconcileFixture(t *testing.T) (context.Context, *pgxpool.Pool, *redis.C
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	t.Cleanup(cancel)
 
-	rc, err := redis.NewClient(ctx, redis.Config{Addr: integrationRedisAddr})
+	rc, err := redis.NewClient(ctx, redis.Config{Addr: integrationRedisAddr}, nil)
 	if err != nil {
 		t.Fatalf("redis.NewClient: %v", err)
 	}

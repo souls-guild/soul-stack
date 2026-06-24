@@ -1,0 +1,58 @@
+name: tls-on-plain-open
+description: >
+  redis_config несёт tls-port НО port != '0' (plain-порт 6379 ОТКРЫТ) →
+  tls.enable=true, tls.only=false. Реальный prod-state «TLS включён, plaintext не
+  закрыт» (clients мигрируют постепенно) — контр-кейс к tls-extracted (там only=true).
+  tls.only ← port == '0' даёт false. tls.port=7379 (роль-дефолт, DSL-лимит, см.
+  002_to_003.yml). cert/key/ca_ref → '' (Vault-ПУТИ в v2-state не лежали).
+
+state_before:
+  redis_type: standalone
+  redis_version: "7.2.4"
+  redis_config:
+    port: "6379"
+    tls-port: "6380"
+    tls-cert-file: /etc/redis/tls/redis.crt
+    tls-key-file: /etc/redis/tls/redis.key
+    tls-ca-cert-file: /etc/redis/tls/ca.crt
+    maxmemory: "256mb"
+    maxmemory-policy: allkeys-lru
+    save: "900 1 300 10 60 10000"
+    appendonly: "no"
+  redis_users: {}
+  redis_hosts: []
+  redis_sentinel: {}
+
+state_after:
+  redis_type: standalone
+  redis_version: "7.2.4"
+  redis_config:
+    port: "6379"
+    tls-port: "6380"
+    tls-cert-file: /etc/redis/tls/redis.crt
+    tls-key-file: /etc/redis/tls/redis.key
+    tls-ca-cert-file: /etc/redis/tls/ca.crt
+    maxmemory: "256mb"
+    maxmemory-policy: allkeys-lru
+    save: "900 1 300 10 60 10000"
+    appendonly: "no"
+  redis_users: {}
+  redis_hosts: []
+  redis_sentinel: {}
+  tls:
+    enable: true
+    only: false
+    port: 7379
+    cert_ref: ""
+    key_ref: ""
+    ca_ref: ""
+  install:
+    method: package
+  persistence: rdb
+  maxmemory_policy: allkeys-lru
+  memory_mb: 0
+  modules: []
+  sysctl_settings: {}
+  shards: 0
+  replicas: 0
+  sentinel_quorum: 0

@@ -82,7 +82,7 @@ func TestIntegration_PingAndClose(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	c, err := NewClient(ctx, Config{Addr: integrationAddr})
+	c, err := NewClient(ctx, Config{Addr: integrationAddr}, nil)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestIntegration_LeaseAcquireRenewRelease(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	c, err := NewClient(ctx, Config{Addr: integrationAddr})
+	c, err := NewClient(ctx, Config{Addr: integrationAddr}, nil)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestIntegration_LeaseExpiry(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	c, err := NewClient(ctx, Config{Addr: integrationAddr})
+	c, err := NewClient(ctx, Config{Addr: integrationAddr}, nil)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -169,13 +169,13 @@ func TestIntegration_OutboundPubSub_RoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	cPub, err := NewClient(ctx, Config{Addr: integrationAddr})
+	cPub, err := NewClient(ctx, Config{Addr: integrationAddr}, nil)
 	if err != nil {
 		t.Fatalf("NewClient(pub): %v", err)
 	}
 	defer cPub.Close()
 
-	cSub, err := NewClient(ctx, Config{Addr: integrationAddr})
+	cSub, err := NewClient(ctx, Config{Addr: integrationAddr}, nil)
 	if err != nil {
 		t.Fatalf("NewClient(sub): %v", err)
 	}
@@ -230,7 +230,7 @@ func TestIntegration_OutboundPubSub_SelfFilter(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	c, err := NewClient(ctx, Config{Addr: integrationAddr})
+	c, err := NewClient(ctx, Config{Addr: integrationAddr}, nil)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -284,13 +284,13 @@ func TestIntegration_ApplyBusPubSub_RoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	cPub, err := NewClient(ctx, Config{Addr: integrationAddr})
+	cPub, err := NewClient(ctx, Config{Addr: integrationAddr}, nil)
 	if err != nil {
 		t.Fatalf("NewClient(pub): %v", err)
 	}
 	defer cPub.Close()
 
-	cSub, err := NewClient(ctx, Config{Addr: integrationAddr})
+	cSub, err := NewClient(ctx, Config{Addr: integrationAddr}, nil)
 	if err != nil {
 		t.Fatalf("NewClient(sub): %v", err)
 	}
@@ -339,7 +339,7 @@ func TestIntegration_ApplyBusPubSub_SelfFilter(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	c, err := NewClient(ctx, Config{Addr: integrationAddr})
+	c, err := NewClient(ctx, Config{Addr: integrationAddr}, nil)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -391,13 +391,13 @@ func TestIntegration_Summons_RoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	cPub, err := NewClient(ctx, Config{Addr: integrationAddr})
+	cPub, err := NewClient(ctx, Config{Addr: integrationAddr}, nil)
 	if err != nil {
 		t.Fatalf("NewClient(pub): %v", err)
 	}
 	defer cPub.Close()
 
-	cSub, err := NewClient(ctx, Config{Addr: integrationAddr})
+	cSub, err := NewClient(ctx, Config{Addr: integrationAddr}, nil)
 	if err != nil {
 		t.Fatalf("NewClient(sub): %v", err)
 	}
@@ -444,13 +444,13 @@ func TestIntegration_RBACInvalidate_RoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	cPub, err := NewClient(ctx, Config{Addr: integrationAddr})
+	cPub, err := NewClient(ctx, Config{Addr: integrationAddr}, nil)
 	if err != nil {
 		t.Fatalf("NewClient(pub): %v", err)
 	}
 	defer cPub.Close()
 
-	cSub, err := NewClient(ctx, Config{Addr: integrationAddr})
+	cSub, err := NewClient(ctx, Config{Addr: integrationAddr}, nil)
 	if err != nil {
 		t.Fatalf("NewClient(sub): %v", err)
 	}
@@ -497,7 +497,7 @@ func TestIntegration_RBACInvalidate_SelfFilter(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	c, err := NewClient(ctx, Config{Addr: integrationAddr})
+	c, err := NewClient(ctx, Config{Addr: integrationAddr}, nil)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -551,7 +551,7 @@ func TestIntegration_ReadSoulLeaseHolder_RoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	c, err := NewClient(ctx, Config{Addr: integrationAddr})
+	c, err := NewClient(ctx, Config{Addr: integrationAddr}, nil)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}

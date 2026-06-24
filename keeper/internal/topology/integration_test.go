@@ -310,7 +310,7 @@ func (c integrationLeaseChecker) SoulsStreamAlive(ctx context.Context, sids []st
 func newLeaseChecker(t *testing.T) (integrationLeaseChecker, *miniredis.Miniredis) {
 	t.Helper()
 	mr := miniredis.RunT(t)
-	rc, err := keeperredis.NewClient(context.Background(), keeperredis.Config{Addr: mr.Addr()})
+	rc, err := keeperredis.NewClient(context.Background(), keeperredis.Config{Addr: mr.Addr()}, nil)
 	if err != nil {
 		t.Fatalf("redis NewClient: %v", err)
 	}

@@ -129,7 +129,11 @@ assert:
             textfile_dir: /var/lib/node_exporter
           self:
             sid: trial-host
-            covens: []
+            # single-host сахар (fixtures.soulprint) несёт корневую
+            # incarnation.name-метку в covens (имя сценария = create) —
+            # зеркало прод-roster `WHERE $1 = ANY(coven)`. Это поведение harness
+            # с самого начала (см. fixtureHosts), а не артефакт multi-host-enabler-а.
+            covens: [create]
             choirs: []
             role: ""
             os:
@@ -201,7 +205,8 @@ assert:
             extra_args: []
           self:
             sid: trial-host
-            covens: []
+            # см. node_exporter unit выше: covens несёт incarnation.name-метку.
+            covens: [create]
             choirs: []
             role: ""
             os:

@@ -24,7 +24,7 @@ curl -s http://127.0.0.1:8080/v1/souls -H "Authorization: Bearer $TOKEN"
 
 ## 2. Раскладка service-репо
 
-Сервис — это git-репозиторий определённой формы. Один сервис = один тип сервиса (`hello-world`, `redis-cluster`, `postgres-ha`) = один репозиторий. Версия сервиса — это git-ref (tag или branch), под которым закоммичены файлы; поля `version:` в манифесте **нет** ([ADR-007](../adr/0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте)).
+Сервис — это git-репозиторий определённой формы. Один сервис = один тип сервиса (`hello-world`, `redis`, `postgres-ha`) = один репозиторий. Версия сервиса — это git-ref (tag или branch), под которым закоммичены файлы; поля `version:` в манифесте **нет** ([ADR-007](../adr/0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте)).
 
 Раскладка нашего `hello-world` (минимальная — обязательны только `service.yml` и хотя бы один сценарий):
 
@@ -249,4 +249,4 @@ soulctl incarnation run hello-demo create --input '{"greeting":"hi again"}' --wa
 - **Зависимости.** Переиспользуемые пакеты задач — выноси в отдельные destiny и подключай через `destiny[]` в `service.yml` + `apply:` в сценарии. Custom-модули — через `modules[]`. Формат — [docs/service/manifest.md](../service/manifest.md).
 - **Факты о хосте.** Таргетинг и значения по фактам системы — `soulprint.self.*` (OS-family, pkg_mgr, IP, …). Схема — [docs/soul/soulprint.md](../soul/soulprint.md).
 - **Day-2 операции** (мониторинг, апгрейд, восстановление кластера) — раздел [Сделать](../README.md#сделать-оператор) в карте документации и [docs/operations/](../operations/README.md).
-- **Готовые образцы** сервисов посложнее — [`examples/service/`](../../examples/service/) (например, [`redis-cluster/`](../../examples/service/redis-cluster/) с rolling-update и failover).
+- **Готовые образцы** сервисов посложнее — [`examples/service/`](../../examples/service/) (например, [`redis/`](../../examples/service/redis/) — один сервис на все режимы развёртывания standalone/sentinel/cluster/sentinel_only с day-2 rolling-restart и reshard).

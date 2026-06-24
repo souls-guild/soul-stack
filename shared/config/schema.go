@@ -19,6 +19,7 @@ var (
 	enumLogFormat      = []string{"json", "text"}
 	enumOTelExporter   = []string{"otlp"}
 	enumVaultAuth      = []string{"token", "approle"}
+	enumRedisMode      = []string{"standalone", "sentinel", "cluster"}
 	enumConflictPolicy = []string{"warn", "fail"}
 	enumCapability     = []string{
 		"run_as_root",
@@ -139,7 +140,7 @@ func schemaValidateKeeper(path string, root *ast.MappingNode, c *KeeperConfig) [
 	out = append(out, checkHostPort(root, "$.listen.openapi.addr", c.Listen.OpenAPI.Addr)...)
 	out = append(out, checkHostPort(root, "$.listen.mcp.addr", c.Listen.MCP.Addr)...)
 	out = append(out, checkHostPort(root, "$.listen.metrics.addr", c.Listen.Metrics.Addr)...)
-	out = append(out, checkHostPort(root, "$.redis.addr", c.Redis.Addr)...)
+	out = append(out, validateRedis(root, &c.Redis)...)
 
 	if c.Postgres.Pool.Min != 0 || c.Postgres.Pool.Max != 0 {
 		if c.Postgres.Pool.Min < 1 {
@@ -881,6 +882,140 @@ func validateSigil(root *ast.MappingNode, s *KeeperSigil) []diag.Diagnostic {
 	return out
 }
 
+// validateRedis проверяет блок `redis` (ADR-006 amendment, режимы
+// standalone/sentinel/cluster). Симметрично [validateVaultAuth]: enum `mode`
+// + per-mode required-поля + диагностика лишних полей чужого режима.
+//
+// Правила:
+//   - `mode` (если задан) — из [enumRedisMode]; пусто = standalone (forward-
+//     compat для конфигов без `mode`).
+//   - standalone: требует `addr` (host:port); `sentinels`/`nodes`/`master_name`
+//     для этого режима лишние (диагностика, не fatal-для-других-полей).
+//   - sentinel: требует непустой `master_name` И непустой `sentinels` (каждый
+//     элемент — host:port); `addr`/`nodes` лишние.
+//   - cluster: требует непустой `nodes` (каждый элемент — host:port);
+//     `addr`/`master_name`/`sentinels` лишние.
+//   - `password_ref`/`sentinel_password_ref` — vault-ref-формат (стиль
+//     metrics.auth.basic.password_ref); plaintext тут невалиден.
+//
+// host:port-валидность addr/элементов резолвится через [checkHostPort]
+// (пустой пропускается — required-проверка ловит отсутствие отдельным диагом).
+func validateRedis(root *ast.MappingNode, r *KeeperRedis) []diag.Diagnostic {
+	var out []diag.Diagnostic
+
+	if r.Mode != "" {
+		out = append(out, checkEnum(root, "$.redis.mode", r.Mode, enumRedisMode)...)
+		// Невалидный mode → per-mode-проверки бессмысленны (как vault.auth.method).
+		if !contains(enumRedisMode, r.Mode) {
+			return out
+		}
+	}
+
+	mode := r.Mode
+	if mode == "" {
+		mode = "standalone"
+	}
+
+	// vault-ref-формат password_ref/sentinel_password_ref проверяет semantic-фаза
+	// (`$.redis.password_ref` / `$.redis.sentinel_password_ref`, `#field`-aware
+	// reVaultRef) — здесь только структура топологии.
+
+	switch mode {
+	case "standalone":
+		if r.Addr == "" {
+			out = append(out, atPath(root, "$.redis.addr", diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+				Code:    "missing_required_field",
+				Message: "redis.addr is required when redis.mode=standalone",
+				Hint:    "set redis.addr: host:port, or pick mode sentinel/cluster",
+			}))
+		}
+		out = append(out, checkHostPort(root, "$.redis.addr", r.Addr)...)
+		out = append(out, redisUnusedFieldsDiag(root, mode,
+			r.MasterName != "", len(r.Sentinels) > 0, len(r.Nodes) > 0)...)
+
+	case "sentinel":
+		if r.MasterName == "" {
+			out = append(out, atPath(root, "$.redis.master_name", diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+				Code:    "missing_required_field",
+				Message: "redis.master_name is required when redis.mode=sentinel",
+				Hint:    "set redis.master_name to the monitored master group name",
+			}))
+		}
+		if len(r.Sentinels) == 0 {
+			out = append(out, atPath(root, "$.redis.sentinels", diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+				Code:    "missing_required_field",
+				Message: "redis.sentinels is required when redis.mode=sentinel",
+				Hint:    "list sentinel node addresses as host:port",
+			}))
+		}
+		for i, s := range r.Sentinels {
+			yamlPath := fmt.Sprintf("$.redis.sentinels[%d]", i)
+			out = append(out, checkListEntryHostPort(root, yamlPath, s)...)
+		}
+		out = append(out, redisUnusedFieldsDiag(root, mode,
+			false, false, len(r.Nodes) > 0)...)
+		if r.Addr != "" {
+			out = append(out, atPath(root, "$.redis.addr", diag.Diagnostic{
+				Level: diag.LevelWarning, Phase: diag.PhaseSchemaValidate,
+				Code:    "redis_unused_field",
+				Message: "redis.addr is ignored when redis.mode=sentinel (use sentinels)",
+			}))
+		}
+
+	case "cluster":
+		if len(r.Nodes) == 0 {
+			out = append(out, atPath(root, "$.redis.nodes", diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+				Code:    "missing_required_field",
+				Message: "redis.nodes is required when redis.mode=cluster",
+				Hint:    "list cluster node addresses as host:port",
+			}))
+		}
+		for i, n := range r.Nodes {
+			yamlPath := fmt.Sprintf("$.redis.nodes[%d]", i)
+			out = append(out, checkListEntryHostPort(root, yamlPath, n)...)
+		}
+		out = append(out, redisUnusedFieldsDiag(root, mode,
+			r.MasterName != "", len(r.Sentinels) > 0, false)...)
+		if r.Addr != "" {
+			out = append(out, atPath(root, "$.redis.addr", diag.Diagnostic{
+				Level: diag.LevelWarning, Phase: diag.PhaseSchemaValidate,
+				Code:    "redis_unused_field",
+				Message: "redis.addr is ignored when redis.mode=cluster (use nodes)",
+			}))
+		}
+	}
+
+	return out
+}
+
+// redisUnusedFieldsDiag эмитит warn-диагностику на поля чужого режима. Каждый
+// флаг = «поле задано, но к текущему mode не относится». Не fatal: помогает
+// поймать опечатку в `mode` / забытое поле прошлой топологии.
+func redisUnusedFieldsDiag(root *ast.MappingNode, mode string, masterName, sentinels, nodes bool) []diag.Diagnostic {
+	var out []diag.Diagnostic
+	warn := func(yamlPath, field string) {
+		out = append(out, atPath(root, yamlPath, diag.Diagnostic{
+			Level: diag.LevelWarning, Phase: diag.PhaseSchemaValidate,
+			Code:    "redis_unused_field",
+			Message: fmt.Sprintf("redis.%s is ignored when redis.mode=%s", field, mode),
+		}))
+	}
+	if masterName {
+		warn("$.redis.master_name", "master_name")
+	}
+	if sentinels {
+		warn("$.redis.sentinels", "sentinels")
+	}
+	if nodes {
+		warn("$.redis.nodes", "nodes")
+	}
+	return out
+}
+
 // validateVaultAuth проверяет блок `vault.auth` (ADR-014, AppRole).
 //
 // vaultPresent — присутствует ли top-level `vault`-ключ в YAML; при его
@@ -903,6 +1038,19 @@ func validateVaultAuth(root *ast.MappingNode, v *KeeperVault, vaultPresent bool)
 		return nil
 	}
 	var out []diag.Diagnostic
+
+	// `kv_version` — escape-hatch для probe версии KV mount-а: пусто → auto,
+	// иначе строго "1"/"2". Невалидное значение ловим здесь, чтобы не упасть
+	// на runtime при первом ReadKV (override побеждает probe).
+	if v.KVVersion != "" && v.KVVersion != "1" && v.KVVersion != "2" {
+		out = append(out, atPath(root, "$.vault.kv_version", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    "vault_kv_version_invalid",
+			Message: fmt.Sprintf("vault.kv_version must be \"1\" or \"2\", got %q", v.KVVersion),
+			Hint:    "leave empty for auto-detect via sys/internal/ui/mounts, or set \"1\"/\"2\"",
+		}))
+	}
+
 	a := &v.Auth
 
 	if a.Method != "" {
@@ -1003,6 +1151,22 @@ func checkEnum(root *ast.MappingNode, yamlPath, val string, allowed []string) []
 		Code:    "enum_invalid",
 		Message: fmt.Sprintf("%q is not in allowed set %v", val, allowed),
 	})}
+}
+
+// checkListEntryHostPort — вариант [checkHostPort] для элементов списка
+// (`sentinels[]`/`nodes[]`), где пустой элемент — не «опущено», а ошибочно
+// пустая запись (`["", "s:26379"]`): required-проверка ловит лишь полностью
+// пустой список, поэтому одиночный пустой элемент нужно отвергнуть явно тем же
+// кодом host_port_invalid.
+func checkListEntryHostPort(root *ast.MappingNode, yamlPath, val string) []diag.Diagnostic {
+	if val == "" {
+		return []diag.Diagnostic{atPath(root, yamlPath, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    "host_port_invalid",
+			Message: "empty list entry: expected host:port",
+		})}
+	}
+	return checkHostPort(root, yamlPath, val)
 }
 
 func checkHostPort(root *ast.MappingNode, yamlPath, val string) []diag.Diagnostic {

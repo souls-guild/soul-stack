@@ -6,13 +6,17 @@ package redis
 // Модель (parity reliable-queue Redis: pending-LIST → processing-LIST +
 // per-claim lease-ключ):
 //
-//   - pending (LIST `herald:delivery:pending`) — очередь job-ов; Enqueue =
+//   - pending (LIST `herald:delivery:{q}:pending`) — очередь job-ов; Enqueue =
 //     LPUSH JSON-payload-а (неблокирующий).
-//   - processing (LIST `herald:delivery:processing`) — claimed-job-ы; Claim =
+//   - processing (LIST `herald:delivery:{q}:processing`) — claimed-job-ы; Claim =
 //     BRPOPLPUSH pending→processing (АТОМАРНЫЙ pop+перенос: при крэше worker-а
 //     job не теряется, остаётся в processing), затем SET lease-ключа PX=ttl.
-//   - lease (string `herald:delivery:lease:<id>`, PX=leaseTTL) — heartbeat
+//   - lease (string `herald:delivery:{q}:lease:<id>`, PX=leaseTTL) — heartbeat
 //     владения job-ом. Жив → job обрабатывается; истёк → job осиротел.
+//
+// Hash-tag `{q}` во всех трёх ключах сажает весь keyspace очереди в один слот
+// Redis Cluster — это обязательно, чтобы мультиключевой BRPOPLPUSH
+// pending→processing не отвергался с CROSSSLOT (детали — у const-блока ниже).
 //   - Ack (успех/терминал) = LREM job из processing + DEL lease.
 //   - Requeue (retry) = LREM job из processing + LPUSH нового payload-а в
 //     pending (caller инкрементит attempt) + DEL lease.
@@ -40,10 +44,17 @@ import (
 // Convention-ключи очереди доставки (фиксированы, стиль `<подсистема>:<очередь>`
 // как `apply:summons` / `tempo:<aid>`). Не per-Herald: единая очередь на все
 // каналы, разбор адресата — внутри payload-а job-а (herald-пакет).
+//
+// Hash-tag `{q}` (ADR-006 amendment, cluster-режим): `Claim` делает атомарный
+// BRPOPLPUSH pending→processing — обе KEYS обязаны лежать в одном слоте, иначе
+// Redis Cluster отвергает мультиключевую команду с CROSSSLOT. Hash-tag `{q}`
+// присутствует во ВСЕХ ключах очереди (pending/processing/lease), поэтому весь
+// keyspace доставки садится в один слот (= CLUSTER KEYSLOT совпадает). В
+// standalone/sentinel hash-tag — просто часть имени ключа, поведение не меняет.
 const (
-	heraldPendingKey    = "herald:delivery:pending"
-	heraldProcessingKey = "herald:delivery:processing"
-	heraldLeasePrefix   = "herald:delivery:lease:"
+	heraldPendingKey    = "herald:delivery:{q}:pending"
+	heraldProcessingKey = "herald:delivery:{q}:processing"
+	heraldLeasePrefix   = "herald:delivery:{q}:lease:"
 )
 
 func heraldLeaseKey(jobID string) string { return heraldLeasePrefix + jobID }

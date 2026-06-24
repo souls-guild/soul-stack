@@ -1,0 +1,112 @@
+# L0-испытание create в режиме cluster — ОДНОУЗЛОВОЙ кластер (shards=1,
+# replicas_per_shard=0 → 1 хост, size-guard PASS: 1 == 1*(1+0)). Граничный случай:
+# минимальная валидная cluster-топология. Доказывает, что cluster-ветка корректна
+# и при single-host roster (size-guard не требует ≥2 хостов), nodes-MAP содержит
+# ровно одну запись, cluster-директивы рендерятся как обычно.
+#
+# Этот хост одновременно — единственный по SID, поэтому render_context.self ==
+# nodes-MAP-запись (announce-ip в .tmpl из его же .self.network.primary_ip).
+name: cluster create single-node (1 shard, 0 replicas)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.9 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+  essence:
+    redis_type: cluster
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+  input:
+    redis_type: cluster
+    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
+    # distro-native пин (мажор < 8 → version-gate модулей не активен).
+    version: "7.2.4"
+    shards: 1
+    replicas_per_shard: 0
+    cluster_node_timeout: 5000
+
+assert:
+  rendered_tasks:
+    # index 0 — mode-guard (cluster → no-op). shards-guard УБРАН (required_when в
+    # main.yml ловит пропуск shards на input-валидации); size-guard PASS: 1 == 1*(1+0)
+    # → assert that[0] true (assert:, не задача — ADR-009 amendment). Обе задачи позиций
+    # не занимают → cluster-ветка сдвинута на −2 от исходного плана.
+
+    # redis.conf: cluster-директивы; render_context.self = единственный хост.
+    - index: 16
+      module: core.file.rendered
+      params:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            password: s3cr3t-redis-pass-create
+            loadmodules: []
+            config:
+              maxmemory:        "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients:       10000
+              timeout:          300
+              save:             "900 1 300 10 60 10000"
+              appendonly:       "no"
+              cluster-enabled:      "yes"
+              cluster-config-file:  "nodes.conf"
+              cluster-node-timeout: "5000"
+          self:
+            sid: node-solo.example.com
+            covens: [create, redis]
+            choirs: []
+            role: ""
+            network:
+              primary_ip: 10.0.0.9
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # cluster-build: nodes-MAP с единственной записью. index 24 (−2 guard + −1
+    # extras-sysctl сжаты 2→1 задачи core.sysctl.applied).
+    - index: 31
+
+      module: community.redis.cluster
+      params:
+        action: create
+        replicas_per_shard: 0
+        password: s3cr3t-redis-pass-create
+        nodes:
+          node-solo.example.com: { addr: "10.0.0.9:6379" }
+
+  state_changes:
+    redis_type: cluster
+    redis_version: "7.2.4"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+      cluster-enabled:      "yes"
+      cluster-config-file:  "nodes.conf"
+      cluster-node-timeout: "5000"
+    redis_users: {}
+    redis_hosts: []

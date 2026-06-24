@@ -1,58 +1,141 @@
 name: redis
-description: Install and configure Redis server on a single host
-# Версия destiny — git ref, под которым закоммичен файл (см. ADR-007 в docs/architecture.md).
-# Поле `version:` верхнего уровня намеренно отсутствует.
+description: >-
+  Режим-агностичный per-host кирпич Redis (концепция Ansible-роли, B-гибрид
+  ADR-009): установка пакета + render redis.conf из merged-конфига + render
+  users.acl + systemd hardening drop-in + сервис. ВСЯ оркестрация (топология,
+  rolling-restart, failover, sentinel reconcile, health-gate) живёт в scenario
+  сервиса — здесь только идемпотентный install/render/service одного инстанса.
+
+# Версия destiny — git ref (ADR-007). Поля `version:` верхнего уровня нет.
+# Список задач — в tasks/main.yml. Только core-модули → required_modules: не нужен
+# (community.redis вызывается из scenario сервиса, не из этой destiny).
 #
-# Список задач — НЕ в этом файле. Он живёт в tasks/main.yml; см. docs/architecture.md →
-# «Структура задачи в `tasks:`». Здесь только манифест: input-контракт и required_modules.
-
-# Входной контракт destiny. Проверяется keeper-ом при инвокации и soul-ом
-# перед apply (defense in depth). DSL описан в docs/architecture.md →
-# «Destiny: входной контракт и валидация».
-
-# Эта destiny использует только core-модули, поэтому required_modules: не нужен.
-# Блок required_modules: появляется только когда destiny требует custom-модули
-# из сторонних коллекций — например, required_modules: [wb.haproxy, wb.myapp].
+# Режим-агностична: один и тот же кирпич обслуживает standalone, cluster и
+# sentinel (последний — через sentinel_enabled + sentinel.conf.tmpl/unit, gated-
+# задачи в хвосте tasks/main.yml). Режим выбирает scenario сервиса передачей флагов
+# и cluster-/sentinel-директив в config; destiny сама режим не знает. Конфиг
+# приходит ГОТОВЫМ merged map-ом через apply: input: config: (merge default→preset→
+# вычисления→passthrough делает scenario сервиса) — destiny остаётся «глупой», сама
+# ничего не сливает.
 
 input:
-  action:
-    type: string
-    required: true
-    enum: [apply, ensure_user, ensure_users, update_acls, restart, failover_and_restart, ping, replication_status, diagnose]
+  # ── Гейт data-плоскости redis-server (режим sentinel_only) ───────────────────
+  # deploy_redis=false → НЕ разворачиваем redis-server (data-плоскость): redis.conf,
+  # users.acl, PEM/TLS data-плоскости, systemd hardening drop-in и core.service
+  # redis-server running/restart — все gated placeholder-skip-ом. Пакет redis при
+  # этом ставится ВСЕГДА (sentinel-демон поставляется ТЕМ ЖЕ пакетом). Так режим
+  # sentinel_only поднимает ТОЛЬКО sentinel-демон (sentinel_enabled=true,
+  # deploy_redis=false), мониторящий ВНЕШНИЙ master (адрес из input.sentinel.*).
+  # default:true — стандартный путь (standalone/cluster/sentinel разворачивают
+  # redis-server). Гейт host-инвариантен → приходит через apply.input. Предикат
+  # static (только input.*) → Keeper гасит data-задачи placeholder-skip-ом без
+  # сдвига индексов (skip занимает слот).
+  deploy_redis:
+    type: boolean
+    required: false
+    default: true
+    description: >-
+      Разворачивать ли data-плоскость redis-server (render redis.conf/users.acl/
+      PEM + systemd-сервис redis-server). По умолчанию true. false (режим
+      sentinel_only) — поднять только sentinel-демон (sentinel_enabled), master
+      внешний. Пакет redis ставится в любом случае (несёт и sentinel-демон).
 
   version:
     type: string
-    required: false
+    # ОБЯЗАТЕЛЬНА ТОЛЬКО для install.method=package (required_when): distro-native
+    # пин читает её голым input.version (см. install.yml package-ветка). При
+    # install.method=binary distro-пакет НЕ ставится — версия бинаря приходит в
+    # install.version (upstream-semver), а это поле не используется. required_when
+    # context — input-only (default() недоступен) → absent-нормализация has()-цепочкой:
+    # «package» истинно, когда install не передан / method не задан / method=='package'.
+    required_when: "!has(input.install) || !has(input.install.method) || input.install.method == 'package'"
     # distro-native: опциональный epoch `N:` + upstream-версия + опциональная
     # ревизия (напр. Debian `5:7.0.15-1~deb12u7`). Узкий semver ломал version-пин
     # на реальном дистрибутиве (apt-get install redis-server=7.2.4 → exit 100).
     pattern: "^([0-9]+:)?[0-9][A-Za-z0-9.~+-]*$"
     description: >-
-      Версия пакета redis-server в репозитории дистрибутива (distro-native, напр.
-      5:7.0.15-1~deb12u7). Опциональна: если не передана, ставится версия по
-      умолчанию из репозитория (core.pkg без =version-пина).
+      Версия пакета redis-server в репозитории дистрибутива (distro-native пин,
+      напр. 5:7.0.15-1~deb12u7). ОБЯЗАТЕЛЬНА при install.method=package (директива
+      пользователя 2026-06-23): core.pkg всегда ставит =version-пин. Поведение
+      «latest из репо» (пустой version → core.pkg без пина) более НЕ доступно. При
+      install.method=binary НЕ используется (версия бинаря — в install.version).
+
+  # ── install: способ установки redis (концепция Ansible-роли redis_install_*) ──
+  # Способ доставки бинарей redis: distro-пакет (default, поведение-сохраняющее) ИЛИ
+  # upstream-tarball (opt-in). Прецедент binary-install — node-exporter (install.yml:
+  # core.url.fetched → core.archive.extracted → install -m0755). Гейт install.method —
+  # host-инвариант (один способ установки на кластер) → приходит через apply.input.
+  # Предикат method static (только input.*) → Keeper гасит неактивную ветку install.yml
+  # placeholder-skip-ом без сдвига индексов.
+  #
+  # ★ binary-ветка САМА несёт всё, что distro-пакет даёт даром: systemd-юнит
+  # redis-server.service (+ redis-sentinel.service в sentinel-режиме), distro-юзер/
+  # группу redis. Имя юнита — redis-server (НЕ redis), чтобы server.yml hardening
+  # drop-in (/etc/systemd/system/redis-server.service.d/) и core.service redis-server
+  # рестарт работали В ОБЕИХ ветках без ветвления.
+  install:
+    type: object
+    required: false
+    additional_properties: false
+    description: >-
+      Способ установки redis (концепция redis_install_* роли). method: package
+      (default) — distro-пакет redis-server (поведение-сохраняющее); binary — upstream-
+      tarball (base_url + version + soulprint.self.os.arch → /usr/local/bin + свой
+      systemd-юнит + distro-юзер/группа redis). base_url/version/sha256 нужны лишь при
+      method=binary. Пустой/не передан → method=package.
+    properties:
+      method:
+        type: string
+        enum: [package, binary]
+      base_url:
+        type: string
+        description: >-
+          Базовый URL источника tarball-а redis (без version/arch-сегментов). destiny
+          строит полный URL per-host как <base_url>/redis-<version>-<arch>.tar.gz, где
+          arch — soulprint.self.os.arch. Обязателен при method=binary.
+      version:
+        type: string
+        # upstream-semver (напр. 7.2.4) — ОТДЕЛЬНО от top-level version (distro-epoch):
+        # бинарный tarball именуется upstream-версией, не distro-ревизией. method=binary
+        # → пишется в URL и в version-guard install бинаря.
+        pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        description: >-
+          Upstream-версия redis для tarball-а (semver, напр. 7.2.4). Обязательна при
+          method=binary. ОТДЕЛЬНА от top-level version (distro-epoch) — разные
+          форматы (#4 version-pattern).
+      sha256:
+        type: string
+        # ОПЦИОНАЛЬНЫЙ (как modules_sha256, #14): задан → core.url.fetched fail-closed
+        # integrity-verify; не задан → content-идемпотентность (без verify, доверие
+        # HTTPS + store). Голый hex (destiny оборачивает в "sha256:<hex>").
+        pattern: "^[0-9a-f]{64}$"
+        description: >-
+          SHA-256 tarball-а redis (голый hex), ОПЦИОНАЛЬНЫЙ. Задан → fail-closed verify
+          скачанного tarball-а; не задан → загрузка по content-идемпотентности (без
+          verify). Соответствует паре (version, arch).
 
   password:
     type: string
+    required: true
     secret: true
     min_length: 16
+    description: >-
+      Пароль Redis (requirepass). Маскируется в логах/трейсах/UI. Destiny
+      получает УЖЕ зарезолвленное значение: caller-сценарий читает секрет из Vault
+      keeper-side через CEL-функцию vault() в render-фазе (templating.md §2.3/§4)
+      и прокидывает результат в apply:input. Destiny остаётся «глупой» — кладёт
+      готовый пароль в redis.conf, vault-клиент не тянет (ADR-012).
 
-  # ACL для action: ensure_users применяются ПРОТИВ master_addr (а не
-  # локально), чтобы шаг create, идущий широко по incarnation, на репликах
-  # не создавал локальный ACL до репликации (рассинхрон). На любом хосте
-  # incarnation команда уходит на один и тот же master → на репликах
-  # idempotent. scenario вычисляет адрес сам (модель 3-ADDR); destiny не
-  # резолвит. Не required: остальные action (apply/ensure_user/restart/…)
-  # master_addr не используют.
-  master_addr:
-    type: string
-
-  maxmemory:
-    type: string
-    pattern: "^[0-9]+(b|kb|mb|gb)$"          # Redis-формат: 256mb, 4gb, …
-
+  # Merged-конфиг redis.conf: caller (scenario сервиса) сливает default→preset→
+  # вычисления→passthrough через merge() и передаёт ГОТОВЫЙ map. Шаблон range-ит
+  # его ПОСЛЕ базовых директив (last-wins): caller может осознанно переопределить
+  # любую базовую. Пустой/не передан → секция пуста. unixsocket/maxmemory/save/
+  # appendonly/maxmemory-policy — обычные ключи этого map-а (scenario их вычислил).
   config:
     type: object
+    description: >-
+      Готовые директивы redis.conf (merged на стороне scenario сервиса). Каждая
+      пара key→value пишется в redis.conf как есть. Destiny НЕ мержит повторно.
     properties:
       maxclients:
         type: integer
@@ -62,72 +145,219 @@ input:
         min: 0
     additional_properties: true
 
-  user:
-    type: string
-    pattern: "^[a-z_][a-z0-9_-]{0,31}$"
-
-  acl:
-    type: string
-
-  state:
-    type: string
-    enum: [on, off]
-
-  # ACL-пользователи Redis: map по имени юзера → {acl, state}.
-  # tasks/manage.yml итерирует ${ input.users } через `as: user,
-  # index_as: username` и читает ${ user.acl } / ${ user.state }; поэтому
-  # верхний уровень — type=object с additional_properties: <schema>, а
-  # фиксированных properties нет (имена юзеров — произвольные).
+  # ACL-пользователи Redis: MAP имя→{perms, state, password}. scenario строит
+  # этот map из своего typed-map input.users (формой merge(list(map)) над
+  # .map(...)-comprehension) и резолвит password каждого юзера keeper-side из
+  # Vault. Шаблон users.acl.tmpl range-ит MAP (Go сортирует ключи → строки
+  # ACL детерминированы между прогонами — нет ложного change/рестарта) и хеширует
+  # пароль (Redis ACL #<sha256>) — plaintext в файл НЕ пишется. Пустой/не передан
+  # → users.acl без юзеров.
   users:
     type: object
-    description: ACL-пользователи Redis, ключ — имя юзера, значение — {acl, state}.
+    required: false
+    description: >-
+      ACL-пользователи Redis (map имя→{perms, state, password}). Рендерятся в
+      /etc/redis/users.acl (aclfile в redis.conf), порядок строк детерминирован
+      (range по map сортирует ключи). password — зарезолвленный keeper-side
+      секрет (маскируется); в файл пишется его sha256-хеш.
     properties: {}
     additional_properties:
       type: object
+      required: [perms, state, password]
+      additional_properties: false
       properties:
-        acl:
+        perms:
           type: string
         state:
           type: string
           enum: [on, off]
-      required: [acl, state]
-      additional_properties: false
+        password:
+          type: string
+          secret: true
 
-  # action: update_acls — патч ACL у СУЩЕСТВУЮЩИХ юзеров. Применяется на текущем
-  # мастере локально (scenario таргетит where: role=='master' + run_once, см.
-  # service/redis-cluster/scenario/update_acl). changes — map username → {acl,
-  # state?}: state необязателен (меняем только ACL, on/off оставляем как был).
-  # Симметрия с input.users (ensure_users), но state опционален — потому что это
-  # ПАТЧ существующих, а не создание.
-  changes:
+  # ── TLS (концепция Ansible-роли redis: redis_tls_*) ──────────────────────────
+  # TLS-параметры — единый dict `tls` (object-typed, симметрично `users`/`sentinel`):
+  # enable/only/port/cert_ref/key_ref/ca_ref. HOST-ИНВАРИАНТ (один cert/CA/порт на
+  # кластер) → приходят через apply.input. Пустой/absent dict → TLS off (has(input.tls)-
+  # guard + default() в задачах даёт enable=false). Гейт tls.enable — per-task when на
+  # PEM-задачах (tasks/server.yml). Сами TLS-директивы (tls-port/tls-cert-file/...) —
+  # обычные ключи merged config (scenario кладёт их в config), destiny range-ит их в
+  # redis.conf. tls.only НЕ читается destiny как отдельная задача — он лишь меняет
+  # config (scenario ставит `port 0`).
+  #
+  # ★ PEM-РЕНДЕР ЧЕРЕЗ vault() В САМОЙ ЯЧЕЙКЕ (seal-маскинг, ADR-010 §7.4): destiny
+  # получает Vault-ПУТИ (tls.cert_ref/key_ref/ca_ref), а сам PEM читает CEL-функцией
+  # vault() ПРЯМО в ячейке content задачи core.file.present (НЕ .tmpl, НЕ apply.input
+  # с уже-резолвленным PEM). vault() резолвится KEEPER-SIDE в render-фазе destiny-
+  # прохода — детектор seal помечает ячейку sealed vault-слоем, маскинг ловит PEM в
+  # error_summary/state. PEM в файл уезжает уже значением; vault-клиент на Soul не
+  # тянется (ADR-012). Если бы destiny принимала operator-литеральный PEM (не ref) —
+  # его пришлось бы гнать через apply.input, а seal destiny-прохода схему secret-input
+  # не видит (destiny-input-secret transit — отложенный слайс) → PEM не маскировался
+  # бы. Поэтому контракт — именно Vault-ref, vault() в ячейке.
+  tls:
     type: object
-    description: Патч ACL существующих юзеров, ключ — имя юзера, значение — {acl, state?}.
-    properties: {}
-    additional_properties:
-      type: object
-      properties:
-        acl:
-          type: string
-        state:
-          type: string
-          enum: [on, off]
-      required: [acl]
-      additional_properties: false
+    # cert_ref/key_ref/ca_ref обязательны, КОГДА dict передан (object-level required:
+    # список под-ключей): без путей PEM-задачам нечего читать. Один ключ `required`
+    # несёт ЛИБО bool (опциональность поля), ЛИБО список обязательных под-ключей —
+    # здесь выбрана списочная форма (как у `sentinel`), поэтому `required: false`
+    # отсутствует: опциональность поля достигается отсутствием field-level required.
+    required: [cert_ref, key_ref, ca_ref]
+    additional_properties: false
+    description: >-
+      Параметры TLS Redis (концепция redis_tls_* роли). Пустой/не передан → TLS off
+      (block PEM-задач placeholder-skip, директив TLS нет). enable — главный гейт
+      рендера PEM/директив; only — закрыть plain-порт (scenario ставит `port 0`);
+      port — TLS-порт (директива tls-port); cert_ref/key_ref/ca_ref — Vault-ПУТИ
+      серверного cert/key и CA (форма "<mount>/<path>#<field>"). destiny читает PEM
+      через vault(ref) В ЯЧЕЙКЕ content (seal-маскинг), vault-клиент на Soul нет.
+    properties:
+      enable:
+        type: boolean
+      only:
+        type: boolean
+      port:
+        type: integer
+        min: 1
+      cert_ref:
+        type: string
+      key_ref:
+        type: string
+      ca_ref:
+        type: string
 
-  # Текущее состояние redis_users из incarnation.state (scenario пробрасывает
-  # ${ state.redis_users }). Нужно для дефолта state, когда changes[user].state
-  # не передан: берём прежнее on/off из current[user].state, чтобы патч ACL не
-  # сбрасывал юзера в off молча.
-  current:
+  # ── Redis-модули (концепция Ansible-роли redis: redis_module_*) ──────────────
+  # На Redis < 8 модули (RediSearch / RedisJSON / RedisTimeSeries / RedisBloom)
+  # подключаются как загружаемые .so-объекты: их .so качаются в modules_dir и
+  # подключаются директивой loadmodule в redis.conf. На Redis 8+ модули ВСТРОЕНЫ в
+  # сервер — .so не качаем и loadmodule НЕ пишем (version-gate делает scenario: на
+  # 8+ передаёт modules=[] и loadmodules=[]). HOST-ИНВАРИАНТ (один набор модулей на
+  # кластер) → приходят через apply.input, не per-host .self (tiling-урок).
+  #
+  # modules — короткие алиасы. Имя .so-файла каждого алиаса — фиксированная таблица
+  # имён Redis-модулей (НЕ operator-трансляция) → живёт в destiny (тут). URL .so
+  # АРХ-СПЕЦИФИЧЕН: destiny строит его per-host из modules_base_url + СВОЕГО
+  # soulprint.self.os.arch + имени файла (soulprint доступен в destiny-CEL —
+  # прецедент arch-резолва node-exporter), поэтому mixed-arch incarnation корректен
+  # (каждый хост качает .so под свою арх). checksum (modules_sha256) — host-инвариант
+  # (для архитектуры кластера) → apply.input, как single sha256 redis-exporter.
+  modules:
+    type: array
+    required: false
+    description: >-
+      Алиасы Redis-модулей для загрузки (Redis < 8). Пусто/не передан → модули не
+      качаются и не подключаются. На Redis 8+ scenario передаёт пустой список
+      (модули встроены в сервер).
+    items:
+      type: string
+      enum: [search, json, timeseries, bloom]
+
+  modules_dir:
+    type: string
+    required: false
+    default: /var/lib/redis/modules
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: >-
+      Каталог, куда раскладываются .so Redis-модулей (концепция redis_module_dir
+      роли). По умолчанию /var/lib/redis/modules.
+
+  modules_base_url:
+    type: string
+    required: false
+    description: >-
+      Базовый URL источника .so Redis-модулей (без арх-сегмента). destiny строит
+      полный URL каждого модуля как modules_base_url/<arch>/<имя.so>, где arch —
+      soulprint.self.os.arch ЭТОГО хоста. Обязателен, если modules непуст.
+
+  # checksum каждого .so — ОПЦИОНАЛЬНЫЙ (директива пользователя 2026-06-24). Задан
+  # для item → fail-closed: core.url.fetched верифицирует SHA-256 ДО публикации файла,
+  # mismatch → задача падает (целевой путь нетронут, supply-chain). НЕ задан → задача
+  # передаёт пустой checksum, и core.url.fetched качает .so по СОДЕРЖИМОМУ
+  # (content-идемпотентность: скачать во temp → сравнить SHA-256 с существующим →
+  # запись только при diff), без integrity-verify — доверяем HTTPS + доверенному
+  # store. Маппинг частичный: можно задать sha256 лишь для части алиасов. Форма
+  # значения — голый hex (destiny оборачивает в "sha256:<hex>" per-item; absent item
+  # → пустая строка, см. tasks/modules.yml).
+  modules_sha256:
     type: object
-    description: Текущее состояние ACL-юзеров (для дефолта state при патче).
+    required: false
+    description: >-
+      Маппинг алиас→SHA-256 .so-объекта (голый hex), ОПЦИОНАЛЬНЫЙ. Задан для алиаса →
+      fail-closed integrity-verify скачанного .so; отсутствует → загрузка по
+      content-идемпотентности (без verify, доверие HTTPS + store). Соответствует паре
+      (version, arch) кластера; берётся из sha256sums источника модулей. Host-инвариант
+      (одна арх на кластер в типичном случае) → приходит через apply.input.
     properties: {}
     additional_properties:
-      type: object
-      properties:
-        acl:
-          type: string
-        state:
-          type: string
-          enum: [on, off]
-      additional_properties: false
+      type: string
+      pattern: "^[0-9a-f]{64}$"
+
+  # ── Host-tuning extras (концепция Ansible-роли) ──────────────────────────────
+  # Режим-агностичные per-host добавки. THP-отключение / logrotate / sysctl —
+  # БЕЗУСЛОВНЫ (рекомендация Redis / hardening, не выбор оператора): флагов в
+  # контракте нет, задачи всегда активны. sysctl_settings — данные-таблица значений
+  # kernel-параметров, host-инвариантна → приходит через apply.input (scenario
+  # сервиса), сами параметры применяются всегда.
+  sysctl_settings:
+    type: object
+    required: false
+    description: >-
+      Kernel-параметры под Redis (map имя→значение), рендерятся в
+      /etc/sysctl.d/30-redis.conf. Значения — СТРОКИ (multi-value параметры через
+      пробел). Передаются scenario сервиса (дефолты — essence.sysctl_settings).
+    properties: {}
+    additional_properties: true
+
+  # ── Sentinel (режим sentinel) ────────────────────────────────────────────────
+  # Эти поля задействованы ТОЛЬКО когда sentinel_enabled=true (gated-задачи ниже
+  # в tasks/main.yml). Вне sentinel-режима не передаются → has()-guard в задачах
+  # гасит рендер sentinel.conf/unit. Структура — режим-агностичный кирпич остаётся
+  # «глупым»: scenario сервиса вычисляет master-election и передаёт ГОТОВЫЕ значения.
+  sentinel_enabled:
+    type: boolean
+    required: false
+    default: false
+    description: >-
+      Включить рендер sentinel.conf + redis-sentinel.service + запуск демона
+      (режим sentinel). По умолчанию false (standalone/cluster — без sentinel).
+
+  sentinel:
+    type: object
+    # Поле опционально (field-level required отсутствует → false): передаётся
+    # только в sentinel-режиме (gated на sentinel_enabled). Когда передано —
+    # master_ip обязателен (object-level required: [...] ниже). Один ключ
+    # `required` может нести ЛИБО bool (опциональность поля), ЛИБО список
+    # обязательных под-ключей object-а — здесь выбрана списочная форма, поэтому
+    # `required: false` отсутствует (опциональность достигается дефолтом).
+    description: >-
+      Параметры monitored master для sentinel.conf. master_ip/master_port —
+      HOST-ИНВАРИАНТНЫЙ адрес master-а кластера (один на кластер, scenario
+      резолвит run_once). announce-ip НЕ здесь: он per-host, рендерится из
+      .self.network.primary_ip. config — стартовые директивы sentinel.conf
+      (файловая форма). auth_pass — зарезолвленный keeper-side секрет (маскируется).
+    # master_ip обязателен: sentinel без monitored master бессмыслен, а задача
+    # рендера sentinel.conf берёт ${ input.sentinel.master_ip } БЕЗ has()-guard
+    # (gated на sentinel_enabled). Required ловит пропуск адреса понятной
+    # schema-ошибкой ДО render, а не криптичным CEL «no such key» в шаблоне.
+    required: [master_ip]
+    additional_properties: false
+    properties:
+      master_name:
+        type: string
+      master_ip:
+        type: string
+      master_port:
+        type: integer
+        min: 1
+      quorum:
+        type: integer
+        min: 1
+      auth_user:
+        type: string
+      auth_pass:
+        type: string
+        secret: true
+      config:
+        type: object
+        properties: {}
+        additional_properties: true

@@ -1,0 +1,10 @@
+name: single-user
+description: >
+  Один пользователь: foreach по списку из одного элемента, имя → ключ map-а.
+
+state_before:
+  redis_users: ["app"]
+
+state_after:
+  redis_users:
+    app: { perms: "off ~* &* +@all", state: "off" }

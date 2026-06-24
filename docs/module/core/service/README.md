@@ -139,7 +139,7 @@ Existing-задачи без `daemon_reload` получают `auto` — additiv
     name: node_exporter
 ```
 
-(дидактический срез связки `running` + `onchanges`-`restarted`; аналогичная связка для redis-server — в [`examples/destiny/redis-single/tasks/main.yml`](../../../../examples/destiny/redis-single/tasks/main.yml))
+(дидактический срез связки `running` + `onchanges`-`restarted`; аналогичная связка для redis-server — в [`examples/destiny/redis/tasks/server.yml`](../../../../examples/destiny/redis/tasks/server.yml))
 
 `onchanges:` принимает **список** register-ов — рестарт триггерится, если изменился **хотя бы один** из них. Так демон перезапускается и на изменение unit-файла, и на апгрейд бинаря:
 

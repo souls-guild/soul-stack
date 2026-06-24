@@ -64,7 +64,7 @@ service-<name>/
 
 | Поле | Обяз. | Тип | Смысл |
 |---|---|---|---|
-| `name` | да | string (kebab-case) | Имя типа сервиса (`redis-cluster`, `postgres-ha`). Совпадает с именем папки `service-<name>/` без префикса. Regex `^[a-z][a-z0-9-]*$`. |
+| `name` | да | string (kebab-case) | Имя типа сервиса (`redis`, `postgres-ha`). Совпадает с именем папки сервиса (в `examples/service/<name>/` — голое имя без приставки `service-`). Regex `^[a-z][a-z0-9-]*$`. |
 | `description` | рекомендуется | string | Одна-две фразы: что это за сервис. Видно в UI Keeper-а, MCP-каталоге, выводе `soul-lint`. |
 | `state_schema_version` | да | integer (≥1) | Версия структуры `incarnation.state` в Postgres. **НЕ** версия сервиса (это git tag по [ADR-007](../adr/0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте)). Инкрементируется явно при breaking-изменениях schema; требует соответствующей миграции в `migrations/`. |
 | `state_schema` | да | JSON Schema object | Структура `incarnation.state` JSONB-поля в Postgres. Формат — JSON Schema (`type: object` на корне), draft-07-совместимый. См. [«Формат `state_schema`»](#формат-state_schema) ниже. |
@@ -117,46 +117,46 @@ Keeper валидирует `incarnation.state` против `state_schema` пр
 ### Пример
 
 ```yaml
-name: redis-cluster
+name: redis
 state_schema_version: 2
-description: Redis HA cluster with rolling updates and failover
+description: Redis по концепции Ansible-роли (standalone/sentinel/cluster/sentinel_only)
 
 # Структура incarnation.state в БД
 state_schema:
   type: object
-  required: [redis_version, redis_users, redis_config, redis_hosts]
+  required: [redis_type, redis_config]
   properties:
+    redis_type: { type: string, enum: [standalone, sentinel, cluster, sentinel_only] }
     redis_version: { type: string }
-    redis_users:
+    redis_config:
+      type: object
+      additionalProperties: true
+    redis_users:                      # map username → {perms, state}
       type: object
       additionalProperties:
         type: object
-        required: [acl, state]
+        required: [perms, state]
         properties:
-          acl:   { type: string }
+          perms: { type: string }
           state: { type: string, enum: [on, off] }
-    redis_config:
-      type: object
-      additionalProperties: { type: string }
     redis_hosts:
       type: array
       items:
         type: object
         properties:
           sid:  { type: string }
-          role: { type: string, enum: [primary, replica] }
+          role: { type: string, enum: [primary, replica, sentinel] }
 
 # Артефакты-зависимости — ref: git tag/branch (см. ADR-007)
 destiny:
-  - { name: redis,                    ref: v2.0.0 }
-  - { name: redis-replication-config, ref: v1.0.0 }
+  - { name: redis, ref: v1.0.0 }      # режим-агностичный кирпич: install + render redis.conf
 
 # Custom-модули, нужные сценариям (двухуровневая форма <namespace>.<module>)
 modules:
-  - { name: wb.redis-failover, ref: v1.2.0 }
+  - { name: community.redis, ref: v1.0.0 }  # живой Redis-рантайм (CONFIG SET, ACL, cluster, sentinel)
 ```
 
-Рабочий пример с полной раскладкой папки — [`examples/service/redis-cluster/`](../../examples/service/redis-cluster/).
+Рабочий пример с полной раскладкой папки — [`examples/service/redis/`](../../examples/service/redis/).
 
 ## Сценарии
 

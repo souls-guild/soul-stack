@@ -1,6 +1,6 @@
 # core.vault.kv-read
 
-Явное чтение секрета из Vault KV v2 на keeper-стороне с записью audit-event-а.
+Явное чтение секрета из Vault KV (v1/v2, версия определяется автоматически) на keeper-стороне с записью audit-event-а.
 **Keeper-side**, диспетчер `on: keeper` — шаг исполняется на самом Keeper-е, не
 на хосте (в отличие от Soul-side core). Запуск без `on: keeper` — ошибка
 валидации scenario. Реализация —
@@ -16,13 +16,13 @@
 
 | State | Назначение | Идемпотентность (когда `changed=true`) |
 |---|---|---|
-| `read` (verb) | Прочитать секрет из Vault KV v2 и отдать выбранные поля в register-output. | **Никогда** `changed=true`: read-операция, state не мутирует (`changed=false` всегда). |
+| `read` (verb) | Прочитать секрет из Vault KV (v1/v2) и отдать выбранные поля в register-output. | **Никогда** `changed=true`: read-операция, state не мутирует (`changed=false` всегда). |
 
 ## read — params
 
 | Param | Тип | Required / default | Смысл |
 |---|---|---|---|
-| `path` | string | required | Путь секрета в Vault. KV v2 формат `data.data` распаковывается автоматически (`extractKVData`); legacy KV v1 без обёртки — отдаётся как есть. |
+| `path` | string | required | Путь секрета в Vault, **mount-relative и без сегмента `data/`** — клиент сам подставит `data/` для KV v2 (для KV v1 — без него). Указывать `secret/redis/admin`, а не `secret/data/redis/admin` (иначе клиент построит `secret/data/data/redis/admin` и секрет не найдётся). Версия KV mount-а (v1/v2) резолвится в keeper-side `vault.Client` (автоопределение через probe, либо override `vault.kv_version`, см. [config.md → vault](../../../keeper/config.md#vault)); модуль получает уже **плоский payload** и работает на обеих версиях одинаково (для v2 обёртка `data.data` распакована клиентом до передачи в модуль). |
 | `fields` | array of string | optional | Какие ключи вернуть в `data`. Пусто / не задан → весь payload. Запрошенный, но отсутствующий ключ — **пропускается без ошибки** (audit-event на чтение уже потрачен). |
 
 ## Capabilities / side-effects
@@ -91,7 +91,7 @@
   module: core.vault.kv-read
   register: db_creds
   params:
-    path:   secret/data/redis/admin
+    path:   secret/redis/admin
     fields: [username, password]
 ```
 

@@ -1,0 +1,107 @@
+# L0-испытание create (standalone) — guard на пробелы покрытия QA 2026-06-22:
+#   - persistence: rdb_aof → save непустой + appendonly yes (пресет rdb_aof);
+#   - memory_mb=512 → computed maxmemory 512*75/100=384 → "384mb";
+#   - redis_settings.maxmemory="1gb" ПЕРЕКРЫВАЕТ computed "384mb" (last-wins на
+#     COMPUTED-слое, не только на essence-дефолте): redis_settings — самый правый
+#     слой merge, бьёт и вычисленные ключи. Это и есть guard.
+name: rdb_aof + redis_settings overrides COMPUTED maxmemory (last-wins)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network:
+      primary_ip: 10.0.0.5
+    os:
+      arch: amd64
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+  essence:
+    redis_type: standalone
+    memory_reserve_percent: 75
+    persistence_presets:
+      off:
+        save: ""
+        appendonly: "no"
+      aof:
+        save: ""
+        appendonly: "yes"
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+      rdb_aof:
+        save: "900 1 300 10 60 10000"
+        appendonly: "yes"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+  input:
+    redis_type: standalone
+    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
+    # distro-native пин (мажор < 8 → version-gate модулей не активен).
+    version: "7.2.4"
+    memory_mb: 512
+    persistence: rdb_aof
+    redis_settings:
+      # Перекрывает COMPUTED maxmemory (384mb), не только essence-дефолт.
+      maxmemory: "1gb"
+
+assert:
+  rendered_tasks:
+    # index 0 — mode-guard диспетчера (standalone реализован → no-op). Не ассертим.
+    - index: 0
+      module: core.pkg.installed
+      params:
+        name: redis-server
+        version: "7.2.4"
+
+    - index: 14
+      module: core.file.rendered
+      params:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            password: s3cr3t-redis-pass-create
+            loadmodules: []
+            config:
+              # COMPUTED был "384mb" (512*75/100), но redis_settings (самый правый
+              # слой merge) перекрыл его на "1gb". LAST-WINS на computed-слое.
+              maxmemory: "1gb"
+              maxmemory-policy: allkeys-lru
+              maxclients: 10000
+              timeout: 300
+              # persistence-пресет rdb_aof.
+              save: "900 1 300 10 60 10000"
+              appendonly: "yes"
+          self:
+            sid: trial-host
+            covens: [create]
+            choirs: []
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+  state_changes:
+    redis_type: standalone
+    redis_version: "7.2.4"
+    # DRIFT-GUARD: идентичен apply.input.config (index 3).
+    redis_config:
+      maxmemory: "1gb"
+      maxmemory-policy: allkeys-lru
+      maxclients: 10000
+      timeout: 300
+      save: "900 1 300 10 60 10000"
+      appendonly: "yes"
+    redis_users: {}
+    redis_hosts: []

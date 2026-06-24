@@ -317,9 +317,9 @@ provision_git_repo \
 # см. шаг 10; ref: v1.0.0 — из redis/service.yml::destiny[]). Имя каталога
 # = {name} из destiny[], и каталог examples теперь тоже голый {name}.
 provision_git_repo \
-    "${EXAMPLES}/destiny/redis-single" \
-    "${KEEPER_DEV_DIR}/destiny/redis-single" \
-    v1.0.0 "destiny redis-single"
+    "${EXAMPLES}/destiny/redis" \
+    "${KEEPER_DEV_DIR}/destiny/redis" \
+    v1.0.0 "destiny redis"
 provision_git_repo \
     "${EXAMPLES}/destiny/redis-exporter" \
     "${KEEPER_DEV_DIR}/destiny/redis-exporter" \
@@ -331,10 +331,6 @@ provision_git_repo \
     "${EXAMPLES}/destiny/node-exporter" \
     "${KEEPER_DEV_DIR}/destiny/node-exporter" \
     v1.0.0 "destiny node-exporter"
-provision_git_repo \
-    "${EXAMPLES}/destiny/redis-replication-config" \
-    "${KEEPER_DEV_DIR}/destiny/redis-replication-config" \
-    v1.0.0 "destiny redis-replication-config"
 
 # 10. Seed реестра сервисов в Postgres (service_registry + keeper_settings).
 #

@@ -90,7 +90,17 @@
   раскрывается при загрузке destiny-артефакта (до фазы render), так же как
   scenario-include ([scenario/orchestration.md §6](../scenario/orchestration.md#6-двухуровневый-резолв-ресурсов)):
   include-задача заменяется задачами подключённого файла inline, на их месте;
-  render получает плоский список без `include:`-узлов.
+  render получает плоский список без `include:`-узлов. После уплощения keeper-side
+  `registerIndex` и стратификатор плоские: `register:` адресуется по индексу в плане.
+- **Проверка register-ссылок остаётся per-file (cross-file `onchanges` отвергается).**
+  `register`-ссылки в `onchanges:`/`onfail:`/`require:` и CEL-предикатах валидирует
+  **загрузочный** линтер (`validateTaskRefs` в `shared/config/destiny_tasks.go`) на
+  уровне **одного файла**. `onchanges:` в одном include-файле на `register:`, объявленный
+  в **другом** include-файле, поднимает `unknown_register_reference` — несмотря на то,
+  что после уплощения оба попадают в общий план. Практический инвариант: **`register:`
+  и его `onchanges:`-потребитель держатся в одном файле `tasks/<name>.yml`** (эталоны —
+  `examples/destiny/node-exporter` и `examples/destiny/redis`: install-register и рестарт
+  живут вместе). Расширение этого до cross-file-адресации — open Q §12.
 - **Правила:**
   - относительные пути за пределы `tasks/` запрещены (`../...`, абсолютные);
     резолв строго внутри каталога `tasks/` снапшота (securejoin-кламп);
@@ -234,7 +244,7 @@
 ### Правила
 
 - **Содержимое** `block:` — top-level список задач, тот же формат и тот же набор полей, что в `tasks/main.yml`. В pilot C1 внутри допустимы `module:`-задачи, `apply:`-задачи и вложенный `block:`. Within-block `include:` (include-потомок) — **пост-pilot** (within-block include отложен; внутри block пока только `module:`, `apply:` и вложенный `block:`); дизайн-намерение сохраняется, реализация pilot C1 его не поддерживает.
-- **`when:` block-задачи** — оборачивающее условие. Falsy → все задачи пропускаются как одна группа, с пометкой `skipped: when` на самой block-задаче (не на каждой внутренней).
+- **`when:` block-задачи** — оборачивающее условие. Falsy → все задачи пропускаются. `when:` block-задачи вливается в **каждого потомка** через AND (см. наследование ниже), поэтому пометка `skipped: when` ставится на **каждом потомке**, а не одной записью на block-задаче. Это инвариант: `register:` потомков остаётся видимым снаружи и при skip (см. «register потомков виден снаружи»).
 - **`onchanges:` / `onfail:` / `require:` block-задачи** — применяются ко всей группе так же, как к одной задаче: если условие не выполнено, вся группа пропускается.
 - **Внутренние `when:`** допустимы и комбинируются с внешним по AND: внутренняя задача выполняется только если внешний `when:` block-а truthy И её собственный `when:` truthy.
 - **`register:`** на самой block-задаче не имеет смысла и **запрещён** — block не вызывает модуль, нечего регистрировать. Задачи внутри могут иметь свои `register:`-имена; они доступны после block-а.
@@ -251,7 +261,7 @@
 
 - `module:`-потомки, `apply:`-потомки (делегирование в destiny с унаследованным `serial:`-окном) и вложенный `block:` внутри block.
 - Наследование от block-задачи к потомкам: `when:` (комбинируется с внутренним по AND), `where:`, `serial:`, requisites (`onchanges:` / `onfail:` / `require:`), `vars:`.
-- Static-skip всей группы по `when:` (falsy → все задачи пропускаются как одна, пометка `skipped: when` на block-задаче).
+- Static-skip всей группы по `when:` (falsy → все задачи пропускаются). Раскрывается в **per-потомок** skip-placeholder-ы: block.`when:` вливается в каждого потомка через AND, static-when каждого становится false, и каждый потомок несёт свой `skipped: when` + свой `register:`. `register:` потомков виден снаружи block и при static-skip (flat-register-scope инвариантен относительно truthy/falsy — см. ниже).
 - Fail-closed отказ module-специфичных ключей на block-уровне (коды `*_on_block_invalid`, см. [naming-rules.md → Error codes](../naming-rules.md)).
 
 **Пост-pilot (спека сохранена как дизайн-намерение, реализация pilot C1 не поддерживает):**
@@ -259,6 +269,20 @@
 - `parallel: true` на block — parallel целиком отложен (нет прод-потребителя; гейт fail-closed `parallel_on_block_invalid`).
 - `loop:` на block — block+loop комбинация отложена.
 - Within-block `include:` (include-потомок) — внутри block пока только `module:` и вложенный `block:`.
+
+### `block:` внутри destiny-прохода (apply:destiny)
+
+`block:` поддержан не только в scenario, но и **внутри destiny**, рендеримой через `apply: { destiny: … }` ([ADR-009 amendment](../adr/0009-scenario-dsl.md)). Раньше `block:` в destiny-проходе отвергался pilot-рестриктом (`ErrUnsupportedDSL`) — рестрикт **снят**. Зеркало scenario-block в destiny-семантике: наследование `when:` (AND-merge с внутренним), `vars:` (база→override), requisites (`onchanges:` / `onfail:` / `require:` — union), вложенный `block:`; потомки — `module:` или вложенный `block:`.
+
+**Граница ключей destiny-block** (строже, чем scenario-block): scenario-оркестрация на destiny-block или его потомке **запрещена** (`ErrUnsupportedDSL`) — в destiny она бессмысленна (нет roster-резолва на потомке, нет вложенного `apply:`):
+
+- `where:` / `on:` / `serial:` / `run_once:` — таргетинг и волны живут на scenario-applier-задаче, не внутри destiny;
+- `parallel:` — parallel целиком отложен (как и в scenario-block);
+- `loop:` — block+loop комбинация отложена;
+- `include:` — within-block include отложен;
+- `apply:`-потомок — вложенный `apply:` в destiny запрещён (та же граница, что у плоской destiny-задачи).
+
+Roster наследуется блоком **целиком** (block НЕ сужает хосты — в отличие от scenario, где `where:` потомка сужает); `serial:`-окно applier-задачи протягивается во все потомки. `register:` потомка block виден задачам **снаружи** block (плоский register-scope: потомки вклеиваются в общий план destiny-прохода со сквозными индексами — типовой кейс «TLS-задачи в `block.when`, рестарт-`onchanges:` снаружи читает их `register:`»). **Static-false `when:` block-а раскрывается в per-потомок skip-placeholder-ы** (НЕ один placeholder за весь блок): block.`when:` вливается в каждого потомка через AND, и каждый потомок эмитит свой skip-placeholder со своим `register:`. Поэтому `register:` потомков static-false block виден снаружи через эти placeholder-ы — **flat-register-scope инвариантен относительно static-skip** (не зависит от truthy/falsy исхода `when:`); рестарт-`onchanges:` снаружи резолвится одинаково и при активном, и при погашенном блоке.
 
 ### Когда `block:` vs `include:`
 
@@ -737,7 +761,7 @@ DSL-ядро задач выше — общее для destiny и scenario ([ADR
 ### Requisites
 - **`prereq:`** (Salt) — обратное `require:` (А ждёт изменений в Б; если Б собирается меняться, А выполняется первым). Нужно ли.
 - **Wildcard в requisites.** `onchanges: [redis_*]` — все register-id-ы по префиксу. Удобно, но усложняет валидацию.
-- **Cross-file адресация.** `onchanges: [other-file.task]` или строго в пределах одного `tasks/main.yml`-дерева?
+- **Cross-file адресация.** Сейчас: register-ссылка в `onchanges:`/`onfail:`/`require:` валидируется **per-file** (загрузочный `validateTaskRefs`), поэтому ссылка на `register:` из соседнего include-файла отвергается (`unknown_register_reference`) — register и его потребитель обязаны быть в одном файле (см. §4 `include:`). Open Q: вводить ли явную cross-file-адресацию (валидация ссылок по уплощённому плану, а не per-file) — keeper-side `registerIndex` после уплощения это уже позволил бы, но статическая проверка ссылок осталась бы сложнее.
 
 ### Block — error-handling
 - **`rescue:`** (Ansible) — список задач, выполняемых при fail внутри `block:`. Сейчас не закреплён; обходимся `onfail:`-задачами после block-а. Нужно ли вводить как явный синтаксис.

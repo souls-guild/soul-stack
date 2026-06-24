@@ -36,7 +36,7 @@ rbac_roles:
   name: db-operator        builtin: false   created_by_aid: archon-alice
 
 rbac_role_permissions:
-  (db-operator, "incarnation.* on service=redis-cluster,vault-cluster")
+  (db-operator, "incarnation.* on service=redis,vault-cluster")
   (db-operator, "soul.list")
 
 rbac_role_operators:
@@ -44,7 +44,7 @@ rbac_role_operators:
   (db-operator, archon-db-02)   granted_by_aid: archon-alice
 ```
 
-`db-operator` может делать любые операции над incarnation-ами сервисов `redis-cluster` и `vault-cluster` и видеть список Souls; всё остальное запрещено. Создаётся через OpenAPI/MCP: `role.create` (роль + permissions) + `role.grant-operator` (membership) — [§ Каталог permissions](#каталог-permissions).
+`db-operator` может делать любые операции над incarnation-ами сервисов `redis` и `vault-cluster` и видеть список Souls; всё остальное запрещено. Создаётся через OpenAPI/MCP: `role.create` (роль + permissions) + `role.grant-operator` (membership) — [§ Каталог permissions](#каталог-permissions).
 
 ## Формат permissions
 
@@ -119,7 +119,7 @@ value      := [a-zA-Z0-9_.-]+
 - **`default_policy: deny`.** Любое действие, не покрытое явной allow-permission, отвергается. Это встроенный инвариант enforcer-а ([ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres) — после hard-cut `rbac:` нет конфиг-поля `default_policy`); `allow`-режим как опция за пределами dev/test не предусмотрен.
 - **Union селекторов одной permission.** Если две роли одного оператора дают `incarnation.create on service=foo` и `incarnation.create on service=bar` — эффективный селектор = `service=foo,bar`.
 
-Алгоритм проверки запроса на permission `incarnation.create` с контекстом `{service: redis-cluster, incarnation: redis-prod, …}`:
+Алгоритм проверки запроса на permission `incarnation.create` с контекстом `{service: redis, incarnation: redis-prod, …}`:
 
 1. Найти все роли Архонта по membership (`rbac_role_operators` где `aid = <запрашивающий AID>`).
 2. Развернуть в плоский список permissions (`rbac_role_permissions` по найденным ролям).
@@ -593,14 +593,14 @@ role: cloud-admin
 ```
 role: db-operator
   permissions:
-    - "incarnation.* on service=redis-cluster,vault-cluster"
-    - "incarnation.upgrade on service=redis-cluster,vault-cluster"
+    - "incarnation.* on service=redis,vault-cluster"
+    - "incarnation.upgrade on service=redis,vault-cluster"
     - "push.apply on coven=db,cache"
     - "soul.list"
   operators: ["archon-db-01", "archon-db-02"]
 ```
 
-`db-operator` может: делать любые операции над incarnation-ами сервисов `redis-cluster` и `vault-cluster` (включая `upgrade`); делать push-apply на хосты с coven `db` или `cache`; видеть список Souls. Прочее — запрещено (`default_policy: deny`).
+`db-operator` может: делать любые операции над incarnation-ами сервисов `redis` и `vault-cluster` (включая `upgrade`); делать push-apply на хосты с coven `db` или `cache`; видеть список Souls. Прочее — запрещено (`default_policy: deny`).
 
 **Точечная роль — по конкретному instance:**
 

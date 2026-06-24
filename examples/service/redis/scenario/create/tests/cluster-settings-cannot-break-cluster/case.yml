@@ -1,0 +1,138 @@
+# L0-испытание create в режиме cluster — GUARD на ПОРЯДОК merge (пробел покрытия
+# qa 2026-06-22). НАМЕРЕНИЕ: cluster-директивы (особенно cluster-enabled) ОБЯЗАНЫ
+# побеждать operator-овский redis_settings — оператор НЕ может случайно/намеренно
+# сломать cluster-режим через passthrough redis_settings.
+#
+# Механизм: в merge() ветки cluster.yml порядок слоёв (СЛЕВА НАПРАВО, SHALLOW
+# last-wins):
+#   1. essence.redis_config
+#   2. persistence_presets[persistence]
+#   3. computed maxmemory/policy
+#   4. input.redis_settings          ← operator passthrough
+#   5. { cluster-enabled, cluster-config-file, cluster-node-timeout }  ← ПОСЛЕДНИМ
+# cluster-блок (слой 5) идёт ПОСЛЕ redis_settings (слой 4) → last-wins: даже если
+# оператор подал cluster-enabled: "no" в redis_settings, итоговый merged несёт
+# cluster-enabled: "yes". Этот кейс подаёт ВРАЖДЕБНЫЙ redis_settings (cluster-enabled
+# no / cluster-node-timeout 99 / cluster-config-file evil.conf) и ассертит, что в
+# итоге все три cluster-директивы — КАНОНИЧЕСКИЕ, а не operator-овские.
+#
+# Заодно: безвредный passthrough оператора (tcp-backlog) долетает (не cluster-ключ
+# → не перезатёрт), доказывая что guard режет ТОЛЬКО cluster-директивы, а не весь
+# redis_settings.
+#
+# Топология: shards=3, replicas_per_shard=0 → 3 хоста (size-guard PASS).
+name: cluster directives beat operator redis_settings (cannot break cluster)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-b.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-c.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+    - sid: node-a.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+  essence:
+    redis_type: cluster
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+  input:
+    redis_type: cluster
+    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
+    # distro-native пин (мажор < 8 → version-gate модулей не активен).
+    version: "7.2.4"
+    shards: 3
+    replicas_per_shard: 0
+    cluster_node_timeout: 7000
+    # ВРАЖДЕБНЫЙ passthrough: оператор пытается сломать cluster-режим. cluster-блок
+    # merge() идёт ПОСЛЕ → last-wins канонические значения. tcp-backlog (не
+    # cluster-ключ) долетает нетронутым.
+    redis_settings:
+      cluster-enabled: "no"
+      cluster-config-file: "evil.conf"
+      cluster-node-timeout: "99"
+      tcp-backlog: 511
+
+assert:
+  rendered_tasks:
+    # index 0 — mode-guard (cluster → no-op). shards-guard УБРАН (required_when в
+    # main.yml ловит пропуск shards на input-валидации); size-guard PASS — assert:
+    # (ADR-009 amendment) НЕ задача. Обе задачи позиций не занимают → cluster-ветка
+    # сдвинута на −2 от исходного плана (redis.conf→10).
+
+    # redis.conf: cluster-блок ПОБЕДИЛ враждебный redis_settings (last-wins).
+    - index: 16
+      module: core.file.rendered
+      params:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            password: s3cr3t-redis-pass-create
+            loadmodules: []
+            config:
+              maxmemory:        "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients:       10000
+              timeout:          300
+              save:             "900 1 300 10 60 10000"
+              appendonly:       "no"
+              # КАНОНИЧЕСКИЕ cluster-директивы — НЕ operator-овские "no"/"evil.conf"/"99".
+              # cluster-node-timeout = 7000 из input.cluster_node_timeout (не 99 из settings).
+              cluster-enabled:      "yes"
+              cluster-config-file:  "nodes.conf"
+              cluster-node-timeout: "7000"
+              # Безвредный passthrough (не cluster-ключ) долетел.
+              tcp-backlog: 511
+          self:
+            sid: node-a.example.com
+            covens: [create, redis]
+            choirs: []
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+  state_changes:
+    redis_type: cluster
+    redis_version: "7.2.4"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+      cluster-enabled:      "yes"
+      cluster-config-file:  "nodes.conf"
+      cluster-node-timeout: "7000"
+      tcp-backlog: 511
+    redis_users: {}
+    redis_hosts: []

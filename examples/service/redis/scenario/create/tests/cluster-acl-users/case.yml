@@ -1,0 +1,171 @@
+# L0-испытание create в режиме cluster С ACL-ЮЗЕРАМИ (пробел покрытия qa
+# 2026-06-22). Доказываем, что в cluster-режиме:
+#   1. users.acl рендерится из MAP имя→{perms,state,password} (index 9) — тот же
+#      детерминированный map-рендер, что и standalone (range по map → сортировка
+#      ключей); cluster не ломает ACL-проход.
+#   2. cluster-директивы в redis.conf (index 10) СОСУЩЕСТВУЮТ с ACL-юзерами —
+#      это разные файлы (users.acl и redis.conf), оба рендерятся в одном прогоне.
+#   3. per-user пароль резолвится keeper-side vault() по конвенции
+#      secret/redis/<inc>/users/<name>#password; в users.acl он пишется ХЕШЕМ
+#      (sha256 в .tmpl), plaintext-пароль НЕ течёт в config redis.conf и НЕ
+#      попадает в чужой ключ. Два юзера (zeta/alpha) с РАЗНЫМИ паролями: ассерт
+#      ловит и резолв, и отсутствие cross-leak.
+#
+# Топология: shards=3, replicas_per_shard=0 → 3 хоста (size-guard PASS).
+# render_context.self = первый по SID хост (node-a, host-инвариант apply.input).
+name: cluster create renders per-user acl alongside cluster directives
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-b.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-c.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+    - sid: node-a.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    # Per-user секреты — РАЗНЫЕ значения: cross-leak (пароль одного юзера в строке
+    # другого) детектируется ассертом на отдельные значения.
+    secret/redis/create/users/zeta:
+      password: zeta-user-secret-pass
+    secret/redis/create/users/alpha:
+      password: alpha-user-secret-pass
+  essence:
+    redis_type: cluster
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+  input:
+    redis_type: cluster
+    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
+    # distro-native пин (мажор < 8 → version-gate модулей не активен).
+    version: "7.2.4"
+    shards: 3
+    replicas_per_shard: 0
+    cluster_node_timeout: 5000
+    users:
+      zeta:
+        perms: "~* +@all"
+        state: "on"
+      alpha:
+        perms: "~app:* +@read +@write"
+        state: "on"
+
+assert:
+  rendered_tasks:
+    # index 0 — mode-guard (cluster реализован → no-op). shards-guard УБРАН
+    # (required_when в main.yml ловит пропуск shards на input-валидации); size-guard
+    # PASS — assert: (НЕ задача, в план не эмитится). Обе задачи позиций не занимают
+    # → cluster-ветка сдвинута на −2 от исходного плана (users.acl→9, redis.conf→10).
+
+    # users.acl: MAP имя→{perms,state,password} с per-user vault-паролями.
+    # zeta/alpha — каждый со СВОИМ резолвнутым паролем (нет cross-leak).
+    - index: 15
+      module: core.file.rendered
+      params:
+        path: /etc/redis/users.acl
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            users:
+              zeta:
+                perms: "~* +@all"
+                state: "on"
+                password: zeta-user-secret-pass
+              alpha:
+                perms: "~app:* +@read +@write"
+                state: "on"
+                password: alpha-user-secret-pass
+          self:
+            sid: node-a.example.com
+            covens: [create, redis]
+            choirs: []
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # redis.conf: cluster-директивы СОСУЩЕСТВУЮТ с ACL (разные файлы). В config
+    # НЕ должно быть per-user пароля (он только в users.acl, хешем). index 10 (−2).
+    - index: 16
+      module: core.file.rendered
+      params:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            password: s3cr3t-redis-pass-create
+            loadmodules: []
+            config:
+              maxmemory:        "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients:       10000
+              timeout:          300
+              save:             "900 1 300 10 60 10000"
+              appendonly:       "no"
+              cluster-enabled:      "yes"
+              cluster-config-file:  "nodes.conf"
+              cluster-node-timeout: "5000"
+          self:
+            sid: node-a.example.com
+            covens: [create, redis]
+            choirs: []
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+  state_changes:
+    redis_type: cluster
+    redis_version: "7.2.4"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+      cluster-enabled:      "yes"
+      cluster-config-file:  "nodes.conf"
+      cluster-node-timeout: "5000"
+    # ACL-юзеры в state — имя→{perms,state} (без пароля; он keeper-side vault).
+    redis_users:
+      zeta:
+        perms: "~* +@all"
+        state: "on"
+      alpha:
+        perms: "~app:* +@read +@write"
+        state: "on"
+    redis_hosts: []

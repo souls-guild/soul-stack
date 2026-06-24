@@ -1,0 +1,193 @@
+# L0-испытание (Trial, ADR-023): TLS standalone (концепция Ansible-роли redis:
+# redis_tls_*). TLS включён ИЗ ESSENCE (essence.tls_enable=true, оператор input.tls
+# не задал) — back-compat: essence остаётся дефолтом, новый input.tls — опционален.
+# Главный guard слайса — что при включённом TLS:
+#   1. PEM-файлы /etc/redis/tls/{redis.crt,redis.key,ca.crt} раскладываются
+#      core.file.present (mode 0600, owner redis), content = vault(tls.<x>_ref) →
+#      ЦЕЛЫЙ PEM в ячейке content задачи destiny (НЕ .tmpl, vault() в ячейке);
+#   2. TLS-директивы (tls-port/tls-cert-file/tls-key-file/tls-ca-cert-file/
+#      tls-replication) попали в merged config (range-ятся в redis.conf);
+#   3. tls_only → `port 0` в config (plain закрыт);
+#   4. health-gate PING несёт tls=true + addr на tls_port + tls_ca (плагин ОБЯЗАН
+#      коннектиться по TLS, т.к. plain закрыт).
+# cert/CA/порт — HOST-ИНВАРИАНТ (один на кластер) → через apply.input. PEM content
+# = vault(ref) в САМОЙ ячейке → seal помечает sealed vault-слоем (маскинг в state/
+# error_summary). Маскинг доказан отдельным кейсом tls-pem-sealed-masking.
+name: tls enabled standalone renders PEM files and TLS directives, port 0 on tls_only
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network:
+      primary_ip: 10.0.0.5
+    os:
+      arch: amd64
+  # Мок Vault: requirepass + TLS PEM-материал (cert/key/ca под secret/services/redis/tls).
+  # scenario резолвит их из essence.tls_*_ref (доверенный путь автора).
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    secret/services/redis/tls:
+      cert: "-----BEGIN CERTIFICATE-----\nSERVERCERT\n-----END CERTIFICATE-----"
+      key:  "-----BEGIN PRIVATE KEY-----\nSERVERKEY\n-----END PRIVATE KEY-----"
+      ca:   "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+  essence:
+    redis_type: standalone
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    # TLS ВКЛЮЧЁН + only-TLS: plain закрыт, плагин обязан по TLS.
+    tls_enable: true
+    tls_only:   true
+    tls_port:   7379
+    tls_cert_ref: "secret/services/redis/tls#cert"
+    tls_key_ref:  "secret/services/redis/tls#key"
+    tls_ca_ref:   "secret/services/redis/tls#ca"
+
+  input:
+    redis_type: standalone
+    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
+    # distro-native пин (мажор < 8 → version-gate модулей не активен).
+    version: "7.2.4"
+    persistence: rdb
+
+assert:
+  rendered_tasks:
+    # index 3 — TLS dir (core.file.directory, when tls.enable → АКТИВЕН): /etc/redis/tls.
+    - index: 9
+      module: core.file.directory
+      params:
+        path: /etc/redis/tls
+        owner: redis
+        group: redis
+        mode: "0750"
+
+    # index 4 — TLS server cert: core.file.present, content = vault(tls.cert_ref) →
+    # ЦЕЛЫЙ PEM в ячейке content (НЕ .tmpl/render_context: PEM через vault() в ячейке,
+    # seal-маскинг vault-слоем).
+    - index: 10
+      module: core.file.present
+      params:
+        path: /etc/redis/tls/redis.crt
+        content: "-----BEGIN CERTIFICATE-----\nSERVERCERT\n-----END CERTIFICATE-----"
+        mode: "0600"
+        owner: redis
+        group: redis
+
+    # index 5 — TLS private key: core.file.present, content = vault(tls.key_ref) →
+    # секрет-PEM в ячейке (sealed vault-слоем).
+    - index: 11
+      module: core.file.present
+      params:
+        path: /etc/redis/tls/redis.key
+        content: "-----BEGIN PRIVATE KEY-----\nSERVERKEY\n-----END PRIVATE KEY-----"
+        mode: "0600"
+        owner: redis
+        group: redis
+
+    # index 6 — TLS CA cert: core.file.present, content = vault(tls.ca_ref).
+    - index: 12
+      module: core.file.present
+      params:
+        path: /etc/redis/tls/ca.crt
+        content: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+        mode: "0600"
+        owner: redis
+        group: redis
+
+    # index 8 — redis.conf: merged config несёт TLS-директивы + port 0 (tls_only).
+    - index: 14
+      module: core.file.rendered
+      params:
+        path: /etc/redis/redis.conf
+        render_context:
+          vars:
+            password: s3cr3t-redis-pass-create
+            loadmodules: []
+            config:
+              # port 0 — plain закрыт (tls_only). КРИТИЧНО: гарантия only-TLS.
+              port: "0"
+              tls-port: "7379"
+              tls-cert-file: /etc/redis/tls/redis.crt
+              tls-key-file: /etc/redis/tls/redis.key
+              tls-ca-cert-file: /etc/redis/tls/ca.crt
+              tls-replication: "yes"
+              # обычные директивы тоже на месте (TLS не вытеснил их).
+              maxmemory: "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients: 10000
+              timeout: 300
+              save: "900 1 300 10 60 10000"
+              appendonly: "no"
+          self:
+            sid: trial-host
+            covens: [create]
+            choirs: []
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # index 21 — PING health-gate: при tls_only плагин по TLS (tls=true, addr на
+    # tls_port, tls_ca = CA-PEM из vault). Доказывает «плагин ОБЯЗАН по TLS».
+    # Сдвиг −1 (extras-sysctl сжаты 2→1 задачи core.sysctl.applied).
+    - index: 28
+
+      module: community.redis.command
+      params:
+        addr: "127.0.0.1:7379"
+        password: s3cr3t-redis-pass-create
+        tls: true
+        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+        args: ["PING"]
+
+  # DRIFT-GUARD: redis_config в state ОБЯЗАН быть бит-в-бит равен apply.input.config
+  # (index 8), включая TLS-директивы + port 0 (host-инвариант → пишутся в state).
+  state_changes:
+    redis_type: standalone
+    redis_version: "7.2.4"
+    redis_config:
+      port: "0"
+      tls-port: "7379"
+      tls-cert-file: /etc/redis/tls/redis.crt
+      tls-key-file: /etc/redis/tls/redis.key
+      tls-ca-cert-file: /etc/redis/tls/ca.crt
+      tls-replication: "yes"
+      maxmemory: "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients: 10000
+      timeout: 300
+      save: "900 1 300 10 60 10000"
+      appendonly: "no"
+    redis_users: {}
+    redis_hosts: []
+    redis_sentinel: {}
+    # ── namedfields (read-model, v3): из тех же compute.tls_*, что TLS-блок redis_config.
+    # tls включён+only из essence → enable/only true, port 7379, refs из essence.
+    tls:
+      enable:   true
+      only:     true
+      port:     7379
+      cert_ref: "secret/services/redis/tls#cert"
+      key_ref:  "secret/services/redis/tls#key"
+      ca_ref:   "secret/services/redis/tls#ca"
+    install:
+      method: package
+    persistence: rdb
+    memory_mb: 0
+    maxmemory_policy: ""
+    modules: []
+    sysctl_settings: {}
+    shards: 0
+    replicas: 0
+    sentinel_quorum: 0

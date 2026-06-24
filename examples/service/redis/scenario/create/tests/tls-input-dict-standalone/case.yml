@@ -1,0 +1,140 @@
+# L0-испытание (Trial, ADR-023): TLS через ОПЕРАТОРСКИЙ dict-input input.tls (#1).
+# В отличие от tls-enabled-standalone (TLS из essence), здесь essence TLS НЕ включает,
+# а оператор задаёт input.tls целиком: enable=true, only=true, СВОЙ port (7400, бьёт
+# essence/дефолт 7379) и СВОИ cert_ref/key_ref/ca_ref (Vault-пути под operator-конвенцией
+# secret/ops/redis/tls). Guard: input.tls бьёт essence (оператор контролирует TLS), а
+# refs из input.tls идут в vault(ref) → PEM в content (seal-маскинг). Доказывает, что
+# TLS теперь управляется оператором, а не только essence-подложкой.
+name: tls via operator input dict overrides essence and uses operator vault refs
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network:
+      primary_ip: 10.0.0.5
+    os:
+      arch: amd64
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    # PEM по ОПЕРАТОРСКИМ ref-ам (input.tls.*_ref), НЕ essence.tls_*_ref.
+    secret/ops/redis/tls:
+      cert: "-----BEGIN CERTIFICATE-----\nOPCERT\n-----END CERTIFICATE-----"
+      key:  "-----BEGIN PRIVATE KEY-----\nOPKEY\n-----END PRIVATE KEY-----"
+      ca:   "-----BEGIN CERTIFICATE-----\nOPCA\n-----END CERTIFICATE-----"
+  essence:
+    redis_type: standalone
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    # essence TLS НЕ включает (tls_enable отсутствует) → дефолт off. Оператор включает
+    # через input.tls. essence.tls_*_ref тоже не задаём — refs приходят из input.tls.
+
+  input:
+    redis_type: standalone
+    version: "7.2.4"
+    persistence: rdb
+    # Оператор включает TLS целиком: only-TLS, свой порт, свои Vault-пути.
+    tls:
+      enable: true
+      only: true
+      port: 7400
+      cert_ref: "secret/ops/redis/tls#cert"
+      key_ref:  "secret/ops/redis/tls#key"
+      ca_ref:   "secret/ops/redis/tls#ca"
+
+assert:
+  rendered_tasks:
+    # index 4 — TLS server cert: content = vault(input.tls.cert_ref) → operator-PEM.
+    - index: 10
+      module: core.file.present
+      params:
+        path: /etc/redis/tls/redis.crt
+        content: "-----BEGIN CERTIFICATE-----\nOPCERT\n-----END CERTIFICATE-----"
+        mode: "0600"
+        owner: redis
+        group: redis
+
+    # index 5 — TLS private key: content = vault(input.tls.key_ref) → operator-PEM.
+    - index: 11
+      module: core.file.present
+      params:
+        path: /etc/redis/tls/redis.key
+        content: "-----BEGIN PRIVATE KEY-----\nOPKEY\n-----END PRIVATE KEY-----"
+        mode: "0600"
+        owner: redis
+        group: redis
+
+    # index 8 — redis.conf: TLS-директивы на ОПЕРАТОРСКОМ порту 7400 (бьёт essence/7379)
+    # + port 0 (only). КРИТИЧНО: tls-port 7400 доказывает, что input.tls.port победил.
+    - index: 14
+      module: core.file.rendered
+      params:
+        path: /etc/redis/redis.conf
+        render_context:
+          vars:
+            password: s3cr3t-redis-pass-create
+            loadmodules: []
+            config:
+              port: "0"
+              tls-port: "7400"
+              tls-cert-file: /etc/redis/tls/redis.crt
+              tls-key-file: /etc/redis/tls/redis.key
+              tls-ca-cert-file: /etc/redis/tls/ca.crt
+              tls-replication: "yes"
+              maxmemory: "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients: 10000
+              timeout: 300
+              save: "900 1 300 10 60 10000"
+              appendonly: "no"
+          self:
+            sid: trial-host
+            covens: [create]
+            choirs: []
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # index 21 — PING: tls=true, addr на operator-порту 7400, tls_ca = operator-CA-PEM.
+    # Сдвиг −1 (extras-sysctl сжаты 2→1 задачи core.sysctl.applied).
+    - index: 28
+
+      module: community.redis.command
+      params:
+        addr: "127.0.0.1:7400"
+        password: s3cr3t-redis-pass-create
+        tls: true
+        tls_ca: "-----BEGIN CERTIFICATE-----\nOPCA\n-----END CERTIFICATE-----"
+        args: ["PING"]
+
+  state_changes:
+    redis_type: standalone
+    redis_version: "7.2.4"
+    redis_config:
+      port: "0"
+      tls-port: "7400"
+      tls-cert-file: /etc/redis/tls/redis.crt
+      tls-key-file: /etc/redis/tls/redis.key
+      tls-ca-cert-file: /etc/redis/tls/ca.crt
+      tls-replication: "yes"
+      maxmemory: "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients: 10000
+      timeout: 300
+      save: "900 1 300 10 60 10000"
+      appendonly: "no"
+    redis_users: {}
+    redis_hosts: []
+    redis_sentinel: {}

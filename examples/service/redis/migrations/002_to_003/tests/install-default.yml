@@ -1,0 +1,41 @@
+name: install-default
+description: >
+  DEFAULT-поля (в v2-state нет, essence в migration-CEL недоступен): install →
+  {method: package}, modules → [], sysctl_settings → {}, memory_mb → 0 (необратим).
+  Минимальный v2-state (только required redis_type+redis_config) — проверяем, что
+  отсутствие redis_users/redis_hosts/redis_sentinel не ломает миграцию.
+
+state_before:
+  redis_type: standalone
+  redis_version: "7.2.4"
+  redis_config:
+    maxmemory: "256mb"
+    maxmemory-policy: allkeys-lru
+    save: "900 1 300 10 60 10000"
+    appendonly: "no"
+
+state_after:
+  redis_type: standalone
+  redis_version: "7.2.4"
+  redis_config:
+    maxmemory: "256mb"
+    maxmemory-policy: allkeys-lru
+    save: "900 1 300 10 60 10000"
+    appendonly: "no"
+  tls:
+    enable: false
+    only: false
+    port: 7379
+    cert_ref: ""
+    key_ref: ""
+    ca_ref: ""
+  install:
+    method: package
+  persistence: rdb
+  maxmemory_policy: allkeys-lru
+  memory_mb: 0
+  modules: []
+  sysctl_settings: {}
+  shards: 0
+  replicas: 0
+  sentinel_quorum: 0

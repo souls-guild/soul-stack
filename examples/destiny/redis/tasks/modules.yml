@@ -1,0 +1,72 @@
+# tasks/modules.yml — Redis-модули (концепция Ansible-роли redis: загрузка .so
+# RediSearch/RedisJSON/RedisTimeSeries/RedisBloom на Redis < 8). Gated на НЕпустой
+# input.modules. HOST-ИНВАРИАНТ (один набор модулей на кластер) → modules/modules_*/
+# loadmodules приходят через apply.input.
+#
+# VERSION-GATE (упрощение, см. brief): на Redis 8+ модули ВСТРОЕНЫ в сервер — .so
+# не качаем и loadmodule НЕ пишем. Гейт делает scenario сервиса по input.version
+# (мажор < 8 → передаёт modules/loadmodules; 8+ → пустые списки). Полную
+# version-matrix НЕ тащим: gate по мажору версии + fail-closed на самом Redis (если
+# .so несовместим — сервер не стартует и рестарт-задача упадёт явно), без probe-
+# matrix совместимости каждого модуля с каждой минорной версией.
+
+# Каталог .so-модулей. core.file.rendered/url.fetched создают только файл, не
+# родительский каталог. Создаём явно декларативным core.file.directory.
+# owner redis: .so читает сервис. parents:true — modules_dir переопределяем
+# оператором (может быть глубоким путём с несуществующим родителем); сохраняем
+# неявный mkdir -p прежнего install -d (core.file.directory по умолчанию
+# parents:false и упал бы на отсутствующем промежуточном каталоге).
+#
+# ★ ИНДЕКС: эта задача gated на size(input.modules)>0 → вне modules-режима она
+# placeholder-skip (ОДНА задача в плане, не ноль). Это даёт ЕДИНЫЙ фиксированный
+# сдвиг +1 терминальных индексов (PING/cluster-build/sentinel-state) во всех
+# кейсах. fetch-задача ниже под loop: при пустом modules даёт 0 задач, поэтому она
+# индексы НЕ сдвигает.
+- name: Ensure the redis modules directory exists
+  module: core.file.directory
+  when: "size(default(input.modules, [])) > 0"
+  params:
+    path: "${ default(input.modules_dir, '/var/lib/redis/modules') }"
+    parents: true
+    owner: redis
+    group: redis
+    mode: "0750"
+
+# Скачивание .so каждого модуля. loop: по алиасам input.modules (пусто → 0 задач,
+# индексы не сдвигаются). Имя .so-файла — фиксированная таблица имён Redis-модулей
+# (map-литерал ниже), индексируется алиасом. URL АРХ-СПЕЦИФИЧЕН и строится PER-HOST
+# из soulprint.self.os.arch (soulprint доступен в destiny-CEL — прецедент arch-
+# резолва node-exporter): modules_base_url/<arch>/<имя.so>. mode 0750 owner redis:
+# .so читает только сервис. register не нужен — loadmodule-директива в redis.conf
+# уже триггерит рестарт через redis_conf-register; повторная загрузка идемпотентна.
+#
+# checksum — ОПЦИОНАЛЬНЫЙ (директива пользователя 2026-06-24: получать sha256 каждого
+# .so под пару (version, arch) — дорого; если он нужен лишь чтобы повторно не качать,
+# core.url.fetched и без него идемпотентен по СОДЕРЖИМОМУ). Две ветки одной CEL-ячейки:
+#   - modules_sha256[item] ЗАДАН → "sha256:<hex>": fail-closed integrity-verify по
+#     временному файлу ДО публикации (mismatch → задача падает, целевой путь нетронут,
+#     supply-chain);
+#   - НЕ задан → пустая строка: core.url.fetched трактует пустой checksum как
+#     отсутствие (OptStringParam) и качает по content-идемпотентности (скачивает во
+#     temp → сравнивает SHA-256 с существующим → запись только при diff). Без
+#     integrity-verify — доверяем HTTPS + доверенному store источника.
+# Guard через has(input.modules_sha256) (field-selection) + `item in …` (membership):
+# has() в CEL принимает только селектор поля, НЕ index-выражение has(m[k]); наличие
+# ключа в map проверяется оператором `in`. Сам input.modules_sha256 может
+# отсутствовать целиком — has() ловит это до индексации (иначе CEL «no such key»).
+- name: Fetch redis module shared object
+  module: core.url.fetched
+  loop:
+    items: "${ default(input.modules, []) }"
+    as: item
+  params:
+    url:      "${ input.modules_base_url + '/' + soulprint.self.os.arch + '/' + {'search': 'redisearch.so', 'json': 'rejson.so', 'timeseries': 'redistimeseries.so', 'bloom': 'redisbloom.so'}[item] }"
+    path:     "${ default(input.modules_dir, '/var/lib/redis/modules') + '/' + {'search': 'redisearch.so', 'json': 'rejson.so', 'timeseries': 'redistimeseries.so', 'bloom': 'redisbloom.so'}[item] }"
+    # Гейт по НАЛИЧИЮ ключа (item in map), НЕ по непустоте значения: ключ задан с
+    # ПУСТЫМ значением даёт битый checksum "sha256:" (префикс без hex) → core.url
+    # отвергает его на валидации формата (fail-closed), а НЕ трактует как absent.
+    # Пустой checksum (content-идемпотентность без verify) = ключ ОТСУТСТВУЕТ вовсе.
+    checksum: "${ (has(input.modules_sha256) && item in input.modules_sha256) ? 'sha256:' + input.modules_sha256[item] : '' }"
+    mode:     "0750"
+    owner:    redis
+    group:    redis

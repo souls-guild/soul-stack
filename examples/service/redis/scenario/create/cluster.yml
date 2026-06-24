@@ -1,0 +1,159 @@
+# Ветка диспетчера create — режим cluster (honest hash-slot Redis Cluster, 16384
+# слота; перенос инварианта из прежнего redis-cluster-live). Подключается из
+# main.yml через include: и раскрывается в плоский список ДО render. Каждая задача
+# несёт `when: input.redis_type == 'cluster'` — статический предикат (только
+# input.*), Keeper гасит его placeholder-skip-ом на standalone-прогоне (isStaticWhen)
+# и рендерит на cluster-прогоне. См. standalone.yml — тот же механизм диспетчера.
+#
+# Раскладку ролей master/replica и слотов делает ПЛАГИН (community.redis.cluster
+# action create) детерминированно по сортировке ключей nodes. Scenario лишь строит
+# топологию-MAP (SID→addr) и зовёт плагин run_once на bootstrap-ноде; саму
+# трансляцию (деление 16384 на shards) НЕ повторяет — иначе две раскладки
+# (scenario + плагин) рассинхронятся.
+
+# 1. SIZE-GUARD — fail-fast ДО любого install (assert:, ADR-009 amendment 2026-06-23).
+#    Топология обязана точно совпасть: число таргетированных хостов roster-а ==
+#    shards*(1+replicas_per_shard). Соответствие проверяется KEEPER-SIDE на РЕНДЕРЕ —
+#    там доступен soulprint.hosts (roster прогона; на Soul-е во flow_context его НЕТ,
+#    поэтому Soul-side failed_when тут неприменим). assert.that[] — предикат «совпало»;
+#    false ОБРЫВАЕТ render (НИ одной задачи на Soul, прогон не стартует) с message.
+#    Это «fail на этапе модели» — раньше и понятнее, чем shell-guard на хосте.
+#    assert НЕ emit RenderedTask — задачи cluster-ветки после него сдвигаются на его
+#    позицию (−1 индекс относительно прежнего плана).
+#
+#    ОБЯЗАТЕЛЬНОСТЬ shards — декларативно через required_when в main.yml (ADR-009
+#    amendment 2026-06-23): `shards: required_when: "input.redis_type == 'cluster'"`.
+#    Прежний shards-guard (core.cmd.shell с has(input.shards) || exit 1) УБРАН:
+#    отсутствие shards в режиме cluster ловит input-валидация Keeper-а ДО render —
+#    оператор получает понятный отказ раньше и без произвольного shell на хосте.
+#    Поэтому int(input.shards) здесь читается голым (shards гарантированно присутствует
+#    в cluster-прогоне, дошедшем до render); has()-тернар больше не нужен.
+#    replicas_per_shard имеет default:0 → int() безопасен без обёртки.
+- name: Guard cluster topology size matches shards and replicas
+  when: "input.redis_type == 'cluster'"
+  assert:
+    that:
+      - "size(soulprint.hosts) == int(input.shards) * (1 + int(input.replicas_per_shard))"
+    message: "topology mismatch: hosts != shards*(1+replicas_per_shard)"
+
+# 2. Per-host install + render redis.conf (с cluster-директивами) + render
+#    users.acl + systemd. Та же destiny `redis` (режим-агностична), что и
+#    standalone, но merged config ДОПОЛНЕН cluster-директивами поверх базового
+#    merge. Они — обычные ключи config-map-а (destiny range-ит их в redis.conf):
+#      - cluster-enabled yes        — включить cluster-режим инстанса;
+#      - cluster-config-file        — где Redis ведёт топологию (nodes.conf);
+#      - cluster-node-timeout       — таймаут gossip (мс), input или дефолт 5000.
+#    Все три HOST-ИНВАРИАНТНЫ → их корректно гнать через apply.input.config (он
+#    резолвится ОДИН раз на первом по SID хосте, resolveApplyInput targeted[0]).
+#
+#    cluster-announce-ip ЗДЕСЬ НЕТ намеренно: это per-host директива (IP ЭТОЙ
+#    ноды), её рендерит destiny `redis` в redis.conf.tmpl из
+#    `{{ .self.network.primary_ip }}` (render_context.self ПЕР-ХОСТ, симметрично
+#    bind), под гейтом cluster-enabled. Проброс announce-ip через config-map
+#    зафиксировал бы IP первой ноды для ВСЕХ → все анонсируют один адрес →
+#    cluster-bus за NAT/в облаке сломан (TILING-урок qa 2026-06-22).
+#    int() на uint64-операндах cluster_node_timeout — унификация числового типа
+#    (YAML→uint64 в L0, JSON→double в проде), иначе CEL «no such overload».
+- name: Apply redis destiny (cluster install + render redis.conf/users.acl + systemd)
+  when: "input.redis_type == 'cluster'"
+  apply:
+    destiny: redis
+    input:
+      # version: distro-пин (method=package). При method=binary absent → has()-guard ''.
+      version:  "${ has(input.version) ? input.version : '' }"
+      # install: способ установки (package default / binary), as-is в destiny-диспетч.
+      install:  "${ default(input.install, {}) }"
+      password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+      # Единый compute.redis_config (объявлен ОДИН раз в main.yml compute:, ADR-009):
+      # тот же map, что уйдёт в state_changes.redis_config — drift «state ≡ live
+      # config» снят самим compute. Для cluster compute.redis_config = базовый merge
+      # + cluster-директивы (cluster-enabled/config-file/node-timeout) + tls-cluster
+      # yes при TLS (ветвление по input.redis_type внутри compute). HOST-ИНВАРИАНТ →
+      # apply.input на targeted[0] корректен.
+      config: "${ compute.redis_config }"
+      users: >-
+        ${ has(input.users)
+           ? merge(input.users.map(name, {
+               name: {
+                 'perms':    input.users[name].perms,
+                 'state':    input.users[name].state,
+                 'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+               }
+             }))
+           : {} }
+      # Redis-модули (Redis < 8), version-gate — см. standalone.yml (тот же гейт по
+      # compute.redis_version, host-инвариантные base_url/sha256 → apply.input, арх-URL
+      # строит destiny per-host). На Redis 8+ → пустой список.
+      modules: >-
+        ${ (has(input.modules) && !compute.redis_version.matches('^([0-9]+:)?(8|9|[1-9][0-9])\\.'))
+           ? input.modules
+           : [] }
+      modules_base_url: "${ default(input.modules_base_url, '') }"
+      modules_sha256:   "${ default(input.modules_sha256, {}) }"
+      # Host-tuning extras (концепция роли), режим-агностичны — как в standalone-ветке.
+      # THP/logrotate/sysctl БЕЗУСЛОВНЫ (рекомендация Redis / hardening) — операторских
+      # флагов нет, задачи destiny `redis` всегда активны. sysctl_settings — essence,
+      # host-инвариантна → apply.input.
+      sysctl_settings:  "${ default(essence.sysctl_settings, {}) }"
+      # TLS — единый dict (enable/only/port + cert_ref/key_ref/ca_ref) — см. standalone.
+      # HOST-ИНВАРИАНТ → apply.input. enable/only/port — compute-vars (input.tls.* бьёт
+      # essence). cert_ref/key_ref/ca_ref — Vault-ПУТИ (destiny читает PEM через vault()
+      # в ячейке content, seal-маскинг). refs из input.tls.* с дефолтом essence.tls_*_ref.
+      tls:
+        enable:   "${ compute.tls_on }"
+        only:     "${ compute.tls_only_on }"
+        port:     "${ compute.tls_port }"
+        cert_ref: "${ compute.tls_cert_ref }"
+        key_ref:  "${ compute.tls_key_ref }"
+        ca_ref:   "${ compute.tls_ca_ref }"
+
+# 3. Health-gate per-host: PING живого Redis после старта (каждая нода обязана
+#    ответить ДО сборки кластера). community.redis.command, retry/until через retry.
+#    addr — localhost (плагин на redis-хосте), пароль — keeper-side vault()-резолв.
+#    ★ ИБ (anti-downgrade): tls/tls_ca/порт гейтятся на compute.tls_on (TLS ВКЛЮЧЁН),
+#    НЕ tls_only (TLS включён → плагин ОБЯЗАН по TLS; при tls_only_on=false plain ещё
+#    открыт, но AUTH-пароль по plaintext недопустим). addr на compute.tls_port + tls_ca
+#    (CA-PEM, vault(ref) в scenario-проходе, seal vault-слоем).
+- name: Wait for each cluster node to answer PING
+  when: "input.redis_type == 'cluster'"
+  module: community.redis.command
+  retry: { count: 10, delay: 3s }
+  params:
+    addr:     "${ compute.tls_on ? '127.0.0.1:' + string(compute.tls_port) : '127.0.0.1:6379' }"
+    password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    tls:      "${ compute.tls_on }"
+    tls_ca:   "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
+    args:     ["PING"]
+
+# 4. CLUSTER-BUILD — run_once на bootstrap-ноде. Строим nodes-MAP детерминированно
+#    из roster-а прогона (soulprint.hosts): ключ = SID (стабилен и сортируем →
+#    плагин раскладывает master/replica по сортировке ключей детерминированно),
+#    значение = {addr: "<primary_ip>:6379"}. Форма merge(list(map)): .map(...) даёт
+#    СПИСОК одноключевых map-ов SID→{addr}, merge сворачивает в один map (templating
+#    §2.3). Плагин community.redis.cluster (action create) сам шлёт CLUSTER MEET/
+#    ADDSLOTS/REPLICATE по go-redis и делит 16384 слота — scenario топологию НЕ
+#    транслирует, передаёт готовую. Пароль — keeper-side vault()-резолв (плагин
+#    коннектится к каждой ноде; password маскируется, в логи не течёт).
+#    ★ ИБ (anti-downgrade): tls/tls_ca/порт nodes гейтятся на compute.tls_on (TLS
+#    ВКЛЮЧЁН), НЕ tls_only — TLS включён → плагин ОБЯЗАН коннектиться к нодам по TLS
+#    (иначе AUTH-пароль к каждой ноде ушёл бы plaintext-ом). addr-ы строятся на
+#    compute.tls_port, передаём tls=true + tls_ca (CA-PEM для verify).
+#    ★ mTLS cluster-bus: при включённом tls-cluster (взаимная аутентификация нод)
+#    плагину нужен КЛИЕНТСКИЙ cert — пробрасываем tls_cert/tls_key (vault(ref) тех же
+#    путей, что в redis.conf: input.tls.cert_ref/key_ref с дефолтом essence). Плагин
+#    строит mTLS-пару ТОЛЬКО когда заданы ОБА (tls.go: certPEM+keyPEM); без mutual-bus
+#    они не мешают handshake. cert/key host-инвариантны → apply.input корректен.
+#    tls_cert/tls_key/tls_ca — vault(ref) в scenario-проходе (seal vault-слоем).
+- name: Build the redis cluster (CLUSTER MEET/ADDSLOTS/REPLICATE)
+  when: "input.redis_type == 'cluster'"
+  run_once: true
+  module: community.redis.cluster
+  params:
+    action:             create
+    nodes:              "${ merge(soulprint.hosts.map(h, { h.sid: { 'addr': h.network.primary_ip + ':' + (compute.tls_on ? string(compute.tls_port) : '6379') } })) }"
+    replicas_per_shard: "${ int(input.replicas_per_shard) }"
+    password:           "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    tls:                "${ compute.tls_on }"
+    tls_ca:             "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
+    tls_cert:           "${ compute.tls_on ? vault(compute.tls_cert_ref) : '' }"
+    tls_key:            "${ compute.tls_on ? vault(compute.tls_key_ref) : '' }"

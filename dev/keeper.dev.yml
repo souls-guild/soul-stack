@@ -63,9 +63,9 @@ logging:
 #   - keeper_settings[default_destiny_source] = file:///tmp/keeper-dev/destiny/{name}
 #   - service hello-world → file:///tmp/keeper-dev/repos/hello-world @ main
 #   - service redis       → file:///tmp/keeper-dev/repos/redis @ main
-#     (композиция трёх destiny через apply:destiny, ADR-009; destiny-репо
-#      резолвятся по default_destiny_source: {name} = redis-single /
-#      redis-exporter / node-exporter, ref v1.0.0 из redis/service.yml).
+#     (консолидированный redis, ADR-029/redis-консолидация: один режим-агностичный
+#      destiny `redis` на все redis_type; резолвится по default_destiny_source:
+#      {name} = redis, ref v1.0.0 из redis/service.yml::destiny[]={redis}).
 # Seed требует уже применённой схемы (миграции 034/035); на свежей БД он
 # отложен до запуска после `keeper init` — повторить `make dev-provision`.
 

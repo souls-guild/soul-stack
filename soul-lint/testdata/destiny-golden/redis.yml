@@ -1,34 +1,41 @@
 name: redis
-description: Install and configure Redis server on a single host
+description: >-
+  Режим-агностичный per-host кирпич Redis (концепция Ansible-роли, B-гибрид
+  ADR-009): установка пакета + render redis.conf из merged-конфига + render
+  users.acl + systemd hardening drop-in + сервис.
 
-# Копия examples/destiny/redis/destiny.yml для regression-теста
-# soul-lint validate-destiny: должна совпадать с источником (любое
-# содержательное расхождение — баг этого файла, не источника).
+# Regression-фикстура валидного typed-destiny: выровнена по примеру
+# examples/destiny/redis (актуальная typed-форма version/config/users). НЕ
+# байт-копия источника — самостоятельный минимальный манифест, который soul-lint
+# validate-destiny принимает с 0 diagnostics. Контракт регрессии: и эта фикстура,
+# и сам пример валидны (см. validate_test.go TestGolden_DestinyExample[_FromRepo]).
+# Любое содержательное расхождение со схемой destiny — баг, который тест ловит.
 
 input:
-  action:
-    type: string
-    required: true
-    enum: [apply, ensure_user, ensure_users, update_acls, restart, failover_and_restart, ping, replication_status, diagnose]
-
   version:
     type: string
-    pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    required: false
+    # distro-native: опциональный epoch `N:` + upstream-версия + ревизия.
+    pattern: "^([0-9]+:)?[0-9][A-Za-z0-9.~+-]*$"
+    description: >-
+      Версия пакета redis-server (distro-native, напр. 5:7.0.15-1~deb12u7).
+      Опциональна: не задана → версия по умолчанию из репозитория.
 
   password:
     type: string
+    required: true
     secret: true
     min_length: 16
+    description: >-
+      Пароль Redis (requirepass). Destiny получает УЖЕ зарезолвленное keeper-side
+      значение и кладёт его в redis.conf (ADR-012); vault-клиент не тянет.
 
-  master_addr:
-    type: string
-
-  maxmemory:
-    type: string
-    pattern: "^[0-9]+(b|kb|mb|gb)$"
-
+  # Готовые директивы redis.conf (merged на стороне scenario сервиса).
   config:
     type: object
+    description: >-
+      Готовые директивы redis.conf (merged caller-ом). Каждая пара key→value
+      пишется в redis.conf как есть. Destiny НЕ мержит повторно.
     properties:
       maxclients:
         type: integer
@@ -38,28 +45,26 @@ input:
         min: 0
     additional_properties: true
 
-  user:
-    type: string
-    pattern: "^[a-z_][a-z0-9_-]{0,31}$"
-
-  acl:
-    type: string
-
-  state:
-    type: string
-    enum: [on, off]
-
+  # ACL-пользователи Redis: MAP имя→{perms, state, password}.
   users:
     type: object
-    description: ACL-пользователи Redis, ключ — имя юзера, значение — {acl, state}.
+    required: false
+    description: >-
+      ACL-пользователи Redis (map имя→{perms, state, password}). Рендерятся в
+      /etc/redis/users.acl, порядок строк детерминирован (range по map сортирует
+      ключи); password — зарезолвленный keeper-side секрет, в файл пишется его
+      sha256-хеш.
     properties: {}
     additional_properties:
       type: object
+      required: [perms, state, password]
+      additional_properties: false
       properties:
-        acl:
+        perms:
           type: string
         state:
           type: string
           enum: [on, off]
-      required: [acl, state]
-      additional_properties: false
+        password:
+          type: string
+          secret: true

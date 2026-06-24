@@ -116,6 +116,9 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 				if errors.Is(err, scenario.ErrInputInvalid) {
 					return zero, incProblem(problem.TypeValidationFailed, "input_invalid: "+err.Error())
 				}
+				if errors.Is(err, scenario.ErrValidateFailed) {
+					return zero, incProblem(problem.TypeValidationFailed, "validation_failed: "+err.Error())
+				}
 				h.logger.Error("incarnation.create: input validation failed",
 					slog.String("name", req.Name), slog.String("service", req.Service), slog.Any("error", err))
 				return zero, incProblem(problem.TypeInternalError, "validate scenario create input failed")
@@ -128,6 +131,36 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 			}
 			if art != nil && art.Manifest != nil {
 				autoCreate = art.Manifest.Lifecycle.AutoCreateEnabled()
+			}
+		}
+
+		// Pre-flight assert-гейт (ADR-009/ADR-027 amendment 2026-06-23, форма A):
+		// ПОСЛЕ ValidateInput (input материализован) и ДО incarnation.Create/Start —
+		// синхронно вычисляем assert-предикаты сценария create в scenario-CEL-
+		// контексте (roster connected-souls по covens incarnation = soulprint.hosts).
+		// Любой false → 422 assert_failed БЕЗ записи incarnation и БЕЗ fail-статуса
+		// (отказ на этапе модели, не postfactum error_locked через async render).
+		// Гейтится autoCreate: при autoCreate=false прогон create не стартует —
+		// проверять инвариант прогона незачем. pre-flight опционален (type-assertion
+		// над runner-ом): runner без PreflightAssert / сценарий без assert-задач →
+		// no-op. render-assert остаётся fail-safe для TOCTOU (roster изменился между
+		// pre-flight и стартом goroutine).
+		if autoCreate {
+			if pf, ok := h.runner.(AssertPreflighter); ok {
+				if err := pf.PreflightAssert(ctx, scenario.RunSpec{
+					IncarnationName: req.Name,
+					ServiceRef:      serviceRef,
+					ScenarioName:    scenario.CreateScenarioName,
+					Input:           input,
+					StartedByAID:    claims.Subject,
+				}); err != nil {
+					if errors.Is(err, scenario.ErrAssertFailed) {
+						return zero, incProblem(problem.TypeAssertFailed, err.Error())
+					}
+					h.logger.Error("incarnation.create: pre-flight assert failed",
+						slog.String("name", req.Name), slog.String("service", req.Service), slog.Any("error", err))
+					return zero, incProblem(problem.TypeInternalError, "pre-flight assert evaluation failed")
+				}
 			}
 		}
 	}
@@ -255,6 +288,9 @@ func (h *IncarnationHandler) RunTyped(ctx context.Context, claims *jwt.Claims, n
 		if err := scenario.ValidateInput(ctx, h.loader, serviceRef, scenarioName, input); err != nil {
 			if errors.Is(err, scenario.ErrInputInvalid) {
 				return zero, incProblem(problem.TypeValidationFailed, "input_invalid: "+err.Error())
+			}
+			if errors.Is(err, scenario.ErrValidateFailed) {
+				return zero, incProblem(problem.TypeValidationFailed, "validation_failed: "+err.Error())
 			}
 			h.logger.Error("incarnation.run: input validation failed",
 				slog.String("name", name), slog.String("scenario", scenarioName), slog.Any("error", err))
@@ -823,7 +859,9 @@ func (h *IncarnationHandler) UpdateHostsTyped(ctx context.Context, claims *jwt.C
 		})
 	}
 
-	return toIncarnationGetView(res.Incarnation), nil
+	// schema-aware маскинг spec/state в reply update-hosts (тот же детальный вид).
+	schema := h.secretSchemaForIncarnation(ctx, res.Incarnation)
+	return toIncarnationGetView(res.Incarnation, schema), nil
 }
 
 // --- Get / List / History (READ, без audit) ---------------------------
@@ -849,7 +887,12 @@ func (h *IncarnationHandler) GetTyped(ctx context.Context, name string, inScope 
 	if inScope == nil || !inScope(inc) {
 		return zero, incProblem(problem.TypeNotFound, "incarnation "+name+" not found")
 	}
-	return toIncarnationGetView(inc), nil
+	// seal/декларатив (ADR-010 §7.4): материализуем secret-схему сервиса для
+	// schema-aware маскинга spec/state. Best-effort: nil → деградация к
+	// MaskSecrets (vault+regex). single-incarnation детальный вид — загрузка
+	// снапшота приемлема (в отличие от List, см. observations).
+	schema := h.secretSchemaForIncarnation(ctx, inc)
+	return toIncarnationGetView(inc, schema), nil
 }
 
 // IncarnationListReply — typed envelope GET /v1/incarnations (handler-native: element —
@@ -933,7 +976,12 @@ func (h *IncarnationHandler) ListTyped(ctx context.Context, q IncarnationListQue
 
 	replies := make([]IncarnationGetView, 0, len(items))
 	for _, inc := range items {
-		replies = append(replies, toIncarnationGetView(inc))
+		// List — bulk-вид: schema-прокидка НЕ применяется (материализация снапшота
+		// per-элемент — недопустимая стоимость на read-hot-path). nil-схема →
+		// MaskSecrets (vault+regex), БИТ-В-БИТ. Декларатив доступен на детальном
+		// GET/History (см. observations: schema-aware List — отдельный слайс с
+		// кешированием schema per-service).
+		replies = append(replies, toIncarnationGetView(inc, nil))
 	}
 	return IncarnationListReply{Items: replies, Offset: q.Offset, Limit: q.Limit, Total: total}, nil
 }
@@ -984,9 +1032,12 @@ func (h *IncarnationHandler) HistoryTyped(ctx context.Context, name, applyID str
 			slog.String("name", name), slog.String("apply_id", filter.ApplyID), slog.Any("error", err))
 		return zero, incProblem(problem.TypeInternalError, "list history failed")
 	}
+	// secret-схему сервиса материализуем ОДИН раз на запрос (history — single
+	// incarnation), переиспользуем для всех записей. Best-effort: nil → MaskSecrets.
+	schema := h.secretSchemaForIncarnation(ctx, inc)
 	entries := make([]StateHistoryView, 0, len(items))
 	for _, e := range items {
-		entries = append(entries, toStateHistoryView(e))
+		entries = append(entries, toStateHistoryView(e, schema))
 	}
 	return IncarnationHistoryReply{Items: entries, Offset: offset, Limit: limit, Total: total}, nil
 }

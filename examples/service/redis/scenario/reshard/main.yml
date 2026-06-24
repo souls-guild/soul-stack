@@ -1,0 +1,88 @@
+name: reshard
+description: >-
+  Day-2: перенести N hash-слотов с одного master-а на другой в УЖЕ сформированном
+  Redis-кластере (режим redis_type=cluster). Аналог redis-cli `--cluster reshard`,
+  но ЦЕЛИКОМ через плагин community.redis (go-redis: CLUSTER NODES + SETSLOT
+  IMPORTING/MIGRATING + GETKEYSINSLOT + MIGRATE + SETSLOT NODE) — никакого
+  redis-cli/shell, capability плагина только network_outbound.
+
+  ★ НЕ ИДЕМПОТЕНТЕН (осознанно, как старый redis-cluster-live без unless):
+  повторный apply сдвинет ЕЩЁ `slots` слотов с from на to. Это императивная
+  exec-style day-2 операция — оператор зовёт её ЯВНО, она НЕ часть converge.
+  Прочие cluster-операции (create/add_node/remove_node) идемпотентны, reshard —
+  НЕТ. Запускать осознанно, ровно столько раз, сколько нужно переносов.
+
+  Оба master-а ОБЯЗАНЫ быть привязаны к incarnation Soul-ами и присутствовать в
+  roster прогона (soulprint.hosts) — endpoint-ы строятся из него по SID. Таргетинг —
+  по стабильному SID через where: (probe не нужен, ADR-008). Прогон зовётся на весь
+  incarnation: roster содержит и from, и to.
+
+  Граница (architect 2026-06-22): scenario оркеструет порядок/таргетинг и строит
+  ГОТОВУЮ топологию-карту (SID→addr) для плагина; плагин исполняет ОДНУ операцию
+  (reshard) — сам читает CLUSTER NODES с from, выбирает первые N слотов источника и
+  переносит их (ничего не транслирует). incarnation.state этим сценарием НЕ
+  мутируется (точная роль/раскладка слотов SID в state не пишется — follow-up,
+  симметрия с add_node/remove_node).
+
+# ── Входной контракт оператора (docs/input.md) ────────────────────────────────
+# Простые типизированные понятия day-2: с какого master-а, на какой и сколько
+# слотов перенести.
+input:
+  from_sid:
+    type: string
+    required: true
+    format: fqdn
+    description: >-
+      SID (FQDN) master-а ИСТОЧНИКА — с него снимаются слоты. Должен присутствовать
+      в roster прогона (soulprint.hosts) и быть master-ом со слотами в кластере.
+
+  to_sid:
+    type: string
+    required: true
+    format: fqdn
+    description: >-
+      SID (FQDN) master-а ПОЛУЧАТЕЛЯ слотов. Должен присутствовать в roster прогона
+      и отличаться от from_sid.
+
+  slots:
+    type: integer
+    required: true
+    min: 1
+    description: >-
+      Сколько слотов перенести с from на to (>= 1). Берутся ПЕРВЫЕ slots слотов
+      источника по возрастанию. ★ НЕ идемпотентно: повторный apply перенесёт ещё
+      slots слотов.
+
+tasks:
+  # 1. GUARD — from_sid и to_sid обязаны быть в roster и различаться (assert:,
+  #    ADR-009 amendment 2026-06-23; тот же механизм, что guard remove_node). Предикат
+  #    вычисляется KEEPER-SIDE на РЕНДЕРЕ (там доступен soulprint.hosts; на Soul-е его
+  #    НЕТ). false ОБРЫВАЕТ render с message ДО любого dispatch — раньше и понятнее,
+  #    чем shell-test на хосте. assert НЕ emit RenderedTask.
+  - name: Guard from and to are distinct masters of the run roster
+    assert:
+      that:
+        - 'input.from_sid != input.to_sid && size(soulprint.hosts.where("sid == input.from_sid")) == 1 && size(soulprint.hosts.where("sid == input.to_sid")) == 1'
+      message: "reshard guard: from_sid/to_sid must be distinct hosts of the run roster"
+
+  # 2. RESHARD — run_once. Endpoint-ы строятся из roster (soulprint.hosts) по SID:
+  #    from/to = {addr: "<primary_ip>:6379"}. Это ГОТОВАЯ топология — плагин ничего
+  #    не транслирует: сам читает CLUSTER NODES с from, выбирает первые `slots`
+  #    слотов источника и переносит каждый (go-redis SETSLOT/MIGRATE/SETSLOT NODE).
+  #    ★ НЕ идемпотентен (без unless): повторный прогон сдвинет ещё `slots` слотов.
+  #    .where("sid == ...")[0] детерминирован (single-host roster-фильтр; прецедент
+  #    add_node/remove_node). Пароль — keeper-side vault()-резолв; плагин коннектится
+  #    к нодам, password маскируется.
+  - name: Reshard N slots from source master to target master
+    run_once: true
+    module: community.redis.cluster
+    params:
+      action:   reshard
+      password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+      # int() унифицирует uint64-операнд input.slots в числовой тип (тот же приём,
+      # что replicas_per_shard в create/cluster.yml); whole-cell ${…} → нативный int.
+      slots:    "${ int(input.slots) }"
+      from:
+        addr: "${ soulprint.hosts.where(\"sid == input.from_sid\")[0].network.primary_ip + ':6379' }"
+      to:
+        addr: "${ soulprint.hosts.where(\"sid == input.to_sid\")[0].network.primary_ip + ':6379' }"

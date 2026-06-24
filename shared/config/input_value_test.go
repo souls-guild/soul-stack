@@ -704,3 +704,127 @@ func TestResolveInputValues_MinLengthSecretMasked(t *testing.T) {
 		t.Errorf("ошибка не содержит маску %q: %v", maskedSecretLiteral, err)
 	}
 }
+
+// requiredWhenSchema — общая фикстура required_when-тестов: режим + поле shards,
+// обязательное только при redis_type == 'cluster' (use-case redis-консолидации).
+func requiredWhenSchema(t *testing.T) InputSchemaMap {
+	t.Helper()
+	return schemaFromInput(t, `redis_type:
+  type: string
+  enum: [standalone, cluster]
+  default: standalone
+shards:
+  type: integer
+  min: 1
+  required_when: "input.redis_type == 'cluster'"
+`)
+}
+
+// TestResolveInputValues_RequiredWhenTruePredicateMissing — предикат истинен
+// (redis_type=cluster) и поле отсутствует → required-ошибка (условная).
+func TestResolveInputValues_RequiredWhenTruePredicateMissing(t *testing.T) {
+	schema := requiredWhenSchema(t)
+	_, err := ResolveInputValues(schema, map[string]any{"redis_type": "cluster"})
+	if err == nil {
+		t.Fatal("ожидалась ошибка: shards обязателен при redis_type=cluster")
+	}
+	if !strings.Contains(err.Error(), "shards") {
+		t.Errorf("ошибка не называет параметр: %v", err)
+	}
+	// Узнаваемая форма required-ошибки — downstream-детект (checkdrift) ловит
+	// безусловный и условный required единым матчингом подстроки.
+	if !strings.Contains(err.Error(), "обязателен, но не передан и не имеет default") {
+		t.Errorf("ошибка не несёт узнаваемую required-форму: %v", err)
+	}
+}
+
+// TestResolveInputValues_RequiredWhenFalsePredicateMissing — предикат ложен
+// (redis_type=standalone) и поле отсутствует → OK (условная обязательность не
+// срабатывает).
+func TestResolveInputValues_RequiredWhenFalsePredicateMissing(t *testing.T) {
+	schema := requiredWhenSchema(t)
+	got, err := ResolveInputValues(schema, map[string]any{"redis_type": "standalone"})
+	if err != nil {
+		t.Fatalf("standalone без shards должен пройти: %v", err)
+	}
+	if _, present := got["shards"]; present {
+		t.Errorf("shards не передан — не должен появиться в эффективном input: %#v", got)
+	}
+}
+
+// TestResolveInputValues_RequiredWhenTruePredicatePassed — предикат истинен и
+// поле передано → OK.
+func TestResolveInputValues_RequiredWhenTruePredicatePassed(t *testing.T) {
+	schema := requiredWhenSchema(t)
+	got, err := ResolveInputValues(schema, map[string]any{"redis_type": "cluster", "shards": 3})
+	if err != nil {
+		t.Fatalf("cluster с shards должен пройти: %v", err)
+	}
+	if got["shards"] != uint64(3) && got["shards"] != 3 {
+		t.Errorf("shards = %#v, want 3", got["shards"])
+	}
+}
+
+// TestResolveInputValues_RequiredWhenDefaultMaterialized — предикат читает поле с
+// default, материализованным merge-фазой (predicate eval ПОСЛЕ mergeInputDefaults).
+// redis_type не передан → default standalone → предикат ложен → shards опционален.
+func TestResolveInputValues_RequiredWhenDefaultMaterialized(t *testing.T) {
+	schema := requiredWhenSchema(t)
+	got, err := ResolveInputValues(schema, map[string]any{})
+	if err != nil {
+		t.Fatalf("дефолтный redis_type=standalone → shards опционален: %v", err)
+	}
+	if got["redis_type"] != "standalone" {
+		t.Errorf("default redis_type не смёржен: %#v", got)
+	}
+}
+
+// TestRequiredWhen_InvalidCELRejectedAtSchema — непарсимый/ссылающийся на имя вне
+// input предикат отвергается schema-валидацией (input_required_when_invalid), а
+// не на runtime.
+func TestRequiredWhen_InvalidCELRejectedAtSchema(t *testing.T) {
+	cases := []struct{ name, expr string }{
+		{"syntax", "input.x =="},
+		{"undeclared_essence", "essence.mode == 'x'"},
+		{"undeclared_soulprint", "soulprint.self.os.family == 'debian'"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := "name: t\ndescription: d\nstate_changes: {}\ntasks: []\ninput:\n" +
+				indentBlock("f:\n  type: string\n  required_when: \""+tc.expr+"\"\n", "  ")
+			_, _, diags, err := LoadScenarioManifestFromBytes("t.yml", []byte(body), ValidateOptions{})
+			if err != nil {
+				t.Fatalf("LoadScenarioManifestFromBytes: %v", err)
+			}
+			var found bool
+			for _, d := range diags {
+				if d.Code == "input_required_when_invalid" {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("ожидался диагностический код input_required_when_invalid для %q; diags=%v", tc.expr, diags)
+			}
+		})
+	}
+}
+
+// TestRequiredWhen_EmptyStringRejectedAtSchema — пустой required_when отвергается
+// (бессмысленный предикат → footgun «никогда не обязателен»).
+func TestRequiredWhen_EmptyStringRejectedAtSchema(t *testing.T) {
+	body := "name: t\ndescription: d\nstate_changes: {}\ntasks: []\ninput:\n" +
+		indentBlock("f:\n  type: string\n  required_when: \"\"\n", "  ")
+	_, _, diags, err := LoadScenarioManifestFromBytes("t.yml", []byte(body), ValidateOptions{})
+	if err != nil {
+		t.Fatalf("LoadScenarioManifestFromBytes: %v", err)
+	}
+	var found bool
+	for _, d := range diags {
+		if d.Code == "input_required_when_invalid" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("ожидался input_required_when_invalid на пустой required_when; diags=%v", diags)
+	}
+}

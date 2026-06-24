@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	securejoin "github.com/cyphar/filepath-securejoin"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -18,9 +19,10 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// trialHostSID — синтетический SID единственного хоста L0-прогона. L0
-// герметичен и не таргетит реальный реестр; один хост достаточен для
-// render-only ассерта (per-host вариативность — слой dispatch, вне пилота).
+// trialHostSID — синтетический SID хоста single-host сахара (fixtures.soulprint).
+// L0 герметичен и не таргетит реальный реестр; для render-only ассерта single
+// хоста достаточно. Multi-host roster (fixtures.hosts) несёт собственные SID-ы
+// (per-host dispatch-вариативность — слой L3, вне пилота).
 const trialHostSID = "trial-host"
 
 // Level — уровень испытания (ADR-023), по которому кейс маршрутизирован при
@@ -120,6 +122,16 @@ func renderCase(ctx context.Context, c *Case, caseFile string) (renderedCase, er
 		return rc, fmt.Errorf("trial: input %s: %w", scn.Name, err)
 	}
 
+	// validate: — декларативные input-инварианты (ADR-009 amendment, DSL wave 2),
+	// зеркало pre-flight-гейта прода (scenario.ValidateInput). Input-only eval над
+	// смерженным input; первый провал обрывает кейс той же ошибкой, что и
+	// required_when (testable через expect_render_error). no-op без validate-секции.
+	if fail, evErr := config.EvalValidateRules(scn.Validate, effectiveInput); evErr != nil {
+		return rc, fmt.Errorf("trial: validate %s: %w", scn.Name, evErr)
+	} else if fail != nil {
+		return rc, fmt.Errorf("trial: validate %s: %s", scn.Name, fail.Error())
+	}
+
 	// Templates: ридер .tmpl снапшота сервиса кейса (двухуровневый резолв
 	// scenario-local→service-level, ADR-009). serviceRoot — корень сервиса/
 	// _trial-обёртки; scenario-prefix `scenario/<name>` берётся из имени scenario.
@@ -137,7 +149,7 @@ func renderCase(ctx context.Context, c *Case, caseFile string) (renderedCase, er
 		Input:       effectiveInput,
 		Register:    orEmptyMap(c.Mocks.Register),
 		Incarnation: render.IncarnationMeta{Name: scn.Name},
-		Hosts:       fixtureHosts(scn.Name, c.Fixtures.Soulprint),
+		Hosts:       fixtureHosts(scn.Name, c.Fixtures),
 		Destiny:     destiny,
 		Templates:   templates,
 		// State — fixtures.state как pre-run снимок incarnation.state: доступен в
@@ -170,6 +182,21 @@ func RunCase(ctx context.Context, c *Case, caseFile string) (Result, error) {
 	res := Result{Case: c.Name}
 
 	rc, err := renderCase(ctx, c, caseFile)
+
+	// expect_render_error (ADR-023 amendment): кейс ОЖИДАЕТ обрыв рендера
+	// (assert:-провал / required_when). Render-успех → FAIL; ошибка без подстроки
+	// → FAIL; ошибка с подстрокой → PASS. Coverage пуст (план не построен), но кейс
+	// проходит. Сверяем raw-ошибку renderCase до её оборачивания в return err ниже.
+	if c.ExpectRenderError != "" {
+		if err == nil {
+			res.Failures = append(res.Failures, fmt.Sprintf("ожидался обрыв рендера с подстрокой %q, но render успешен", c.ExpectRenderError))
+		} else if !strings.Contains(err.Error(), c.ExpectRenderError) {
+			res.Failures = append(res.Failures, fmt.Sprintf("ожидалась ошибка рендера с подстрокой %q, получено: %v", c.ExpectRenderError, err))
+		}
+		res.Pass = len(res.Failures) == 0
+		return res, nil
+	}
+
 	if err != nil {
 		return res, err
 	}
@@ -184,7 +211,15 @@ func RunCase(ctx context.Context, c *Case, caseFile string) (Result, error) {
 	// это была слепая зона harness-а, видевшего только tasks. Mocks.Register даёт
 	// `register.*` в sets тот же per-host register-контекст, что и в `where:`.
 	in.Ctx = ctx
-	in.RegisterByHost = map[string]map[string]any{trialHostSID: orEmptyMap(c.Mocks.Register)}
+	// Mocks.Register — единый L0-payload probe (probe-per-host = dispatch-слой L3,
+	// вне пилота): один и тот же register-контекст применяется к каждому хосту
+	// roster-а по его SID. На single-host roster это ровно {trialHostSID: register}
+	// (back-compat бит-в-бит).
+	mockReg := orEmptyMap(c.Mocks.Register)
+	in.RegisterByHost = make(map[string]map[string]any, len(in.Hosts))
+	for _, h := range in.Hosts {
+		in.RegisterByHost[h.SID] = mockReg
+	}
 
 	// Рендер state_changes гоняется ВСЕГДА (как прод после барьера), даже без
 	// ассерта: незащищённый `${ input.X }` по optional-без-default input (CEL «no
@@ -322,18 +357,40 @@ func readWithin(base, name string) ([]byte, error) {
 	return os.ReadFile(full)
 }
 
-// fixtureHosts строит roster L0 из fixtures.soulprint — один синтетический
-// хост. Он явно несёт корневую incarnation-метку (incarnationName ==
-// RenderInput.Incarnation.Name), зеркаля прод-инвариант roster-а (rosterSQL
-// `WHERE $1 = ANY(coven)`: каждый хост incarnation несёт корневую метку).
-// Благодаря ей `on:` опущенный, `on: ["${ incarnation.name }"]` и `where:`
-// резолвятся на этот хост так же, как в проде.
-func fixtureHosts(incarnationName string, soulprint map[string]any) []*topology.HostFacts {
-	return []*topology.HostFacts{{
-		SID:       trialHostSID,
-		Coven:     []string{incarnationName},
-		Soulprint: orEmptyMap(soulprint),
-	}}
+// fixtureHosts строит roster L0 прогона из fixtures.
+//
+// Multi-host (fixtures.hosts задан): roster из N хостов в детерминированном
+// порядке по SID (soulprint.hosts-проекция render-движка идёт в порядке
+// in.Hosts, не сортирует сама — детерминизм обеспечиваем здесь). Зеркало
+// топологии прогона: covens/role/choirs/soulprint берутся из host-записи как
+// есть; корректность incarnation.name-метки в covens — на авторе кейса
+// (rosterSQL `WHERE $1 = ANY(coven)`: без неё хост выпадет из таргета).
+//
+// Single-host (fixtures.soulprint, multi не задан): прежнее поведение
+// БИТ-В-БИТ — один синтетический хост trial-host с корневой incarnation-меткой
+// (incarnationName == RenderInput.Incarnation.Name), per-host вариативность —
+// слой dispatch (L3, вне пилота).
+func fixtureHosts(incarnationName string, f Fixtures) []*topology.HostFacts {
+	if len(f.Hosts) == 0 {
+		return []*topology.HostFacts{{
+			SID:       trialHostSID,
+			Coven:     []string{incarnationName},
+			Soulprint: orEmptyMap(f.Soulprint),
+		}}
+	}
+
+	hosts := make([]*topology.HostFacts, 0, len(f.Hosts))
+	for _, h := range f.Hosts {
+		hosts = append(hosts, &topology.HostFacts{
+			SID:       h.SID,
+			Coven:     h.Covens,
+			Role:      h.Role,
+			Choirs:    h.Choirs,
+			Soulprint: orEmptyMap(h.Soulprint),
+		})
+	}
+	sort.Slice(hosts, func(i, j int) bool { return hosts[i].SID < hosts[j].SID })
+	return hosts
 }
 
 func orEmptyMap(m map[string]any) map[string]any {

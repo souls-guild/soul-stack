@@ -19,12 +19,22 @@ const maskedValue = "***MASKED***"
 // — все попадают под фильтр (security-review H1: exact-match на `"token"`
 // пропускал `"bootstrap_token"` → plaintext leak).
 //
+// TLS PEM-материал (`tls_key` / `tls_cert` / `tls_ca`, а также дефисная и
+// `*-data` формы — `tls-key`, `tls_ca_data`) маскируется по фрагменту
+// `tls[_-]?(key|cert|ca)`: модель маскинга — ИМЯ ключа, а голый фрагмент `key`/
+// `cert`/`ca` в каталог не входит (over-masking безобидных `cache`/`scary`).
+// Приватный ключ (`tls_key`) — секрет в строгом смысле; cert/ca маскируем тоже
+// (они помечены `secret: true` в схеме и могут нести закрытый материал в
+// combined-PEM). Граница точная: `certificate`/`cacheable` фрагмент НЕ ловит
+// (нужен префикс `tls` + разделитель). Источник — redis-консолидация TLS
+// (community.redis: PEM в params коннекта; BLOCKER masking-guard).
+//
 // Расширение каталога — обычным PR в этот regex при появлении новой
 // sensitive области; инвариант словаря не требует propose-and-wait
 // (формализация наблюдаемого pattern-а, см. docs/architecture.md → Error
 // codes / расширение каталога).
 var sensitiveKeyRe = regexp.MustCompile(
-	`(?i)(token|secret|password|passwd|private[_-]?key|privatekey|credential|signing[_-]?key|api[_-]?key|access[_-]?key)`,
+	`(?i)(token|secret|password|passwd|private[_-]?key|privatekey|credential|signing[_-]?key|api[_-]?key|access[_-]?key|tls[_-]?(key|cert|ca))`,
 )
 
 // extraExactKeys — короткие ключи без секрет-фрагмента в имени, которые

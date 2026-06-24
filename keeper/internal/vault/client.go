@@ -1,5 +1,5 @@
 // Package vault — обёртка над `github.com/hashicorp/vault/api` для чтения
-// Vault KV v2 секретов на keeper-стороне.
+// Vault KV (v1/v2) секретов на keeper-стороне.
 //
 // Scope (ADR-014, ADR-017): чтение `secret/keeper/jwt-signing-key` для
 // JWT-issuer-а в bootstrap-логике, поддержка `core.vault.kv-read` на
@@ -26,6 +26,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	vaultapi "github.com/hashicorp/vault/api"
@@ -43,14 +44,28 @@ const defaultKVMount = "secret"
 // от транспортных ошибок.
 var ErrVaultKVNotFound = errors.New("vault: KV path not found")
 
+// kvVersionUnset — `kvVersionOverride` не задан (auto-detect через probe).
+const kvVersionUnset = 0
+
 // Client — тонкая обёртка над *vaultapi.Client с фиксированным KV-mount.
 //
 // Безопасен для конкурентного использования: vaultapi.Client держит
-// внутренний http.Client с пулом соединений.
+// внутренний http.Client с пулом соединений. Кеш версий KV mount-ов
+// (`kvVersions`) защищён `kvVersionsMu` — `resolveKVVersion` конкурентен.
 type Client struct {
 	c       *vaultapi.Client
 	kvMount string
 	metrics *VaultMetrics
+
+	// kvVersionOverride — форс версии KV из cfg.Vault.KVVersion (1/2);
+	// kvVersionUnset → auto-detect через probe (sys/internal/ui/mounts).
+	kvVersionOverride int
+
+	// kvVersions — per-mount кеш резолвленной версии KV (1/2). Probe ленивый
+	// (первый ReadKV/WriteKV mount-а), результат кешируется. map, а не одно
+	// поле, чтобы расширяться на мультимаунтовые сценарии без переписывания.
+	kvVersionsMu sync.RWMutex
+	kvVersions   map[string]int
 }
 
 // SetMetrics подключает keeper_vault_*-метрики к клиенту (ADR-024). nil-safe
@@ -118,11 +133,131 @@ func NewClient(ctx context.Context, cfg config.KeeperVault) (*Client, error) {
 		mount = defaultKVMount
 	}
 
-	cl := &Client{c: api, kvMount: mount}
+	// kv_version override (escape-hatch): пусто → kvVersionUnset (probe).
+	// Невалидное значение отсекается schema-фазой; здесь fail-fast для
+	// callers вне config-load-пути (тесты).
+	override := kvVersionUnset
+	switch cfg.KVVersion {
+	case "":
+		// auto-detect
+	case "1":
+		override = 1
+	case "2":
+		override = 2
+	default:
+		return nil, fmt.Errorf("vault: invalid kv_version %q (want \"1\" or \"2\")", cfg.KVVersion)
+	}
+
+	cl := &Client{
+		c:                 api,
+		kvMount:           mount,
+		kvVersionOverride: override,
+		kvVersions:        make(map[string]int),
+	}
+	// Probe версии KV — строго ленивый (первый ReadKV/WriteKV). Здесь только
+	// Ping (sys/health, без KV-прав) — bootstrap-путь (keeper init) поднимает
+	// Client до выдачи KV-доступа; probe в конструкторе сломал бы его.
 	if err := cl.Ping(ctx); err != nil {
 		return nil, fmt.Errorf("vault: ping: %w", err)
 	}
 	return cl, nil
+}
+
+// resolveKVVersion определяет версию KV secrets engine для mount-а (1 или 2).
+//
+// Порядок:
+//  1. override (cfg.Vault.kv_version) — побеждает безусловно, БЕЗ round-trip-а;
+//  2. per-mount кеш — версия уже резолвлена;
+//  3. probe `sys/internal/ui/mounts/<mount>` → `data.type == "kv"` +
+//     `data.options.version` ("1"/"2").
+//
+// Fail-closed: если probe не дал однозначной версии («kv» mount без
+// options.version / неожиданное значение / type != "kv" / permission-denied
+// без override) — явная ошибка с подсказкой про `vault.kv_version`, а НЕ
+// молчаливый дефолт v2. Прежний механизм «угадывания по классу ошибки
+// KVv2.Get» отвергнут (обычный v1-секрет неотличим от v2-missing).
+//
+// Probe ленивый — вызывается из ReadKV/WriteKV, не из NewClient (см. там).
+func (c *Client) resolveKVVersion(ctx context.Context, mount string) (int, error) {
+	if c.kvVersionOverride != kvVersionUnset {
+		return c.kvVersionOverride, nil
+	}
+
+	c.kvVersionsMu.RLock()
+	v, ok := c.kvVersions[mount]
+	c.kvVersionsMu.RUnlock()
+	if ok {
+		return v, nil
+	}
+
+	// Re-check под write-lock перед probe: на холодном старте несколько горутин
+	// видят промах RLock-кеша одновременно; без этого они сделают дублирующие
+	// probe-round-trip-ы. Double-checked locking убирает лишние probe (single-
+	// flight не нужен — probe идемпотентен, важна лишь экономия round-trip-ов).
+	c.kvVersionsMu.Lock()
+	defer c.kvVersionsMu.Unlock()
+	if v, ok := c.kvVersions[mount]; ok {
+		return v, nil
+	}
+
+	version, err := c.probeKVVersion(ctx, mount)
+	if err != nil {
+		return 0, err
+	}
+	c.kvVersions[mount] = version
+	return version, nil
+}
+
+// probeKVVersion читает `sys/internal/ui/mounts/<mount>` и извлекает версию
+// KV engine из `data.options.version`. Не кеширует (это делает
+// resolveKVVersion). Ошибки fail-closed — см. resolveKVVersion.
+func (c *Client) probeKVVersion(ctx context.Context, mount string) (int, error) {
+	const hint = "specify vault.kv_version: 1|2 to skip auto-detect"
+
+	secret, err := c.c.Logical().ReadWithContext(ctx, "sys/internal/ui/mounts/"+mount)
+	if err != nil {
+		// 403/permission-denied (ACL закрыл probe-endpoint) и любой другой
+		// транспортный сбой — fail-closed: версию определить не вышло.
+		// Ошибка транспорта/ACL probe-endpoint (sys/internal/ui/mounts) безопасна
+		// для текста: секрета KV тут нет — включаем `%v` для диагностики (ACL/сеть).
+		return 0, fmt.Errorf("vault: cannot determine KV version of mount %q via sys/internal/ui/mounts (%v); %s", mount, err, hint)
+	}
+	if secret == nil || secret.Data == nil {
+		return 0, fmt.Errorf("vault: cannot determine KV version of mount %q: empty sys/internal/ui/mounts response; %s", mount, hint)
+	}
+
+	if t, _ := secret.Data["type"].(string); t != "kv" {
+		return 0, fmt.Errorf("vault: mount %q is not a KV engine (type=%q); %s", mount, t, hint)
+	}
+
+	opts, ok := secret.Data["options"].(map[string]any)
+	if !ok || opts == nil {
+		return 0, fmt.Errorf("vault: mount %q has no KV options.version; %s", mount, hint)
+	}
+	ver, _ := opts["version"].(string)
+	switch ver {
+	case "1":
+		return 1, nil
+	case "2":
+		return 2, nil
+	default:
+		return 0, fmt.Errorf("vault: mount %q has unexpected KV version %q; %s", mount, ver, hint)
+	}
+}
+
+// requireKVv2 — guard для metadata/list-операций (ListKV / ReadKVMetadata):
+// у KV v1 нет `<mount>/metadata/`-пути, поэтому на v1-mount-е эти операции
+// бессмысленны. Отдаём понятную ошибку вместо молча-сломанного round-trip-а.
+// op — человекочитаемое имя операции для текста ошибки ("list"/"metadata read").
+func (c *Client) requireKVv2(ctx context.Context, op string) error {
+	version, err := c.resolveKVVersion(ctx, c.kvMount)
+	if err != nil {
+		return err
+	}
+	if version != 2 {
+		return fmt.Errorf("vault: %s requires KV v2, but mount %q is v%d", op, c.kvMount, version)
+	}
+	return nil
 }
 
 // loginAppRole выполняет `auth/approle/login` и устанавливает полученный
@@ -227,15 +362,18 @@ func (c *Client) relativeKVPath(input string) (string, error) {
 	return rel, nil
 }
 
-// ReadKV читает значение секрета по path. Возвращает декодированный
-// `data.data` (KV v2 формат `{data: {data: {...}, metadata: {...}}}`).
+// ReadKV читает значение секрета по path. Контракт возврата — единый плоский
+// payload (`map = поля секрета`), независимо от версии KV mount-а: KVv2.Get
+// уже отдаёт развёрнутый `data.data`, KVv1.Get — `secret.Data` плоско.
 //
 // `path` принимается в двух формах:
 //   - logical: "secret/keeper/jwt-signing-key" (с префиксом mount-а);
 //   - relative: "keeper/jwt-signing-key" (mount подставляется автоматически).
 //
-// Mount резолвится через client.kvMount. Возвращает ErrVaultKVNotFound,
-// если путь отсутствует или удалён (Vault отдаёт пустой Secret).
+// Mount резолвится через client.kvMount; версия (v1/v2) — через
+// resolveKVVersion (override или probe). Возвращает ErrVaultKVNotFound,
+// если путь отсутствует или удалён (Vault отдаёт пустой Secret) — для ОБЕИХ
+// версий.
 func (c *Client) ReadKV(ctx context.Context, path string) (_ map[string]any, err error) {
 	// Нормализация input-path (strip mount/leading-slash) + fail-closed
 	// guard на `..`-сегмент — см. relativeKVPath.
@@ -252,11 +390,20 @@ func (c *Client) ReadKV(ctx context.Context, path string) (_ map[string]any, err
 	start := time.Now()
 	defer func() { c.metrics.ObserveRead(c.kvMount, time.Since(start), err) }()
 
-	kv := c.c.KVv2(c.kvMount)
-	secret, err := kv.Get(ctx, rel)
+	version, err := c.resolveKVVersion(ctx, c.kvMount)
 	if err != nil {
-		// vaultapi.KVv2.Get возвращает ErrSecretNotFound для отсутствующих
-		// и tombstone-нутых путей; маппим в наш sentinel.
+		return nil, err
+	}
+
+	var secret *vaultapi.KVSecret
+	if version == 2 {
+		secret, err = c.c.KVv2(c.kvMount).Get(ctx, rel)
+	} else {
+		secret, err = c.c.KVv1(c.kvMount).Get(ctx, rel)
+	}
+	if err != nil {
+		// vaultapi.KVv{1,2}.Get возвращают ErrSecretNotFound для отсутствующих
+		// и tombstone-нутых путей; маппим в наш sentinel (обе версии).
 		if errors.Is(err, vaultapi.ErrSecretNotFound) {
 			err = fmt.Errorf("%w: %s", ErrVaultKVNotFound, path)
 			return nil, err
@@ -271,12 +418,13 @@ func (c *Client) ReadKV(ctx context.Context, path string) (_ map[string]any, err
 	return secret.Data, nil
 }
 
-// WriteKV записывает секрет в KV v2 по path (создаёт новую версию). data —
+// WriteKV записывает секрет в KV по path (KV v2 создаёт новую версию). data —
 // плоский набор полей секрета (`{"signing_key": "<PEM>"}`).
 //
 // `path` принимается в тех же формах, что [Client.ReadKV] (logical с mount-
-// префиксом либо relative); mount резолвится через client.kvMount. Симметрично
-// чтению: leading slash снимается, mount-prefix отсекается.
+// префиксом либо relative); mount/версия резолвятся через client.kvMount +
+// resolveKVVersion. Симметрично чтению: leading slash снимается, mount-prefix
+// отсекается.
 //
 // Scope (ADR-026(h), R3-S7): запись приватника ed25519-ключа подписи Sigil при
 // вводе нового trust-anchor-ключа (`secret/keeper/sigil-keys/<key_id>`). До R3
@@ -301,8 +449,17 @@ func (c *Client) WriteKV(ctx context.Context, path string, data map[string]any) 
 	start := time.Now()
 	defer func() { c.metrics.ObserveWrite(c.kvMount, time.Since(start), err) }()
 
-	kv := c.c.KVv2(c.kvMount)
-	if _, err = kv.Put(ctx, rel, data); err != nil {
+	version, err := c.resolveKVVersion(ctx, c.kvMount)
+	if err != nil {
+		return err
+	}
+
+	if version == 2 {
+		_, err = c.c.KVv2(c.kvMount).Put(ctx, rel, data)
+	} else {
+		err = c.c.KVv1(c.kvMount).Put(ctx, rel, data)
+	}
+	if err != nil {
 		err = fmt.Errorf("vault: write %q: %w", path, err)
 		return err
 	}
@@ -337,6 +494,10 @@ func (c *Client) ListKV(ctx context.Context, prefix string) (_ []string, err err
 	// caller-а, не Vault-round-trip, его не измеряем.
 	start := time.Now()
 	defer func() { c.metrics.ObserveList(c.kvMount, time.Since(start), err) }()
+
+	if err = c.requireKVv2(ctx, "list"); err != nil {
+		return nil, err
+	}
 
 	secret, err := c.c.Logical().ListWithContext(ctx, c.kvMount+"/metadata/"+rel)
 	if err != nil {
@@ -387,6 +548,10 @@ func (c *Client) ReadKVMetadata(ctx context.Context, path string) (_ time.Time, 
 
 	start := time.Now()
 	defer func() { c.metrics.ObserveRead(c.kvMount, time.Since(start), err) }()
+
+	if err = c.requireKVv2(ctx, "metadata read"); err != nil {
+		return time.Time{}, err
+	}
 
 	secret, err := c.c.Logical().ReadWithContext(ctx, c.kvMount+"/metadata/"+rel)
 	if err != nil {

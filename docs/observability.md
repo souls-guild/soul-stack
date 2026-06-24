@@ -184,9 +184,9 @@
 | `keeper_render_duration_seconds` | histogram (`DefBuckets`) | — | Длительность одного прохода `Pipeline.Render` в секундах (vault-resolve → CEL-render → резолв `on`/`where` → сборка плана) — самая тяжёлая Keeper-side фаза прогона (тот же горизонт, что у span-а `render.pipeline`). Разрез по результату не нужен — для p99 хватает общей серии; имена incarnation/scenario в label НЕ кладём (cardinality-blow-up) — их разрез несёт span. |
 | `keeper_render_errors_total` | counter | — | Неуспешные проходы `Pipeline.Render` (любой не-nil error: `ErrUnsupportedDSL` / vault-resolve-fail / CEL-fail / host-инвариант-fail). Без label-а причины — детализация уходит в trace/log (span `render.pipeline` ставит `codes.Error`); counter держим для алерта на rate ошибок рендера. |
 
-#### Keeper · vault (чтение KV v2, ADR-017)
+#### Keeper · vault (чтение KV v1/v2, ADR-017)
 
-Регистратор — `RegisterVaultMetrics(reg *obs.Registry) *VaultMetrics` в [`keeper/internal/vault/metrics.go`](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам). Инструментирует keeper-side Vault-клиент (чтение KV v2: CEL `vault()`, `vault:`-ref, `core.vault.kv-read`, чтение JWT-signing-key). Дескриптор инжектится сеттером `Client.SetMetrics` (init-order: registry поднимается позже клиента, тот же паттерн, что `Holder.SetMetrics`).
+Регистратор — `RegisterVaultMetrics(reg *obs.Registry) *VaultMetrics` в [`keeper/internal/vault/metrics.go`](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам). Инструментирует keeper-side Vault-клиент (чтение KV v1/v2, версия mount-а определяется автоматически: CEL `vault()`, `vault:`-ref, `core.vault.kv-read`, чтение JWT-signing-key). Дескриптор инжектится сеттером `Client.SetMetrics` (init-order: registry поднимается позже клиента, тот же паттерн, что `Holder.SetMetrics`).
 
 **Кардинальность (инвариант, ADR-024 §2.2 + «безопасность на первом месте»).** В label-ы НЕ кладём ни значение секрета, ни логический KV-путь (путь часто несёт имя секрета и высокую кардинальность). Разрез — только `mount` (closed enum, 1-2 значения на keeper: `secret`-default) и `kind` ошибки (closed enum `notfound`/`error`).
 

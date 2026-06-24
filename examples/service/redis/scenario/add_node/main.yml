@@ -1,0 +1,138 @@
+name: add_node
+description: >-
+  Day-2: присоединить ОДНУ новую ноду к УЖЕ сформированному Redis-кластеру
+  (режим redis_type=cluster). Аналог redis-cli `--cluster add-node`, но ЦЕЛИКОМ
+  через плагин community.redis (go-redis: CLUSTER MEET/REPLICATE/NODES) — никакого
+  redis-cli/shell, capability плагина только network_outbound.
+
+  Новая нода ОБЯЗАНА быть уже привязанной к incarnation как Soul (онбординг —
+  вне сценария). Таргетинг новой ноды — по стабильному SID через where: (probe не
+  нужен, ADR-008). Прогон зовётся на весь incarnation: roster (soulprint.hosts)
+  содержит и существующие ноды, и новичка — из него строятся endpoint-ы.
+
+  Граница (architect 2026-06-22): scenario оркеструет порядок/таргетинг и строит
+  ГОТОВУЮ топологию-карту для плагина; плагин исполняет ОДНУ операцию (add-node) и
+  ничего не транслирует. Per-host директивы (cluster-announce-ip) рендерит destiny
+  `redis` из .self (TILING-урок), НЕ apply.input.
+
+  role=master добавляет ПУСТОЙ master (без слотов): перенос слотов на новый master —
+  это ОТДЕЛЬНАЯ операция reshard (follow-up). add-node слоты не двигает.
+
+# ── Входной контракт оператора (docs/input.md) ────────────────────────────────
+# Простые типизированные понятия day-2: какой SID добавить, какой ролью, с какой
+# существующей нодой контактировать (seed), к какому master привязать реплику.
+input:
+  new_node_sid:
+    type: string
+    required: true
+    format: fqdn
+    description: >-
+      SID (FQDN) новой ноды — уже привязанного к incarnation Soul-а, который надо
+      ввести в кластер. Должен присутствовать в roster прогона (soulprint.hosts).
+
+  seed_sid:
+    type: string
+    required: true
+    format: fqdn
+    description: >-
+      SID любой СУЩЕСТВУЮЩЕЙ ноды кластера — контакт для CLUSTER MEET и источник
+      CLUSTER NODES (идемпотентность). Должен отличаться от new_node_sid.
+
+  role:
+    type: string
+    required: false
+    default: replica
+    enum: [replica, master]
+    description: >-
+      Роль новой ноды. replica — стать репликой master-а (master_sid или, если не
+      задан, наименее загруженного — выбор делает плагин). master — пустой master
+      без слотов (слоты переносит отдельный reshard).
+
+  master_sid:
+    type: string
+    required: false
+    format: fqdn
+    description: >-
+      SID master-ноды (role=replica), чьей репликой станет новичок. Не задан →
+      плагин выбирает master с наименьшим числом реплик (балансировка).
+
+# incarnation.state НЕ мутируется этим сценарием в текущем срезе: точная роль
+# каждого SID в state не пишется (redis_hosts наполнение — follow-up, см. brief
+# «Топология pilot»). add_node меняет живую топологию кластера, не декларацию.
+
+tasks:
+  # 1. GUARD — new_node_sid и seed_sid обязаны быть в roster и различаться (assert:,
+  #    ADR-009 amendment 2026-06-23; тот же механизм, что size-guard create). Предикат
+  #    вычисляется KEEPER-SIDE на РЕНДЕРЕ (там доступен soulprint.hosts; на Soul-е его
+  #    НЕТ). false ОБРЫВАЕТ render с message ДО любого dispatch — раньше и понятнее,
+  #    чем shell-test на хосте. assert НЕ emit RenderedTask.
+  - name: Guard new_node and seed are distinct members of the run roster
+    assert:
+      that:
+        - 'input.new_node_sid != input.seed_sid && size(soulprint.hosts.where("sid == input.new_node_sid")) == 1 && size(soulprint.hosts.where("sid == input.seed_sid")) == 1'
+      message: "add_node guard: new_node_sid/seed_sid must be distinct hosts of the run roster"
+
+  # 2. Per-host install + render redis.conf (cluster-директивы) + systemd на НОВОЙ
+  #    ноде (таргет по стабильному SID). Та же режим-агностичная destiny `redis`,
+  #    что и create/cluster: cluster-enabled/cluster-config-file/cluster-node-timeout
+  #    — host-инвариантные ключи merged config (из incarnation.state.redis_config —
+  #    ИСТОЧНИК ИСТИНЫ, зафиксированный create, НЕ перевычисляем → нет drift).
+  #    cluster-announce-ip ЗДЕСЬ НЕТ: per-host, рендерится destiny `redis` в
+  #    redis.conf.tmpl из {{ .self.network.primary_ip }} под гейтом cluster-enabled
+  #    (TILING-урок). Пароль — keeper-side vault()-резолв.
+  - name: Apply redis destiny on the new cluster node (install + render + systemd)
+    where: soulprint.self.sid == input.new_node_sid
+    apply:
+      destiny: redis
+      input:
+        version:  "${ default(incarnation.state.redis_version, '') }"
+        password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+        config:   "${ incarnation.state.redis_config }"
+        users: >-
+          ${ has(incarnation.state.redis_users)
+             ? merge(incarnation.state.redis_users.map(name, {
+                 name: {
+                   'perms':    incarnation.state.redis_users[name].perms,
+                   'state':    incarnation.state.redis_users[name].state,
+                   'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+                 }
+               }))
+             : {} }
+
+  # 3. Health-gate: новая нода обязана ответить PING ДО ввода в кластер.
+  #    community.redis.command, retry/until через retry. addr localhost (плагин на
+  #    самой ноде), пароль — keeper-side vault().
+  - name: Wait for the new node to answer PING
+    where: soulprint.self.sid == input.new_node_sid
+    module: community.redis.command
+    retry: { count: 10, delay: 3s }
+    params:
+      addr:     "127.0.0.1:6379"
+      password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+      args:     ["PING"]
+
+  # 4. ADD-NODE — run_once. Endpoint-ы строятся из roster (soulprint.hosts) по SID:
+  #    new_node/seed/master = {addr: "<primary_ip>:6379"}. Это ГОТОВАЯ топология —
+  #    плагин ничего не транслирует, шлёт CLUSTER MEET/REPLICATE/NODES по go-redis.
+  #    .where("sid == ...")[0] детерминирован (single-host roster-фильтр; прецедент
+  #    redis-cluster/create replication.yml). master передаём ТОЛЬКО при role=replica
+  #    и заданном master_sid; иначе плагин выбирает master сам.
+  - name: Add the new node to the cluster (CLUSTER MEET + REPLICATE/empty-master)
+    run_once: true
+    module: community.redis.cluster
+    params:
+      action:   add-node
+      role:     "${ default(input.role, 'replica') }"
+      password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+      new_node:
+        addr: "${ soulprint.hosts.where(\"sid == input.new_node_sid\")[0].network.primary_ip + ':6379' }"
+      seed:
+        addr: "${ soulprint.hosts.where(\"sid == input.seed_sid\")[0].network.primary_ip + ':6379' }"
+      # master.addr пуст, если master_sid не задан → плагин трактует это как
+      # «не указан» и выбирает master сам (балансировка). .where внутри строкового
+      # ${…}-cell, НЕ внутри CEL-map-литерала (rewrite не заходит в {…}-литералы).
+      master:
+        addr: >-
+          ${ has(input.master_sid)
+             ? soulprint.hosts.where("sid == input.master_sid")[0].network.primary_ip + ':6379'
+             : '' }

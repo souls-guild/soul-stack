@@ -411,7 +411,7 @@ func TestToDTO_MasksSecretsInStateAndSpec(t *testing.T) {
 			"vault_ref":   "vault:secret/redis/admin",
 		},
 	}
-	dto := toIncarnationGetView(inc)
+	dto := toIncarnationGetView(inc, nil)
 
 	if got := dto.State["admin_token"]; got != "***MASKED***" {
 		t.Errorf("state.admin_token = %v, want masked", got)
@@ -446,7 +446,7 @@ func TestToHistoryDTO_MasksSecretsInStateSnapshots(t *testing.T) {
 		StateBefore: map[string]any{"admin_token": "old", "replicas": float64(1)},
 		StateAfter:  map[string]any{"admin_token": "new", "replicas": float64(1)},
 	}
-	dto := toStateHistoryView(e)
+	dto := toStateHistoryView(e, nil)
 
 	if got := dto.StateBefore["admin_token"]; got != "***MASKED***" {
 		t.Errorf("state_before.admin_token = %v, want masked", got)
@@ -1897,19 +1897,28 @@ type fakeLoader struct {
 	// nil → манифест без lifecycle (оба флага дефолтно true, backcompat).
 	lifecycle *config.LifecycleConfig
 
+	// stateSchema — flat state_schema манифеста снапшота (seal read-path:
+	// secretSchemaForIncarnation обходит его на secret:true). nil → без state_schema.
+	stateSchema map[string]any
+
 	loadCalls     int
 	chainCalls    int
 	readFileCalls int
+
+	// loadedRefs фиксирует ref.Ref каждого Load (порядок вызовов) — guard-тесты
+	// version-pin сверяют, на какой версии сервиса материализовался снапшот.
+	loadedRefs []string
 }
 
 func (f *fakeLoader) Load(_ context.Context, ref artifact.ServiceRef) (*artifact.ServiceArtifact, error) {
 	f.loadCalls++
+	f.loadedRefs = append(f.loadedRefs, ref.Ref)
 	if f.loadErr != nil {
 		return nil, f.loadErr
 	}
 	return &artifact.ServiceArtifact{
 		Ref:      ref,
-		Manifest: &config.ServiceManifest{StateSchemaVersion: f.targetSchema, Lifecycle: f.lifecycle},
+		Manifest: &config.ServiceManifest{StateSchemaVersion: f.targetSchema, Lifecycle: f.lifecycle, StateSchema: f.stateSchema},
 	}, nil
 }
 
@@ -3135,7 +3144,7 @@ func TestIncarnationGetReply_GoldenNullFields(t *testing.T) {
 		CreatedAt: time.Unix(0, 0).UTC(),
 		UpdatedAt: time.Unix(0, 0).UTC(),
 	}
-	b, err := json.Marshal(shimGetReplyJSON(toIncarnationGetView(inc)))
+	b, err := json.Marshal(shimGetReplyJSON(toIncarnationGetView(inc, nil)))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -3173,7 +3182,7 @@ func TestIncarnationGetReply_DriftSummaryTyped(t *testing.T) {
 			TotalHosts: 3, ScannedAt: scannedAt,
 		},
 	}
-	b, err := json.Marshal(shimGetReplyJSON(toIncarnationGetView(inc)))
+	b, err := json.Marshal(shimGetReplyJSON(toIncarnationGetView(inc, nil)))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -3226,7 +3235,7 @@ func TestIncarnationGetReply_DriftSummaryOmittedWhenNil(t *testing.T) {
 		UpdatedAt:          time.Unix(0, 0).UTC(),
 		// LastDriftSummary / LastDriftCheckAt — nil.
 	}
-	b, err := json.Marshal(shimGetReplyJSON(toIncarnationGetView(inc)))
+	b, err := json.Marshal(shimGetReplyJSON(toIncarnationGetView(inc, nil)))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -3247,7 +3256,7 @@ func TestStateHistoryEntry_GoldenChangedByAIDOmitted(t *testing.T) {
 		ApplyID: "01HABCDEFGHJKMNPQRSTVWXYZ0",
 		At:      time.Unix(0, 0).UTC(),
 	}
-	b, err := json.Marshal(shimHistoryEntryJSON(toStateHistoryView(e)))
+	b, err := json.Marshal(shimHistoryEntryJSON(toStateHistoryView(e, nil)))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}

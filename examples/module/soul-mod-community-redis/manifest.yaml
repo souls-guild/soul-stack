@@ -1,0 +1,685 @@
+# Manifest плагина soul-mod-community-redis (ADR-020 plugin-инфраструктура).
+#
+# ОСНОВНОЙ интерфейс к живому Redis в redis-консолидации (концепция Ansible-роли):
+# scenario сервиса оркеструет порядок/таргетинг, плагин исполняет ОДНУ операцию
+# над одним Redis-инстансом. Сейчас реализованы states command + pinged/role/
+# replica-synced (read-probe) + config + cluster (action create + add-node + remove-node +
+# reshard) + replica (REPLICAOF) + sentinel (MONITOR/SET reconcile); acl /
+# failover — планируются (следующие батчи), их в spec.states пока НЕТ (объявляем
+# только реализованное).
+#
+# СОЗНАТЕЛЬНО БЕЗ dry-run preview: плагин НЕ реализует PlanReadSafe — на dry_run
+# host (Soul) применяет default-deny (задача получает честный «drift не
+# поддержан», а не ложное «нет дрифта»). Решение пользователя 2026-06-22.
+kind: soul_module
+protocol_version: 1                    # compat-флаг SoulModule API; версия артефакта — git ref (ADR-007)
+namespace: community
+name: redis
+
+# TLS-коннект (концепция Ansible-роли redis: defaults redis_tls_*). Все states
+# (command/pinged/role/replica-synced/config/cluster/replica/sentinel) принимают ОБЩИЕ TLS-параметры коннекта:
+#   - tls             (bool, default false) — коннектиться по TLS. В режиме only-TLS
+#                     (redis `port 0`, plain закрыт) ОБЯЗАТЕЛЕН — иначе плагин не
+#                     достучится. tls=false → plaintext (back-compat).
+#   - tls_ca          (string, secret, PEM) — CA для проверки серверного сертификата
+#                     (RootCAs). При частном PKI практически обязателен.
+#   - tls_cert/tls_key (string, secret, PEM) — client-cert для mTLS (опц.; только
+#                     ВМЕСТЕ). Один без другого → ошибка.
+#   - tls_skip_verify (bool, default false) — ЯВНЫЙ opt-out проверки сертификата.
+#                     default secure: проверка ВКЛЮЧЕНА (security-инвариант).
+# PEM приходит ЦЕЛИКОМ в params (scenario резолвит из Vault в render-фазе). PEM-поля
+# secret → маскируются выходным слоем по имени ключа (shared/audit маскирует
+# tls_key/tls_cert/tls_ca). В события/логи/ошибки PEM не попадает (redactError).
+# Параметры объявлены в input каждого state (command/config ниже как канон); cluster/
+# replica/sentinel читают тот же набор через общий путь коннекта.
+#
+# Closed enum (ADR-020(f) / docs/keeper/plugins.md → required_capabilities).
+# ТОЛЬКО network_outbound: плагин коннектится к Redis по TCP/unix-сокету (вкл. TLS).
+# БЕЗ vault_access — пароль И PEM приходят УЖЕ зарезолвленными от Keeper (render-фаза
+# vault() в scenario), свой Vault-доступ плагину не нужен (ADR-012, brief).
+required_capabilities:
+  - network_outbound
+
+# Strict-контракт touched-ресурсов (ADR-020(g)): ровно одна пара
+# <resource-type>: <value> на запись. Оба state работают над живым сервисом redis.
+side_effects:
+  - { service: redis-server }
+
+spec:
+  states:
+    # command — raw-команда к Redis. Imperative verb-state (прецедент
+    # core.cmd.shell / core.exec.run / core.http.probe): changed=false по
+    # умолчанию (как probe). Идемпотентность — на совести оператора; плагин лишь
+    # отправляет команду и возвращает её вывод.
+    command:
+      description: |
+        Выполнить raw-команду к Redis (imperative verb-state). По умолчанию
+        changed=false (как probe); оператор отвечает за идемпотентность.
+        Без dry-run preview (плагин не реализует PlanReadSafe).
+
+        WARNING (ИБ): вывод команды кладётся в Output.result В PLAINTEXT — это
+        ответ Redis, а не управляемый плагином секрет, поэтому масками ADR-010 он
+        НЕ покрыт. НЕ запускайте через command-state read-команды, возвращающие
+        секреты (CONFIG GET requirepass / masterauth, ACL GETUSER <user>, ACL LIST):
+        их результат уйдёт в RunResult/логи/OTel/UI открытым текстом. Для такого —
+        пометьте задачу no_log или используйте специализированный state (config с
+        secret-полем сам не эхает значение). Сам params.password при этом маскируется
+        и в аргументы команды не попадает (см. guard-тесты).
+      input:
+        addr:
+          type: string
+          required: true
+          description: >-
+            Адрес Redis: host:port (TCP) либо unix-сокет с префиксом
+            "unix:" (напр. unix:/var/run/redis/redis-server.sock).
+        password:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            Пароль Redis (requirepass / ACL). vault-ref в operator-input;
+            keeper резолвит до Apply, плагин получает plaintext (ADR-012).
+            Маскируется в логах/трейсах/UI (secret).
+        username:
+          type: string
+          required: false
+          description: ACL-username для AUTH (если не default-user).
+        db:
+          type: int
+          required: false
+          default: 0
+          description: Номер БД (SELECT) перед командой.
+        # TLS-параметры коннекта (общие для всех states, см. шапку манифеста).
+        tls:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            Коннектиться к Redis по TLS. Обязателен в only-TLS (port 0).
+            По умолчанию false (plaintext).
+        # secret-PEM: как password, манифест объявляет secret-источник через
+        # pattern "^vault:.*" (semantic rule input_secret_without_vault_pattern —
+        # единственный допустимый pattern для secret). РЕАЛЬНОЕ значение приходит
+        # ПЛЕЙНТЕКСТОМ: scenario резолвит PEM через ${ vault(...) } в render-фазе и
+        # кладёт целый PEM в apply.input (как requirepass). pattern — декларативный
+        # маркер secret-источника для аудита, а не runtime-регекс по PEM. Маскинг —
+        # по имени ключа (shared/audit маскирует tls_key/tls_cert/tls_ca).
+        tls_ca:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM CA-сертификата для проверки серверного сертификата (RootCAs).
+            Маскируется (secret). Резолвится keeper-side из Vault (render-фаза).
+        tls_cert:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM client-сертификата для mTLS (опц., только вместе с tls_key).
+            Маскируется (secret).
+        tls_key:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM client-ключа для mTLS (опц., только вместе с tls_cert).
+            Маскируется (secret); в события/ошибки не попадает.
+        tls_skip_verify:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            ЯВНЫЙ opt-out проверки серверного сертификата. По умолчанию false
+            (проверка включена — default secure).
+        args:
+          type: list
+          required: true
+          description: >-
+            Команда массивом аргументов (без shell), напр.
+            ["CONFIG", "SET", "maxmemory", "256mb"]. Первый элемент — verb.
+        changed:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            Пометить результат как changed=true (для команд, реально мутирующих
+            состояние). По умолчанию false (probe-семантика).
+    # pinged — health-probe через go-redis PING (ожидает PONG). Read-only,
+    # changed=false КОНСТРУКТИВНО (прецедент core.http.probe). Заменяет idiom
+    # command args:[PING]: Output.result несёт ответ (PONG) для health-gate
+    # (retry/until/failed_when по register.self.result). TLS-параметры коннекта —
+    # общие (см. шапку манифеста), читаются через тот же путь, что command.
+    pinged:
+      description: |
+        Health-probe Redis через go-redis PING (ожидает PONG). Read-only,
+        changed=false конструктивно (probe, не изменение). Заменяет idiom
+        command args:[PING]: Output.result == 'PONG' — то же поле, что отдавал
+        command, поэтому register.self.result == 'PONG' в health-gate
+        (retry/until/failed_when) работает без правок. Без dry-run preview.
+      input:
+        addr:
+          type: string
+          required: true
+          description: >-
+            Адрес Redis: host:port (TCP) либо unix-сокет с префиксом "unix:".
+        password:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            Пароль Redis (vault-ref; keeper резолвит до Apply). Маскируется —
+            не попадает в события/логи. В аргументы PING не передаётся.
+        username:
+          type: string
+          required: false
+          description: ACL-username для AUTH (если не default-user).
+        db:
+          type: int
+          required: false
+          default: 0
+          description: Номер БД (SELECT) перед PING.
+        # TLS-параметры коннекта — общие для всех states (см. шапку манифеста):
+        # tls / tls_ca / tls_cert / tls_key / tls_skip_verify читаются через тот
+        # же путь коннекта, что command/replica. Объявление-канон — в command.
+        tls:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            Коннектиться к Redis по TLS. Обязателен в only-TLS (port 0).
+            По умолчанию false (plaintext).
+        tls_ca:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM CA-сертификата для проверки серверного сертификата (RootCAs).
+            Маскируется (secret). Резолвится keeper-side из Vault (render-фаза).
+        tls_cert:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM client-сертификата для mTLS (опц., только вместе с tls_key).
+            Маскируется (secret).
+        tls_key:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM client-ключа для mTLS (опц., только вместе с tls_cert).
+            Маскируется (secret); в события/ошибки не попадает.
+        tls_skip_verify:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            ЯВНЫЙ opt-out проверки серверного сертификата. По умолчанию false
+            (проверка включена — default secure).
+    # role — role-probe через go-redis INFO replication (волатильная роль хоста).
+    # Read-only, changed=false КОНСТРУКТИВНО. Заменяет shell-idiom
+    # `redis-cli role | head -1 | tr -d '\n'`: Output.role несёт фактическую роль
+    # (master/slave) для where-таргетинга rolling-restart (ADR-008: роль волатильна,
+    # замеряется живым probe перед таргетингом, не из incarnation.state). TLS —
+    # общие параметры коннекта (как pinged/command).
+    role:
+      description: |
+        Role-probe Redis через go-redis INFO replication. Read-only,
+        changed=false конструктивно (probe). Output.role несёт фактическую
+        (волатильную) роль инстанса: "master" / "slave" — те же значения, что
+        отдавал shell `redis-cli role`. Используется в where-таргетинге
+        rolling-restart (register.self.role == 'master'/'slave'); роль волатильна
+        (ADR-008), берётся живым probe перед таргетингом. Без dry-run preview.
+      input:
+        addr:
+          type: string
+          required: true
+          description: >-
+            Адрес Redis: host:port (TCP) либо unix-сокет с префиксом "unix:".
+        password:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            Пароль Redis (vault-ref; keeper резолвит до Apply). Маскируется —
+            не попадает в события/логи (INFO replication роль-секретом не несёт,
+            но коннект-ошибка теоретически могла бы — redactError).
+        username:
+          type: string
+          required: false
+          description: ACL-username для AUTH (если не default-user).
+        db:
+          type: int
+          required: false
+          default: 0
+          description: Номер БД (SELECT) перед INFO.
+        # TLS-параметры коннекта — общие (объявление-канон в command).
+        tls:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            Коннектиться к Redis по TLS. Обязателен в only-TLS (port 0).
+            По умолчанию false (plaintext).
+        tls_ca:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM CA-сертификата для проверки серверного сертификата (RootCAs).
+            Маскируется (secret). Резолвится keeper-side из Vault (render-фаза).
+        tls_cert:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM client-сертификата для mTLS (опц., только вместе с tls_key).
+            Маскируется (secret).
+        tls_key:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM client-ключа для mTLS (опц., только вместе с tls_cert).
+            Маскируется (secret); в события/ошибки не попадает.
+        tls_skip_verify:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            ЯВНЫЙ opt-out проверки серверного сертификата. По умолчанию false
+            (проверка включена — default secure).
+    # replica-synced — restart health-gate реплики через go-redis INFO
+    # replication: master_link_status == "up" (реплика РЕСИНКНУЛАСЬ с master-ом).
+    # Строже pinged (PONG = демон жив, но мог ещё не догнать master после
+    # рестарта). Read-only, changed=false КОНСТРУКТИВНО. Output.synced bool +
+    # master_link_status строкой для диагностики.
+    # ★ Граница master/slave: поле master_link_status есть ТОЛЬКО у реплики
+    # (role:slave) — у master-а его нет. State предназначен для slave-пути
+    # (restart block.where slave). Поля нет (master/нештатный INFO) → synced=false
+    # с явной причиной в Message (НЕ тихий success), чтобы health-gate реплики не
+    # прошёл на не-реплике. TLS — общие параметры коннекта (как pinged/command).
+    replica-synced:
+      description: |
+        Restart health-gate реплики через go-redis INFO replication: проверяет
+        master_link_status == "up" (реплика догнала master-а после рестарта).
+        Read-only, changed=false конструктивно (probe). Output.synced (bool) —
+        условие для health-gate (until: register.self.synced == true);
+        Output.master_link_status (строка) — для диагностики. master_link_status
+        присутствует ТОЛЬКО у реплики: на master-е (поля нет) synced=false с
+        причиной в Message — state применяется на slave-пути rolling-restart.
+        Без dry-run preview.
+      input:
+        addr:
+          type: string
+          required: true
+          description: >-
+            Адрес Redis: host:port (TCP) либо unix-сокет с префиксом "unix:".
+        password:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            Пароль Redis (vault-ref; keeper резолвит до Apply). Маскируется —
+            не попадает в события/логи (INFO replication секрет не несёт, но
+            коннект-ошибка теоретически могла бы — redactError).
+        username:
+          type: string
+          required: false
+          description: ACL-username для AUTH (если не default-user).
+        db:
+          type: int
+          required: false
+          default: 0
+          description: Номер БД (SELECT) перед INFO.
+        # TLS-параметры коннекта — общие (объявление-канон в command).
+        tls:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            Коннектиться к Redis по TLS. Обязателен в only-TLS (port 0).
+            По умолчанию false (plaintext).
+        tls_ca:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM CA-сертификата для проверки серверного сертификата (RootCAs).
+            Маскируется (secret). Резолвится keeper-side из Vault (render-фаза).
+        tls_cert:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM client-сертификата для mTLS (опц., только вместе с tls_key).
+            Маскируется (secret).
+        tls_key:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM client-ключа для mTLS (опц., только вместе с tls_cert).
+            Маскируется (secret); в события/ошибки не попадает.
+        tls_skip_verify:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            ЯВНЫЙ opt-out проверки серверного сертификата. По умолчанию false
+            (проверка включена — default secure).
+    # config — применить map конфиг-директив через CONFIG SET (+ опц. CONFIG
+    # REWRITE для персиста в redis.conf). Idempotent на стороне Redis: CONFIG SET
+    # повторно с тем же значением — no-op для самого Redis. changed=true, когда
+    # хоть одна директива применена.
+    config:
+      description: |
+        Применить map директив redis.conf через CONFIG SET к живому Redis.
+        Опционально CONFIG REWRITE (persist). Без dry-run preview.
+      input:
+        addr:
+          type: string
+          required: true
+          description: >-
+            Адрес Redis: host:port (TCP) либо unix-сокет с префиксом "unix:".
+        password:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            Пароль Redis (vault-ref в operator-input; keeper резолвит до Apply).
+            Маскируется в логах/трейсах/UI (secret).
+        username:
+          type: string
+          required: false
+          description: ACL-username для AUTH (если не default-user).
+        config:
+          type: map
+          required: true
+          description: >-
+            Директивы redis.conf: { maxmemory: "256mb", maxmemory-policy:
+            allkeys-lru, ... }. Каждая применяется через CONFIG SET <key> <value>.
+        rewrite:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            После CONFIG SET выполнить CONFIG REWRITE (персист в redis.conf).
+            По умолчанию false (изменение только в рантайме).
+    # cluster — управление hash-slot-кластером Redis (16384 слота) ЦЕЛИКОМ через
+    # go-redis: CLUSTER MEET / ADDSLOTS / REPLICATE + CLUSTER INFO/NODES
+    # (диагностика и идемпотентность). НИКАКОГО redis-cli/shell — capability
+    # остаётся только network_outbound.
+    #
+    #   action=create   — собрать кластер с нуля. Раскладка ролей master/replica
+    #                     и 16384 слотов детерминирована (сортировка ключей nodes).
+    #                     Идемпотентен: повторный create на сформированном
+    #                     кластере → changed=false, no-op.
+    #   action=add-node — присоединить ОДНУ новую ноду к сформированному кластеру
+    #                     (day-2): MEET через seed → REPLICATE (role=replica) либо
+    #                     пустой master (role=master). Идемпотентен: нода уже в
+    #                     CLUSTER NODES → changed=false, no-op.
+    #   action=remove-node — вывести ОДНУ ноду из кластера (day-2). master СО
+    #                     слотами: сначала миграция слотов на оставшиеся masters
+    #                     (SETSLOT IMPORTING/MIGRATING + GETKEYSINSLOT + MIGRATE +
+    #                     SETSLOT NODE), затем CLUSTER FORGET на всех оставшихся.
+    #                     replica / master без слотов: просто FORGET на всех.
+    #                     Идемпотентен: ноды уже нет в CLUSTER NODES → no-op.
+    #   action=reshard  — перенести N слотов с master-а from на master to (day-2,
+    #                     зеркало redis-cli `--cluster reshard`): первые N слотов
+    #                     источника по возрастанию, каждый через SETSLOT IMPORTING/
+    #                     MIGRATING + GETKEYSINSLOT + MIGRATE + SETSLOT NODE.
+    #                     ★ НЕ ИДЕМПОТЕНТЕН (осознанно): повторный apply сдвинет
+    #                     ещё N слотов — это императивная exec-style операция, НЕ
+    #                     часть converge (оператор зовёт явно, как старый
+    #                     redis-cluster-live без unless).
+    #
+    # add-node слоты НЕ двигает (role=master добавляет ПУСТОЙ master); перенос
+    # слотов на новый master — это reshard.
+    cluster:
+      description: |
+        Управление Redis-кластером через go-redis (без redis-cli/shell).
+        action=create — собрать кластер (MEET → ADDSLOTS → REPLICATE),
+        раскладка ролей и 16384 слотов детерминирована, идемпотентен.
+        action=add-node — присоединить одну ноду к сформированному кластеру
+        (MEET + REPLICATE/empty-master), идемпотентен (нода уже в кластере →
+        no-op). action=remove-node — вывести одну ноду (master со слотами →
+        миграция слотов на оставшиеся masters + FORGET; иначе просто FORGET),
+        идемпотентен (ноды уже нет → no-op). action=reshard — перенести N слотов
+        с master from на master to (SETSLOT/MIGRATE первых N слотов источника).
+        ★ reshard НЕ ИДЕМПОТЕНТЕН (осознанно): повторный apply сдвинет ещё N
+        слотов — императивная exec-style day-2 операция, НЕ часть converge
+        (create/add-node/remove-node, напротив, идемпотентны). Без dry-run
+        preview (плагин не реализует PlanReadSafe).
+      input:
+        action:
+          type: string
+          required: true
+          description: >-
+            Операция над кластером: "create" (сборка кластера из nodes),
+            "add-node" (присоединение одной ноды к сформированному кластеру),
+            "remove-node" (вывод одной ноды из кластера) или "reshard" (перенос N
+            слотов с master from на master to; НЕ идемпотентен).
+        # ── action=create ────────────────────────────────────────────────────
+        nodes:
+          type: map
+          required: false
+          description: >-
+            (action=create) Узлы кластера: map стабильный-ключ (SID/имя) ->
+            { addr: "host:port" } либо { ip: "10.0.0.1", port: 6379 }. Ключи
+            СОРТИРУЮТСЯ — детерминируют раскладку master/replica. addr — для
+            коннекта, ip+port — для CLUSTER MEET (gossip оперирует ip:port).
+        replicas_per_shard:
+          type: int
+          required: false
+          default: 0
+          description: >-
+            (action=create) Реплик на один шард. shards = len(nodes) /
+            (1 + replicas_per_shard); len(nodes) обязан делиться на размер шарда.
+            Первые shards нод (по сортировке ключей) — мастера, остальные —
+            реплики round-robin.
+        # ── action=add-node ──────────────────────────────────────────────────
+        new_node:
+          type: map
+          required: false
+          description: >-
+            (action=add-node) Присоединяемая нода: { addr: "host:port" } либо
+            { ip, port }. addr — для коннекта (REPLICATE исполняется на ней),
+            ip+port — для CLUSTER MEET.
+        seed:
+          type: map
+          required: false
+          description: >-
+            (action=add-node) Любая существующая нода кластера (контакт для MEET
+            и источник CLUSTER NODES): { addr: "host:port" } либо { ip, port }.
+        role:
+          type: string
+          required: false
+          default: replica
+          description: >-
+            (action=add-node) Роль новой ноды: "replica" (CLUSTER REPLICATE к
+            master из params.master или к наименее загруженному) или "master"
+            (пустой master без слотов; слоты переносит отдельный reshard).
+        master:
+          type: map
+          required: false
+          description: >-
+            (action=add-node, role=replica) Master, чьей репликой станет новичок:
+            { addr: "host:port" } либо { ip, port }. Не задан → плагин выбирает
+            master с наименьшим числом реплик (балансировка, как redis-cli без
+            --cluster-master-id).
+        # ── action=remove-node ───────────────────────────────────────────────
+        # seed (выше) — общий с add-node: контакт для CLUSTER NODES + источник
+        # топологии для FORGET/миграции слотов.
+        node:
+          type: map
+          required: false
+          description: >-
+            (action=remove-node) Выводимая нода: { addr: "host:port" } либо
+            { ip, port }. Если это master СО слотами — слоты сперва мигрируют на
+            оставшиеся masters, затем CLUSTER FORGET на всех; replica / master
+            без слотов — просто FORGET. Идемпотентен (ноды уже нет → no-op).
+        # ── action=reshard ───────────────────────────────────────────────────
+        from:
+          type: map
+          required: false
+          description: >-
+            (action=reshard) Master-ИСТОЧНИК, с которого снимаются слоты:
+            { addr: "host:port" } либо { ip, port }. Обязан быть master-ом в
+            кластере и владеть >= slots слотами.
+        to:
+          type: map
+          required: false
+          description: >-
+            (action=reshard) Master-ПОЛУЧАТЕЛЬ слотов: { addr: "host:port" } либо
+            { ip, port }. Обязан быть master-ом в кластере и отличаться от from.
+        slots:
+          type: int
+          required: false
+          description: >-
+            (action=reshard) Сколько слотов перенести с from на to (>= 1).
+            Берутся ПЕРВЫЕ slots слотов источника по возрастанию. ★ НЕ
+            идемпотентно: повторный apply перенесёт ещё slots слотов.
+        # ── общие ────────────────────────────────────────────────────────────
+        password:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            Пароль Redis (vault-ref в operator-input; keeper резолвит до Apply).
+            Применяется при коннекте к КАЖДОЙ ноде. Маскируется в логах/трейсах/UI.
+        username:
+          type: string
+          required: false
+          description: ACL-username для AUTH (если не default-user).
+    # replica — привязать инстанс к master-у (REPLICAOF) через go-redis. addr —
+    # ЭТОТ инстанс (на redis-хосте локальный 127.0.0.1:6379, per-host инвариант);
+    # master_addr — host-ИНВАРИАНТНЫЙ адрес master-а кластера (ОДИН на кластер).
+    # Идемпотентен (INFO replication): уже реплика нужного master со здоровым
+    # линком → no-op. master НЕ реплицирует себя: addr == master_addr → no-op
+    # (guard В ПЛАГИНЕ — scenario зовёт replica на ВСЕХ хостах, включая master).
+    replica:
+      description: |
+        Привязать Redis к master-у через REPLICAOF (go-redis, без redis-cli).
+        masterauth ставится CONFIG SET до REPLICAOF (реплика знает пароль master).
+        Идемпотентен (INFO replication → уже реплика нужного master = no-op).
+        addr == master_addr → no-op (master не реплицирует себя, guard в плагине).
+        Без dry-run preview (плагин не реализует PlanReadSafe).
+      input:
+        addr:
+          type: string
+          required: true
+          description: >-
+            Адрес ЭТОГО инстанса: host:port (TCP) или unix-сокет ("unix:/path").
+            На redis-хосте локальный (127.0.0.1:6379) — плагин исполняется там же.
+        master_addr:
+          type: string
+          required: true
+          description: >-
+            Адрес master-а host:port. HOST-ИНВАРИАНТНЫЙ (один на кластер) —
+            scenario резолвит его run_once (soulprint.hosts[0]) и передаёт через
+            apply.input. addr == master_addr → инстанс есть master, no-op.
+        password:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            Пароль Redis (vault-ref; keeper резолвит до Apply). Ставится как
+            masterauth (CONFIG SET) до REPLICAOF. Маскируется. Пустой → masterauth
+            не ставится (master без requirepass).
+        username:
+          type: string
+          required: false
+          description: >-
+            ACL-username для репликации (CONFIG SET masteruser). Опционально.
+    # sentinel — горячая реконсиляция Redis Sentinel через go-redis (без redis-cli):
+    # SENTINEL MASTERS/MASTER (diff) → MONITOR/REMOVE+MONITOR → SET → CONFIG GET/SET.
+    # Алгоритм перенесён 1:1 из Ansible library/redis_sentinel_update.py. monitor.ip —
+    # HOST-ИНВАРИАНТНЫЙ адрес master-а (один на кластер); идемпотентен (монитор не
+    # трогается, если master уже на нужном адресе; SET — только при реальном отличии).
+    sentinel:
+      description: |
+        Реконсилировать Redis Sentinel через go-redis (без redis-cli/shell).
+        SENTINEL MONITOR/REMOVE (монитор) + SET (per-master) + CONFIG SET (globals).
+        Источник желаемого — config (директивы в файловой форме sentinel.conf):
+        плагин сам делит на globals/per-master (top-level CONFIG в Sentinel нет).
+        Идемпотентен (diff против SENTINEL MASTER/CONFIG GET). Без dry-run preview.
+      input:
+        addr:
+          type: string
+          required: true
+          description: >-
+            Адрес Sentinel-инстанса host:port (обычно 127.0.0.1:26379).
+        master_name:
+          type: string
+          required: false
+          default: mymaster
+          description: Логическое имя monitored master в Sentinel.
+        monitor:
+          type: map
+          required: false
+          description: >-
+            Желаемый адрес master для реконсиляции монитора: { ip, port, quorum }.
+            ip — HOST-ИНВАРИАНТНЫЙ (один на кластер). Не задан → монитор не
+            трогается (только SET/CONFIG SET параметров).
+        config:
+          type: map
+          required: false
+          description: >-
+            Желаемые директивы Sentinel в ФАЙЛОВОЙ форме (как в sentinel.conf):
+            { "sentinel down-after-milliseconds mymaster": "12000",
+            "sentinel announce-ip": "10.0.0.1", "loglevel": "notice" }. Плагин сам
+            раскладывает на globals (SENTINEL CONFIG SET) и per-master (SENTINEL
+            SET); startup-only (dir/port/tls-*) игнорирует — они меняются рестартом.
+        auth_user:
+          type: string
+          required: false
+          description: >-
+            Пользователь Sentinel для AUTH на master (SENTINEL SET auth-user).
+            Ставится при создании/пересоздании монитора.
+        auth_pass:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            Пароль Sentinel для AUTH на master (SENTINEL SET auth-pass). vault-ref;
+            keeper резолвит до Apply. Маскируется — НЕ попадает в события/логи.
+        redis_version:
+          type: string
+          required: false
+          description: >-
+            Версия Redis для version-gate глобальных параметров (loglevel доступен
+            в Sentinel с 7.0). Не задана → version-gated параметры отбрасываются.
+        password:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            Пароль для коннекта К САМОМУ Sentinel (requirepass Sentinel-инстанса),
+            если задан. vault-ref; keeper резолвит до Apply. Маскируется.
+        username:
+          type: string
+          required: false
+          description: ACL-username для коннекта к Sentinel (если не default-user).

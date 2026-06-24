@@ -21,18 +21,38 @@ package trial
 // Fixtures задают весь герметичный контекст прогона (input/essence/soulprint/
 // vault). Mocks.Register — register-контекст probe-шагов для `where:`/`when:`
 // (в L0-пилоте проброс готового register-payload-а, без исполнения probe).
-// Assert — ожидаемый результат; в пилоте используется только RenderedTasks.
+// Assert — ожидаемый результат; L0 сверяет RenderedTasks, StateChanges и
+// StateAfter (см. AssertBlock).
 type Case struct {
 	Name     string      `yaml:"name"`
 	Fixtures Fixtures    `yaml:"fixtures"`
 	Mocks    Mocks       `yaml:"mocks,omitempty"`
-	Assert   AssertBlock `yaml:"assert"`
+	Assert   AssertBlock `yaml:"assert,omitempty"`
+
+	// ExpectRenderError — кейс ОЖИДАЕТ, что Keeper-side render ОБОРВЁТСЯ ошибкой,
+	// содержащей эту подстроку (ADR-023 amendment 2026-06-23). Enabler fail-кейсов
+	// механизмов, падающих на render: assert: (ADR-009 amendment) и будущий
+	// required_when. Render-успех при заданном ExpectRenderError → FAIL кейса;
+	// render-ошибка без подстроки → FAIL; render-ошибка с подстрокой → PASS.
+	//
+	// Взаимоисключим с assert.rendered_tasks: «ожидаем abort» и «ожидаем план» —
+	// противоположные исходы (validate отвергает оба в одном кейсе). При
+	// ExpectRenderError секция assert пуста (плана нет). Опционально (omitempty):
+	// обычные L0-кейсы его не несут — путь рендера БИТ-В-БИТ.
+	ExpectRenderError string `yaml:"expect_render_error,omitempty"`
 }
 
 // Fixtures — герметичный вход прогона. Все поля опциональны; пустое поле =
 // пустой контекст соответствующей переменной CEL.
 //
-// Soulprint в L0 — факты одного хоста (карта `soulprint.self.<path>`).
+// Soulprint в L0 — факты ОДНОГО хоста (карта `soulprint.self.<path>`),
+// single-host сахар: harness строит roster из одного синтетического хоста.
+// Hosts — multi-host roster прогона (N хостов, render-инварианты топологии:
+// `soulprint.hosts`/`.where(...)`/`size()`/nodes-детерминизм). Soulprint и Hosts
+// ВЗАИМОИСКЛЮЧЕНЫ: оба в одном кейсе → strict-ошибка (validate), в духе
+// strict-декода harness. Соответствует уровню L0 render-only — какой хост
+// реально исполняет (dispatch) остаётся L3 ([ADR-023] amendment 2026-06-22).
+//
 // Vault — мок vault-резолва: ключ = logical-path секрета (`secret/<...>`),
 // значение = map полей секрета (форма KV v2 `data.data`).
 //
@@ -52,9 +72,27 @@ type Fixtures struct {
 	Input                map[string]any            `yaml:"input,omitempty"`
 	Essence              map[string]any            `yaml:"essence,omitempty"`
 	Soulprint            map[string]any            `yaml:"soulprint,omitempty"`
+	Hosts                []HostFixture             `yaml:"hosts,omitempty"`
 	Vault                map[string]map[string]any `yaml:"vault,omitempty"`
 	State                map[string]any            `yaml:"state,omitempty"`
 	DefaultDestinySource string                    `yaml:"default_destiny_source,omitempty"`
+}
+
+// HostFixture — одна запись multi-host roster-а L0 (`fixtures.hosts[]`).
+// Зеркало стабильных полей topology.HostFacts, видимых в render
+// (`soulprint.hosts[]`): sid/covens/role/soulprint/choirs.
+//
+// SID обязателен; Covens обязаны нести incarnation.name-метку (имя сценария
+// кейса) — зеркало прод-roster (`rosterSQL WHERE $1 = ANY(coven)`), иначе хост
+// не попадёт в таргет `on:`/`where:`. Role/Soulprint/Choirs опциональны.
+// Порядок roster-а в `soulprint.hosts` детерминирован сортировкой по SID
+// (harness, не порядок в YAML).
+type HostFixture struct {
+	SID       string         `yaml:"sid"`
+	Covens    []string       `yaml:"covens,omitempty"`
+	Role      string         `yaml:"role,omitempty"`
+	Soulprint map[string]any `yaml:"soulprint,omitempty"`
+	Choirs    []string       `yaml:"choirs,omitempty"`
 }
 
 // Mocks — моки для шагов, обращающихся к среде хоста.

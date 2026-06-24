@@ -1,0 +1,48 @@
+# L0-испытание top-level validate:-секции (ADR-009 amendment 2026-06-23, DSL wave 2):
+# FAIL-ветка кросс-полевого input-инварианта «tls.only требует tls.enable».
+#
+# Оператор задаёт input.tls.only=true БЕЗ input.tls.enable (и essence TLS не включает):
+# только-TLS закрывает plain-порт (`port 0`), но TLS-порт не открыт (enable=false) →
+# у Redis НИ ОДНОГО listener-а. validate:-правило create/main.yml ловит это НА INPUT-
+# ВАЛИДАЦИИ (config.EvalValidateRules, input-only eval) ДО render — понятным сообщением.
+#
+# validate-CEL — input-only БЕЗ custom-функций (default()/vault() недоступны): absent-
+# нормализация через has()-цепочку. Правило false → expect_render_error по подстроке
+# message (create/main.yml validate[1]).
+name: tls.only without tls.enable aborts at input validation (no listener)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network:
+      primary_ip: 10.0.0.5
+    os:
+      arch: amd64
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+  essence:
+    redis_type: standalone
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    # essence TLS НЕ включает (tls_enable отсутствует) → дефолт off.
+
+  # Оператор просит только-TLS, но не включает TLS — validate-правило false.
+  input:
+    redis_type: standalone
+    version: "7.2.4"
+    persistence: rdb
+    tls:
+      only: true
+
+# Прогон обрывается на validate: правило «tls.only требует tls.enable» false.
+# Подстрока — message правила (create/main.yml validate[1]).
+expect_render_error: "tls.only требует tls.enable"

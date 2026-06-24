@@ -1,0 +1,64 @@
+# L0-испытание reshard: перенести N слотов с master from на master to. Roster
+# прогона — 3 хоста (3-master cluster); from=node-1, to=node-2, slots=100.
+# Scenario строит ГОТОВУЮ топологию-map (from/to = primary_ip:6379 по SID из
+# roster) и зовёт плагин run_once. ВЫБОР первых N слотов источника и сам перенос
+# (SETSLOT/MIGRATE/SETSLOT NODE) делает ПЛАГИН в рантайме по CLUSTER NODES — на L0
+# не видно (render не исполняет Redis); последовательность/лосслесс доказаны
+# плагин-тестами (cluster_test.go). ★ reshard НЕ идемпотентен — это imperative,
+# L0 это не «доказывает» (см. per-module doc); здесь проверяется render-контракт.
+name: reshard slots from source to target master
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-1.example.com
+      covens: [reshard, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-2.example.com
+      covens: [reshard, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-3.example.com
+      covens: [reshard, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/reshard:
+      password: s3cr3t-redis-pass-reshard
+  state:
+    redis_type: cluster
+    redis_version: ""
+    redis_config:
+      maxmemory: "256mb"
+      cluster-enabled: "yes"
+      cluster-config-file: "nodes.conf"
+      cluster-node-timeout: "5000"
+    redis_users: {}
+    redis_hosts: []
+
+  input:
+    from_sid: node-1.example.com
+    to_sid: node-2.example.com
+    slots: 100
+
+assert:
+  rendered_tasks:
+    # GUARD теперь assert: (from != to, оба в roster → that[0] true → render проходит,
+    # задача в план НЕ эмитится) → RESHARD сдвинут на −1 (1→0).
+    #
+    # RESHARD run_once: endpoint-ы из roster по SID. from=node-1, to=node-2,
+    # slots=100 (int() → нативное число). password из vault.
+    - index: 0
+      module: community.redis.cluster
+      params:
+        action: reshard
+        password: s3cr3t-redis-pass-reshard
+        slots: 100
+        from:
+          addr: "10.0.0.1:6379"
+        to:
+          addr: "10.0.0.2:6379"

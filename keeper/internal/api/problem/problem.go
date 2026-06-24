@@ -125,6 +125,18 @@ const (
 	// policy-отказ по способу провижининга, а не нехватка permission; UI/SDK может
 	// различить «метод выключен политикой» от «недостаточно прав».
 	TypeProvisioningMethodDisabled = "https://soul-stack.io/errors/provisioning-method-disabled"
+	// TypeAssertFailed — scenario `assert:`-предикат не прошёл на pre-flight-
+	// гейте СОЗДАНИЯ прогона (ADR-009/ADR-027 amendment 2026-06-23, форма A):
+	// roster прогона не сходится с инвариантом топологии (напр. cluster size-
+	// guard). 422 Unprocessable Entity — запрос синтаксически валиден, но
+	// предусловие МОДЕЛИ не выполнено (parity `validation-failed`/input_invalid:
+	// тот же 422-класс «семантика входа не сходится»). Отдельный URN от
+	// `validation-failed`: UI/SDK различает «топология не сходится» (роняй на
+	// roster/scope) от «поле input не матчит схему». incarnation НЕ создаётся,
+	// fail-статус (error_locked) НЕ ставится — отказ на этапе модели ДО коммита.
+	// НЕ 412 Precondition Failed (зарезервирован под conditional-headers
+	// If-Match/If-None-Match — путать нельзя).
+	TypeAssertFailed = "https://soul-stack.io/errors/assert-failed"
 )
 
 // titles — фиксированные английские заголовки для каждого known-`type`.
@@ -174,6 +186,7 @@ var titles = map[string]string{
 	TypeHeraldExists:               "Herald already exists",
 	TypeTidingExists:               "Tiding already exists",
 	TypeProvisioningMethodDisabled: "Provisioning method disabled by policy",
+	TypeAssertFailed:               "Assertion failed",
 }
 
 // Details — JSON-форма RFC 7807-объекта. Поля строго по RFC; кастомные
@@ -260,4 +273,5 @@ var statuses = map[string]int{
 	TypeHeraldExists:               http.StatusConflict,
 	TypeTidingExists:               http.StatusConflict,
 	TypeProvisioningMethodDisabled: http.StatusForbidden,
+	TypeAssertFailed:               http.StatusUnprocessableEntity,
 }

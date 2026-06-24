@@ -1,33 +1,30 @@
-# Post-apply ожидания redis::create в L3b (real-soul-in-container под
-# examples/service/redis). Один Debian-12 systemd-PID-1 контейнер
-# (soul-live-a.example.com). create раскрывает три standalone-destiny через
-# apply:destiny: redis-single (apt-пакет + redis.conf + systemd) → redis-exporter
-# (GitHub-tarball + unit) → node-exporter (GitHub-tarball + unit). Это первый
-# L3b-сервис-композиция (smoke-nginx-live/redis-cluster-live — самодостаточны).
+# Post-apply ожидания redis::create (режим standalone) в L3b
+# (real-soul-in-container под examples/service/redis, redis-консолидация
+# концепции Ansible-роли). Один Debian-12 systemd-PID-1 контейнер
+# (soul-live-a.example.com). create-диспетчер инклудит ветку standalone
+# (cluster/sentinel/sentinel_only гасятся static-when), которая раскрывает
+# режим-агностичный destiny `redis`: apt redis-server + render redis.conf
+# (merged config) + render users.acl + systemd hardening drop-in. Живой
+# health-gate PING — через плагин community.redis.command.
+#
+# Экспортеры (redis_exporter/node_exporter) ВЫНЕСЕНЫ из service/redis: мониторинг —
+# отдельная сущность (redis-консолидация .pm/tasks/2026-06-22-redis-consolidation).
 #
 # apply_runs/incarnation_state/audit/metrics — те же контракт-проверки, что в
-# smoke-nginx-live. incarnation_state идёт из scenario.state_changes.sets
-# (keeper-side рендер из input/essence ПОСЛЕ барьера), НЕ из RunResult.
+# smoke-nginx-live. incarnation_state идёт из scenario.state_changes (keeper-side
+# рендер из input/essence ПОСЛЕ барьера), НЕ из RunResult.
 #
-# host_state — реальная верификация Exec-ом внутри контейнера (L3b-4 +
-# endpoints-расширение): пакет redis-server installed + systemd active, unix-сокет
-# существует; redis_exporter/node_exporter active.
-#
-# ★ Piggyback-проверка node-exporter (центральная цель этого pilot-а):
-#   - бинарь /usr/local/bin/node_exporter существует (files);
-#   - systemd-unit node_exporter active (services);
-#   - порт :9100 РЕАЛЬНО слушает и отдаёт /metrics (endpoints, curl внутри
-#     контейнера → тело содержит "node_" — node_exporter-метрику). Это и есть
-#     доказательство «node-exporter поднялся», которого services/files по
-#     отдельности не дают.
+# host_state — реальная верификация Exec-ом внутри контейнера: пакет redis-server
+# installed + systemd active, redis.conf отрендерен с merged-директивами.
 apply_runs:
   status: success
 
 incarnation_state:
-  node_exporter_version: "1.8.2"
-  redis_exporter_version: "1.62.0"
-  redis_socket: /var/run/redis/redis-server.sock
-  redis_maxmemory: 256mb
+  redis_type: standalone
+  # maxmemory = memory_mb(1024)*reserve(75)/100 = 768mb (merge-трансляция).
+  redis_config:
+    maxmemory: 768mb
+    maxmemory-policy: volatile-lru
 
 audit_events:
   - type: incarnation.created
@@ -41,19 +38,8 @@ host_state:
       redis-server: installed
     services:
       redis-server: active
-      redis_exporter: active
-      node_exporter: active
     files:
-      # unix-сокет redis (единая точка интеграции с redis_exporter).
-      - path: /var/run/redis/redis-server.sock
-      # бинарь node_exporter, разложенный из GitHub-tarball (piggyback).
-      - path: /usr/local/bin/node_exporter
-      # бинарь redis_exporter, разложенный из GitHub-tarball.
-      - path: /usr/local/bin/redis_exporter
-    endpoints:
-      # ★ node-exporter слушает :9100 и отдаёт /metrics с node_-метриками.
-      - url: http://127.0.0.1:9100/metrics
-        contains: "node_"
-      # redis_exporter слушает :9121 и отдаёт redis_-метрики.
-      - url: http://127.0.0.1:9121/metrics
-        contains: "redis_"
+      # redis.conf, отрендеренный из merged redis_config (директива maxmemory
+      # доказывает, что merge-трансляция простого ввода дошла до файла на хосте).
+      - path: /etc/redis/redis.conf
+        contains: "maxmemory 768mb"

@@ -104,6 +104,12 @@ func (p *Pipeline) renderApplyDestiny(
 		Templates:       resolved.Templates, // .tmpl из снапшота ИМЕННО этой destiny
 		Ctx:             ctx,                // vault() в destiny-params: отмена/таймаут ReadKV
 		destinyIsolated: true,
+		// seal (ADR-010 §7.4): тот же аккумулятор прогона — destiny-params с
+		// `${ vault(...) }` маркируются sealed наравне со scenario. destiny-input
+		// secret-флаг детектится только если ResolvedDestiny несёт Input-схему (в
+		// пилоте не пробрасывается — vault()-провенанс ловится без схемы; см.
+		// observations: транзит destiny-secret-input — отдельный слайс).
+		Sealed: parentIn.Sealed,
 	}
 
 	// destiny-локалы vars.yml (Вариант A, vars.md): резолв ОДИН раз на проход
@@ -138,6 +144,27 @@ func (p *Pipeline) renderApplyDestiny(
 
 		if gerr := guardDestinyTask(task, i, resolved.Name); gerr != nil {
 			return nil, nil, gerr
+		}
+
+		// block: внутри destiny-прохода (ADR-009 amendment 2026-06-24) — render-time
+		// fan-out в плоский слой, как в scenario (renderBlockTask), но в destiny-
+		// семантике: наследование env-agnostic (mergeBlockInheritance: when/vars/
+		// requisites), roster наследуется ЦЕЛИКОМ (block НЕ сужает хосты — where/on
+		// на destiny-block отвергнуты guardDestinyBlockChild), serialWidth родителя
+		// destiny протягивается в каждый DispatchPlan потомка. Static-when-false блок
+		// НЕ гасится emitStaticWhenSkip (она пропускает block-задачу) — заходит сюда,
+		// walkBlockChildren вливает block.when в каждого потомка через AND и каждый
+		// child эмитит СВОЙ skip-placeholder с register/requisites (flat-register-
+		// scope цел при skip — register потомков виден снаружи через resolveOnChanges).
+		if task.Block != nil {
+			bt, bp, berr := p.renderDestinyBlock(ctx, destinyIn, task, idx, targeted, serialWidth)
+			if berr != nil {
+				return nil, nil, berr
+			}
+			tasks = append(tasks, bt...)
+			plans = append(plans, bp...)
+			idx += len(bt)
+			continue
 		}
 
 		destinyTargeted, terr := resolveTargets(p.cel, destinyIn, task)
@@ -291,32 +318,163 @@ func applyInputContract(values map[string]any, schema config.InputSchemaMap, des
 }
 
 // guardDestinyTask отвергает вложенные DSL-конструкции destiny вне пилот-объёма
-// (block:/parallel:/вложенный apply:) и scenario-only ключи на destiny-задаче
+// (parallel:/вложенный apply:) и scenario-only ключи на destiny-задаче
 // (serial:/run_once: — недопустимы в destiny, docs/destiny/tasks.md §3;
 // serial: scenario-уровня наследуется destiny через параметр renderApplyDestiny,
 // не через поле destiny-задачи). Пилот поддерживает плоский destiny: module-
 // задачи с on:/where: + loop: (слайс E снят — fan-out наследует изоляцию destiny
-// через loopInvariantVars: AllowHosts=false, Register пуст). Остальные вложенные
-// конструкции — слайсы C/…. include: внутри
-// destiny раскрывается ДО render (within-destiny, в DestinyLoader.parseTasks /
-// fixture-резолвере); дошедший до render include — ErrUnexpandedInclude (баг
-// раскрытия), не «вне pilot».
+// через loopInvariantVars: AllowHosts=false, Register пуст) + block: (ADR-009
+// amendment 2026-06-24 — render-time fan-out, renderDestinyBlock).
+// include: внутри destiny раскрывается ДО render (within-destiny, в
+// DestinyLoader.parseTasks / fixture-резолвере); дошедший до render include —
+// ErrUnexpandedInclude (баг раскрытия), не «вне pilot».
+//
+// ★ block-задача (task.Block != nil) ПРОХОДИТ guardDestinyTask: в renderApplyDestiny
+// guardDestinyTask вызывается РАНЬШЕ ветки block (guardDestinyTask :145 → ветка
+// `if task.Block != nil` renderDestinyBlock :157). Поэтому `case task.Block != nil`
+// ниже — LOAD-BEARING на живом пути: он намеренно ПРОПУСКАЕТ block (return nil, не
+// считая её module-задачей), после чего renderApplyDestiny ветвит на renderDestinyBlock.
+// Удалить его как «мёртвый» нельзя — без него block упал бы в `case task.Module == nil`
+// (не-module-задача). Граница ключей ВНУТРИ destiny-block — guardDestinyBlockChild.
 func guardDestinyTask(task config.Task, idx int, destiny string) error {
 	switch {
 	case task.Apply != nil:
 		return fmt.Errorf("%w: вложенный apply: в destiny %q (task[%d] %q)", ErrUnsupportedDSL, destiny, idx, task.Name)
 	case task.Include != nil:
 		return fmt.Errorf("%w: в destiny %q (task[%d] %q)", ErrUnexpandedInclude, destiny, idx, task.Name)
-	case task.Block != nil:
-		return fmt.Errorf("%w: block: в destiny %q (task[%d] %q)", ErrUnsupportedDSL, destiny, idx, task.Name)
 	case task.Parallel:
 		return fmt.Errorf("%w: parallel: в destiny %q (task[%d] %q)", ErrUnsupportedDSL, destiny, idx, task.Name)
 	case task.RunOnce:
 		return fmt.Errorf("%w: run_once: в destiny %q (task[%d] %q)", ErrUnsupportedDSL, destiny, idx, task.Name)
 	case task.Serial != nil:
 		return fmt.Errorf("%w: serial: в destiny %q (task[%d] %q)", ErrUnsupportedDSL, destiny, idx, task.Name)
+	case task.Block != nil:
+		// LOAD-BEARING (не мёртвый код): guardDestinyTask вызывается РАНЬШЕ ветки block
+		// в renderApplyDestiny (:145 vs :157), поэтому block ПРОХОДИТ этот guard первым.
+		// Намеренно пропускаем (return nil) — block валиден в destiny (ADR-009 amendment),
+		// её обработает renderDestinyBlock сразу после. Без этого case block упала бы в
+		// `case task.Module == nil` ниже (не module-задача → ошибка).
+		return nil
 	case task.Module == nil:
 		return fmt.Errorf("%w: task[%d] %q в destiny %q не является module-задачей", ErrUnsupportedDSL, idx, task.Name, destiny)
+	}
+	return nil
+}
+
+// renderDestinyBlock разворачивает block-задачу ВНУТРИ destiny-прохода (ADR-009
+// amendment 2026-06-24) в плоский слой RenderedTask — зеркало renderBlockTask
+// (block.go) в destiny-семантике. Переиспользует тот же обход walkBlockChildren
+// (единый source-of-truth наследования: mergeBlockInheritance → emitStaticWhenSkip
+// → guard → render), отличаясь тремя слоевыми инвариантами:
+//
+//   - guard потомка — guardDestinyBlockChild: отвергает scenario-оркестрацию
+//     (where/serial/run_once/on/parallel/loop/include/apply) на block или его
+//     потомке. В destiny эти ключи бессмысленны (нет roster-резолва на потомке).
+//   - roster наследуется ЦЕЛИКОМ (block НЕ сужает хосты): target-callback всегда
+//     возвращает targeted блока, в отличие от scenario, где where: потомка сужает.
+//   - serialWidth родителя destiny протягивается в каждый DispatchPlan потомка
+//     (block НЕ несёт свой serial — он отвергнут guard-ом; width приходит из serial:
+//     apply-задачи родителя через renderApplyDestiny).
+//
+// width=0 для apply-потомка не используется — apply на потомке отвергает
+// guardDestinyBlockChild раньше, ветка child.Apply в walkBlockChildren недостижима.
+//
+// flat register-scope (кейс #10): register потомков block виден СНАРУЖИ block —
+// потомки вклеиваются в общий плоский tasks[] destiny-прохода со сквозными idx,
+// resolveOnChanges/resolveOnFail на выходе Render резолвят по плоскому списку
+// (collectFlatAddresses в config-слое уже рекурсивен через block:).
+func (p *Pipeline) renderDestinyBlock(
+	ctx context.Context,
+	destinyIn RenderInput,
+	blockTask config.Task,
+	startIndex int,
+	targeted []*topology.HostFacts,
+	width int,
+) ([]*RenderedTask, []DispatchPlan, error) {
+	// Граница ключей на САМОМ block-узле. Верхнеуровневый block ПРОХОДИТ
+	// guardDestinyTask (тот пропускает его `case task.Block`, см. выше), но НЕ его
+	// ключевые проверки module-специфичных полей — потому guardDestinyBlock здесь
+	// проверяет их на самом блоке. Вложенный block ловится guardDestinyBlockChild
+	// как block-потомок; здесь — единый текст ошибки для обоих путей.
+	if gerr := guardDestinyBlock(blockTask); gerr != nil {
+		return nil, nil, gerr
+	}
+	// roster наследуется блоком ЦЕЛИКОМ: block в destiny не несёт on/where (guard
+	// отвергает) — потомок применяется к тем же хостам, что и блок.
+	childTarget := func(_ config.Task) ([]*topology.HostFacts, error) {
+		return targeted, nil
+	}
+	// вложенный block → рекурсия того же destiny-слоя (наследование каскадом).
+	childRecurse := func(child config.Task, idx int, childTargeted []*topology.HostFacts) ([]*RenderedTask, []DispatchPlan, error) {
+		return p.renderDestinyBlock(ctx, destinyIn, child, idx, childTargeted, width)
+	}
+	return p.walkBlockChildren(ctx, destinyIn, blockTask, startIndex, width, guardDestinyBlockChild, childTarget, childRecurse)
+}
+
+// guardDestinyBlockChild — граница ключей destiny-block (render-слой; config-слой
+// общий на оба слоя и block-ключи там валидны). Отвергает scenario-оркестрацию на
+// потомке destiny-block явной [ErrUnsupportedDSL]:
+//
+//	where / serial / run_once / on / parallel / loop / include / apply
+//
+// — все они бессмысленны в destiny (нет roster-резолва потомка, нет вложенного
+// destiny). ВАЛИДНЫ (наследование env-agnostic + плоское ядро): when (AND-merge),
+// name, vars, onchanges/onfail/require (union), вложенный block:; потомок — module:
+// или вложенный block:.
+//
+// Симметрично guardPilotBlockChild (scenario-слой), но строже: scenario разрешает
+// apply/serial/run_once/where/on на потомке, destiny — нет.
+//
+// Граница ключей на САМОМ destiny-block (не потомке) — guardDestinyBlock,
+// вызывается в renderDestinyBlock (block проходит guardDestinyTask, чей `case
+// task.Block` его пропускает, затем ветка renderDestinyBlock зовёт guardDestinyBlock).
+func guardDestinyBlockChild(child config.Task, idx int, blockName string) error {
+	switch {
+	case child.Where != "":
+		return fmt.Errorf("%w: where: на потомке destiny-block %q (task[%d] %q) — scenario-оркестрация в destiny запрещена", ErrUnsupportedDSL, blockName, idx, child.Name)
+	case child.Serial != nil:
+		return fmt.Errorf("%w: serial: на потомке destiny-block %q (task[%d] %q) — scenario-оркестрация в destiny запрещена", ErrUnsupportedDSL, blockName, idx, child.Name)
+	case child.RunOnce:
+		return fmt.Errorf("%w: run_once: на потомке destiny-block %q (task[%d] %q) — scenario-оркестрация в destiny запрещена", ErrUnsupportedDSL, blockName, idx, child.Name)
+	case child.On != nil:
+		return fmt.Errorf("%w: on: на потомке destiny-block %q (task[%d] %q) — scenario-оркестрация в destiny запрещена", ErrUnsupportedDSL, blockName, idx, child.Name)
+	case child.Parallel:
+		return fmt.Errorf("%w: parallel: на потомке destiny-block %q (task[%d] %q) — scenario-оркестрация в destiny запрещена", ErrUnsupportedDSL, blockName, idx, child.Name)
+	case child.Loop != nil:
+		return fmt.Errorf("%w: loop: на потомке destiny-block %q (task[%d] %q) — вне destiny-объёма block", ErrUnsupportedDSL, blockName, idx, child.Name)
+	case child.Include != nil:
+		return fmt.Errorf("%w: include: на потомке destiny-block %q (task[%d] %q)", ErrUnexpandedInclude, blockName, idx, child.Name)
+	case child.Apply != nil:
+		return fmt.Errorf("%w: apply: на потомке destiny-block %q (task[%d] %q) — вложенный apply в destiny запрещён", ErrUnsupportedDSL, blockName, idx, child.Name)
+	case child.Module == nil && child.Block == nil:
+		return fmt.Errorf("%w: task[%d] %q в destiny-block %q не является module/block-задачей", ErrUnsupportedDSL, idx, child.Name, blockName)
+	}
+	return nil
+}
+
+// guardDestinyBlock — граница ключей на САМОМ block-узле destiny (не потомке).
+// Верхнеуровневый destiny-block ветвится в renderApplyDestiny ДО guardDestinyTask,
+// поэтому serial:/on:/run_once:/parallel:/loop: на нём НЕ ловятся ни guardDestinyTask
+// (block минует её), ни mergeBlockInheritance (она не наследует эти ключи потомку —
+// where наследуется, остальные остаются на block-узле). Отвергаем их здесь.
+//
+// where: на block-узле наследуется потомкам через mergeBlockInheritance и будет
+// поймано guardDestinyBlockChild на первом потомке — но если блок пуст (потомков
+// нет), where остался бы непроверенным; ловим его и тут для полноты.
+func guardDestinyBlock(blockTask config.Task) error {
+	switch {
+	case blockTask.Where != "":
+		return fmt.Errorf("%w: where: на destiny-block %q — scenario-оркестрация в destiny запрещена", ErrUnsupportedDSL, blockTask.Name)
+	case blockTask.Serial != nil:
+		return fmt.Errorf("%w: serial: на destiny-block %q — scenario-оркестрация в destiny запрещена", ErrUnsupportedDSL, blockTask.Name)
+	case blockTask.RunOnce:
+		return fmt.Errorf("%w: run_once: на destiny-block %q — scenario-оркестрация в destiny запрещена", ErrUnsupportedDSL, blockTask.Name)
+	case blockTask.On != nil:
+		return fmt.Errorf("%w: on: на destiny-block %q — scenario-оркестрация в destiny запрещена", ErrUnsupportedDSL, blockTask.Name)
+	case blockTask.Parallel:
+		return fmt.Errorf("%w: parallel: на destiny-block %q — scenario-оркестрация в destiny запрещена", ErrUnsupportedDSL, blockTask.Name)
+	case blockTask.Loop != nil:
+		return fmt.Errorf("%w: loop: на destiny-block %q — вне destiny-объёма block", ErrUnsupportedDSL, blockTask.Name)
 	}
 	return nil
 }

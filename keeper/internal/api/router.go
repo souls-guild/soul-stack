@@ -50,6 +50,7 @@ import (
 //	GET    /v1/incarnations/{name}                   — get incarnation (M0.6c-1).
 //	GET    /v1/incarnations/{name}/history           — state_history (M0.6c-1).
 //	POST   /v1/incarnations/{name}/scenarios/{scenario} — run named scenario (M0.6c).
+//	POST   /v1/incarnations/{name}/scenarios/{scenario}/form-prefill — day-2 prefill формы из state (docs/input.md).
 //	POST   /v1/incarnations/{name}/unlock            — снять error_locked (M0.6c).
 //	POST   /v1/incarnations/{name}/upgrade           — перевод state_schema_version (ADR-019).
 //	DELETE /v1/incarnations/{name}                   — destroy incarnation (S-D4).
@@ -505,6 +506,19 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				apimiddleware.RequireAction(enforcer, "incarnation", "get"),
 			).Group(func(r chi.Router) {
 				registerHumaIncarnationGet(newHumaCadenceAPI(r), incH)
+			})
+
+			// POST /v1/incarnations/{name}/scenarios/{scenario}/form-prefill — day-2
+			// pre-fill UI-формы сценария из incarnation.state (docs/input.md). READ-
+			// резолв (не мутация): audit НЕ навешан, newHumaCadenceAPI. Permission
+			// incarnation.get (reuse: кто читает инкарнацию, тот и получает prefill её
+			// формы); per-{name} scope — in-handler inScope-предикат (GetInScopeFor,
+			// action=get), как у Get/History. Path-whitelist и secret-исключение —
+			// внутри FormPrefillTyped.
+			r.With(
+				apimiddleware.RequireAction(enforcer, "incarnation", "get"),
+			).Group(func(r chi.Router) {
+				registerHumaIncarnationFormPrefill(newHumaCadenceAPI(r), incH)
 			})
 
 			r.With(

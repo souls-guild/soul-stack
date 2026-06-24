@@ -1,0 +1,30 @@
+# Post-apply ожидания redis::create (режим cluster) в L3b
+# (real-soul-in-container под examples/service/redis, redis-консолидация).
+# Три Debian-12 systemd-PID-1 контейнера: shards=3, replicas_per_shard=0 →
+# 3 master без реплик. cluster формируется ЦЕЛИКОМ через плагин
+# community.redis.cluster (CLUSTER MEET/ADDSLOTS), а не redis-cli --cluster create.
+#
+# ★ Используется skip-нутым TestL3bRedisClusterCreate_ThreeNode: cluster-create
+# через плагин ещё не доказан live end-to-end (см. шапку теста). Fixture лежит
+# готовым к реактивации вместе с harness cluster-bootstrap/verify helper-ами.
+apply_runs:
+  status: success
+
+incarnation_state:
+  redis_type: cluster
+  redis_config:
+    cluster-enabled: "yes"
+    cluster-config-file: nodes.conf
+
+audit_events:
+  - type: incarnation.created
+
+metrics:
+  keeper_scenario_runs_total{result="ok"}: ">= 1"
+
+host_state:
+  - soul: soul-live-a.example.com
+    packages:
+      redis-server: installed
+    services:
+      redis-server: active
