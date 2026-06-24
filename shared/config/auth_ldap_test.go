@@ -101,6 +101,26 @@ func TestKeeperAuthLDAP_SearchRequiresBindCreds(t *testing.T) {
 	}
 }
 
+// TestKeeperAuthLDAP_UnsupportedBindMode — bind_mode вне {"", "search"} → ERROR
+// на load (раньше ловилось только runtime в ldap.New): стадия 1 поддерживает
+// только search-bind, direct отложен (code-nit, point 5).
+func TestKeeperAuthLDAP_UnsupportedBindMode(t *testing.T) {
+	src := keeperBaseRequired + `auth:
+  ldap:
+    url: "ldaps://ldap.example.com:636"
+    bind_mode: direct
+    bind_dn: "cn=svc,dc=example,dc=com"
+    bind_password_ref: vault:secret/keeper/ldap-bind
+    base_dn: "ou=people,dc=example,dc=com"
+    user_filter: "(uid=%s)"
+`
+	_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", []byte(src), ValidateOptions{})
+	if !hasCode(diags, "ldap_bind_mode_unsupported") {
+		dump(t, diags)
+		t.Fatalf("expected ldap_bind_mode_unsupported for bind_mode=direct")
+	}
+}
+
 // TestKeeperAuthLDAP_BindPasswordRefFormat — bind_password_ref не vault-ref →
 // ошибка формата (тот же checkVaultRef, что у redis.password_ref).
 func TestKeeperAuthLDAP_BindPasswordRefFormat(t *testing.T) {

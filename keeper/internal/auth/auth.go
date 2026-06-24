@@ -1,16 +1,17 @@
 // Package auth — федеративная аутентификация операторов (Archon) поверх
-// внешних identity-провайдеров (LDAP / OAuth2-OIDC). ADR-058 (СТАТУС: draft).
-//
-// ★ СКЕЛЕТ. Это каркас под ADR-058 (propose-and-wait): интерфейсы +
-// типы данных + TODO-заглушки. Реальная LDAP/OIDC-логика и интеграция в
-// прод-auth-flow добавляются ТОЛЬКО после одобрения дизайна пользователем.
-// Сейчас здесь нет ни сетевых вызовов, ни импортов go-oidc/go-ldap/oauth2.
+// внешних identity-провайдеров (LDAP / OAuth2-OIDC). ADR-058 (accepted,
+// стадии 1 LDAP + 2 OIDC реализованы и доведены end-to-end).
 //
 // Модель (ADR-058): внешний IdP аутентифицирует человека-Архонта, Keeper
 // ВАЛИДИРУЕТ результат, МАППИТ внешнюю identity на реестр operators(aid) +
 // RBAC-роли и выпускает ВНУТРЕННИЙ JWT существующим jwt.Issuer (ADR-014).
 // Вся остальная система (auth-middleware, RBAC, MCP, OpenAPI) остаётся
 // JWT-based и НЕ меняется.
+//
+// Состав пакета: контракты Authenticator/Mapper + ExternalIdentity/MappedOperator
+// (этот файл), DBMapper-реализация маппинга на operators+роли (mapper.go),
+// конкретные аутентификаторы — подпакеты ldap/ и oidc/ (сетевые вызовы,
+// go-ldap/go-oidc/oauth2). Endpoint-слой — keeper/internal/api/huma_{auth,oidc}.go.
 package auth
 
 import (

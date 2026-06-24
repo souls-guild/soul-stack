@@ -367,12 +367,15 @@ func (h *OperatorHandler) IssueTokenTyped(ctx context.Context, claims *jwt.Claim
 
 // OperatorView — ПЛОСКАЯ wire-форма Operator-а (list-item / get-200), handler-
 // native PILOT (заменяет Operator-алиас). Nullable-поля отражают NULL в БД:
-// created_by_aid (NULL у первого bootstrap-Архонта), revoked_at (NULL у
-// активного). bootstrap_initial — derived-флаг (CreatedByAID==nil) для UI
-// (отдельной колонки в БД нет — ADR-013 фиксирует факт через
-// `created_by_aid IS NULL` + partial unique index). Пакет api проецирует
-// OperatorView → native-схему Operator (register-func), wire-форма (UTC +
-// Truncate(Second) на date-time) фиксируется здесь.
+// created_by_aid (NULL у bootstrap/system/federated — ADR-058(d) легализовал
+// NULL для не-bootstrap-строк), revoked_at (NULL у активного). bootstrap_initial —
+// derived-флаг `op.IsBootstrap()` (created_via='bootstrap') для UI: отдельной
+// колонки в БД нет, единственность первого Архонта гарантирует partial unique
+// index `WHERE created_via='bootstrap'` (ADR-013/ADR-014 amendment 2026-06-23,
+// миграция 085). Признак перенесён с прежнего `created_by_aid IS NULL` —
+// иначе federated/system-операторы с NULL-родителем давали ложный bootstrap-флаг.
+// Пакет api проецирует OperatorView → native-схему Operator (register-func),
+// wire-форма (UTC + Truncate(Second) на date-time) фиксируется здесь.
 type OperatorView struct {
 	AID              string
 	AuthMethod       string
