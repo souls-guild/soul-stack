@@ -78,6 +78,57 @@ func TestApplied_NewDropIn_WritesAndReloads(t *testing.T) {
 	}
 }
 
+// TestApplied_EmptySettings_NoOp — пустой набор settings (len==0): ранний no-op,
+// changed=false, БЕЗ записи пустого drop-in и БЕЗ reload (general-purpose edge:
+// bulk-задача без параметров — нечего применять).
+func TestApplied_EmptySettings_NoOp(t *testing.T) {
+	dir := t.TempDir()
+	r := internaltest.NewRunner()
+	m := &sysctl.Module{Runner: r, Dir: dir}
+
+	stream := &internaltest.ApplyStream{}
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State:  "applied",
+		Params: mustStruct(t, appliedParams(map[string]any{}, nil)),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if stream.Last().Failed {
+		t.Fatalf("пустой settings → Failed: %v", stream.Last().Message)
+	}
+	if stream.Last().Changed {
+		t.Fatal("пустой settings → changed=true (ожидался no-op)")
+	}
+	if _, err := os.Stat(dropInPath(dir, "30-redis")); !os.IsNotExist(err) {
+		t.Fatalf("пустой settings записал drop-in (ожидалось: файла нет): %v", err)
+	}
+	if reloadCalled(r) {
+		t.Fatalf("пустой settings вызвал reload: %v", r.Calls)
+	}
+}
+
+// TestPlanApplied_EmptySettings_NoDrift — пустой набор settings → drift=false
+// (симметрия с applyApplied: нечего применять → нет дрейфа), без записи.
+func TestPlanApplied_EmptySettings_NoDrift(t *testing.T) {
+	dir := t.TempDir()
+	r := internaltest.NewRunner()
+	m := &sysctl.Module{Runner: r, Dir: dir}
+
+	stream := &planStream{}
+	if err := m.Plan(&pluginv1.PlanRequest{
+		State:  "applied",
+		Params: mustStruct(t, appliedParams(map[string]any{}, nil)),
+	}, stream); err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if got := stream.last(); got == nil || got.GetChanged() {
+		t.Fatalf("changed=%v, want false (пустой settings — no drift)", got.GetChanged())
+	}
+	if _, err := os.Stat(dropInPath(dir, "30-redis")); !os.IsNotExist(err) {
+		t.Fatalf("Plan записал drop-in на пустом settings: %v", err)
+	}
+}
+
 // TestApplied_Idempotent_SameMap — drop-in уже совпадает → changed=false, БЕЗ
 // записи и БЕЗ reload (reload-gating: auto + нет file-change → no-op).
 func TestApplied_Idempotent_SameMap(t *testing.T) {
