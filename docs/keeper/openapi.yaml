@@ -1042,6 +1042,23 @@ components:
       required:
         - apply_id
       type: object
+    IncarnationFormPrefillReply:
+      additionalProperties: false
+      properties:
+        values:
+          additionalProperties: {}
+          description: field → текущее значение из incarnation.state (prefill-hint)
+          type: object
+      required:
+        - values
+      type: object
+    IncarnationFormPrefillRequest:
+      additionalProperties: false
+      properties:
+        ref:
+          description: опц. git-ref версии сервиса (схема той же версии, что форма); пусто → версия инкарнации
+          type: string
+      type: object
     IncarnationGetReply:
       additionalProperties: false
       properties:
@@ -6297,6 +6314,71 @@ paths:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Service Unavailable
       summary: Запустить сценарий инкарнации
+      tags:
+        - incarnation
+  /v1/incarnations/{name}/scenarios/{scenario}/form-prefill:
+    post:
+      description: Текущие значения state под поля схемы сценария с prefill_from_state (docs/input.md). Path-whitelist (клиент путь не задаёт), secret-поля исключены. Вне RBAC-scope → 404. Permission incarnation.get. Read-only, без audit.
+      operationId: incarnationFormPrefill
+      parameters:
+        - description: имя инкарнации
+          in: path
+          name: name
+          required: true
+          schema:
+            description: имя инкарнации
+            type: string
+        - description: имя сценария
+          in: path
+          name: scenario
+          required: true
+          schema:
+            description: имя сценария
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IncarnationFormPrefillRequest"
+              description: "опц. тело: версия сервиса (ref)"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IncarnationFormPrefillReply"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Bad Request
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Pre-fill day-2-формы сценария из incarnation.state
       tags:
         - incarnation
   /v1/incarnations/{name}/unlock:
