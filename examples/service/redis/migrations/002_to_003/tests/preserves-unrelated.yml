@@ -1,0 +1,65 @@
+name: preserves-unrelated
+description: >
+  Write-model (redis_config/redis_users/redis_hosts/redis_sentinel) и
+  redis_type/redis_version НЕ трогаются миграцией — переезжают бит-в-бит.
+  Миграция только ДОБАВЛЯЕТ namedfields рядом. redis_users — уже v2-map-форма
+  (после 001_to_002): проверяем, что её структура сохранена.
+
+state_before:
+  redis_type: cluster
+  redis_version: "7.2.4"
+  redis_config:
+    maxmemory: "256mb"
+    maxmemory-policy: allkeys-lru
+    maxclients: 10000
+    timeout: 300
+    save: "900 1 300 10 60 10000"
+    appendonly: "no"
+    cluster-enabled: "yes"
+    cluster-config-file: "nodes.conf"
+    cluster-node-timeout: "5000"
+  redis_users:
+    app:     { perms: "~app:* +@read +@write", state: "on" }
+    monitor: { perms: "off ~* &* +@all", state: "off" }
+  redis_hosts:
+    - { sid: node-1.example.com, role: primary }
+    - { sid: node-2.example.com, role: primary }
+  redis_sentinel: {}
+
+state_after:
+  redis_type: cluster
+  redis_version: "7.2.4"
+  redis_config:
+    maxmemory: "256mb"
+    maxmemory-policy: allkeys-lru
+    maxclients: 10000
+    timeout: 300
+    save: "900 1 300 10 60 10000"
+    appendonly: "no"
+    cluster-enabled: "yes"
+    cluster-config-file: "nodes.conf"
+    cluster-node-timeout: "5000"
+  redis_users:
+    app:     { perms: "~app:* +@read +@write", state: "on" }
+    monitor: { perms: "off ~* &* +@all", state: "off" }
+  redis_hosts:
+    - { sid: node-1.example.com, role: primary }
+    - { sid: node-2.example.com, role: primary }
+  redis_sentinel: {}
+  tls:
+    enable: false
+    only: false
+    port: 7379
+    cert_ref: ""
+    key_ref: ""
+    ca_ref: ""
+  install:
+    method: package
+  persistence: rdb
+  maxmemory_policy: allkeys-lru
+  memory_mb: 0
+  modules: []
+  sysctl_settings: {}
+  shards: 0
+  replicas: 0
+  sentinel_quorum: 0
