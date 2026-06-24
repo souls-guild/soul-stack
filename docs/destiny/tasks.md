@@ -260,6 +260,20 @@
 - `loop:` на block — block+loop комбинация отложена.
 - Within-block `include:` (include-потомок) — внутри block пока только `module:` и вложенный `block:`.
 
+### `block:` внутри destiny-прохода (apply:destiny)
+
+`block:` поддержан не только в scenario, но и **внутри destiny**, рендеримой через `apply: { destiny: … }` ([ADR-009 amendment](../adr/0009-scenario-dsl.md)). Раньше `block:` в destiny-проходе отвергался pilot-рестриктом (`ErrUnsupportedDSL`) — рестрикт **снят**. Зеркало scenario-block в destiny-семантике: наследование `when:` (AND-merge с внутренним), `vars:` (база→override), requisites (`onchanges:` / `onfail:` / `require:` — union), вложенный `block:`; потомки — `module:` или вложенный `block:`.
+
+**Граница ключей destiny-block** (строже, чем scenario-block): scenario-оркестрация на destiny-block или его потомке **запрещена** (`ErrUnsupportedDSL`) — в destiny она бессмысленна (нет roster-резолва на потомке, нет вложенного `apply:`):
+
+- `where:` / `on:` / `serial:` / `run_once:` — таргетинг и волны живут на scenario-applier-задаче, не внутри destiny;
+- `parallel:` — parallel целиком отложен (как и в scenario-block);
+- `loop:` — block+loop комбинация отложена;
+- `include:` — within-block include отложен;
+- `apply:`-потомок — вложенный `apply:` в destiny запрещён (та же граница, что у плоской destiny-задачи).
+
+Roster наследуется блоком **целиком** (block НЕ сужает хосты — в отличие от scenario, где `where:` потомка сужает); `serial:`-окно applier-задачи протягивается во все потомки. `register:` потомка block виден задачам **снаружи** block (плоский register-scope: потомки вклеиваются в общий план destiny-прохода со сквозными индексами — типовой кейс «TLS-задачи в `block.when`, рестарт-`onchanges:` снаружи читает их `register:`»). Static-false `when:` block-а → весь блок гасится одним placeholder-ом, `register:` пуст.
+
 ### Когда `block:` vs `include:`
 
 - **`block:`** — короткая inline-группа (2–6 задач), которая не переиспользуется. Не плодим файлы.
