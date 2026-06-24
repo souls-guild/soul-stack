@@ -391,6 +391,65 @@ func TestRenderBlock_StaticSkipNested(t *testing.T) {
 	}
 }
 
+// TestRenderBlock_StaticFalseBlockDynamicChildOperand (флаг #10-review) — block со
+// static-false when: + потомок с СОБСТВЕННЫМ ДИНАМИЧЕСКИМ операндом
+// (when: register.cfg.changed). AND-merge даёт `(input.action == 'apply') &&
+// (register.cfg.changed)` — register-ссылка делает строку НЕ статической
+// (isStaticWhen → false из-за ExtractRegisterRefs), поэтому потомок НЕ гасится
+// static-skip-ом, а РЕНДЕРИТСЯ (Params != nil): динамический операнд переводит
+// обработку обратно в рендер. Закрепляет инвариант «динамический операнд потомка
+// бьёт static-false родителя»: register потомка сохранён и виден снаружи (onchanges
+// снаружи резолвится), params отрендерены, AND-предикат протянут as-is на Soul
+// (Soul вычислит весь AND, в т.ч. ложный block.when — потомок реально не исполнится,
+// но РЕШЕНИЕ принимает Soul, а не render-time skip). Контраст с
+// TestRenderBlock_StaticSkipPreservesRegister (там child.when пуст → AND = чистый
+// static-false → skip-placeholder).
+func TestRenderBlock_StaticFalseBlockDynamicChildOperand(t *testing.T) {
+	child := moduleTask("reload", "core.service.restarted")
+	child.Register = "reloaded"
+	child.When = "register.cfg.changed" // динамический операнд потомка
+	child.Module.Params = map[string]any{"name": "${ input.unit }"}
+	grp := config.Task{
+		Name:  "grp",
+		When:  "input.action == 'apply'", // static-false при diagnose
+		Block: &config.BlockTask{Block: []config.Task{child}},
+	}
+	consumer := moduleTask("consumer", "core.exec.run")
+	consumer.OnChanges = []string{"reloaded"} // ссылка на register потомка снаружи
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{grp, consumer}},
+		Input:       map[string]any{"action": "diagnose", "unit": "redis-server"},
+		Incarnation: IncarnationMeta{Name: "svc"},
+		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
+	}
+	tasks, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render: динамический операнд потомка static-false block НЕ должен ронять рендер: %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("len(tasks) = %d, want 2 (отрендеренный потомок + consumer)", len(tasks))
+	}
+	// ★ Ключевой инвариант: потомок РЕНДЕРИТСЯ (НЕ placeholder), т.к. AND-merge не статичен.
+	if tasks[0].Params == nil {
+		t.Fatal("tasks[0].Params == nil — динамический операнд должен переводить обработку в РЕНДЕР, а не static-skip")
+	}
+	if got := tasks[0].Params.GetFields()["name"].GetStringValue(); got != "redis-server" {
+		t.Errorf("tasks[0].name = %q, want redis-server (params отрендерены обычным путём)", got)
+	}
+	// AND-предикат протянут as-is — Soul вычислит весь AND (вкл. ложный block.when).
+	if got, want := tasks[0].When, "(input.action == 'apply') && (register.cfg.changed)"; got != want {
+		t.Errorf("tasks[0].When = %q, want %q (AND-merge протянут as-is на Soul)", got, want)
+	}
+	// register потомка сохранён и виден снаружи: consumer резолвит его в OnChangesIdx.
+	if tasks[0].Register != "reloaded" {
+		t.Errorf("tasks[0].Register = %q, want reloaded (register не теряется при рендере)", tasks[0].Register)
+	}
+	if len(tasks[1].OnChangesIdx) != 1 || tasks[1].OnChangesIdx[0] != 0 {
+		t.Errorf("consumer.OnChangesIdx = %v, want [0] — register отрендеренного потомка виден снаружи", tasks[1].OnChangesIdx)
+	}
+}
+
 // TestRenderBlock_IndexIntegrity (guard #7) — fan-out блока + последующая задача
 // дают сквозные монотонные Index без дыр.
 func TestRenderBlock_IndexIntegrity(t *testing.T) {

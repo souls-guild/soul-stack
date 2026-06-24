@@ -117,6 +117,49 @@ func TestCollectStateSchemaSecrets_AdditionalPropertiesNestedSecret(t *testing.T
 	}
 }
 
+// ★ Документирует ПРОБЕЛ (nit seal-review, НЕ фикс): собранный schema-путь
+// `users.password` НЕ матчит реальный путь ячейки `users.<dynamic-key>.password`.
+// Рекурсия в ap не вставляет сегмента под произвольный ключ → собирается
+// `users.password`, а maskMapLayered ведёт путь по КОНКРЕТНОМУ ключу map
+// (`users.alice.password`). [audit.SecretPathSet.IsSecret] сверяет точную форму И
+// normalizeIdx — но normalizeIdx обобщает только индексы среза (`[N]`→`[]`), не
+// map-ключи → совпадения нет. Schema-слой такой secret НЕ маскирует (деградация к
+// vault+regex по имени `password`). Тест фиксирует ТЕКУЩЕЕ поведение: при появлении
+// dynamic-key матчинга в IsSecret (отдельный слайс) ассерт `!IsSecret(...)` упадёт —
+// сигнал обновить ограничение в collectStateSchemaSecrets.
+func TestCollectStateSchemaSecrets_AdditionalPropertiesNestedSecret_DynamicKeyGap(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"users": map[string]any{
+				"type": "object",
+				"additionalProperties": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"password": map[string]any{"type": "string", "secret": true},
+					},
+				},
+			},
+		},
+	}
+	set := audit.SecretPathSet{}
+	collectStateSchemaSecrets(schema, "", set)
+
+	// Собирается ap-путь без dynamic-key сегмента.
+	if !set["users.password"] {
+		t.Fatalf("ожидался собранный путь `users.password`: %v", set)
+	}
+	// ★ Текущее поведение: реальный путь ячейки с КОНКРЕТНЫМ ключом map НЕ матчится
+	// schema-слоем (dynamic-key сегмент `alice` не покрыт; normalizeIdx его не трогает).
+	if set.IsSecret("users.alice.password") {
+		t.Errorf("IsSecret(users.alice.password) = true — gap неожиданно закрыт; обнови ограничение в collectStateSchemaSecrets")
+	}
+	// Контроль: обобщение idx не помогает — map-ключ не индекс среза.
+	if set.IsSecret("users.bob.password") {
+		t.Errorf("IsSecret(users.bob.password) = true — gap неожиданно закрыт; обнови ограничение в collectStateSchemaSecrets")
+	}
+}
+
 // secretSchemaForIncarnation материализует снапшот и объединяет state_schema
 // secret + create-scenario input secret под input.<name>.
 func TestSecretSchemaForIncarnation_StateAndInput(t *testing.T) {
