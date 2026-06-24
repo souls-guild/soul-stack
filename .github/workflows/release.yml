@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # Полная история + теги: VERSION в Makefile берётся из
           # `git describe --tags`. Без fetch-depth: 0 и тегов describe вернёт
