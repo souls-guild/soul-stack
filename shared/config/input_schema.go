@@ -58,6 +58,21 @@ type InputSchema struct {
 	// (см. requireInputValues / input_required_when.go). Пустая строка =
 	// отсутствие ключа.
 	RequiredWhen string `yaml:"required_when,omitempty"`
+
+	// PrefillFromState — путь `state.<path>` (dot-нотация) в incarnation.state,
+	// чьё ТЕКУЩЕЕ значение UI подставляет как pre-fill day-2-формы сценария
+	// (docs/input.md → «Pre-fill из state»). Это ПОДСКАЗКА формы, НЕ часть
+	// резолва значений: ключ намеренно НЕ участвует в [ResolveInputValues] /
+	// [mergeInputDefaults] (incarnation.state не должен протечь в эффективный
+	// input — иначе day-2-prefill незаметно стал бы create-дефолтом). Граница с
+	// `default`: `default` — статичный create-дефолт (в merge, в эффективный
+	// input); `prefill_from_state` — day-2 UI-hint, виден только form-prefill-
+	// эндпоинту. Они сосуществуют на одном поле.
+	//
+	// Синтаксис корня `state.<path>` переиспользует statepredicate ADR-047 (тот
+	// же корень `state` + dot-нотация), но здесь это ЛИТЕРАЛЬНЫЙ путь-ссылка на
+	// одно значение, а не CEL-предикат. Пустая строка = отсутствие ключа.
+	PrefillFromState string `yaml:"prefill_from_state,omitempty"`
 	// rawRequired сохраняет исходный AST-узел `required:` до классификации
 	// в `requiredKind`. Используется в `validateInputSchemaNode`, чтобы
 	// поднять `input_required_value_invalid`, когда значение не bool и не
@@ -137,12 +152,20 @@ var (
 	// строго snake_case.
 	reInputParamName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
+	// rePrefillFromStatePath — путь `prefill_from_state` (ADR-047 statepredicate
+	// корень `state` + dot-нотация, но литеральный путь, не CEL): обязательный
+	// корень `state` + ≥1 сегмент. Каждый сегмент — snake_case `[a-z][a-z0-9_]*`,
+	// что совпадает с формой имён state-полей (statePathQueryPattern в keeper) и
+	// input-параметров (reInputParamName). Индексы массивов / map-ключи с иными
+	// символами вне MVP — prefill целит в именованное state-поле.
+	rePrefillFromStatePath = regexp.MustCompile(`^state(\.[a-z][a-z0-9_]*)+$`)
+
 	// Закрытый набор YAML-ключей внутри одной InputSchema-ноды.
 	// Используется для unknown_key-проверки (вне reflect-walker, потому
 	// что у InputSchema особый смысл `required` и рекурсивные поля).
 	inputSchemaKnownKeys = map[string]bool{
 		"type": true, "required": true, "required_when": true, "default": true, "enum": true,
-		"secret": true, "description": true,
+		"secret": true, "description": true, "prefill_from_state": true,
 
 		"pattern": true, "format": true, "min_length": true,
 		"max_length": true, "allow_empty": true, "vault_scope": true,
@@ -393,6 +416,14 @@ func validateInputSchemaNode(s *InputSchema, node *ast.MappingNode, path string)
 		out = append(out, validateRequiredWhen(s, kv, path)...)
 	}
 
+	// prefill_from_state — путь `state.<path>` (dot-нотация) day-2 UI-prefill-
+	// hint (docs/input.md → «Pre-fill из state»). Применим к любому type (форма
+	// поля резолвится из значения state любого типа), поэтому проверяется до
+	// per-type-fork. Невалидный путь → input_prefill_from_state_invalid.
+	if kv, ok := present["prefill_from_state"]; ok {
+		out = append(out, validatePrefillFromState(s, kv, path)...)
+	}
+
 	// type — enum.
 	if !contains(inputTypeEnum, s.Type) {
 		tkv := present["type"]
@@ -605,6 +636,30 @@ func validateVaultScope(s *InputSchema, present map[string]*ast.MappingValueNode
 		}))
 	}
 	return out
+}
+
+// validatePrefillFromState — статическая проверка синтаксиса пути
+// `prefill_from_state` (docs/input.md → «Pre-fill из state»). Применим к любому
+// type. Путь обязан быть непустой dot-формой `state.<path>` (корень `state` +
+// ≥1 сегмент snake_case): без корня `state` / пустой / с недопустимыми
+// сегментами → input_prefill_from_state_invalid. Резолв самого значения из
+// incarnation.state и path-whitelist делает backend form-prefill-эндпоинта —
+// здесь только синтаксис (симметрия с validateSource: схема проверяет форму,
+// множество резолвит backend). kv — `prefill_from_state` MappingValueNode.
+func validatePrefillFromState(s *InputSchema, kv *ast.MappingValueNode, path string) []diag.Diagnostic {
+	if s == nil {
+		return nil
+	}
+	if !rePrefillFromStatePath.MatchString(s.PrefillFromState) {
+		return []diag.Diagnostic{diagAtKV(kv, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+			Code:     "input_prefill_from_state_invalid",
+			Message:  fmt.Sprintf("prefill_from_state %q is not a valid state.<path> reference", s.PrefillFromState),
+			Hint:     `form: state.<field>[.<field>…], snake_case segments — e.g. prefill_from_state: state.redis_version`,
+			YAMLPath: path + ".prefill_from_state",
+		})}
+	}
+	return nil
 }
 
 // validateSource — структурная валидность каталога-источника `source:`

@@ -369,6 +369,7 @@ func HumaIncarnationSpecYAML() (string, error) {
 		registerHumaIncarnationCreate(api, stub)
 		registerHumaIncarnationList(api, stub)
 		registerHumaIncarnationGet(api, stub)
+		registerHumaIncarnationFormPrefill(api, stub)
 		registerHumaIncarnationHistory(api, stub)
 		registerHumaIncarnationRun(api, stub)
 		registerHumaIncarnationUnlock(api, stub)
