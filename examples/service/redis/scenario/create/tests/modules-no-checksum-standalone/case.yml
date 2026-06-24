@@ -59,7 +59,7 @@ assert:
   rendered_tasks:
     # redis.conf несёт vars.loadmodules — пути .so в ПОРЯДКЕ input.modules
     # (search → redisearch.so первым). loadmodules от наличия sha256 НЕ зависят.
-    - index: 14
+    - index: 16
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -93,7 +93,7 @@ assert:
           essence: {}
 
     # modules-dir каталог — gated на size(modules)>0, здесь АКТИВНА.
-    - index: 27
+    - index: 29
 
       module: core.file.directory
       params:
@@ -106,7 +106,7 @@ assert:
     # checksum ПУСТ ("") — modules_sha256 не передан: core.url.fetched качает по
     # content-идемпотентности (пустой checksum = absent, OptStringParam). Именно
     # пустую строку и доказывает кейс (assert сверяет ключ checksum точно).
-    - index: 28
+    - index: 30
 
       module: core.url.fetched
       params:
@@ -117,7 +117,7 @@ assert:
         owner: redis
         group: redis
 
-    - index: 29
+    - index: 31
 
       module: core.url.fetched
       params:
@@ -129,7 +129,7 @@ assert:
         group: redis
 
     # PING сдвинут на +2 (две .so-задачи), как в modules-enabled-standalone.
-    - index: 30
+    - index: 32
 
       module: community.redis.command
       params:

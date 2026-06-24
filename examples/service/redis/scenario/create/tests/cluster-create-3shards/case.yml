@@ -11,12 +11,13 @@
 # (input.redis_type == 'cluster'): пропуск рвёт прогон на input-валидации ДО render
 # (см. cluster-shards-guard-missing). Обе задачи (assert size-guard + удалённый
 # shards-guard) НЕ занимают позиций в плане → задачи cluster-ветки сдвинуты ещё на −1.
-# Ключевые индексы:
+# Ключевые индексы (актуальные asserted-значения; binary-под-ветка install.yml — три
+# core.file.present вместо одного core.cmd.shell, +2 для всего, что ПОСЛЕ неё):
 #   index 0  — mode-guard диспетчера (core.cmd.shell, no-op на реализованном режиме);
-#   index 3  — cluster destiny: core.pkg.installed (redis-server);
-#   index 10 — cluster destiny: redis.conf (core.file.rendered, cluster-директивы);
-#   index 24 — cluster-build (community.redis.cluster action create, nodes-MAP;
-#              −1 относительно прежнего 26: extras-sysctl сжаты 2→1 задачи core.sysctl.applied).
+#   index 2  — cluster destiny: core.pkg.installed (redis-server) — ДО binary-под-ветки,
+#              +2 его не касается;
+#   index 18 — cluster destiny: redis.conf (core.file.rendered, cluster-директивы);
+#   index 33 — cluster-build (community.redis.cluster action create, nodes-MAP).
 #
 # Что ассертим (критерий приёмки слайса):
 #   1. size-guard PASS: assert that[0] (size(hosts)==shards*(1+replicas), 3==3*(1+0))
@@ -118,7 +119,7 @@ assert:
     # .self.network.primary_ip (см. destiny_redis_tmpl_test.go: per-host announce).
     # render_context.self здесь = первый по SID хост (node-a, host-инвариант
     # apply.input в пилоте), но СЛОЙ .tmpl на Soul-е возьмёт self КАЖДОГО хоста.
-    - index: 16
+    - index: 18
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -154,10 +155,8 @@ assert:
 
     # ── cluster-build (community.redis.cluster) ─────────────────────────────
     # nodes-MAP: ключ=SID, addr=primary_ip+":6379". Детерминирован по SID.
-    # index 24 — после удаления из плана size-guard (assert:) и shards-guard
-    # (required_when) cluster-ветка −2; extras-sysctl сжаты 2→1 задачи
-    # core.sysctl.applied → ещё −1.
-    - index: 31
+    # index 33 — после binary-под-ветки install.yml (+2 от трёх core.file.present).
+    - index: 33
 
       module: community.redis.cluster
       params:

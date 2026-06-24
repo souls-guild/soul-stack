@@ -43,8 +43,18 @@ func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest) []diag.Di
 	}
 
 	dir := filepath.Dir(scenarioPath)
-	tasks, expandDiags := config.ExpandIncludes(m.Tasks, scenarioLocalIncludeResolver(dir))
 	var out []diag.Diagnostic
+
+	// Условный include с динамическим `when:` (register./soulprint.) — статическая
+	// ОШИБКА офлайн (conditional-include group-drop, ADR-009 amendment). Это свойство
+	// САМОЙ include-задачи в m.Tasks, не зависит от резолва цели (поэтому проверяем ДО
+	// ExpandIncludes — иначе downgrade-в-HINT ниже замаскировал бы её). include
+	// раскрывается ДО Stratify: register предыдущих задач ещё не собран, per-host
+	// soulprint неизвестен → допустим только статический предикат. Прод тоже отвергнет
+	// (ExpandIncludes → include_when_dynamic_unsupported), но соул-линт ловит офлайн.
+	out = append(out, dynamicIncludeWhenDiagnostics(scenarioPath, m.Tasks)...)
+
+	tasks, expandDiags := config.ExpandIncludes(m.Tasks, scenarioLocalIncludeResolver(dir))
 	// include-резолв офлайн неполон (нет service-слоя): error-диагностики expand-а
 	// downgrade-им в HINT, чтобы не маскировать stage-валидацию ложным провалом.
 	// Если include реально битый, его поднимет полная валидация на keeper-е.
@@ -146,6 +156,35 @@ func passagePlanSummary(plan config.Passage) string {
 		return fmt.Sprintf("single-passage прогон (%d задач, без cross-task register-зависимости) — один проход, как до staged-render", len(plan.TaskPassage))
 	}
 	return fmt.Sprintf("staged-прогон: %d Passage по register-зависимости, задач в каждом %v (потребитель register исполняется строго после probe)", plan.Count, counts)
+}
+
+// dynamicIncludeWhenDiagnostics поднимает include_when_dynamic_unsupported для
+// каждой include-задачи с непустым НЕстатическим `when:` (conditional-include
+// group-drop, ADR-009 amendment). Резолв цели НЕ нужен — это свойство include-узла
+// (предикат), поэтому статвалидация офлайн полна и не зависит от service-слоя. Обход
+// рекурсивен через block: (include-потомок block в пилоте отвергается раньше как
+// ErrUnexpandedInclude, но обход симметричен на случай будущей поддержки).
+// IsStaticIncludeWhen — тот же критерий, что прод ExpandIncludes (input./essence./
+// incarnation./vars. — да; register./soulprint. — нет).
+func dynamicIncludeWhenDiagnostics(scenarioPath string, tasks []config.Task) []diag.Diagnostic {
+	var out []diag.Diagnostic
+	for i := range tasks {
+		t := &tasks[i]
+		if t.Include != nil && t.When != "" && !config.IsStaticIncludeWhen(t.When) {
+			out = append(out, diag.Diagnostic{
+				Level:   diag.LevelError,
+				Phase:   diag.PhaseSemanticValidate,
+				File:    scenarioPath,
+				Code:    "include_when_dynamic_unsupported",
+				Message: fmt.Sprintf("include %q несёт динамический when %q (ссылка на register./soulprint.) — include раскрывается ДО стратификации, доступен только статический предикат input./essence./incarnation./vars.", t.Include.Include, t.When),
+				Hint:    "замените на статический предикат (input./essence./incarnation.) либо перенесите условие на module-задачу подключённого файла через when:",
+			})
+		}
+		if t.Block != nil {
+			out = append(out, dynamicIncludeWhenDiagnostics(scenarioPath, t.Block.Block)...)
+		}
+	}
+	return out
 }
 
 // scenarioLocalIncludeResolver — within-scenario [config.IncludeResolver] для

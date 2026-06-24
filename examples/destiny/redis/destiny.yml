@@ -63,7 +63,7 @@ input:
   # ── install: способ установки redis (концепция Ansible-роли redis_install_*) ──
   # Способ доставки бинарей redis: distro-пакет (default, поведение-сохраняющее) ИЛИ
   # upstream-tarball (opt-in). Прецедент binary-install — node-exporter (install.yml:
-  # core.url.fetched → core.archive.extracted → install -m0755). Гейт install.method —
+  # core.url.fetched → core.archive.extracted → core.file.present (src:)). Гейт install.method —
   # host-инвариант (один способ установки на кластер) → приходит через apply.input.
   # Предикат method static (только input.*) → Keeper гасит неактивную ветку install.yml
   # placeholder-skip-ом без сдвига индексов.
@@ -97,7 +97,9 @@ input:
         type: string
         # upstream-semver (напр. 7.2.4) — ОТДЕЛЬНО от top-level version (distro-epoch):
         # бинарный tarball именуется upstream-версией, не distro-ревизией. method=binary
-        # → пишется в URL и в version-guard install бинаря.
+        # → пишется в URL tarball-а и в путь распакованного каталога /tmp/redis-<version>,
+        # откуда core.file.present (src:) разложит бинари (идемпотентность нативная по
+        # sha256 содержимого, version-guard не нужен — см. install.yml шаг 4).
         pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
         description: >-
           Upstream-версия redis для tarball-а (semver, напр. 7.2.4). Обязательна при

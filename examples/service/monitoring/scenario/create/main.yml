@@ -178,14 +178,23 @@ tasks:
       path: "${ '/tmp/redis_exporter-' + input.redis_exporter_version + '.tar.gz' }"
       dest: "${ '/tmp/redis_exporter-' + input.redis_exporter_version }"
 
+  # Разложить бинарь redis_exporter из распакованного каталога в bin_dir через
+  # core.file.present с src: (копия содержимого regular-файла с хоста). Идемпотентность
+  # нативная: changed=true ТОЛЬКО при отсутствии целевого файла либо расхождении его
+  # sha256 с src (плюс дрейф mode/owner). Прежний core.cmd.shell + creates:-guard
+  # пропускал install при ЛЮБОМ существующем файле → апгрейд версии НЕ переустанавливал
+  # бинарь (latent-баг). register — onchanges рестарта ниже реагирует на смену бинаря
+  # так же, как на смену unit-файла. src несёт префикс `v` в имени каталога внутри
+  # tarball-а (redis_exporter-v<v>.linux-<arch>) — раскладка GitHub Releases.
   - name: Install redis_exporter binary
-    module: core.cmd.shell
+    module: core.file.present
+    register: redis_exporter_bin
     params:
-      creates: "${ input.bin_dir + '/redis_exporter' }"
-      cmd: >-
-        install -m 0755
-        '${ '/tmp/redis_exporter-' + input.redis_exporter_version + '/redis_exporter-v' + input.redis_exporter_version + '.linux-' + soulprint.self.os.arch + '/redis_exporter' }'
-        '${ input.bin_dir + '/redis_exporter' }'
+      path: "${ input.bin_dir + '/redis_exporter' }"
+      src: "${ '/tmp/redis_exporter-' + input.redis_exporter_version + '/redis_exporter-v' + input.redis_exporter_version + '.linux-' + soulprint.self.os.arch + '/redis_exporter' }"
+      mode: "0755"
+      owner: root
+      group: root
 
   # Выделенный системный пользователь exporter-а (least-privilege). Членство в
   # supplementary-группе redis даёт «group»-доступ к unix-сокету (типично
@@ -229,9 +238,9 @@ tasks:
     params:
       name: redis_exporter
 
-  - name: Restart redis_exporter because unit changed
+  - name: Restart redis_exporter because the unit or binary changed
     module: core.service.restarted
-    onchanges: [redis_exporter_unit]
+    onchanges: [redis_exporter_unit, redis_exporter_bin]
     timeout: 30s
     params:
       name: redis_exporter

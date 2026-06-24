@@ -8,7 +8,8 @@
 #     node_exporter, version-aware install, стабильный сервис-аккаунт node_exporter,
 #     hardened-unit, textfile-коллекторы железа). collectors=[] (input) → ставится
 #     только ядро;
-#   - redis_exporter (инлайн, индексы 30..37): тройка + core.user.present + unit с
+#   - redis_exporter (инлайн, индексы 30..37): тройка (url.fetched → archive.extracted
+#     → core.file.present install бинаря) + core.user.present + unit с
 #     User=redis-exporter (без пароля и без Requires=redis-server.service — сервис
 #     Redis не ставит, подключается к уже работающему).
 #
@@ -55,9 +56,9 @@ fixtures:
 
 # Сверка params в L0 — полная (deep-equal), не подмножество. node-exporter (0..8)
 # раскрывается из destiny; redis_exporter (30..37) — инлайн. Ассертим установочную
-# тройку, render unit-ов (CEL-сборка url/redis_addr), сервис-аккаунты и
-# декларативные шаги. Install-шаги несут rendered install-строку — их полная
-# фиксация хрупка; проверяются soul-lint + scenario.
+# тройку (вкл. install бинаря через core.file.present с src: — детерминированные
+# params, не rendered install-строка), render unit-ов (CEL-сборка url/redis_addr),
+# сервис-аккаунты и декларативные шаги.
 assert:
   rendered_tasks:
     # ── node-exporter (apply:destiny, индексы 0..8 — ядро) ──────────────────────
@@ -103,13 +104,17 @@ assert:
         group: node_exporter
         mode: "0755"
 
-    # version-aware install (service.yml): бинарь node_exporter; unless-guard
-    # пропускает install при уже стоящей версии.
+    # install бинаря node_exporter (service.yml): core.file.present с src: — копия
+    # node_exporter из распакованного /tmp. Идемпотентность нативная по sha256(src),
+    # честный changed строго при смене байт; version-aware unless-guard не нужен.
     - index: 5
-      module: core.cmd.shell
+      module: core.file.present
       params:
-        cmd: "install -m 0755 '/tmp/node_exporter-1.8.2/node_exporter-1.8.2.linux-amd64/node_exporter' '/usr/local/bin/node_exporter'"
-        unless: "test -x /usr/local/bin/node_exporter && /usr/local/bin/node_exporter --version 2>&1 | grep -qF 'version 1.8.2 '"
+        path: /usr/local/bin/node_exporter
+        src: /tmp/node_exporter-1.8.2/node_exporter-1.8.2.linux-amd64/node_exporter
+        mode: "0755"
+        owner: root
+        group: root
 
     # Unit-path — /etc/systemd/system/node_exporter.service, listen :9100.
     # literal-содержимое .tmpl доставлено Keeper-ом (A1).
@@ -174,6 +179,20 @@ assert:
       params:
         path: /tmp/redis_exporter-1.62.0.tar.gz
         dest: /tmp/redis_exporter-1.62.0
+
+    # install бинаря redis_exporter (инлайн): core.file.present с src: — копия
+    # redis_exporter из распакованного /tmp в bin_dir. Имя каталога/файла внутри
+    # tarball-а несёт префикс `v` (redis_exporter-v<v>.linux-<arch>). Идемпотентность
+    # нативная по sha256(src) — честный changed строго при смене байт; прежний
+    # core.cmd.shell + creates: пропускал апгрейд (latent-баг устранён).
+    - index: 32
+      module: core.file.present
+      params:
+        path: /usr/local/bin/redis_exporter
+        src: /tmp/redis_exporter-1.62.0/redis_exporter-v1.62.0.linux-amd64/redis_exporter
+        mode: "0755"
+        owner: root
+        group: root
 
     # Выделенный системный пользователь redis-exporter в группе redis (доступ к
     # unix-сокету по членству в группе, least-privilege). Инлайн оставлен осознанно:

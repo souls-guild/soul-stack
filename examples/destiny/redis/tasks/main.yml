@@ -12,9 +12,11 @@
 # индексы плоского плана, на которые ассертят L0-кейсы):
 #   install.yml  — установка бинарей redis (диспетч по install.method: package-block
 #                  default = core.pkg.installed redis-server; binary-block opt-in =
-#                  url.fetched→archive.extracted→user/group→install -m0755→свой
+#                  url.fetched→archive.extracted→user/group→три core.file.present (src:)
+#                  redis-server/redis-cli/redis-sentinel в /usr/local/bin→свой
 #                  redis-server.service + СВОЙ рестарт на смену бинаря/юнита, register
-#                  redis_binaries/redis_server_unit) + каталог unix-сокета (обе ветки).
+#                  redis_server_bin/redis_cli_bin/redis_sentinel_bin/redis_server_unit)
+#                  + каталог unix-сокета (обе ветки).
 #                  ★ binary-ветка несёт СВОЙ рестарт здесь, а не дёргает server.yml:
 #                  register-ссылки в onchanges линтер (validateTaskRefs) проверяет
 #                  per-file — cross-file onchanges отвергается (тот же инвариант, что

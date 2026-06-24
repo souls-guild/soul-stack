@@ -1,0 +1,21 @@
+name: conditional-include
+description: >
+  Пилот conditional-include (ADR-009 amendment): include с условным СТАТИЧЕСКИМ
+  `when:`. base.yml подключается всегда; cluster.yml — только при
+  `input.topology == 'cluster'`. На standalone группа cluster.yml РЕАЛЬНО исчезает
+  из плана (render-phase group-drop, не placeholder): её задачи отсутствуют, индекс
+  не резервируется. L0-кейсы проверяют это presence-матчером (task_present/task_absent).
+
+input:
+  topology:
+    type: string
+    required: true
+    enum: [standalone, cluster]
+
+tasks:
+  # Базовая задача — всегда в плане.
+  - include: base.yml
+
+  # Кластерная группа — только при cluster-топологии (group-drop на standalone).
+  - include: cluster.yml
+    when: input.topology == 'cluster'

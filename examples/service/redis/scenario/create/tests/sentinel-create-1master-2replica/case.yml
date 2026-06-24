@@ -81,7 +81,7 @@ assert:
     #
     # ── sentinel destiny: redis.conf (sentinel-режим: НЕТ cluster-директив) ──
     # render_context.self = первый по SID хост (node-1, host-инвариант apply.input).
-    - index: 19
+    - index: 21
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -123,7 +123,7 @@ assert:
     # master доказано render-ассертом TargetSIDs (TestAcceptance_SentinelReplicaExcludesMaster).
     # Params host-инвариантны → L0 assert by-index сверяет одни и те же params
     # реплик. index 27 (−2 guard + −1 extras-sysctl сжаты 2→1 задачи).
-    - index: 34
+    - index: 36
 
       module: community.redis.replica
       params:
@@ -135,7 +135,7 @@ assert:
     # monitor.ip — HOST-ИНВАРИАНТНЫЙ адрес master-а (master-election node-1).
     # quorum=2 (input.sentinel_quorum). auth_pass — keeper-side vault()-резолв.
     # index 28 (−2 guard + −1 extras-sysctl сжаты 2→1 задачи).
-    - index: 35
+    - index: 37
 
       module: community.redis.sentinel
       params:

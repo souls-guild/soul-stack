@@ -1,0 +1,18 @@
+# L0-испытание (Trial, ADR-023): outer='no', inner='no' → план пуст (внешняя группа
+# дропнута, вложенная — каскадом). Симметрия outer-no-inner-yes без зависимости от
+# inner-значения: ложный outer достаточен для дропа обеих задач.
+name: nested conditional-include drops everything when outer is no (inner no)
+
+fixtures:
+  input:
+    outer: 'no'
+    inner: 'no'
+
+assert:
+  task_absent:
+    - module: core.file.present
+      params_subset:
+        path: /etc/pilot/outer.txt
+    - module: core.file.present
+      params_subset:
+        path: /etc/pilot/inner.txt

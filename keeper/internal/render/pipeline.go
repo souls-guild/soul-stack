@@ -129,6 +129,13 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 	plans := make([]DispatchPlan, 0, len(in.Scenario.Tasks))
 	idx := 0
 
+	// includeGroupKeep кеширует решение по условному include (group-drop): id группы
+	// (Task.IncludeGroupID, проставлен ExpandIncludes) → keep/drop. Вычисляется ОДИН
+	// раз на группу (include-when host-инвариантен — static input./essence./
+	// incarnation./vars.), все задачи группы используют тот же исход. nil-исход для
+	// безусловных задач (IncludeGroupID==0) сюда не попадает.
+	includeGroupKeep := map[int]bool{}
+
 	// passageStart фиксирует, с какого RenderedTask начинается текущая top-level
 	// задача — чтобы заклеймить весь её выход (включая apply:destiny/loop-потомков)
 	// passage-индексом originating-задачи (staged-render, ADR-056). Стампинг делаем
@@ -139,6 +146,33 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 
 		passage := taskPassageAt(in.TaskPassage, i)
 		passageStart := len(tasks)
+
+		// Conditional-include group-drop (ADR-009 amendment) — ДО emitStaticWhenSkip.
+		// Задача несёт IncludeGroupID!=0 (проставлен config.ExpandIncludes): её include
+		// раскрыт под статическим `when:`. Вычисляем include-when ОДИН раз на группу
+		// (кеш по IncludeGroupID) тем же isStaticWhen/evalStaticWhen, что и static-when-
+		// skip. include-when false → РЕАЛЬНЫЙ дроп: continue БЕЗ эмита RenderedTask и БЕЗ
+		// idx++ (индекс не резервируется, задача физически исчезает из плана). Это
+		// ОТЛИЧАЕТСЯ от emitStaticWhenSkip (placeholder с idx++): дискриминатор —
+		// IncludeGroupID. true → задача рендерится обычным путём (carry-through поля
+		// дальше не влияют). Безопасность: cross-file register дропнутой группы уже
+		// lint-запрещён (per-file validateTaskRefs + ErrUnexpandedInclude), поэтому
+		// внешний onchanges на её register невозможен → resolveOnChanges не падает
+		// ErrOnChangesUnknownRegister.
+		if task.IncludeGroupID != 0 {
+			keep, ok := includeGroupKeep[task.IncludeGroupID]
+			if !ok {
+				k, derr := p.evalIncludeWhen(in, task.IncludeWhen)
+				if derr != nil {
+					return nil, nil, derr
+				}
+				keep = k
+				includeGroupKeep[task.IncludeGroupID] = keep
+			}
+			if !keep {
+				continue // group-drop: ни RenderedTask, ни idx — реальное исключение.
+			}
+		}
 
 		// assert-задача (ADR-009 amendment 2026-06-23) — keeper-side render-time
 		// precondition. Обрабатывается ДО emitStaticWhenSkip/guardPilotDSL: assert НЕ
@@ -541,6 +575,44 @@ func (p *Pipeline) staticWhenSkips(
 		return nil, nil // when:true — задача активна, рендерим params обычным путём.
 	}
 	return firstFC, nil
+}
+
+// evalIncludeWhen вычисляет include-when условного include (conditional-include
+// group-drop, ADR-009 amendment) — keeper-side, ОДИН раз на группу. include-when
+// статичен по контракту (config.ExpandIncludes отверг бы динамический как
+// include_when_dynamic_unsupported, isStaticWhen его здесь подтверждает defense-in-
+// depth), поэтому вычисляется тем же flow-control-движком и тем же flow_context, что
+// static-when-skip — host-инвариантно, на ПЕРВОМ хосте roster-а.
+//
+// Возвращает keep: true → группа остаётся (задачи рендерятся обычным путём); false →
+// группа дропается (caller делает continue без эмита/idx++). Пустой include-when сюда
+// не приходит (IncludeGroupID!=0 ⇔ непустой when, ExpandIncludes). Ошибка eval (битый
+// предикат / no-such-key на отсутствующем input) пробрасывается caller-у — Keeper
+// падает render_failed так же, как упал бы на нём static-when.
+func (p *Pipeline) evalIncludeWhen(in RenderInput, when string) (bool, error) {
+	// defense-in-depth: ExpandIncludes уже гарантировал статичность; если сюда дошёл
+	// не-static include-when (баг раскрытия) — fail-closed, не молча keep.
+	if !isStaticWhen(when) {
+		return false, fmt.Errorf("render: include-when %q не статичен (register/soulprint) — group-drop требует статического предиката (ADR-009 amendment)", when)
+	}
+	host := &topology.HostFacts{}
+	if len(in.Hosts) > 0 {
+		host = in.Hosts[0]
+	}
+	vars := hostVars(in, host, len(in.Hosts))
+	vars, err := resolveTaskVars(p.cel, fileVarsForHost(in, host), nil, vars)
+	if err != nil {
+		return false, fmt.Errorf("render: include-when %q: %w", when, err)
+	}
+	fc, err := buildFlowContext(in, host, vars, len(in.Hosts))
+	if err != nil {
+		return false, fmt.Errorf("render: include-when %q: flow_context: %w", when, err)
+	}
+	keep, err := evalStaticWhen(when, fc)
+	if err != nil {
+		return false, fmt.Errorf("render: include-when %q: %w", when, err)
+	}
+	return keep, nil
 }
 
 // emitStaticWhenSkip — ранний static-when placeholder-skip, выполняемый в НАЧАЛЕ

@@ -13,32 +13,30 @@
 # перечитывает конфигурацию systemd при смене unit-файла ПЕРЕД start/restart.
 # Порядок: install бинаря → render unit → core.service.running → core.service.restarted.
 
-# Разложить бинарь из распакованного каталога в bin_dir. core.file.present
-# копировать из пути не умеет (только inline-content), а бинарь — контент из
-# ФС → install-шаг core.cmd.shell (локальный install -m0755, без сети).
+# Разложить бинарь из распакованного каталога в bin_dir. core.file.present умеет
+# src: — копию содержимого regular-файла с хоста (docs/module/core/file: src
+# взаимоисключён с content, абсолютный путь, Lstat-проверка regular-file, атомарная
+# запись). src — node_exporter из распакованного во /tmp каталога релиза.
 #
-# Идемпотентность — версия-зависимый guard unless: install пропускается ТОЛЬКО
-# если на месте уже стоит бинарь нужной версии. core.cmd «satisfied» = exit 0
-# (docs/module/core/cmd: unless с exit 0 → skip, reason: unless). node_exporter
-# --version печатает строку вида `node_exporter, version <X> (...)` → grep на
-# литерал `version <input.version> ` даёт exit 0 при совпадении. Пробелы с ОБЕИХ
-# сторон версии закрывают границы: ведущий — слева, trailing (node_exporter
-# печатает пробел перед `(`) — справа, чтобы `version 1.9.0 ` матчило, а
-# `version 1.9.01 ` — нет. `test -x … && … | grep -qF …`: нет бинаря ИЛИ версия
-# другая → test или grep даёт non-zero → unless НЕ satisfied → install выполняется
-# (перезапишет старую версию). grep-паттерн — в одинарных кавычках (пробел внутри);
-# input.version под semver-pattern, в кавычках injection невозможна. register —
-# install-шаг подключён к onchanges рестарта: апгрейд версии (install changed)
-# рестартит сервис так же, как изменение unit-файла.
+# Идемпотентность — нативная, от самого core.file.present: желаемый хэш =
+# sha256(содержимое src), changed=true ТОЛЬКО если целевого файла нет либо его
+# sha256 отличается от sha256 src (либо дрейфит mode/owner). Тот же бинарь на
+# повторном прогоне → байты совпали → changed=false. Это убирает нужду в
+# version-aware unless-guard прежнего core.cmd.shell (который сам по себе всегда
+# changed=true и потому требовал guard, чтобы не холостить onchanges-рестарт):
+# разные версии = разные байты бинаря → честный changed строго при апгрейде, что
+# эквивалентно version-guard-у и строже его (ловит ЛЮБУЮ смену байт, не только
+# смену строки --version). register — install-шаг подключён к onchanges рестарта:
+# апгрейд версии (changed=true) рестартит сервис так же, как изменение unit-файла.
 - name: Install node_exporter binary
-  module: core.cmd.shell
+  module: core.file.present
   register: node_exporter_bin
   params:
-    unless: "${ 'test -x ' + input.bin_dir + '/node_exporter && ' + input.bin_dir + '/node_exporter --version 2>&1 | grep -qF ' + \"'version \" + input.version + \" '\" }"
-    cmd: >-
-      install -m 0755
-      '${ '/tmp/node_exporter-' + input.version + '/node_exporter-' + input.version + '.linux-' + soulprint.self.os.arch + '/node_exporter' }'
-      '${ input.bin_dir + '/node_exporter' }'
+    path: "${ input.bin_dir + '/node_exporter' }"
+    src: "${ '/tmp/node_exporter-' + input.version + '/node_exporter-' + input.version + '.linux-' + soulprint.self.os.arch + '/node_exporter' }"
+    mode: "0755"
+    owner: root
+    group: root
 
 # Основной systemd-unit. Рендерится из .tmpl (ADR-010): literal-шаблон +
 # CEL-rendered vars → core.file.rendered раскладывает на хосте. register — чтобы

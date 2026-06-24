@@ -1,0 +1,21 @@
+# L0-испытание (Trial, ADR-023): ★ ключевой кейс каскадного дропа.
+# outer='no', inner='yes' → внешняя группа дропнута, и inner-task ОТСУТСТВУЕТ, хотя
+# её собственный inner-when истинен. Это исправление бага «вложенный
+# conditional-include не каскадит дроп»: эффективный include-when inner — конъюнкция
+# `(input.outer == 'yes') && (input.inner == 'yes')`, ложный outer гасит обе задачи.
+name: nested conditional-include cascades drop when outer is no (inner yes)
+
+fixtures:
+  input:
+    outer: 'no'
+    inner: 'yes'
+
+assert:
+  # Весь план пуст: и outer-direct, и inner-task отсутствуют.
+  task_absent:
+    - module: core.file.present
+      params_subset:
+        path: /etc/pilot/outer.txt
+    - module: core.file.present
+      params_subset:
+        path: /etc/pilot/inner.txt

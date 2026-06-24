@@ -1,16 +1,22 @@
 # L0-испытание (Trial, ADR-023): install.method=binary (upstream-tarball). Guard:
 # binary-ветка install.yml активна (url.fetched → archive.extracted → group → user →
-# install -m0755 → свой redis-server.service + СВОЙ рестарт), а package-ветка
-# (core.pkg.installed, index 0) — placeholder-skip (params пусты). Прецедент binary-
-# install — node-exporter. URL собирается per-host из base_url + install.version +
-# soulprint.self.os.arch. version (top-level distro-пин) НЕ передан — required_when=
-# package, при method=binary не обязателен; redis_version в state берётся из
-# install.version (compute.redis_version).
+# три core.file.present с src: → свой redis-server.service + СВОЙ рестарт), а
+# package-ветка (core.pkg.installed, index 0) — placeholder-skip (params пусты).
+# Прецедент binary-install — node-exporter. URL собирается per-host из base_url +
+# install.version + soulprint.self.os.arch. version (top-level distro-пин) НЕ передан
+# — required_when=package, при method=binary не обязателен; redis_version в state
+# берётся из install.version (compute.redis_version).
 #
-# ★ Cross-file register guard: register'ы redis_binaries/redis_server_unit (install.yml)
-# читает onchanges рестарт-задачи В ТОМ ЖЕ install.yml (НЕ server.yml) — этот кейс
-# рендерится без unknown_register_reference, фиксируя «register + его onchanges-
-# потребитель живут в одном файле» как инвариант (per-file линтер validateTaskRefs).
+# Бинари раскладываются тремя core.file.present с src: (а не одним core.cmd.shell с
+# install -m0755): src копирует содержимое regular-файла из распакованного /tmp →
+# идемпотентность нативная по sha256 (честный changed строго при смене байт бинаря),
+# version-aware unless-guard больше не нужен.
+#
+# ★ Cross-file register guard: register'ы redis_server_bin/redis_cli_bin/
+# redis_sentinel_bin/redis_server_unit (install.yml) читает onchanges рестарт-задачи
+# В ТОМ ЖЕ install.yml (НЕ server.yml) — этот кейс рендерится без
+# unknown_register_reference, фиксируя «register + его onchanges-потребитель живут в
+# одном файле» как инвариант (per-file линтер validateTaskRefs).
 name: install method binary fetches upstream tarball and lays out binaries with own unit
 
 fixtures:
@@ -83,24 +89,43 @@ assert:
         shell: /usr/sbin/nologin
         home: /var/lib/redis
 
-    # index 5 — install -m0755 трёх бинарей в /usr/local/bin. register redis_binaries.
-    # unless: version-aware guard (приём node-exporter) — install changed=true ТОЛЬКО
-    # при реальной смене версии (бинаря нет ИЛИ redis-server --version не несёт
-    # `v=7.2.4 `). Без него core.cmd.shell всегда changed → onchanges-рестарт
-    # redis-server холостил бы на каждом прогоне.
+    # index 5..7 — три core.file.present с src: раскладывают redis-server/redis-cli/
+    # redis-sentinel из распакованного /tmp/redis-7.2.4 в /usr/local/bin (mode 0755,
+    # owner/group root). register redis_server_bin/redis_cli_bin/redis_sentinel_bin.
+    # Идемпотентность нативная — sha256(src) сверяется с целью, changed строго при
+    # смене байт (реальный апгрейд версии); version-aware unless-guard прежнего
+    # core.cmd.shell не нужен. src/content взаимоисключены (content в задаче нет).
     - index: 5
-      module: core.cmd.shell
+      module: core.file.present
       params:
-        unless: "test -x /usr/local/bin/redis-server && /usr/local/bin/redis-server --version 2>&1 | grep -qF 'v=7.2.4 '"
-        cmd: >-
-          install -m 0755 '/tmp/redis-7.2.4/redis-server'   /usr/local/bin/redis-server &&
-          install -m 0755 '/tmp/redis-7.2.4/redis-cli'      /usr/local/bin/redis-cli &&
-          install -m 0755 '/tmp/redis-7.2.4/redis-sentinel' /usr/local/bin/redis-sentinel
+        path: /usr/local/bin/redis-server
+        src: /tmp/redis-7.2.4/redis-server
+        mode: "0755"
+        owner: root
+        group: root
 
-    # index 6 — свой systemd-юнит redis-server.service (binary install). register
+    - index: 6
+      module: core.file.present
+      params:
+        path: /usr/local/bin/redis-cli
+        src: /tmp/redis-7.2.4/redis-cli
+        mode: "0755"
+        owner: root
+        group: root
+
+    - index: 7
+      module: core.file.present
+      params:
+        path: /usr/local/bin/redis-sentinel
+        src: /tmp/redis-7.2.4/redis-sentinel
+        mode: "0755"
+        owner: root
+        group: root
+
+    # index 8 — свой systemd-юнит redis-server.service (binary install). register
     # redis_server_unit. Имя юнита redis-server → hardening drop-in/core.service в обеих
     # ветках работают.
-    - index: 6
+    - index: 8
       module: core.file.rendered
       params:
         path: /etc/systemd/system/redis-server.service
@@ -109,16 +134,18 @@ assert:
         owner: root
         group: root
 
-    # index 7 — рестарт redis-server на смену бинаря/юнита (binary-локальный onchanges
-    # на redis_binaries/redis_server_unit, оба из ЭТОГО файла — cross-file guard).
-    - index: 7
+    # index 9 — рестарт redis-server на смену бинаря/юнита (binary-локальный onchanges
+    # на redis_server_bin/redis_cli_bin/redis_sentinel_bin/redis_server_unit, все из
+    # ЭТОГО файла — cross-file guard).
+    - index: 9
       module: core.service.restarted
       params:
         name: redis-server
 
-    # index 14 — redis.conf на месте: data-плоскость одинакова в обеих ветках
-    # (install.method меняет только установку бинарей, не render redis.conf).
-    - index: 14
+    # index 16 — redis.conf на месте: data-плоскость одинакова в обеих ветках
+    # (install.method меняет только установку бинарей, не render redis.conf). Индекс
+    # сдвинут с 14 на 16: три core.file.present вместо одного core.cmd.shell дают +2.
+    - index: 16
       module: core.file.rendered
 
   state_changes:

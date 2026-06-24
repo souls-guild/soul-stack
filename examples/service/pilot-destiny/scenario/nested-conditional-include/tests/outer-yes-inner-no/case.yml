@@ -1,0 +1,20 @@
+# L0-испытание (Trial, ADR-023): outer='yes', inner='no' → внешняя группа остаётся
+# (outer-direct присутствует), вложенная inner-группа дропнута по собственному
+# inner-when:false. Подтверждает, что каскад НЕ переусердствует: ложный inner гасит
+# только inner, не трогая outer-direct.
+name: nested conditional-include keeps outer, drops inner when inner is no
+
+fixtures:
+  input:
+    outer: 'yes'
+    inner: 'no'
+
+assert:
+  task_present:
+    - module: core.file.present
+      params_subset:
+        path: /etc/pilot/outer.txt
+  task_absent:
+    - module: core.file.present
+      params_subset:
+        path: /etc/pilot/inner.txt

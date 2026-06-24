@@ -353,6 +353,33 @@ var reRegisterCELRef = regexp.MustCompile(`(^|[^A-Za-z0-9_.])register\.([a-z][a-
 // ложное unknown_register_reference.
 var celStringLiteral = regexp.MustCompile(`'[^']*'|"[^"]*"`)
 
+// reSoulprintRef ловит ссылку на soulprint в CEL-тексте (host-вариативный слой
+// soulprint.self). Зеркало keeper/internal/render.reFlowControlSoulprint (`\bsoulprint\b`)
+// — один источник правды грамматики «host-вариативный предикат».
+var reSoulprintRef = regexp.MustCompile(`\bsoulprint\b`)
+
+// IsStaticIncludeWhen сообщает, статичен ли `when:`-предикат условного include —
+// т.е. вычислим ли он ДО фазы Stratify/render (conditional-include group-drop,
+// ADR-009 amendment). include раскрывается в плоский список ДО стратификации, когда
+// register предыдущих задач ещё не собран, а per-host soulprint неизвестен; поэтому
+// допустим только статический предикат (input./essence./incarnation./vars.). Те же
+// два критерия, что keeper-side isStaticWhen (register-/soulprint-независимость):
+//   - нет cross-task register-ссылки (ExtractRegisterRefs — тот же канон-парсер);
+//   - нет ссылки на soulprint (host-вариативный слой).
+//
+// Пустой when → true (безусловный include — группа всегда вклеивается; дроп не
+// активируется при IncludeGroupID==0). Динамический when → false: caller
+// (ExpandIncludes/soul-lint) поднимает include_when_dynamic_unsupported.
+func IsStaticIncludeWhen(when string) bool {
+	if when == "" {
+		return true
+	}
+	if len(ExtractRegisterRefs(when)) != 0 {
+		return false
+	}
+	return !reSoulprintRef.MatchString(when)
+}
+
 // ExtractRegisterRefs возвращает отсортированный набор уникальных имён из
 // `register.<name>` в CEL-строке (после вырезания строковых литералов). `self`
 // исключается — это текущая задача (register.self.*), её известность не

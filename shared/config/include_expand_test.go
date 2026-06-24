@@ -123,7 +123,6 @@ func TestExpandIncludes_ModifierUnsupported(t *testing.T) {
 	cases := map[string]Task{
 		"vars":     {Include: &IncludeTask{Include: "x.yml"}, Vars: map[string]any{"a": 1}},
 		"loop":     {Include: &IncludeTask{Include: "x.yml"}, Loop: &LoopSpec{Items: "${ input.users }"}},
-		"when":     {Include: &IncludeTask{Include: "x.yml"}, When: "input.go"},
 		"on":       {Include: &IncludeTask{Include: "x.yml"}, On: []any{"coven"}},
 		"serial":   {Include: &IncludeTask{Include: "x.yml"}, Serial: 2},
 		"run_once": {Include: &IncludeTask{Include: "x.yml"}, RunOnce: true},
@@ -350,6 +349,234 @@ func TestExpandIncludes_UniqueAddressAcrossInclude(t *testing.T) {
 	_, idiags := ExpandIncludes(rootTasks, mapResolver(files))
 	if diag.HasErrors(idiags) {
 		t.Fatalf("уникальные адреса через include не должны давать ошибок: %v", idiags)
+	}
+}
+
+// --- conditional-include: carry-through include-when + group-id ---
+
+// TestExpandIncludes_ConditionalWhenCarriesThrough — статический `when:` на include
+// раскрывается без ошибки и протаскивает include-when + один group-id в КАЖДУЮ
+// вклеенную задачу (Task.IncludeWhen/IncludeGroupID). Это сырьё для keeper-side
+// group-drop (render дропает всю группу одним вычислением include-when).
+func TestExpandIncludes_ConditionalWhenCarriesThrough(t *testing.T) {
+	root := []Task{
+		{Module: &ModuleTask{Module: "core.cmd.shell", Params: map[string]any{"cmd": "true"}}},
+		{Include: &IncludeTask{Include: "cluster.yml"}, When: "input.topology == 'cluster'"},
+	}
+	files := map[string]string{
+		"cluster.yml": `
+- name: a
+  module: core.cmd.shell
+  params: { cmd: "a" }
+- name: b
+  module: core.cmd.shell
+  params: { cmd: "b" }
+`,
+	}
+	got, diags := ExpandIncludes(root, mapResolver(files))
+	if diag.HasErrors(diags) {
+		t.Fatalf("статический when на include не должен давать ошибок: %v", diags)
+	}
+	if len(got) != 3 {
+		t.Fatalf("len = %d, want 3 (head + 2 вклеенных)", len(got))
+	}
+	// Head — вне условного include.
+	if got[0].IncludeGroupID != 0 || got[0].IncludeWhen != "" {
+		t.Errorf("head: IncludeGroupID=%d IncludeWhen=%q, want 0/\"\" (безусловная задача)", got[0].IncludeGroupID, got[0].IncludeWhen)
+	}
+	// Обе вклеенные несут один и тот же group-id и include-when.
+	for _, gi := range []int{1, 2} {
+		if got[gi].IncludeGroupID == 0 {
+			t.Errorf("got[%d].IncludeGroupID = 0, want != 0 (условный include)", gi)
+		}
+		if got[gi].IncludeWhen != "input.topology == 'cluster'" {
+			t.Errorf("got[%d].IncludeWhen = %q, want протянутый include-when", gi, got[gi].IncludeWhen)
+		}
+	}
+	if got[1].IncludeGroupID != got[2].IncludeGroupID {
+		t.Errorf("задачи одной include-группы получили РАЗНЫЕ group-id: %d vs %d", got[1].IncludeGroupID, got[2].IncludeGroupID)
+	}
+}
+
+// TestExpandIncludes_ConditionalGroupsDistinct — два условных include дают РАЗНЫЕ
+// group-id (дроп каждого — независимое вычисление своего include-when).
+func TestExpandIncludes_ConditionalGroupsDistinct(t *testing.T) {
+	root := []Task{
+		{Include: &IncludeTask{Include: "a.yml"}, When: "input.x"},
+		{Include: &IncludeTask{Include: "b.yml"}, When: "input.y"},
+	}
+	files := map[string]string{
+		"a.yml": "- name: a\n  module: core.cmd.shell\n  params: { cmd: 'a' }\n",
+		"b.yml": "- name: b\n  module: core.cmd.shell\n  params: { cmd: 'b' }\n",
+	}
+	got, diags := ExpandIncludes(root, mapResolver(files))
+	if diag.HasErrors(diags) {
+		t.Fatalf("unexpected diagnostics: %v", diags)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+	if got[0].IncludeGroupID == got[1].IncludeGroupID {
+		t.Errorf("два разных условных include получили ОДИН group-id %d — дроп смешался бы", got[0].IncludeGroupID)
+	}
+	if got[0].IncludeWhen != "input.x" || got[1].IncludeWhen != "input.y" {
+		t.Errorf("include-when группы спутан: %q / %q", got[0].IncludeWhen, got[1].IncludeWhen)
+	}
+}
+
+// TestExpandIncludes_NestedConditionalConjoinsWhen — ★ вложенный условный include:
+// внешний `when: input.x` подключает файл, внутри которого ещё один `when: input.y`.
+// Внутренняя группа получает СВОЙ group-id, а её эффективный include-when —
+// КОНЪЮНКЦИЯ предков `(input.x) && (input.y)`, чтобы дроп внешней группы (input.x:false)
+// каскадил на вложенную, даже если её собственный input.y истинен. Это исправление
+// бага «вложенный conditional-include не каскадит дроп».
+func TestExpandIncludes_NestedConditionalConjoinsWhen(t *testing.T) {
+	root := []Task{{Include: &IncludeTask{Include: "outer.yml"}, When: "input.x"}}
+	files := map[string]string{
+		"outer.yml": `
+- name: outer-direct
+  module: core.cmd.shell
+  params: { cmd: "outer" }
+- include: inner.yml
+  when: input.y
+`,
+		"inner.yml": "- name: inner\n  module: core.cmd.shell\n  params: { cmd: 'inner' }\n",
+	}
+	got, diags := ExpandIncludes(root, mapResolver(files))
+	if diag.HasErrors(diags) {
+		t.Fatalf("unexpected diagnostics: %v", diags)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2 (outer-direct + inner)", len(got))
+	}
+	// outer-direct → внешняя группа (when input.x — без конъюнкции, верхний уровень).
+	if got[0].IncludeWhen != "input.x" {
+		t.Errorf("outer-direct.IncludeWhen = %q, want input.x", got[0].IncludeWhen)
+	}
+	// inner → внутренняя группа: эффективный when = конъюнкция предка и собственного.
+	if got[1].IncludeWhen != "(input.x) && (input.y)" {
+		t.Errorf("inner.IncludeWhen = %q, want \"(input.x) && (input.y)\" (конъюнкция предка для каскадного дропа)", got[1].IncludeWhen)
+	}
+	if got[0].IncludeGroupID == got[1].IncludeGroupID {
+		t.Errorf("внешняя и вложенная группы получили один group-id %d — дроп вложенной зависел бы от внешнего when", got[0].IncludeGroupID)
+	}
+}
+
+// TestExpandIncludes_NestedConditionalThroughUnconditional — ancestor-when
+// протаскивается СКВОЗЬ безусловный промежуточный include: outer(when:input.x) →
+// mid.yml (без when) → inner(when:input.y). Эффективный include-when вложенной
+// условной группы — конъюнкция `(input.x) && (input.y)` (безусловный mid сам группу
+// не заводит, но накопленный ancestor сохраняется). Задачи самого mid (если бы были)
+// — внешняя группа input.x.
+func TestExpandIncludes_NestedConditionalThroughUnconditional(t *testing.T) {
+	root := []Task{{Include: &IncludeTask{Include: "outer.yml"}, When: "input.x"}}
+	files := map[string]string{
+		"outer.yml": "- include: mid.yml\n",
+		"mid.yml": `
+- name: mid-direct
+  module: core.cmd.shell
+  params: { cmd: "mid" }
+- include: inner.yml
+  when: input.y
+`,
+		"inner.yml": "- name: inner\n  module: core.cmd.shell\n  params: { cmd: 'inner' }\n",
+	}
+	got, diags := ExpandIncludes(root, mapResolver(files))
+	if diag.HasErrors(diags) {
+		t.Fatalf("unexpected diagnostics: %v", diags)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2 (mid-direct + inner)", len(got))
+	}
+	// mid-direct → внешняя условная группа (input.x): безусловный mid не сбрасывает
+	// накопленный ancestor, и outer-stamp клеймит его задачи своим when.
+	if got[0].IncludeWhen != "input.x" {
+		t.Errorf("mid-direct.IncludeWhen = %q, want input.x (ancestor сквозь безусловный include)", got[0].IncludeWhen)
+	}
+	// inner → конъюнкция предка (input.x) и собственного (input.y).
+	if got[1].IncludeWhen != "(input.x) && (input.y)" {
+		t.Errorf("inner.IncludeWhen = %q, want \"(input.x) && (input.y)\"", got[1].IncludeWhen)
+	}
+}
+
+// TestExpandIncludes_ThreeLevelConjunction — три уровня условного include:
+// L1(input.a) → L2(input.b) → L3(input.c). Эффективный include-when каждого уровня —
+// нарастающая конъюнкция предков, чтобы ложь ЛЮБОГО предка дропала всех потомков.
+func TestExpandIncludes_ThreeLevelConjunction(t *testing.T) {
+	root := []Task{{Include: &IncludeTask{Include: "l1.yml"}, When: "input.a"}}
+	files := map[string]string{
+		"l1.yml": "- name: t1\n  module: core.cmd.shell\n  params: { cmd: '1' }\n- include: l2.yml\n  when: input.b\n",
+		"l2.yml": "- name: t2\n  module: core.cmd.shell\n  params: { cmd: '2' }\n- include: l3.yml\n  when: input.c\n",
+		"l3.yml": "- name: t3\n  module: core.cmd.shell\n  params: { cmd: '3' }\n",
+	}
+	got, diags := ExpandIncludes(root, mapResolver(files))
+	if diag.HasErrors(diags) {
+		t.Fatalf("unexpected diagnostics: %v", diags)
+	}
+	if len(got) != 3 {
+		t.Fatalf("len = %d, want 3 (t1,t2,t3)", len(got))
+	}
+	want := map[string]string{
+		"t1": "input.a",
+		"t2": "(input.a) && (input.b)",
+		"t3": "((input.a) && (input.b)) && (input.c)",
+	}
+	byName := map[string]Task{}
+	for _, t := range got {
+		byName[t.Name] = t
+	}
+	for name, w := range want {
+		if byName[name].IncludeWhen != w {
+			t.Errorf("%s.IncludeWhen = %q, want %q", name, byName[name].IncludeWhen, w)
+		}
+	}
+	// Три РАЗНЫХ group-id (дроп каждого уровня — своё вычисление своей конъюнкции).
+	ids := map[int]bool{byName["t1"].IncludeGroupID: true, byName["t2"].IncludeGroupID: true, byName["t3"].IncludeGroupID: true}
+	if len(ids) != 3 {
+		t.Errorf("ожидались 3 различных group-id, got %v", ids)
+	}
+}
+
+// TestExpandIncludes_DynamicWhenRejected — динамический when на include
+// (register./soulprint.) → include_when_dynamic_unsupported. include раскрывается ДО
+// Stratify, register/soulprint недоступны.
+func TestExpandIncludes_DynamicWhenRejected(t *testing.T) {
+	cases := map[string]string{
+		"register":  "register.probe.changed",
+		"soulprint": "soulprint.self.os.family == 'debian'",
+		"mixed":     "input.x && register.probe.ok",
+	}
+	files := map[string]string{"x.yml": "- name: a\n  module: core.cmd.shell\n  params: { cmd: 'true' }\n"}
+	for name, when := range cases {
+		t.Run(name, func(t *testing.T) {
+			root := []Task{{Include: &IncludeTask{Include: "x.yml"}, When: when}}
+			_, diags := ExpandIncludes(root, mapResolver(files))
+			if !hasCode(diags, "include_when_dynamic_unsupported") {
+				t.Fatalf("ожидался include_when_dynamic_unsupported для when %q, diagnostics: %v", when, diags)
+			}
+		})
+	}
+}
+
+// TestConditionalInclude_CrossFileRegisterRejectedOffline — фундамент безопасности
+// group-drop: внешний `onchanges:` на register, эмитнутый в подключённом файле, уже
+// отвергается ОФЛАЙН per-file validateTaskRefs (unknown_register_reference) при
+// загрузке потребляющего файла — его register-scope не видит чужой файл. Значит к
+// фазе render такой scenario не доживает, и дроп условного include НЕ может оставить
+// dangling external onchanges → ErrOnChangesUnknownRegister на keeper-е не возникает.
+func TestConditionalInclude_CrossFileRegisterRejectedOffline(t *testing.T) {
+	// Главный файл: onchanges на register, который объявлен ТОЛЬКО в included-файле.
+	mainSrc := `
+- name: external consumer
+  module: core.cmd.shell
+  onchanges: [probe_done]
+  params: { cmd: "react" }
+- include: cluster.yml
+  when: input.topology == 'cluster'
+`
+	_, diags, _ := LoadDestinyTasksFromBytes("scenario/create/main.yml", []byte(mainSrc), ValidateOptions{})
+	if !hasCode(diags, "unknown_register_reference") {
+		t.Fatalf("cross-file onchanges на register included-файла обязан отвергаться офлайн (unknown_register_reference), diagnostics: %v", diags)
 	}
 }
 

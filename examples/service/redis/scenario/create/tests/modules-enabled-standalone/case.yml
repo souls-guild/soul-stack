@@ -74,7 +74,7 @@ assert:
     # redis.conf несёт vars.loadmodules — пути .so в ПОРЯДКЕ input.modules
     # (search → redisearch.so первым). Директивы loadmodule рендерит шаблон отдельной
     # секцией (чистота — destiny_redis_tmpl_test.go).
-    - index: 14
+    - index: 16
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -108,7 +108,7 @@ assert:
           essence: {}
 
     # modules-dir каталог — gated на size(modules)>0, здесь АКТИВНА.
-    - index: 27
+    - index: 29
 
       module: core.file.directory
       params:
@@ -120,7 +120,7 @@ assert:
     # fetch .so — loop по алиасам (array, порядок списка: search[0], json[1]).
     # URL арх-специфичен (amd64 из soulprint.self); sha256 ЗАДАН → checksum
     # "sha256:<hex>" (fail-closed integrity-verify).
-    - index: 28
+    - index: 30
 
       module: core.url.fetched
       params:
@@ -131,7 +131,7 @@ assert:
         owner: redis
         group: redis
 
-    - index: 29
+    - index: 31
 
       module: core.url.fetched
       params:
@@ -143,7 +143,7 @@ assert:
         group: redis
 
     # PING сдвинут на +2 (две .so-задачи) относительно базового modules-empty (21).
-    - index: 30
+    - index: 32
 
       module: community.redis.command
       params:

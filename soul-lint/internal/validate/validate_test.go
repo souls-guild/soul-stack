@@ -56,6 +56,15 @@ func TestGolden_ScenarioExample(t *testing.T) {
 	runExpect(t, "../../testdata/scenario-golden/redis-create.yml", KindScenario, false, ExitOK, nil)
 }
 
+// TestGolden_ScenarioConditionalInclude — условный include со СТАТИЧЕСКИМ when:
+// (input.*) ВАЛИДЕН (conditional-include group-drop, ADR-009 amendment). Проходит
+// линт (ExitOK): include-when статичен → не падает include_when_dynamic_unsupported;
+// include-цель офлайн не резолвится → лишь HINT, exit OK. Реверс (статический
+// include-when ошибочно зарезан) → ExitHasErrors → тест падает.
+func TestGolden_ScenarioConditionalInclude(t *testing.T) {
+	runExpect(t, "../../testdata/scenario-golden/conditional-include.yml", KindScenario, false, ExitOK, nil)
+}
+
 // TestGolden_ScenarioAssertPrecondition — assert-задача (ADR-009 amendment
 // 2026-06-23): валидная форма (that[] CEL-bool со soulprint.hosts, message-строка)
 // проходит линт (ExitOK). Реверс (assert ошибочно зарезан) → ExitHasErrors → тест

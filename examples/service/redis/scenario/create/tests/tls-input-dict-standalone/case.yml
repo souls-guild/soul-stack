@@ -53,7 +53,7 @@ fixtures:
 assert:
   rendered_tasks:
     # index 4 — TLS server cert: content = vault(input.tls.cert_ref) → operator-PEM.
-    - index: 10
+    - index: 12
       module: core.file.present
       params:
         path: /etc/redis/tls/redis.crt
@@ -63,7 +63,7 @@ assert:
         group: redis
 
     # index 5 — TLS private key: content = vault(input.tls.key_ref) → operator-PEM.
-    - index: 11
+    - index: 13
       module: core.file.present
       params:
         path: /etc/redis/tls/redis.key
@@ -74,7 +74,7 @@ assert:
 
     # index 8 — redis.conf: TLS-директивы на ОПЕРАТОРСКОМ порту 7400 (бьёт essence/7379)
     # + port 0 (only). КРИТИЧНО: tls-port 7400 доказывает, что input.tls.port победил.
-    - index: 14
+    - index: 16
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -109,7 +109,7 @@ assert:
 
     # index 21 — PING: tls=true, addr на operator-порту 7400, tls_ca = operator-CA-PEM.
     # Сдвиг −1 (extras-sysctl сжаты 2→1 задачи core.sysctl.applied).
-    - index: 28
+    - index: 30
 
       module: community.redis.command
       params:

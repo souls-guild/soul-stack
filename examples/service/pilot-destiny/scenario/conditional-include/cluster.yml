@@ -1,0 +1,14 @@
+# Кластерная группа conditional-include: подключается из main.yml под условным
+# `when: input.topology == 'cluster'`. На standalone вся группа дропается из плана
+# (render-phase group-drop), её задачи отсутствуют — индексы не резервируются.
+- name: cluster replication marker
+  module: core.file.present
+  params:
+    path:    /etc/pilot/replication.txt
+    content: "replication enabled"
+
+- name: cluster sentinel marker
+  module: core.file.present
+  params:
+    path:    /etc/pilot/sentinel.txt
+    content: "sentinel enabled"

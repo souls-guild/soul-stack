@@ -1,0 +1,23 @@
+name: nested-conditional-include
+description: >
+  Пилот ВЛОЖЕННОГО conditional-include (ADR-009 amendment, каскадный дроп):
+  outer.yml подключается под `when: input.outer == 'yes'`, а ВНУТРИ outer.yml
+  inner.yml подключается под `when: input.inner == 'yes'`. Эффективный include-when
+  вложенной inner-группы — КОНЪЮНКЦИЯ предков `(outer) && (inner)`, поэтому дроп
+  внешней группы каскадит на вложенную: при `input.outer == 'no'` inner-task
+  ОТСУТСТВУЕТ при ЛЮБОМ inner. L0-кейсы фиксируют матрицу 2×2 presence-матчером.
+
+input:
+  outer:
+    type: string
+    required: true
+    enum: ['yes', 'no']
+  inner:
+    type: string
+    required: true
+    enum: ['yes', 'no']
+
+tasks:
+  # Внешняя условная группа: outer-direct + вложенный условный include inner.yml.
+  - include: outer.yml
+    when: input.outer == 'yes'

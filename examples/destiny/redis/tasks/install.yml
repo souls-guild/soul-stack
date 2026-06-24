@@ -4,7 +4,8 @@
 # skip-ом per-потомок (block static-skip, ADR-009): индексы не сдвигаются, register
 # потомков виден снаружи и при погашенной ветке (flat-register-scope инвариантен).
 #
-# ★ register'ы binary-ветки (redis_binaries/redis_server_unit) и их рестарт-onchanges
+# ★ register'ы binary-ветки (redis_server_bin/redis_cli_bin/redis_sentinel_bin/
+#   redis_server_unit) и их рестарт-onchanges
 #   живут В ЭТОМ файле: ЗАГРУЗОЧНЫЙ per-file линтер (validateTaskRefs,
 #   shared/config/destiny_tasks.go) валидирует register-ссылки в onchanges на уровне
 #   ОДНОГО файла — cross-file onchanges (register в install.yml, onchanges в server.yml)
@@ -40,7 +41,7 @@
 
 # ── binary-ветка (opt-in, upstream-tarball) ────────────────────────────────────
 # Способ node-exporter (install.yml: core.url.fetched → core.archive.extracted →
-# install -m0755). Один gate install.method==binary на всю ветку (block static-skip).
+# core.file.present src:). Один gate install.method==binary на всю ветку (block static-skip).
 # binary НЕ несёт distro-пакета → САМА ставит то, что пакет даёт даром: бинари в
 # /usr/local/bin, distro-юзер/группу redis, свой systemd-юнит redis-server.service
 # (+ sentinel-юнит рендерится в sentinel.yml с тем же sentinel_bin путём). arch для
@@ -98,45 +99,63 @@
         shell: /usr/sbin/nologin
         home: /var/lib/redis
 
-    # 4. Разложить redis-server/redis-cli/redis-sentinel в /usr/local/bin (mode 0755).
-    #    core.file.present копировать из ФС не умеет (только inline-content), бинарь —
-    #    контент из распакованного каталога → install-шаг core.cmd.shell (локальный
-    #    install -m0755, без сети). register redis_binaries — рестарт redis-server
-    #    (шаг 6 ниже, В ЭТОМ файле) реагирует на смену бинаря; cross-file onchanges
-    #    отверг бы per-file линтер (см. шапку).
-    #    Один shell-шаг ставит ВСЕ три бинаря.
+    # 4. Разложить redis-server/redis-cli/redis-sentinel в /usr/local/bin (mode 0755)
+    #    из распакованного каталога. core.file.present теперь умеет src: — копию
+    #    содержимого regular-файла с хоста (docs/module/core/file: src взаимоисключён
+    #    с content, абсолютный путь, Lstat-проверка regular-file, атомарная запись).
     #
-    #    ИДЕМПОТЕНТНОСТЬ — версия-зависимый guard unless: (приём node-exporter,
-    #    service.yml). core.cmd.shell САМ ПО СЕБЕ всегда changed=true (install -m
-    #    перезаписывает байт-в-байт тем же контентом, но модуль этого не знает) →
-    #    БЕЗ guard redis_binaries был бы changed на КАЖДОМ прогоне и onchanges-рестарт
-    #    redis-server (шаг 6) срабатывал бы вхолостую, не только при апгрейде. unless
-    #    делает шаг changed=true ТОЛЬКО при реальной смене версии: если redis-server
-    #    уже стоит и его --version несёт целевую версию — install пропускается
-    #    (core.cmd «satisfied» = unless exit 0 → skip, reason: unless; docs/module/
-    #    core/cmd). redis-server --version печатает строку `Redis server v=<X> sha=…`
-    #    → grep -qF на литерал `v=<input.version> ` (пробел справа закрывает границу
-    #    перед `sha=`, чтобы `v=7.2.4 ` матчило, а `v=7.2.41 ` — нет; левую границу
-    #    даёт сам префикс `v=`). test -x: нет бинаря ИЛИ версия другая → test/grep
-    #    non-zero → unless НЕ satisfied → install выполняется (перезапишет старую).
-    #    Проверяем redis-server (рестартим именно его юнит); три бинаря ставятся одним
-    #    шагом, их версии в tarball-е согласованы. install.version под semver/тегом из
-    #    input — injection в grep-литерал (одинарные кавычки) невозможна.
-    #    redis-sentinel ставится во ВСЕХ режимах (как distro-пакет): sentinel.yml ждёт
-    #    бинарь на месте при sentinel_enabled.
-    - name: Install redis binaries into /usr/local/bin
-      module: core.cmd.shell
-      register: redis_binaries
+    #    ИДЕМПОТЕНТНОСТЬ — нативная, от самого core.file.present: желаемый хэш =
+    #    sha256(содержимое src), changed=true ТОЛЬКО если целевого файла нет либо его
+    #    sha256 отличается от sha256 src (либо дрейфит mode/owner). Тот же бинарь на
+    #    повторном прогоне → байты совпали → changed=false. Это убирает нужду в
+    #    version-aware unless-guard прежнего core.cmd.shell (который сам по себе всегда
+    #    changed=true и потому требовал guard, чтобы не холостить onchanges-рестарт):
+    #    разные версии redis = разные байты бинаря → честный changed строго при
+    #    реальном апгрейде, что эквивалентно version-guard-у и строже его (ловит ЛЮБУЮ
+    #    смену байт, не только смену строки --version).
+    #
+    #    register'ы redis_server_bin/redis_cli_bin/redis_sentinel_bin — рестарт
+    #    redis-server (шаг 6 ниже, В ЭТОМ файле) реагирует на смену любого из трёх
+    #    через onchanges-список; cross-file onchanges отверг бы per-file линтер (см.
+    #    шапку). owner/group root — бинари в /usr/local/bin владеет root (как distro-
+    #    пакет). redis-sentinel ставится во ВСЕХ режимах (как distro-пакет): sentinel.yml
+    #    ждёт бинарь на месте при sentinel_enabled.
+    - name: Install the redis-server binary into /usr/local/bin
+      module: core.file.present
+      register: redis_server_bin
       vars:
         # has()-guard: render-safe в мёртвом package-проходе (см. fetch-задачу выше).
         src_dir: "${ '/tmp/redis-' + (has(input.install) && has(input.install.version) ? input.install.version : '') }"
-        ver:     "${ has(input.install) && has(input.install.version) ? input.install.version : '' }"
       params:
-        unless: "${ 'test -x /usr/local/bin/redis-server && /usr/local/bin/redis-server --version 2>&1 | grep -qF ' + \"'v=\" + vars.ver + \" '\" }"
-        cmd: >-
-          install -m 0755 '${ vars.src_dir }/redis-server'   /usr/local/bin/redis-server &&
-          install -m 0755 '${ vars.src_dir }/redis-cli'      /usr/local/bin/redis-cli &&
-          install -m 0755 '${ vars.src_dir }/redis-sentinel' /usr/local/bin/redis-sentinel
+        path: /usr/local/bin/redis-server
+        src: "${ vars.src_dir + '/redis-server' }"
+        mode: "0755"
+        owner: "${ vars.root_owner }"
+        group: "${ vars.root_group }"
+
+    - name: Install the redis-cli binary into /usr/local/bin
+      module: core.file.present
+      register: redis_cli_bin
+      vars:
+        src_dir: "${ '/tmp/redis-' + (has(input.install) && has(input.install.version) ? input.install.version : '') }"
+      params:
+        path: /usr/local/bin/redis-cli
+        src: "${ vars.src_dir + '/redis-cli' }"
+        mode: "0755"
+        owner: "${ vars.root_owner }"
+        group: "${ vars.root_group }"
+
+    - name: Install the redis-sentinel binary into /usr/local/bin
+      module: core.file.present
+      register: redis_sentinel_bin
+      vars:
+        src_dir: "${ '/tmp/redis-' + (has(input.install) && has(input.install.version) ? input.install.version : '') }"
+      params:
+        path: /usr/local/bin/redis-sentinel
+        src: "${ vars.src_dir + '/redis-sentinel' }"
+        mode: "0755"
+        owner: "${ vars.root_owner }"
+        group: "${ vars.root_group }"
 
     # 5. Свой systemd-юнит redis-server.service (binary НЕ несёт distro-юнита).
     #    ★ Имя юнита redis-server — чтобы server.yml hardening drop-in
@@ -154,18 +173,24 @@
         group: "${ vars.root_group }"
 
     # 6. Рестарт redis-server на смену бинаря (апгрейд версии) или своего юнита.
-    #    register'ы redis_binaries/redis_server_unit живут В ЭТОМ файле → onchanges
+    #    onchanges принимает список register-ов (docs/module/core/service): рестарт
+    #    триггерится, если изменился хотя бы один. redis_server_bin несёт честный
+    #    changed от core.file.present (true только при смене байт redis-server, т.е.
+    #    реальном апгрейде); redis_cli_bin/redis_sentinel_bin добавлены для полноты
+    #    (версии трёх бинарей в одном tarball согласованы, но смена любого = повод
+    #    рестартить сервис, версии которого они часть); redis_server_unit — смена
+    #    своего systemd-юнита. Все register'ы живут В ЭТОМ файле → onchanges
     #    резолвится per-file (cross-file линтер не отверг бы; см. шапку). Gated
     #    ДОПОЛНИТЕЛЬНО на deploy_redis: в sentinel_only (deploy_redis=false) redis-server
-    #    не разворачивается — рестартить нечего (бинарь redis-server всё равно
-    #    разложен, но как сервис не поднят; sentinel-демон рестартит sentinel.yml).
+    #    не разворачивается — рестартить нечего (бинари redis-* всё равно разложены, но
+    #    как сервис не поднят; sentinel-демон рестартит sentinel.yml).
     #    daemon-reload при смене юнита core.service делает сам перед рестартом. server.yml
     #    рестартит на смену config/ACL/TLS/hardening — здесь ОТДЕЛЬНЫЙ триггер на
     #    апгрейд бинаря (тот же сервис redis-server, разные источники изменения).
     - name: Restart redis-server because the binary or unit changed
       module: core.service.restarted
       when: "default(input.deploy_redis, true)"
-      onchanges: [redis_binaries, redis_server_unit]
+      onchanges: [redis_server_bin, redis_cli_bin, redis_sentinel_bin, redis_server_unit]
       timeout: 30s
       params:
         name: redis-server

@@ -8,7 +8,7 @@
 
   Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010). .vars/.self
   юнит не использует (статичен): путь конфига фиксирован /etc/redis/redis.conf,
-  бинарь — /usr/local/bin/redis-server (install.yml разложил его туда install -m0755).
+  бинарь — /usr/local/bin/redis-server (install.yml разложил его туда core.file.present src:).
 
   Type=notify + supervised systemd в redis.conf (redis.conf.tmpl: supervised systemd):
   redis-server остаётся foreground-процессом и сам уведомляет systemd о готовности —

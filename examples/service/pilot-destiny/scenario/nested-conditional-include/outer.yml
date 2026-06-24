@@ -1,0 +1,14 @@
+# Внешняя условная группа (подключается из main.yml под `when: input.outer == 'yes'`).
+# Несёт прямую задачу (outer-direct) + ВЛОЖЕННЫЙ условный include inner.yml.
+# Эффективный include-when inner-группы — конъюнкция `(input.outer == 'yes') &&
+# (input.inner == 'yes')`: дроп этой внешней группы каскадит на inner.
+- name: outer direct marker
+  module: core.file.present
+  params:
+    path:    /etc/pilot/outer.txt
+    content: "outer"
+
+# Вложенная условная группа: подключается только при inner == 'yes', но дополнительно
+# гасится при дропе внешней группы (каскад через конъюнкцию include-when).
+- include: inner.yml
+  when: input.inner == 'yes'

@@ -31,14 +31,28 @@
     path: "${ '/tmp/redis_exporter-' + input.version + '.tar.gz' }"
     dest: "${ '/tmp/redis_exporter-' + input.version }"
 
+# Разложить бинарь redis_exporter из распакованного каталога в bin_dir.
+# core.file.present умеет src: — копию содержимого regular-файла с хоста
+# (docs/module/core/file: src взаимоисключён с content, абсолютный путь, Lstat-
+# проверка regular-file, атомарная запись). src несёт префикс `v` в имени каталога
+# внутри tarball-а (redis_exporter-v<v>.linux-<arch>) — раскладка GitHub Releases.
+#
+# Идемпотентность — нативная, от самого core.file.present: changed=true ТОЛЬКО если
+# целевого файла нет либо его sha256 отличается от sha256 src (либо дрейфит mode/
+# owner). Это строго лучше прежнего creates:-guard прошлого core.cmd.shell: creates:
+# пропускал install при ЛЮБОМ существующем файле → апгрейд версии НЕ переустанавливал
+# бинарь (latent-баг). core.file.present переустанавливает строго при смене байт →
+# честный changed на апгрейде. register — onchanges рестарта ниже реагирует на смену
+# бинаря так же, как на смену unit-файла.
 - name: Install redis_exporter binary
-  module: core.cmd.shell
+  module: core.file.present
+  register: redis_exporter_bin
   params:
-    creates: "${ input.bin_dir + '/redis_exporter' }"
-    cmd: >-
-      install -m 0755
-      '${ '/tmp/redis_exporter-' + input.version + '/redis_exporter-v' + input.version + '.linux-' + input.arch + '/redis_exporter' }'
-      '${ input.bin_dir + '/redis_exporter' }'
+    path: "${ input.bin_dir + '/redis_exporter' }"
+    src: "${ '/tmp/redis_exporter-' + input.version + '/redis_exporter-v' + input.version + '.linux-' + input.arch + '/redis_exporter' }"
+    mode: "0755"
+    owner: root
+    group: root
 
 # Выделенного системного пользователя/группы НЕТ намеренно. redis_exporter —
 # stateless-демон без owned data-dir, поэтому по гибрид-правилу прод-конвенции
@@ -77,9 +91,9 @@
     name: redis_exporter
     enabled: true
 
-- name: Restart redis_exporter because unit changed
+- name: Restart redis_exporter because the unit or binary changed
   module: core.service.restarted
-  onchanges: [redis_exporter_unit]
+  onchanges: [redis_exporter_unit, redis_exporter_bin]
   timeout: 30s
   params:
     name: redis_exporter

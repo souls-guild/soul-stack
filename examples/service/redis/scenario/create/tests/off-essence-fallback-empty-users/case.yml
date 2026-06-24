@@ -58,7 +58,7 @@ assert:
         version: "7.2.4"
 
     # users.acl: пустой map (users не задан → {}). Шаблон рендерит файл без строк.
-    - index: 13
+    - index: 15
       module: core.file.rendered
       params:
         path: /etc/redis/users.acl
@@ -82,7 +82,7 @@ assert:
           essence: {}
 
     # redis.conf: maxmemory/policy ПОЛНОСТЬЮ из essence (computed-слой пуст).
-    - index: 14
+    - index: 16
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf

@@ -1,0 +1,6 @@
+# Безусловная база conditional-include: подключается всегда из main.yml.
+- name: base marker
+  module: core.file.present
+  params:
+    path:    /etc/pilot/base.txt
+    content: "base"

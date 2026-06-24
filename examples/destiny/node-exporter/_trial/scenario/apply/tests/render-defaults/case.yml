@@ -87,14 +87,17 @@ assert:
         mode: "0755"
 
     # ── service.yml: install-бинаря + unit + сервис (индексы 5..8) ──────────────
-    # install-шаг несёт rendered shell-строку (раскладка node_exporter) — её полная
-    # фиксация хрупка; module + version-aware unless достаточно. unless собран
-    # CEL-ом: бинарь существует И его --version содержит `version <input.version>`
-    # → exit 0 → install skip; иначе install выполняется и рестартит сервис.
+    # install-шаг — core.file.present с src: (копия node_exporter из распакованного
+    # /tmp). Идемпотентность нативная по sha256(src) — честный changed строго при
+    # смене байт бинаря; version-aware unless-guard прежнего core.cmd.shell не нужен.
     - index: 5
-      module: core.cmd.shell
+      module: core.file.present
       params:
-        unless: "test -x /usr/local/bin/node_exporter && /usr/local/bin/node_exporter --version 2>&1 | grep -qF 'version 1.9.0 '"
+        path: /usr/local/bin/node_exporter
+        src: /tmp/node_exporter-1.9.0/node_exporter-1.9.0.linux-amd64/node_exporter
+        mode: "0755"
+        owner: root
+        group: root
 
     # Основной hardened-unit. listen собран CEL-ом: primary_ip из 10.* → bind на
     # него + порт :9100. render_context не ассертим (self host-вариативен).

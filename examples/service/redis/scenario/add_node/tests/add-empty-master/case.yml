@@ -44,7 +44,7 @@ assert:
   rendered_tasks:
     # GUARD теперь assert: (в план не эмитится) → −1 (24→23); extras-sysctl сжаты
     # 2→1 задачи (core.sysctl.applied) → ещё −1 (23→22).
-    - index: 29
+    - index: 31
       module: community.redis.cluster
       params:
         action: add-node

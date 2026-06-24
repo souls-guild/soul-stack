@@ -55,6 +55,17 @@ type Task struct {
 	Include *IncludeTask `yaml:"include,omitempty"`
 	Block   *BlockTask   `yaml:"block,omitempty"`
 	Assert  *AssertSpec  `yaml:"assert,omitempty"`
+
+	// Carry-through conditional-include (ADR-009 amendment, conditional-include
+	// group-drop). НЕ-YAML поля (`yaml:"-"` → не парсятся из манифеста, не попадают
+	// в taskKnownKeys/yamlFieldIndex — forward-compat как RenderInput.destinyIsolated).
+	// Заполняются ТОЛЬКО [ExpandIncludes] при раскрытии include с `when:`: include-
+	// when и id группы протаскиваются в КАЖДУЮ вклеенную задачу. Keeper-side render
+	// дропает всю группу одним вычислением include-when (по IncludeGroupID), ДО
+	// emitStaticWhenSkip. IncludeGroupID==0 — задача вне условного include (обычный
+	// путь); IncludeWhen непустой ⇔ IncludeGroupID!=0.
+	IncludeWhen    string `yaml:"-"`
+	IncludeGroupID int    `yaml:"-"`
 }
 
 // AssertSpec — keeper-side render-time precondition прогона (ADR-009 amendment

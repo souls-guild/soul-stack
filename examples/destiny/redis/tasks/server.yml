@@ -219,7 +219,8 @@
     # потомков виден этой задаче снаружи nested block (onchanges резолвится, но потомки
     # skip → не считаются changed).
     #
-    # ★ Рестарт на смену БИНАРЯ/ЮНИТА binary-ветки (redis_binaries/redis_server_unit)
+    # ★ Рестарт на смену БИНАРЯ/ЮНИТА binary-ветки (redis_server_bin/redis_cli_bin/
+    # redis_sentinel_bin/redis_server_unit)
     # НЕ здесь: их register'ы живут в install.yml, а cross-file onchanges отвергает
     # ЗАГРУЗОЧНЫЙ per-file линтер (validateTaskRefs, shared/config/destiny_tasks.go) —
     # register должен быть в ОДНОМ файле со своим onchanges-потребителем (тот же

@@ -60,7 +60,7 @@ fixtures:
 assert:
   rendered_tasks:
     # redis.conf БЕЗ loadmodules (version-gate → пустой список): vars.loadmodules: [].
-    - index: 14
+    - index: 16
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf
@@ -94,7 +94,7 @@ assert:
     # PING на index 21 (как modules-empty): modules-dir gated-placeholder на 20,
     # fetch-loop 0 задач (пустой modules после gate). Хвост после sysctl −1
     # (extras-sysctl сжаты 2→1 задачи core.sysctl.applied).
-    - index: 28
+    - index: 30
 
       module: community.redis.command
       params:

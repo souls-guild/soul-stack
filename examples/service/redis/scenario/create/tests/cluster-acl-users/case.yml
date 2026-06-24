@@ -80,7 +80,7 @@ assert:
 
     # users.acl: MAP имя→{perms,state,password} с per-user vault-паролями.
     # zeta/alpha — каждый со СВОИМ резолвнутым паролем (нет cross-leak).
-    - index: 15
+    - index: 17
       module: core.file.rendered
       params:
         path: /etc/redis/users.acl
@@ -113,7 +113,7 @@ assert:
 
     # redis.conf: cluster-директивы СОСУЩЕСТВУЮТ с ACL (разные файлы). В config
     # НЕ должно быть per-user пароля (он только в users.acl, хешем). index 10 (−2).
-    - index: 16
+    - index: 18
       module: core.file.rendered
       params:
         path: /etc/redis/redis.conf

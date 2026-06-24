@@ -1,0 +1,22 @@
+# L0-испытание (Trial, ADR-023): conditional-include keep на cluster.
+#
+# Реверс drop-on-standalone: при topology=cluster статический include-when:true →
+# группа cluster.yml ОСТАЁТСЯ, её задачи рендерятся обычным путём (не placeholder).
+# Presence-матчер фиксирует наличие всех трёх задач (base + 2 cluster).
+name: conditional-include keeps cluster group on cluster
+
+fixtures:
+  input:
+    topology: cluster
+
+assert:
+  task_present:
+    - module: core.file.present
+      params_subset:
+        path: /etc/pilot/base.txt
+    - module: core.file.present
+      params_subset:
+        path: /etc/pilot/replication.txt
+    - module: core.file.present
+      params_subset:
+        path: /etc/pilot/sentinel.txt
