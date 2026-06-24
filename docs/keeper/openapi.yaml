@@ -1052,13 +1052,6 @@ components:
       required:
         - values
       type: object
-    IncarnationFormPrefillRequest:
-      additionalProperties: false
-      properties:
-        ref:
-          description: опц. git-ref версии сервиса (схема той же версии, что форма); пусто → версия инкарнации
-          type: string
-      type: object
     IncarnationGetReply:
       additionalProperties: false
       properties:
@@ -6335,12 +6328,6 @@ paths:
           schema:
             description: имя сценария
             type: string
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/IncarnationFormPrefillRequest"
-              description: "опц. тело: версия сервиса (ref)"
       responses:
         "200":
           content:
@@ -6348,12 +6335,6 @@ paths:
               schema:
                 $ref: "#/components/schemas/IncarnationFormPrefillReply"
           description: OK
-        "400":
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/HumaProblemError"
-          description: Bad Request
         "403":
           content:
             application/problem+json:
