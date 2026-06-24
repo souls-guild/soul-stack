@@ -24,9 +24,9 @@
 # индексы НЕ сдвигает.
 - name: Ensure the redis modules directory exists
   module: core.file.directory
-  when: "size(has(input.modules) ? input.modules : []) > 0"
+  when: "size(default(input.modules, [])) > 0"
   params:
-    path: "${ has(input.modules_dir) ? input.modules_dir : '/var/lib/redis/modules' }"
+    path: "${ default(input.modules_dir, '/var/lib/redis/modules') }"
     parents: true
     owner: redis
     group: redis
@@ -45,11 +45,11 @@
 - name: Fetch redis module shared object
   module: core.url.fetched
   loop:
-    items: "${ has(input.modules) ? input.modules : [] }"
+    items: "${ default(input.modules, []) }"
     as: item
   params:
     url:      "${ input.modules_base_url + '/' + soulprint.self.os.arch + '/' + {'search': 'redisearch.so', 'json': 'rejson.so', 'timeseries': 'redistimeseries.so', 'bloom': 'redisbloom.so'}[item] }"
-    path:     "${ (has(input.modules_dir) ? input.modules_dir : '/var/lib/redis/modules') + '/' + {'search': 'redisearch.so', 'json': 'rejson.so', 'timeseries': 'redistimeseries.so', 'bloom': 'redisbloom.so'}[item] }"
+    path:     "${ default(input.modules_dir, '/var/lib/redis/modules') + '/' + {'search': 'redisearch.so', 'json': 'rejson.so', 'timeseries': 'redistimeseries.so', 'bloom': 'redisbloom.so'}[item] }"
     checksum: "${ 'sha256:' + input.modules_sha256[item] }"
     mode:     "0750"
     owner:    redis

@@ -85,7 +85,7 @@ tasks:
     apply:
       destiny: redis
       input:
-        version:  "${ has(incarnation.state.redis_version) ? incarnation.state.redis_version : '' }"
+        version:  "${ default(incarnation.state.redis_version, '') }"
         password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
         config:   "${ incarnation.state.redis_config }"
         users: >-
@@ -122,7 +122,7 @@ tasks:
     module: community.redis.cluster
     params:
       action:   add-node
-      role:     "${ has(input.role) ? input.role : 'replica' }"
+      role:     "${ default(input.role, 'replica') }"
       password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
       new_node:
         addr: "${ soulprint.hosts.where(\"sid == input.new_node_sid\")[0].network.primary_ip + ':6379' }"
