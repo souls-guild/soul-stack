@@ -16,3 +16,10 @@ spec:
         name:     { type: string, required: true, description: "Имя kernel-параметра (напр. net.ipv4.ip_forward)." }
         value:    { type: string, required: true, description: "Желаемое значение." }
         filename: { type: string, description: "Имя persist-файла в /etc/sysctl.d (default — name с '.'→'-' + .conf)." }
+    applied:
+      description: Bulk-набор kernel-параметров одним детерминированным drop-in в /etc/sysctl.d (sorted keys) + точечный sysctl -p <file> при изменении; ADR-015 amend (модуль сам владеет drop-in+reload+idempotency, Ansible-модель).
+      input:
+        settings:        { type: map, items: { type: string }, required: true, description: "Map kernel-параметр→значение. Ключи сортируются → контент drop-in детерминирован." }
+        filename:        { type: string, required: true, description: "Имя drop-in в /etc/sysctl.d (напр. 30-redis); суффикс .conf добавляется автоматически." }
+        reload:          { type: string, enum: [auto, always, never], default: auto, description: "sysctl -p <file> после записи: auto = только при изменении файла, always = безусловно, never = opt-out. Сам reload changed не помечает (реюз словаря core.service daemon_reload)." }
+        ignore_failures: { type: bool, default: false, description: "sysctl -e -p (--ignore): глушит read-only/несуществующие ключи в контейнерах. Явный opt-in." }

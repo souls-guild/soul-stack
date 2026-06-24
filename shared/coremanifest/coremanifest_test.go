@@ -21,7 +21,7 @@ var expectedModules = map[string][]string{
 	"core.mount":    {"present", "absent", "mounted", "unmounted"},
 	"core.git":      {"cloned", "pulled"},
 	"core.archive":  {"extracted"},
-	"core.sysctl":   {"present"},
+	"core.sysctl":   {"present", "applied"},
 	"core.url":      {"fetched"},
 	"core.line":     {"present", "absent"},
 	"core.repo":     {"present", "absent"},
