@@ -152,8 +152,10 @@ func (p *Pipeline) renderApplyDestiny(
 		// requisites), roster наследуется ЦЕЛИКОМ (block НЕ сужает хосты — where/on
 		// на destiny-block отвергнуты guardDestinyBlockChild), serialWidth родителя
 		// destiny протягивается в каждый DispatchPlan потомка. Static-when-false блок
-		// уже погашен emitStaticWhenSkip выше (1 placeholder за весь блок) — сюда не
-		// доходит.
+		// НЕ гасится emitStaticWhenSkip (она пропускает block-задачу) — заходит сюда,
+		// walkBlockChildren вливает block.when в каждого потомка через AND и каждый
+		// child эмитит СВОЙ skip-placeholder с register/requisites (flat-register-
+		// scope цел при skip — register потомков виден снаружи через resolveOnChanges).
 		if task.Block != nil {
 			bt, bp, berr := p.renderDestinyBlock(ctx, destinyIn, task, idx, targeted, serialWidth)
 			if berr != nil {

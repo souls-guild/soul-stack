@@ -58,6 +58,65 @@ func TestCollectStateSchemaSecrets(t *testing.T) {
 	}
 }
 
+// secret НА САМОМ additionalProperties-узле (значение произвольного ключа map —
+// secret) НЕ попадает в SecretPathSet: ни `map_field` (пометил бы всю map →
+// over-mask на read-path), ни `map_field.*` (IsSecret такой путь не запрашивает →
+// запись мёртвая). Деградация к vault+regex-слою маскинга намеренна (★-ограничение
+// schema-слоя). Регрессия на ap-secret-ветку collectStateSchemaSecrets.
+func TestCollectStateSchemaSecrets_AdditionalPropertiesSecretLeaf(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"map_field": map[string]any{
+				"type":                 "object",
+				"additionalProperties": map[string]any{"type": "string", "secret": true},
+			},
+		},
+	}
+	set := audit.SecretPathSet{}
+	collectStateSchemaSecrets(schema, "", set)
+
+	if set["map_field"] {
+		t.Errorf("ap-secret-leaf пометил `map_field` — over-mask всей map: %v", set)
+	}
+	if set["map_field.*"] {
+		t.Errorf("ap-secret-leaf пометил `map_field.*` — мёртвая запись (IsSecret такой путь не запрашивает): %v", set)
+	}
+	if len(set) != 0 {
+		t.Errorf("ap-secret-leaf не должен давать ни одной записи (деградация к vault+regex): %v", set)
+	}
+}
+
+// ap-узел БЕЗ secret, но с вложенными конкретными `properties` под secret: schema-
+// слой ДОЛЖЕН покрыть точные имена (рекурсия в ap ведётся), а сам ap-узел — нет.
+func TestCollectStateSchemaSecrets_AdditionalPropertiesNestedSecret(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"users": map[string]any{
+				"type": "object",
+				"additionalProperties": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"name":     map[string]any{"type": "string"},
+						"password": map[string]any{"type": "string", "secret": true},
+					},
+				},
+			},
+		},
+	}
+	set := audit.SecretPathSet{}
+	collectStateSchemaSecrets(schema, "", set)
+
+	// ap-путь = имя map (`users`), вложенный конкретный `password` → `users.password`.
+	if !set["users.password"] {
+		t.Errorf("вложенный конкретный secret под ap не собран: %v", set)
+	}
+	if set["users"] {
+		t.Errorf("сам ap-узел `users` помечен secret — over-mask: %v", set)
+	}
+}
+
 // secretSchemaForIncarnation материализует снапшот и объединяет state_schema
 // secret + create-scenario input secret под input.<name>.
 func TestSecretSchemaForIncarnation_StateAndInput(t *testing.T) {
