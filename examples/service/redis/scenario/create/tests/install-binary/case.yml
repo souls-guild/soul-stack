@@ -127,3 +127,27 @@ assert:
     redis_users: {}
     redis_hosts: []
     redis_sentinel: {}
+    # ── namedfields (read-model, v3): install=binary (тот же compute.install, что
+    # ушёл в destiny apply.input). sha256 не задан → '' (content-идемпотентность).
+    install:
+      method:   binary
+      base_url: "https://downloads.example.com/redis"
+      version:  "7.2.4"
+      sha256:   ""
+    # TLS off (essence без tls_*): enable/only false, port 7379 (essence-дефолт),
+    # refs пусты (essence.tls_*_ref не заданы → has()-цепочка даёт '').
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    persistence: rdb
+    memory_mb: 0
+    maxmemory_policy: ""
+    modules: []
+    sysctl_settings: {}
+    shards: 0
+    replicas: 0
+    sentinel_quorum: 0

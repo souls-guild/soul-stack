@@ -433,6 +433,23 @@ compute:
   # install.version. has()-цепочка (default() ловит no-such-key только в первом
   # аргументе — input.version отсутствует целиком в binary, не лист).
   redis_version: "${ has(input.version) ? input.version : (has(input.install) && has(input.install.version) ? input.install.version : '') }"
+  # ── install как namedfield (read-model): нормализуем absent input.install →
+  # {method: 'package'} (default-поведение, см. input.install). method всегда
+  # присутствует; base_url/version/sha256 — только при method=binary (берём из
+  # input.install as-is, has()-цепочка). install_in нормализует корень (default()
+  # ловит no-such-key лишь на существующем map — input.install может отсутствовать
+  # целиком). state_changes.install ссылается ОДНО это значение (не повторяет каскад).
+  install_in:     "${ default(input.install, {}) }"
+  install_method: "${ default(compute.install_in.method, 'package') }"
+  install: >-
+    ${ (compute.install_method == 'binary')
+         ? {
+             'method':   'binary',
+             'base_url': default(compute.install_in.base_url, ''),
+             'version':  default(compute.install_in.version, ''),
+             'sha256':   default(compute.install_in.sha256, '')
+           }
+         : { 'method': 'package' } }
   tls_in:      "${ default(input.tls, {}) }"
   tls_on:      "${ default(compute.tls_in.enable, default(essence.tls_enable, false)) }"
   tls_only_on: "${ default(compute.tls_in.only, default(essence.tls_only, false)) }"
@@ -519,6 +536,64 @@ state_changes:
   # redis_config ≡ apply.input.config веток: единый compute.redis_config (см. выше).
   - set: redis_config
     value: "${ compute.redis_config }"
+
+  # ── Именованные поля намерения (read-model, v3) ─────────────────────────────
+  # ★ КРИТИЧНО (architect a9e1c2c6): значения берутся из ТЕХ ЖЕ compute.*/input, что
+  # и redis_config — не из сырого input отдельно. Так namedfields (намерение) и
+  # redis_config (вычисленный итог) согласованы по построению (один compute-проход).
+  # tls: тот же compute.tls_on/tls_only_on/tls_port/tls_*_ref, что дал TLS-блок
+  # redis_config (cert/key/ca — Vault-ПУТИ, не PEM: секрет в state не лежит).
+  - set: tls
+    value: >-
+      ${ {
+           'enable':   compute.tls_on,
+           'only':     compute.tls_only_on,
+           'port':     compute.tls_port,
+           'cert_ref': compute.tls_cert_ref,
+           'key_ref':  compute.tls_key_ref,
+           'ca_ref':   compute.tls_ca_ref
+         } }
+  # install: нормализованный compute.install (method всегда; base_url/version/sha256
+  # при binary). Тот же install, что уходит в destiny `redis` (apply.input.install).
+  - set: install
+    value: "${ compute.install }"
+  # persistence: input.persistence (default rdb) — тот же ключ, по которому выбран
+  # essence.persistence_presets в redis_config (read-model дублирует выбор оператора).
+  - set: persistence
+    value: "${ input.persistence }"
+  # memory_mb: бюджет памяти оператора (int). Не задан → 0 (плоский set всегда
+  # создаёт ключ; 0 = «оператор не зафиксировал бюджет», maxmemory взят из essence).
+  - set: memory_mb
+    value: "${ int(default(input.memory_mb, 0)) }"
+  # maxmemory_policy: явный выбор оператора; не задан → '' (директива из essence-
+  # подложки, см. redis_config). namedfield маркирует ОТСУТСТВИЕ явного выбора пустой
+  # строкой (не лезем в redis_config за фактическим значением — это write-model).
+  - set: maxmemory_policy
+    value: "${ default(input.maxmemory_policy, '') }"
+  # modules: алиасы Redis-модулей (тот же input.modules, что строит loadmodules в
+  # destiny). Пусто/не задан → [].
+  - set: modules
+    value: "${ default(input.modules, []) }"
+  # sysctl_settings: применённый host-tuning (тот же essence.sysctl_settings, что
+  # уходит в destiny apply.input). Из essence (host-инвариант, не операторский ввод).
+  - set: sysctl_settings
+    value: "${ default(essence.sysctl_settings, {}) }"
+  # ── Топология (counts) ──────────────────────────────────────────────────────
+  # shards/replicas/sentinel_quorum — из тех же input.*, что size-guard/cluster-build/
+  # sentinel-ветки. Режим-зависимы: cluster использует shards+replicas_per_shard;
+  # sentinel — replicas+sentinel_quorum. Не задан → 0 (плоский set всегда создаёт ключ;
+  # 0 = «не применимо к режиму / auto»). replicas: cluster — replicas_per_shard (реплик
+  # на шард), sentinel — replicas (реплик master-а); оба читаются из своего input-поля.
+  - set: shards
+    value: "${ int(default(input.shards, 0)) }"
+  - set: replicas
+    value: >-
+      ${ (input.redis_type == 'cluster')
+           ? int(default(input.replicas_per_shard, 0))
+           : int(default(input.replicas, 0)) }
+  - set: sentinel_quorum
+    value: "${ int(default(input.sentinel_quorum, 0)) }"
+
   - set: redis_users
     value: "${ default(input.users, {}) }"
   # redis_hosts пустой во ВСЕХ режимах: state_changes рендерятся per-host с

@@ -1,5 +1,5 @@
 name: redis
-state_schema_version: 2
+state_schema_version: 3
 description: >-
   Redis по концепции Ansible-роли: ОДИН сервис на все режимы развёртывания
   (redis_type ∈ standalone/sentinel/cluster/sentinel_only). Per-host install +
@@ -15,11 +15,26 @@ description: >-
   установка из бинарного дистрибутива (Шаг B припаркован)
   (redis-консолидация .pm/tasks/2026-06-22-redis-consolidation).
 
-# state_schema_version = 2: миграция 001_to_002 (migrations/001_to_002.yml) —
-# демо-цель грамматики DSL (rename + set + foreach + delete, ADR-019). v1→v2
-# переводит redis_users из списка имён в map name → {perms, state} (forward-only).
+# state_schema_version = 3: цепочка миграций forward-only (ADR-019).
+#   - 001_to_002 (migrations/001_to_002.yml): redis_users из списка имён в map
+#     name → {perms, state} (демо-грамматики DSL — rename + set + foreach + delete).
+#   - 002_to_003 (migrations/002_to_003.yml): «richer state» — opaque redis_config
+#     ДОПОЛНЯЕТСЯ ИМЕНОВАННЫМИ полями намерения (read-model day-2): tls/install/
+#     persistence/memory_mb/maxmemory_policy/modules/sysctl_settings + топология
+#     (shards/replicas/sentinel_quorum). Best-effort: извлекаемое — из redis_config/
+#     redis_sentinel, неизвлекаемое — консервативный default (см. описание миграции).
 # incarnation.state фиксирует, что развёрнуто, чтобы оператор видел инсталляцию и
 # повторный apply был idempotent.
+#
+# ГРАНИЦА двух представлений конфига (architect a9e1c2c6):
+#   - redis_config (opaque, additionalProperties:true) — ВЫЧИСЛЕННЫЙ ИТОГ трансляции
+#     простого ввода в redis.conf-map (что реально уйдёт в render и CONFIG SET). Это
+#     write-model «как развёрнуто».
+#   - именованные поля (tls/install/persistence/...) — НАМЕРЕНИЕ оператора в простых
+#     типизированных понятиях (read-model). День-2-сценарии читают их именованно
+#     (restart — state.tls, будущие update_config — state.install/persistence/memory_mb).
+# ОБА представления заполняются из ОДНОГО compute-прохода create (compute.*): namedfields
+# и redis_config считаются из тех же compute.tls_*/input.* — рассинхрона между ними нет.
 state_schema:
   type: object
   required: [redis_type, redis_config]
@@ -38,6 +53,73 @@ state_schema:
     redis_config:
       type: object
       additionalProperties: true
+
+    # ── Именованные поля намерения (read-model, v3) ───────────────────────────
+    # Простые типизированные понятия оператора, рядом с opaque redis_config. День-2-
+    # сценарии читают их ИМЕНОВАННО (не парсят redis_config). Заполняются create из
+    # тех же compute.*/input, что и redis_config (один источник истины, без drift).
+
+    # TLS-намерение: включён ли TLS, закрыт ли plain-порт, на каком TLS-порту, и
+    # Vault-ПУТИ серверного cert/key/CA (НЕ сам PEM — секрет в state не лежит, ИБ).
+    # Заполняется из compute.tls_on/tls_only_on/tls_port/tls_*_ref (те же значения,
+    # что ушли в TLS-блок redis_config). day-2 restart читает state.tls.enable/port.
+    tls:
+      type: object
+      additionalProperties: false
+      properties:
+        enable:   { type: boolean }
+        only:     { type: boolean }
+        port:     { type: integer }
+        cert_ref: { type: string }
+        key_ref:  { type: string }
+        ca_ref:   { type: string }
+    # Способ установки redis (package — distro-пакет; binary — upstream-tarball).
+    # base_url/version/sha256 материализуются при method=binary. Из default(input.
+    # install, {method:package}). day-2 update_config читает state.install.method.
+    install:
+      type: object
+      additionalProperties: false
+      properties:
+        method:   { type: string, enum: [package, binary] }
+        base_url: { type: string }
+        version:  { type: string }
+        sha256:   { type: string }
+    # Режим persistence (концепция роли). Из input.persistence (default rdb).
+    persistence:
+      type: string
+      enum: [off, aof, rdb, rdb_aof]
+    # Бюджет памяти под Redis, МБ. Из input.memory_mb; не задан → отсутствует/0.
+    memory_mb:
+      type: integer
+      minimum: 64
+    # Политика вытеснения. Из input.maxmemory_policy; не задан → пустая строка
+    # (директива берётся из merge-подложки essence — в namedfields маркируется
+    # отсутствием явного выбора оператора).
+    maxmemory_policy:
+      type: string
+    # Подключённые Redis-модули (Redis < 8). Алиасы из input.modules; пусто → [].
+    modules:
+      type: array
+      items:
+        type: string
+        enum: [search, json, timeseries, bloom]
+    # Применённые kernel-параметры под Redis (host-tuning). Из essence.sysctl_settings
+    # (тот же map, что ушёл в destiny через apply.input). key→value (строки).
+    sysctl_settings:
+      type: object
+      additionalProperties:
+        type: string
+
+    # ── Топология (counts, v3) ────────────────────────────────────────────────
+    # Раскладка ролей по таргетированным souls. Из input.shards/replicas/
+    # sentinel_quorum (см. input create). Режим-зависимы: cluster использует shards/
+    # replicas (replicas_per_shard), sentinel — replicas/sentinel_quorum; для прочих
+    # режимов — 0. Не задан в input → 0 (auto-quorum sentinel вычисляется в apply,
+    # в namedfields материализуется 0 как «оператор не зафиксировал явно»).
+    shards:          { type: integer }
+    replicas:        { type: integer }
+    sentinel_quorum: { type: integer }
+
     # ACL-пользователи Redis: map username → {perms, state}. perms — полная ACL-
     # строка (директивы Redis ACL как есть). Наполняется create из input.users;
     # пароли — НЕ в state (keeper-side Vault, ADR-012).

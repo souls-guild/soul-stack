@@ -1,0 +1,41 @@
+name: persistence-rdb-aof
+description: >
+  Обратная свёртка persistence: save непустой + appendonly=yes → rdb_aof
+  (двойная durability).
+
+state_before:
+  redis_type: standalone
+  redis_version: "7.2.4"
+  redis_config:
+    save: "900 1 300 10 60 10000"
+    appendonly: "yes"
+  redis_users: {}
+  redis_hosts: []
+  redis_sentinel: {}
+
+state_after:
+  redis_type: standalone
+  redis_version: "7.2.4"
+  redis_config:
+    save: "900 1 300 10 60 10000"
+    appendonly: "yes"
+  redis_users: {}
+  redis_hosts: []
+  redis_sentinel: {}
+  tls:
+    enable: false
+    only: false
+    port: 7379
+    cert_ref: ""
+    key_ref: ""
+    ca_ref: ""
+  install:
+    method: package
+  persistence: rdb_aof
+  maxmemory_policy: ""
+  memory_mb: 0
+  modules: []
+  sysctl_settings: {}
+  shards: 0
+  replicas: 0
+  sentinel_quorum: 0

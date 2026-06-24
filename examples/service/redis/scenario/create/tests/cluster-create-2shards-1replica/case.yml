@@ -133,3 +133,23 @@ assert:
       cluster-node-timeout: "8000"
     redis_users: {}
     redis_hosts: []
+    # ── namedfields (read-model, v3): топология cluster. shards=2 (input.shards),
+    # replicas=1 (cluster → input.replicas_per_shard, реплик на шард). sentinel_quorum
+    # = 0 (не sentinel-режим). persistence default rdb; install package; tls off.
+    shards: 2
+    replicas: 1
+    sentinel_quorum: 0
+    persistence: rdb
+    install:
+      method: package
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    memory_mb: 0
+    maxmemory_policy: ""
+    modules: []
+    sysctl_settings: {}
