@@ -116,63 +116,55 @@ input:
           secret: true
 
   # ── TLS (концепция Ansible-роли redis: redis_tls_*) ──────────────────────────
-  # PEM-материал и директивы TLS — HOST-ИНВАРИАНТ (один cert/CA/порт на кластер) →
-  # приходят через apply.input (scenario резолвит PEM из Vault в render-фазе). Гейт
-  # tls_enable на трёх PEM-render-задачах (в хвосте tasks/main.yml). Сами TLS-
-  # директивы (tls-port/tls-cert-file/...) — обычные ключи merged config (scenario
-  # кладёт их в config); destiny их range-ит в redis.conf как любые директивы.
-  # tls_only НЕ читается destiny как отдельная задача — он лишь меняет config
-  # (scenario ставит `port 0` при tls_only), здесь объявлен для контракта/доки.
-  tls_enable:
-    type: boolean
-    required: false
-    default: false
+  # TLS-параметры — единый dict `tls` (object-typed, симметрично `users`/`sentinel`):
+  # enable/only/port/cert_ref/key_ref/ca_ref. HOST-ИНВАРИАНТ (один cert/CA/порт на
+  # кластер) → приходят через apply.input. Пустой/absent dict → TLS off (has(input.tls)-
+  # guard + default() в задачах даёт enable=false). Гейт tls.enable — per-task when на
+  # PEM-задачах (tasks/server.yml). Сами TLS-директивы (tls-port/tls-cert-file/...) —
+  # обычные ключи merged config (scenario кладёт их в config), destiny range-ит их в
+  # redis.conf. tls.only НЕ читается destiny как отдельная задача — он лишь меняет
+  # config (scenario ставит `port 0`).
+  #
+  # ★ PEM-РЕНДЕР ЧЕРЕЗ vault() В САМОЙ ЯЧЕЙКЕ (seal-маскинг, ADR-010 §7.4): destiny
+  # получает Vault-ПУТИ (tls.cert_ref/key_ref/ca_ref), а сам PEM читает CEL-функцией
+  # vault() ПРЯМО в ячейке content задачи core.file.present (НЕ .tmpl, НЕ apply.input
+  # с уже-резолвленным PEM). vault() резолвится KEEPER-SIDE в render-фазе destiny-
+  # прохода — детектор seal помечает ячейку sealed vault-слоем, маскинг ловит PEM в
+  # error_summary/state. PEM в файл уезжает уже значением; vault-клиент на Soul не
+  # тянется (ADR-012). Если бы destiny принимала operator-литеральный PEM (не ref) —
+  # его пришлось бы гнать через apply.input, а seal destiny-прохода схему secret-input
+  # не видит (destiny-input-secret transit — отложенный слайс) → PEM не маскировался
+  # бы. Поэтому контракт — именно Vault-ref, vault() в ячейке.
+  tls:
+    type: object
+    # cert_ref/key_ref/ca_ref обязательны, КОГДА dict передан (object-level required:
+    # список под-ключей): без путей PEM-задачам нечего читать. Один ключ `required`
+    # несёт ЛИБО bool (опциональность поля), ЛИБО список обязательных под-ключей —
+    # здесь выбрана списочная форма (как у `sentinel`), поэтому `required: false`
+    # отсутствует: опциональность поля достигается отсутствием field-level required.
+    required: [cert_ref, key_ref, ca_ref]
+    additional_properties: false
     description: >-
-      Включить TLS: рендерить PEM-файлы /etc/redis/tls/{redis.crt,redis.key,ca.crt}
-      (mode 0600 owner redis) и (через config) TLS-директивы redis.conf. По
-      умолчанию false (plaintext).
-
-  tls_only:
-    type: boolean
-    required: false
-    default: false
-    description: >-
-      Только-TLS: plain-порт закрыт (`port 0` в config, ставит scenario). Плагин
-      community.redis ОБЯЗАН коннектиться по TLS. Объявлено для контракта; destiny
-      его прямо не читает (эффект — в merged config от scenario).
-
-  tls_port:
-    type: integer
-    required: false
-    default: 7379
-    min: 1
-    description: >-
-      TLS-порт Redis (директива tls-port redis.conf, приходит в config от
-      scenario). По умолчанию 7379 (как redis_tls_port роли).
-
-  tls_cert:
-    type: string
-    required: false
-    secret: true
-    description: >-
-      PEM серверного сертификата (рендерится в /etc/redis/tls/redis.crt).
-      Зарезолвлен keeper-side из Vault (render-фаза vault()); маскируется.
-
-  tls_key:
-    type: string
-    required: false
-    secret: true
-    description: >-
-      PEM приватного ключа серверного сертификата (рендерится в
-      /etc/redis/tls/redis.key, mode 0600). Секрет; маскируется, в файл — как есть.
-
-  tls_ca:
-    type: string
-    required: false
-    secret: true
-    description: >-
-      PEM CA-сертификата кластера (рендерится в /etc/redis/tls/ca.crt). Узлы
-      валидируют сертификаты пиров по нему (tls-replication/tls-cluster).
+      Параметры TLS Redis (концепция redis_tls_* роли). Пустой/не передан → TLS off
+      (block PEM-задач placeholder-skip, директив TLS нет). enable — главный гейт
+      рендера PEM/директив; only — закрыть plain-порт (scenario ставит `port 0`);
+      port — TLS-порт (директива tls-port); cert_ref/key_ref/ca_ref — Vault-ПУТИ
+      серверного cert/key и CA (форма "<mount>/<path>#<field>"). destiny читает PEM
+      через vault(ref) В ЯЧЕЙКЕ content (seal-маскинг), vault-клиент на Soul нет.
+    properties:
+      enable:
+        type: boolean
+      only:
+        type: boolean
+      port:
+        type: integer
+        min: 1
+      cert_ref:
+        type: string
+      key_ref:
+        type: string
+      ca_ref:
+        type: string
 
   # ── Redis-модули (концепция Ansible-роли redis: redis_module_*) ──────────────
   # На Redis < 8 модули (RediSearch / RedisJSON / RedisTimeSeries / RedisBloom)

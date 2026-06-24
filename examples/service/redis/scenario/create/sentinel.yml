@@ -84,14 +84,17 @@
       # флагов нет, задачи destiny `redis` всегда активны. sysctl_settings — essence,
       # host-инвариантна → apply.input.
       sysctl_settings:  "${ default(essence.sysctl_settings, {}) }"
-      # TLS PEM + флаги — HOST-ИНВАРИАНТ (один cert/CA на кластер) → apply.input
-      # (см. standalone.yml). Источник — Vault-пути essence.
-      tls_enable: "${ default(essence.tls_enable, false) }"
-      tls_only:   "${ default(essence.tls_only, false) }"
-      tls_port:   "${ int(default(essence.tls_port, 7379)) }"
-      tls_cert:   "${ (has(essence.tls_enable) && essence.tls_enable) ? vault(essence.tls_cert_ref) : '' }"
-      tls_key:    "${ (has(essence.tls_enable) && essence.tls_enable) ? vault(essence.tls_key_ref) : '' }"
-      tls_ca:     "${ (has(essence.tls_enable) && essence.tls_enable) ? vault(essence.tls_ca_ref) : '' }"
+      # TLS — единый dict (enable/only/port + cert_ref/key_ref/ca_ref) — см. standalone.
+      # HOST-ИНВАРИАНТ → apply.input. enable/only/port — compute-vars (input.tls.* бьёт
+      # essence). cert_ref/key_ref/ca_ref — Vault-ПУТИ (destiny читает PEM через vault()
+      # в ячейке content, seal-маскинг). refs из input.tls.* с дефолтом essence.tls_*_ref.
+      tls:
+        enable:   "${ compute.tls_on }"
+        only:     "${ compute.tls_only_on }"
+        port:     "${ compute.tls_port }"
+        cert_ref: "${ compute.tls_cert_ref }"
+        key_ref:  "${ compute.tls_key_ref }"
+        ca_ref:   "${ compute.tls_ca_ref }"
       sentinel_enabled: true
       sentinel:
         master_name: "${ input.sentinel_master_name }"
@@ -104,18 +107,18 @@
 # 3. Health-gate per-host: PING живого Redis после старта (каждый узел обязан
 #    ответить ДО привязки реплик/настройки sentinel). community.redis.command,
 #    retry/until через retry. addr — localhost (плагин на redis-хосте).
-#    ★ ИБ (anti-downgrade): tls/tls_ca/порт гейтятся на essence.tls_ENABLE, НЕ
-#    tls_only — TLS включён → плагин ОБЯЗАН по TLS (иначе AUTH-пароль plaintext-ом).
-#    PING по tls_port + tls=true + tls_ca.
+#    ★ ИБ (anti-downgrade): tls/tls_ca/порт гейтятся на compute.tls_on (TLS ВКЛЮЧЁН),
+#    НЕ tls_only — TLS включён → плагин ОБЯЗАН по TLS (иначе AUTH-пароль plaintext-ом).
+#    PING по compute.tls_port + tls=true + tls_ca (vault(ref) в scenario-проходе).
 - name: Wait for each redis node to answer PING
   when: "input.redis_type == 'sentinel'"
   module: community.redis.command
   retry: { count: 10, delay: 3s }
   params:
-    addr:     "${ (has(essence.tls_enable) && essence.tls_enable) ? '127.0.0.1:' + string(int(default(essence.tls_port, 7379))) : '127.0.0.1:6379' }"
+    addr:     "${ compute.tls_on ? '127.0.0.1:' + string(compute.tls_port) : '127.0.0.1:6379' }"
     password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
-    tls:      "${ default(essence.tls_enable, false) }"
-    tls_ca:   "${ (has(essence.tls_enable) && essence.tls_enable) ? vault(essence.tls_ca_ref) : '' }"
+    tls:      "${ compute.tls_on }"
+    tls_ca:   "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
     args:     ["PING"]
 
 # 4. REPLICAOF реплик: plugin community.redis.replica ТОЛЬКО на репликах. addr —
@@ -132,20 +135,20 @@
 #    выражение master-election (soulprint.hosts[0]), но `.sid` вместо primary_ip.
 #    Предикат — top-level where-ключ (строка), НЕ CEL-map-литерал
 #    (rewriteHostsWhere не переписывает .where внутри map-литерала).
-#    ★ ИБ (anti-downgrade): tls/tls_ca/порт гейтятся на essence.tls_ENABLE, НЕ
-#    tls_only — TLS включён → плагин коннектится к локальному redis И к master-у по
+#    ★ ИБ (anti-downgrade): tls/tls_ca/порт гейтятся на compute.tls_on (TLS ВКЛЮЧЁН),
+#    НЕ tls_only — TLS включён → плагин коннектится к локальному redis И к master-у по
 #    TLS (иначе masterauth/REPLICAOF и репликация ушли бы plaintext-ом). addr/
-#    master_addr на tls_port; tls_ca — CA-PEM из essence (verify master при репликации).
+#    master_addr на compute.tls_port; tls_ca — CA-PEM (vault(ref), verify master).
 - name: Make replicas follow the elected master (REPLICAOF)
   when: "input.redis_type == 'sentinel'"
   where: "soulprint.self.sid != soulprint.hosts[0].sid"
   module: community.redis.replica
   params:
-    addr:        "${ (has(essence.tls_enable) && essence.tls_enable) ? '127.0.0.1:' + string(int(default(essence.tls_port, 7379))) : '127.0.0.1:6379' }"
-    master_addr: "${ soulprint.hosts[0].network.primary_ip + ':' + ((has(essence.tls_enable) && essence.tls_enable) ? string(int(default(essence.tls_port, 7379))) : '6379') }"
+    addr:        "${ compute.tls_on ? '127.0.0.1:' + string(compute.tls_port) : '127.0.0.1:6379' }"
+    master_addr: "${ soulprint.hosts[0].network.primary_ip + ':' + (compute.tls_on ? string(compute.tls_port) : '6379') }"
     password:    "${ vault('secret/redis/' + incarnation.name + '#password') }"
-    tls:         "${ default(essence.tls_enable, false) }"
-    tls_ca:      "${ (has(essence.tls_enable) && essence.tls_enable) ? vault(essence.tls_ca_ref) : '' }"
+    tls:         "${ compute.tls_on }"
+    tls_ca:      "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
 
 # 5. SENTINEL MONITOR reconcile: plugin community.redis.sentinel на КАЖДОМ хосте
 #    (каждый sentinel-демон мониторит master). addr — локальный sentinel
