@@ -101,8 +101,9 @@
     # 4. Разложить redis-server/redis-cli/redis-sentinel в /usr/local/bin (mode 0755).
     #    core.file.present копировать из ФС не умеет (только inline-content), бинарь —
     #    контент из распакованного каталога → install-шаг core.cmd.shell (локальный
-    #    install -m0755, без сети). register redis_binaries — рестарт server.yml
-    #    реагирует на смену версии бинаря (cross-file register уплощается, см. шапку).
+    #    install -m0755, без сети). register redis_binaries — рестарт redis-server
+    #    (шаг 6 ниже, В ЭТОМ файле) реагирует на смену бинаря; cross-file onchanges
+    #    отверг бы per-file линтер (см. шапку).
     #    Один shell-шаг ставит ВСЕ три бинаря: idempotent install -m (перезаписывает
     #    тем же контентом — байт-в-байт совпадение → нет реального изменения inode-
     #    содержимого для потребителя, но core.cmd.shell всегда changed=true; рестарт
