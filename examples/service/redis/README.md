@@ -198,9 +198,11 @@ operator-флагов нет, задачи рендерятся **всегда**
   `/var/log/redis/*.log`, `copytruncate`), рендерится всегда. Прежнего флага
   `logrotate_enable` (opt-out) больше **нет** — задание `logrotate_enable: false`
   отклонит input-валидация Keeper-а как `unknown_key`.
-- **sysctl — безусловно.** Drop-in `/etc/sysctl.d/30-redis.conf` + реактивный
-  `sysctl -e --system` на его изменение (`-e` глушит read-only/несуществующие ключи
-  в контейнерах, не валя прогон), рендерится всегда. Набор и значения kernel-
+- **sysctl — безусловно.** Один шаг `core.sysctl.applied` (state `applied`):
+  модуль сам строит детерминированный drop-in `/etc/sysctl.d/30-redis.conf` из
+  map (sorted keys) и реактивно перечитывает его `sysctl -e -p <file>` (точечно по
+  drop-in, НЕ весь `--system`; `-e` глушит read-only/несуществующие ключи в
+  контейнерах, не валя прогон). Применяется всегда. Набор и значения kernel-
   параметров **выровнены 1:1 по sysctl-блоку Ansible-роли redis** (память/fork-
   overcommit, swappiness, сетевые буферы, бэклоги, TCP-стек); источник значений —
   данные-таблица [`essence/_default.yaml → sysctl_settings`](essence/_default.yaml)

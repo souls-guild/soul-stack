@@ -62,6 +62,10 @@
   params:
     url:      "${ input.modules_base_url + '/' + soulprint.self.os.arch + '/' + {'search': 'redisearch.so', 'json': 'rejson.so', 'timeseries': 'redistimeseries.so', 'bloom': 'redisbloom.so'}[item] }"
     path:     "${ default(input.modules_dir, '/var/lib/redis/modules') + '/' + {'search': 'redisearch.so', 'json': 'rejson.so', 'timeseries': 'redistimeseries.so', 'bloom': 'redisbloom.so'}[item] }"
+    # Гейт по НАЛИЧИЮ ключа (item in map), НЕ по непустоте значения: ключ задан с
+    # ПУСТЫМ значением даёт битый checksum "sha256:" (префикс без hex) → core.url
+    # отвергает его на валидации формата (fail-closed), а НЕ трактует как absent.
+    # Пустой checksum (content-идемпотентность без verify) = ключ ОТСУТСТВУЕТ вовсе.
     checksum: "${ (has(input.modules_sha256) && item in input.modules_sha256) ? 'sha256:' + input.modules_sha256[item] : '' }"
     mode:     "0750"
     owner:    redis
