@@ -26,6 +26,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
+	apimiddleware "github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
 	"github.com/souls-guild/soul-stack/keeper/internal/augur"
 	"github.com/souls-guild/soul-stack/keeper/internal/oracle"
 	"github.com/souls-guild/soul-stack/keeper/internal/pluginhost"
@@ -205,7 +206,9 @@ func collectRoutes(t *testing.T) map[route]struct{} {
 		false, // webUIEnabled — /ui вне /v1, drift-walker его не видит; держим выключенным для чистоты периметра
 		nil,   // ldapAuth (LDAP не сконфигурирован в тесте)
 		nil,   // oidcAuth (OIDC не сконфигурирован в тесте)
-		nil,   // logger — допустим nil (handler-ы получают io.Discard внутри)
+		nil,                                  // loginGuard (anti-bruteforce off в тесте)
+		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
+		nil,                                  // logger — допустим nil (handler-ы получают io.Discard внутри)
 	)
 
 	routes, ok := h.(chi.Routes)

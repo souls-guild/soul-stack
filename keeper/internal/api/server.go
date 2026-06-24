@@ -331,6 +331,18 @@ type Deps struct {
 	// И живого Redis (flow-state store cluster-shared): без Redis OIDC недоступен.
 	OIDCAuth *OIDCAuthDeps
 
+	// LoginGuard — anti-bruteforce-примитив публичных login-эндпоинтов (ADR-058(g),
+	// HIGH-3): per-IP+per-username throttle + lockout. Реализуется *redis.LoginGuard.
+	// nil (нет Redis) → login-эндпоинты без throttle (passthrough, как Tempo при
+	// nil-limiter). daemon собирает при живом Redis. Используется только при
+	// смонтированных /auth-роутах (non-nil LDAPAuth/OIDCAuth).
+	LoginGuard apimiddleware.LoginGuard
+
+	// LoginLimitCfg — статические параметры anti-bruteforce-лимита (резолв из
+	// config.KeeperAuth.ResolvedLoginRateLimit()). Читается один раз на сборке
+	// middleware (login редок, не hot-path).
+	LoginLimitCfg apimiddleware.AuthLoginLimitConfig
+
 	// ProvisioningPolicyReader — read-снимок политики provisioning_allowed_methods
 	// для GET /v1/provisioning-policy (ADR-058 Часть B). Реализуется
 	// *serviceregistry.Holder (cluster-консистентный atomic-снимок). PUT пишет через
@@ -681,7 +693,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 		}
 	}
 
-	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, augurH, oracleH, pushH, pushProviderH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, logger)
+	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, augurH, oracleH, pushH, pushProviderH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.LoginGuard, deps.LoginLimitCfg, logger)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,

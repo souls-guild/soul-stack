@@ -78,7 +78,9 @@ func TestHumaIncarnation_ChiCoexistence(t *testing.T) {
 		false, // webUIEnabled — /ui вне интереса incarnation-роутинг-теста
 		nil,   // ldapAuth (LDAP не сконфигурирован в тесте)
 		nil,   // oidcAuth (OIDC не сконфигурирован в тесте)
-		nil,   // logger
+		nil,                                  // loginGuard (anti-bruteforce off в тесте)
+		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
+		nil,                                  // logger
 	)
 	routes, ok := h.(chi.Routes)
 	if !ok {

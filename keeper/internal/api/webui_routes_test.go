@@ -20,6 +20,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 	"github.com/souls-guild/soul-stack/keeper/internal/api/health"
+	apimiddleware "github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
 	keeperjwt "github.com/souls-guild/soul-stack/keeper/internal/jwt"
 )
 
@@ -62,7 +63,9 @@ func webUIRouter(t *testing.T, verifier *keeperjwt.Verifier, webUIEnabled bool) 
 		webUIEnabled,
 		nil, // ldapAuth (LDAP не сконфигурирован в тесте)
 		nil, // oidcAuth (OIDC не сконфигурирован в тесте)
-		nil, // logger
+		nil,                                  // loginGuard (anti-bruteforce off в тесте)
+		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
+		nil,                                  // logger
 	)
 }
 

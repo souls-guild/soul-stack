@@ -387,6 +387,12 @@ type daemon struct {
 	// (hot-reload, ADR-050(f)).
 	tempoLimiter *keeperredis.TokenBucket
 
+	// loginGuard — Redis anti-bruteforce-примитив публичных login-эндпоинтов
+	// (ADR-058(g), HIGH-3). Конструируется в setupLoginGuard ТОЛЬКО при Redis
+	// И auth.rate_limit.enabled (default-ON). Инжектится в api.Deps.LoginGuard;
+	// без Redis → nil → login без throttle (passthrough).
+	loginGuard *keeperredis.LoginGuard
+
 	// --- acolyte (ADR-027) ---
 	acolytePool *acolyte.Pool
 
@@ -3005,6 +3011,67 @@ func tempoLimiterOrNil(tb *keeperredis.TokenBucket) apimiddleware.RateLimiter {
 	return tb
 }
 
+// setupLoginGuard конструирует Redis anti-bruteforce-примитив login-эндпоинтов
+// (ADR-058(g), HIGH-3). Gate-цепочка (как setupTempo):
+//   - auth-блока нет / login-эндпоинты не нужны → пропускаем (нечего защищать);
+//   - `auth.rate_limit.enabled: false` → не конструируется (явный opt-out);
+//   - нет Redis-клиента → не конструируется (lockout cluster-shared живёт в
+//     Redis; без него middleware passthrough — login без throttle).
+//
+// При gate-ах d.loginGuard остаётся nil → api.Deps.LoginGuard nil → middleware
+// passthrough. Порядок: ПОСЛЕ setupRedis, ДО setupAPIServer.
+func (d *daemon) setupLoginGuard(_ context.Context) error {
+	logger := d.logger
+	if d.cfg.Auth == nil {
+		return nil // нет auth-блока — login-эндпоинты не монтируются
+	}
+	if !d.cfg.Auth.LoginRateLimitEnabled() {
+		logger.Info("keeper run: auth login rate-limit disabled (auth.rate_limit.enabled=false)")
+		return nil
+	}
+	if d.redisClient == nil {
+		logger.Info("keeper run: auth login rate-limit disabled (no Redis client) — login endpoints without throttle")
+		return nil
+	}
+	guard, err := keeperredis.NewLoginGuard(d.redisClient)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "keeper run: build login guard: %v\n", err)
+		return errSetupFailed
+	}
+	d.loginGuard = guard
+	rate, burst, threshold, window, backoff := d.cfg.Auth.ResolvedLoginRateLimit()
+	logger.Info("keeper run: auth login rate-limit active (/auth/*)",
+		slog.Float64("rate", rate), slog.Int("burst", burst),
+		slog.Int("lockout_threshold", threshold),
+		slog.Duration("lockout_window", window),
+		slog.Duration("lockout_backoff", backoff))
+	return nil
+}
+
+// loginGuardOrNil — typed-nil-guard для интерфейса [apimiddleware.LoginGuard]
+// (паттерн tempoLimiterOrNil): возвращает «настоящий nil-интерфейс» при
+// nil-guard, чтобы AuthLoginLimit-фабрика распознала passthrough.
+func loginGuardOrNil(g *keeperredis.LoginGuard) apimiddleware.LoginGuard {
+	if g == nil {
+		return nil
+	}
+	return g
+}
+
+// loginLimitCfg резолвит статические параметры anti-bruteforce-лимита из config
+// в форму apimiddleware.AuthLoginLimitConfig (читается один раз на сборке
+// middleware, не hot-path). nil-auth → дефолты (ResolvedLoginRateLimit nil-safe).
+func (d *daemon) loginLimitCfg() apimiddleware.AuthLoginLimitConfig {
+	rate, burst, threshold, window, backoff := d.cfg.Auth.ResolvedLoginRateLimit()
+	return apimiddleware.AuthLoginLimitConfig{
+		Rate:             rate,
+		Burst:            burst,
+		LockoutThreshold: threshold,
+		LockoutWindow:    window,
+		LockoutBackoff:   backoff,
+	}
+}
+
 // tollDurationOrDefault — парсит config-строку duration-формата с fallback на
 // дефолт. Стиль `watchmanInterval`-резолвера (semantic-фаза уже отвергла
 // невалидный формат, остаётся отрезать пустое/<=0).
@@ -3861,6 +3928,11 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		// OIDCAuth — федеративная OIDC-аутентификация (ADR-058 стадия 2). nil при
 		// отсутствии auth.oidc / Redis → /auth/oidc/{login,callback} не монтируются.
 		OIDCAuth: oidcAuth,
+		// LoginGuard / LoginLimitCfg — anti-bruteforce публичных login-эндпоинтов
+		// (ADR-058(g), HIGH-3). nil-guard (нет Redis / auth.rate_limit.enabled=false)
+		// → login без throttle (passthrough). loginGuardOrNil — typed-nil-guard.
+		LoginGuard:    loginGuardOrNil(d.loginGuard),
+		LoginLimitCfg: d.loginLimitCfg(),
 		// ProvisioningPolicyReader — снимок политики provisioning_allowed_methods
 		// для GET /v1/provisioning-policy + гейта POST /v1/operators (ADR-058 Часть
 		// B). Тот же serviceHolder, что несёт service-каталог: политика — well-known
@@ -3933,7 +4005,10 @@ func (d *daemon) setupLDAPAuth(ctx context.Context) (*api.LDAPAuthDeps, error) {
 		Method:       operator.AuthMethodLDAP,
 		GroupRoleMap: l.GroupRoleMap,
 		DB:           d.pool,
-		Audit:        d.auditWriter,
+		// Tx — атомарная реконсиляция ролей (grant+scoped-revoke в одной
+		// транзакции, HIGH-1/ADR-058(d)). *pgxpool.Pool удовлетворяет BeginTx.
+		Tx:    d.pool,
+		Audit: d.auditWriter,
 		// ProvisioningGate — политика provisioning_allowed_methods (ADR-058 Часть B):
 		// гейтит auto-provision нового federated-оператора (метод "ldap"). Тот же
 		// serviceHolder-снимок, что и для POST /v1/operators / GET-эндпоинта.
@@ -4040,7 +4115,9 @@ func (d *daemon) setupOIDCAuth(ctx context.Context) (*api.OIDCAuthDeps, error) {
 		Method:       operator.AuthMethodOIDC,
 		GroupRoleMap: o.GroupRoleMap,
 		DB:           d.pool,
-		Audit:        d.auditWriter,
+		// Tx — атомарная реконсиляция ролей (grant+scoped-revoke, HIGH-1/ADR-058(d)).
+		Tx:    d.pool,
+		Audit: d.auditWriter,
 		// ProvisioningGate — политика provisioning_allowed_methods (метод "oidc"),
 		// тот же serviceHolder-снимок, что у LDAP-mapper-а и POST /v1/operators.
 		ProvisioningGate: d.serviceHolder,

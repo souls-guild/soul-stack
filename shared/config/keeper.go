@@ -896,6 +896,99 @@ type KeeperAuth struct {
 	JWT  *KeeperAuthJWT  `yaml:"jwt,omitempty"`
 	LDAP *KeeperAuthLDAP `yaml:"ldap,omitempty"` // ADR-058 стадия 1
 	OIDC *KeeperAuthOIDC `yaml:"oidc,omitempty"` // ADR-058 стадия 2
+
+	// RateLimit — anti-bruteforce публичных login-эндпоинтов (ADR-058(g),
+	// HIGH-3). Per-IP + per-username троттл частоты попыток + lockout после серии
+	// неудач. Опционально: nil/опущено → дефолты [DefaultAuthLoginRL*]
+	// (default-ON, footgun-guard как Tempo/Toll). Фактически поднимается только
+	// при наличии Redis (limiter cluster-shared, gate в daemon); без Redis —
+	// login-эндпоинты деградируют без throttle (как Tempo passthrough), что
+	// согласуется с тем, что OIDC и так требует Redis. Hot-reloadable.
+	RateLimit *KeeperAuthLoginRateLimit `yaml:"rate_limit,omitempty"`
+}
+
+// Дефолты anti-bruteforce login-лимита (ADR-058(g), HIGH-3). Подобраны под
+// «человек со сбитым паролем не упрётся, брутфорс/перебор username режется».
+const (
+	// DefaultAuthLoginRLRate — refill-скорость троттла попыток (попыток/сек) на
+	// один принципал (IP или username). 0.5 rps = в среднем попытка раз в 2с.
+	DefaultAuthLoginRLRate = 0.5
+
+	// DefaultAuthLoginRLBurst — глубина бакета попыток (одномоментная пачка).
+	DefaultAuthLoginRLBurst = 10
+
+	// DefaultAuthLoginLockoutThreshold — число подряд неудачных логинов в окне,
+	// после которого принципал блокируется.
+	DefaultAuthLoginLockoutThreshold = 5
+
+	// DefaultAuthLoginLockoutWindow — окно подсчёта неудач (скользящее по TTL).
+	DefaultAuthLoginLockoutWindow = 15 * time.Minute
+
+	// DefaultAuthLoginLockoutBackoff — длительность блокировки после достижения
+	// порога неудач.
+	DefaultAuthLoginLockoutBackoff = 15 * time.Minute
+)
+
+// KeeperAuthLoginRateLimit — настройки anti-bruteforce login-эндпоинтов
+// (ADR-058(g), HIGH-3). Все поля опциональны, опущенные/нулевые → [Default*].
+type KeeperAuthLoginRateLimit struct {
+	// Enabled — флаг включения. nil/опущено → true (default-ON, footgun-guard).
+	// Явный `false` — opt-out (dev). Фактический подъём требует Redis (daemon).
+	Enabled *bool `yaml:"enabled,omitempty"`
+
+	// Rate / Burst — троттл частоты ПОПЫТОК на принципал (token-bucket).
+	Rate  float64 `yaml:"rate,omitempty"`
+	Burst int     `yaml:"burst,omitempty"`
+
+	// LockoutThreshold — число неудач в окне до блокировки.
+	LockoutThreshold int `yaml:"lockout_threshold,omitempty"`
+
+	// LockoutWindow / LockoutBackoff — окно счёта неудач и длительность блока
+	// (duration-convention: Go-duration или `<N>d`).
+	LockoutWindow  string `yaml:"lockout_window,omitempty"`
+	LockoutBackoff string `yaml:"lockout_backoff,omitempty"`
+}
+
+// LoginRateLimitEnabled — эффективный флаг (nil-блок/nil-поле → true).
+func (a *KeeperAuth) LoginRateLimitEnabled() bool {
+	if a == nil || a.RateLimit == nil || a.RateLimit.Enabled == nil {
+		return true
+	}
+	return *a.RateLimit.Enabled
+}
+
+// ResolvedLoginRateLimit возвращает эффективные параметры throttle+lockout:
+// опущенные/нулевые поля → [DefaultAuthLogin*]. Duration-поля парсятся; невалид
+// (не должен дойти — semantic-валидация) → дефолт. Чистый резолв для
+// daemon-wiring (читается один раз на сборке middleware, не hot-path).
+func (a *KeeperAuth) ResolvedLoginRateLimit() (rate float64, burst, threshold int, window, backoff time.Duration) {
+	rate, burst = DefaultAuthLoginRLRate, DefaultAuthLoginRLBurst
+	threshold = DefaultAuthLoginLockoutThreshold
+	window, backoff = DefaultAuthLoginLockoutWindow, DefaultAuthLoginLockoutBackoff
+	if a == nil || a.RateLimit == nil {
+		return rate, burst, threshold, window, backoff
+	}
+	rl := a.RateLimit
+	if rl.Rate > 0 {
+		rate = rl.Rate
+	}
+	if rl.Burst > 0 {
+		burst = rl.Burst
+	}
+	if rl.LockoutThreshold > 0 {
+		threshold = rl.LockoutThreshold
+	}
+	if rl.LockoutWindow != "" {
+		if d, err := ParseDuration(rl.LockoutWindow); err == nil && d > 0 {
+			window = d
+		}
+	}
+	if rl.LockoutBackoff != "" {
+		if d, err := ParseDuration(rl.LockoutBackoff); err == nil && d > 0 {
+			backoff = d
+		}
+	}
+	return rate, burst, threshold, window, backoff
 }
 
 type KeeperAuthJWT struct {

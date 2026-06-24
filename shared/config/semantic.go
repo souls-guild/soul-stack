@@ -136,6 +136,12 @@ func semanticValidateKeeper(c *KeeperConfig, root *ast.MappingNode) []diag.Diagn
 		out = append(out, checkAuthOIDC(root, c.Auth.OIDC)...)
 	}
 
+	// auth.rate_limit (ADR-058(g), HIGH-3): duration-формат lockout-окна/backoff-а.
+	if c.Auth != nil && c.Auth.RateLimit != nil {
+		out = append(out, checkDuration(root, "$.auth.rate_limit.lockout_window", c.Auth.RateLimit.LockoutWindow)...)
+		out = append(out, checkDuration(root, "$.auth.rate_limit.lockout_backoff", c.Auth.RateLimit.LockoutBackoff)...)
+	}
+
 	// Cross-field: audit.retention_days alias на reaper.rules.purge_audit_old.max_age.
 	if c.Audit != nil && c.Reaper != nil {
 		if rule, ok := c.Reaper.Rules["purge_audit_old"]; ok && rule.MaxAge != "" && c.Audit.RetentionDays != 0 {
@@ -242,6 +248,19 @@ func checkAuthLDAP(root *ast.MappingNode, l *KeeperAuthLDAP) []diag.Diagnostic {
 		}))
 	}
 
+	// bind_mode вне {"", "search"} → ERROR на load (а не runtime в ldap.New):
+	// стадия 1 ADR-058(c) поддерживает только search-bind; direct-bind отложен
+	// без breaking change. `user_dn_template` в конфиге остаётся как
+	// placeholder под будущий direct-режим, но НЕ активируется bind_mode-ом.
+	if l.BindMode != "" && l.BindMode != "search" {
+		out = append(out, atPath(root, "$.auth.ldap.bind_mode", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+			Code:    "ldap_bind_mode_unsupported",
+			Message: fmt.Sprintf("auth.ldap.bind_mode %q is unsupported: only \"search\" (or empty=default) is implemented in stage 1", l.BindMode),
+			Hint:    "set bind_mode: search (direct-bind is deferred)",
+		}))
+	}
+
 	// bind_mode пуст (=search дефолт) или search ⇒ service-account обязателен.
 	if l.BindMode == "" || l.BindMode == "search" {
 		if l.BindDN == "" {
@@ -325,6 +344,20 @@ func checkAuthOIDC(root *ast.MappingNode, o *KeeperAuthOIDC) []diag.Diagnostic {
 	}
 	if o.TLS.CARef != "" {
 		out = append(out, checkVaultRef(root, "$.auth.oidc.tls.ca_ref", o.TLS.CARef)...)
+	}
+
+	// aid_claim из user-mutable claim → identity-spoofing-риск (WARN). `sub`
+	// (дефолт, MED-фикс) — иммутабельный субъект IdP; email/preferred_username
+	// пользователь/админ IdP может переназначить, и тогда чужой человек,
+	// получив этот email/username у IdP, залогинится под существующим AID.
+	switch o.AIDClaim {
+	case "email", "preferred_username":
+		out = append(out, atPath(root, "$.auth.oidc.aid_claim", diag.Diagnostic{
+			Level: diag.LevelWarning, Phase: diag.PhaseSemanticValidate,
+			Code:    "oidc_aid_claim_mutable",
+			Message: fmt.Sprintf("auth.oidc.aid_claim=%q is user-mutable (identity-spoofing risk): a reassigned %s lets a different person log in as the same AID", o.AIDClaim, o.AIDClaim),
+			Hint:    "prefer the immutable subject identifier: aid_claim: sub (default)",
+		}))
 	}
 
 	return out

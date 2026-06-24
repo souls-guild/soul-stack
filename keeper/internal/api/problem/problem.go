@@ -103,6 +103,13 @@ const (
 	// по здоровью кластера): Tempo — 429 per-AID по частоте; единый problem+json/
 	// Retry-After-каркас, разный риск.
 	TypeTempoExceeded = "https://soul-stack.io/errors/tempo-exceeded"
+	// TypeAuthThrottled — anti-bruteforce-лимит публичного login-эндпоинта
+	// превышен (ADR-058(g), HIGH-3): слишком частые попытки с IP/username ИЛИ
+	// lockout после серии неудач. 429 Too Many Requests + Retry-After (секунды
+	// до снятия). Отдельный URN от [TypeTempoExceeded] (per-AID, post-JWT):
+	// auth-throttle — pre-JWT по IP/username; anti-oracle — detail без причины
+	// (не раскрываем, по IP это или по username, locked или throttled).
+	TypeAuthThrottled = "https://soul-stack.io/errors/auth-throttled"
 	// Herald/Tiding — уведомления о событиях прогонов (ADR-052, S4).
 	// *-already-exists — UNIQUE-violation на heralds.name / tidings.name (409,
 	// симметрия с TypeOmenExists / TypePushProviderExists). not-found Herald /
@@ -163,6 +170,7 @@ var titles = map[string]string{
 	TypeChoirExists:                "Choir already exists",
 	TypeVoiceExists:                "Voice already exists",
 	TypeTempoExceeded:              "Too many requests",
+	TypeAuthThrottled:              "Too many login attempts",
 	TypeHeraldExists:               "Herald already exists",
 	TypeTidingExists:               "Tiding already exists",
 	TypeProvisioningMethodDisabled: "Provisioning method disabled by policy",
@@ -248,6 +256,7 @@ var statuses = map[string]int{
 	TypeChoirExists:                http.StatusConflict,
 	TypeVoiceExists:                http.StatusConflict,
 	TypeTempoExceeded:              http.StatusTooManyRequests,
+	TypeAuthThrottled:              http.StatusTooManyRequests,
 	TypeHeraldExists:               http.StatusConflict,
 	TypeTidingExists:               http.StatusConflict,
 	TypeProvisioningMethodDisabled: http.StatusForbidden,
