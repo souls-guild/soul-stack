@@ -26,10 +26,37 @@ type ScenarioManifest struct {
 	Name         string         `yaml:"name"`
 	Description  string         `yaml:"description,omitempty"`
 	Input        InputSchemaMap `yaml:"input,omitempty"`
+	Validate     []ValidateRule `yaml:"validate,omitempty"`
 	StateChanges *StateChanges  `yaml:"state_changes,omitempty"`
 	Compute      ComputeBlock   `yaml:"compute,omitempty"`
 	Vars         map[string]any `yaml:"vars,omitempty"`
 	Tasks        []Task         `yaml:"tasks"`
+}
+
+// ValidateRule — одно правило top-level scenario-секции `validate:` (ADR-009
+// amendment 2026-06-23, DSL wave 2). Декларативная input-валидация «должно быть
+// X, не Y» вместо россыпи assert-задач: список правил `[{that, message}]`, каждое
+// `that` — CEL-bool-предикат (вся строка = CEL без обёртки, как `where:`/`assert.
+// that`), `message` — человекочитаемая причина отказа при `that == false`.
+//
+// КОНТЕКСТ ПРАВИЛА — INPUT-ONLY: env несёт ЕДИНСТВЕННУЮ переменную `input`
+// (тот же узкий cel-go-sandbox, что `required_when` — input_required_when.go).
+// validate: покрывает ИНВАРИАНТЫ ВВОДА (кросс-полевые предусловия, не выразимые
+// одиночным schema-ключом — например, «`port` обязателен, если `tls` выключен»).
+// Ссылка на essence/soulprint/register/vault в `that` → compile-ошибка undeclared
+// reference (структурный барьер необъявленностью, не текстовый guard). Топология/
+// roster-проверки остаются за `assert:` (у него полный scenario-CEL-контекст с
+// soulprint.hosts) — validate: ДОПОЛНЯЕТ, не заменяет ни assert, ни required_when.
+//
+// КОГДА: pre-flight на CreateTyped/RunTyped (request-путь) — первый провалившийся
+// rule даёт HTTP 422 validation_failed ДО коммита incarnation и ДО applying (как
+// required_when и pre-flight assert, БЕЗ error_locked). Вычисление детерминировано
+// от input (config.EvalValidateRules) — двухточечная render-fail-safe не нужна
+// (input не меняется между request-путём и стартом goroutine, в отличие от roster
+// у assert).
+type ValidateRule struct {
+	That    string `yaml:"that"`
+	Message string `yaml:"message"`
 }
 
 // ComputeBlock — scenario-level вычисляемые переменные (`compute:`, ADR-009
@@ -532,6 +559,11 @@ func schemaValidateScenario(path string, root *ast.MappingNode, m *ScenarioManif
 	// 5) `input:` — общий валидатор схемы.
 	if topKeys["input"] {
 		out = append(out, validateInputSchemaMap(m.Input, findInputMapping(root, "input"), "$.input")...)
+	}
+
+	// 5a) `validate:` — top-level список input-инвариантов (только если ключ есть).
+	if topKeys["validate"] {
+		out = append(out, validateValidateBlock(root, "$.validate")...)
 	}
 
 	// 6) `tasks[]` — полиморфная валидация каждой задачи.

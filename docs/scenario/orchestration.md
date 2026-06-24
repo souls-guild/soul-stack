@@ -38,7 +38,7 @@ scenario/<name>/
 | `serial:` | int (1..M) ИЛИ string `"<N>%"` | module/apply/`block:`-задаче | опционально (опущен = вся ширина таргета) *Гранулярность — per-Passage min-width (в N=1 = per-RUN), см. подраздел §2.2.1 ниже* |
 | `run_once:` | bool, default `false` | module/apply/`block:`-задаче | опционально |
 
-Сверх per-задачных ключей у scenario есть **top-level** `compute:` — блок вычисляемых vars прогона (§2.4).
+Сверх per-задачных ключей у scenario есть **top-level** блоки: `compute:` — вычисляемые vars прогона (§2.4); `validate:` — декларативные input-инварианты (§2.5).
 
 Всё остальное в scenario-задаче — ровно то же, что в destiny-задаче, с той же семантикой ([destiny/tasks.md §3–§10](../destiny/tasks.md#3-полный-список-блоков-задачи)). Расхождения с destiny явно перечислены в §6 (резолв ресурсов) и §10 (шаблонный контекст).
 
@@ -275,6 +275,40 @@ tasks:
 **Имена.** Имя compute-var — CEL-field-доступный идентификатор (буквы/цифры/`_`, начинается с буквы или `_`); дефис/точка запрещены (сломали бы `compute.<имя>`). Имя не должно затенять корневые контекст-имена (`input`/`register`/`incarnation`/`soulprint`/`essence`/`vars`/`compute`).
 
 > **Граница `compute:` ↔ `vars:`.** Task-level `vars:` (§10, [destiny/tasks.md §9](../destiny/tasks.md#9-прочность-и-контроль-исполнения)) — локальны для одной задачи и **видны только в её** `params:`. `compute:` — рун-уровневые, видны в `apply: input:` **и** `state_changes`. Если значение нужно и в state, и в передаче destiny — это `compute:`; если только внутри `params:` одной задачи — `vars:`.
+
+### 2.5. `validate:` — декларативные input-инварианты
+
+`validate:` — **top-level** секция сценария (рядом с `input:`): список правил `[{that: <CEL-bool>, message: <str>}]`, каждое — **инвариант ВВОДА**, который обязан быть истинным ([ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) amendment 2026-06-23). Первый `false` отклоняет прогон оператору как **422 `validation-failed`** — **до коммита incarnation и до applying**, с `message` правила.
+
+```yaml
+name: create
+input:
+  redis_type: { type: string, default: standalone, enum: [standalone, sentinel, cluster, sentinel_only] }
+  replicas:        { type: integer, default: 0, min: 0 }
+  sentinel_quorum: { type: integer, required: false, min: 1 }
+validate:
+  - that: "!has(input.sentinel_quorum) || input.redis_type != 'sentinel' || int(input.sentinel_quorum) <= 1 + int(input.replicas)"
+    message: "sentinel_quorum не может превышать число sentinel-ов (1 + replicas): кворум станет недостижим"
+tasks: [ ... ]
+```
+
+**Зачем.** Покрывает **кросс-полевые** предусловия «должно быть X, не Y», не выразимые одиночным schema-ключом (`enum`/`min`/`max` — про **одно** поле, потолок здесь — **другое** поле) и не покрываемые `required_when` (про **присутствие** поля, не про **соотношение** значений). До `validate:` такой инвариант пришлось бы городить keeper-side shell-стражем (`core.cmd.shell ... || exit 1`) или ронять непонятным runtime-фейлом постфактум.
+
+**Контекст правила — INPUT-ONLY.** `that` видит **только `input.*`** (тот же узкий cel-go-sandbox, что `required_when`). Ссылка на `essence.*`/`soulprint.*`/`register.*`/`vault()`/`now()` → CEL-ошибка undeclared reference — **структурный input-only-барьер необъявленностью**, не текстовый guard. Топология/roster-проверки (`size(soulprint.hosts) == …`) — **не сюда**, а в `assert:` (§2.3): у него полный scenario-контекст с `soulprint.hosts`.
+
+**Когда — pre-flight на request-пути.** Вычисляется в той же фазе, что `required_when` (`scenario.ValidateInput`): ПОСЛЕ merge дефолтов / required / type-валидации над **смерженным** input, ДО коммита incarnation и входа в `applying`. Покрывает оба пути — `POST /v1/incarnations` (create) и `POST .../scenarios/{scenario}` (run). Render fail-safe (как у `assert:`) **не нужен**: `validate:` детерминировано от `input.*`, который между request-путём и стартом прогона не меняется (в отличие от roster у assert — TOCTOU).
+
+**Форма правила.** `that` — обязательная непустая CEL-bool-строка (вся строка = CEL без обёртки, как `where:`). `message` — **обязательная** непустая строка (в отличие от опционального `assert.message`: у assert есть имя задачи как fallback, у validate-правила имени нет → 422 был бы анонимен). Несколько правил — первый `false` выигрывает (короткое замыкание по порядку объявления).
+
+> **Граница `validate:` ↔ `required_when` ↔ `assert:`.** Три механизма, три разные ниши:
+>
+> | Механизм | Контекст | Что проверяет | Код ошибки |
+> |---|---|---|---|
+> | `required_when` (input-schema ключ, [docs/input.md](../input.md)) | input-only | **присутствие** поля при условии над другими input | 422 `validation-failed` |
+> | `validate:` (top-level секция) | input-only | **кросс-полевой инвариант** ВВОДА (соотношение значений) | 422 `validation-failed` |
+> | `assert:` (task-дискриминатор, §2.3) | полный (`soulprint.hosts`) | **инвариант ТОПОЛОГИИ** прогона (roster) | 422 `assert-failed` |
+>
+> `validate:` ДОПОЛНЯЕТ, не заменяет: «обязателен ли port?» → `required_when`; «не превышает ли quorum число sentinel-ов?» → `validate:`; «сошёлся ли roster под N-шардовый кластер?» → `assert:`.
 
 ## 3. Таргет шага — `on:`
 

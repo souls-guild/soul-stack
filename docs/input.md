@@ -117,6 +117,8 @@ input:
 
 > **Почему не shell-guard.** Прежде условную обязательность писали задачей-стражем на хосте (`core.cmd.shell` с `test "${ has(input.X) }" = true || exit 1`) — произвольный shell ради control-flow, исполняемый на Soul-е. `required_when` переносит проверку на input-стадию Keeper-а декларативно: оператор получает ошибку до старта прогона, attack-surface произвольного shell не растёт.
 
+> **`required_when` (присутствие) vs `validate:` (соотношение).** `required_when` отвечает на «обязательно ли это поле?». Когда нужно проверить **соотношение нескольких полей** ввода («`sentinel_quorum` не больше `1 + replicas`»), это не про присутствие — для этого у сценария есть top-level секция `validate:` (декларативные input-инварианты, тот же input-only контекст, тот же 422 `validation-failed`). Спека — [scenario/orchestration.md §2.5](scenario/orchestration.md#25-validate--декларативные-input-инварианты).
+
 ## Тип `string`
 
 | Ключ | Тип | Default | Описание |

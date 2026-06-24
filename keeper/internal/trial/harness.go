@@ -122,6 +122,16 @@ func renderCase(ctx context.Context, c *Case, caseFile string) (renderedCase, er
 		return rc, fmt.Errorf("trial: input %s: %w", scn.Name, err)
 	}
 
+	// validate: — декларативные input-инварианты (ADR-009 amendment, DSL wave 2),
+	// зеркало pre-flight-гейта прода (scenario.ValidateInput). Input-only eval над
+	// смерженным input; первый провал обрывает кейс той же ошибкой, что и
+	// required_when (testable через expect_render_error). no-op без validate-секции.
+	if fail, evErr := config.EvalValidateRules(scn.Validate, effectiveInput); evErr != nil {
+		return rc, fmt.Errorf("trial: validate %s: %w", scn.Name, evErr)
+	} else if fail != nil {
+		return rc, fmt.Errorf("trial: validate %s: %s", scn.Name, fail.Error())
+	}
+
 	// Templates: ридер .tmpl снапшота сервиса кейса (двухуровневый резолв
 	// scenario-local→service-level, ADR-009). serviceRoot — корень сервиса/
 	// _trial-обёртки; scenario-prefix `scenario/<name>` берётся из имени scenario.
