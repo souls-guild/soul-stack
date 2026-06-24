@@ -164,6 +164,26 @@ url: "${ input.base_url + '/v' + input.version + '/node_exporter-' + input.versi
 - послабление допустимо только в паре с `base_url`-override на доверенное внутреннее зеркало; для скачивания напрямую из публичного GitHub Releases держите хэш обязательным (как делает service-уровень);
 - сценарий, претендующий на **строгий** prod-grade-контракт (без оговорок), объявляет хэш `required: true` без `default` у себя и пробрасывает его в destiny.
 
+## 7a. Day-2: источник истины = `incarnation.state`
+
+**Нормативное правило для day-2-сценариев** (всё, что не `create`: `restart`, `update_config`, `add_node`, `update_acl`, `remove_replica` и т.п.). Day-2-сценарий читает развёрнутый факт о сервисе из **`incarnation.state`**, а **не** из `essence`/`input`.
+
+Причина — `essence` и `input` на day-2 **неполны**:
+
+- `create` принимает операторский `input` (например `input.tls`, `input.memory_mb`), **транслирует** его в развёрнутую конфигурацию и записывает её в `incarnation.state` (`state_changes`, [ADR-057](../adr/0057-state-changes-crud-verbs.md)). Этот `input` доступен только в момент `create` — день-2-прогон его не видит.
+- Оператор на `create` может **переопределить** дефолты `essence` (в Soul Stack `input` бьёт `essence` — например операторский `input.tls.port`/`input.tls.ca_ref` поверх `essence.tls_*`). День-2-сценарий, смотрящий на `essence`, увидит **подложку автора**, а не реально развёрнутое — это приводит к рассинхрону «сценарий думает одно, на хосте другое».
+
+Поэтому развёрнутый факт (включён ли TLS, на каком порту слушает сервис, какие ACL-пользователи заведены, какова топология шардов) day-2-сценарий берёт из `incarnation.state` — единственного места, где зафиксировано *что реально применено*. `essence`/`input` на day-2 используются только для того, что в `state` **принципиально не лежит** (например секреты — см. ниже).
+
+Рабочая иллюстрация — `restart` сервиса [`redis`](../../examples/service/redis/scenario/restart/main.yml): TLS-дискриминатор коннекта плагина к Redis (по TLS или plaintext, на каком порту) берётся из развёрнутого `incarnation.state.redis_config`, а не из `essence.tls_*`. Если бы он смотрел на `essence`, при операторском TLS-override день-2 пошёл бы plaintext-коннектом на TLS-only Redis (провал health-gate; в худшем случае AUTH plaintext при открытом plain-порту).
+
+Граничные случаи:
+
+- **Секреты в `state` не лежат** (ИБ-инвариант). PEM, пароли и прочий секрет-материал из `state` исключён сознательно. Их day-2-сценарий резолвит `vault(<ref>)` тем же способом, что и `create` — `ref` берётся из стабильного author-context (`essence.<...>_ref`) или конвенции пути (`secret/redis/<incarnation>#password`). В `state` материализуется только **путь** к секрету на хосте (например `tls-ca-cert-file: /etc/redis/tls/ca.crt`), не его содержимое; путь — для рендера конфига, не для передачи в плагин (плагин, читающий секрет, обычно ждёт **содержимое**, не путь).
+- **Чтение ключа с дефисом** (`redis_config['tls-port']`) — bracket-нотация в **доступе** к значению, но проверка наличия ключа — оператором `'<key>' in <map>`, **не** `has(<map>['<key>'])`: `has()` — CEL-макрос, принимающий только field-selection (`has(x.y)`), index-аргумент `has(x['y'])` отвергается парсером («invalid argument to has() macro»). Дефис в имени ключа исключает field-access, поэтому защита от no-such-key — `has(incarnation.state) && has(incarnation.state.<col>) && '<key>' in incarnation.state.<col>` (две ступени `has()` покрывают отсутствие `state` в push/trial-прогоне без State и ещё-не-материализованную коллекцию).
+
+Проверка инварианта — guard-кейс L0 на оба пути дискриминатора: для `redis/restart` это пара `rolling-restart-replicas` (state без `tls-port` → plaintext-ветка) и `rolling-restart-tls` (state с `tls-port` → TLS-ветка, addr на TLS-порту, `tls_ca` = PEM из Vault).
+
 ## 8. Изоляция destiny (ADR-009)
 
 destiny видит **только свой `input:`**. Никакого чтения чужого контекста:
