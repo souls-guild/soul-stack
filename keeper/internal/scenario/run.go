@@ -105,6 +105,15 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		plans []render.DispatchPlan
 	)
 
+	// seal / sealed-paths ([ADR-010] §7.4): аккумулятор путей ячеек params, чьё
+	// CEL-выражение читало secret-источник (secret-input/vault()/транзит). Render
+	// (шаг 5) наполняет его per-task; abort/lockIncarnation используют sealed.Paths()
+	// для seal-aware маскинга наблюдаемых каналов (audit.MaskSecretsSealed) поверх
+	// vault+regex. Указатель шарится между passages staged-render-а (пути
+	// накапливаются по всем Passage прогона). Объявлен ДО abort — abort может
+	// сработать до Render (sealed пуст → деградация к vault+regex, БИТ-В-БИТ).
+	sealed := render.NewSealedSet()
+
 	// С этого момента провал прогона = failStatus (state не меняем).
 	// result остаётся runResultFailed на любом abort-выходе ниже; ok
 	// выставляется только при успешном финале.
@@ -113,13 +122,13 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		// маскинг, что и для status_details в lockIncarnation, применяем к обоим
 		// наблюдаемым каналам: OTel-трейс (span exception) и slog (лог-файл) —
 		// нельзя оставлять асимметрию с маскированным DB-status_details.
-		maskedCause := errors.New(maskErrText(cause))
+		maskedCause := errors.New(maskErrText(cause, sealed.Paths()))
 		span.RecordError(maskedCause)
 		log.Error("scenario: прогон провален — incarnation заблокирована",
 			slog.String("reason", reason),
 			slog.String("terminal_status", string(failStatus)),
-			slog.String("error", maskErrText(cause)))
-		finalized := r.lockIncarnation(ctx, spec, stateBefore, failStatus, reason, cause, log)
+			slog.String("error", maskErrText(cause, sealed.Paths())))
+		finalized := r.lockIncarnation(ctx, spec, stateBefore, failStatus, reason, cause, sealed.Paths(), log)
 		// BAG-1: гарантируем терминальную строку apply_runs прогона. Ранний abort
 		// (no_hosts и пр.) случается ДО dispatch-фазы — НИ ОДНОЙ строки apply_runs
 		// ещё нет, а Voyage-awaiter поллит их до терминала ВСЕХ строк и при пустом
@@ -245,6 +254,10 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			func(rel string) ([]byte, error) { return artifact.ReadSnapshotFile(art.LocalDir, rel) },
 			scenarioTemplatePrefix(spec.ScenarioName),
 		),
+		// seal (ADR-010 §7.4): Render наполняет sealed путями ячеек params, чьё
+		// выражение читало secret-источник. Используется abort/lockIncarnation для
+		// seal-aware маскинга. Указатель шарится между passages (накопление).
+		Sealed: sealed,
 	}
 	if r.deps.Destiny != nil {
 		renderIn.Destiny = r.deps.Destiny.resolverFor(art.Manifest)
@@ -749,7 +762,7 @@ func failureStatus(mode TerminalMode) incarnation.Status {
 // чтобы провальное incarnation.run_completed эмитил ровно один инстанс-победитель
 // (не задвоить событие при recovery-перехвате, симметрично success-ветке, где
 // проигравший commit возвращается до emitRunCompleted).
-func (r *Runner) lockIncarnation(ctx context.Context, spec RunSpec, stateBefore map[string]any, failStatus incarnation.Status, reason string, cause error, log *slog.Logger) (finalized bool) {
+func (r *Runner) lockIncarnation(ctx context.Context, spec RunSpec, stateBefore map[string]any, failStatus incarnation.Status, reason string, cause error, sealedPaths map[string]bool, log *slog.Logger) (finalized bool) {
 	// commit пишем под detached-ctx: исходный ctx мог быть отменён
 	// (Cancel/Shutdown/timeout), но зафиксировать error_locked надо в любом
 	// случае. WithoutCancel: сохраняем trace-baggage, не наследуем cancel
@@ -766,8 +779,15 @@ func (r *Runner) lockIncarnation(ctx context.Context, spec RunSpec, stateBefore 
 	// status_details читается наружу через GET incarnation без маскинга, а
 	// cause.Error() может транзитом нести зарезолвленный секрет / vault-ref из
 	// Params (например в render/dispatch-ошибке). Маскируем перед записью —
-	// observability-only, на wire (ApplyRequest.Params) это не влияет.
-	details = audit.MaskSecrets(details)
+	// observability-only, на wire (ApplyRequest.Params) это не влияет. seal-aware
+	// (ADR-010 §7.4): vault+regex слои + sealed-пути этого прогона + regex-аларм
+	// (DefaultSealHooks). sealedPaths пуст (abort до Render) → деградация к
+	// vault+regex БИТ-В-БИТ.
+	details = audit.MaskSecretsSealed(details, audit.SealOpts{
+		Sealed:        sealedPaths,
+		RegexFallback: audit.DefaultSealHooks.RegexFallback,
+		Logger:        audit.DefaultSealHooks.Logger,
+	})
 	historyID := audit.NewULID()
 	err := pgx.BeginFunc(wctx, r.deps.DB, func(tx pgx.Tx) error {
 		return incarnation.UpdateStateFromRun(
@@ -1081,15 +1101,24 @@ func startedByPtr(aid string) *string {
 	return &aid
 }
 
-// maskErrText возвращает текст ошибки, прогнанный через audit.MaskSecrets:
+// maskErrText возвращает текст ошибки, прогнанный через seal-aware маскинг:
 // render/dispatch-ошибка может нести vault:secret/-ref (наводку на секрет-
 // локацию). Тот же фильтр, что для status_details, применяется и к slog-каналу
-// (лог-файл — наблюдаемый канал). nil → пустая строка.
-func maskErrText(err error) string {
+// (лог-файл — наблюдаемый канал). sealedPaths — пути sealed-ячеек прогона
+// ([ADR-010] §7.4): здесь под единым ключом `error` они почти всегда no-op
+// (свободный текст ошибки несёт путь/выражение, не значение по sealed-пути), но
+// маскинг идёт тем же MaskSecretsSealed для симметрии со status_details и чтобы
+// regex-аларм (DefaultSealHooks) фиксировал sensitive-by-name в тексте. nil →
+// пустая строка.
+func maskErrText(err error, sealedPaths map[string]bool) string {
 	if err == nil {
 		return ""
 	}
-	masked := audit.MaskSecrets(map[string]any{"error": err.Error()})
+	masked := audit.MaskSecretsSealed(map[string]any{"error": err.Error()}, audit.SealOpts{
+		Sealed:        sealedPaths,
+		RegexFallback: audit.DefaultSealHooks.RegexFallback,
+		Logger:        audit.DefaultSealHooks.Logger,
+	})
 	if s, ok := masked["error"].(string); ok {
 		return s
 	}

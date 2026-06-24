@@ -115,8 +115,10 @@ func (c *ClaimRunner) execute(ctx context.Context, run *applyrun.ApplyRun) {
 			return
 		}
 		// err может транзитом нести vault:secret/-ref — маскируем перед записью
-		// в status (operator-facing, без маскинга наружу) и логом.
-		c.markFailed(ctx, run, maskErrText(err), log)
+		// в status (operator-facing, без маскинга наружу) и логом. Acolyte-путь
+		// seal-набор не ведёт (per-host render при claim, отдельный слайс) → nil
+		// sealed-пути: деградация к vault+regex слоям (ADR-010 §7.4), БИТ-В-БИТ.
+		c.markFailed(ctx, run, maskErrText(err, nil), log)
 		return
 	}
 
