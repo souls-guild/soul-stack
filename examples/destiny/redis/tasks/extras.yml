@@ -4,9 +4,8 @@
 # задачи без when:, рендерятся ВСЕГДА. Операторских флагов logrotate_enable/
 # sysctl_enable в контракте больше НЕТ.
 #
-# register sysctl→apply живёт В ЭТОМ файле (cross-file register не раскрывается, open
-# Q tasks.md §12). disable-thp daemon-reload УБРАН: core.service (daemon_reload: auto)
-# сам перечитывает unit при смене disable-thp.service ПЕРЕД enable/start.
+# disable-thp daemon-reload УБРАН: core.service (daemon_reload: auto) сам
+# перечитывает unit при смене disable-thp.service ПЕРЕД enable/start.
 
 # transparent-hugepages: oneshot-юнит отключения THP до Redis. БЕЗУСЛОВНО (THP даёт
 # latency-спайки на fork RDB/AOF — рекомендация Redis, hardening для всех режимов).
@@ -39,32 +38,19 @@
     owner: root
     group: root
 
-# sysctl: drop-in /etc/sysctl.d/30-redis.conf с kernel-параметрами под Redis.
-# БЕЗУСЛОВНО (как THP/logrotate). core.file.rendered + `sysctl --system` (а не пер-ключ
-# core.sysctl: drop-in несёт ~десяток параметров — отдельный шаг на каждый раздул
-# бы план и сдвинул индексы; rendered+--system применяет весь файл одной задачей,
-# range по MAP детерминирует порядок строк → нет ложного change/повторного reload).
+# sysctl: bulk-набор kernel-параметров под Redis ОДНИМ drop-in
+# /etc/sysctl.d/30-redis.conf. БЕЗУСЛОВНО (как THP/logrotate). core.sysctl.applied
+# сам владеет drop-in: пишет детерминированный файл (sorted keys → нет ложного
+# change), реактивно перечитывает его `sysctl -p <file>` точечно при изменении
+# (reload: auto), сам change не помечает. В контейнерах часть vm.* read-only —
+# ignore_failures даёт `sysctl -e -p` (--ignore глушит read-only/несуществующие
+# ключи, не валя прогон; поведение ignoreerrors Ansible-роли).
 # sysctl_settings — map kernel-параметр→значение, scenario сервиса передаёт его
-# через apply.input (дефолты — essence.sysctl_settings). register — реактивный reload.
-- name: Render redis sysctl drop-in
-  module: core.file.rendered
-  register: redis_sysctl
+# через apply.input (дефолты — essence.sysctl_settings).
+- name: Apply redis sysctl kernel parameters
+  module: core.sysctl.applied
   params:
-    path: /etc/sysctl.d/30-redis.conf
-    template: templates/redis.sysctl.conf.tmpl
-    mode: "0644"
-    owner: root
-    group: root
-    vars:
-      sysctl_settings: "${ default(input.sysctl_settings, {}) }"
-
-# Применяем drop-in реактивно на его изменение. `sysctl --system` перечитывает все
-# /etc/sysctl.d/*.conf; onchanges → не изменился, no-op. В контейнерах часть vm.*
-# read-only — `-e` (--ignore) глушит ошибки несуществующих/read-only ключей, не
-# валя прогон (поведение ignoreerrors Ansible-роли). argv без shell.
-- name: Apply redis sysctl drop-in because it changed
-  module: core.exec.run
-  onchanges: [redis_sysctl]
-  params:
-    cmd: sysctl
-    args: ["-e", "--system"]
+    filename: 30-redis
+    reload: auto
+    ignore_failures: true
+    settings: "${ default(input.sysctl_settings, {}) }"

@@ -103,8 +103,10 @@ assert:
           essence: {}
 
     # cluster-build: nodes-MAP всех 4 хостов (детерминирован по SID),
-    # replicas_per_shard=1 уходит в плагин. index 26 (−2 от исходного плана).
-    - index: 25
+    # replicas_per_shard=1 уходит в плагин. index 24 (−2 guard + −1 extras-sysctl
+    # сжаты 2→1 задачи core.sysctl.applied).
+    - index: 24
+
       module: community.redis.cluster
       params:
         action: create

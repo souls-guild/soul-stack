@@ -78,4 +78,36 @@
   only-add; `soul-lint` валидирует автоматически). Additive и обратно совместимо:
   существующие задачи `core.file` не затронуты. Документация —
   [`docs/module/core/file/README.md`](../module/core/file/README.md).
+- **Amendment (2026-06-24, новый state `applied` в `core.sysctl`).** В `core.sysctl`
+  добавлен state `applied` (`core.sysctl.applied`) — bulk-применение НАБОРА
+  kernel-параметров одним drop-in, в дополнение к per-key `present`. Мотивация:
+  host-tuning-наборы (Redis/ES/Kafka и т.п.) несут ~десяток параметров; отдельный
+  `core.sysctl.present` на каждый раздувает план и сдвигает индексы. Params:
+  `settings` (map `имя→значение`, required), `filename` (string, required — имя
+  drop-in в `/etc/sysctl.d/`, напр. `30-redis`; суффикс `.conf` добавляется),
+  `reload` (enum `auto|always|never`, default `auto` — **реюз словаря enum из
+  `core.service` `daemon_reload`**, util.DaemonReloadMode), `ignore_failures` (bool,
+  default `false` → `sysctl -e -p`, глушит read-only/несуществующие ключи в
+  контейнерах). Идемпотентность: контент drop-in **детерминирован** (ключи
+  СОРТИРУЮТСЯ, формат `key = value`) → сравнение с существующим файлом, `changed=true`
+  только при diff (атомарная запись через `util.AtomicWritePreserving`); reload
+  (`sysctl -p <file>` ТОЧЕЧНО по drop-in, НЕ весь `--system`) гейтится: `never` →
+  никогда (opt-out), `always` → безусловно, `auto` → только при file-change (как
+  `daemon_reload:auto`); сам reload `changed` НЕ помечает. Поддержан Plan/Scry
+  ([ADR-031](0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile)):
+  `planApplied` — pure-read drift (сравнение контента без записи/reload).
+  **Осознанное исключение из границы с `core.file`.** В отличие от per-key `present`
+  (где persist-файл — побочный продукт) и общего правила «файлы рендерит
+  `core.file.rendered`», state `applied` **сам владеет drop-in**: модуль строит
+  контент из map, пишет его и управляет reload + idempotency единым шагом. Это
+  сознательная Ansible-модель (`sysctl`-модуль владеет файлом+reload), а не drift:
+  контент drop-in тривиален (`key = value`, sorted) и не требует text/template, а
+  связка «файл↔reload↔idempotency» атомарна на уровне модуля. Реализация —
+  [`soul/internal/coremod/sysctl/applied.go`](../../soul/internal/coremod/sysctl/applied.go)
+  (`applyApplied`/`planApplied` + ветки `case "applied"` в Apply/Plan/Validate),
+  переиспользует `util.AtomicWritePreserving`/`util.DaemonReloadMode`. Author-манифест
+  — блок `states.applied` в
+  [`shared/coremanifest/sysctl.yaml`](../../shared/coremanifest/sysctl.yaml) (additive,
+  only-add). Additive и обратно совместимо: задачи `core.sysctl.present` не затронуты.
+  Документация — [`docs/module/core/sysctl/README.md`](../module/core/sysctl/README.md).
 - **Amendment (2026-06-18, централизованный daemon-reload в `core.service`).** `core.service` (systemd-backend) перед мутирующими actions (`running` / `restarted` / `enabled`) проверяет systemd-флаг `NeedDaemonReload` и при рассинхроне unit-файла с загруженным определением делает `systemctl daemon-reload` ДО start/restart/enable. Закрывает баг: после правки unit-файла без reload `systemctl restart` тихо рестартует со СТАРЫМ определением (exit 0, лишь warning). Поведение управляется опциональным параметром `daemon_reload` (string enum `auto` | `always` | `never`, **default `auto`**, объявлен в `shared/coremanifest/service.yaml` на states `running`/`restarted`/`enabled`; на `stopped` НЕ объявляется — там reload не нужен): `auto` — reload только при `NeedDaemonReload=yes` (gated, идемпотентно); `always` — reload безусловно; `never` — явный opt-out. Механизм проверки — `systemctl show <unit> --property=NeedDaemonReload --value` (`yes`/`no`); на первом install нового unit флаг = `no` (systemd подхватит определение на start), reload не нужен. **reload НЕ помечает шаг `changed`** (changed остаётся функцией только start/restart/enable) — при реально выполненном reload в `output` добавляется диагностическое `reloaded: true`. `openrc`/`sysv` — **no-op** (у них нет daemon-reload). Реализация — хелпер `util.EnsureDaemonReloaded` рядом с `util.ServiceActive` (тот же mock-абельный Runner, без D-Bus/go-systemd); enum валидируется в `core.service.Validate` (неизвестное значение → ошибка валидации, не молча). Additive и обратно совместимо: существующие задачи без `daemon_reload` получают `auto`.

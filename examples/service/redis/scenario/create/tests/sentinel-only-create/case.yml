@@ -16,12 +16,12 @@
 #      guard УБРАН (required_when в main.yml: input.redis_type == 'sentinel_only'
 #      ловит пропуск master_ip на input-валидации, см. sentinel-only-requires-master-ip).
 #   2. install redis-server (index 12): пакет ставится ДАЖЕ при deploy_redis=false.
-#   3. sentinel.conf (index 24) РЕНДЕРИТСЯ: monitor ВНЕШНЕГО master 10.9.9.9, quorum
+#   3. sentinel.conf (index 22) РЕНДЕРИТСЯ: monitor ВНЕШНЕГО master 10.9.9.9, quorum
 #      2 (size/2+1 при 2 хостах). data-плоскость redis-server в плане отсутствует
 #      (placeholder-skip — доказано render-acceptance TestAcceptance_SentinelOnlySkipsRedisServer).
-#   4. SENTINEL MONITOR (index 34): monitor.ip = input.master_ip 10.9.9.9 (ВНЕШНИЙ,
+#   4. SENTINEL MONITOR (index 31): monitor.ip = input.master_ip 10.9.9.9 (ВНЕШНИЙ,
 #      НЕ из soulprint.hosts), quorum 2.
-#   5. PONG-gate :26379 (index 35): same-task register.self (PONG), НЕ cross-passage.
+#   5. PONG-gate :26379 (index 32): same-task register.self (PONG), НЕ cross-passage.
 name: sentinel_only deploys only sentinel daemon monitoring external master
 
 fixtures:
@@ -67,8 +67,9 @@ assert:
     # план НЕ эмитятся. master_ip-guard уже убран (required_when в main.yml). Обе
     # удалённые задачи в include-порядке (mode-guard диспетчера + sentinel-ветка) идут
     # ДО sentinel_only-ветки и раньше занимали слоты placeholder-skip-ом — поэтому
-    # задачи sentinel_only сдвинуты на −2: install 12→10, sentinel.conf 24→22,
-    # SENTINEL MONITOR 34→32, PONG-gate 35→33.
+    # задачи sentinel_only сдвинуты на −2: install 12→10, sentinel.conf 24→22;
+    # extras-sysctl сжаты 2→1 задачи core.sysctl.applied → задачи после sysctl
+    # ещё −1: SENTINEL MONITOR 34→31, PONG-gate 35→32.
     #
     # Install redis-server package (index 10): пакет ставится ВСЕГДА — несёт и
     # sentinel-демон. deploy_redis=false его НЕ гасит. standalone/cluster/sentinel
@@ -79,7 +80,7 @@ assert:
         name: redis-server
         version: "7.2.4"
 
-    # sentinel.conf (index 23): РЕНДЕРИТСЯ (sentinel_enabled=true). vars: monitor
+    # sentinel.conf (index 22): РЕНДЕРИТСЯ (sentinel_enabled=true). vars: monitor
     # ВНЕШНЕГО master 10.9.9.9:6379, master_name mymaster, quorum 2 (size(2)/2+1).
     # announce-ip НЕ в vars — per-host в sentinel.conf.tmpl из .self. render_context.self
     # = первый по SID хост (node-1, host-инвариант apply.input). data-плоскость
@@ -114,10 +115,11 @@ assert:
           role: ""
           essence: {}
 
-    # SENTINEL MONITOR (index 32): monitor.ip = input.master_ip 10.9.9.9 (ВНЕШНИЙ,
+    # SENTINEL MONITOR (index 31): monitor.ip = input.master_ip 10.9.9.9 (ВНЕШНИЙ,
     # НЕ из soulprint.hosts — master живёт вне прогона). quorum 2 (size/2+1).
-    # index 32 (−2: mode-guard + sentinel-guard).
-    - index: 32
+    # Сдвиг −1 относительно прежнего 32: extras-sysctl сжаты 2→1 задачи
+    # (core.sysctl.applied вместо rendered+exec).
+    - index: 31
       module: community.redis.sentinel
       params:
         addr: "127.0.0.1:26379"
@@ -129,10 +131,10 @@ assert:
           port: 6379
           quorum: 2
 
-    # PONG-gate :26379 (index 33): same-task register.self (PONG), НЕ cross-passage.
+    # PONG-gate :26379 (index 32): same-task register.self (PONG), НЕ cross-passage.
     # community.redis.pinged (единая идиома health-gate через плагин-state, НЕ raw
-    # command args:[PING]). index 33 (−2: mode-guard + sentinel-guard).
-    - index: 33
+    # command args:[PING]). Сдвиг −1 (extras-sysctl 2→1 задачи).
+    - index: 32
       module: community.redis.pinged
       params:
         addr: "127.0.0.1:26379"

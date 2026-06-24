@@ -22,8 +22,9 @@
 #   sentinel.yml — sentinel-демон (gated sentinel_enabled): sentinel.conf + unit +
 #                  core.service.running/restarted. register'ы redis_sentinel_* и их
 #                  onchanges — здесь;
-#   extras.yml   — host-tuning (THP-юнит / logrotate / sysctl), каждый блок gated
-#                  своим флагом. register sysctl→apply — здесь;
+#   extras.yml   — host-tuning (THP-юнит / logrotate / sysctl), все БЕЗУСЛОВНЫ
+#                  (флагов в контракте нет). sysctl — один core.sysctl.applied
+#                  (модуль сам владеет drop-in + reload, без register→apply);
 #   modules.yml  — каталог .so + loop-fetch Redis-модулей (Redis < 8).
 #
 # Явных daemon-reload-шагов НЕТ: core.service (daemon_reload: auto, default) сам

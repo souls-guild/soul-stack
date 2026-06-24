@@ -15,7 +15,8 @@
 #   index 0  — mode-guard диспетчера (core.cmd.shell, no-op на реализованном режиме);
 #   index 3  — cluster destiny: core.pkg.installed (redis-server);
 #   index 10 — cluster destiny: redis.conf (core.file.rendered, cluster-директивы);
-#   index 26 — cluster-build (community.redis.cluster action create, nodes-MAP).
+#   index 24 — cluster-build (community.redis.cluster action create, nodes-MAP;
+#              −1 относительно прежнего 26: extras-sysctl сжаты 2→1 задачи core.sysctl.applied).
 #
 # Что ассертим (критерий приёмки слайса):
 #   1. size-guard PASS: assert that[0] (size(hosts)==shards*(1+replicas), 3==3*(1+0))
@@ -153,9 +154,11 @@ assert:
 
     # ── cluster-build (community.redis.cluster) ─────────────────────────────
     # nodes-MAP: ключ=SID, addr=primary_ip+":6379". Детерминирован по SID.
-    # index 26 — после удаления из плана size-guard (assert:) и shards-guard
-    # (required_when) cluster-ветка сдвинута на −2 от исходного плана.
-    - index: 25
+    # index 24 — после удаления из плана size-guard (assert:) и shards-guard
+    # (required_when) cluster-ветка −2; extras-sysctl сжаты 2→1 задачи
+    # core.sysctl.applied → ещё −1.
+    - index: 24
+
       module: community.redis.cluster
       params:
         action: create

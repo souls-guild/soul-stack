@@ -76,7 +76,8 @@ assert:
     # (assert:) + cluster shards-guard (required_when) уже не занимали слот. 3 == 1+2 →
     # sentinel guard that[0] true → render проходит. Сдвиг относительно прежнего плана:
     # задачи до sentinel-guard −1 (mode-guard), задачи после −2 (mode-guard + sentinel-
-    # guard): redis.conf 14→12, replica 30→28, sentinel-monitor 31→29.
+    # guard) + −1 (extras-sysctl сжаты 2→1 задачи core.sysctl.applied):
+    # redis.conf 14→12, replica 30→27, sentinel-monitor 31→28.
     #
     # ── sentinel destiny: redis.conf (sentinel-режим: НЕТ cluster-директив) ──
     # render_context.self = первый по SID хост (node-1, host-инвариант apply.input).
@@ -121,8 +122,9 @@ assert:
     # срабатывает, реальная защита — этот where. Per-host отсутствие задачи на
     # master доказано render-ассертом TargetSIDs (TestAcceptance_SentinelReplicaExcludesMaster).
     # Params host-инвариантны → L0 assert by-index сверяет одни и те же params
-    # реплик. index 28 (−2 после удаления mode-guard и sentinel-guard).
-    - index: 28
+    # реплик. index 27 (−2 guard + −1 extras-sysctl сжаты 2→1 задачи).
+    - index: 27
+
       module: community.redis.replica
       params:
         addr: "127.0.0.1:6379"
@@ -132,8 +134,9 @@ assert:
     # ── SENTINEL MONITOR reconcile (community.redis.sentinel) ───────────────
     # monitor.ip — HOST-ИНВАРИАНТНЫЙ адрес master-а (master-election node-1).
     # quorum=2 (input.sentinel_quorum). auth_pass — keeper-side vault()-резолв.
-    # index 29 (−2 после удаления mode-guard и sentinel-guard).
-    - index: 29
+    # index 28 (−2 guard + −1 extras-sysctl сжаты 2→1 задачи).
+    - index: 28
+
       module: community.redis.sentinel
       params:
         addr: "127.0.0.1:26379"

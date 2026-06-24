@@ -107,8 +107,10 @@ assert:
           role: ""
           essence: {}
 
-    # index 23 — PING: tls=true, addr на operator-порту 7400, tls_ca = operator-CA-PEM.
-    - index: 22
+    # index 21 — PING: tls=true, addr на operator-порту 7400, tls_ca = operator-CA-PEM.
+    # Сдвиг −1 (extras-sysctl сжаты 2→1 задачи core.sysctl.applied).
+    - index: 21
+
       module: community.redis.command
       params:
         addr: "127.0.0.1:7400"

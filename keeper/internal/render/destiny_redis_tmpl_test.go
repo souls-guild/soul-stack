@@ -341,44 +341,11 @@ func TestSentinelConf_AuthRendered(t *testing.T) {
 	}
 }
 
-// TestRedisSysctl_DeterministicOrder — детерминизм drop-in /etc/sysctl.d/30-redis.conf
-// (host-tuning extras). Тот же class-of-bug, что users.acl/sentinel.conf: range по
-// MAP в шаблоне обязан сортировать ключи, иначе порядок строк недетерминирован →
-// core.file.rendered фиксирует ложный change → лишний `sysctl --system`. Рендерит
-// РЕАЛЬНЫЙ redis.sysctl.conf.tmpl многократно с НАМЕРЕННО неотсортированным map-ом.
-func TestRedisSysctl_DeterministicOrder(t *testing.T) {
-	root := map[string]any{
-		"self": map[string]any{},
-		"vars": map[string]any{
-			// Намеренно не отсортированы: range по MAP обязан отсортировать ключи.
-			"sysctl_settings": map[string]any{
-				"vm.swappiness":        "1",
-				"net.core.somaxconn":   "65535",
-				"vm.overcommit_memory": "1",
-			},
-		},
-	}
-	const runs = 12
-	var first string
-	for i := 0; i < runs; i++ {
-		out := renderRedisTmpl(t, "redis.sysctl.conf.tmpl", root)
-		if i == 0 {
-			first = out
-		} else if out != first {
-			t.Fatalf("прогон %d дал ИНОЙ вывод (недетерминизм sysctl):\n--- 0 ---\n%s\n--- %d ---\n%s", i, first, i, out)
-		}
-	}
-	// Отсортированный порядок ключей: net.core.somaxconn < vm.overcommit_memory < vm.swappiness.
-	iSom := strings.Index(first, "net.core.somaxconn = 65535")
-	iOver := strings.Index(first, "vm.overcommit_memory = 1")
-	iSwap := strings.Index(first, "vm.swappiness = 1")
-	if iSom < 0 || iOver < 0 || iSwap < 0 {
-		t.Fatalf("нет ожидаемых sysctl-строк:\n%s", first)
-	}
-	if !(iSom < iOver && iOver < iSwap) {
-		t.Fatalf("sysctl-параметры не в отсортированном порядке:\n%s", first)
-	}
-}
+// sysctl drop-in /etc/sysctl.d/30-redis.conf больше НЕ рендерится шаблоном:
+// host-tuning extras перешли на core.sysctl.applied (модуль сам строит
+// детерминированный drop-in из map с sorted keys, ADR-015 amend). Шаблон
+// redis.sysctl.conf.tmpl удалён, sorted-детерминизм проверяется unit-тестом
+// модуля (soul/internal/coremod/sysctl/applied_test.go).
 
 // TestRedisConf_Loadmodule_NoTrailingSpace — ПРЯМОЙ guard на чистоту директив
 // loadmodule (Redis-модули, Redis < 8). Корень потенциального бага (brief

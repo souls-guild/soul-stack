@@ -53,7 +53,7 @@ core — только `on: keeper`.
 | [`core.mount`](core/mount/README.md) | `present` / `absent` / `mounted` / `unmounted` | Точки монтирования и /etc/fstab. |
 | [`core.git`](core/git/README.md) | `cloned` / `pulled` | Клонирование / обновление git-репозитория на хосте. |
 | [`core.archive`](core/archive/README.md) | `extracted` | Распаковка архивов (tar/tar.gz/tar.bz2/zip). |
-| [`core.sysctl`](core/sysctl/README.md) | `present` | Kernel-параметры (`vm.*`, `kernel.*`). |
+| [`core.sysctl`](core/sysctl/README.md) | `present` / `applied` | Kernel-параметры (`vm.*`, `kernel.*`): `present` — один ключ, `applied` — bulk-набор одним drop-in + reload. |
 | [`core.url`](core/url/README.md) | `fetched` | Загрузка файла по URL (только `https://`, idempotency через checksum). |
 | [`core.line`](core/line/README.md) | `present` / `absent` | In-place построчная правка файла (lineinfile-эквивалент). |
 | [`core.repo`](core/repo/README.md) | `present` / `absent` | Пакетный репозиторий (apt/dnf/yum/apk). |

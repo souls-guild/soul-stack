@@ -1,15 +1,17 @@
 // Package sysctl реализует core-модуль `core.sysctl` ([ADR-015]).
 //
-// Состояние:
-//   - present: ключ kernel-параметра `name` имеет значение `value`, persist
+// Состояния:
+//   - present: ОДИН ключ kernel-параметра `name` имеет значение `value`, persist
 //     запись в `/etc/sysctl.d/<filename>.conf`. Применяется через `sysctl -w`
-//     (runtime) + запись в файл (persist after reboot).
-//
-// Idempotency: текущее значение читается через `sysctl -n <name>`. Если уже
-// совпадает И persist-файл содержит ту же запись — no-op. Иначе обновляем оба.
-//
-// `filename` опционален (default — `<name>` с заменой '.' на '-', чтобы файл
-// был валидным sysctl.d-конфигом).
+//     (runtime) + запись в файл (persist after reboot). Idempotency: текущее
+//     значение читается через `sysctl -n <name>`; если уже совпадает И
+//     persist-файл содержит ту же запись — no-op, иначе обновляем оба. `filename`
+//     опционален (default — `<name>` с заменой '.' на '-').
+//   - applied: BULK-набор `settings` (map ключ→значение) пишется ОДНИМ
+//     детерминированным drop-in `/etc/sysctl.d/<filename>.conf` (sorted keys);
+//     reload (`sysctl -p <file>`, точечно) только при изменении файла. См.
+//     applied.go. Осознанное исключение из границы с core.file: модуль сам
+//     владеет drop-in + reload + idempotency (Ansible-модель), [ADR-015] amend.
 package sysctl
 
 import (
@@ -44,11 +46,18 @@ func New() *Module {
 	}
 }
 
-// Validate — known-state + required-params (name/value) делегированы в
-// shared/coremanifest/sysctl.yaml (единый источник с soul-lint). Тип
-// опционального filename проверяет Apply-getter; cross-field-инвариантов нет.
+// Validate — known-state + required-params (present: name/value; applied:
+// settings/filename) делегированы в shared/coremanifest/sysctl.yaml (единый
+// источник с soul-lint). Cross-field-guard поверх делегации: reload — closed-set
+// enum (auto|always|never) у state `applied`, симметрично daemon_reload в
+// core.service (runtime-проверка значения, не литерала).
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	errs := util.ValidateAgainstManifest(Name, req)
+	if req.State == stateApplied {
+		if _, err := reloadMode(req.Params); err != nil {
+			errs = append(errs, err.Error())
+		}
+	}
 	return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
 
@@ -57,18 +66,26 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 // default-deny).
 func (m *Module) PlanReadSafe() {}
 
-// Plan — pure-read dry-run (ADR-031 Scry): читает текущее значение runtime
-// (`sysctl -n <name>`, read-only) + содержимое persist-файла и шлёт
-// PlanEvent.changed — «Apply изменил бы хост?». НЕ мутирует: ни `sysctl -w`,
-// ни запись persist-файла.
-//
-// `sysctl -n` — read-only вызов того же бэкенда, который Apply использует для
-// idempotency перед записью.
+// Plan — pure-read dry-run (ADR-031 Scry): читает текущее состояние хоста и шлёт
+// PlanEvent.changed — «Apply изменил бы хост?». НЕ мутирует. Покрывает
+// present/applied.
 func (m *Module) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
-	ctx := stream.Context()
-	if req.State != "present" {
+	switch req.State {
+	case "present":
+		return m.planPresent(req, stream)
+	case stateApplied:
+		return m.planApplied(req, stream)
+	default:
 		return util.PlanFailed(fmt.Sprintf("unknown state %q", req.State))
 	}
+}
+
+// planPresent — pure-read dry-run state `present`: читает текущее значение
+// runtime (`sysctl -n <name>`, read-only) + содержимое persist-файла. НЕ
+// мутирует: ни `sysctl -w`, ни запись persist-файла. `sysctl -n` — read-only
+// вызов того же бэкенда, который Apply использует для idempotency перед записью.
+func (m *Module) planPresent(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
+	ctx := stream.Context()
 	name, err := util.StringParam(req.Params, "name")
 	if err != nil {
 		return util.PlanFailed(err.Error())
@@ -117,10 +134,18 @@ func (m *Module) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServ
 }
 
 func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
-	ctx := stream.Context()
-	if req.State != "present" {
+	switch req.State {
+	case "present":
+		return m.applyPresent(req, stream)
+	case stateApplied:
+		return m.applyApplied(req, stream)
+	default:
 		return util.SendFailed(stream, fmt.Sprintf("unknown state %q", req.State))
 	}
+}
+
+func (m *Module) applyPresent(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
+	ctx := stream.Context()
 	name, err := util.StringParam(req.Params, "name")
 	if err != nil {
 		return util.SendFailed(stream, err.Error())

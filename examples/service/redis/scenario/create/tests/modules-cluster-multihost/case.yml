@@ -7,12 +7,13 @@
 #
 # ИНДЕКСЫ (cluster-прогон, modules=[json]→1 .so-задача). shards-guard УБРАН
 # (required_when в main.yml) + size-guard — assert: (ADR-009 amendment): обе задачи
-# позиций в плане НЕ занимают → cluster-ветка сдвинута на −2 от исходного плана:
+# позиций в плане НЕ занимают → −2 от исходного плана; extras-sysctl сжаты 2→1
+# задачи core.sysctl.applied → хвост после sysctl ещё −1:
 #   0 mode-guard; 1..2 standalone-ветка (СКИП);
-#   3..23 cluster destiny (redis.conf=10 с loadmodules);
-#   24 modules-dir (gated, АКТИВНА);
-#   25 fetch .so json (loop, 1 задача);
-#   26 cluster PING; 27 cluster-build.
+#   3..22 cluster destiny (redis.conf=10 с loadmodules);
+#   22 modules-dir (gated, АКТИВНА);
+#   23 fetch .so json (loop, 1 задача);
+#   24 cluster PING; 25 cluster-build.
 name: cluster modules fetch .so and add loadmodule alongside cluster directives
 
 fixtures:
@@ -110,8 +111,10 @@ assert:
           role: ""
           essence: {}
 
-    # modules-dir каталог — gated, активна в cluster-modules-прогоне. index 24 (−2).
-    - index: 23
+    # modules-dir каталог — gated, активна в cluster-modules-прогоне. index 22
+    # (−2 guard + −1 extras-sysctl 2→1 задачи).
+    - index: 22
+
       module: core.file.directory
       params:
         path: /var/lib/redis/modules
@@ -119,8 +122,10 @@ assert:
         group: redis
         mode: "0750"
 
-    # fetch .so json: URL арх-специфичен (amd64 из soulprint первого хоста в L0). index 25 (−2).
-    - index: 24
+    # fetch .so json: URL арх-специфичен (amd64 из soulprint первого хоста в L0).
+    # index 23 (−2 guard + −1 extras-sysctl).
+    - index: 23
+
       module: core.url.fetched
       params:
         url: "https://artifacts.example.com/redis/modules/6.2/amd64/rejson.so"
@@ -130,8 +135,9 @@ assert:
         owner: redis
         group: redis
 
-    # cluster-build: index 27 (−2 от исходного плана).
-    - index: 26
+    # cluster-build: index 25 (−2 guard + −1 extras-sysctl 2→1 задачи).
+    - index: 25
+
       module: community.redis.cluster
       params:
         action: create

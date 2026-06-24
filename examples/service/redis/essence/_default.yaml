@@ -61,11 +61,12 @@ redis_config:
   timeout:          300
 
 # Данные-таблица kernel-параметров под Redis. scenario передаёт этот map в destiny
-# `redis` через apply.input.sysctl_settings → рендерится в /etc/sysctl.d/30-redis.conf
-# и применяется `sysctl --system` БЕЗУСЛОВНО (host-tuning — рекомендация Redis, не
-# выбор оператора; операторского флага sysctl_enable нет). Значения — СТРОКИ
-# (multi-value параметры через пробел); range по map в шаблоне сортирует ключи
-# (детерминизм). Не во входе оператора: tuning под Redis, не операционный выбор.
+# `redis` через apply.input.sysctl_settings → core.sysctl.applied строит drop-in
+# /etc/sysctl.d/30-redis.conf и применяет его `sysctl -e -p <file>` БЕЗУСЛОВНО
+# (host-tuning — рекомендация Redis, не выбор оператора; операторского флага
+# sysctl_enable нет). Значения — СТРОКИ (multi-value параметры через пробел); модуль
+# сортирует ключи при построении drop-in (детерминизм → нет ложного reload). Не во
+# входе оператора: tuning под Redis, не операционный выбор.
 #
 # ИСТОЧНИК (выровнено 2026-06-23): набор и значения 1:1 повторяют sysctl-блок
 # Ansible-роли redis (roles/redis/tasks/installation.yml «Настройка параметров
