@@ -207,6 +207,16 @@ type RenderInput struct {
 	// накопленным register резолвит их полноценно. nil-TaskPassage → ActivePassage
 	// игнорируется (не-staged: все задачи Passage 0 рендерятся как сейчас, БИТ-В-БИТ).
 	ActivePassage int
+
+	// Sealed — аккумулятор sealed-путей render-прогона (seal / sealed-paths,
+	// [ADR-010] §7.4). Render помечает в нём путь ячейки params, чьё СЫРОЕ
+	// `${ … }`-значение читает secret-источник (secret-input/vault()/транзитивно
+	// vars). Caller (scenario.run) создаёт [NewSealedSet], кладёт сюда и после
+	// Render использует Sealed.Paths() для seal-aware маскинга наблюдаемых каналов
+	// (audit.MaskSecretsSealed). nil ⇒ коллекция выключена (push/trial/Acolyte/
+	// CheckDrift — seal не нужен, поведение БИТ-В-БИТ). Указатель шарится между
+	// passages staged-render-а: пути накапливаются по всем Passage одного прогона.
+	Sealed *SealedSet
 }
 
 // RenderedTask — задача после Keeper-side CEL-рендера, промежуточное

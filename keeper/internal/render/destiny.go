@@ -104,6 +104,12 @@ func (p *Pipeline) renderApplyDestiny(
 		Templates:       resolved.Templates, // .tmpl из снапшота ИМЕННО этой destiny
 		Ctx:             ctx,                // vault() в destiny-params: отмена/таймаут ReadKV
 		destinyIsolated: true,
+		// seal (ADR-010 §7.4): тот же аккумулятор прогона — destiny-params с
+		// `${ vault(...) }` маркируются sealed наравне со scenario. destiny-input
+		// secret-флаг детектится только если ResolvedDestiny несёт Input-схему (в
+		// пилоте не пробрасывается — vault()-провенанс ловится без схемы; см.
+		// observations: транзит destiny-secret-input — отдельный слайс).
+		Sealed: parentIn.Sealed,
 	}
 
 	// destiny-локалы vars.yml (Вариант A, vars.md): резолв ОДИН раз на проход
