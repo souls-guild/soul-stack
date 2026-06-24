@@ -230,6 +230,42 @@ input:
     properties: {}
     additional_properties: true
 
+  # ── TLS (концепция Ansible-роли redis: redis_tls_*) ───────────────────────────
+  # Операторский dict-input `tls` (object-typed, симметрично users): enable/only/
+  # port/cert_ref/key_ref/ca_ref. Пустой/не передан → TLS off. КАЖДОЕ под-поле
+  # опционально — оператор задаёт лишь те, что переопределяет; недостающие берут
+  # ДЕФОЛТ ИЗ ESSENCE (default(input.tls.<x>, essence.tls_<x>)). Так оператор
+  # КОНТРОЛИРУЕТ TLS, а essence — подложка (раньше TLS жил ТОЛЬКО в essence; теперь
+  # input бьёт essence). cert_ref/key_ref/ca_ref — Vault-ПУТИ (форма "<mount>/<path>
+  # #<field>"), НЕ сам PEM: destiny читает PEM через vault(ref) в ячейке content
+  # (seal-маскинг). Operator-литеральный PEM не поддержан — он шёл бы через apply.input,
+  # а seal destiny-прохода схему secret-input не видит (destiny-input-secret transit —
+  # отложенный слайс) → PEM не маскировался бы.
+  tls:
+    type: object
+    required: false
+    additional_properties: false
+    description: >-
+      Параметры TLS Redis. Пустой/не передан → TLS off (TLS-задачи destiny gated off,
+      директив нет). enable — главный гейт; only — закрыть plain-порт (`port 0`);
+      port — TLS-порт; cert_ref/key_ref/ca_ref — Vault-ПУТИ серверного cert/key и CA.
+      Недостающие под-поля берут дефолт из essence (essence.tls_enable/tls_only/
+      tls_port/tls_*_ref).
+    properties:
+      enable:
+        type: boolean
+      only:
+        type: boolean
+      port:
+        type: integer
+        min: 1
+      cert_ref:
+        type: string
+      key_ref:
+        type: string
+      ca_ref:
+        type: string
+
   # ── Redis-модули (концепция Ansible-роли redis: redis_module_*) ──────────────
   # Загружаемые модули RediSearch/RedisJSON/RedisTimeSeries/RedisBloom как .so
   # (Redis < 8). VERSION-GATE: на Redis 8+ модули ВСТРОЕНЫ — сценарий передаёт
@@ -291,6 +327,20 @@ validate:
   - that: "!has(input.sentinel_quorum) || input.redis_type != 'sentinel' || int(input.sentinel_quorum) <= 1 + int(input.replicas)"
     message: "sentinel_quorum не может превышать число sentinel-ов (1 + replicas): кворум станет недостижим и failover не сработает"
 
+  # Нельзя только-TLS без TLS: tls.only=true требует tls.enable=true. Иначе у Redis
+  # НИ ОДНОГО listener-а — plain-порт закрыт (only → `port 0`), а TLS-порт не открыт
+  # (enable=false → tls-port не пишется) → сервер недоступен по сети. Это и есть
+  # инвариант «хотя бы один listener»: либо plain открыт (not only), либо TLS включён.
+  # INPUT-ONLY (essence в validate недоступен): проверяем ЯВНЫЙ операторский ввод —
+  # явно попросить only без enable нельзя. Не выразимо одним schema-ключом (потолок —
+  # другое поле) и не required_when (соотношение, не присутствие).
+  # validate-CEL — input-only БЕЗ custom-функций (default()/vault() недоступны, только
+  # has()/int()/стандартный CEL). Поэтому absent-нормализация — через has()-цепочку, а
+  # не default(): «only=true» истинно лишь когда tls dict есть И only задан И true; то
+  # же для enable. Если only НЕ задан → правило тривиально истинно (нет only-намерения).
+  - that: "!(has(input.tls) && has(input.tls.only) && input.tls.only) || (has(input.tls) && has(input.tls.enable) && input.tls.enable)"
+    message: "tls.only требует tls.enable: только-TLS без включённого TLS закрывает plain-порт и не открывает TLS — у Redis не остаётся ни одного listener-а"
+
 # ── Host-tuning extras (концепция Ansible-роли) ──────────────────────────────────
 # Режим-агностичные per-host добавки — THP-отключение, logrotate, sysctl — БЕЗУСЛОВНЫ
 # (рекомендация Redis / hardening, не выбор оператора): флагов в операторском
@@ -317,9 +367,33 @@ validate:
 # Слои merge (SHALLOW last-wins, слева направо): essence.redis_config (дефолты) →
 # persistence-пресет → вычисленные maxmemory/policy (has-guard) → input.redis_settings
 # (passthrough оператора) → TLS-блок (после redis_settings, оператор не ломает TLS).
-# cluster-announce-ip в config НЕ материализуется (per-host → шаблон .self), TLS
-# cert/порт host-инвариантны.
+# TLS-гейт — compute.tls_on/tls_only_on/tls_port (input.tls.* бьёт essence-дефолт,
+# объявлены выше). cluster-announce-ip в config НЕ материализуется (per-host → шаблон
+# .self), TLS cert/порт host-инвариантны.
 compute:
+  # ── TLS-флаги: input.tls.* бьёт essence (оператор контролирует, essence — подложка)
+  # input.tls — dict оператора; недостающие под-поля берут дефолт из essence
+  # (default(tls_in.<x>, essence.tls_<x>)). Объявлены ОТДЕЛЬНЫМИ compute-vars, чтобы
+  # и redis_config (ниже), и ветки (apply.input.tls + health-gate) читали ОДНО
+  # разрешённое значение — а не повторяли default()-каскад. compute контекст рун-
+  # уровневый: input/essence доступны, soulprint — нет (host-инвариантность TLS).
+  #
+  # tls_in нормализует absent input.tls в {}: default(input.tls.enable, …) при отсутствии
+  # САМОГО input.tls упал бы CEL «no such key: tls» (default ловит только отсутствие
+  # ЛИСТА на существующем map, не отсутствие корня). default(input.tls, {}) даёт пустой
+  # map, тогда default(tls_in.enable, …) корректно ловит отсутствие листа enable.
+  tls_in:      "${ default(input.tls, {}) }"
+  tls_on:      "${ default(compute.tls_in.enable, default(essence.tls_enable, false)) }"
+  tls_only_on: "${ default(compute.tls_in.only, default(essence.tls_only, false)) }"
+  tls_port:    "${ int(default(compute.tls_in.port, default(essence.tls_port, 7379))) }"
+  # Vault-ПУТИ PEM: input.tls.<x>_ref бьёт essence.tls_<x>_ref. has()-цепочка (НЕ
+  # default(input, essence)): default() в Soul Stack ловит no-such-key только в ПЕРВОМ
+  # аргументе, второй вычисляется eager → default(tls_in.cert_ref, essence.tls_cert_ref)
+  # упал бы no-such-key, если essence.tls_cert_ref отсутствует (L0-кейсы без TLS его не
+  # задают). Объявлены ОТДЕЛЬНЫМИ compute-vars → ветки/health-gate читают одно значение.
+  tls_cert_ref: "${ has(compute.tls_in.cert_ref) ? compute.tls_in.cert_ref : (has(essence.tls_cert_ref) ? essence.tls_cert_ref : '') }"
+  tls_key_ref:  "${ has(compute.tls_in.key_ref)  ? compute.tls_in.key_ref  : (has(essence.tls_key_ref)  ? essence.tls_key_ref  : '') }"
+  tls_ca_ref:   "${ has(compute.tls_in.ca_ref)   ? compute.tls_in.ca_ref   : (has(essence.tls_ca_ref)   ? essence.tls_ca_ref   : '') }"
   redis_config: >-
     ${ (input.redis_type == 'sentinel_only')
          ? {}
@@ -339,17 +413,17 @@ compute:
                'cluster-config-file':  'nodes.conf',
                'cluster-node-timeout': string(int(input.cluster_node_timeout))
              },
-             (has(essence.tls_enable) && essence.tls_enable)
+             compute.tls_on
                ? merge(
                    {
-                     'tls-port':         string(int(default(essence.tls_port, 7379))),
+                     'tls-port':         string(compute.tls_port),
                      'tls-cert-file':    '/etc/redis/tls/redis.crt',
                      'tls-key-file':     '/etc/redis/tls/redis.key',
                      'tls-ca-cert-file': '/etc/redis/tls/ca.crt',
                      'tls-replication':  'yes',
                      'tls-cluster':      'yes'
                    },
-                   (has(essence.tls_only) && essence.tls_only) ? { 'port': '0' } : {}
+                   compute.tls_only_on ? { 'port': '0' } : {}
                  )
                : {}
            )
@@ -363,16 +437,16 @@ compute:
                has(input.maxmemory_policy) ? { 'maxmemory-policy': input.maxmemory_policy } : {}
              ),
              default(input.redis_settings, {}),
-             (has(essence.tls_enable) && essence.tls_enable)
+             compute.tls_on
                ? merge(
                    {
-                     'tls-port':         string(int(default(essence.tls_port, 7379))),
+                     'tls-port':         string(compute.tls_port),
                      'tls-cert-file':    '/etc/redis/tls/redis.crt',
                      'tls-key-file':     '/etc/redis/tls/redis.key',
                      'tls-ca-cert-file': '/etc/redis/tls/ca.crt',
                      'tls-replication':  'yes'
                    },
-                   (has(essence.tls_only) && essence.tls_only) ? { 'port': '0' } : {}
+                   compute.tls_only_on ? { 'port': '0' } : {}
                  )
                : {}
            ) }

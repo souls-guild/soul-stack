@@ -85,35 +85,38 @@
       # оператора отложен, essence-дефолт покрывает Redis-tuning), host-инвариантна →
       # apply.input.
       sysctl_settings:  "${ default(essence.sysctl_settings, {}) }"
-      # TLS PEM-материал — HOST-ИНВАРИАНТ (один cert/CA на кластер) → apply.input.
-      # Источник — Vault-ПУТИ из essence (essence.tls_*_ref — доверенный контекст
-      # автора, не operator-input → vault() принимает их динамическим аргументом).
-      # vault() резолвит PEM в render-фазе keeper-side, в destiny уходит ЦЕЛЫЙ PEM
-      # (как requirepass). PEM-vars (tls_cert/tls_key/tls_ca) — secret-имена →
-      # маскируются выходным слоем (shared/audit), в логи/OTel/RunResult не текут.
-      tls_enable: "${ default(essence.tls_enable, false) }"
-      tls_only:   "${ default(essence.tls_only, false) }"
-      tls_port:   "${ int(default(essence.tls_port, 7379)) }"
-      tls_cert:   "${ (has(essence.tls_enable) && essence.tls_enable) ? vault(essence.tls_cert_ref) : '' }"
-      tls_key:    "${ (has(essence.tls_enable) && essence.tls_enable) ? vault(essence.tls_key_ref) : '' }"
-      tls_ca:     "${ (has(essence.tls_enable) && essence.tls_enable) ? vault(essence.tls_ca_ref) : '' }"
+      # TLS — единый dict в destiny (enable/only/port + cert_ref/key_ref/ca_ref).
+      # HOST-ИНВАРИАНТ (один cert/CA/порт на кластер) → apply.input. enable/only/port
+      # — разрешённые compute-vars (input.tls.* бьёт essence-дефолт). cert_ref/key_ref/
+      # ca_ref — Vault-ПУТИ (НЕ сам PEM): destiny читает PEM через vault(ref) в ячейке
+      # content (seal-маскинг). Источник refs — input.tls.* (оператор) с дефолтом из
+      # essence.tls_*_ref (доверенный контекст автора). PEM в destiny НЕ резолвится
+      # здесь — refs это пути, не секреты.
+      tls:
+        enable:   "${ compute.tls_on }"
+        only:     "${ compute.tls_only_on }"
+        port:     "${ compute.tls_port }"
+        cert_ref: "${ compute.tls_cert_ref }"
+        key_ref:  "${ compute.tls_key_ref }"
+        ca_ref:   "${ compute.tls_ca_ref }"
 
 # 2. Health-gate: PING живого Redis после старта (демонстрация плагина
 #    community.redis; raw-команда, конфиг НЕ пишет). addr — localhost (плагин
 #    исполняется на redis-хосте), пароль — тот же keeper-side vault()-резолв.
-#    ★ ИБ (anti-downgrade): tls/tls_ca/порт гейтятся на essence.tls_ENABLE, НЕ
-#    tls_only. TLS включён → плагин ОБЯЗАН коннектиться по TLS (tls=true + addr на
-#    tls_port + tls_ca для verify), иначе при tls_enable=true && tls_only=false
+#    ★ ИБ (anti-downgrade): tls/tls_ca/порт гейтятся на compute.tls_on (TLS ВКЛЮЧЁН),
+#    НЕ tls_only. TLS включён → плагин ОБЯЗАН коннектиться по TLS (tls=true + addr на
+#    compute.tls_port + tls_ca для verify), иначе при tls_on=true && tls_only_on=false
 #    (plain ещё открыт) плагин ушёл бы PLAINTEXT-ом на 6379 → AUTH-пароль открытым
 #    текстом по сети (plaintext-downgrade). TLS выключен → PING по 6379 без TLS
-#    (back-compat). tls_ca — secret-имя (маскируется); vault(essence.tls_ca_ref).
+#    (back-compat). tls_ca — vault(ref) в scenario-проходе (seal vault-слоем): ref —
+#    input.tls.ca_ref с дефолтом essence.tls_ca_ref.
 - name: Wait for redis to answer PING
   when: "input.redis_type == 'standalone'"
   module: community.redis.command
   retry: { count: 5, delay: 2s }
   params:
-    addr:     "${ (has(essence.tls_enable) && essence.tls_enable) ? '127.0.0.1:' + string(int(default(essence.tls_port, 7379))) : '127.0.0.1:6379' }"
+    addr:     "${ compute.tls_on ? '127.0.0.1:' + string(compute.tls_port) : '127.0.0.1:6379' }"
     password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
-    tls:      "${ default(essence.tls_enable, false) }"
-    tls_ca:   "${ (has(essence.tls_enable) && essence.tls_enable) ? vault(essence.tls_ca_ref) : '' }"
+    tls:      "${ compute.tls_on }"
+    tls_ca:   "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
     args:     ["PING"]

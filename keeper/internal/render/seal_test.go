@@ -1,7 +1,6 @@
 package render
 
 import (
-	"context"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/shared/cel"
@@ -159,5 +158,35 @@ func TestCollectSealed_PathConventionMatchesRenderValue(t *testing.T) {
 	if !set.Paths()["a.b[0]"] {
 		t.Errorf("путь не a.b[0]: %v", set.Paths())
 	}
-	_ = context.Background()
+}
+
+// PEM-content задачи destiny redis (core.file.present, content = vault(input.tls.<x>_ref))
+// помечается sealed vault-слоем в destiny-проходе. Guard на масккинг PEM (ADR-010 §7.4):
+// destiny-проход НЕ несёт secret-input-схему (scenarioSealSources даёт пустой набор),
+// поэтому единственное, что ловит sealed для PEM, — vault() В САМОЙ ячейке content
+// (collectSealed без схемы детектит vault). Если кто-то заменит content на уже-резолв-
+// ленный PEM через apply.input (`${ input.tls_cert }` без vault()) — этот тест упадёт:
+// destiny-input-secret-схема не пробрасывается, ячейка перестанет быть sealed, PEM
+// утёк бы в error_summary/state. Зеркало L0 tls-enabled-standalone (форма content там).
+func TestCollectSealed_RedisTLSPEMContentViaVault(t *testing.T) {
+	e := sealTestEngine(t)
+	set := NewSealedSet()
+
+	// Форма ячейки content PEM-задачи destiny redis (server.yml). sources БЕЗ схемы —
+	// как в destiny-проходе (destinyIn.Scenario без Input → secretInputNames пуст).
+	params := map[string]any{
+		"path":    "/etc/redis/tls/redis.key",
+		"content": "${ vault(input.tls.key_ref) }",
+		"mode":    "0600",
+		"owner":   "redis",
+	}
+	collectSealed(e, set, params, cel.SealSources{}, "")
+
+	paths := set.Paths()
+	if !paths["content"] {
+		t.Errorf("PEM content (vault() в ячейке) НЕ sealed — PEM утечёт в state/error: %v", paths)
+	}
+	if paths["path"] || paths["mode"] || paths["owner"] {
+		t.Errorf("несекретные поля sealed — over-seal: %v", paths)
+	}
 }

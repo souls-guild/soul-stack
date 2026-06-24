@@ -66,10 +66,11 @@
       # apply.input.
       sysctl_settings:  "${ default(essence.sysctl_settings, {}) }"
       # TLS data-плоскости redis-server тут не разворачивается (deploy_redis=false →
-      # PEM-задачи placeholder-skip). sentinel-демон TLS (:26379) — отдельный
-      # follow-up (brief). Отдаём tls_enable=false → TLS-задачи destiny gated off.
-      tls_enable: false
-      tls_only:   false
+      # PEM-block placeholder-skip; к тому же block ещё и gated на deploy_redis).
+      # sentinel-демон TLS (:26379) — отдельный follow-up (brief). dict `tls` НЕ
+      # передаём (absent → destiny default(input.tls.enable,false) → TLS off); это
+      # чище, чем tls:{enable:false} — тот потребовал бы object-level required
+      # cert_ref/key_ref/ca_ref без реальной надобности.
       # ── Sentinel-демон (мониторит ВНЕШНИЙ master) ───────────────────────────
       sentinel_enabled: true
       sentinel:

@@ -1,15 +1,18 @@
 # L0-испытание (Trial, ADR-023): TLS standalone (концепция Ansible-роли redis:
-# redis_tls_*). Главный guard слайса — что при tls_enable:
-#   1. PEM-файлы /etc/redis/tls/{redis.crt,redis.key,ca.crt} РЕНДЕРЯТСЯ (mode 0600,
-#      owner redis), PEM приходит из vault(essence.tls_*_ref) — ЦЕЛЫЙ PEM в плане;
+# redis_tls_*). TLS включён ИЗ ESSENCE (essence.tls_enable=true, оператор input.tls
+# не задал) — back-compat: essence остаётся дефолтом, новый input.tls — опционален.
+# Главный guard слайса — что при включённом TLS:
+#   1. PEM-файлы /etc/redis/tls/{redis.crt,redis.key,ca.crt} раскладываются
+#      core.file.present (mode 0600, owner redis), content = vault(tls.<x>_ref) →
+#      ЦЕЛЫЙ PEM в ячейке content задачи destiny (НЕ .tmpl, vault() в ячейке);
 #   2. TLS-директивы (tls-port/tls-cert-file/tls-key-file/tls-ca-cert-file/
 #      tls-replication) попали в merged config (range-ятся в redis.conf);
 #   3. tls_only → `port 0` в config (plain закрыт);
 #   4. health-gate PING несёт tls=true + addr на tls_port + tls_ca (плагин ОБЯЗАН
 #      коннектиться по TLS, т.к. plain закрыт).
-# cert/CA/порт — HOST-ИНВАРИАНТ (один на кластер) → через apply.input (резолв на
-# targeted[0] корректен). PEM render-vars (tls_cert/tls_key/tls_ca) — secret-имена
-# → маскируются выходным слоем shared/audit ПО ИМЕНИ ключа (tls[_-]?(key|cert|ca)).
+# cert/CA/порт — HOST-ИНВАРИАНТ (один на кластер) → через apply.input. PEM content
+# = vault(ref) в САМОЙ ячейке → seal помечает sealed vault-слоем (маскинг в state/
+# error_summary). Маскинг доказан отдельным кейсом tls-pem-sealed-masking.
 name: tls enabled standalone renders PEM files and TLS directives, port 0 on tls_only
 
 fixtures:
@@ -57,7 +60,7 @@ fixtures:
 
 assert:
   rendered_tasks:
-    # index 3 — TLS dir (core.file.directory, when tls_enable → АКТИВЕН): /etc/redis/tls.
+    # index 3 — TLS dir (core.file.directory, when tls.enable → АКТИВЕН): /etc/redis/tls.
     - index: 2
       module: core.file.directory
       params:
@@ -66,77 +69,38 @@ assert:
         group: redis
         mode: "0750"
 
-    # index 4 — TLS server cert: PEM из vault → render_context.vars.tls_cert (ЦЕЛЫЙ PEM).
+    # index 4 — TLS server cert: core.file.present, content = vault(tls.cert_ref) →
+    # ЦЕЛЫЙ PEM в ячейке content (НЕ .tmpl/render_context: PEM через vault() в ячейке,
+    # seal-маскинг vault-слоем).
     - index: 3
-      module: core.file.rendered
+      module: core.file.present
       params:
         path: /etc/redis/tls/redis.crt
-        template_content: "<present>"
+        content: "-----BEGIN CERTIFICATE-----\nSERVERCERT\n-----END CERTIFICATE-----"
         mode: "0600"
         owner: redis
         group: redis
-        render_context:
-          vars:
-            tls_cert: "-----BEGIN CERTIFICATE-----\nSERVERCERT\n-----END CERTIFICATE-----"
-          self:
-            sid: trial-host
-            covens: [create]
-            choirs: []
-            role: ""
-            network:
-              primary_ip: 10.0.0.5
-            os:
-              arch: amd64
-          role: ""
-          essence: {}
 
-    # index 5 — TLS private key: секрет-PEM из vault → render_context.vars.tls_key.
+    # index 5 — TLS private key: core.file.present, content = vault(tls.key_ref) →
+    # секрет-PEM в ячейке (sealed vault-слоем).
     - index: 4
-      module: core.file.rendered
+      module: core.file.present
       params:
         path: /etc/redis/tls/redis.key
-        template_content: "<present>"
+        content: "-----BEGIN PRIVATE KEY-----\nSERVERKEY\n-----END PRIVATE KEY-----"
         mode: "0600"
         owner: redis
         group: redis
-        render_context:
-          vars:
-            tls_key: "-----BEGIN PRIVATE KEY-----\nSERVERKEY\n-----END PRIVATE KEY-----"
-          self:
-            sid: trial-host
-            covens: [create]
-            choirs: []
-            role: ""
-            network:
-              primary_ip: 10.0.0.5
-            os:
-              arch: amd64
-          role: ""
-          essence: {}
 
-    # index 6 — TLS CA cert.
+    # index 6 — TLS CA cert: core.file.present, content = vault(tls.ca_ref).
     - index: 5
-      module: core.file.rendered
+      module: core.file.present
       params:
         path: /etc/redis/tls/ca.crt
-        template_content: "<present>"
+        content: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
         mode: "0600"
         owner: redis
         group: redis
-        render_context:
-          vars:
-            tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
-          self:
-            sid: trial-host
-            covens: [create]
-            choirs: []
-            role: ""
-            network:
-              primary_ip: 10.0.0.5
-            os:
-              arch: amd64
-          role: ""
-          essence: {}
 
     # index 8 — redis.conf: merged config несёт TLS-директивы + port 0 (tls_only).
     - index: 7

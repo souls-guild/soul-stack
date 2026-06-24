@@ -15,77 +15,84 @@
 # ── TLS PEM-материал (концепция Ansible-роли redis: redis_tls_*) ───────────────
 # Рендерим cert/key/CA в /etc/redis/tls/ ДО redis.conf и старта сервиса: redis.conf
 # (директивы tls-cert-file/tls-key-file/tls-ca-cert-file приходят в config от
-# scenario) ссылается на эти файлы — при tls_enable Redis обязан их найти на старте,
-# иначе падает «can't open the TLS certificate». Все три gated на tls_enable +
-# register'ятся → рестарт реактивен на смену cert (см. restart-onchanges ниже).
-# HOST-ИНВАРИАНТ (один cert/CA на кластер): PEM приходит через apply.input
-# (scenario резолвит из Vault), НЕ per-host .self — tiling-урок.
+# scenario) ссылается на эти файлы — при tls.enable Redis обязан их найти на старте,
+# иначе падает «can't open the TLS certificate». Все четыре gated на tls.enable
+# (per-task when) + register'ятся → рестарт реактивен на смену cert (см. restart-
+# onchanges ниже). HOST-ИНВАРИАНТ (один cert/CA на кластер): PEM-ПУТИ (tls.cert_ref/
+# key_ref/ca_ref) приходят через apply.input.
+#
+# ★ block-группировка этих задач (один when на группу) НЕ применена: block-в-destiny
+# при static-false when гасит ВЕСЬ блок ОДНИМ placeholder-ом, и register потомков НЕ
+# материализуется (tasks.md §6.5: «register пуст») → onchanges-рестарт ниже ссылается
+# на несуществующий register → render падает ErrOnChangesUnknownRegister. Per-task
+# placeholder-skip же НЕСЁТ register каждой задачи (pipeline.go staticSkipPlaceholder
+# Register: task.Register) → onchanges на static-skipped register РАБОТАЕТ. Поэтому
+# TLS-задачи остаются плоскими с per-task when (flat-register цел). Расхождение
+# §6.5 (onchanges снаружи block заявлен рабочим) ↔ поведение ядра — на разбор архитектора.
+#
+# ★ PEM ЧЕРЕЗ core.file.present + vault() В ЯЧЕЙКЕ content (seal-маскинг, ADR-010
+# §7.4): НЕ .tmpl, НЕ передача уже-резолвленного PEM через apply.input. vault(ref)
+# стоит ПРЯМО в ячейке content задачи destiny — детектор seal помечает её sealed
+# vault-слоем В destiny-проходе (collectSealed без схемы ловит vault()), маскинг
+# скрывает PEM в error_summary/state. vault() резолвится keeper-side в render-фазе;
+# vault-клиент на Soul не тянется (ADR-012). ref берётся из input.tls.cert_ref (путь,
+# не секрет) — scenario передаёт Vault-путь, destiny читает значение сама.
+# TLS-PEM — DATA-плоскость redis-server → gated ТАКЖЕ на deploy_redis: в sentinel_only
+# (deploy_redis=false) redis-server нет, PEM не рендерим. has(input.tls)-guard —
+# render-safety: при absent tls dict (sentinel_only) when не должен падать no-such-key.
 
-# Каталог /etc/redis/tls — core.file.rendered создаёт только файл, не родительский
+# Каталог /etc/redis/tls — core.file.present создаёт только файл, не родительский
 # каталог. Создаём явно декларативным core.file.directory (idempotent по mode/owner/
-# group, чинит дрейф, dry-run — в отличие от императивного core.exec.run install -d).
-# mode 0750 owner redis: PEM (вкл. приватный ключ) читает только сервис.
-# TLS-PEM — DATA-плоскость redis-server (redis.conf ссылается на эти файлы) →
-# gated ТАКЖЕ на deploy_redis: в sentinel_only (deploy_redis=false) redis-server
-# нет, PEM data-плоскости не рендерим (sentinel-демон TLS — отдельный follow-up).
+# group, чинит дрейф, dry-run). mode 0750 owner redis: PEM (вкл. приватный ключ)
+# читает только сервис.
 - name: Ensure the redis TLS directory exists
   module: core.file.directory
-  when: "(has(input.deploy_redis) ? input.deploy_redis : true) && has(input.tls_enable) && input.tls_enable"
+  when: "(has(input.deploy_redis) ? input.deploy_redis : true) && has(input.tls) && default(input.tls.enable, false)"
   params:
     path: /etc/redis/tls
     owner: redis
     group: redis
     mode: "0750"
 
-# Серверный сертификат. mode 0600 owner redis (cert не секрет, но держим режим
-# единым со всем TLS-каталогом). register — рестарт при ротации cert. var-имя
-# `tls_cert` (не голое `cert`) — каталог маскинга shared/audit ловит секрет ПО
-# ИМЕНИ ключа (regex tls[_-]?(key|cert|ca)); голое `cert` под фильтр не попадало
-# бы → PEM утёк бы в логи/OTel/RunResult.
+# Серверный сертификат. mode 0600 owner redis. register — рестарт при ротации cert.
+# content = vault(input.tls.cert_ref) В ЯЧЕЙКЕ → seal помечает sealed vault-слоем
+# (PEM маскируется в error_summary/state).
 - name: Render TLS server certificate
-  module: core.file.rendered
-  when: "(has(input.deploy_redis) ? input.deploy_redis : true) && has(input.tls_enable) && input.tls_enable"
+  module: core.file.present
+  when: "(has(input.deploy_redis) ? input.deploy_redis : true) && has(input.tls) && default(input.tls.enable, false)"
   register: redis_tls_cert
   params:
     path: /etc/redis/tls/redis.crt
-    template: templates/tls-cert.crt.tmpl
+    content: "${ vault(input.tls.cert_ref) }"
     mode: "0600"
     owner: redis
     group: redis
-    vars:
-      tls_cert: "${ has(input.tls_cert) ? input.tls_cert : '' }"
 
-# Приватный ключ — СЕКРЕТ. mode 0600 owner redis. var-имя `tls_key` маскируется
-# выходным слоем ПО ИМЕНИ ключа (shared/audit regex tls[_-]?(key|cert|ca));
-# прежнее голое `key` под фильтр НЕ попадало → приватный PEM-ключ утекал в
-# логи/OTel/RunResult. register — рестарт при ротации.
+# Приватный ключ — СЕКРЕТ. mode 0600 owner redis. content = vault(input.tls.key_ref)
+# В ЯЧЕЙКЕ → sealed vault-слоем (приватный PEM-ключ маскируется). register — рестарт.
 - name: Render TLS server private key
-  module: core.file.rendered
-  when: "(has(input.deploy_redis) ? input.deploy_redis : true) && has(input.tls_enable) && input.tls_enable"
+  module: core.file.present
+  when: "(has(input.deploy_redis) ? input.deploy_redis : true) && has(input.tls) && default(input.tls.enable, false)"
   register: redis_tls_key
   params:
     path: /etc/redis/tls/redis.key
-    template: templates/tls-key.key.tmpl
+    content: "${ vault(input.tls.key_ref) }"
     mode: "0600"
     owner: redis
     group: redis
-    vars:
-      tls_key: "${ has(input.tls_key) ? input.tls_key : '' }"
 
 # CA-сертификат кластера (валидация пиров для tls-replication/tls-cluster).
-# var-имя `tls_ca` — та же причина: маскинг по имени (tls[_-]?(key|cert|ca)).
+# content = vault(input.tls.ca_ref) В ЯЧЕЙКЕ → sealed vault-слоем. register — рестарт.
 - name: Render TLS CA certificate
-  module: core.file.rendered
-  when: "(has(input.deploy_redis) ? input.deploy_redis : true) && has(input.tls_enable) && input.tls_enable"
+  module: core.file.present
+  when: "(has(input.deploy_redis) ? input.deploy_redis : true) && has(input.tls) && default(input.tls.enable, false)"
   register: redis_tls_ca
   params:
     path: /etc/redis/tls/ca.crt
-    template: templates/tls-ca.crt.tmpl
+    content: "${ vault(input.tls.ca_ref) }"
     mode: "0600"
     owner: redis
     group: redis
-    vars:
-      tls_ca: "${ has(input.tls_ca) ? input.tls_ca : '' }"
 
 # users.acl из переданного MAP ACL-юзеров имя→{perms,state,password} (aclfile в
 # redis.conf). register, чтобы рестартить redis при изменении ACL. owner/group
@@ -180,8 +187,9 @@
 # директивы/юзеры/сертификаты вступают в силу только после перезапуска). Изменённый
 # drop-in вступает в силу только после рестарта (daemon-reload при смене unit
 # core.service делает сам перед рестартом). TLS-register'ы в onchanges → ротация
-# cert/key/CA дёргает рестарт; вне tls_enable эти задачи placeholder-skip → register
-# пуст → onchanges их не считает. Порядок гарантирован позицией задач.
+# cert/key/CA дёргает рестарт; вне tls.enable эти задачи placeholder-skip (per-task,
+# register СОХРАНЯЕТСЯ пустым) → onchanges их не считает. Порядок гарантирован
+# позицией задач.
 - name: Restart redis-server because config or hardening changed
   module: core.service.restarted
   when: "has(input.deploy_redis) ? input.deploy_redis : true"
