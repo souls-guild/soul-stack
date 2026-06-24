@@ -97,11 +97,12 @@ tasks:
   #
   # ★ TLS-дискриминатор вынесен в scenario-level compute: (см. блок compute выше):
   # tls_on/tls_port/tls_ca объявлены ОДИН раз, задачи ссылаются compute.<name>. Источник
-  # истины — incarnation.state.tls (ИМЕНОВАННОЕ поле v3, day-2-конвенция §7a). Operator-
-  # override ca_ref на create записан в state.tls.ca_ref, но это Vault-ПУТЬ (не PEM) →
-  # day-2 читает essence-ref (совпадает с CA, реально развёрнутым на хосте при create без
-  # override). addr на compute.tls_on/tls_port: TLS включён → '127.0.0.1:' + tls-порт
-  # (string(state.tls.port), INTEGER в v3), иначе plaintext 6379.
+  # истины — incarnation.state.tls (ИМЕНОВАННОЕ поле v3, day-2-конвенция §7a). ca_ref на
+  # create записан в state.tls.ca_ref как Vault-ПУТЬ (не PEM), а плагину нужно PEM-
+  # СОДЕРЖИМОЕ → day-2 берёт CA через vault(essence.tls_ca_ref): essence-ref совпадает с
+  # развёрнутым CA при create БЕЗ ca_ref-override (essence-дефолт). addr на
+  # compute.tls_on/tls_port: TLS включён → '127.0.0.1:' + tls-порт (string(state.tls.port),
+  # INTEGER в v3), иначе plaintext 6379.
   - name: Detect actual redis role per host
     module: community.redis.role
     register: redis_role
