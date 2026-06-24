@@ -101,7 +101,7 @@ jobs:
           fi
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           # Тег и имя релиза = пушнутый тег. Тело генерируется автоматически из
           # коммитов между тегами.
