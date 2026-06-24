@@ -37,8 +37,9 @@ fixtures:
     reason: "restart master for L0"
 
   # Пароль Redis — probe резолвит vault('secret/redis/restart#password')
-  # (incarnation.name == имя сценария == restart). essence.tls_enable не задан →
-  # plaintext-ветка коннекта.
+  # (incarnation.name == имя сценария == restart). state НЕ задан в fixture →
+  # has(incarnation.state) false → tls_on false → plaintext-ветка коннекта
+  # (дискриминатор v3 читает state.tls.enable, не essence).
   vault:
     secret/redis/restart:
       password: fixture-redis-pass-16+
