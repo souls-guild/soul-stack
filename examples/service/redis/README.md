@@ -18,20 +18,25 @@ passthrough-директивы оператора, SHALLOW last-wins ([templatin
 > `input.master_ip`) — все четыре в scenario `create`, выбор через `redis_type`
 > ([`sentinel.yml`](scenario/create/sentinel.yml) и
 > [`sentinel-only.yml`](scenario/create/sentinel-only.yml) включены в диспетчер).
-> Реализована и day-2 операция cluster — присоединение/вывод ноды через отдельные
-> scenario [`add_node`](scenario/add_node/main.yml) /
-> [`remove_node`](scenario/remove_node/main.yml). Mode-guard первой задачей диспетчера
-> рвёт прогон с понятным сообщением только при значении вне enum (защита от footgun
-> «нереализованный режим = тихий зелёный no-op»). Остальной backlog (cluster day-2
-> reshard, sentinel failover/day-2, sentinel-демон TLS) — см. [«В работе»](#в-работе).
-> README описывает только то, что есть в файлах.
+> Реализованы day-2 cluster-операции — присоединение/вывод/решардинг ноды через
+> отдельные scenario [`add_node`](scenario/add_node/main.yml) /
+> [`remove_node`](scenario/remove_node/main.yml) /
+> [`reshard`](scenario/reshard/main.yml) и rolling-restart
+> [`restart`](scenario/restart/main.yml). Неизвестный `redis_type` (вне enum)
+> отвергает **input-валидация Keeper-а ДО рендера** (понятный отказ, прогон не
+> стартует) — прежний shell-mode-guard убран. Остальной backlog (sentinel
+> failover/day-2, `update_config`, плагинный `acl`, sentinel-демон TLS) — см.
+> [«В работе»](#в-работе). README описывает только то, что есть в файлах.
 
 Разделение обязанностей (architect B-гибрид, ADR-009):
 
 - **destiny [`redis`](../../destiny/redis/)** — режим-агностичный per-host кирпич:
-  установка пакета `redis-server`, render `redis.conf` из **готового merged**-конфига,
-  render `users.acl`, systemd-hardening drop-in, запуск сервиса. destiny «глупая» —
-  ничего сама не сливает и не оркеструет; merge делает scenario сервиса.
+  установка `redis-server` (диспетчер по `install.method`: distro-пакет **или**
+  upstream-tarball), render `redis.conf` из **готового merged**-конфига, render
+  `users.acl`, TLS-PEM (`core.file.present` + `${ vault(ref) }` в ячейке),
+  systemd-hardening drop-in, host-tuning extras (THP/logrotate/sysctl), запуск
+  сервиса. destiny «глупая» — ничего сама не сливает и не оркеструет; merge делает
+  scenario сервиса.
 - **scenario сервиса** — трансляция простого ввода в `redis_config` (через
   `merge()`) + оркестрация (порядок шагов, таргетинг, health-gate, размотка
   cluster-топологии в `nodes`-MAP; в будущих батчах — rolling-restart, day-2).
@@ -42,14 +47,16 @@ passthrough-директивы оператора, SHALLOW last-wins ([templatin
 
 ## state_schema
 
-[`service.yml → state_schema`](service.yml) (`state_schema_version: 1`).
+[`service.yml → state_schema`](service.yml) (`state_schema_version: 2`; миграция
+v1→v2 — [`migrations/001_to_002.yml`](migrations/001_to_002.yml), переводит
+`redis_users` из списка имён в map `name → {perms, state}`, forward-only, ADR-019).
 `incarnation.state` фиксирует, что развёрнуто, чтобы оператор видел инсталляцию, а
 повторный apply был идемпотентен:
 
 | поле | тип | смысл |
 |---|---|---|
 | `redis_type` | enum `standalone`/`sentinel`/`cluster`/`sentinel_only` | режим развёртывания (реализованы все четыре) |
-| `redis_version` | string | версия пакета `redis-server` — distro-native пин (обязателен, см. input `version`) |
+| `redis_version` | string | эффективная версия Redis: distro-native пин (`install.method=package`, из input `version`) **или** upstream-semver (`install.method=binary`, из `install.version`); см. input `version` / `install` |
 | `redis_config` | object | **итог трансляции** — merged-конфиг `redis.conf` (default → preset → вычисления → passthrough; для `cluster` — плюс `cluster-*`-директивы). В `sentinel_only` — пустой `{}` (data-плоскости redis-server нет, `redis.conf` не рендерится; `required`-ключ присутствует) |
 | `redis_users` | map `username → {perms, state}` | ACL-пользователи Redis; `perms` — полная ACL-строка (пароли НЕ в state — keeper-side Vault) |
 | `redis_hosts` | array `{sid, role}` | хосты топологии (пишется `[]`; точные роли `master`/`replica`/`sentinel` для cluster/sentinel раскладывает apply-сторона — в state не фиксируются) |
@@ -65,8 +72,9 @@ passthrough-директивы оператора, SHALLOW last-wins ([templatin
 
 | поле | тип | смысл |
 |---|---|---|
-| `redis_type` | enum, default `standalone` | режим; выбирает ветку диспетчера; реализованы все четыре (`standalone`/`cluster`/`sentinel`/`sentinel_only`). Значение вне enum ловит mode-guard первой задачей |
-| `version` | string, **обяз.** | distro-native пин версии пакета (напр. `5:7.0.15-1~deb12u7`); `core.pkg` всегда ставит `=version` — воспроизводимая инсталляция. Поведение «не задана → latest из репо» удалено (директива пользователя 2026-06-23) |
+| `redis_type` | enum, default `standalone` | режим; выбирает ветку диспетчера; реализованы все четыре (`standalone`/`cluster`/`sentinel`/`sentinel_only`). Значение вне enum отвергает input-валидация Keeper-а по enum ДО рендера |
+| `version` | string, обяз. **только при `install.method=package`** (`required_when`) | distro-native пин версии пакета (напр. `5:7.0.15-1~deb12u7`); `core.pkg` всегда ставит `=version` — воспроизводимая инсталляция. Поведение «не задана → latest из репо» удалено (директива пользователя 2026-06-23). При `install.method=binary` НЕ используется — версия бинаря в `install.version` (upstream-semver) |
+| `install` | object `{method, base_url, version, sha256}`, опц. | способ установки redis (концепция `redis_install_*` роли): `method` ∈ `package` (default — distro-пакет, поведение-сохраняющий) / `binary` (opt-in — upstream-tarball: `base_url` + `version` (semver) + `soulprint.self.os.arch` → `/usr/local/bin` + свой systemd-юнит + distro-юзер/группа redis). `base_url`+`version` обяз. при `method=binary` (`validate`). `sha256` (голый hex) **опционален**: задан → fail-closed verify скачанного tarball-а; нет → загрузка по content-идемпотентности (без verify, доверие HTTPS+store). Пустой/не передан → `method=package` |
 | `memory_mb` | integer, опц., min `64` | бюджет памяти под Redis на хосте, МБ; `maxmemory` = доля от него |
 | `persistence` | enum `off`/`aof`/`rdb`/`rdb_aof`, default `rdb` | режим durability; транслируется в `save`/`appendonly` |
 | `maxmemory_policy` | enum eviction-политик | политика вытеснения при достижении `maxmemory` |
@@ -80,9 +88,21 @@ passthrough-директивы оператора, SHALLOW last-wins ([templatin
 | `master_port` | integer, опц., default `6379`, min `1` | **(sentinel_only)** порт внешнего redis-master; уходит в `sentinel.conf` и в `community.redis.sentinel` (`monitor.port`) |
 | `users` | map `имя → {perms, state}` | ACL-юзеры; `perms` — полная ACL-строка Redis, `state` ∈ `on`/`off` |
 | `redis_settings` | object (passthrough) | произвольные директивы `redis.conf` key→value; **бьют всё** в итоговом merge |
+| `tls` | object `{enable, only, port, cert_ref, key_ref, ca_ref}`, опц. | **(TLS)** параметры TLS Redis (концепция `redis_tls_*` роли). operator-input **бьёт essence** (каждое под-поле опционально; недостающие берут дефолт из `essence.tls_*`). `enable` — главный гейт рендера PEM/директив; `only` — закрыть plain-порт (scenario ставит `port 0`); `port` — TLS-порт (директива `tls-port`, дефолт essence `7379`); `cert_ref`/`key_ref`/`ca_ref` — Vault-**ПУТИ** серверного cert/key и CA (форма `<mount>/<path>#<field>`, **не** сам PEM). destiny читает PEM через `vault(ref)` в ячейке `content` (`core.file.present`, seal-маскинг — НЕ `.tmpl`). Пустой/не передан → TLS off. `tls.only` требует `tls.enable` (`validate`) |
 | `modules` | array enum `search`/`json`/`timeseries`/`bloom`, опц. | **(Redis-модули)** алиасы загружаемых модулей (RediSearch/RedisJSON/RedisTimeSeries/RedisBloom) для Redis < 8; на Redis 8+ игнорируется (модули встроены). Пусто/не задан → модули не подключаются |
 | `modules_base_url` | string, обяз. при непустом `modules` | **(Redis-модули)** базовый URL источника `.so` (без арх-сегмента); destiny строит полный URL per-host как `<base_url>/<arch>/<имя.so>` |
-| `modules_sha256` | map `алиас → SHA-256` (голый hex), обяз. для каждого `modules` | **(Redis-модули)** контрольная сумма каждого `.so` (fail-closed: `core.url.fetched` верифицирует, mismatch → падение) |
+| `modules_sha256` | map `алиас → SHA-256` (голый hex), **опц.** | **(Redis-модули)** контрольная сумма `.so`, **опциональна и частична** (можно задать лишь для части алиасов). Задан для алиаса → fail-closed integrity-verify (`core.url.fetched` верифицирует, mismatch → падение); отсутствует → загрузка по content-идемпотентности (без verify, доверие HTTPS+store) |
+
+**Кросс-полевые инварианты ввода** ([`create/main.yml → validate:`](scenario/create/main.yml),
+input-only, первый провал → 422 `validation_failed` ДО коммита incarnation и ДО
+applying):
+
+- `sentinel_quorum` ≤ `1 + replicas` (режим sentinel) — иначе кворум недостижим и
+  failover не сработает;
+- `tls.only` требует `tls.enable` — только-TLS без включённого TLS закрывает
+  plain-порт и не открывает TLS-порт (у Redis не остаётся ни одного listener-а);
+- `install.method=binary` требует `install.base_url` и `install.version` — без них
+  не из чего собрать URL upstream-tarball-а.
 
 Параметров `logrotate_enable` / `sysctl_enable` / `thp_disable` во входном контракте
 **нет**: отключение Transparent Huge Pages, logrotate-конфиг и sysctl-тюнинг — **безусловный
@@ -230,16 +250,13 @@ operator-флагов нет, задачи рендерятся **всегда**
 standalone, cluster, sentinel, sentinel_only: ветки добавляются в хвост, индексы
 предыдущих веток не сдвигаются.
 
-**Mode-guard первой задачей.** Перед ветками диспетчер ставит задачу `core.cmd.shell`
-(`run_once`, без `when:` — рендерится при любом `redis_type`), которая ловит footgun
-«нереализованный режим = тихий зелёный no-op»: ветки gated на свой `redis_type`,
-поэтому при значении **вне** enum `{standalone, cluster, sentinel, sentinel_only}`
-**все** ветки гаснут placeholder-skip-ом и `create` прошёл бы зелёным, ничего не
-развернув. Guard вычисляет keeper-side булево «режим реализован» (перечень
-mode-литералов синхронен enum `input.redis_type`): реализован → no-op; нет → `echo` с
-конкретным `redis_type` + `exit 1` рвут прогон fail-fast. Поскольку все четыре режима
-теперь реализованы, на любом легальном `redis_type` mode-guard проходит no-op-ом —
-он отвергает только реально-неизвестные значения.
+**Неизвестный режим — input-валидация, не shell-guard.** Прежняя `core.cmd.shell`
+«mode-guard» первой задачей **убрана**: неизвестный `redis_type` отвергает
+**input-валидация Keeper-а по enum** `input.redis_type` (`[standalone, cluster,
+sentinel, sentinel_only]`) **ДО рендера** — раньше и понятнее, чем shell-test на
+Soul-е. Все ветки gated на свой `redis_type`, а enum гарантирует попадание ровно в
+одну из них, поэтому footgun «нереализованный режим = тихий зелёный no-op»
+конструктивно невозможен (значение вне enum не доходит до рендера).
 
 После успешного apply Keeper фиксирует `state_changes` (ADR-009 §7.1, ADR-057):
 `redis_type`, `redis_version`, `redis_config` (тот же `merge()`, что ушёл в render —
@@ -427,6 +444,55 @@ data-плоскости redis-server), мониторящий **внешний**
    `add_node`). Параметры `remove-node` state — в
    [per-module doc](../../../docs/module/community/redis/README.md).
 
+### `reshard` (day-2: перенести N слотов между мастерами)
+
+[`scenario/reshard/main.yml`](scenario/reshard/main.yml) — перенести **N** hash-слотов
+с одного master-а (`from_sid`) на другой (`to_sid`) в уже сформированном кластере
+(режим `redis_type=cluster`). Аналог `redis-cli --cluster reshard`, целиком через
+плагин `community.redis.cluster` (`action: reshard`) — без `redis-cli`/shell. Оба
+master-а обязаны быть в roster-е прогона (`soulprint.hosts`); таргетинг по стабильному
+SID. Два шага:
+
+1. **guard** (`assert:`, keeper-side при render) — `from_sid` и `to_sid` обязаны быть
+   различными членами roster-а; `false` обрывает render с `message` ДО dispatch.
+2. **reshard** (`community.redis.cluster`, `action: reshard`, `run_once`) — endpoint-ы
+   `from`/`to` строятся из roster-а по SID. Плагин читает `CLUSTER NODES` с `from`,
+   берёт первые `slots` слотов источника по возрастанию и переносит каждый
+   (`SETSLOT`/`MIGRATE`/`SETSLOT NODE`, online).
+
+> **★ `reshard` НЕ идемпотентен** (осознанно, exec-style day-2): повторный apply
+> сдвинет **ещё** `slots` слотов с `from` на `to`. Оператор зовёт его **явно**, ровно
+> столько раз, сколько нужно переносов — это **не** часть converge. Семантика
+> partial-failure (нет авто-отката) — в
+> [per-module doc](../../../docs/module/community/redis/README.md).
+
+### `restart` (day-2: безопасный rolling-restart)
+
+[`scenario/restart/main.yml`](scenario/restart/main.yml) — rolling-restart Redis без
+изменения конфига (режимы sentinel/cluster). Фактическая роль каждого хоста
+**волатильна** (после возможного failover declared-роль `create` уже неверна),
+поэтому роль берётся **живым probe** (`community.redis.role`, `INFO replication`)
+непосредственно перед таргетингом, а не из `incarnation.state` (ADR-008). Реплики
+рестартятся **по одной** (`block` + `serial: 1`: волна = {рестарт, health-gate}),
+master — **отдельной задачей после всех реплик** (rolling-инвариант «master
+последним»). Health-gate реплики — `community.redis.replica-synced` (строгий ресинк
+`master_link_status:up`, не просто `PONG`); рестарт самого демона —
+`core.service.restarted`. `state` не меняется — только запись в `state_history`.
+
+> **★ Источник истины day-2 = `incarnation.state`, не `essence`** ([production-conventions §7a](../../../docs/destiny/production-conventions.md)).
+> TLS-дискриминатор коннекта плагина (по TLS или plaintext, на каком порту) берётся
+> из развёрнутого `incarnation.state.redis_config` (`'tls-port' in
+> incarnation.state.redis_config`), а **не** из `essence.tls_*`: на create оператор
+> мог переопределить TLS через `input.tls` (бьёт essence), и эта развёрнутая
+> конфигурация зафиксирована только в `state`. Смотреть на `essence` дало бы
+> plaintext-коннект на TLS-only Redis (провал health-gate). Секрет CA в `state` не
+> лежит (ИБ) — резолвится `vault(essence.tls_ca_ref)`, в `state` материализуется
+> только путь к PEM на хосте.
+
+Живой failover (`SENTINEL FAILOVER` / `CLUSTER FAILOVER` до рестарта master-а) — в
+backlog (плагинный verb `failover`), пока master рестартится напрямую (краткая
+недоступность на рестарт). См. [«В работе»](#в-работе).
+
 ## Безопасность
 
 Пароли — **из Vault**, не во входном контракте сценария. Сценарий читает их
@@ -442,6 +508,18 @@ keeper-side CEL-функцией `vault(...)` в render-фазе (templating.md 
 (ADR-012). В git нет ни значения, ни operator-указателя на секрет. В `users.acl`
 пароль пишется **хешем** (`#<sha256>`), plaintext в файл не попадает. Плагин
 `community.redis` не логирует `params["password"]` (ADR-010).
+
+**TLS-PEM — Vault-ПУТИ, не литеральный PEM.** Оператор задаёт `tls.cert_ref` /
+`tls.key_ref` / `tls.ca_ref` — Vault-**пути** (форма `<mount>/<path>#<field>`,
+бьют essence-дефолты `essence.tls_*_ref`), **не** сам PEM. destiny читает PEM
+CEL-функцией `vault(ref)` **прямо в ячейке** `content` задачи `core.file.present`
+(не `.tmpl`-пустышка, не проброс уже-резолвленного PEM через `apply.input`): детектор
+seal помечает ячейку sealed vault-слоем в render-фазе destiny-прохода (ADR-010 §7.4),
+маскинг скрывает PEM в `error_summary`/`state`. PEM уезжает в файлы
+`/etc/redis/tls/{redis.crt,redis.key,ca.crt}` (mode `0600`, owner `redis`); vault-клиент
+на Soul не тянется (ADR-012). Литеральный operator-PEM не поддержан намеренно: он шёл
+бы через `apply.input`, а seal destiny-прохода схему secret-input не видит → PEM не
+маскировался бы.
 
 ## Прогон L0
 
@@ -460,6 +538,10 @@ go run ./cmd/soul-trial run ../examples/service/redis/scenario/create/tests/sent
 go run ./cmd/soul-trial run ../examples/service/redis/scenario/add_node/tests/add-replica-explicit-master/case.yml
 # remove_node (day-2)
 go run ./cmd/soul-trial run ../examples/service/redis/scenario/remove_node/tests/remove-node-from-cluster/case.yml
+# reshard (day-2, НЕ идемпотентен)
+go run ./cmd/soul-trial run ../examples/service/redis/scenario/reshard/tests/reshard-slots-from-to/case.yml
+# restart (day-2, rolling)
+go run ./cmd/soul-trial run ../examples/service/redis/scenario/restart/tests/rolling-restart-replicas/case.yml
 ```
 
 [Кейс `create/tests/full-stack`](scenario/create/tests/full-stack/case.yml)
@@ -503,8 +585,8 @@ Sentinel-кейсы под [`scenario/create/tests/`](scenario/create/tests/):
 - [`sentinel-size-guard-mismatch`](scenario/create/tests/sentinel-size-guard-mismatch/case.yml)
   — FAIL-ветка size-guard (`hosts != 1 + replicas`).
 - [`sentinel-only-create`](scenario/create/tests/sentinel-only-create/case.yml)
-  — `redis_type=sentinel_only`, `master_ip` задан: input-валидация и mode-guard
-  проходят, пакет `redis` ставится при `deploy_redis=false`, `sentinel.conf`
+  — `redis_type=sentinel_only`, `master_ip` задан: input-валидация проходит,
+  пакет `redis` ставится при `deploy_redis=false`, `sentinel.conf`
   рендерится (monitor внешнего master, quorum `size/2+1`), data-плоскость
   redis-server в плане placeholder-skip, `community.redis.sentinel` мониторит
   `input.master_ip`, PONG-gate `:26379`; `redis_config` в state пустой.
@@ -512,6 +594,32 @@ Sentinel-кейсы под [`scenario/create/tests/`](scenario/create/tests/):
   — `redis_type=sentinel_only` без `master_ip`: отказ на **input-валидации**
   (`required_when: "input.redis_type == 'sentinel_only'"`) — рендер не запускается,
   прогон не стартует.
+
+TLS- и install-кейсы под [`scenario/create/tests/`](scenario/create/tests/):
+
+- [`tls-enabled-standalone`](scenario/create/tests/tls-enabled-standalone/case.yml)
+  — `tls.enable: true` (плюс `tls.only`): TLS-PEM-задачи активны, `tls-port`/
+  `tls-cert-file`/… в merged `redis.conf`, `port 0` при `only`.
+- [`tls-enabled-no-only-standalone`](scenario/create/tests/tls-enabled-no-only-standalone/case.yml)
+  — `tls.enable: true`, `tls.only` не задан: TLS-порт открыт, plain-порт остаётся.
+- [`tls-input-dict-standalone`](scenario/create/tests/tls-input-dict-standalone/case.yml)
+  — operator-dict `tls` бьёт essence-дефолты (под-поля переопределяются точечно).
+- [`tls-disabled-standalone`](scenario/create/tests/tls-disabled-standalone/case.yml)
+  — `tls` не передан: TLS off, PEM-задачи placeholder-skip, директив TLS нет.
+- [`tls-only-without-enable`](scenario/create/tests/tls-only-without-enable/case.yml)
+  — `tls.only: true` без `tls.enable`: отказ на **input-валидации** (`validate:`
+  «tls.only требует tls.enable») ДО рендера.
+- [`tls-cluster`](scenario/create/tests/tls-cluster/case.yml) — TLS + cluster:
+  `tls-replication`/`tls-cluster yes` в merged config.
+- [`install-package`](scenario/create/tests/install-package/case.yml) — default-ветка
+  `install.method=package`: distro-пакет с `=version`-пином.
+- [`install-binary`](scenario/create/tests/install-binary/case.yml) —
+  `install.method=binary`: `core.url.fetched` (tarball по `base_url`+`version`+arch)
+  → `core.archive.extracted` → install бинарей + свой systemd-юнит; package-ветка
+  placeholder-skip.
+- [`modules-no-checksum-standalone`](scenario/create/tests/modules-no-checksum-standalone/case.yml)
+  — `modules` без `modules_sha256`: загрузка `.so` по content-идемпотентности (без
+  fail-closed verify).
 
 add_node-кейсы под [`scenario/add_node/tests/`](scenario/add_node/tests/):
 
@@ -530,15 +638,15 @@ add_node-кейсы под [`scenario/add_node/tests/`](scenario/add_node/tests/
 
 Следующие батчи эпика redis-консолидации (в этом сервисе **пока не реализованы**):
 
-- day-2 cluster-операция `reshard` (плагин `community.redis.cluster` умеет
-  `action: create` / `add-node` / `remove-node`; `reshard` в action-enum пока нет);
 - day-2 sentinel: failover (switchover) и прочие day-2-операции sentinel-топологии;
 - day-2 в целом: `update_config` (live `CONFIG SET` дельты), `add_user` (плагинный
-  state `acl`), безопасный rolling-restart;
-- плагинные states `community.redis`: `acl` / `failover` (`command` / `config` /
-  `cluster` / `replica` / `sentinel` уже есть);
+  state `acl`);
+- плагинные states `community.redis`: `acl` / `failover` (`command` / `pinged` /
+  `role` / `replica-synced` / `config` / `cluster` (create/add-node/remove-node/
+  reshard) / `replica` / `sentinel` уже есть);
 - TLS sentinel-демона (`:26379`): data-плоскость redis-server TLS уже реализована
-  (`tls_enable`/`tls_only`), TLS для sentinel-демона — follow-up.
+  (operator-dict `tls.enable`/`tls.only`, бьёт essence), TLS для sentinel-демона —
+  follow-up.
 
 Состояние плагина `community.redis` (какие states реализованы) — в его per-module
 doc [`docs/module/community/redis/README.md`](../../../docs/module/community/redis/README.md).
