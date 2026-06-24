@@ -1043,6 +1043,10 @@ func (d *daemon) setupMetricsRegistry(_ context.Context) error {
 	// keeper_render_*-метрики render-пайплайна — на тот же registry; дескриптор
 	// инжектится в render.NewPipeline ниже (горячий путь CEL+template-рендера).
 	d.renderMetrics = render.RegisterRenderMetrics(metricsReg)
+	// keeper_mask_regex_fallback_total + process-global audit.SetSealHooks —
+	// наблюдаемость regex-last-resort слоя secret-маскинга (ADR-010 §7.4, слой 4).
+	// На тот же registry; logger — канал warn-лога fallback-а.
+	setupMaskMetrics(metricsReg, d.logger)
 	// keeper_vault_*-метрики чтения KV — на тот же registry; vc поднят выше
 	// (до создания registry, т.к. нужен для DSN-резолва), поэтому метрики
 	// подключаются сеттером SetMetrics здесь, после регистрации.

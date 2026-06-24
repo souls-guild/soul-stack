@@ -392,6 +392,25 @@ CEL обрабатывает значения с `secret: true` (из `input:`/e
 
 Маскированию подлежит значение, помеченное `secret: true` в схеме источника (см. [docs/input.md](input.md)). Маскинг — обязанность слоя вывода, не шаблонизатора.
 
+#### Слои маскинга (AUGMENT / OR-объединение)
+
+Маскинг на выходе устроен **тремя декларативными слоями + regex-last-resort**, объединёнными по ИЛИ (любой сработавший слой → значение замаскировано). Декларатив — primary; regex — последний рубеж с алармом на пробел декларатива.
+
+1. **schema** (декларатив, primary) — поле маскируется, если его путь объявлен `secret: true` в активной схеме источника (`input_schema` / `state_schema` / manifest `InputParamDef.Secret`). Не зависит от угадывания по имени ключа. На read-path (`GET /v1/incarnations/...` spec/state/history) Keeper материализует secret-схему сервиса (`state_schema` + input-схема scenario `create`) и маскирует по объявленным путям (`audit.MaskSecretsWithSchema`).
+
+2. **vault-происхождение** (по содержимому) — string-значение содержит `vault:<mount>/` (любой mount-токен) → маскируется целиком. Маскинг по СОДЕРЖИМОМУ значения (vault-ref утёк в логи/error-строку), а не по имени ключа.
+
+3. **seal / sealed-paths** (render-time provenance/taint, центральная механика) — Keeper на render-фазе помечает путь ячейки `params` **sealed**, когда её CEL-выражение читает secret-источник:
+   - `input.<name>`, где `<name>` объявлен `secret: true` в активной input-схеме прохода (scenario-input на scenario, destiny-input на destiny);
+   - `vault(...)`;
+   - транзитивно — `vars.<x>`/`compute.<x>`, чьё значение само sealed.
+
+   Детекция — **AST-обход** выражения (не single-ident-матч): тернарник `has(input.tls_cert) ? input.tls_cert : ''` обходится по всем веткам — любая читает секрет → ячейка sealed (whole-cell taint); склейка `literal + ${ secret }` → весь результат sealed (whole-value taint, безопасно). Набор sealed-путей (in-memory, текущий прогон) прикрепляется к результату render-прохода и доводится до write-точек прогона (`status_details` / `error_summary` / логи), где маскинг идёт по провенансу (`audit.MaskSecretsSealed`). Метафора — «запечатанные пути» (см. [naming-rules.md → seal/sealed-paths](naming-rules.md#сущности-предметной-области)).
+
+4. **regex-last-resort** (`sensitiveKeyRe` по имени ключа) — НЕ удалён, оставлен последним рубежом. Ловит класс sensitive-by-name, не покрытый декларативом (внутренние `bootstrap_token`/`jwt`/credentials без схемы). Когда секрет поймал **только** regex (schema/vault/seal по этому пути молчали) — инкрементится метрика `keeper_mask_regex_fallback_total` + warn-лог: сигнал пробела декларатива, чтобы класс закрывать структурно, а не полагаться на имя ключа.
+
+CEL обрабатывает sealed-значения нормально (резолвит секрет, подставляет в params, отдаёт Soul-у реальным) — taint только маркирует путь для слоя вывода, не меняет wire-значение `ApplyRequest.params`.
+
 #### Sensitive-by-construction params
 
 Помимо `secret: true`-маскинга по схеме источника, существует категория **sensitive-by-construction** — params модуля, которые секретны по самой своей природе, безотносительно того, что в них подставил оператор. Такой param **никогда** не логируется, не кладётся в OTel-атрибуты, не возвращается в `output`/`register` и не попадает в `ApplyEvent` — независимо от наличия `secret: true` на источнике значения.

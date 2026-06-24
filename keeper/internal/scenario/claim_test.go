@@ -66,7 +66,7 @@ func TestClaim_AbortedGuard(t *testing.T) {
 func TestClaim_FailedSummaryMasksSecret(t *testing.T) {
 	// render-ошибка, транзитом несущая vault-ref в тексте.
 	err := errors.New("scenario: RenderForHost: render redis-prod/create: vault:secret/db-creds#password missing")
-	summary := maskErrText(err)
+	summary := maskErrText(err, nil) // Acolyte-путь без seal-набора → vault+regex слои
 
 	if strings.Contains(summary, "vault:secret/db-creds") {
 		t.Errorf("summary несёт голый vault-ref: %q", summary)

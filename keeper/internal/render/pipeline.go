@@ -394,6 +394,12 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		return nil, fmt.Errorf("render: task %q: %w", task.Name, err)
 	}
 
+	// seal / sealed-paths ([ADR-010] §7.4): пометить пути ячеек params, чьё СЫРОЕ
+	// `${ … }`-значение читает secret-источник (secret-input/vault()). Обход СЫРЫХ
+	// params (task.Module.Params, ДО resolveVaultRefs+CEL) — единственный, где
+	// видны исходные выражения. Per-task (host-инвариантно), nil-Sealed → no-op.
+	collectSealed(p.cel, in.Sealed, task.Module.Params, scenarioSealSources(in), "")
+
 	isRendered := task.Module.Module == moduleFileRendered
 	var firstSID string
 	for hi, h := range renderHosts {
@@ -772,6 +778,10 @@ func (p *Pipeline) renderKeeperTask(ctx context.Context, in RenderInput, task co
 	if err != nil {
 		return nil, fmt.Errorf("render: keeper task %q: %w", task.Name, err)
 	}
+
+	// seal / sealed-paths ([ADR-010] §7.4): keeper-side задача (core.vault.kv-read
+	// и пр.) тоже может нести `${ vault(...) }`/`${ input.<secret> }` в params.
+	collectSealed(p.cel, in.Sealed, task.Module.Params, scenarioSealSources(in), "")
 
 	vars := keeperVars(in)
 	// keeper-side задача — не destiny-проход (destiny-tasks все Soul-side в пилоте);
