@@ -70,10 +70,24 @@ type StateHistoryView struct {
 	StateBefore  map[string]any
 }
 
-// toIncarnationGetView проецирует incarnation в доменный [IncarnationGetView]. Маскировка
-// spec/state — через [audit.MaskSecrets] (единый источник defense-in-depth, parity прежнего
-// toDTO). date-time — `.UTC()` БЕЗ Truncate. covens nil → `[]`.
-func toIncarnationGetView(inc *incarnation.Incarnation) IncarnationGetView {
+// maskWithSchema — единая точка read-path-маскинга spec/state/history payload
+// ([ADR-010] §7.4): при наличии secret-схемы сервиса — декларативный слой через
+// [audit.MaskSecretsWithSchema] (schema+vault+regex с regex-алармом), иначе —
+// [audit.MaskSecrets] (vault+regex, БЕЗ алармa). nil-схема → байт-в-байт прежнее
+// поведение (List без schema-прокидки — снапшот не материализуется per-элемент).
+func maskWithSchema(payload map[string]any, schema audit.SecretSchema) map[string]any {
+	if schema == nil {
+		return audit.MaskSecrets(payload)
+	}
+	return audit.MaskSecretsWithSchema(payload, schema)
+}
+
+// toIncarnationGetView проецирует incarnation в доменный [IncarnationGetView].
+// Маскировка spec/state — через [maskWithSchema] (декларативный слой ADR-010
+// §7.4 + vault+regex; единый источник defense-in-depth, parity прежнего toDTO).
+// schema — secret-схема сервиса ([secretSchemaForIncarnation]); nil → деградация
+// к MaskSecrets, БИТ-В-БИТ. date-time — `.UTC()` БЕЗ Truncate. covens nil → `[]`.
+func toIncarnationGetView(inc *incarnation.Incarnation, schema audit.SecretSchema) IncarnationGetView {
 	view := IncarnationGetView{
 		Covens:             coalesceCoven(inc.Covens),
 		CreatedAt:          inc.CreatedAt.UTC(),
@@ -81,8 +95,8 @@ func toIncarnationGetView(inc *incarnation.Incarnation) IncarnationGetView {
 		Name:               inc.Name,
 		Service:            inc.Service,
 		ServiceVersion:     inc.ServiceVersion,
-		Spec:               audit.MaskSecrets(inc.Spec),
-		State:              audit.MaskSecrets(inc.State),
+		Spec:               maskWithSchema(inc.Spec, schema),
+		State:              maskWithSchema(inc.State, schema),
 		StateSchemaVersion: int32(inc.StateSchemaVersion),
 		Status:             string(inc.Status),
 		StatusDetails:      inc.StatusDetails,
@@ -113,16 +127,17 @@ func toDriftScanSummaryView(s *incarnation.DriftScanSummary) *DriftScanSummaryVi
 	}
 }
 
-// toStateHistoryView проецирует state_history-row в доменный [StateHistoryView]. state_before/
-// state_after прогоняются через [audit.MaskSecrets] (defense-in-depth, parity прежнего
-// toHistoryDTO). changed_by_aid — *string (пустой → nil → ключ опущен). created_at — `.UTC()`
-// без Truncate.
-func toStateHistoryView(e *incarnation.HistoryEntry) StateHistoryView {
+// toStateHistoryView проецирует state_history-row в доменный [StateHistoryView].
+// state_before/state_after — через [maskWithSchema] (декларативный слой ADR-010
+// §7.4 + vault+regex; parity прежнего toHistoryDTO). schema — secret-схема
+// сервиса (nil → MaskSecrets, БИТ-В-БИТ). changed_by_aid — *string (пустой → nil →
+// ключ опущен). created_at — `.UTC()` без Truncate.
+func toStateHistoryView(e *incarnation.HistoryEntry, schema audit.SecretSchema) StateHistoryView {
 	view := StateHistoryView{
 		HistoryID:   e.HistoryID,
 		Scenario:    e.Scenario,
-		StateBefore: audit.MaskSecrets(e.StateBefore),
-		StateAfter:  audit.MaskSecrets(e.StateAfter),
+		StateBefore: maskWithSchema(e.StateBefore, schema),
+		StateAfter:  maskWithSchema(e.StateAfter, schema),
 		ApplyID:     e.ApplyID,
 		CreatedAt:   e.At.UTC(),
 	}
