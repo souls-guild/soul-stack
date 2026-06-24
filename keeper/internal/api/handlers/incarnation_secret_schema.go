@@ -81,6 +81,20 @@ func (h *IncarnationHandler) secretSchemaForIncarnation(ctx context.Context, inc
 // помечать бессмысленно — он деградирует к vault+regex-слою маскинга (MaskSecrets).
 // Рекурсию ВЕДЁМ (внутри ap могут быть вложенные `properties` с конкретными именами —
 // их пути schema-слой покрывает), а сам secret НА ap-узле пропускаем.
+//
+// ★ Сопутствующий gap (ВЛОЖЕННЫЙ secret под ap по ДИНАМИЧЕСКОМУ ключу, nit
+// seal-review, НЕ чиним — фикс = матчинг dynamic-key в IsSecret, отдельный слайс):
+// рекурсия в ap НЕ добавляет сегмента под произвольный ключ, поэтому
+// `users:{additionalProperties:{properties:{password:{secret}}}}` собирает путь
+// `users.password`. Реальный payload (incarnation.state) несёт КОНКРЕТНЫЙ ключ map —
+// `{users:{alice:{password:…}}}` → maskMapLayered ведёт путь ячейки `users.alice.
+// password`. [audit.SecretPathSet.IsSecret] сверяет `users.alice.password` И
+// normalizeIdx(того же) — а normalizeIdx обобщает ТОЛЬКО индексы среза (`[N]`→`[]`),
+// map-ключ `alice` не трогает → ни одна форма не совпадает с собранным `users.
+// password`. Schema-слой такой secret НЕ маскирует; он деградирует к vault+regex
+// (ключ `password` ловится sensitive-by-name regex-last-resort'ом — alarm-fallback,
+// не schema). Регрессию текущего поведения фиксирует тест
+// TestCollectStateSchemaSecrets_AdditionalPropertiesNestedSecret_DynamicKeyGap.
 func collectStateSchemaSecrets(schema map[string]any, path string, set audit.SecretPathSet) {
 	if schema == nil {
 		return
