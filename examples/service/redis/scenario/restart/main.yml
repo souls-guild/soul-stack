@@ -60,17 +60,41 @@ tasks:
   # хосте → barrier → error_locked, where-Passage не стартует. register.self.role
   # — фактическая роль ("master"/"slave"), where сравнивает == 'slave'/'master'
   # БЕЗ ручного trim (плагин отдаёт типизированную строку, не stdout с newline).
-  # addr — localhost (плагин исполняется на redis-хосте). TLS/пароль гейтятся на
-  # essence.tls_enable (как create-сценарий): TLS включён → плагин по TLS.
+  # addr — localhost (плагин исполняется на redis-хосте).
+  #
+  # ★ TLS-дискриминатор — incarnation.state, НЕ essence (day-2-конвенция,
+  # docs/destiny/production-conventions.md «Day-2: источник истины = incarnation.state»,
+  # ADR-057 amendment): create транслирует operator-input.tls (бьёт essence) в
+  # развёрнутый redis_config (state) с tls-port/tls-cert-file/tls-ca-cert-file. На
+  # day-2 essence НЕПОЛНА (не видит operator-override) — смотреть на essence.tls_*
+  # дало бы plaintext-коннект на TLS-only Redis (провал health-gate; AUTH plaintext
+  # при открытом plain-порту). Поэтому факт «TLS включён» берётся из развёрнутого
+  # state: 'tls-port' in incarnation.state.redis_config.
+  #
+  # ★ Дискриминатор — `'<key>' in <map>`, НЕ has(...['<key>']): has() — CEL-макрос,
+  # принимающий ТОЛЬКО field-selection (has(x.y)), index-аргумент has(x['y']) —
+  # «invalid argument to has() macro» (cel-go). Дефис в ключе ('tls-port') исключает
+  # field-access, поэтому проверка наличия ключа — оператором `in`. Цепочка
+  # has(incarnation.state) && has(incarnation.state.redis_config) защищает от
+  # no-such-key, когда State отсутствует (push/trial без State) или redis_config ещё
+  # не материализован — обе ступени дают plaintext-ветку (false). bracket-нотация
+  # остаётся в ДОСТУПЕ к значению (incarnation.state.redis_config['tls-port']) — там
+  # она нужна для дефисного ключа. tls-port в state — СТРОКА, конкатенируется в addr
+  # напрямую (без int()/string()). tls_ca — PEM CA (плагин ждёт PEM-СОДЕРЖИМОЕ, НЕ
+  # путь: tls.go AppendCertsFromPEM, файлы не читает), резолвится vault(essence.tls_ca_ref)
+  # — секрет в state не лежит (ИБ), ref — стабильный host-инвариант author-context
+  # (как пароль ниже). Operator-override ca_ref на create в state не сохранён → day-2
+  # читает essence-ref (см. observations в delegation; совпадает с CA, реально
+  # развёрнутым на хосте при create без override).
   - name: Detect actual redis role per host
     module: community.redis.role
     register: redis_role
     changed_when: false
     params:
-      addr:     "${ (has(essence.tls_enable) && essence.tls_enable) ? '127.0.0.1:' + string(int(default(essence.tls_port, 7379))) : '127.0.0.1:6379' }"
+      addr:     "${ has(incarnation.state) && has(incarnation.state.redis_config) && 'tls-port' in incarnation.state.redis_config ? '127.0.0.1:' + incarnation.state.redis_config['tls-port'] : '127.0.0.1:6379' }"
       password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
-      tls:      "${ default(essence.tls_enable, false) }"
-      tls_ca:   "${ (has(essence.tls_enable) && essence.tls_enable) ? vault(essence.tls_ca_ref) : '' }"
+      tls:      "${ has(incarnation.state) && has(incarnation.state.redis_config) && 'tls-port' in incarnation.state.redis_config }"
+      tls_ca:   "${ has(incarnation.state) && has(incarnation.state.redis_config) && 'tls-port' in incarnation.state.redis_config ? vault(essence.tls_ca_ref) : '' }"
 
   # Rolling-restart реплик по одному хосту (serial: 1). serial: на block: катит
   # весь блок целиком по одному набору хостов перед следующей волной
@@ -100,11 +124,13 @@ tasks:
           delay: 5s
           until: "register.self.synced == true"
         failed_when: "register.self.synced != true"
+        # TLS-гейт — incarnation.state (day-2-конвенция, см. probe-задачу выше:
+        # `'tls-port' in state.redis_config`, НЕ has(...['tls-port']) — макрос-лимит).
         params:
-          addr:     "${ (has(essence.tls_enable) && essence.tls_enable) ? '127.0.0.1:' + string(int(default(essence.tls_port, 7379))) : '127.0.0.1:6379' }"
+          addr:     "${ has(incarnation.state) && has(incarnation.state.redis_config) && 'tls-port' in incarnation.state.redis_config ? '127.0.0.1:' + incarnation.state.redis_config['tls-port'] : '127.0.0.1:6379' }"
           password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
-          tls:      "${ default(essence.tls_enable, false) }"
-          tls_ca:   "${ (has(essence.tls_enable) && essence.tls_enable) ? vault(essence.tls_ca_ref) : '' }"
+          tls:      "${ has(incarnation.state) && has(incarnation.state.redis_config) && 'tls-port' in incarnation.state.redis_config }"
+          tls_ca:   "${ has(incarnation.state) && has(incarnation.state.redis_config) && 'tls-port' in incarnation.state.redis_config ? vault(essence.tls_ca_ref) : '' }"
 
   # Рестарт master-а ПОСЛЕ всех реплик (rolling-инвариант «master последним»).
   # run_once: — ровно один хост (первый по SID) из резолва on:+where:
