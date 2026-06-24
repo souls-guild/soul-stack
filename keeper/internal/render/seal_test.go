@@ -45,8 +45,8 @@ func TestCollectSealed_SecretInputInGenericField(t *testing.T) {
 
 	params := map[string]any{
 		"content": "requirepass ${ input.admin_password }", // (a) generic-поле, секрет
-		"port":    "${ input.port }",                        // (f) несекретный input
-		"label":   "static-config",                          // чистый литерал
+		"port":    "${ input.port }",                       // (f) несекретный input
+		"label":   "static-config",                         // чистый литерал
 	}
 	collectSealed(e, set, params, sources, "")
 

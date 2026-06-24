@@ -15,7 +15,7 @@ import (
 //     уже прошли детекцию на своей фазе резолва).
 //
 // Детекция — whole-cell: достаточно одной ветки выражения, читающей секрет
-// (тернарник `has(input.tls_cert) ? input.tls_cert : ''` — обе ветки в обходе),
+// (тернарник `has(input.tls_cert) ? input.tls_cert : ”` — обе ветки в обходе),
 // чтобы вся ячейка стала sealed (whole-value taint, безопасно: смешение
 // literal+secret даёт sealed результат). Это AST-обход, не single-ident-матч.
 //
