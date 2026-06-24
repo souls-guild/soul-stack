@@ -37,9 +37,13 @@ import (
 //
 // Static-when-false потомок: emitStaticWhenSkip в начале цикла эмитит
 // placeholder(ы) ДО guard/render — симметрично top-level Render-циклу (неактивная
-// ветка с unsupported-DSL не блокирует активную). Block-level static-when:false
-// гасится в Render-цикле (emitStaticWhenSkip top-level) ДО вызова renderBlockTask:
-// ровно 1 placeholder за весь блок, сюда такой блок не доходит.
+// ветка с unsupported-DSL не блокирует активную). Block-level static-when:false НЕ
+// гасится emitStaticWhenSkip (она пропускает block-задачу): static-false block
+// доходит сюда, mergeBlockInheritance вливает block.when в КАЖДОГО потомка через
+// AND, static-when каждого потомка становится false, и каждый child эмитит СВОЙ
+// skip-placeholder с register/requisites через walkBlockChildren. Так register
+// потомков static-false block виден снаружи (flat-register-scope инвариантен
+// относительно static-skip — паттерн loopStaticSkip).
 func (p *Pipeline) renderBlockTask(
 	ctx context.Context,
 	in RenderInput,

@@ -15,7 +15,9 @@ import (
 //
 //	(a) block.when AND-merge с child.when → gated when на потомке;
 //	(b) register потомка block виден onchanges-задаче СНАРУЖИ block (flat scope);
-//	(c) block.when static-false → placeholder-skip, register пуст, потомки не эмитятся;
+//	(c) block.when static-false → per-потомок skip-placeholder-ы, register потомка
+//	    виден снаружи (flat-register-scope инвариантен относительно static-skip);
+//	    +c2 onchanges снаружи резолвится, +c3 опечатка register по-прежнему падает;
 //	(d) where/serial/run_once/on/parallel/loop/include/apply на destiny-block или
 //	    потомке → ErrUnsupportedDSL;
 //	(e) вложенный block разворачивается каскадом со сквозными Index.
@@ -107,10 +109,13 @@ func TestRenderDestinyBlock_FlatRegisterScope(t *testing.T) {
 	}
 }
 
-// (c) block.when static-false → placeholder-skip за весь блок: register пуст,
-// потомки НЕ эмитятся. when статичен (input.enabled — нет register/soulprint),
-// при enabled=false весь блок гасится одним placeholder-ом ДО guard/render.
-func TestRenderDestinyBlock_StaticWhenFalse_Placeholder(t *testing.T) {
+// (c) block.when static-false → per-потомок skip-placeholder-ы (НЕ один за весь
+// блок): block.when вливается в каждого потомка через AND, static-when каждого
+// становится false, и каждый child эмитит СВОЙ placeholder со своим register. when
+// статичен (input.enabled — нет register/soulprint), при enabled=false каждый
+// потомок гасится своим placeholder-ом. register потомка ВИДЕН снаружи (flat scope
+// инвариантен относительно static-skip — исправляемый дефект block-static-skip).
+func TestRenderDestinyBlock_StaticWhenFalse_PerChild(t *testing.T) {
 	probe := moduleTask("inner", "core.service.restarted")
 	probe.Register = "inner_reg"
 	block := config.Task{
@@ -125,16 +130,75 @@ func TestRenderDestinyBlock_StaticWhenFalse_Placeholder(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	if len(tasks) != 1 || len(plans) != 1 {
-		t.Fatalf("len(tasks)=%d plans=%d, want 1/1 (один placeholder за весь блок)", len(tasks), len(plans))
+		t.Fatalf("len(tasks)=%d plans=%d, want 1/1 (per-потомок placeholder)", len(tasks), len(plans))
 	}
 	if tasks[0].FlowContext == nil {
 		t.Errorf("placeholder должен нести FlowContext (static-skip)")
 	}
-	if tasks[0].Register != "" {
-		t.Errorf("tasks[0].Register = %q, want пусто — потомок block не эмитнут, register пуст", tasks[0].Register)
+	if tasks[0].Register != "inner_reg" {
+		t.Errorf("tasks[0].Register = %q, want inner_reg — register потомка виден на skip-placeholder", tasks[0].Register)
+	}
+	if tasks[0].Params != nil {
+		t.Errorf("tasks[0].Params = %v, want nil (static-skip placeholder)", tasks[0].Params)
 	}
 	if len(plans[0].TargetSIDs) != 0 {
 		t.Errorf("placeholder.TargetSIDs = %v, want пусто (не диспатчится)", plans[0].TargetSIDs)
+	}
+}
+
+// (c2) static-false destiny-block + onchanges СНАРУЖИ на register потомка (кейс
+// #10, зеркало scenario): render НЕ падает ErrOnChangesUnknownRegister, register
+// потомка резолвится в OnChangesIdx у задачи после блока. Это и есть исправляемый
+// латентный дефект block-static-skip в destiny-слое.
+func TestRenderDestinyBlock_StaticWhenFalse_PreservesRegister(t *testing.T) {
+	probe := moduleTask("probe", "core.exec.run")
+	probe.Register = "tls_changed"
+	block := config.Task{
+		Name:  "tls-grp",
+		When:  "input.enabled",
+		Block: &config.BlockTask{Block: []config.Task{probe}},
+	}
+	restart := moduleTask("restart", "core.service.restarted")
+	restart.OnChanges = []string{"tls_changed"}
+	d := blockDestiny("tls-gated", block, restart)
+
+	tasks, _, err := renderBlockDestiny(t, d, map[string]any{"enabled": false})
+	if err != nil {
+		t.Fatalf("Render НЕ должен падать на register потомка static-false destiny-block: %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("len(tasks) = %d, want 2 (skip-placeholder потомка + restart)", len(tasks))
+	}
+	if tasks[0].Register != "tls_changed" {
+		t.Errorf("tasks[0].Register = %q, want tls_changed (register потомка виден через skip-placeholder)", tasks[0].Register)
+	}
+	if len(tasks[1].OnChangesIdx) != 1 || tasks[1].OnChangesIdx[0] != 0 {
+		t.Errorf("restart.OnChangesIdx = %v, want [0] — register потомка static-false destiny-block резолвится снаружи", tasks[1].OnChangesIdx)
+	}
+}
+
+// (c3, негатив) onchanges на ЗАВЕДОМО несуществующий register (опечатка) ПО-ПРЕЖНЕМУ
+// падает ErrOnChangesUnknownRegister — фикс block-static-skip НЕ ослабил валидацию.
+// Гарантирует, что раскрытие static-false block в per-потомок placeholder-ы не
+// маскирует опечатки register-id.
+func TestRenderDestinyBlock_StaticWhenFalse_UnknownRegisterStillFails(t *testing.T) {
+	probe := moduleTask("probe", "core.exec.run")
+	probe.Register = "tls_changed"
+	block := config.Task{
+		Name:  "tls-grp",
+		When:  "input.enabled",
+		Block: &config.BlockTask{Block: []config.Task{probe}},
+	}
+	restart := moduleTask("restart", "core.service.restarted")
+	restart.OnChanges = []string{"typo_changed"} // опечатка: такого register нет
+	d := blockDestiny("tls-typo", block, restart)
+
+	_, _, err := renderBlockDestiny(t, d, map[string]any{"enabled": false})
+	if err == nil {
+		t.Fatal("Render: ожидалась ошибка на несуществующий onchanges register, got nil")
+	}
+	if !errors.Is(err, ErrOnChangesUnknownRegister) {
+		t.Errorf("err = %v, want ErrOnChangesUnknownRegister (валидация не ослаблена static-skip)", err)
 	}
 }
 

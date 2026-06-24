@@ -267,7 +267,10 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 		// run_once (выше) — потомки наследуют on/where/run_once бесплатно. width из
 		// block.serial раздаётся всем потомкам. stampPassage клеймит весь fan-out
 		// одним Passage (block атомарен по Passage, ADR-056). Static-when-false
-		// block гасится emitStaticWhenSkip выше (1 placeholder за весь блок).
+		// block НЕ гасится emitStaticWhenSkip (она пропускает block-задачу) — он
+		// заходит сюда, walkBlockChildren вольёт block.when в каждого потомка через
+		// AND и каждый child эмитит СВОЙ skip-placeholder с register/requisites
+		// (flat-register-scope цел при skip — иначе register потомков терялся бы).
 		if task.Block != nil {
 			bt, bp, berr := p.renderBlockTask(ctx, in, task, idx, targeted)
 			if berr != nil {
@@ -572,6 +575,20 @@ func (p *Pipeline) emitStaticWhenSkip(
 	idx *int,
 ) (bool, error) {
 	if !isStaticWhen(task.When) {
+		return false, nil
+	}
+
+	// block-задача со static-false when: НЕ гасится здесь одним placeholder-ом
+	// (иначе ветка renderBlockTask/renderDestinyBlock не отработает, потомки не
+	// материализуются, и их register теряется — resolveOnChanges снаружи падает
+	// ErrOnChangesUnknownRegister). Отдаём её ветке block: mergeBlockInheritance
+	// вольёт block.when в КАЖДОГО потомка через AND, static-when каждого потомка
+	// станет false, и каждый child сам пройдёт через emitStaticWhenSkip внутри
+	// walkBlockChildren, эмитнув placeholder со СВОИМ Register/requisites/ID
+	// (паттерн loopStaticSkip — block раскрывается per-потомок, не одним
+	// placeholder-ом). flat-register-scope цел и при skip. Сам block register не
+	// несёт (запрещён валидатором) — на block-узле терять нечего.
+	if task.Block != nil {
 		return false, nil
 	}
 

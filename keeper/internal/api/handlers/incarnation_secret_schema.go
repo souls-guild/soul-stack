@@ -99,11 +99,17 @@ func collectStateSchemaSecrets(schema map[string]any, path string, set audit.Sec
 		collectStateSchemaSecrets(items, path+"[]", set)
 	}
 	if ap, ok := schema["additionalProperties"].(map[string]any); ok {
-		// secret НА ap-узле не помечаем (см. ★-ограничение в doc-комментарии:
-		// `.*`-путь IsSecret не запрашивает → запись мёртвая, деградация к vault+regex).
-		// Рекурсию ведём — вложенные конкретные `properties` внутри ap schema-слой
-		// всё же покрывает по точному пути.
-		collectStateSchemaSecrets(ap, path, set)
+		// secret НА САМОМ ap-узле не помечаем (см. ★-ограничение в doc-комментарии:
+		// путь `map_field` пометил бы ВСЮ map как secret — over-mask на read-path; а
+		// `map_field.*` IsSecret не запрашивает → запись мёртвая. Деградация к
+		// vault+regex намеренна). Рекурсию ведём, но БЕЗ secret-флага самого ap-узла:
+		// вложенные конкретные `properties` внутри ap schema-слой покрывает по точному
+		// пути, а secret НА ap-узле гасим, чтобы isSecretNode не пометил path.
+		recurse := ap
+		if isSecretNode(ap) {
+			recurse = mapWithoutSecret(ap)
+		}
+		collectStateSchemaSecrets(recurse, path, set)
 	}
 }
 
@@ -111,6 +117,21 @@ func collectStateSchemaSecrets(schema map[string]any, path string, set audit.Sec
 func isSecretNode(schema map[string]any) bool {
 	b, _ := schema["secret"].(bool)
 	return b
+}
+
+// mapWithoutSecret — поверхностная копия schema-узла без ключа `secret`, чтобы
+// рекурсия по additionalProperties не пометила сам ap-узел как secret-leaf (его
+// path = имя map, пометка дала бы over-mask всей map). Вложенные `properties`/
+// `items` копии не трогаются — рекурсия по ним идёт по своим точным путям.
+func mapWithoutSecret(schema map[string]any) map[string]any {
+	out := make(map[string]any, len(schema))
+	for k, v := range schema {
+		if k == "secret" {
+			continue
+		}
+		out[k] = v
+	}
+	return out
 }
 
 // collectCreateInputSecrets читает scenario `create`/main.yml снапшота, парсит

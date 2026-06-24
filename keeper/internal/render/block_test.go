@@ -254,9 +254,12 @@ func TestRenderBlock_NestedRecursion(t *testing.T) {
 	}
 }
 
-// TestRenderBlock_StaticSkipSingle (guard #6) — block-level статический when:false
-// → РОВНО 1 placeholder за весь блок (не N), Index последующих задач не съезжает.
-func TestRenderBlock_StaticSkipSingle(t *testing.T) {
+// TestRenderBlock_StaticSkipPerChild (guard #6) — block-level статический when:false
+// раскрывается в per-потомок skip-placeholder-ы (НЕ один за весь блок): block.when
+// вливается в каждого потомка через AND, static-when каждого становится false, и
+// каждый child эмитит СВОЙ placeholder. Index последующих задач не съезжает (число
+// placeholder-ов == число потомков).
+func TestRenderBlock_StaticSkipPerChild(t *testing.T) {
 	grp := config.Task{
 		Name: "grp",
 		When: "input.action == 'apply'", // статический, false при другом action
@@ -278,22 +281,113 @@ func TestRenderBlock_StaticSkipSingle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	// 1 placeholder за весь блок + 1 задача after = 2.
+	// 3 per-потомок placeholder + 1 задача after = 4.
+	if len(tasks) != 4 {
+		t.Fatalf("len(tasks) = %d, want 4 (3 per-child placeholder + after)", len(tasks))
+	}
+	for i := 0; i < 3; i++ {
+		if tasks[i].Params != nil {
+			t.Errorf("placeholder[%d] Params = %v, want nil (skip)", i, tasks[i].Params)
+		}
+		// Унаследованный block.when вылит в каждого потомка (AND с пустым child.when
+		// → чистый block.when).
+		if got, want := tasks[i].When, "input.action == 'apply'"; got != want {
+			t.Errorf("placeholder[%d].When = %q, want %q (унаследованный block.when)", i, got, want)
+		}
+	}
+	// after не съехал: Index 3.
+	if tasks[3].Index != 3 || tasks[3].Module != "core.exec.run" {
+		t.Errorf("after = {Index:%d Module:%q}, want {3 core.exec.run}", tasks[3].Index, tasks[3].Module)
+	}
+	for i := range tasks {
+		if tasks[i].Index != i {
+			t.Errorf("tasks[%d].Index = %d, want %d (сквозной без дыр)", i, tasks[i].Index, i)
+		}
+	}
+	if len(plans) != 4 {
+		t.Errorf("len(plans) = %d, want 4", len(plans))
+	}
+}
+
+// TestRenderBlock_StaticSkipPreservesRegister (guard #6b, кейс #10) — static-false
+// scenario-block с register-несущим потомком: register потомка виден СНАРУЖИ через
+// skip-placeholder, onchanges-задача снаружи резолвит его в OnChangesIdx, render НЕ
+// падает ErrOnChangesUnknownRegister. Это и есть исправляемый латентный дефект.
+func TestRenderBlock_StaticSkipPreservesRegister(t *testing.T) {
+	probe := moduleTask("probe", "core.exec.run")
+	probe.Register = "cfg_changed"
+	grp := config.Task{
+		Name:  "grp",
+		When:  "input.action == 'apply'", // статический, false при diagnose
+		Block: &config.BlockTask{Block: []config.Task{probe}},
+	}
+	restart := moduleTask("restart", "core.service.restarted")
+	restart.OnChanges = []string{"cfg_changed"} // ссылка на register потомка static-false block
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{grp, restart}},
+		Input:       map[string]any{"action": "diagnose"},
+		Incarnation: IncarnationMeta{Name: "svc"},
+		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
+	}
+	tasks, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render НЕ должен падать на register потомка static-false block: %v", err)
+	}
 	if len(tasks) != 2 {
-		t.Fatalf("len(tasks) = %d, want 2 (1 block-placeholder + after)", len(tasks))
+		t.Fatalf("len(tasks) = %d, want 2 (skip-placeholder потомка + restart)", len(tasks))
+	}
+	if tasks[0].Register != "cfg_changed" {
+		t.Errorf("tasks[0].Register = %q, want cfg_changed (register потомка виден на skip-placeholder)", tasks[0].Register)
 	}
 	if tasks[0].Params != nil {
-		t.Errorf("block placeholder Params = %v, want nil (skip)", tasks[0].Params)
+		t.Errorf("tasks[0].Params = %v, want nil (static-skip placeholder)", tasks[0].Params)
 	}
-	if tasks[0].Index != 0 {
-		t.Errorf("placeholder.Index = %d, want 0", tasks[0].Index)
+	if len(tasks[1].OnChangesIdx) != 1 || tasks[1].OnChangesIdx[0] != 0 {
+		t.Errorf("restart.OnChangesIdx = %v, want [0] — register потомка static-false block резолвится снаружи", tasks[1].OnChangesIdx)
 	}
-	// after не съехал: Index 1.
-	if tasks[1].Index != 1 || tasks[1].Module != "core.exec.run" {
-		t.Errorf("after = {Index:%d Module:%q}, want {1 core.exec.run}", tasks[1].Index, tasks[1].Module)
+}
+
+// TestRenderBlock_StaticSkipNested (guard #6c) — вложенный static-false block:
+// каскад AND-merge гасит каждого листового потомка через свой placeholder, register
+// листа виден снаружи. Проверяет, что фикс работает по всей глубине вложенности.
+func TestRenderBlock_StaticSkipNested(t *testing.T) {
+	leaf := moduleTask("leaf", "core.exec.run")
+	leaf.Register = "leaf_reg"
+	inner := config.Task{
+		Name:  "inner",
+		Block: &config.BlockTask{Block: []config.Task{leaf}},
 	}
-	if len(plans) != 2 {
-		t.Errorf("len(plans) = %d, want 2", len(plans))
+	grp := config.Task{
+		Name:  "grp",
+		When:  "input.action == 'apply'", // статический, false при diagnose
+		Block: &config.BlockTask{Block: []config.Task{inner}},
+	}
+	restart := moduleTask("restart", "core.service.restarted")
+	restart.OnChanges = []string{"leaf_reg"}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{grp, restart}},
+		Input:       map[string]any{"action": "diagnose"},
+		Incarnation: IncarnationMeta{Name: "svc"},
+		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
+	}
+	tasks, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render НЕ должен падать на register листа вложенного static-false block: %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("len(tasks) = %d, want 2 (skip-placeholder листа + restart)", len(tasks))
+	}
+	if tasks[0].Register != "leaf_reg" {
+		t.Errorf("tasks[0].Register = %q, want leaf_reg (register листа виден через каскад)", tasks[0].Register)
+	}
+	// Каскад AND: внешний block.when влит в inner, затем в leaf — обёрнут в скобки.
+	if got, want := tasks[0].When, "input.action == 'apply'"; got != want {
+		t.Errorf("leaf placeholder.When = %q, want %q (каскад AND с пустыми child.when → чистый block.when)", got, want)
+	}
+	if len(tasks[1].OnChangesIdx) != 1 || tasks[1].OnChangesIdx[0] != 0 {
+		t.Errorf("restart.OnChangesIdx = %v, want [0] — register листа вложенного static-false block резолвится снаружи", tasks[1].OnChangesIdx)
 	}
 }
 
