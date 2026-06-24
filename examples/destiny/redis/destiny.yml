@@ -209,19 +209,24 @@ input:
       полный URL каждого модуля как modules_base_url/<arch>/<имя.so>, где arch —
       soulprint.self.os.arch ЭТОГО хоста. Обязателен, если modules непуст.
 
-  # checksum каждого .so — ОБЯЗАТЕЛЬНЫЙ, fail-closed (прецедент redis-exporter):
-  # core.url.fetched верифицирует SHA-256 ДО публикации файла, mismatch → задача
-  # падает (целевой путь нетронут). Без placeholder-дефолта: нет хэша → честный
-  # schema-отказ, а не fetch с заведомо отвергаемым плейсхолдером. Форма значения —
-  # голый hex (destiny оборачивает в "sha256:<hex>" под контракт core.url.fetched).
+  # checksum каждого .so — ОПЦИОНАЛЬНЫЙ (директива пользователя 2026-06-24). Задан
+  # для item → fail-closed: core.url.fetched верифицирует SHA-256 ДО публикации файла,
+  # mismatch → задача падает (целевой путь нетронут, supply-chain). НЕ задан → задача
+  # передаёт пустой checksum, и core.url.fetched качает .so по СОДЕРЖИМОМУ
+  # (content-идемпотентность: скачать во temp → сравнить SHA-256 с существующим →
+  # запись только при diff), без integrity-verify — доверяем HTTPS + доверенному
+  # store. Маппинг частичный: можно задать sha256 лишь для части алиасов. Форма
+  # значения — голый hex (destiny оборачивает в "sha256:<hex>" per-item; absent item
+  # → пустая строка, см. tasks/modules.yml).
   modules_sha256:
     type: object
     required: false
     description: >-
-      Маппинг алиас→SHA-256 .so-объекта (голый hex, обязателен для каждого
-      загружаемого модуля). Соответствует паре (version, arch) кластера; берётся из
-      sha256sums источника модулей. Host-инвариант (одна арх на кластер в типичном
-      случае) → приходит через apply.input.
+      Маппинг алиас→SHA-256 .so-объекта (голый hex), ОПЦИОНАЛЬНЫЙ. Задан для алиаса →
+      fail-closed integrity-verify скачанного .so; отсутствует → загрузка по
+      content-идемпотентности (без verify, доверие HTTPS + store). Соответствует паре
+      (version, arch) кластера; берётся из sha256sums источника модулей. Host-инвариант
+      (одна арх на кластер в типичном случае) → приходит через apply.input.
     properties: {}
     additional_properties:
       type: string

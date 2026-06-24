@@ -272,8 +272,10 @@ input:
   # destiny пустой список (см. modules_for_redis в ветках диспетчера). Гейт по
   # input.version (мажор >= 8), упрощённо: полную version-matrix совместимости НЕ
   # тащим (brief), version не задан → не гейтим (fail-closed на Redis: .so против
-  # 8+-бинаря отклонит сам сервер). modules_base_url/modules_sha256 обязательны при
-  # непустом modules — destiny верифицирует SHA-256 каждого .so (fail-closed).
+  # 8+-бинаря отклонит сам сервер). modules_base_url ОБЯЗАТЕЛЕН при непустом modules
+  # (без него destiny нечем строить URL). modules_sha256 — ОПЦИОНАЛЬНЫЙ: задан для
+  # алиаса → destiny верифицирует SHA-256 .so (fail-closed); отсутствует → загрузка
+  # по content-идемпотентности (без verify, доверие HTTPS + store).
   modules:
     type: array
     required: false
@@ -297,9 +299,11 @@ input:
     type: object
     required: false
     description: >-
-      Маппинг алиас→SHA-256 .so-объекта (голый hex). ОБЯЗАТЕЛЕН для каждого
-      подключаемого модуля (fail-closed: core.url.fetched верифицирует, mismatch →
-      падение). Соответствует паре (version, arch) кластера.
+      Маппинг алиас→SHA-256 .so-объекта (голый hex), ОПЦИОНАЛЬНЫЙ. Задан для алиаса →
+      fail-closed (core.url.fetched верифицирует скачанный .so, mismatch → падение);
+      отсутствует → загрузка по content-идемпотентности (без verify, доверие HTTPS +
+      store). Маппинг частичный — можно задать sha256 лишь для части алиасов.
+      Соответствует паре (version, arch) кластера.
     properties: {}
     additional_properties:
       type: string
