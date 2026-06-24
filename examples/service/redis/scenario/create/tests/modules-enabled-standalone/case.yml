@@ -164,3 +164,24 @@ assert:
     redis_users: {}
     redis_hosts: []
     redis_sentinel: {}
+    # ── namedfields (read-model, v3): modules=[search, json] (тот же input.modules,
+    # что строит loadmodules в destiny). maxmemory_policy '' — оператор НЕ задавал
+    # input.maxmemory_policy (директива в redis_config — из essence-подложки; namedfield
+    # маркирует отсутствие явного выбора '', не лезет в write-model redis_config).
+    modules: [search, json]
+    persistence: rdb
+    maxmemory_policy: ""
+    install:
+      method: package
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    memory_mb: 0
+    sysctl_settings: {}
+    shards: 0
+    replicas: 0
+    sentinel_quorum: 0

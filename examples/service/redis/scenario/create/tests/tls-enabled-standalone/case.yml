@@ -172,3 +172,22 @@ assert:
     redis_users: {}
     redis_hosts: []
     redis_sentinel: {}
+    # ── namedfields (read-model, v3): из тех же compute.tls_*, что TLS-блок redis_config.
+    # tls включён+only из essence → enable/only true, port 7379, refs из essence.
+    tls:
+      enable:   true
+      only:     true
+      port:     7379
+      cert_ref: "secret/services/redis/tls#cert"
+      key_ref:  "secret/services/redis/tls#key"
+      ca_ref:   "secret/services/redis/tls#ca"
+    install:
+      method: package
+    persistence: rdb
+    memory_mb: 0
+    maxmemory_policy: ""
+    modules: []
+    sysctl_settings: {}
+    shards: 0
+    replicas: 0
+    sentinel_quorum: 0
