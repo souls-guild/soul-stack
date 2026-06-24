@@ -14,8 +14,11 @@ import (
 // по путям, объявленным secret:true в схеме сервиса:
 //
 //   - state — из flat state_schema манифеста (`properties.<field>.secret: true`,
-//     рекурсивно через properties/items/additionalProperties); путь —
-//     `<field>`, элемент массива — `<field>[].<...>`;
+//     рекурсивно через properties/items, и через additionalProperties-ВЛОЖЕННЫЕ
+//     properties); путь — `<field>`, элемент массива — `<field>[].<...>`.
+//     ★ secret НА САМОМ additionalProperties-узле (значение произвольного ключа map)
+//     schema-слоем НЕ покрыт (TODO отдельным слайсом) — деградирует к vault+regex
+//     (см. ограничение в collectStateSchemaSecrets);
 //   - spec — из input_schema scenario `create` (spec несёт операторский input под
 //     ключом `input`); путь — `input.<name>` (config.InputSchema.Secret).
 //
@@ -67,9 +70,17 @@ func (h *IncarnationHandler) secretSchemaForIncarnation(ctx context.Context, inc
 // помечает в set dot/idx-пути полей с `secret: true`. Структура:
 //   - properties: map<field, schema> → рекурсия с path = join(path, field);
 //   - items: schema → рекурсия с path = path+"[]" (элемент массива);
-//   - additionalProperties: schema → рекурсия с path = path+".*" пропущена
-//     (map с произвольными ключами; конкретный путь неизвестен — secret на
-//     additionalProperties помечает «значение любого ключа секрет», path = path).
+//   - additionalProperties: schema → рекурсия с path = path (БЕЗ `.*`-сегмента).
+//
+// ★ Ограничение read-path schema-слоя для secret-leaf под additionalProperties
+// (TODO отдельным слайсом): когда `secret: true` стоит на САМОМ ap-узле (значение
+// любого ключа map секрет), schema-слой его НЕ покрывает. [audit.SecretPathSet.
+// IsSecret] сверяет запрашиваемый путь как есть или через normalizeIdx (конкретные
+// индексы → `[]`) — но НИКОГДА не подставляет `.*`-сегмент; запись вида `path.*` в
+// наборе ни с одним реальным запросом не совпала бы (мёртвая). Поэтому ap-secret-leaf
+// помечать бессмысленно — он деградирует к vault+regex-слою маскинга (MaskSecrets).
+// Рекурсию ВЕДЁМ (внутри ap могут быть вложенные `properties` с конкретными именами —
+// их пути schema-слой покрывает), а сам secret НА ap-узле пропускаем.
 func collectStateSchemaSecrets(schema map[string]any, path string, set audit.SecretPathSet) {
 	if schema == nil {
 		return
@@ -88,15 +99,10 @@ func collectStateSchemaSecrets(schema map[string]any, path string, set audit.Sec
 		collectStateSchemaSecrets(items, path+"[]", set)
 	}
 	if ap, ok := schema["additionalProperties"].(map[string]any); ok {
-		// map с произвольными ключами: secret на самом ap-узле → значение любого
-		// ключа секрет. Конкретный ключ неизвестен — обобщённый сегмент `.*`
-		// сверяется audit.SecretPathSet.IsSecret через normalizeIdx-симметрию не
-		// покрыт; помечаем путь самого map как «дочерние значения секрет» отдельной
-		// записью с суффиксом `.*` — read-path-маскинг по точному ключу его не
-		// поймает, поэтому рекурсию ведём, а сам ap-secret эскалируем на родителя.
-		if isSecretNode(ap) && path != "" {
-			set[path+".*"] = true
-		}
+		// secret НА ap-узле не помечаем (см. ★-ограничение в doc-комментарии:
+		// `.*`-путь IsSecret не запрашивает → запись мёртвая, деградация к vault+regex).
+		// Рекурсию ведём — вложенные конкретные `properties` внутри ap schema-слой
+		// всё же покрывает по точному пути.
 		collectStateSchemaSecrets(ap, path, set)
 	}
 }

@@ -322,15 +322,18 @@ func applyInputContract(values map[string]any, schema config.InputSchemaMap, des
 // не через поле destiny-задачи). Пилот поддерживает плоский destiny: module-
 // задачи с on:/where: + loop: (слайс E снят — fan-out наследует изоляцию destiny
 // через loopInvariantVars: AllowHosts=false, Register пуст) + block: (ADR-009
-// amendment 2026-06-24 — render-time fan-out, renderDestinyBlock; ветвится в
-// renderApplyDestiny ДО этого guard-а, сюда block-задача не доходит).
+// amendment 2026-06-24 — render-time fan-out, renderDestinyBlock).
 // include: внутри destiny раскрывается ДО render (within-destiny, в
 // DestinyLoader.parseTasks / fixture-резолвере); дошедший до render include —
 // ErrUnexpandedInclude (баг раскрытия), не «вне pilot».
 //
-// block-задача (task.Block != nil) сюда НЕ попадает — renderApplyDestiny ветвит на
-// renderDestinyBlock ДО guard. Граница ключей ВНУТРИ destiny-block (отвергаемые
-// scenario-ключи на блоке/потомке) — guardDestinyBlockChild, не здесь.
+// ★ block-задача (task.Block != nil) ПРОХОДИТ guardDestinyTask: в renderApplyDestiny
+// guardDestinyTask вызывается РАНЬШЕ ветки block (guardDestinyTask :145 → ветка
+// `if task.Block != nil` renderDestinyBlock :157). Поэтому `case task.Block != nil`
+// ниже — LOAD-BEARING на живом пути: он намеренно ПРОПУСКАЕТ block (return nil, не
+// считая её module-задачей), после чего renderApplyDestiny ветвит на renderDestinyBlock.
+// Удалить его как «мёртвый» нельзя — без него block упал бы в `case task.Module == nil`
+// (не-module-задача). Граница ключей ВНУТРИ destiny-block — guardDestinyBlockChild.
 func guardDestinyTask(task config.Task, idx int, destiny string) error {
 	switch {
 	case task.Apply != nil:
@@ -344,9 +347,11 @@ func guardDestinyTask(task config.Task, idx int, destiny string) error {
 	case task.Serial != nil:
 		return fmt.Errorf("%w: serial: в destiny %q (task[%d] %q)", ErrUnsupportedDSL, destiny, idx, task.Name)
 	case task.Block != nil:
-		// block: валиден в destiny (ADR-009 amendment) — ветвление в renderApplyDestiny
-		// раньше. Сюда block доходит лишь как defense-in-depth (render-путь мимо ветки):
-		// не отвергаем, но и не считаем module-задачей.
+		// LOAD-BEARING (не мёртвый код): guardDestinyTask вызывается РАНЬШЕ ветки block
+		// в renderApplyDestiny (:145 vs :157), поэтому block ПРОХОДИТ этот guard первым.
+		// Намеренно пропускаем (return nil) — block валиден в destiny (ADR-009 amendment),
+		// её обработает renderDestinyBlock сразу после. Без этого case block упала бы в
+		// `case task.Module == nil` ниже (не module-задача → ошибка).
 		return nil
 	case task.Module == nil:
 		return fmt.Errorf("%w: task[%d] %q в destiny %q не является module-задачей", ErrUnsupportedDSL, idx, task.Name, destiny)
@@ -384,9 +389,11 @@ func (p *Pipeline) renderDestinyBlock(
 	targeted []*topology.HostFacts,
 	width int,
 ) ([]*RenderedTask, []DispatchPlan, error) {
-	// Граница ключей на САМОМ block-узле (верхнеуровневый минует guardDestinyTask,
-	// вложенный — пойман guardDestinyBlockChild как block-потомок; здесь — defense
-	// in depth + единый текст ошибки для обоих путей).
+	// Граница ключей на САМОМ block-узле. Верхнеуровневый block ПРОХОДИТ
+	// guardDestinyTask (тот пропускает его `case task.Block`, см. выше), но НЕ его
+	// ключевые проверки module-специфичных полей — потому guardDestinyBlock здесь
+	// проверяет их на самом блоке. Вложенный block ловится guardDestinyBlockChild
+	// как block-потомок; здесь — единый текст ошибки для обоих путей.
 	if gerr := guardDestinyBlock(blockTask); gerr != nil {
 		return nil, nil, gerr
 	}
@@ -417,7 +424,8 @@ func (p *Pipeline) renderDestinyBlock(
 // apply/serial/run_once/where/on на потомке, destiny — нет.
 //
 // Граница ключей на САМОМ destiny-block (не потомке) — guardDestinyBlock,
-// вызывается в renderApplyDestiny ДО ветвления (block минует guardDestinyTask).
+// вызывается в renderDestinyBlock (block проходит guardDestinyTask, чей `case
+// task.Block` его пропускает, затем ветка renderDestinyBlock зовёт guardDestinyBlock).
 func guardDestinyBlockChild(child config.Task, idx int, blockName string) error {
 	switch {
 	case child.Where != "":
