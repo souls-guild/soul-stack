@@ -23,3 +23,5 @@ state_schema:
 #   - { name: pilot-special, ref: v2.0.0, git: "git@github.com:custom/destiny-special.git" }
 destiny:
   - { name: pilot-flat, ref: v1.0.0 }
+  # Негативная destiny для L0-проверки var→var-цикла (vars-cycle сценарий).
+  - { name: pilot-vars-cycle, ref: v1.0.0 }

@@ -195,17 +195,17 @@ func collectRoutes(t *testing.T) map[route]struct{} {
 		handlers.NewPermissionCatalogHandler(nil),   // permCatalogH — /v1/permissions монтируется всегда (статика rbac-каталога)
 		handlers.NewEventTypeCatalogHandler(nil),    // eventTypeCatalogH — /v1/event-types монтируется всегда (статика herald-каталога)
 		handlers.NewMyPermissionsHandler(nil, nil),  // meH — /v1/me/permissions монтируется всегда (зависит лишь от RBAC-снимка); PermissionsOf при обходе дерева не дёргается
-		nil,   // enforcer — RequirePermission собирается lazily
-		nil,   // auditWriter — Audit собирается lazily
-		nil,   // metricsHTTP — nil → metrics-middleware не подключается (router.go)
-		nil,   // tollDegradedReader — DegradedMiddleware skip при nil (router.go)
-		nil,   // tempoLimiter — nil → RateLimit middleware passthrough (router.go)
-		nil,   // tempoMetrics — nil → emit no-op (router.go)
-		nil,   // tempoVoyageCreateLimits — nil допустим (RateLimit при nil-limiter не вызывает provider)
-		nil,   // tempoVoyagePreviewLimits — nil допустим (RateLimit при nil-limiter не вызывает provider)
-		false, // webUIEnabled — /ui вне /v1, drift-walker его не видит; держим выключенным для чистоты периметра
-		nil,   // ldapAuth (LDAP не сконфигурирован в тесте)
-		nil,   // oidcAuth (OIDC не сконфигурирован в тесте)
+		nil,                                  // enforcer — RequirePermission собирается lazily
+		nil,                                  // auditWriter — Audit собирается lazily
+		nil,                                  // metricsHTTP — nil → metrics-middleware не подключается (router.go)
+		nil,                                  // tollDegradedReader — DegradedMiddleware skip при nil (router.go)
+		nil,                                  // tempoLimiter — nil → RateLimit middleware passthrough (router.go)
+		nil,                                  // tempoMetrics — nil → emit no-op (router.go)
+		nil,                                  // tempoVoyageCreateLimits — nil допустим (RateLimit при nil-limiter не вызывает provider)
+		nil,                                  // tempoVoyagePreviewLimits — nil допустим (RateLimit при nil-limiter не вызывает provider)
+		false,                                // webUIEnabled — /ui вне /v1, drift-walker его не видит; держим выключенным для чистоты периметра
+		nil,                                  // ldapAuth (LDAP не сконфигурирован в тесте)
+		nil,                                  // oidcAuth (OIDC не сконфигурирован в тесте)
 		nil,                                  // loginGuard (anti-bruteforce off в тесте)
 		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
 		nil,                                  // logger — допустим nil (handler-ы получают io.Discard внутри)

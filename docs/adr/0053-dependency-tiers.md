@@ -36,6 +36,7 @@
 | **push host-CA** | нет push-блока / `ssh_providers` | `keeper.push` — **no-op, push выключен** |
 | **metrics basic-auth** | `metrics.basic.enabled: false` | metrics-listener поднимается **без auth** |
 | **OTel-экспорт** | endpoint не задан | трейсы/метрики **не экспортируются**, in-process работа не страдает |
+| **Kafka audit-sink** | `audit.sink ≠ kafka` (default `pg`) | audit-выгрузка идёт в PG (`audit_log`), Kafka не требуется; при `audit.sink: kafka` недоступность брокера деградирует **fail-closed** (audit compliance-критичен — событие не теряется: durable-fallback/блок write-path, не fail-open) — [ADR-059](0059-audit-sink-pluggable.md) |
 
 **Правило для НОВЫХ фич.**
 - Новая **обязательная** инфраструктурная зависимость (четвёртый REQUIRED-компонент) вводится **только через явное решение пользователя** — не «фича притащила зависимость как деталь имплементации».
@@ -58,3 +59,4 @@
 - **[ADR-026](0026-sigil.md#adr-026-sigil--целостность-плагинов-keeper-signed-digest-индекс)** — Sigil signing-key (OPTIONAL, fail-closed-деградация).
 - **[ADR-050](0050-tempo.md#adr-050-tempo--per-aid-rate-limiting-write-api)** — пример осознанного fail-open при деградации (контраст с fail-closed).
 - **[ADR-052](0052-herald-notifications.md#adr-052-herald--tiding--уведомления-о-событиях-прогонов)** — Herald `secret_ref` (OPTIONAL, доставка без подписи при отсутствии).
+- **[ADR-059](0059-audit-sink-pluggable.md)** — Kafka audit-sink (OPTIONAL, **fail-closed**-деградация; default `audit.sink: pg` — обязательный контур цел, Kafka НЕ становится 4-м required).

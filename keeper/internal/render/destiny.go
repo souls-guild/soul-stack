@@ -211,10 +211,16 @@ func (p *Pipeline) renderApplyDestiny(
 // RenderInput destiny (Register/Essence пусты, destinyIsolated=true → AllowHosts
 // =false). Доступны input.* (destiny-input, не scenario), soulprint.self.* и
 // incarnation.*; `register.*`/`essence.*`/`soulprint.hosts` дают ошибку изоляции.
-// base.Vars НЕ заполняется в процессе резолва → `vars.<other>` внутри значения
-// vars.yml даёт no-such-key (запрет перекрёстных и само-ссылок, vars.md). Раздельный
-// per-key резолв в один base гарантирует порядко-независимость (file-vars не видят
-// друг друга — зеркало resolveTaskVars).
+// base.Vars пуст на СТАРТЕ слоя (resolveVarLayer накапливает его сам) — ссылка
+// `vars.<other>` резолвится только на file-var ЭТОГО ЖЕ слоя (var→var разрешён,
+// eager-topological), а на чужой слой/register/soulprint.hosts — ошибка изоляции.
+//
+// var→var (vars.md, ADR-009/ADR-010 amendment 2026-06-24): file-var может ссылаться
+// на другой file-var через `${ vars.<other> }`; resolveVarLayer строит граф через
+// VarRefs и резолвит в топопорядке. Порядок ключей в vars.yml безразличен. Цикл →
+// ErrVarCycle с трассой, ссылка на несуществующий var → ErrVarUnknownRef (eager,
+// даже если ссылающийся var не используется). Изоляция НЕ ослаблена: var→var живёт
+// строго внутри file-слоя.
 //
 // Резолв per-host: значения могут ссылаться на soulprint.self (host-вариативный),
 // поэтому каждый хост получает свою карту. nil raw → nil (destiny без локалов).
@@ -229,21 +235,10 @@ func (p *Pipeline) resolveDestinyVars(destinyIn RenderInput, raw map[string]any,
 	}
 	out := make(map[string]map[string]any, len(hosts))
 	for _, host := range hosts {
-		base := hostVars(destinyIn, host, len(targeted))
-		resolved := make(map[string]any, len(raw))
-		for name, val := range raw {
-			s, ok := val.(string)
-			if !ok {
-				// Non-string vars-значение — литерал (CEL трогает только строки,
-				// симметрично resolveTaskVars/renderValue).
-				resolved[name] = val
-				continue
-			}
-			r, err := p.cel.EvalInterpolation(s, base)
-			if err != nil {
-				return nil, fmt.Errorf("render: destiny %q vars.%s (vars.yml, host %s): %w", destinyIn.Scenario.Name, name, host.SID, err)
-			}
-			resolved[name] = r
+		base := hostVars(destinyIn, host, len(targeted)) // base.Vars пуст — старт слоя
+		resolved, err := resolveVarLayer(p.cel, raw, base)
+		if err != nil {
+			return nil, fmt.Errorf("render: destiny %q (vars.yml, host %s): %w", destinyIn.Scenario.Name, host.SID, err)
 		}
 		out[host.SID] = resolved
 	}

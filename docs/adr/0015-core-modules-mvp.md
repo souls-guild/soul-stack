@@ -78,6 +78,35 @@
   only-add; `soul-lint` валидирует автоматически). Additive и обратно совместимо:
   существующие задачи `core.file` не затронуты. Документация —
   [`docs/module/core/file/README.md`](../module/core/file/README.md).
+- **Amendment (2026-06-24, опциональный param `src` у `core.file.present`).** К state
+  `present` добавлен опциональный param `src` — **абсолютный путь regular-файла на
+  Soul-хосте** (типично результат `core.archive.extracted`); `present` копирует
+  СОДЕРЖИМОЕ `src` в `path`. `src` задаёт **только содержимое**, не атрибуты
+  источника — `mode`/`owner`/`group` целевого файла берутся из явных params
+  `present` как раньше. `src` и `content` **взаимоисключаются** (проверка по
+  присутствию КЛЮЧА в params, не по пустоте строки — так `content: ""` + `src` тоже
+  ловится как конфликт `content and src are mutually exclusive`); ни один не задан →
+  **сохранено legacy-поведение** (пустой файл), это обратная совместимость, не
+  ошибка. **MVP — только regular file**: каталог/симлинк/device/socket/fifo
+  explicit-reject; тип проверяется через `os.Lstat` + `IsRegular()` (ИМЕННО Lstat —
+  симлинк reject-ится, а не следуется: защита от подмены источника), отсутствие →
+  `read src %s: no such file`, не-regular → `src %s is not a regular file`, относительный →
+  `src must be absolute`. Идемпотентность по `sha256(src-байты)`: src читается в
+  память один раз, тот же буфер хэшируется и пишется (без двойного чтения — TOCTOU).
+  **Асимметрия атомарности**: src-ветка пишет атомарно (`util.AtomicWrite`, temp +
+  rename), content-ветка остаётся на `os.WriteFile` (без изменения). Поддержан
+  Plan/Scry ([ADR-031](0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile)):
+  `planPresent` при `src` берёт желаемый хэш = `sha256(readSrc(src))`, дальше
+  pure-read сверка без записи; src отсутствует/нечитаем во время Plan → `PlanFailed`
+  (НЕ false-clean). Реализация — новый хелпер `util.ReadRegularFile` (рядом с
+  `util.AtomicWrite`) + ветки в `applyPresent`/`planPresent`/`Validate`
+  ([`soul/internal/coremod/file/file.go`](../../soul/internal/coremod/file/file.go)).
+  Author-манифест — param `src` в `states.present.input`
+  ([`shared/coremanifest/file.yaml`](../../shared/coremanifest/file.yaml)); манифест-DSL
+  не выражает взаимоисключение (нет `oneof`) — XOR живёт в `Module.Validate`, в
+  манифесте лишь описания. **Additive, proto не трогается, breaking нет**: задачи
+  `core.file.present` без `src` не затронуты. Документация —
+  [`docs/module/core/file/README.md`](../module/core/file/README.md).
 - **Amendment (2026-06-24, новый state `applied` в `core.sysctl`).** В `core.sysctl`
   добавлен state `applied` (`core.sysctl.applied`) — bulk-применение НАБОРА
   kernel-параметров одним drop-in, в дополнение к per-key `present`. Мотивация:

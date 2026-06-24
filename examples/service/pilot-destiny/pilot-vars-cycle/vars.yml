@@ -1,0 +1,7 @@
+# vars.yml с ЦИКЛОМ a → b → c → a (vars.md, ADR-009/ADR-010 amendment 2026-06-24):
+# var→var разрешён внутри слоя, но цикл неразрешим топосортом → render обрывается
+# var_cycle с трассой. Этот файл существует ИМЕННО для негативного L0-кейса
+# (pilot-destiny::vars-cycle, expect_render_error: var_cycle).
+a: "${ vars.b }"
+b: "${ vars.c }"
+c: "${ vars.a }"

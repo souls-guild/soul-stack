@@ -87,17 +87,17 @@ func metaRouter(t *testing.T, verifier *keeperjwt.Verifier) http.Handler {
 		handlers.NewPermissionCatalogHandler(nil),
 		handlers.NewEventTypeCatalogHandler(nil),
 		handlers.NewMyPermissionsHandler(nil, nil),
-		nil,   // enforcer
-		nil,   // auditWriter
-		nil,   // metricsHTTP
-		nil,   // tollDegraded
-		nil,   // tempoLimiter
-		nil,   // tempoMetrics
-		nil,   // tempoVoyageCreateLimits
-		nil,   // tempoVoyagePreviewLimits
-		false, // webUIEnabled — meta-тесты /ui не проверяют (guard в webui_routes_test.go)
-		nil,   // ldapAuth (LDAP не сконфигурирован в тесте)
-		nil,   // oidcAuth (OIDC не сконфигурирован в тесте)
+		nil,                                  // enforcer
+		nil,                                  // auditWriter
+		nil,                                  // metricsHTTP
+		nil,                                  // tollDegraded
+		nil,                                  // tempoLimiter
+		nil,                                  // tempoMetrics
+		nil,                                  // tempoVoyageCreateLimits
+		nil,                                  // tempoVoyagePreviewLimits
+		false,                                // webUIEnabled — meta-тесты /ui не проверяют (guard в webui_routes_test.go)
+		nil,                                  // ldapAuth (LDAP не сконфигурирован в тесте)
+		nil,                                  // oidcAuth (OIDC не сконфигурирован в тесте)
 		nil,                                  // loginGuard (anti-bruteforce off в тесте)
 		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
 		nil,                                  // logger

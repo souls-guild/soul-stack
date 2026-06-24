@@ -86,8 +86,8 @@
           module: core.file.directory
           params:
             path: /etc/redis/tls
-            owner: redis
-            group: redis
+            owner: "${ vars.redis_user }"
+            group: "${ vars.redis_group }"
             mode: "0750"
 
         # Серверный сертификат. mode 0600 owner redis. register — рестарт при ротации
@@ -99,9 +99,9 @@
           params:
             path: /etc/redis/tls/redis.crt
             content: "${ vault(input.tls.cert_ref) }"
-            mode: "0600"
-            owner: redis
-            group: redis
+            mode: "${ vars.redis_pem_mode }"
+            owner: "${ vars.redis_user }"
+            group: "${ vars.redis_group }"
 
         # Приватный ключ — СЕКРЕТ. mode 0600 owner redis. content = vault(input.tls.
         # key_ref) В ЯЧЕЙКЕ → sealed vault-слоем (приватный PEM-ключ маскируется).
@@ -112,9 +112,9 @@
           params:
             path: /etc/redis/tls/redis.key
             content: "${ vault(input.tls.key_ref) }"
-            mode: "0600"
-            owner: redis
-            group: redis
+            mode: "${ vars.redis_pem_mode }"
+            owner: "${ vars.redis_user }"
+            group: "${ vars.redis_group }"
 
         # CA-сертификат кластера (валидация пиров для tls-replication/tls-cluster).
         # content = vault(input.tls.ca_ref) В ЯЧЕЙКЕ → sealed vault-слоем. register —
@@ -125,9 +125,9 @@
           params:
             path: /etc/redis/tls/ca.crt
             content: "${ vault(input.tls.ca_ref) }"
-            mode: "0600"
-            owner: redis
-            group: redis
+            mode: "${ vars.redis_pem_mode }"
+            owner: "${ vars.redis_user }"
+            group: "${ vars.redis_group }"
 
     # users.acl из переданного MAP ACL-юзеров имя→{perms,state,password} (aclfile в
     # redis.conf). register, чтобы рестартить redis при изменении ACL. owner/group
@@ -141,9 +141,9 @@
       params:
         path: /etc/redis/users.acl
         template: templates/users.acl.tmpl
-        mode: "0640"
-        owner: redis
-        group: redis
+        mode: "${ vars.redis_secret_file_mode }"
+        owner: "${ vars.redis_user }"
+        group: "${ vars.redis_group }"
         vars:
           users: "${ default(input.users, {}) }"
 
@@ -155,9 +155,9 @@
       params:
         path: /etc/redis/redis.conf
         template: templates/redis.conf.tmpl
-        mode: "0640"
-        owner: redis
-        group: redis
+        mode: "${ vars.redis_secret_file_mode }"
+        owner: "${ vars.redis_user }"
+        group: "${ vars.redis_group }"
         vars:
           password: "${ input.password }"
           config:   "${ default(input.config, {}) }"
@@ -181,8 +181,8 @@
       module: core.file.directory
       params:
         path: /etc/systemd/system/redis-server.service.d
-        owner: root
-        group: root
+        owner: "${ vars.root_owner }"
+        group: "${ vars.root_group }"
         mode: "0755"
 
     # systemd drop-in hardening поверх ДИСТРИБУТИВНОГО юнита redis-server (его нельзя
@@ -197,9 +197,9 @@
       params:
         path: /etc/systemd/system/redis-server.service.d/hardening.conf
         template: templates/hardening.conf.tmpl
-        mode: "0644"
-        owner: root
-        group: root
+        mode: "${ vars.unit_file_mode }"
+        owner: "${ vars.root_owner }"
+        group: "${ vars.root_group }"
 
     # core.service redis-server running/restarted. sentinel_only (deploy_redis=false)
     # сервис redis-server НЕ держит — весь block static-skip.

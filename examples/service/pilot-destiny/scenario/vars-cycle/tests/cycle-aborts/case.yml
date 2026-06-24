@@ -1,0 +1,15 @@
+# L0-испытание (Trial, ADR-023): var→var ЦИКЛ в file-level vars.yml destiny
+# pilot-vars-cycle (a → b → c → a) обрывает render-проход destiny ошибкой var_cycle
+# с трассой. EAGER-topological резолв слоя: граф строится на старте слоя, цикл
+# неразрешим топосортом → ErrVarCycle ДО рендера params. Guard-тест инварианта
+# «цикл → ошибка с трассой» (кейс #3).
+name: cyclic var chain in destiny vars.yml aborts render with cycle trace
+
+fixtures:
+  default_destiny_source: "file://{name}"
+  input:
+    path: /etc/pilot/marker.txt
+
+# Render ОБЯЗАН оборваться. Подстрока var_cycle — стабильный маркер ошибки;
+# трасса "a → b → c → a" печатается в тексте (см. ErrVarCycle).
+expect_render_error: "var_cycle"

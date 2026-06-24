@@ -221,6 +221,26 @@ func OptIntSliceParam(params *structpb.Struct, key string) ([]int64, error) {
 	return out, nil
 }
 
+// ParamPresent сообщает, присутствует ли ключ в params со значимым значением.
+// Явный null трактуется как отсутствие — симметрично Opt*Param-getter-ам.
+// В отличие от них различает «ключа нет» от «есть пустая строка»: нужно для
+// cross-field XOR-инвариантов (например content vs src в core.file.present),
+// где `content: ""` вместе с `src:` обязан ловиться как конфликт, а не
+// маскироваться пустотой строки.
+func ParamPresent(params *structpb.Struct, key string) bool {
+	if params == nil || params.Fields == nil {
+		return false
+	}
+	v, ok := params.Fields[key]
+	if !ok || v == nil {
+		return false
+	}
+	if _, isNull := v.Kind.(*structpb.Value_NullValue); isNull {
+		return false
+	}
+	return true
+}
+
 func lookup(params *structpb.Struct, key string) (*structpb.Value, error) {
 	if params == nil || params.Fields == nil {
 		return nil, fmt.Errorf("param %q: missing (params is empty)", key)

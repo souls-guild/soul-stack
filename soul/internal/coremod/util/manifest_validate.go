@@ -8,7 +8,6 @@ import (
 
 	"github.com/souls-guild/soul-stack/shared/coremanifest"
 	"github.com/souls-guild/soul-stack/shared/plugin"
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // ValidateAgainstManifest — runtime-валидация ValidateRequest против embed-
@@ -44,20 +43,10 @@ func ValidateAgainstManifest(coreName string, req *pluginv1.ValidateRequest) []s
 }
 
 func paramPresent(req *pluginv1.ValidateRequest, name string) bool {
-	if req == nil || req.Params == nil || req.Params.Fields == nil {
+	if req == nil {
 		return false
 	}
-	v, ok := req.Params.Fields[name]
-	if !ok || v == nil {
-		return false
-	}
-	// Явный null трактуется как отсутствие — симметрично Apply-time getter-ам
-	// (Opt*Param в params.go), где NullValue-kind → значения нет. Иначе
-	// required-параметр со значением null проходил бы lint, но падал в runtime.
-	if _, isNull := v.Kind.(*structpb.Value_NullValue); isNull {
-		return false
-	}
-	return true
+	return ParamPresent(req.Params, name)
 }
 
 func sortedStates(m *plugin.Manifest) []string {

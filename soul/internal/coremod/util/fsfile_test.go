@@ -7,6 +7,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -125,6 +126,56 @@ func TestAtomicWrite(t *testing.T) {
 			if e.Name() != "asdir" {
 				t.Fatalf("temp leftover after rename failure: %s", e.Name())
 			}
+		}
+	})
+}
+
+func TestReadRegularFile(t *testing.T) {
+	t.Run("reads regular file", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "f")
+		if err := os.WriteFile(path, []byte("payload\n"), 0o644); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		got, err := util.ReadRegularFile(path)
+		if err != nil {
+			t.Fatalf("ReadRegularFile: %v", err)
+		}
+		if string(got) != "payload\n" {
+			t.Fatalf("content=%q", string(got))
+		}
+	})
+
+	t.Run("relative path rejected", func(t *testing.T) {
+		if _, err := util.ReadRegularFile("relative/f"); err == nil || !strings.Contains(err.Error(), "must be absolute") {
+			t.Fatalf("err=%v want must-be-absolute", err)
+		}
+	})
+
+	t.Run("missing file gives no-such-file", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "nope")
+		if _, err := util.ReadRegularFile(path); err == nil || !strings.Contains(err.Error(), "no such file") {
+			t.Fatalf("err=%v want no-such-file", err)
+		}
+	})
+
+	t.Run("directory rejected", func(t *testing.T) {
+		if _, err := util.ReadRegularFile(t.TempDir()); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+			t.Fatalf("err=%v want not-a-regular-file", err)
+		}
+	})
+
+	// Lstat, не Stat: симлинк на regular-файл всё равно reject (защита от подмены).
+	t.Run("symlink rejected via Lstat", func(t *testing.T) {
+		target := filepath.Join(t.TempDir(), "real")
+		if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		link := filepath.Join(t.TempDir(), "link")
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatalf("symlink: %v", err)
+		}
+		if _, err := util.ReadRegularFile(link); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+			t.Fatalf("err=%v want not-a-regular-file (Lstat reject)", err)
 		}
 	})
 }

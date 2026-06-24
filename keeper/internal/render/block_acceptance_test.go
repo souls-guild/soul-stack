@@ -334,6 +334,14 @@ func (r realRedisDestinyResolver) Resolve(_ context.Context, name string) (*Reso
 		}
 	}
 	tasks = expanded
+	// destiny-локалы vars.yml (docs/destiny/vars.md) — зеркало прода
+	// (artifact.DestinyLoader.parseVars) и trial (fixtureDestinyResolver): тот же
+	// config.LoadDestinyVars, опционален (нет файла → nil,nil). Без проброса Vars
+	// `${ vars.* }` (owner/group redis после выноса в vars.yml) падал no-such-key.
+	vars, err := config.LoadDestinyVars(filepath.Join(r.dir, "vars.yml"))
+	if err != nil {
+		return nil, err
+	}
 	templates := NewSnapshotTemplateReader(
 		func(rel string) ([]byte, error) { return os.ReadFile(filepath.Join(r.dir, rel)) },
 		"",
@@ -342,6 +350,7 @@ func (r realRedisDestinyResolver) Resolve(_ context.Context, name string) (*Reso
 		Name:      manifest.Name,
 		Tasks:     tasks,
 		Input:     manifest.Input,
+		Vars:      vars,
 		Templates: templates,
 	}, nil
 }

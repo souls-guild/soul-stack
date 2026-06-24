@@ -83,20 +83,39 @@ acl_file_path: "/etc/redis/users/${ input.user }.acl"
 
 - `input.<name>` — провалидированные параметры destiny.
 - `soulprint.self.<name>` — факты текущего хоста ([ADR-018](../adr/0018-soulprint-typed.md#adr-018-soulprint-typed-схема-mvp): `soulprint.self.os.family`, `soulprint.self.network.primary_ip`, `soulprint.self.memory.total_mb`, …).
+- **`vars.<other>`** — другая переменная `vars.yml` ТОГО ЖЕ слоя (см. ниже «var → var»).
 
 Не доступно (намеренно):
 
-- **`vars.<other>`** — другие переменные `vars.yml`. Это запрет перекрёстных ссылок между vars: они вычисляются параллельно, а не в порядке появления. Если нужна цепочка — собирай выражение целиком.
 - **`register.<name>`** — результаты задач. На момент вычисления `vars` задач ещё не было.
 - **`essence.*`** — этого пространства имён в destiny **нет вообще**. essence — концепция уровня service; service сам решает, какие значения подкладывать в `input:` destiny при вызове.
+- **`soulprint.hosts` / `soulprint.where(...)`** — cross-host scenario-only аксессоры. В destiny-проходе отсекаются изоляцией (ошибка на compile). var → var их НЕ открывает.
+
+### var → var (ссылки внутри слоя)
+
+`vars.yml`-переменная **может** ссылаться на другую переменную ТОГО ЖЕ `vars.yml` через `${ vars.<other> }` (ADR-009 / ADR-010 amendment 2026-06-24). Резолв **eager-topological**:
+
+- Зависимости извлекаются из CEL-AST (не regex): `${ vars.X }` в значении → ребро на `X`.
+- Слой резолвится в **топологическом порядке** — переменная видит уже вычисленные зависимости. **Порядок объявления в файле безразличен**:
+
+  ```yaml
+  # эквивалентно при любом порядке строк
+  root_owner: root
+  root_group: "${ vars.root_owner }"   # резолвится в "root"
+  ```
+
+- **Цикл** (`a → b → c → a`, в т.ч. самоссылка `a → a`) → ошибка рендера `var_cycle` с трассой цикла.
+- **Ссылка на несуществующий ключ слоя** (`vars.z`, которого нет) → ошибка рендера `var_unknown_ref`. Проверка **eager**: ошибка поднимается, даже если сам ссылающийся var нигде не используется (битая ссылка = опечатка автора, не «отложенный» var).
+- **Только внутри своего слоя.** var→var НЕ ослабляет изоляцию: ссылка по-прежнему не достаёт `register.*`/`essence.*`/`soulprint.hosts`. Цепочка между file-слоем и task-слоем недоступна (см. ниже).
+- Index-форма `vars['key']` не поддерживается — используй select-форму `vars.key` (имя ключа должно быть статически известно из AST).
 
 ## Слияние file-vars ↔ task-vars (Вариант A)
 
 Пространство имён `vars.*` делят два источника: file-level `vars.yml` (этот документ) и task-level `vars:` на отдельной задаче ([tasks.md §9](tasks.md)). Когда имя объявлено в обоих — действует **Вариант A**:
 
 - **task-level `vars:` переопределяет одноимённый file-level var.** File-vars — базовый слой, task-vars кладутся поверх. Исход детерминирован: на задаче с собственным `vars: { redis_unit_name: … }` именно task-значение попадёт в `${ vars.redis_unit_name }`, а file-level — нет.
-- **Оба слоя резолвятся над одним базовым контекстом (`input.*` + `soulprint.self.*` + `incarnation.*`) и НЕ видят друг друга.** file-var не может сослаться на task-var, task-var — на file-var, ни тот ни другой — на свой же слой (`vars.<other>` внутри значения даёт no-such-key). Это та же изоляция, что запрет перекрёстных ссылок внутри `vars.yml` (см. «Что доступно внутри `vars`»): порядок объявления безразличен.
-- **Изоляция scope сохраняется.** file-vars резолвятся внутри destiny-прохода (после валидации `apply.input`), `register.*`/`essence.*`/`soulprint.hosts` им недоступны — как и task-vars destiny-задачи. scenario-level `vars:` в destiny НЕ видны вовсе (только через `apply: input:`).
+- **var → var работает ВНУТРИ каждого слоя, но НЕ между слоями.** file-var может ссылаться на другой **file-var** (eager-topological, см. «var → var» выше); task-var — на другой **task-var** того же слоя. А вот **межслойно** ссылки запрещены: file-var не видит task-var, task-var не видит file-var (`${ vars.<чужой_слой> }` даёт `var_unknown_ref`). task-vars резолвятся над тем же базовым контекстом (`input.*` + `soulprint.self.*` + `incarnation.*`), что и file-vars, и file-слой подкладывается под них только ПОСЛЕ резолва (override) — поэтому task-var не может сослаться на file-var.
+- **Изоляция scope сохраняется.** file-vars резолвятся внутри destiny-прохода (после валидации `apply.input`), `register.*`/`essence.*`/`soulprint.hosts` им недоступны — как и task-vars destiny-задачи. var→var изоляцию НЕ ослабляет. scenario-level `vars:` в destiny НЕ видны вовсе (только через `apply: input:`).
 - **`soul-lint` поднимает `warn` (`vars_collision`)** на каждое имя, объявленное и в `vars.yml`, и в task-level `vars:` той же destiny. Это не ошибка (Вариант A однозначен), но почти всегда — недосмотр автора: переименуй один из двух или полагайся на переопределение осознанно.
 
 Резолв file-vars выполняется **один раз на destiny-проход** (per-host, потому что значения могут ссылаться на `soulprint.self`), а не на каждую задачу: file-vars инвариантны по задачам одного прохода.

@@ -143,20 +143,36 @@ func (c *Case) validate() error {
 		}
 		seenSID[h.SID] = struct{}{}
 	}
-	// expect_render_error (ожидаем render-abort) ⊕ assert.rendered_tasks (ожидаем
-	// план) — противоположные исходы, в одном кейсе бессмысленны (ADR-023 amendment).
+	// expect_render_error (ожидаем render-abort) ⊕ assert.* (ожидаем план) —
+	// противоположные исходы, в одном кейсе бессмысленны (ADR-023 amendment).
+	// Presence-формы (task_present/task_absent) тоже ожидают успешный план —
+	// одинаково взаимоисключимы с обрывом.
 	if c.ExpectRenderError != "" {
-		if len(c.Assert.RenderedTasks) > 0 || c.Assert.StateChanges != nil || c.Assert.StateAfter != nil {
+		if len(c.Assert.RenderedTasks) > 0 || len(c.Assert.TaskPresent) > 0 || len(c.Assert.TaskAbsent) > 0 ||
+			c.Assert.StateChanges != nil || c.Assert.StateAfter != nil {
 			return fmt.Errorf("expect_render_error и assert.* взаимоисключены: expect_render_error ожидает обрыв рендера, assert.* — успешный план/итог")
 		}
 		return nil
 	}
-	if len(c.Assert.RenderedTasks) == 0 {
-		return fmt.Errorf("assert.rendered_tasks: пуст (L0 требует план задач; state_changes/state_after — дополнительные секции; либо задай expect_render_error для fail-кейса)")
+	// L0 требует ассерт плана задач хотя бы в одной форме: позиционной
+	// (rendered_tasks) ИЛИ presence (task_present/task_absent). state_changes/
+	// state_after — дополнительные секции, сам план ими не подменяется.
+	if len(c.Assert.RenderedTasks) == 0 && len(c.Assert.TaskPresent) == 0 && len(c.Assert.TaskAbsent) == 0 {
+		return fmt.Errorf("assert: пуст (L0 требует план задач — rendered_tasks ИЛИ task_present/task_absent; state_changes/state_after — дополнительные секции; либо задай expect_render_error для fail-кейса)")
 	}
 	for i, et := range c.Assert.RenderedTasks {
 		if et.Module == "" {
 			return fmt.Errorf("assert.rendered_tasks[%d]: module обязателен", i)
+		}
+	}
+	for i, et := range c.Assert.TaskPresent {
+		if et.Module == "" {
+			return fmt.Errorf("assert.task_present[%d]: module обязателен", i)
+		}
+	}
+	for i, et := range c.Assert.TaskAbsent {
+		if et.Module == "" {
+			return fmt.Errorf("assert.task_absent[%d]: module обязателен", i)
 		}
 	}
 	return nil

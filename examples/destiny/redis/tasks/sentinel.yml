@@ -32,9 +32,9 @@
       params:
         path: /etc/redis/sentinel.conf
         template: templates/sentinel.conf.tmpl
-        mode: "0640"
-        owner: redis
-        group: redis
+        mode: "${ vars.redis_secret_file_mode }"
+        owner: "${ vars.redis_user }"
+        group: "${ vars.redis_group }"
         vars:
           master_name: "${ default(input.sentinel.master_name, 'mymaster') }"
           master_ip:   "${ input.sentinel.master_ip }"
@@ -57,9 +57,9 @@
       params:
         path: /etc/systemd/system/redis-sentinel.service
         template: templates/redis-sentinel.service.tmpl
-        mode: "0644"
-        owner: root
-        group: root
+        mode: "${ vars.unit_file_mode }"
+        owner: "${ vars.root_owner }"
+        group: "${ vars.root_group }"
         # has()-цепочка (НЕ default(input.install.method, …)): сам input.install может
         # отсутствовать целиком (корень) → default() упал бы no-such-key. binary →
         # /usr/local/bin (install.yml разложил туда), иначе /usr/bin (distro-пакет).

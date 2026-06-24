@@ -86,14 +86,14 @@
     - name: Ensure the redis group exists
       module: core.group.present
       params:
-        name: redis
+        name: "${ vars.redis_group }"
         system: true
 
     - name: Ensure the redis user exists
       module: core.user.present
       params:
-        name: redis
-        group: redis
+        name: "${ vars.redis_user }"
+        group: "${ vars.redis_group }"
         system: true
         shell: /usr/sbin/nologin
         home: /var/lib/redis
@@ -104,11 +104,24 @@
     #    install -m0755, без сети). register redis_binaries — рестарт redis-server
     #    (шаг 6 ниже, В ЭТОМ файле) реагирует на смену бинаря; cross-file onchanges
     #    отверг бы per-file линтер (см. шапку).
-    #    Один shell-шаг ставит ВСЕ три бинаря: idempotent install -m (перезаписывает
-    #    тем же контентом — байт-в-байт совпадение → нет реального изменения inode-
-    #    содержимого для потребителя, но core.cmd.shell всегда changed=true; рестарт
-    #    при апгрейде версии — корректное поведение, нет ложных рестартов между
-    #    одинаковыми прогонами, т.к. tarball извлекается один раз по marker).
+    #    Один shell-шаг ставит ВСЕ три бинаря.
+    #
+    #    ИДЕМПОТЕНТНОСТЬ — версия-зависимый guard unless: (приём node-exporter,
+    #    service.yml). core.cmd.shell САМ ПО СЕБЕ всегда changed=true (install -m
+    #    перезаписывает байт-в-байт тем же контентом, но модуль этого не знает) →
+    #    БЕЗ guard redis_binaries был бы changed на КАЖДОМ прогоне и onchanges-рестарт
+    #    redis-server (шаг 6) срабатывал бы вхолостую, не только при апгрейде. unless
+    #    делает шаг changed=true ТОЛЬКО при реальной смене версии: если redis-server
+    #    уже стоит и его --version несёт целевую версию — install пропускается
+    #    (core.cmd «satisfied» = unless exit 0 → skip, reason: unless; docs/module/
+    #    core/cmd). redis-server --version печатает строку `Redis server v=<X> sha=…`
+    #    → grep -qF на литерал `v=<input.version> ` (пробел справа закрывает границу
+    #    перед `sha=`, чтобы `v=7.2.4 ` матчило, а `v=7.2.41 ` — нет; левую границу
+    #    даёт сам префикс `v=`). test -x: нет бинаря ИЛИ версия другая → test/grep
+    #    non-zero → unless НЕ satisfied → install выполняется (перезапишет старую).
+    #    Проверяем redis-server (рестартим именно его юнит); три бинаря ставятся одним
+    #    шагом, их версии в tarball-е согласованы. install.version под semver/тегом из
+    #    input — injection в grep-литерал (одинарные кавычки) невозможна.
     #    redis-sentinel ставится во ВСЕХ режимах (как distro-пакет): sentinel.yml ждёт
     #    бинарь на месте при sentinel_enabled.
     - name: Install redis binaries into /usr/local/bin
@@ -117,7 +130,9 @@
       vars:
         # has()-guard: render-safe в мёртвом package-проходе (см. fetch-задачу выше).
         src_dir: "${ '/tmp/redis-' + (has(input.install) && has(input.install.version) ? input.install.version : '') }"
+        ver:     "${ has(input.install) && has(input.install.version) ? input.install.version : '' }"
       params:
+        unless: "${ 'test -x /usr/local/bin/redis-server && /usr/local/bin/redis-server --version 2>&1 | grep -qF ' + \"'v=\" + vars.ver + \" '\" }"
         cmd: >-
           install -m 0755 '${ vars.src_dir }/redis-server'   /usr/local/bin/redis-server &&
           install -m 0755 '${ vars.src_dir }/redis-cli'      /usr/local/bin/redis-cli &&
@@ -134,9 +149,9 @@
       params:
         path: /etc/systemd/system/redis-server.service
         template: templates/redis-server.service.tmpl
-        mode: "0644"
-        owner: root
-        group: root
+        mode: "${ vars.unit_file_mode }"
+        owner: "${ vars.root_owner }"
+        group: "${ vars.root_group }"
 
     # 6. Рестарт redis-server на смену бинаря (апгрейд версии) или своего юнита.
     #    register'ы redis_binaries/redis_server_unit живут В ЭТОМ файле → onchanges
@@ -166,13 +181,13 @@
 - name: Ensure the redis socket directory exists
   module: core.file.directory
   when: "default(input.deploy_redis, true) && has(input.config) && has(input.config.unixsocket)"
-  vars:
-    socket_dir: /var/run/redis
-    dir_owner: redis
-    dir_group: redis
-    dir_mode: "0755"
   params:
+    # Конвенция vars: базовые identity/path-инварианты (socket_dir/owner/group) — в
+    # file-level vars.yml, переиспользуются между задачами. Кастомный точечный mode
+    # каталога — литералом прямо здесь, без промежуточного var: 0755 нужен только этой
+    # задаче (владелец redis пишет сокет, остальные обходят каталог), общим инвариантом
+    # destiny не является.
     path: "${ vars.socket_dir }"
-    owner: "${ vars.dir_owner }"
-    group: "${ vars.dir_group }"
-    mode: "${ vars.dir_mode }"
+    owner: "${ vars.redis_user }"
+    group: "${ vars.redis_group }"
+    mode: "0755"

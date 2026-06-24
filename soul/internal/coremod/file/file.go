@@ -1,7 +1,8 @@
 // Package file реализует core-модуль `core.file` ([ADR-015]).
 //
 // Состояния MVP:
-//   - present:   файл существует с заданным content/mode/owner/group.
+//   - present:   файл существует с заданным содержимым (inline content ЛИБО
+//     копия с хоста через src — взаимоисключаются) + mode/owner/group.
 //   - absent:    файл удалён.
 //   - rendered:  файл = результат рендера text/template-шаблона ([ADR-010]).
 //     Keeper кладёт literal template_content + CEL-rendered vars в params,
@@ -29,6 +30,7 @@ import (
 
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // Name — каноническая верхушка адреса.
@@ -90,6 +92,18 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 			errs = append(errs, err.Error())
 		}
 	}
+	if req.State == "present" {
+		// content XOR src по присутствию ключей (см. presentSourceConflict).
+		if msg, ok := presentSourceConflict(req.Params); !ok {
+			errs = append(errs, msg)
+		}
+		if util.ParamPresent(req.Params, "src") {
+			src, _ := util.OptStringParam(req.Params, "src")
+			if !filepath.IsAbs(src) {
+				errs = append(errs, fmt.Sprintf("src must be absolute: %q", src))
+			}
+		}
+	}
 	return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
 
@@ -129,6 +143,10 @@ func (m *Module) planPresent(stream grpc.ServerStreamingServer[pluginv1.PlanEven
 	if err != nil {
 		return util.PlanFailed(err.Error())
 	}
+	src, err := util.OptStringParam(req.Params, "src")
+	if err != nil {
+		return util.PlanFailed(err.Error())
+	}
 	modeStr, err := util.OptStringParam(req.Params, "mode")
 	if err != nil {
 		return util.PlanFailed(err.Error())
@@ -141,12 +159,25 @@ func (m *Module) planPresent(stream grpc.ServerStreamingServer[pluginv1.PlanEven
 	if err != nil {
 		return util.PlanFailed(err.Error())
 	}
+	if msg, ok := presentSourceConflict(req.Params); !ok {
+		return util.PlanFailed(msg)
+	}
 	mode, perr := util.ParseMode(modeStr)
 	if perr != nil {
 		return util.PlanFailed(perr.Error())
 	}
 
-	contentHash := sha256.Sum256([]byte(content))
+	// Желаемый хэш = хэш src-файла (если задан) либо inline content. src
+	// отсутствует/нечитаем во время Plan → PlanFailed (НЕ false-clean): без
+	// источника эталона сравнивать не с чем, тихо считать «совпало» = соврать.
+	desired := []byte(content)
+	if src != "" {
+		desired, err = util.ReadRegularFile(src)
+		if err != nil {
+			return util.PlanFailed(err.Error())
+		}
+	}
+	contentHash := sha256.Sum256(desired)
 
 	info, statErr := os.Stat(path)
 	switch {
@@ -223,6 +254,10 @@ func (m *Module) applyPresent(stream grpc.ServerStreamingServer[pluginv1.ApplyEv
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
+	src, err := util.OptStringParam(req.Params, "src")
+	if err != nil {
+		return util.SendFailed(stream, err.Error())
+	}
 	modeStr, err := util.OptStringParam(req.Params, "mode")
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
@@ -235,13 +270,26 @@ func (m *Module) applyPresent(stream grpc.ServerStreamingServer[pluginv1.ApplyEv
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
+	if msg, ok := presentSourceConflict(req.Params); !ok {
+		return util.SendFailed(stream, msg)
+	}
 
 	mode, perr := util.ParseMode(modeStr)
 	if perr != nil {
 		return util.SendFailed(stream, perr.Error())
 	}
 
-	contentHash := sha256.Sum256([]byte(content))
+	// Желаемое содержимое: либо src-файл с хоста (читается в память один раз,
+	// тот же буфер хэшируется и пишется в dest — без двойного чтения, TOCTOU),
+	// либо inline content (legacy-ветка, в т.ч. пустой файл когда оба не заданы).
+	desired := []byte(content)
+	if src != "" {
+		desired, err = util.ReadRegularFile(src)
+		if err != nil {
+			return util.SendFailed(stream, err.Error())
+		}
+	}
+	contentHash := sha256.Sum256(desired)
 	contentChanged, modeChanged, ownerChanged := false, false, false
 
 	info, statErr := os.Stat(path)
@@ -265,12 +313,20 @@ func (m *Module) applyPresent(stream grpc.ServerStreamingServer[pluginv1.ApplyEv
 	}
 
 	if contentChanged {
-		if werr := os.WriteFile(path, []byte(content), mode); werr != nil {
+		if src != "" {
+			// src-ветка пишет атомарно (temp + rename): копия конфига с хоста
+			// может читаться конкурентным демоном, частично записанный файл
+			// недопустим. content-ветка остаётся на os.WriteFile (см. README:
+			// асимметрия атомарности по present).
+			if werr := util.AtomicWrite(path, desired, mode); werr != nil {
+				return util.SendFailed(stream, werr.Error())
+			}
+		} else if werr := os.WriteFile(path, desired, mode); werr != nil {
 			return util.SendFailed(stream, fmt.Sprintf("write %s: %v", path, werr))
 		}
 	}
 	if modeChanged && !contentChanged {
-		// WriteFile уже установил mode при contentChanged; иначе chmod отдельно.
+		// WriteFile/AtomicWrite уже установили mode при contentChanged; иначе chmod отдельно.
 		if cerr := os.Chmod(path, mode); cerr != nil {
 			return util.SendFailed(stream, fmt.Sprintf("chmod %s: %v", path, cerr))
 		}
@@ -291,6 +347,18 @@ func (m *Module) applyPresent(stream grpc.ServerStreamingServer[pluginv1.ApplyEv
 		"mode":      fmt.Sprintf("%04o", mode),
 		"installed": true,
 	})
+}
+
+// presentSourceConflict — cross-field инвариант present: content и src взаимно
+// исключаются. Проверка по присутствию КЛЮЧА (util.ParamPresent), не по пустоте
+// строки: `content: ""` + `src: /x` обязан ловиться как конфликт, а не
+// маскироваться пустым content. Ни один не задан — валидно (legacy пустой файл).
+// Возвращает (сообщение-ошибки, ok); ok=false → конфликт.
+func presentSourceConflict(params *structpb.Struct) (string, bool) {
+	if util.ParamPresent(params, "content") && util.ParamPresent(params, "src") {
+		return "content and src are mutually exclusive", false
+	}
+	return "", true
 }
 
 func (m *Module) applyAbsent(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], path string) error {

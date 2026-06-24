@@ -1,0 +1,13 @@
+name: pilot-vars-cycle
+description: >
+  Негативная пилот-destiny для L0-проверки var→var (ADR-009/ADR-010 amendment
+  2026-06-24): vars.yml несёт циклическую ссылку a → b → c → a. Render ОБЯЗАН
+  оборваться ошибкой var_cycle с трассой (eager-topological резолв слоя). Используется
+  только сценарием pilot-destiny::vars-cycle с expect_render_error.
+
+input:
+  marker_file:
+    type: string
+    required: true
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: "Путь marker-файла (apply.input)."

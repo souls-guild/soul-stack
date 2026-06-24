@@ -1,0 +1,8 @@
+# Одна задача, читающая один из var-ов цикла. Render не дойдёт до неё: резолв слоя
+# vars.yml оборвётся var_cycle ДО рендера params (eager — граф строится на старте слоя).
+- name: Use cyclic var (render must abort before this)
+  module: core.file.present
+  params:
+    path:    "${ input.marker_file }"
+    content: "${ vars.a }"
+    mode:    "0644"

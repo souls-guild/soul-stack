@@ -14,9 +14,9 @@
   params:
     path: /etc/systemd/system/disable-thp.service
     template: templates/disable-thp.service.tmpl
-    mode: "0644"
-    owner: root
-    group: root
+    mode: "${ vars.unit_file_mode }"
+    owner: "${ vars.root_owner }"
+    group: "${ vars.root_group }"
 
 # core.service сам перечитывает unit (daemon_reload: auto) при смене disable-thp.service
 # перед enable/start. disable-thp — oneshot RemainAfterExit, отрабатывает один раз.
@@ -34,9 +34,9 @@
   params:
     path: /etc/logrotate.d/redis
     template: templates/logrotate.tmpl
-    mode: "0644"
-    owner: root
-    group: root
+    mode: "${ vars.unit_file_mode }"
+    owner: "${ vars.root_owner }"
+    group: "${ vars.root_group }"
 
 # sysctl: bulk-набор kernel-параметров под Redis ОДНИМ drop-in
 # /etc/sysctl.d/30-redis.conf. БЕЗУСЛОВНО (как THP/logrotate). core.sysctl.applied

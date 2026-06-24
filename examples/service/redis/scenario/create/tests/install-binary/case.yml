@@ -84,9 +84,14 @@ assert:
         home: /var/lib/redis
 
     # index 5 — install -m0755 трёх бинарей в /usr/local/bin. register redis_binaries.
+    # unless: version-aware guard (приём node-exporter) — install changed=true ТОЛЬКО
+    # при реальной смене версии (бинаря нет ИЛИ redis-server --version не несёт
+    # `v=7.2.4 `). Без него core.cmd.shell всегда changed → onchanges-рестарт
+    # redis-server холостил бы на каждом прогоне.
     - index: 5
       module: core.cmd.shell
       params:
+        unless: "test -x /usr/local/bin/redis-server && /usr/local/bin/redis-server --version 2>&1 | grep -qF 'v=7.2.4 '"
         cmd: >-
           install -m 0755 '/tmp/redis-7.2.4/redis-server'   /usr/local/bin/redis-server &&
           install -m 0755 '/tmp/redis-7.2.4/redis-cli'      /usr/local/bin/redis-cli &&

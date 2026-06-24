@@ -2,10 +2,12 @@ package render
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
+	"github.com/souls-guild/soul-stack/shared/cel"
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
@@ -98,6 +100,57 @@ func TestDestinyFileVars_RegisterIsolation(t *testing.T) {
 	}
 }
 
+// TestDestinyFileVars_HostsIsolation — var→var НЕ ослабляет изоляцию (кейс #6):
+// file-var, ссылающийся на soulprint.hosts (cross-host scenario-only аксессор),
+// по-прежнему отвергается на compile (AllowHosts=false в destiny-проходе).
+func TestDestinyFileVars_HostsIsolation(t *testing.T) {
+	res := &stubDestinyResolver{resolved: destinyWithFileVars(
+		map[string]any{"x": "${ soulprint.hosts.size() }"},
+		map[string]any{"cmd": "echo ${ vars.x }"},
+	)}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario:    applyScenario("pilot-vars", map[string]any{}),
+		Incarnation: IncarnationMeta{Name: "svc"},
+		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
+		Destiny:     res,
+	}
+	_, _, err := p.Render(context.Background(), in)
+	if err == nil {
+		t.Fatal("Render: vars.yml не должен видеть soulprint.hosts (изоляция destiny, не ослаблена var→var)")
+	}
+}
+
+// TestDestinyFileVars_OverrideWithInLayerRef — кейс #9: одноимённые file/task vars
+// (Вариант-A override) + ссылка ВНУТРИ task-слоя цела. file-var `unit` перетёрт
+// task-var `unit`, а task-var `svc` ссылается на task-var `unit` (внутрислоевой
+// var→var). params видит task-значения.
+func TestDestinyFileVars_OverrideWithInLayerRef(t *testing.T) {
+	resolved := destinyWithFileVars(
+		map[string]any{"unit": "redis-FILE"}, // file-level — будет перетёрт
+		map[string]any{"cmd": "${ vars.svc }"},
+	)
+	resolved.Tasks[0].Vars = map[string]any{
+		"unit": "redis-TASK",         // override file-var
+		"svc":  "${ vars.unit }-svc", // ссылка на task-var того же слоя
+	}
+	res := &stubDestinyResolver{resolved: resolved}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario:    applyScenario("pilot-vars", map[string]any{}),
+		Incarnation: IncarnationMeta{Name: "svc"},
+		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
+		Destiny:     res,
+	}
+	tasks, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if got := tasks[0].Params.GetFields()["cmd"].GetStringValue(); got != "redis-TASK-svc" {
+		t.Errorf("cmd = %q, want redis-TASK-svc (task-var svc видит task-var unit, override Вариант A)", got)
+	}
+}
+
 // TestDestinyFileVars_EssenceIsolation — vars.yml-значение не видит essence.*
 // (essence — концепция уровня service, в destiny её нет вовсе) → ошибка.
 func TestDestinyFileVars_EssenceIsolation(t *testing.T) {
@@ -120,9 +173,11 @@ func TestDestinyFileVars_EssenceIsolation(t *testing.T) {
 	}
 }
 
-// TestDestinyFileVars_NoSelfReference — vars.yml-значение не видит другие
-// file-vars (`vars.<other>` → no-such-key); зеркало TestResolveTaskVars_NoSelfReference.
-func TestDestinyFileVars_NoSelfReference(t *testing.T) {
+// TestDestinyFileVars_VarToVar — file-var ссылается на другой file-var того же
+// слоя (`${ vars.<other> }` РАЗРЕШЕНО, eager-topological); зеркало
+// TestResolveTaskVars_VarToVar (кейс #1, file-слой). ИСХОДНЫЙ кейс фичи:
+// root_group: "${ vars.root_owner }".
+func TestDestinyFileVars_VarToVar(t *testing.T) {
 	res := &stubDestinyResolver{resolved: destinyWithFileVars(
 		map[string]any{
 			"base": "redis",
@@ -137,12 +192,115 @@ func TestDestinyFileVars_NoSelfReference(t *testing.T) {
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
+	tasks, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render: var→var внутри file-слоя должен резолвиться: %v", err)
+	}
+	if got := tasks[0].Params.GetFields()["cmd"].GetStringValue(); got != "echo redis-server" {
+		t.Errorf("cmd = %q, want echo redis-server (unit ссылается на base)", got)
+	}
+}
+
+// TestDestinyFileVars_TransitiveChain — транзитивная цепочка a→b→c того же слоя
+// (кейс #2): c вычисляется первым, b видит c, a видит b.
+func TestDestinyFileVars_TransitiveChain(t *testing.T) {
+	got, err := resolveVarLayer(newEngine(t), map[string]any{
+		"a": "${ vars.b }/a",
+		"b": "${ vars.c }/b",
+		"c": "root",
+	}, cel.Vars{})
+	if err != nil {
+		t.Fatalf("resolveVarLayer: %v", err)
+	}
+	if got["a"] != "root/b/a" {
+		t.Errorf("vars.a = %v, want root/b/a (транзитивно a→b→c)", got["a"])
+	}
+}
+
+// TestDestinyFileVars_Cycle — цикл a→b→c→a (кейс #3) → ErrVarCycle с трассой.
+func TestDestinyFileVars_Cycle(t *testing.T) {
+	_, err := resolveVarLayer(newEngine(t), map[string]any{
+		"a": "${ vars.b }",
+		"b": "${ vars.c }",
+		"c": "${ vars.a }",
+	}, cel.Vars{})
+	if err == nil || !errors.Is(err, ErrVarCycle) {
+		t.Fatalf("resolveVarLayer: ожидался ErrVarCycle, получено: %v", err)
+	}
+	// Трасса замкнута: содержит стартовый узел дважды (a → … → a).
+	if !strings.Contains(err.Error(), "a → b → c → a") {
+		t.Errorf("err = %v, want трассу 'a → b → c → a'", err)
+	}
+}
+
+// TestDestinyFileVars_SelfReference — самоссылка a→a (кейс #4) → ErrVarCycle
+// (частный случай цикла, трасса 'a → a').
+func TestDestinyFileVars_SelfReference(t *testing.T) {
+	_, err := resolveVarLayer(newEngine(t), map[string]any{
+		"a": "${ vars.a }-loop",
+	}, cel.Vars{})
+	if err == nil || !errors.Is(err, ErrVarCycle) {
+		t.Fatalf("resolveVarLayer: самоссылка должна давать ErrVarCycle, получено: %v", err)
+	}
+	if !strings.Contains(err.Error(), "a → a") {
+		t.Errorf("err = %v, want трассу 'a → a'", err)
+	}
+}
+
+// TestDestinyFileVars_UnusedBrokenRef — НЕИСПОЛЬЗУЕМЫЙ var ссылается на
+// несуществующий vars.z (кейс #5): EAGER-маркер — резолв слоя падает
+// ErrVarUnknownRef, даже если ссылающийся var нигде не читается params-ом.
+func TestDestinyFileVars_UnusedBrokenRef(t *testing.T) {
+	res := &stubDestinyResolver{resolved: destinyWithFileVars(
+		map[string]any{
+			"used":   "redis-server",
+			"broken": "${ vars.z }", // z не существует; broken никто не читает
+		},
+		map[string]any{"cmd": "echo ${ vars.used }"}, // params читает только used
+	)}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario:    applyScenario("pilot-vars", map[string]any{}),
+		Incarnation: IncarnationMeta{Name: "svc"},
+		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
+		Destiny:     res,
+	}
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatal("Render: ожидалась ошибка — vars.yml не должен ссылаться на vars.<other> (нет перекрёстных ссылок)")
+		t.Fatal("Render: битый неиспользуемый var должен ронять рендер EAGER (var_unknown_ref)")
 	}
-	if !strings.Contains(err.Error(), "vars.unit") {
-		t.Errorf("err = %v, want упоминание vars.unit", err)
+	if !errors.Is(err, ErrVarUnknownRef) {
+		t.Errorf("err = %v, want ErrVarUnknownRef", err)
+	}
+}
+
+// TestDestinyFileVars_OrderIndependent — порядок ключей в file-слое безразличен
+// (кейс #7): два варианта raw с разным порядком объявления дают равный результат.
+func TestDestinyFileVars_OrderIndependent(t *testing.T) {
+	e := newEngine(t)
+	v1, err := resolveVarLayer(e, map[string]any{
+		"a": "root",
+		"b": "${ vars.a }-b",
+		"c": "${ vars.b }-c",
+	}, cel.Vars{})
+	if err != nil {
+		t.Fatalf("resolveVarLayer v1: %v", err)
+	}
+	v2, err := resolveVarLayer(e, map[string]any{
+		"c": "${ vars.b }-c",
+		"a": "root",
+		"b": "${ vars.a }-b",
+	}, cel.Vars{})
+	if err != nil {
+		t.Fatalf("resolveVarLayer v2: %v", err)
+	}
+	for _, k := range []string{"a", "b", "c"} {
+		if v1[k] != v2[k] {
+			t.Errorf("vars.%s расходится при разном порядке: v1=%v v2=%v", k, v1[k], v2[k])
+		}
+	}
+	if v1["c"] != "root-b-c" {
+		t.Errorf("vars.c = %v, want root-b-c", v1["c"])
 	}
 }
 

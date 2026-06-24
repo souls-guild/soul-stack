@@ -252,5 +252,22 @@
   "helpMcpCopyAria": "Copy MCP URL",
   "helpMcpHint": "For Claude Desktop, set the endpoint in claude_desktop_config.json under the key mcpServers.soul-stack.",
   "helpDocsTitle": "Documentation",
-  "helpDocsLead": "Documentation and ADRs live in the soul-stack/docs/ repository."
+  "helpDocsLead": "Documentation and ADRs live in the soul-stack/docs/ repository.",
+
+  "provPolicyCrumbs": "operator provisioning policy",
+  "provPolicyTitle": "Provisioning Policy",
+  "provPolicyDesc": "Controls which methods can be used to create new operators (Archons). Does not affect login for existing operators.",
+  "provPolicyAllowedMethods": "Allowed methods",
+  "provPolicyDefaultHint": "No policy set — all methods are allowed (default behaviour).",
+  "provPolicySaveBtn": "Save",
+  "provPolicySaving": "Saving…",
+  "provPolicySaved": "Policy updated.",
+  "provPolicyLoadError": "Failed to load policy.",
+  "provPolicySaveError": "Failed to save policy.",
+  "provPolicyAntiLockout": "The list cannot be empty — this would block creation of new operators.",
+  "provMethodUser": "manual creation via API/UI",
+  "provMethodLdap": "auto-provisioning from LDAP",
+  "provMethodOidc": "auto-provisioning via OIDC",
+
+  "archonCreatedVia": "Created via"
 }

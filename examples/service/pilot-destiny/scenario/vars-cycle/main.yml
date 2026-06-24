@@ -1,0 +1,20 @@
+name: vars-cycle
+description: >
+  Негативный сценарий: делегирует в destiny pilot-vars-cycle, чья vars.yml несёт
+  цикл a → b → c → a. Render-проход destiny ОБЯЗАН оборваться var_cycle с трассой
+  (eager-topological резолв var-слоя, ADR-009/ADR-010 amendment 2026-06-24).
+  L0-кейс проверяет это через expect_render_error.
+
+input:
+  path:
+    type: string
+    required: true
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: Путь marker-файла.
+
+tasks:
+  - name: Apply pilot-vars-cycle destiny
+    apply:
+      destiny: pilot-vars-cycle
+      input:
+        marker_file: "${ input.path }"

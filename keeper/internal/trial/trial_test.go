@@ -1112,3 +1112,323 @@ func TestFixtureVault(t *testing.T) {
 		t.Fatalf("ожидали ErrVaultKVNotFound на отсутствующем секрете")
 	}
 }
+
+// presenceMain — scenario с ДВУМЯ задачами одного module (core.file.present) с
+// разными register/path и одной уникальной (core.service.running) — стресс
+// presence-матчера: совпадение по module создаёт коллизию, дизамбигуируемую по
+// id(register)/params_subset.
+const presenceMain = `name: create
+input:
+  greeting:
+    type: string
+    required: true
+tasks:
+  - name: write alpha
+    module: core.file.present
+    register: alpha_file
+    params:
+      path: /tmp/alpha
+      content: "${ input.greeting }"
+  - name: write beta
+    module: core.file.present
+    register: beta_file
+    params:
+      path: /tmp/beta
+      content: "${ input.greeting }"
+  - name: run service
+    module: core.service.running
+    params:
+      name: redis-server
+      enabled: true
+`
+
+// TestRunCase_PresencePass — positive: task_present находит задачи по module +
+// params_subset (частичное подмножество params), task_absent проходит на
+// невызванном module. Доказывает базовый матч и сосуществование с позиционной
+// формой (rendered_tasks тут не задан — план ассертится только presence).
+func TestRunCase_PresencePass(t *testing.T) {
+	caseDir := writeScenarioTree(t, presenceMain, `name: presence pass
+fixtures:
+  input:
+    greeting: hi
+assert:
+  task_present:
+    - module: core.file.present
+      id: alpha_file
+      params_subset:
+        path: /tmp/alpha
+    - module: core.service.running
+      params_subset:
+        name: redis-server
+  task_absent:
+    - module: core.pkg.installed
+`)
+	results, err := Run(context.Background(), caseDir)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !results[0].Pass {
+		t.Fatalf("ожидали PASS, получили: %v", results[0].Failures)
+	}
+}
+
+// TestRunCase_PresenceNotFound — negative: task_present по несуществующему
+// params_subset (path не совпадает ни с одной задачей) → FAIL с «не найдено».
+func TestRunCase_PresenceNotFound(t *testing.T) {
+	caseDir := writeScenarioTree(t, presenceMain, `name: presence not found
+fixtures:
+  input:
+    greeting: hi
+assert:
+  task_present:
+    - module: core.file.present
+      params_subset:
+        path: /tmp/does-not-exist
+`)
+	results, err := Run(context.Background(), caseDir)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if results[0].Pass {
+		t.Fatalf("ожидали FAIL: task_present не должен был найтись")
+	}
+	if !strings.Contains(strings.Join(results[0].Failures, "\n"), "не найдено") {
+		t.Fatalf("ожидали расхождение «не найдено», получили: %v", results[0].Failures)
+	}
+}
+
+// TestRunCase_PresenceAbsentViolated — negative: task_absent на module, который
+// в плане ЕСТЬ и матчится по params_subset → FAIL.
+func TestRunCase_PresenceAbsentViolated(t *testing.T) {
+	caseDir := writeScenarioTree(t, presenceMain, `name: presence absent violated
+fixtures:
+  input:
+    greeting: hi
+assert:
+  task_present:
+    - module: core.service.running
+      params_subset:
+        name: redis-server
+  task_absent:
+    - module: core.file.present
+      params_subset:
+        path: /tmp/alpha
+`)
+	results, err := Run(context.Background(), caseDir)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if results[0].Pass {
+		t.Fatalf("ожидали FAIL: task_absent нарушен (задача присутствует)")
+	}
+	if !strings.Contains(strings.Join(results[0].Failures, "\n"), "ожидалось отсутствие") {
+		t.Fatalf("ожидали расхождение «ожидалось отсутствие», получили: %v", results[0].Failures)
+	}
+}
+
+// TestRunCase_PresenceCollision — коллизия: task_present по module без
+// дизамбигуатора матчит ОБЕ core.file.present задачи (>1 совпадение) → FAIL с
+// подсказкой добавить id/register или сузить params_subset.
+func TestRunCase_PresenceCollision(t *testing.T) {
+	caseDir := writeScenarioTree(t, presenceMain, `name: presence collision
+fixtures:
+  input:
+    greeting: hi
+assert:
+  task_present:
+    - module: core.file.present
+      params_subset:
+        content: hi
+`)
+	results, err := Run(context.Background(), caseDir)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if results[0].Pass {
+		t.Fatalf("ожидали FAIL: коллизия (2 совпадения на task_present)")
+	}
+	if !strings.Contains(strings.Join(results[0].Failures, "\n"), "коллизия") {
+		t.Fatalf("ожидали расхождение «коллизия», получили: %v", results[0].Failures)
+	}
+}
+
+// TestRunCase_PresenceCollisionResolved — та же коллизия, но дизамбигуирована
+// id(register) → ровно одно совпадение → PASS. Доказывает, что register∪id
+// снимает коллизию.
+func TestRunCase_PresenceCollisionResolved(t *testing.T) {
+	caseDir := writeScenarioTree(t, presenceMain, `name: presence collision resolved
+fixtures:
+  input:
+    greeting: hi
+assert:
+  task_present:
+    - module: core.file.present
+      id: beta_file
+      params_subset:
+        content: hi
+`)
+	results, err := Run(context.Background(), caseDir)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !results[0].Pass {
+		t.Fatalf("ожидали PASS (коллизия снята id=beta_file), получили: %v", results[0].Failures)
+	}
+}
+
+// skipBranchMain — scenario с выключаемой веткой: задача core.pkg.installed под
+// static-false when (`when: input.enabled`, при enabled=false → static-when skip-
+// placeholder, ADR-012(d) Вариант b) + всегда-активная core.service.running. Один
+// module (core.pkg.installed) живёт ТОЛЬКО в выключенной ветке — стресс
+// skip-placeholder-матча: bare-module presence/absence не должны срабатывать на
+// skip. when статический (без register/soulprint) — Keeper эмитит placeholder с
+// Params=nil, не рендерит params.
+const skipBranchMain = `name: create
+input:
+  enabled:
+    type: boolean
+    required: true
+tasks:
+  - name: install optional pkg
+    module: core.pkg.installed
+    when: input.enabled
+    params:
+      name: nginx
+  - name: run service
+    module: core.service.running
+    params:
+      name: redis-server
+      enabled: true
+`
+
+// TestRunCase_PresenceAbsentOnSkippedBranch — GUARD (MAJOR-баг): выключенная ветка
+// (when:false → skip-placeholder) + task_absent ТОЛЬКО с module этой ветки.
+// Skip = «не вызвано» → НЕ присутствие → task_absent проходит. До фикса placeholder
+// сохранял Module при Params=nil, давая ложный FAIL «задача найдена».
+func TestRunCase_PresenceAbsentOnSkippedBranch(t *testing.T) {
+	caseDir := writeScenarioTree(t, skipBranchMain, `name: absent on skipped branch
+fixtures:
+  input:
+    enabled: false
+assert:
+  task_absent:
+    - module: core.pkg.installed
+`)
+	results, err := Run(context.Background(), caseDir)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !results[0].Pass {
+		t.Fatalf("ожидали PASS: skip-placeholder не должен считаться присутствием, получили: %v", results[0].Failures)
+	}
+}
+
+// TestRunCase_PresenceNotFoundOnSkippedBranch — GUARD: тот же скип + task_present с
+// bare-module скип-ветки → NOT FOUND (skip не present). До фикса bare-module мог
+// ложно зазеленеть на placeholder.
+func TestRunCase_PresenceNotFoundOnSkippedBranch(t *testing.T) {
+	caseDir := writeScenarioTree(t, skipBranchMain, `name: present on skipped branch
+fixtures:
+  input:
+    enabled: false
+assert:
+  task_present:
+    - module: core.pkg.installed
+`)
+	results, err := Run(context.Background(), caseDir)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if results[0].Pass {
+		t.Fatalf("ожидали FAIL: skip-placeholder не должен матчить task_present")
+	}
+	if !strings.Contains(strings.Join(results[0].Failures, "\n"), "не найдено") {
+		t.Fatalf("ожидали расхождение «не найдено», получили: %v", results[0].Failures)
+	}
+}
+
+// TestRunCase_PresenceWhenDisambiguatorPositive — дизамбигуация через when: (только
+// when, без id): при enabled=true ветка АКТИВНА (реальная задача с Params), и
+// when-дизамбигуатор адресует именно её → ровно одно совпадение → PASS.
+func TestRunCase_PresenceWhenDisambiguatorPositive(t *testing.T) {
+	caseDir := writeScenarioTree(t, skipBranchMain, `name: when disambiguator positive
+fixtures:
+  input:
+    enabled: true
+assert:
+  task_present:
+    - module: core.pkg.installed
+      when: input.enabled
+      params_subset:
+        name: nginx
+`)
+	results, err := Run(context.Background(), caseDir)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !results[0].Pass {
+		t.Fatalf("ожидали PASS (when-дизамбигуатор адресует активную задачу), получили: %v", results[0].Failures)
+	}
+}
+
+// TestRunCase_PresenceWhenDisambiguatorNegative — негатив when-дизамбигуатора:
+// when ассерта не совпадает с when задачи → не матчит → NOT FOUND. Доказывает, что
+// when сужает матч (а не игнорируется).
+func TestRunCase_PresenceWhenDisambiguatorNegative(t *testing.T) {
+	caseDir := writeScenarioTree(t, skipBranchMain, `name: when disambiguator negative
+fixtures:
+  input:
+    enabled: true
+assert:
+  task_present:
+    - module: core.pkg.installed
+      when: input.other
+      params_subset:
+        name: nginx
+`)
+	results, err := Run(context.Background(), caseDir)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if results[0].Pass {
+		t.Fatalf("ожидали FAIL: when ассерта не совпадает с when задачи, матч не должен срабатывать")
+	}
+	if !strings.Contains(strings.Join(results[0].Failures, "\n"), "не найдено") {
+		t.Fatalf("ожидали расхождение «не найдено», получили: %v", results[0].Failures)
+	}
+}
+
+// TestRunCase_PresencePlusPositional — сосуществование presence + позиционной
+// rendered_tasks в ОДНОМ кейсе: обе сверки независимы и обе должны пройти.
+// Закрепляет заявленное свойство (compareTaskPresence и compareRenderedTasks
+// аппендятся независимо в RunCase). Скип-ветка отключена (enabled=false): позиционная
+// сверка видит skip-placeholder по индексу 0 (module сохранён), presence по нему
+// НЕ срабатывает (Params=nil) — два контракта на одном плане.
+func TestRunCase_PresencePlusPositional(t *testing.T) {
+	caseDir := writeScenarioTree(t, skipBranchMain, `name: presence plus positional
+fixtures:
+  input:
+    enabled: false
+assert:
+  rendered_tasks:
+    - index: 0
+      module: core.pkg.installed
+    - index: 1
+      module: core.service.running
+      params:
+        name: redis-server
+  task_present:
+    - module: core.service.running
+      params_subset:
+        name: redis-server
+  task_absent:
+    - module: core.pkg.installed
+`)
+	results, err := Run(context.Background(), caseDir)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !results[0].Pass {
+		t.Fatalf("ожидали PASS (presence + позиционная независимы), получили: %v", results[0].Failures)
+	}
+}

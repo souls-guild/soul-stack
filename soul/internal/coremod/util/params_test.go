@@ -330,3 +330,24 @@ func TestOptStringSliceParam_EdgeCases(t *testing.T) {
 		t.Fatal("OptStringSliceParam scalar: want error")
 	}
 }
+
+func TestParamPresent(t *testing.T) {
+	// nil params / отсутствие ключа / явный null → отсутствует.
+	if util.ParamPresent(nil, "x") {
+		t.Fatal("ParamPresent(nil) = true")
+	}
+	p := mustStruct(t, map[string]any{"content": "x", "empty": "", "null": nil})
+	if util.ParamPresent(p, "missing") {
+		t.Fatal("ParamPresent отсутствующего ключа = true")
+	}
+	if util.ParamPresent(p, "null") {
+		t.Fatal("ParamPresent явного null = true (должен трактоваться как отсутствие)")
+	}
+	// Ключ присутствует — даже с пустой строкой (ключевое отличие от пустоты).
+	if !util.ParamPresent(p, "content") {
+		t.Fatal("ParamPresent заданного ключа = false")
+	}
+	if !util.ParamPresent(p, "empty") {
+		t.Fatal("ParamPresent пустой строки = false (присутствие ключа != пустота значения)")
+	}
+}

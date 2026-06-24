@@ -1,6 +1,7 @@
 package util
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -25,6 +26,38 @@ func ParseMode(modeStr string) (fs.FileMode, error) {
 		return 0, fmt.Errorf("param %q: invalid octal mode %q", "mode", modeStr)
 	}
 	return fs.FileMode(parsed) & fs.ModePerm, nil
+}
+
+// ReadRegularFile читает содержимое regular-файла по абсолютному пути src.
+// Используется core-модулями, которые копируют содержимое уже лежащего на хосте
+// файла (core.file.present с src). Контракт (security-граница):
+//
+//   - src обязан быть абсолютным (filepath.IsAbs) — относительный reject, чтобы
+//     resolve относительно cwd Soul-демона (обычно root) не стал footgun-ом;
+//   - тип проверяется через os.Lstat + IsRegular(), ИМЕННО Lstat: симлинк
+//     reject-ится, а не следуется — защита от подмены источника симлинком на
+//     чувствительный файл между объявлением и применением;
+//   - каталог / симлинк / device / socket / fifo → explicit-reject (MVP — только
+//     regular file);
+//   - отсутствие / permission-ошибка чтения пробрасываются как есть.
+//
+// Файл читается в память один раз; вызывающий хэширует и пишет тот же буфер
+// (без двойного чтения — защита от TOCTOU между сверкой и записью).
+func ReadRegularFile(src string) ([]byte, error) {
+	if !filepath.IsAbs(src) {
+		return nil, fmt.Errorf("src must be absolute: %q", src)
+	}
+	info, err := os.Lstat(src)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("read src %s: no such file", src)
+		}
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("src %s is not a regular file", src)
+	}
+	return os.ReadFile(src)
 }
 
 // AtomicWrite материализует data в path атомарно: temp-файл в той же

@@ -69,17 +69,17 @@ func TestHumaCadence_RestReachable_ChiCoexistence(t *testing.T) {
 		handlers.NewPermissionCatalogHandler(nil),
 		handlers.NewEventTypeCatalogHandler(nil),
 		handlers.NewMyPermissionsHandler(nil, nil),
-		nil,   // enforcer (nil: RBAC не дёргается — проверка через router-tree)
-		nil,   // auditWriter
-		nil,   // metricsHTTP
-		nil,   // tollDegraded
-		nil,   // tempoLimiter
-		nil,   // tempoMetrics
-		nil,   // tempoVoyageCreateLimits
-		nil,   // tempoVoyagePreviewLimits
-		false, // webUIEnabled — /ui вне интереса cadence-роутинг-теста
-		nil,   // ldapAuth (LDAP не сконфигурирован в тесте)
-		nil,   // oidcAuth (OIDC не сконфигурирован в тесте)
+		nil,                                  // enforcer (nil: RBAC не дёргается — проверка через router-tree)
+		nil,                                  // auditWriter
+		nil,                                  // metricsHTTP
+		nil,                                  // tollDegraded
+		nil,                                  // tempoLimiter
+		nil,                                  // tempoMetrics
+		nil,                                  // tempoVoyageCreateLimits
+		nil,                                  // tempoVoyagePreviewLimits
+		false,                                // webUIEnabled — /ui вне интереса cadence-роутинг-теста
+		nil,                                  // ldapAuth (LDAP не сконфигурирован в тесте)
+		nil,                                  // oidcAuth (OIDC не сконфигурирован в тесте)
 		nil,                                  // loginGuard (anti-bruteforce off в тесте)
 		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
 		nil,                                  // logger

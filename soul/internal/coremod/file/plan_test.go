@@ -140,6 +140,71 @@ func TestPlan_Absent_Missing_Clean(t *testing.T) {
 	}
 }
 
+// TestPlan_Present_Src_Missing_Drift — Plan(present, src) для отсутствующего
+// dest: changed=true (Apply создал бы), src НЕ скопирован, dest НЕ создан.
+func TestPlan_Present_Src_Missing_Drift(t *testing.T) {
+	src := seedSrc(t, "payload\n")
+	dst := filepath.Join(t.TempDir(), "dest")
+
+	m := file.New()
+	stream := &planStream{}
+	if err := m.Plan(&pluginv1.PlanRequest{
+		State:  "present",
+		Params: mustStruct(t, map[string]any{"path": dst, "src": src}),
+	}, stream); err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if got := stream.last(); got == nil || !got.GetChanged() {
+		t.Fatal("changed=false, want true (dest отсутствует)")
+	}
+	if _, err := os.Stat(dst); !os.IsNotExist(err) {
+		t.Fatalf("Plan создал dest %s (должен быть pure-read)", dst)
+	}
+}
+
+// TestPlan_Present_Src_Match_Clean — Plan(present, src) при dest == src-байты:
+// changed=false и dest НЕ переписан.
+func TestPlan_Present_Src_Match_Clean(t *testing.T) {
+	src := seedSrc(t, "same\n")
+	dst := filepath.Join(t.TempDir(), "dest")
+	if err := os.WriteFile(dst, []byte("same\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshot(t, dst)
+
+	m := file.New()
+	stream := &planStream{}
+	if err := m.Plan(&pluginv1.PlanRequest{
+		State:  "present",
+		Params: mustStruct(t, map[string]any{"path": dst, "src": src}),
+	}, stream); err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if got := stream.last(); got == nil || got.GetChanged() {
+		t.Fatalf("changed=%v, want false (clean)", got.GetChanged())
+	}
+	assertUnchanged(t, dst, before)
+}
+
+// TestPlan_Present_Src_Unreadable_PlanFailed — src отсутствует во время Plan →
+// Plan возвращает error (PlanFailed), НЕ false-clean (ADR-031).
+func TestPlan_Present_Src_Unreadable_PlanFailed(t *testing.T) {
+	dst := filepath.Join(t.TempDir(), "dest")
+
+	m := file.New()
+	stream := &planStream{}
+	err := m.Plan(&pluginv1.PlanRequest{
+		State:  "present",
+		Params: mustStruct(t, map[string]any{"path": dst, "src": filepath.Join(t.TempDir(), "nope")}),
+	}, stream)
+	if err == nil {
+		t.Fatal("Plan вернул nil, want PlanFailed для нечитаемого src (не false-clean)")
+	}
+	if stream.last() != nil && !stream.last().GetChanged() {
+		t.Fatal("Plan отправил changed=false вместо PlanFailed (false-clean)")
+	}
+}
+
 // fileState — снимок (содержимое, mode) файла для сверки pure-read в assertUnchanged.
 type fileState struct {
 	content string

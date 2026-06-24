@@ -12,7 +12,8 @@ spec:
       description: Файл существует с заданным content/mode/owner/group (ADR-015).
       input:
         path:    { type: string, required: true, description: "Целевой путь файла." }
-        content: { type: string, description: "Содержимое файла (inline)." }
+        content: { type: string, description: "Содержимое файла (inline). Взаимоисключается с src; ни одного — пустой файл." }
+        src:     { type: string, description: "Абсолютный путь regular-файла на хосте, содержимое копируется в path (типично результат core.archive.extracted). Задаёт только содержимое, не атрибуты источника. Взаимоисключается с content." }
         mode:    { type: string, description: "Права в восьмеричной форме, напр. \"0640\"." }
         owner:   { type: string, description: "Владелец (имя пользователя)." }
         group:   { type: string, description: "Группа-владелец (имя группы)." }

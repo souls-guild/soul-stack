@@ -35,7 +35,8 @@
 Что отложено до пост-беты (не нужно для малого флота):
 
 - **Партиционирование `audit_log`** по `created_at` (declarative partitioning / BRIN) — расширение, не breaking ([ADR-022](adr/0022-audit-pipeline.md)).
-- **Hot-cold / batched-INSERT / Redis-Stream-буферизация** аудита для очень крупных флотов — backlog следующих релизов.
+- **Pluggable audit-sink (Kafka-выгрузка)** — **спроектирован, в бете не реализован** ([ADR-059](adr/0059-audit-sink-pluggable.md), proposed / deferred). На целевом масштабе backend audit-выгрузки становится выбираемым (`audit.sink: pg | kafka | off`, default `pg`); Kafka-sink (at-least-once `acks=all`, fail-closed, дедуп downstream по `audit_id`) снимает PG-write-нагрузку, остаётся строго опциональным (обязательный контур PG+Redis+Vault не меняется, [ADR-053](adr/0053-dependency-tiers.md)). **Вытесняет вариант Redis-Stream-буферизации** (Kafka покрывает ту же ось write-throughput полноценнее; Redis — hot-слой, не долговременный audit-буфер). Перед реализацией требует развязки зависимости: `changed_tasks`/`GET /v1/audit` сегодня деривят данные из `audit_log` в PG ([ADR-059](adr/0059-audit-sink-pluggable.md) open question).
+- **Hot-cold / batched-INSERT** аудита для крупных флотов — backlog следующих релизов. **batched-INSERT остаётся** более дешёвой альтернативой на оси write-throughput (батч-flush PG-sink-а без новой инфраструктуры), не вытесняется Kafka-sink-ом.
 
 Если планируете флот в тысячи+ хостов — это вне профиля беты; следите за размером `audit_log` и `apply_runs` ([operations/infra.md → Размер таблиц](operations/infra.md#размер-таблиц-приблизительная-оценка)).
 

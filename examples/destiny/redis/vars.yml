@@ -1,0 +1,48 @@
+# vars.yml — destiny-локалы redis (docs/destiny/vars.md): инварианты, ОДИНАКОВЫЕ для
+# всех incarnation и НЕ переопределяемые снаружи (не input — это контракт vs внутренности).
+# Литералы redis/redis (system-юзер/группа distro-пакета) и пути host-layout-а раньше
+# были зашиты по задачам копипастом / объявлены task-level vars — теперь один источник
+# правды здесь, задачи берут через ${ vars.* }.
+#
+# Резолвятся ОДИН раз на destiny-проход (per-host) до задач. var→var-ссылка внутри слоя
+# разрешена (eager-topological, vars.md): vars.<other> резолвится на другой file-var того
+# же слоя (root_group → root_owner), цикл/несуществующий ref → ошибка рендера, порядок
+# объявления безразличен. Файл закоммичен в git destiny-репо — секретов тут нет (пароли/
+# PEM приходят через input с secret/vault()).
+
+# system-юзер и группа сервиса redis. distro-пакет заводит их сам, binary-ветка
+# install.yml создаёт явно (core.group.present/core.user.present) — оба берут имя отсюда.
+redis_user:  redis
+redis_group: redis
+
+# Каталог unix-сокета redis. core.file.directory создаёт его в обеих ветках, когда в
+# merged-конфиге есть директива unixsocket (см. install.yml). Совпадает с дефолтным
+# unixsocket-путём, который scenario передаёт в config.
+socket_dir: /var/run/redis
+
+# ── file-mode/owner инварианты (вынесены: >2 употреблений по задачам) ──────────
+# Литеральные значения; задачи берут через ${ vars.* }. Вынос сохраняет рендер
+# бит-в-бит — это те же mode-/owner-строки, что стояли инлайн. Точечные mode на
+# ≤2 задачи (0750 tls-dir/modules-dir, 0755 socket-/drop-in-dir) ОСТАЮТСЯ литералом:
+# общим инвариантом destiny не являются (vars.md — не плодить var ради одной задачи).
+
+# mode конфигов с секретами redis (содержат password-хеши / requirepass): redis.conf,
+# users.acl, sentinel.conf. 0640 owner/group redis — читает только сервис.
+redis_secret_file_mode: "0640"
+
+# mode systemd-юнитов и drop-in-ов (root-owned, world-readable стандарт systemd):
+# redis-server/redis-sentinel/disable-thp .service, hardening drop-in, logrotate.d.
+unit_file_mode: "0644"
+
+# mode TLS PEM-материала redis-server (cert/key/CA): 0600 owner redis — приватный
+# ключ и сертификаты читает только сервис.
+redis_pem_mode: "0600"
+
+# owner root-owned артефактов (systemd-юниты/drop-ины/logrotate.d): литерал root.
+root_owner: root
+
+# group root-owned артефактов. var→var-ссылка на root_owner (vars.md, ADR-009/ADR-010
+# amendment 2026-06-24: var→var внутри слоя разрешён, eager-topological): owner и group
+# совпадают, поэтому group выражена через owner — одна точка правды, при смене root_owner
+# группа едет автоматически. Резолвится в "root".
+root_group: "${ vars.root_owner }"

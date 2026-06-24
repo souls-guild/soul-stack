@@ -125,8 +125,21 @@ type Mocks struct {
 // частичная сверка дельты, state_after — полная сверка результата).
 type AssertBlock struct {
 	RenderedTasks []ExpectedTask `yaml:"rendered_tasks,omitempty"`
-	StateChanges  map[string]any `yaml:"state_changes,omitempty"`
-	StateAfter    map[string]any `yaml:"state_after,omitempty"`
+
+	// TaskPresent/TaskAbsent — assert-by-presence-форма (PILOT новой модели L0,
+	// решение пользователя 2026-06-24): тест проверяет НАЛИЧИЕ/ОТСУТСТВИЕ
+	// вызова задачи в плане, не его ПОЗИЦИЮ. Сосуществует с позиционной
+	// rendered_tasks на время миграции (взаимоисключения нет — формы независимы,
+	// см. compareTaskPresence). Для каждой записи TaskPresent в плане обязана быть
+	// ≥1 задача matching {module== ∧ params_subset⊆params ∧ опц.when== ∧
+	// опц.id==(register∪id)}; 0 совпадений → fail. Для TaskAbsent — ≥1 совпадение
+	// → fail. Дизамбигуаторы when/id разрешают коллизию >1 совпадения на
+	// task_present.
+	TaskPresent []ExpectedTask `yaml:"task_present,omitempty"`
+	TaskAbsent  []ExpectedTask `yaml:"task_absent,omitempty"`
+
+	StateChanges map[string]any `yaml:"state_changes,omitempty"`
+	StateAfter   map[string]any `yaml:"state_after,omitempty"`
 	// Dispatch — секция уровня L3 (multi-host оркестрация, [ADR-023]): на
 	// single-host один синтетический хост, dispatch-план осмыслен только на
 	// топологии. Поле НЕ объявлено, чтобы strict-декод отверг опирающиеся на
@@ -134,13 +147,29 @@ type AssertBlock struct {
 	// TestLoadCase_RejectsUnknownSection).
 }
 
-// ExpectedTask — ожидание на одну отрендеренную задачу плана.
+// ExpectedTask — ожидание на одну отрендеренную задачу плана. Обслуживает обе
+// формы L0-ассерта tasks: позиционную (assert.rendered_tasks, по Index) и
+// presence (assert.task_present/task_absent, по совпадению атрибутов).
 //
-// Index — позиция в scenario.tasks[] (связь с RenderedTask.Index). Module —
-// ожидаемый module-адрес. Params — ожидаемые CEL-rendered params (deep-compare).
-// Params опциональны: если не заданы — сверяются только index+module.
+// Позиционная форма: Index — позиция в scenario.tasks[] (связь с
+// RenderedTask.Index). Module — ожидаемый module-адрес. Params — ожидаемые
+// CEL-rendered params (deep-compare). Params опциональны: если не заданы —
+// сверяются только index+module. ParamsSubset/When/ID в этой форме не
+// используются.
+//
+// Presence-форма: Index игнорируется (позиция не сверяется). Module обязателен —
+// module-адрес искомой задачи. ParamsSubset — ПОДМНОЖЕСТВО ожидаемых params
+// (по-ключно, поддерживает <present>-маркер; лишние ключи рендера не мешают
+// совпадению — та же семантика, что Params в позиционной сверке). When/ID —
+// опциональные ДИЗАМБИГУАТОРЫ при коллизии нескольких совпадений: When —
+// точное равенство CEL-строки RenderedTask.When; ID — равенство
+// RenderedTask.Register ИЛИ RenderedTask.ID (register∪id, T1).
 type ExpectedTask struct {
 	Index  int            `yaml:"index"`
 	Module string         `yaml:"module"`
 	Params map[string]any `yaml:"params,omitempty"`
+
+	ParamsSubset map[string]any `yaml:"params_subset,omitempty"`
+	When         string         `yaml:"when,omitempty"`
+	ID           string         `yaml:"id,omitempty"`
 }

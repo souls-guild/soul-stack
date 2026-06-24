@@ -1,0 +1,26 @@
+name: copy-config
+description: >
+  Демонстрирует core.file.present с src: содержимое целевого файла копируется из
+  уже лежащего на хосте regular-файла (типично — результат core.archive.extracted),
+  а не задаётся inline через content. src и content взаимоисключаются (ADR-015).
+  Render-only L0-кейс проверяет, что src проходит render-пайплайн как абсолютный
+  путь без изменения (вся ячейка — литерал, CEL-интерполяция только в content-пути).
+
+# state_changes не задаётся: сценарий ничего не коммитит в incarnation.state,
+# это демонстрация копирования содержимого файла.
+state_changes: {}
+
+input:
+  src:
+    type: string
+    required: true
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: Абсолютный путь файла-источника на хосте.
+
+tasks:
+  - name: Copy config from a host-local source file
+    module: core.file.present
+    params:
+      path: /etc/soul-stack/app.conf
+      src:  "${ input.src }"
+      mode: "0640"

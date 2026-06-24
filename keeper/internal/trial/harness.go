@@ -203,6 +203,9 @@ func RunCase(ctx context.Context, c *Case, caseFile string) (Result, error) {
 	pipeline, in, sink, tasks := rc.pipeline, rc.in, rc.sink, rc.tasks
 
 	res.Failures = compareRenderedTasks(c.Assert.RenderedTasks, tasks)
+	// Presence-форма (assert-by-presence, PILOT): сосуществует с позиционной —
+	// обе сверки независимы, кейс может нести любую комбинацию.
+	res.Failures = append(res.Failures, compareTaskPresence(c.Assert.TaskPresent, c.Assert.TaskAbsent, tasks)...)
 
 	// Рендер state_changes.sets — зеркало прода (scenario.run §7.1,
 	// RenderStateChanges после барьера). В L0 нет dispatch/register-накопления, но
@@ -426,6 +429,106 @@ func compareRenderedTasks(expected []ExpectedTask, got []*render.RenderedTask) [
 		}
 	}
 	return fails
+}
+
+// compareTaskPresence реализует assert-by-presence (PILOT новой модели L0):
+// сверяет НАЛИЧИЕ/ОТСУТСТВИЕ вызова задачи в плане, не позицию.
+//
+// task_present: для каждой записи в плане обязана быть РОВНО ОДНА (после
+// дизамбигуации) задача matching — 0 совпадений → fail «ожидалась задача,
+// не найдено»; >1 совпадение без when/id-дизамбигуатора → fail-коллизия с
+// подсказкой сузить ассерт. task_absent: ≥1 совпадение → fail.
+//
+// Матч одной задачи — taskMatches (module== ∧ params_subset⊆params ∧ опц.when==
+// ∧ опц.id==register∪id). params_subset проверяется тем же compareParams, что и
+// позиционная сверка (частичный по-ключно, <present>-маркер), поэтому семантика
+// подмножества идентична Params в rendered_tasks.
+func compareTaskPresence(present, absent []ExpectedTask, got []*render.RenderedTask) []string {
+	var fails []string
+
+	for i, et := range present {
+		var matched []*render.RenderedTask
+		for _, rt := range got {
+			if taskMatches(et, rt) {
+				matched = append(matched, rt)
+			}
+		}
+		switch {
+		case len(matched) == 0:
+			fails = append(fails, fmt.Sprintf("task_present[%d]: ожидалась задача matching %s, в плане (%d задач) не найдено",
+				i, describeExpected(et), len(got)))
+		case len(matched) > 1:
+			fails = append(fails, fmt.Sprintf("task_present[%d]: %s — найдено %d совпадений (коллизия); добавь id/register или when, либо сузь params_subset",
+				i, describeExpected(et), len(matched)))
+		}
+	}
+
+	for i, et := range absent {
+		for _, rt := range got {
+			if taskMatches(et, rt) {
+				fails = append(fails, fmt.Sprintf("task_absent[%d]: %s — ожидалось отсутствие, но задача найдена в плане",
+					i, describeExpected(et)))
+				break
+			}
+		}
+	}
+
+	return fails
+}
+
+// taskMatches — предикат совпадения одной отрендеренной задачи с presence-
+// ожиданием. Все заданные условия конъюнктивны; незаданные (пустые) — не
+// ограничивают. params_subset матчится переиспользованием compareParams (пустой
+// diff == совпадение): он частичен по-ключно и понимает <present>-маркер.
+//
+// Skip-placeholder (выключенная ветка: static when:false / block-skip / loop-skip,
+// а также future-passage stub staged-render) НИКОГДА не матчится — ни как
+// task_present, ни как task_absent. Семантика «задача не вызвана»: present по нему
+// не должен зеленеть, absent по нему не должен ложно срабатывать. Признак skip —
+// `rt.Params == nil`: render реальной module-задачи всегда несёт non-nil
+// *structpb.Struct (renderParams возвращает Struct даже на пустых params), а оба
+// skip-конструктора (staticSkipPlaceholder/loopSkipPlaceholder) и future-passage
+// stub оставляют Params nil. Явного булева Skip-флага у RenderedTask нет, а
+// FlowContext неинформативен — он устанавливается и у реальной задачи.
+func taskMatches(et ExpectedTask, rt *render.RenderedTask) bool {
+	if rt.Params == nil {
+		return false
+	}
+	if rt.Module != et.Module {
+		return false
+	}
+	if et.When != "" && rt.When != et.When {
+		return false
+	}
+	// id-дизамбигуатор: register∪id (T1 — оба сразу запрещены в DSL, поэтому
+	// одной строкой адресуем любую из двух).
+	if et.ID != "" && rt.Register != et.ID && rt.ID != et.ID {
+		return false
+	}
+	if len(et.ParamsSubset) > 0 {
+		if diff := compareParams(rt.Index, et.ParamsSubset, rt.Params, rt.NoLog); diff != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// describeExpected — человекочитаемое описание presence-ожидания для текста
+// расхождения. Не печатает params_subset целиком (может нести vault-секреты) —
+// только ключи, как no_log-ветка compareParams.
+func describeExpected(et ExpectedTask) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "module=%q", et.Module)
+	if et.When != "" {
+		fmt.Fprintf(&b, ", when=%q", et.When)
+	}
+	if et.ID != "" {
+		fmt.Fprintf(&b, ", id=%q", et.ID)
+	}
+	if len(et.ParamsSubset) > 0 {
+		fmt.Fprintf(&b, ", params_subset-ключи=%v", sortedKeys(et.ParamsSubset))
+	}
+	return b.String()
 }
 
 // compareStateChanges сверяет ожидаемый assert.state_changes с отрендеренными

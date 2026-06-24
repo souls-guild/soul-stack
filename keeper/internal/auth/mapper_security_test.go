@@ -105,7 +105,7 @@ func (t *reconcileTx) Query(ctx context.Context, sql string, args ...any) (pgx.R
 func (t *reconcileTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
 	return t.db.QueryRow(ctx, sql, args...)
 }
-func (t *reconcileTx) Commit(_ context.Context) error  { t.committed = true; return nil }
+func (t *reconcileTx) Commit(_ context.Context) error   { t.committed = true; return nil }
 func (t *reconcileTx) Rollback(_ context.Context) error { return nil }
 func (t *reconcileTx) Begin(context.Context) (pgx.Tx, error) {
 	panic("reconcileTx.Begin: unused")

@@ -50,6 +50,23 @@ func TestMigration_ContextVarsUndeclared(t *testing.T) {
 	}
 }
 
+// TestMigration_VarsStillUndeclared_AfterVarLayer — фича var→var (VarRefs +
+// resolveVarLayer, scenario/destiny-фаза) НЕ задевает migration-CEL (кейс #11):
+// `vars` остаётся НЕобъявленной в migration-env, поэтому `${ vars.x }` в set.value
+// → compile-error undeclared reference, как и до фичи. VarRefs живёт в обычном
+// Engine (New), не в migration-Engine; var-слой существует только в scenario/
+// destiny-проходе. Guard-тест против регресса «var→var просочился в миграцию».
+func TestMigration_VarsStillUndeclared_AfterVarLayer(t *testing.T) {
+	e := newMigrationEngine(t)
+	// Интерполяция `${ vars.x }` в set.value: блок `vars.x` компилируется в
+	// migration-env, где `vars` не объявлена → ErrCompile (undeclared).
+	_, err := e.EvalInterpolation("${ vars.x }", Vars{State: map[string]any{}})
+	var ce *ErrCompile
+	if !errors.As(err, &ce) {
+		t.Fatalf("migration ${ vars.x }: ошибка = %v, want *ErrCompile (vars undeclared, фича var→var не задела миграцию)", err)
+	}
+}
+
 // TestMigration_VaultGuarded — vault() без KVReader отсекается guard-ом как
 // ErrUnsupported (а не undeclared): миграция не тянет секреты.
 func TestMigration_VaultGuarded(t *testing.T) {

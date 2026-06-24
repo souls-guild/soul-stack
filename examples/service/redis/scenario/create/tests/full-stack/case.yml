@@ -80,28 +80,34 @@ fixtures:
       timeout: 60
       tcp-backlog: 511
 
+# PRESENCE-форма (assert-by-presence, PILOT новой модели L0): ассертим НАЛИЧИЕ
+# вызова задачи в плане, не её ПОЗИЦИЮ (индексы хрупки — съезжают от любой правки
+# destiny). Каждая задача идентифицируется module + различающим подмножеством
+# params (path/name) через params_subset; полный params в presence не нужен,
+# матч частичен по-ключно (лишние ключи рендера совпадению не мешают). Выключенные
+# ветки (sentinel в режиме standalone) — task_absent: их placeholder-skip несёт
+# пустые params, поэтому params_subset для них не матчится — guard «sentinel-демон
+# в standalone НЕ разворачивается».
 assert:
-  rendered_tasks:
-    # index 0 — mode-guard (core.cmd.shell, БЕЗ when:): диспетчер ловит
-    # нереализованный redis_type. standalone реализован → "true" → no-op. Не ассертим.
-
+  task_present:
     # ── destiny redis (standalone) ──────────────────────────────────────────
-    - index: 0
-      module: core.pkg.installed
-      params:
+    # core.cmd.shell mode-guard (диспетчер по redis_type) и socket-dir
+    # (when: config.unixsocket — static-skip, unixsocket нет) НЕ ассертим: первый
+    # — no-op "true", второй — выключенная ветка.
+    - module: core.pkg.installed
+      params_subset:
         name: redis-server
         version: "5:7.0.15-1~deb12u7"
-
-    # index 2 — socket-dir (core.file.directory, when: config.unixsocket): unixsocket в
-    # merged-конфиге НЕТ → static-when-false → placeholder-skip. Не ассертим.
 
     # users.acl: MAP имя→{perms,state,password} с ПОЛНОЙ ACL-строкой +
     # keeper-side vault()-пароль. ПОЧЕМУ map, а не список: range по map в шаблоне
     # сортирует ключи → детерминизм порядка строк (regress-guard на tiling-баг
-    # 2026-06-22; прямой order-guard — destiny_redis_tmpl_test.go).
-    - index: 13
-      module: core.file.rendered
-      params:
+    # 2026-06-22; прямой order-guard — destiny_redis_tmpl_test.go). Дизамбигуатор
+    # от redis.conf-задачи — path в params_subset (обе core.file.rendered с тем же
+    # when), плюс явный register-якорь redis_acl.
+    - module: core.file.rendered
+      id: redis_acl
+      params_subset:
         path: /etc/redis/users.acl
         template_content: "<present>"
         mode: "0640"
@@ -128,10 +134,11 @@ assert:
           role: ""
           essence: {}
 
-    # redis.conf: ИТОГ merge(). Здесь живёт главный guard трансляции.
-    - index: 14
-      module: core.file.rendered
-      params:
+    # redis.conf: ИТОГ merge(). Здесь живёт главный guard трансляции. Дизамбигуатор
+    # от users.acl — register-якорь redis_conf + path.
+    - module: core.file.rendered
+      id: redis_conf
+      params_subset:
         path: /etc/redis/redis.conf
         template_content: "<present>"
         mode: "0640"
@@ -167,28 +174,39 @@ assert:
           role: ""
           essence: {}
 
-    - index: 17
-      module: core.service.running
-      params:
+    # redis-server: enabled-at-boot. Дизамбигуатор от sentinel-демона
+    # (core.service.running redis-sentinel — placeholder-skip без params) — name.
+    - module: core.service.running
+      params_subset:
         name: redis-server
         enabled: true
 
-    - index: 18
-      module: core.service.restarted
-      params:
+    - module: core.service.restarted
+      params_subset:
         name: redis-server
 
     # ── community.redis.command (PING health-gate) ──────────────────────────
     # addr localhost, пароль — тот же requirepass vault()-резолв, args [PING].
-    # index 28: standalone destiny занимает индексы 0..27 (pkg=0, binary-ветка 1..7
-    # placeholder-skip, socket-dir 8, server.yml 9..18, sentinel 19..22 skip, extras
-    # 23..26, modules 27 skip), PING сценария идёт следом (index 28).
-    - index: 28
-      module: community.redis.command
-      params:
+    # cluster/sentinel PING-ветки — placeholder-skip (без params), дизамбигуатор —
+    # args/addr в params_subset.
+    - module: community.redis.command
+      params_subset:
         addr: "127.0.0.1:6379"
         password: s3cr3t-redis-pass-create
         args: ["PING"]
+
+  task_absent:
+    # GUARD «standalone НЕ разворачивает sentinel-демон»: ветка tasks/sentinel.yml
+    # gated на input.sentinel_enabled (отсутствует → static-skip). Её sentinel.conf
+    # и сам демон в плане присутствуют ТОЛЬКО как placeholder без params, поэтому
+    # params_subset не матчится. Регресс «sentinel протёк в standalone» = задача
+    # отрендерится с реальными params → match → fail task_absent.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/sentinel.conf
+    - module: core.service.running
+      params_subset:
+        name: redis-sentinel
 
   # Регресс на класс багов «state_changes падает на render» + сверка ИТОГА
   # трансляции, записываемого в incarnation.state (тот же merge(), что ушёл в

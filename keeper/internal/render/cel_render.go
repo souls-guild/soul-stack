@@ -100,44 +100,43 @@ func evalWhere(engine *cel.Engine, where string, vars cel.Vars) (bool, error) {
 // одном хосте: БАЗА — резолвленные destiny-локалы `vars.yml` (fileVars,
 // docs/destiny/vars.md), ПОВЕРХ — task-level `vars:` (taskVars, destiny/tasks.md
 // §9). Вариант A (vars.md «Слияние file-vars ↔ task-vars»): task-var переопределяет
-// одноимённый file-var; оба резолвятся в одном base-env, НЕ видя друг друга.
+// одноимённый file-var.
 //
 // fileVars уже резолвлены ОДИН раз на destiny-проход (resolveDestinyVars над
 // destiny-env input+soulprint.self+incarnation, изолированно от scenario-scope) —
 // здесь они только подкладываются базой. В scenario-проходе fileVars пуст (vars.yml
 // — destiny-сущность); поведение scenario-задач БИТ-В-БИТ как до фичи.
 //
-// taskVars резолвятся через EvalInterpolation (`${ … }`) над base, где base.Vars
-// ПУСТ — ни file-vars, ни другие task-vars не видны (запрет ссылок vars→vars,
-// destiny/tasks.md §9; зеркально resolveDestinyVars). Порядок ключей безразличен
-// (каждый видит только базовый контекст). Это сознательно: file-vars в base.Vars
-// НЕ кладутся ДО резолва task-vars, иначе task-var мог бы сослаться на file-var и
-// нарушить «оба над одним base-env без видимости друг друга».
+// taskVars резолвятся через resolveVarLayer над base, где base.Vars ПУСТ на старте
+// слоя — task-var видит ТОЛЬКО task-var того же слоя (var→var разрешён внутри слоя,
+// eager-topological), но НЕ file-var (межслойная изоляция: `${ vars.<file_var> }` в
+// task-var → ErrVarUnknownRef). Это сознательно: file-vars в base.Vars НЕ кладутся
+// ДО резолва task-vars, иначе task-var мог бы сослаться на file-var и нарушить
+// межслойную границу. Цикл task-var→task-var → ErrVarCycle, ссылка на несуществующий
+// task-var → ErrVarUnknownRef (зеркало resolveDestinyVars). Порядок ключей в taskVars
+// безразличен.
+//
+// file-vars подкладываются под task-vars ПОСЛЕ резолва (override, Вариант A):
+// одноимённый task-var перетирает file-var в финальной карте.
 //
 // Оба пусты → base без изменений (Vars=nil → штатный no-such-key на `vars.<key>`).
 func resolveTaskVars(engine *cel.Engine, fileVars, taskVars map[string]any, base cel.Vars) (cel.Vars, error) {
 	if len(fileVars) == 0 && len(taskVars) == 0 {
 		return base, nil
 	}
-	resolved := make(map[string]any, len(fileVars)+len(taskVars))
+	// task-vars резолвятся СВОИМ слоем над base с пустым base.Vars (resolveVarLayer
+	// накапливает их сам) — file-vars не видны, var→var живёт внутри task-слоя.
+	resolvedTask, err := resolveVarLayer(engine, taskVars, base)
+	if err != nil {
+		return cel.Vars{}, err
+	}
+	resolved := make(map[string]any, len(fileVars)+len(resolvedTask))
 	// База: file-vars уже резолвлены — копируются как есть (без CEL).
 	for key, val := range fileVars {
 		resolved[key] = val
 	}
-	// Поверх: task-vars резолвятся над base (base.Vars пуст — file-vars не видны),
-	// перезаписывают одноимённые file-vars (Вариант A).
-	for key, raw := range taskVars {
-		s, ok := raw.(string)
-		if !ok {
-			// Non-string vars-значение (число/bool/коллекция) проходит как литерал —
-			// CEL-фаза трогает только строки (renderValue), симметрично params.
-			resolved[key] = raw
-			continue
-		}
-		val, err := engine.EvalInterpolation(s, base)
-		if err != nil {
-			return cel.Vars{}, fmt.Errorf("render: vars.%s: %w", key, err)
-		}
+	// Поверх: task-vars перезаписывают одноимённые file-vars (Вариант A).
+	for key, val := range resolvedTask {
 		resolved[key] = val
 	}
 	base.Vars = resolved

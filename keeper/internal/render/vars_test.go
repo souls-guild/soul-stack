@@ -2,7 +2,7 @@ package render
 
 import (
 	"context"
-	"strings"
+	"errors"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
@@ -82,22 +82,57 @@ func TestResolveTaskVars_NativeTypeSingleBlock(t *testing.T) {
 	}
 }
 
-// TestResolveTaskVars_NoSelfReference — vars НЕ видит свои же task-vars
-// (destiny/tasks.md §9: нет циклических ссылок). Ссылка vars.<other> внутри
-// vars-значения → no-such-key (eval-ошибка).
-func TestResolveTaskVars_NoSelfReference(t *testing.T) {
+// TestResolveTaskVars_VarToVar — task-var ссылается на ДРУГОЙ task-var того же
+// слоя (var→var внутри слоя РАЗРЕШЁН, eager-topological); порядок объявления
+// безразличен (topоsort). Guard-тест инварианта var→var (кейс #1, task-слой).
+func TestResolveTaskVars_VarToVar(t *testing.T) {
 	e := newEngine(t)
 	base := cel.Vars{Input: map[string]any{"host": "h"}}
 
-	_, err := resolveTaskVars(e, nil, map[string]any{
+	got, err := resolveTaskVars(e, nil, map[string]any{
+		"b": "${ vars.a }-x", // объявлен РАНЬШЕ a — порядок не важен
 		"a": "${ input.host }",
-		"b": "${ vars.a }",
 	}, base)
-	if err == nil {
-		t.Fatal("resolveTaskVars: vars→vars-ссылка должна давать ошибку (нет циклических ссылок)")
+	if err != nil {
+		t.Fatalf("resolveTaskVars: var→var внутри task-слоя должен резолвиться: %v", err)
 	}
-	if !strings.Contains(err.Error(), "vars.b") {
-		t.Errorf("err = %v, want упоминание ключа vars.b", err)
+	if got.Vars["a"] != "h" {
+		t.Errorf("vars.a = %v, want h", got.Vars["a"])
+	}
+	if got.Vars["b"] != "h-x" {
+		t.Errorf("vars.b = %v, want h-x (b ссылается на a того же слоя)", got.Vars["b"])
+	}
+}
+
+// TestResolveTaskVars_CannotSeeFileVar — межслойная изоляция: task-var НЕ видит
+// file-var (`${ vars.<file_var> }` → ErrVarUnknownRef, file-vars не в task-слое).
+// Guard-тест инварианта изоляции (кейс #8, task→file).
+func TestResolveTaskVars_CannotSeeFileVar(t *testing.T) {
+	e := newEngine(t)
+	base := cel.Vars{Input: map[string]any{"host": "h"}}
+
+	_, err := resolveTaskVars(e,
+		map[string]any{"fv": "FILE"},                   // file-vars (резолвлены)
+		map[string]any{"tv": "${ vars.fv }-from-task"}, // task-var ссылается на file-var
+		base)
+	if err == nil {
+		t.Fatal("resolveTaskVars: task-var не должен видеть file-var (межслойная изоляция)")
+	}
+	if !errors.Is(err, ErrVarUnknownRef) {
+		t.Errorf("err = %v, want ErrVarUnknownRef (var_unknown_ref)", err)
+	}
+}
+
+// TestResolveTaskVars_Cycle — цикл task-var→task-var → ErrVarCycle с трассой.
+// Guard-тест (кейс #2/#4 на task-слое).
+func TestResolveTaskVars_Cycle(t *testing.T) {
+	e := newEngine(t)
+	_, err := resolveTaskVars(e, nil, map[string]any{
+		"a": "${ vars.b }",
+		"b": "${ vars.a }",
+	}, cel.Vars{})
+	if err == nil || !errors.Is(err, ErrVarCycle) {
+		t.Fatalf("resolveTaskVars: ожидался ErrVarCycle, получено: %v", err)
 	}
 }
 
