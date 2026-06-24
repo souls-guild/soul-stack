@@ -48,14 +48,21 @@ type FormPrefillResult struct {
 // FormPrefillTyped — доменная функция POST /v1/incarnations/{name}/scenarios/
 // {scenario}/form-prefill (READ, без audit). inScope — RBAC scope-предикат
 // (ADR-047, action=get): вне scope → 404 (как GetTyped, не палим чужую
-// инкарнацию). ref — опц. override версии сервиса (схема той же версии, что
-// форма); "" → ServiceVersion инкарнации.
+// инкарнацию).
+//
+// Версия схемы — ВСЕГДА inc.ServiceVersion (версия развёрнутой инкарнации):
+// клиент версию НЕ задаёт. Это критично для безопасности — иначе path-whitelist
+// объявленных prefill-путей и secret-set резолвились бы из РАЗНЫХ версий
+// (whitelist с клиентского ref, secret-set всегда с ServiceVersion в
+// secretSchemaForIncarnation), и крафт ref на версию, где sensitive-поле ещё не
+// помечено secret, вернул бы его значение. Единая авторитетная версия закрывает
+// version-craft вектор; maskWithSchema остаётся 2-м слоем defense-in-depth.
 //
 // Ошибки — *problemError (422 невалидный path-сегмент / 404 нет инкарнации или
 // вне scope / 500 сбой резолва сервиса). Best-effort по схеме: нет loader-а /
 // сервис не зарегистрирован / scenario не парсится → пустой values (форма
 // откроется без prefill, не 500 — prefill необязателен).
-func (h *IncarnationHandler) FormPrefillTyped(ctx context.Context, name, scenarioName, ref string, inScope func(*incarnation.Incarnation) bool) (FormPrefillResult, error) {
+func (h *IncarnationHandler) FormPrefillTyped(ctx context.Context, name, scenarioName string, inScope func(*incarnation.Incarnation) bool) (FormPrefillResult, error) {
 	zero := FormPrefillResult{Values: map[string]any{}}
 
 	if !incarnation.ValidName(name) {
@@ -80,9 +87,9 @@ func (h *IncarnationHandler) FormPrefillTyped(ctx context.Context, name, scenari
 	}
 
 	// path-whitelist: множество объявленных в схеме сценария prefill-путей.
-	// Клиент путь не передаёт — берём из схемы ТОЙ версии, что форма (ref override
-	// → ServiceVersion инкарнации). Best-effort: схема недоступна → пустой values.
-	fields := h.prefillFieldsForScenario(ctx, inc, scenarioName, ref)
+	// Клиент путь не передаёт — берём из схемы версии инкарнации (inc.ServiceVersion),
+	// той же, что secretSchemaForIncarnation. Best-effort: схема недоступна → пустой values.
+	fields := h.prefillFieldsForScenario(ctx, inc, scenarioName)
 	if len(fields) == 0 {
 		return zero, nil
 	}
@@ -119,12 +126,13 @@ func (h *IncarnationHandler) FormPrefillTyped(ctx context.Context, name, scenari
 
 // prefillFieldsForScenario строит множество объявленных prefill-полей схемы
 // сценария: `field → state.<path>` (path-whitelist). Материализует снапшот
-// сервиса на версии инкарнации (или ref-override), читает `scenario/<name>/
+// сервиса на версии инкарнации (inc.ServiceVersion — ТА ЖЕ авторитетная версия,
+// что secretSchemaForIncarnation, клиент её НЕ задаёт), читает `scenario/<name>/
 // main.yml`, парсит input-схему и собирает поля с непустым `prefill_from_state`.
 // Best-effort (parity collectCreateInputSecrets): любой сбой → nil (форма без
 // prefill, не ошибка). state-предикат-доступ к произвольным путям невозможен —
 // только объявленное автором схемы.
-func (h *IncarnationHandler) prefillFieldsForScenario(ctx context.Context, inc *incarnation.Incarnation, scenarioName, ref string) map[string]string {
+func (h *IncarnationHandler) prefillFieldsForScenario(ctx context.Context, inc *incarnation.Incarnation, scenarioName string) map[string]string {
 	if h.loader == nil || h.services == nil || inc == nil {
 		return nil
 	}
@@ -132,12 +140,11 @@ func (h *IncarnationHandler) prefillFieldsForScenario(ctx context.Context, inc *
 	if !ok {
 		return nil
 	}
-	if ref != "" {
-		// Явный override версии сервиса (форма строилась по той же).
-		serviceRef.Ref = ref
-	} else if inc.ServiceVersion != "" {
-		// По умолчанию — версия, на которой инкарнация создана/мигрирована
-		// (та же схема, что отдал ListScenarios форме).
+	// Версия — та, на которой инкарнация создана/мигрирована (та же схема, что
+	// отдал ListScenarios форме И что использует secretSchemaForIncarnation).
+	// Клиентский override отсутствует: единая версия whitelist+secret-set — анти
+	// version-craft инвариант (см. doc-комментарий FormPrefillTyped).
+	if inc.ServiceVersion != "" {
 		serviceRef.Ref = inc.ServiceVersion
 	}
 	art, err := h.loader.Load(ctx, serviceRef)

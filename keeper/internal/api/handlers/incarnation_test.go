@@ -1904,10 +1904,15 @@ type fakeLoader struct {
 	loadCalls     int
 	chainCalls    int
 	readFileCalls int
+
+	// loadedRefs фиксирует ref.Ref каждого Load (порядок вызовов) — guard-тесты
+	// version-pin сверяют, на какой версии сервиса материализовался снапшот.
+	loadedRefs []string
 }
 
 func (f *fakeLoader) Load(_ context.Context, ref artifact.ServiceRef) (*artifact.ServiceArtifact, error) {
 	f.loadCalls++
+	f.loadedRefs = append(f.loadedRefs, ref.Ref)
 	if f.loadErr != nil {
 		return nil, f.loadErr
 	}

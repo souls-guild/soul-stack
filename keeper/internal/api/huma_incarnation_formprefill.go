@@ -3,8 +3,8 @@ package api
 // FULL-TYPED форма INCARNATION form-prefill-роута (code-first источник OpenAPI,
 // ADR-054 §Pattern). POST /v1/incarnations/{name}/scenarios/{scenario}/form-prefill
 // — day-2 pre-fill UI-формы сценария текущими значениями incarnation.state
-// (docs/input.md → «Pre-fill из state»). READ-with-body (резолв, не мутация):
-// audit НЕ навешан. RBAC incarnation.get + scope-предикат (ADR-047) — на группе.
+// (docs/input.md → «Pre-fill из state»). Резолв (не мутация), тела НЕТ: audit НЕ
+// навешан. RBAC incarnation.get + scope-предикат (ADR-047) — на группе.
 // Go-типы — единственный источник правды схемы.
 
 import (
@@ -18,21 +18,12 @@ import (
 )
 
 // incFormPrefillInput — huma-input POST .../scenarios/{scenario}/form-prefill.
-// Name/Scenario — path; Body — ПОИНТЕР (опц. тело: единственное поле ref). Клиент
-// state-путь НЕ передаёт (path-whitelist строится из схемы сценария на backend).
+// Name/Scenario — path; тела НЕТ. Клиент НЕ задаёт ни state-путь (path-whitelist
+// строится из схемы сценария на backend), ни версию сервиса: схема всегда берётся
+// по inc.ServiceVersion (анти version-craft инвариант, см. FormPrefillTyped).
 type incFormPrefillInput struct {
-	Name     string                      `path:"name" doc:"имя инкарнации"`
-	Scenario string                      `path:"scenario" doc:"имя сценария"`
-	Body     *IncarnationFormPrefillRequest `doc:"опц. тело: версия сервиса (ref)"`
-}
-
-// IncarnationFormPrefillRequest — Go-форма тела POST .../form-prefill (code-first
-// источник схемы И валидации). Единственное поле — опц. `ref` (версия сервиса:
-// схема той же версии, что строила форму; пусто → ServiceVersion инкарнации).
-// additionalProperties:false (huma-дефолт) → unknown поле → 400. Имя структуры =
-// контрактное имя схемы (huma DefaultSchemaNamer).
-type IncarnationFormPrefillRequest struct {
-	Ref string `json:"ref,omitempty" doc:"опц. git-ref версии сервиса (схема той же версии, что форма); пусто → версия инкарнации"`
+	Name     string `path:"name" doc:"имя инкарнации"`
+	Scenario string `path:"scenario" doc:"имя сценария"`
 }
 
 // IncarnationFormPrefillReply — native 200-тело POST .../form-prefill. Values —
@@ -49,9 +40,9 @@ type incFormPrefillOutput struct {
 }
 
 // incFormPrefillOperation — метаданные POST .../scenarios/{scenario}/form-prefill.
-// DefaultStatus=200. READ-роут (резолв, не мутация): audit НЕ навешан. Permission
-// incarnation.get. Errors: 400 unknown/malformed, 403 RBAC, 404 нет инкарнации/вне
-// scope, 422 невалидный name/scenario, 500.
+// DefaultStatus=200. READ-роут (резолв, не мутация, тела нет): audit НЕ навешан.
+// Permission incarnation.get. Errors: 403 RBAC, 404 нет инкарнации/вне scope,
+// 422 невалидный name/scenario, 500.
 func incFormPrefillOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "incarnationFormPrefill",
@@ -61,12 +52,12 @@ func incFormPrefillOperation() huma.Operation {
 		Description:   "Текущие значения state под поля схемы сценария с prefill_from_state (docs/input.md). Path-whitelist (клиент путь не задаёт), secret-поля исключены. Вне RBAC-scope → 404. Permission incarnation.get. Read-only, без audit.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusOK,
-		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
 	}
 }
 
 // registerHumaIncarnationFormPrefill монтирует POST .../scenarios/{scenario}/
-// form-prefill через huma (READ-with-body, БЕЗ audit). scope-предикат (ADR-047,
+// form-prefill через huma (READ, без тела, БЕЗ audit). scope-предикат (ADR-047,
 // action=get) → вне scope 404. incH nil → no-op.
 func registerHumaIncarnationFormPrefill(humaAPI huma.API, incH *handlers.IncarnationHandler) {
 	if incH == nil {
@@ -74,11 +65,7 @@ func registerHumaIncarnationFormPrefill(humaAPI huma.API, incH *handlers.Incarna
 	}
 	huma.Register(humaAPI, incFormPrefillOperation(), func(ctx context.Context, in *incFormPrefillInput) (*incFormPrefillOutput, error) {
 		claims, _ := apimiddleware.ClaimsFromContext(ctx)
-		ref := ""
-		if in.Body != nil {
-			ref = in.Body.Ref
-		}
-		res, err := incH.FormPrefillTyped(ctx, in.Name, in.Scenario, ref, incH.GetInScopeFor(claims, "get"))
+		res, err := incH.FormPrefillTyped(ctx, in.Name, in.Scenario, incH.GetInScopeFor(claims, "get"))
 		if err != nil {
 			return nil, incProblem(err)
 		}
