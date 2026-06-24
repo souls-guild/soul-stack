@@ -1,11 +1,13 @@
 # tasks/service.yml — раскладка бинаря node_exporter + основной systemd-unit.
 #
 # Install-шаг бинаря живёт ЗДЕСЬ (а не в install.yml) намеренно: его register
-# node_exporter_bin читает onchanges рестарта ниже, а ядро НЕ раскрывает register
-# через границу include (cross-file register — нерешённый open Q
-# docs/destiny/tasks.md §12). register и его onchanges-потребитель обязаны быть в
-# одном файле — install.yml готовит артефакт в /tmp (fetch+extract), service.yml
-# ставит бинарь и поднимает сервис.
+# node_exporter_bin читает onchanges рестарта ниже, а register-ссылки в onchanges
+# валидирует ЗАГРУЗОЧНЫЙ per-file линтер (validateTaskRefs, shared/config/
+# destiny_tasks.go) — onchanges на register из ДРУГОГО include-файла отвергается как
+# unknown_register_reference. (Within-destiny include уплощается ДО render — tasks.md
+# §4, — keeper-side registerIndex плоский, — но проверка ссылок per-file.) Поэтому
+# register и его onchanges-потребитель обязаны быть в одном файле: install.yml готовит
+# артефакт в /tmp (fetch+extract), service.yml ставит бинарь и поднимает сервис.
 #
 # Явного daemon-reload-шага НЕТ: core.service (daemon_reload: auto, default) сам
 # перечитывает конфигурацию systemd при смене unit-файла ПЕРЕД start/restart.
