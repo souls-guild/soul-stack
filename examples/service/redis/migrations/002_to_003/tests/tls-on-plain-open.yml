@@ -1,22 +1,20 @@
-name: tls-extracted
+name: tls-on-plain-open
 description: >
-  redis_config несёт TLS-директивы (tls-port + port 0) → tls.enable=true,
-  tls.only=true (plain закрыт). tls.port=7379 — НЕ извлечён из redis_config['tls-port']
-  (DSL-лимит: migration-CEL без string→int, см. 002_to_003.yml), а роль-дефолт 7379;
-  совпал с redis_config['tls-port']="7379" случайно (не-дефолтный порт см. в
-  non-default-tls-port). cert/key/ca_ref → '' (Vault-ПУТИ в v2-state не лежали).
-  maxmemory_policy извлечён из redis_config.
+  redis_config несёт tls-port НО port != '0' (plain-порт 6379 ОТКРЫТ) →
+  tls.enable=true, tls.only=false. Реальный prod-state «TLS включён, plaintext не
+  закрыт» (clients мигрируют постепенно) — контр-кейс к tls-extracted (там only=true).
+  tls.only ← port == '0' даёт false. tls.port=7379 (роль-дефолт, DSL-лимит, см.
+  002_to_003.yml). cert/key/ca_ref → '' (Vault-ПУТИ в v2-state не лежали).
 
 state_before:
   redis_type: standalone
   redis_version: "7.2.4"
   redis_config:
-    port: "0"
-    tls-port: "7379"
+    port: "6379"
+    tls-port: "6380"
     tls-cert-file: /etc/redis/tls/redis.crt
     tls-key-file: /etc/redis/tls/redis.key
     tls-ca-cert-file: /etc/redis/tls/ca.crt
-    tls-replication: "yes"
     maxmemory: "256mb"
     maxmemory-policy: allkeys-lru
     save: "900 1 300 10 60 10000"
@@ -29,12 +27,11 @@ state_after:
   redis_type: standalone
   redis_version: "7.2.4"
   redis_config:
-    port: "0"
-    tls-port: "7379"
+    port: "6379"
+    tls-port: "6380"
     tls-cert-file: /etc/redis/tls/redis.crt
     tls-key-file: /etc/redis/tls/redis.key
     tls-ca-cert-file: /etc/redis/tls/ca.crt
-    tls-replication: "yes"
     maxmemory: "256mb"
     maxmemory-policy: allkeys-lru
     save: "900 1 300 10 60 10000"
@@ -44,7 +41,7 @@ state_after:
   redis_sentinel: {}
   tls:
     enable: true
-    only: true
+    only: false
     port: 7379
     cert_ref: ""
     key_ref: ""
