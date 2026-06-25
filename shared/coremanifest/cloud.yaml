@@ -19,3 +19,10 @@ spec:
         provider: { type: string, required: true, description: "Имя cloud-Provider в реестре." }
         vm_ids:   { type: list,   required: true, items: { type: string }, description: "Список provider-vm-id для уничтожения." }
         sids:     { type: list,   items: { type: string }, description: "SID-ы для cascade-обновления реестров (souls/seeds/tokens)." }
+    resized:
+      description: Keeper-side (on:keeper). Ресурсы облачных VM изменены до абсолютного целевого размера через CloudDriver.Resize (capability Resizable).
+      input:
+        provider:       { type: string, required: true, description: "Имя cloud-Provider в реестре." }
+        vm_ids:         { type: list,   required: true, items: { type: string }, description: "provider-vm-id для resize (один target на весь батч)." }
+        desired:        { type: map,    required: true, description: "Целевые ресурсы в наших единицах: cpu_cores (ядра) / ram_mb (МБ) / disk_gb (ГБ). Хотя бы одно > 0; поля с 0 не меняются." }
+        allow_downtime: { type: bool,   description: "Разрешить downtime (stop/start) для cpu/ram-resize. Обязателен при изменении cpu/ram; disk-only online (default false)." }

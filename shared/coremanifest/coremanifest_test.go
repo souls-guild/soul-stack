@@ -27,11 +27,11 @@ var expectedModules = map[string][]string{
 	"core.repo":     {"present", "absent"},
 	"core.firewall": {"present", "absent"},
 	"core.http":     {"probe"},
-	"core.noop":     {"run"},                  // no-op/barrier-якорь (ADR-015)
-	"core.soul":     {"registered"},           // keeper-side (on: keeper)
-	"core.cloud":    {"created", "destroyed"}, // keeper-side (ADR-017)
-	"core.vault":    {"kv-read"},              // keeper-side (ADR-017)
-	"core.choir":    {"present", "absent"},    // keeper-side (ADR-044)
+	"core.noop":     {"run"},                             // no-op/barrier-якорь (ADR-015)
+	"core.soul":     {"registered"},                      // keeper-side (on: keeper)
+	"core.cloud":    {"created", "destroyed", "resized"}, // keeper-side (ADR-017; resized — авто-расширение VM)
+	"core.vault":    {"kv-read"},                         // keeper-side (ADR-017)
+	"core.choir":    {"present", "absent"},               // keeper-side (ADR-044)
 }
 
 // TestDefault_EmbedManifestsParse — все embed-манифесты парсятся и валидны
