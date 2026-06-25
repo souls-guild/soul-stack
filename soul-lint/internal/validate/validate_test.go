@@ -73,6 +73,17 @@ func TestGolden_ScenarioAssertPrecondition(t *testing.T) {
 	runExpect(t, "../../testdata/scenario-golden/assert-precondition.yml", KindScenario, false, ExitOK, nil)
 }
 
+// TestGolden_ScenarioValidatePrecondition — top-level validate:-блок (ADR-009
+// amendment 2026-06-23, DSL wave 2): декларативные input-инварианты
+// [{that, message}] проходят линт (ExitOK). Guard против регресса, где soul-lint
+// поднимал бы unknown_key на «validate» (поле ScenarioManifest.Validate +
+// reflect-walker stop-point validateRuleSliceType + AST-валидатор
+// validateValidateBlock). Реверс (validate: ошибочно зарезан как unknown_key) →
+// ExitHasErrors → тест падает.
+func TestGolden_ScenarioValidatePrecondition(t *testing.T) {
+	runExpect(t, "../../testdata/scenario-golden/validate-precondition.yml", KindScenario, false, ExitOK, nil)
+}
+
 // TestGolden_ScenarioIncarnationStateRead — `incarnation.state.<path>` (read-only
 // снимок incarnation.state в scenario render, ADR-009/010 Вариант A) ВАЛИДЕН в
 // предикате и apply.input. Контракт: каноническая форма НЕ ловится

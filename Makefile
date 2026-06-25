@@ -154,14 +154,23 @@ build-soulctl:
 
 # Модули без go-пакетов пропускаются по `go list ./...` — то же правило,
 # что и в `build`. На текущем этапе под фильтр попадает `proto/plugin/`.
+#
+# `-count=1` отключает go-test-кеш. КРИТИЧНО для гейта, не оптимизация: go кеширует
+# результат пакета по хешу его `.go`-исходников (+ объявленных входов), но НЕ по
+# содержимому произвольных файлов, прочитанных в рантайме через `os.ReadFile` по
+# пути (напр. keeper/internal/render рендерит examples/destiny/*/templates/*.tmpl).
+# Без `-count=1` правка такого .tmpl (без правки .go-теста) оставляет результат
+# `(cached) ok` — красный тест проходит гейт молча (так сломанный redis-render
+# проехал в f40da00: conf_dir/data_dir-волна сменила .tmpl, не тронув .go-тест).
+# Тот же приём уже стоит в test-plugins / test-integration / gen-openapi.
 test:
 	@for m in $(MODULES); do \
 		if [ -z "$$(cd $$m && go list ./... 2>/dev/null)" ]; then \
 			echo "skip $$m (no Go packages)"; \
 			continue; \
 		fi; \
-		echo "go test ./... in $$m"; \
-		(cd $$m && go test ./...) || exit 1; \
+		echo "go test -count=1 ./... in $$m"; \
+		(cd $$m && go test -count=1 ./...) || exit 1; \
 	done
 
 # Тесты community-плагинов examples/module/* — каждый ОТДЕЛЬНЫЙ go.mod ВНЕ go.work

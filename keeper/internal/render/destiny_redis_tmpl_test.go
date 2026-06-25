@@ -138,6 +138,8 @@ func TestRedisConf_ClusterAnnounceIP_PerHost(t *testing.T) {
 			"vars": map[string]any{
 				"password": "s3cr3t-redis-pass",
 				"config":   clusterConfig,
+				"data_dir": "/var/lib/redis",
+				"conf_dir": "/etc/redis",
 			},
 		}
 		out := renderRedisTmpl(t, "redis.conf.tmpl", root)
@@ -172,6 +174,8 @@ func TestRedisConf_ClusterAnnounceIP_StandaloneOmitsLine(t *testing.T) {
 		"self": map[string]any{"network": map[string]any{"primary_ip": "10.0.0.7"}},
 		"vars": map[string]any{
 			"password": "s3cr3t-redis-pass",
+			"data_dir": "/var/lib/redis",
+			"conf_dir": "/etc/redis",
 			"config": map[string]any{
 				"maxmemory":  "256mb",
 				"appendonly": "no",
@@ -221,6 +225,8 @@ func TestSentinelConf_AnnounceIP_PerHost(t *testing.T) {
 		"quorum":          "2",
 		"auth_user":       "",
 		"auth_pass":       "",
+		"data_dir":        "/var/lib/redis",
+		"conf_dir":        "/etc/redis",
 		"sentinel_config": map[string]any{},
 	}
 
@@ -276,6 +282,8 @@ func TestSentinelConf_DirectivesDeterministicOrder(t *testing.T) {
 			"quorum":      "2",
 			"auth_user":   "sentinel",
 			"auth_pass":   "",
+			"data_dir":    "/var/lib/redis",
+			"conf_dir":    "/etc/redis",
 			// Намеренно не отсортированы: range по MAP обязан отсортировать ключи.
 			"sentinel_config": map[string]any{
 				"sentinel down-after-milliseconds mymaster": "12000",
@@ -326,6 +334,8 @@ func TestSentinelConf_AuthRendered(t *testing.T) {
 			"quorum":          "2",
 			"auth_user":       "sentinel-user",
 			"auth_pass":       "s3cr3t-sentinel-pass",
+			"data_dir":        "/var/lib/redis",
+			"conf_dir":        "/etc/redis",
 			"sentinel_config": map[string]any{},
 		},
 	}
@@ -370,6 +380,8 @@ func TestRedisConf_Loadmodule_NoTrailingSpace(t *testing.T) {
 			"password":    "s3cr3t-redis-pass",
 			"config":      map[string]any{"maxmemory": "256mb"},
 			"loadmodules": loadmodules,
+			"data_dir":    "/var/lib/redis",
+			"conf_dir":    "/etc/redis",
 		},
 	}
 
@@ -425,6 +437,8 @@ func TestRedisConf_Loadmodule_EmptyAndAbsent(t *testing.T) {
 		vars := map[string]any{
 			"password": "s3cr3t-redis-pass",
 			"config":   map[string]any{"maxmemory": "256mb"},
+			"data_dir": "/var/lib/redis",
+			"conf_dir": "/etc/redis",
 		}
 		if loadmodules != nil {
 			vars["loadmodules"] = loadmodules

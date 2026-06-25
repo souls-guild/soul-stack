@@ -34,42 +34,72 @@ func TestNew_WritesToFile(t *testing.T) {
 	}
 }
 
-// TestNew_RotatesBySize — маленький max_size_mb вынуждает создать backup-файл.
+// TestNew_RotatesBySize — маленький max_size вынуждает создать backup-файлы.
 //
 // lumberjack ротирует, когда запись НЕ влезает в текущий файл при достигнутом
-// лимите. С max_size=1 МБ пишем заведомо больше мегабайта мелкими строками —
-// в каталоге должен появиться хотя бы один архивный файл рядом с активным.
+// лимите. С max_size=1 МБ пишем несколько записей по ~0.59 МБ — каждая вторая
+// не влезает и вызывает ротацию; в каталоге остаются активный + backup-файлы.
+//
+// Корень прежней flakiness (падало под параллельным `go test ./...`, не
+// изолированно): lumberjack на каждом Write запускает фоновую mill-горутину
+// (compress/removal backup-ов). Close() её НЕ дожидается — при MaxBackups>0 она
+// продолжала сканировать и трогать каталог уже после возврата тела теста, и
+// гонка с t.TempDir() cleanup (RemoveAll) давала «directory not empty».
+//
+// Детерминизм:
+//   - MaxBackups: 0 → millRunOnce делает ранний return и НЕ обращается к ФС
+//     (оставляем все backup-ы; ротация по размеру при этом полноценно
+//     работает). Фоновая горутина каталог не трогает — гонки с cleanup нет.
+//   - Пишем напрямую в ротатор, минуя slog-handler: точный контроль числа и
+//     размера записей, без зависимости от буферизации handler-а.
+//   - Close() перед ReadDir: текущий файл закрыт, синхронные rename-ы ротаций
+//     гарантированно на диске.
+//   - Записи >0.5 МБ разносят ротации во времени, исключая коллизию backup-имён
+//     (гранулярность lumberjack — миллисекунда).
 func TestNew_RotatesBySize(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "soul.log")
 
-	logger := New(Options{
-		Level:    "info",
-		Format:   "json",
-		File:     logPath,
-		Rotation: &config.LoggingRotation{MaxSizeMB: 1, MaxFiles: 3, Compress: false},
-	})
+	rot := &lumberjackWriter{
+		Filename:   logPath,
+		MaxSize:    1, // МБ
+		MaxBackups: 0, // см. комментарий: mill-горутина не трогает каталог
+		MaxAge:     0,
+		Compress:   false,
+	}
 
-	big := strings.Repeat("x", 4096)
-	for i := 0; i < 600; i++ { // ~2.4 МБ payload + JSON-обвязка
-		logger.Info("rotate-probe", slog.String("payload", big))
+	// Запись чуть больше половины лимита: каждая вторая не влезает и вызывает
+	// ротацию. 9 записей → 4 ротации (4 backup-а) + активный файл.
+	line := append([]byte(strings.Repeat("x", 600*1024)), '\n') // ~0.59 МБ
+	const writes = 9
+	for i := 0; i < writes; i++ {
+		if _, err := rot.Write(line); err != nil {
+			t.Fatalf("write %d: %v", i, err)
+		}
+	}
+	if err := rot.Close(); err != nil {
+		t.Fatalf("close rotator: %v", err)
 	}
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("read dir: %v", err)
 	}
-	var logs int
+	var active, backups int
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), "soul") && strings.HasSuffix(e.Name(), ".log") {
-			logs++
-		} else if strings.HasPrefix(e.Name(), "soul-") {
-			logs++ // архивный backup вида soul-2006-01-02T15-04-05.000.log[.gz]
+		switch {
+		case e.Name() == "soul.log":
+			active++
+		case strings.HasPrefix(e.Name(), "soul-") && strings.HasSuffix(e.Name(), ".log"):
+			backups++ // архивный backup вида soul-2006-01-02T15-04-05.000.log
 		}
 	}
-	if logs < 2 {
-		t.Errorf("expected active + at least one backup file, got %d log-files in %s", logs, dir)
+	if active != 1 {
+		t.Errorf("expected exactly one active soul.log, got %d", active)
+	}
+	if backups < 1 {
+		t.Errorf("expected at least one backup file from size rotation, got %d backups in %s", backups, dir)
 		for _, e := range entries {
 			t.Logf("  entry: %s", e.Name())
 		}
