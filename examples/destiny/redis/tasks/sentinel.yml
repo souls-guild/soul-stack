@@ -32,7 +32,7 @@
   module: core.file.rendered
   register: redis_sentinel_acl
   params:
-    path: "${ default(input.conf_dir, vars.redis_conf_dir) + '/sentinel-users.acl' }"
+    path: "${ vars.redis_conf_dir_eff + '/sentinel-users.acl' }"
     template: templates/sentinel-users.acl.tmpl
     mode: "${ vars.redis_secret_file_mode }"
     owner: "${ vars.redis_user }"
@@ -47,7 +47,7 @@
   module: core.file.rendered
   register: redis_sentinel_conf
   params:
-    path: "${ default(input.conf_dir, vars.redis_conf_dir) + '/sentinel.conf' }"
+    path: "${ vars.redis_conf_dir_eff + '/sentinel.conf' }"
     template: templates/sentinel.conf.tmpl
     mode: "${ vars.redis_secret_file_mode }"
     owner: "${ vars.redis_user }"
@@ -65,8 +65,8 @@
       # host-layout (директива B): шаблон выводит `dir` (рабочий каталог sentinel) из
       # data_dir и `aclfile` (sentinel-users.acl) из conf_dir. Эффективные значения с
       # дефолтами /var/lib/redis (vars.redis_data_dir) / /etc/redis (vars.redis_conf_dir).
-      data_dir:    "${ default(input.data_dir, vars.redis_data_dir) }"
-      conf_dir:    "${ default(input.conf_dir, vars.redis_conf_dir) }"
+      data_dir:    "${ vars.redis_data_dir_eff }"
+      conf_dir:    "${ vars.redis_conf_dir_eff }"
 
 # Полный systemd-юнит redis-sentinel (пакет не всегда заводит его под наш конфиг).
 # register — рестарт реактивно на изменение юнита (daemon-reload при смене unit
@@ -85,10 +85,11 @@
     group: "${ vars.root_group }"
     # has()-цепочка (НЕ default(input.install.method, …)): сам input.install может
     # отсутствовать целиком (корень) → default() упал бы no-such-key. binary →
-    # /usr/local/bin (install.yml разложил туда), иначе /usr/bin (distro-пакет).
+    # vars.redis_bin_dir (install.yml разложил туда; тот же layout-каталог), иначе
+    # /usr/bin (distro-пакет — НЕ наш layout, в vars не выносится).
     vars:
-      sentinel_bin: "${ has(input.install) && has(input.install.method) && input.install.method == 'binary' ? '/usr/local/bin' : '/usr/bin' }"
-      cli_bin:      "${ has(input.install) && has(input.install.method) && input.install.method == 'binary' ? '/usr/local/bin' : '/usr/bin' }"
+      sentinel_bin: "${ has(input.install) && has(input.install.method) && input.install.method == 'binary' ? vars.redis_bin_dir : '/usr/bin' }"
+      cli_bin:      "${ has(input.install) && has(input.install.method) && input.install.method == 'binary' ? vars.redis_bin_dir : '/usr/bin' }"
 
 - name: Ensure redis-sentinel is running and enabled at boot
   module: core.service.running

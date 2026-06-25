@@ -58,6 +58,17 @@ sentinel_service_name: redis-sentinel
 # чтобы переопределение оператора доезжало; этот var — единый источник дефолта.
 redis_conf_dir: /etc/redis
 
+# ── Эффективные пути conf/data (резолв input→дефолт ОДИН раз, директива «conf_dir в
+# vars») ────────────────────────────────────────────────────────────────────────
+# var→input CEL (vars.md, ADR-009/010 amendment 2026-06-24: file-var видит input.* и
+# другие file-vars того же слоя, eager-topological): резолв default(input.X, дефолт)
+# уходит СЮДА, задачи берут готовое ${ vars.redis_conf_dir_eff } вместо повторного
+# inline-default по файлам. Один источник правды на каталог; смена дефолта — в одном
+# месте. _eff-суффикс отделяет «эффективный путь (input или дефолт)» от raw-дефолта
+# redis_conf_dir/redis_data_dir выше (на который ссылается input.default в destiny.yml).
+redis_conf_dir_eff: "${ default(input.conf_dir, vars.redis_conf_dir) }"
+redis_data_dir_eff: "${ default(input.data_dir, vars.redis_data_dir) }"
+
 # data-dir redis (RDB/AOF, modules-dir). ДЕФОЛТ для input.data_dir (оператор может
 # переопределить под свой storage). modules-dir выводится из input.data_dir в задачах
 # (${ input.data_dir }/modules) — отдельного modules_dir в input больше нет (директива
@@ -66,6 +77,31 @@ redis_data_dir: /var/lib/redis
 
 # Каталог TLS PEM-материала (cert/key/CA). ИНВАРИАНТ (под conf_dir): tls/ внутри
 # conf-dir. Задачи строят путь как ${ input.conf_dir }/tls.
+
+# Каталог установки бинарей redis (redis-server/redis-cli/redis-sentinel) binary-ветки.
+# ИНВАРИАНТ (vars, не input): node-exporter-прецедент кладёт upstream-бинари в
+# /usr/local/bin — фиксированный layout-каталог, менять незачем. Задачи binary-ветки
+# собирают путь как ${ vars.redis_bin_dir }/redis-server (и -cli/-sentinel). Имя бинаря
+# совпадает со значением redis_service_name случайно (там семантика «имя СЕРВИСА»,
+# здесь «путь бинаря») — это РАЗНЫЕ vars, токен не переиспользуется.
+redis_bin_dir: /usr/local/bin
+
+# ── Пути binary-install tarball-а (директива «путь в одном месте») ──────────────
+# ИНВАРИАНТ-производные (vars, не input): пути временного tarball-а и распакованного
+# каталога upstream-install собираются из upstream-версии (input.install.version) в
+# ОДНОМ месте, а не дублируются inline по install.yml-задачам (fetch/extract/три
+# core.file.present src:). var→input CEL (eager-topological): file-var видит input.* и
+# другие file-vars слоя.
+#
+# ★ render-safety в МЁРТВОМ package-проходе: при install.method=package binary-блок
+# static-skip, НО file-vars резолвятся per-host ДО skip-проекции (eager, до задач) —
+# голый input.install.version упал бы «no such key: install». Поэтому версия нормализуется
+# has()-цепочкой к '' (значение не используется в package-проходе — задачи skip; в
+# binary-проходе validate гарантирует присутствие install.version). redis_install_tarball/
+# redis_src_dir ссылаются на этот нормализованный redis_install_ver (var→var, тот же слой).
+redis_install_ver:     "${ has(input.install) && has(input.install.version) ? input.install.version : '' }"
+redis_install_tarball: "${ '/tmp/redis-' + vars.redis_install_ver + '.tar.gz' }"
+redis_src_dir:         "${ '/tmp/redis-' + vars.redis_install_ver }"
 
 # Каталог systemd drop-in-ов redis-server (override поверх distro-юнита). ИНВАРИАНТ
 # (привязан к имени сервиса + layout systemd): /etc/systemd/system/<unit>.d. Задачи
@@ -96,6 +132,26 @@ redis_modules:
   json:       rejson.so
   search:     redisearch.so
   timeseries: redistimeseries.so
+
+# Каталог .so-модулей под data-dir: <data_dir>/modules. var→var (vars.redis_data_dir_eff).
+# Задачи modules.yml/loadmodules берут готовый путь отсюда — один источник правды.
+redis_modules_dir: "${ vars.redis_data_dir_eff + '/modules' }"
+
+# ── Version-guard Redis 8+ (директива C: vars-вычисление, не inline по задачам) ──
+# ЭФФЕКТИВНАЯ версия redis для version-gate модулей: input.version (distro-пин), когда
+# непуст (`!= ''`), ИНАЧЕ input.install.version (upstream-semver binary-ветки). scenario
+# передаёт ключ `version` ВСЕГДА (как '' при install.method=binary) → голый has() брал
+# бы '' и делал бы install.version мёртвой; поэтому нормализуем пустой version к
+# install.version. var→input CEL (eager, render-safe в любом проходе).
+redis_effective_version: "${ (has(input.version) && input.version != '') ? input.version : (has(input.install) && has(input.install.version) ? input.install.version : '') }"
+
+# Redis 8+? Мажор >= 8 (regex по эффективной версии: опц. epoch `N:` + мажор 8/9/двузначный).
+# На Redis 8+ модули ВСТРОЕНЫ в сервер — .so не качаем и loadmodule не пишем (директива C).
+# Единый источник version-gate: loadmodules (server.yml), include modules.yml (main.yml).
+# var→var (redis_effective_version). Пустая версия (обе absent — невозможно при валидном
+# вводе) regex не матчит → false → не гейтим (модули проходят как < 8).
+redis_is_v8plus: >-
+  ${ vars.redis_effective_version.matches('^([0-9]+:)?(8|9|[1-9][0-9])\\.') }
 
 # ── file-mode/owner инварианты (вынесены: >2 употреблений по задачам) ──────────
 # Литеральные значения; задачи берут через ${ vars.* }. Вынос сохраняет рендер

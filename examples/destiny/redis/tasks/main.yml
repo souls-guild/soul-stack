@@ -69,13 +69,10 @@
 
 # Модули ВСЕГДА ВСЕ из vars.redis_modules (директива C), но ТОЛЬКО где есть data-
 # плоскость redis-server (deploy_redis: в sentinel_only redis-server нет → модулям
-# негде грузиться) И Redis < 8 (на 8+ модули встроены в сервер — version-guard в
-# самом гейте, не в scenario). redis8 истинно, когда ЭФФЕКТИВНАЯ версия (input.version
-# distro-пин ИЛИ input.install.version upstream-semver) мажором >= 8. ЭФФЕКТИВНАЯ —
-# version, но ТОЛЬКО когда он непуст: scenario передаёт ключ `version` ВСЕГДА (как ''
-# при install.method=binary, has()-guard в ветках) → голый `has(input.version)` всегда
-# true и брал бы пустую строку, делая ветку install.version МЁРТВОЙ. Поэтому гейт
-# падает на install.version, когда version отсутствует ИЛИ пуст (`!= ''`). Предикат
-# static (input.* — допустим для conditional-include) → группа РЕАЛЬНО исключается из плана.
+# негде грузиться) И Redis < 8 (на 8+ модули встроены в сервер). version-guard вынесен
+# в vars (vars.redis_is_v8plus, единый источник с loadmodules server.yml) — здесь
+# просто `!vars.redis_is_v8plus`. conditional-include допускает vars. в предикате
+# (наряду с input./essence./incarnation.; register./soulprint. запрещены) → группа
+# РЕАЛЬНО исключается из плана на Redis 8+ / в sentinel_only.
 - include: modules.yml
-  when: "default(input.deploy_redis, true) && !((has(input.version) && input.version != '') ? input.version : (has(input.install) && has(input.install.version) ? input.install.version : '')).matches('^([0-9]+:)?(8|9|[1-9][0-9])\\\\.')"
+  when: "default(input.deploy_redis, true) && !vars.redis_is_v8plus"

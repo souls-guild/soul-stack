@@ -1,9 +1,11 @@
 # Ветка диспетчера create — режим sentinel (master-replica + sentinel-демон;
 # перенос redis-cluster (master-replica) + redis-sentinel прежних сервисов).
-# Подключается из main.yml через include: и раскрывается в плоский список ДО
-# render. Каждая задача несёт `when: input.redis_type == 'sentinel'` — статический
-# предикат (только input.*), Keeper гасит его placeholder-skip-ом на cluster-прогоне
-# (isStaticWhen) и рендерит на sentinel-прогоне.
+# Подключается из main.yml через CONDITIONAL-INCLUDE: `when: input.redis_type ==
+# 'sentinel'` стоит НА include — на cluster-прогоне весь файл group-drop (задачи
+# физически не рендерятся), на sentinel-прогоне раскрывается в плоский список ДО
+# render. Per-task when по redis_type больше НЕ нужен (гейт на include) — задачи
+# внутри безусловны (REPLICAOF-задача сохраняет свой `where:` — это per-host роль-
+# предикат master/replica, не режим-гейт).
 #
 # ★ sentinel — БАЗОВАЯ ветка деплоя (после удаления standalone-ветки 2026-06-25):
 # replicas_per_master=0 даёт standalone-эквивалент (один master + sentinel-демон).
@@ -34,7 +36,6 @@
 #    него позиций не занимают. int() от uint64 (YAML→uint64 в L0, JSON→double в проде)
 #    унифицирует числовой тип CEL.
 - name: Guard sentinel topology size matches one master and replicas
-  when: "input.redis_type == 'sentinel'"
   assert:
     that:
       - "int(size(soulprint.hosts)) == 1 + int(input.replicas_per_master)"
@@ -51,7 +52,6 @@
 #    одинаков у всех хостов → через apply.input КОРРЕКТЕН. announce-ip НЕ здесь —
 #    per-host в sentinel.conf.tmpl из .self.network.primary_ip.
 - name: Apply redis destiny (install + render redis.conf/users.acl/sentinel.conf + systemd)
-  when: "input.redis_type == 'sentinel'"
   apply:
     destiny: redis
     input:
@@ -158,7 +158,6 @@
 #    НЕ tls_only — TLS включён → плагин ОБЯЗАН по TLS (иначе AUTH-пароль plaintext-ом).
 #    PING по compute.tls_port + tls=true + tls_ca (vault(ref) в scenario-проходе).
 - name: Wait for each redis node to answer PING
-  when: "input.redis_type == 'sentinel'"
   module: community.redis.command
   retry: { count: 10, delay: 3s }
   params:
@@ -187,7 +186,6 @@
 #    TLS (иначе masterauth/REPLICAOF и репликация ушли бы plaintext-ом). addr/
 #    master_addr на compute.tls_port; tls_ca — CA-PEM (vault(ref), verify master).
 - name: Make replicas follow the elected master (REPLICAOF)
-  when: "input.redis_type == 'sentinel'"
   where: "soulprint.self.sid != soulprint.hosts[0].sid"
   module: community.redis.replica
   params:
@@ -205,7 +203,6 @@
 #    reconcile (MONITOR/REMOVE+MONITOR/SET/CONFIG SET) перенесён 1:1 из Ansible
 #    redis_sentinel_update.py (см. плагин sentinel.go).
 - name: Configure each sentinel to monitor the elected master (SENTINEL MONITOR)
-  when: "input.redis_type == 'sentinel'"
   module: community.redis.sentinel
   params:
     addr:        "127.0.0.1:26379"
@@ -226,7 +223,6 @@
 #    старого redis-sentinel/create (верный same-task health-gate). retry/until +
 #    failed_when по register.self.result этой же задачи.
 - name: Wait until each sentinel answers PONG on :26379
-  when: "input.redis_type == 'sentinel'"
   module: community.redis.command
   changed_when: false
   retry:

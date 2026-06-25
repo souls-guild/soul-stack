@@ -66,7 +66,7 @@
     - name: Ensure the redis TLS directory exists
       module: core.file.directory
       params:
-        path: "${ default(input.conf_dir, vars.redis_conf_dir) + '/tls' }"
+        path: "${ vars.redis_conf_dir_eff + '/tls' }"
         owner: "${ vars.redis_user }"
         group: "${ vars.redis_group }"
         mode: "0750"
@@ -78,7 +78,7 @@
       module: core.file.present
       register: redis_tls_cert
       params:
-        path: "${ default(input.conf_dir, vars.redis_conf_dir) + '/tls/redis.crt' }"
+        path: "${ vars.redis_conf_dir_eff + '/tls/redis.crt' }"
         content: "${ vault(input.tls.cert_ref) }"
         mode: "${ vars.redis_pem_mode }"
         owner: "${ vars.redis_user }"
@@ -91,7 +91,7 @@
       module: core.file.present
       register: redis_tls_key
       params:
-        path: "${ default(input.conf_dir, vars.redis_conf_dir) + '/tls/redis.key' }"
+        path: "${ vars.redis_conf_dir_eff + '/tls/redis.key' }"
         content: "${ vault(input.tls.key_ref) }"
         mode: "${ vars.redis_pem_mode }"
         owner: "${ vars.redis_user }"
@@ -104,7 +104,7 @@
       module: core.file.present
       register: redis_tls_ca
       params:
-        path: "${ default(input.conf_dir, vars.redis_conf_dir) + '/tls/ca.crt' }"
+        path: "${ vars.redis_conf_dir_eff + '/tls/ca.crt' }"
         content: "${ vault(input.tls.ca_ref) }"
         mode: "${ vars.redis_pem_mode }"
         owner: "${ vars.redis_user }"
@@ -120,7 +120,7 @@
   module: core.file.rendered
   register: redis_acl
   params:
-    path: "${ default(input.conf_dir, vars.redis_conf_dir) + '/users.acl' }"
+    path: "${ vars.redis_conf_dir_eff + '/users.acl' }"
     template: templates/users.acl.tmpl
     mode: "${ vars.redis_secret_file_mode }"
     owner: "${ vars.redis_user }"
@@ -134,7 +134,7 @@
   module: core.file.rendered
   register: redis_conf
   params:
-    path: "${ default(input.conf_dir, vars.redis_conf_dir) + '/redis.conf' }"
+    path: "${ vars.redis_conf_dir_eff + '/redis.conf' }"
     template: templates/redis.conf.tmpl
     mode: "${ vars.redis_secret_file_mode }"
     owner: "${ vars.redis_user }"
@@ -146,31 +146,23 @@
       # RDB/AOF) и `aclfile` из conf_dir (${conf_dir}/users.acl — туда же, куда задача
       # «Render users.acl» кладёт файл). Эффективные значения с дефолтом — оператор
       # переопределяет под свой storage; при дефолте рендер бит-в-бит прежний.
-      conf_dir: "${ default(input.conf_dir, vars.redis_conf_dir) }"
-      data_dir: "${ default(input.data_dir, vars.redis_data_dir) }"
+      conf_dir: "${ vars.redis_conf_dir_eff }"
+      data_dir: "${ vars.redis_data_dir_eff }"
       # Директивы loadmodule — отдельной секцией шаблона (НЕ ключи config-map: range
       # `{{key}} {{value}}` дал бы хвостовой пробел у loadmodule без значения).
-      # ★ ДИРЕКТИВА «модули ВСЕГДА ВСЕ»: пути .so строятся из vars.redis_modules (ПОЛНЫЙ
-      # набор-инвариант) + <data_dir>/modules. НЕ из input.modules (поле удалено).
-      # ПОРЯДОК — ЯВНЫЙ отсортированный список алиасов (bloom/json/search/timeseries):
-      # CEL .map() по MAP наследует НЕДЕТЕРМИНИРОВАННЫЙ Go-порядок итерации (не сортирует,
-      # в отличие от Go text/template range) → дал бы ложный change/рестарт между
-      # прогонами. Поэтому итерируем по СОРТИРОВАННОМУ array-литералу алиасов, имя .so
-      # каждого — из vars.redis_modules[<alias>] (один источник имён). Источник — vars,
-      # scenario модули не передаёт.
-      # ★ REDIS 8+ (version-guard в destiny, директива C): модули встроены в сервер →
-      # loadmodules ПУСТОЙ (.so не качаем, loadmodule не пишем). redis8 истинно, когда
-      # ЭФФЕКТИВНАЯ версия (input.version distro-пин ИЛИ input.install.version upstream)
-      # мажором >= 8: regex ^([0-9]+:)?(8|9|двузначный мажор)\. ЭФФЕКТИВНАЯ — version,
-      # но ТОЛЬКО когда непуст (`!= ''`): scenario передаёт `version` ВСЕГДА (как '' при
-      # install.method=binary), голый has() брал бы '' и делал ветку install.version
-      # мёртвой. Версия неизвестна (обе absent/пусты — невозможно при валидном вводе) →
-      # не гейтим (модули проходят, как < 8).
+      # ★ ДИРЕКТИВА «модули ВСЕГДА ВСЕ»: version-guard (vars.redis_is_v8plus) и путь
+      # каталога модулей (vars.redis_modules_dir) ВЫНЕСЕНЫ в vars.yml — здесь только
+      # тернар «Redis 8+ → пусто, иначе список путей». Redis 8+: модули встроены в
+      # сервер → loadmodules ПУСТОЙ (.so не качаем, loadmodule не пишем). Иначе пути
+      # ВСЕХ .so набора-инварианта: ПОРЯДОК — ЯВНЫЙ отсортированный array-литерал алиасов
+      # (bloom/json/search/timeseries), а НЕ .map() по map-у (CEL итерация по map
+      # недетерминирована → ложный change/рестарт); имя .so каждого — vars.redis_modules
+      # [<alias>] (один источник имён). Источник — vars, scenario модули не передаёт.
       loadmodules: >-
-        ${ ((has(input.version) && input.version != '') ? input.version : (has(input.install) && has(input.install.version) ? input.install.version : '')).matches('^([0-9]+:)?(8|9|[1-9][0-9])\\.')
+        ${ vars.redis_is_v8plus
            ? []
            : ['bloom', 'json', 'search', 'timeseries'].map(alias,
-               default(input.data_dir, vars.redis_data_dir) + '/modules/' + vars.redis_modules[alias]) }
+               vars.redis_modules_dir + '/' + vars.redis_modules[alias]) }
 
 # Каталог drop-in-а systemd. core.file.rendered создаёт только файл, родительский
 # каталог .service.d/ — нет, а дистрибутивный пакет redis-server его не заводит.

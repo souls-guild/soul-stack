@@ -1,9 +1,10 @@
 # Ветка диспетчера create — режим cluster (honest hash-slot Redis Cluster, 16384
-# слота; перенос инварианта из прежнего redis-cluster-live). Подключается из
-# main.yml через include: и раскрывается в плоский список ДО render. Каждая задача
-# несёт `when: input.redis_type == 'cluster'` — статический предикат (только
-# input.*), Keeper гасит его placeholder-skip-ом на sentinel-прогоне (isStaticWhen)
-# и рендерит на cluster-прогоне. См. sentinel.yml — тот же механизм диспетчера.
+# слота; перенос инварианта из прежнего redis-cluster-live). Подключается из main.yml
+# через CONDITIONAL-INCLUDE: `when: input.redis_type == 'cluster'` стоит НА include —
+# на sentinel-прогоне весь файл group-drop (задачи физически не рендерятся), на
+# cluster-прогоне раскрывается в плоский список ДО render. Per-task when по redis_type
+# больше НЕ нужен (гейт на include) — задачи внутри безусловны. См. sentinel.yml — тот
+# же механизм диспетчера.
 #
 # Раскладку ролей master/replica и слотов делает ПЛАГИН (community.redis.cluster
 # action create) детерминированно по сортировке ключей nodes. Scenario лишь строит
@@ -30,7 +31,6 @@
 #    в cluster-прогоне, дошедшем до render); has()-тернар больше не нужен.
 #    replicas_per_master имеет default:0 → int() безопасен без обёртки.
 - name: Guard cluster topology size matches shards and replicas
-  when: "input.redis_type == 'cluster'"
   assert:
     that:
       - "size(soulprint.hosts) == int(input.shards) * (1 + int(input.replicas_per_master))"
@@ -55,7 +55,6 @@
 #    int() на uint64-операндах cluster_node_timeout — унификация числового типа
 #    (YAML→uint64 в L0, JSON→double в проде), иначе CEL «no such overload».
 - name: Apply redis destiny (cluster install + render redis.conf/users.acl + systemd)
-  when: "input.redis_type == 'cluster'"
   apply:
     destiny: redis
     input:
@@ -133,7 +132,6 @@
 #    открыт, но AUTH-пароль по plaintext недопустим). addr на compute.tls_port + tls_ca
 #    (CA-PEM, vault(ref) в scenario-проходе, seal vault-слоем).
 - name: Wait for each cluster node to answer PING
-  when: "input.redis_type == 'cluster'"
   module: community.redis.command
   retry: { count: 10, delay: 3s }
   params:
@@ -163,7 +161,6 @@
 #    они не мешают handshake. cert/key host-инвариантны → apply.input корректен.
 #    tls_cert/tls_key/tls_ca — vault(ref) в scenario-проходе (seal vault-слоем).
 - name: Build the redis cluster (CLUSTER MEET/ADDSLOTS/REPLICATE)
-  when: "input.redis_type == 'cluster'"
   run_once: true
   module: community.redis.cluster
   params:

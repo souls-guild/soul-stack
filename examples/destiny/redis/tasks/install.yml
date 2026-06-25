@@ -61,22 +61,21 @@
     #   строку в этом мёртвом проходе (значение не используется — задача skip).
     - name: Fetch redis tarball
       module: core.url.fetched
-      vars:
-        ver: "${ has(input.install) && has(input.install.version) ? input.install.version : '' }"
       params:
-        url: "${ (has(input.install) && has(input.install.base_url) ? input.install.base_url : '') + '/redis-' + vars.ver + '-' + soulprint.self.os.arch + '.tar.gz' }"
-        path: "${ '/tmp/redis-' + vars.ver + '.tar.gz' }"
+        # base_url has()-guard render-safe в мёртвом package-проходе; upstream-версия и
+        # путь tarball-а — из file-vars (vars.redis_install_ver/redis_install_tarball),
+        # собраны в vars.yml в одном месте (директива «путь в одном месте»).
+        url: "${ (has(input.install) && has(input.install.base_url) ? input.install.base_url : '') + '/redis-' + vars.redis_install_ver + '-' + soulprint.self.os.arch + '.tar.gz' }"
+        path: "${ vars.redis_install_tarball }"
         mode: "0644"
 
     # 2. Распаковать tarball в каталог. format auto-detect по .tar.gz. Идемпотентно:
     #    core.archive пишет marker и повторно не распаковывает тот же архив.
     - name: Extract redis tarball
       module: core.archive.extracted
-      vars:
-        ver: "${ has(input.install) && has(input.install.version) ? input.install.version : '' }"
       params:
-        path: "${ '/tmp/redis-' + vars.ver + '.tar.gz' }"
-        dest: "${ '/tmp/redis-' + vars.ver }"
+        path: "${ vars.redis_install_tarball }"
+        dest: "${ vars.redis_src_dir }"
 
     # 3. distro-юзер/группа redis (binary НЕ создаёт их — это делает distro-пакет).
     #    Группа ПЕРЕД юзером (primary group юзера). system-аккаунт без login-shell:
@@ -96,7 +95,7 @@
         group: "${ vars.redis_group }"
         system: true
         shell: /usr/sbin/nologin
-        home: "${ default(input.data_dir, vars.redis_data_dir) }"
+        home: "${ vars.redis_data_dir_eff }"
 
     # 4. Разложить redis-server/redis-cli/redis-sentinel в /usr/local/bin (mode 0755)
     #    из распакованного каталога. core.file.present теперь умеет src: — копию
@@ -119,39 +118,35 @@
     #    шапку). owner/group root — бинари в /usr/local/bin владеет root (как distro-
     #    пакет). redis-sentinel ставится во ВСЕХ режимах (как distro-пакет): sentinel.yml
     #    ждёт бинарь на месте при sentinel_enabled.
-    - name: Install the redis-server binary into /usr/local/bin
+    - name: Install the redis-server binary into the local bin directory
       module: core.file.present
       register: redis_server_bin
-      vars:
-        # has()-guard: render-safe в мёртвом package-проходе (см. fetch-задачу выше).
-        src_dir: "${ '/tmp/redis-' + (has(input.install) && has(input.install.version) ? input.install.version : '') }"
       params:
-        path: /usr/local/bin/redis-server
-        src: "${ vars.src_dir + '/redis-server' }"
+        # path: целевой бинарь из vars.redis_bin_dir (директива «путь установки в vars»);
+        # src: из распакованного каталога vars.redis_src_dir (директива «путь в одном
+        # месте»). Оба — file-vars, собраны в vars.yml; render-safe в package-проходе.
+        path: "${ vars.redis_bin_dir + '/redis-server' }"
+        src: "${ vars.redis_src_dir + '/redis-server' }"
         mode: "0755"
         owner: "${ vars.root_owner }"
         group: "${ vars.root_group }"
 
-    - name: Install the redis-cli binary into /usr/local/bin
+    - name: Install the redis-cli binary into the local bin directory
       module: core.file.present
       register: redis_cli_bin
-      vars:
-        src_dir: "${ '/tmp/redis-' + (has(input.install) && has(input.install.version) ? input.install.version : '') }"
       params:
-        path: /usr/local/bin/redis-cli
-        src: "${ vars.src_dir + '/redis-cli' }"
+        path: "${ vars.redis_bin_dir + '/redis-cli' }"
+        src: "${ vars.redis_src_dir + '/redis-cli' }"
         mode: "0755"
         owner: "${ vars.root_owner }"
         group: "${ vars.root_group }"
 
-    - name: Install the redis-sentinel binary into /usr/local/bin
+    - name: Install the redis-sentinel binary into the local bin directory
       module: core.file.present
       register: redis_sentinel_bin
-      vars:
-        src_dir: "${ '/tmp/redis-' + (has(input.install) && has(input.install.version) ? input.install.version : '') }"
       params:
-        path: /usr/local/bin/redis-sentinel
-        src: "${ vars.src_dir + '/redis-sentinel' }"
+        path: "${ vars.redis_bin_dir + '/redis-sentinel' }"
+        src: "${ vars.redis_src_dir + '/redis-sentinel' }"
         mode: "0755"
         owner: "${ vars.root_owner }"
         group: "${ vars.root_group }"

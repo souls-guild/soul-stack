@@ -35,7 +35,7 @@
 - name: Ensure the redis modules directory exists
   module: core.file.directory
   params:
-    path: "${ default(input.data_dir, vars.redis_data_dir) + '/modules' }"
+    path: "${ vars.redis_modules_dir }"
     parents: true
     owner: "${ vars.redis_user }"
     group: "${ vars.redis_group }"
@@ -64,7 +64,7 @@
   module: core.url.fetched
   params:
     url:   "${ input.modules_base_url + '/' + soulprint.self.os.arch + '/' + vars.redis_modules.bloom }"
-    path:  "${ default(input.data_dir, vars.redis_data_dir) + '/modules/' + vars.redis_modules.bloom }"
+    path:  "${ vars.redis_modules_dir + '/' + vars.redis_modules.bloom }"
     mode:  "0750"
     owner: "${ vars.redis_user }"
     group: "${ vars.redis_group }"
@@ -73,7 +73,7 @@
   module: core.url.fetched
   params:
     url:   "${ input.modules_base_url + '/' + soulprint.self.os.arch + '/' + vars.redis_modules.json }"
-    path:  "${ default(input.data_dir, vars.redis_data_dir) + '/modules/' + vars.redis_modules.json }"
+    path:  "${ vars.redis_modules_dir + '/' + vars.redis_modules.json }"
     mode:  "0750"
     owner: "${ vars.redis_user }"
     group: "${ vars.redis_group }"
@@ -82,7 +82,7 @@
   module: core.url.fetched
   params:
     url:   "${ input.modules_base_url + '/' + soulprint.self.os.arch + '/' + vars.redis_modules.search }"
-    path:  "${ default(input.data_dir, vars.redis_data_dir) + '/modules/' + vars.redis_modules.search }"
+    path:  "${ vars.redis_modules_dir + '/' + vars.redis_modules.search }"
     mode:  "0750"
     owner: "${ vars.redis_user }"
     group: "${ vars.redis_group }"
@@ -91,7 +91,7 @@
   module: core.url.fetched
   params:
     url:   "${ input.modules_base_url + '/' + soulprint.self.os.arch + '/' + vars.redis_modules.timeseries }"
-    path:  "${ default(input.data_dir, vars.redis_data_dir) + '/modules/' + vars.redis_modules.timeseries }"
+    path:  "${ vars.redis_modules_dir + '/' + vars.redis_modules.timeseries }"
     mode:  "0750"
     owner: "${ vars.redis_user }"
     group: "${ vars.redis_group }"

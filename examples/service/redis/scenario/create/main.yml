@@ -16,13 +16,15 @@ description: >-
 
   ДИСПЕТЧЕР ПО redis_type (2026-06-22): этот файл — диспетчер. Тело прогона вынесено
   в ветки create/cluster.yml / sentinel.yml, подключаемые через include: ниже.
-  include: раскрывается БЕЗУСЛОВНО в плоский список ДО render (when: на самой
-  include-задаче запрещён), поэтому ветвление делает не include, а `when:` на каждой
-  задаче ветки: предикат по input.redis_type статичен (isStaticWhen — только input.*),
-  Keeper вычисляет его at-render и гасит неактивную ветку placeholder-skip-ом
-  (ADR-012(d) Вариант b). Оператор всегда зовёт create; режим выбирает redis_type.
-  Порядок include — cluster, sentinel: ветки добавляются В ХВОСТ, индексы предыдущих
-  веток не сдвигаются.
+  Ветвление делает CONDITIONAL-INCLUDE (orchestration.md §6, Вариант B group-drop):
+  `when: input.redis_type == '<mode>'` стоит НА include-задаче — статический
+  input-предикат (isStaticWhen) РЕАЛЬНО исключает неактивную ветку из плана
+  (render-phase group-drop), а не гасит её placeholder-skip-ом. Прежний per-task when
+  по каждой задаче ветки убран (гейт переехал на include): дублировал бы include-when.
+  Оператор всегда зовёт create; режим выбирает redis_type. enum redis_type гарантирует
+  попадание ровно в одну ветку (тихого зелёного no-op быть не может). L0-кейсы ассертят
+  presence-матчером (task_present/task_absent), которому group-drop безопасен
+  (позиционные индексы не важны).
 
   ★ РЕЖИМЫ СЕРВИСА сужены до sentinel/cluster (2026-06-25): standalone и sentinel_only
   убраны из сервиса (решение пользователя). standalone покрывается sentinel с 0 реплик
@@ -52,7 +54,7 @@ input:
       Режим развёртывания (концепция роли). Два режима: sentinel (master-replica +
       sentinel-демон; replicas_per_master=0 даёт standalone-эквивалент) и cluster
       (honest hash-slot Redis Cluster). redis_type выбирает ветку диспетчера
-      (include: cluster.yml / sentinel.yml + when: по redis_type на каждой задаче).
+      (conditional-include cluster.yml / sentinel.yml + when: по redis_type на include).
 
   version:
     type: string
@@ -683,14 +685,19 @@ state_changes:
              }
            : {} }
 
-# Тело прогона — ветки диспетчера, по одной на режим. Раскрываются inline ДО render
-# (orchestration.md §6); ветвление по redis_type — через `when:` на их задачах.
+# Тело прогона — ветки диспетчера, по одной на режим. CONDITIONAL-INCLUDE
+# (orchestration.md §6, Вариант B): `when:` стоит НА include — статический
+# input-предикат по redis_type РЕАЛЬНО исключает неактивную ветку из плана
+# (render-phase group-drop), её задачи физически не рендерятся. Прежний per-task when
+# внутри cluster.yml/sentinel.yml убран (гейт переехал сюда). Порядок include —
+# cluster, sentinel; индексы не важны (ветки взаимоисключающие по enum).
 #
 # Mode-guard (прежняя core.cmd.shell-задача «режим реализован») УБРАН: неизвестный
 # redis_type отвергает input-валидация Keeper-а по enum redis_type ([sentinel,
-# cluster]) ДО рендера — раньше и понятнее, чем shell-test на Soul. Обе ветки gated
-# на свой redis_type, enum гарантирует попадание в одну из них (тихого зелёного no-op
-# быть не может).
+# cluster]) ДО рендера — раньше и понятнее, чем shell-test на Soul. enum гарантирует
+# попадание ровно в одну ветку (тихого зелёного no-op быть не может).
 tasks:
   - include: cluster.yml
+    when: "input.redis_type == 'cluster'"
   - include: sentinel.yml
+    when: "input.redis_type == 'sentinel'"
