@@ -102,9 +102,16 @@ input:
     default: node_exporter
     pattern: "^[a-z_][a-z0-9_-]*$"
     description: >-
-      Системный сервис-аккаунт node_exporter (он же primary-группа). Стабильный
-      uid нужен, т.к. textfile-каталог переживает рестарты (прод-конвенция §2,
-      stateful-ветка).
+      Системный сервис-аккаунт node_exporter. Стабильный uid нужен, т.к.
+      textfile-каталог переживает рестарты (прод-конвенция §2, stateful-ветка).
+
+  group:
+    type: string
+    default: node_exporter
+    pattern: "^[a-z_][a-z0-9_-]*$"
+    description: >-
+      Primary-группа сервис-аккаунта node_exporter и владелец textfile-каталога.
+      Задаётся независимо от user (по умолчанию совпадает с именем аккаунта).
 
   textfile_dir:
     type: string

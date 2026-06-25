@@ -39,6 +39,7 @@ assert:
             listen: ":9100"
             textfile_dir: /var/lib/node_exporter
             user: node_exporter
+            group: node_exporter
           self:
             choirs: []
             # traits — registry-проекция (ADR-060), пустой объект без меток.

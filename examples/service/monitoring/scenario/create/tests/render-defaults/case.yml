@@ -84,14 +84,15 @@ assert:
         name: node_exporter
         system: true
 
-    # Дизамбигуатор от redis-exporter user — name.
+    # Дизамбигуатор от redis-exporter user — name. home НЕ задаётся: account.yml
+    # больше не прописывает home (system-аккаунт без домашней директории, useradd
+    # -M; см. tasks/account.yml) — у задачи ключа home нет.
     - module: core.user.present
       params_subset:
         name: node_exporter
         system: true
         group: node_exporter
         shell: /usr/sbin/nologin
-        home: /
 
     # textfile-каталог через декларативное core.file.directory. Единственный.
     - module: core.file.directory
@@ -126,6 +127,7 @@ assert:
           vars:
             bin_dir: /usr/local/bin
             user: node_exporter
+            group: node_exporter
             listen: ":9100"
             textfile_dir: /var/lib/node_exporter
           self:

@@ -50,6 +50,7 @@ func TestNodeExporterTemplates_ParseAndRender(t *testing.T) {
 		"vars": map[string]any{
 			"bin_dir":      "/usr/local/bin",
 			"user":         "node_exporter",
+			"group":        "node_exporter",
 			"listen":       "127.0.0.1:9100",
 			"textfile_dir": "/var/lib/node_exporter",
 		},
@@ -90,6 +91,7 @@ var nodeExporterRenderVars = map[string]any{
 	"vars": map[string]any{
 		"bin_dir":      "/usr/local/bin",
 		"user":         "node_exporter",
+		"group":        "node_exporter",
 		"listen":       "127.0.0.1:9100",
 		"textfile_dir": "/var/lib/node_exporter",
 	},

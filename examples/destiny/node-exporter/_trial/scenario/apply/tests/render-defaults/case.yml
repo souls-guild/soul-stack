@@ -68,13 +68,15 @@ assert:
         name: node_exporter
         system: true
 
+    # home НЕ ассертим: core.user.present всегда передаёт useradd -M (каталог не
+    # создаётся), поэтому `home:` в params опущен — system-аккаунт без домашней
+    # директории (паритет ansible create_home: no).
     - module: core.user.present
       params_subset:
         name: node_exporter
         system: true
         group: node_exporter
         shell: /usr/sbin/nologin
-        home: /
 
     # textfile-каталог через декларативное core.file.directory (НЕ core.exec.run
     # install -d): idempotent по mode/owner/group, чинит дрейф, поддерживает dry-run.

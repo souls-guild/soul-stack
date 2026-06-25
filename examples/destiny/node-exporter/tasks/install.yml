@@ -12,22 +12,24 @@
 # arch для URL берётся из soulprint.self.os.arch (soulprint доступен в destiny-CEL).
 
 # 1. Скачать tarball во временный путь. URL собирается CEL-ом из base_url +
-#    version + arch (soulprint.self.os.arch). checksum верифицируется ДО
-#    материализации файла; при пустом input.sha256 core.url трактует checksum как
-#    «без проверки» и идёт idempotency по SHA-256 содержимого
-#    (soul/internal/coremod/url/fetched.go).
+#    version + arch (soulprint.self.os.arch). Путь скачивания — vars.tarball_path
+#    (единый источник правды на download-путь, см. vars.yml). checksum
+#    верифицируется ДО материализации файла; при пустом input.sha256 core.url
+#    трактует checksum как «без проверки» (Validate допускает пустой checksum) и
+#    идёт idempotency по SHA-256 содержимого (soul/internal/coremod/url/fetched.go).
 - name: Fetch node_exporter tarball
   module: core.url.fetched
   params:
     url: "${ input.base_url + '/v' + input.version + '/node_exporter-' + input.version + '.linux-' + soulprint.self.os.arch + '.tar.gz' }"
-    path: "${ '/tmp/node_exporter-' + input.version + '.tar.gz' }"
+    path: "${ vars.tarball_path }"
     checksum: "${ input.sha256 }"
     mode: "0644"
 
 # 2. Распаковать tarball в каталог. format auto-detect по .tar.gz. Идемпотентно:
-#    core.archive пишет marker и повторно не распаковывает тот же архив.
+#    core.archive пишет marker и повторно не распаковывает тот же архив. Пути —
+#    из vars (tarball_path / extract_dir), один источник правды.
 - name: Extract node_exporter tarball
   module: core.archive.extracted
   params:
-    path: "${ '/tmp/node_exporter-' + input.version + '.tar.gz' }"
-    dest: "${ '/tmp/node_exporter-' + input.version }"
+    path: "${ vars.tarball_path }"
+    dest: "${ vars.extract_dir }"

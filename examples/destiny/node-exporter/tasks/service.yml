@@ -45,7 +45,7 @@
   module: core.file.rendered
   register: node_exporter_unit
   params:
-    path: /etc/systemd/system/node_exporter.service
+    path: "${ '/etc/systemd/system/' + vars.service_name + '.service' }"
     template: templates/node_exporter.service.tmpl
     mode: "0644"
     owner: root
@@ -53,13 +53,14 @@
     vars:
       bin_dir:       "${ input.bin_dir }"
       user:          "${ input.user }"
+      group:         "${ input.group }"
       listen:        "${ input.listen }"
       textfile_dir:  "${ input.textfile_dir }"
 
 - name: Ensure node_exporter is running and enabled at boot
   module: core.service.running
   params:
-    name: node_exporter
+    name: "${ vars.service_name }"
     enabled: true
 
 # Рестарт основного демона — реактивно на ЛЮБОЕ из двух изменений: unit-файл
@@ -73,4 +74,4 @@
   onchanges: [node_exporter_unit, node_exporter_bin]
   timeout: 30s
   params:
-    name: node_exporter
+    name: "${ vars.service_name }"

@@ -1,0 +1,24 @@
+# vars.yml — destiny-локалы node-exporter (docs/destiny/vars.md): инварианты,
+# ОДИНАКОВЫЕ для всех incarnation и НЕ переопределяемые снаружи (не input — это
+# граница «контракт vs внутренности»). Резолвятся ОДИН раз на destiny-проход
+# (per-host) до задач; ссылка на input.* разрешена (vars вычисляются ПОСЛЕ
+# валидации input). Файл закоммичен в git destiny-репо — секретов тут нет.
+
+# ── Имя systemd-сервиса node_exporter (директива «имя сервиса в vars, ВЕЗДЕ») ──
+# ИНВАРИАНТ (vars, не input): имя основного юнита — контракт между unit-файлом
+# (/etc/systemd/system/<service_name>.service), core.service.running/restarted и
+# SyslogIdentifier шаблона. Менять незачем (привязано к раскладке юнита) → не
+# operator-переопределяемое. Один источник правды: задачи берут ${ vars.service_name }
+# вместо литерала node_exporter. ВНИМАНИЕ: это имя СЕРВИСА (systemd) и имя бинаря —
+# совпадение значений случайно; имена collector-таймеров (node-exporter-smartmon.timer
+# и т.п.) — ОТДЕЛЬНЫЕ юниты, из этого var НЕ выводятся.
+service_name: node_exporter
+
+# ── Артефакт-пути во временном каталоге (директива «download path в vars») ─────
+# ИНВАРИАНТ (vars, не input): tarball скачивается в /tmp и распаковывается рядом;
+# /tmp — фиксированный staging, оператору менять незачем. Имена зависят от
+# input.version (vars вычисляются после валидации input). install.yml берёт
+# ${ vars.tarball_path } (fetch.path / extract.path) и ${ vars.extract_dir }
+# (extract.dest) — один источник правды на оба производных пути.
+tarball_path: "${ '/tmp/node_exporter-' + input.version + '.tar.gz' }"
+extract_dir:  "${ '/tmp/node_exporter-' + input.version }"
