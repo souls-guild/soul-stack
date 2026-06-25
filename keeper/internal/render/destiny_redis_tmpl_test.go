@@ -461,6 +461,92 @@ func TestRedisConf_Loadmodule_EmptyAndAbsent(t *testing.T) {
 	}
 }
 
+// TestSentinelConf_AclfileSecondFile — guard на ВТОРОЙ aclfile (system-ACL-users d2):
+// sentinel.conf обязан указывать aclfile = ${conf_dir}/sentinel-users.acl (ОТДЕЛЬНЫЙ
+// от users.acl redis-server). Путь следует conf_dir (директива B). Регресс «sentinel
+// без своего aclfile» или хардкод /etc/redis при override conf_dir = красный.
+func TestSentinelConf_AclfileSecondFile(t *testing.T) {
+	root := map[string]any{
+		"self": map[string]any{"network": map[string]any{"primary_ip": "10.0.0.5"}},
+		"vars": map[string]any{
+			"master_name":     "master",
+			"master_ip":       "10.0.0.1",
+			"master_port":     "6379",
+			"quorum":          "2",
+			"auth_user":       "",
+			"auth_pass":       "",
+			"data_dir":        "/var/lib/redis",
+			"conf_dir":        "/opt/redis-conf", // нестандартный conf_dir — aclfile обязан следовать
+			"sentinel_config": map[string]any{},
+		},
+	}
+	out := renderRedisTmpl(t, "sentinel.conf.tmpl", root)
+	if !strings.Contains(out, "aclfile /opt/redis-conf/sentinel-users.acl") {
+		t.Fatalf("sentinel.conf: нет aclfile под conf_dir (sentinel-users.acl):\n%s", out)
+	}
+	// users.acl redis-server в sentinel.conf НЕ упоминается (это второй, отдельный файл).
+	if strings.Contains(out, "/users.acl") {
+		t.Fatalf("sentinel.conf ссылается на users.acl redis-server — должен на свой sentinel-users.acl:\n%s", out)
+	}
+}
+
+// TestSentinelUsersAcl_DeterministicOrder — sentinel-users.acl.tmpl (ВТОРОЙ aclfile,
+// system-ACL-users d2) рендерит МАП системных юзеров sentinel-демона в ОТСОРТИРОВАННОМ
+// порядке (детерминизм — нет ложного change/рестарта sentinel-демона), хеширует пароль
+// (sha256, не plaintext). Тот же инвариант, что users.acl. Включает default-юзера
+// (у sentinel-демона он в aclfile, в отличие от redis-server requirepass).
+func TestSentinelUsersAcl_DeterministicOrder(t *testing.T) {
+	root := map[string]any{
+		"vars": map[string]any{
+			"users": map[string]any{
+				"sentinel":   map[string]any{"perms": "+auth +sentinel|master", "state": "on", "password": "sentinel-pass"},
+				"default":    map[string]any{"perms": "allchannels allkeys +@all", "state": "on", "password": "default-pass"},
+				"monitoring": map[string]any{"perms": "-@all +info", "state": "on", "password": "mon-pass"},
+				"haproxy":    map[string]any{"perms": "-@all +ping", "state": "on", "password": "haproxy-pass"},
+			},
+		},
+	}
+	const runs = 12
+	var first string
+	for i := 0; i < runs; i++ {
+		out := renderRedisTmpl(t, "sentinel-users.acl.tmpl", root)
+		lines := nonEmptyLines(out)
+		if len(lines) != 4 {
+			t.Fatalf("ожидалось 4 строки user, получено %d:\n%s", len(lines), out)
+		}
+		// Отсортировано: default < haproxy < monitoring < sentinel.
+		gotNames := []string{userName(lines[0]), userName(lines[1]), userName(lines[2]), userName(lines[3])}
+		want := []string{"default", "haproxy", "monitoring", "sentinel"}
+		for j := range want {
+			if gotNames[j] != want[j] {
+				t.Fatalf("порядок строк не отсортирован: got %v want %v\n%s", gotNames, want, out)
+			}
+		}
+		if i == 0 {
+			first = out
+		} else if out != first {
+			t.Fatalf("прогон %d дал ИНОЙ вывод (недетерминизм):\n%s", i, out)
+		}
+	}
+	// Пароль — ХЕШЕМ (#<sha256hex>), plaintext не утекает.
+	if strings.Contains(first, "default-pass") || strings.Contains(first, "sentinel-pass") {
+		t.Fatalf("plaintext-пароль в sentinel-users.acl (должен быть sha256-хеш):\n%s", first)
+	}
+	if !strings.Contains(first, "#") {
+		t.Fatalf("нет sha256-хеша пароля (#<hash>):\n%s", first)
+	}
+}
+
+// TestSentinelUsersAcl_EmptyMapValid — пустой map → валидный aclfile без юзеров
+// (back-compat: destiny без input.sentinel_users рендерит пустой файл).
+func TestSentinelUsersAcl_EmptyMapValid(t *testing.T) {
+	root := map[string]any{"vars": map[string]any{"users": map[string]any{}}}
+	out := renderRedisTmpl(t, "sentinel-users.acl.tmpl", root)
+	if len(nonEmptyLines(out)) != 0 {
+		t.Fatalf("пустой map должен дать файл без user-строк:\n%s", out)
+	}
+}
+
 // nonEmptyLines — непустые строки рендера (отбрасывает blank-строки от
 // {{- -}}-обрамления комментария шаблона).
 func nonEmptyLines(s string) []string {

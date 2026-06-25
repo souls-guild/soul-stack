@@ -64,6 +64,44 @@ tls_cert_ref: "secret/services/redis/tls#cert"
 tls_key_ref:  "secret/services/redis/tls#key"
 tls_ca_ref:   "secret/services/redis/tls#ca"
 
+# ── Системные ACL-юзеры Redis (концепция Ansible-роли redis: redis_system_users /
+#    redis_sentinel_system_users) ────────────────────────────────────────────────
+# Имя→ACL-perms-строка СЛУЖЕБНЫХ юзеров, без которых кластер не работает: replica
+# (репликация PSYNC), monitoring (экспортёр метрик), sentinel (sentinel↔redis AUTH),
+# haproxy (health-check балансировщика). perms скопированы 1:1 из vars/main.yml роли
+# (redis_system_users / redis_sentinel_system_users) — НЕ выдумывать, источник истины.
+#
+# Два набора, потому что у redis-server и sentinel-демона РАЗНЫЕ требования к командам
+# (sentinel-команды vs обычные redis-команды) → ДВА aclfile: users.acl (redis-server,
+# system_acl_users) и sentinel-users.acl (sentinel-демон, system_acl_users_sentinel).
+#
+# Пароль КАЖДОГО системного юзера — в Vault по той же ветке, что operator-extra:
+# secret/redis/<incarnation>/users/<name>#password. scenario резолвит keeper-side
+# через vault() в render-фазе и доливает системных в apply.input.users ПОВЕРХ
+# operator-extra (last-wins; см. create/cluster.yml/sentinel.yml, add_user).
+#
+# ★ default-юзер: в system_acl_users (redis-server) его НЕТ — он задаётся requirepass
+# в redis.conf (модель кирпича: redis.conf.tmpl «requirepass {{.vars.password}}»,
+# users.acl.tmpl его не дублирует). В system_acl_users_sentinel default ЕСТЬ — у
+# sentinel-демона нет requirepass-эквивалента для aclfile-доступа, поэтому default
+# объявляется в sentinel-users.acl с тем же секретом secret/redis/<inc>#password
+# (как роль). Имена системных = default/replica/monitoring/sentinel/haproxy —
+# validate-guard create отвергает operator-extra с любым из этих имён (коллизия).
+#
+# Набор redis-server (redis_system_users роли, БЕЗ default — он в requirepass):
+system_acl_users:
+  replica:    "+psync +replconf +ping"
+  monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+  sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+  haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+
+# Набор sentinel-демона (redis_sentinel_system_users роли; ВКЛЮЧАЕТ default):
+system_acl_users_sentinel:
+  default:    "allchannels allkeys +@all"
+  monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+  sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+
 # Merge-подложка redis.conf (defaults роли) — НИЖНИЙ слой merge(): persistence-
 # пресет, вычисленные maxmemory/policy и passthrough оператора наслаиваются
 # поверх. Этот merged итог рендерится в полный redis.conf (destiny `redis`).

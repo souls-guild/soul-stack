@@ -21,8 +21,28 @@
 # дублировал бы include-when). Задачи file внутренних when: не несут — на keep
 # (include-when истинно) рендерятся обычным путём.
 
+# sentinel-users.acl — ВТОРОЙ aclfile, ТОЛЬКО для sentinel-демона (отдельный
+# perms-набор: sentinel-команды). register — рестартить демон при изменении набора.
+# owner/group redis, mode 0640 — содержит password-хеши, читает только сервис.
+# Шаблон range-ит MAP (сортировка ключей → детерминизм) и хеширует пароль (sha256).
+# Пустой/не передан input.sentinel_users → файл без юзеров (валидный aclfile;
+# back-compat — destiny без поля рендерит пустой). ДО sentinel.conf: его aclfile-
+# директива ссылается на этот файл, при старте sentinel обязан его найти.
+- name: Render sentinel-users.acl
+  module: core.file.rendered
+  register: redis_sentinel_acl
+  params:
+    path: "${ default(input.conf_dir, vars.redis_conf_dir) + '/sentinel-users.acl' }"
+    template: templates/sentinel-users.acl.tmpl
+    mode: "${ vars.redis_secret_file_mode }"
+    owner: "${ vars.redis_user }"
+    group: "${ vars.redis_group }"
+    vars:
+      users: "${ default(input.sentinel_users, {}) }"
+
 # sentinel.conf из переданных параметров master-а. register — рестартить демон при
 # изменении. announce-ip рендерится в шаблоне per-host из .self (НЕ из vars).
+# aclfile (директива sentinel.conf) указывает на sentinel-users.acl (см. шаблон).
 - name: Render sentinel.conf
   module: core.file.rendered
   register: redis_sentinel_conf
@@ -43,8 +63,10 @@
       auth_pass:   "${ default(input.sentinel.auth_pass, '') }"
       sentinel_config: "${ default(input.sentinel.config, {}) }"
       # host-layout (директива B): шаблон выводит `dir` (рабочий каталог sentinel) из
-      # data_dir. Эффективное значение с дефолтом /var/lib/redis (vars.redis_data_dir).
+      # data_dir и `aclfile` (sentinel-users.acl) из conf_dir. Эффективные значения с
+      # дефолтами /var/lib/redis (vars.redis_data_dir) / /etc/redis (vars.redis_conf_dir).
       data_dir:    "${ default(input.data_dir, vars.redis_data_dir) }"
+      conf_dir:    "${ default(input.conf_dir, vars.redis_conf_dir) }"
 
 # Полный systemd-юнит redis-sentinel (пакет не всегда заводит его под наш конфиг).
 # register — рестарт реактивно на изменение юнита (daemon-reload при смене unit
@@ -74,11 +96,13 @@
     name: "${ vars.sentinel_service_name }"
     enabled: true
 
-# Рестарт реактивно на изменение sentinel.conf или юнита. core.service при смене
-# unit сам делает daemon-reload перед рестартом.
-- name: Restart redis-sentinel because config or unit changed
+# Рестарт реактивно на изменение sentinel.conf, sentinel-users.acl или юнита.
+# core.service при смене unit сам делает daemon-reload перед рестартом. ACL sentinel-
+# демона перечитывается только рестартом (отдельного hot-reload-сценария для sentinel-
+# aclfile нет — набор служебный, меняется лишь на ротации/create).
+- name: Restart redis-sentinel because config, ACL or unit changed
   module: core.service.restarted
-  onchanges: [redis_sentinel_conf, redis_sentinel_unit]
+  onchanges: [redis_sentinel_conf, redis_sentinel_acl, redis_sentinel_unit]
   timeout: 30s
   params:
     name: "${ vars.sentinel_service_name }"

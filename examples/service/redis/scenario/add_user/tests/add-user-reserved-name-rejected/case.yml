@@ -1,0 +1,43 @@
+# L0-испытание validate-guard add_user (system-ACL-users d2): operator НЕ может
+# добавить юзера с именем СЛУЖЕБНОГО (default/replica/monitoring/sentinel/haproxy).
+# Оператор задаёт username=sentinel — зарезервировано (доливается из essence ПОВЕРХ
+# operator-extra → молча перекрыл бы sentinel-perms). validate-правило add_user/main.yml
+# ловит на INPUT-валидации (422 ДО applying). Правило false → expect_render_error.
+name: add_user with reserved system name aborts at input validation
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.5 }
+    os: { arch: amd64 }
+
+  state:
+    redis_type: sentinel
+    redis_version: "7.2.4"
+    conf_dir: /etc/redis
+    data_dir: /var/lib/redis
+    redis_config:
+      maxmemory: "256mb"
+    redis_users:
+      bob:
+        perms: "~app:* +@read"
+        state: "on"
+
+  essence:
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+
+  # Оператор пытается добавить юзера с зарезервированным именем sentinel.
+  input:
+    username: sentinel
+    perms: "~* +@all"
+    state: "on"
+
+  vault:
+    secret/redis/add_user:
+      password: addusr-redis-pass-16ch
+
+expect_render_error: "зарезервировано за служебным"

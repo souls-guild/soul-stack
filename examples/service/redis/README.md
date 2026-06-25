@@ -82,7 +82,7 @@ passthrough-директивы оператора, SHALLOW last-wins ([templatin
 | `redis_type` | enum `sentinel`/`cluster` | режим развёртывания (реализованы оба) |
 | `redis_version` | string | эффективная версия Redis: distro-native пин (`install.method=package`, из input `version`) **или** upstream-semver (`install.method=binary`, из `install.version`); см. input `version` / `install` |
 | `redis_config` | object | **итог трансляции** — merged-конфиг `redis.conf` (default → preset → вычисления → passthrough; для `cluster` — плюс `cluster-*`-директивы) |
-| `redis_users` | map `username → {perms, state}` | ACL-пользователи Redis; `perms` — полная ACL-строка (пароли НЕ в state — keeper-side Vault) |
+| `redis_users` | map `username → {perms, state}` | **operator-extra** ACL-пользователи Redis (только заведённые оператором); `perms` — полная ACL-строка (пароли НЕ в state — keeper-side Vault). **Системные** служебные юзеры (`replica`/`monitoring`/`sentinel`/`haproxy` и т.д.) сюда **НЕ** пишутся — они доливаются в `users.acl` из `essence.system_acl_users` на каждом рендере (см. [«Системные ACL-юзеры»](#системные-acl-юзеры)) |
 | `redis_hosts` | array `{sid, role}` | хосты топологии (пишется `[]`; точные роли `primary`/`replica`/`sentinel` для cluster/sentinel раскладывает apply-сторона — в state не фиксируются) |
 | `redis_sentinel` | object `{master_name, quorum}` | факты sentinel-режима: имя monitored master (из `essence.sentinel_master_name`, дефолт `master`) + quorum. `quorum` всегда `0` (auto `size/2+1` вычисляется в apply, в state не материализуется). Вне режима `sentinel` — пустой объект |
 
@@ -115,7 +115,7 @@ v3): `tls` / `install` / `persistence` / `memory_mb` / `maxmemory_policy` / `mod
 | `replicas_per_master` | integer, опц., default `0`, min `0` | **(оба режима)** реплик на каждый master. `cluster` — реплик на шард (roster = `shards * (1 + replicas_per_master)`); `sentinel` — реплик master-а (roster = `1 + replicas_per_master`). `0` — без реплик (`sentinel` с `0` = standalone-эквивалент). Унифицировано 2026-06-25 (заменило прежние `replicas` + `replicas_per_shard`) |
 | `shards` | integer, обяз. при `cluster` (`required_when`), min `1` | **(cluster)** число master-шардов; 16384 hash-слота делятся поровну между мастерами. Обязателен при `redis_type=cluster` через `required_when: "input.redis_type == 'cluster'"` — пропуск рвёт input-валидацию ДО рендера |
 | `cluster_node_timeout` | integer, опц., default `5000`, min `1` | **(cluster)** таймаут gossip между нодами, мс (директива `cluster-node-timeout`) |
-| `users` | map `имя → {perms, state}` | ACL-юзеры; `perms` — полная ACL-строка Redis, `state` ∈ `on`/`off` |
+| `users` | map `имя → {perms, state}` | **operator-extra** ACL-юзеры; `perms` — полная ACL-строка Redis, `state` ∈ `on`/`off`. Имя **не может** совпасть с системным служебным (`default`/`replica`/`monitoring`/`sentinel`/`haproxy`) — коллизию отвергает input-валидация (422, см. [«Системные ACL-юзеры»](#системные-acl-юзеры)). Сливается **поверх** системных (last-wins) в `users.acl` |
 | `redis_settings` | object (passthrough) | произвольные директивы `redis.conf` key→value; **бьют всё** в итоговом merge |
 | `tls` | object `{enable, only, port, cert_ref, key_ref, ca_ref}`, опц. | **(TLS)** параметры TLS Redis (концепция `redis_tls_*` роли). operator-input **бьёт essence** (каждое под-поле опционально; недостающие берут дефолт из `essence.tls_*`). `enable` — главный гейт рендера PEM/директив; `only` — закрыть plain-порт (scenario ставит `port 0`); `port` — TLS-порт (директива `tls-port`, дефолт essence `7379`); `cert_ref`/`key_ref`/`ca_ref` — Vault-**ПУТИ** серверного cert/key и CA (форма `<mount>/<path>#<field>`, **не** сам PEM). destiny читает PEM через `vault(ref)` в ячейке `content` (`core.file.present`, seal-маскинг — НЕ `.tmpl`). Пустой/не передан → TLS off. `tls.only` требует `tls.enable` (`validate`) |
 **Чего во входном контракте нет (essence-параметры или авто-вычисление):**
@@ -143,7 +143,11 @@ applying):
 - `tls.only` требует `tls.enable` — только-TLS без включённого TLS закрывает
   plain-порт и не открывает TLS-порт (у Redis не остаётся ни одного listener-а);
 - `install.method=binary` требует `install.base_url` и `install.version` — без них
-  не из чего собрать URL upstream-tarball-а.
+  не из чего собрать URL upstream-tarball-а;
+- имя `input.users` **не** входит в `[default, replica, monitoring, sentinel, haproxy]`
+  — operator-extra не может занять имя системного служебного юзера (его молча
+  перекрыли бы доливаемые системные perms; см. [«Системные ACL-юзеры»](#системные-acl-юзеры)).
+  Тот же guard в `add_user` ([`validate:`](scenario/add_user/main.yml)).
 
 Параметров `logrotate_enable` / `sysctl_enable` / `thp_disable` во входном контракте
 **нет**: отключение Transparent Huge Pages, logrotate-конфиг и sysctl-тюнинг — **безусловный
@@ -274,6 +278,74 @@ operator-флагов нет, задачи рендерятся **всегда**
   (зависит от модуля ядра `tcp_bbr`, на Debian не загружен по умолчанию) — отложен.
 
 Все три набора значений host-инвариантны → приходят в destiny через `apply.input`.
+
+## Системные ACL-юзеры
+
+Помимо operator-extra (`input.users`) сервис **всегда доливает** в `users.acl` набор
+**служебных** ACL-юзеров, без которых кластер не работает: `replica` (репликация
+`PSYNC`), `monitoring` (экспортёр метрик), `sentinel` (AUTH sentinel↔redis), `haproxy`
+(health-check балансировщика). perms каждого скопированы 1:1 из Ansible-роли redis
+(`redis_system_users` / `redis_sentinel_system_users`) и живут в
+[`essence/_default.yaml`](essence/_default.yaml) (`system_acl_users` —
+для `redis-server`; `system_acl_users_sentinel` — для sentinel-демона). Оператор их **не
+задаёт** и **не видит** во входной форме — это author-context essence.
+
+### Merge: системные снизу, operator-extra сверху
+
+Во **всех** задачах, рендерящих `users.acl` (create cluster/sentinel + day-2
+`add_user`/`update_config`/`add_node`), `apply.input.users` собирается двойным
+`merge()`: **сначала** системные из `essence.system_acl_users` (нижний слой, `state: on`,
+пароль из Vault), **поверх** — operator-extra (`input.users` на create / `state.redis_users`
+на day-2 / `compute.users_new` в `add_user`). Порядок аргументов `merge()` = приоритет:
+last-wins, operator-extra перекрыл бы одноимённого системного — но коллизия имён
+закрыта validate-guard (ниже), поэтому слои не пересекаются.
+
+Доступ к набору — через `default(essence.system_acl_users, {})`: **back-compat** —
+инкарнации со старым essence без этого поля системных НЕ получают (фича включается
+**обновлением essence**, не кодом scenario).
+
+### ★ Долив на day-2 (инвариант)
+
+`add_user` / `update_config` / `add_node` перерендеривают **весь** `users.acl` (не
+append) тем же destiny-кирпичом. Поэтому каждая из этих задач **обязана** долить
+системных — иначе перерендер **стёр бы** `replica`/`monitoring`/`sentinel`/`haproxy`
+и сломал бы на day-2 репликацию / sentinel↔redis / health-check. Системные **не
+лежат в state** (state хранит только operator-extra), поэтому доливаются из `essence`
+на **каждом** рендере. Особо критичен `add_node`: без системного `replica` новая нода
+не выполнит `PSYNC` — кластер не примет её как реплику.
+
+### default-юзер: разделён по двум aclfile
+
+- **redis-server** — `default` в `system_acl_users` **отсутствует**: он задаётся
+  `requirepass` в `redis.conf` (`users.acl` его не дублирует, как и в Ansible-роли).
+- **sentinel-демон** — `default` в `system_acl_users_sentinel` **есть**: у sentinel-демона
+  нет `requirepass`-эквивалента для aclfile-доступа, поэтому `default` объявляется в
+  `sentinel-users.acl` с тем же главным секретом `secret/redis/<incarnation>#password`
+  (что и requirepass redis-server — иначе sentinel-демон не пустил бы default-клиента
+  общим паролем).
+
+### 2-й aclfile sentinel-демона
+
+sentinel-демон требует **отдельный** perms-набор (`sentinel|*`-команды, не обычные
+redis-команды), поэтому пишется во **второй** aclfile —
+[`sentinel-users.acl`](../../destiny/redis/templates/sentinel-users.acl.tmpl) (на него
+указывает `aclfile` в `sentinel.conf`). Только в режиме `sentinel` scenario передаёт
+destiny новое additive-поле `input.sentinel_users` (из `essence.system_acl_users_sentinel`);
+operator-extra сюда **не** доливается (sentinel-доступ служебный). Пароли:
+`default` → главный `secret/redis/<incarnation>#password`; остальные
+(`monitoring`/`sentinel`/`haproxy`) → ветка `secret/redis/<incarnation>/users/<name>#password`.
+Полную механику рендера см. в
+[destiny-README → «Системные ACL-юзеры и второй aclfile»](../../destiny/redis/README.md#системные-acl-юзеры-и-второй-aclfile).
+
+### validate-guard на резервированные имена
+
+operator-extra (`input.users` на create, `input.username` в `add_user`) **не может**
+занять имя системного: `[default, replica, monitoring, sentinel, haproxy]` зарезервированы.
+Коллизию ловит input-валидация (`validate:`, [create](scenario/create/main.yml) +
+[add_user](scenario/add_user/main.yml)) — **422 `validation_failed` ДО applying**, а не
+молчаливое переопределение (operator `replica` с `~* +@all` молча выдал бы лишние права
+и сломал бы replica-perms репликации). Guard **input-only**: список имён захардкожен в
+обоих сценариях (essence в `validate`-контексте недоступен — структурный CEL-барьер).
 
 ## Сценарии
 
@@ -411,6 +483,9 @@ per-module doc [`docs/module/community/redis/README.md`](../../../docs/module/co
 2. **`apply: destiny: redis`** на **новой** ноде (`where: soulprint.self.sid == input.new_node_sid`)
    — install + render `redis.conf` (cluster-директивы из `incarnation.state.redis_config` —
    **источник истины**, зафиксированный `create`, не перевычисляется → нет drift) + systemd.
+   `users.acl` новой ноды доливает **системных** из `essence.system_acl_users` поверх
+   `state.redis_users` — без системного `replica` нода не выполнит `PSYNC` и кластер не
+   примет её как реплику (см. [«★ Долив на day-2»](#-долив-на-day-2-инвариант)).
 3. **health-gate PING** на новой ноде — обязана ответить ДО ввода в кластер.
 4. **add-node** (`community.redis.cluster`, `action: add-node`, `run_once`) — endpoint-ы
    `new_node`/`seed`/`master` строятся из roster-а по SID. Плагин шлёт `CLUSTER MEET`
@@ -509,7 +584,10 @@ backlog (плагинный verb `failover`), пока master рестартит
 развёрнутое — day-2 источник истины = `state`, [§7a](../../../docs/destiny/production-conventions.md#7a-day-2-источник-истины--incarnationstate)). Два шага:
 
 1. **re-render** `redis.conf` на диск с новым merged config (полный файл — desired
-   state для следующего рестарта процесса).
+   state для следующего рестарта процесса). Тот же destiny-кирпич перерендеривает и
+   `users.acl`, поэтому задача **доливает системных** из `essence.system_acl_users`
+   поверх `state.redis_users` — иначе hot-reload-проход стёр бы служебных юзеров (см.
+   [«★ Долив на day-2»](#-долив-на-day-2-инвариант)).
 2. **hot-reload** (`community.redis.config`, `CONFIG SET` + `CONFIG REWRITE`): передаётся
    **весь** `compute.redis_config`, плагин сам пропускает startup-only-директивы по
    денилисту (`port`/`dir`/`aclfile`/…) и применяет только hot-settable. Идемпотентно —
@@ -528,8 +606,13 @@ namedfields. Параметры state `config` (вкл. денилист) — в
 **не** во входе — лежит в Vault по конвенции `secret/redis/<incarnation>/users/<name>#password`,
 резолвится keeper-side. Два шага:
 
-1. **re-render** `users.acl` на диск с новым набором (`state.redis_users` + добавляемый,
-   upsert по имени; per-user пароли из Vault, `.tmpl` пишет хеш, не plaintext).
+1. **re-render** `users.acl` на диск с новым набором: **системные** служебные юзеры
+   (из `essence.system_acl_users`) + operator-extra (`state.redis_users` + добавляемый,
+   upsert по имени). re-render пишет **весь** файл, поэтому долив системных обязателен —
+   иначе перерендер стёр бы `replica`/`monitoring`/`sentinel`/`haproxy` (см.
+   [«★ Долив на day-2»](#-долив-на-day-2-инвариант)). per-user пароли из Vault, `.tmpl`
+   пишет хеш, не plaintext. `input.username` ∈ резервированных имён отвергает
+   [`validate:`](scenario/add_user/main.yml) (422).
 2. **hot-reload ACL** (`community.redis.acl`, `ACL LOAD`): живой инстанс перечитывает
    `aclfile` целиком. Идемпотентно по конструкции; плагин делает diff `ACL LIST`
    до/после (`changed=false` при совпадении).
@@ -576,14 +659,27 @@ keeper-side CEL-функцией `vault(...)` в render-фазе (templating.md 
 конвенции:
 
 - requirepass: `secret/redis/<incarnation.name>#password`;
-- per-user: `secret/redis/<incarnation.name>/users/<name>#password`.
+- per-user (operator-extra **и** системные `replica`/`monitoring`/`sentinel`/`haproxy`):
+  `secret/redis/<incarnation.name>/users/<name>#password`;
+- sentinel-демон `default`-юзер (в `sentinel-users.acl`): главный
+  `secret/redis/<incarnation.name>#password` (общий с requirepass redis-server).
 
 Путь строится из доверенного контекста (incarnation, не operator-input). В destiny
 и в плагин через `apply.input` / `params` уходит уже **зарезолвленное значение** —
 пароль доезжает на хост значением, а не ссылкой; Soul vault-клиент не тянет
 (ADR-012). В git нет ни значения, ни operator-указателя на секрет. В `users.acl`
-пароль пишется **хешем** (`#<sha256>`), plaintext в файл не попадает. Плагин
-`community.redis` не логирует `params["password"]` (ADR-010).
+**и** `sentinel-users.acl` пароль пишется **хешем** (`#<sha256>`), plaintext в файл
+не попадает. Оба файла — `mode 0640`, owner/group `redis` (читает только сервис).
+Плагин `community.redis` не логирует `params["password"]` (ADR-010).
+
+> **★ Исключение: `sentinel auth-pass` в `sentinel.conf` — plaintext на диске.**
+> Пароль, которым sentinel-демон аутентифицируется на monitored master
+> (`sentinel auth-pass <master> <pass>`), пишется в `sentinel.conf` **в открытом виде** —
+> это требование протокола Sentinel (хеш `#<sha256>` он **не** принимает, в отличие от
+> ACL-aclfile). Поле `sentinel.auth_pass` помечено `secret: true` (маскируется в
+> логах/трейсах/state), сам файл — `mode 0640` owner `redis`, но на диске значение
+> хранится открытым. Это единственное место, где Redis-секрет лежит plaintext-ом
+> (вынужденно, by-protocol), — в отличие от хешей в обоих aclfile.
 
 **TLS-PEM — Vault-ПУТИ, не литеральный PEM.** Оператор задаёт `tls.cert_ref` /
 `tls.key_ref` / `tls.ca_ref` — Vault-**пути** (форма `<mount>/<path>#<field>`,

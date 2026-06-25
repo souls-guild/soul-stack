@@ -162,16 +162,32 @@ tasks:
         password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
         config:   "${ compute.redis_config }"
         modules_base_url: "${ default(incarnation.state.modules_base_url, '') }"
+        # ★★ КРИТИЧНО (system-ACL-users d2): redis.conf-рендер этой задачи перерендеривает
+        # и users.acl (тот же destiny `redis` кирпич) → ОБЯЗАН долить системные из essence,
+        # иначе update_config СТЁР БЫ replica/monitoring/sentinel/haproxy (как add_user).
+        # Системные ПЕРВЫМИ, operator-extra (state.redis_users) ПОВЕРХ (last-wins). Системные
+        # НЕ в state (пункт 7 d2) — доливаются из essence на каждом рендере. has()-guard на
+        # state.redis_users — back-compat (инкарнации без operator-extra). Vault-пароль той
+        # же ветки secret/redis/<inc>/users/<name>#password.
         users: >-
-          ${ has(incarnation.state.redis_users)
-             ? merge(incarnation.state.redis_users.map(name, {
+          ${ merge(
+               merge(default(essence.system_acl_users, {}).map(name, {
                  name: {
-                   'perms':    incarnation.state.redis_users[name].perms,
-                   'state':    incarnation.state.redis_users[name].state,
+                   'perms':    essence.system_acl_users[name],
+                   'state':    'on',
                    'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
                  }
-               }))
-             : {} }
+               })),
+               has(incarnation.state.redis_users)
+                 ? merge(incarnation.state.redis_users.map(name, {
+                     name: {
+                       'perms':    incarnation.state.redis_users[name].perms,
+                       'state':    incarnation.state.redis_users[name].state,
+                       'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+                     }
+                   }))
+                 : {}
+             ) }
 
   # 2. HOT-RELOAD: применить hot-settable директивы к живому инстансу (CONFIG SET) +
   #    CONFIG REWRITE (персист в redis.conf — на самом деле redis.conf уже отрендерен

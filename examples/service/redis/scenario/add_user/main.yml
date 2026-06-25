@@ -56,6 +56,16 @@ input:
       Состояние пользователя: on (активен) / off (заблокирован, но правило хранится).
       По умолчанию on.
 
+# ── Декларативные input-инварианты (validate:) ───────────────────────────────────
+# ★ system-ACL-users guard (дизайн d2): operator НЕ может добавить юзера с именем
+# СЛУЖЕБНОГО (default/replica/monitoring/sentinel/haproxy). Системные доливаются в
+# users.acl из essence ПОВЕРХ operator-extra (last-wins) — operator `replica` молча
+# перекрыл бы replica-perms репликации. Ловим на INPUT-валидации (422 ДО applying),
+# как в create. INPUT-ONLY (essence недоступен): список имён захардкожен (= create).
+validate:
+  - that: "!(input.username in ['default', 'replica', 'monitoring', 'sentinel', 'haproxy'])"
+    message: "имя ACL-пользователя зарезервировано за служебным (default/replica/monitoring/sentinel/haproxy): выбери другое имя — служебные юзеры заводятся автоматически из essence"
+
 # ── Вычисляемые scenario-vars (compute:) ─────────────────────────────────────────
 # Рун-уровневый контекст (input/essence/incarnation — без soulprint). tls_* —
 # дискриминатор коннекта плагина из state.tls (state_schema v3), идентично restart/
@@ -99,15 +109,32 @@ tasks:
         password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
         config:   "${ incarnation.state.redis_config }"
         modules_base_url: "${ default(incarnation.state.modules_base_url, '') }"
-        # Полный набор юзеров (state + новый), каждый с per-user паролем из Vault.
+        # ★★ КРИТИЧНО (system-ACL-users d2): ПОЛНЫЙ users.acl = СИСТЕМНЫЕ (из essence,
+        # ПЕРВЫМИ) + operator-extra (state.redis_users + новый, compute.users_new,
+        # ПОВЕРХ). add_user перерендеривает ВЕСЬ файл (не append) → БЕЗ долива системных
+        # этот рендер СТЁР БЫ replica/monitoring/sentinel/haproxy → сломал бы репликацию/
+        # sentinel/health-check на day-2. Системные доливаются на КАЖДОМ рендере из
+        # essence.system_acl_users (они НЕ в state — state хранит только operator-extra,
+        # пункт 7 d2). last-wins: operator-extra перекрывает одноимённого системного
+        # (но имена системных закрыты validate-guard create — коллизии быть не должно).
+        # Vault-пароль каждого — secret/redis/<inc>/users/<name>#password (та же ветка).
         users: >-
-          ${ merge(compute.users_new.map(name, {
-               name: {
-                 'perms':    compute.users_new[name].perms,
-                 'state':    compute.users_new[name].state,
-                 'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
-               }
-             })) }
+          ${ merge(
+               merge(default(essence.system_acl_users, {}).map(name, {
+                 name: {
+                   'perms':    essence.system_acl_users[name],
+                   'state':    'on',
+                   'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+                 }
+               })),
+               merge(compute.users_new.map(name, {
+                 name: {
+                   'perms':    compute.users_new[name].perms,
+                   'state':    compute.users_new[name].state,
+                   'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+                 }
+               }))
+             ) }
 
   # 2. HOT-RELOAD ACL: community.redis.acl шлёт ACL LOAD — живой инстанс перечитывает
   #    aclfile (отрендеренный шагом 1) целиком. Идемпотентно по конструкции; плагин

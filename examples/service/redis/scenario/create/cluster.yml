@@ -74,16 +74,34 @@
       # yes при TLS (ветвление по input.redis_type внутри compute). HOST-ИНВАРИАНТ →
       # apply.input на targeted[0] корректен.
       config: "${ compute.redis_config }"
+      # ★ СИСТЕМНЫЕ + operator-extra (system-ACL-users, дизайн d2 Вариант A): сначала
+      # СЛУЖЕБНЫЕ юзеры (replica/monitoring/sentinel/haproxy) из essence.system_acl_users
+      # (perms-строка → {perms,state:'on',password vault()}), ПОВЕРХ — operator-extra
+      # (input.users), last-wins (operator перекрывает одноимённого системного). Без
+      # системных репликация/sentinel/health-check сломаются. default — НЕ здесь (он в
+      # requirepass redis.conf). Имена системных закрыты validate-guard (input.users не
+      # может пересечься). Пароль каждого — Vault secret/redis/<inc>/users/<name>#password
+      # (та же ветка, что operator-extra). merge(list-of-maps) сворачивает оба списка
+      # одноключевых map-ов в один (templating §2.3); порядок аргументов = приоритет.
       users: >-
-        ${ has(input.users)
-           ? merge(input.users.map(name, {
+        ${ merge(
+             merge(default(essence.system_acl_users, {}).map(name, {
                name: {
-                 'perms':    input.users[name].perms,
-                 'state':    input.users[name].state,
+                 'perms':    essence.system_acl_users[name],
+                 'state':    'on',
                  'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
                }
-             }))
-           : {} }
+             })),
+             has(input.users)
+               ? merge(input.users.map(name, {
+                   name: {
+                     'perms':    input.users[name].perms,
+                     'state':    input.users[name].state,
+                     'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+                   }
+                 }))
+               : {}
+           ) }
       # Redis-модули — НАБОР больше НЕ передаётся (директива «модули ВСЕГДА ВСЕ»):
       # destiny разворачивает полный набор из vars.redis_modules сама, version-guard
       # Redis 8+ тоже в destiny — см. sentinel.yml. scenario отдаёт только источник

@@ -195,6 +195,39 @@ input:
           type: string
           secret: true
 
+  # ── Системные ACL-юзеры sentinel-демона (2-й aclfile, system-ACL-users d2) ───
+  # ОПЦИОНАЛЬНОЕ additive-поле (only-add, forward-compat): MAP имя→{perms,state,
+  # password} СЛУЖЕБНЫХ юзеров sentinel-демона (default/monitoring/sentinel/haproxy
+  # с sentinel-командами — ОТЛИЧНЫ от users.acl redis-server). Передаётся scenario
+  # ТОЛЬКО в sentinel-режиме (sentinel_enabled=true) из essence.system_acl_users_sentinel.
+  # Рендерится в ОТДЕЛЬНЫЙ файл ${conf_dir}/sentinel-users.acl (задача sentinel.yml),
+  # на который указывает aclfile в sentinel.conf. Пустой/не передан → файл без юзеров
+  # (back-compat: destiny без поля рендерит пустой aclfile, sentinel.conf aclfile-
+  # директива безвредна). Структура — та же, что users (range по map хеширует пароль).
+  sentinel_users:
+    type: object
+    required: false
+    description: >-
+      Системные ACL-пользователи sentinel-демона (map имя→{perms, state, password}).
+      Рендерятся в ${conf_dir}/sentinel-users.acl (aclfile в sentinel.conf). Набор —
+      service-side из essence.system_acl_users_sentinel (default/monitoring/sentinel/
+      haproxy с sentinel-командами). password — зарезолвленный keeper-side секрет
+      (маскируется); в файл пишется sha256-хеш. Только sentinel-режим.
+    properties: {}
+    additional_properties:
+      type: object
+      required: [perms, state, password]
+      additional_properties: false
+      properties:
+        perms:
+          type: string
+        state:
+          type: string
+          enum: [on, off]
+        password:
+          type: string
+          secret: true
+
   # ── TLS (концепция Ansible-роли redis: redis_tls_*) ──────────────────────────
   # TLS-параметры — единый dict `tls` (object-typed, симметрично `users`/`sentinel`):
   # enable/only/port/cert_ref/key_ref/ca_ref. HOST-ИНВАРИАНТ (один cert/CA/порт на

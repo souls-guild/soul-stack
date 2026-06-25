@@ -1,0 +1,50 @@
+# L0-испытание validate-guard (system-ACL-users d2): operator-extra (input.users) НЕ
+# может занять имя СЛУЖЕБНОГО юзера. Оператор задаёт input.users.replica — имя
+# зарезервировано за служебным (доливается из essence.system_acl_users с last-wins
+# ПОВЕРХ системного → operator `replica` молча перекрыл бы replica-perms репликации).
+# validate-правило create/main.yml ловит это на INPUT-валидации (422 ДО applying) —
+# понятным отказом. INPUT-ONLY (essence в validate недоступен): список имён захардкожен.
+# Правило false → expect_render_error по подстроке message.
+name: operator extra user with reserved system name aborts at input validation
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network:
+      primary_ip: 10.0.0.5
+    os:
+      arch: amd64
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+  essence:
+    redis_type: sentinel
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+
+  # Оператор пытается завести юзера с зарезервированным именем replica.
+  input:
+    redis_type: sentinel
+    version: "7.2.4"
+    persistence: rdb
+    users:
+      replica:
+        perms: "~* +@all"
+        state: "on"
+
+# Прогон обрывается на validate: правило «имя зарезервировано за служебным» false.
+# Подстрока — message правила (create/main.yml validate).
+expect_render_error: "зарезервировано за служебным"

@@ -1,0 +1,130 @@
+# L0-испытание create cluster: СИСТЕМНЫЕ ACL-юзеры (system-ACL-users d2) доливаются
+# в users.acl ПОВЕРХ нижнего слоя из essence.system_acl_users, operator-extra (app)
+# наслаивается сверху. Доказываем:
+#   1. users.acl несёт ВСЕ системные redis-server (replica/monitoring/sentinel/haproxy)
+#      из essence.system_acl_users с perms 1:1 из essence + state:'on';
+#   2. operator-extra (app) сосуществует со системными в том же файле;
+#   3. КАЖДЫЙ системный — со СВОИМ vault-паролем secret/redis/<inc>/users/<name>#password
+#      (та же ветка, что operator-extra) — нет cross-leak;
+#   4. default-юзер в users.acl ОТСУТСТВУЕТ (он в requirepass redis.conf, не в aclfile);
+#   5. state_changes.redis_users несёт ТОЛЬКО operator-extra (app) — системные НЕ в
+#      state (пункт 7 d2: доливаются из essence на каждом рендере).
+#
+# Топология: shards=1, replicas_per_master=0 → 1 хост (size-guard PASS). render_context
+# .self = первый по SID хост (node-a, host-инвариант apply.input).
+name: cluster create merges system ACL users into users.acl above operator extras
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-a.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    # Per-user секреты системных — РАЗНЫЕ значения (cross-leak детектируется ассертом).
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+    secret/redis/create/users/app:
+      password: app-user-secret-pass
+  essence:
+    redis_type: cluster
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    # Системные ACL-юзеры redis-server (perms 1:1 из vars/main.yml роли redis_system_users,
+    # БЕЗ default — он в requirepass). Источник истины долива системных в users.acl.
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+
+  input:
+    redis_type: cluster
+    version: "7.2.4"
+    shards: 1
+    replicas_per_master: 0
+    cluster_node_timeout: 5000
+    users:
+      app:
+        perms: "~app:* +@read +@write"
+        state: "on"
+
+assert:
+  task_present:
+    # users.acl: системные (replica/monitoring/sentinel/haproxy) с perms из essence +
+    # operator-extra (app). КАЖДЫЙ со СВОИМ vault-паролем. default ОТСУТСТВУЕТ (см.
+    # task_absent — здесь deep-compare всего map ловит и лишний default).
+    - module: core.file.rendered
+      id: redis_acl
+      params_subset:
+        path: /etc/redis/users.acl
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            users:
+              replica:
+                perms: "+psync +replconf +ping"
+                state: "on"
+                password: replica-sys-secret-pass
+              monitoring:
+                perms: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+                state: "on"
+                password: monitoring-sys-secret-pass
+              sentinel:
+                perms: "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+                state: "on"
+                password: sentinel-sys-secret-pass
+              haproxy:
+                perms: "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+                state: "on"
+                password: haproxy-sys-secret-pass
+              app:
+                perms: "~app:* +@read +@write"
+                state: "on"
+                password: app-user-secret-pass
+          self:
+            sid: node-a.example.com
+            covens: [create, redis]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+  state_changes:
+    redis_type: cluster
+    redis_version: "7.2.4"
+    # ★ GUARD «системные НЕ в state»: redis_users несёт ТОЛЬКО operator-extra (app),
+    # БЕЗ replica/monitoring/sentinel/haproxy (они доливаются из essence, deep-compare
+    # ловит лишний системный ключ как расхождение).
+    redis_users:
+      app:
+        perms: "~app:* +@read +@write"
+        state: "on"
+    redis_hosts: []

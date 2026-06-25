@@ -35,7 +35,7 @@ Destiny получает значения уже зарезолвленными 
 |---|---|---|
 | [`install.yml`](tasks/install.yml) | установка бинарей redis — диспетчер по `install.method`: **package** (default, distro-пакет) **или** **binary** (opt-in upstream-tarball: fetch → extract → distro-юзер/группа → три `core.file.present` (`src:`) разложение redis-server/redis-cli/redis-sentinel в `/usr/local/bin` → свой systemd-юнит + СВОЙ рестарт) + каталог unix-сокета (обе ветки) | [`core.pkg`](../../../docs/module/core/pkg/README.md), [`core.url`](../../../docs/module/core/url/README.md), [`core.archive`](../../../docs/module/core/archive/README.md), [`core.group`](../../../docs/module/core/group/README.md), [`core.user`](../../../docs/module/core/user/README.md), [`core.file`](../../../docs/module/core/file/README.md), [`core.service`](../../../docs/module/core/service/README.md) |
 | [`server.yml`](tasks/server.yml) | data-плоскость `redis-server` (gated `deploy_redis`): TLS-PEM (cert/key/ca) → `users.acl` → `redis.conf` → systemd-hardening drop-in → `core.service running/restarted` | [`core.file`](../../../docs/module/core/file/README.md), [`core.service`](../../../docs/module/core/service/README.md) |
-| [`sentinel.yml`](tasks/sentinel.yml) | sentinel-демон (gated `sentinel_enabled`): `sentinel.conf` + systemd-юнит + `core.service running/restarted` | [`core.file`](../../../docs/module/core/file/README.md), [`core.service`](../../../docs/module/core/service/README.md) |
+| [`sentinel.yml`](tasks/sentinel.yml) | sentinel-демон (gated `sentinel_enabled`): `sentinel-users.acl` (2-й aclfile) → `sentinel.conf` → systemd-юнит → `core.service running/restarted` | [`core.file`](../../../docs/module/core/file/README.md), [`core.service`](../../../docs/module/core/service/README.md) |
 | [`extras.yml`](tasks/extras.yml) | host-tuning, **безусловно** (рекомендация Redis / hardening, не выбор оператора): отключение THP (oneshot-юнит) / logrotate / sysctl kernel-параметры | [`core.file`](../../../docs/module/core/file/README.md), [`core.service`](../../../docs/module/core/service/README.md), [`core.sysctl`](../../../docs/module/core/sysctl/README.md) |
 | [`modules.yml`](tasks/modules.yml) | каталог `.so` + loop-fetch Redis-модулей (RediSearch/RedisJSON/RedisTimeSeries/RedisBloom) на Redis < 8 | [`core.file`](../../../docs/module/core/file/README.md), [`core.url`](../../../docs/module/core/url/README.md) |
 
@@ -72,9 +72,14 @@ destiny видит **только свой** `input:` (изоляция, [ADR-00
   **не** `.tmpl` и **не** уже-резолвленный PEM через `apply.input`: destiny получает
   Vault-**пути** (`cert_ref`/`key_ref`/`ca_ref`) и читает значение сама в render-фазе
   Keeper-а; vault-клиент на Soul не тянется ([ADR-012](../../../docs/adr/0012-keeper-soul-grpc.md)).
-- **Секреты.** `password` (`requirepass`) и `users` (ACL-map `имя → {perms, state, password}`)
-  приходят уже зарезолвленными keeper-side; в `users.acl` пишется sha256-хеш пароля,
-  plaintext не материализуется. Маскируются в логах/трейсах/UI.
+- **Секреты.** `password` (`requirepass`) и `users` (ACL-map `имя → {perms, state, password}`,
+  redis-server) приходят уже зарезолвленными keeper-side; в `users.acl` пишется sha256-хеш
+  пароля, plaintext не материализуется. Маскируются в логах/трейсах/UI. `users`-набор
+  scenario сервиса формирует как **системные + operator-extra** (см.
+  [«Системные ACL-юзеры и второй aclfile»](#системные-acl-юзеры-и-второй-aclfile)).
+- **`sentinel_users`** (опц., additive) — ACL-map того же вида для **sentinel-демона**,
+  рендерится в **отдельный** `sentinel-users.acl` (см. ниже). Передаётся только в
+  sentinel-режиме; пустой/не передан → пустой aclfile (back-compat).
 - **Конфиг.** `config` — **готовый merged-map** директив `redis.conf` (default → preset →
   вычисления → passthrough делает scenario сервиса). Сюда же scenario кладёт
   persistence/`maxmemory`/`maxmemory-policy`/`unixsocket`/TLS- и cluster-директивы.
@@ -88,6 +93,37 @@ destiny видит **только свой** `input:` (изоляция, [ADR-00
 - **Sentinel.** `sentinel_enabled` (bool) + `sentinel: {master_name, master_ip,
   master_port, quorum, auth_user, auth_pass, config}` — задействованы только в
   sentinel-режимах; `master_ip` обязателен, когда dict передан.
+
+## Системные ACL-юзеры и второй aclfile
+
+Кирпич рендерит **два** ACL-файла, оба `core.file.rendered`, оба `mode 0640` owner/group
+`redis`, оба пишут пароль **хешем** (`#<sha256>`, sprig `sha256sum`), не plaintext-ом:
+
+| Файл | Шаблон | Источник `vars.users` | aclfile-директива |
+|---|---|---|---|
+| `${conf_dir}/users.acl` | [`users.acl.tmpl`](templates/users.acl.tmpl) | `input.users` (системные redis-server + operator-extra) | `aclfile` в `redis.conf` |
+| `${conf_dir}/sentinel-users.acl` | [`sentinel-users.acl.tmpl`](templates/sentinel-users.acl.tmpl) | `input.sentinel_users` (системные sentinel-демона) | `aclfile` в `sentinel.conf` |
+
+**Два файла, потому что у redis-server и sentinel-демона разные perms** — sentinel-демону
+нужны `sentinel|*`-команды, а не обычные redis-команды, поэтому их служебные наборы не
+совпадают (в Ansible-роли — `redis_system_users` vs `redis_sentinel_system_users`). Какой
+набор кладётся (`replica`/`monitoring`/`sentinel`/`haproxy`, плюс `default` только в
+sentinel-aclfile) и откуда берутся пароли — решает **scenario сервиса**; destiny получает
+готовый map и только рендерит. См.
+[service-README → «Системные ACL-юзеры»](../../service/redis/README.md#системные-acl-юзеры).
+
+`sentinel-users.acl` рендерится **первой** задачей [`sentinel.yml`](tasks/sentinel.yml)
+(ДО `sentinel.conf` — его `aclfile`-директива должна указывать на уже существующий файл),
+под `register: redis_sentinel_acl`. ACL sentinel-демона перечитывается только **рестартом**
+демона (`onchanges: [redis_sentinel_conf, redis_sentinel_acl, redis_sentinel_unit]`) —
+отдельного hot-reload-сценария для sentinel-aclfile нет: набор служебный, меняется лишь на
+create/ротации. Пустой map → валидный пустой aclfile (back-compat: destiny старого ref без
+поля `sentinel_users` рендерит пустой файл, директива безвредна).
+
+> **`default`-юзер: в `users.acl` его нет, в `sentinel-users.acl` есть.** redis-server
+> авторизует `default` через `requirepass` в `redis.conf` (`users.acl` его не дублирует).
+> У sentinel-демона `requirepass`-эквивалента для aclfile-доступа нет, поэтому `default`
+> объявляется прямо в `sentinel-users.acl`.
 
 ## Чем НЕ является
 

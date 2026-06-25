@@ -31,6 +31,12 @@ logfile /var/log/redis/redis-sentinel.log
 # /var/lib/redis (vars.redis_data_dir).
 dir {{ .vars.data_dir }}
 
+# ВТОРОЙ aclfile — ТОЛЬКО для sentinel-демона (системные юзеры с sentinel-командами,
+# отдельный набор от users.acl redis-server). Путь из conf_dir (директива B): destiny
+# кладёт sentinel-users.acl в ${conf_dir}/sentinel-users.acl (задача sentinel.yml) —
+# директива смотрит туда же. Пустой файл валиден (back-compat).
+aclfile {{ .vars.conf_dir }}/sentinel-users.acl
+
 # Стартовые директивы из переданного map (отсортированы range-ом по ключам).
 {{- range $key, $value := .vars.sentinel_config }}
 {{ $key }} {{ $value }}

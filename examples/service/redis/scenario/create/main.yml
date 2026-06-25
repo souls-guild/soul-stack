@@ -383,6 +383,19 @@ validate:
   - that: "!(has(input.install) && has(input.install.method) && input.install.method == 'binary') || (has(input.install.base_url) && has(input.install.version))"
     message: "install.method=binary требует install.base_url и install.version: без них не из чего собрать URL upstream-tarball-а redis"
 
+  # ★ system-ACL-users guard (дизайн d2): operator-extra (input.users) НЕ может занять
+  # имя СЛУЖЕБНОГО юзера. Системные (default/replica/monitoring/sentinel/haproxy)
+  # доливаются в users.acl из essence.system_acl_users[_sentinel] с last-wins ПОВЕРХ
+  # системных — операторский юзер с тем же именем МОЛЧА перекрыл бы служебные perms
+  # (напр. operator `replica` с `~* +@all` сломал бы replica-perms репликации, дав
+  # лишние права). Ловим коллизию на INPUT-валидации (422 ДО applying) понятным
+  # отказом, а не молчаливым переопределением. INPUT-ONLY (essence в validate
+  # недоступен — структурный CEL-барьер): список зарезервированных имён захардкожен
+  # здесь (он же essence.system_acl_users[_sentinel] keys + default из requirepass).
+  # has()-guard — input.users опционален; .all() над map итерирует по ключам.
+  - that: "!has(input.users) || input.users.all(name, !(name in ['default', 'replica', 'monitoring', 'sentinel', 'haproxy']))"
+    message: "имя ACL-пользователя зарезервировано за служебным (default/replica/monitoring/sentinel/haproxy): выбери другое имя — служебные юзеры заводятся автоматически из essence"
+
   # ★ Правило «modules_base_url обязателен на Redis < 8» УБРАНО (2026-06-25): источник
   # .so переехал из operator-input в essence.modules_base_url (author-context, дефолт ""),
   # а validate-контекст INPUT-ONLY — essence в нём недоступен (структурный CEL-барьер).

@@ -71,16 +71,51 @@
       # (БЕЗ cluster-директив; tls-replication yes при TLS, port 0 при tls_only).
       # HOST-ИНВАРИАНТ → apply.input на targeted[0] корректен.
       config: "${ compute.redis_config }"
+      # ★ СИСТЕМНЫЕ + operator-extra (system-ACL-users, дизайн d2 Вариант A) — как
+      # cluster.yml: служебные replica/monitoring/sentinel/haproxy из essence.system_acl_users
+      # ПЕРВЫМИ, operator-extra (input.users) ПОВЕРХ (last-wins). default — в requirepass
+      # redis.conf, не здесь. Без системных репликация (replica) и sentinel↔redis AUTH
+      # (sentinel) сломаются. Vault-пароль — secret/redis/<inc>/users/<name>#password.
       users: >-
-        ${ has(input.users)
-           ? merge(input.users.map(name, {
+        ${ merge(
+             merge(default(essence.system_acl_users, {}).map(name, {
                name: {
-                 'perms':    input.users[name].perms,
-                 'state':    input.users[name].state,
+                 'perms':    essence.system_acl_users[name],
+                 'state':    'on',
                  'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
                }
-             }))
-           : {} }
+             })),
+             has(input.users)
+               ? merge(input.users.map(name, {
+                   name: {
+                     'perms':    input.users[name].perms,
+                     'state':    input.users[name].state,
+                     'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+                   }
+                 }))
+               : {}
+           ) }
+      # ★ 2-й aclfile sentinel-демона (system-ACL-users, дизайн d2): sentinel использует
+      # ОТДЕЛЬНЫЙ perms-набор essence.system_acl_users_sentinel (default/monitoring/
+      # sentinel/haproxy — sentinel-команды, не redis-команды). Опциональное поле
+      # destiny `redis` input.sentinel_users → задача рендера sentinel-users.acl +
+      # sentinel.conf.tmpl aclfile. Только системные (operator-extra в sentinel-aclfile
+      # не доливается — sentinel-доступ служебный).
+      # ★ Vault-пароль: default-юзер → ГЛАВНЫЙ секрет secret/redis/<inc>#password (как
+      # роль: redis_password; default = главный пароль Redis, тот же, что requirepass
+      # redis-server — иначе sentinel-демон не пустил бы default-клиента общим паролем).
+      # Остальные (monitoring/sentinel/haproxy) → ветка users/<name>#password (как
+      # operator-extra и redis-server-системные).
+      sentinel_users: >-
+        ${ merge(default(essence.system_acl_users_sentinel, {}).map(name, {
+             name: {
+               'perms':    essence.system_acl_users_sentinel[name],
+               'state':    'on',
+               'password': (name == 'default')
+                 ? vault('secret/redis/' + incarnation.name + '#password')
+                 : vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+             }
+           })) }
       # Redis-модули — НАБОР больше НЕ передаётся (директива «модули ВСЕГДА ВСЕ»):
       # destiny разворачивает полный набор из vars.redis_modules сама, version-guard
       # Redis 8+ тоже в destiny. scenario отдаёт только источник .so

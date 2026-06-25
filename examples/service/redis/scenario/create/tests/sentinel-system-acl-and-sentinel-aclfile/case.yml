@@ -1,0 +1,156 @@
+# L0-испытание create sentinel: ДВА aclfile (system-ACL-users d2).
+#   1. users.acl (redis-server): системные replica/monitoring/sentinel/haproxy из
+#      essence.system_acl_users, perms 1:1, каждый со СВОИМ vault-паролем users/<name>.
+#   2. sentinel-users.acl (sentinel-демон, ВТОРОЙ aclfile): системные default/monitoring/
+#      sentinel/haproxy из essence.system_acl_users_sentinel (ОТЛИЧНЫЙ perms-набор —
+#      sentinel-команды). default → ГЛАВНЫЙ секрет secret/redis/<inc>#password (как роль
+#      redis_password); monitoring/sentinel/haproxy → ветка users/<name>#password.
+#   3. оба файла рендерятся в одном sentinel-прогоне; redis.conf указывает aclfile
+#      users.acl, sentinel.conf — aclfile sentinel-users.acl (per-host announce-ip в
+#      отдельном tmpl-тесте, тут проверяем vars-долив).
+#
+# Топология: 1 хост (replicas_per_master=0, size-guard 1==1+0 PASS). render_context.self
+# = node-1 (host-инвариант apply.input).
+name: sentinel create renders two aclfiles with distinct system user sets
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-1.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    # Системные redis-server (БЕЗ default — он в requirepass).
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    # Системные sentinel-демона (ВКЛЮЧАЕТ default; sentinel-команды — отличны от выше).
+    system_acl_users_sentinel:
+      default:    "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+
+  input:
+    redis_type: sentinel
+    version: "7.2.4"
+    replicas_per_master: 0
+
+assert:
+  task_present:
+    # users.acl (redis-server): системные redis-server (4, БЕЗ default).
+    - module: core.file.rendered
+      id: redis_acl
+      params_subset:
+        path: /etc/redis/users.acl
+        render_context:
+          vars:
+            users:
+              replica:
+                perms: "+psync +replconf +ping"
+                state: "on"
+                password: replica-sys-secret-pass
+              monitoring:
+                perms: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+                state: "on"
+                password: monitoring-sys-secret-pass
+              sentinel:
+                perms: "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+                state: "on"
+                password: sentinel-sys-secret-pass
+              haproxy:
+                perms: "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+                state: "on"
+                password: haproxy-sys-secret-pass
+          self:
+            sid: node-1.example.com
+            covens: [create, redis]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # sentinel-users.acl (sentinel-демон, ВТОРОЙ aclfile): системные sentinel (4, С
+    # default). default → ГЛАВНЫЙ секрет (s3cr3t-redis-pass-create), остальные → users/<name>.
+    - module: core.file.rendered
+      id: redis_sentinel_acl
+      params_subset:
+        path: /etc/redis/sentinel-users.acl
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            users:
+              default:
+                perms: "allchannels allkeys +@all"
+                state: "on"
+                password: s3cr3t-redis-pass-create
+              monitoring:
+                perms: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+                state: "on"
+                password: monitoring-sys-secret-pass
+              sentinel:
+                perms: "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+                state: "on"
+                password: sentinel-sys-secret-pass
+              haproxy:
+                perms: "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+                state: "on"
+                password: haproxy-sys-secret-pass
+          self:
+            sid: node-1.example.com
+            covens: [create, redis]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+  state_changes:
+    redis_type: sentinel
+    redis_version: "7.2.4"
+    # operator-extra нет → системные не в state → redis_users пуст.
+    redis_users: {}
+    redis_hosts: []
+    redis_sentinel:
+      master_name: master
+      quorum: 0
