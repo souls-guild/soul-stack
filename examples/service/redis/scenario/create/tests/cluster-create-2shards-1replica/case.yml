@@ -59,18 +59,14 @@ fixtures:
     cluster_node_timeout: 8000
 
 assert:
-  rendered_tasks:
-    # index 0 — mode-guard (cluster → no-op). shards-guard УБРАН (required_when в
-    # main.yml ловит пропуск shards на input-валидации); size-guard PASS: 4 == 2*(1+1)
-    # → assert that[0] true (assert:, не задача — ADR-009 amendment). Обе задачи позиций
-    # не занимают → cluster-ветка сдвинута на −2 от исходного плана.
-
+  # size-guard PASS: 4 == 2*(1+1) → assert: (не задача, в план не эмитится).
+  task_present:
     # redis.conf: cluster-node-timeout из input (8000, не дефолт 5000).
     # cluster-announce-ip в config НЕТ — per-host, рендерится в .tmpl из
     # .self.network.primary_ip. render_context.self = первый по SID хост (node-1).
-    - index: 18
-      module: core.file.rendered
-      params:
+    # Дизамбигуатор от users.acl/hardening — path.
+    - module: core.file.rendered
+      params_subset:
         path: /etc/redis/redis.conf
         template_content: "<present>"
         mode: "0640"
@@ -103,12 +99,10 @@ assert:
           essence: {}
 
     # cluster-build: nodes-MAP всех 4 хостов (детерминирован по SID),
-    # replicas_per_shard=1 уходит в плагин. index 24 (−2 guard + −1 extras-sysctl
-    # сжаты 2→1 задачи core.sysctl.applied).
-    - index: 33
-
-      module: community.redis.cluster
-      params:
+    # replicas_per_shard=1 уходит в плагин. Единственная community.redis.cluster в
+    # плане → дизамбигуатор не нужен.
+    - module: community.redis.cluster
+      params_subset:
         action: create
         replicas_per_shard: 1
         password: s3cr3t-redis-pass-create

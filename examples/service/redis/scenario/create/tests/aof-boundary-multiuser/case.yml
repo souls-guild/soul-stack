@@ -67,20 +67,17 @@ fixtures:
         state: "off"
 
 assert:
-  rendered_tasks:
-    # index 0 — mode-guard диспетчера (standalone реализован → no-op). Не ассертим.
-    - index: 0
-      module: core.pkg.installed
-      params:
+  task_present:
+    - module: core.pkg.installed
+      params_subset:
         name: redis-server
-        # version не задан → "" (latest из репо).
         version: "7.2.4"
 
     # users.acl: MAP трёх юзеров. Порядок строк гарантирует range по map (шаблон);
-    # здесь ассертим лишь СОСТАВ map-а (значения order-independent).
-    - index: 15
-      module: core.file.rendered
-      params:
+    # здесь ассертим лишь СОСТАВ map-а (значения order-independent). Дизамбигуатор от
+    # redis.conf (тот же core.file.rendered) — path в params_subset.
+    - module: core.file.rendered
+      params_subset:
         path: /etc/redis/users.acl
         template_content: "<present>"
         mode: "0640"
@@ -114,9 +111,8 @@ assert:
           essence: {}
 
     # redis.conf: ИТОГ merge() — главный guard этого кейса.
-    - index: 16
-      module: core.file.rendered
-      params:
+    - module: core.file.rendered
+      params_subset:
         path: /etc/redis/redis.conf
         template_content: "<present>"
         mode: "0640"

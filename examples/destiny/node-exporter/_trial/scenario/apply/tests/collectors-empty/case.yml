@@ -23,22 +23,26 @@ fixtures:
       primary_ip: "10.0.0.5"
 
 assert:
-  rendered_tasks:
+  task_present:
     # Установочное ядро не зависит от collectors — присутствует при пустом списке.
-    - index: 0
-      module: core.url.fetched
-      params:
+    - module: core.url.fetched
+      params_subset:
         url: https://github.com/prometheus/node_exporter/releases/download/v1.9.0/node_exporter-1.9.0.linux-amd64.tar.gz
-    - index: 5
-      module: core.file.present
-      params:
+    - module: core.file.present
+      params_subset:
         path: /usr/local/bin/node_exporter
-    - index: 6
-      module: core.file.rendered
-      params:
+    - module: core.file.rendered
+      params_subset:
         path: /etc/systemd/system/node_exporter.service
-    # Коллектор-задачи остаются в плане (when: — Soul-side), но их when ложен:
-    # ассертим лишь module-присутствие, чтобы зафиксировать, что пустой список не
-    # вырезал индексы и не сломал план. smartmon-pkg на index 9.
+
+  # ── smartmon-pkg НЕВЫРАЗИМ в presence (см. отчёт) ─────────────────────────────
+  # При collectors: [] коллектор-шаги — STATIC-when:false skip-placeholder
+  # (`'smartmon' in input.collectors` вычислим на render по fixture-input → задача
+  # эмитится с Params==nil). taskMatches отвергает Params==nil И как present, И как
+  # absent (skip ≠ «вызвано»). Здесь намеренно проверяется именно сохранение
+  # index-слота скипнутого шага (пустой список не вырезал и не сдвинул план), что —
+  # позиционное свойство. Оставлено в rendered_tasks (формы сосуществуют): index 9 —
+  # smartmon-pkg (ядро 0..8, коллекторы с 9).
+  rendered_tasks:
     - index: 9
       module: core.pkg.installed

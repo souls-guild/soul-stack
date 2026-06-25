@@ -51,32 +51,31 @@ fixtures:
       ca_ref:   "secret/ops/redis/tls#ca"
 
 assert:
-  rendered_tasks:
-    # index 4 — TLS server cert: content = vault(input.tls.cert_ref) → operator-PEM.
-    - index: 12
-      module: core.file.present
-      params:
+  task_present:
+    # TLS server cert: content = vault(input.tls.cert_ref) → operator-PEM.
+    # Дизамбигуатор PEM (тот же core.file.present) — path.
+    - module: core.file.present
+      params_subset:
         path: /etc/redis/tls/redis.crt
         content: "-----BEGIN CERTIFICATE-----\nOPCERT\n-----END CERTIFICATE-----"
         mode: "0600"
         owner: redis
         group: redis
 
-    # index 5 — TLS private key: content = vault(input.tls.key_ref) → operator-PEM.
-    - index: 13
-      module: core.file.present
-      params:
+    # TLS private key: content = vault(input.tls.key_ref) → operator-PEM.
+    - module: core.file.present
+      params_subset:
         path: /etc/redis/tls/redis.key
         content: "-----BEGIN PRIVATE KEY-----\nOPKEY\n-----END PRIVATE KEY-----"
         mode: "0600"
         owner: redis
         group: redis
 
-    # index 8 — redis.conf: TLS-директивы на ОПЕРАТОРСКОМ порту 7400 (бьёт essence/7379)
-    # + port 0 (only). КРИТИЧНО: tls-port 7400 доказывает, что input.tls.port победил.
-    - index: 16
-      module: core.file.rendered
-      params:
+    # redis.conf: TLS-директивы на ОПЕРАТОРСКОМ порту 7400 (бьёт essence/7379) + port 0
+    # (only). КРИТИЧНО: tls-port 7400 доказывает, что input.tls.port победил.
+    # Дизамбигуатор от users.acl/hardening — path.
+    - module: core.file.rendered
+      params_subset:
         path: /etc/redis/redis.conf
         render_context:
           vars:
@@ -107,12 +106,10 @@ assert:
           role: ""
           essence: {}
 
-    # index 21 — PING: tls=true, addr на operator-порту 7400, tls_ca = operator-CA-PEM.
-    # Сдвиг −1 (extras-sysctl сжаты 2→1 задачи core.sysctl.applied).
-    - index: 30
-
-      module: community.redis.command
-      params:
+    # PING: tls=true, addr на operator-порту 7400, tls_ca = operator-CA-PEM.
+    # cluster/sentinel PING — placeholder-skip; дизамбигуатор addr/args.
+    - module: community.redis.command
+      params_subset:
         addr: "127.0.0.1:7400"
         password: s3cr3t-redis-pass-create
         tls: true

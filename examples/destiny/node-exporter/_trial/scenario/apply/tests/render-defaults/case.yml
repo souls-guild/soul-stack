@@ -39,37 +39,37 @@ fixtures:
     network:
       primary_ip: "10.0.0.5"
 
-# Сверка params по-ключно частична (лишние ключи рендера кейс не валят); индексы
-# покрываются подмножеством. bin_dir/textfile_dir/user — из default destiny.
+# Presence-форма (миграция 2026-06-24): тест проверяет НАЛИЧИЕ вызовов в плане, не
+# их позицию. Дубли модулей (core.file.rendered / core.pkg.installed /
+# core.service.running / core.file.absent) разводятся params_subset (path/name —
+# уникальны на задачу). Сверка params_subset по-ключно частична: лишние ключи
+# рендера кейс не валят. bin_dir/textfile_dir/user — из default destiny.
 assert:
-  rendered_tasks:
-    # ── install.yml: fetch + extract (индексы 0..1) ─────────────────────────────
+  task_present:
+    # ── install.yml: fetch + extract ───────────────────────────────────────────
     # url собран CEL-ом из base_url+version+arch (arch из soulprint.self.os.arch),
-    # checksum-пин из apply:input.
-    - index: 0
-      module: core.url.fetched
-      params:
+    # checksum-пин из apply:input. Единственный core.url.fetched в плане.
+    - module: core.url.fetched
+      params_subset:
         url: https://github.com/prometheus/node_exporter/releases/download/v1.9.0/node_exporter-1.9.0.linux-amd64.tar.gz
         path: /tmp/node_exporter-1.9.0.tar.gz
         checksum: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
         mode: "0644"
 
-    - index: 1
-      module: core.archive.extracted
-      params:
+    # Единственный core.archive.extracted в плане.
+    - module: core.archive.extracted
+      params_subset:
         path: /tmp/node_exporter-1.9.0.tar.gz
         dest: /tmp/node_exporter-1.9.0
 
-    # ── account.yml: стабильный сервис-аккаунт + textfile-каталог (индексы 2..4) ─
-    - index: 2
-      module: core.group.present
-      params:
+    # ── account.yml: стабильный сервис-аккаунт + textfile-каталог ───────────────
+    - module: core.group.present
+      params_subset:
         name: node_exporter
         system: true
 
-    - index: 3
-      module: core.user.present
-      params:
+    - module: core.user.present
+      params_subset:
         name: node_exporter
         system: true
         group: node_exporter
@@ -78,21 +78,20 @@ assert:
 
     # textfile-каталог через декларативное core.file.directory (НЕ core.exec.run
     # install -d): idempotent по mode/owner/group, чинит дрейф, поддерживает dry-run.
-    - index: 4
-      module: core.file.directory
-      params:
+    - module: core.file.directory
+      params_subset:
         path: /var/lib/node_exporter
         owner: node_exporter
         group: node_exporter
         mode: "0755"
 
-    # ── service.yml: install-бинаря + unit + сервис (индексы 5..8) ──────────────
+    # ── service.yml: install-бинаря + unit + сервис ─────────────────────────────
     # install-шаг — core.file.present с src: (копия node_exporter из распакованного
     # /tmp). Идемпотентность нативная по sha256(src) — честный changed строго при
     # смене байт бинаря; version-aware unless-guard прежнего core.cmd.shell не нужен.
-    - index: 5
-      module: core.file.present
-      params:
+    # Единственный core.file.present в плане.
+    - module: core.file.present
+      params_subset:
         path: /usr/local/bin/node_exporter
         src: /tmp/node_exporter-1.9.0/node_exporter-1.9.0.linux-amd64/node_exporter
         mode: "0755"
@@ -102,95 +101,77 @@ assert:
     # Основной hardened-unit. listen собран CEL-ом: primary_ip из 10.* → bind на
     # него + порт :9100. render_context не ассертим (self host-вариативен).
     # daemon-reload-шага НЕТ: core.service сам reload-ит перед start/restart при
-    # смене unit (daemon_reload: auto). Порядок: render unit → running → restarted.
-    - index: 6
-      module: core.file.rendered
-      params:
+    # смене unit (daemon_reload: auto). Дизамбигуатор от других rendered — path.
+    - module: core.file.rendered
+      params_subset:
         path: /etc/systemd/system/node_exporter.service
         template_content: "<present>"
         mode: "0644"
         owner: root
         group: root
 
-    - index: 7
-      module: core.service.running
-      params:
+    - module: core.service.running
+      params_subset:
         name: node_exporter
         enabled: true
 
-    - index: 8
-      module: core.service.restarted
-      params:
+    # Единственный core.service.restarted в плане.
+    - module: core.service.restarted
+      params_subset:
         name: node_exporter
 
-    # ── collectors.yml: smartmon (индексы 9..14): module-only (when: остаётся в
-    #    плане, вычисляется на Soul). daemon-reload-шага НЕТ: core.service.running
-    #    таймера сам reload-ит при смене .timer-файла (auto). ────────────────────
-    - index: 9
-      module: core.pkg.installed
-      params:
+    # ── collectors.yml: smartmon — module присутствует (when: остаётся в плане,
+    #    вычисляется на Soul). daemon-reload-шага НЕТ: core.service.running таймера
+    #    сам reload-ит при смене .timer-файла (auto). pkg разводится name. ─────────
+    - module: core.pkg.installed
+      params_subset:
         name: smartmontools
-    - index: 10
-      module: core.file.rendered
-    - index: 11
-      module: core.file.rendered
-      params:
+    - module: core.file.rendered
+      params_subset:
         path: /etc/systemd/system/node-exporter-smartmon.service
-    - index: 12
-      module: core.file.rendered
-      params:
+    - module: core.file.rendered
+      params_subset:
         path: /etc/systemd/system/node-exporter-smartmon.timer
-    - index: 13
-      module: core.service.running
-      params:
+    - module: core.service.running
+      params_subset:
         name: node-exporter-smartmon.timer
         enabled: true
-    - index: 14
-      module: core.file.absent
-      params:
+    - module: core.file.absent
+      params_subset:
         path: /etc/cron.d/node_exporter_smartmon
 
-    # ── nvme (индексы 15..21): nvme-cli + jq (две отдельные pkg-задачи) + скрипт/
-    #    unit/timer/running/cron-cleanup ──────────────────────────────────────────
-    - index: 15
-      module: core.pkg.installed
-      params:
+    # ── nvme: nvme-cli + jq (две отдельные pkg-задачи) + timer/running/cron-cleanup ─
+    - module: core.pkg.installed
+      params_subset:
         name: nvme-cli
-    - index: 16
-      module: core.pkg.installed
-      params:
+    - module: core.pkg.installed
+      params_subset:
         name: jq
-    - index: 20
-      module: core.service.running
-      params:
+    - module: core.service.running
+      params_subset:
         name: node-exporter-nvme.timer
         enabled: true
-    - index: 21
-      module: core.file.absent
-      params:
+    - module: core.file.absent
+      params_subset:
         path: /etc/cron.d/node_exporter_nvme
 
-    # ── ipmi (индексы 22..29): + udev-правило + udev-reload ─────────────────────
-    - index: 22
-      module: core.pkg.installed
-      params:
+    # ── ipmi: + udev-правило + udev-reload ──────────────────────────────────────
+    - module: core.pkg.installed
+      params_subset:
         name: ipmitool
-    - index: 24
-      module: core.file.rendered
-      params:
+    - module: core.file.rendered
+      params_subset:
         path: /lib/udev/rules.d/52-ipmi.rules
         template_content: "<present>"
         mode: "0644"
-    - index: 25
-      module: core.exec.run
-      params:
+    # Единственный core.exec.run в плане (udev-reload). cmd: sh + args дизамбигуируют.
+    - module: core.exec.run
+      params_subset:
         cmd: sh
-    - index: 28
-      module: core.service.running
-      params:
+    - module: core.service.running
+      params_subset:
         name: node-exporter-ipmitool.timer
         enabled: true
-    - index: 29
-      module: core.file.absent
-      params:
+    - module: core.file.absent
+      params_subset:
         path: /etc/cron.d/node_exporter_ipmitool

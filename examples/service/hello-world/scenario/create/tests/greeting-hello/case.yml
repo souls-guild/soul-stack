@@ -10,9 +10,9 @@ fixtures:
     greeting: hi
 
 assert:
-  rendered_tasks:
-    - index: 0
-      module: core.file.present
-      params:
+  task_present:
+    # Единственная задача плана.
+    - module: core.file.present
+      params_subset:
         path: /tmp/soul-stack-hello
         content: hi

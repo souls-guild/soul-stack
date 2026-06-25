@@ -34,7 +34,19 @@ redis_group:     redis
 acl_file_path: "/etc/redis/users/${ input.user }.acl"
 ```
 
-Допустимые value-типы: те же, что и в `input:` ([docs/input.md](../input.md)) — string / integer / number / boolean / array / object. Шаблонные выражения `"${ … }"` поддерживаются на любой глубине ([ADR-010](../adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов), [docs/templating.md](../templating.md)).
+Допустимые value-типы: те же, что и в `input:` ([docs/input.md](../input.md)) — string / integer / number / boolean / array / object. Шаблонные выражения `"${ … }"` ([ADR-010](../adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов), [docs/templating.md](../templating.md)) резолвятся **только когда всё значение var — строка** (верхний уровень значения). non-string значения (map / list / число / bool) проходят **литералом насквозь** — CEL их не трогает.
+
+> **Ограничение (известное): `${ … }` внутри map/list-значений НЕ разворачивается.** Если значение var — map или list, вложенные `${ … }` в его элементах остаются **сырым текстом**, а не резолвятся. Резолв применяется к строковому значению целиком, не рекурсивно по структуре.
+>
+> ```yaml
+> base: /etc/redis                       # string — ок
+> conf_path: "${ vars.base }/redis.conf" # string — резолвится в "/etc/redis/redis.conf"
+>
+> paths:                                  # map-значение — НЕ резолвится
+>   conf: "${ vars.base }/redis.conf"     # останется литералом "${ vars.base }/redis.conf"
+> ```
+>
+> Если нужна сборка вложенной структуры из других vars — собирай каждый строковый лист отдельным var, либо строй map целиком одним `${ … }`-выражением (вся ячейка = один маркер → нативный тип, см. [templating.md](../templating.md)). Рекурсивный рендер по глубине map/list — не реализован.
 
 ## Что НЕ лежит в `vars.yml`
 

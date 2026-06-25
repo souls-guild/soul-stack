@@ -71,14 +71,11 @@ fixtures:
       json: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 assert:
-  rendered_tasks:
-    # shards-guard УБРАН (required_when) + size-guard assert: (ADR-009 amendment) —
-    # обе задачи позиций не занимают → cluster-ветка сдвинута на −2 (redis.conf→10,
-    # modules-dir→24, fetch .so→25, cluster-build→27).
+  task_present:
     # redis.conf несёт cluster-директивы + vars.loadmodules ([rejson.so]).
-    - index: 18
-      module: core.file.rendered
-      params:
+    # Дизамбигуатор от users.acl/hardening (тот же core.file.rendered) — path.
+    - module: core.file.rendered
+      params_subset:
         path: /etc/redis/redis.conf
         template_content: "<present>"
         mode: "0640"
@@ -111,23 +108,19 @@ assert:
           role: ""
           essence: {}
 
-    # modules-dir каталог — gated, активна в cluster-modules-прогоне. index 22
-    # (−2 guard + −1 extras-sysctl 2→1 задачи).
-    - index: 31
-
-      module: core.file.directory
-      params:
+    # modules-dir каталог — gated, активна в cluster-modules-прогоне. Дизамбигуатор
+    # от systemd-dropin-dir (тот же core.file.directory) — path.
+    - module: core.file.directory
+      params_subset:
         path: /var/lib/redis/modules
         owner: redis
         group: redis
         mode: "0750"
 
     # fetch .so json: URL арх-специфичен (amd64 из soulprint первого хоста в L0).
-    # index 23 (−2 guard + −1 extras-sysctl).
-    - index: 32
-
-      module: core.url.fetched
-      params:
+    # Единственная активная core.url.fetched (tarball-fetch — placeholder).
+    - module: core.url.fetched
+      params_subset:
         url: "https://artifacts.example.com/redis/modules/6.2/amd64/rejson.so"
         path: /var/lib/redis/modules/rejson.so
         checksum: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -135,11 +128,9 @@ assert:
         owner: redis
         group: redis
 
-    # cluster-build: index 25 (−2 guard + −1 extras-sysctl 2→1 задачи).
-    - index: 34
-
-      module: community.redis.cluster
-      params:
+    # cluster-build: единственная community.redis.cluster в плане.
+    - module: community.redis.cluster
+      params_subset:
         action: create
         replicas_per_shard: 0
         password: s3cr3t-redis-pass-create

@@ -21,23 +21,22 @@ fixtures:
     path:    /etc/pilot/marker.txt
     content: "pilot ok"
 
-# Сверка плана: две задачи destiny (сквозные индексы 0 и 1). Изоляция видна по
-# тому, что params собраны из apply.input (marker_*), а scenario input.path
-# попал туда только потому, что scenario явно прокинул его через apply.input.
+# Presence-форма (миграция 2026-06-24): две задачи destiny, оба модуля уникальны
+# в плане. Изоляция видна по тому, что params собраны из apply.input (marker_*), а
+# scenario input.path попал туда только потому, что scenario явно прокинул его
+# через apply.input.
 assert:
-  rendered_tasks:
+  task_present:
     # core.file.present: content из apply.input (scenario input.content),
     # mode добран из default destiny (0644) — apply.input его не передавал.
-    - index: 0
-      module: core.file.present
-      params:
+    - module: core.file.present
+      params_subset:
         path:    /etc/pilot/marker.txt
         content: "pilot ok"
         mode:    "0644"
 
     # core.exec.run: argv несёт marker_file из apply.input в последнем элементе.
-    - index: 1
-      module: core.exec.run
-      params:
+    - module: core.exec.run
+      params_subset:
         cmd: echo
         args: ["marker", "written", "to", "/etc/pilot/marker.txt"]

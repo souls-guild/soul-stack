@@ -24,10 +24,10 @@ fixtures:
       primary_ip: "192.168.1.5"
 
 assert:
-  rendered_tasks:
-    - index: 6
-      module: core.file.rendered
-      params:
+  task_present:
+    # Дизамбигуатор от коллектор-rendered — path основного unit-а.
+    - module: core.file.rendered
+      params_subset:
         path: /etc/systemd/system/node_exporter.service
         # template_content присутствует (literal .tmpl доставлен Keeper→Soul);
         # точную посимвольную сверку шаблона не делаем (хрупко), см. presentMarker.
@@ -41,7 +41,9 @@ assert:
             user: node_exporter
           self:
             choirs: []
-            covens: []
+            # covens несёт incarnation.name-метку (имя scenario = apply) —
+            # зеркало прод-roster `WHERE $1 = ANY(coven)` (harness single-host сахар).
+            covens: [apply]
             network:
               primary_ip: "192.168.1.5"
             os:

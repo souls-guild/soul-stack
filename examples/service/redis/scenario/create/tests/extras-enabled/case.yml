@@ -63,11 +63,12 @@ fixtures:
     # Флагов extras в контракте больше НЕТ: THP/logrotate/sysctl безусловны.
 
 assert:
-  rendered_tasks:
+  task_present:
     # ── transparent-hugepages ───────────────────────────────────────────────
-    - index: 25
-      module: core.file.rendered
-      params:
+    # Дизамбигуатор от redis.conf/users.acl/logrotate/hardening (тот же
+    # core.file.rendered) — path.
+    - module: core.file.rendered
+      params_subset:
         path: /etc/systemd/system/disable-thp.service
         template_content: "<present>"
         mode: "0644"
@@ -75,17 +76,15 @@ assert:
         group: root
 
     # daemon-reload убран: core.service (daemon_reload: auto) сам перечитывает unit
-    # перед enable/start. disable-thp service.running идёт сразу следом за render.
-    - index: 26
-      module: core.service.running
-      params:
+    # перед enable/start. Дизамбигуатор от redis-server service.running — name.
+    - module: core.service.running
+      params_subset:
         name: disable-thp
         enabled: true
 
     # ── logrotate (безусловно) ──────────────────────────────────────────────
-    - index: 27
-      module: core.file.rendered
-      params:
+    - module: core.file.rendered
+      params_subset:
         path: /etc/logrotate.d/redis
         template_content: "<present>"
         mode: "0644"
@@ -96,11 +95,9 @@ assert:
     # core.sysctl.applied: модуль сам пишет детерминированный drop-in из map
     # (sorted keys) + точечный sysctl -p при изменении (reload: auto), сам change
     # не помечает. settings — из essence (передан через apply.input). ignore_failures
-    # → `sysctl -e -p` (контейнерный режим). render_context уехал внутрь модуля —
-    # на L0 проверяем CEL-резолв settings (default(input.sysctl_settings, {})).
-    - index: 28
-      module: core.sysctl.applied
-      params:
+    # → `sysctl -e -p` (контейнерный режим). Единственная core.sysctl.applied в плане.
+    - module: core.sysctl.applied
+      params_subset:
         filename: 30-redis
         reload: auto
         ignore_failures: true
@@ -109,12 +106,10 @@ assert:
           vm.swappiness:        "1"
           net.core.somaxconn:   "65535"
 
-    # PING на index 22: extras занимают фиксированное число хвостовых слотов
-    # (4 задачи, все безусловны) — ловит сдвиг плана, если кто-то добавит/уберёт
-    # extras-задачу.
-    - index: 30
-      module: community.redis.command
-      params:
+    # standalone-PING: cluster/sentinel PING-ветки — placeholder-skip (без params);
+    # дизамбигуатор — addr/args в params_subset.
+    - module: community.redis.command
+      params_subset:
         addr: "127.0.0.1:6379"
         password: s3cr3t-redis-pass-create
         args: ["PING"]

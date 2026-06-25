@@ -70,13 +70,13 @@ fixtures:
       json:   "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 assert:
-  rendered_tasks:
+  task_present:
     # redis.conf несёт vars.loadmodules — пути .so в ПОРЯДКЕ input.modules
     # (search → redisearch.so первым). Директивы loadmodule рендерит шаблон отдельной
-    # секцией (чистота — destiny_redis_tmpl_test.go).
-    - index: 16
-      module: core.file.rendered
-      params:
+    # секцией (чистота — destiny_redis_tmpl_test.go). Дизамбигуатор от users.acl/
+    # hardening (тот же core.file.rendered) — path.
+    - module: core.file.rendered
+      params_subset:
         path: /etc/redis/redis.conf
         template_content: "<present>"
         mode: "0640"
@@ -107,11 +107,10 @@ assert:
           role: ""
           essence: {}
 
-    # modules-dir каталог — gated на size(modules)>0, здесь АКТИВНА.
-    - index: 29
-
-      module: core.file.directory
-      params:
+    # modules-dir каталог — gated на size(modules)>0, здесь АКТИВНА. Дизамбигуатор
+    # от systemd-dropin-dir (тот же core.file.directory) — path.
+    - module: core.file.directory
+      params_subset:
         path: /var/lib/redis/modules
         owner: redis
         group: redis
@@ -119,11 +118,10 @@ assert:
 
     # fetch .so — loop по алиасам (array, порядок списка: search[0], json[1]).
     # URL арх-специфичен (amd64 из soulprint.self); sha256 ЗАДАН → checksum
-    # "sha256:<hex>" (fail-closed integrity-verify).
-    - index: 30
-
-      module: core.url.fetched
-      params:
+    # "sha256:<hex>" (fail-closed integrity-verify). Дизамбигуатор двух .so —
+    # path/url; tarball-fetch (binary install) — placeholder-skip.
+    - module: core.url.fetched
+      params_subset:
         url: "https://artifacts.example.com/redis/modules/6.2/amd64/redisearch.so"
         path: /var/lib/redis/modules/redisearch.so
         checksum: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -131,10 +129,8 @@ assert:
         owner: redis
         group: redis
 
-    - index: 31
-
-      module: core.url.fetched
-      params:
+    - module: core.url.fetched
+      params_subset:
         url: "https://artifacts.example.com/redis/modules/6.2/amd64/rejson.so"
         path: /var/lib/redis/modules/rejson.so
         checksum: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -142,11 +138,10 @@ assert:
         owner: redis
         group: redis
 
-    # PING сдвинут на +2 (две .so-задачи) относительно базового modules-empty (21).
-    - index: 32
-
-      module: community.redis.command
-      params:
+    # standalone-PING: cluster/sentinel ветки — placeholder-skip; дизамбигуатор
+    # addr/args.
+    - module: community.redis.command
+      params_subset:
         addr: "127.0.0.1:6379"
         password: s3cr3t-redis-pass-create
         args: ["PING"]

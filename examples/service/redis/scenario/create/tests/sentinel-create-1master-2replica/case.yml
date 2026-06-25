@@ -70,20 +70,14 @@ fixtures:
     sentinel_master_name: mymaster
 
 assert:
-  rendered_tasks:
-    # Mode-guard УБРАН (enum input.redis_type) И sentinel size-guard переведён в
-    # assert: (ADR-009 amendment) — ОБА в план НЕ эмитятся. cluster size-guard
-    # (assert:) + cluster shards-guard (required_when) уже не занимали слот. 3 == 1+2 →
-    # sentinel guard that[0] true → render проходит. Сдвиг относительно прежнего плана:
-    # задачи до sentinel-guard −1 (mode-guard), задачи после −2 (mode-guard + sentinel-
-    # guard) + −1 (extras-sysctl сжаты 2→1 задачи core.sysctl.applied):
-    # redis.conf 14→12, replica 30→27, sentinel-monitor 31→28.
-    #
+  # sentinel size-guard PASS: 3 == 1+2 → assert: (ADR-009 amendment), в план не
+  # эмитится.
+  task_present:
     # ── sentinel destiny: redis.conf (sentinel-режим: НЕТ cluster-директив) ──
     # render_context.self = первый по SID хост (node-1, host-инвариант apply.input).
-    - index: 21
-      module: core.file.rendered
-      params:
+    # Дизамбигуатор от users.acl/hardening (тот же core.file.rendered) — path.
+    - module: core.file.rendered
+      params_subset:
         path: /etc/redis/redis.conf
         template_content: "<present>"
         mode: "0640"
@@ -121,12 +115,10 @@ assert:
     # ни на одном хосте → плагин-guard (addr==master_addr → no-op) в prod не
     # срабатывает, реальная защита — этот where. Per-host отсутствие задачи на
     # master доказано render-ассертом TargetSIDs (TestAcceptance_SentinelReplicaExcludesMaster).
-    # Params host-инвариантны → L0 assert by-index сверяет одни и те же params
-    # реплик. index 27 (−2 guard + −1 extras-sysctl сжаты 2→1 задачи).
-    - index: 36
-
-      module: community.redis.replica
-      params:
+    # Params host-инвариантны → presence сверяет одни и те же params реплик.
+    # Единственная community.redis.replica в плане → дизамбигуатор не нужен.
+    - module: community.redis.replica
+      params_subset:
         addr: "127.0.0.1:6379"
         master_addr: "10.0.0.1:6379"
         password: s3cr3t-redis-pass-create
@@ -134,11 +126,9 @@ assert:
     # ── SENTINEL MONITOR reconcile (community.redis.sentinel) ───────────────
     # monitor.ip — HOST-ИНВАРИАНТНЫЙ адрес master-а (master-election node-1).
     # quorum=2 (input.sentinel_quorum). auth_pass — keeper-side vault()-резолв.
-    # index 28 (−2 guard + −1 extras-sysctl сжаты 2→1 задачи).
-    - index: 37
-
-      module: community.redis.sentinel
-      params:
+    # sentinel_only-вариант — placeholder-skip → единственная активная.
+    - module: community.redis.sentinel
+      params_subset:
         addr: "127.0.0.1:26379"
         master_name: mymaster
         auth_pass: s3cr3t-redis-pass-create

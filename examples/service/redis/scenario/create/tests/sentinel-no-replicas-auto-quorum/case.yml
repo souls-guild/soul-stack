@@ -40,30 +40,22 @@ fixtures:
     replicas: 0
 
 assert:
-  rendered_tasks:
-    # Mode-guard УБРАН (enum) И sentinel size-guard переведён в assert: (ADR-009
-    # amendment) — ОБА в план НЕ эмитятся. cluster size-guard (assert:) + shards-guard
-    # (required_when) слот не занимали. 1 == 1+0 → sentinel guard that[0] true → render
-    # проходит. Сдвиг: задачи после guard −2 (mode-guard + sentinel-guard) + −1
-    # (extras-sysctl сжаты 2→1 задачи core.sysctl.applied): replica 30→27,
-    # sentinel-monitor 31→28.
-    #
+  # sentinel size-guard PASS: 1 == 1+0 → assert: (ADR-009 amendment), в план не
+  # эмитится.
+  task_present:
     # REPLICAOF: master_addr = единственный хост (он же master) → плагин no-op
-    # (addr==master_addr guard). Здесь ассертим лишь params (host-инвариант). index 27.
-    - index: 36
-
-      module: community.redis.replica
-      params:
+    # (addr==master_addr guard). Единственная community.redis.replica в плане.
+    - module: community.redis.replica
+      params_subset:
         addr: "127.0.0.1:6379"
         master_addr: "10.0.0.9:6379"
         password: s3cr3t-redis-pass-create
 
     # SENTINEL MONITOR: monitor.ip — единственный хост; auto-quorum = 1/2+1 = 1
-    # (sentinel_quorum не задан). master_name по умолчанию mymaster. index 28.
-    - index: 37
-
-      module: community.redis.sentinel
-      params:
+    # (sentinel_quorum не задан). master_name по умолчанию mymaster. Единственная
+    # активная community.redis.sentinel.
+    - module: community.redis.sentinel
+      params_subset:
         addr: "127.0.0.1:26379"
         master_name: mymaster
         auth_pass: s3cr3t-redis-pass-create

@@ -88,26 +88,24 @@ mocks:
       role: slave
 
 assert:
-  rendered_tasks:
-    # ── probe (community.redis.role): ПО TLS (tls-port в state.redis_config) ──
-    - index: 0
-      module: community.redis.role
-      params:
+  task_present:
+    # ── probe (community.redis.role): ПО TLS (tls-port в state.tls.port) ──
+    # Единственная community.redis.role в плане. Главный TLS-guard кейса: probe
+    # коннектится по TLS на tls-порт.
+    - module: community.redis.role
+      params_subset:
         addr: "127.0.0.1:7379"
         password: fixture-redis-pass-16+
         tls: true
         tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
 
-    # ── block-потомок 1: Restart redis-server (core.service.restarted) ───────
-    - index: 1
-      module: core.service.restarted
-      params:
-        name: redis-server
-
-    # ── block-потомок 2: slave-health-gate (community.redis.replica-synced) ПО TLS ──
-    - index: 2
-      module: community.redis.replica-synced
-      params:
+    # ── slave-health-gate (community.redis.replica-synced) ПО TLS ────────────
+    # Единственная community.redis.replica-synced. Второй TLS-guard: ресинк-гейт тоже
+    # по TLS. Bare core.service.restarted (block-рестарт) presence-неотличим от
+    # master-рестарта (см. наблюдение в отчёте) → отдельно НЕ ассертим; наличие
+    # этого гейта внутри slave-block-а доказывает рендер block fan-out.
+    - module: community.redis.replica-synced
+      params_subset:
         addr: "127.0.0.1:7379"
         password: fixture-redis-pass-16+
         tls: true

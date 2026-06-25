@@ -23,30 +23,30 @@ fixtures:
       primary_ip: "10.0.0.5"
 
 assert:
-  rendered_tasks:
-    - index: 0
-      module: core.url.fetched
-    # smartmon-ветка: пакет + скрипт + unit + timer на своих индексах.
-    - index: 9
-      module: core.pkg.installed
-      params:
+  task_present:
+    # Единственный core.url.fetched в плане.
+    - module: core.url.fetched
+    # smartmon-ветка АКТИВНА (collectors=[smartmon]) → задачи реально рендерятся
+    # (Params!=nil), presence их матчит. Дубли разводятся name/path.
+    - module: core.pkg.installed
+      params_subset:
         name: smartmontools
-    - index: 11
-      module: core.file.rendered
-      params:
+    - module: core.file.rendered
+      params_subset:
         path: /etc/systemd/system/node-exporter-smartmon.service
-    - index: 13
-      module: core.service.running
-      params:
+    - module: core.service.running
+      params_subset:
         name: node-exporter-smartmon.timer
         enabled: true
-    # nvme/ipmi-задачи остаются в плане (when: Soul-side ложен на этом списке) —
-    # фиксируем, что одиночный список не вырезал их индексы.
+
+  # ── nvme/ipmi-pkg НЕВЫРАЗИМЫ в presence (см. отчёт) ───────────────────────────
+  # nvme/ipmi не в списке → их шаги — STATIC-when:false skip-placeholder
+  # (Params==nil): taskMatches их НЕ матчит ни present, ни absent. Кейс намеренно
+  # фиксирует сохранение их index-слотов (одиночный список не вырезал план) —
+  # позиционное свойство. Оставлено в rendered_tasks (формы сосуществуют): nvme-cli
+  # на index 15, ipmitool на 22 (раскладка коллекторов smartmon 9.. nvme 15.. ipmi 22..).
+  rendered_tasks:
     - index: 15
       module: core.pkg.installed
-      params:
-        name: nvme-cli
     - index: 22
       module: core.pkg.installed
-      params:
-        name: ipmitool

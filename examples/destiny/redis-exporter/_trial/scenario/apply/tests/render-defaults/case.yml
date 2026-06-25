@@ -30,19 +30,20 @@ fixtures:
     # токенов, render_context.vars.extra_args = [].
 
 assert:
-  rendered_tasks:
+  task_present:
+    # Все 4 модуля плана уникальны (url.fetched / archive.extracted / file.rendered /
+    # service.running) — presence-форма без дизамбигуаторов.
+    #
     # url: префикс `v` перед версией в имени файла и каталоге внутри tarball-а.
-    - index: 0
-      module: core.url.fetched
-      params:
+    - module: core.url.fetched
+      params_subset:
         url: https://github.com/oliver006/redis_exporter/releases/download/v1.62.0/redis_exporter-v1.62.0.linux-amd64.tar.gz
         path: /tmp/redis_exporter-1.62.0.tar.gz
         checksum: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
         mode: "0644"
 
-    - index: 1
-      module: core.archive.extracted
-      params:
+    - module: core.archive.extracted
+      params_subset:
         path: /tmp/redis_exporter-1.62.0.tar.gz
         dest: /tmp/redis_exporter-1.62.0
 
@@ -53,9 +54,8 @@ assert:
     # unit: redis_addr собран CEL-ом из 'unix://' + redis_socket — подключение к
     # Redis через unix-сокет. bin_dir/listen добраны из default destiny. extra_args
     # не передан → default [] (ExecStart без доп. токенов).
-    - index: 3
-      module: core.file.rendered
-      params:
+    - module: core.file.rendered
+      params_subset:
         path: /etc/systemd/system/redis_exporter.service
         # template-путь заменён на доставленное Keeper-ом literal-содержимое (A1, ADR-012(d)).
         template_content: "<present>"
@@ -73,13 +73,15 @@ assert:
             extra_args: []
           self:
             sid: trial-host
-            covens: []
+            choirs: []
+            # covens несёт incarnation.name-метку (имя scenario = apply) —
+            # зеркало прод-roster `WHERE $1 = ANY(coven)` (harness single-host сахар).
+            covens: [apply]
             role: ""
           role: ""
           essence: {}
 
-    - index: 4
-      module: core.service.running
-      params:
+    - module: core.service.running
+      params_subset:
         name: redis_exporter
         enabled: true

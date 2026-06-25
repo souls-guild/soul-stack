@@ -64,17 +64,13 @@ fixtures:
     cluster_node_timeout: 5000
 
 assert:
-  rendered_tasks:
-    # index 0 — mode-guard (cluster → no-op). shards-guard УБРАН (required_when в
-    # main.yml ловит пропуск shards на input-валидации); size-guard PASS: 3 == 3*(1+0)
-    # → assert that[0] true (assert:, не задача — ADR-009 amendment). Обе задачи позиций
-    # не занимают → cluster-ветка сдвинута на −2 от исходного плана (redis.conf→10).
-
+  # size-guard PASS: 3 == 3*(1+0) → assert: (не задача, в план не эмитится).
+  task_present:
     # redis.conf: aof-пресет (appendonly yes / save "") СОСУЩЕСТВУЕТ с
     # cluster-директивами. announce-ip в config НЕТ — per-host из .tmpl.
-    - index: 18
-      module: core.file.rendered
-      params:
+    # Дизамбигуатор от users.acl/hardening — path.
+    - module: core.file.rendered
+      params_subset:
         path: /etc/redis/redis.conf
         template_content: "<present>"
         mode: "0640"

@@ -56,12 +56,12 @@ fixtures:
     modules_base_url: "https://artifacts.example.com/redis/modules/6.2"
 
 assert:
-  rendered_tasks:
+  task_present:
     # redis.conf несёт vars.loadmodules — пути .so в ПОРЯДКЕ input.modules
     # (search → redisearch.so первым). loadmodules от наличия sha256 НЕ зависят.
-    - index: 16
-      module: core.file.rendered
-      params:
+    # Дизамбигуатор от users.acl/hardening — path.
+    - module: core.file.rendered
+      params_subset:
         path: /etc/redis/redis.conf
         template_content: "<present>"
         mode: "0640"
@@ -92,11 +92,10 @@ assert:
           role: ""
           essence: {}
 
-    # modules-dir каталог — gated на size(modules)>0, здесь АКТИВНА.
-    - index: 29
-
-      module: core.file.directory
-      params:
+    # modules-dir каталог — gated на size(modules)>0, здесь АКТИВНА. Дизамбигуатор
+    # от systemd-dropin-dir — path.
+    - module: core.file.directory
+      params_subset:
         path: /var/lib/redis/modules
         owner: redis
         group: redis
@@ -106,10 +105,9 @@ assert:
     # checksum ПУСТ ("") — modules_sha256 не передан: core.url.fetched качает по
     # content-идемпотентности (пустой checksum = absent, OptStringParam). Именно
     # пустую строку и доказывает кейс (assert сверяет ключ checksum точно).
-    - index: 30
-
-      module: core.url.fetched
-      params:
+    # Дизамбигуатор двух .so — path/url; tarball-fetch — placeholder-skip.
+    - module: core.url.fetched
+      params_subset:
         url: "https://artifacts.example.com/redis/modules/6.2/amd64/redisearch.so"
         path: /var/lib/redis/modules/redisearch.so
         checksum: ""
@@ -117,10 +115,8 @@ assert:
         owner: redis
         group: redis
 
-    - index: 31
-
-      module: core.url.fetched
-      params:
+    - module: core.url.fetched
+      params_subset:
         url: "https://artifacts.example.com/redis/modules/6.2/amd64/rejson.so"
         path: /var/lib/redis/modules/rejson.so
         checksum: ""
@@ -128,11 +124,10 @@ assert:
         owner: redis
         group: redis
 
-    # PING сдвинут на +2 (две .so-задачи), как в modules-enabled-standalone.
-    - index: 32
-
-      module: community.redis.command
-      params:
+    # standalone-PING: cluster/sentinel ветки — placeholder-skip; дизамбигуатор
+    # addr/args.
+    - module: community.redis.command
+      params_subset:
         addr: "127.0.0.1:6379"
         password: s3cr3t-redis-pass-create
         args: ["PING"]

@@ -75,16 +75,12 @@ fixtures:
       tcp-backlog: 511
 
 assert:
-  rendered_tasks:
-    # index 0 — mode-guard (cluster → no-op). shards-guard УБРАН (required_when в
-    # main.yml ловит пропуск shards на input-валидации); size-guard PASS — assert:
-    # (ADR-009 amendment) НЕ задача. Обе задачи позиций не занимают → cluster-ветка
-    # сдвинута на −2 от исходного плана (redis.conf→10).
-
+  # size-guard PASS — assert: (ADR-009 amendment) НЕ задача.
+  task_present:
     # redis.conf: cluster-блок ПОБЕДИЛ враждебный redis_settings (last-wins).
-    - index: 18
-      module: core.file.rendered
-      params:
+    # Дизамбигуатор от users.acl/hardening (тот же core.file.rendered) — path.
+    - module: core.file.rendered
+      params_subset:
         path: /etc/redis/redis.conf
         template_content: "<present>"
         mode: "0640"

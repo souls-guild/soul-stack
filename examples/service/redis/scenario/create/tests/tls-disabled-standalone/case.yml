@@ -36,17 +36,11 @@ fixtures:
     persistence: rdb
 
 assert:
-  rendered_tasks:
-    # index 4 (TLS cert render) — gated на tls_enable=false → placeholder-skip:
-    # модуль НЕ исполняется. Trial-харнесс ассертит params пустыми (skip-placeholder).
-    # Главное: задача НЕ рендерит файл (params=map[] на skip). Ассертим, что на этом
-    # индексе НЕ настоящий core.file.rendered с PEM — модуль есть, но params пусты.
-    # (Полное доказательство «нет tls-строк» — на redis.conf ниже.)
-
-    # index 8 — redis.conf: merged config БЕЗ tls-* и БЕЗ port 0 (plain открыт).
-    - index: 16
-      module: core.file.rendered
-      params:
+  task_present:
+    # redis.conf: merged config БЕЗ tls-* и БЕЗ port 0 (plain открыт).
+    # Дизамбигуатор от users.acl/hardening (тот же core.file.rendered) — path.
+    - module: core.file.rendered
+      params_subset:
         path: /etc/redis/redis.conf
         render_context:
           vars:
@@ -73,17 +67,25 @@ assert:
           role: ""
           essence: {}
 
-    # index 21 — PING: tls=false (plain, без tls_ca), addr на 6379 (plain открыт).
-    # Сдвиг −1 (extras-sysctl сжаты 2→1 задачи core.sysctl.applied).
-    - index: 30
-
-      module: community.redis.command
-      params:
+    # PING: tls=false (plain, без tls_ca), addr на 6379 (plain открыт). cluster/sentinel
+    # PING — placeholder-skip; дизамбигуатор addr/args.
+    - module: community.redis.command
+      params_subset:
         addr: "127.0.0.1:6379"
         password: s3cr3t-redis-pass-create
         tls: false
         tls_ca: ""
         args: ["PING"]
+
+  task_absent:
+    # TLS выключен (tls_enable=false) → TLS-dir и PEM-cert gated-placeholder-skip
+    # (params_subset path не сматчит placeholder). Guard «без TLS нет PEM-файлов».
+    - module: core.file.directory
+      params_subset:
+        path: /etc/redis/tls
+    - module: core.file.present
+      params_subset:
+        path: /etc/redis/tls/redis.crt
 
   state_changes:
     redis_type: standalone

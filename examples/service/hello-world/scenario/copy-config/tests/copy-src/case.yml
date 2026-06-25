@@ -11,10 +11,10 @@ fixtures:
     src: /opt/dist/app.conf
 
 assert:
-  rendered_tasks:
-    - index: 0
-      module: core.file.present
-      params:
+  task_present:
+    # Единственная задача плана.
+    - module: core.file.present
+      params_subset:
         path: /etc/soul-stack/app.conf
         src:  /opt/dist/app.conf
         mode: "0640"

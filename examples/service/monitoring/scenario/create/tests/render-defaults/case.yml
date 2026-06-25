@@ -54,51 +54,48 @@ fixtures:
     os:
       arch: amd64
 
-# Сверка params в L0 — полная (deep-equal), не подмножество. node-exporter (0..8)
-# раскрывается из destiny; redis_exporter (30..37) — инлайн. Ассертим установочную
-# тройку (вкл. install бинаря через core.file.present с src: — детерминированные
-# params, не rendered install-строка), render unit-ов (CEL-сборка url/redis_addr),
-# сервис-аккаунты и декларативные шаги.
+# Presence-форма (миграция 2026-06-24): тест проверяет НАЛИЧИЕ вызовов в плане, не
+# их позицию. План — композиция node-exporter (apply:destiny) + инлайн
+# redis_exporter; дубли модулей между блоками (url.fetched / archive.extracted /
+# file.present / file.rendered / user.present / service.running) разводятся
+# params_subset (path/name/url — уникальны на задачу). Сверка params_subset по-ключно
+# частична (лишние ключи рендера кейс не валят); render_context unit-ов фиксируем.
 assert:
-  rendered_tasks:
-    # ── node-exporter (apply:destiny, индексы 0..8 — ядро) ──────────────────────
+  task_present:
+    # ── node-exporter (apply:destiny, ядро) ─────────────────────────────────────
     # node_exporter tarball: url собран CEL-ом из base_url+version+arch (arch из
-    # soulprint), checksum-пин из apply:input.
-    - index: 0
-      module: core.url.fetched
-      params:
+    # soulprint), checksum-пин из apply:input. Дизамбигуатор от redis-tarball — url/path.
+    - module: core.url.fetched
+      params_subset:
         url: https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-amd64.tar.gz
         path: /tmp/node_exporter-1.8.2.tar.gz
         checksum: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
         mode: "0644"
 
-    - index: 1
-      module: core.archive.extracted
-      params:
+    - module: core.archive.extracted
+      params_subset:
         path: /tmp/node_exporter-1.8.2.tar.gz
         dest: /tmp/node_exporter-1.8.2
 
     # Стабильный сервис-аккаунт node_exporter (НЕ DynamicUser — textfile-каталог
-    # переживает рестарты): группа ДО пользователя.
-    - index: 2
-      module: core.group.present
-      params:
+    # переживает рестарты): группа ДО пользователя. Единственный core.group.present.
+    - module: core.group.present
+      params_subset:
         name: node_exporter
         system: true
 
-    - index: 3
-      module: core.user.present
-      params:
+    # Дизамбигуатор от redis-exporter user — name.
+    - module: core.user.present
+      params_subset:
         name: node_exporter
         system: true
         group: node_exporter
         shell: /usr/sbin/nologin
         home: /
 
-    # textfile-каталог через декларативное core.file.directory.
-    - index: 4
-      module: core.file.directory
-      params:
+    # textfile-каталог через декларативное core.file.directory. Единственный.
+    - module: core.file.directory
+      params_subset:
         path: /var/lib/node_exporter
         owner: node_exporter
         group: node_exporter
@@ -107,9 +104,9 @@ assert:
     # install бинаря node_exporter (service.yml): core.file.present с src: — копия
     # node_exporter из распакованного /tmp. Идемпотентность нативная по sha256(src),
     # честный changed строго при смене байт; version-aware unless-guard не нужен.
-    - index: 5
-      module: core.file.present
-      params:
+    # Дизамбигуатор от redis-exporter install — path.
+    - module: core.file.present
+      params_subset:
         path: /usr/local/bin/node_exporter
         src: /tmp/node_exporter-1.8.2/node_exporter-1.8.2.linux-amd64/node_exporter
         mode: "0755"
@@ -117,10 +114,9 @@ assert:
         group: root
 
     # Unit-path — /etc/systemd/system/node_exporter.service, listen :9100.
-    # literal-содержимое .tmpl доставлено Keeper-ом (A1).
-    - index: 6
-      module: core.file.rendered
-      params:
+    # literal-содержимое .tmpl доставлено Keeper-ом (A1). Дизамбигуатор — path.
+    - module: core.file.rendered
+      params_subset:
         path: /etc/systemd/system/node_exporter.service
         template_content: "<present>"
         mode: "0644"
@@ -148,35 +144,30 @@ assert:
 
     # running + restart — по имени юнита node_exporter (ловит регресс имени).
     # daemon-reload-шага НЕТ: core.service сам reload-ит при смене unit (auto).
-    - index: 7
-      module: core.service.running
-      params:
+    # Дизамбигуатор от redis-exporter/коллектор-таймеров — name.
+    - module: core.service.running
+      params_subset:
         name: node_exporter
         enabled: true
 
-    - index: 8
-      module: core.service.restarted
-      params:
+    # Единственный core.service.restarted в плане.
+    - module: core.service.restarted
+      params_subset:
         name: node_exporter
 
-    # ── redis_exporter (инлайн, индексы 30..37) ─────────────────────────────────
-    # node-exporter блок — 9 задач ядра (0..8) + 21 коллектор-задача (when:,
-    # idx 9..29, при collectors=[] остаются в плане render-only). Инлайн
-    # redis_exporter начинается с idx 30.
-    #
+    # ── redis_exporter (инлайн) ─────────────────────────────────────────────────
     # redis_exporter tarball: имя файла несёт префикс `v` перед версией
     # (redis_exporter-v<v>.linux-<arch>) — отличие раскладки от node_exporter.
-    - index: 30
-      module: core.url.fetched
-      params:
+    # Дизамбигуатор от node-tarball — url/path.
+    - module: core.url.fetched
+      params_subset:
         url: https://github.com/oliver006/redis_exporter/releases/download/v1.62.0/redis_exporter-v1.62.0.linux-amd64.tar.gz
         path: /tmp/redis_exporter-1.62.0.tar.gz
         checksum: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
         mode: "0644"
 
-    - index: 31
-      module: core.archive.extracted
-      params:
+    - module: core.archive.extracted
+      params_subset:
         path: /tmp/redis_exporter-1.62.0.tar.gz
         dest: /tmp/redis_exporter-1.62.0
 
@@ -185,9 +176,9 @@ assert:
     # tarball-а несёт префикс `v` (redis_exporter-v<v>.linux-<arch>). Идемпотентность
     # нативная по sha256(src) — честный changed строго при смене байт; прежний
     # core.cmd.shell + creates: пропускал апгрейд (latent-баг устранён).
-    - index: 32
-      module: core.file.present
-      params:
+    # Дизамбигуатор от node-install — path.
+    - module: core.file.present
+      params_subset:
         path: /usr/local/bin/redis_exporter
         src: /tmp/redis_exporter-1.62.0/redis_exporter-v1.62.0.linux-amd64/redis_exporter
         mode: "0755"
@@ -197,18 +188,18 @@ assert:
     # Выделенный системный пользователь redis-exporter в группе redis (доступ к
     # unix-сокету по членству в группе, least-privilege). Инлайн оставлен осознанно:
     # сервис подключается к уже работающему Redis (без DynamicUser-нюансов destiny).
-    - index: 33
-      module: core.user.present
-      params:
+    # Дизамбигуатор от node-exporter user — name.
+    - module: core.user.present
+      params_subset:
         name: redis-exporter
         groups: [redis]
         shell: /usr/sbin/nologin
 
     # redis_exporter unit (инлайн): redis_addr собран CEL-ом из 'unix://' + redis_socket
     # — ключевая проверка «подключение к Redis через unix-сокет». Без пароля.
-    - index: 34
-      module: core.file.rendered
-      params:
+    # Дизамбигуатор от node-exporter unit — path.
+    - module: core.file.rendered
+      params_subset:
         path: /etc/systemd/system/redis_exporter.service
         # template-путь заменён на доставленное Keeper-ом literal-содержимое (A1, ADR-012(d)).
         template_content: "<present>"
@@ -233,12 +224,12 @@ assert:
           role: ""
           essence: {}
 
-    - index: 35
-      module: core.service.enabled
-      params:
+    # Единственный core.service.enabled в плане.
+    - module: core.service.enabled
+      params_subset:
         name: redis_exporter
 
-    - index: 36
-      module: core.service.running
-      params:
+    # Дизамбигуатор от node_exporter/коллектор-таймеров running — name.
+    - module: core.service.running
+      params_subset:
         name: redis_exporter

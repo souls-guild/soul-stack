@@ -20,15 +20,14 @@ fixtures:
       primary_ip: "10.0.0.5"
 
 assert:
-  rendered_tasks:
-    - index: 0
-      module: core.url.fetched
-      params:
+  task_present:
+    # Единственный core.url.fetched в плане.
+    - module: core.url.fetched
+      params_subset:
         url: https://github.com/prometheus/node_exporter/releases/download/v1.9.0/node_exporter-1.9.0.linux-arm64.tar.gz
         path: /tmp/node_exporter-1.9.0.tar.gz
     # install-шаг разворачивает arm64-каталог в unless/cmd (через arch).
-    - index: 1
-      module: core.archive.extracted
-      params:
+    - module: core.archive.extracted
+      params_subset:
         path: /tmp/node_exporter-1.9.0.tar.gz
         dest: /tmp/node_exporter-1.9.0

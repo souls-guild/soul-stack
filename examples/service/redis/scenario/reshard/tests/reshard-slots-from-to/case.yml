@@ -46,15 +46,14 @@ fixtures:
     slots: 100
 
 assert:
-  rendered_tasks:
-    # GUARD теперь assert: (from != to, оба в roster → that[0] true → render проходит,
-    # задача в план НЕ эмитится) → RESHARD сдвинут на −1 (1→0).
-    #
+  # GUARD — assert: (from != to, оба в roster → that[0] true → render проходит,
+  # задача в план не эмитится).
+  task_present:
     # RESHARD run_once: endpoint-ы из roster по SID. from=node-1, to=node-2,
-    # slots=100 (int() → нативное число). password из vault.
-    - index: 0
-      module: community.redis.cluster
-      params:
+    # slots=100 (int() → нативное число). password из vault. Единственная
+    # community.redis.cluster в плане.
+    - module: community.redis.cluster
+      params_subset:
         action: reshard
         password: s3cr3t-redis-pass-reshard
         slots: 100

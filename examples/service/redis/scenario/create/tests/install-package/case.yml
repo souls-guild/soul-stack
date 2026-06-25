@@ -34,29 +34,29 @@ fixtures:
       method: package
 
 assert:
-  rendered_tasks:
-    # index 0 — distro-пакет: core.pkg.installed с distro-пином (package-ветка активна).
-    - index: 0
-      module: core.pkg.installed
-      params:
+  task_present:
+    # distro-пакет: core.pkg.installed с distro-пином (package-ветка активна).
+    - module: core.pkg.installed
+      params_subset:
         name: redis-server
         version: "5:7.0.15-1~deb12u7"
 
-    # index 1 — Fetch redis tarball (binary-ветка): method=package → placeholder-skip.
-    # Модуль есть в плане (block static-skip per-потомок), params пусты.
-    - index: 1
-      module: core.url.fetched
+    # redis.conf на месте. Полную сверку merged config даёт full-stack; здесь — что
+    # data-плоскость поведение-сохранна (тот же модуль/путь, что в default-режиме).
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
 
-    # index 5 — Install redis-server binary (первая из трёх core.file.present,
-    # binary-ветка): placeholder-skip.
-    - index: 5
-      module: core.file.present
-
-    # index 16 — redis.conf на месте (+9 сдвиг от binary-ветки install.yml). Полную
-    # сверку merged config даёт full-stack; здесь — что data-плоскость поведение-
-    # сохранна (тот же модуль/путь, что в default-режиме).
-    - index: 16
-      module: core.file.rendered
+  task_absent:
+    # binary-ветка install.yml выключена (method=package → static-skip): tarball-fetch
+    # и раскладка бинаря — placeholder-skip без params. params_subset не сматчит
+    # placeholder (Params nil) → guard «package НЕ запускает binary-install».
+    - module: core.url.fetched
+      params_subset:
+        path: "/tmp/redis-7.2.4.tar.gz"
+    - module: core.file.present
+      params_subset:
+        path: /usr/local/bin/redis-server
 
   state_changes:
     redis_type: standalone

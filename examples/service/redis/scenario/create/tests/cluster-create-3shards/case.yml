@@ -96,19 +96,13 @@ fixtures:
     cluster_node_timeout: 5000
 
 assert:
-  rendered_tasks:
-    # ── mode-guard (index 0) ─────────────────────────────────────────────────
-    # index 0 — mode-guard диспетчера (cluster реализован → no-op). shards-guard
-    # УБРАН (required_when в main.yml ловит пропуск shards на input-валидации, см.
-    # шапку). size-guard — assert: (3 == 3*(1+0) → render проходит, в план НЕ
-    # эмитится). Обе задачи позиций не занимают → cluster-destiny начинается с
-    # index 3 (pkg). Провал size-guard (mismatch) ловит cluster-size-guard-mismatch
-    # через expect_render_error; пропуск shards — cluster-shards-guard-missing.
-
-    # ── cluster destiny: пакет (index 3) ────────────────────────────────────
-    - index: 2
-      module: core.pkg.installed
-      params:
+  # size-guard — assert: (3 == 3*(1+0) → render проходит, в план НЕ эмитится).
+  # Провал size-guard (mismatch) ловит cluster-size-guard-mismatch через
+  # expect_render_error; пропуск shards — cluster-shards-guard-missing.
+  task_present:
+    # ── cluster destiny: пакет (mode-агностичный install ДО ветвления) ──────
+    - module: core.pkg.installed
+      params_subset:
         name: redis-server
         version: "7.2.4"
 
@@ -119,9 +113,9 @@ assert:
     # .self.network.primary_ip (см. destiny_redis_tmpl_test.go: per-host announce).
     # render_context.self здесь = первый по SID хост (node-a, host-инвариант
     # apply.input в пилоте), но СЛОЙ .tmpl на Soul-е возьмёт self КАЖДОГО хоста.
-    - index: 18
-      module: core.file.rendered
-      params:
+    # Дизамбигуатор от users.acl/hardening (тот же core.file.rendered) — path.
+    - module: core.file.rendered
+      params_subset:
         path: /etc/redis/redis.conf
         template_content: "<present>"
         mode: "0640"
@@ -155,11 +149,9 @@ assert:
 
     # ── cluster-build (community.redis.cluster) ─────────────────────────────
     # nodes-MAP: ключ=SID, addr=primary_ip+":6379". Детерминирован по SID.
-    # index 33 — после binary-под-ветки install.yml (+2 от трёх core.file.present).
-    - index: 33
-
-      module: community.redis.cluster
-      params:
+    # Единственная community.redis.cluster в плане → дизамбигуатор не нужен.
+    - module: community.redis.cluster
+      params_subset:
         action: create
         replicas_per_shard: 0
         password: s3cr3t-redis-pass-create

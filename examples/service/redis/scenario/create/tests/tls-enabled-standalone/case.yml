@@ -13,6 +13,12 @@
 # cert/CA/порт — HOST-ИНВАРИАНТ (один на кластер) → через apply.input. PEM content
 # = vault(ref) в САМОЙ ячейке → seal помечает sealed vault-слоем (маскинг в state/
 # error_summary). Маскинг доказан отдельным кейсом tls-pem-sealed-masking.
+#
+# PRESENCE-форма (миграция с позиционной 2026-06-24): задачи идентифицируются
+# module + params_subset; индексы не сверяются (хрупки). Три PEM-задачи
+# (cert/key/ca) — один и тот же module core.file.present, дизамбигуируются по path
+# (/etc/redis/tls/{redis.crt,redis.key,ca.crt}); каждая несёт СВОЙ content (PEM из
+# vault) + mode 0600 — guard на права и на правильный материал в правильном файле.
 name: tls enabled standalone renders PEM files and TLS directives, port 0 on tls_only
 
 fixtures:
@@ -59,53 +65,51 @@ fixtures:
     persistence: rdb
 
 assert:
-  rendered_tasks:
-    # index 3 — TLS dir (core.file.directory, when tls.enable → АКТИВЕН): /etc/redis/tls.
-    - index: 11
-      module: core.file.directory
-      params:
+  task_present:
+    # TLS dir (core.file.directory, when tls.enable → АКТИВЕН): /etc/redis/tls.
+    - module: core.file.directory
+      params_subset:
         path: /etc/redis/tls
         owner: redis
         group: redis
         mode: "0750"
 
-    # index 4 — TLS server cert: core.file.present, content = vault(tls.cert_ref) →
-    # ЦЕЛЫЙ PEM в ячейке content (НЕ .tmpl/render_context: PEM через vault() в ячейке,
-    # seal-маскинг vault-слоем).
-    - index: 12
-      module: core.file.present
-      params:
+    # TLS server cert: core.file.present, content = vault(tls.cert_ref) → ЦЕЛЫЙ PEM
+    # в ячейке content (НЕ .tmpl/render_context: PEM через vault() в ячейке,
+    # seal-маскинг vault-слоем). Дизамбигуатор от key/ca — path.
+    - module: core.file.present
+      params_subset:
         path: /etc/redis/tls/redis.crt
         content: "-----BEGIN CERTIFICATE-----\nSERVERCERT\n-----END CERTIFICATE-----"
         mode: "0600"
         owner: redis
         group: redis
 
-    # index 5 — TLS private key: core.file.present, content = vault(tls.key_ref) →
-    # секрет-PEM в ячейке (sealed vault-слоем).
-    - index: 13
-      module: core.file.present
-      params:
+    # TLS private key: core.file.present, content = vault(tls.key_ref) → секрет-PEM
+    # в ячейке (sealed vault-слоем). Дизамбигуатор от cert/ca — path.
+    - module: core.file.present
+      params_subset:
         path: /etc/redis/tls/redis.key
         content: "-----BEGIN PRIVATE KEY-----\nSERVERKEY\n-----END PRIVATE KEY-----"
         mode: "0600"
         owner: redis
         group: redis
 
-    # index 6 — TLS CA cert: core.file.present, content = vault(tls.ca_ref).
-    - index: 14
-      module: core.file.present
-      params:
+    # TLS CA cert: core.file.present, content = vault(tls.ca_ref). Дизамбигуатор
+    # от cert/key — path.
+    - module: core.file.present
+      params_subset:
         path: /etc/redis/tls/ca.crt
         content: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
         mode: "0600"
         owner: redis
         group: redis
 
-    # index 8 — redis.conf: merged config несёт TLS-директивы + port 0 (tls_only).
-    - index: 16
-      module: core.file.rendered
-      params:
+    # redis.conf: merged config несёт TLS-директивы + port 0 (tls_only). КРИТИЧНО:
+    # `port: "0"` — гарантия only-TLS (plain закрыт). Дизамбигуатор от users.acl/
+    # hardening — path.
+    - module: core.file.rendered
+      params_subset:
         path: /etc/redis/redis.conf
         render_context:
           vars:
@@ -138,13 +142,11 @@ assert:
           role: ""
           essence: {}
 
-    # index 21 — PING health-gate: при tls_only плагин по TLS (tls=true, addr на
-    # tls_port, tls_ca = CA-PEM из vault). Доказывает «плагин ОБЯЗАН по TLS».
-    # Сдвиг −1 (extras-sysctl сжаты 2→1 задачи core.sysctl.applied).
-    - index: 30
-
-      module: community.redis.command
-      params:
+    # PING health-gate: при tls_only плагин по TLS (tls=true, addr на tls_port,
+    # tls_ca = CA-PEM из vault). Доказывает «плагин ОБЯЗАН по TLS». cluster/sentinel
+    # PING — placeholder-skip; дизамбигуатор addr/args.
+    - module: community.redis.command
+      params_subset:
         addr: "127.0.0.1:7379"
         password: s3cr3t-redis-pass-create
         tls: true
@@ -152,7 +154,7 @@ assert:
         args: ["PING"]
 
   # DRIFT-GUARD: redis_config в state ОБЯЗАН быть бит-в-бит равен apply.input.config
-  # (index 8), включая TLS-директивы + port 0 (host-инвариант → пишутся в state).
+  # (redis.conf выше), включая TLS-директивы + port 0 (host-инвариант → пишутся в state).
   state_changes:
     redis_type: standalone
     redis_version: "7.2.4"

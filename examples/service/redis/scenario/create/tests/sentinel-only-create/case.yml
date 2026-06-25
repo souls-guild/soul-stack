@@ -63,28 +63,23 @@ fixtures:
     master_ip: 10.9.9.9
 
 assert:
-  rendered_tasks:
-    # Install redis-server package (index 10): пакет ставится ВСЕГДА — несёт и
-    # sentinel-демон. deploy_redis=false его НЕ гасит. standalone/cluster/sentinel
-    # ветки placeholder-skip на sentinel_only-прогоне. Это destiny-index 0 install.yml
-    # (package-ветка) — рендерится ДО binary-под-ветки, поэтому +2 от перехода трёх
-    # бинарей на core.file.present его не двигает (бинари идут ПОСЛЕ пакета).
-    - index: 10
-      module: core.pkg.installed
-      params:
+  task_present:
+    # Install redis-server package: пакет ставится ВСЕГДА — несёт и sentinel-демон.
+    # deploy_redis=false его НЕ гасит. binary-под-ветка install.yml — placeholder-skip
+    # (method=package).
+    - module: core.pkg.installed
+      params_subset:
         name: redis-server
         version: "7.2.4"
 
-    # sentinel.conf (index 31): РЕНДЕРИТСЯ (sentinel_enabled=true). vars: monitor
-    # ВНЕШНЕГО master 10.9.9.9:6379, master_name mymaster, quorum 2 (size(2)/2+1).
-    # announce-ip НЕ в vars — per-host в sentinel.conf.tmpl из .self. render_context.self
-    # = первый по SID хост (node-1, host-инвариант apply.input). data-плоскость
-    # redis-server (redis.conf/users.acl/systemd) в плане placeholder-skip —
-    # TestAcceptance_SentinelOnlySkipsRedisServer. Идёт ПОСЛЕ binary-под-ветки
-    # install.yml → +2 от перехода трёх бинарей на core.file.present.
-    - index: 31
-      module: core.file.rendered
-      params:
+    # sentinel.conf: РЕНДЕРИТСЯ (sentinel_enabled=true). vars: monitor ВНЕШНЕГО master
+    # 10.9.9.9:6379, master_name mymaster, quorum 2 (size(2)/2+1). announce-ip НЕ в
+    # vars — per-host в sentinel.conf.tmpl из .self. render_context.self = первый по
+    # SID хост (node-1, host-инвариант apply.input). data-плоскость redis-server
+    # (redis.conf/users.acl/systemd) — placeholder-skip (см. task_absent).
+    # Дизамбигуатор от sentinel-unit/hardening (тот же core.file.rendered) — path.
+    - module: core.file.rendered
+      params_subset:
         path: /etc/redis/sentinel.conf
         template_content: "<present>"
         mode: "0640"
@@ -111,11 +106,11 @@ assert:
           role: ""
           essence: {}
 
-    # SENTINEL MONITOR (index 40): monitor.ip = input.master_ip 10.9.9.9 (ВНЕШНИЙ,
-    # НЕ из soulprint.hosts — master живёт вне прогона). quorum 2 (size/2+1).
-    - index: 40
-      module: community.redis.sentinel
-      params:
+    # SENTINEL MONITOR: monitor.ip = input.master_ip 10.9.9.9 (ВНЕШНИЙ, НЕ из
+    # soulprint.hosts — master живёт вне прогона). quorum 2 (size/2+1). sentinel-mode
+    # вариант — placeholder-skip → единственная активная community.redis.sentinel.
+    - module: community.redis.sentinel
+      params_subset:
         addr: "127.0.0.1:26379"
         master_name: mymaster
         auth_pass: s3cr3t-redis-pass-create
@@ -125,13 +120,24 @@ assert:
           port: 6379
           quorum: 2
 
-    # PONG-gate :26379 (index 41): same-task register.self (PONG), НЕ cross-passage.
+    # PONG-gate :26379: same-task register.self (PONG), НЕ cross-passage.
     # community.redis.pinged (единая идиома health-gate через плагин-state, НЕ raw
-    # command args:[PING]).
-    - index: 41
-      module: community.redis.pinged
-      params:
+    # command args:[PING]). Единственная community.redis.pinged в плане.
+    - module: community.redis.pinged
+      params_subset:
         addr: "127.0.0.1:26379"
+
+  task_absent:
+    # GUARD «sentinel_only НЕ разворачивает data-плоскость redis-server»
+    # (deploy_redis=false → redis.conf/users.acl/systemd redis-server placeholder-skip).
+    # params_subset path не сматчит placeholder. Регресс «redis.conf протёк в
+    # sentinel_only» = задача отрендерится с реальными params → match → fail.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/users.acl
 
   # sentinel_only-факты в state: redis_type sentinel_only + redis_config ПУСТОЙ
   # (data-плоскости нет) + master_name/master_ip(ВНЕШНИЙ)/quorum + пустые

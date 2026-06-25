@@ -59,14 +59,12 @@ fixtures:
     cluster_node_timeout: 5000
 
 assert:
-  rendered_tasks:
-    # shards-guard УБРАН (required_when в main.yml) + size-guard assert: (ADR-009
-    # amendment) — обе задачи позиций не занимают → cluster-ветка сдвинута на −2 от
-    # исходного плана (redis.conf→10, cluster-build→26).
+  # size-guard PASS — assert: (ADR-009 amendment), в план не эмитится.
+  task_present:
     # redis.conf: merged config с cluster + TLS (вкл. tls-cluster yes) + port 0.
-    - index: 18
-      module: core.file.rendered
-      params:
+    # Дизамбигуатор от users.acl/hardening — path.
+    - module: core.file.rendered
+      params_subset:
         path: /etc/redis/redis.conf
         render_context:
           vars:
@@ -103,11 +101,9 @@ assert:
 
     # cluster-build: nodes-MAP на tls_port (7379), tls=true + tls_ca (плагин по TLS) +
     # mTLS client-cert (tls_cert/tls_key для взаимного cluster-bus, tls-cluster yes).
-    # index 24 (−2 guard + −1 extras-sysctl сжаты 2→1 задачи core.sysctl.applied).
-    - index: 33
-
-      module: community.redis.cluster
-      params:
+    # Единственная community.redis.cluster в плане.
+    - module: community.redis.cluster
+      params_subset:
         action: create
         replicas_per_shard: 0
         password: s3cr3t-redis-pass-create

@@ -58,11 +58,11 @@ fixtures:
       json:   "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 assert:
-  rendered_tasks:
+  task_present:
     # redis.conf БЕЗ loadmodules (version-gate → пустой список): vars.loadmodules: [].
-    - index: 16
-      module: core.file.rendered
-      params:
+    # Дизамбигуатор от users.acl/hardening — path.
+    - module: core.file.rendered
+      params_subset:
         path: /etc/redis/redis.conf
         template_content: "<present>"
         mode: "0640"
@@ -91,16 +91,26 @@ assert:
           role: ""
           essence: {}
 
-    # PING на index 21 (как modules-empty): modules-dir gated-placeholder на 20,
-    # fetch-loop 0 задач (пустой modules после gate). Хвост после sysctl −1
-    # (extras-sysctl сжаты 2→1 задачи core.sysctl.applied).
-    - index: 30
-
-      module: community.redis.command
-      params:
+    # standalone-PING: cluster/sentinel ветки — placeholder-skip; дизамбигуатор
+    # addr/args.
+    - module: community.redis.command
+      params_subset:
         addr: "127.0.0.1:6379"
         password: s3cr3t-redis-pass-create
         args: ["PING"]
+
+  task_absent:
+    # VERSION-GATE Redis 8+: modules-dir gated на size(modules)>0 → placeholder-skip
+    # (params_subset не сматчит). Guard «Redis 8 НЕ создаёт modules-dir». Дизамбигуатор
+    # от активного systemd-dropin-dir (тот же core.file.directory) — path.
+    - module: core.file.directory
+      params_subset:
+        path: /var/lib/redis/modules
+    # .so fetch: fetch-loop по пустому (после gate) modules → 0 задач. Guard «Redis 8
+    # НЕ качает .so». Дизамбигуатор от tarball-fetch placeholder — path.
+    - module: core.url.fetched
+      params_subset:
+        path: /var/lib/redis/modules/redisearch.so
 
   state_changes:
     redis_type: standalone

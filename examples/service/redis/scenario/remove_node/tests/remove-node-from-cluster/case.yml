@@ -43,14 +43,13 @@ fixtures:
     seed_sid: node-1.example.com
 
 assert:
-  rendered_tasks:
-    # GUARD теперь assert: (remove_node != seed, оба в roster → that[0] true → render
-    # проходит, задача в план НЕ эмитится) → REMOVE-NODE сдвинут на −1 (1→0).
-    #
+  # GUARD — assert: (remove_node != seed, оба в roster → that[0] true → render
+  # проходит, задача в план не эмитится).
+  task_present:
     # REMOVE-NODE run_once: endpoint-ы из roster по SID. node=node-3, seed=node-1.
-    - index: 0
-      module: community.redis.cluster
-      params:
+    # Единственная community.redis.cluster в плане.
+    - module: community.redis.cluster
+      params_subset:
         action: remove-node
         password: s3cr3t-redis-pass-removenode
         node:

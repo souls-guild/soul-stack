@@ -55,27 +55,26 @@ mocks:
       role: slave
 
 assert:
-  rendered_tasks:
+  task_present:
     # ── probe (community.redis.role): go-redis INFO replication, без redis-cli ──
-    - index: 0
-      module: community.redis.role
-      params:
+    # Единственная community.redis.role в плане.
+    - module: community.redis.role
+      params_subset:
         addr: "127.0.0.1:6379"
         password: fixture-redis-pass-16+
         tls: false
         tls_ca: ""
 
-    # ── block-потомок 1: Restart redis-server (core.service.restarted) ───────
-    - index: 1
-      module: core.service.restarted
-      params:
-        name: redis-server
-
-    # ── block-потомок 2: slave-health-gate (community.redis.replica-synced) ───
-    #    СТРОГИЙ ресинк-гейт (master_link_status:up), НЕ pinged/PONG.
-    - index: 2
-      module: community.redis.replica-synced
-      params:
+    # ── slave-health-gate (community.redis.replica-synced) ───────────────────
+    #    СТРОГИЙ ресинк-гейт (master_link_status:up), НЕ pinged/PONG. Единственная
+    #    community.redis.replica-synced в плане. Этот гейт живёт ВНУТРИ slave-block-а
+    #    сразу за `core.service.restarted` (block fan-out where=slave) — его наличие
+    #    доказывает, что slave-block отрендерился, а сам рестарт реплики (bare
+    #    core.service.restarted name=redis-server) presence-неотличим от master-рестарта
+    #    (оба идентичны, дискриминатор — block-`where`/TargetSIDs, presence его не
+    #    видит), поэтому его НЕ ассертим отдельно (см. наблюдение в отчёте).
+    - module: community.redis.replica-synced
+      params_subset:
         addr: "127.0.0.1:6379"
         password: fixture-redis-pass-16+
         tls: false

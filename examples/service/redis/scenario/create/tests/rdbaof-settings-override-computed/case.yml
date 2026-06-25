@@ -50,17 +50,16 @@ fixtures:
       maxmemory: "1gb"
 
 assert:
-  rendered_tasks:
-    # index 0 — mode-guard диспетчера (standalone реализован → no-op). Не ассертим.
-    - index: 0
-      module: core.pkg.installed
-      params:
+  task_present:
+    - module: core.pkg.installed
+      params_subset:
         name: redis-server
         version: "7.2.4"
 
-    - index: 16
-      module: core.file.rendered
-      params:
+    # redis.conf — единственная core.file.rendered с этим path (дизамбигуатор от
+    # users.acl/hardening).
+    - module: core.file.rendered
+      params_subset:
         path: /etc/redis/redis.conf
         template_content: "<present>"
         mode: "0640"

@@ -21,9 +21,9 @@ fixtures:
       primary_ip: "10.0.0.5"
 
 assert:
-  rendered_tasks:
-    - index: 0
-      module: core.url.fetched
-      params:
+  task_present:
+    # Единственный core.url.fetched в плане.
+    - module: core.url.fetched
+      params_subset:
         url: https://nexus.internal/ne/v1.9.0/node_exporter-1.9.0.linux-amd64.tar.gz
         path: /tmp/node_exporter-1.9.0.tar.gz

@@ -50,17 +50,26 @@ mocks:
       role: master
 
 assert:
-  rendered_tasks:
+  task_present:
     # ── probe (community.redis.role): go-redis INFO replication, без redis-cli ──
-    - index: 0
-      module: community.redis.role
-      params:
+    # Единственная community.redis.role в плане.
+    - module: community.redis.role
+      params_subset:
         addr: "127.0.0.1:6379"
         password: fixture-redis-pass-16+
         tls: false
         tls_ca: ""
 
-    # ── master-restart (core.service.restarted, where master, run_once) ──────
+  # ── master-restart НЕВЫРАЗИМ в presence (go/no-go, см. отчёт) ──────────────
+  # Главный guard кейса — что рестартится именно MASTER (where=master, run_once),
+  # ОТДЕЛЬНОЙ задачей ПОСЛЕ slave-block-а. В плане ДВА идентичных
+  # core.service.restarted name=redis-server (block-рестарт реплики + master-рестарт),
+  # оба с пустым when/id и теми же params; дискриминатор — block/task-`where`
+  # (TargetSIDs), который presence-матчер НЕ видит (taskMatches смотрит только
+  # module/params_subset/when/id). bare task_present сматчил бы ОБА → collision-fail.
+  # Поэтому master-restart остаётся в позиционной форме (формы сосуществуют): index 3 —
+  # master-restart (после probe[0] + block Restart[1] + replica-synced[2]).
+  rendered_tasks:
     - index: 3
       module: core.service.restarted
       params:

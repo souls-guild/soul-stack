@@ -1,8 +1,8 @@
 # L0-испытание (Trial, ADR-023): install.method=binary (upstream-tarball). Guard:
 # binary-ветка install.yml активна (url.fetched → archive.extracted → group → user →
 # три core.file.present с src: → свой redis-server.service + СВОЙ рестарт), а
-# package-ветка (core.pkg.installed, index 0) — placeholder-skip (params пусты).
-# Прецедент binary-install — node-exporter. URL собирается per-host из base_url +
+# package-ветка (core.pkg.installed) — placeholder-skip (params пусты). Прецедент
+# binary-install — node-exporter. URL собирается per-host из base_url +
 # install.version + soulprint.self.os.arch. version (top-level distro-пин) НЕ передан
 # — required_when=package, при method=binary не обязателен; redis_version в state
 # берётся из install.version (compute.redis_version).
@@ -17,6 +17,15 @@
 # В ТОМ ЖЕ install.yml (НЕ server.yml) — этот кейс рендерится без
 # unknown_register_reference, фиксируя «register + его onchanges-потребитель живут в
 # одном файле» как инвариант (per-file линтер validateTaskRefs).
+#
+# PRESENCE-форма (миграция с позиционной 2026-06-24): задачи идентифицируются
+# module + params_subset; индексы не сверяются (хрупки — три file.present вместо
+# одного cmd.shell съезжали план на +2). Три бинаря (redis-server/redis-cli/
+# redis-sentinel) — один и тот же core.file.present, дизамбигуируются по path +
+# своим src (guard на правильный бинарь в правильном файле). GUARD «package-ветка
+# НЕ активна при method=binary» — task_absent ниже: package-шаг при binary —
+# static-skip (Params==nil), его core.pkg.installed несёт пустые params → name
+# не матчится; регресс «package протёк в binary» = задача с реальным name.
 name: install method binary fetches upstream tarball and lays out binaries with own unit
 
 fixtures:
@@ -50,103 +59,104 @@ fixtures:
       version: "7.2.4"
 
 assert:
-  rendered_tasks:
-    # index 0 — package-ветка (core.pkg.installed): method=binary → placeholder-skip.
-    - index: 0
-      module: core.pkg.installed
-
-    # index 1 — Fetch redis tarball: URL из base_url + version + arch (amd64). checksum
-    # пуст (sha256 не задан → content-идемпотентность). path во /tmp.
-    - index: 1
-      module: core.url.fetched
-      params:
+  task_present:
+    # Fetch redis tarball: URL из base_url + version + arch (amd64). checksum пуст
+    # (sha256 не задан → content-идемпотентность). path во /tmp. Единственный
+    # core.url.fetched в плане.
+    - module: core.url.fetched
+      params_subset:
         url: "https://downloads.example.com/redis/redis-7.2.4-amd64.tar.gz"
         path: "/tmp/redis-7.2.4.tar.gz"
         checksum: ""
         mode: "0644"
 
-    # index 2 — Extract redis tarball во /tmp/redis-7.2.4.
-    - index: 2
-      module: core.archive.extracted
-      params:
+    # Extract redis tarball во /tmp/redis-7.2.4. Единственный core.archive.extracted.
+    - module: core.archive.extracted
+      params_subset:
         path: "/tmp/redis-7.2.4.tar.gz"
         dest: "/tmp/redis-7.2.4"
 
-    # index 3 — distro-группа redis (system).
-    - index: 3
-      module: core.group.present
-      params:
+    # distro-группа redis (system). Единственный core.group.present.
+    - module: core.group.present
+      params_subset:
         name: redis
         system: true
 
-    # index 4 — distro-юзер redis (system, nologin).
-    - index: 4
-      module: core.user.present
-      params:
+    # distro-юзер redis (system, nologin). Единственный core.user.present.
+    - module: core.user.present
+      params_subset:
         name: redis
         group: redis
         system: true
         shell: /usr/sbin/nologin
         home: /var/lib/redis
 
-    # index 5..7 — три core.file.present с src: раскладывают redis-server/redis-cli/
-    # redis-sentinel из распакованного /tmp/redis-7.2.4 в /usr/local/bin (mode 0755,
-    # owner/group root). register redis_server_bin/redis_cli_bin/redis_sentinel_bin.
-    # Идемпотентность нативная — sha256(src) сверяется с целью, changed строго при
-    # смене байт (реальный апгрейд версии); version-aware unless-guard прежнего
-    # core.cmd.shell не нужен. src/content взаимоисключены (content в задаче нет).
-    - index: 5
-      module: core.file.present
-      params:
+    # Три core.file.present с src: раскладывают redis-server/redis-cli/redis-sentinel
+    # из распакованного /tmp/redis-7.2.4 в /usr/local/bin (mode 0755, owner/group root).
+    # register redis_server_bin/redis_cli_bin/redis_sentinel_bin. Идемпотентность
+    # нативная — sha256(src) сверяется с целью, changed строго при смене байт.
+    # src/content взаимоисключены (content в задаче нет). Дизамбигуатор тройки — path.
+    - module: core.file.present
+      params_subset:
         path: /usr/local/bin/redis-server
         src: /tmp/redis-7.2.4/redis-server
         mode: "0755"
         owner: root
         group: root
 
-    - index: 6
-      module: core.file.present
-      params:
+    - module: core.file.present
+      params_subset:
         path: /usr/local/bin/redis-cli
         src: /tmp/redis-7.2.4/redis-cli
         mode: "0755"
         owner: root
         group: root
 
-    - index: 7
-      module: core.file.present
-      params:
+    - module: core.file.present
+      params_subset:
         path: /usr/local/bin/redis-sentinel
         src: /tmp/redis-7.2.4/redis-sentinel
         mode: "0755"
         owner: root
         group: root
 
-    # index 8 — свой systemd-юнит redis-server.service (binary install). register
+    # Свой systemd-юнит redis-server.service (binary install). register
     # redis_server_unit. Имя юнита redis-server → hardening drop-in/core.service в обеих
-    # ветках работают.
-    - index: 8
-      module: core.file.rendered
-      params:
+    # ветках работают. Дизамбигуатор от redis.conf — path + register-якорь.
+    - module: core.file.rendered
+      id: redis_server_unit
+      params_subset:
         path: /etc/systemd/system/redis-server.service
         template_content: "<present>"
         mode: "0644"
         owner: root
         group: root
 
-    # index 9 — рестарт redis-server на смену бинаря/юнита (binary-локальный onchanges
-    # на redis_server_bin/redis_cli_bin/redis_sentinel_bin/redis_server_unit, все из
-    # ЭТОГО файла — cross-file guard).
-    - index: 9
-      module: core.service.restarted
-      params:
+    # redis.conf на месте: data-плоскость одинакова в обеих ветках (install.method
+    # меняет только установку бинарей, не render redis.conf). Дизамбигуатор от
+    # redis-server.service unit — path.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+
+    # Рестарт redis-server на смену бинаря/юнита (binary-локальный onchanges на
+    # redis_server_bin/redis_cli_bin/redis_sentinel_bin/redis_server_unit, все из
+    # ЭТОГО файла — cross-file guard). В плане ДВА core.service.restarted
+    # name=redis-server (этот binary-restart из install.yml + config/hardening-restart
+    # из server.yml, оба без register/id); дизамбигуатор — when этого шага
+    # (default(input.deploy_redis, true)), у config-restart when пуст.
+    - module: core.service.restarted
+      when: "default(input.deploy_redis, true)"
+      params_subset:
         name: redis-server
 
-    # index 16 — redis.conf на месте: data-плоскость одинакова в обеих ветках
-    # (install.method меняет только установку бинарей, не render redis.conf). Индекс
-    # сдвинут с 14 на 16: три core.file.present вместо одного core.cmd.shell дают +2.
-    - index: 16
-      module: core.file.rendered
+  task_absent:
+    # GUARD «method=binary НЕ активирует package-ветку»: core.pkg.installed gated на
+    # install.method==package (binary → static-skip, Params==nil) → name не матчится.
+    # Регресс «package протёк в binary» = задача с реальным name redis-server.
+    - module: core.pkg.installed
+      params_subset:
+        name: redis-server
 
   state_changes:
     redis_type: standalone
