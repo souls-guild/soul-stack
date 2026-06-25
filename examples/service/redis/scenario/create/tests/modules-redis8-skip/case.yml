@@ -1,19 +1,22 @@
-# L0-испытание create (standalone) — VERSION-GATE Redis 8+: модули ВСТРОЕНЫ в
-# сервер → .so НЕ качаем и loadmodule НЕ пишем, ДАЖЕ если оператор задал
-# input.modules. Контр-кейс к modules-enabled-standalone (Redis 6, модули активны).
+# L0-испытание create (standalone) — VERSION-GUARD Redis 8+: модули ВСТРОЕНЫ в
+# сервер → .so НЕ качаем и loadmodule НЕ пишем. Контр-кейс к modules-enabled-standalone
+# (Redis 6 → полный набор активен). Директива «модули ВСЕГДА ВСЕ» = для Redis < 8;
+# на Redis 8+ — builtin-skip.
 #
-# Корень гейта: scenario вычисляет modules_for_redis = redis8plus ? [] : input.modules,
-# где redis8plus матчит version по regex ^([0-9]+:)?(8|9|двузначный мажор)\. На
-# version=8.0.0 → modules → [] → destiny получает пустой modules/loadmodules:
-#   - modules-dir gated на size(modules)>0 → placeholder-skip (НЕ создаёт каталог);
-#   - fetch-loop по пустому списку → 0 задач;
-#   - vars.loadmodules = [] → секции loadmodule в redis.conf нет.
-# План идентичен modules-empty: PING на index 21 (modules-dir placeholder на 20;
-# extras-sysctl сжаты 2→1 задачи core.sysctl.applied → хвост после sysctl −1).
+# Корень гейта (ПЕРЕЕХАЛ В DESTINY): version-guard теперь в самой destiny (раньше
+# scenario обнулял modules). redis8 истинно, когда эффективная версия (input.version
+# distro-пин ИЛИ input.install.version upstream) мажором >= 8: regex
+# ^([0-9]+:)?(8|9|двузначный мажор)\. На version=8.0.0:
+#   - include modules.yml gated на deploy_redis && !redis8 → redis8 истинно → conditional-
+#     include group-drop: ВЕСЬ файл (modules-dir + fetch-loop) ФИЗИЧЕСКИ отсутствует в
+#     плане (не placeholder — задачи не рендерятся, indices не резервируются);
+#   - loadmodules-ячейка redis.conf: redis8 → [] → секции loadmodule нет;
+#   - state.modules = [] (compute.redis_modules_deployed: redis8 → []).
+# План идентичен modules-empty (presence-форма — позиционные индексы не сверяются).
 #
-# Упрощение (brief): version-gate по input.version (мажор), полную version-matrix
+# Упрощение (brief): version-guard по версии (мажор), полную version-matrix
 # совместимости модулей НЕ тащим. version не задан → НЕ гейтим (fail-closed на Redis).
-name: redis 8 version gate skips module download even when modules requested
+name: redis 8 version guard skips module download (modules builtin)
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
@@ -50,12 +53,9 @@ fixtures:
   input:
     redis_type: standalone
     version: "8.0.0"
-    # Оператор ЗАДАЛ модули, но Redis 8+ → version-gate их гасит.
-    modules: [search, json]
+    # Redis 8+ → version-guard гасит модули (встроены в сервер). modules_base_url задан,
+    # но на 8+ не используется (URL не строится — include modules.yml group-drop).
     modules_base_url: "https://artifacts.example.com/redis/modules/8.0"
-    modules_sha256:
-      search: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-      json:   "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 assert:
   task_present:
@@ -100,14 +100,14 @@ assert:
         args: ["PING"]
 
   task_absent:
-    # VERSION-GATE Redis 8+: modules-dir gated на size(modules)>0 → placeholder-skip
-    # (params_subset не сматчит). Guard «Redis 8 НЕ создаёт modules-dir». Дизамбигуатор
-    # от активного systemd-dropin-dir (тот же core.file.directory) — path.
+    # VERSION-GATE Redis 8+: include modules.yml gated на deploy_redis && !redis8 →
+    # group-drop (modules-dir отсутствует в плане). Guard «Redis 8 НЕ создаёт modules-dir».
+    # Дизамбигуатор от активного systemd-dropin-dir (тот же core.file.directory) — path.
     - module: core.file.directory
       params_subset:
         path: /var/lib/redis/modules
-    # .so fetch: fetch-loop по пустому (после gate) modules → 0 задач. Guard «Redis 8
-    # НЕ качает .so». Дизамбигуатор от tarball-fetch placeholder — path.
+    # .so fetch: include modules.yml group-dropped → fetch-loop в плане отсутствует.
+    # Guard «Redis 8 НЕ качает .so». Дизамбигуатор от tarball-fetch placeholder — path.
     - module: core.url.fetched
       params_subset:
         path: /var/lib/redis/modules/redisearch.so
@@ -125,3 +125,5 @@ assert:
     redis_users: {}
     redis_hosts: []
     redis_sentinel: {}
+    # Redis 8+ → модули встроены, .so не качаются → развёрнутый набор пуст.
+    modules: []

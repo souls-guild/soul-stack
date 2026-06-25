@@ -1,18 +1,17 @@
 # L0-испытание create (standalone) — Redis-МОДУЛИ БЕЗ sha256 (checksum ОПЦИОНАЛЕН,
 # директива пользователя 2026-06-24). Контр-кейс к modules-enabled-standalone (там
-# modules_sha256 ЗАДАН → checksum "sha256:<hex>", fail-closed). Здесь оператор
-# input.modules_sha256 НЕ передаёт вовсе → задача fetch передаёт ПУСТОЙ checksum, и
-# core.url.fetched качает .so по СОДЕРЖИМОМУ (content-идемпотентность: скачать во temp
-# → сравнить SHA-256 с существующим → запись только при diff), без integrity-verify.
+# modules_sha256 ЗАДАН частично → search/json verify). Здесь оператор modules_sha256
+# НЕ передаёт вовсе → КАЖДЫЙ из четырёх модулей fetch-ится с ПУСТЫМ checksum, и
+# core.url.fetched качает .so по СОДЕРЖИМОМУ (content-идемпотентность), без verify.
 #
-# Guard на то, что при непустом input.modules и ОТСУТСТВУЮЩЕМ modules_sha256:
+# Guard (директива «модули ВСЕГДА ВСЕ»): при ОТСУТСТВУЮЩЕМ modules_sha256:
 #   1. рендер проходит (CEL-ячейка checksum НЕ падает no-such-key — has()-guard);
-#   2. каждый алиас → core.url.fetched с checksum: "" (пусто = absent для модуля);
-#   3. остальное (modules-dir, loadmodules в redis.conf, URL из arch) — как с sha256.
+#   2. КАЖДЫЙ из ЧЕТЫРЁХ алиасов → core.url.fetched с checksum: "" (absent);
+#   3. остальное (modules-dir, loadmodules всех четырёх, URL из arch) — как с sha256.
 #
-# version=5:6.2.7 — мажор 6 (< 8), version-gate модули НЕ гасит (как в базовом modules-
-# кейсе). modules=[search, json] — тот же порядок и индексы, что modules-enabled-
-# standalone (отличие ровно одно: пустой checksum vs "sha256:<hex>").
+# version=5:6.2.7 — мажор 6 (< 8), version-guard модули НЕ гасит. input.modules НЕ
+# задаётся (набор-инвариант в destiny vars.redis_modules) — отличие от enabled-кейса
+# ровно одно: пустой checksum у ВСЕХ vs частичный verify.
 name: modules without sha256 render empty checksum and fetch by content idempotency
 
 fixtures:
@@ -50,16 +49,15 @@ fixtures:
   input:
     redis_type: standalone
     version: "5:6.2.7"
-    # modules заданы, modules_sha256 — НЕТ (опционален). Порядок [search, json]
-    # сохраняется в loadmodules; в fetch-задачах checksum пуст (absent для каждого).
-    modules: [search, json]
+    # input.modules НЕ задаётся (набор-инвариант), modules_sha256 — НЕТ (опционален).
+    # ВСЕ четыре модуля fetch-ятся с пустым checksum (absent для каждого).
     modules_base_url: "https://artifacts.example.com/redis/modules/6.2"
 
 assert:
   task_present:
-    # redis.conf несёт vars.loadmodules — пути .so в ПОРЯДКЕ input.modules
-    # (search → redisearch.so первым). loadmodules от наличия sha256 НЕ зависят.
-    # Дизамбигуатор от users.acl/hardening — path.
+    # redis.conf несёт vars.loadmodules — пути .so ВСЕХ четырёх (Go-сорт: bloom, json,
+    # search, timeseries). loadmodules от наличия sha256 НЕ зависят. Дизамбигуатор от
+    # users.acl/hardening — path.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
@@ -71,8 +69,10 @@ assert:
           vars:
             password: s3cr3t-redis-pass-create
             loadmodules:
-              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redisbloom.so
               - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
             config:
               maxmemory: "256mb"
               maxmemory-policy: allkeys-lru
@@ -92,8 +92,8 @@ assert:
           role: ""
           essence: {}
 
-    # modules-dir каталог — gated на size(modules)>0, здесь АКТИВНА. Дизамбигуатор
-    # от systemd-dropin-dir — path.
+    # modules-dir каталог — gated-include на deploy_redis && !redis8, здесь АКТИВНА.
+    # Дизамбигуатор от systemd-dropin-dir — path.
     - module: core.file.directory
       params_subset:
         path: /var/lib/redis/modules
@@ -101,11 +101,28 @@ assert:
         group: redis
         mode: "0750"
 
-    # fetch .so — loop по алиасам (search[0], json[1]). URL арх-специфичен (amd64).
-    # checksum ПУСТ ("") — modules_sha256 не передан: core.url.fetched качает по
-    # content-идемпотентности (пустой checksum = absent, OptStringParam). Именно
-    # пустую строку и доказывает кейс (assert сверяет ключ checksum точно).
-    # Дизамбигуатор двух .so — path/url; tarball-fetch — placeholder-skip.
+    # fetch .so — loop по КЛЮЧАМ vars.redis_modules (Go-сорт: bloom, json, search,
+    # timeseries). URL арх-специфичен (amd64). checksum ПУСТ ("") у КАЖДОГО —
+    # modules_sha256 не передан: core.url.fetched качает по content-идемпотентности.
+    # Дизамбигуатор .so — path/url; tarball-fetch — placeholder-skip.
+    - module: core.url.fetched
+      params_subset:
+        url: "https://artifacts.example.com/redis/modules/6.2/amd64/redisbloom.so"
+        path: /var/lib/redis/modules/redisbloom.so
+        checksum: ""
+        mode: "0750"
+        owner: redis
+        group: redis
+
+    - module: core.url.fetched
+      params_subset:
+        url: "https://artifacts.example.com/redis/modules/6.2/amd64/rejson.so"
+        path: /var/lib/redis/modules/rejson.so
+        checksum: ""
+        mode: "0750"
+        owner: redis
+        group: redis
+
     - module: core.url.fetched
       params_subset:
         url: "https://artifacts.example.com/redis/modules/6.2/amd64/redisearch.so"
@@ -117,8 +134,8 @@ assert:
 
     - module: core.url.fetched
       params_subset:
-        url: "https://artifacts.example.com/redis/modules/6.2/amd64/rejson.so"
-        path: /var/lib/redis/modules/rejson.so
+        url: "https://artifacts.example.com/redis/modules/6.2/amd64/redistimeseries.so"
+        path: /var/lib/redis/modules/redistimeseries.so
         checksum: ""
         mode: "0750"
         owner: redis
@@ -145,3 +162,5 @@ assert:
     redis_users: {}
     redis_hosts: []
     redis_sentinel: {}
+    # Redis 6 (< 8) → полный набор развёрнут (модули всегда все).
+    modules: [bloom, json, search, timeseries]

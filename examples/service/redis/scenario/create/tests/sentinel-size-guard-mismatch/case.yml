@@ -45,6 +45,9 @@ fixtures:
     # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
     # distro-native пин (мажор < 8 → version-gate модулей не активен).
     version: "7.2.4"
+    # modules_base_url обязателен на Redis < 8 (директива «модули ВСЕГДА ВСЕ»): иначе
+    # validate[3] 422-нул бы ДО render, скрыв ожидаемый ниже size-guard render-error.
+    modules_base_url: "https://artifacts.example.com/redis/modules"
     replicas: 1
 
 # Render ОБРЫВАЕТСЯ assert-провалом sentinel size-guard-а: ожидаем ошибку рендера с

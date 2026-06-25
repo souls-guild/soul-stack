@@ -97,12 +97,28 @@ state_schema:
     # отсутствием явного выбора оператора).
     maxmemory_policy:
       type: string
-    # Подключённые Redis-модули (Redis < 8). Алиасы из input.modules; пусто → [].
+    # Развёрнутые Redis-модули (read-model). Директива «модули ВСЕГДА ВСЕ»: на Redis
+    # < 8 — полный набор алиасов (destiny грузит все из vars.redis_modules), на Redis
+    # 8+ — пусто (встроены). НЕ operator-выбор (input.modules упразднён).
     modules:
       type: array
       items:
         type: string
         enum: [search, json, timeseries, bloom]
+    # Источник .so Redis-модулей (modules_base_url оператора, read-model). Сохраняется
+    # для day-2 (add_node): новая нода кластера тянет .so из ТОГО ЖЕ источника. Пусто,
+    # если оператор не задавал (Redis 8+ — модули встроены, источник не нужен).
+    modules_base_url:
+      type: string
+    # Host-layout (директива B, read-model): базовые каталоги конфигурации и данных
+    # Redis, переопределяемые оператором (input.conf_dir/data_dir). Сохраняются для
+    # day-2 (add_node): новая нода кластера обязана знать ТОТ ЖЕ layout. default =
+    # текущий путь (/etc/redis, /var/lib/redis); для старых инкарнаций без этих полей
+    # day-2 читает их has()-safe-дефолтом (back-compat). Симметрично modules_base_url.
+    conf_dir:
+      type: string
+    data_dir:
+      type: string
     # Применённые kernel-параметры под Redis (host-tuning). Из essence.sysctl_settings
     # (тот же map, что ушёл в destiny через apply.input). key→value (строки).
     sysctl_settings:

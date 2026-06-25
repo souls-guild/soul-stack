@@ -60,6 +60,34 @@ input:
       «latest из репо» (пустой version → core.pkg без пина) более НЕ доступно. При
       install.method=binary НЕ используется (версия бинаря — в install.version).
 
+  # ── Пути host-layout, переопределяемые оператором (директива B) ──────────────
+  # conf_dir/data_dir — базовые каталоги конфигурации и данных Redis. ОПЕРАТОР-
+  # ПЕРЕОПРЕДЛЯЕМЫ (input, не vars): оператор может развернуть конфиг/данные под свой
+  # storage-layout (отдельный mount под /data, нестандартный /etc-путь). Дефолт =
+  # ТЕКУЩИЙ путь (back-compat: не задан → тот же /etc/redis, /var/lib/redis). Задачи
+  # выводят конкретные файлы/подкаталоги из этих баз (redis.conf, users.acl, tls/,
+  # modules/ — см. tasks/*.yml). HOST-ИНВАРИАНТ (один layout на кластер) → приходят
+  # через apply.input. Инвариантные каталоги (имя юнит-файла, drop-in-dir) в input НЕ
+  # выносятся — менять их незачем (см. vars.yml граница vars↔input).
+  conf_dir:
+    type: string
+    required: false
+    default: /etc/redis
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: >-
+      Каталог конфигурации Redis (redis.conf, users.acl, sentinel.conf, tls/).
+      По умолчанию /etc/redis. Оператор может переопределить под свой layout.
+
+  data_dir:
+    type: string
+    required: false
+    default: /var/lib/redis
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: >-
+      Рабочий каталог данных Redis (RDB/AOF; modules/ выводится из него как
+      <data_dir>/modules). По умолчанию /var/lib/redis. Оператор может переопределить
+      под свой storage-layout.
+
   # ── install: способ установки redis (концепция Ansible-роли redis_install_*) ──
   # Способ доставки бинарей redis: distro-пакет (default, поведение-сохраняющее) ИЛИ
   # upstream-tarball (opt-in). Прецедент binary-install — node-exporter (install.yml:
@@ -229,47 +257,34 @@ input:
         type: string
 
   # ── Redis-модули (концепция Ansible-роли redis: redis_module_*) ──────────────
-  # На Redis < 8 модули (RediSearch / RedisJSON / RedisTimeSeries / RedisBloom)
-  # подключаются как загружаемые .so-объекты: их .so качаются в modules_dir и
-  # подключаются директивой loadmodule в redis.conf. На Redis 8+ модули ВСТРОЕНЫ в
-  # сервер — .so не качаем и loadmodule НЕ пишем (version-gate делает scenario: на
-  # 8+ передаёт modules=[] и loadmodules=[]). HOST-ИНВАРИАНТ (один набор модулей на
-  # кластер) → приходят через apply.input, не per-host .self (tiling-урок).
+  # ★ ДИРЕКТИВА «модули ВСЕГДА ВСЕ» (2026-06-25): НАБОР модулей больше НЕ operator-
+  # выбор. Полная таблица алиас→.so (RediSearch/RedisJSON/RedisTimeSeries/RedisBloom)
+  # — ИНВАРИАНТ кирпича в vars.yml (redis_modules). На Redis < 8 разворачивается ВЕСЬ
+  # набор: .so качаются в <data_dir>/modules и подключаются loadmodule в redis.conf.
+  # Поэтому полей input.modules / input.modules_dir больше НЕТ (modules_dir выводится
+  # из input.data_dir). scenario модули НЕ передаёт.
   #
-  # modules — короткие алиасы. Имя .so-файла каждого алиаса — фиксированная таблица
-  # имён Redis-модулей (НЕ operator-трансляция) → живёт в destiny (тут). URL .so
-  # АРХ-СПЕЦИФИЧЕН: destiny строит его per-host из modules_base_url + СВОЕГО
-  # soulprint.self.os.arch + имени файла (soulprint доступен в destiny-CEL —
-  # прецедент arch-резолва node-exporter), поэтому mixed-arch incarnation корректен
-  # (каждый хост качает .so под свою арх). checksum (modules_sha256) — host-инвариант
-  # (для архитектуры кластера) → apply.input, как single sha256 redis-exporter.
-  modules:
-    type: array
-    required: false
-    description: >-
-      Алиасы Redis-модулей для загрузки (Redis < 8). Пусто/не передан → модули не
-      качаются и не подключаются. На Redis 8+ scenario передаёт пустой список
-      (модули встроены в сервер).
-    items:
-      type: string
-      enum: [search, json, timeseries, bloom]
-
-  modules_dir:
-    type: string
-    required: false
-    default: /var/lib/redis/modules
-    pattern: "^/[A-Za-z0-9._/-]+$"
-    description: >-
-      Каталог, куда раскладываются .so Redis-модулей (концепция redis_module_dir
-      роли). По умолчанию /var/lib/redis/modules.
-
+  # REDIS 8+ (version-guard сохранён, директива C): модули ВСТРОЕНЫ в сервер — .so не
+  # качаем и loadmodule НЕ пишем. Раньше version-gate делал scenario (передавал
+  # modules=[]); теперь, когда набор-инвариант в vars, гейт ПЕРЕЕХАЛ В DESTINY:
+  # version читается из input.version (distro-пин) / input.install.version (binary),
+  # мажор >= 8 → loadmodules пустой + include modules.yml group-drop (server.yml/
+  # modules.yml/main.yml). Так «всегда все» = для Redis < 8; на Redis 8+ — builtin-skip.
+  #
+  # URL .so АРХ-СПЕЦИФИЧЕН: destiny строит его per-host из modules_base_url + СВОЕГО
+  # soulprint.self.os.arch + имени файла из vars.redis_modules (soulprint доступен в
+  # destiny-CEL — прецедент arch-резолва node-exporter), поэтому mixed-arch incarnation
+  # корректен (каждый хост качает .so под свою арх). modules_base_url (откуда брать .so)
+  # и modules_sha256 (checksums) ОСТАЮТСЯ в input — это deployment-артефакт под пару
+  # (version, arch) кластера, не инвариант кирпича. HOST-ИНВАРИАНТ → apply.input.
   modules_base_url:
     type: string
     required: false
     description: >-
       Базовый URL источника .so Redis-модулей (без арх-сегмента). destiny строит
       полный URL каждого модуля как modules_base_url/<arch>/<имя.so>, где arch —
-      soulprint.self.os.arch ЭТОГО хоста. Обязателен, если modules непуст.
+      soulprint.self.os.arch ЭТОГО хоста, а имя файла — из vars.redis_modules.
+      Обязателен на Redis < 8 (модули разворачиваются всегда все).
 
   # checksum каждого .so — ОПЦИОНАЛЬНЫЙ (директива пользователя 2026-06-24). Задан
   # для item → fail-closed: core.url.fetched верифицирует SHA-256 ДО публикации файла,

@@ -29,6 +29,7 @@ fixtures:
   input:
     redis_type: standalone
     version: "5:7.0.15-1~deb12u7"
+    modules_base_url: "https://artifacts.example.com/redis/modules"
     persistence: rdb
     install:
       method: package

@@ -50,6 +50,11 @@
       # бинарь redis-sentinel раскладывается во ВСЕХ режимах (как distro-пакет несёт
       # оба демона), и sentinel.yml ждёт его на месте.
       install:  "${ default(input.install, {}) }"
+      # conf_dir/data_dir: host-layout (директива B), сквозь-проброс — см. standalone.yml.
+      # В sentinel_only data-плоскости нет (deploy_redis=false), но sentinel.conf/unit
+      # рендерятся под conf_dir → проброс нужен и здесь.
+      conf_dir: "${ default(input.conf_dir, '/etc/redis') }"
+      data_dir: "${ default(input.data_dir, '/var/lib/redis') }"
       # deploy_redis=false: data-плоскость redis-server НЕ разворачивается.
       deploy_redis: false
       # requirepass НЕ применяется (нет redis-server), но destiny-контракт требует
@@ -63,7 +68,10 @@
       # отличается от этой подложки — state отражает «redis-server не развёрнут».
       config:   "${ essence.redis_config }"
       users:    "${ {} }"
-      modules:  "${ [] }"
+      # Модули НЕ передаём (директива «модули ВСЕГДА ВСЕ» — набор-инвариант в destiny
+      # vars.redis_modules). В sentinel_only data-плоскости нет (deploy_redis=false) →
+      # include modules.yml gated off → .so не качаются. modules_base_url пуст (источник
+      # не нужен), modules_sha256 — пустой map.
       modules_base_url: "${ '' }"
       modules_sha256:   "${ {} }"
       # Host-tuning extras режим-агностичны — как в прочих ветках. THP/logrotate/sysctl

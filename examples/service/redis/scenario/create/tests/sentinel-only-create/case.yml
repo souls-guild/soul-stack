@@ -7,9 +7,12 @@
 # Render-only, герметично. Диспетчер create инклудит standalone/cluster/sentinel/
 # sentinel-only; на sentinel_only-прогоне первые три ветки гаснут placeholder-skip-
 # ом (static-when input.redis_type != 'sentinel_only'), sentinel-only-ветка
-# рендерится. ВНУТРИ destiny `redis` deploy_redis=false гасит data-плоскость
-# (redis.conf/users.acl/PEM/systemd redis-server — placeholder-skip), но пакет redis
-# ставится ВСЕГДА (несёт sentinel-демон) + sentinel.conf/unit/демон (sentinel_enabled).
+# рендерится. ВНУТРИ destiny `redis` deploy_redis=false гасит data-плоскость:
+# include server.yml дропается ЦЕЛИКОМ (conditional-include group-drop, ADR-009
+# amendment) → redis.conf/users.acl/PEM/systemd redis-server ФИЗИЧЕСКИ ОТСУТСТВУЮТ в
+# плане (не placeholder-skip — их задачи не рендерятся, indices не резервируются), но
+# пакет redis ставится ВСЕГДА (install.yml безусловен, несёт sentinel-демон) +
+# sentinel.conf/unit/демон (include sentinel.yml keep при sentinel_enabled).
 #
 # Что ассертим (критерий приёмки слайса):
 #   1. mode-guard (index 0): sentinel_only реализован → "true" → no-op. master_ip-
@@ -18,12 +21,13 @@
 #   2. install redis-server (index 10): пакет ставится ДАЖЕ при deploy_redis=false.
 #      package-install — destiny-index 0 install.yml, ДО binary-под-ветки → +2 от
 #      трёх core.file.present его НЕ касается (бинари рендерятся ПОСЛЕ пакета).
-#   3. sentinel.conf (index 31) РЕНДЕРИТСЯ: monitor ВНЕШНЕГО master 10.9.9.9, quorum
+#   3. sentinel.conf РЕНДЕРИТСЯ: monitor ВНЕШНЕГО master 10.9.9.9, quorum
 #      2 (size/2+1 при 2 хостах). data-плоскость redis-server в плане отсутствует
-#      (placeholder-skip — доказано render-acceptance TestAcceptance_SentinelOnlySkipsRedisServer).
-#   4. SENTINEL MONITOR (index 40): monitor.ip = input.master_ip 10.9.9.9 (ВНЕШНИЙ,
+#      (include server.yml group-dropped — доказано render-acceptance
+#      TestAcceptance_SentinelOnlySkipsRedisServer).
+#   4. SENTINEL MONITOR: monitor.ip = input.master_ip 10.9.9.9 (ВНЕШНИЙ,
 #      НЕ из soulprint.hosts), quorum 2.
-#   5. PONG-gate :26379 (index 41): same-task register.self (PONG), НЕ cross-passage.
+#   5. PONG-gate :26379: same-task register.self (PONG), НЕ cross-passage.
 name: sentinel_only deploys only sentinel daemon monitoring external master
 
 fixtures:
@@ -76,8 +80,9 @@ assert:
     # 10.9.9.9:6379, master_name mymaster, quorum 2 (size(2)/2+1). announce-ip НЕ в
     # vars — per-host в sentinel.conf.tmpl из .self. render_context.self = первый по
     # SID хост (node-1, host-инвариант apply.input). data-плоскость redis-server
-    # (redis.conf/users.acl/systemd) — placeholder-skip (см. task_absent).
-    # Дизамбигуатор от sentinel-unit/hardening (тот же core.file.rendered) — path.
+    # (redis.conf/users.acl/systemd) — group-dropped (include server.yml выключен,
+    # см. task_absent). Дизамбигуатор от sentinel-unit/hardening (тот же
+    # core.file.rendered) — path.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/sentinel.conf
@@ -129,9 +134,11 @@ assert:
 
   task_absent:
     # GUARD «sentinel_only НЕ разворачивает data-плоскость redis-server»
-    # (deploy_redis=false → redis.conf/users.acl/systemd redis-server placeholder-skip).
-    # params_subset path не сматчит placeholder. Регресс «redis.conf протёк в
-    # sentinel_only» = задача отрендерится с реальными params → match → fail.
+    # (deploy_redis=false → include server.yml group-dropped: redis.conf/users.acl/
+    # systemd redis-server ФИЗИЧЕСКИ отсутствуют в плане). presence task_absent ловит
+    # обе формы (полное отсутствие group-drop'а и placeholder-skip). Регресс
+    # «redis.conf протёк в sentinel_only» = задача отрендерится с реальными params →
+    # match → fail.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf

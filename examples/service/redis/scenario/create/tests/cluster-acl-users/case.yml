@@ -72,6 +72,7 @@ fixtures:
     # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
     # distro-native пин (мажор < 8 → version-gate модулей не активен).
     version: "7.2.4"
+    modules_base_url: "https://artifacts.example.com/redis/modules"
     shards: 3
     replicas_per_shard: 0
     cluster_node_timeout: 5000
@@ -136,7 +137,11 @@ assert:
         render_context:
           vars:
             password: s3cr3t-redis-pass-create
-            loadmodules: []
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
             config:
               maxmemory:        "256mb"
               maxmemory-policy: allkeys-lru
@@ -160,10 +165,11 @@ assert:
           essence: {}
 
   task_absent:
-    # GUARD «cluster НЕ разворачивает sentinel-демон»: ветка tasks/sentinel.yml
-    # gated на input.sentinel_enabled (отсутствует → static-skip). sentinel.conf
-    # и демон присутствуют ТОЛЬКО как placeholder без params → params_subset не
-    # матчится. Регресс «sentinel протёк в cluster» = задача с реальными params.
+    # GUARD «cluster НЕ разворачивает sentinel-демон»: include tasks/sentinel.yml
+    # gated на input.sentinel_enabled (отсутствует → conditional-include group-drop):
+    # sentinel.conf и демон ФИЗИЧЕСКИ отсутствуют в плане (include дропнут целиком, не
+    # placeholder). presence task_absent ловит отсутствие. Регресс «sentinel протёк в
+    # cluster» = задача с реальными params.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/sentinel.conf

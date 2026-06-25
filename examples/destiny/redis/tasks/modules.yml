@@ -1,72 +1,105 @@
 # tasks/modules.yml — Redis-модули (концепция Ansible-роли redis: загрузка .so
-# RediSearch/RedisJSON/RedisTimeSeries/RedisBloom на Redis < 8). Gated на НЕпустой
-# input.modules. HOST-ИНВАРИАНТ (один набор модулей на кластер) → modules/modules_*/
-# loadmodules приходят через apply.input.
+# RediSearch/RedisJSON/RedisTimeSeries/RedisBloom на Redis < 8). ВЕСЬ файл gated на
+# include (main.yml): включён, когда data-плоскость redis-server разворачивается
+# (deploy_redis) И версия Redis < 8.
 #
-# VERSION-GATE (упрощение, см. brief): на Redis 8+ модули ВСТРОЕНЫ в сервер — .so
-# не качаем и loadmodule НЕ пишем. Гейт делает scenario сервиса по input.version
-# (мажор < 8 → передаёт modules/loadmodules; 8+ → пустые списки). Полную
-# version-matrix НЕ тащим: gate по мажору версии + fail-closed на самом Redis (если
-# .so несовместим — сервер не стартует и рестарт-задача упадёт явно), без probe-
-# matrix совместимости каждого модуля с каждой минорной версией.
+# ★ ДИРЕКТИВА «модули ВСЕГДА ВСЕ» (2026-06-25): набор модулей больше НЕ operator-выбор.
+# Полная таблица алиас→.so — ИНВАРИАНТ кирпича в vars.redis_modules; fetch-loop
+# качает ВЕСЬ набор (на Redis < 8). input.modules / input.modules_dir удалены; modules-
+# dir выводится из input.data_dir (<data_dir>/modules). modules_base_url (откуда брать
+# .so) и modules_sha256 (опц. checksums) ОСТАЮТСЯ в input — deployment-артефакт под
+# пару (version, arch), не инвариант. scenario модули не передаёт.
+#
+# VERSION-GATE Redis 8+ (директива C, сохранён): на Redis 8+ модули ВСТРОЕНЫ в сервер —
+# .so не качаем и loadmodule НЕ пишем. Раньше гейт делал scenario (передавал modules=[]);
+# теперь, когда набор-инвариант в vars, гейт ПЕРЕЕХАЛ НА include (main.yml: NOT redis8
+# по ЭФФЕКТИВНОЙ версии). ЭФФЕКТИВНАЯ — input.version, когда непуст (`!= ''`), иначе
+# input.install.version: scenario передаёт `version` ВСЕГДА (как '' при method=binary),
+# поэтому гейт нормализует пустой version к install.version (иначе binary-install Redis 8
+# качал бы 4 несовместимых .so + писал loadmodule → redis-server 8 не стартовал бы).
+# Полную version-matrix НЕ тащим: gate по мажору версии + fail-closed на самом Redis
+# (несовместимый .so → сервер не стартует и рестарт-задача упадёт явно), без probe-matrix
+# каждого модуля с каждой минорной версией.
+#
+# ВКЛЮЧЁН ТОЛЬКО при deploy_redis (data-плоскость) И НЕ redis8: в sentinel_only
+# (deploy_redis=false) redis-server нет → модулям негде грузиться; на Redis 8+ они
+# встроены. Иначе include дропается целиком (render-phase group-drop): обе задачи
+# физически отсутствуют в плане, не placeholder-skip.
 
-# Каталог .so-модулей. core.file.rendered/url.fetched создают только файл, не
-# родительский каталог. Создаём явно декларативным core.file.directory.
-# owner redis: .so читает сервис. parents:true — modules_dir переопределяем
-# оператором (может быть глубоким путём с несуществующим родителем); сохраняем
-# неявный mkdir -p прежнего install -d (core.file.directory по умолчанию
-# parents:false и упал бы на отсутствующем промежуточном каталоге).
-#
-# ★ ИНДЕКС: эта задача gated на size(input.modules)>0 → вне modules-режима она
-# placeholder-skip (ОДНА задача в плане, не ноль). Это даёт ЕДИНЫЙ фиксированный
-# сдвиг +1 терминальных индексов (PING/cluster-build/sentinel-state) во всех
-# кейсах. fetch-задача ниже под loop: при пустом modules даёт 0 задач, поэтому она
-# индексы НЕ сдвигает.
+# Каталог .so-модулей <data_dir>/modules. core.file.rendered/url.fetched создают только
+# файл, не родительский каталог. Создаём явно декларативным core.file.directory.
+# owner redis: .so читает сервис. parents:true — data_dir переопределяем оператором
+# (может быть глубоким путём с несуществующим родителем); сохраняем неявный mkdir -p
+# прежнего install -d (core.file.directory по умолчанию parents:false и упал бы на
+# отсутствующем промежуточном каталоге).
 - name: Ensure the redis modules directory exists
   module: core.file.directory
-  when: "size(default(input.modules, [])) > 0"
   params:
-    path: "${ default(input.modules_dir, '/var/lib/redis/modules') }"
+    path: "${ default(input.data_dir, vars.redis_data_dir) + '/modules' }"
     parents: true
     owner: "${ vars.redis_user }"
     group: "${ vars.redis_group }"
     mode: "0750"
 
-# Скачивание .so каждого модуля. loop: по алиасам input.modules (пусто → 0 задач,
-# индексы не сдвигаются). Имя .so-файла — фиксированная таблица имён Redis-модулей
-# (map-литерал ниже), индексируется алиасом. URL АРХ-СПЕЦИФИЧЕН и строится PER-HOST
-# из soulprint.self.os.arch (soulprint доступен в destiny-CEL — прецедент arch-
-# резолва node-exporter): modules_base_url/<arch>/<имя.so>. mode 0750 owner redis:
-# .so читает только сервис. register не нужен — loadmodule-директива в redis.conf
-# уже триггерит рестарт через redis_conf-register; повторная загрузка идемпотентна.
+# Скачивание .so КАЖДОГО модуля набора. ★ Набор-инвариант фиксирован (vars.redis_modules,
+# 4 модуля) → ЧЕТЫРЕ ЯВНЫЕ задачи, по одной на алиас, а НЕ loop по vars. Почему НЕ loop:
+# loop.items резолвится в host-инвариантном контексте БЕЗ доступа к `vars.*`
+# (loopInvariantVars, keeper/internal/render/loop.go — items видит input/register/
+# incarnation/essence/soulprint.hosts, но не file-vars). Имя .so и арх-URL нужны ИЗ vars,
+# а params (в отличие от loop.items) ИМЕЮТ полный vars-контекст — поэтому набор разнесён
+# в явные задачи: каждая берёт своё имя файла из vars.redis_modules.<alias> в params.
+# Набор фиксированный (4) — явное перечисление дешевле расширения loop-движка на vars.
+# Порядок задач — по алиасу (bloom/json/search/timeseries), как Go-сорт ключей в
+# loadmodules redis.conf → план детерминирован.
 #
-# checksum — ОПЦИОНАЛЬНЫЙ (директива пользователя 2026-06-24: получать sha256 каждого
-# .so под пару (version, arch) — дорого; если он нужен лишь чтобы повторно не качать,
-# core.url.fetched и без него идемпотентен по СОДЕРЖИМОМУ). Две ветки одной CEL-ячейки:
-#   - modules_sha256[item] ЗАДАН → "sha256:<hex>": fail-closed integrity-verify по
-#     временному файлу ДО публикации (mismatch → задача падает, целевой путь нетронут,
-#     supply-chain);
-#   - НЕ задан → пустая строка: core.url.fetched трактует пустой checksum как
-#     отсутствие (OptStringParam) и качает по content-идемпотентности (скачивает во
-#     temp → сравнивает SHA-256 с существующим → запись только при diff). Без
-#     integrity-verify — доверяем HTTPS + доверенному store источника.
-# Guard через has(input.modules_sha256) (field-selection) + `item in …` (membership):
-# has() в CEL принимает только селектор поля, НЕ index-выражение has(m[k]); наличие
-# ключа в map проверяется оператором `in`. Сам input.modules_sha256 может
-# отсутствовать целиком — has() ловит это до индексации (иначе CEL «no such key»).
-- name: Fetch redis module shared object
+# URL АРХ-СПЕЦИФИЧЕН per-host: modules_base_url + soulprint.self.os.arch + имя .so из
+# vars (soulprint доступен в destiny-CEL params — прецедент node-exporter). mode 0750
+# owner redis: .so читает только сервис. register не нужен — loadmodule-директива в
+# redis.conf уже триггерит рестарт через redis_conf-register; загрузка идемпотентна.
+#
+# checksum — ОПЦИОНАЛЬНЫЙ (директива 2026-06-24). Две ветки одной CEL-ячейки на задачу:
+#   - modules_sha256[<alias>] ЗАДАН → "sha256:<hex>": fail-closed integrity-verify по
+#     временному файлу ДО публикации (mismatch → падение, целевой путь нетронут);
+#   - НЕ задан → пустая строка: core.url.fetched качает по content-идемпотентности
+#     (скачать во temp → сравнить SHA-256 → запись при diff), без verify.
+# Guard через has(input.modules_sha256) (сам map может отсутствовать целиком) + `'<alias>'
+# in …` (наличие ключа; has() принимает только селектор поля, не index-выражение).
+- name: Fetch the redisbloom module shared object
   module: core.url.fetched
-  loop:
-    items: "${ default(input.modules, []) }"
-    as: item
   params:
-    url:      "${ input.modules_base_url + '/' + soulprint.self.os.arch + '/' + {'search': 'redisearch.so', 'json': 'rejson.so', 'timeseries': 'redistimeseries.so', 'bloom': 'redisbloom.so'}[item] }"
-    path:     "${ default(input.modules_dir, '/var/lib/redis/modules') + '/' + {'search': 'redisearch.so', 'json': 'rejson.so', 'timeseries': 'redistimeseries.so', 'bloom': 'redisbloom.so'}[item] }"
-    # Гейт по НАЛИЧИЮ ключа (item in map), НЕ по непустоте значения: ключ задан с
-    # ПУСТЫМ значением даёт битый checksum "sha256:" (префикс без hex) → core.url
-    # отвергает его на валидации формата (fail-closed), а НЕ трактует как absent.
-    # Пустой checksum (content-идемпотентность без verify) = ключ ОТСУТСТВУЕТ вовсе.
-    checksum: "${ (has(input.modules_sha256) && item in input.modules_sha256) ? 'sha256:' + input.modules_sha256[item] : '' }"
+    url:      "${ input.modules_base_url + '/' + soulprint.self.os.arch + '/' + vars.redis_modules.bloom }"
+    path:     "${ default(input.data_dir, vars.redis_data_dir) + '/modules/' + vars.redis_modules.bloom }"
+    checksum: "${ (has(input.modules_sha256) && 'bloom' in input.modules_sha256) ? 'sha256:' + input.modules_sha256.bloom : '' }"
+    mode:     "0750"
+    owner:    "${ vars.redis_user }"
+    group:    "${ vars.redis_group }"
+
+- name: Fetch the rejson module shared object
+  module: core.url.fetched
+  params:
+    url:      "${ input.modules_base_url + '/' + soulprint.self.os.arch + '/' + vars.redis_modules.json }"
+    path:     "${ default(input.data_dir, vars.redis_data_dir) + '/modules/' + vars.redis_modules.json }"
+    checksum: "${ (has(input.modules_sha256) && 'json' in input.modules_sha256) ? 'sha256:' + input.modules_sha256.json : '' }"
+    mode:     "0750"
+    owner:    "${ vars.redis_user }"
+    group:    "${ vars.redis_group }"
+
+- name: Fetch the redisearch module shared object
+  module: core.url.fetched
+  params:
+    url:      "${ input.modules_base_url + '/' + soulprint.self.os.arch + '/' + vars.redis_modules.search }"
+    path:     "${ default(input.data_dir, vars.redis_data_dir) + '/modules/' + vars.redis_modules.search }"
+    checksum: "${ (has(input.modules_sha256) && 'search' in input.modules_sha256) ? 'sha256:' + input.modules_sha256.search : '' }"
+    mode:     "0750"
+    owner:    "${ vars.redis_user }"
+    group:    "${ vars.redis_group }"
+
+- name: Fetch the redistimeseries module shared object
+  module: core.url.fetched
+  params:
+    url:      "${ input.modules_base_url + '/' + soulprint.self.os.arch + '/' + vars.redis_modules.timeseries }"
+    path:     "${ default(input.data_dir, vars.redis_data_dir) + '/modules/' + vars.redis_modules.timeseries }"
+    checksum: "${ (has(input.modules_sha256) && 'timeseries' in input.modules_sha256) ? 'sha256:' + input.modules_sha256.timeseries : '' }"
     mode:     "0750"
     owner:    "${ vars.redis_user }"
     group:    "${ vars.redis_group }"

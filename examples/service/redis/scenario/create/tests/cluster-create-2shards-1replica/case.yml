@@ -54,6 +54,7 @@ fixtures:
     # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
     # distro-native пин (мажор < 8 → version-gate модулей не активен).
     version: "7.2.4"
+    modules_base_url: "https://artifacts.example.com/redis/modules"
     shards: 2
     replicas_per_shard: 1
     cluster_node_timeout: 8000
@@ -75,7 +76,11 @@ assert:
         render_context:
           vars:
             password: s3cr3t-redis-pass-create
-            loadmodules: []
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
             config:
               maxmemory:        "256mb"
               maxmemory-policy: allkeys-lru
@@ -145,5 +150,5 @@ assert:
       ca_ref:   ""
     memory_mb: 0
     maxmemory_policy: ""
-    modules: []
+    modules: [bloom, json, search, timeseries]
     sysctl_settings: {}

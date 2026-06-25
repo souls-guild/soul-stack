@@ -40,6 +40,7 @@ fixtures:
   input:
     redis_type: standalone
     version: "7.2.4"
+    modules_base_url: "https://artifacts.example.com/redis/modules"
     persistence: rdb
     # Оператор включает TLS целиком: only-TLS, свой порт, свои Vault-пути.
     tls:
@@ -80,7 +81,11 @@ assert:
         render_context:
           vars:
             password: s3cr3t-redis-pass-create
-            loadmodules: []
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
             config:
               port: "0"
               tls-port: "7400"

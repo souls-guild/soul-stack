@@ -39,6 +39,11 @@
       # destiny диспетчит по install.method (package-block / binary-block install.yml).
       # not-передан → destiny default(install.method,'package')=package.
       install:  "${ default(input.install, {}) }"
+      # conf_dir/data_dir: host-layout (директива B) — оператор-переопределяемы в destiny.
+      # Прокидываем СКВОЗЬ (иначе override мёртв: destiny взяла бы только дефолт). Дефолт
+      # = текущий путь (back-compat). HOST-ИНВАРИАНТ → apply.input.
+      conf_dir: "${ default(input.conf_dir, '/etc/redis') }"
+      data_dir: "${ default(input.data_dir, '/var/lib/redis') }"
       # Пароль requirepass — keeper-side vault()-резолв (templating.md §2.3/§4):
       # путь из incarnation (доверенный контекст), в destiny уходит ЗНАЧЕНИЕ.
       password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
@@ -71,18 +76,14 @@
                }
              }))
            : {} }
-      # Redis-модули (Redis < 8). VERSION-GATE: на Redis 8+ модули встроены →
-      # передаём destiny ПУСТОЙ список (.so не качается, loadmodule не пишется).
-      # Гейт по compute.redis_version (эффективная версия — distro-пин или upstream-
-      # semver, объявлена в main.yml compute:): мажор >= 8 (epoch-префикс N: + 8|9|
-      # двузначный мажор). Через compute, а не input.version напрямую: version теперь
-      # required_when=package, в binary-режиме отсутствует — compute даёт строку
-      # (пустую при неизвестной версии → matches=false → модули проходят). modules_base_url/
-      # modules_sha256 — host-инвариант → apply.input; arch-URL строит destiny per-host.
-      modules: >-
-        ${ (has(input.modules) && !compute.redis_version.matches('^([0-9]+:)?(8|9|[1-9][0-9])\\.'))
-           ? input.modules
-           : [] }
+      # Redis-модули — НАБОР больше НЕ передаётся (директива «модули ВСЕГДА ВСЕ»):
+      # destiny разворачивает ПОЛНЫЙ набор из vars.redis_modules сама, version-guard
+      # Redis 8+ тоже переехал в destiny (по input.version/input.install.version).
+      # scenario отдаёт только deployment-артефакт: откуда брать .so (modules_base_url)
+      # и опц. checksums (modules_sha256) — host-инвариант → apply.input; arch-URL
+      # строит destiny per-host. Поле input.modules сценария оператор больше не задаёт
+      # (см. main.yml input:), modules_base_url нужен на Redis < 8 (иначе destiny
+      # нечем строить URL .so).
       modules_base_url: "${ default(input.modules_base_url, '') }"
       modules_sha256:   "${ default(input.modules_sha256, {}) }"
       # Host-tuning extras (концепция роли). THP/logrotate/sysctl БЕЗУСЛОВНЫ

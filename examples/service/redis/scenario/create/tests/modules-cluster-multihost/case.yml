@@ -1,20 +1,12 @@
-# L0-испытание create (cluster, multi-host) — Redis-МОДУЛИ на кластере. Guard на то,
-# что в cluster-режиме (3 хоста, shards=3) модули качаются и loadmodule-директивы
-# приходят в redis.conf наравне с cluster-директивами. Per-host arch в URL: все
-# хосты amd64 (homogeneous), arch берётся из soulprint.self.os.arch — render_context
+# L0-испытание create (cluster, multi-host) — Redis-МОДУЛИ на кластере (директива
+# «модули ВСЕГДА ВСЕ»). Guard на то, что в cluster-режиме (3 хоста, shards=3)
+# разворачивается ПОЛНЫЙ набор модулей (.so всех четырёх качаются, loadmodule-директивы
+# всех четырёх приходят в redis.conf наравне с cluster-директивами). Per-host arch в
+# URL: все хосты amd64 (homogeneous), arch из soulprint.self.os.arch — render_context
 # L0 несёт self первого по SID хоста (node-a), но СЛОЙ .tmpl на Soul-е возьмёт arch
 # КАЖДОГО хоста (mixed-arch корректен — URL строит destiny per-host, не apply.input).
-#
-# ИНДЕКСЫ (cluster-прогон, modules=[json]→1 .so-задача). shards-guard УБРАН
-# (required_when в main.yml) + size-guard — assert: (ADR-009 amendment): обе задачи
-# позиций в плане НЕ занимают → −2 от исходного плана; extras-sysctl сжаты 2→1
-# задачи core.sysctl.applied → хвост после sysctl ещё −1:
-#   0 mode-guard; 1..2 standalone-ветка (СКИП);
-#   3..22 cluster destiny (redis.conf=10 с loadmodules);
-#   22 modules-dir (gated, АКТИВНА);
-#   23 fetch .so json (loop, 1 задача);
-#   24 cluster PING; 25 cluster-build.
-name: cluster modules fetch .so and add loadmodule alongside cluster directives
+# input.modules больше НЕ задаётся (набор-инвариант в destiny vars.redis_modules).
+name: cluster modules fetch every .so and add loadmodule alongside cluster directives
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
@@ -65,7 +57,8 @@ fixtures:
     shards: 3
     replicas_per_shard: 0
     cluster_node_timeout: 5000
-    modules: [json]
+    # input.modules НЕ задаётся (набор-инвариант). modules_sha256 задан только для json
+    # → ему verify, прочим пустой checksum.
     modules_base_url: "https://artifacts.example.com/redis/modules/6.2"
     modules_sha256:
       json: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -85,7 +78,10 @@ assert:
           vars:
             password: s3cr3t-redis-pass-create
             loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
               - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
             config:
               maxmemory:        "256mb"
               maxmemory-policy: allkeys-lru
@@ -108,8 +104,8 @@ assert:
           role: ""
           essence: {}
 
-    # modules-dir каталог — gated, активна в cluster-modules-прогоне. Дизамбигуатор
-    # от systemd-dropin-dir (тот же core.file.directory) — path.
+    # modules-dir каталог — gated-include на deploy_redis && !redis8, активна.
+    # Дизамбигуатор от systemd-dropin-dir (тот же core.file.directory) — path.
     - module: core.file.directory
       params_subset:
         path: /var/lib/redis/modules
@@ -117,13 +113,41 @@ assert:
         group: redis
         mode: "0750"
 
-    # fetch .so json: URL арх-специфичен (amd64 из soulprint первого хоста в L0).
-    # Единственная активная core.url.fetched (tarball-fetch — placeholder).
+    # fetch .so — ВСЕ четыре (Go-сорт: bloom, json, search, timeseries). URL арх-
+    # специфичен (amd64 из soulprint первого хоста в L0). sha256 задан только для json
+    # → ему checksum, прочим пусто. tarball-fetch (binary install) — placeholder.
+    - module: core.url.fetched
+      params_subset:
+        url: "https://artifacts.example.com/redis/modules/6.2/amd64/redisbloom.so"
+        path: /var/lib/redis/modules/redisbloom.so
+        checksum: ""
+        mode: "0750"
+        owner: redis
+        group: redis
+
     - module: core.url.fetched
       params_subset:
         url: "https://artifacts.example.com/redis/modules/6.2/amd64/rejson.so"
         path: /var/lib/redis/modules/rejson.so
         checksum: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        mode: "0750"
+        owner: redis
+        group: redis
+
+    - module: core.url.fetched
+      params_subset:
+        url: "https://artifacts.example.com/redis/modules/6.2/amd64/redisearch.so"
+        path: /var/lib/redis/modules/redisearch.so
+        checksum: ""
+        mode: "0750"
+        owner: redis
+        group: redis
+
+    - module: core.url.fetched
+      params_subset:
+        url: "https://artifacts.example.com/redis/modules/6.2/amd64/redistimeseries.so"
+        path: /var/lib/redis/modules/redistimeseries.so
+        checksum: ""
         mode: "0750"
         owner: redis
         group: redis
@@ -154,3 +178,5 @@ assert:
       cluster-node-timeout: "5000"
     redis_users: {}
     redis_hosts: []
+    # Redis 6 (< 8) → полный набор развёрнут (модули всегда все).
+    modules: [bloom, json, search, timeseries]

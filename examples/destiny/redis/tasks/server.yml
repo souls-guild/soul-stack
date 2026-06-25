@@ -1,5 +1,9 @@
-# tasks/server.yml — data-плоскость redis-server (gated deploy_redis): TLS PEM +
-# users.acl + redis.conf + systemd hardening drop-in + сервис redis-server.
+# tasks/server.yml — data-плоскость redis-server: TLS PEM + users.acl + redis.conf +
+# systemd hardening drop-in + сервис redis-server. ВЕСЬ файл gated на deploy_redis —
+# гейт стоит НА include (main.yml: `when: default(input.deploy_redis, true)`,
+# conditional-include ADR-009 amendment), а НЕ внутри файла. sentinel_only
+# (deploy_redis=false) → include дропается целиком (render-phase group-drop): задачи
+# redis-server физически отсутствуют в плане, не placeholder-skip.
 #
 # ★ register'ы (redis_tls_cert/redis_tls_key/redis_tls_ca/redis_acl/redis_conf/
 #   redis_hardening) и их onchanges-рестарт ОБЯЗАНЫ жить В ЭТОМ файле: register-ссылки
@@ -16,15 +20,12 @@
 # Поэтому рестарт после смены юнита идёт ЧЕРЕЗ core.service.restarted (а не raw
 # exec) — иначе auto-reload не отработал бы.
 #
-# ★ ОДИН gate deploy_redis на всю data-плоскость (#8 DRY): прежде каждая из семи
-# задач/блоков повторяла `default(input.deploy_redis, true)` в своём when — теперь
-# все они собраны во ВНЕШНИЙ block с этим when (ADR-009 block static-skip), ядро
-# вливает gate в каждого потомка через AND (mergeBlockInheritance). sentinel_only
-# (deploy_redis=false) → весь block static-skip placeholder-ом (per-потомок,
-# register потомков виден снаружи — flat-register-scope инвариантен static-skip).
-# Индексы не сдвигаются (block раскрывается в плоский список тех же задач, порядок
-# потомков = порядок плана). Рестарт-задача — ПОСЛЕДНИЙ потомок, onchanges на
-# register'ы соседей (вкл. TLS из nested block).
+# ★ Прежде гейт deploy_redis жил во ВНЕШНЕМ block (block static-skip) — теперь он на
+# include (conditional-include): один статический input-предикат гасит группу
+# РЕАЛЬНЫМ исключением из плана. Внешний block-обёртка убран как избыточный (гейт
+# дублировал бы include-when). ЧАСТИЧНЫЙ inner-гейт tls.enable (только PEM-задачи, не
+# весь файл) ОСТАЁТСЯ in-block (nested TLS-block ниже): include-when дропает файл
+# целиком — не годится для гейта подмножества задач внутри keep-нутого файла.
 
 # ── TLS PEM-материал (концепция Ansible-роли redis: redis_tls_*) ───────────────
 # Рендерим cert/key/CA в /etc/redis/tls/ ДО redis.conf и старта сервиса: redis.conf
@@ -35,16 +36,17 @@
 # restart-onchanges ниже). HOST-ИНВАРИАНТ (один cert/CA на кластер): PEM-ПУТИ
 # (tls.cert_ref/key_ref/ca_ref) приходят через apply.input.
 #
-# ★ Вложенный TLS-block внутри внешнего deploy_redis-block (один tls.enable-gate на
-# группу): tls-dir + cert/key/CA несут добавочный gate tls.enable (deploy_redis
-# влит из внешнего block через AND), поэтому собраны в nested block: с этим when —
-# не повторяем gate на каждой из четырёх задач. Static-false when nested-block
-# раскрывается в per-потомок skip-placeholder-ы (ядро вливает block.when в каждого
-# потомка через AND, каждый эмитит свой placeholder со СВОИМ register) — register
-# потомков (redis_tls_cert/key/ca) виден снаружи nested block и при static-skip,
-# поэтому onchanges-рестарт ниже резолвится одинаково при tls.enable=true и при
-# tls.enable=false (flat-register-scope инвариантен static-skip, ADR-009 amendment
-# block-static-skip).
+# ★ Вложенный TLS-block с ЧАСТИЧНЫМ gate tls.enable (гейт подмножества задач data-
+# плоскости, не всего файла): tls-dir + cert/key/CA. Статический tls.enable-предикат
+# — но НА include НЕ выносится (include-when дропает ВЕСЬ файл server.yml, а здесь
+# нужно погасить только TLS-задачи внутри оставшегося файла), поэтому ОСТАЁТСЯ
+# in-block. Static-false when nested-block раскрывается в per-потомок skip-placeholder-ы
+# (ядро вливает block.when в каждого потомка через AND, каждый эмитит свой placeholder
+# со СВОИМ register) — register потомков (redis_tls_cert/key/ca) виден снаружи nested
+# block и при static-skip, поэтому onchanges-рестарт ниже резолвится одинаково при
+# tls.enable=true и tls.enable=false (flat-register-scope инвариантен static-skip,
+# ADR-009 amendment block-static-skip). deploy_redis-гейт влит из include-when (файл
+# keep ⇒ deploy_redis истинно), здесь добавочно только tls.enable.
 #
 # ★ PEM ЧЕРЕЗ core.file.present + vault() В ЯЧЕЙКЕ content (seal-маскинг, ADR-010
 # §7.4): НЕ .tmpl, НЕ передача уже-резолвленного PEM через apply.input. vault(ref)
@@ -53,183 +55,175 @@
 # скрывает PEM в error_summary/state. vault() резолвится keeper-side в render-фазе;
 # vault-клиент на Soul не тянется (ADR-012). ref берётся из input.tls.cert_ref (путь,
 # не секрет) — scenario передаёт Vault-путь, destiny читает значение сама.
-# TLS-PEM — DATA-плоскость redis-server → gated ТАКЖЕ на deploy_redis: в sentinel_only
-# (deploy_redis=false) redis-server нет, PEM не рендерим. has(input.tls)-guard —
-# render-safety: при absent tls dict (sentinel_only) when не должен падать no-such-key.
-
-# ── DATA-плоскость redis-server (один gate на группу, #8 DRY) ──────────────────
-# Все задачи data-плоскости несут ОДИН gate deploy_redis → собраны в block: с этим
-# when (ADR-009 block static-skip): прежде каждая из семи задач/блоков повторяла
-# `default(input.deploy_redis, true)` в своём when — теперь gate объявлен ОДИН раз
-# на block, ядро вливает его в каждого потомка через AND (mergeBlockInheritance).
-# sentinel_only (deploy_redis=false) → весь block static-skip placeholder-ом
-# (per-потомок, register потомков виден снаружи — flat-register-scope инвариантен
-# static-skip). Порядок потомков = порядок плана, индексы не сдвигаются (block
-# раскрывается в плоский список тех же задач). Рестарт-задача — ПОСЛЕДНИЙ потомок:
-# её onchanges ссылается на register'ы соседей-потомков (включая TLS из nested
-# block), резолв одинаков при deploy_redis true/false.
-- name: Deploy the redis-server data plane
-  when: "default(input.deploy_redis, true)"
+# has(input.tls)-guard — render-safety: при absent tls dict when не должен падать
+# no-such-key (хотя при keep файла tls обычно задан).
+- name: Provision redis TLS material
+  when: "has(input.tls) && default(input.tls.enable, false)"
   block:
-    # ── TLS PEM-материал ───────────────────────────────────────────────────────
-    # Вложенный block с ДОБАВОЧНЫМ gate tls.enable (deploy_redis влит из внешнего
-    # block через AND): tls-dir + cert/key/CA. register'ы потомков (redis_tls_cert/
-    # key/ca) видны рестарт-задаче (последний потомок внешнего block) и при static-
-    # skip (per-потомок placeholder-ы). Каталог /etc/redis/tls создаём явно первым
-    # потомком (core.file.present создаёт только файл, не каталог).
-    - name: Provision redis TLS material
-      when: "has(input.tls) && default(input.tls.enable, false)"
-      block:
-        # Каталог /etc/redis/tls — idempotent по mode/owner/group, чинит дрейф, dry-run.
-        # mode 0750 owner redis: PEM (вкл. приватный ключ) читает только сервис.
-        - name: Ensure the redis TLS directory exists
-          module: core.file.directory
-          params:
-            path: /etc/redis/tls
-            owner: "${ vars.redis_user }"
-            group: "${ vars.redis_group }"
-            mode: "0750"
-
-        # Серверный сертификат. mode 0600 owner redis. register — рестарт при ротации
-        # cert. content = vault(input.tls.cert_ref) В ЯЧЕЙКЕ → seal помечает sealed
-        # vault-слоем (PEM маскируется в error_summary/state).
-        - name: Render TLS server certificate
-          module: core.file.present
-          register: redis_tls_cert
-          params:
-            path: /etc/redis/tls/redis.crt
-            content: "${ vault(input.tls.cert_ref) }"
-            mode: "${ vars.redis_pem_mode }"
-            owner: "${ vars.redis_user }"
-            group: "${ vars.redis_group }"
-
-        # Приватный ключ — СЕКРЕТ. mode 0600 owner redis. content = vault(input.tls.
-        # key_ref) В ЯЧЕЙКЕ → sealed vault-слоем (приватный PEM-ключ маскируется).
-        # register — рестарт.
-        - name: Render TLS server private key
-          module: core.file.present
-          register: redis_tls_key
-          params:
-            path: /etc/redis/tls/redis.key
-            content: "${ vault(input.tls.key_ref) }"
-            mode: "${ vars.redis_pem_mode }"
-            owner: "${ vars.redis_user }"
-            group: "${ vars.redis_group }"
-
-        # CA-сертификат кластера (валидация пиров для tls-replication/tls-cluster).
-        # content = vault(input.tls.ca_ref) В ЯЧЕЙКЕ → sealed vault-слоем. register —
-        # рестарт.
-        - name: Render TLS CA certificate
-          module: core.file.present
-          register: redis_tls_ca
-          params:
-            path: /etc/redis/tls/ca.crt
-            content: "${ vault(input.tls.ca_ref) }"
-            mode: "${ vars.redis_pem_mode }"
-            owner: "${ vars.redis_user }"
-            group: "${ vars.redis_group }"
-
-    # users.acl из переданного MAP ACL-юзеров имя→{perms,state,password} (aclfile в
-    # redis.conf). register, чтобы рестартить redis при изменении ACL. owner/group
-    # redis, mode 0640 — файл содержит password-хеши, читает только сервис. Шаблон
-    # range-ит MAP (Go сортирует ключи → строки ACL детерминированы между прогонами,
-    # нет ложного change → нет лишнего рестарта) и хеширует пароль (sha256), plaintext
-    # не пишет; пустой map → файл без юзеров (валидный aclfile).
-    - name: Render users.acl
-      module: core.file.rendered
-      register: redis_acl
-      params:
-        path: /etc/redis/users.acl
-        template: templates/users.acl.tmpl
-        mode: "${ vars.redis_secret_file_mode }"
-        owner: "${ vars.redis_user }"
-        group: "${ vars.redis_group }"
-        vars:
-          users: "${ default(input.users, {}) }"
-
-    # redis.conf из merged-конфига. register, чтобы рестартить redis только при
-    # изменении конфига. owner/group redis, mode 0640 — конфиг читает только сервис.
-    - name: Render redis.conf
-      module: core.file.rendered
-      register: redis_conf
-      params:
-        path: /etc/redis/redis.conf
-        template: templates/redis.conf.tmpl
-        mode: "${ vars.redis_secret_file_mode }"
-        owner: "${ vars.redis_user }"
-        group: "${ vars.redis_group }"
-        vars:
-          password: "${ input.password }"
-          config:   "${ default(input.config, {}) }"
-          # Директивы loadmodule (Redis < 8) — отдельной секцией шаблона (НЕ ключи
-          # config-map: range `{{key}} {{value}}` дал бы хвостовой пробел у loadmodule
-          # без значения). Пути .so вычисляются из input.modules (алиасы) + фиксированной
-          # таблицы имён .so + modules_dir — host-инвариантны (без arch в пути). Пусто/
-          # Redis 8+ (scenario передаёт modules=[]) → пустой список → секции нет.
-          loadmodules: >-
-            ${ has(input.modules)
-               ? input.modules.map(item,
-                   default(input.modules_dir, '/var/lib/redis/modules')
-                   + '/'
-                   + {'search': 'redisearch.so', 'json': 'rejson.so', 'timeseries': 'redistimeseries.so', 'bloom': 'redisbloom.so'}[item])
-               : [] }
-
-    # Каталог drop-in-а systemd. core.file.rendered создаёт только файл, родительский
-    # каталог .service.d/ — нет, а дистрибутивный пакет redis-server его не заводит.
-    # Создаём явно ДО рендера декларативным core.file.directory.
-    - name: Ensure the redis-server systemd drop-in directory exists
+    # Каталог tls/ под conf_dir — idempotent по mode/owner/group, чинит дрейф, dry-run.
+    # mode 0750 owner redis: PEM (вкл. приватный ключ) читает только сервис. Путь
+    # выводится из input.conf_dir (директива B: conf-dir переопределяем оператором).
+    - name: Ensure the redis TLS directory exists
       module: core.file.directory
       params:
-        path: /etc/systemd/system/redis-server.service.d
-        owner: "${ vars.root_owner }"
-        group: "${ vars.root_group }"
-        mode: "0755"
+        path: "${ default(input.conf_dir, vars.redis_conf_dir) + '/tls' }"
+        owner: "${ vars.redis_user }"
+        group: "${ vars.redis_group }"
+        mode: "0750"
 
-    # systemd drop-in hardening поверх ДИСТРИБУТИВНОГО юнита redis-server (его нельзя
-    # заменять целиком — обновляется с пакетом, несёт ExecStart/Type=notify). Override
-    # мержится в [Service]. stateful-вариант: ProtectSystem=strict + ReadWritePaths под
-    # фактические каталоги записи redis (data-dir/socket/pid/log). register — чтобы
-    # реактивно дернуть рестарт только при изменении (daemon-reload core.service делает
-    # сам перед рестартом). Подробности — в шаблоне.
-    - name: Render redis-server systemd hardening drop-in
-      module: core.file.rendered
-      register: redis_hardening
+    # Серверный сертификат. mode 0600 owner redis. register — рестарт при ротации
+    # cert. content = vault(input.tls.cert_ref) В ЯЧЕЙКЕ → seal помечает sealed
+    # vault-слоем (PEM маскируется в error_summary/state).
+    - name: Render TLS server certificate
+      module: core.file.present
+      register: redis_tls_cert
       params:
-        path: /etc/systemd/system/redis-server.service.d/hardening.conf
-        template: templates/hardening.conf.tmpl
-        mode: "${ vars.unit_file_mode }"
-        owner: "${ vars.root_owner }"
-        group: "${ vars.root_group }"
+        path: "${ default(input.conf_dir, vars.redis_conf_dir) + '/tls/redis.crt' }"
+        content: "${ vault(input.tls.cert_ref) }"
+        mode: "${ vars.redis_pem_mode }"
+        owner: "${ vars.redis_user }"
+        group: "${ vars.redis_group }"
 
-    # core.service redis-server running/restarted. sentinel_only (deploy_redis=false)
-    # сервис redis-server НЕ держит — весь block static-skip.
-    - name: Ensure redis-server is running and enabled at boot
-      module: core.service.running
+    # Приватный ключ — СЕКРЕТ. mode 0600 owner redis. content = vault(input.tls.
+    # key_ref) В ЯЧЕЙКЕ → sealed vault-слоем (приватный PEM-ключ маскируется).
+    # register — рестарт.
+    - name: Render TLS server private key
+      module: core.file.present
+      register: redis_tls_key
       params:
-        name: redis-server
-        enabled: true
+        path: "${ default(input.conf_dir, vars.redis_conf_dir) + '/tls/redis.key' }"
+        content: "${ vault(input.tls.key_ref) }"
+        mode: "${ vars.redis_pem_mode }"
+        owner: "${ vars.redis_user }"
+        group: "${ vars.redis_group }"
 
-    # Рестарт реактивно на изменение конфига/ACL/drop-in/TLS-материала: redis.conf,
-    # users.acl, hardening drop-in и любой из TLS PEM-файлов требуют рестарта (новые
-    # директивы/юзеры/сертификаты вступают в силу только после перезапуска). Изменённый
-    # drop-in вступает в силу только после рестарта (daemon-reload при смене unit
-    # core.service делает сам перед рестартом). TLS-register'ы (redis_tls_cert/key/ca)
-    # живут в nested TLS-block выше → ротация cert/key/CA дёргает рестарт; вне
-    # tls.enable nested block раскрывается в per-потомок placeholder-ы, register
-    # потомков виден этой задаче снаружи nested block (onchanges резолвится, но потомки
-    # skip → не считаются changed).
-    #
-    # ★ Рестарт на смену БИНАРЯ/ЮНИТА binary-ветки (redis_server_bin/redis_cli_bin/
-    # redis_sentinel_bin/redis_server_unit)
-    # НЕ здесь: их register'ы живут в install.yml, а cross-file onchanges отвергает
-    # ЗАГРУЗОЧНЫЙ per-file линтер (validateTaskRefs, shared/config/destiny_tasks.go) —
-    # register должен быть в ОДНОМ файле со своим onchanges-потребителем (тот же
-    # инвариант, что у node-exporter: install-register живёт рядом с рестартом).
-    # Поэтому binary-ветка несёт СВОЙ рестарт redis-server в install.yml. Порядок
-    # гарантирован позицией задач.
-    - name: Restart redis-server because config or hardening changed
-      module: core.service.restarted
-      onchanges: [redis_conf, redis_acl, redis_hardening, redis_tls_cert, redis_tls_key, redis_tls_ca]
-      timeout: 30s
+    # CA-сертификат кластера (валидация пиров для tls-replication/tls-cluster).
+    # content = vault(input.tls.ca_ref) В ЯЧЕЙКЕ → sealed vault-слоем. register —
+    # рестарт.
+    - name: Render TLS CA certificate
+      module: core.file.present
+      register: redis_tls_ca
       params:
-        name: redis-server
+        path: "${ default(input.conf_dir, vars.redis_conf_dir) + '/tls/ca.crt' }"
+        content: "${ vault(input.tls.ca_ref) }"
+        mode: "${ vars.redis_pem_mode }"
+        owner: "${ vars.redis_user }"
+        group: "${ vars.redis_group }"
+
+# users.acl из переданного MAP ACL-юзеров имя→{perms,state,password} (aclfile в
+# redis.conf). register, чтобы рестартить redis при изменении ACL. owner/group
+# redis, mode 0640 — файл содержит password-хеши, читает только сервис. Шаблон
+# range-ит MAP (Go сортирует ключи → строки ACL детерминированы между прогонами,
+# нет ложного change → нет лишнего рестарта) и хеширует пароль (sha256), plaintext
+# не пишет; пустой map → файл без юзеров (валидный aclfile).
+- name: Render users.acl
+  module: core.file.rendered
+  register: redis_acl
+  params:
+    path: "${ default(input.conf_dir, vars.redis_conf_dir) + '/users.acl' }"
+    template: templates/users.acl.tmpl
+    mode: "${ vars.redis_secret_file_mode }"
+    owner: "${ vars.redis_user }"
+    group: "${ vars.redis_group }"
+    vars:
+      users: "${ default(input.users, {}) }"
+
+# redis.conf из merged-конфига. register, чтобы рестартить redis только при
+# изменении конфига. owner/group redis, mode 0640 — конфиг читает только сервис.
+- name: Render redis.conf
+  module: core.file.rendered
+  register: redis_conf
+  params:
+    path: "${ default(input.conf_dir, vars.redis_conf_dir) + '/redis.conf' }"
+    template: templates/redis.conf.tmpl
+    mode: "${ vars.redis_secret_file_mode }"
+    owner: "${ vars.redis_user }"
+    group: "${ vars.redis_group }"
+    vars:
+      password: "${ input.password }"
+      config:   "${ default(input.config, {}) }"
+      # Директивы loadmodule — отдельной секцией шаблона (НЕ ключи config-map: range
+      # `{{key}} {{value}}` дал бы хвостовой пробел у loadmodule без значения).
+      # ★ ДИРЕКТИВА «модули ВСЕГДА ВСЕ»: пути .so строятся из vars.redis_modules (ПОЛНЫЙ
+      # набор-инвариант) + <data_dir>/modules. НЕ из input.modules (поле удалено).
+      # ПОРЯДОК — ЯВНЫЙ отсортированный список алиасов (bloom/json/search/timeseries):
+      # CEL .map() по MAP наследует НЕДЕТЕРМИНИРОВАННЫЙ Go-порядок итерации (не сортирует,
+      # в отличие от Go text/template range) → дал бы ложный change/рестарт между
+      # прогонами. Поэтому итерируем по СОРТИРОВАННОМУ array-литералу алиасов, имя .so
+      # каждого — из vars.redis_modules[<alias>] (один источник имён). Источник — vars,
+      # scenario модули не передаёт.
+      # ★ REDIS 8+ (version-guard в destiny, директива C): модули встроены в сервер →
+      # loadmodules ПУСТОЙ (.so не качаем, loadmodule не пишем). redis8 истинно, когда
+      # ЭФФЕКТИВНАЯ версия (input.version distro-пин ИЛИ input.install.version upstream)
+      # мажором >= 8: regex ^([0-9]+:)?(8|9|двузначный мажор)\. ЭФФЕКТИВНАЯ — version,
+      # но ТОЛЬКО когда непуст (`!= ''`): scenario передаёт `version` ВСЕГДА (как '' при
+      # install.method=binary), голый has() брал бы '' и делал ветку install.version
+      # мёртвой. Версия неизвестна (обе absent/пусты — невозможно при валидном вводе) →
+      # не гейтим (модули проходят, как < 8).
+      loadmodules: >-
+        ${ ((has(input.version) && input.version != '') ? input.version : (has(input.install) && has(input.install.version) ? input.install.version : '')).matches('^([0-9]+:)?(8|9|[1-9][0-9])\\.')
+           ? []
+           : ['bloom', 'json', 'search', 'timeseries'].map(alias,
+               default(input.data_dir, vars.redis_data_dir) + '/modules/' + vars.redis_modules[alias]) }
+
+# Каталог drop-in-а systemd. core.file.rendered создаёт только файл, родительский
+# каталог .service.d/ — нет, а дистрибутивный пакет redis-server его не заводит.
+# Создаём явно ДО рендера декларативным core.file.directory. Путь юнит-drop-in-а
+# собирается из vars.systemd_dir + имени сервиса (директива A: service-name из vars).
+- name: Ensure the redis-server systemd drop-in directory exists
+  module: core.file.directory
+  params:
+    path: "${ vars.systemd_dir + '/' + vars.redis_service_name + '.service.d' }"
+    owner: "${ vars.root_owner }"
+    group: "${ vars.root_group }"
+    mode: "0755"
+
+# systemd drop-in hardening поверх ДИСТРИБУТИВНОГО юнита redis-server (его нельзя
+# заменять целиком — обновляется с пакетом, несёт ExecStart/Type=notify). Override
+# мержится в [Service]. stateful-вариант: ProtectSystem=strict + ReadWritePaths под
+# фактические каталоги записи redis (data-dir/socket/pid/log). register — чтобы
+# реактивно дернуть рестарт только при изменении (daemon-reload core.service делает
+# сам перед рестартом). Подробности — в шаблоне.
+- name: Render redis-server systemd hardening drop-in
+  module: core.file.rendered
+  register: redis_hardening
+  params:
+    path: "${ vars.systemd_dir + '/' + vars.redis_service_name + '.service.d/hardening.conf' }"
+    template: templates/hardening.conf.tmpl
+    mode: "${ vars.unit_file_mode }"
+    owner: "${ vars.root_owner }"
+    group: "${ vars.root_group }"
+
+# core.service redis-server running/restarted. sentinel_only (deploy_redis=false)
+# сервис redis-server НЕ держит — весь файл group-drop (include-when ложно).
+# Имя сервиса — из vars (директива A): тот же токен, что в drop-in-пути/binary-юните.
+- name: Ensure redis-server is running and enabled at boot
+  module: core.service.running
+  params:
+    name: "${ vars.redis_service_name }"
+    enabled: true
+
+# Рестарт реактивно на изменение конфига/ACL/drop-in/TLS-материала: redis.conf,
+# users.acl, hardening drop-in и любой из TLS PEM-файлов требуют рестарта (новые
+# директивы/юзеры/сертификаты вступают в силу только после перезапуска). Изменённый
+# drop-in вступает в силу только после рестарта (daemon-reload при смене unit
+# core.service делает сам перед рестартом). TLS-register'ы (redis_tls_cert/key/ca)
+# живут в nested TLS-block выше → ротация cert/key/CA дёргает рестарт; вне
+# tls.enable nested block раскрывается в per-потомок placeholder-ы, register
+# потомков виден этой задаче снаружи nested block (onchanges резолвится, но потомки
+# skip → не считаются changed).
+#
+# ★ Рестарт на смену БИНАРЯ/ЮНИТА binary-ветки (redis_server_bin/redis_cli_bin/
+# redis_sentinel_bin/redis_server_unit)
+# НЕ здесь: их register'ы живут в install.yml, а cross-file onchanges отвергает
+# ЗАГРУЗОЧНЫЙ per-file линтер (validateTaskRefs, shared/config/destiny_tasks.go) —
+# register должен быть в ОДНОМ файле со своим onchanges-потребителем (тот же
+# инвариант, что у node-exporter: install-register живёт рядом с рестартом).
+# Поэтому binary-ветка несёт СВОЙ рестарт redis-server в install.yml. Порядок
+# гарантирован позицией задач.
+- name: Restart redis-server because config or hardening changed
+  module: core.service.restarted
+  onchanges: [redis_conf, redis_acl, redis_hardening, redis_tls_cert, redis_tls_key, redis_tls_ca]
+  timeout: 30s
+  params:
+    name: "${ vars.redis_service_name }"

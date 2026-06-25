@@ -63,6 +63,9 @@
       version:  "${ has(input.version) ? input.version : '' }"
       # install: способ установки (package default / binary), as-is в destiny-диспетч.
       install:  "${ default(input.install, {}) }"
+      # conf_dir/data_dir: host-layout (директива B), сквозь-проброс — см. standalone.yml.
+      conf_dir: "${ default(input.conf_dir, '/etc/redis') }"
+      data_dir: "${ default(input.data_dir, '/var/lib/redis') }"
       password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
       # Единый compute.redis_config (объявлен ОДИН раз в main.yml compute:, ADR-009):
       # тот же map, что уйдёт в state_changes.redis_config — drift «state ≡ live
@@ -81,13 +84,11 @@
                }
              }))
            : {} }
-      # Redis-модули (Redis < 8), version-gate — см. standalone.yml (тот же гейт по
-      # compute.redis_version, host-инвариантные base_url/sha256 → apply.input, арх-URL
-      # строит destiny per-host). На Redis 8+ → пустой список.
-      modules: >-
-        ${ (has(input.modules) && !compute.redis_version.matches('^([0-9]+:)?(8|9|[1-9][0-9])\\.'))
-           ? input.modules
-           : [] }
+      # Redis-модули — НАБОР больше НЕ передаётся (директива «модули ВСЕГДА ВСЕ»):
+      # destiny разворачивает полный набор из vars.redis_modules сама, version-guard
+      # Redis 8+ тоже в destiny — см. standalone.yml. scenario отдаёт только источник
+      # .so (modules_base_url) + опц. checksums (modules_sha256), host-инвариант →
+      # apply.input; арх-URL строит destiny per-host.
       modules_base_url: "${ default(input.modules_base_url, '') }"
       modules_sha256:   "${ default(input.modules_sha256, {}) }"
       # Host-tuning extras (концепция роли), режим-агностичны — как в standalone-ветке.

@@ -9,16 +9,93 @@
 # же слоя (root_group → root_owner), цикл/несуществующий ref → ошибка рендера, порядок
 # объявления безразличен. Файл закоммичен в git destiny-репо — секретов тут нет (пароли/
 # PEM приходят через input с secret/vault()).
+#
+# ── ГРАНИЦА vars (инвариант) vs input (оператор-переопределяемое) ───────────────
+# vars (ЗДЕСЬ) — то, что ОДИНАКОВО для всех incarnation и менять незачем/нельзя:
+#   - identity сервиса: имена systemd-юнитов (redis_service_name/sentinel_service_name)
+#     — контракт с distro-пакетом, сменишь → сломаешь package-ветку;
+#   - фиксированная номенклатура: таблица алиас→.so Redis-модулей (redis_modules);
+#   - file-mode/owner инварианты; каталоги layout-а, привязанные к systemd/пакету
+#     (systemd_dir, tls-/modules-dir выводятся из conf_dir/data_dir).
+# input (destiny.yml input:) — то, что РАЗУМНО переопределить per-incarnation:
+#   - conf_dir/data_dir: оператор может развернуть конфиг/данные под свой storage-
+#     layout (другой mount под /data и т.п.). Дефолт input = vars-значение
+#     (redis_conf_dir/redis_data_dir) — back-compat, дефолтный путь не меняется.
+# Почему НЕ всё в input: переопределяемость без сценария применения раздувает контракт
+# (имя юнит-файла, drop-in-каталог, набор модулей менять незачем) — vars.md «не плодить
+# input ради умозрительной гибкости».
 
 # system-юзер и группа сервиса redis. distro-пакет заводит их сам, binary-ветка
 # install.yml создаёт явно (core.group.present/core.user.present) — оба берут имя отсюда.
 redis_user:  redis
 redis_group: redis
 
+# ── Имена systemd-сервисов (директива A: имя сервиса в vars, ВЕЗДЕ) ────────────
+# ИНВАРИАНТ (vars, не input): имя юнита — контракт между binary-юнитом, hardening
+# drop-in (.service.d/), core.service running/restart и distro-пакетом. distro-пакет
+# зовёт сервис именно redis-server/redis-sentinel; менять имя НЕЛЬЗЯ, не сломав
+# package-ветку → не operator-переопределяемое. Один источник правды: задачи и пути
+# юнит-файлов собираются из ${ vars.*_service_name }, литералы redis-server/
+# redis-sentinel по задачам устранены. ВНИМАНИЕ: это имя СЕРВИСА (systemd), НЕ имя
+# пакета (core.pkg redis-server) и НЕ имя бинаря (/usr/local/bin/redis-server) — там
+# совпадение значений случайно, но семантика разная, потому те токены НЕ из этих vars.
+redis_service_name:    redis-server
+sentinel_service_name: redis-sentinel
+
+# ── Базовые пути host-layout (директива B: инвариантные базовые пути → vars) ────
+# ИНВАРИАНТ (vars, не input): системные каталоги распаковки конфигурации Redis,
+# ОДИНАКОВЫЕ для всех incarnation. Конкретные файлы выводятся из этих баз в задачах
+# (${ vars.redis_conf_dir }/redis.conf и т.п.) — один источник правды на каталог.
+# Что НЕ здесь: data_dir и conf_dir дополнительно ВЫНЕСЕНЫ в input (см. destiny.yml
+# input.data_dir/input.conf_dir) — оператор может захотеть другое расположение data/
+# conf под свой storage-layout; vars-значения тут — дефолты, на которые ссылается
+# input.default. Имя unit-файла, tls-/modules-/drop-in-каталоги в input НЕ выносятся:
+# менять их незачем (привязаны к layout systemd/пакета), переопределяемость только
+# раздула бы контракт без сценария применения.
+
+# conf-dir redis: redis.conf, users.acl, sentinel.conf, tls/. ДЕФОЛТ для input.conf_dir
+# (оператор может переопределить). Задачи берут input.conf_dir (не этот var напрямую),
+# чтобы переопределение оператора доезжало; этот var — единый источник дефолта.
+redis_conf_dir: /etc/redis
+
+# data-dir redis (RDB/AOF, modules-dir). ДЕФОЛТ для input.data_dir (оператор может
+# переопределить под свой storage). modules-dir выводится из input.data_dir в задачах
+# (${ input.data_dir }/modules) — отдельного modules_dir в input больше нет (директива
+# B: modules_dir убран из input, путь производный от data-dir).
+redis_data_dir: /var/lib/redis
+
+# Каталог TLS PEM-материала (cert/key/CA). ИНВАРИАНТ (под conf_dir): tls/ внутри
+# conf-dir. Задачи строят путь как ${ input.conf_dir }/tls.
+
+# Каталог systemd drop-in-ов redis-server (override поверх distro-юнита). ИНВАРИАНТ
+# (привязан к имени сервиса + layout systemd): /etc/systemd/system/<unit>.d. Задачи
+# строят путь из vars.redis_service_name.
+systemd_dir: /etc/systemd/system
+
 # Каталог unix-сокета redis. core.file.directory создаёт его в обеих ветках, когда в
 # merged-конфиге есть директива unixsocket (см. install.yml). Совпадает с дефолтным
 # unixsocket-путём, который scenario передаёт в config.
 socket_dir: /var/run/redis
+
+# ── Каталог Redis-модулей и полный набор (директива C: модули ВСЕГДА ВСЕ) ───────
+# ИНВАРИАНТ (vars, не input): фиксированная таблица алиас→имя .so-файла Redis-модулей.
+# Имена .so — НЕ operator-выбор, а фиксированная номенклатура Redis (redisearch.so /
+# rejson.so / redistimeseries.so / redisbloom.so) → живёт в destiny. Директива
+# пользователя «модули ВСЕГДА ВСЕ»: разворачиваем ВЕСЬ набор всегда (на Redis < 8),
+# оператор НЕ выбирает подмножество. loadmodules в redis.conf (сорт-литерал алиасов
+# ['bloom','json','search','timeseries'].map(...)) и ЧЕТЫРЕ ЯВНЫЕ fetch-задачи
+# modules.yml (по одной на алиас) берут имена .so из ЭТОГО map-а (vars.redis_modules
+# .<alias>) — детерминированный порядок задаёт сортированный литерал алиасов, не
+# итерация по map. Источник .so (modules_base_url) и
+# опциональные checksums (modules_sha256) ОСТАЮТСЯ в input — это deployment-артефакт
+# (где лежат бинари модулей под (version, arch) кластера), не инвариант кирпича.
+# REDIS 8+: модули ВСТРОЕНЫ в сервер — .so не качаем и loadmodule не пишем (version-
+# guard в задачах по input.version/input.install.version, см. server.yml/modules.yml).
+redis_modules:
+  bloom:      redisbloom.so
+  json:       rejson.so
+  search:     redisearch.so
+  timeseries: redistimeseries.so
 
 # ── file-mode/owner инварианты (вынесены: >2 употреблений по задачам) ──────────
 # Литеральные значения; задачи берут через ${ vars.* }. Вынос сохраняет рендер

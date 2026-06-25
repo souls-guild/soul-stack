@@ -1,0 +1,125 @@
+# L0-испытание create (standalone) — OVERRIDE conf_dir/data_dir (директива B). Guard:
+# оператор переопределяет базовые каталоги конфигурации и данных Redis, и эти пути
+# ДОЕЗЖАЮТ до файловых задач destiny `redis`. Регресс-кейс к MAJOR-у: до фикса
+# scenario create НЕ объявлял conf_dir/data_dir в input и НЕ прокидывал их в
+# apply.input → destiny брала только дефолт (override был МЁРТВ). Фикс: scenario
+# объявляет conf_dir/data_dir (default = текущий путь) и прокидывает в apply.input
+# всех веток; destiny строит пути redis.conf/users.acl/tls/.so/modules-dir из них.
+#
+# Override: conf_dir=/opt/redis, data_dir=/srv/redis-data. Ожидаем:
+#   - redis.conf, users.acl → /opt/redis/* (под conf_dir);
+#   - modules-dir + .so → /srv/redis-data/modules/* (под data_dir);
+#   - loadmodules в redis.conf → /srv/redis-data/modules/*.so (data_dir);
+#   - state.conf_dir/data_dir персистят override (day-2 add_node читает их).
+# version=5:6.2.7 (< 8) → модули активны (.so под data_dir проверяемы). TLS off
+# (директивы tls-cert-file scenario хардкодит /etc/redis/tls — отдельный слой, см.
+# observations PM; этот кейс про ФАЙЛОВЫЕ пути задач destiny, не про config-директивы).
+name: conf_dir and data_dir override flow through to destiny file paths
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network:
+      primary_ip: 10.0.0.5
+    os:
+      arch: amd64
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+  essence:
+    redis_type: standalone
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory: "256mb"
+
+  input:
+    redis_type: standalone
+    version: "5:6.2.7"
+    persistence: rdb
+    modules_base_url: "https://artifacts.example.com/redis/modules/6.2"
+    # ★ OVERRIDE host-layout (директива B): нестандартные conf/data каталоги.
+    conf_dir: /opt/redis
+    data_dir: /srv/redis-data
+
+assert:
+  task_present:
+    # redis.conf под conf_dir override (/opt/redis), а loadmodules → под data_dir
+    # override (/srv/redis-data/modules). Регресс «override мёртв» = /etc/redis/redis.conf
+    # + loadmodules /var/lib/redis/modules. Дизамбигуатор от users.acl/hardening — path.
+    - module: core.file.rendered
+      params_subset:
+        path: /opt/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            password: s3cr3t-redis-pass-create
+            loadmodules:
+              - /srv/redis-data/modules/redisbloom.so
+              - /srv/redis-data/modules/rejson.so
+              - /srv/redis-data/modules/redisearch.so
+              - /srv/redis-data/modules/redistimeseries.so
+            config:
+              maxmemory: "256mb"
+              save: "900 1 300 10 60 10000"
+              appendonly: "no"
+          self:
+            sid: trial-host
+            covens: [create]
+            choirs: []
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # users.acl под conf_dir override. Дизамбигуатор от redis.conf — path.
+    - module: core.file.rendered
+      params_subset:
+        path: /opt/redis/users.acl
+        mode: "0640"
+        owner: redis
+        group: redis
+
+    # modules-dir под data_dir override. Дизамбигуатор от systemd-dropin-dir — path.
+    - module: core.file.directory
+      params_subset:
+        path: /srv/redis-data/modules
+        owner: redis
+        group: redis
+        mode: "0750"
+
+    # .so fetch под data_dir override; URL арх-специфичен (amd64). Дизамбигуатор — path.
+    - module: core.url.fetched
+      params_subset:
+        url: "https://artifacts.example.com/redis/modules/6.2/amd64/redisearch.so"
+        path: /srv/redis-data/modules/redisearch.so
+        mode: "0750"
+        owner: redis
+        group: redis
+
+  task_absent:
+    # Регресс «override не доехал, взят дефолт»: дефолтные пути НЕ должны появиться.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+    - module: core.url.fetched
+      params_subset:
+        path: /var/lib/redis/modules/redisearch.so
+
+  state_changes:
+    redis_type: standalone
+    redis_version: "5:6.2.7"
+    modules: [bloom, json, search, timeseries]
+    modules_base_url: "https://artifacts.example.com/redis/modules/6.2"
+    # ★ override персистит в state → day-2 add_node читает его (тот же layout у новой ноды).
+    conf_dir: /opt/redis
+    data_dir: /srv/redis-data

@@ -360,13 +360,21 @@ func (r realRedisDestinyResolver) Resolve(_ context.Context, name string) (*Reso
 // потребитель examples/service/redis/scenario/create/main.yml (диспетчер) +
 // РЕАЛЬНАЯ destiny redis (tasks/main.yml) на multi-host roster-е.
 //
+// ★ Гейт deploy_redis в destiny redis стоит НА include (tasks/main.yml: `include:
+// server.yml` `when: default(input.deploy_redis, true)`, conditional-include
+// group-drop, ADR-009 amendment) — НЕ внутри файла. Поэтому при deploy_redis=false
+// include server.yml дропается ЦЕЛИКОМ: задачи data-плоскости ФИЗИЧЕСКИ ОТСУТСТВУЮТ
+// в плане (group-drop, не placeholder-skip — не эмитятся вовсе). Это уточняет прежнюю
+// проверку «placeholder-skip с Params==nil»: теперь byName[...] == nil.
+//
 // Доказывает на отрендеренном плане:
-//   - redis.conf-задача (core.file.rendered) — placeholder-skip (Params == nil):
-//     deploy_redis=false погасил рендер data-плоскости;
-//   - core.service redis-server running — placeholder-skip (Params == nil);
+//   - redis.conf-задача (core.file.rendered) ОТСУТСТВУЕТ (include server.yml
+//     group-dropped): deploy_redis=false дропнул всю data-плоскость;
+//   - core.service redis-server running ОТСУТСТВУЕТ (та же группа);
 //   - sentinel.conf-задача (core.file.rendered) РЕНДЕРИТСЯ (Params != nil):
 //     sentinel-демон поднимается, мониторя ВНЕШНИЙ master из input.master_ip;
-//   - пакет redis ставится ВСЕГДА (core.pkg.installed рендерится, Params != nil).
+//   - пакет redis ставится ВСЕГДА (core.pkg.installed рендерится, Params != nil;
+//     install.yml безусловен).
 func TestAcceptance_SentinelOnlySkipsRedisServer(t *testing.T) {
 	path := filepath.FromSlash("../../../examples/service/redis/scenario/create/main.yml")
 	m, _, diags, err := config.LoadScenarioManifest(path, config.ValidateOptions{})
@@ -434,10 +442,9 @@ func TestAcceptance_SentinelOnlySkipsRedisServer(t *testing.T) {
 		t.Fatalf("Render (приёмка create/main.yml sentinel_only): %v", err)
 	}
 
-	// Находим задачи destiny по Name (RenderedTask.Name протягивается и на
-	// placeholder-skip, а Params — нет, поэтому матчить по params.path нельзя:
-	// у skip-задачи params nil). Индекс зависит от смещения ветки в диспетчере,
-	// ищем по имени, а не по жёсткому индексу.
+	// Находим задачи destiny по Name. group-dropped задачи (include server.yml выключен)
+	// в плане ОТСУТСТВУЮТ вовсе (не placeholder), поэтому byName[...] == nil — это и есть
+	// доказательство дропа. Индекс зависит от смещения ветки в диспетчере, ищем по имени.
 	byName := map[string]*RenderedTask{}
 	for _, tk := range tasks {
 		byName[tk.Name] = tk
@@ -447,17 +454,11 @@ func TestAcceptance_SentinelOnlySkipsRedisServer(t *testing.T) {
 	redisRunning := byName["Ensure redis-server is running and enabled at boot"]
 	pkgInstall := byName["Install redis-server package"]
 
-	if redisConf == nil {
-		t.Fatal("redis.conf-задача (core.file.rendered) не найдена в плане")
+	if redisConf != nil {
+		t.Errorf("redis.conf-задача присутствует в плане — include server.yml должен быть group-dropped при deploy_redis=false (физическое отсутствие, не placeholder)")
 	}
-	if redisConf.Params != nil {
-		t.Errorf("redis.conf РЕНДЕРИТСЯ при deploy_redis=false (Params != nil) — data-плоскость не погашена")
-	}
-	if redisRunning == nil {
-		t.Fatal("core.service.running redis-server не найдена в плане")
-	}
-	if redisRunning.Params != nil {
-		t.Errorf("core.service redis-server running РЕНДЕРИТСЯ при deploy_redis=false (Params != nil)")
+	if redisRunning != nil {
+		t.Errorf("core.service.running redis-server присутствует в плане — include server.yml должен быть group-dropped при deploy_redis=false")
 	}
 	if sentinelConf == nil {
 		t.Fatal("sentinel.conf-задача (core.file.rendered) не найдена в плане")

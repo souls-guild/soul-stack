@@ -1,28 +1,21 @@
-# L0-испытание create (standalone) — Redis-МОДУЛИ ВКЛЮЧЕНЫ (концепция Ansible-роли
-# redis: RediSearch/RedisJSON загружаемыми .so на Redis < 8). Guard на то, что при
-# непустом input.modules:
-#   1. каталог modules_dir создаётся (gated-задача, активна — НЕ placeholder);
-#   2. каждый алиас → отдельная core.url.fetched задача (loop); sha256 ЗАДАН →
-#      checksum "sha256:<hex>" (fail-closed integrity-verify) + АРХ-СПЕЦИФИЧНЫЙ
-#      URL из soulprint.self.os.arch (контр-кейс modules-no-checksum: sha256 не
-#      задан → пустой checksum, content-идемпотентность без verify);
-#   3. в redis.conf приходят пути loadmodule (vars.loadmodules) — рендер директив
-#      делает шаблон отдельной секцией (без хвостового пробела, см. tmpl-тест).
+# L0-испытание create (standalone) — Redis-МОДУЛИ (директива «модули ВСЕГДА ВСЕ»,
+# 2026-06-25). НАБОР модулей больше НЕ operator-выбор: на Redis < 8 destiny
+# разворачивает ПОЛНЫЙ набор из vars.redis_modules (bloom/json/search/timeseries).
+# Guard на то, что:
+#   1. каталог modules-dir (<data_dir>/modules) создаётся (gated-include, активен);
+#   2. КАЖДЫЙ из ЧЕТЫРЁХ алиасов → отдельная core.url.fetched задача (loop по ключам
+#      vars.redis_modules, Go-сорт → bloom, json, search, timeseries). modules_sha256
+#      задан ЧАСТИЧНО (search/json) → им checksum "sha256:<hex>" (fail-closed verify);
+#      bloom/timeseries без sha256 → пустой checksum (content-идемпотентность). URL
+#      арх-специфичен из soulprint.self.os.arch;
+#   3. в redis.conf приходят пути loadmodule ВСЕХ четырёх (vars.loadmodules, сорт по
+#      алиасу) — рендер директив делает шаблон отдельной секцией (см. tmpl-тест).
 #
-# version=5:6.2.7 — мажор 6 (< 8) → version-gate НЕ гасит модули (контр-кейс
-# modules-redis8-skip доказывает обратную ветку). modules_base_url/modules_sha256 —
-# host-инвариант → apply.input; arch (amd64 из soulprint) подставляется в URL destiny
-# per-host.
-#
-# ИНДЕКСЫ (standalone-прогон, modules=[search, json] → 2 .so-задачи; extras-sysctl
-# сжаты 2→1 задачи core.sysctl.applied → весь хвост после sysctl −1):
-#   0  — mode-guard;
-#   1..19 — destiny redis (redis.conf=7 с loadmodules; sysctl-apply=19);
-#   20 — modules-dir (core.file.directory, gated, АКТИВНА);
-#   21 — fetch .so search (loop[0], порядок input.modules: search < json);
-#   22 — fetch .so json   (loop[1]);
-#   23 — PING (community.redis.command, сдвинут +2 относительно базового modules-empty 21).
-name: modules enabled standalone fetches .so and renders loadmodule directives
+# version=5:6.2.7 — мажор 6 (< 8) → version-guard (теперь В DESTINY) НЕ гасит модули
+# (контр-кейс modules-redis8-skip доказывает обратную ветку). modules_base_url —
+# host-инвариант → apply.input; arch (amd64) подставляется destiny per-host. input.modules
+# больше НЕ задаётся (оператор не выбирает подмножество — всегда все).
+name: modules always-all standalone fetches every .so and renders loadmodule directives
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
@@ -59,11 +52,10 @@ fixtures:
   input:
     redis_type: standalone
     version: "5:6.2.7"
-    # Алиасы намеренно НЕ в алфавитном порядке (search до json): loop сортирует
-    # array по порядку списка как есть (array → as=элемент по индексу), а
-    # loadmodules.map сохраняет порядок input.modules. Здесь проверяем именно ЭТОТ
-    # порядок (search первым → redisearch.so первым в loadmodules).
-    modules: [search, json]
+    # input.modules больше НЕТ (директива «модули ВСЕГДА ВСЕ»): набор-инвариант в
+    # destiny vars.redis_modules. Порядок задач/loadmodules — Go-сорт ключей map
+    # (bloom, json, search, timeseries). modules_sha256 задан ЧАСТИЧНО (search/json) —
+    # им verify, остальным пустой checksum.
     modules_base_url: "https://artifacts.example.com/redis/modules/6.2"
     modules_sha256:
       search: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -71,10 +63,10 @@ fixtures:
 
 assert:
   task_present:
-    # redis.conf несёт vars.loadmodules — пути .so в ПОРЯДКЕ input.modules
-    # (search → redisearch.so первым). Директивы loadmodule рендерит шаблон отдельной
-    # секцией (чистота — destiny_redis_tmpl_test.go). Дизамбигуатор от users.acl/
-    # hardening (тот же core.file.rendered) — path.
+    # redis.conf несёт vars.loadmodules — пути .so ВСЕХ четырёх модулей в порядке
+    # Go-сорта ключей vars.redis_modules (bloom, json, search, timeseries). Директивы
+    # loadmodule рендерит шаблон отдельной секцией (чистота — destiny_redis_tmpl_test.go).
+    # Дизамбигуатор от users.acl/hardening (тот же core.file.rendered) — path.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
@@ -86,8 +78,10 @@ assert:
           vars:
             password: s3cr3t-redis-pass-create
             loadmodules:
-              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redisbloom.so
               - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
             config:
               maxmemory: "256mb"
               maxmemory-policy: allkeys-lru
@@ -107,8 +101,8 @@ assert:
           role: ""
           essence: {}
 
-    # modules-dir каталог — gated на size(modules)>0, здесь АКТИВНА. Дизамбигуатор
-    # от systemd-dropin-dir (тот же core.file.directory) — path.
+    # modules-dir каталог — gated-include на deploy_redis && !redis8, здесь АКТИВНА.
+    # Дизамбигуатор от systemd-dropin-dir (тот же core.file.directory) — path.
     - module: core.file.directory
       params_subset:
         path: /var/lib/redis/modules
@@ -116,10 +110,29 @@ assert:
         group: redis
         mode: "0750"
 
-    # fetch .so — loop по алиасам (array, порядок списка: search[0], json[1]).
-    # URL арх-специфичен (amd64 из soulprint.self); sha256 ЗАДАН → checksum
-    # "sha256:<hex>" (fail-closed integrity-verify). Дизамбигуатор двух .so —
-    # path/url; tarball-fetch (binary install) — placeholder-skip.
+    # fetch .so — loop по КЛЮЧАМ vars.redis_modules (Go-сорт: bloom, json, search,
+    # timeseries). URL арх-специфичен (amd64 из soulprint.self). sha256 ЗАДАН для
+    # search/json → checksum "sha256:<hex>" (verify); bloom/timeseries без sha256 →
+    # пустой checksum (content-идемпотентность). Дизамбигуатор .so — path/url;
+    # tarball-fetch (binary install) — placeholder-skip.
+    - module: core.url.fetched
+      params_subset:
+        url: "https://artifacts.example.com/redis/modules/6.2/amd64/redisbloom.so"
+        path: /var/lib/redis/modules/redisbloom.so
+        checksum: ""
+        mode: "0750"
+        owner: redis
+        group: redis
+
+    - module: core.url.fetched
+      params_subset:
+        url: "https://artifacts.example.com/redis/modules/6.2/amd64/rejson.so"
+        path: /var/lib/redis/modules/rejson.so
+        checksum: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        mode: "0750"
+        owner: redis
+        group: redis
+
     - module: core.url.fetched
       params_subset:
         url: "https://artifacts.example.com/redis/modules/6.2/amd64/redisearch.so"
@@ -131,9 +144,9 @@ assert:
 
     - module: core.url.fetched
       params_subset:
-        url: "https://artifacts.example.com/redis/modules/6.2/amd64/rejson.so"
-        path: /var/lib/redis/modules/rejson.so
-        checksum: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        url: "https://artifacts.example.com/redis/modules/6.2/amd64/redistimeseries.so"
+        path: /var/lib/redis/modules/redistimeseries.so
+        checksum: ""
         mode: "0750"
         owner: redis
         group: redis
@@ -159,11 +172,10 @@ assert:
     redis_users: {}
     redis_hosts: []
     redis_sentinel: {}
-    # ── namedfields (read-model, v3): modules=[search, json] (тот же input.modules,
-    # что строит loadmodules в destiny). maxmemory_policy '' — оператор НЕ задавал
-    # input.maxmemory_policy (директива в redis_config — из essence-подложки; namedfield
-    # маркирует отсутствие явного выбора '', не лезет в write-model redis_config).
-    modules: [search, json]
+    # ── namedfields (read-model, v3): modules = ФАКТИЧЕСКИ развёрнутый набор. Redis 6
+    # (< 8) → полный набор (компонент redis_modules_deployed в scenario, сорт). НЕ
+    # operator-выбор. maxmemory_policy '' — оператор НЕ задавал input.maxmemory_policy.
+    modules: [bloom, json, search, timeseries]
     persistence: rdb
     maxmemory_policy: ""
     install:

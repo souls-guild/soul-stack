@@ -97,7 +97,7 @@
         group: "${ vars.redis_group }"
         system: true
         shell: /usr/sbin/nologin
-        home: /var/lib/redis
+        home: "${ default(input.data_dir, vars.redis_data_dir) }"
 
     # 4. Разложить redis-server/redis-cli/redis-sentinel в /usr/local/bin (mode 0755)
     #    из распакованного каталога. core.file.present теперь умеет src: — копию
@@ -166,7 +166,10 @@
       module: core.file.rendered
       register: redis_server_unit
       params:
-        path: /etc/systemd/system/redis-server.service
+        # Путь юнит-файла собирается из vars.systemd_dir + имени сервиса (директива A):
+        # /etc/systemd/system/<redis_service_name>.service. Имя СЕРВИСА (НЕ путь бинаря
+        # /usr/local/bin/redis-server в ExecStart шаблона — там фиксированный binary-путь).
+        path: "${ vars.systemd_dir + '/' + vars.redis_service_name + '.service' }"
         template: templates/redis-server.service.tmpl
         mode: "${ vars.unit_file_mode }"
         owner: "${ vars.root_owner }"
@@ -187,13 +190,19 @@
     #    daemon-reload при смене юнита core.service делает сам перед рестартом. server.yml
     #    рестартит на смену config/ACL/TLS/hardening — здесь ОТДЕЛЬНЫЙ триггер на
     #    апгрейд бинаря (тот же сервис redis-server, разные источники изменения).
+    # id: стабильный адрес binary-restart — дизамбигуатор от config/hardening-restart
+    # server.yml (оба core.service.restarted name=redis-server). register у задачи нет
+    # (onchanges-only), поэтому id допустим (id ⊕ register запрещены вместе). Раньше
+    # различались when-ом, но гейт deploy_redis ушёл на include (server.yml-restart →
+    # when пуст, этот binary-restart несёт merged binary-block-when) → нужен явный якорь.
     - name: Restart redis-server because the binary or unit changed
       module: core.service.restarted
+      id: redis_binary_restart
       when: "default(input.deploy_redis, true)"
       onchanges: [redis_server_bin, redis_cli_bin, redis_sentinel_bin, redis_server_unit]
       timeout: 30s
       params:
-        name: redis-server
+        name: "${ vars.redis_service_name }"
 
 # ── Каталог unix-сокета (обе ветки) ─────────────────────────────────────────────
 # ТОЛЬКО если в merged-конфиге есть директива unixsocket. Пакетный systemd создаёт

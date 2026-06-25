@@ -65,6 +65,35 @@ input:
       «latest из репо» более НЕ доступно. При install.method=binary НЕ используется
       (версия бинаря — в install.version).
 
+  # ── Пути host-layout, переопределяемые оператором (директива B) ──────────────
+  # conf_dir/data_dir — базовые каталоги конфигурации и данных Redis. Объявлены
+  # оператор-переопределяемыми в destiny `redis` (destiny.yml input.conf_dir/data_dir),
+  # поэтому СКВОЗЬ-проброшены здесь: scenario объявляет их в своём input и гонит в
+  # apply.input всех веток (иначе override был бы мёртв — destiny получала бы только
+  # дефолт). Дефолт = ТЕКУЩИЙ путь (back-compat: не задан → /etc/redis, /var/lib/redis).
+  # HOST-ИНВАРИАНТ (один layout на кластер) → apply.input. Персистятся в state (как
+  # modules_base_url) для day-2-консистентности: add_node читает их из incarnation.state,
+  # чтобы новая нода знала тот же layout.
+  conf_dir:
+    type: string
+    required: false
+    default: /etc/redis
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: >-
+      Каталог конфигурации Redis (redis.conf, users.acl, sentinel.conf, tls/). По
+      умолчанию /etc/redis. Оператор может переопределить под свой layout; путь
+      прокидывается в destiny `redis` и персистится в state для day-2 (add_node).
+
+  data_dir:
+    type: string
+    required: false
+    default: /var/lib/redis
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: >-
+      Рабочий каталог данных Redis (RDB/AOF; modules/ выводится как <data_dir>/modules).
+      По умолчанию /var/lib/redis. Оператор может переопределить под свой storage-layout;
+      путь прокидывается в destiny `redis` и персистится в state для day-2 (add_node).
+
   # ── install: способ установки redis (default package) ────────────────────────
   # package (default, поведение-сохраняющее) — distro-пакет; binary — upstream-tarball.
   # Прокидывается as-is в destiny `redis` (apply.input.install) во всех ветках.
@@ -299,33 +328,22 @@ input:
         type: string
 
   # ── Redis-модули (концепция Ansible-роли redis: redis_module_*) ──────────────
-  # Загружаемые модули RediSearch/RedisJSON/RedisTimeSeries/RedisBloom как .so
-  # (Redis < 8). VERSION-GATE: на Redis 8+ модули ВСТРОЕНЫ — сценарий передаёт
-  # destiny пустой список (см. modules_for_redis в ветках диспетчера). Гейт по
-  # input.version (мажор >= 8), упрощённо: полную version-matrix совместимости НЕ
-  # тащим (brief), version не задан → не гейтим (fail-closed на Redis: .so против
-  # 8+-бинаря отклонит сам сервер). modules_base_url ОБЯЗАТЕЛЕН при непустом modules
-  # (без него destiny нечем строить URL). modules_sha256 — ОПЦИОНАЛЬНЫЙ: задан для
-  # алиаса → destiny верифицирует SHA-256 .so (fail-closed); отсутствует → загрузка
-  # по content-идемпотентности (без verify, доверие HTTPS + store).
-  modules:
-    type: array
-    required: false
-    description: >-
-      Алиасы Redis-модулей для подключения (Redis < 8): search (RediSearch),
-      json (RedisJSON), timeseries (RedisTimeSeries), bloom (RedisBloom). Пусто/не
-      задан → модули не подключаются. На Redis 8+ игнорируется (модули встроены).
-    items:
-      type: string
-      enum: [search, json, timeseries, bloom]
-
+  # ★ ДИРЕКТИВА «модули ВСЕГДА ВСЕ» (2026-06-25): НАБОР модулей больше НЕ operator-
+  # выбор — destiny разворачивает ПОЛНЫЙ набор из своего vars.redis_modules (Redis < 8).
+  # Поэтому поля input.modules здесь НЕТ (оператор не выбирает подмножество). На Redis
+  # 8+ модули ВСТРОЕНЫ — version-guard (по compute.redis_version) гасит .so и в destiny
+  # (include modules.yml group-drop), и в read-model (state.modules=[]).
+  #
+  # Оператор задаёт лишь ИСТОЧНИК .so: modules_base_url (откуда брать бинари модулей) +
+  # опц. modules_sha256 (checksums под пару (version, arch) кластера). modules_base_url
+  # ОБЯЗАТЕЛЕН на Redis < 8 (без него destiny нечем строить URL .so) — см. validate:.
   modules_base_url:
     type: string
     required: false
     description: >-
       Базовый URL источника .so-модулей (без арх-сегмента). destiny `redis` строит
-      полный URL per-host как <base_url>/<arch>/<имя.so>. Обязателен при непустом
-      modules.
+      полный URL per-host как <base_url>/<arch>/<имя.so>. Обязателен на Redis < 8
+      (модули разворачиваются всегда все).
 
   modules_sha256:
     type: object
@@ -385,6 +403,18 @@ validate:
   - that: "!(has(input.install) && has(input.install.method) && input.install.method == 'binary') || (has(input.install.base_url) && has(input.install.version))"
     message: "install.method=binary требует install.base_url и install.version: без них не из чего собрать URL upstream-tarball-а redis"
 
+  # modules_base_url ОБЯЗАТЕЛЕН на Redis < 8 (директива «модули ВСЕГДА ВСЕ»): destiny
+  # разворачивает полный набор .so и строит URL из modules_base_url — без него ячейка
+  # URL упала бы криптичным CEL «no such key: modules_base_url» в render-фазе destiny.
+  # Явный 422 ДО applying понятнее. На Redis 8+ модули встроены → URL не нужен (правило
+  # тривиально истинно). data-плоскость (sentinel_only) — отдельный слой, но base_url
+  # дёшев и для неё требовать его незачем: ВЕРСИЯ-гейт уже покрывает основной кейс,
+  # sentinel_only гасит modules.yml через deploy_redis. INPUT-ONLY (has()-цепочка):
+  # redis8 истинно, когда эффективная версия (version distro-пин ИЛИ install.version)
+  # мажором >= 8. sentinel_only НЕ грузит модули (redis-server нет) → исключаем его.
+  - that: "(input.redis_type == 'sentinel_only') || (has(input.version) ? input.version : (has(input.install) && has(input.install.version) ? input.install.version : '')).matches('^([0-9]+:)?(8|9|[1-9][0-9])\\\\.') || has(input.modules_base_url)"
+    message: "modules_base_url обязателен на Redis < 8: модули разворачиваются всегда все, без источника .so destiny не сможет их скачать"
+
 # ── Host-tuning extras (концепция Ansible-роли) ──────────────────────────────────
 # Режим-агностичные per-host добавки — THP-отключение, logrotate, sysctl — БЕЗУСЛОВНЫ
 # (рекомендация Redis / hardening, не выбор оператора): флагов в операторском
@@ -433,6 +463,19 @@ compute:
   # install.version. has()-цепочка (default() ловит no-such-key только в первом
   # аргументе — input.version отсутствует целиком в binary, не лист).
   redis_version: "${ has(input.version) ? input.version : (has(input.install) && has(input.install.version) ? input.install.version : '') }"
+  # ── Развёрнутые Redis-модули (read-model state.modules) ──────────────────────
+  # ★ ДИРЕКТИВА «модули ВСЕГДА ВСЕ» (2026-06-25): набор больше НЕ operator-выбор.
+  # destiny разворачивает ПОЛНЫЙ набор из своего vars.redis_modules (Redis < 8). state-
+  # read-model отражает ФАКТИЧЕСКИ развёрнутое: Redis < 8 → полный набор алиасов;
+  # Redis 8+ → [] (модули встроены, .so не качаются — version-guard). Список алиасов
+  # тут — ЗЕРКАЛО ключей destiny vars.redis_modules (destiny маппит alias→.so для
+  # деплоя; scenario знает только алиасы для read-model — разные слои, дублируются
+  # только ИМЕНА; при добавлении модуля синхронизировать оба места). Отсортирован (как
+  # Go-сорт ключей map в destiny) — детерминизм state.
+  redis_modules_deployed: >-
+    ${ compute.redis_version.matches('^([0-9]+:)?(8|9|[1-9][0-9])\\.')
+         ? []
+         : ['bloom', 'json', 'search', 'timeseries'] }
   # ── install как namedfield (read-model): нормализуем absent input.install →
   # {method: 'package'} (default-поведение, см. input.install). method всегда
   # присутствует; base_url/version/sha256 — только при method=binary (берём из
@@ -570,10 +613,23 @@ state_changes:
   # строкой (не лезем в redis_config за фактическим значением — это write-model).
   - set: maxmemory_policy
     value: "${ default(input.maxmemory_policy, '') }"
-  # modules: алиасы Redis-модулей (тот же input.modules, что строит loadmodules в
-  # destiny). Пусто/не задан → [].
+  # modules: ФАКТИЧЕСКИ развёрнутые Redis-модули (директива «модули ВСЕГДА ВСЕ»). Redis
+  # < 8 → полный набор (destiny грузит все из vars.redis_modules); Redis 8+ → [] (модули
+  # встроены). НЕ operator-выбор (input.modules удалён) — compute.redis_modules_deployed.
   - set: modules
-    value: "${ default(input.modules, []) }"
+    value: "${ compute.redis_modules_deployed }"
+  # modules_base_url: источник .so (read-model). Сохраняем для day-2 (add_node читает
+  # его из state, чтобы новая нода тянула .so из того же источника). Пусто → оператор
+  # не задавал (Redis 8+ — модули встроены, источник не нужен).
+  - set: modules_base_url
+    value: "${ default(input.modules_base_url, '') }"
+  # conf_dir/data_dir: host-layout (read-model, директива B). Сохраняем для day-2
+  # (add_node читает их из state, чтобы новая нода знала тот же layout, что и кластер).
+  # default = текущий путь (back-compat). Симметрично modules_base_url.
+  - set: conf_dir
+    value: "${ default(input.conf_dir, '/etc/redis') }"
+  - set: data_dir
+    value: "${ default(input.data_dir, '/var/lib/redis') }"
   # sysctl_settings: применённый host-tuning (тот же essence.sysctl_settings, что
   # уходит в destiny apply.input). Из essence (host-инвариант, не операторский ввод).
   - set: sysctl_settings

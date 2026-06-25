@@ -1,0 +1,73 @@
+# L0-испытание add_node — DAY-2 has()-SAFE на СТАРОЙ инкарнации (coverage_gap qa).
+# Guard: add_node читает incarnation.state.conf_dir/data_dir/modules_base_url через
+# default(...,'<дефолт>') — для СТАРЫХ инкарнаций, чей state НЕ содержит этих полей
+# (создан до директивы B / до «модули ВСЕГДА ВСЕ»), default ловит отсутствие листа
+# на существующем incarnation.state и НЕ падает «no such key». Регресс «голый
+# incarnation.state.conf_dir» = render-фейл no-such-key на старом state.
+#
+# state НАМЕРЕННО без conf_dir/data_dir/modules_base_url (старая инкарнация). Ожидаем:
+#   - render НЕ падает no-such-key (рендер успешен, план собран);
+#   - destiny получает ДЕФОЛТНЫЕ пути: redis.conf → /etc/redis, modules-dir → /var/lib/redis;
+#   - add-node плагин строит endpoint-ы из roster как обычно.
+name: add_node tolerates legacy state without conf_dir/data_dir/modules_base_url
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-1.example.com
+      covens: [add_node, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-9.example.com
+      covens: [add_node, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.9 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/add_node:
+      password: s3cr3t-redis-pass-addnode
+  # СТАРАЯ инкарнация: state БЕЗ conf_dir/data_dir/modules_base_url (поля добавлены
+  # позже как create-only с has()-safe чтением на day-2). redis_version="" тоже без
+  # пина (< 8 эффективно → модули проходят дефолтными путями).
+  state:
+    redis_type: cluster
+    redis_version: ""
+    redis_config:
+      maxmemory: "256mb"
+      cluster-enabled: "yes"
+      cluster-config-file: "nodes.conf"
+      cluster-node-timeout: "5000"
+    redis_users: {}
+    redis_hosts: []
+
+  input:
+    new_node_sid: node-9.example.com
+    seed_sid: node-1.example.com
+    role: master
+
+assert:
+  task_present:
+    # redis.conf под ДЕФОЛТНЫМ conf_dir (state без conf_dir → default /etc/redis):
+    # доказывает, что default(...) сработал, render не упал. Дизамбигуатор — path.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+    # modules-dir под ДЕФОЛТНЫМ data_dir (state без data_dir → default /var/lib/redis):
+    # модули активны (version эффективно < 8), путь дефолтный. Дизамбигуатор — path.
+    - module: core.file.directory
+      params_subset:
+        path: /var/lib/redis/modules
+    # ADD-NODE плагин: пустой master_sid → master.addr пуст (role=master). Endpoint-ы
+    # из roster. Доказывает, что day-2-проход дошёл до конца (render не сорвался).
+    - module: community.redis.cluster
+      params_subset:
+        action: add-node
+        role: master
+        password: s3cr3t-redis-pass-addnode
+        new_node:
+          addr: "10.0.0.9:6379"
+        seed:
+          addr: "10.0.0.1:6379"
+        master:
+          addr: ""

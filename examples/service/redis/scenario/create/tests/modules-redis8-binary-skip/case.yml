@@ -1,0 +1,125 @@
+# L0-испытание create (standalone) — VERSION-GUARD Redis 8+ через install.version
+# (метод binary). РЕГРЕСС-КЕЙС к BLOCKER-у redis8-гейта: scenario передаёт ключ
+# `version` в destiny ВСЕГДА (как '' при install.method=binary, has()-guard в ветках),
+# поэтому destiny-гейт redis8 НЕ ДОЛЖЕН тупо брать `version` голым has() — иначе он
+# взял бы пустую строку, 8.x-regex не сматчился бы, и Redis 8 binary-install качал бы
+# 4 НЕСОВМЕСТИМЫХ .so + писал loadmodule → redis-server 8 не стартовал бы (а state
+# писал modules:[] — рассинхрон с фактом). Фикс: ЭФФЕКТИВНАЯ версия = version (когда
+# непуст) ИНАЧЕ install.version; 8.x-regex применяется к ней.
+#
+# Контр-кейс к install-binary (install.version 7.2.4 → модули ВКЛЮЧЕНЫ). Здесь
+# install.version=8.0.0 → version-guard ГАСИТ модули (встроены в Redis 8):
+#   - include modules.yml gated на deploy_redis && !redis8 → redis8 истинно по
+#     ЭФФЕКТИВНОЙ версии (install.version 8.0.0) → group-drop: modules-dir + fetch-loop
+#     ФИЗИЧЕСКИ отсутствуют в плане;
+#   - loadmodules-ячейка redis.conf: redis8 → [] → секции loadmodule нет;
+#   - state.modules = [] (compute.redis_modules_deployed: redis8 → []).
+# Top-level version НЕ передан (required_when=package, при binary не обязателен) →
+# эффективная версия берётся из install.version. Регресс «гейт взял пустой version» =
+# модули протекли бы (modules-dir + .so + непустой loadmodules + state.modules≠[]).
+name: redis 8 version guard via install.version skips modules on binary install
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network:
+      primary_ip: 10.0.0.5
+    os:
+      arch: amd64
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+  essence:
+    redis_type: standalone
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory: "256mb"
+
+  # version (top-level distro-пин) НЕ передан: method=binary → required_when=package
+  # не срабатывает; эффективная версия — install.version 8.0.0 (мажор 8 → redis8).
+  input:
+    redis_type: standalone
+    persistence: rdb
+    install:
+      method: binary
+      base_url: "https://downloads.example.com/redis"
+      version: "8.0.0"
+
+assert:
+  task_present:
+    # Fetch redis tarball: URL из base_url + install.version + arch. Сам tarball
+    # качается (бинари ставятся ВСЕГДА) — модулей это не касается, гасятся только .so.
+    - module: core.url.fetched
+      params_subset:
+        url: "https://downloads.example.com/redis/redis-8.0.0-amd64.tar.gz"
+        path: "/tmp/redis-8.0.0.tar.gz"
+
+    # redis.conf БЕЗ loadmodules (version-gate по install.version → пустой список):
+    # vars.loadmodules: []. Регресс «гейт взял пустой version» = непустой loadmodules.
+    # Дизамбигуатор от users.acl/hardening/unit — path.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            password: s3cr3t-redis-pass-create
+            loadmodules: []
+            config:
+              maxmemory: "256mb"
+              save: "900 1 300 10 60 10000"
+              appendonly: "no"
+          self:
+            sid: trial-host
+            covens: [create]
+            choirs: []
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # standalone-PING: cluster/sentinel ветки — placeholder-skip; дизамбигуатор addr/args.
+    - module: community.redis.command
+      params_subset:
+        addr: "127.0.0.1:6379"
+        password: s3cr3t-redis-pass-create
+        args: ["PING"]
+
+  task_absent:
+    # VERSION-GATE Redis 8+ по install.version: include modules.yml gated на
+    # deploy_redis && !redis8 → group-drop (modules-dir отсутствует в плане).
+    # Регресс «гейт взял пустой version вместо install.version» = modules-dir протёк.
+    - module: core.file.directory
+      params_subset:
+        path: /var/lib/redis/modules
+    # .so fetch: include modules.yml group-dropped → fetch-loop отсутствует.
+    # Дизамбигуатор от tarball-fetch (есть в плане) — path .so.
+    - module: core.url.fetched
+      params_subset:
+        path: /var/lib/redis/modules/redisearch.so
+    # GUARD «method=binary НЕ активирует package-ветку»: core.pkg.installed static-skip.
+    - module: core.pkg.installed
+      params_subset:
+        name: redis-server
+
+  state_changes:
+    redis_type: standalone
+    # redis_version из install.version (compute.redis_version: binary → upstream-semver).
+    redis_version: "8.0.0"
+    # Redis 8+ → модули встроены, .so не качаются → развёрнутый набор пуст.
+    modules: []
+    install:
+      method:   binary
+      base_url: "https://downloads.example.com/redis"
+      version:  "8.0.0"
+      sha256:   ""

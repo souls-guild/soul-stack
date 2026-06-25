@@ -52,6 +52,7 @@ fixtures:
     # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
     # distro-native пин (мажор < 8 → version-gate модулей не активен).
     version: "7.2.4"
+    modules_base_url: "https://artifacts.example.com/redis/modules"
     memory_mb: 64
     persistence: aof
     # maxmemory_policy НЕ задан — должен прийти из essence (allkeys-lru).
@@ -121,7 +122,11 @@ assert:
         render_context:
           vars:
             password: s3cr3t-redis-pass-create
-            loadmodules: []
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
             config:
               # ГРАНИЦА: 64*75/100=48 → "48mb" (НЕ "0mb"). Перекрыл essence "256mb".
               maxmemory: "48mb"

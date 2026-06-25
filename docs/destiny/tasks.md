@@ -126,7 +126,12 @@
     раскрытие, и `soul-lint` офлайн);
   - механизм: раскрытие протаскивает include-when и id группы в каждую вклеенную
     задачу, render вычисляет include-when **один раз на группу** (ADR-009 amendment
-    2026-06-24, conditional-include);
+    2026-06-24, conditional-include). Работает на **обоих** путях раскрытия: в scenario
+    (`Pipeline.Render`) и внутри `apply: destiny` (изолированный destiny-проход). В
+    destiny include-when вычисляется в **изолированном destiny-env** (только
+    резолвнутый `apply.input` + schema-defaults, БЕЗ scenario-scope), а кеш решений
+    групп — **отдельный на каждый проход** (id-группы destiny не пересекаются со
+    scenario);
   - безопасность: `onchanges:` извне на `register:` дропнутой группы невозможен —
     cross-file register-ссылка уже отвергается per-file линтером (см. правило ниже),
     поэтому дроп не оставляет висячих register-ссылок.

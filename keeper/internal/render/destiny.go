@@ -126,8 +126,43 @@ func (p *Pipeline) renderApplyDestiny(
 	tasks := make([]*RenderedTask, 0, len(resolved.Tasks))
 	plans := make([]DispatchPlan, 0, len(resolved.Tasks))
 	idx := startIndex
+
+	// includeGroupKeep — кеш решения по условному include внутри destiny (group-drop,
+	// ADR-009 amendment): id группы (Task.IncludeGroupID, проставлен ExpandIncludes) →
+	// keep/drop. Раздельный от scenario-кеша (pipeline.go) — destiny-проход изолирован,
+	// своё env. include-when вычисляется ОДИН раз на группу над destinyIn (изолированный
+	// destiny-input), host-инвариантно. Безусловные задачи (IncludeGroupID==0) сюда не
+	// попадают.
+	includeGroupKeep := map[int]bool{}
+
 	for i := range resolved.Tasks {
 		task := resolved.Tasks[i]
+
+		// Conditional-include group-drop (ADR-009 amendment) — ЗЕРКАЛО scenario-цикла
+		// (pipeline.go), ДО emitStaticWhenSkip и block-обработки. Задача несёт
+		// IncludeGroupID!=0 (config.ExpandIncludes раскрыл её include под статическим
+		// `when:`). include-when вычисляется ОДИН раз на группу в ИЗОЛИРОВАННОМ destiny-env
+		// (destinyIn: input = резолвнутый apply.input + schema-defaults, НЕ scenario-scope)
+		// — НЕ parentIn. include-when false → РЕАЛЬНЫЙ дроп: continue БЕЗ эмита RenderedTask
+		// и БЕЗ idx++ (индекс не резервируется, задача физически исчезает). Дискриминатор
+		// IncludeGroupID ортогонален block: group-drop стоит ВЫШЕ block-ветки, поэтому при
+		// keep=false дропается вся группа (вкл. block-задачу+потомков) ДО renderDestinyBlock.
+		// Кеш includeGroupKeep раздельный от scenario; register-изоляция идентична scenario
+		// (cross-file register дропнутой группы lint-запрещён офлайн → onchanges не падает).
+		if task.IncludeGroupID != 0 {
+			keep, ok := includeGroupKeep[task.IncludeGroupID]
+			if !ok {
+				k, derr := p.evalIncludeWhen(destinyIn, task.IncludeWhen)
+				if derr != nil {
+					return nil, nil, derr
+				}
+				keep = k
+				includeGroupKeep[task.IncludeGroupID] = keep
+			}
+			if !keep {
+				continue // group-drop: ни RenderedTask, ни idx — реальное исключение.
+			}
+		}
 
 		// Static-when ПРЕДШЕСТВУЕТ guardDestinyTask (ADR-012(d), тот же инвариант,
 		// что и в scenario-цикле pipeline.go): статически-false `when:` гейтит задачу

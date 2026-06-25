@@ -53,6 +53,7 @@ fixtures:
   input:
     redis_type: standalone
     persistence: rdb
+    modules_base_url: "https://artifacts.example.com/redis/modules"
     install:
       method: binary
       base_url: "https://downloads.example.com/redis"
@@ -143,10 +144,13 @@ assert:
     # redis_server_bin/redis_cli_bin/redis_sentinel_bin/redis_server_unit, все из
     # ЭТОГО файла — cross-file guard). В плане ДВА core.service.restarted
     # name=redis-server (этот binary-restart из install.yml + config/hardening-restart
-    # из server.yml, оба без register/id); дизамбигуатор — when этого шага
-    # (default(input.deploy_redis, true)), у config-restart when пуст.
+    # из server.yml). Дизамбигуатор — id=redis_binary_restart (стабильный якорь на
+    # binary-restart). Раньше различались when-ом, но гейт deploy_redis ушёл на include
+    # (conditional-include group-drop): server.yml-restart → when пуст, а binary-restart
+    # внутри binary-блока несёт merged binary-block-when (хрупкий для матча) — поэтому
+    # id-якорь, а не when.
     - module: core.service.restarted
-      when: "default(input.deploy_redis, true)"
+      id: redis_binary_restart
       params_subset:
         name: redis-server
 
@@ -188,7 +192,7 @@ assert:
     persistence: rdb
     memory_mb: 0
     maxmemory_policy: ""
-    modules: []
+    modules: [bloom, json, search, timeseries]
     sysctl_settings: {}
     shards: 0
     replicas: 0

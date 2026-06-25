@@ -43,6 +43,7 @@ fixtures:
     # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
     # distro-native пин (мажор < 8 → version-gate модулей не активен).
     version: "7.2.4"
+    modules_base_url: "https://artifacts.example.com/redis/modules"
     memory_mb: 512
     persistence: rdb_aof
     redis_settings:
@@ -68,7 +69,11 @@ assert:
         render_context:
           vars:
             password: s3cr3t-redis-pass-create
-            loadmodules: []
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
             config:
               # COMPUTED был "384mb" (512*75/100), но redis_settings (самый правый
               # слой merge) перекрыл его на "1gb". LAST-WINS на computed-слое.
