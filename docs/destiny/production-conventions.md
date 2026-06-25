@@ -105,9 +105,11 @@ CapabilityBoundingSet=
 
 1. `core.file.rendered` drop-in (`register: <hardening>`).
 2. `core.exec.run systemctl daemon-reload` с `onchanges: [<hardening>]` — перечитать unit до рестарта.
-3. `core.service.restarted` с `onchanges: [<config>, <hardening>]` — рестарт при изменении конфига сервиса **или** drop-in (изменённый drop-in вступает в силу только после рестарта).
+3. `core.service.restarted` с `onchanges: [<hardening>]` — рестарт при изменении drop-in (изменённый drop-in вступает в силу только после рестарта).
 
 Порядок гарантируется позицией задач (drop-in → daemon-reload → restart). Ничего не изменилось → вся цепочка no-op. С опорой на встроенный `auto` шаг 2 опускается: `core.service.restarted` (`daemon_reload: auto`) делает reload сам перед рестартом.
+
+> **★ Рестарт сужен до unit-уровня (§6a).** В `onchanges` рестарта — **только** register drop-in-задачи (`<hardening>`), **не** register-ы конфига/ACL/TLS-материала. У сервиса с live-reconfig (Redis) изменения `redis.conf`/`users.acl`/TLS PEM **не рестартят** процесс: их оживляет hot-reload day-2-сценария (`update_config`/`add_user`/`rotate_tls`, §6a). Рестарт остаётся истинным кейсом только для смены самого systemd-юнита (hardening drop-in), которую CONFIG SET покрыть не может. Эталон — [`examples/destiny/redis/tasks/server.yml`](../../examples/destiny/redis/tasks/server.yml): задача `core.service.restarted` несёт `onchanges: [redis_hardening]` (а не прежний `[redis_conf, redis_acl, redis_hardening, redis_tls_*]`). На at-create рестарт не нужен вовсе — первичный `core.service.running` поднимает инстанс уже с финальным конфигом/ACL/cert.
 
 ### 3b. Привилегированный oneshot-коллектор: root + узкий sandbox + Condition-gate
 
@@ -150,6 +152,22 @@ url: "${ input.base_url + '/v' + input.version + '/node_exporter-' + input.versi
 
 Шаг без признака идемпотентности (особенно `cmd`/`exec` без `creates:`) — баг прод-grade destiny.
 
+### 6a. Hot-reload предпочтительнее рестарта для сервисов с live-reconfig
+
+**Нормативное правило.** Для сервиса, поддерживающего **переконфигурацию на лету** (live-reconfig — Redis, и аналогичные), изменения **config / ACL / TLS-материала** в day-2-сценариях применяются **hot-reload-ом** (без рестарта процесса), а **не** реактивным рестартом. Рестарт демона дорог (сброс реплик/клиентов, окно недоступности) и для таких изменений не нужен: сервис умеет перечитать их у живого инстанса.
+
+Рестарт остаётся **только** за изменениями, которые hot-reload **физически не покрывает**, — прежде всего за **systemd-unit-уровнем** (hardening drop-in: `ProtectSystem`/`ReadWritePaths`/`ExecStart`-override): они вступают в силу только через `daemon-reload` + перезапуск процесса, потому что это конфигурация самого юнита, а не runtime-директива сервиса (§3a).
+
+Это сужает прежнюю формулировку «рестарт реактивно на изменение конфига/drop-in»: рендер желаемого состояния на диск (`redis.conf`/`users.acl`/PEM) остаётся в destiny, но **оживление** изменения делает hot-reload-шаг day-2-сценария, а не `core.service.restarted` по `onchanges` на эти файлы.
+
+Иллюстрации — day-2-сценарии сервиса [`redis`](../../examples/service/redis/) (рядом с `restart`, который остаётся именно за unit-уровнем, §3a / §7a):
+
+- [`update_config`](../../examples/service/redis/scenario/update_config/main.yml) — `community.redis.config` (CONFIG SET hot-settable + CONFIG REWRITE);
+- [`add_user`](../../examples/service/redis/scenario/add_user/main.yml) — `community.redis.acl` (ACL LOAD перечитывает `aclfile`, без рестарта);
+- [`rotate_tls`](../../examples/service/redis/scenario/rotate_tls/main.yml) — CONFIG SET `tls-*-file` (Redis 6.2+ перечитывает cert/key/CA live).
+
+При этом сам destiny-рендер этих файлов остаётся идемпотентным по §6 (тот же ref/content → no-op), а признак «уже применено» у hot-reload-шага даёт сравнение live↔желаемое в самом плагине (честный diff `CONFIG GET` / `ACL LIST`), а не `onchanges` (см. [`docs/module/community/redis/README.md`](../module/community/redis/README.md)). Исключение — операция-действие вроде `rotate_tls` (force re-read SSL_CTX): она неидемпотентна **по конструкции**, так же как exec-style `reshard`.
+
 ## 7. Supply-chain
 
 Любой артефакт, скачиваемый из сети:
@@ -166,7 +184,7 @@ url: "${ input.base_url + '/v' + input.version + '/node_exporter-' + input.versi
 
 ## 7a. Day-2: источник истины = `incarnation.state`
 
-**Нормативное правило для day-2-сценариев** (всё, что не `create`: `restart`, `update_config`, `add_node`, `update_acl`, `remove_replica` и т.п.). Day-2-сценарий читает развёрнутый факт о сервисе из **`incarnation.state`**, а **не** из `essence`/`input`.
+**Нормативное правило для day-2-сценариев** (всё, что не `create`: `restart`, `update_config`, `add_user`, `rotate_tls`, `add_node`, `remove_node` и т.п.). Day-2-сценарий читает развёрнутый факт о сервисе из **`incarnation.state`**, а **не** из `essence`/`input`.
 
 Причина — `essence` и `input` на day-2 **неполны**:
 

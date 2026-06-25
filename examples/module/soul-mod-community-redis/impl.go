@@ -207,6 +207,44 @@ func (m *RedisModule) applyCommand(ctx context.Context, stream grpc.ServerStream
 	})
 }
 
+// startupOnlyDirectives — директивы redis.conf, которые задаются ТОЛЬКО при старте
+// процесса: CONFIG SET их отвергает («Unknown option or number of arguments» /
+// «can't set ... at runtime»). day-2 update_config рендерит ПОЛНЫЙ redis.conf
+// (включая такие директивы — они нужны при следующем рестарте процесса), но к
+// ЖИВОМУ инстансу их применить нельзя. Чтобы CONFIG SET не падал на них, плагин их
+// ПРОПУСКАЕТ (skip-счётчик в Output) — hot-settable применяются как обычно. Смена
+// startup-only-директивы вступит в силу при следующем рестарте процесса (его
+// триггерит смена hardening-юнита, destiny redis server.yml). Набор — известные
+// startup-only Redis (порт/listener/threading/cluster-bootstrap/file-layout/
+// persistence-имена/modules/daemon/syslog/databases/logo).
+var startupOnlyDirectives = map[string]bool{
+	"port":                true,
+	"tls-port":            true,
+	"bind":                true,
+	"unixsocket":          true,
+	"unixsocketperm":      true,
+	"io-threads":          true,
+	"io-threads-do-reads": true,
+	"cluster-enabled":     true,
+	"cluster-config-file": true,
+	"aclfile":             true,
+	"logfile":             true,
+	"pidfile":             true,
+	"dir":                 true,
+	"daemonize":           true,
+	"supervised":          true,
+	"dbfilename":          true,
+	"loadmodule":          true,
+	"syslog-enabled":      true,
+	"syslog-ident":        true,
+	"syslog-facility":     true,
+	"databases":           true,
+	"always-show-logo":    true,
+	"set-proc-title":      true,
+	"locale-collate":      true,
+	"socket-mark-id":      true,
+}
+
 // applyConfig — честный diff: CONFIG GET текущего значения каждой директивы,
 // CONFIG SET только реально отличающихся (no-op → changed=false, идемпотентно как
 // reconcileGlobals / cluster / replica / sentinel). Порядок детерминированный
@@ -215,6 +253,12 @@ func (m *RedisModule) applyCommand(ctx context.Context, stream grpc.ServerStream
 // redis.conf, который надо персистить). Значения директив в Output идут — это
 // конфиг redis, не пароль; но error-path санитизируется redactError по значению
 // директивы (defense-in-depth: значение могло прийти из vault, напр. requirepass).
+//
+// ★ Startup-only-директивы (startupOnlyDirectives) ПРОПУСКАЮТСЯ: CONFIG SET их
+// отвергает, а day-2 рендерит ПОЛНЫЙ redis.conf (включая их — для следующего
+// рестарта). Без skip CONFIG SET dir/port/... падал бы и рвал прогон. Hot-settable
+// директивы того же вызова применяются нормально; число пропущенных — в Output
+// (skipped), их имена — отдельным полем для аудита.
 func (m *RedisModule) applyConfig(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], conn redisConn, params *structpb.Struct) error {
 	f := params.GetFields()
 	directives := stringMap(f["config"])
@@ -224,7 +268,14 @@ func (m *RedisModule) applyConfig(ctx context.Context, stream grpc.ServerStreami
 	rewrite := boolOrDefault(f["rewrite"], false)
 
 	applied := make([]string, 0, len(directives))
+	skipped := make([]string, 0)
 	for _, key := range sortedKeys(directives) {
+		if startupOnlyDirectives[key] {
+			// startup-only: CONFIG SET отвергнет → пропускаем (вступит в силу при
+			// рестарте процесса; см. startupOnlyDirectives).
+			skipped = append(skipped, key)
+			continue
+		}
 		want := directives[key]
 		current, err := configGet(ctx, conn, key)
 		if err != nil {
@@ -249,9 +300,11 @@ func (m *RedisModule) applyConfig(ctx context.Context, stream grpc.ServerStreami
 	}
 
 	return sendOutcome(stream, len(applied) > 0, fmt.Sprintf("CONFIG SET applied: %s", strings.Join(applied, ",")), map[string]any{
-		"applied": strings.Join(applied, ","),
-		"count":   int64(len(applied)),
-		"rewrite": rewrite && len(applied) > 0,
+		"applied":      strings.Join(applied, ","),
+		"count":        int64(len(applied)),
+		"rewrite":      rewrite && len(applied) > 0,
+		"skipped":      strings.Join(skipped, ","),
+		"skippedCount": int64(len(skipped)),
 	})
 }
 

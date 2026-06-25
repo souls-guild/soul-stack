@@ -1,0 +1,122 @@
+name: add_user
+description: >-
+  Day-2: добавить (или переопределить) ОДНОГО ACL-пользователя на УЖЕ работающем
+  Redis БЕЗ рестарта процесса. Производственная конвенция «hot-reload > рестарт»
+  (docs/destiny/production-conventions.md §3a/§6): ACL применяется на лету командой
+  ACL LOAD (перечитать aclfile), рестарт демона не нужен.
+
+  Оператор задаёт простые понятия (username + perms + state) — те же, что элемент
+  create input.users. Пароль НЕ во входном контракте: лежит в Vault по конвенции
+  secret/redis/<incarnation>/users/<name>#password (как create/add_node), резолвится
+  keeper-side через vault() в render-фазе. Сценарий мержит нового юзера в РАЗВЁРНУТЫЙ
+  incarnation.state.redis_users, рендерит ПОЛНЫЙ users.acl на диск и ОЖИВЛЯЕТ через
+  community.redis.acl (ACL LOAD).
+
+  ★ Граница с update_config/rotate_tls: add_user трогает ТОЛЬКО ACL (users.acl +
+  ACL LOAD), redis.conf и TLS-материал не перерендеривает — отдельная аудит-семантика
+  «изменился список пользователей». users.acl рендерит destiny redis (тот же кирпич,
+  что create) — здесь подменяется только vars.users набор.
+
+  Идемпотентность: ACL LOAD идемпотентен ПО КОНСТРУКЦИИ (приводит живой инстанс к
+  файлу независимо от текущего состояния); плагин делает честный diff ACL LIST
+  до/после (changed=false при совпадении). Рендер users.acl детерминирован (range по
+  отсортированному map). Day-2: инстанс УЖЕ работает (auth через vault()-пароль +
+  TLS-дискриминатор из incarnation.state.tls, как restart/update_config).
+
+  Таргетинг — на весь incarnation (on опущен, ADR-008/009): новый users.acl + ACL LOAD
+  идут на КАЖДЫЙ redis-server-хост. ACL host-инвариантен (один набор юзеров на кластер).
+
+# ── Входной контракт оператора (docs/input.md) ────────────────────────────────
+# Простые типизированные понятия: имя юзера, его ACL-права, on/off. Пароль — НЕ во
+# входе (Vault-конвенция, см. description). Один юзер за прогон — атомарная day-2
+# операция «добавить пользователя» (несколько → несколько прогонов / будущий bulk).
+input:
+  username:
+    type: string
+    required: true
+    pattern: "^[A-Za-z0-9._-]+$"
+    description: >-
+      Имя ACL-пользователя Redis. Добавляется в users.acl (или переопределяет
+      существующего с тем же именем — idempotent upsert). default-юзер не задаётся
+      этим сценарием (он объявлен в redis.conf отдельно).
+
+  perms:
+    type: string
+    required: true
+    description: >-
+      ПОЛНАЯ ACL-строка прав (директивы Redis ACL как есть), напр. "~* +@all" или
+      "~app:* +@read +@write -@dangerous". Не алиас — пишется в users.acl как есть.
+
+  state:
+    type: string
+    required: false
+    default: "on"
+    enum: [on, off]
+    description: >-
+      Состояние пользователя: on (активен) / off (заблокирован, но правило хранится).
+      По умолчанию on.
+
+# ── Вычисляемые scenario-vars (compute:) ─────────────────────────────────────────
+# Рун-уровневый контекст (input/essence/incarnation — без soulprint). tls_* —
+# дискриминатор коннекта плагина из state.tls (state_schema v3), идентично restart/
+# update_config: ACL LOAD идёт через TLS-коннект, если Redis на TLS.
+compute:
+  tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
+  tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
+  tls_ca:   "${ compute.tls_on ? vault(essence.tls_ca_ref) : '' }"
+
+  # ── Новый набор ACL-юзеров: РАЗВЁРНУТЫЙ state.redis_users + добавляемый юзер ──
+  # merge SHALLOW last-wins: новый юзер перекрывает одноимённого (upsert). Каждый
+  # юзер несёт perms/state; пароль add НЕ хранит в state — он keeper-side vault.
+  # has()-guard на redis_users — back-compat для инкарнаций без ACL-юзеров.
+  users_new: >-
+    ${ merge(
+         has(incarnation.state.redis_users) ? incarnation.state.redis_users : {},
+         { input.username: { 'perms': input.perms, 'state': default(input.state, 'on') } }
+       ) }
+
+# ── Мутация incarnation.state ─────────────────────────────────────────────────
+# day-2 фиксирует НОВЫЙ набор ACL-юзеров (имя→{perms,state}, БЕЗ пароля — он
+# keeper-side vault, ADR-012). Тот же compute.users_new, что ушёл в render users.acl.
+state_changes:
+  - set: redis_users
+    value: "${ compute.users_new }"
+
+tasks:
+  # 1. Перерендерить users.acl на диск с НОВЫМ набором юзеров (тот же режим-агностичный
+  #    destiny redis, что create/add_node). vars.users — merged набор с per-user
+  #    паролями из Vault (keeper-side vault(), .tmpl хеширует, plaintext не пишет).
+  #    redis.conf/TLS НЕ трогаем — add_user меняет ТОЛЬКО ACL (apply destiny рендерит
+  #    весь кирпич, но оживляем мы лишь ACL шагом 2; redis.conf на диске не изменится
+  #    при тех же config — idempotent рендер). version/conf_dir/data_dir — из state.
+  - name: Re-render users.acl with the new ACL user set (full file on disk)
+    apply:
+      destiny: redis
+      input:
+        version:  "${ default(incarnation.state.redis_version, '') }"
+        conf_dir: "${ default(incarnation.state.conf_dir, '/etc/redis') }"
+        data_dir: "${ default(incarnation.state.data_dir, '/var/lib/redis') }"
+        password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+        config:   "${ incarnation.state.redis_config }"
+        modules_base_url: "${ default(incarnation.state.modules_base_url, '') }"
+        # Полный набор юзеров (state + новый), каждый с per-user паролем из Vault.
+        users: >-
+          ${ merge(compute.users_new.map(name, {
+               name: {
+                 'perms':    compute.users_new[name].perms,
+                 'state':    compute.users_new[name].state,
+                 'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+               }
+             })) }
+
+  # 2. HOT-RELOAD ACL: community.redis.acl шлёт ACL LOAD — живой инстанс перечитывает
+  #    aclfile (отрендеренный шагом 1) целиком. Идемпотентно по конструкции; плагин
+  #    делает diff ACL LIST до/после (changed=false при совпадении). addr/TLS-
+  #    дискриминатор — из state.tls (compute.tls_*), как restart/update_config.
+  - name: Hot-reload ACL on the live instance (ACL LOAD)
+    module: community.redis.acl
+    params:
+      addr:     "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
+      password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+      tls:      "${ compute.tls_on }"
+      tls_ca:   "${ compute.tls_ca }"

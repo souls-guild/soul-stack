@@ -1,0 +1,149 @@
+# L0-испытание update_config НА TLS-инстансе. Парный guard к update-maxmemory-policy
+# (plaintext) — покрывает TLS-ветку дискриминатора day-2-гейта (compute.tls_on=true).
+# Render-only, герметично.
+#
+# ★ Инвариант (day-2-конвенция §7a, ADR-057 amendment): дискриминатор TLS берётся из
+# ИМЕНОВАННОГО incarnation.state.tls (state_schema v3), НЕ из essence/redis_config.
+# При state.tls.enable=true hot-reload-шаг (community.redis.config) обязан коннектиться
+# по TLS: addr на state.tls.port, tls=true, tls_ca = PEM CA из vault(essence.tls_ca_ref).
+# Иначе plaintext-коннект на TLS-only Redis провалит CONFIG SET (а AUTH plaintext при
+# открытом plain — утечка пароля).
+#
+# Что ассертим:
+#   1. redis.conf перерендерен с новым merged config (изменён maxmemory; TLS-директивы
+#      СОХРАНЕНЫ из state.redis_config — update_config их не трогает, ротация — rotate_tls).
+#   2. hot-reload (community.redis.config): addr 127.0.0.1:7379 (TLS-порт из state.tls.port),
+#      tls=true, tls_ca = PEM CA, rewrite=true, config несёт TLS-директивы (плагин
+#      пропустит startup-only tls-port по денилисту, применит hot-settable tls-cert-file и
+#      обычные директивы).
+#   3. state_changes: redis_config ≡ переданный config (один compute).
+name: update_config over TLS hot-reloads on tls-port from incarnation.state
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.6 }
+    os: { arch: amd64 }
+
+  essence:
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    # day-2 резолвит PEM CA через тот же ref, что create (host-инвариант author-context).
+    tls_ca_ref: "secret/services/redis/tls#ca"
+
+  # Развёрнутый incarnation.state v3 (от create с TLS): tls.enable=true + port 7379.
+  state:
+    redis_type: standalone
+    redis_version: "7.2.4"
+    conf_dir: /etc/redis
+    data_dir: /var/lib/redis
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    tls:
+      enable:   true
+      only:     false
+      port:     7379
+      cert_ref: "secret/services/redis/tls#cert"
+      key_ref:  "secret/services/redis/tls#key"
+      ca_ref:   "secret/services/redis/tls#ca"
+    persistence: rdb
+    memory_mb: 1024
+    maxmemory_policy: allkeys-lru
+    redis_config:
+      maxmemory:        "768mb"
+      maxmemory-policy: allkeys-lru
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+      tls-port:         "7379"
+      tls-cert-file:    /etc/redis/tls/redis.crt
+      tls-key-file:     /etc/redis/tls/redis.key
+      tls-ca-cert-file: /etc/redis/tls/ca.crt
+      tls-replication:  "yes"
+    redis_users: {}
+
+  input:
+    # Дельта: новый бюджет памяти (2048*75/100 = 1536mb).
+    memory_mb: 2048
+
+  vault:
+    secret/redis/update_config:
+      password: upd-redis-pass-16chars
+    secret/services/redis/tls:
+      ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+
+assert:
+  task_present:
+    # 1. redis.conf перерендерен: maxmemory 1536mb (новый бюджет), TLS-директивы
+    #    сохранены из state.redis_config (update_config их не трогает).
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+        render_context:
+          vars:
+            password: upd-redis-pass-16chars
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
+            config:
+              maxmemory: "1536mb"
+              maxmemory-policy: allkeys-lru
+              save: "900 1 300 10 60 10000"
+              appendonly: "no"
+              tls-port: "7379"
+              tls-cert-file: /etc/redis/tls/redis.crt
+              tls-key-file: /etc/redis/tls/redis.key
+              tls-ca-cert-file: /etc/redis/tls/ca.crt
+              tls-replication: "yes"
+          self:
+            sid: trial-host
+            covens: [update_config]
+            choirs: []
+            role: ""
+            network:
+              primary_ip: 10.0.0.6
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # 2. HOT-RELOAD ПО TLS: community.redis.config, addr на tls-порт (7379), tls=true,
+    #    tls_ca = PEM CA, rewrite=true. config несёт TLS-директивы — плагин пропустит
+    #    startup-only tls-port (денилист), применит hot-settable.
+    - module: community.redis.config
+      params_subset:
+        addr: "127.0.0.1:7379"
+        password: upd-redis-pass-16chars
+        tls: true
+        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+        rewrite: true
+        config:
+          maxmemory: "1536mb"
+          maxmemory-policy: allkeys-lru
+          save: "900 1 300 10 60 10000"
+          appendonly: "no"
+          tls-port: "7379"
+          tls-cert-file: /etc/redis/tls/redis.crt
+          tls-key-file: /etc/redis/tls/redis.key
+          tls-ca-cert-file: /etc/redis/tls/ca.crt
+          tls-replication: "yes"
+
+  state_changes:
+    redis_config:
+      maxmemory: "1536mb"
+      maxmemory-policy: allkeys-lru
+      save: "900 1 300 10 60 10000"
+      appendonly: "no"
+      tls-port: "7379"
+      tls-cert-file: /etc/redis/tls/redis.crt
+      tls-key-file: /etc/redis/tls/redis.key
+      tls-ca-cert-file: /etc/redis/tls/ca.crt
+      tls-replication: "yes"
+    persistence: rdb
+    memory_mb: 2048
+    maxmemory_policy: allkeys-lru

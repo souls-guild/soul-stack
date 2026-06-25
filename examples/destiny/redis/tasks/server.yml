@@ -209,15 +209,25 @@
     name: "${ vars.redis_service_name }"
     enabled: true
 
-# Рестарт реактивно на изменение конфига/ACL/drop-in/TLS-материала: redis.conf,
-# users.acl, hardening drop-in и любой из TLS PEM-файлов требуют рестарта (новые
-# директивы/юзеры/сертификаты вступают в силу только после перезапуска). Изменённый
-# drop-in вступает в силу только после рестарта (daemon-reload при смене unit
-# core.service делает сам перед рестартом). TLS-register'ы (redis_tls_cert/key/ca)
-# живут в nested TLS-block выше → ротация cert/key/CA дёргает рестарт; вне
-# tls.enable nested block раскрывается в per-потомок placeholder-ы, register
-# потомков виден этой задаче снаружи nested block (onchanges резолвится, но потомки
-# skip → не считаются changed).
+# ★ РЕСТАРТ СУЖЕН до hardening drop-in (systemd unit-level) — единственный истинный
+# рестарт-кейс data-плоскости. Смена systemd-юнита (ProtectSystem/ReadWritePaths/
+# ExecStart-override) вступает в силу ТОЛЬКО через daemon-reload + restart процесса:
+# CONFIG SET тут бессилен (это не runtime-директива Redis, а unit самого процесса).
+# Поэтому redis_hardening → рестарт (daemon-reload core.service делает сам перед
+# restart).
+#
+# ★ redis.conf / users.acl / TLS PEM БОЛЬШЕ НЕ рестартят (убраны из onchanges:
+# redis_conf/redis_acl/redis_tls_cert/redis_tls_key/redis_tls_ca). Они ОЖИВЛЯЮТСЯ
+# hot-reload в day-2-сценариях сервиса (производственная конвенция «hot-reload >
+# рестарт» для сервисов с live-reconfig, docs/destiny/production-conventions.md §3a/§6):
+#   - update_config → community.redis.config (CONFIG SET hot-settable + CONFIG REWRITE);
+#   - add_user      → community.redis.acl (ACL LOAD перечитывает aclfile, без рестарта);
+#   - rotate_tls    → community.redis.config с tls-*-file (Redis 6.2+ перечитывает
+#                     cert/key/CA live, без рестарта).
+# Рендер этих файлов (redis.conf/users.acl/PEM) остаётся ЗДЕСЬ — он кладёт желаемое
+# состояние на диск; ОЖИВЛЕНИЕ делает hot-reload-шаг day-2-сценария. На at-create
+# инстанс ещё не запущен → первичный старт (core.service.running выше) поднимает его
+# уже с финальным конфигом/ACL/cert, отдельный рестарт не нужен.
 #
 # ★ Рестарт на смену БИНАРЯ/ЮНИТА binary-ветки (redis_server_bin/redis_cli_bin/
 # redis_sentinel_bin/redis_server_unit)
@@ -227,9 +237,9 @@
 # инвариант, что у node-exporter: install-register живёт рядом с рестартом).
 # Поэтому binary-ветка несёт СВОЙ рестарт redis-server в install.yml. Порядок
 # гарантирован позицией задач.
-- name: Restart redis-server because config or hardening changed
+- name: Restart redis-server because the systemd hardening drop-in changed
   module: core.service.restarted
-  onchanges: [redis_conf, redis_acl, redis_hardening, redis_tls_cert, redis_tls_key, redis_tls_ca]
+  onchanges: [redis_hardening]
   timeout: 30s
   params:
     name: "${ vars.redis_service_name }"

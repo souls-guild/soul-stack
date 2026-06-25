@@ -8,11 +8,15 @@ description: >-
   идёт через плагин `community.redis`; оркестрация (порядок/таргетинг/rolling/
   health-gate) — в scenario сервиса.
 
-  Статус (2026-06-23): scenario `create` реализован для ВСЕХ четырёх режимов —
-  standalone, cluster, sentinel и sentinel_only (диспетчер по redis_type). В
-  backlog: day-2 scenarios (update_config/add_user/rolling-restart/failover),
-  плагинные states community.redis.acl и community.redis.failover, а также
-  установка из бинарного дистрибутива (Шаг B припаркован)
+  Статус (2026-06-25): scenario `create` реализован для ВСЕХ четырёх режимов —
+  standalone, cluster, sentinel и sentinel_only (диспетчер по redis_type). Day-2
+  hot-reload реализован: `update_config` (CONFIG SET hot-settable + REWRITE),
+  `add_user` (ACL LOAD), `rotate_tls` (CONFIG SET tls-*-file, live cert-reload), а
+  также `restart` (systemd-unit-уровень), `add_node`/`remove_node`/`reshard`
+  (cluster). Производственная конвенция: для config/acl/tls — hot-reload (без
+  рестарта), рестарт только за systemd-unit-уровнем (hardening drop-in). В backlog:
+  failover-сценарий, плагинный state community.redis.failover, установка из
+  бинарного дистрибутива (Шаг B припаркован)
   (redis-консолидация .pm/tasks/2026-06-22-redis-consolidation).
 
 # state_schema_version = 3: цепочка миграций forward-only (ADR-019).

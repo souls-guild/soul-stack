@@ -389,10 +389,21 @@ spec:
     # REWRITE для персиста в redis.conf). Idempotent на стороне Redis: CONFIG SET
     # повторно с тем же значением — no-op для самого Redis. changed=true, когда
     # хоть одна директива применена.
+    #
+    # ★ STARTUP-ONLY ДЕНИЛИСТ: директивы, задаваемые только при старте процесса
+    # (port/tls-port/bind/unixsocket/io-threads/cluster-enabled/aclfile/logfile/
+    # pidfile/dir/daemonize/supervised/dbfilename/loadmodule/syslog-*/databases/…),
+    # CONFIG SET отвергает. day-2 update_config рендерит ПОЛНЫЙ redis.conf (с ними —
+    # для следующего рестарта процесса), поэтому такие директивы плагин ПРОПУСКАЕТ
+    # (не падает): hot-settable применяются как обычно, число/имена пропущенных идут
+    # в Output (skippedCount/skipped). Смена startup-only вступит в силу при рестарте
+    # процесса (его триггерит смена hardening-юнита, destiny redis server.yml).
     config:
       description: |
         Применить map директив redis.conf через CONFIG SET к живому Redis.
-        Опционально CONFIG REWRITE (persist). Без dry-run preview.
+        Опционально CONFIG REWRITE (persist). Startup-only-директивы (port/dir/
+        aclfile/cluster-enabled/loadmodule/…) пропускаются (CONFIG SET их отвергает).
+        Без dry-run preview.
       input:
         addr:
           type: string

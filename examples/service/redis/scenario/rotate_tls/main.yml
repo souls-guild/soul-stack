@@ -1,0 +1,193 @@
+name: rotate_tls
+description: >-
+  Day-2: ротация TLS-материала Redis (серверный cert/key + CA) БЕЗ рестарта
+  процесса. Redis 6.2+ перечитывает cert/key/CA на лету по CONFIG SET tls-*-file —
+  рестарт демона не нужен (производственная конвенция «hot-reload > рестарт»,
+  docs/destiny/production-conventions.md §3a/§6).
+
+  Отдельный сценарий (НЕ часть update_config) РАДИ ЯВНОЙ АУДИТ-СЕМАНТИКИ ротации:
+  «сменился TLS-материал» — отдельное событие в state_history, с собственным input
+  (новые Vault-refs cert/key/ca) и собственной мутацией state.tls.*_ref. update_config
+  TLS-материал СОЗНАТЕЛЬНО не трогает.
+
+  Оператор задаёт НОВЫЕ Vault-ПУТИ серверного cert/key/CA (не сам PEM — секрет идёт
+  через vault() в ячейке content destiny, seal-маскинг). Сценарий: (1) destiny redis
+  перерендеривает PEM в ${conf_dir}/tls/{redis.crt,redis.key,ca.crt} из НОВЫХ refs;
+  (2) три community.redis.command шлют CONFIG SET tls-cert-file / tls-key-file /
+  tls-ca-cert-file — Redis 6.2+ ПЕРЕСОЗДАЁТ SSL_CTX и перечитывает PEM live, даже если
+  путь не изменился (один command = одна команда → три шага).
+
+  ★ ПРЕДУСЛОВИЕ: TLS уже ВКЛЮЧЁН на инстансе (state.tls.enable=true). Ротация на
+  plaintext-инстансе бессмысленна (нечего ротировать) — validate рвёт прогон ДО
+  applying. Включение TLS на работающем plaintext-Redis — отдельная операция (требует
+  рестарта для открытия TLS-listener-а: tls-port startup-only), не rotate_tls.
+
+  ★ НЕИДЕМПОТЕНТНОСТЬ ПО КОНСТРУКЦИИ: rotate_tls — ЯВНАЯ операция ротации. CONFIG SET
+  через command-state форсит re-read SSL_CTX на КАЖДЫЙ вызов (changed:true), минуя
+  diff-skip community.redis.config (который счёл бы no-op при неизменном пути и не
+  дёрнул бы CONFIG SET → Redis не перечитал бы новый cert). Это сознательный выбор,
+  как сознательно неидемпотентен cluster-reshard: оператор зовёт rotate_tls = «форсни
+  re-read нового материала», а не «приведи к состоянию». Гейтинг по onchanges здесь
+  невозможен (PEM-register destiny scenario не виден; applier-register рендером не
+  материализуется), да и не нужен — re-read дешёв и безопасен.
+
+  Идемпотентность РЕНДЕРА сохранена: рендер PEM idempotent по content (тот же ref →
+  тот же PEM → файл не меняется). Day-2: инстанс УЖЕ работает, коннект — по TLS
+  (state.tls, как restart). Неидемпотентен только сам force-reload (command-шаги).
+
+  Таргетинг — на весь incarnation (on опущен, ADR-008/009): новый PEM + reload идут
+  на КАЖДЫЙ redis-server-хост. TLS-материал host-инвариантен (один cert/CA на кластер).
+
+# ── Входной контракт оператора (docs/input.md) ────────────────────────────────
+# НОВЫЕ Vault-ПУТИ серверного cert/key/CA (форма "<mount>/<path>#<field>"), НЕ сам
+# PEM. Каждый опционален — оператор ротирует лишь часть (напр. только cert+key, CA
+# тот же); не заданный ref берёт ТЕКУЩИЙ из incarnation.state.tls (подложка).
+input:
+  cert_ref:
+    type: string
+    required: false
+    description: >-
+      Новый Vault-путь серверного TLS-сертификата (redis.crt). Не задан → текущий
+      state.tls.cert_ref (CA/key ротируются независимо).
+
+  key_ref:
+    type: string
+    required: false
+    description: >-
+      Новый Vault-путь серверного приватного ключа (redis.key). Не задан → текущий
+      state.tls.key_ref.
+
+  ca_ref:
+    type: string
+    required: false
+    description: >-
+      Новый Vault-путь CA-сертификата кластера (ca.crt). Не задан → текущий
+      state.tls.ca_ref.
+
+# ── Декларативные input-инварианты (validate:) ───────────────────────────────────
+# (1) хотя бы один ref задан (иначе нечего ротировать); (2) TLS включён (state.tls.
+# enable=true) — ротация на plaintext бессмысленна. INPUT-ONLY: TLS-предусловие НЕ
+# выразимо через input (state недоступен в validate-контексте) — оно вынесено в
+# первый assert-шаг ниже (полный scenario-контекст с incarnation.state). Здесь —
+# только «хотя бы один ref».
+validate:
+  - that: "has(input.cert_ref) || has(input.key_ref) || has(input.ca_ref)"
+    message: "rotate_tls требует хотя бы один новый ref (cert_ref/key_ref/ca_ref)"
+
+# ── Вычисляемые scenario-vars (compute:) ─────────────────────────────────────────
+# Рун-уровневый контекст (input/essence/incarnation — без soulprint). tls_* —
+# дискриминатор коннекта плагина из state.tls (как restart/update_config). Здесь TLS
+# заведомо включён (assert-guard ниже), но дискриминатор оставлен симметричным
+# остальным day-2-сценариям (единый паттерн).
+compute:
+  tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
+  tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
+  tls_ca:   "${ compute.tls_on ? vault(essence.tls_ca_ref) : '' }"
+  conf_dir: "${ default(incarnation.state.conf_dir, '/etc/redis') }"
+
+  # Эффективные refs: новый из input бьёт текущий из state (подложка — частичная
+  # ротация). has()-цепочка (default(input, state) упал бы no-such-key, если input.*_ref
+  # отсутствует целиком — default ловит лист, не корень аргумента).
+  cert_ref: "${ has(input.cert_ref) ? input.cert_ref : incarnation.state.tls.cert_ref }"
+  key_ref:  "${ has(input.key_ref)  ? input.key_ref  : incarnation.state.tls.key_ref }"
+  ca_ref:   "${ has(input.ca_ref)   ? input.ca_ref   : incarnation.state.tls.ca_ref }"
+
+# ── Мутация incarnation.state ─────────────────────────────────────────────────
+# day-2 фиксирует НОВЫЕ Vault-refs cert/key/ca (read-model state.tls.*_ref). enable/
+# only/port НЕ меняются (rotate только материал). Тот же compute.*_ref, что ушёл в
+# render PEM destiny. add/modify по namedfield state.tls (ADR-057): обновляем refs.
+state_changes:
+  - set: tls
+    value: >-
+      ${ {
+           'enable':   incarnation.state.tls.enable,
+           'only':     incarnation.state.tls.only,
+           'port':     incarnation.state.tls.port,
+           'cert_ref': compute.cert_ref,
+           'key_ref':  compute.key_ref,
+           'ca_ref':   compute.ca_ref
+         } }
+
+tasks:
+  # 1. GUARD — TLS обязан быть включён (state.tls.enable=true). Предикат вычисляется
+  #    KEEPER-SIDE на рендере (incarnation.state доступен). false ОБРЫВАЕТ render с
+  #    message ДО dispatch — раньше и понятнее, чем падение коннекта на хосте. assert
+  #    НЕ emit RenderedTask.
+  - name: Guard TLS is enabled on the instance before rotating its material
+    assert:
+      that:
+        - "has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false)"
+      message: "rotate_tls guard: TLS must be enabled (state.tls.enable=true); rotating material on a plaintext instance is meaningless"
+
+  # 2. Перерендерить PEM в ${conf_dir}/tls/ из НОВЫХ refs (тот же destiny redis, что
+  #    create). apply.input.tls несёт enable + НОВЫЕ cert_ref/key_ref/ca_ref → destiny
+  #    server.yml кладёт cert/key/ca через core.file.present + vault(ref) в ячейке
+  #    (seal-маскинг). config — текущий state.redis_config (redis.conf не меняется при
+  #    ротации; tls-*-file пути те же). version/conf_dir/data_dir/users — из state.
+  - name: Re-render TLS PEM material from the new Vault refs
+    apply:
+      destiny: redis
+      input:
+        version:  "${ default(incarnation.state.redis_version, '') }"
+        conf_dir: "${ compute.conf_dir }"
+        data_dir: "${ default(incarnation.state.data_dir, '/var/lib/redis') }"
+        password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+        config:   "${ incarnation.state.redis_config }"
+        modules_base_url: "${ default(incarnation.state.modules_base_url, '') }"
+        tls:
+          enable:   "${ incarnation.state.tls.enable }"
+          only:     "${ incarnation.state.tls.only }"
+          port:     "${ incarnation.state.tls.port }"
+          cert_ref: "${ compute.cert_ref }"
+          key_ref:  "${ compute.key_ref }"
+          ca_ref:   "${ compute.ca_ref }"
+        users: >-
+          ${ has(incarnation.state.redis_users)
+             ? merge(incarnation.state.redis_users.map(name, {
+                 name: {
+                   'perms':    incarnation.state.redis_users[name].perms,
+                   'state':    incarnation.state.redis_users[name].state,
+                   'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+                 }
+               }))
+             : {} }
+
+  # 3. HOT-RELOAD CERT: три community.redis.command (CONFIG SET tls-cert-file /
+  #    tls-key-file / tls-ca-cert-file) форсят re-read SSL_CTX на live-инстансе. command
+  #    (raw verb-state) бьёт МИМО diff-skip community.redis.config: тот сравнил бы
+  #    значения CONFIG GET, счёл no-op (путь тот же) и не дёрнул бы CONFIG SET → Redis
+  #    не перечитал бы новый PEM. Redis 6.2+ ПЕРЕСОЗДАЁТ SSL_CTX по CONFIG SET tls-*-file
+  #    даже при неизменном пути. changed:true — это операция-действие (force re-read),
+  #    rotate_tls неидемпотентен по конструкции (см. шапку). Один command = один verb →
+  #    три шага. Пути PEM — из conf_dir (туда destiny положил материал шагом 2). addr/
+  #    TLS-дискриминатор/пароль — из state.tls (compute.tls_*) + vault(), коннект по TLS
+  #    (rotate только на TLS-инстансе).
+  - name: Force re-read of the rotated TLS cert (CONFIG SET tls-cert-file)
+    module: community.redis.command
+    params:
+      addr:     "127.0.0.1:${ compute.tls_port }"
+      password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+      tls:      "${ compute.tls_on }"
+      tls_ca:   "${ compute.tls_ca }"
+      args:     ["CONFIG", "SET", "tls-cert-file", "${ compute.conf_dir + '/tls/redis.crt' }"]
+      changed:  true
+
+  - name: Force re-read of the rotated TLS key (CONFIG SET tls-key-file)
+    module: community.redis.command
+    params:
+      addr:     "127.0.0.1:${ compute.tls_port }"
+      password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+      tls:      "${ compute.tls_on }"
+      tls_ca:   "${ compute.tls_ca }"
+      args:     ["CONFIG", "SET", "tls-key-file", "${ compute.conf_dir + '/tls/redis.key' }"]
+      changed:  true
+
+  - name: Force re-read of the rotated TLS CA cert (CONFIG SET tls-ca-cert-file)
+    module: community.redis.command
+    params:
+      addr:     "127.0.0.1:${ compute.tls_port }"
+      password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+      tls:      "${ compute.tls_on }"
+      tls_ca:   "${ compute.tls_ca }"
+      args:     ["CONFIG", "SET", "tls-ca-cert-file", "${ compute.conf_dir + '/tls/ca.crt' }"]
+      changed:  true

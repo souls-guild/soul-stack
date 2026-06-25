@@ -1,0 +1,193 @@
+name: update_config
+description: >-
+  Day-2: изменить директивы redis.conf на УЖЕ работающем Redis БЕЗ рестарта
+  процесса (hot-reload через CONFIG SET). Производственная конвенция «hot-reload >
+  рестарт» для сервисов с live-reconfig (docs/destiny/production-conventions.md
+  §3a/§6): рестарт демона дорог (сброс реплик/клиентов, окно недоступности), а
+  большинство директив Redis применяются на лету. Рестарт остаётся только за
+  systemd-unit-уровнем (hardening drop-in, destiny redis server.yml).
+
+  Оператор задаёт ИЗМЕНЁННЫЕ простые понятия (memory_mb/maxmemory_policy/
+  persistence/redis_settings) — те же, что create. Сценарий ПЕРЕВЫЧИСЛЯЕТ
+  итоговый redis_config (тот же compute.redis_config-перевод, что create, с
+  ДОПОЛНЕНИЕМ из incarnation.state как подложки), рендерит ПОЛНЫЙ redis.conf на
+  диск (для следующего рестарта процесса) и ОЖИВЛЯЕТ изменения на живом инстансе
+  через плагин community.redis.config (CONFIG SET hot-settable + CONFIG REWRITE).
+
+  ★ Startup-only-директивы (port/tls-port/bind/dir/aclfile/cluster-enabled/
+  loadmodule/…) CONFIG SET отвергает — плагин их ПРОПУСКАЕТ (денилист в
+  community.redis.config). Они уже отрендерены в redis.conf и вступят в силу при
+  следующем рестарте процесса. update_config НЕ меняет TLS-материал и НЕ трогает
+  ACL — для этого отдельные сценарии rotate_tls / add_user (явная аудит-семантика).
+
+  Идемпотентность: повторный прогон с тем же вводом → CONFIG GET перед каждым SET
+  даёт совпадение (no-op, changed=false на стороне плагина); рендер redis.conf
+  детерминирован (отсортированный merge). Day-2: инстанс УЖЕ работает (auth через
+  vault()-пароль + TLS-дискриминатор из incarnation.state.tls, как restart).
+
+  Таргетинг — на весь incarnation (on опущен, ADR-008/009): новый redis.conf и
+  hot-reload идут на КАЖДЫЙ redis-server-хост инкарнации. cluster/sentinel —
+  director-агностично: config-директивы host-инвариантны (compute, без soulprint).
+
+# ── Входной контракт оператора (docs/input.md) ────────────────────────────────
+# Простые типизированные понятия — изменяемое подмножество create-контракта. Не
+# заданное оператором → берётся из incarnation.state (подложка), чтобы повторный
+# update_config не сбрасывал ранее развёрнутые директивы к essence-дефолту.
+input:
+  memory_mb:
+    type: integer
+    required: false
+    min: 64
+    description: >-
+      Новый бюджет памяти под Redis, МБ. maxmemory = int(memory_mb)*reserve/100+"mb"
+      (та же трансляция, что create). Не задан → берётся ранее развёрнутый
+      incarnation.state.memory_mb (подложка). min:64 — как create (усечение не даёт
+      "0mb" = безлимит).
+
+  maxmemory_policy:
+    type: string
+    required: false
+    enum:
+      - noeviction
+      - allkeys-lru
+      - allkeys-lfu
+      - allkeys-random
+      - volatile-lru
+      - volatile-lfu
+      - volatile-random
+      - volatile-ttl
+    description: >-
+      Новая политика вытеснения. Не задана → берётся ранее развёрнутая
+      incarnation.state.maxmemory_policy (подложка).
+
+  persistence:
+    type: string
+    required: false
+    enum: [off, aof, rdb, rdb_aof]
+    description: >-
+      Новый режим persistence (транслируется в save/appendonly через
+      essence.persistence_presets). Не задан → ранее развёрнутый
+      incarnation.state.persistence (подложка).
+
+  redis_settings:
+    type: object
+    required: false
+    description: >-
+      Passthrough-директивы redis.conf (key→value), перекрывают дефолты/пресет в
+      merge (last-wins). Для директив, не покрытых простыми полями. Сливаются ПОВЕРХ
+      ранее развёрнутого incarnation.state.redis_config (накопительно: не заданное
+      здесь сохраняет прежнее значение).
+    properties: {}
+    additional_properties: true
+
+# ── Декларативные input-инварианты (validate:) ───────────────────────────────────
+# day-2 обязан иметь, что апдейтить: хотя бы одно изменяемое поле. INPUT-ONLY
+# (has()-цепочка, default()/essence недоступны в validate).
+validate:
+  - that: "has(input.memory_mb) || has(input.maxmemory_policy) || has(input.persistence) || has(input.redis_settings)"
+    message: "update_config требует хотя бы одно изменяемое поле (memory_mb/maxmemory_policy/persistence/redis_settings)"
+
+# ── Вычисляемые scenario-vars (compute:, ADR-009 amendment) ──────────────────────
+# Рун-уровневый контекст (input/essence/incarnation — без soulprint, host-инвариант).
+# Источник истины day-2 — incarnation.state (что РАЗВЁРНУТО), вход — ДЕЛЬТА оператора.
+#
+# tls_* — дискриминатор коннекта плагина из ИМЕНОВАННОГО state.tls (state_schema v3,
+# day-2-конвенция §7a), идентично restart: плагин обязан коннектиться по TLS, если
+# Redis на TLS (иначе plaintext на TLS-only провалит шаг; AUTH plaintext при открытом
+# plain-порту — утечка пароля). tls_ca — PEM CA из vault(essence.tls_ca_ref) (плагин
+# ждёт PEM, не путь; секрет в state не лежит).
+compute:
+  tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
+  tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
+  tls_ca:   "${ compute.tls_on ? vault(essence.tls_ca_ref) : '' }"
+
+  # Эффективное persistence: вход бьёт развёрнутое state (подложка), default rdb для
+  # совсем старых инкарнаций без поля.
+  persistence: "${ default(input.persistence, default(incarnation.state.persistence, 'rdb')) }"
+
+  # ── Перевычисленный redis_config (тот же merge-перевод, что create) ──────────
+  # Слои (SHALLOW last-wins): РАЗВЁРНУТЫЙ incarnation.state.redis_config (база day-2 —
+  # сохраняет TLS/cluster/прочие директивы, которые оператор сейчас не трогает) →
+  # persistence-пресет → вычисленные maxmemory/policy (вход ИЛИ state-подложка) →
+  # input.redis_settings (passthrough дельта). TLS-директивы УЖЕ в базовом
+  # state.redis_config (create их туда положил) — здесь НЕ перевычисляются (TLS-материал
+  # update_config не трогает; ротация — rotate_tls). Аналогично cluster-директивы.
+  redis_config: >-
+    ${ merge(
+         incarnation.state.redis_config,
+         essence.persistence_presets[compute.persistence],
+         merge(
+           has(input.memory_mb)
+             ? { 'maxmemory': string(int(input.memory_mb) * int(essence.memory_reserve_percent) / 100) + 'mb' }
+             : (has(incarnation.state.memory_mb) && int(incarnation.state.memory_mb) >= 64
+                  ? { 'maxmemory': string(int(incarnation.state.memory_mb) * int(essence.memory_reserve_percent) / 100) + 'mb' }
+                  : {}),
+           has(input.maxmemory_policy)
+             ? { 'maxmemory-policy': input.maxmemory_policy }
+             : (has(incarnation.state.maxmemory_policy) && incarnation.state.maxmemory_policy != ''
+                  ? { 'maxmemory-policy': incarnation.state.maxmemory_policy }
+                  : {})
+         ),
+         default(input.redis_settings, {})
+       ) }
+
+# ── Мутация incarnation.state ─────────────────────────────────────────────────
+# day-2 фиксирует НОВЫЙ развёрнутый redis_config + изменённые namedfields (read-model
+# из тех же compute/input, что redis_config — без drift, как create). Не заданные
+# оператором namedfields сохраняют прежнее значение (подложка из state).
+state_changes:
+  - set: redis_config
+    value: "${ compute.redis_config }"
+  - set: persistence
+    value: "${ compute.persistence }"
+  - set: memory_mb
+    value: "${ int(default(input.memory_mb, default(incarnation.state.memory_mb, 0))) }"
+  - set: maxmemory_policy
+    value: "${ default(input.maxmemory_policy, default(incarnation.state.maxmemory_policy, '')) }"
+
+tasks:
+  # 1. Перерендерить redis.conf на диск с новым merged config (тот же режим-агностичный
+  #    destiny redis, что create/add_node). Это desired state на диске — для следующего
+  #    рестарта процесса (startup-only-директивы из state.redis_config + новые). conf_dir/
+  #    data_dir/version — из state (host-layout кластера, директива B); пароль/users —
+  #    keeper-side vault(), сохраняются неизменными (update_config их не трогает, но
+  #    redis.conf рендерится целиком). config — ПЕРЕВЫЧИСЛЕННЫЙ compute.redis_config.
+  - name: Re-render redis.conf with the updated config (full file on disk)
+    apply:
+      destiny: redis
+      input:
+        version:  "${ default(incarnation.state.redis_version, '') }"
+        conf_dir: "${ default(incarnation.state.conf_dir, '/etc/redis') }"
+        data_dir: "${ default(incarnation.state.data_dir, '/var/lib/redis') }"
+        password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+        config:   "${ compute.redis_config }"
+        modules_base_url: "${ default(incarnation.state.modules_base_url, '') }"
+        users: >-
+          ${ has(incarnation.state.redis_users)
+             ? merge(incarnation.state.redis_users.map(name, {
+                 name: {
+                   'perms':    incarnation.state.redis_users[name].perms,
+                   'state':    incarnation.state.redis_users[name].state,
+                   'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+                 }
+               }))
+             : {} }
+
+  # 2. HOT-RELOAD: применить hot-settable директивы к живому инстансу (CONFIG SET) +
+  #    CONFIG REWRITE (персист в redis.conf — на самом деле redis.conf уже отрендерен
+  #    шагом 1, но REWRITE гарантирует консистентность live↔файл по канону Redis).
+  #    Передаём ВЕСЬ compute.redis_config — плагин сам пропускает startup-only по
+  #    денилисту (port/dir/aclfile/cluster-enabled/loadmodule/…), применяет только
+  #    hot-settable. changed=false при no-op (честный CONFIG GET-diff в плагине →
+  #    идемпотентность повторного прогона). addr/TLS-дискриминатор — из state.tls
+  #    (compute.tls_*), как restart. changed_when здесь НЕ давим: реальный change
+  #    (применённая директива) обязан отразиться в RunResult.
+  - name: Hot-reload changed config directives on the live instance (CONFIG SET + REWRITE)
+    module: community.redis.config
+    params:
+      addr:     "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
+      password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+      tls:      "${ compute.tls_on }"
+      tls_ca:   "${ compute.tls_ca }"
+      config:   "${ compute.redis_config }"
+      rewrite:  true

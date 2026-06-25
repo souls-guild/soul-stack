@@ -75,6 +75,8 @@ v1→v2 — [`migrations/001_to_002.yml`](migrations/001_to_002.yml), перев
 | `redis_type` | enum, default `standalone` | режим; выбирает ветку диспетчера; реализованы все четыре (`standalone`/`cluster`/`sentinel`/`sentinel_only`). Значение вне enum отвергает input-валидация Keeper-а по enum ДО рендера |
 | `version` | string, обяз. **только при `install.method=package`** (`required_when`) | distro-native пин версии пакета (напр. `5:7.0.15-1~deb12u7`); `core.pkg` всегда ставит `=version` — воспроизводимая инсталляция. Поведение «не задана → latest из репо» удалено (директива пользователя 2026-06-23). При `install.method=binary` НЕ используется — версия бинаря в `install.version` (upstream-semver) |
 | `install` | object `{method, base_url, version, sha256}`, опц. | способ установки redis (концепция `redis_install_*` роли): `method` ∈ `package` (default — distro-пакет, поведение-сохраняющий) / `binary` (opt-in — upstream-tarball: `base_url` + `version` (semver) + `soulprint.self.os.arch` → `/usr/local/bin` + свой systemd-юнит + distro-юзер/группа redis). `base_url`+`version` обяз. при `method=binary` (`validate`). `sha256` (голый hex) **опционален**: задан → fail-closed verify скачанного tarball-а; нет → загрузка по content-идемпотентности (без verify, доверие HTTPS+store). Пустой/не передан → `method=package` |
+| `conf_dir` | string, опц., default `/etc/redis` | каталог конфигурации Redis (`redis.conf`, `users.acl`, `sentinel.conf`, `tls/`). Оператор может переопределить под свой layout; HOST-инвариант (один на кластер). Прокидывается в destiny `redis` и **персистится в `state`** для day-2-консистентности (`add_node`/`update_config`/`add_user` читают его из `state`). Прежний хардкод `aclfile /etc/redis/users.acl` в compute убран — override теперь доезжает до `redis.conf` (`dir`/`aclfile` выводит destiny-шаблон из vars) |
+| `data_dir` | string, опц., default `/var/lib/redis` | рабочий каталог данных Redis (RDB/AOF; `modules/` = `<data_dir>/modules`). Оператор может переопределить под свой storage-layout; HOST-инвариант, персистится в `state` для day-2. Прежний хардкод `dir /var/lib/redis` убран — override доезжает до `redis.conf` через vars шаблона |
 | `memory_mb` | integer, опц., min `64` | бюджет памяти под Redis на хосте, МБ; `maxmemory` = доля от него |
 | `persistence` | enum `off`/`aof`/`rdb`/`rdb_aof`, default `rdb` | режим durability; транслируется в `save`/`appendonly` |
 | `maxmemory_policy` | enum eviction-политик | политика вытеснения при достижении `maxmemory` |
@@ -493,6 +495,76 @@ master — **отдельной задачей после всех реплик*
 backlog (плагинный verb `failover`), пока master рестартится напрямую (краткая
 недоступность на рестарт). См. [«В работе»](#в-работе).
 
+> **★ `restart` — за systemd-unit-уровнем, не за конфигом** ([production-conventions §6a](../../../docs/destiny/production-conventions.md#6a-hot-reload-предпочтительнее-рестарта-для-сервисов-с-live-reconfig)).
+> Изменения `redis.conf`/`users.acl`/TLS-материала **не** требуют рестарта — их
+> применяют day-2 hot-reload-сценарии ниже (`update_config`/`add_user`/`rotate_tls`).
+> `restart` нужен только когда меняется сам systemd-юнит (hardening drop-in) или для
+> явного rolling-перезапуска демона; в destiny [`redis/tasks/server.yml`](../../destiny/redis/tasks/server.yml)
+> реактивный рестарт сужен до `onchanges: [redis_hardening]`.
+
+### `update_config` (day-2: hot-reload директив `redis.conf`)
+
+[`scenario/update_config/main.yml`](scenario/update_config/main.yml) — изменить
+директивы `redis.conf` на **уже работающем** Redis **без рестарта процесса**
+(hot-reload через `CONFIG SET`). Оператор задаёт изменённое подмножество create-входа
+(`memory_mb`/`maxmemory_policy`/`persistence`/`redis_settings`); сценарий
+**перевычисляет** итоговый `redis_config` тем же compute-переводом, что `create`, но с
+подложкой из `incarnation.state` (не заданное оператором сохраняет ранее
+развёрнутое — day-2 источник истины = `state`, [§7a](../../../docs/destiny/production-conventions.md#7a-day-2-источник-истины--incarnationstate)). Два шага:
+
+1. **re-render** `redis.conf` на диск с новым merged config (полный файл — desired
+   state для следующего рестарта процесса).
+2. **hot-reload** (`community.redis.config`, `CONFIG SET` + `CONFIG REWRITE`): передаётся
+   **весь** `compute.redis_config`, плагин сам пропускает startup-only-директивы по
+   денилисту (`port`/`dir`/`aclfile`/…) и применяет только hot-settable. Идемпотентно —
+   honest `CONFIG GET`-diff в плагине → повторный прогон `changed=false`.
+
+`validate` требует хотя бы одно изменяемое поле. TLS-материал и ACL **не** трогаются
+(для них — отдельные сценарии). `state` фиксирует новый `redis_config` + изменённые
+namedfields. Параметры state `config` (вкл. денилист) — в
+[per-module doc](../../../docs/module/community/redis/README.md#config--params).
+
+### `add_user` (day-2: добавить ACL-пользователя через `ACL LOAD`)
+
+[`scenario/add_user/main.yml`](scenario/add_user/main.yml) — добавить (или
+переопределить) **одного** ACL-пользователя на работающем Redis **без рестарта**.
+Оператор задаёт `username` + `perms` (полная ACL-строка) + `state` (`on`/`off`); пароль
+**не** во входе — лежит в Vault по конвенции `secret/redis/<incarnation>/users/<name>#password`,
+резолвится keeper-side. Два шага:
+
+1. **re-render** `users.acl` на диск с новым набором (`state.redis_users` + добавляемый,
+   upsert по имени; per-user пароли из Vault, `.tmpl` пишет хеш, не plaintext).
+2. **hot-reload ACL** (`community.redis.acl`, `ACL LOAD`): живой инстанс перечитывает
+   `aclfile` целиком. Идемпотентно по конструкции; плагин делает diff `ACL LIST`
+   до/после (`changed=false` при совпадении).
+
+`state.redis_users` мутируется новым набором (имя→`{perms,state}`, **без** пароля — ИБ).
+Один юзер за прогон (атомарная операция). Параметры state `acl` — в
+[per-module doc](../../../docs/module/community/redis/README.md#acl--params).
+
+### `rotate_tls` (day-2: ротация TLS cert/key/CA без рестарта)
+
+[`scenario/rotate_tls/main.yml`](scenario/rotate_tls/main.yml) — ротация
+TLS-материала Redis **без рестарта**: Redis 6.2+ перечитывает cert/key/CA на лету по
+`CONFIG SET tls-*-file`. Оператор задаёт **новые Vault-пути** серверного cert/key/CA
+(`cert_ref`/`key_ref`/`ca_ref`, каждый опционален — частичная ротация; не заданный
+берёт текущий из `state.tls`). Три шага:
+
+1. **guard** (`assert:`, keeper-side) — TLS обязан быть включён (`state.tls.enable=true`);
+   ротация на plaintext-инстансе бессмысленна, `false` обрывает render ДО dispatch.
+2. **re-render PEM** в `${conf_dir}/tls/{redis.crt,redis.key,ca.crt}` из новых refs
+   (через `vault(ref)` в ячейке `content`, seal-маскинг).
+3. **force re-read** — три `community.redis.command` (`CONFIG SET tls-cert-file` /
+   `tls-key-file` / `tls-ca-cert-file`) форсят пересоздание SSL_CTX на живом инстансе.
+
+> **★ Неидемпотентен по конструкции.** `rotate_tls` использует **`command`** (raw verb),
+> а не `config`-state, **намеренно**: honest-diff `community.redis.config` счёл бы
+> `CONFIG SET tls-*-file` no-op при неизменном пути и **не** дёрнул бы команду — Redis не
+> перечитал бы новый cert. `command` с `changed: true` форсит re-read **на каждый вызов**.
+> Это операция-действие («форсни re-read нового материала»), как exec-style `reshard`, а
+> не converge-приведение. Рендер PEM при этом остаётся идемпотентным (тот же ref → тот
+> же файл). `state.tls.*_ref` фиксирует новые refs; `enable`/`only`/`port` не меняются.
+
 ## Безопасность
 
 Пароли — **из Vault**, не во входном контракте сценария. Сценарий читает их
@@ -636,13 +708,14 @@ add_node-кейсы под [`scenario/add_node/tests/`](scenario/add_node/tests/
 
 ## В работе
 
-Следующие батчи эпика redis-консолидации (в этом сервисе **пока не реализованы**):
+Day-2 hot-reload реализован: `update_config` (live `CONFIG SET` дельты, → state
+`config`), `add_user` (→ state `acl`, `ACL LOAD`), `rotate_tls` (→ state `command`,
+force re-read SSL_CTX). Следующие батчи эпика redis-консолидации (в этом сервисе
+**пока не реализованы**):
 
 - day-2 sentinel: failover (switchover) и прочие day-2-операции sentinel-топологии;
-- day-2 в целом: `update_config` (live `CONFIG SET` дельты), `add_user` (плагинный
-  state `acl`);
-- плагинные states `community.redis`: `acl` / `failover` (`command` / `pinged` /
-  `role` / `replica-synced` / `config` / `cluster` (create/add-node/remove-node/
+- плагинный state `community.redis.failover` (`command` / `pinged` / `role` /
+  `replica-synced` / `config` / `acl` / `cluster` (create/add-node/remove-node/
   reshard) / `replica` / `sentinel` уже есть);
 - TLS sentinel-демона (`:26379`): data-плоскость redis-server TLS уже реализована
   (operator-dict `tls.enable`/`tls.only`, бьёт essence), TLS для sentinel-демона —

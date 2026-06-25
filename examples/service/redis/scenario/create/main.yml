@@ -449,13 +449,15 @@ validate:
 # недоступен по сети). cluster-announce-ip в config НЕ материализуется (per-host →
 # шаблон .self), TLS cert/порт host-инвариантны.
 #
-# ★ ГРАНИЦА ФИКСА: host-layout-директивы dir (рабочий каталог RDB/AOF, → data_dir) и
-# aclfile (→ conf_dir) ЗАХАРДКОЖЕНЫ В destiny-ШАБЛОНЕ redis.conf.tmpl (/var/lib/redis,
-# /etc/redis/users.acl), НЕ в этом compute. Тот же класс бага под override (см.
-# observations отчёта) — но это другой артефакт (destiny `redis`); добавление их в
-# compute.redis_config дублировало бы layout-логику шаблона. logfile/pidfile
-# (/var/log/redis, /var/run/redis) — системные каталоги вне input-схемы conf_dir/
-# data_dir; unixsocket/dbfilename в шаблоне не задаются.
+# ★ ГРАНИЦА КОНФИГА: host-layout-директивы dir (рабочий каталог RDB/AOF, → data_dir) и
+# aclfile (→ conf_dir) задаёт destiny-ШАБЛОН redis.conf.tmpl ИЗ vars (dir {{.vars.data_dir}},
+# aclfile {{.vars.conf_dir}}/users.acl), НЕ этот compute. Прежний хардкод (/var/lib/redis,
+# /etc/redis/users.acl) убран — override conf_dir/data_dir теперь доезжает до redis.conf
+# (apply.input.conf_dir/data_dir → destiny vars). Эти директивы здесь не дублируем: layout
+# выводится из vars в шаблоне (один источник), их добавление в compute.redis_config
+# продублировало бы ту же логику. logfile/pidfile (/var/log/redis, /var/run/redis) —
+# системные каталоги вне input-схемы conf_dir/data_dir; unixsocket/dbfilename в шаблоне
+# не задаются.
 compute:
   # ── TLS-флаги: input.tls.* бьёт essence (оператор контролирует, essence — подложка)
   # input.tls — dict оператора; недостающие под-поля берут дефолт из essence

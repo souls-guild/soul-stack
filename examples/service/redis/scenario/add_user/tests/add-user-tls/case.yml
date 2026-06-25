@@ -1,0 +1,100 @@
+# L0-испытание add_user НА TLS-инстансе. Парный guard к add-user-plaintext —
+# покрывает TLS-ветку дискриминатора (compute.tls_on=true). Render-only, герметично.
+#
+# ★ Инвариант (day-2-конвенция §7a): при state.tls.enable=true ACL LOAD-шаг
+# (community.redis.acl) обязан коннектиться по TLS (addr на state.tls.port, tls=true,
+# tls_ca = PEM CA из vault(essence.tls_ca_ref)) — иначе plaintext-коннект на TLS-only
+# Redis провалит ACL LOAD.
+#
+# Что ассертим:
+#   1. users.acl перерендерен с merged-набором (alice — первый юзер инкарнации).
+#   2. hot-reload (community.redis.acl): addr 127.0.0.1:7379 (TLS-порт), tls=true,
+#      tls_ca = PEM CA.
+#   3. state_changes: redis_users = {alice}.
+name: add_user over TLS hot-reloads ACL on tls-port from incarnation.state
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.6 }
+    os: { arch: amd64 }
+
+  essence:
+    tls_ca_ref: "secret/services/redis/tls#ca"
+
+  # Развёрнутый incarnation.state v3 с TLS; ACL ещё пуст (alice — первый юзер).
+  state:
+    redis_type: standalone
+    redis_version: "7.2.4"
+    conf_dir: /etc/redis
+    data_dir: /var/lib/redis
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    tls:
+      enable:   true
+      only:     false
+      port:     7379
+      cert_ref: "secret/services/redis/tls#cert"
+      key_ref:  "secret/services/redis/tls#key"
+      ca_ref:   "secret/services/redis/tls#ca"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+      tls-port:         "7379"
+      tls-cert-file:    /etc/redis/tls/redis.crt
+      tls-key-file:     /etc/redis/tls/redis.key
+      tls-ca-cert-file: /etc/redis/tls/ca.crt
+      tls-replication:  "yes"
+    redis_users: {}
+
+  input:
+    username: alice
+    perms: "~app:* +@read +@write"
+    state: "on"
+
+  vault:
+    secret/redis/add_user:
+      password: addusr-redis-pass-16ch
+    secret/redis/add_user/users/alice:
+      password: alice-user-secret-pass
+    secret/services/redis/tls:
+      ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+
+assert:
+  task_present:
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/users.acl
+        render_context:
+          vars:
+            users:
+              alice:
+                perms: "~app:* +@read +@write"
+                state: "on"
+                password: alice-user-secret-pass
+          self:
+            sid: trial-host
+            covens: [add_user]
+            choirs: []
+            role: ""
+            network:
+              primary_ip: 10.0.0.6
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # HOT-RELOAD ACL ПО TLS: addr на tls-порт, tls=true, tls_ca = PEM CA.
+    - module: community.redis.acl
+      params_subset:
+        addr: "127.0.0.1:7379"
+        password: addusr-redis-pass-16ch
+        tls: true
+        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+
+  state_changes:
+    redis_users:
+      alice:
+        perms: "~app:* +@read +@write"
+        state: "on"

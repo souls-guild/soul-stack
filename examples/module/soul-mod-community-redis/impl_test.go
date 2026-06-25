@@ -447,6 +447,102 @@ func TestApplyConfig_RewriteCallsConfigRewrite(t *testing.T) {
 	}
 }
 
+// TestApplyConfig_StartupOnlyDirectivesSkipped — денилист startup-only: CONFIG SET
+// их отвергает, day-2 рендерит ПОЛНЫЙ redis.conf (с ними), поэтому плагин их
+// ПРОПУСКАЕТ (не падает). Hot-settable директивы того же вызова применяются как
+// обычно. Проверяем: ни CONFIG GET, ни CONFIG SET по startup-only НЕ вызваны;
+// hot-settable применена; skipped/skippedCount в Output корректны.
+func TestApplyConfig_StartupOnlyDirectivesSkipped(t *testing.T) {
+	conn := &fakeConn{}
+	m := newModule(conn)
+	stream := &applyStream{}
+
+	err := m.Apply(&pluginv1.ApplyRequest{
+		State: "config",
+		Params: mustStruct(t, map[string]any{
+			"addr": "127.0.0.1:6379",
+			"config": map[string]any{
+				// startup-only — должны быть пропущены (CONFIG SET их отвергает):
+				"port":            "6379",
+				"dir":             "/var/lib/redis",
+				"aclfile":         "/etc/redis/users.acl",
+				"cluster-enabled": "yes",
+				"loadmodule":      "/x.so",
+				// hot-settable — должна примениться:
+				"maxmemory": "512mb",
+			},
+		}),
+	}, stream)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	fin := stream.final()
+	if fin == nil || fin.Failed {
+		t.Fatalf("ждали успех (startup-only пропущены, не падение), got %+v", fin)
+	}
+	if !fin.Changed {
+		t.Error("ждали changed=true: hot-settable maxmemory применена")
+	}
+
+	// Ни одна startup-only-директива не должна дойти ни до GET, ни до SET.
+	for _, k := range []string{"port", "dir", "aclfile", "cluster-enabled", "loadmodule"} {
+		if hasCall(conn.calls, "CONFIG", "GET", k) || hasCall(conn.calls, "CONFIG", "SET", k) {
+			t.Errorf("startup-only %q не должна попадать в CONFIG GET/SET: %v", k, conn.calls)
+		}
+	}
+	// Hot-settable применена.
+	if !hasCall(conn.calls, "CONFIG", "SET", "maxmemory", "512mb") {
+		t.Errorf("hot-settable maxmemory должна примениться: %v", conn.calls)
+	}
+	// Output: applied/count по hot-settable, skipped/skippedCount по startup-only.
+	out := fin.GetOutput().GetFields()
+	if got := out["count"].GetNumberValue(); got != 1 {
+		t.Errorf("count=%v, ждали 1 (одна hot-settable)", got)
+	}
+	if got := out["skippedCount"].GetNumberValue(); got != 5 {
+		t.Errorf("skippedCount=%v, ждали 5 (port/dir/aclfile/cluster-enabled/loadmodule)", got)
+	}
+	skipped := out["skipped"].GetStringValue()
+	for _, k := range []string{"port", "dir", "aclfile", "cluster-enabled", "loadmodule"} {
+		if !strings.Contains(skipped, k) {
+			t.Errorf("skipped не содержит %q: %q", k, skipped)
+		}
+	}
+}
+
+// TestApplyConfig_AllStartupOnly_NoChange — если ВСЕ директивы startup-only,
+// CONFIG SET не вызывается ни разу, changed=false (нечего применять hot), прогон не
+// падает. Граничный кейс денилиста: rewrite тоже не дёргается (len(applied)==0).
+func TestApplyConfig_AllStartupOnly_NoChange(t *testing.T) {
+	conn := &fakeConn{}
+	m := newModule(conn)
+	stream := &applyStream{}
+
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State: "config",
+		Params: mustStruct(t, map[string]any{
+			"addr":    "127.0.0.1:6379",
+			"config":  map[string]any{"port": "6379", "dir": "/var/lib/redis"},
+			"rewrite": true,
+		}),
+	}, stream)
+
+	fin := stream.final()
+	if fin == nil || fin.Failed {
+		t.Fatalf("ждали успех (все startup-only пропущены), got %+v", fin)
+	}
+	if fin.Changed {
+		t.Error("ждали changed=false: нечего применять hot (все директивы startup-only)")
+	}
+	if hasCall(conn.calls, "CONFIG", "SET") {
+		t.Errorf("CONFIG SET не должен вызываться при всех startup-only: %v", conn.calls)
+	}
+	if hasCall(conn.calls, "CONFIG", "REWRITE") {
+		t.Errorf("CONFIG REWRITE не должен вызываться при пустом applied: %v", conn.calls)
+	}
+}
+
 // --- Validate: acl ---
 
 func TestValidate_AclRequiresAddr(t *testing.T) {

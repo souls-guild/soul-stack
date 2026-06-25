@@ -1,0 +1,140 @@
+# L0-испытание rotate_tls: day-2 ротация TLS-материала БЕЗ рестарта. Оператор задаёт
+# НОВЫЕ Vault-refs cert/key/ca; сценарий перерендеривает PEM в ${conf_dir}/tls/ из
+# новых refs и шлёт три CONFIG SET tls-*-file через community.redis.command (Redis 6.2+
+# пересоздаёт SSL_CTX и перечитывает live). Render-only, герметично. Инстанс УЖЕ на TLS
+# (state.tls.enable=true; rotate только для TLS).
+#
+# Что ассертим:
+#   1. PEM перерендерены (core.file.present, path-дизамбигуатор): redis.crt/redis.key/
+#      ca.crt в /etc/redis/tls/, content = vault(НОВЫЙ ref), mode 0600 owner redis.
+#   2. force re-read (три community.redis.command): addr 127.0.0.1:7379 (TLS-порт),
+#      tls=true, tls_ca = PEM CA, args = CONFIG SET tls-cert-file/tls-key-file/
+#      tls-ca-cert-file на пути в ${conf_dir}/tls/, changed=true (операция-действие).
+#   3. state_changes: state.tls несёт НОВЫЕ refs (cert/key/ca), enable/only/port
+#      сохранены.
+#
+# Идемпотентность РЕНДЕРА сохранена: рендер PEM idempotent по content (тот же ref → тот
+# же PEM). Сам force re-read (command-шаги, changed:true) неидемпотентен ПО КОНСТРУКЦИИ
+# — rotate_tls форсит re-read SSL_CTX на каждый вызов, минуя config-diff (прецедент —
+# cluster-reshard). L0 ловит рендер-форму и форму трёх command-шагов.
+name: rotate_tls re-renders PEM from new refs and force-rereads via CONFIG SET commands
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.5 }
+    os: { arch: amd64 }
+
+  essence:
+    # day-2 резолвит PEM CA коннекта (tls_ca плагина) через essence.tls_ca_ref — тот же
+    # author-context ref, что create (host-инвариант). Это CA ТЕКУЩЕГО доверия коннекта;
+    # ротируемый ca_ref (input) — это новый CA, рендерящийся в файл для самого Redis.
+    tls_ca_ref: "secret/services/redis/tls#ca"
+
+  # Развёрнутый incarnation.state v3 с ВКЛЮЧЁННЫМ TLS (rotate-предусловие). Текущие refs
+  # — старые; input даёт новые.
+  state:
+    redis_type: standalone
+    redis_version: "7.2.4"
+    conf_dir: /etc/redis
+    data_dir: /var/lib/redis
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    tls:
+      enable:   true
+      only:     false
+      port:     7379
+      cert_ref: "secret/services/redis/tls#cert"
+      key_ref:  "secret/services/redis/tls#key"
+      ca_ref:   "secret/services/redis/tls#ca"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+      tls-port:         "7379"
+      tls-cert-file:    /etc/redis/tls/redis.crt
+      tls-key-file:     /etc/redis/tls/redis.key
+      tls-ca-cert-file: /etc/redis/tls/ca.crt
+      tls-replication:  "yes"
+    redis_users: {}
+
+  input:
+    # Новые refs (ротация всех трёх).
+    cert_ref: "secret/services/redis/tls-v2#cert"
+    key_ref:  "secret/services/redis/tls-v2#key"
+    ca_ref:   "secret/services/redis/tls-v2#ca"
+
+  vault:
+    secret/redis/rotate_tls:
+      password: rot-redis-pass-16chars
+    # CA коннекта (essence.tls_ca_ref) — текущее доверие.
+    secret/services/redis/tls:
+      ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+    # НОВЫЙ TLS-материал (по input refs) — рендерится в файлы для Redis.
+    secret/services/redis/tls-v2:
+      cert: "-----BEGIN CERTIFICATE-----\nNEWCERT\n-----END CERTIFICATE-----"
+      key:  "-----BEGIN PRIVATE KEY-----\nNEWKEY\n-----END PRIVATE KEY-----"
+      ca:   "-----BEGIN CERTIFICATE-----\nNEWCA\n-----END CERTIFICATE-----"
+
+assert:
+  task_present:
+    # 1. PEM перерендерены из НОВЫХ refs (content = новый PEM). Дизамбигуатор — path.
+    - module: core.file.present
+      params_subset:
+        path: /etc/redis/tls/redis.crt
+        content: "-----BEGIN CERTIFICATE-----\nNEWCERT\n-----END CERTIFICATE-----"
+        mode: "0600"
+        owner: redis
+        group: redis
+    - module: core.file.present
+      params_subset:
+        path: /etc/redis/tls/redis.key
+        content: "-----BEGIN PRIVATE KEY-----\nNEWKEY\n-----END PRIVATE KEY-----"
+        mode: "0600"
+        owner: redis
+        group: redis
+    - module: core.file.present
+      params_subset:
+        path: /etc/redis/tls/ca.crt
+        content: "-----BEGIN CERTIFICATE-----\nNEWCA\n-----END CERTIFICATE-----"
+        mode: "0600"
+        owner: redis
+        group: redis
+
+    # 2. FORCE RE-READ: три community.redis.command (CONFIG SET tls-*-file), addr на
+    #    tls-порт, tls=true, tls_ca = CA коннекта, args на пути в /etc/redis/tls/,
+    #    changed=true (операция-действие, форсит re-read SSL_CTX мимо config-diff).
+    - module: community.redis.command
+      params_subset:
+        addr: "127.0.0.1:7379"
+        password: rot-redis-pass-16chars
+        tls: true
+        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+        changed: true
+        args: ["CONFIG", "SET", "tls-cert-file", "/etc/redis/tls/redis.crt"]
+    - module: community.redis.command
+      params_subset:
+        addr: "127.0.0.1:7379"
+        password: rot-redis-pass-16chars
+        tls: true
+        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+        changed: true
+        args: ["CONFIG", "SET", "tls-key-file", "/etc/redis/tls/redis.key"]
+    - module: community.redis.command
+      params_subset:
+        addr: "127.0.0.1:7379"
+        password: rot-redis-pass-16chars
+        tls: true
+        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+        changed: true
+        args: ["CONFIG", "SET", "tls-ca-cert-file", "/etc/redis/tls/ca.crt"]
+
+  # state_changes: state.tls несёт НОВЫЕ refs; enable/only/port сохранены.
+  state_changes:
+    tls:
+      enable:   true
+      only:     false
+      port:     7379
+      cert_ref: "secret/services/redis/tls-v2#cert"
+      key_ref:  "secret/services/redis/tls-v2#key"
+      ca_ref:   "secret/services/redis/tls-v2#ca"

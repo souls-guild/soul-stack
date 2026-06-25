@@ -1,0 +1,130 @@
+# L0-испытание update_config: day-2 hot-reload директив redis.conf БЕЗ рестарта.
+# Оператор меняет maxmemory_policy (allkeys-lru → volatile-lru); сценарий
+# перевычисляет merged redis_config (на базе РАЗВЁРНУТОГО incarnation.state.redis_config),
+# рендерит новый redis.conf и ОЖИВЛЯЕТ через community.redis.config (CONFIG SET +
+# REWRITE). Render-only, герметично. Plaintext (state.tls.enable=false → addr 6379).
+#
+# Что ассертим (критерий приёмки):
+#   1. redis.conf (core.file.rendered): новый merged config несёт изменённую директиву
+#      maxmemory-policy: volatile-lru + сохранённые из state (maxmemory/save/appendonly).
+#   2. hot-reload-шаг (community.redis.config): addr 127.0.0.1:6379 (plain), tls=false,
+#      password из vault (маскируется на выводе, в плане — резолвленное значение),
+#      rewrite=true, config несёт перевычисленный merged config.
+#   3. state_changes: redis_config ≡ переданный в hot-reload config (один compute,
+#      без drift); maxmemory_policy = volatile-lru (namedfield read-model).
+#
+# Идемпотентность (рендер-уровень): merge детерминирован (отсортированные ключи в
+# шаблоне) — повторный прогон с тем же вводом даёт бит-в-бит тот же redis.conf и тот
+# же config в hot-reload-шаге; CONFIG GET-diff плагина даёт no-op (changed=false) на
+# уровне live-инстанса (L1+, вне L0-render).
+name: update_config hot-reloads changed directive without restart (plaintext)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.5 }
+    os: { arch: amd64 }
+
+  # essence-подложка: persistence_presets + memory_reserve (для перевычисления maxmemory
+  # из сохранённого state.memory_mb).
+  essence:
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+
+  # Развёрнутый incarnation.state v3 (от create): plaintext (tls.enable=false), уже
+  # развёрнутый redis_config + namedfields. update_config мержит дельту ПОВЕРХ него.
+  state:
+    redis_type: standalone
+    redis_version: "7.2.4"
+    conf_dir: /etc/redis
+    data_dir: /var/lib/redis
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    persistence: rdb
+    memory_mb: 1024
+    maxmemory_policy: allkeys-lru
+    redis_config:
+      maxmemory:        "768mb"
+      maxmemory-policy: allkeys-lru
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+    redis_users: {}
+
+  input:
+    # Дельта оператора: только новая политика вытеснения.
+    maxmemory_policy: volatile-lru
+
+  vault:
+    secret/redis/update_config:
+      password: upd-redis-pass-16chars
+
+assert:
+  task_present:
+    # 1. redis.conf перерендерен с новым merged config. maxmemory-policy сменилась на
+    #    volatile-lru; maxmemory перевычислен из state.memory_mb (1024*75/100=768mb);
+    #    save/appendonly сохранены из state.redis_config (подложка). Дизамбигуатор —
+    #    path (от users.acl/hardening).
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+        render_context:
+          vars:
+            password: upd-redis-pass-16chars
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
+            config:
+              maxmemory: "768mb"
+              maxmemory-policy: volatile-lru
+              save: "900 1 300 10 60 10000"
+              appendonly: "no"
+          self:
+            sid: trial-host
+            covens: [update_config]
+            choirs: []
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # 2. HOT-RELOAD: community.redis.config к живому plain-инстансу. addr 6379 (plain),
+    #    tls=false, rewrite=true, config = перевычисленный merged. Денилист startup-only
+    #    отрабатывает на стороне плагина (здесь config hot-settable, startup-only нет).
+    - module: community.redis.config
+      params_subset:
+        addr: "127.0.0.1:6379"
+        password: upd-redis-pass-16chars
+        tls: false
+        rewrite: true
+        config:
+          maxmemory: "768mb"
+          maxmemory-policy: volatile-lru
+          save: "900 1 300 10 60 10000"
+          appendonly: "no"
+
+  # DRIFT-GUARD: state.redis_config ≡ config переданный в hot-reload (один compute).
+  state_changes:
+    redis_config:
+      maxmemory: "768mb"
+      maxmemory-policy: volatile-lru
+      save: "900 1 300 10 60 10000"
+      appendonly: "no"
+    persistence: rdb
+    memory_mb: 1024
+    maxmemory_policy: volatile-lru
