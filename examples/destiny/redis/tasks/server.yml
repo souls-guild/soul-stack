@@ -142,6 +142,12 @@
     vars:
       password: "${ input.password }"
       config:   "${ default(input.config, {}) }"
+      # host-layout (директива B): шаблон выводит `dir` из data_dir (рабочий каталог
+      # RDB/AOF) и `aclfile` из conf_dir (${conf_dir}/users.acl — туда же, куда задача
+      # «Render users.acl» кладёт файл). Эффективные значения с дефолтом — оператор
+      # переопределяет под свой storage; при дефолте рендер бит-в-бит прежний.
+      conf_dir: "${ default(input.conf_dir, vars.redis_conf_dir) }"
+      data_dir: "${ default(input.data_dir, vars.redis_data_dir) }"
       # Директивы loadmodule — отдельной секцией шаблона (НЕ ключи config-map: range
       # `{{key}} {{value}}` дал бы хвостовой пробел у loadmodule без значения).
       # ★ ДИРЕКТИВА «модули ВСЕГДА ВСЕ»: пути .so строятся из vars.redis_modules (ПОЛНЫЙ

@@ -71,6 +71,8 @@ assert:
         render_context:
           vars:
             password: s3cr3t-redis-pass-create
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
             loadmodules: []
             config:
               maxmemory: "256mb"

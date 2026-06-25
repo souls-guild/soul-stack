@@ -55,6 +55,9 @@ func (c *sentinelConn) GetKeysInSlot(_ context.Context, _, _ int) ([]string, err
 	return nil, nil
 }
 
+// AclList — sentinel-state ACL не трогает, стаб под интерфейс redisConn.
+func (c *sentinelConn) AclList(_ context.Context) ([]string, error) { return nil, nil }
+
 func (c *sentinelConn) Close() error { c.closed = true; return nil }
 
 func str(v any) string { s, _ := v.(string); return s }

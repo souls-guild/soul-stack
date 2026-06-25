@@ -442,8 +442,20 @@ validate:
 # persistence-пресет → вычисленные maxmemory/policy (has-guard) → input.redis_settings
 # (passthrough оператора) → TLS-блок (после redis_settings, оператор не ломает TLS).
 # TLS-гейт — compute.tls_on/tls_only_on/tls_port (input.tls.* бьёт essence-дефолт,
-# объявлены выше). cluster-announce-ip в config НЕ материализуется (per-host → шаблон
-# .self), TLS cert/порт host-инвариантны.
+# объявлены выше). ★ FIX (qa): TLS-директивы tls-cert-file/tls-key-file/tls-ca-cert-file
+# выводятся из compute.conf_dir (НЕ хардкод /etc/redis/tls) — destiny кладёт PEM в
+# ${conf_dir}/tls/ (server.yml), и redis.conf обязан смотреть ТУДА ЖЕ, иначе при
+# override conf_dir + TLS redis-server не находит cert и не стартует (при tls.only узел
+# недоступен по сети). cluster-announce-ip в config НЕ материализуется (per-host →
+# шаблон .self), TLS cert/порт host-инвариантны.
+#
+# ★ ГРАНИЦА ФИКСА: host-layout-директивы dir (рабочий каталог RDB/AOF, → data_dir) и
+# aclfile (→ conf_dir) ЗАХАРДКОЖЕНЫ В destiny-ШАБЛОНЕ redis.conf.tmpl (/var/lib/redis,
+# /etc/redis/users.acl), НЕ в этом compute. Тот же класс бага под override (см.
+# observations отчёта) — но это другой артефакт (destiny `redis`); добавление их в
+# compute.redis_config дублировало бы layout-логику шаблона. logfile/pidfile
+# (/var/log/redis, /var/run/redis) — системные каталоги вне input-схемы conf_dir/
+# data_dir; unixsocket/dbfilename в шаблоне не задаются.
 compute:
   # ── TLS-флаги: input.tls.* бьёт essence (оператор контролирует, essence — подложка)
   # input.tls — dict оператора; недостающие под-поля берут дефолт из essence
@@ -493,6 +505,16 @@ compute:
              'sha256':   default(compute.install_in.sha256, '')
            }
          : { 'method': 'package' } }
+  # ── Эффективный host-layout: conf_dir с дефолтом (директива B) ───────────────
+  # input.conf_dir бьёт дефолт (/etc/redis — back-compat). Объявлен ОТДЕЛЬНЫМ compute-
+  # var, чтобы и redis_config (TLS-пути ниже), и state_changes читали ОДНО разрешённое
+  # значение, а не повторяли default()-каскад. host-инвариант (один layout на кластер)
+  # — soulprint в compute недоступен. ★ FIX (qa): TLS-директивы redis.conf
+  # (tls-cert-file/tls-key-file/tls-ca-cert-file) ДОЛЖНЫ следовать conf_dir (раньше
+  # хардкодили /etc/redis/tls мимо override → при override conf_dir + TLS redis-server
+  # не находил cert → не стартовал; при tls.only узел недоступен по сети). destiny
+  # кладёт PEM в ${conf_dir}/tls/ (server.yml) — redis.conf обязан смотреть туда же.
+  conf_dir: "${ default(input.conf_dir, '/etc/redis') }"
   tls_in:      "${ default(input.tls, {}) }"
   tls_on:      "${ default(compute.tls_in.enable, default(essence.tls_enable, false)) }"
   tls_only_on: "${ default(compute.tls_in.only, default(essence.tls_only, false)) }"
@@ -528,9 +550,9 @@ compute:
                ? merge(
                    {
                      'tls-port':         string(compute.tls_port),
-                     'tls-cert-file':    '/etc/redis/tls/redis.crt',
-                     'tls-key-file':     '/etc/redis/tls/redis.key',
-                     'tls-ca-cert-file': '/etc/redis/tls/ca.crt',
+                     'tls-cert-file':    compute.conf_dir + '/tls/redis.crt',
+                     'tls-key-file':     compute.conf_dir + '/tls/redis.key',
+                     'tls-ca-cert-file': compute.conf_dir + '/tls/ca.crt',
                      'tls-replication':  'yes',
                      'tls-cluster':      'yes'
                    },
@@ -552,9 +574,9 @@ compute:
                ? merge(
                    {
                      'tls-port':         string(compute.tls_port),
-                     'tls-cert-file':    '/etc/redis/tls/redis.crt',
-                     'tls-key-file':     '/etc/redis/tls/redis.key',
-                     'tls-ca-cert-file': '/etc/redis/tls/ca.crt',
+                     'tls-cert-file':    compute.conf_dir + '/tls/redis.crt',
+                     'tls-key-file':     compute.conf_dir + '/tls/redis.key',
+                     'tls-ca-cert-file': compute.conf_dir + '/tls/ca.crt',
                      'tls-replication':  'yes'
                    },
                    compute.tls_only_on ? { 'port': '0' } : {}

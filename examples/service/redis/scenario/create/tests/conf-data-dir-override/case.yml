@@ -10,10 +10,15 @@
 #   - redis.conf, users.acl → /opt/redis/* (под conf_dir);
 #   - modules-dir + .so → /srv/redis-data/modules/* (под data_dir);
 #   - loadmodules в redis.conf → /srv/redis-data/modules/*.so (data_dir);
+#   - redis.conf render_context несёт conf_dir/data_dir override → шаблон выводит
+#     `dir` из data_dir (/srv/redis-data) и `aclfile` из conf_dir (/opt/redis/users.acl),
+#     а НЕ захардкоженные /var/lib/redis ÷ /etc/redis/users.acl (директива B, фикс хардкода
+#     dir/aclfile в redis.conf.tmpl мимо override);
 #   - state.conf_dir/data_dir персистят override (day-2 add_node читает их).
 # version=5:6.2.7 (< 8) → модули активны (.so под data_dir проверяемы). TLS off
-# (директивы tls-cert-file scenario хардкодит /etc/redis/tls — отдельный слой, см.
-# observations PM; этот кейс про ФАЙЛОВЫЕ пути задач destiny, не про config-директивы).
+# (этот кейс про ФАЙЛОВЫЕ пути задач destiny). TLS-директивы redis.conf под override
+# conf_dir покрывает отдельный кейс conf-data-dir-override-tls (qa-фикс хардкода
+# /etc/redis/tls в compute.redis_config).
 name: conf_dir and data_dir override flow through to destiny file paths
 
 fixtures:
@@ -60,6 +65,13 @@ assert:
         render_context:
           vars:
             password: s3cr3t-redis-pass-create
+            # ★ GUARD host-layout (директива B): conf_dir/data_dir доезжают в render_context
+            # шаблона redis.conf → `dir` рендерится из data_dir (/srv/redis-data), `aclfile`
+            # из conf_dir (${conf_dir}/users.acl → /opt/redis/users.acl). Регресс «dir/aclfile
+            # захардкожены /var/lib/redis ÷ /etc/redis/users.acl мимо override» = эти ключи
+            # отсутствуют/= дефолт → deepEqualJSON render_context FAIL.
+            conf_dir: /opt/redis
+            data_dir: /srv/redis-data
             loadmodules:
               - /srv/redis-data/modules/redisbloom.so
               - /srv/redis-data/modules/rejson.so

@@ -12,12 +12,20 @@
   поэтому он обязан САМ задавать все критичные для systemd-managed Redis директивы —
   иначе вступают встроенные дефолты бинаря redis-server, а не дистрибутивные.
   Конкретно:
-    - `dir /var/lib/redis` — рабочий каталог под RDB/AOF. Встроенный дефолт `dir /`
-      read-only для пользователя redis; при SIGTERM-рестарте Redis пишет финальный
-      RDB-снапшот, падает «Read-only file system» и НЕ выходит → рестарт висит
-      вечно. Каталог создаёт пакет redis (owner redis:redis, mode 0750).
+    - `dir {{ "{{" }} .vars.data_dir {{ "}}" }}` — рабочий каталог под RDB/AOF, выводится из
+      data_dir (директива B: data-dir переопределяем оператором, дефолт /var/lib/redis).
+      Встроенный дефолт `dir /` read-only для пользователя redis; при SIGTERM-рестарте
+      Redis пишет финальный RDB-снапшот, падает «Read-only file system» и НЕ выходит →
+      рестарт висит вечно. КРИТИЧНО: при override data_dir RDB/AOF обязаны писаться в
+      ФАКТИЧЕСКИЙ каталог данных, иначе тот же read-only-инцидент на чужом пути.
+      Каталог создаёт пакет redis (owner redis:redis, mode 0750).
+    - `aclfile {{ "{{" }} .vars.conf_dir {{ "}}" }}/users.acl` — внешний ACL-файл, выводится из
+      conf_dir (директива B: conf-dir переопределяем, дефолт /etc/redis). destiny кладёт
+      users.acl в ${conf_dir}/users.acl (server.yml) — redis.conf обязан смотреть ТУДА ЖЕ,
+      иначе при override conf_dir aclfile разъезжается с реальным путём.
     - daemonize/supervised/pidfile/logfile — под управление systemd-юнитом
-      redis-server (Type=notify, supervised systemd).
+      redis-server (Type=notify, supervised systemd). logfile/pidfile — СИСТЕМНЫЕ
+      каталоги (/var/log/redis, /var/run/redis), вне conf_dir/data_dir-скоупа → не из vars.
 
   Persistence (save/appendonly) НЕ зашита здесь: она приходит в .vars.config от
   persistence-пресета scenario (essence.persistence_presets[input.persistence]) и
@@ -51,14 +59,18 @@ supervised systemd
 pidfile /var/run/redis/redis-server.pid
 logfile /var/log/redis/redis-server.log
 
-# Рабочий каталог под RDB/AOF. КРИТИЧНО: без него Redis пишет дамп в `/`
-# (read-only для redis) и зависает при рестарте. Каталог создаёт пакет redis.
-dir /var/lib/redis
+# Рабочий каталог под RDB/AOF из data_dir (директива B). КРИТИЧНО: без него Redis
+# пишет дамп в `/` (read-only для redis) и зависает при рестарте; при override
+# data_dir дамп обязан идти в фактический каталог данных. Дефолт /var/lib/redis
+# (var.redis_data_dir) — каталог создаёт пакет redis.
+dir {{ .vars.data_dir }}
 
 requirepass {{ .vars.password }}
 
-# ACL-юзеры вынесены в отдельный файл (см. destiny task «Render users.acl»).
-aclfile /etc/redis/users.acl
+# ACL-юзеры вынесены в отдельный файл (см. destiny task «Render users.acl»), путь
+# из conf_dir (директива B): destiny кладёт users.acl в ${conf_dir}/users.acl —
+# aclfile смотрит туда же, иначе при override conf_dir путь разъезжается.
+aclfile {{ .vars.conf_dir }}/users.acl
 
 {{- if (index .vars.config "cluster-enabled") }}
 # Режим cluster: эта нода анонсирует СВОЙ primary_ip в gossip (per-host, см. шапку).

@@ -80,6 +80,8 @@ assert:
         render_context:
           vars:
             password: s3cr3t-redis-pass-create
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
             loadmodules:
               - /var/lib/redis/modules/redisbloom.so
               - /var/lib/redis/modules/rejson.so

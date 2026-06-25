@@ -42,6 +42,9 @@
       auth_user:   "${ default(input.sentinel.auth_user, '') }"
       auth_pass:   "${ default(input.sentinel.auth_pass, '') }"
       sentinel_config: "${ default(input.sentinel.config, {}) }"
+      # host-layout (директива B): шаблон выводит `dir` (рабочий каталог sentinel) из
+      # data_dir. Эффективное значение с дефолтом /var/lib/redis (vars.redis_data_dir).
+      data_dir:    "${ default(input.data_dir, vars.redis_data_dir) }"
 
 # Полный systemd-юнит redis-sentinel (пакет не всегда заводит его под наш конфиг).
 # register — рестарт реактивно на изменение юнита (daemon-reload при смене unit

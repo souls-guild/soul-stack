@@ -1,0 +1,199 @@
+# L0-испытание create (standalone) — OVERRIDE conf_dir/data_dir + TLS. Guard к
+# MAJOR-у (qa): до фикса compute.redis_config ХАРДКОДИЛ TLS-директивы redis.conf
+# (tls-cert-file/tls-key-file/tls-ca-cert-file) на /etc/redis/tls/ — МИМО override
+# conf_dir. При override conf_dir=/opt/redis + TLS destiny кладёт PEM в /opt/redis/tls/
+# (server.yml: ${conf_dir}/tls/redis.crt), а redis.conf смотрел в /etc/redis/tls →
+# redis-server не находил cert → не стартовал; при tls.only (plain закрыт) узел
+# вообще недоступен по сети. Фикс: tls-cert-file/key/ca выводятся из compute.conf_dir.
+#
+# Override: conf_dir=/opt/redis, data_dir=/srv/redis-data, TLS включён+only-TLS.
+# Falsification-надёжность: ассертим ПРИСУТСТВИЕ override-путей (/opt/redis/tls/*) И
+# ОТСУТСТВИЕ дефолтных (/etc/redis/tls/*) — регресс «хардкод не уехал» рвёт обе стороны.
+# Ожидаем:
+#   - redis.conf config: tls-cert-file/tls-key-file/tls-ca-cert-file → /opt/redis/tls/*
+#     (conf_dir override), port 0 (tls_only);
+#   - PEM-задачи destiny кладут cert/key/ca → /opt/redis/tls/* (тот же conf_dir);
+#   - TLS-dir /opt/redis/tls (не /etc/redis/tls);
+#   - redis.conf render_context несёт conf_dir/data_dir override → шаблон выводит `dir`
+#     из data_dir (/srv/redis-data) и `aclfile` из conf_dir (/opt/redis/users.acl), НЕ
+#     захардкоженные /var/lib/redis ÷ /etc/redis/users.acl (фикс хардкода dir/aclfile в
+#     redis.conf.tmpl мимо override); добавочно data_dir override виден по loadmodules
+#     (.so под /srv/redis-data/modules);
+#   - state.conf_dir/data_dir персистят override.
+# version=5:6.2.7 (< 8) → модули активны (.so под data_dir override проверяемы).
+name: conf_dir override flows through to redis.conf TLS directives and PEM paths
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network:
+      primary_ip: 10.0.0.5
+    os:
+      arch: amd64
+  # Мок Vault: requirepass + TLS PEM-материал (cert/key/ca). scenario резолвит TLS-refs
+  # из essence.tls_*_ref (доверенный путь автора); override conf_dir НЕ трогает refs —
+  # только КУДА destiny кладёт PEM и куда redis.conf на них ссылается.
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    secret/services/redis/tls:
+      cert: "-----BEGIN CERTIFICATE-----\nSERVERCERT\n-----END CERTIFICATE-----"
+      key:  "-----BEGIN PRIVATE KEY-----\nSERVERKEY\n-----END PRIVATE KEY-----"
+      ca:   "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+  essence:
+    redis_type: standalone
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory: "256mb"
+    # TLS ВКЛЮЧЁН + only-TLS: plain закрыт (port 0). Источник refs — essence (back-compat).
+    tls_enable: true
+    tls_only:   true
+    tls_port:   7379
+    tls_cert_ref: "secret/services/redis/tls#cert"
+    tls_key_ref:  "secret/services/redis/tls#key"
+    tls_ca_ref:   "secret/services/redis/tls#ca"
+
+  input:
+    redis_type: standalone
+    version: "5:6.2.7"
+    persistence: rdb
+    modules_base_url: "https://artifacts.example.com/redis/modules/6.2"
+    # ★ OVERRIDE host-layout (директива B): нестандартные conf/data каталоги.
+    conf_dir: /opt/redis
+    data_dir: /srv/redis-data
+
+assert:
+  task_present:
+    # TLS dir под conf_dir override (/opt/redis/tls, НЕ /etc/redis/tls).
+    - module: core.file.directory
+      params_subset:
+        path: /opt/redis/tls
+        owner: redis
+        group: redis
+        mode: "0750"
+
+    # PEM cert/key/ca под conf_dir override — content = vault(ref). Дизамбигуатор — path.
+    - module: core.file.present
+      params_subset:
+        path: /opt/redis/tls/redis.crt
+        content: "-----BEGIN CERTIFICATE-----\nSERVERCERT\n-----END CERTIFICATE-----"
+        mode: "0600"
+        owner: redis
+        group: redis
+    - module: core.file.present
+      params_subset:
+        path: /opt/redis/tls/redis.key
+        content: "-----BEGIN PRIVATE KEY-----\nSERVERKEY\n-----END PRIVATE KEY-----"
+        mode: "0600"
+        owner: redis
+        group: redis
+    - module: core.file.present
+      params_subset:
+        path: /opt/redis/tls/ca.crt
+        content: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+        mode: "0600"
+        owner: redis
+        group: redis
+
+    # ★ ЯДРО GUARD-а: redis.conf TLS-директивы указывают на /opt/redis/tls/* (conf_dir
+    # override), НЕ /etc/redis/tls/*. Регресс «хардкод не уехал» = /etc/redis/tls/redis.crt
+    # тут (deepEqualJSON config-map → FAIL). port 0 — tls_only (plain закрыт). loadmodules
+    # под data_dir override (/srv/redis-data/modules) — проверка data_dir-плеча. redis.conf
+    # под conf_dir override; дизамбигуатор от users.acl/tls/hardening — path.
+    - module: core.file.rendered
+      params_subset:
+        path: /opt/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            password: s3cr3t-redis-pass-create
+            # ★ GUARD host-layout (директива B): conf_dir/data_dir доезжают в render_context →
+            # шаблон выводит `dir` из data_dir (/srv/redis-data) и `aclfile` из conf_dir
+            # (/opt/redis/users.acl), НЕ захардкоженные /var/lib/redis ÷ /etc/redis/users.acl.
+            conf_dir: /opt/redis
+            data_dir: /srv/redis-data
+            loadmodules:
+              - /srv/redis-data/modules/redisbloom.so
+              - /srv/redis-data/modules/rejson.so
+              - /srv/redis-data/modules/redisearch.so
+              - /srv/redis-data/modules/redistimeseries.so
+            config:
+              port: "0"
+              tls-port: "7379"
+              tls-cert-file: /opt/redis/tls/redis.crt
+              tls-key-file: /opt/redis/tls/redis.key
+              tls-ca-cert-file: /opt/redis/tls/ca.crt
+              tls-replication: "yes"
+              maxmemory: "256mb"
+              save: "900 1 300 10 60 10000"
+              appendonly: "no"
+          self:
+            sid: trial-host
+            covens: [create]
+            choirs: []
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # PING health-gate over TLS на conf_dir-агностичном addr (tls_port). tls_ca = CA-PEM.
+    - module: community.redis.command
+      params_subset:
+        addr: "127.0.0.1:7379"
+        password: s3cr3t-redis-pass-create
+        tls: true
+        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+        args: ["PING"]
+
+  task_absent:
+    # Регресс «хардкод /etc/redis/tls не уехал»: дефолтные TLS-пути НЕ должны появиться
+    # ни в PEM-задачах, ни в TLS-dir. (config-директивы внутри map ловятся deepEqualJSON
+    # task_present выше — task_absent сверяет params верхнего уровня по path.)
+    - module: core.file.present
+      params_subset:
+        path: /etc/redis/tls/redis.crt
+    - module: core.file.directory
+      params_subset:
+        path: /etc/redis/tls
+    # Регресс «data_dir override не доехал»: дефолтный modules-путь не должен появиться.
+    - module: core.url.fetched
+      params_subset:
+        path: /var/lib/redis/modules/redisearch.so
+
+  state_changes:
+    redis_type: standalone
+    redis_version: "5:6.2.7"
+    # redis_config DRIFT-GUARD: TLS-директивы в state бит-в-бит = config redis.conf,
+    # включая override-пути /opt/redis/tls/* (host-инвариант → пишутся в state).
+    redis_config:
+      port: "0"
+      tls-port: "7379"
+      tls-cert-file: /opt/redis/tls/redis.crt
+      tls-key-file: /opt/redis/tls/redis.key
+      tls-ca-cert-file: /opt/redis/tls/ca.crt
+      tls-replication: "yes"
+      maxmemory: "256mb"
+      save: "900 1 300 10 60 10000"
+      appendonly: "no"
+    tls:
+      enable:   true
+      only:     true
+      port:     7379
+      cert_ref: "secret/services/redis/tls#cert"
+      key_ref:  "secret/services/redis/tls#key"
+      ca_ref:   "secret/services/redis/tls#ca"
+    modules: [bloom, json, search, timeseries]
+    modules_base_url: "https://artifacts.example.com/redis/modules/6.2"
+    # ★ override персистит в state → day-2 add_node читает его (тот же layout у новой ноды).
+    conf_dir: /opt/redis
+    data_dir: /srv/redis-data

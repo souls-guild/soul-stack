@@ -28,6 +28,12 @@ type fakeConn struct {
 	configLive map[string]string // CONFIG GET <param> → текущее значение
 	doErr      error
 	closed     bool
+
+	// aclSeq — последовательные ответы ACL LIST (по одному на вызов: before, after).
+	// Если длиннее не нужно — повторяет последний. nil → пустой список.
+	aclSeq   [][]string
+	aclCalls int
+	aclErr   error // ошибка ACL LIST (для error-path acl-state)
 }
 
 func (f *fakeConn) Do(_ context.Context, args ...any) (string, error) {
@@ -60,6 +66,25 @@ func (f *fakeConn) ConfigGet(_ context.Context, param string) (map[string]string
 // GetKeysInSlot — command/config-тесты слоты не мигрируют, стаб под интерфейс.
 func (f *fakeConn) GetKeysInSlot(_ context.Context, _, _ int) ([]string, error) {
 	return nil, nil
+}
+
+// AclList — отдаёт следующий элемент aclSeq (before/after для diff acl-state),
+// фиксируя порядковый вызов. Записывает вызов в calls (видим для assert порядка
+// LIST → LOAD → LIST). Длиннее aclSeq — повторяет последний.
+func (f *fakeConn) AclList(_ context.Context) ([]string, error) {
+	f.calls = append(f.calls, []any{"ACL", "LIST"})
+	if f.aclErr != nil {
+		return nil, f.aclErr
+	}
+	i := f.aclCalls
+	f.aclCalls++
+	if i >= len(f.aclSeq) {
+		if len(f.aclSeq) == 0 {
+			return nil, nil
+		}
+		return f.aclSeq[len(f.aclSeq)-1], nil
+	}
+	return f.aclSeq[i], nil
 }
 
 func (f *fakeConn) Close() error { f.closed = true; return nil }
@@ -422,6 +447,219 @@ func TestApplyConfig_RewriteCallsConfigRewrite(t *testing.T) {
 	}
 }
 
+// --- Validate: acl ---
+
+func TestValidate_AclRequiresAddr(t *testing.T) {
+	m := &RedisModule{}
+	reply, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
+		State:  "acl",
+		Params: mustStruct(t, map[string]any{"addr": ""}),
+	})
+	if reply.Ok {
+		t.Fatal("ждали Ok=false на пустой addr для acl")
+	}
+}
+
+func TestValidate_AclHappyPath(t *testing.T) {
+	m := &RedisModule{}
+	reply, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
+		State:  "acl",
+		Params: mustStruct(t, map[string]any{"addr": "127.0.0.1:6379"}),
+	})
+	if !reply.Ok || len(reply.Errors) != 0 {
+		t.Fatalf("ждали Ok=true без ошибок, got %+v", reply)
+	}
+}
+
+// --- Apply: acl ---
+
+// TestApplyACL_SendsAclLoad — базовый контракт: acl-state шлёт ACL LOAD между
+// двумя ACL LIST (diff-проба), коннект получает пароль, аргументы команд его не
+// несут, соединение закрывается.
+func TestApplyACL_SendsAclLoad(t *testing.T) {
+	conn := &fakeConn{aclSeq: [][]string{
+		{"user default on nopass ~* +@all"},
+		{"user default on nopass ~* +@all", "user alice on #abc ~app:* +@read"}, // после LOAD добавился alice
+	}}
+	m := newModule(conn)
+	stream := &applyStream{}
+
+	err := m.Apply(&pluginv1.ApplyRequest{
+		State: "acl",
+		Params: mustStruct(t, map[string]any{
+			"addr":     "127.0.0.1:6379",
+			"password": secretPass,
+		}),
+	}, stream)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	fin := stream.final()
+	if fin == nil || fin.Failed {
+		t.Fatalf("ждали успешное финальное событие, got %+v", fin)
+	}
+	// Порядок: ACL LIST (before) → ACL LOAD → ACL LIST (after).
+	wantCalls := [][]any{
+		{"ACL", "LIST"},
+		{"ACL", "LOAD"},
+		{"ACL", "LIST"},
+	}
+	assertCalls(t, conn, wantCalls)
+	if conn.cfg.password != secretPass {
+		t.Errorf("пароль не доехал до коннекта: %q", conn.cfg.password)
+	}
+	assertNoCommandCarriesSecret(t, conn)
+	if !conn.closed {
+		t.Error("соединение не закрыто")
+	}
+}
+
+// TestApplyACL_ChangedTrueWhenAclDiffers — ACL LIST до/после отличается (LOAD
+// реально перечитал файл с новыми правилами) → changed=true, users — по after.
+func TestApplyACL_ChangedTrueWhenAclDiffers(t *testing.T) {
+	conn := &fakeConn{aclSeq: [][]string{
+		{"user default on nopass ~* +@all"},
+		{"user default on nopass ~* +@all", "user alice on #abc ~app:* +@read"},
+	}}
+	m := newModule(conn)
+	stream := &applyStream{}
+
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State:  "acl",
+		Params: mustStruct(t, map[string]any{"addr": "127.0.0.1:6379"}),
+	}, stream)
+
+	fin := stream.final()
+	if fin == nil || fin.Failed || !fin.Changed {
+		t.Fatalf("ждали успех changed=true (ACL изменился), got %+v", fin)
+	}
+	if got := fin.GetOutput().GetFields()["users"].GetNumberValue(); got != 2 {
+		t.Errorf("users=%v, ждали 2 (after-список)", got)
+	}
+}
+
+// TestApplyACL_ChangedFalseWhenAclUnchanged — живой инстанс уже совпадал с
+// aclfile: ACL LIST до/после идентичен → changed=false (no-op, идемпотентность
+// как config/cluster/sentinel). ACL LOAD при этом всё равно выполняется
+// (приведение к декларированному — by construction).
+func TestApplyACL_ChangedFalseWhenAclUnchanged(t *testing.T) {
+	same := []string{"user default on nopass ~* +@all", "user alice on #abc ~app:* +@read"}
+	conn := &fakeConn{aclSeq: [][]string{same, same}}
+	m := newModule(conn)
+	stream := &applyStream{}
+
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State:  "acl",
+		Params: mustStruct(t, map[string]any{"addr": "127.0.0.1:6379"}),
+	}, stream)
+
+	fin := stream.final()
+	if fin == nil || fin.Failed {
+		t.Fatalf("ждали успех, got %+v", fin)
+	}
+	if fin.Changed {
+		t.Error("ждали changed=false: ACL LIST до/после совпал (no-op)")
+	}
+	if !hasCall(conn.calls, "ACL", "LOAD") {
+		t.Errorf("ACL LOAD должен выполниться даже на no-op (приведение by construction): %v", conn.calls)
+	}
+}
+
+// TestApplyACL_LoadErrorIsFailure — ACL LOAD упал (битый/несконфигурированный
+// aclfile) → failed=true с внятным сообщением.
+func TestApplyACL_LoadErrorIsFailure(t *testing.T) {
+	conn := &fakeConn{doErr: errors.New("ERR This Redis instance is not configured to use an ACL file.")}
+	m := newModule(conn)
+	stream := &applyStream{}
+
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State:  "acl",
+		Params: mustStruct(t, map[string]any{"addr": "127.0.0.1:6379"}),
+	}, stream)
+
+	fin := stream.final()
+	if fin == nil || !fin.Failed {
+		t.Fatalf("ждали failed=true на ошибку ACL LOAD, got %+v", fin)
+	}
+	if !strings.Contains(fin.GetMessage(), "ACL LOAD") {
+		t.Errorf("ждали внятный prefix 'ACL LOAD' в сообщении, got %q", fin.GetMessage())
+	}
+}
+
+// TestApplyACL_ListErrorIsFailure — ACL LIST (before) недоступен → failed, ACL
+// LOAD НЕ выполняется (нет точки сравнения — не трогаем живой инстанс вслепую).
+func TestApplyACL_ListErrorIsFailure(t *testing.T) {
+	conn := &fakeConn{aclErr: errors.New("WRONGPASS invalid username-password pair")}
+	m := newModule(conn)
+	stream := &applyStream{}
+
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State:  "acl",
+		Params: mustStruct(t, map[string]any{"addr": "127.0.0.1:6379"}),
+	}, stream)
+
+	fin := stream.final()
+	if fin == nil || !fin.Failed {
+		t.Fatalf("ждали failed=true на ошибку ACL LIST, got %+v", fin)
+	}
+	if hasCall(conn.calls, "ACL", "LOAD") {
+		t.Errorf("ACL LOAD не должен выполняться при недоступном ACL LIST (before): %v", conn.calls)
+	}
+}
+
+// TestApplyACL_ConnectFailure_DoesNotLeakPassword — ошибка коннекта, чей текст
+// СОДЕРЖИТ пароль, санитизируется (общий путь Apply, redactError).
+func TestApplyACL_ConnectFailure_DoesNotLeakPassword(t *testing.T) {
+	m := &RedisModule{
+		connect: func(_ context.Context, cfg connConfig) (redisConn, error) {
+			return nil, errors.New("dial failed for AUTH " + cfg.password)
+		},
+	}
+	stream := &applyStream{}
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State: "acl",
+		Params: mustStruct(t, map[string]any{
+			"addr":     "127.0.0.1:6379",
+			"password": secretPass,
+		}),
+	}, stream)
+
+	fin := stream.final()
+	if fin == nil || !fin.Failed {
+		t.Fatalf("ждали failed=true, got %+v", fin)
+	}
+	assertEventsNoSecret(t, stream)
+}
+
+// TestApplyACL_TLSParamsReachConnect — TLS-параметры (tls/tls_ca) доезжают до
+// коннекта (acl читает тот же набор, что config/command — общий путь).
+func TestApplyACL_TLSParamsReachConnect(t *testing.T) {
+	var captured connConfig
+	m := &RedisModule{
+		connect: func(_ context.Context, cfg connConfig) (redisConn, error) {
+			captured = cfg
+			return &fakeConn{}, nil
+		},
+	}
+	const caPEM = "-----BEGIN CERTIFICATE-----\nFAKE\n-----END CERTIFICATE-----"
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State: "acl",
+		Params: mustStruct(t, map[string]any{
+			"addr":   "127.0.0.1:6379",
+			"tls":    true,
+			"tls_ca": caPEM,
+		}),
+	}, &applyStream{})
+
+	if !captured.tls.enabled {
+		t.Error("tls=true не доехал до коннекта acl-state")
+	}
+	if captured.tls.caPEM != caPEM {
+		t.Errorf("tls_ca не доехал до коннекта: %q", captured.tls.caPEM)
+	}
+}
+
 // --- Apply: unix-socket addr ---
 
 func TestApply_UnixSocketAddrParsed(t *testing.T) {
@@ -480,6 +718,7 @@ func TestApply_NoEventCarriesSecret(t *testing.T) {
 	}{
 		{"command", "command", map[string]any{"addr": "127.0.0.1:6379", "password": secretPass, "args": []any{"GET", "key"}}},
 		{"config", "config", map[string]any{"addr": "127.0.0.1:6379", "password": secretPass, "config": map[string]any{"maxmemory": "256mb"}}},
+		{"acl", "acl", map[string]any{"addr": "127.0.0.1:6379", "password": secretPass}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			conn := &fakeConn{}
@@ -544,7 +783,8 @@ func (c *leakyConfigConn) ConfigGet(_ context.Context, param string) (map[string
 func (c *leakyConfigConn) GetKeysInSlot(_ context.Context, _, _ int) ([]string, error) {
 	return nil, nil
 }
-func (c *leakyConfigConn) Close() error { return nil }
+func (c *leakyConfigConn) AclList(_ context.Context) ([]string, error) { return nil, nil }
+func (c *leakyConfigConn) Close() error                                { return nil }
 
 // --- redactError: регресс для коротких паролей-подстрок ---
 

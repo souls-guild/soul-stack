@@ -99,6 +99,8 @@ assert:
             auth_user: ""
             auth_pass: s3cr3t-redis-pass-create
             sentinel_config: {}
+            # host-layout (директива B): dir в sentinel.conf из data_dir, дефолт.
+            data_dir: /var/lib/redis
           self:
             sid: node-1.example.com
             covens: [create, redis]

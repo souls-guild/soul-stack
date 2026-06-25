@@ -5,9 +5,10 @@
 //
 // States: `command` (raw verb-state, changed=false по умолчанию), `pinged` /
 // `role` / `replica-synced` (read-probe, changed=false конструктивно, см.
-// probe.go), `config` (CONFIG SET из map), `cluster` (см. cluster.go), `replica`
+// probe.go), `config` (CONFIG SET из map), `acl` (ACL LOAD — hot-reload aclfile,
+// changed по diff ACL LIST до/после), `cluster` (см. cluster.go), `replica`
 // (REPLICAOF, см. replica.go), `sentinel` (SENTINEL MONITOR/SET reconcile, см.
-// sentinel.go). acl / failover — следующие батчи.
+// sentinel.go). failover — следующий батч.
 //
 // СОЗНАТЕЛЬНО без dry-run preview: плагин на BaseModule НЕ реализует PlanReadSafe
 // → host применяет default-deny (на dry_run задача получает честный «drift не
@@ -66,6 +67,13 @@ type redisConn interface {
 	// несуществующим ключам → ключ НЕ переносится, а SETSLOT NODE всё равно отдаёт
 	// слот → ПОТЕРЯ ДАННЫХ. Native-path сохраняет разделители (симметрия с ConfigGet).
 	GetKeysInSlot(ctx context.Context, slot, count int) ([]string, error)
+	// AclList читает ACL LIST через ТИПИЗИРОВАННЫЙ путь драйвера ([]string — по
+	// строке на пользователя). Используется для diff до/после ACL LOAD (changed-
+	// детекция acl-state). НЕ через Do+strings.Fields: каждая строка ACL — целое
+	// правило ("user alice on >hash ~* +@all") с пробелами; space-join + Fields
+	// рассыпали бы её в токены → ложный diff. Native-path сохраняет строки целиком
+	// (симметрия с ConfigGet/GetKeysInSlot).
+	AclList(ctx context.Context) ([]string, error)
 	Close() error
 }
 
@@ -101,6 +109,11 @@ func (m *RedisModule) Validate(_ context.Context, req *pluginv1.ValidateRequest)
 		if len(stringMap(f["config"])) == 0 {
 			errs = append(errs, "params.config: must be a non-empty map of directives")
 		}
+	case "acl":
+		// acl приводит ЖИВОЙ инстанс к уже отрендеренному aclfile командой ACL LOAD
+		// — никаких params кроме коннекта (addr + опц. auth/TLS). Единственное
+		// обязательное — addr (как у read-probe).
+		errs = append(errs, validateAddr(f)...)
 	case "cluster":
 		// cluster коннектится к нодам из nodes-map, единый addr не требуется.
 		errs = append(errs, validateCluster(f)...)
@@ -109,7 +122,7 @@ func (m *RedisModule) Validate(_ context.Context, req *pluginv1.ValidateRequest)
 	case "sentinel":
 		errs = append(errs, validateSentinel(f)...)
 	default:
-		errs = append(errs, fmt.Sprintf("unknown state %q (expected command|pinged|role|replica-synced|config|cluster|replica|sentinel)", req.GetState()))
+		errs = append(errs, fmt.Sprintf("unknown state %q (expected command|pinged|role|replica-synced|config|acl|cluster|replica|sentinel)", req.GetState()))
 	}
 
 	if len(errs) > 0 {
@@ -153,12 +166,14 @@ func (m *RedisModule) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStream
 		return m.applyReplicaSynced(ctx, stream, conn, req.GetParams())
 	case "config":
 		return m.applyConfig(ctx, stream, conn, req.GetParams())
+	case "acl":
+		return m.applyACL(ctx, stream, conn, req.GetParams())
 	case "replica":
 		return m.applyReplica(ctx, stream, conn, req.GetParams())
 	case "sentinel":
 		return m.applySentinel(ctx, stream, conn, req.GetParams())
 	default:
-		return sendFailure(stream, fmt.Sprintf("unknown state %q (expected command|pinged|role|replica-synced|config|cluster|replica|sentinel)", req.GetState()))
+		return sendFailure(stream, fmt.Sprintf("unknown state %q (expected command|pinged|role|replica-synced|config|acl|cluster|replica|sentinel)", req.GetState()))
 	}
 }
 
@@ -238,6 +253,57 @@ func (m *RedisModule) applyConfig(ctx context.Context, stream grpc.ServerStreami
 		"count":   int64(len(applied)),
 		"rewrite": rewrite && len(applied) > 0,
 	})
+}
+
+// applyACL — hot-reload ACL: ACL LOAD заставляет Redis перечитать aclfile
+// целиком (фундамент волны hot-reload; aclfile уже отрендерен destiny до этого
+// шага). Идемпотентно ПО КОНСТРУКЦИИ: ACL LOAD приводит живой инстанс к
+// декларированному файлу независимо от текущего состояния.
+//
+// changed-семантика: сама ACL LOAD «changed» не сообщает, поэтому делаем дешёвый
+// честный diff — ACL LIST до и после LOAD (типизированный путь, []string по
+// правилу на пользователя). Совпали → changed=false (живой инстанс уже совпадал
+// с файлом, no-op как config/cluster/sentinel); отличаются → changed=true.
+// Симметрия с config: тоже сверяем live и приводим к желаемому.
+//
+// ИБ: ACL-правила (вывод ACL LIST) НЕ кладём в Output — строка пользователя
+// может нести password-hash (>hash / #sha256). Output несёт только число
+// затронутых пользователей и факт changed. error-path санитизируется
+// (redactError) по cfg.* через общий путь Apply; внутри — без секретов.
+func (m *RedisModule) applyACL(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], conn redisConn, _ *structpb.Struct) error {
+	before, err := conn.AclList(ctx)
+	if err != nil {
+		return sendFailure(stream, fmt.Sprintf("ACL LIST (before): %v", err))
+	}
+	if _, err := conn.Do(ctx, "ACL", "LOAD"); err != nil {
+		// ACL LOAD фейлит при битом aclfile / aclfile не сконфигурирован — это ответ
+		// Redis (не секрет оператора), но коннект-уровень секретов тут уже нет.
+		return sendFailure(stream, fmt.Sprintf("ACL LOAD: %v", err))
+	}
+	after, err := conn.AclList(ctx)
+	if err != nil {
+		return sendFailure(stream, fmt.Sprintf("ACL LIST (after): %v", err))
+	}
+
+	changed := !aclListEqual(before, after)
+	return sendOutcome(stream, changed, "ACL LOAD ok", map[string]any{
+		"users": int64(len(after)),
+	})
+}
+
+// aclListEqual — посимвольное сравнение двух ACL LIST (порядок значим: ACL LIST
+// возвращает пользователей детерминированно, по порядку загрузки из файла, и
+// после LOAD порядок отражает файл). Любое расхождение → ACL изменился.
+func aclListEqual(before, after []string) bool {
+	if len(before) != len(after) {
+		return false
+	}
+	for i := range before {
+		if before[i] != after[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // configGet читает CONFIG GET <param> → текущее значение или "" (параметр пуст/нет).
@@ -331,6 +397,20 @@ func (r *realConn) GetKeysInSlot(ctx context.Context, slot, count int) ([]string
 		return nil, err
 	}
 	return keys, nil
+}
+
+// AclList — типизированный ACL LIST через go-redis ([]string, по строке на
+// пользователя). Строки сохраняются целиком (правило ACL содержит пробелы).
+// redis.Nil → пустой срез (ACL не сконфигурирован).
+func (r *realConn) AclList(ctx context.Context) ([]string, error) {
+	users, err := r.c.ACLList(ctx).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return users, nil
 }
 
 func (r *realConn) Close() error { return r.c.Close() }

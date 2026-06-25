@@ -42,6 +42,9 @@ func (c *replConn) GetKeysInSlot(_ context.Context, _, _ int) ([]string, error) 
 	return nil, nil
 }
 
+// AclList — replica-state ACL не трогает, стаб под интерфейс redisConn.
+func (c *replConn) AclList(_ context.Context) ([]string, error) { return nil, nil }
+
 func (c *replConn) Close() error { c.closed = true; return nil }
 
 func replModule(conn *replConn) *RedisModule {

@@ -106,6 +106,9 @@ func (c *clusterConn) ConfigGet(_ context.Context, param string) (map[string]str
 	return map[string]string{param: ""}, nil
 }
 
+// AclList — cluster-state ACL не трогает, стаб под интерфейс redisConn.
+func (c *clusterConn) AclList(_ context.Context) ([]string, error) { return nil, nil }
+
 func (c *clusterConn) Close() error { c.closed = true; return nil }
 
 // clusterFleet — набор fake-нод, раздаваемых по addr. registry фиксирует, к какой
