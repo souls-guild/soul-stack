@@ -138,6 +138,7 @@
 | Документ | Что это |
 |---|---|
 | [known-limitations.md](known-limitations.md) | Что НЕ входит в закрытую бету: cloud-provisioning без REST/MCP/UI, неполное MCP-покрытие, audit-scaling на крупных флотах, supply-chain-подпись, JWT-only identity, профиль push / recovery / Redis. Каждый пункт со ссылкой на канон — чтобы отсутствие фичи не принять за баг. |
+| [backlog.md](backlog.md) | **Бэклог отложенных крупных эпиков**: сознательно поставленные на паузу фичи с зафиксированным импактом, прагматичным обходом и условиями возобновления (не open Q, не дизайн). Сейчас: per-service уникальность имени инкарнации (отвязка `incarnation.name` от Coven-метки). |
 | [prod-readiness.md](prod-readiness.md) | **GA-gap роадмап**: что не готово для продакшена / GA (по результатам по-коду аудита). P0-блокеры (e2e-live blocking, clean-room onboarding, release-дистрибуция + cosign, Shepherd, recovery-lease live, внешний pentest, снять `continue-on-error`), P1-hardening, P2 + сильные места и доказанная нагрузка. Источник правды по GA-границам наравне с known-limitations.md; **не путать с дрейфующим roadmap.md**. |
 
 **Состояние.** MVP feature-complete: три бинаря (`keeper` / `soul` / `soul-lint`) реализованы, HA-кластер Keeper (Postgres + Redis) доказан на живом стенде; **выпущена `v0.1.0-beta.1` (закрытая бета, приватные репо `souls-guild`)**. Сборка / линт / тесты — таргеты [`Makefile`](../Makefile) (`make build` / `make test` / `make check`). Все архитектурные решения проходят через ADR ([adr/](adr/README.md)); документация впереди кода — изменение дизайна это правка соответствующего ADR, а не «новый код как получилось».
@@ -179,4 +180,5 @@
 - **Фича/open Q вокруг коллекций модулей** → [module-collections.md](module-collections.md).
 - **Новый уровень тестирования / формат L3a** → [testing/](testing/README.md), спека — [testing/e2e.md](testing/e2e.md) ([ADR-039](adr/0039-e2e-testing.md)).
 - **Security-граница / модель угроз** → [security/threat-model.md](security/threat-model.md). Документирует реализованное; новых решений не вводит.
+- **Крупный эпик отложен (сознательная пауза, не open Q)** → запись в [backlog.md](backlog.md): что хотели, почему отложили, прагматичный обход, условия возобновления. ADR/architecture при этом не трогаются.
 - **Документ разрастается на отдельный файл** → создать `docs/<тема>.md`, добавить запись сюда и ссылку из [architecture.md](architecture.md).
