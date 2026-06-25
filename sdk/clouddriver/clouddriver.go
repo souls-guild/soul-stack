@@ -15,7 +15,9 @@
 //
 // BaseDriver даёт no-op-реализации всех RPC (Schema/Validate возвращают пустые
 // успешные ответы, Create/Destroy/List закрывают stream без событий, Status
-// возвращает пустой State); автор переопределяет только те, которые нужны.
+// возвращает пустой State, Resize — default-deny resize.unsupported); автор
+// переопределяет только те, которые нужны. Resize дополнительно требует
+// объявить marker-интерфейс Resizable (default-deny capability).
 // Serve открывает Unix-socket, делает gRPC-stdio handshake и обрабатывает
 // SIGTERM (см. sdk/handshake).
 package clouddriver
@@ -43,6 +45,31 @@ type CloudDriver interface {
 	Destroy(req *pluginv1.DestroyRequest, stream grpc.ServerStreamingServer[pluginv1.DestroyEvent]) error
 	Status(ctx context.Context, req *pluginv1.StatusRequest) (*pluginv1.StatusReply, error)
 	List(req *pluginv1.ListRequest, stream grpc.ServerStreamingServer[pluginv1.VmInfo]) error
+
+	// Resize расширяет ресурсы VM (cpu/ram/disk, наши единицы). Объявлен в
+	// интерфейсе для forward-compat (gRPC-контракт его уже несёт), но capability
+	// объявляется ОТДЕЛЬНО через marker-интерфейс [Resizable] (default-deny):
+	// драйвер, реально поддерживающий resize, переопределяет этот метод И
+	// реализует [Resizable]. Драйвер на [BaseDriver] получает безопасный
+	// default-deny — host (keeper) не зовёт Resize, а возвращает
+	// resize.unsupported. См. [BaseDriver.Resize], [Resizable].
+	Resize(req *pluginv1.ResizeRequest, stream grpc.ServerStreamingServer[pluginv1.ResizeEvent]) error
+}
+
+// Resizable — опциональный marker-интерфейс (default-deny, паттерн [PlanReadSafe]
+// из sdk/module / ADR-031): драйвер реализует его, чтобы ОБЪЯВИТЬ, что его Resize —
+// настоящая реализация (умеет менять ресурсы VM). Host (keeper, модуль
+// `core.cloud.provisioned` state=resized) проверяет реализацию type-assertion-ом
+// ДО вызова Resize: драйвер без [Resizable] получает default-deny — host
+// возвращает внятный `resize.unsupported`, а НЕ сырой gRPC Unimplemented и не
+// ложный «успех».
+//
+// Метод-маркер без аргументов: его наличие = декларация capability. [BaseDriver]
+// его НЕ реализует СОЗНАТЕЛЬНО — драйвер на BaseDriver по умолчанию получает
+// безопасный default-deny на resize без действий автора.
+type Resizable interface {
+	// Resizable — маркер; вызывается host-ом как type-assertion, тело не важно.
+	Resizable()
 }
 
 // BaseDriver — embeddable default-реализация CloudDriver: все методы no-op.
@@ -73,6 +100,17 @@ func (BaseDriver) Status(context.Context, *pluginv1.StatusRequest) (*pluginv1.St
 
 func (BaseDriver) List(*pluginv1.ListRequest, grpc.ServerStreamingServer[pluginv1.VmInfo]) error {
 	return nil
+}
+
+// Resize — default-deny no-op: шлёт финальный ResizeEvent с failed=true и
+// message resize.unsupported, НЕ панику и НЕ ложный «успех». В норме host до
+// этого метода не доходит (BaseDriver не реализует [Resizable] → host применяет
+// default-deny). Этот fallback защищает от прямого вызова в обход marker-check-а.
+func (BaseDriver) Resize(_ *pluginv1.ResizeRequest, stream grpc.ServerStreamingServer[pluginv1.ResizeEvent]) error {
+	return stream.Send(&pluginv1.ResizeEvent{
+		Failed:  true,
+		Message: "resize.unsupported: driver does not implement Resize (missing Resizable capability)",
+	})
 }
 
 // Serve — типовой main() CloudDriver-плагина: оборачивает sdk/handshake.Serve
@@ -116,4 +154,21 @@ func (a *serverAdapter) Status(ctx context.Context, req *pluginv1.StatusRequest)
 
 func (a *serverAdapter) List(req *pluginv1.ListRequest, stream grpc.ServerStreamingServer[pluginv1.VmInfo]) error {
 	return a.impl.List(req, stream)
+}
+
+// Resize применяет default-deny по marker-интерфейсу [Resizable] (паттерн
+// PlanReadSafe). Плагин живёт в отдельном процессе, поэтому host (keeper)
+// не может проверить marker напрямую type-assertion-ом — проверка делается
+// здесь, в serverAdapter: если impl НЕ реализует [Resizable], adapter
+// возвращает resize.unsupported, НЕ вызывая impl.Resize. Это гарантирует, что
+// драйвер на [BaseDriver] (или забывший объявить capability) получит внятный
+// отказ, а не случайно выполнит no-op Resize.
+func (a *serverAdapter) Resize(req *pluginv1.ResizeRequest, stream grpc.ServerStreamingServer[pluginv1.ResizeEvent]) error {
+	if _, ok := a.impl.(Resizable); !ok {
+		return stream.Send(&pluginv1.ResizeEvent{
+			Failed:  true,
+			Message: "resize.unsupported: driver does not declare Resizable capability",
+		})
+	}
+	return a.impl.Resize(req, stream)
 }

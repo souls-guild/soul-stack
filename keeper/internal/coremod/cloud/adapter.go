@@ -252,3 +252,61 @@ func (a *PluginAdapter) List(ctx context.Context, driver string, credentials, fi
 	}
 	return vms, nil
 }
+
+// Resize — реализация [PluginHost.Resize]. Spawn one-shot, server-stream Read
+// до EOF, агрегация per-vm результатов из финального события. Stream-level
+// failed=true (включая resize.unsupported от драйвера без Resizable-capability)
+// превращается в ошибку с message события — модуль маппит её в failed-event.
+func (a *PluginAdapter) Resize(ctx context.Context, driver string, credentials map[string]any, vmIDs []string, desired *pluginv1.ResizeSpec, allowDowntime bool) ([]*pluginv1.VmResizeResult, error) {
+	d, ok := a.providers[driver]
+	if !ok {
+		return nil, fmt.Errorf("cloud adapter: unknown driver %q (known: %v)", driver, a.Providers())
+	}
+	plugin, err := a.host.Spawn(ctx, d)
+	if err != nil {
+		return nil, fmt.Errorf("cloud adapter: spawn %s: %w", d.Manifest.Address(), err)
+	}
+	defer func() { _ = plugin.Close() }()
+
+	cd, err := pluginhost.NewCloudDriverPlugin(plugin)
+	if err != nil {
+		return nil, fmt.Errorf("cloud adapter: wrap %s: %w", d.Manifest.Address(), err)
+	}
+
+	credsStruct, err := encodeStruct(credentials, "credentials")
+	if err != nil {
+		return nil, err
+	}
+
+	stream, err := cd.Resize(ctx, &pluginv1.ResizeRequest{
+		VmIds:         vmIDs,
+		Desired:       desired,
+		AllowDowntime: allowDowntime,
+		Credentials:   credsStruct,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("cloud adapter: resize rpc %s: %w", d.Manifest.Address(), err)
+	}
+
+	var results []*pluginv1.VmResizeResult
+	for {
+		ev, recvErr := stream.Recv()
+		if errors.Is(recvErr, io.EOF) {
+			break
+		}
+		if recvErr != nil {
+			return nil, fmt.Errorf("cloud adapter: resize stream %s: %w (stderr-tail: %s)",
+				d.Manifest.Address(), recvErr, plugin.StderrTail())
+		}
+		if ev.GetFailed() {
+			// Stream-level сбой всей операции (включая resize.unsupported от
+			// драйвера без Resizable). Превращаем в ошибку — модуль выдаст
+			// failed-event с этим message.
+			return nil, fmt.Errorf("%s", ev.GetMessage())
+		}
+		if len(ev.GetResults()) > 0 {
+			results = append(results, ev.GetResults()...)
+		}
+	}
+	return results, nil
+}

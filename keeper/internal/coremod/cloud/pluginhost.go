@@ -41,6 +41,13 @@ type PluginHost interface {
 	// credentials — тот же A-flow. Stream-агрегация — на стороне реализации;
 	// модуль получает финальный []VmInfo.
 	List(ctx context.Context, driver string, credentials, filter map[string]any) ([]*pluginv1.VmInfo, error)
+
+	// Resize расширяет ресурсы VM (cpu/ram/disk, наши единицы) через CloudDriver-
+	// плагин `driver` (= Provider.Type). desired — целевой spec (поля с 0 не
+	// меняются); allowDowntime разрешает stop/start. credentials — тот же A-flow.
+	// Stream-агрегация — на стороне реализации; модуль получает per-vm результаты
+	// (или ошибку при stream-fail / resize.unsupported).
+	Resize(ctx context.Context, driver string, credentials map[string]any, vmIDs []string, desired *pluginv1.ResizeSpec, allowDowntime bool) ([]*pluginv1.VmResizeResult, error)
 }
 
 // ErrPluginHostNotImplemented — sentinel-ошибка [StubHost], которую модуль
@@ -67,5 +74,9 @@ func (StubHost) Status(_ context.Context, _ string, _ map[string]any, _ string) 
 }
 
 func (StubHost) List(_ context.Context, _ string, _, _ map[string]any) ([]*pluginv1.VmInfo, error) {
+	return nil, ErrPluginHostNotImplemented
+}
+
+func (StubHost) Resize(_ context.Context, _ string, _ map[string]any, _ []string, _ *pluginv1.ResizeSpec, _ bool) ([]*pluginv1.VmResizeResult, error) {
 	return nil, ErrPluginHostNotImplemented
 }

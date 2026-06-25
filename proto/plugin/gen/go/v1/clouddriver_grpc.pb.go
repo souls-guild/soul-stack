@@ -23,6 +23,7 @@ const (
 	CloudDriver_Validate_FullMethodName = "/soulstack.plugin.v1.CloudDriver/Validate"
 	CloudDriver_Create_FullMethodName   = "/soulstack.plugin.v1.CloudDriver/Create"
 	CloudDriver_Destroy_FullMethodName  = "/soulstack.plugin.v1.CloudDriver/Destroy"
+	CloudDriver_Resize_FullMethodName   = "/soulstack.plugin.v1.CloudDriver/Resize"
 	CloudDriver_Status_FullMethodName   = "/soulstack.plugin.v1.CloudDriver/Status"
 	CloudDriver_List_FullMethodName     = "/soulstack.plugin.v1.CloudDriver/List"
 )
@@ -50,6 +51,17 @@ type CloudDriverClient interface {
 	Create(ctx context.Context, in *CreateRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CreateEvent], error)
 	// Удаляет VM. Под guard-rails — см. docs/keeper/cloud.md → Безопасность destroy.
 	Destroy(ctx context.Context, in *DestroyRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DestroyEvent], error)
+	// Расширяет ресурсы VM (resize): cpu_cores / ram_mb / disk_gb (наши единицы,
+	// драйвер конвертит в provider-нативные). Драйвер инкапсулирует всю
+	// последовательность (quota-check → stop → update → start для cpu/ram +
+	// online disk-add) — Keeper агностичен к stop/start. Стримит прогресс по
+	// фазам, как Create.
+	//
+	// forward-compat only-add (ADR-012(c)/ADR-020): новый RPC, без reuse
+	// field-номеров, без удаления. Старый драйвер без capability-marker
+	// `Resizable` (sdk/clouddriver) → host вернёт resize.unsupported, а не
+	// сырой Unimplemented.
+	Resize(ctx context.Context, in *ResizeRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ResizeEvent], error)
 	// Опрос состояния конкретной VM.
 	Status(ctx context.Context, in *StatusRequest, opts ...grpc.CallOption) (*StatusReply, error)
 	// Перечисление VM, известных провайдеру.
@@ -122,6 +134,25 @@ func (c *cloudDriverClient) Destroy(ctx context.Context, in *DestroyRequest, opt
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type CloudDriver_DestroyClient = grpc.ServerStreamingClient[DestroyEvent]
 
+func (c *cloudDriverClient) Resize(ctx context.Context, in *ResizeRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ResizeEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &CloudDriver_ServiceDesc.Streams[2], CloudDriver_Resize_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ResizeRequest, ResizeEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type CloudDriver_ResizeClient = grpc.ServerStreamingClient[ResizeEvent]
+
 func (c *cloudDriverClient) Status(ctx context.Context, in *StatusRequest, opts ...grpc.CallOption) (*StatusReply, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(StatusReply)
@@ -134,7 +165,7 @@ func (c *cloudDriverClient) Status(ctx context.Context, in *StatusRequest, opts 
 
 func (c *cloudDriverClient) List(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[VmInfo], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &CloudDriver_ServiceDesc.Streams[2], CloudDriver_List_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &CloudDriver_ServiceDesc.Streams[3], CloudDriver_List_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -174,6 +205,17 @@ type CloudDriverServer interface {
 	Create(*CreateRequest, grpc.ServerStreamingServer[CreateEvent]) error
 	// Удаляет VM. Под guard-rails — см. docs/keeper/cloud.md → Безопасность destroy.
 	Destroy(*DestroyRequest, grpc.ServerStreamingServer[DestroyEvent]) error
+	// Расширяет ресурсы VM (resize): cpu_cores / ram_mb / disk_gb (наши единицы,
+	// драйвер конвертит в provider-нативные). Драйвер инкапсулирует всю
+	// последовательность (quota-check → stop → update → start для cpu/ram +
+	// online disk-add) — Keeper агностичен к stop/start. Стримит прогресс по
+	// фазам, как Create.
+	//
+	// forward-compat only-add (ADR-012(c)/ADR-020): новый RPC, без reuse
+	// field-номеров, без удаления. Старый драйвер без capability-marker
+	// `Resizable` (sdk/clouddriver) → host вернёт resize.unsupported, а не
+	// сырой Unimplemented.
+	Resize(*ResizeRequest, grpc.ServerStreamingServer[ResizeEvent]) error
 	// Опрос состояния конкретной VM.
 	Status(context.Context, *StatusRequest) (*StatusReply, error)
 	// Перечисление VM, известных провайдеру.
@@ -199,6 +241,9 @@ func (UnimplementedCloudDriverServer) Create(*CreateRequest, grpc.ServerStreamin
 }
 func (UnimplementedCloudDriverServer) Destroy(*DestroyRequest, grpc.ServerStreamingServer[DestroyEvent]) error {
 	return status.Error(codes.Unimplemented, "method Destroy not implemented")
+}
+func (UnimplementedCloudDriverServer) Resize(*ResizeRequest, grpc.ServerStreamingServer[ResizeEvent]) error {
+	return status.Error(codes.Unimplemented, "method Resize not implemented")
 }
 func (UnimplementedCloudDriverServer) Status(context.Context, *StatusRequest) (*StatusReply, error) {
 	return nil, status.Error(codes.Unimplemented, "method Status not implemented")
@@ -285,6 +330,17 @@ func _CloudDriver_Destroy_Handler(srv interface{}, stream grpc.ServerStream) err
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type CloudDriver_DestroyServer = grpc.ServerStreamingServer[DestroyEvent]
 
+func _CloudDriver_Resize_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ResizeRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(CloudDriverServer).Resize(m, &grpc.GenericServerStream[ResizeRequest, ResizeEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type CloudDriver_ResizeServer = grpc.ServerStreamingServer[ResizeEvent]
+
 func _CloudDriver_Status_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(StatusRequest)
 	if err := dec(in); err != nil {
@@ -343,6 +399,11 @@ var CloudDriver_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "Destroy",
 			Handler:       _CloudDriver_Destroy_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "Resize",
+			Handler:       _CloudDriver_Resize_Handler,
 			ServerStreams: true,
 		},
 		{

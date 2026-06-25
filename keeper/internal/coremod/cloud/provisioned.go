@@ -9,6 +9,11 @@
 //     (ADR-017 cascade): souls→destroyed + active soul_seeds→orphaned +
 //     active bootstrap_tokens→burned. Output: destroyed_vm_ids + sids +
 //     cascade-counts.
+//   - resized: PluginHost.Resize(vm_ids, desired) — драйвер расширяет ресурсы
+//     VM (cpu/ram/disk, наши единицы). Keeper-агностичен к stop/start: всю
+//     последовательность инкапсулирует драйвер. БД не трогается (resize не
+//     меняет реестр souls). Output: results[{vm_id, caused_downtime, error}].
+//     Драйвер без Resizable-capability → resize.unsupported.
 //
 // Заменяет паттерн «destiny `cloud-provision` с `on: keeper`» (ADR-017):
 // это keeper-side операция, не пакет задач для Soul.
@@ -25,6 +30,7 @@ import (
 
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // Name — base-имя модуля без state-суффикса (ключ Registry). Author-форма
@@ -36,6 +42,7 @@ const Name = "core.cloud"
 const (
 	StateCreated   = "created"
 	StateDestroyed = "destroyed"
+	StateResized   = "resized"
 )
 
 // SoulStore — узкое подмножество для INSERT в souls.
@@ -149,8 +156,23 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 		if _, err := util.StringSliceParam(req.Params, "vm_ids"); err != nil {
 			errs = append(errs, err.Error())
 		}
+	case StateResized:
+		if _, err := util.StringParam(req.Params, "provider"); err != nil {
+			errs = append(errs, err.Error())
+		}
+		if _, err := util.StringSliceParam(req.Params, "vm_ids"); err != nil {
+			errs = append(errs, err.Error())
+		}
+		// desired — обязательный объект; хотя бы одно измерение (cpu/ram/disk)
+		// должно быть задано (>0), иначе resize — бессмысленный no-op.
+		if _, _, _, derr := parseDesired(req.Params); derr != nil {
+			errs = append(errs, derr.Error())
+		}
+		if _, _, aerr := util.OptBoolParam(req.Params, "allow_downtime"); aerr != nil {
+			errs = append(errs, aerr.Error())
+		}
 	default:
-		errs = append(errs, fmt.Sprintf("unknown state %q (want created/destroyed)", req.State))
+		errs = append(errs, fmt.Sprintf("unknown state %q (want created/destroyed/resized)", req.State))
 	}
 	return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
@@ -165,6 +187,8 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		return m.applyCreated(req, stream)
 	case StateDestroyed:
 		return m.applyDestroyed(req, stream)
+	case StateResized:
+		return m.applyResized(req, stream)
 	default:
 		return util.SendFailed(stream, fmt.Sprintf("unknown state %q", req.State))
 	}
@@ -411,4 +435,135 @@ func (m *Module) applyDestroyed(req *pluginv1.ApplyRequest, stream grpc.ServerSt
 		"seeds_orphaned": float64(counts.SeedsOrphaned),
 		"tokens_burned":  float64(counts.TokensBurned),
 	})
+}
+
+// parseDesired извлекает целевые ресурсы из params.desired (наши единицы:
+// cpu=ядра / ram_mb=МБ / disk_gb=ГБ). Все поля опциональные, но хотя бы одно
+// должно быть задано (>0) — иначе resize бессмысленен. Возвращает значения
+// (0 = не менять) + ошибку валидации (отсутствует desired / неверный тип /
+// все нули / отрицательные).
+func parseDesired(params *structpb.Struct) (cpu int32, ramMB, diskGB int64, err error) {
+	desired, derr := util.OptStructParam(params, "desired")
+	if derr != nil {
+		return 0, 0, 0, derr
+	}
+	if desired == nil {
+		return 0, 0, 0, fmt.Errorf("param %q: missing (resize requires target resources)", "desired")
+	}
+	cpu64, _, cerr := util.OptIntParam(desired, "cpu_cores")
+	if cerr != nil {
+		return 0, 0, 0, cerr
+	}
+	ramMB, _, rerr := util.OptIntParam(desired, "ram_mb")
+	if rerr != nil {
+		return 0, 0, 0, rerr
+	}
+	diskGB, _, gerr := util.OptIntParam(desired, "disk_gb")
+	if gerr != nil {
+		return 0, 0, 0, gerr
+	}
+	if cpu64 < 0 || ramMB < 0 || diskGB < 0 {
+		return 0, 0, 0, fmt.Errorf("param %q: cpu_cores/ram_mb/disk_gb must be >= 0", "desired")
+	}
+	if cpu64 == 0 && ramMB == 0 && diskGB == 0 {
+		return 0, 0, 0, fmt.Errorf("param %q: at least one of cpu_cores/ram_mb/disk_gb must be > 0", "desired")
+	}
+	return int32(cpu64), ramMB, diskGB, nil
+}
+
+// applyResized реализует state=resized. См. doc-комментарий пакета. БД не
+// трогается: resize меняет ресурсы VM, но не реестр souls.
+func (m *Module) applyResized(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
+	ctx := stream.Context()
+	provider, err := util.StringParam(req.Params, "provider")
+	if err != nil {
+		return util.SendFailed(stream, err.Error())
+	}
+	vmIDs, err := util.StringSliceParam(req.Params, "vm_ids")
+	if err != nil {
+		return util.SendFailed(stream, err.Error())
+	}
+	cpu, ramMB, diskGB, err := parseDesired(req.Params)
+	if err != nil {
+		return util.SendFailed(stream, err.Error())
+	}
+	allowDowntime, _, err := util.OptBoolParam(req.Params, "allow_downtime")
+	if err != nil {
+		return util.SendFailed(stream, err.Error())
+	}
+
+	if m.Resolver == nil {
+		return util.SendFailed(stream, "cloud resized: provider resolver not configured (wire CredentialsResolverPG in main)")
+	}
+	resolved, err := m.Resolver.Resolve(ctx, provider)
+	if err != nil {
+		return util.SendFailed(stream, fmt.Sprintf("resolve provider %q: %s", provider, maskErr(err)))
+	}
+
+	desired := &pluginv1.ResizeSpec{CpuCores: cpu, RamMb: ramMB, DiskGb: diskGB}
+	results, err := m.Plugins.Resize(ctx, resolved.Driver, resolved.Credentials, vmIDs, desired, allowDowntime)
+	if err != nil {
+		return util.SendFailed(stream, fmt.Sprintf("cloud resize via provider %q: %s", provider, maskErr(err)))
+	}
+
+	resultsOut := make([]any, 0, len(results))
+	causedDowntime := false
+	var perVMErrors []string
+	for _, r := range results {
+		entry := map[string]any{
+			"vm_id":           r.GetVmId(),
+			"caused_downtime": r.GetCausedDowntime(),
+		}
+		if e := r.GetError(); e != "" {
+			entry["error"] = e
+			perVMErrors = append(perVMErrors, fmt.Sprintf("%s: %s", r.GetVmId(), e))
+		}
+		if r.GetCausedDowntime() {
+			causedDowntime = true
+		}
+		resultsOut = append(resultsOut, entry)
+	}
+
+	if m.Audit != nil {
+		ev := &audit.Event{
+			EventType: audit.EventCloudProvisioned,
+			Source:    audit.SourceKeeperInternal,
+			Payload: map[string]any{
+				"action":          StateResized,
+				"provider":        provider,
+				"vm_ids":          toAnySlice(vmIDs),
+				"cpu_cores":       float64(cpu),
+				"ram_mb":          float64(ramMB),
+				"disk_gb":         float64(diskGB),
+				"caused_downtime": causedDowntime,
+			},
+		}
+		if werr := m.Audit.Write(ctx, ev); werr != nil {
+			return util.SendFailed(stream, fmt.Sprintf("audit write: %v", werr))
+		}
+	}
+
+	// changed=true: resize всегда меняет ресурс (идемпотентность к целевому
+	// размеру — задача драйвера; на уровне модуля считаем resize изменяющей
+	// операцией). Per-VM ошибки не валят весь шаг (часть VM могла зарезайзиться),
+	// но попадают в output для наблюдаемости.
+	out := map[string]any{
+		"action":          StateResized,
+		"vm_ids":          toAnySlice(vmIDs),
+		"results":         resultsOut,
+		"caused_downtime": causedDowntime,
+	}
+	if len(perVMErrors) > 0 {
+		out["errors"] = toAnySlice(perVMErrors)
+	}
+	return util.SendFinal(stream, true, out)
+}
+
+// toAnySlice конвертирует []string в []any для structpb-output.
+func toAnySlice(ss []string) []any {
+	out := make([]any, len(ss))
+	for i, s := range ss {
+		out[i] = s
+	}
+	return out
 }

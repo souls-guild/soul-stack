@@ -22,12 +22,17 @@ type fakePlugins struct {
 	createErr     error
 	destroyResp   []string
 	destroyErr    error
+	resizeResp    []*pluginv1.VmResizeResult
+	resizeErr     error
 	lastDriver    string
 	lastProfile   map[string]any
 	lastCreds     map[string]any
 	lastUserdata  string
 	lastCount     int32
 	lastDestroyed []string
+	lastResizeIDs []string
+	lastDesired   *pluginv1.ResizeSpec
+	lastDowntime  bool
 }
 
 func (f *fakePlugins) Create(_ context.Context, driver string, profile, credentials map[string]any, count int32, userdata string) ([]*pluginv1.VmInfo, error) {
@@ -61,6 +66,18 @@ func (f *fakePlugins) Status(_ context.Context, _ string, _ map[string]any, _ st
 
 func (f *fakePlugins) List(_ context.Context, _ string, _, _ map[string]any) ([]*pluginv1.VmInfo, error) {
 	return nil, coremodcloud.ErrPluginHostNotImplemented
+}
+
+func (f *fakePlugins) Resize(_ context.Context, driver string, credentials map[string]any, vmIDs []string, desired *pluginv1.ResizeSpec, allowDowntime bool) ([]*pluginv1.VmResizeResult, error) {
+	f.lastDriver = driver
+	f.lastCreds = credentials
+	f.lastResizeIDs = append([]string(nil), vmIDs...)
+	f.lastDesired = desired
+	f.lastDowntime = allowDowntime
+	if f.resizeErr != nil {
+		return nil, f.resizeErr
+	}
+	return f.resizeResp, nil
 }
 
 // fakeResolver — стаб ProviderResolver: маппит param `provider` (= имя Provider)
@@ -655,6 +672,163 @@ func TestApply_StubHost_FailsCleanly(t *testing.T) {
 	if err := m.Apply(&pluginv1.ApplyRequest{
 		State:  "created",
 		Params: mustStruct(t, map[string]any{"provider": "aws"}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if !stream.Last().Failed {
+		t.Fatal("expected failed=true from StubHost")
+	}
+}
+
+// --- resized (state) ---
+
+func TestValidate_Resized_Ok(t *testing.T) {
+	m := coremodcloud.New(&fakePlugins{}, &fakeResolver{}, &fakeSouls{}, newFakeTokens(), &fakeCascade{}, &fakeAudit{})
+	rep, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
+		State: "resized",
+		Params: mustStruct(t, map[string]any{
+			"provider": "aws",
+			"vm_ids":   []any{"i-1"},
+			"desired":  map[string]any{"cpu_cores": float64(4), "ram_mb": float64(8192)},
+		}),
+	})
+	if !rep.Ok {
+		t.Fatalf("expected ok, got errors: %v", rep.Errors)
+	}
+}
+
+func TestValidate_Resized_MissingDesired(t *testing.T) {
+	m := coremodcloud.New(&fakePlugins{}, &fakeResolver{}, &fakeSouls{}, newFakeTokens(), &fakeCascade{}, &fakeAudit{})
+	rep, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
+		State: "resized",
+		Params: mustStruct(t, map[string]any{
+			"provider": "aws",
+			"vm_ids":   []any{"i-1"},
+		}),
+	})
+	if rep.Ok {
+		t.Fatal("expected error on missing desired")
+	}
+}
+
+func TestValidate_Resized_AllZeroDesired(t *testing.T) {
+	m := coremodcloud.New(&fakePlugins{}, &fakeResolver{}, &fakeSouls{}, newFakeTokens(), &fakeCascade{}, &fakeAudit{})
+	rep, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
+		State: "resized",
+		Params: mustStruct(t, map[string]any{
+			"provider": "aws",
+			"vm_ids":   []any{"i-1"},
+			"desired":  map[string]any{"cpu_cores": float64(0), "ram_mb": float64(0), "disk_gb": float64(0)},
+		}),
+	})
+	if rep.Ok {
+		t.Fatal("expected error on all-zero desired (no dimension to change)")
+	}
+}
+
+func TestApply_Resized_PassesDesiredAndAggregates(t *testing.T) {
+	fp := &fakePlugins{resizeResp: []*pluginv1.VmResizeResult{
+		{VmId: "i-1", CausedDowntime: true},
+		{VmId: "i-2", CausedDowntime: false},
+	}}
+	m := coremodcloud.New(fp, &fakeResolver{driver: "wb"}, &fakeSouls{}, newFakeTokens(), nil, &fakeAudit{})
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State: "resized",
+		Params: mustStruct(t, map[string]any{
+			"provider":       "prox",
+			"vm_ids":         []any{"i-1", "i-2"},
+			"desired":        map[string]any{"cpu_cores": float64(4), "ram_mb": float64(8192), "disk_gb": float64(100)},
+			"allow_downtime": true,
+		}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	ev := stream.Last()
+	if ev.Failed {
+		t.Fatalf("unexpected failed: %+v", ev)
+	}
+	if !ev.Changed {
+		t.Fatal("resize must report changed=true")
+	}
+	// Наши единицы прокинуты в ResizeSpec без конверсии (конверсия в WB-байты — драйвер).
+	if fp.lastDesired.GetCpuCores() != 4 || fp.lastDesired.GetRamMb() != 8192 || fp.lastDesired.GetDiskGb() != 100 {
+		t.Fatalf("desired not propagated: %+v", fp.lastDesired)
+	}
+	if !fp.lastDowntime {
+		t.Fatal("allow_downtime not propagated")
+	}
+	if fp.lastDriver != "wb" {
+		t.Fatalf("driver=%q, want resolved wb", fp.lastDriver)
+	}
+	out := ev.Output.AsMap()
+	if dt, _ := out["caused_downtime"].(bool); !dt {
+		t.Fatal("aggregate caused_downtime must be true (one VM had downtime)")
+	}
+	results, _ := out["results"].([]any)
+	if len(results) != 2 {
+		t.Fatalf("results=%v, want 2", results)
+	}
+}
+
+func TestApply_Resized_PerVmErrorInOutput(t *testing.T) {
+	fp := &fakePlugins{resizeResp: []*pluginv1.VmResizeResult{
+		{VmId: "i-1"},
+		{VmId: "i-2", Error: "quota_exceeded: disk"},
+	}}
+	m := coremodcloud.New(fp, &fakeResolver{}, &fakeSouls{}, newFakeTokens(), nil, &fakeAudit{})
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State: "resized",
+		Params: mustStruct(t, map[string]any{
+			"provider": "aws",
+			"vm_ids":   []any{"i-1", "i-2"},
+			"desired":  map[string]any{"disk_gb": float64(200)},
+		}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	ev := stream.Last()
+	if ev.Failed {
+		t.Fatalf("per-VM error must NOT fail whole step: %+v", ev)
+	}
+	out := ev.Output.AsMap()
+	errs, _ := out["errors"].([]any)
+	if len(errs) != 1 {
+		t.Fatalf("errors=%v, want 1 per-VM error surfaced", errs)
+	}
+}
+
+func TestApply_Resized_PluginError_FailsTask(t *testing.T) {
+	fp := &fakePlugins{resizeErr: errors.New("provider down")}
+	m := coremodcloud.New(fp, &fakeResolver{}, &fakeSouls{}, newFakeTokens(), nil, &fakeAudit{})
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State: "resized",
+		Params: mustStruct(t, map[string]any{
+			"provider": "aws",
+			"vm_ids":   []any{"i-1"},
+			"desired":  map[string]any{"cpu_cores": float64(2)},
+		}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if !stream.Last().Failed {
+		t.Fatal("expected failed=true on resize plugin error")
+	}
+}
+
+func TestApply_Resized_StubHost_FailsCleanly(t *testing.T) {
+	// StubHost возвращает ErrPluginHostNotImplemented → failed-event, не crash.
+	m := coremodcloud.New(coremodcloud.StubHost{}, &fakeResolver{}, &fakeSouls{}, newFakeTokens(), nil, &fakeAudit{})
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State: "resized",
+		Params: mustStruct(t, map[string]any{
+			"provider": "aws",
+			"vm_ids":   []any{"i-1"},
+			"desired":  map[string]any{"ram_mb": float64(4096)},
+		}),
 	}, stream); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}

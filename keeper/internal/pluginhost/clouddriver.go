@@ -75,3 +75,11 @@ func (c *CloudDriverPlugin) Status(ctx context.Context, req *pluginv1.StatusRequ
 func (c *CloudDriverPlugin) List(ctx context.Context, req *pluginv1.ListRequest) (grpc.ServerStreamingClient[pluginv1.VmInfo], error) {
 	return c.client.List(ctx, req)
 }
+
+// Resize — RPC CloudDriver.Resize (server-streaming). Расширение ресурсов VM;
+// caller читает события прогресса по фазам до EOF. Драйвер без capability
+// `Resizable` (sdk/clouddriver) вернёт финальный ResizeEvent с failed=true и
+// message resize.unsupported — это НЕ gRPC Unimplemented.
+func (c *CloudDriverPlugin) Resize(ctx context.Context, req *pluginv1.ResizeRequest) (grpc.ServerStreamingClient[pluginv1.ResizeEvent], error) {
+	return c.client.Resize(ctx, req)
+}

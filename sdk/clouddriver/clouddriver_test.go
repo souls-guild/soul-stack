@@ -3,6 +3,7 @@ package clouddriver
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
@@ -141,6 +142,7 @@ type fakeDriver struct {
 	statusVmId    string
 	statusReply   *pluginv1.StatusReply
 	listCalled    bool
+	resizeVmIds   []string
 }
 
 func (f *fakeDriver) Schema(context.Context, *pluginv1.SchemaRequest) (*pluginv1.SchemaReply, error) {
@@ -171,6 +173,20 @@ func (f *fakeDriver) List(_ *pluginv1.ListRequest, _ grpc.ServerStreamingServer[
 	f.listCalled = true
 	return nil
 }
+
+func (f *fakeDriver) Resize(req *pluginv1.ResizeRequest, stream grpc.ServerStreamingServer[pluginv1.ResizeEvent]) error {
+	f.resizeVmIds = req.VmIds
+	results := make([]*pluginv1.VmResizeResult, len(req.VmIds))
+	for i, id := range req.VmIds {
+		results[i] = &pluginv1.VmResizeResult{VmId: id, CausedDowntime: req.AllowDowntime}
+	}
+	return stream.Send(&pluginv1.ResizeEvent{Results: results})
+}
+
+// resizableDriver — fakeDriver, ДОПОЛНИТЕЛЬНО объявивший Resizable-capability.
+type resizableDriver struct{ fakeDriver }
+
+func (*resizableDriver) Resizable() {}
 
 // fakeCreateStream / fakeDestroyStream / fakeListStream — минимальные mock
 // grpc.ServerStreamingServer для in-process unit-тестов (без поднятия реального
@@ -210,3 +226,91 @@ func (s *fakeListStream) Send(v *pluginv1.VmInfo) error {
 }
 
 func (s *fakeListStream) Context() context.Context { return context.Background() }
+
+type fakeResizeStream struct {
+	grpc.ServerStreamingServer[pluginv1.ResizeEvent]
+	sent []*pluginv1.ResizeEvent
+}
+
+func (s *fakeResizeStream) Send(e *pluginv1.ResizeEvent) error {
+	s.sent = append(s.sent, e)
+	return nil
+}
+
+func (s *fakeResizeStream) Context() context.Context { return context.Background() }
+
+// TestBaseDriverNotResizable — BaseDriver СОЗНАТЕЛЬНО не реализует Resizable:
+// драйвер на BaseDriver получает default-deny на resize (паттерн PlanReadSafe).
+func TestBaseDriverNotResizable(t *testing.T) {
+	var b BaseDriver
+	if _, ok := any(b).(Resizable); ok {
+		t.Fatal("BaseDriver реализует Resizable — должен НЕ реализовывать (default-deny)")
+	}
+}
+
+// TestResizableDetect — явная реализация Resizable распознаётся
+// type-assertion-ом (как это делает serverAdapter/host).
+func TestResizableDetect(t *testing.T) {
+	var fake CloudDriver = &fakeDriver{}
+	if _, ok := fake.(Resizable); ok {
+		t.Fatal("fakeDriver без Resizable распознан как Resizable")
+	}
+	var rz CloudDriver = &resizableDriver{}
+	if _, ok := rz.(Resizable); !ok {
+		t.Fatal("явная реализация Resizable не распознаётся type-assertion-ом")
+	}
+}
+
+// TestBaseDriverResizeDefaultDeny — BaseDriver.Resize шлёт failed-event
+// resize.unsupported, НЕ панику и НЕ ложный успех.
+func TestBaseDriverResizeDefaultDeny(t *testing.T) {
+	var b BaseDriver
+	stream := &fakeResizeStream{}
+	if err := b.Resize(&pluginv1.ResizeRequest{VmIds: []string{"i-1"}}, stream); err != nil {
+		t.Fatalf("Resize: %v", err)
+	}
+	if len(stream.sent) != 1 || !stream.sent[0].Failed {
+		t.Fatalf("Resize sent=%+v, want one failed event", stream.sent)
+	}
+	if !strings.Contains(stream.sent[0].Message, "resize.unsupported") {
+		t.Fatalf("Resize message=%q, want resize.unsupported", stream.sent[0].Message)
+	}
+}
+
+// TestServerAdapterResizeDefaultDeny — serverAdapter не вызывает impl.Resize
+// и возвращает resize.unsupported, если impl НЕ реализует Resizable.
+func TestServerAdapterResizeDefaultDeny(t *testing.T) {
+	impl := &fakeDriver{}
+	adapter := &serverAdapter{impl: impl}
+	stream := &fakeResizeStream{}
+	if err := adapter.Resize(&pluginv1.ResizeRequest{VmIds: []string{"i-1"}}, stream); err != nil {
+		t.Fatalf("Resize: %v", err)
+	}
+	if impl.resizeVmIds != nil {
+		t.Fatal("impl.Resize вызван несмотря на отсутствие Resizable")
+	}
+	if len(stream.sent) != 1 || !stream.sent[0].Failed ||
+		!strings.Contains(stream.sent[0].Message, "resize.unsupported") {
+		t.Fatalf("Resize sent=%+v, want resize.unsupported failed event", stream.sent)
+	}
+}
+
+// TestServerAdapterResizeDelegates — serverAdapter ПРОКСИРУЕТ Resize к impl,
+// если impl реализует Resizable.
+func TestServerAdapterResizeDelegates(t *testing.T) {
+	impl := &resizableDriver{}
+	adapter := &serverAdapter{impl: impl}
+	stream := &fakeResizeStream{}
+	if err := adapter.Resize(&pluginv1.ResizeRequest{VmIds: []string{"i-1", "i-2"}, AllowDowntime: true}, stream); err != nil {
+		t.Fatalf("Resize: %v", err)
+	}
+	if len(impl.resizeVmIds) != 2 {
+		t.Fatalf("impl.Resize vm_ids=%v, want 2", impl.resizeVmIds)
+	}
+	if len(stream.sent) != 1 || len(stream.sent[0].Results) != 2 {
+		t.Fatalf("Resize sent=%+v, want one event with 2 results", stream.sent)
+	}
+	if !stream.sent[0].Results[0].CausedDowntime {
+		t.Fatal("caused_downtime not propagated (allow_downtime=true)")
+	}
+}

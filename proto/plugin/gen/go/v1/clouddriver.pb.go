@@ -649,6 +649,298 @@ func (x *ListRequest) GetCredentials() *structpb.Struct {
 	return nil
 }
 
+// ResizeSpec — целевые ресурсы VM. Единицы — НАШИ канонические (драйвер
+// конвертит в provider-нативные: WB-байты и т.п.):
+//   - cpu_cores: целевое число vCPU (ядра).
+//   - ram_mb: целевой объём RAM в МЕГАБАЙТАХ.
+//   - disk_gb: целевой АБСОЛЮТНЫЙ размер диска в ГИГАБАЙТАХ (НЕ дельта) —
+//     идемпотентно: повторный resize к тому же размеру = no-op.
+//
+// Все поля опциональные: 0 = «не менять это измерение». Драйвер меняет только
+// заданные (>0) поля. Разделение cpu/ram (требуют stop/start у части провайдеров)
+// и disk (online add) — на стороне драйвера.
+type ResizeSpec struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CpuCores      int32                  `protobuf:"varint,1,opt,name=cpu_cores,json=cpuCores,proto3" json:"cpu_cores,omitempty"`
+	RamMb         int64                  `protobuf:"varint,2,opt,name=ram_mb,json=ramMb,proto3" json:"ram_mb,omitempty"`
+	DiskGb        int64                  `protobuf:"varint,3,opt,name=disk_gb,json=diskGb,proto3" json:"disk_gb,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResizeSpec) Reset() {
+	*x = ResizeSpec{}
+	mi := &file_v1_clouddriver_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResizeSpec) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResizeSpec) ProtoMessage() {}
+
+func (x *ResizeSpec) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_clouddriver_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResizeSpec.ProtoReflect.Descriptor instead.
+func (*ResizeSpec) Descriptor() ([]byte, []int) {
+	return file_v1_clouddriver_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *ResizeSpec) GetCpuCores() int32 {
+	if x != nil {
+		return x.CpuCores
+	}
+	return 0
+}
+
+func (x *ResizeSpec) GetRamMb() int64 {
+	if x != nil {
+		return x.RamMb
+	}
+	return 0
+}
+
+func (x *ResizeSpec) GetDiskGb() int64 {
+	if x != nil {
+		return x.DiskGb
+	}
+	return 0
+}
+
+// ResizeRequest — запрос Resize.
+type ResizeRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// VM-идентификаторы для resize (формат provider-specific). Один батч —
+	// одинаковый target ко всем VM (как userdata в Create).
+	VmIds []string `protobuf:"bytes,1,rep,name=vm_ids,json=vmIds,proto3" json:"vm_ids,omitempty"`
+	// Целевые ресурсы (наши единицы). Поля с 0 не меняются.
+	Desired *ResizeSpec `protobuf:"bytes,2,opt,name=desired,proto3" json:"desired,omitempty"`
+	// Разрешён ли downtime (stop/start VM для применения cpu/ram). false →
+	// драйвер обязан отказать (или применить только то, что online, например
+	// disk-add) вместо незапланированного перезапуска. caused_downtime в
+	// per-vm результате сообщает, был ли downtime фактически.
+	AllowDowntime bool `protobuf:"varint,3,opt,name=allow_downtime,json=allowDowntime,proto3" json:"allow_downtime,omitempty"`
+	// Credentials провайдера, резолвленные Keeper-ом из Provider-реестра — см.
+	// CreateRequest.credentials (тот же A-flow). Без них драйвер не может
+	// аутентифицироваться в provider API для update-операции.
+	Credentials   *structpb.Struct `protobuf:"bytes,4,opt,name=credentials,proto3" json:"credentials,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResizeRequest) Reset() {
+	*x = ResizeRequest{}
+	mi := &file_v1_clouddriver_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResizeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResizeRequest) ProtoMessage() {}
+
+func (x *ResizeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_clouddriver_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResizeRequest.ProtoReflect.Descriptor instead.
+func (*ResizeRequest) Descriptor() ([]byte, []int) {
+	return file_v1_clouddriver_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *ResizeRequest) GetVmIds() []string {
+	if x != nil {
+		return x.VmIds
+	}
+	return nil
+}
+
+func (x *ResizeRequest) GetDesired() *ResizeSpec {
+	if x != nil {
+		return x.Desired
+	}
+	return nil
+}
+
+func (x *ResizeRequest) GetAllowDowntime() bool {
+	if x != nil {
+		return x.AllowDowntime
+	}
+	return false
+}
+
+func (x *ResizeRequest) GetCredentials() *structpb.Struct {
+	if x != nil {
+		return x.Credentials
+	}
+	return nil
+}
+
+// VmResizeResult — per-VM результат resize (в финальном ResizeEvent).
+type VmResizeResult struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Provider-specific идентификатор VM.
+	VmId string `protobuf:"bytes,1,opt,name=vm_id,json=vmId,proto3" json:"vm_id,omitempty"`
+	// true, если для применения изменений потребовался stop/start VM.
+	CausedDowntime bool `protobuf:"varint,2,opt,name=caused_downtime,json=causedDowntime,proto3" json:"caused_downtime,omitempty"`
+	// Заполнено при per-VM ошибке (provider отверг конкретную VM). Пустое —
+	// успех. Stream-level failed (ResizeEvent.failed) — это сбой всей операции.
+	Error         string `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VmResizeResult) Reset() {
+	*x = VmResizeResult{}
+	mi := &file_v1_clouddriver_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VmResizeResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VmResizeResult) ProtoMessage() {}
+
+func (x *VmResizeResult) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_clouddriver_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VmResizeResult.ProtoReflect.Descriptor instead.
+func (*VmResizeResult) Descriptor() ([]byte, []int) {
+	return file_v1_clouddriver_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *VmResizeResult) GetVmId() string {
+	if x != nil {
+		return x.VmId
+	}
+	return ""
+}
+
+func (x *VmResizeResult) GetCausedDowntime() bool {
+	if x != nil {
+		return x.CausedDowntime
+	}
+	return false
+}
+
+func (x *VmResizeResult) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+// ResizeEvent — событие из Resize-stream-а. Промежуточные — диагностические
+// message-ы по фазам (quota-check / stopping / updating / starting);
+// финальное переносит per-vm результаты (results[]).
+type ResizeEvent struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Диагностическое сообщение фазы (опц.) — для прогресса long-running resize.
+	Message string `protobuf:"bytes,1,opt,name=message,proto3" json:"message,omitempty"`
+	// Имя текущей фазы (опц., машинно-читаемое: "quota" / "stop" / "update" /
+	// "start"). Заполняется на промежуточных событиях прогресса.
+	Phase string `protobuf:"bytes,2,opt,name=phase,proto3" json:"phase,omitempty"`
+	// Заполнено только в финальном событии — per-vm результаты.
+	Results []*VmResizeResult `protobuf:"bytes,3,rep,name=results,proto3" json:"results,omitempty"`
+	// Заполнено при сбое всей операции. Stream закрывается после первого
+	// failed=true (per-VM отказы переносятся в VmResizeResult.error без
+	// stream-level failed).
+	Failed        bool `protobuf:"varint,4,opt,name=failed,proto3" json:"failed,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResizeEvent) Reset() {
+	*x = ResizeEvent{}
+	mi := &file_v1_clouddriver_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResizeEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResizeEvent) ProtoMessage() {}
+
+func (x *ResizeEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_v1_clouddriver_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResizeEvent.ProtoReflect.Descriptor instead.
+func (*ResizeEvent) Descriptor() ([]byte, []int) {
+	return file_v1_clouddriver_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *ResizeEvent) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *ResizeEvent) GetPhase() string {
+	if x != nil {
+		return x.Phase
+	}
+	return ""
+}
+
+func (x *ResizeEvent) GetResults() []*VmResizeResult {
+	if x != nil {
+		return x.Results
+	}
+	return nil
+}
+
+func (x *ResizeEvent) GetFailed() bool {
+	if x != nil {
+		return x.Failed
+	}
+	return false
+}
+
 // VmInfo — описание одной VM (используется в Create и List).
 type VmInfo struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -666,7 +958,7 @@ type VmInfo struct {
 
 func (x *VmInfo) Reset() {
 	*x = VmInfo{}
-	mi := &file_v1_clouddriver_proto_msgTypes[11]
+	mi := &file_v1_clouddriver_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -678,7 +970,7 @@ func (x *VmInfo) String() string {
 func (*VmInfo) ProtoMessage() {}
 
 func (x *VmInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_clouddriver_proto_msgTypes[11]
+	mi := &file_v1_clouddriver_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -691,7 +983,7 @@ func (x *VmInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VmInfo.ProtoReflect.Descriptor instead.
 func (*VmInfo) Descriptor() ([]byte, []int) {
-	return file_v1_clouddriver_proto_rawDescGZIP(), []int{11}
+	return file_v1_clouddriver_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *VmInfo) GetVmId() string {
@@ -761,7 +1053,26 @@ const file_v1_clouddriver_proto_rawDesc = "" +
 	"attributes\"y\n" +
 	"\vListRequest\x12/\n" +
 	"\x06filter\x18\x01 \x01(\v2\x17.google.protobuf.StructR\x06filter\x129\n" +
-	"\vcredentials\x18\x02 \x01(\v2\x17.google.protobuf.StructR\vcredentials\"\x89\x01\n" +
+	"\vcredentials\x18\x02 \x01(\v2\x17.google.protobuf.StructR\vcredentials\"Y\n" +
+	"\n" +
+	"ResizeSpec\x12\x1b\n" +
+	"\tcpu_cores\x18\x01 \x01(\x05R\bcpuCores\x12\x15\n" +
+	"\x06ram_mb\x18\x02 \x01(\x03R\x05ramMb\x12\x17\n" +
+	"\adisk_gb\x18\x03 \x01(\x03R\x06diskGb\"\xc3\x01\n" +
+	"\rResizeRequest\x12\x15\n" +
+	"\x06vm_ids\x18\x01 \x03(\tR\x05vmIds\x129\n" +
+	"\adesired\x18\x02 \x01(\v2\x1f.soulstack.plugin.v1.ResizeSpecR\adesired\x12%\n" +
+	"\x0eallow_downtime\x18\x03 \x01(\bR\rallowDowntime\x129\n" +
+	"\vcredentials\x18\x04 \x01(\v2\x17.google.protobuf.StructR\vcredentials\"d\n" +
+	"\x0eVmResizeResult\x12\x13\n" +
+	"\x05vm_id\x18\x01 \x01(\tR\x04vmId\x12'\n" +
+	"\x0fcaused_downtime\x18\x02 \x01(\bR\x0ecausedDowntime\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"\x94\x01\n" +
+	"\vResizeEvent\x12\x18\n" +
+	"\amessage\x18\x01 \x01(\tR\amessage\x12\x14\n" +
+	"\x05phase\x18\x02 \x01(\tR\x05phase\x12=\n" +
+	"\aresults\x18\x03 \x03(\v2#.soulstack.plugin.v1.VmResizeResultR\aresults\x12\x16\n" +
+	"\x06failed\x18\x04 \x01(\bR\x06failed\"\x89\x01\n" +
 	"\x06VmInfo\x12\x13\n" +
 	"\x05vm_id\x18\x01 \x01(\tR\x04vmId\x12\x12\n" +
 	"\x04fqdn\x18\x02 \x01(\tR\x04fqdn\x12\x1d\n" +
@@ -769,12 +1080,13 @@ const file_v1_clouddriver_proto_rawDesc = "" +
 	"primary_ip\x18\x03 \x01(\tR\tprimaryIp\x127\n" +
 	"\n" +
 	"attributes\x18\x04 \x01(\v2\x17.google.protobuf.StructR\n" +
-	"attributes2\x81\x04\n" +
+	"attributes2\xd3\x04\n" +
 	"\vCloudDriver\x12N\n" +
 	"\x06Schema\x12\".soulstack.plugin.v1.SchemaRequest\x1a .soulstack.plugin.v1.SchemaReply\x12b\n" +
 	"\bValidate\x12+.soulstack.plugin.v1.ValidateProfileRequest\x1a).soulstack.plugin.v1.ValidateProfileReply\x12P\n" +
 	"\x06Create\x12\".soulstack.plugin.v1.CreateRequest\x1a .soulstack.plugin.v1.CreateEvent0\x01\x12S\n" +
-	"\aDestroy\x12#.soulstack.plugin.v1.DestroyRequest\x1a!.soulstack.plugin.v1.DestroyEvent0\x01\x12N\n" +
+	"\aDestroy\x12#.soulstack.plugin.v1.DestroyRequest\x1a!.soulstack.plugin.v1.DestroyEvent0\x01\x12P\n" +
+	"\x06Resize\x12\".soulstack.plugin.v1.ResizeRequest\x1a .soulstack.plugin.v1.ResizeEvent0\x01\x12N\n" +
 	"\x06Status\x12\".soulstack.plugin.v1.StatusRequest\x1a .soulstack.plugin.v1.StatusReply\x12G\n" +
 	"\x04List\x12 .soulstack.plugin.v1.ListRequest\x1a\x1b.soulstack.plugin.v1.VmInfo0\x01BCZAgithub.com/souls-guild/soul-stack/proto/plugin/gen/go/v1;pluginv1b\x06proto3"
 
@@ -790,7 +1102,7 @@ func file_v1_clouddriver_proto_rawDescGZIP() []byte {
 	return file_v1_clouddriver_proto_rawDescData
 }
 
-var file_v1_clouddriver_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_v1_clouddriver_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_v1_clouddriver_proto_goTypes = []any{
 	(*SchemaRequest)(nil),          // 0: soulstack.plugin.v1.SchemaRequest
 	(*SchemaReply)(nil),            // 1: soulstack.plugin.v1.SchemaReply
@@ -803,38 +1115,47 @@ var file_v1_clouddriver_proto_goTypes = []any{
 	(*StatusRequest)(nil),          // 8: soulstack.plugin.v1.StatusRequest
 	(*StatusReply)(nil),            // 9: soulstack.plugin.v1.StatusReply
 	(*ListRequest)(nil),            // 10: soulstack.plugin.v1.ListRequest
-	(*VmInfo)(nil),                 // 11: soulstack.plugin.v1.VmInfo
-	(*structpb.Struct)(nil),        // 12: google.protobuf.Struct
+	(*ResizeSpec)(nil),             // 11: soulstack.plugin.v1.ResizeSpec
+	(*ResizeRequest)(nil),          // 12: soulstack.plugin.v1.ResizeRequest
+	(*VmResizeResult)(nil),         // 13: soulstack.plugin.v1.VmResizeResult
+	(*ResizeEvent)(nil),            // 14: soulstack.plugin.v1.ResizeEvent
+	(*VmInfo)(nil),                 // 15: soulstack.plugin.v1.VmInfo
+	(*structpb.Struct)(nil),        // 16: google.protobuf.Struct
 }
 var file_v1_clouddriver_proto_depIdxs = []int32{
-	12, // 0: soulstack.plugin.v1.SchemaReply.profile_schema:type_name -> google.protobuf.Struct
-	12, // 1: soulstack.plugin.v1.ValidateProfileRequest.profile:type_name -> google.protobuf.Struct
-	12, // 2: soulstack.plugin.v1.CreateRequest.profile:type_name -> google.protobuf.Struct
-	12, // 3: soulstack.plugin.v1.CreateRequest.credentials:type_name -> google.protobuf.Struct
-	11, // 4: soulstack.plugin.v1.CreateEvent.vms:type_name -> soulstack.plugin.v1.VmInfo
-	12, // 5: soulstack.plugin.v1.DestroyRequest.credentials:type_name -> google.protobuf.Struct
-	12, // 6: soulstack.plugin.v1.StatusRequest.credentials:type_name -> google.protobuf.Struct
-	12, // 7: soulstack.plugin.v1.StatusReply.attributes:type_name -> google.protobuf.Struct
-	12, // 8: soulstack.plugin.v1.ListRequest.filter:type_name -> google.protobuf.Struct
-	12, // 9: soulstack.plugin.v1.ListRequest.credentials:type_name -> google.protobuf.Struct
-	12, // 10: soulstack.plugin.v1.VmInfo.attributes:type_name -> google.protobuf.Struct
-	0,  // 11: soulstack.plugin.v1.CloudDriver.Schema:input_type -> soulstack.plugin.v1.SchemaRequest
-	2,  // 12: soulstack.plugin.v1.CloudDriver.Validate:input_type -> soulstack.plugin.v1.ValidateProfileRequest
-	4,  // 13: soulstack.plugin.v1.CloudDriver.Create:input_type -> soulstack.plugin.v1.CreateRequest
-	6,  // 14: soulstack.plugin.v1.CloudDriver.Destroy:input_type -> soulstack.plugin.v1.DestroyRequest
-	8,  // 15: soulstack.plugin.v1.CloudDriver.Status:input_type -> soulstack.plugin.v1.StatusRequest
-	10, // 16: soulstack.plugin.v1.CloudDriver.List:input_type -> soulstack.plugin.v1.ListRequest
-	1,  // 17: soulstack.plugin.v1.CloudDriver.Schema:output_type -> soulstack.plugin.v1.SchemaReply
-	3,  // 18: soulstack.plugin.v1.CloudDriver.Validate:output_type -> soulstack.plugin.v1.ValidateProfileReply
-	5,  // 19: soulstack.plugin.v1.CloudDriver.Create:output_type -> soulstack.plugin.v1.CreateEvent
-	7,  // 20: soulstack.plugin.v1.CloudDriver.Destroy:output_type -> soulstack.plugin.v1.DestroyEvent
-	9,  // 21: soulstack.plugin.v1.CloudDriver.Status:output_type -> soulstack.plugin.v1.StatusReply
-	11, // 22: soulstack.plugin.v1.CloudDriver.List:output_type -> soulstack.plugin.v1.VmInfo
-	17, // [17:23] is the sub-list for method output_type
-	11, // [11:17] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	16, // 0: soulstack.plugin.v1.SchemaReply.profile_schema:type_name -> google.protobuf.Struct
+	16, // 1: soulstack.plugin.v1.ValidateProfileRequest.profile:type_name -> google.protobuf.Struct
+	16, // 2: soulstack.plugin.v1.CreateRequest.profile:type_name -> google.protobuf.Struct
+	16, // 3: soulstack.plugin.v1.CreateRequest.credentials:type_name -> google.protobuf.Struct
+	15, // 4: soulstack.plugin.v1.CreateEvent.vms:type_name -> soulstack.plugin.v1.VmInfo
+	16, // 5: soulstack.plugin.v1.DestroyRequest.credentials:type_name -> google.protobuf.Struct
+	16, // 6: soulstack.plugin.v1.StatusRequest.credentials:type_name -> google.protobuf.Struct
+	16, // 7: soulstack.plugin.v1.StatusReply.attributes:type_name -> google.protobuf.Struct
+	16, // 8: soulstack.plugin.v1.ListRequest.filter:type_name -> google.protobuf.Struct
+	16, // 9: soulstack.plugin.v1.ListRequest.credentials:type_name -> google.protobuf.Struct
+	11, // 10: soulstack.plugin.v1.ResizeRequest.desired:type_name -> soulstack.plugin.v1.ResizeSpec
+	16, // 11: soulstack.plugin.v1.ResizeRequest.credentials:type_name -> google.protobuf.Struct
+	13, // 12: soulstack.plugin.v1.ResizeEvent.results:type_name -> soulstack.plugin.v1.VmResizeResult
+	16, // 13: soulstack.plugin.v1.VmInfo.attributes:type_name -> google.protobuf.Struct
+	0,  // 14: soulstack.plugin.v1.CloudDriver.Schema:input_type -> soulstack.plugin.v1.SchemaRequest
+	2,  // 15: soulstack.plugin.v1.CloudDriver.Validate:input_type -> soulstack.plugin.v1.ValidateProfileRequest
+	4,  // 16: soulstack.plugin.v1.CloudDriver.Create:input_type -> soulstack.plugin.v1.CreateRequest
+	6,  // 17: soulstack.plugin.v1.CloudDriver.Destroy:input_type -> soulstack.plugin.v1.DestroyRequest
+	12, // 18: soulstack.plugin.v1.CloudDriver.Resize:input_type -> soulstack.plugin.v1.ResizeRequest
+	8,  // 19: soulstack.plugin.v1.CloudDriver.Status:input_type -> soulstack.plugin.v1.StatusRequest
+	10, // 20: soulstack.plugin.v1.CloudDriver.List:input_type -> soulstack.plugin.v1.ListRequest
+	1,  // 21: soulstack.plugin.v1.CloudDriver.Schema:output_type -> soulstack.plugin.v1.SchemaReply
+	3,  // 22: soulstack.plugin.v1.CloudDriver.Validate:output_type -> soulstack.plugin.v1.ValidateProfileReply
+	5,  // 23: soulstack.plugin.v1.CloudDriver.Create:output_type -> soulstack.plugin.v1.CreateEvent
+	7,  // 24: soulstack.plugin.v1.CloudDriver.Destroy:output_type -> soulstack.plugin.v1.DestroyEvent
+	14, // 25: soulstack.plugin.v1.CloudDriver.Resize:output_type -> soulstack.plugin.v1.ResizeEvent
+	9,  // 26: soulstack.plugin.v1.CloudDriver.Status:output_type -> soulstack.plugin.v1.StatusReply
+	15, // 27: soulstack.plugin.v1.CloudDriver.List:output_type -> soulstack.plugin.v1.VmInfo
+	21, // [21:28] is the sub-list for method output_type
+	14, // [14:21] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_v1_clouddriver_proto_init() }
@@ -848,7 +1169,7 @@ func file_v1_clouddriver_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_v1_clouddriver_proto_rawDesc), len(file_v1_clouddriver_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   12,
+			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
