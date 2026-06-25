@@ -144,6 +144,29 @@ message RenderedTask {
   // forward-compat (ADR-012(c) only-add). Для N=1 plan_index==task_idx, корреляция
   // совпадает с прежним поведением БИТ-В-БИТ. Только never-reuse номера поля.
   int32 plan_index = 16;
+
+  // aggregate_of — локальные позиции дочерних задач (в ЭТОМ ApplyRequest.tasks[],
+  // как onchanges_idx/onfail_idx) одной applier-задачи (`apply:`+`register:`),
+  // итог которой агрегирует ТЕРМИНАЛЬНАЯ синтетическая задача `core.noop.run` с
+  // этим полем (orchestration.md §2.1.1, материализация applier-register, Вариант B).
+  //
+  // Зачем: при `apply: destiny` + `register: X` сам register.X должен отражать
+  // СВОДНЫЙ итог destiny-прогона (`.changed = OR(child.changed)`, аналогично
+  // failed/timed_out), чтобы внешний `onchanges: [X]` / `when: register.X.changed`
+  // резолвился. Keeper материализует это синтетической `core.noop.run` (Register=X)
+  // ПОСЛЕ всех дочерних задач этой applier; Soul строит её register_data НЕ из
+  // ApplyEvent (noop тривиально changed=false), а агрегатом по индексам отсюда:
+  // `changed = OR(registerByIdx[i].changed)`, аналогично failed/timed_out. Терминал
+  // последний в группе → все дочерние уже в registerByIdx на момент его исполнения.
+  //
+  // Индексы РЕМАПЯТСЯ global→local при сборке ApplyRequest (ToProtoTasks,
+  // remapRequisites), как onchanges_idx: они ссылаются на ЛОКАЛЬНУЮ позицию в
+  // tasks[] этого среза. Отфильтрованный where:/cross-passage источник кодируется
+  // sentinel-ом (-1) — Soul трактует его как changed/failed=false (вклад в OR нулевой).
+  //
+  // Пусто = задача не агрегирует (обычная задача / applier БЕЗ register:):
+  // forward-compat (ADR-012(c) only-add). Только never-reuse номера поля.
+  repeated int32 aggregate_of = 17;
 }
 
 // ApplyRequest — команда Keeper → Soul на выполнение прогона.

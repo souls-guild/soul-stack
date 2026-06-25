@@ -160,8 +160,11 @@ func (p *Pipeline) walkBlockChildren(
 
 		// apply-потомок: изолированный render-проход destiny с унаследованным width.
 		// Достижимо только в scenario-слое (destiny-guard отвергает apply на потомке).
+		// child.Register материализуется терминальной core.noop.run агрегата (Вариант B,
+		// renderApplyDestiny) — applier-register block-потомка адресуем извне как
+		// register.<child>.* (orchestration.md §2.1.1).
 		if child.Apply != nil {
-			dt, dp, derr := p.renderApplyDestiny(ctx, in, child.Apply, idx, childTargeted, width)
+			dt, dp, derr := p.renderApplyDestiny(ctx, in, child.Apply, idx, childTargeted, width, child.Register)
 			if derr != nil {
 				return nil, nil, derr
 			}

@@ -43,10 +43,13 @@ Defense in depth, по аналогии с `input:`:
 
 ## Как читает caller — `register:` на applier-задаче
 
-Scenario вызывает destiny через `apply: { destiny: ..., input: { ... } }` ([scenario/orchestration.md §2](../scenario/orchestration.md#2-дельта-scenario-относительно-dsl-ядра)). Чтобы прочитать результат destiny, applier-задача сценария ставит `register: <имя>`:
+Scenario вызывает destiny через `apply: { destiny: ..., input: { ... } }` ([scenario/orchestration.md §2.1.1](../scenario/orchestration.md#211-register-на-applier-задаче--чтение-результата-destiny)). Applier-задача сценария ставит `register: <имя>`, и у `register.<имя>` две части с разным статусом реализации:
+
+- **DSL-ядро `.changed` / `.failed` / `.timed_out` — реализовано.** Эти поля материализуются как **агрегат `OR`** по всем дочерним destiny-задачам applier-а (`changed = OR(child.changed)`, аналогично `failed` / `timed_out`; `skipped` — всегда `false`). Внешний `onchanges: [<имя>]` / `onfail: [<имя>]` / `when: register.<имя>.changed` резолвится по этому агрегату. Поля DSL-ядра присутствуют **независимо** от того, объявила ли destiny top-level `output:`.
+- **`.<output-поле>` по объявленному top-level `output:`-контракту — ПЛАНИРУЕТСЯ.** Проброс прикладных полей destiny из её `output:`-блока в `register.<имя>.<output-поле>` пока **не реализован** (отдельный будущий slice — см. note ниже).
 
 ```yaml
-- name: Bootstrap the application database
+- name: Apply the application database config
   apply:
     destiny: db-bootstrap
     input:
@@ -54,16 +57,13 @@ Scenario вызывает destiny через `apply: { destiny: ..., input: { ..
       version: "${ essence.db_version }"
   register: bootstrapped
 
-- name: Continue with the freshly bootstrapped database
+- name: Run migrations only if config actually changed
+  when: register.bootstrapped.changed   # агрегат OR по дочерним задачам — РАБОТАЕТ
   module: core.noop.run
   params: {}
-  output:
-    dsn: "${ register.bootstrapped.dsn }"   # объявленное output-поле destiny
 ```
 
-В `register.<имя>.<output-поле>` доступны **только** те поля, что destiny объявила в своём top-level `output:`-блоке (плюс стандартные `.changed` / `.failed`). Канон доступа — `register.<name>.<output-поле>` (тот же префикс-канон, что и для всего DSL-ядра, [scenario/orchestration.md §4](../scenario/orchestration.md#4-волатильный-предикат--where)).
-
-Если destiny не имеет top-level `output:` — caller всё равно получает `register.<имя>.changed` / `.failed` (это поля DSL-ядра, не часть destiny-output), но прикладные данные через `register.<имя>.*` недоступны.
+> **Проброс прикладного destiny-`output:` в `register.<applier>.<поле>` — вне объёма.** Когда output-проекция будет реализована, в `register.<имя>.<output-поле>` станут доступны поля, объявленные destiny в её top-level `output:`-блоке. До этого slice-а каноническая форма `register.<имя>.<output-поле>` (`register.bootstrapped.dsn` и т.п.) не резолвится — это слой orchestrator-а, не покрытый текущей реализацией applier-register. Реализованы только DSL-ядро `.changed` / `.failed` / `.timed_out` (агрегат `OR`, см. выше).
 
 ## `output:` ≠ версия артефакта
 
@@ -83,7 +83,11 @@ Scenario `output:`-блока **нет**: scenario пишет результат
 > до коммита, а `register.*` в `sets` — стабильный post-barrier-снимок.
 > Прямой проброс destiny-`output:` (прочитанного через `register:` на
 > applier-задаче) в `sets` для destiny-вызовов через `apply:` пока вне объёма —
-> это слой orchestrator-а, не покрытый текущей реализацией module-задач.
+> это тот же планируемый output-проекционный slice, что описан в разделе
+> [«Как читает caller»](#как-читает-caller--register-на-applier-задаче). DSL-ядро
+> `register.<applier>.changed`/`.failed`/`.timed_out` (агрегат `OR`) при этом уже
+> материализуется и `sets` мог бы его читать; не материализуются именно
+> прикладные `output:`-поля.
 
 ## См. также
 
@@ -91,5 +95,5 @@ Scenario `output:`-блока **нет**: scenario пишет результат
 - [`docs/destiny/input.md`](input.md) — destiny-специфика входного контракта (симметричный документ).
 - [manifest.md](manifest.md) — где `output:` живёт в `destiny.yml`.
 - [tasks.md §9](tasks.md#9-прочность-и-контроль-исполнения) — task-level `output:` (заполняет объявленные top-level поля).
-- [scenario/orchestration.md §2](../scenario/orchestration.md#2-дельта-scenario-относительно-dsl-ядра) — `register:` на applier-задаче читает результат destiny.
+- [scenario/orchestration.md §2.1.1](../scenario/orchestration.md#211-register-на-applier-задаче--чтение-результата-destiny) — `register:` на applier-задаче: реализованный агрегат `.changed`/`.failed`/`.timed_out` vs планируемая output-проекция.
 - [ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) — изоляция destiny: `output:` (отдача своего) её не нарушает.

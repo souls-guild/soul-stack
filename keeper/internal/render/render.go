@@ -328,6 +328,25 @@ type RenderedTask struct {
 	// onChangesNames: протягиваются renderTaskIter до резолв-прохода
 	// resolveOnFail, после превращения в OnFailIdx не используются.
 	onFailNames []string
+
+	// AggregateOf — ГЛОБАЛЬНЫЕ сквозные Index ВСЕХ дочерних destiny-задач одной
+	// applier-задачи (`apply:`+`register:`), сводный итог которой несёт ЭТА
+	// синтетическая терминальная `core.noop.run` (orchestration.md §2.1.1,
+	// материализация applier-register, Вариант B). Эмитится renderApplyDestiny ПОСЛЕ
+	// дочерних задач, только если у applier был непустой register: Register этой
+	// задачи = register applier-а, поэтому внешний `onchanges:[<applier>]` /
+	// `when: register.<applier>.changed` резолвится в её Index (registerIndex
+	// подхватывает автоматически — onchanges.go не трогается).
+	//
+	// Soul (applyrunner.aggregateRegisterData) строит register_data этой
+	// задачи НЕ из её ApplyEvent (noop тривиально changed=false), а как
+	// `changed=OR(registerByIdx[i].changed)`, аналогично failed/timed_out по этим
+	// индексам. Index'ы РЕМАПЯТСЯ global→local при сборке proto (ToProtoTasks/
+	// remapRequisites), как OnChangesIdx — они адресуют локальную позицию в срезе
+	// ApplyRequest.tasks[]. nil/пусто = задача не агрегирует. → proto
+	// keeperv1.RenderedTask.AggregateOf. Хранятся как []int (global Index, зеркало
+	// OnChangesIdx) — remapRequisites переводит в []int32-local при сборке proto.
+	AggregateOf []int
 }
 
 // RenderedOp — одна операция `state_changes` после Keeper-side CEL-рендера

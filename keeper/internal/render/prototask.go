@@ -47,14 +47,21 @@ func ToProtoTasks(tasks []*RenderedTask) []*keeperv1.RenderedTask {
 			Timeout:      t.Timeout,
 			OnchangesIdx: remapRequisites(t.OnChangesIdx, globalToLocal),
 			OnfailIdx:    remapRequisites(t.OnFailIdx, globalToLocal),
-			When:         t.When,
-			ChangedWhen:  t.ChangedWhen,
-			FailedWhen:   t.FailedWhen,
-			FlowContext:  t.FlowContext,
-			Register:     t.Register,
-			Until:        t.Until,
-			RetryCount:   int32(t.RetryCount),
-			RetryDelay:   t.RetryDelay,
+			// AggregateOf несёт ГЛОБАЛЬНЫЕ Index дочерних destiny-задач applier-а
+			// (материализация applier-register, Вариант B) — ремапим global→local
+			// той же remapRequisites, что onchanges/onfail: Soul агрегирует по
+			// ЛОКАЛЬНОЙ позиции в registerByIdx (applyrunner). Дочерняя задача,
+			// отфильтрованная where: на этом хосте / уехавшая в другой Passage,
+			// кодируется sentinel-ом (-1) → её вклад в OR нулевой (changed=false).
+			AggregateOf: remapRequisites(t.AggregateOf, globalToLocal),
+			When:        t.When,
+			ChangedWhen: t.ChangedWhen,
+			FailedWhen:  t.FailedWhen,
+			FlowContext: t.FlowContext,
+			Register:    t.Register,
+			Until:       t.Until,
+			RetryCount:  int32(t.RetryCount),
+			RetryDelay:  t.RetryDelay,
 			// PlanIndex — глобальный сквозной индекс задачи (по всем Passage),
 			// ключ register-корреляции на Keeper-е (ADR-056 §S1 fix Variant B). Soul
 			// эхает его в TaskEvent.plan_index. Индексы малы и неотрицательны → int32-

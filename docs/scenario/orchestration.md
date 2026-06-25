@@ -57,25 +57,46 @@ scenario/<name>/
 
 #### 2.1.1. `register:` на applier-задаче — чтение результата destiny
 
-Applier-задача может нести унаследованный из DSL-ядра `register: <имя>` ([destiny/tasks.md §8](../destiny/tasks.md#8-requisites--salt-style-зависимости)). В `register.<имя>.*` попадает результат destiny по её декларированному top-level `output:`-контракту ([destiny/output.md](../destiny/output.md)) **плюс** стандартные `.changed` / `.failed` DSL-ядра. Канон доступа — `register.<имя>.<output-поле>`; форма та же, что в `where:`/`changed_when:`/requisites (§4).
+Applier-задача может нести унаследованный из DSL-ядра `register: <имя>` ([destiny/tasks.md §8](../destiny/tasks.md#8-requisites--salt-style-зависимости)). У `register.<имя>` две части с разным статусом реализации:
+
+- **DSL-ядро `.changed` / `.failed` / `.timed_out` — реализовано.** Это **агрегат `OR`** по всем дочерним destiny-задачам applier-а: `changed = OR(child.changed)`, аналогично `failed` / `timed_out` (`skipped` — всегда `false`). Внешний `onchanges: [<имя>]` / `onfail: [<имя>]` / `when: register.<имя>.changed` резолвится по этому агрегату (раньше падал ошибкой «неизвестный register»). Если все дочерние destiny-задачи отфильтрованы (`where:` / `include`-`when:`) — агрегат сводится к `changed/failed/timed_out = false` (no-op applier).
+- **`.<output-поле>` по декларированному top-level `output:`-контракту destiny — ПЛАНИРУЕТСЯ.** Проброс прикладных полей destiny ([destiny/output.md](../destiny/output.md)) в `register.<имя>.<output-поле>` пока **не реализован** (отдельный будущий slice, см. note в [destiny/output.md](../destiny/output.md#как-читает-caller--register-на-applier-задаче)). В текущем объёме `register.<имя>` несёт только DSL-ядро.
+
+Рабочий пример (агрегат `.changed` / `.failed`):
 
 ```yaml
-- name: Reload Redis cluster config on all hosts
+- name: Apply Redis config on all cluster hosts
   apply:
-    destiny: redis-reload
+    destiny: redis-config
     input: { ... }
-  register: reload
+  register: cfg
 
-- name: Restart only nodes that reported config drift
+- name: Restart Redis only where config actually changed
   on: ["${ incarnation.name }"]
-  where: soulprint.self.sid in register.reload.drifted_sids
+  when: register.cfg.changed
   module: core.service.restarted
   params: { name: redis-server }
 ```
 
-Здесь destiny `redis-reload` объявляет в своём top-level `output:` поле `drifted_sids: { type: array, items: { type: string, format: fqdn } }`; scenario читает его через `register.reload.drifted_sids`. Формат `output:`-блока в `destiny.yml` и правила заполнения через task-level `output:` — [destiny/output.md](../destiny/output.md).
+Здесь `register.cfg.changed` истинно, если хотя бы одна дочерняя задача destiny `redis-config` отчиталась `changed` (агрегат `OR`); рестарт пропускается, если конфиг уже сошёлся на всех хостах. Тот же агрегат доступен через `onchanges: [cfg]` / `onfail: [cfg]`.
 
-Если destiny не объявила top-level `output:` — `register.<имя>.*` содержит только стандартные `.changed`/`.failed`; прикладных полей через `register.<имя>.<поле>` не будет (ошибка валидации при обращении к необъявленному полю).
+> **Иллюстрация будущей output-проекции (НЕ работает в MVP).** Пример ниже опирается на проброс прикладного `output:`-поля applier-register — это **планируемый** slice (см. выше), сейчас `register.reload.drifted_sids` не резолвится. Не копировать в рабочий сценарий.
+>
+> ```yaml
+> - name: Reload Redis cluster config on all hosts
+>   apply:
+>     destiny: redis-reload
+>     input: { ... }
+>   register: reload
+>
+> - name: Restart only nodes that reported config drift
+>   on: ["${ incarnation.name }"]
+>   where: soulprint.self.sid in register.reload.drifted_sids   # output-проекция, пока не реализована
+>   module: core.service.restarted
+>   params: { name: redis-server }
+> ```
+>
+> Когда output-проекция будет реализована, destiny `redis-reload` объявит в своём top-level `output:` поле `drifted_sids: { type: array, items: { type: string, format: fqdn } }`, а scenario прочитает его через `register.reload.drifted_sids`. Формат `output:`-блока в `destiny.yml` и правила заполнения через task-level `output:` — [destiny/output.md](../destiny/output.md).
 
 > Когда писать `apply:`, а когда инлайн `module:` — см. границу-рекомендацию в [concept.md](concept.md) ([ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация)). Снятие старого инварианта «scenario только `apply:`» означает: `module:` (включая изменяющие модули) в scenario теперь легален.
 

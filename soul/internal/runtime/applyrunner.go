@@ -405,14 +405,33 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 		// ложный новый FAILED). Исключение — onfail-задачи: для них gating
 		// (источник упал? + when/onchanges) считается ниже. Это и есть новая
 		// fail-stop-семантика: rescue-хвост отрабатывает, остальное skip.
+		//
+		// Терминал applier-register (aggregate_of) — ТОЖЕ исключение: он не исполняет
+		// модуль (синтетическая свёртка дочерних, побочных эффектов нет), а его
+		// register.<applier> ОБЯЗАН отражать реальный итог destiny даже при провале —
+		// иначе внешний onfail:[<applier>] / when: register.<applier>.failed разорвётся
+		// (failed-агрегат потерялся бы под generic-skipped). Эмитим агрегат СРАЗУ:
+		// дочерние раньше по плану и уже в registerByIdx (терминал последний в группе).
 		if runFailed && len(task.GetOnfailIdx()) == 0 {
-			ev := skippedTaskEvent(applyID, int32(idx))
+			var ev *keeperv1.TaskEvent
+			if agg := task.GetAggregateOf(); len(agg) > 0 {
+				ev = &keeperv1.TaskEvent{
+					ApplyId:      applyID,
+					TaskIdx:      int32(idx),
+					Status:       keeperv1.TaskStatus_TASK_STATUS_OK,
+					RegisterData: aggregateRegisterData(agg, registerByIdx),
+				}
+			} else {
+				ev = skippedTaskEvent(applyID, int32(idx))
+			}
 			recordRegister(registerByIdx, registerByName, int32(idx), task.GetRegister(), ev.GetRegisterData())
 			if err := sendTaskEvent(sink, ev, task, passage); err != nil {
 				return fmt.Errorf("runtime: send TaskEvent[%d]: %w", idx, err)
 			}
 			r.metrics.ObserveTask(taskResult(ev.GetStatus()))
-			r.metrics.ObserveSkipped(skipReasonFailedRun)
+			if len(task.GetAggregateOf()) == 0 {
+				r.metrics.ObserveSkipped(skipReasonFailedRun)
+			}
 			continue
 		}
 
@@ -500,6 +519,18 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 			r.metrics.ObserveTask(applyResultFailed)
 			runStatus = keeperv1.RunStatus_RUN_STATUS_CANCELLED
 			break
+		}
+		// Материализация applier-register (orchestration.md §2.1.1, Вариант B):
+		// терминальная core.noop.run с непустым aggregate_of несёт СВОДНЫЙ итог
+		// destiny-прогона applier-а. Её собственный ApplyEvent тривиален (noop →
+		// changed=false), поэтому register_data ПЕРЕЗАПИСываем агрегатом по дочерним
+		// задачам (OR changed/failed/timed_out). Дочерние — раньше по плану и в этом
+		// же ApplyRequest (терминал последний в группе), поэтому уже в registerByIdx.
+		// Override стоит ПОСЛЕ cancel-ветки (отменённая задача сохраняет CANCELLED) и
+		// ДО sendTaskEvent/recordRegister — и отправленный Keeper-у TaskEvent, и
+		// register для последующих gating-ей несут агрегат.
+		if agg := task.GetAggregateOf(); len(agg) > 0 {
+			ev.RegisterData = aggregateRegisterData(agg, registerByIdx)
 		}
 		if err := sendTaskEvent(sink, ev, task, passage); err != nil {
 			return fmt.Errorf("runtime: send TaskEvent[%d]: %w", idx, err)
@@ -1213,6 +1244,51 @@ func buildRegisterData(status keeperv1.TaskStatus, last *pluginv1.ApplyEvent) *s
 		}
 	}
 	return &structpb.Struct{Fields: fields}
+}
+
+// aggregateRegisterData строит register_data ТЕРМИНАЛЬНОЙ синтетической задачи
+// applier-register (core.noop.run с aggregate_of, материализация Вариант B,
+// orchestration.md §2.1.1) как сводный итог дочерних destiny-задач applier-а:
+//
+//	changed   = OR(registerByIdx[i].changed)
+//	failed    = OR(registerByIdx[i].failed)
+//	timed_out = OR(registerByIdx[i].timed_out)
+//
+// по ЛОКАЛЬНЫМ индексам aggregateOf (ремап global→local сделал Keeper, ToProtoTasks).
+// Это дублирует семантику register.<applier>: внешний onchanges:[<applier>] / when:
+// register.<applier>.changed резолвится по этому register_data. skipped — всегда
+// false (агрегат — реальный исход группы, не пропуск самой задачи).
+//
+// Отсутствующий в registerByIdx источник (sentinel-индекс -1 от ToProtoTasks:
+// дочерняя задача отфильтрована where: на этом хосте / уехала в другой Passage)
+// читается как nil → его changed/failed/timed_out=false (нулевой вклад в OR),
+// симметрично skipOnChanges/skipOnFail. Пустой aggregateOf сюда не доходит (caller
+// проверяет len>0); если бы дошёл — все OR=false (no-op applier без дочерних задач).
+//
+// output-поля дочерних задач НЕ проецируются (это OUT-OF-SCOPE: проброс
+// декларированного top-level output: destiny в register.<applier>.<поле> — отдельный
+// слайс). Только DSL-ядро changed/failed/timed_out/skipped.
+func aggregateRegisterData(aggregateOf []int32, registerByIdx map[int32]*structpb.Struct) *structpb.Struct {
+	var changed, failed, timedOut bool
+	for _, idx := range aggregateOf {
+		rd := registerByIdx[idx]
+		fields := rd.GetFields()
+		if fields["changed"].GetBoolValue() {
+			changed = true
+		}
+		if fields["failed"].GetBoolValue() {
+			failed = true
+		}
+		if fields["timed_out"].GetBoolValue() {
+			timedOut = true
+		}
+	}
+	return &structpb.Struct{Fields: map[string]*structpb.Value{
+		"changed":   structpb.NewBoolValue(changed),
+		"failed":    structpb.NewBoolValue(failed),
+		"timed_out": structpb.NewBoolValue(timedOut),
+		"skipped":   structpb.NewBoolValue(false),
+	}}
 }
 
 // inProcApplyStream — реализация `grpc.ServerStreamingServer[pluginv1.ApplyEvent]`

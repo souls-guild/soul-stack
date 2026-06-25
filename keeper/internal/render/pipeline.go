@@ -268,7 +268,7 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 		// targeted; serial: на apply-задаче распространяется на её destiny-задачи.
 		if task.Apply != nil {
 			width := serialWidth(task.Serial, len(targeted))
-			dt, dp, derr := p.renderApplyDestiny(ctx, in, task.Apply, idx, targeted, width)
+			dt, dp, derr := p.renderApplyDestiny(ctx, in, task.Apply, idx, targeted, width, task.Register)
 			if derr != nil {
 				return nil, nil, derr
 			}

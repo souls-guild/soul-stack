@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"google.golang.org/protobuf/types/known/structpb"
+
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 	"github.com/souls-guild/soul-stack/shared/config"
 )
@@ -66,6 +68,15 @@ type DestinyResolver interface {
 // serialWidth — ширина волны `serial:` apply-задачи родителя (orchestration.md
 // §2.2.1): наследуется всеми destiny-задачами (вся destiny катится одной
 // rolling-моделью по хостам). 0 = serial не задан.
+//
+// applierRegister — register: самой applier-задачи (parent.Register). Непустой →
+// renderApplyDestiny ПОСЛЕ дочерних задач эмитит синтетическую терминальную
+// `core.noop.run` с Register=applierRegister и AggregateOf=индексы всех дочерних
+// destiny-задач (orchestration.md §2.1.1, материализация applier-register,
+// Вариант B): её register_data Soul строит агрегатом (`changed=OR(child.changed)`,
+// аналогично failed/timed_out), чтобы внешний `onchanges:[<applier>]` /
+// `when: register.<applier>.changed` резолвился. "" → терминал не эмитится
+// (applier без register: — индекс не резервируется, поведение БИТ-В-БИТ).
 func (p *Pipeline) renderApplyDestiny(
 	ctx context.Context,
 	parentIn RenderInput,
@@ -73,6 +84,7 @@ func (p *Pipeline) renderApplyDestiny(
 	startIndex int,
 	targeted []*topology.HostFacts,
 	serialWidth int,
+	applierRegister string,
 ) ([]*RenderedTask, []DispatchPlan, error) {
 	if parentIn.Destiny == nil {
 		return nil, nil, fmt.Errorf("%w: apply: destiny %q — DestinyResolver не сконфигурирован (RenderInput.Destiny=nil)", ErrUnsupportedDSL, apply.Destiny)
@@ -236,6 +248,43 @@ func (p *Pipeline) renderApplyDestiny(
 		})
 		idx++
 	}
+
+	// Материализация applier-register (orchestration.md §2.1.1, Вариант B): если
+	// applier-задача несёт register:, сводный итог destiny-прогона ДОЛЖЕН быть
+	// адресуем как register.<applier>.* (внешний onchanges:[<applier>] / when:
+	// register.<applier>.changed). Эмитим синтетическую ТЕРМИНАЛЬНУЮ задачу
+	// `core.noop.run` (последняя в группе → все дочерние уже в registerByIdx на
+	// момент её исполнения на Soul-е) с Register=applierRegister и AggregateOf=
+	// ГЛОБАЛЬНЫЕ Index всех дочерних destiny-задач этой applier. Soul строит её
+	// register_data НЕ из ApplyEvent (noop тривиально changed=false), а агрегатом
+	// (aggregateRegisterData: changed=OR(child.changed), аналогично failed/timed_out).
+	// Терминал клеймится тем же Passage родительским stampPassage (pipeline.go) —
+	// здесь Passage не проставляется. Дочерних задач может не быть (вся destiny
+	// дропнута include-when / where: отфильтровал) — AggregateOf тогда пуст,
+	// агрегат сводится к changed/failed/timed_out=false (no-op applier).
+	if applierRegister != "" {
+		aggregateOf := make([]int, 0, len(tasks))
+		for _, t := range tasks {
+			aggregateOf = append(aggregateOf, t.Index)
+		}
+		tasks = append(tasks, &RenderedTask{
+			Index: idx,
+			Name:  "applier-register " + applierRegister,
+			// core.noop игнорирует params (docs/module/core/noop) — пустой Struct
+			// нужен лишь чтобы proto-поле не было nil (сборка ApplyRequest).
+			Params:      &structpb.Struct{Fields: map[string]*structpb.Value{}},
+			Module:      "core.noop.run",
+			Register:    applierRegister,
+			AggregateOf: aggregateOf,
+		})
+		plans = append(plans, DispatchPlan{
+			TaskIndex:   idx,
+			TargetSIDs:  sidsOf(targeted),
+			SerialWidth: serialWidth,
+		})
+		idx++
+	}
+
 	return tasks, plans, nil
 }
 

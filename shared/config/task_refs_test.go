@@ -771,3 +771,59 @@ tasks:
 		t.Fatalf("known register в output/params/apply.input не должен ловиться; got=%d", got)
 	}
 }
+
+// TestTaskRefs_OnChangesApplierRegister_Valid — ★ guard (e), материализация
+// applier-register (orchestration.md §2.1.1, Вариант B). register: НА applier-
+// задаче (`apply:`+`register:`) — это ВАЛИДНЫЙ адрес подписки: collectAddresses
+// регистрирует register: любой задачи (apply/module/block одинаково на AST-уровне),
+// поэтому внешний onchanges:[<applier-register>] НЕ должен ловиться как
+// unknown_register_reference. Инвариант: applier-register адресуем извне (его
+// материализует терминальная core.noop.run, register.<applier> резолвится).
+func TestTaskRefs_OnChangesApplierRegister_Valid(t *testing.T) {
+	src := `
+name: act
+tasks:
+  - name: apply redis destiny
+    register: redis_destiny
+    apply:
+      destiny: redis
+      input:
+        action: update_acls
+  - name: notify on destiny change
+    module: core.service.restarted
+    onchanges: [redis_destiny]
+    params:
+      name: redis
+`
+	_, _, diags, _ := LoadScenarioManifestFromBytes("scenario/act/main.yml", []byte(src), ValidateOptions{})
+	if got := countCode(diags, "unknown_register_reference"); got != 0 {
+		dump(t, diags)
+		t.Fatalf("onchanges на applier-register не должен ловиться unknown_register_reference; got=%d (applier-register — валидный адрес подписки)", got)
+	}
+}
+
+// TestTaskRefs_OnChangesApplierRegister_Typo — ★ guard (e) обратная сторона:
+// ОПЕЧАТКА в onchanges на applier-register всё ещё ловится unknown_register_reference
+// (collectAddresses знает только реальное имя redis_destiny, не redis_destinyy).
+func TestTaskRefs_OnChangesApplierRegister_Typo(t *testing.T) {
+	src := `
+name: act
+tasks:
+  - name: apply redis destiny
+    register: redis_destiny
+    apply:
+      destiny: redis
+      input:
+        action: update_acls
+  - name: notify on typo'd ref
+    module: core.service.restarted
+    onchanges: [redis_destinyy]
+    params:
+      name: redis
+`
+	_, _, diags, _ := LoadScenarioManifestFromBytes("scenario/act/main.yml", []byte(src), ValidateOptions{})
+	if got := countCode(diags, "unknown_register_reference"); got != 1 {
+		dump(t, diags)
+		t.Fatalf("опечатка в onchanges на applier-register обязана ловиться; unknown_register_reference count = %d, want 1", got)
+	}
+}

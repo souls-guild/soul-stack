@@ -252,7 +252,29 @@ type RenderedTask struct {
 	// 0/пусто = старый Soul без эхо ИЛИ N=1-прогон (один Passage, локальный==глобальный):
 	// forward-compat (ADR-012(c) only-add). Для N=1 plan_index==task_idx, корреляция
 	// совпадает с прежним поведением БИТ-В-БИТ. Только never-reuse номера поля.
-	PlanIndex     int32 `protobuf:"varint,16,opt,name=plan_index,json=planIndex,proto3" json:"plan_index,omitempty"`
+	PlanIndex int32 `protobuf:"varint,16,opt,name=plan_index,json=planIndex,proto3" json:"plan_index,omitempty"`
+	// aggregate_of — локальные позиции дочерних задач (в ЭТОМ ApplyRequest.tasks[],
+	// как onchanges_idx/onfail_idx) одной applier-задачи (`apply:`+`register:`),
+	// итог которой агрегирует ТЕРМИНАЛЬНАЯ синтетическая задача `core.noop.run` с
+	// этим полем (orchestration.md §2.1.1, материализация applier-register, Вариант B).
+	//
+	// Зачем: при `apply: destiny` + `register: X` сам register.X должен отражать
+	// СВОДНЫЙ итог destiny-прогона (`.changed = OR(child.changed)`, аналогично
+	// failed/timed_out), чтобы внешний `onchanges: [X]` / `when: register.X.changed`
+	// резолвился. Keeper материализует это синтетической `core.noop.run` (Register=X)
+	// ПОСЛЕ всех дочерних задач этой applier; Soul строит её register_data НЕ из
+	// ApplyEvent (noop тривиально changed=false), а агрегатом по индексам отсюда:
+	// `changed = OR(registerByIdx[i].changed)`, аналогично failed/timed_out. Терминал
+	// последний в группе → все дочерние уже в registerByIdx на момент его исполнения.
+	//
+	// Индексы РЕМАПЯТСЯ global→local при сборке ApplyRequest (ToProtoTasks,
+	// remapRequisites), как onchanges_idx: они ссылаются на ЛОКАЛЬНУЮ позицию в
+	// tasks[] этого среза. Отфильтрованный where:/cross-passage источник кодируется
+	// sentinel-ом (-1) — Soul трактует его как changed/failed=false (вклад в OR нулевой).
+	//
+	// Пусто = задача не агрегирует (обычная задача / applier БЕЗ register:):
+	// forward-compat (ADR-012(c) only-add). Только never-reuse номера поля.
+	AggregateOf   []int32 `protobuf:"varint,17,rep,packed,name=aggregate_of,json=aggregateOf,proto3" json:"aggregate_of,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -397,6 +419,13 @@ func (x *RenderedTask) GetPlanIndex() int32 {
 		return x.PlanIndex
 	}
 	return 0
+}
+
+func (x *RenderedTask) GetAggregateOf() []int32 {
+	if x != nil {
+		return x.AggregateOf
+	}
+	return nil
 }
 
 // ApplyRequest — команда Keeper → Soul на выполнение прогона.
@@ -807,7 +836,7 @@ var File_keeper_v1_apply_proto protoreflect.FileDescriptor
 
 const file_keeper_v1_apply_proto_rawDesc = "" +
 	"\n" +
-	"\x15keeper/v1/apply.proto\x12\x13soulstack.keeper.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x16keeper/v1/common.proto\"\x87\x04\n" +
+	"\x15keeper/v1/apply.proto\x12\x13soulstack.keeper.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x16keeper/v1/common.proto\"\xaa\x04\n" +
 	"\fRenderedTask\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06module\x18\x02 \x01(\tR\x06module\x12/\n" +
@@ -830,7 +859,8 @@ const file_keeper_v1_apply_proto_rawDesc = "" +
 	"retryDelay\x12\x1a\n" +
 	"\bregister\x18\r \x01(\tR\bregister\x12\x1d\n" +
 	"\n" +
-	"plan_index\x18\x10 \x01(\x05R\tplanIndex\"\xd4\x01\n" +
+	"plan_index\x18\x10 \x01(\x05R\tplanIndex\x12!\n" +
+	"\faggregate_of\x18\x11 \x03(\x05R\vaggregateOf\"\xd4\x01\n" +
 	"\fApplyRequest\x12\x19\n" +
 	"\bapply_id\x18\x01 \x01(\tR\aapplyId\x127\n" +
 	"\x05tasks\x18\x02 \x03(\v2!.soulstack.keeper.v1.RenderedTaskR\x05tasks\x12#\n" +
