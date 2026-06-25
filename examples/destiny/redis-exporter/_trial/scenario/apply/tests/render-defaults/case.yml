@@ -74,6 +74,8 @@ assert:
           self:
             sid: trial-host
             choirs: []
+            # traits — registry-проекция (ADR-060), пустой объект без меток.
+            traits: {}
             # covens несёт incarnation.name-метку (имя scenario = apply) —
             # зеркало прод-roster `WHERE $1 = ANY(coven)` (harness single-host сахар).
             covens: [apply]

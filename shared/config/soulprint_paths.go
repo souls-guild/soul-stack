@@ -28,6 +28,7 @@ var soulprintSelfTopLevel = map[string]bool{
 	"hostname": true, // string
 	"covens":   true, // list<string>, registry-проекция
 	"choirs":   true, // list<string>, registry-проекция (ADR-044, зеркало covens)
+	"traits":   true, // map<string, scalar|list>, registry-проекция (ADR-060); ключи динамичны — третий сегмент не статпроверяется
 	"role":     true, // string|null, declared (bootstrap-create only)
 	"os":       true, // OsFacts
 	"kernel":   true, // KernelFacts

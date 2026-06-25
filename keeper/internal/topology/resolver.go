@@ -72,7 +72,7 @@ func NewResolver(pool *pgxpool.Pool, lease SoulLeaseChecker, logger *slog.Logger
 // ORDER BY sid — детерминированный порядок (scenario/orchestration.md §:
 // лексикографически по SID; иначе разрушительные операции невоспроизводимы).
 const rosterSQL = `
-SELECT sid, coven, status,
+SELECT sid, coven, traits, status,
        soulprint_facts, soulprint_collected_at, soulprint_received_at
 FROM souls
 WHERE $1 = ANY(coven)
@@ -337,14 +337,21 @@ func parseDeclaredRoles(specJSON []byte) map[string]string {
 func scanHost(row pgx.Row) (*HostFacts, error) {
 	var (
 		h           HostFacts
+		traitsJSON  []byte
 		factsJSON   []byte
 		collectedAt *time.Time
 		receivedAt  *time.Time
 	)
-	if err := row.Scan(&h.SID, &h.Coven, &h.Status, &factsJSON, &collectedAt, &receivedAt); err != nil {
+	if err := row.Scan(&h.SID, &h.Coven, &traitsJSON, &h.Status, &factsJSON, &collectedAt, &receivedAt); err != nil {
 		return nil, fmt.Errorf("topology: scan host: %w", err)
 	}
 
+	// traits jsonb (ADR-060): '{}' (NOT NULL DEFAULT) → пустой map, не nil.
+	if len(traitsJSON) > 0 {
+		if err := json.Unmarshal(traitsJSON, &h.Traits); err != nil {
+			return nil, fmt.Errorf("topology: unmarshal traits for %q: %w", h.SID, err)
+		}
+	}
 	if len(factsJSON) > 0 {
 		if err := json.Unmarshal(factsJSON, &h.Soulprint); err != nil {
 			return nil, fmt.Errorf("topology: unmarshal soulprint for %q: %w", h.SID, err)
@@ -372,7 +379,7 @@ func scanHost(row pgx.Row) (*HostFacts, error) {
 //
 // ORDER BY sid — детерминизм per-host dispatch-а.
 const inventorySQL = `
-SELECT sid, coven, status,
+SELECT sid, coven, traits, status,
        soulprint_facts, soulprint_collected_at, soulprint_received_at
 FROM souls
 WHERE sid = ANY($1)

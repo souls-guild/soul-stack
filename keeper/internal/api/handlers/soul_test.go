@@ -194,10 +194,11 @@ func (f *fakeSoulPool) QueryRow(_ context.Context, sql string, args ...any) pgx.
 		if s.CreatedByAID != nil {
 			createdByAID = *s.CreatedByAID
 		}
-		// scanSoul order: sid, transport, status, coven, registered_at,
+		// scanSoul order: sid, transport, status, coven, traits, registered_at,
 		// last_seen_at, last_seen_by_kid, created_by_aid, requested_at, note.
 		return staticRow{values: []any{
 			s.SID, string(s.Transport), string(s.Status), s.Coven,
+			[]byte(nil), // traits jsonb (ADR-060): NULL → пустой map в scanSoul
 			s.RegisteredAt, lastSeenAt, lastSeenByKID, createdByAID, requestedAt, note,
 		}}
 
@@ -392,7 +393,7 @@ func (r *scopeEvalRows) RawValues() [][]byte                          { return n
 func (r *scopeEvalRows) Conn() *pgx.Conn                              { return nil }
 
 // soulRows — pgx.Rows-stub под [soul.SelectAll]: отдаёт преднастроенный
-// набор Soul-ов в порядке scanSoul (sid, transport, status, coven,
+// набор Soul-ов в порядке scanSoul (sid, transport, status, coven, traits,
 // registered_at, last_seen_at, last_seen_by_kid, created_by_aid,
 // requested_at, note).
 type soulRows struct {
@@ -414,16 +415,26 @@ func (r *soulRows) Scan(dest ...any) error {
 	*dest[1].(*string) = string(s.Transport)
 	*dest[2].(*string) = string(s.Status)
 	*dest[3].(*[]string) = s.Coven
-	*dest[4].(*time.Time) = s.RegisteredAt
-	*dest[5].(**time.Time) = s.LastSeenAt
-	*dest[6].(**string) = s.LastSeenByKID
-	*dest[7].(**string) = s.CreatedByAID
-	*dest[8].(**time.Time) = s.RequestedAt
+	// traits jsonb (ADR-060): nil Traits → nil-bytes (scanSoul → пустой map).
+	if len(s.Traits) > 0 {
+		b, err := json.Marshal(s.Traits)
+		if err != nil {
+			return err
+		}
+		*dest[4].(*[]byte) = b
+	} else {
+		*dest[4].(*[]byte) = nil
+	}
+	*dest[5].(*time.Time) = s.RegisteredAt
+	*dest[6].(**time.Time) = s.LastSeenAt
+	*dest[7].(**string) = s.LastSeenByKID
+	*dest[8].(**string) = s.CreatedByAID
+	*dest[9].(**time.Time) = s.RequestedAt
 	if s.Note == "" {
-		*dest[9].(**string) = nil
+		*dest[10].(**string) = nil
 	} else {
 		note := s.Note
-		*dest[9].(**string) = &note
+		*dest[10].(**string) = &note
 	}
 	return nil
 }

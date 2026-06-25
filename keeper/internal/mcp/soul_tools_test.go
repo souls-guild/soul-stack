@@ -130,8 +130,8 @@ func (t *soulFakeTx) Prepare(_ context.Context, _, _ string) (*pgconn.StatementD
 func (t *soulFakeTx) Conn() *pgx.Conn { return nil }
 
 // soulSelectRow — pgx.Row для SELECT … FROM souls WHERE sid (scanSoul читает
-// 10 колонок: sid, transport, status, coven, registered_at, last_seen_at,
-// last_seen_by_kid, created_by_aid, requested_at, note).
+// 11 колонок: sid, transport, status, coven, traits, registered_at,
+// last_seen_at, last_seen_by_kid, created_by_aid, requested_at, note).
 type soulSelectRow struct{ s *soul.Soul }
 
 func (r soulSelectRow) Scan(dest ...any) error {
@@ -139,12 +139,22 @@ func (r soulSelectRow) Scan(dest ...any) error {
 	*dest[1].(*string) = string(r.s.Transport)
 	*dest[2].(*string) = string(r.s.Status)
 	*dest[3].(*[]string) = r.s.Coven
-	*dest[4].(*time.Time) = r.s.RegisteredAt
-	*dest[5].(**time.Time) = r.s.LastSeenAt
-	*dest[6].(**string) = r.s.LastSeenByKID
-	*dest[7].(**string) = r.s.CreatedByAID
-	*dest[8].(**time.Time) = r.s.RequestedAt
-	*dest[9].(**string) = nil
+	// traits jsonb (ADR-060): nil Traits → nil-bytes (scanSoul → пустой map).
+	if len(r.s.Traits) > 0 {
+		b, err := json.Marshal(r.s.Traits)
+		if err != nil {
+			return err
+		}
+		*dest[4].(*[]byte) = b
+	} else {
+		*dest[4].(*[]byte) = nil
+	}
+	*dest[5].(*time.Time) = r.s.RegisteredAt
+	*dest[6].(**time.Time) = r.s.LastSeenAt
+	*dest[7].(**string) = r.s.LastSeenByKID
+	*dest[8].(**string) = r.s.CreatedByAID
+	*dest[9].(**time.Time) = r.s.RequestedAt
+	*dest[10].(**string) = nil
 	return nil
 }
 

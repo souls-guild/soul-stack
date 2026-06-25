@@ -162,6 +162,124 @@ func TestEvalWhere_SoulprintSelfChoirs(t *testing.T) {
 	}
 }
 
+// TestEvalWhere_SoulprintSelfTraits — GUARD (ADR-060): where: таргетит по
+// operator-set traits хоста (registry-проекция soulprint.self.traits). Скаляр
+// `traits.namespace == 'dba-ns'` и список `'alice' in traits.owners` резолвятся
+// БЕЗ AST-rewrite (traits — обычное map-поле под self). Покрывает match +
+// исключение не-матча.
+func TestEvalWhere_SoulprintSelfTraits(t *testing.T) {
+	e, err := cel.New()
+	if err != nil {
+		t.Fatalf("cel.New: %v", err)
+	}
+
+	dbaHost := soulprintSelfMap(&topology.HostFacts{
+		SID: "db-1.example.com",
+		Traits: map[string]any{
+			"namespace": "dba-ns",
+			"owners":    []any{"alice", "bob"},
+			"product":   "aboba",
+		},
+	})
+	otherHost := soulprintSelfMap(&topology.HostFacts{
+		SID: "web-1.example.com",
+		Traits: map[string]any{
+			"namespace": "web-ns",
+			"owners":    []any{"carol"},
+		},
+	})
+	// Хост вообще без traits (nil map → пустой объект под self.traits): обращение
+	// к ключу даёт штатный no-such-key, предикат → false (не паника/ошибка).
+	noTraitsHost := soulprintSelfMap(&topology.HostFacts{SID: "bare.example.com"})
+
+	cases := []struct {
+		name string
+		expr string
+		self map[string]any
+		want bool
+	}{
+		{"scalar match", "soulprint.self.traits.namespace == 'dba-ns'", dbaHost, true},
+		{"scalar no-match", "soulprint.self.traits.namespace == 'dba-ns'", otherHost, false},
+		{"list contains match", "'alice' in soulprint.self.traits.owners", dbaHost, true},
+		{"list contains no-match", "'alice' in soulprint.self.traits.owners", otherHost, false},
+		{"missing key on no-traits host", "has(soulprint.self.traits.namespace) && soulprint.self.traits.namespace == 'dba-ns'", noTraitsHost, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := evalWhere(e, tc.expr, cel.Vars{SoulprintSelf: tc.self})
+			if err != nil {
+				t.Fatalf("evalWhere(%q): %v", tc.expr, err)
+			}
+			if got != tc.want {
+				t.Errorf("evalWhere(%q) = %v, want %v", tc.expr, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSoulprintSelfMap_Traits — GUARD (ADR-060): soulprint.self.traits всегда
+// присутствует (пустой map при nil) и несёт operator-set значения как есть
+// (scalar + list). Симметрия с hostFactsToMap проверяется ниже.
+func TestSoulprintSelfMap_Traits(t *testing.T) {
+	h := &topology.HostFacts{
+		SID: "db-1.example.com",
+		Traits: map[string]any{
+			"namespace": "dba-ns",
+			"owners":    []any{"alice", "bob"},
+		},
+	}
+	self := soulprintSelfMap(h)
+	traits, ok := self["traits"].(map[string]any)
+	if !ok {
+		t.Fatalf("self.traits type = %T, want map[string]any", self["traits"])
+	}
+	if traits["namespace"] != "dba-ns" {
+		t.Errorf("self.traits.namespace = %v, want dba-ns", traits["namespace"])
+	}
+	owners, _ := traits["owners"].([]any)
+	if len(owners) != 2 || owners[0] != "alice" || owners[1] != "bob" {
+		t.Errorf("self.traits.owners = %v, want [alice bob]", traits["owners"])
+	}
+
+	// nil Traits → пустой map (не отсутствие ключа traits под self).
+	bare := soulprintSelfMap(&topology.HostFacts{SID: "bare.example.com"})
+	if m, ok := bare["traits"].(map[string]any); !ok || len(m) != 0 {
+		t.Errorf("self.traits for nil-traits host = %v, want empty map", bare["traits"])
+	}
+
+	// Симметрия: элемент soulprint.hosts несёт те же traits.
+	elem := hostFactsToMap(h)
+	htraits, ok := elem["traits"].(map[string]any)
+	if !ok || htraits["namespace"] != "dba-ns" {
+		t.Errorf("hosts[].traits = %v, want согласованный с self", elem["traits"])
+	}
+}
+
+// TestSoulprintSelfMap_TraitsRegistryWinsOverReported — GUARD (ADR-060):
+// анти-спуфинг. operator-set traits живут в registry (HostFacts.Traits); если
+// Soul-агент пришлёт reported-soulprint с ключом "traits", registry-проекция
+// ОБЯЗАНА его перекрыть — Soul не может подменить operator-traits (таргетинг по
+// ним = доверенное решение оператора). Симметрия с sid/covens-инвариантом
+// (TestSoulprintSelfMap_RegistryWinsOverReported).
+func TestSoulprintSelfMap_TraitsRegistryWinsOverReported(t *testing.T) {
+	h := &topology.HostFacts{
+		SID:    "db-1.example.com",
+		Traits: map[string]any{"namespace": "dba-ns"},
+		Soulprint: map[string]any{
+			"traits": map[string]any{"namespace": "spoofed"},
+		},
+	}
+	self := soulprintSelfMap(h)
+
+	traits, ok := self["traits"].(map[string]any)
+	if !ok {
+		t.Fatalf("self.traits type = %T, want map[string]any", self["traits"])
+	}
+	if traits["namespace"] != "dba-ns" {
+		t.Errorf("self.traits.namespace = %v, registry must override reported (анти-спуфинг)", traits["namespace"])
+	}
+}
+
 // TestSoulprintSelfMap_NullReportedFacts — BUG E2E #3: при NULL reported
 // soulprint (Soul-агент не репортит) soulprint.self.sid/.covens/.role всё равно
 // доступны из roster (registry-проекция, ADR-018).

@@ -56,8 +56,13 @@ const stalenessThreshold = 10 * time.Minute
 // fallback-ом резолвера (lease==nil / Redis-сбой); в lease-aware пути presence
 // решает lease, status не читается для отбора.
 type HostFacts struct {
-	SID         string
-	Coven       []string
+	SID   string
+	Coven []string
+	// Traits — operator-set key-value метки хоста (ADR-060): key → (scalar |
+	// list). Registry-данные `souls.traits` (миграция 087); проецируются в
+	// `soulprint.self.traits` / `soulprint.hosts[].traits` для таргетинга
+	// `where:` (registry-проекция, как Coven). nil/пустой — нет меток.
+	Traits      map[string]any
 	Role        string
 	Choirs      []string
 	Status      string

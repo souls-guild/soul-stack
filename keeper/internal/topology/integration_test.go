@@ -169,6 +169,53 @@ func TestIntegration_LoadIncarnationHosts_ByCovenAndStatus(t *testing.T) {
 	}
 }
 
+// TestIntegration_LoadIncarnationHosts_Traits — GUARD (ADR-060): резолвер
+// тащит operator-set traits (scalar + list) из `souls.traits` в HostFacts.Traits
+// через rosterSQL SELECT+scan, симметрично coven. Это и есть источник проекции
+// `soulprint.self.traits` для таргетинга `where:`.
+func TestIntegration_LoadIncarnationHosts_Traits(t *testing.T) {
+	resetAll(t)
+	ctx := context.Background()
+
+	seedIncarnation(t, "redis-prod", map[string]any{})
+
+	// Сеем soul с traits напрямую через soul.Insert (write-путь пилота).
+	s := &soul.Soul{
+		SID:    "a.example.com",
+		Coven:  []string{"redis-prod"},
+		Status: soul.StatusConnected,
+		Traits: map[string]any{
+			"namespace": "dba-ns",
+			"owners":    []any{"alice", "bob"},
+		},
+	}
+	if err := soul.Insert(ctx, integrationPool, s); err != nil {
+		t.Fatalf("seedSoul with traits: %v", err)
+	}
+	// Хост без traits — Traits читается пустым map (jsonb '{}').
+	seedSoul(t, "b.example.com", []string{"redis-prod"}, soul.StatusConnected)
+
+	r := NewResolver(integrationPool, nil, nil)
+	hosts, err := r.LoadIncarnationHosts(ctx, "redis-prod")
+	if err != nil {
+		t.Fatalf("LoadIncarnationHosts: %v", err)
+	}
+	if len(hosts) != 2 {
+		t.Fatalf("len(hosts) = %d, want 2", len(hosts))
+	}
+	// ORDER BY sid: a, b.
+	if hosts[0].Traits["namespace"] != "dba-ns" {
+		t.Errorf("a.Traits[namespace] = %v, want dba-ns", hosts[0].Traits["namespace"])
+	}
+	owners, ok := hosts[0].Traits["owners"].([]any)
+	if !ok || len(owners) != 2 || owners[0] != "alice" {
+		t.Errorf("a.Traits[owners] = %v, want [alice bob]", hosts[0].Traits["owners"])
+	}
+	if hosts[1].Traits == nil || len(hosts[1].Traits) != 0 {
+		t.Errorf("b.Traits = %v, want пустой map (нет traits)", hosts[1].Traits)
+	}
+}
+
 func TestIntegration_LoadIncarnationHosts_CrossIncarnationIsolation(t *testing.T) {
 	// ADR-008 / PM-decision #4: хосты другой incarnation НЕ читаются.
 	resetAll(t)

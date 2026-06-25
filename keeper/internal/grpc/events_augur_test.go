@@ -173,12 +173,13 @@ func augurOmenRowVault(name string) pgx.Row {
 	return augurValRow{vals: []any{name, "vault", "https://vault:8200", "vault:secret/keeper/augur/" + name, nil, augurTestNow}}
 }
 
-// augurSoulRow — soul-строка с заданными covens (10 колонок selectBySIDSQL:
-// sid, transport, status, coven, registered_at, last_seen_at, last_seen_by_kid,
-// created_by_aid, requested_at, note). nil = NULL-колонка.
+// augurSoulRow — soul-строка с заданными covens (11 колонок selectBySIDSQL:
+// sid, transport, status, coven, traits, registered_at, last_seen_at,
+// last_seen_by_kid, created_by_aid, requested_at, note). nil = NULL-колонка
+// (traits NULL → пустой map в scanSoul, ADR-060).
 func augurSoulRow(sid string, covens []string) pgx.Row {
 	return augurValRow{vals: []any{
-		sid, "agent", "connected", covens, augurTestNow,
+		sid, "agent", "connected", covens, nil, augurTestNow,
 		nil, nil, nil, nil, nil,
 	}}
 }

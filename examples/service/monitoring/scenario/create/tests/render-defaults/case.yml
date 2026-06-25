@@ -136,6 +136,9 @@ assert:
             # с самого начала (см. fixtureHosts), а не артефакт multi-host-enabler-а.
             covens: [create]
             choirs: []
+            # traits — operator-set key-value метки (ADR-060), registry-проекция
+            # как covens/choirs; нет traits на хосте → пустой объект.
+            traits: {}
             role: ""
             os:
               arch: amd64
@@ -218,6 +221,8 @@ assert:
             # см. node_exporter unit выше: covens несёт incarnation.name-метку.
             covens: [create]
             choirs: []
+            # traits — registry-проекция (ADR-060), пустой объект без меток.
+            traits: {}
             role: ""
             os:
               arch: amd64

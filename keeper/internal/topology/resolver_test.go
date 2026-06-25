@@ -42,6 +42,7 @@ type choirVoiceRow struct {
 type rosterRow struct {
 	sid         string
 	coven       []string
+	traitsJSON  []byte     // nil = '{}' (jsonb NOT NULL DEFAULT) → пустой map; ADR-060
 	status      string     // "" → дефолт "connected" в Scan (SQL-presence fallback)
 	factsJSON   []byte     // nil = NULL soulprint
 	collectedAt *time.Time // nil = NULL
@@ -112,10 +113,11 @@ func (r *rosterRows) Scan(dest ...any) error {
 	}
 	*(dest[0].(*string)) = row.sid
 	*(dest[1].(*[]string)) = row.coven
-	*(dest[2].(*string)) = status
-	*(dest[3].(*[]byte)) = row.factsJSON
-	*(dest[4].(**time.Time)) = row.collectedAt
-	*(dest[5].(**time.Time)) = row.receivedAt
+	*(dest[2].(*[]byte)) = row.traitsJSON
+	*(dest[3].(*string)) = status
+	*(dest[4].(*[]byte)) = row.factsJSON
+	*(dest[5].(**time.Time)) = row.collectedAt
+	*(dest[6].(**time.Time)) = row.receivedAt
 	return nil
 }
 

@@ -131,6 +131,66 @@ func TestIntegration_Insert_Pending_AndSelect(t *testing.T) {
 	}
 }
 
+// TestIntegration_Insert_Traits_RoundTrip — GUARD (ADR-060): operator-set
+// traits (scalar + list) сериализуются в jsonb-колонку `souls.traits` на Insert
+// и читаются обратно тем же значением через SelectBySID (round-trip). Хост без
+// traits читается как пустой map (jsonb '{}' NOT NULL DEFAULT), не nil-паника.
+func TestIntegration_Insert_Traits_RoundTrip(t *testing.T) {
+	resetAll(t)
+	ctx := context.Background()
+
+	s := &Soul{
+		SID:    "host1.example.com",
+		Status: StatusPending,
+		Coven:  []string{"prod"},
+		Traits: map[string]any{
+			"namespace": "dba-ns",              // scalar
+			"product":   "aboba",               // scalar
+			"owners":    []any{"alice", "bob"}, // list
+		},
+	}
+	if err := Insert(ctx, integrationPool, s); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	got, err := SelectBySID(ctx, integrationPool, "host1.example.com")
+	if err != nil {
+		t.Fatalf("SelectBySID: %v", err)
+	}
+	if got.Traits == nil {
+		t.Fatalf("Traits = nil после round-trip, want map")
+	}
+	if got.Traits["namespace"] != "dba-ns" {
+		t.Errorf("Traits[namespace] = %v, want dba-ns", got.Traits["namespace"])
+	}
+	if got.Traits["product"] != "aboba" {
+		t.Errorf("Traits[product] = %v, want aboba", got.Traits["product"])
+	}
+	// JSON-десериализация массива → []any.
+	owners, ok := got.Traits["owners"].([]any)
+	if !ok || len(owners) != 2 || owners[0] != "alice" || owners[1] != "bob" {
+		t.Errorf("Traits[owners] = %v, want [alice bob]", got.Traits["owners"])
+	}
+
+	// Coven не затронут параллельной осью traits.
+	if len(got.Coven) != 1 || got.Coven[0] != "prod" {
+		t.Errorf("Coven = %v, want [prod] (traits — отдельная ось)", got.Coven)
+	}
+
+	// Хост без traits → пустой map (jsonb '{}'), не nil.
+	bare := &Soul{SID: "host2.example.com", Status: StatusPending}
+	if err := Insert(ctx, integrationPool, bare); err != nil {
+		t.Fatalf("Insert(bare): %v", err)
+	}
+	gotBare, err := SelectBySID(ctx, integrationPool, "host2.example.com")
+	if err != nil {
+		t.Fatalf("SelectBySID(bare): %v", err)
+	}
+	if gotBare.Traits == nil || len(gotBare.Traits) != 0 {
+		t.Errorf("bare Traits = %v, want пустой map", gotBare.Traits)
+	}
+}
+
 func TestIntegration_Insert_RejectsDuplicateSID(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()

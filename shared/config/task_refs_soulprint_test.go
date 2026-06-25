@@ -90,6 +90,52 @@ tasks:
 	}
 }
 
+// TestSoulprintRef_TraitsTargeting — GUARD (ADR-060): operator-set traits
+// таргетинг через `soulprint.self.traits.<key>` (скаляр и список) не флагается.
+// Ключ traits динамичен (произвольное имя оператора) — третий сегмент НЕ
+// статпроверяется (как у covens/choirs); soul-lint сверяет только что
+// `traits` — известное top-level поле под soulprint.self.*.
+func TestSoulprintRef_TraitsTargeting(t *testing.T) {
+	src := `name: ok
+tasks:
+  - name: scalar-trait
+    where: soulprint.self.traits.namespace == "dba-ns"
+    module: core.exec.run
+    params: { cmd: "true" }
+  - name: list-trait
+    where: '"alice" in soulprint.self.traits.owners'
+    module: core.exec.run
+    params: { cmd: "true" }
+  - name: hosts-trait
+    where: 'soulprint.hosts.where("traits.namespace == \"dba-ns\"").size() > 0'
+    module: core.exec.run
+    params: { cmd: "true" }
+`
+	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	if hasCode(diags, "soulprint_unknown_path") || hasCode(diags, "soulprint_naked_reference") {
+		dump(t, diags)
+		t.Fatalf("trait-таргетинг через soulprint.self.traits.<key> не должен флагаться (ADR-060)")
+	}
+}
+
+// TestSoulprintRef_TraitsTypoStillFlagged — опечатка в проекции (`trait` без s)
+// по-прежнему ловится как unknown top-level path: добавление traits не ослабляет
+// линтер (регресс-страховка симметрично choirs).
+func TestSoulprintRef_TraitsTypoStillFlagged(t *testing.T) {
+	src := `name: bad
+tasks:
+  - name: typo
+    where: soulprint.self.trait.namespace == "dba-ns"
+    module: core.exec.run
+    params: { cmd: "true" }
+`
+	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	if !hasCode(diags, "soulprint_unknown_path") {
+		dump(t, diags)
+		t.Fatalf("ожидали soulprint_unknown_path на soulprint.self.trait (опечатка)")
+	}
+}
+
 // TestSoulprintRef_TypoFamilyFlagged — опечатка `os.familly` (двойная l)
 // не валидируется как top-level поле SoulprintFacts, поэтому
 // soulprint_unknown_path должен быть.

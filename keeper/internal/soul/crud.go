@@ -2,6 +2,7 @@ package soul
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -50,17 +51,17 @@ var (
 
 const insertSQL = `
 INSERT INTO souls (
-    sid, transport, status, coven,
+    sid, transport, status, coven, traits,
     registered_at, last_seen_at, last_seen_by_kid,
     created_by_aid, requested_at, note
-) VALUES ($1, $2, $3, $4,
-    COALESCE($5, NOW()), $6, $7,
-    $8, COALESCE($9, NOW()), $10)
+) VALUES ($1, $2, $3, $4, COALESCE($5, '{}'::jsonb),
+    COALESCE($6, NOW()), $7, $8,
+    $9, COALESCE($10, NOW()), $11)
 RETURNING registered_at, requested_at
 `
 
 const selectBySIDSQL = `
-SELECT sid, transport, status, coven,
+SELECT sid, transport, status, coven, traits,
        registered_at, last_seen_at, last_seen_by_kid,
        created_by_aid, requested_at, note
 FROM souls
@@ -157,6 +158,19 @@ func Insert(ctx context.Context, db ExecQueryRower, s *Soul) error {
 		coven = []string{}
 	}
 
+	// traits — jsonb (миграция 087, ADR-060): сериализуем map в []byte
+	// (паттерн incarnation marshalJSONB; pgx-codec-auto для jsonb здесь
+	// сознательно не используется, единообразно с прочими jsonb-колонками).
+	// nil/пустой → arg=nil, COALESCE($5,'{}') в SQL даёт пустой объект.
+	var traitsArg any
+	if len(s.Traits) > 0 {
+		b, err := json.Marshal(s.Traits)
+		if err != nil {
+			return fmt.Errorf("soul: marshal traits: %w", err)
+		}
+		traitsArg = b
+	}
+
 	var registeredAtArg any
 	if !s.RegisteredAt.IsZero() {
 		registeredAtArg = s.RegisteredAt.UTC()
@@ -187,6 +201,7 @@ func Insert(ctx context.Context, db ExecQueryRower, s *Soul) error {
 		string(s.Transport),
 		string(s.Status),
 		coven,
+		traitsArg,
 		registeredAtArg,
 		lastSeenAtArg,
 		lastSeenByKIDArg,
@@ -298,6 +313,7 @@ func scanSoul(row pgx.Row) (*Soul, error) {
 		s             Soul
 		transportStr  string
 		statusStr     string
+		traitsJSON    []byte
 		lastSeenAt    *time.Time
 		lastSeenByKID *string
 		createdByAID  *string
@@ -309,6 +325,7 @@ func scanSoul(row pgx.Row) (*Soul, error) {
 		&transportStr,
 		&statusStr,
 		&s.Coven,
+		&traitsJSON,
 		&s.RegisteredAt,
 		&lastSeenAt,
 		&lastSeenByKID,
@@ -324,6 +341,12 @@ func scanSoul(row pgx.Row) (*Soul, error) {
 	}
 	s.Transport = Transport(transportStr)
 	s.Status = Status(statusStr)
+	// traits jsonb (ADR-060): '{}' (NOT NULL DEFAULT) → пустой map, не nil.
+	if len(traitsJSON) > 0 {
+		if err := json.Unmarshal(traitsJSON, &s.Traits); err != nil {
+			return nil, fmt.Errorf("soul: unmarshal traits for %q: %w", s.SID, err)
+		}
+	}
 	s.LastSeenAt = lastSeenAt
 	s.LastSeenByKID = lastSeenByKID
 	s.CreatedByAID = createdByAID
@@ -1093,7 +1116,7 @@ func SelectAll(ctx context.Context, db ExecQueryRower, filter ListFilter, scope 
 		return nil, 0, fmt.Errorf("soul: count: %w", err)
 	}
 
-	listSQL := `SELECT sid, transport, status, coven,
+	listSQL := `SELECT sid, transport, status, coven, traits,
        registered_at, last_seen_at, last_seen_by_kid,
        created_by_aid, requested_at, note
 FROM souls` + whereSQL +

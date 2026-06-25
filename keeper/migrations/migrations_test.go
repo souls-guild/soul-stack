@@ -201,6 +201,8 @@ func TestEmbed_ContainsExpectedMigrations(t *testing.T) {
 		"085_operators_bootstrap_index.up.sql",
 		"086_seed_archon_system.down.sql",
 		"086_seed_archon_system.up.sql",
+		"087_add_souls_traits.down.sql",
+		"087_add_souls_traits.up.sql",
 	}
 	if len(names) != len(want) {
 		t.Fatalf("got %d files, want %d: %v", len(names), len(want), names)

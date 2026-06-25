@@ -1,0 +1,39 @@
+# ADR-060. Trait — operator-set key-value метки на Soul
+
+> **Статус: active (пилот read/target).** Реализован read/target-путь: миграция `087_add_souls_traits` (колонка `souls.traits jsonb NOT NULL DEFAULT '{}'` + GIN-индекс), поле `soul.Soul.Traits` + round-trip в `keeper/internal/soul` (Insert/SelectBySID/SelectAll), registry-проекция `soulprint.self.traits` в `keeper/internal/render/cel_render.go` (`soulprintSelfMap` + `hostFactsToMap`), прокидка в `topology.HostFacts.Traits` (rosterSQL/inventorySQL SELECT+scan), whitelist `traits` в `shared/config/soulprint_paths.go` (soul-lint). **НЕ в пилоте (следующие слайсы):** bulk-assign API `POST /v1/souls/traits`, audit-event `soul.traits-changed`, `incarnation.spec.hosts[].traits`, UI, RBAC-scope по traits.
+
+**Контекст.** К 2026-06-25 у Soul есть единственная operator-set ось группировки — **Coven** ([ADR-008](0008-coven-stable-tags.md#adr-008-coven--только-стабильные-логические-теги)): плоский `souls.coven TEXT[]`, стабильные логические теги (кластер / проект / окружение / ЦОД). Coven хорош для членства и грубого таргетинга (`$1 = ANY(coven)`, `coven && ARRAY[...]`), на нём же построены RBAC scope-pushdown ([ADR-047](0047-purview.md#adr-047-purview--scoped-rbac-видимость-узлов-role-default_scope--расширенный-селектор)) и CEL-предикаты `'x' in soulprint.self.covens`.
+
+Чего нет: **key-value атрибутов хоста, заданных оператором** — `owner=alice`, `product=aboba`, `namespace=dba-ns`. Их нельзя выразить плоской меткой без «склейки» (`owner-alice`), которая ломает таргетинг по ключу (`owner == 'alice'`), не даёт значений-списков (`owners: [alice, bob]`) и засоряет coven-ось, на которой висят RBAC и членство.
+
+**Решение (зафиксировано пользователем 2026-06-25, propose-and-wait закрыт).** Ввести **Trait** — operator-set key-value метки на Soul, **отдельную сущность рядом с плоским Coven**.
+
+1. **Trait — key-value (scalar | list), operator-set, отдельно от Coven (Вариант B, locked).**
+   - Значение Trait — скаляр (`namespace: dba-ns`, `product: aboba`) ИЛИ список (`owners: [alice, bob]`). Произвольные строковые ключи оператора.
+   - Источник — **оператор** (стабильная registry-данность, как Coven), **НЕ Soul-reported**. Trait — организационная метка («чей хост / какой продукт»), а не факт о системе.
+   - **Coven НЕ трогаем.** Trait — параллельная ось: `souls.coven TEXT[]` остаётся плоским множеством меток членства/таргетинга/RBAC; `souls.traits` — новая jsonb-колонка под key-value.
+
+2. **Хранение — `souls.traits jsonb` (locked).** `NOT NULL DEFAULT '{}'::jsonb` + GIN-индекс под таргетинг (`traits @> '{"namespace":"dba-ns"}'` / containment по ключу). Колонка `souls.coven TEXT[]` не меняется. jsonb — потому что значение полиморфно (scalar | list), а `TEXT[]` этого не выражает.
+
+3. **Проекция в `soulprint.self.traits` (registry-проекция, как `covens`/`choirs`, locked).** При резолве CEL Keeper кладёт `souls.traits` в `soulprint.self.traits` — виртуальная проекция registry-данных в Soulprint-namespace, ровно как `soulprint.self.covens` проецирует `souls.coven[]` ([ADR-018](0018-soulprint-typed.md#adr-018-soulprint-typed-схема-mvp): «`covens` не в `SoulprintFacts`»). Источник истины — registry, поэтому проекция **перекрывает** одноимённый reported-ключ, если бы Soul такой прислал. **`traits` НЕ часть `SoulprintFacts` proto** — registration-контракт Soul→Keeper не трогается (forward-compat: Trait — operator-данность, Soul её не репортит).
+
+4. **Таргетинг — `where:` по `soulprint.self.traits.<key>` (locked).** Каноническая CEL-форма (через `soulprint.self`, [ADR-018](0018-soulprint-typed.md#adr-018-soulprint-typed-схема-mvp)):
+   - скаляр: `where: soulprint.self.traits.namespace == 'dba-ns'`;
+   - список: `where: 'alice' in soulprint.self.traits.owners`.
+
+   `soulprint` объявлен в CEL как `DynType` ([ADR-010](0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов)), поэтому `traits.<любой_ключ>` резолвится динамически **без правки CEL-env и без AST-rewrite** — `traits` это обычное map-поле элемента таргетинга. Soul-lint статпроверяет только префикс `traits` (см. п.6), второй сегмент (ключ оператора) динамичен — как у `covens`.
+
+5. **Мутабельность — как у Coven (locked).** Trait меняется оператором (стабильная registry-данность); конкретный write-путь (bulk-API / keeper-side core-модуль, симметрия с `soul.coven-assign` / `core.soul.registered`) — **следующий слайс**, в пилоте только read/target.
+
+6. **Soul-lint — `traits` в whitelist `soulprint.self.*` как map/dyn (locked).** Добавляется в `soulprintSelfTopLevel` (`shared/config/soulprint_paths.go`) **без** статпроверки второго сегмента — ключи Trait динамичны, как у `covens`/`choirs`. `soulprint.self.traits.<любой_ключ>` проходит lint (третий сегмент регуляркой не захватывается, как у `os.family`-хвоста после массива/скаляра).
+
+7. **RBAC-scope по traits — ОТЛОЖЕН (locked).** Старт — только таргетинг + метаданные. Scope-видимость/таргетинг оператора по Trait (аналог coven-scope-pushdown `$1 = ANY(coven)` из [ADR-047](0047-purview.md#adr-047-purview--scoped-rbac-видимость-узлов-role-default_scope--расширенный-селектор)) — отдельный ADR/слайс по запросу. Пилот сознательно НЕ вводит Trait-измерение в Purview.
+
+**Отвергнутые альтернативы.**
+
+- **Вариант A — расширить `souls.coven` до key-value.** Отвергнут: ломает [ADR-008](0008-coven-stable-tags.md#adr-008-coven--только-стабильные-логические-теги)-семантику плоской метки (Coven — стабильный логический тег, не пара ключ-значение), а также RBAC scope-pushdown `$1 = ANY(coven)` и предикаты `'x' in soulprint.self.covens` — они опираются на `TEXT[]`-форму. Перевод coven в jsonb потащил бы миграцию всех scope-/таргет-путей. Trait как отдельная ось оставляет Coven нетронутым.
+- **Soul-reported traits.** Отвергнут: противоречит [ADR-008](0008-coven-stable-tags.md#adr-008-coven--только-стабильные-логические-теги)/[ADR-018](0018-soulprint-typed.md#adr-018-soulprint-typed-схема-mvp) — Trait это организационная метка владельца, не факт хоста; Soul (потенциально скомпрометированный) не должен задавать свою принадлежность продукту/владельцу. Источник — оператор, как у Coven.
+
+**Naming.** **Trait** — key-value метки оператора на Soul. Отличие от Coven: Coven = плоские группы (кластер / окружение / проект, RBAC-/членство-ось); Trait = атрибуты (владелец / продукт / namespace). Имя вне SaltStack-словаря (там нет прямого аналога; grains — Soul-reported факты, что Trait по семантике НЕ является). Coven занят под плоские группы — переиспользовать нельзя.
+
+**Amends.** Дополняет [ADR-008](0008-coven-stable-tags.md#adr-008-coven--только-стабильные-логические-теги) (рядом с Coven появляется параллельная operator-set ось) и [ADR-018](0018-soulprint-typed.md#adr-018-soulprint-typed-схема-mvp) (новая registry-проекция `soulprint.self.traits`, симметрично `covens`/`choirs`; `SoulprintFacts` proto не трогается).

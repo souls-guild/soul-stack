@@ -63,11 +63,12 @@ func (f *oracleFakeDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row
 		if f.soulErr != nil {
 			return oracleErrRow{err: f.soulErr}
 		}
-		// Порядок selectBySIDSQL: sid, transport, status, coven, registered_at,
-		// last_seen_at, last_seen_by_kid, created_by_aid, requested_at, note.
+		// Порядок selectBySIDSQL: sid, transport, status, coven, traits,
+		// registered_at, last_seen_at, last_seen_by_kid, created_by_aid,
+		// requested_at, note (traits NULL → пустой map в scanSoul, ADR-060).
 		return oracleValRow{vals: []any{
 			"host-a.example.com", "agent", "connected", f.soulCoven,
-			time.Now(), nil, nil, nil, nil, nil,
+			nil, time.Now(), nil, nil, nil, nil, nil,
 		}}
 	case strings.Contains(sql, "FROM oracle_fires"):
 		if f.lastFired == nil {
@@ -865,9 +866,10 @@ func (f *oracleVigilDB) Exec(context.Context, string, ...any) (pgconn.CommandTag
 }
 func (f *oracleVigilDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
 	if strings.Contains(sql, "FROM souls") {
+		// traits jsonb (ADR-060) — слот после coven; NULL → пустой map в scanSoul.
 		return oracleValRow{vals: []any{
 			"host-a.example.com", "agent", "connected", f.soulCoven,
-			time.Now(), nil, nil, nil, nil, nil,
+			nil, time.Now(), nil, nil, nil, nil, nil,
 		}}
 	}
 	return oracleErrRow{err: pgx.ErrNoRows}

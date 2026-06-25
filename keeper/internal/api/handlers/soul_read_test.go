@@ -105,6 +105,7 @@ func (f *fakeReadPool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row
 		}
 		return staticRow{values: []any{
 			s.SID, string(s.Transport), string(s.Status), s.Coven,
+			[]byte(nil), // traits jsonb (ADR-060): NULL → пустой map в scanSoul
 			s.RegisteredAt, lastSeenAt, lastSeenByKID, createdByAID, requestedAt, note,
 		}}
 	}
@@ -552,6 +553,7 @@ func (f *fakeHistoryPool) QueryRow(_ context.Context, sql string, _ ...any) pgx.
 		}
 		return staticRow{values: []any{
 			"soul.example.com", "agent", "connected", f.hostCovens,
+			[]byte(nil), // traits jsonb (ADR-060): NULL → пустой map в scanSoul
 			time.Now(), nil, nil, nil, nil, nil,
 		}}
 	}

@@ -85,6 +85,8 @@ assert:
             sid: node-9.example.com
             covens: [add_node, redis]
             choirs: []
+            # traits — registry-проекция (ADR-060), пустой объект без меток.
+            traits: {}
             role: ""
             network:
               primary_ip: 10.0.0.9

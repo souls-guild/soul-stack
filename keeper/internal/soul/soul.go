@@ -90,16 +90,21 @@ func ValidCoven(label string) bool {
 // маппится в указатели: LastSeenAt = nil для никогда не подключавшегося
 // Soul-а, CreatedByAID = nil для seed-импорта из cli-bootstrap-а.
 type Soul struct {
-	SID           string     `json:"sid"`
-	Transport     Transport  `json:"transport"`
-	Status        Status     `json:"status"`
-	Coven         []string   `json:"coven"`
-	RegisteredAt  time.Time  `json:"registered_at"`
-	LastSeenAt    *time.Time `json:"last_seen_at,omitempty"`
-	LastSeenByKID *string    `json:"last_seen_by_kid,omitempty"`
-	CreatedByAID  *string    `json:"created_by_aid,omitempty"`
-	RequestedAt   *time.Time `json:"requested_at,omitempty"`
-	Note          string     `json:"note,omitempty"`
+	SID       string    `json:"sid"`
+	Transport Transport `json:"transport"`
+	Status    Status    `json:"status"`
+	Coven     []string  `json:"coven"`
+	// Traits — operator-set key-value метки (ADR-060): key → (scalar | list).
+	// Отдельная ось рядом с плоским Coven; источник — оператор (как Coven),
+	// НЕ Soul-reported. jsonb-колонка `souls.traits` (миграция 087); nil/пустой
+	// map = нет меток (read/target пилот, write-путь — следующий слайс).
+	Traits        map[string]any `json:"traits,omitempty"`
+	RegisteredAt  time.Time      `json:"registered_at"`
+	LastSeenAt    *time.Time     `json:"last_seen_at,omitempty"`
+	LastSeenByKID *string        `json:"last_seen_by_kid,omitempty"`
+	CreatedByAID  *string        `json:"created_by_aid,omitempty"`
+	RequestedAt   *time.Time     `json:"requested_at,omitempty"`
+	Note          string         `json:"note,omitempty"`
 }
 
 // ValidStatus / ValidTransport — экспортированные closed-enum проверки

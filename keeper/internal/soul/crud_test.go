@@ -350,6 +350,7 @@ func TestSelectBySID_HappyPath(t *testing.T) {
 				"agent",                // transport
 				"connected",            // status
 				[]string{"prod", "db"}, // coven
+				[]byte(nil),            // traits (jsonb '{}' / NULL → пустой map)
 				now,                    // registered_at
 				(*time.Time)(nil),      // last_seen_at — передаём как nil-указатель
 				(*string)(nil),         // last_seen_by_kid

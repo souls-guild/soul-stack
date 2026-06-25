@@ -310,14 +310,15 @@ func orEmptyMap(m map[string]any) map[string]any {
 // они кладутся ВСЕГДА (даже при NULL reported facts: authority sid — mTLS peer
 // cert, не collected-факт) и ПЕРЕЗАПИСЫВАЮТ одноимённые reported-ключи, если те
 // случайно затесались. role — declared-роль из spec (может быть ""). choirs —
-// имена Choir-ов хоста (ADR-044, S-T4); registry-проекция, как covens.
+// имена Choir-ов хоста (ADR-044, S-T4); registry-проекция, как covens. traits —
+// operator-set key-value метки (ADR-060); registry-проекция, как covens/choirs.
 //
 // Симметрия с hostFactsToMap (soulprint.hosts): self и элемент hosts дают
-// согласованные sid/covens/role/choirs. host.Soulprint не мутируется — строится
+// согласованные sid/covens/role/choirs/traits. host.Soulprint не мутируется — строится
 // новый верхнеуровневый map (значения подсекций reported шарятся read-only,
 // render их не меняет).
 func soulprintSelfMap(host *topology.HostFacts) map[string]any {
-	self := make(map[string]any, len(host.Soulprint)+4)
+	self := make(map[string]any, len(host.Soulprint)+5)
 	for k, v := range host.Soulprint {
 		self[k] = v
 	}
@@ -325,6 +326,11 @@ func soulprintSelfMap(host *topology.HostFacts) map[string]any {
 	self["covens"] = covensList(host.Coven)
 	self["role"] = host.Role
 	self["choirs"] = covensList(host.Choirs)
+	// traits — operator-set key-value метки (ADR-060), registry-проекция как
+	// covens/choirs (перекрывает одноимённый reported-ключ). Всегда кладётся
+	// (пустой map при nil): `soulprint.self.traits.<key>` даёт штатный
+	// no-such-key, не отсутствие самого traits.
+	self["traits"] = orEmptyMap(host.Traits)
 	return self
 }
 
@@ -355,15 +361,16 @@ func soulprintHosts(in RenderInput) []map[string]any {
 }
 
 // hostFactsToMap строит элемент soulprint.hosts из HostFacts: стабильные поля.
-// covens/choirs — копии срезов (cel читает как list); network/os — подмапы
-// Soulprint (отсутствуют → пустой map, обращение к полю даёт штатный
-// no-such-key).
+// covens/choirs — копии срезов (cel читает как list); traits — operator-set
+// key-value map (ADR-060, registry-проекция); network/os — подмапы Soulprint
+// (отсутствуют → пустой map, обращение к полю даёт штатный no-such-key).
 func hostFactsToMap(h *topology.HostFacts) map[string]any {
 	return map[string]any{
 		"sid":     h.SID,
 		"role":    h.Role,
 		"covens":  covensList(h.Coven),
 		"choirs":  covensList(h.Choirs),
+		"traits":  orEmptyMap(h.Traits), // operator-set key-value (ADR-060), как covens/choirs
 		"network": soulprintSection(h.Soulprint, "network"),
 		"os":      soulprintSection(h.Soulprint, "os"),
 	}
