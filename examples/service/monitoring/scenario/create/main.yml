@@ -30,20 +30,6 @@ input:
     pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
     description: Версия node_exporter (GitHub Releases prometheus/node_exporter).
 
-  # checksum tarball-а node_exporter (linux-<arch>). core.url.fetched верифицирует
-  # его ДО публикации файла — неверный хэш не материализуется (supply-chain).
-  # ОБЯЗАТЕЛЬНЫЙ, без дефолта (fail-closed): нет хэша → честный отказ, а не fetch
-  # с placeholder-ом, который верификация всё равно отвергнет. Значение — из
-  # GitHub-релиза (файл sha256sums) под пару (node_exporter_version, arch).
-  node_exporter_sha256:
-    type: string
-    required: true
-    pattern: "^sha256:[0-9a-f]{64}$"
-    description: >-
-      SHA-256 tarball-а node_exporter (форма "sha256:<hex>"). Должен
-      соответствовать паре node_exporter_version + arch; берётся из sha256sums
-      GitHub-релиза prometheus/node_exporter.
-
   redis_exporter_version:
     type: string
     default: "1.62.0"
@@ -139,7 +125,6 @@ tasks:
       destiny: node-exporter
       input:
         version: "${ input.node_exporter_version }"
-        sha256:  "${ input.node_exporter_sha256 }"
         # arch НЕ передаём: destiny берёт его напрямую из soulprint.self.os.arch
         # (soulprint доступен в destiny-CEL). Один incarnation может смешивать
         # amd64/arm64-хосты — destiny сама подберёт tarball под факт хоста.

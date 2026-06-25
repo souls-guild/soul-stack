@@ -30,27 +30,6 @@ input:
     format: semver
     description: Версия node_exporter (GitHub Releases prometheus/node_exporter).
 
-  # sha256 — pinned-хэш tarball-а node_exporter (linux-<arch>). ОПЦИОНАЛЬНЫЙ:
-  # задан → передаётся в checksum шага core.url.fetched, который верифицирует
-  # его ДО публикации файла (supply-chain, прод-конвенция §7); пуст (default "")
-  # → core.url трактует пустой checksum как «без верификации» и идёт idempotency
-  # по SHA-256 содержимого (см. soul/internal/coremod/url/fetched.go: ветка
-  # `checksum != ""`). Форма "sha256:<hex>" — иначе core.url отвергнет на Validate.
-  #
-  # ВНИМАНИЕ supply-chain: при пустом sha256 целостность артефакта не проверяется.
-  # Для прод-окружения задавайте хэш из официального sha256sums GitHub-релиза под
-  # пару (version, arch). Опциональность — компромисс под зеркала/nexus, где хэш
-  # может быть недоступен заранее; default-безопасный путь — задать хэш.
-  sha256:
-    type: string
-    default: ""
-    pattern: "^(sha256:[0-9a-f]{64})?$"
-    description: >-
-      Опциональный SHA-256 tarball-а node_exporter (форма "sha256:<hex>"). Задан
-      — core.url.fetched верифицирует ДО публикации; пуст — скачивание без
-      проверки (idempotency по SHA-256 содержимого). Должен соответствовать паре
-      version + arch.
-
   # base_url — корень GitHub Releases (или подменяемое зеркало/nexus-proxy).
   # https-only (core.url отвергнёт http:// на Validate без allow_http). Полный URL
   # tarball-а собирается CEL-ом в tasks/main.yml из base_url + version + arch

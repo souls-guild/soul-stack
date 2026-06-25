@@ -27,13 +27,12 @@ stand:
   mode:   push
 
 # input харнесс-scenario (L2 берёт input как L0-Fixtures.Input — render не
-# подставляет scenario-default, дублируем явно нужные значения). version/sha256 —
+# подставляет scenario-default, дублируем явно нужные значения). version —
 # passthrough контракта (в L2 fetch/systemd не исполняются); listen :9100
 # (стандартный порт node_exporter); collectors=[] — на VM-стенде коллекторы
 # железа gate-ятся.
 input:
   version: "1.9.0"
-  sha256: ""
   listen: ":9100"
   collectors: []
   bin_dir: /usr/local/bin

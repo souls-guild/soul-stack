@@ -48,22 +48,24 @@
   `redis` нет (Redis на хосте ещё не установлен) — шаг `core.user` упадёт; в этом
   случае установите Redis заранее или добавьте `core.group.present name: redis`.
 - **Версии экспортеров** пиннятся через input на конкретные релизы
-  (`node_exporter_version`, `redis_exporter_version`); вместе с версией оператор
-  обязан передать checksum tarball-а (`node_exporter_sha256`,
-  `redis_exporter_sha256` — оба `required: true`).
+  (`node_exporter_version`, `redis_exporter_version`). Для redis_exporter
+  (инлайн-fetch) вместе с версией оператор обязан передать checksum tarball-а
+  (`redis_exporter_sha256`, `required: true`); node_exporter качается через destiny
+  `node-exporter`, у которой checksum-input убран (скачивание без verification).
 - **Установка — единый паттерн «тройка»:** `core.url.fetched` (скачать tarball с
   GitHub Releases) → `core.archive.extracted` (распаковать) → `core.cmd.shell`
   (`install -m0755` бинаря в `bin_dir`). Скачивание делает специализированный
-  `core.url.fetched` — **https-only** и **checksum-верификация ДО публикации
-  файла** (неверный хэш не материализуется, supply-chain). `core.cmd.shell`
-  остаётся только для локального install-шага (`core.file.present` копировать из
-  пути не умеет — только inline-content), сети в нём нет.
-- **Checksum tarball-а — обязательный input** (`node_exporter_sha256`,
-  `redis_exporter_sha256`, форма `"sha256:<hex>"`, оба `required: true` **без
-  default**, fail-closed по [прод-конвенции §7](../../../docs/destiny/production-conventions.md#7-supply-chain)).
+  `core.url.fetched` — **https-only**; при заданном checksum — **верификация ДО
+  публикации файла** (неверный хэш не материализуется, supply-chain), при пустом
+  checksum — idempotency по SHA-256 содержимого. `core.cmd.shell` остаётся только
+  для локального install-шага (`core.file.present` копировать из пути не умеет —
+  только inline-content), сети в нём нет.
+- **Checksum redis_exporter — обязательный input** (`redis_exporter_sha256`,
+  форма `"sha256:<hex>"`, `required: true` **без default**, fail-closed по
+  [прод-конвенции §7](../../../docs/destiny/production-conventions.md#7-supply-chain)).
   Дефолта нет: нет хэша → честный отказ резолва, а не fetch с placeholder-ом.
-  Хэши берутся из `sha256sums.txt` соответствующего GitHub-релиза под пару
-  (version, arch); `core.url.fetched` верифицирует их ДО публикации файла.
+  Хэш берётся из `sha256sums.txt` соответствующего GitHub-релиза под пару
+  (version, arch); `core.url.fetched` верифицирует его ДО публикации файла.
 
 Если какое-то из допущений не так (например, нужен пакет из репозитория дистрибутива
 вместо tarball, или подключение к Redis по TCP, а не сокету) — поправьте input/scenario.
@@ -130,7 +132,6 @@ monitoring/
 | Параметр | Тип | Default | Назначение |
 |---|---|---|---|
 | `node_exporter_version` | string (semver-like) | `1.8.2` | Версия node_exporter. |
-| `node_exporter_sha256` | string `sha256:<hex>`, **required** | — | SHA-256 tarball-а node_exporter. Из `sha256sums` GitHub-релиза под пару (version, arch). |
 | `redis_exporter_version` | string (semver-like) | `1.62.0` | Версия redis_exporter. |
 | `redis_exporter_sha256` | string `sha256:<hex>`, **required** | — | SHA-256 tarball-а redis_exporter. Из `sha256sums` GitHub-релиза под пару (version, arch). |
 | `arch` | enum `amd64`/`arm64` | `amd64` | Архитектура релизного tarball-а. Задаётся в контракте scenario, но обе destiny берут arch напрямую из `soulprint.self.os.arch` — input в задачи не доезжает (один incarnation может смешивать amd64/arm64-хосты). |
@@ -141,9 +142,9 @@ monitoring/
 | `redis_exporter_listen` | string `host:port` | `:9121` | Listen-адрес redis_exporter. |
 | `redis_exporter_extra_args` | array string | `[]` | Доп. флаги инлайн-redis_exporter (`--check-keys=…`, `--web.config.file=…` для TLS/basic-auth и пр.). Каждый элемент — отдельный токен `ExecStart`. |
 
-Обязательны два checksum-параметра (`node_exporter_sha256`, `redis_exporter_sha256`,
-fail-closed по [прод-конвенции §7](../../../docs/destiny/production-conventions.md#7-supply-chain));
-остальное — дефолты.
+Обязателен checksum-параметр redis_exporter (`redis_exporter_sha256`, fail-closed по
+[прод-конвенции §7](../../../docs/destiny/production-conventions.md#7-supply-chain));
+node_exporter качается через destiny `node-exporter` без checksum; остальное — дефолты.
 
 ## Идемпотентность
 
@@ -179,8 +180,8 @@ fail-closed по [прод-конвенции §7](../../../docs/destiny/product
 Кейс герметичен (render-only, ничего не качает): проверяет CEL-render задач при
 штатных input-ах. План — композит destiny node-exporter (`apply:destiny`, индексы
 0..5) + инлайн redis_exporter (6..13). Ассертит сборку url-ов из `version`+`arch`
-(`arch` из soulprint) для `core.url.fetched` (с checksum-пином), сборку
-`redis_addr=unix://...`, создание пользователя `redis-exporter`
+(`arch` из soulprint) для `core.url.fetched` (checksum-пин — только у redis_exporter),
+сборку `redis_addr=unix://...`, создание пользователя `redis-exporter`
 (`core.user.present`) и декларативные `core.service.{enabled,running}`-шаги. Даёт
 `PASS`.
 
@@ -192,10 +193,11 @@ fail-closed по [прод-конвенции §7](../../../docs/destiny/product
 > **Реальный прогон** (установка бинарей, поднятие сервисов) требует Linux+systemd
 > и сетевого доступа к GitHub Releases — на dev-mac не выполняется. L0-trial
 > покрывает render-фазу; интеграционный прогон — на linux-стенде через
-> `keeper.push` / pull-агента. `node_exporter_sha256` / `redis_exporter_sha256` —
-> обязательные параметры (без дефолта): для реального прогона передайте настоящие
-> хэши из `sha256sums` GitHub-релиза, иначе `core.url.fetched` упадёт на checksum
-> mismatch (а без значения вовсе — резолв откажет fail-closed).
+> `keeper.push` / pull-агента. `redis_exporter_sha256` — обязательный параметр
+> (без дефолта): для реального прогона передайте настоящий хэш из `sha256sums`
+> GitHub-релиза, иначе `core.url.fetched` упадёт на checksum mismatch (а без
+> значения вовсе — резолв откажет fail-closed). node_exporter качается через
+> destiny `node-exporter` без checksum (idempotency по SHA-256 содержимого).
 
 ## Чего здесь специально нет
 

@@ -20,10 +20,6 @@ input:
     type: string
     default: "1.9.0"
     pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-  sha256:
-    type: string
-    default: ""
-    pattern: "^(sha256:[0-9a-f]{64})?$"
   collectors:
     type: array
     default: [smartmon, nvme, ipmi]
@@ -45,7 +41,6 @@ tasks:
         # CEL по scenario-scope: значения резолвятся в scenario-env, в destiny
         # уходит уже результат (destiny scenario-input не видит, изоляция ADR-009).
         version:    "${ input.version }"
-        sha256:     "${ input.sha256 }"
         # arch НЕ передаём: destiny берёт его напрямую из soulprint.self.os.arch
         # (soulprint доступен в destiny-CEL). L0-кейс arch-arm64 варьирует
         # soulprint.os.arch фикстуры — он доезжает в URL через destiny, не через

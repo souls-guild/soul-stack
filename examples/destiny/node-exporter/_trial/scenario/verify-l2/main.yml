@@ -25,7 +25,7 @@ description: >-
   на docker-стенде. Запуск листенера и проба порта — в verify кейса (без systemd).
 
 # input харнесс-scenario. Подмножество контракта продовой destiny node-exporter
-# (version/sha256/listen/collectors/bin_dir), исполнимое герметично. Реальный
+# (version/listen/collectors/bin_dir), исполнимое герметично. Реальный
 # fetch/systemd НЕ задействуются — берутся только те поля, что нужны core.file-
 # подмножеству (listen → launch-скрипт + config, bin_dir → путь скрипта).
 input:
@@ -34,11 +34,6 @@ input:
     default: "1.9.0"
     pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
     description: Версия node_exporter (passthrough контракта; в L2 не качается).
-  sha256:
-    type: string
-    default: ""
-    pattern: "^(sha256:[0-9a-f]{64})?$"
-    description: Опциональный SHA-256 tarball-а (passthrough; в L2 не верифицируется).
   listen:
     type: string
     default: ":9100"

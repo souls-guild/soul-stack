@@ -11,7 +11,6 @@ fixtures:
   default_destiny_source: "file://../../{name}"
   input:
     version: "1.9.0"
-    sha256: ""
     collectors: [smartmon, nvme, ipmi]
   soulprint:
     os:

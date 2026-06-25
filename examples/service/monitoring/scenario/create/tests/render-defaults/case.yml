@@ -35,12 +35,11 @@ fixtures:
   # те же значения, что объявлены дефолтами в scenario/create/main.yml.
   input:
     node_exporter_version:    "1.8.2"
-    # sha256 экспортёров ОБЯЗАТЕЛЕН (required:true, placeholder-дефолт убран). L0
-    # render-only — fetch не исполняется, хэш не верифицируется; передаём валидный
-    # тестовый 64-hex.
-    node_exporter_sha256:     "sha256:1111111111111111111111111111111111111111111111111111111111111111"
     node_exporter_collectors: []
     redis_exporter_version:   "1.62.0"
+    # redis_exporter_sha256 ОБЯЗАТЕЛЕН (required:true): redis_exporter — инлайн-fetch
+    # со своим checksum (node_exporter качается через destiny node-exporter, у которой
+    # checksum убран). L0 render-only — хэш не верифицируется; валидный тестовый 64-hex.
     redis_exporter_sha256:    "sha256:2222222222222222222222222222222222222222222222222222222222222222"
     bin_dir:                  /usr/local/bin
     redis_socket:             /var/run/redis/redis-server.sock
@@ -64,12 +63,12 @@ assert:
   task_present:
     # ── node-exporter (apply:destiny, ядро) ─────────────────────────────────────
     # node_exporter tarball: url собран CEL-ом из base_url+version+arch (arch из
-    # soulprint), checksum-пин из apply:input. Дизамбигуатор от redis-tarball — url/path.
+    # soulprint). checksum НЕ задаётся (destiny node-exporter качает без verification —
+    # idempotency по SHA-256 содержимого). Дизамбигуатор от redis-tarball — url/path.
     - module: core.url.fetched
       params_subset:
         url: https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-amd64.tar.gz
         path: /tmp/node_exporter-1.8.2.tar.gz
-        checksum: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
         mode: "0644"
 
     - module: core.archive.extracted
