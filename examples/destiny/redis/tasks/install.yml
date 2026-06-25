@@ -50,14 +50,14 @@
   when: "has(input.install) && has(input.install.method) && input.install.method == 'binary'"
   block:
     # 1. Скачать tarball во временный путь. URL: base_url + version + arch. checksum
-    #    верифицируется ДО материализации файла; пустой install.sha256 → core.url
-    #    трактует checksum как «без проверки» и идёт idempotency по SHA-256 содержимого
-    #    (#14 опционален, как modules_sha256). Голый hex → "sha256:<hex>".
+    #    НЕ передаётся → core.url.fetched качает по content-идемпотентности (скачать во
+    #    temp → сравнить SHA-256 с существующим → запись только при diff), без integrity-
+    #    verify — доверяем HTTPS + источнику, как node-exporter (директива «попроще»).
     # ★ render-safety: задачи binary-блока несут has()-guard на input.install.version/
-    #   base_url/sha256, хотя при method=binary эти поля присутствуют (validate сценария
-    #   их требует). Причина: при method=package весь блок static-skip, но CEL ячеек
-    #   binary-задач Keeper ВСЁ РАВНО вычисляет (vars/params рендерятся до skip-проекции)
-    #   — голый input.install.version упал бы «no such key: install». Guard даёт пустую
+    #   base_url, хотя при method=binary эти поля присутствуют (validate сценария их
+    #   требует). Причина: при method=package весь блок static-skip, но CEL ячеек binary-
+    #   задач Keeper ВСЁ РАВНО вычисляет (vars/params рендерятся до skip-проекции) —
+    #   голый input.install.version упал бы «no such key: install». Guard даёт пустую
     #   строку в этом мёртвом проходе (значение не используется — задача skip).
     - name: Fetch redis tarball
       module: core.url.fetched
@@ -66,7 +66,6 @@
       params:
         url: "${ (has(input.install) && has(input.install.base_url) ? input.install.base_url : '') + '/redis-' + vars.ver + '-' + soulprint.self.os.arch + '.tar.gz' }"
         path: "${ '/tmp/redis-' + vars.ver + '.tar.gz' }"
-        checksum: "${ has(input.install) && has(input.install.sha256) ? 'sha256:' + input.install.sha256 : '' }"
         mode: "0644"
 
     # 2. Распаковать tarball в каталог. format auto-detect по .tar.gz. Идемпотентно:

@@ -124,7 +124,7 @@ assert:
         group: root
         render_context:
           vars:
-            bin_dir: /usr/local/bin
+            exporter_bin: /usr/local/bin/node_exporter
             user: node_exporter
             group: node_exporter
             listen: ":9100"

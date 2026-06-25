@@ -74,7 +74,7 @@ v1→v2 — [`migrations/001_to_002.yml`](migrations/001_to_002.yml), перев
 |---|---|---|
 | `redis_type` | enum, default `standalone` | режим; выбирает ветку диспетчера; реализованы все четыре (`standalone`/`cluster`/`sentinel`/`sentinel_only`). Значение вне enum отвергает input-валидация Keeper-а по enum ДО рендера |
 | `version` | string, обяз. **только при `install.method=package`** (`required_when`) | distro-native пин версии пакета (напр. `5:7.0.15-1~deb12u7`); `core.pkg` всегда ставит `=version` — воспроизводимая инсталляция. Поведение «не задана → latest из репо» удалено (директива пользователя 2026-06-23). При `install.method=binary` НЕ используется — версия бинаря в `install.version` (upstream-semver) |
-| `install` | object `{method, base_url, version, sha256}`, опц. | способ установки redis (концепция `redis_install_*` роли): `method` ∈ `package` (default — distro-пакет, поведение-сохраняющий) / `binary` (opt-in — upstream-tarball: `base_url` + `version` (semver) + `soulprint.self.os.arch` → `/usr/local/bin` + свой systemd-юнит + distro-юзер/группа redis). `base_url`+`version` обяз. при `method=binary` (`validate`). `sha256` (голый hex) **опционален**: задан → fail-closed verify скачанного tarball-а; нет → загрузка по content-идемпотентности (без verify, доверие HTTPS+store). Пустой/не передан → `method=package` |
+| `install` | object `{method, base_url, version}`, опц. | способ установки redis (концепция `redis_install_*` роли): `method` ∈ `package` (default — distro-пакет, поведение-сохраняющий) / `binary` (opt-in — upstream-tarball: `base_url` + `version` (semver) + `soulprint.self.os.arch` → `/usr/local/bin` + свой systemd-юнит + distro-юзер/группа redis). `base_url`+`version` обяз. при `method=binary` (`validate`). Tarball качается по content-идемпотентности (SHA-256 содержимого, без integrity-verify, доверие HTTPS+store) — как node-exporter. Пустой/не передан → `method=package` |
 | `conf_dir` | string, опц., default `/etc/redis` | каталог конфигурации Redis (`redis.conf`, `users.acl`, `sentinel.conf`, `tls/`). Оператор может переопределить под свой layout; HOST-инвариант (один на кластер). Прокидывается в destiny `redis` и **персистится в `state`** для day-2-консистентности (`add_node`/`update_config`/`add_user` читают его из `state`). Прежний хардкод `aclfile /etc/redis/users.acl` в compute убран — override теперь доезжает до `redis.conf` (`dir`/`aclfile` выводит destiny-шаблон из vars) |
 | `data_dir` | string, опц., default `/var/lib/redis` | рабочий каталог данных Redis (RDB/AOF; `modules/` = `<data_dir>/modules`). Оператор может переопределить под свой storage-layout; HOST-инвариант, персистится в `state` для day-2. Прежний хардкод `dir /var/lib/redis` убран — override доезжает до `redis.conf` через vars шаблона |
 | `memory_mb` | integer, опц., min `64` | бюджет памяти под Redis на хосте, МБ; `maxmemory` = доля от него |
@@ -92,8 +92,7 @@ v1→v2 — [`migrations/001_to_002.yml`](migrations/001_to_002.yml), перев
 | `redis_settings` | object (passthrough) | произвольные директивы `redis.conf` key→value; **бьют всё** в итоговом merge |
 | `tls` | object `{enable, only, port, cert_ref, key_ref, ca_ref}`, опц. | **(TLS)** параметры TLS Redis (концепция `redis_tls_*` роли). operator-input **бьёт essence** (каждое под-поле опционально; недостающие берут дефолт из `essence.tls_*`). `enable` — главный гейт рендера PEM/директив; `only` — закрыть plain-порт (scenario ставит `port 0`); `port` — TLS-порт (директива `tls-port`, дефолт essence `7379`); `cert_ref`/`key_ref`/`ca_ref` — Vault-**ПУТИ** серверного cert/key и CA (форма `<mount>/<path>#<field>`, **не** сам PEM). destiny читает PEM через `vault(ref)` в ячейке `content` (`core.file.present`, seal-маскинг — НЕ `.tmpl`). Пустой/не передан → TLS off. `tls.only` требует `tls.enable` (`validate`) |
 | `modules` | array enum `search`/`json`/`timeseries`/`bloom`, опц. | **(Redis-модули)** алиасы загружаемых модулей (RediSearch/RedisJSON/RedisTimeSeries/RedisBloom) для Redis < 8; на Redis 8+ игнорируется (модули встроены). Пусто/не задан → модули не подключаются |
-| `modules_base_url` | string, обяз. при непустом `modules` | **(Redis-модули)** базовый URL источника `.so` (без арх-сегмента); destiny строит полный URL per-host как `<base_url>/<arch>/<имя.so>` |
-| `modules_sha256` | map `алиас → SHA-256` (голый hex), **опц.** | **(Redis-модули)** контрольная сумма `.so`, **опциональна и частична** (можно задать лишь для части алиасов). Задан для алиаса → fail-closed integrity-verify (`core.url.fetched` верифицирует, mismatch → падение); отсутствует → загрузка по content-идемпотентности (без verify, доверие HTTPS+store) |
+| `modules_base_url` | string, обяз. при непустом `modules` | **(Redis-модули)** базовый URL источника `.so` (без арх-сегмента); destiny строит полный URL per-host как `<base_url>/<arch>/<имя.so>`. `.so` качаются по content-идемпотентности (SHA-256 содержимого, без integrity-verify, доверие HTTPS+store) |
 
 **Кросс-полевые инварианты ввода** ([`create/main.yml → validate:`](scenario/create/main.yml),
 input-only, первый провал → 422 `validation_failed` ДО коммита incarnation и ДО
@@ -698,8 +697,8 @@ TLS- и install-кейсы под [`scenario/create/tests/`](scenario/create/tes
   → `core.archive.extracted` → install бинарей + свой systemd-юнит; package-ветка
   placeholder-skip.
 - [`modules-no-checksum-standalone`](scenario/create/tests/modules-no-checksum-standalone/case.yml)
-  — `modules` без `modules_sha256`: загрузка `.so` по content-идемпотентности (без
-  fail-closed verify).
+  — полный набор Redis-модулей (standalone): загрузка `.so` по content-идемпотентности
+  (без integrity-verify).
 
 add_node-кейсы под [`scenario/add_node/tests/`](scenario/add_node/tests/):
 

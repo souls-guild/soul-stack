@@ -22,3 +22,17 @@ service_name: node_exporter
 # (extract.dest) — один источник правды на оба производных пути.
 tarball_path: "${ '/tmp/node_exporter-' + input.version + '.tar.gz' }"
 extract_dir:  "${ '/tmp/node_exporter-' + input.version }"
+
+# ── Путь бинаря node_exporter (один источник правды на ВСЕ ссылки) ─────────────
+# bin_path — целевой путь установленного бинаря (input.bin_dir + '/node_exporter').
+# Дублировался в двух местах (service.yml core.file.present.path и ExecStart юнита);
+# вынесен в один var: задачи берут ${ vars.bin_path }, шаблон — переданную копию
+# (core.file.rendered vars: exporter_bin). Имя файла бинаря совпадает с именем
+# сервиса (service_name) случайно — это путь именно бинаря, не сервиса.
+bin_path: "${ input.bin_dir + '/node_exporter' }"
+
+# src_bin — путь бинаря ВНУТРИ распакованного релиза (vars.extract_dir, а не
+# заново собранный /tmp-путь): внутри tarball-каталога лежит подкаталог
+# node_exporter-<version>.linux-<arch>/. arch — soulprint.self.os.arch (amd64/arm64,
+# proto soulprint.proto). service.yml берёт ${ vars.src_bin } как core.file.present.src.
+src_bin: "${ vars.extract_dir + '/node_exporter-' + input.version + '.linux-' + soulprint.self.os.arch + '/node_exporter' }"

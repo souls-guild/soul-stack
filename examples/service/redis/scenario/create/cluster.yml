@@ -87,10 +87,9 @@
       # Redis-модули — НАБОР больше НЕ передаётся (директива «модули ВСЕГДА ВСЕ»):
       # destiny разворачивает полный набор из vars.redis_modules сама, version-guard
       # Redis 8+ тоже в destiny — см. standalone.yml. scenario отдаёт только источник
-      # .so (modules_base_url) + опц. checksums (modules_sha256), host-инвариант →
-      # apply.input; арх-URL строит destiny per-host.
+      # .so (modules_base_url), host-инвариант → apply.input; арх-URL строит destiny
+      # per-host, .so качаются по content-идемпотентности (без verify).
       modules_base_url: "${ default(input.modules_base_url, '') }"
-      modules_sha256:   "${ default(input.modules_sha256, {}) }"
       # Host-tuning extras (концепция роли), режим-агностичны — как в standalone-ветке.
       # THP/logrotate/sysctl БЕЗУСЛОВНЫ (рекомендация Redis / hardening) — операторских
       # флагов нет, задачи destiny `redis` всегда активны. sysctl_settings — essence,

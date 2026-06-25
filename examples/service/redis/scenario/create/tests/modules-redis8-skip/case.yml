@@ -1,5 +1,5 @@
 # L0-испытание create (standalone) — VERSION-GUARD Redis 8+: модули ВСТРОЕНЫ в
-# сервер → .so НЕ качаем и loadmodule НЕ пишем. Контр-кейс к modules-enabled-standalone
+# сервер → .so НЕ качаем и loadmodule НЕ пишем. Контр-кейс к modules-no-checksum-standalone
 # (Redis 6 → полный набор активен). Директива «модули ВСЕГДА ВСЕ» = для Redis < 8;
 # на Redis 8+ — builtin-skip.
 #

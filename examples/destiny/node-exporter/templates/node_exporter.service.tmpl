@@ -1,7 +1,7 @@
 {{/*
   systemd-unit node_exporter. Контекст рендера (docs/templating.md §3.2):
-    .vars  — явно переданные core.file.rendered (bin_dir, user, group, listen,
-             textfile_dir);
+    .vars  — явно переданные core.file.rendered (exporter_bin — готовый путь
+             бинаря из vars.bin_path, user, group, listen, textfile_dir);
     .self  — стабильные факты хоста (здесь не используются).
   Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010).
 
@@ -28,7 +28,7 @@ Wants=network-online.target
 Type=simple
 User={{ .vars.user }}
 Group={{ .vars.group }}
-ExecStart={{ .vars.bin_dir }}/node_exporter --collector.textfile.directory={{ .vars.textfile_dir }} --web.listen-address={{ .vars.listen }}
+ExecStart={{ .vars.exporter_bin }} --collector.textfile.directory={{ .vars.textfile_dir }} --web.listen-address={{ .vars.listen }}
 SyslogIdentifier=node_exporter
 Restart=on-failure
 RestartSec=5

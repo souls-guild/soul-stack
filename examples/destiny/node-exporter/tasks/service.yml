@@ -32,8 +32,8 @@
   module: core.file.present
   register: node_exporter_bin
   params:
-    path: "${ input.bin_dir + '/node_exporter' }"
-    src: "${ '/tmp/node_exporter-' + input.version + '/node_exporter-' + input.version + '.linux-' + soulprint.self.os.arch + '/node_exporter' }"
+    path: "${ vars.bin_path }"
+    src: "${ vars.src_bin }"
     mode: "0755"
     owner: root
     group: root
@@ -51,7 +51,7 @@
     owner: root
     group: root
     vars:
-      bin_dir:       "${ input.bin_dir }"
+      exporter_bin:  "${ vars.bin_path }"
       user:          "${ input.user }"
       group:         "${ input.group }"
       listen:        "${ input.listen }"

@@ -61,14 +61,13 @@ fixtures:
 
 assert:
   task_present:
-    # Fetch redis tarball: URL из base_url + version + arch (amd64). checksum пуст
-    # (sha256 не задан → content-идемпотентность). path во /tmp. Единственный
-    # core.url.fetched в плане.
+    # Fetch redis tarball: URL из base_url + version + arch (amd64). checksum НЕ
+    # передаётся (content-идемпотентность по SHA-256 содержимого). path во /tmp.
+    # Единственный core.url.fetched в плане.
     - module: core.url.fetched
       params_subset:
         url: "https://downloads.example.com/redis/redis-7.2.4-amd64.tar.gz"
         path: "/tmp/redis-7.2.4.tar.gz"
-        checksum: ""
         mode: "0644"
 
     # Extract redis tarball во /tmp/redis-7.2.4. Единственный core.archive.extracted.
@@ -174,12 +173,11 @@ assert:
     redis_hosts: []
     redis_sentinel: {}
     # ── namedfields (read-model, v3): install=binary (тот же compute.install, что
-    # ушёл в destiny apply.input). sha256 не задан → '' (content-идемпотентность).
+    # ушёл в destiny apply.input). tarball качается по content-идемпотентности.
     install:
       method:   binary
       base_url: "https://downloads.example.com/redis"
       version:  "7.2.4"
-      sha256:   ""
     # TLS off (essence без tls_*): enable/only false, port 7379 (essence-дефолт),
     # refs пусты (essence.tls_*_ref не заданы → has()-цепочка даёт '').
     tls:

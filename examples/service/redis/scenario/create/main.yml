@@ -97,17 +97,18 @@ input:
   # ── install: способ установки redis (default package) ────────────────────────
   # package (default, поведение-сохраняющее) — distro-пакет; binary — upstream-tarball.
   # Прокидывается as-is в destiny `redis` (apply.input.install) во всех ветках.
-  # base_url/version/sha256 нужны лишь при method=binary. Имя файла tarball-а строит
-  # destiny per-host из soulprint.self.os.arch (host-инвариант источник → apply.input).
+  # base_url/version нужны лишь при method=binary. Имя файла tarball-а строит destiny
+  # per-host из soulprint.self.os.arch (host-инвариант источник → apply.input). tarball
+  # качается по content-идемпотентности (SHA-256 содержимого), без integrity-verify.
   install:
     type: object
     required: false
     additional_properties: false
     description: >-
       Способ установки redis. method: package (default) — distro-пакет redis-server;
-      binary — upstream-tarball (base_url + version + arch). base_url/version/sha256
-      нужны при method=binary. sha256 опционален (fail-closed verify, иначе content-
-      идемпотентность). Пустой → method=package.
+      binary — upstream-tarball (base_url + version + arch). base_url/version нужны при
+      method=binary; tarball качается по content-идемпотентности, без verify.
+      Пустой → method=package.
     properties:
       method:
         type: string
@@ -117,9 +118,6 @@ input:
       version:
         type: string
         pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-      sha256:
-        type: string
-        pattern: "^[0-9a-f]{64}$"
 
   memory_mb:
     type: integer
@@ -334,9 +332,10 @@ input:
   # 8+ модули ВСТРОЕНЫ — version-guard (по compute.redis_version) гасит .so и в destiny
   # (include modules.yml group-drop), и в read-model (state.modules=[]).
   #
-  # Оператор задаёт лишь ИСТОЧНИК .so: modules_base_url (откуда брать бинари модулей) +
-  # опц. modules_sha256 (checksums под пару (version, arch) кластера). modules_base_url
-  # ОБЯЗАТЕЛЕН на Redis < 8 (без него destiny нечем строить URL .so) — см. validate:.
+  # Оператор задаёт лишь ИСТОЧНИК .so: modules_base_url (откуда брать бинари модулей).
+  # modules_base_url ОБЯЗАТЕЛЕН на Redis < 8 (без него destiny нечем строить URL .so) —
+  # см. validate:. .so качаются по content-идемпотентности (SHA-256 содержимого), без
+  # integrity-verify (как node-exporter).
   modules_base_url:
     type: string
     required: false
@@ -344,20 +343,6 @@ input:
       Базовый URL источника .so-модулей (без арх-сегмента). destiny `redis` строит
       полный URL per-host как <base_url>/<arch>/<имя.so>. Обязателен на Redis < 8
       (модули разворачиваются всегда все).
-
-  modules_sha256:
-    type: object
-    required: false
-    description: >-
-      Маппинг алиас→SHA-256 .so-объекта (голый hex), ОПЦИОНАЛЬНЫЙ. Задан для алиаса →
-      fail-closed (core.url.fetched верифицирует скачанный .so, mismatch → падение);
-      отсутствует → загрузка по content-идемпотентности (без verify, доверие HTTPS +
-      store). Маппинг частичный — можно задать sha256 лишь для части алиасов.
-      Соответствует паре (version, arch) кластера.
-    properties: {}
-    additional_properties:
-      type: string
-      pattern: "^[0-9a-f]{64}$"
 
 # ── Презентационный слой формы (form:, top-level scenario-ключ) ───────────────────
 # form: — ЧИСТАЯ ПРЕЗЕНТАЦИЯ: как UI группирует и подписывает поля input в Run-форме.
@@ -422,7 +407,6 @@ form:
       fields:
         - { name: redis_settings, label: "Passthrough-директивы redis.conf" }
         - { name: modules_base_url, label: "URL источника .so-модулей" }
-        - { name: modules_sha256, label: "SHA-256 .so-модулей" }
 
 # ── Декларативные input-инварианты (validate:, ADR-009 amendment 2026-06-23) ──────
 # validate: — кросс-полевые предусловия ВВОДА, не выразимые одним schema-ключом и
@@ -557,10 +541,10 @@ compute:
          : ['bloom', 'json', 'search', 'timeseries'] }
   # ── install как namedfield (read-model): нормализуем absent input.install →
   # {method: 'package'} (default-поведение, см. input.install). method всегда
-  # присутствует; base_url/version/sha256 — только при method=binary (берём из
-  # input.install as-is, has()-цепочка). install_in нормализует корень (default()
-  # ловит no-such-key лишь на существующем map — input.install может отсутствовать
-  # целиком). state_changes.install ссылается ОДНО это значение (не повторяет каскад).
+  # присутствует; base_url/version — только при method=binary (берём из input.install
+  # as-is, has()-цепочка). install_in нормализует корень (default() ловит no-such-key
+  # лишь на существующем map — input.install может отсутствовать целиком).
+  # state_changes.install ссылается ОДНО это значение (не повторяет каскад).
   install_in:     "${ default(input.install, {}) }"
   install_method: "${ default(compute.install_in.method, 'package') }"
   install: >-
@@ -568,8 +552,7 @@ compute:
          ? {
              'method':   'binary',
              'base_url': default(compute.install_in.base_url, ''),
-             'version':  default(compute.install_in.version, ''),
-             'sha256':   default(compute.install_in.sha256, '')
+             'version':  default(compute.install_in.version, '')
            }
          : { 'method': 'package' } }
   # ── Эффективный host-layout: conf_dir с дефолтом (директива B) ───────────────
@@ -685,8 +668,8 @@ state_changes:
            'key_ref':  compute.tls_key_ref,
            'ca_ref':   compute.tls_ca_ref
          } }
-  # install: нормализованный compute.install (method всегда; base_url/version/sha256
-  # при binary). Тот же install, что уходит в destiny `redis` (apply.input.install).
+  # install: нормализованный compute.install (method всегда; base_url/version при
+  # binary). Тот же install, что уходит в destiny `redis` (apply.input.install).
   - set: install
     value: "${ compute.install }"
   # persistence: input.persistence (default rdb) — тот же ключ, по которому выбран

@@ -7,8 +7,8 @@
 # Полная таблица алиас→.so — ИНВАРИАНТ кирпича в vars.redis_modules; fetch-loop
 # качает ВЕСЬ набор (на Redis < 8). input.modules / input.modules_dir удалены; modules-
 # dir выводится из input.data_dir (<data_dir>/modules). modules_base_url (откуда брать
-# .so) и modules_sha256 (опц. checksums) ОСТАЮТСЯ в input — deployment-артефакт под
-# пару (version, arch), не инвариант. scenario модули не передаёт.
+# .so) ОСТАЁТСЯ в input — deployment-артефакт под пару (version, arch), не инвариант.
+# scenario модули не передаёт. .so качаются по content-идемпотентности (без verify).
 #
 # VERSION-GATE Redis 8+ (директива C, сохранён): на Redis 8+ модули ВСТРОЕНЫ в сервер —
 # .so не качаем и loadmodule НЕ пишем. Раньше гейт делал scenario (передавал modules=[]);
@@ -57,49 +57,41 @@
 # owner redis: .so читает только сервис. register не нужен — loadmodule-директива в
 # redis.conf уже триггерит рестарт через redis_conf-register; загрузка идемпотентна.
 #
-# checksum — ОПЦИОНАЛЬНЫЙ (директива 2026-06-24). Две ветки одной CEL-ячейки на задачу:
-#   - modules_sha256[<alias>] ЗАДАН → "sha256:<hex>": fail-closed integrity-verify по
-#     временному файлу ДО публикации (mismatch → падение, целевой путь нетронут);
-#   - НЕ задан → пустая строка: core.url.fetched качает по content-идемпотентности
-#     (скачать во temp → сравнить SHA-256 → запись при diff), без verify.
-# Guard через has(input.modules_sha256) (сам map может отсутствовать целиком) + `'<alias>'
-# in …` (наличие ключа; has() принимает только селектор поля, не index-выражение).
+# checksum НЕ передаётся → core.url.fetched качает .so по content-идемпотентности
+# (скачать во temp → сравнить SHA-256 с существующим → запись только при diff), без
+# integrity-verify — доверяем HTTPS + источнику, как node-exporter (директива «попроще»).
 - name: Fetch the redisbloom module shared object
   module: core.url.fetched
   params:
-    url:      "${ input.modules_base_url + '/' + soulprint.self.os.arch + '/' + vars.redis_modules.bloom }"
-    path:     "${ default(input.data_dir, vars.redis_data_dir) + '/modules/' + vars.redis_modules.bloom }"
-    checksum: "${ (has(input.modules_sha256) && 'bloom' in input.modules_sha256) ? 'sha256:' + input.modules_sha256.bloom : '' }"
-    mode:     "0750"
-    owner:    "${ vars.redis_user }"
-    group:    "${ vars.redis_group }"
+    url:   "${ input.modules_base_url + '/' + soulprint.self.os.arch + '/' + vars.redis_modules.bloom }"
+    path:  "${ default(input.data_dir, vars.redis_data_dir) + '/modules/' + vars.redis_modules.bloom }"
+    mode:  "0750"
+    owner: "${ vars.redis_user }"
+    group: "${ vars.redis_group }"
 
 - name: Fetch the rejson module shared object
   module: core.url.fetched
   params:
-    url:      "${ input.modules_base_url + '/' + soulprint.self.os.arch + '/' + vars.redis_modules.json }"
-    path:     "${ default(input.data_dir, vars.redis_data_dir) + '/modules/' + vars.redis_modules.json }"
-    checksum: "${ (has(input.modules_sha256) && 'json' in input.modules_sha256) ? 'sha256:' + input.modules_sha256.json : '' }"
-    mode:     "0750"
-    owner:    "${ vars.redis_user }"
-    group:    "${ vars.redis_group }"
+    url:   "${ input.modules_base_url + '/' + soulprint.self.os.arch + '/' + vars.redis_modules.json }"
+    path:  "${ default(input.data_dir, vars.redis_data_dir) + '/modules/' + vars.redis_modules.json }"
+    mode:  "0750"
+    owner: "${ vars.redis_user }"
+    group: "${ vars.redis_group }"
 
 - name: Fetch the redisearch module shared object
   module: core.url.fetched
   params:
-    url:      "${ input.modules_base_url + '/' + soulprint.self.os.arch + '/' + vars.redis_modules.search }"
-    path:     "${ default(input.data_dir, vars.redis_data_dir) + '/modules/' + vars.redis_modules.search }"
-    checksum: "${ (has(input.modules_sha256) && 'search' in input.modules_sha256) ? 'sha256:' + input.modules_sha256.search : '' }"
-    mode:     "0750"
-    owner:    "${ vars.redis_user }"
-    group:    "${ vars.redis_group }"
+    url:   "${ input.modules_base_url + '/' + soulprint.self.os.arch + '/' + vars.redis_modules.search }"
+    path:  "${ default(input.data_dir, vars.redis_data_dir) + '/modules/' + vars.redis_modules.search }"
+    mode:  "0750"
+    owner: "${ vars.redis_user }"
+    group: "${ vars.redis_group }"
 
 - name: Fetch the redistimeseries module shared object
   module: core.url.fetched
   params:
-    url:      "${ input.modules_base_url + '/' + soulprint.self.os.arch + '/' + vars.redis_modules.timeseries }"
-    path:     "${ default(input.data_dir, vars.redis_data_dir) + '/modules/' + vars.redis_modules.timeseries }"
-    checksum: "${ (has(input.modules_sha256) && 'timeseries' in input.modules_sha256) ? 'sha256:' + input.modules_sha256.timeseries : '' }"
-    mode:     "0750"
-    owner:    "${ vars.redis_user }"
-    group:    "${ vars.redis_group }"
+    url:   "${ input.modules_base_url + '/' + soulprint.self.os.arch + '/' + vars.redis_modules.timeseries }"
+    path:  "${ default(input.data_dir, vars.redis_data_dir) + '/modules/' + vars.redis_modules.timeseries }"
+    mode:  "0750"
+    owner: "${ vars.redis_user }"
+    group: "${ vars.redis_group }"

@@ -55,12 +55,11 @@ destiny видит **только свой** `input:` (изоляция, [ADR-00
   `redis-server`. `false` (режим `sentinel_only`) гасит всю data-плоскость
   ([`server.yml`](tasks/server.yml)), пакет redis при этом ставится всё равно (он же
   несёт sentinel-демон).
-- **`install`** — способ доставки бинарей: `{method, base_url, version, sha256}`.
-  `method=package` (default) — distro-пакет; `binary` — upstream-tarball. `sha256`
-  опционален (задан → fail-closed integrity-verify; нет → загрузка по
-  content-идемпотентности). `version` верхнего уровня (distro-epoch-пин,
-  напр. `5:7.0.15-1~deb12u7`) — для package-ветки; `install.version` (upstream-semver) —
-  для binary-ветки.
+- **`install`** — способ доставки бинарей: `{method, base_url, version}`.
+  `method=package` (default) — distro-пакет; `binary` — upstream-tarball (качается по
+  content-идемпотентности по SHA-256 содержимого, без integrity-verify). `version`
+  верхнего уровня (distro-epoch-пин, напр. `5:7.0.15-1~deb12u7`) — для package-ветки;
+  `install.version` (upstream-semver) — для binary-ветки.
 - **TLS.** `tls: {enable, only, port, cert_ref, key_ref, ca_ref}` — единый dict
   (host-инвариант). PEM-материал рендерится **через `core.file.present` + `${ vault(ref) }`
   в ячейке `content`** (seal-маскинг, [templating.md §7.4](../../../docs/templating.md)),
@@ -77,8 +76,9 @@ destiny видит **только свой** `input:` (изоляция, [ADR-00
 - **Host-tuning.** `sysctl_settings` (map kernel-параметр → значение, строки) → drop-in
   `/etc/sysctl.d/30-redis.conf` через [`core.sysctl.applied`](../../../docs/module/core/sysctl/README.md).
 - **Redis-модули.** `modules` (алиасы `search`/`json`/`timeseries`/`bloom`),
-  `modules_dir`, `modules_base_url`, `modules_sha256` (опц., per-алиас) — для Redis < 8;
-  URL `.so` арх-специфичен (строится из `soulprint.self.os.arch` per-host).
+  `modules_dir`, `modules_base_url` — для Redis < 8; `.so` качаются по
+  content-идемпотентности (SHA-256 содержимого), URL арх-специфичен (строится из
+  `soulprint.self.os.arch` per-host).
 - **Sentinel.** `sentinel_enabled` (bool) + `sentinel: {master_name, master_ip,
   master_port, quorum, auth_user, auth_pass, config}` — задействованы только в
   sentinel-режимах; `master_ip` обязателен, когда dict передан.

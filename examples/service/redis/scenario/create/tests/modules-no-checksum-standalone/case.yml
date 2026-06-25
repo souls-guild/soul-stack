@@ -1,18 +1,16 @@
-# L0-испытание create (standalone) — Redis-МОДУЛИ БЕЗ sha256 (checksum ОПЦИОНАЛЕН,
-# директива пользователя 2026-06-24). Контр-кейс к modules-enabled-standalone (там
-# modules_sha256 ЗАДАН частично → search/json verify). Здесь оператор modules_sha256
-# НЕ передаёт вовсе → КАЖДЫЙ из четырёх модулей fetch-ится с ПУСТЫМ checksum, и
-# core.url.fetched качает .so по СОДЕРЖИМОМУ (content-идемпотентность), без verify.
+# L0-испытание create (standalone) — Redis-МОДУЛИ (директива «модули ВСЕГДА ВСЕ»).
+# Все четыре .so (RedisBloom/RedisJSON/RediSearch/RedisTimeSeries) fetch-ятся
+# core.url.fetched БЕЗ checksum → загрузка по СОДЕРЖИМОМУ (content-идемпотентность по
+# SHA-256, без integrity-verify), как node-exporter (директива «попроще» 2026-06-25:
+# sha256-инпуты вырезаны целиком).
 #
-# Guard (директива «модули ВСЕГДА ВСЕ»): при ОТСУТСТВУЮЩЕМ modules_sha256:
-#   1. рендер проходит (CEL-ячейка checksum НЕ падает no-such-key — has()-guard);
-#   2. КАЖДЫЙ из ЧЕТЫРЁХ алиасов → core.url.fetched с checksum: "" (absent);
-#   3. остальное (modules-dir, loadmodules всех четырёх, URL из arch) — как с sha256.
+# Guard (директива «модули ВСЕГДА ВСЕ»): набор-инвариант в destiny vars.redis_modules:
+#   1. КАЖДЫЙ из ЧЕТЫРЁХ алиасов → core.url.fetched (modules-dir, loadmodules всех
+#      четырёх, URL из arch);
+#   2. version=5:6.2.7 — мажор 6 (< 8), version-guard модули НЕ гасит.
 #
-# version=5:6.2.7 — мажор 6 (< 8), version-guard модули НЕ гасит. input.modules НЕ
-# задаётся (набор-инвариант в destiny vars.redis_modules) — отличие от enabled-кейса
-# ровно одно: пустой checksum у ВСЕХ vs частичный verify.
-name: modules without sha256 render empty checksum and fetch by content idempotency
+# input.modules НЕ задаётся (набор-инвариант в destiny vars.redis_modules).
+name: modules fetch all four shared objects by content idempotency without checksum
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
@@ -49,15 +47,14 @@ fixtures:
   input:
     redis_type: standalone
     version: "5:6.2.7"
-    # input.modules НЕ задаётся (набор-инвариант), modules_sha256 — НЕТ (опционален).
-    # ВСЕ четыре модуля fetch-ятся с пустым checksum (absent для каждого).
+    # input.modules НЕ задаётся (набор-инвариант). ВСЕ четыре модуля fetch-ятся по
+    # content-идемпотентности (без checksum).
     modules_base_url: "https://artifacts.example.com/redis/modules/6.2"
 
 assert:
   task_present:
     # redis.conf несёт vars.loadmodules — пути .so ВСЕХ четырёх (Go-сорт: bloom, json,
-    # search, timeseries). loadmodules от наличия sha256 НЕ зависят. Дизамбигуатор от
-    # users.acl/hardening — path.
+    # search, timeseries). Дизамбигуатор от users.acl/hardening — path.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
@@ -105,15 +102,13 @@ assert:
         group: redis
         mode: "0750"
 
-    # fetch .so — loop по КЛЮЧАМ vars.redis_modules (Go-сорт: bloom, json, search,
-    # timeseries). URL арх-специфичен (amd64). checksum ПУСТ ("") у КАЖДОГО —
-    # modules_sha256 не передан: core.url.fetched качает по content-идемпотентности.
-    # Дизамбигуатор .so — path/url; tarball-fetch — placeholder-skip.
+    # fetch .so — четыре явные задачи (Go-сорт: bloom, json, search, timeseries).
+    # URL арх-специфичен (amd64). checksum НЕ передаётся: core.url.fetched качает по
+    # content-идемпотентности. Дизамбигуатор .so — path/url; tarball-fetch — placeholder-skip.
     - module: core.url.fetched
       params_subset:
         url: "https://artifacts.example.com/redis/modules/6.2/amd64/redisbloom.so"
         path: /var/lib/redis/modules/redisbloom.so
-        checksum: ""
         mode: "0750"
         owner: redis
         group: redis
@@ -122,7 +117,6 @@ assert:
       params_subset:
         url: "https://artifacts.example.com/redis/modules/6.2/amd64/rejson.so"
         path: /var/lib/redis/modules/rejson.so
-        checksum: ""
         mode: "0750"
         owner: redis
         group: redis
@@ -131,7 +125,6 @@ assert:
       params_subset:
         url: "https://artifacts.example.com/redis/modules/6.2/amd64/redisearch.so"
         path: /var/lib/redis/modules/redisearch.so
-        checksum: ""
         mode: "0750"
         owner: redis
         group: redis
@@ -140,7 +133,6 @@ assert:
       params_subset:
         url: "https://artifacts.example.com/redis/modules/6.2/amd64/redistimeseries.so"
         path: /var/lib/redis/modules/redistimeseries.so
-        checksum: ""
         mode: "0750"
         owner: redis
         group: redis

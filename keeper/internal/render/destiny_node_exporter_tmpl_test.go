@@ -49,6 +49,7 @@ func TestNodeExporterTemplates_ParseAndRender(t *testing.T) {
 	root := map[string]any{
 		"vars": map[string]any{
 			"bin_dir":      "/usr/local/bin",
+			"exporter_bin": "/usr/local/bin/node_exporter",
 			"user":         "node_exporter",
 			"group":        "node_exporter",
 			"listen":       "127.0.0.1:9100",
@@ -90,6 +91,7 @@ func TestNodeExporterTemplates_ParseAndRender(t *testing.T) {
 var nodeExporterRenderVars = map[string]any{
 	"vars": map[string]any{
 		"bin_dir":      "/usr/local/bin",
+		"exporter_bin": "/usr/local/bin/node_exporter",
 		"user":         "node_exporter",
 		"group":        "node_exporter",
 		"listen":       "127.0.0.1:9100",

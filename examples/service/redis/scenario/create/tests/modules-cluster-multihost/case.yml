@@ -6,6 +6,7 @@
 # L0 несёт self первого по SID хоста (node-a), но СЛОЙ .tmpl на Soul-е возьмёт arch
 # КАЖДОГО хоста (mixed-arch корректен — URL строит destiny per-host, не apply.input).
 # input.modules больше НЕ задаётся (набор-инвариант в destiny vars.redis_modules).
+# .so качаются БЕЗ checksum (content-идемпотентность, sha256-инпуты вырезаны 2026-06-25).
 name: cluster modules fetch every .so and add loadmodule alongside cluster directives
 
 fixtures:
@@ -57,11 +58,9 @@ fixtures:
     shards: 3
     replicas_per_shard: 0
     cluster_node_timeout: 5000
-    # input.modules НЕ задаётся (набор-инвариант). modules_sha256 задан только для json
-    # → ему verify, прочим пустой checksum.
+    # input.modules НЕ задаётся (набор-инвариант). .so качаются по content-
+    # идемпотентности (без checksum).
     modules_base_url: "https://artifacts.example.com/redis/modules/6.2"
-    modules_sha256:
-      json: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 assert:
   task_present:
@@ -118,13 +117,12 @@ assert:
         mode: "0750"
 
     # fetch .so — ВСЕ четыре (Go-сорт: bloom, json, search, timeseries). URL арх-
-    # специфичен (amd64 из soulprint первого хоста в L0). sha256 задан только для json
-    # → ему checksum, прочим пусто. tarball-fetch (binary install) — placeholder.
+    # специфичен (amd64 из soulprint первого хоста в L0). checksum НЕ передаётся —
+    # content-идемпотентность. tarball-fetch (binary install) — placeholder.
     - module: core.url.fetched
       params_subset:
         url: "https://artifacts.example.com/redis/modules/6.2/amd64/redisbloom.so"
         path: /var/lib/redis/modules/redisbloom.so
-        checksum: ""
         mode: "0750"
         owner: redis
         group: redis
@@ -133,7 +131,6 @@ assert:
       params_subset:
         url: "https://artifacts.example.com/redis/modules/6.2/amd64/rejson.so"
         path: /var/lib/redis/modules/rejson.so
-        checksum: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         mode: "0750"
         owner: redis
         group: redis
@@ -142,7 +139,6 @@ assert:
       params_subset:
         url: "https://artifacts.example.com/redis/modules/6.2/amd64/redisearch.so"
         path: /var/lib/redis/modules/redisearch.so
-        checksum: ""
         mode: "0750"
         owner: redis
         group: redis
@@ -151,7 +147,6 @@ assert:
       params_subset:
         url: "https://artifacts.example.com/redis/modules/6.2/amd64/redistimeseries.so"
         path: /var/lib/redis/modules/redistimeseries.so
-        checksum: ""
         mode: "0750"
         owner: redis
         group: redis

@@ -79,13 +79,12 @@
       # Redis-модули — НАБОР больше НЕ передаётся (директива «модули ВСЕГДА ВСЕ»):
       # destiny разворачивает ПОЛНЫЙ набор из vars.redis_modules сама, version-guard
       # Redis 8+ тоже переехал в destiny (по input.version/input.install.version).
-      # scenario отдаёт только deployment-артефакт: откуда брать .so (modules_base_url)
-      # и опц. checksums (modules_sha256) — host-инвариант → apply.input; arch-URL
-      # строит destiny per-host. Поле input.modules сценария оператор больше не задаёт
-      # (см. main.yml input:), modules_base_url нужен на Redis < 8 (иначе destiny
+      # scenario отдаёт только deployment-артефакт: откуда брать .so (modules_base_url) —
+      # host-инвариант → apply.input; arch-URL строит destiny per-host, .so качаются по
+      # content-идемпотентности (без verify). Поле input.modules сценария оператор больше
+      # не задаёт (см. main.yml input:), modules_base_url нужен на Redis < 8 (иначе destiny
       # нечем строить URL .so).
       modules_base_url: "${ default(input.modules_base_url, '') }"
-      modules_sha256:   "${ default(input.modules_sha256, {}) }"
       # Host-tuning extras (концепция роли). THP/logrotate/sysctl БЕЗУСЛОВНЫ
       # (рекомендация Redis / hardening) — операторских флагов нет, задачи destiny
       # `redis` всегда активны. sysctl_settings — данные-таблица essence (passthrough

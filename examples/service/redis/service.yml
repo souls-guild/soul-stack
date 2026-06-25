@@ -78,8 +78,8 @@ state_schema:
         key_ref:  { type: string }
         ca_ref:   { type: string }
     # Способ установки redis (package — distro-пакет; binary — upstream-tarball).
-    # base_url/version/sha256 материализуются при method=binary. Из default(input.
-    # install, {method:package}). day-2 update_config читает state.install.method.
+    # base_url/version материализуются при method=binary. Из default(input.install,
+    # {method:package}). day-2 update_config читает state.install.method.
     install:
       type: object
       additionalProperties: false
@@ -87,7 +87,6 @@ state_schema:
         method:   { type: string, enum: [package, binary] }
         base_url: { type: string }
         version:  { type: string }
-        sha256:   { type: string }
     # Режим persistence (концепция роли). Из input.persistence (default rdb).
     persistence:
       type: string

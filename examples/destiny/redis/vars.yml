@@ -86,9 +86,9 @@ socket_dir: /var/run/redis
 # ['bloom','json','search','timeseries'].map(...)) и ЧЕТЫРЕ ЯВНЫЕ fetch-задачи
 # modules.yml (по одной на алиас) берут имена .so из ЭТОГО map-а (vars.redis_modules
 # .<alias>) — детерминированный порядок задаёт сортированный литерал алиасов, не
-# итерация по map. Источник .so (modules_base_url) и
-# опциональные checksums (modules_sha256) ОСТАЮТСЯ в input — это deployment-артефакт
-# (где лежат бинари модулей под (version, arch) кластера), не инвариант кирпича.
+# итерация по map. Источник .so (modules_base_url) ОСТАЁТСЯ в input — это deployment-
+# артефакт (где лежат бинари модулей под (version, arch) кластера), не инвариант кирпича.
+# .so качаются по content-идемпотентности (SHA-256 содержимого), без integrity-verify.
 # REDIS 8+: модули ВСТРОЕНЫ в сервер — .so не качаем и loadmodule не пишем (version-
 # guard в задачах по input.version/input.install.version, см. server.yml/modules.yml).
 redis_modules:

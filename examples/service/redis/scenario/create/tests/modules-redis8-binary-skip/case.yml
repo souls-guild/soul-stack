@@ -126,4 +126,3 @@ assert:
       method:   binary
       base_url: "https://downloads.example.com/redis"
       version:  "8.0.0"
-      sha256:   ""

@@ -34,7 +34,7 @@ assert:
         # render_context.vars.listen = ":9100" — пустой host (primary_ip не 10.*).
         render_context:
           vars:
-            bin_dir: /usr/local/bin
+            exporter_bin: /usr/local/bin/node_exporter
             listen: ":9100"
             textfile_dir: /var/lib/node_exporter
             user: node_exporter
