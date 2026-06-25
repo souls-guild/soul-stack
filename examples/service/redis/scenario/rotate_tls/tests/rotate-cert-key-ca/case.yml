@@ -1,23 +1,36 @@
 # L0-испытание rotate_tls: day-2 ротация TLS-материала БЕЗ рестарта. Оператор задаёт
 # НОВЫЕ Vault-refs cert/key/ca; сценарий перерендеривает PEM в ${conf_dir}/tls/ из
-# новых refs и шлёт три CONFIG SET tls-*-file через community.redis.command (Redis 6.2+
-# пересоздаёт SSL_CTX и перечитывает live). Render-only, герметично. Инстанс УЖЕ на TLS
-# (state.tls.enable=true; rotate только для TLS).
+# новых refs и шлёт три CONFIG SET tls-*-file через community.redis.command под
+# onchanges-гейтом (Redis 6.2+ пересоздаёт SSL_CTX и перечитывает live). Render-only,
+# герметично. Инстанс УЖЕ на TLS (state.tls.enable=true; rotate только для TLS).
 #
 # Что ассертим:
 #   1. PEM перерендерены (core.file.present, path-дизамбигуатор): redis.crt/redis.key/
 #      ca.crt в /etc/redis/tls/, content = vault(НОВЫЙ ref), mode 0600 owner redis.
-#   2. force re-read (три community.redis.command): addr 127.0.0.1:7379 (TLS-порт),
+#   2. applier-register tls_certs МАТЕРИАЛИЗОВАН: движок эмитит терминальную
+#      core.noop.run(register=tls_certs) после дочерних destiny-задач (id-дизамбигуатор
+#      tls_certs). Это якорь onchanges-гейта — без него onchanges:[tls_certs] падал бы
+#      ErrOnChangesUnknownRegister (был обход force changed:true до 52b16ed).
+#   3. reload re-read (три community.redis.command): addr 127.0.0.1:7379 (TLS-порт),
 #      tls=true, tls_ca = PEM CA, args = CONFIG SET tls-cert-file/tls-key-file/
-#      tls-ca-cert-file на пути в ${conf_dir}/tls/, changed=true (операция-действие).
-#   3. state_changes: state.tls несёт НОВЫЕ refs (cert/key/ca), enable/only/port
+#      tls-ca-cert-file на пути в ${conf_dir}/tls/. Args-дизамбигуатор присутствует;
+#      changed=true (force) БОЛЬШЕ НЕ должен стоять — task_absent ловит регресс
+#      обратно на force-форму (см. ниже).
+#   4. state_changes: state.tls несёт НОВЫЕ refs (cert/key/ca), enable/only/port
 #      сохранены.
 #
-# Идемпотентность РЕНДЕРА сохранена: рендер PEM idempotent по content (тот же ref → тот
-# же PEM). Сам force re-read (command-шаги, changed:true) неидемпотентен ПО КОНСТРУКЦИИ
-# — rotate_tls форсит re-read SSL_CTX на каждый вызов, минуя config-diff (прецедент —
-# cluster-reshard). L0 ловит рендер-форму и форму трёх command-шагов.
-name: rotate_tls re-renders PEM from new refs and force-rereads via CONFIG SET commands
+# ★ ИДЕМПОТЕНТНОСТЬ (guard-инвариант). reload гейтится onchanges:[tls_certs] вместо
+# force changed:true: re-read SSL_CTX срабатывает ТОЛЬКО когда PEM реально сменился
+# (новый ref → новый content → core.file.present changed → агрегат tls_certs.changed →
+# onchanges satisfied), повторный прогон с тем же материалом → агрегат changed=false →
+# три CONFIG SET skipped → no-op. L0 (render-only) НЕ исполняет onchanges-gating — это
+# Soul-side runtime (агрегат OR + skip по onchanges_idx покрыт guard-тестами в 52b16ed:
+# soul/internal/runtime/applier_register_test.go). На render-уровне L0 доказывает
+# СТРУКТУРНУЮ предпосылку идемпотентности: (а) якорь tls_certs существует как
+# core.noop.run, (б) force changed:true с reload-задач УБРАН (task_absent). Сам факт
+# «changed→reload / без смены→skipped» от связки onchanges_idx + register-агрегат на
+# Soul, который L0-харнесс не симулирует (probe-per-host = dispatch-слой L3).
+name: rotate_tls re-renders PEM from new refs and re-reads via onchanges-gated CONFIG SET
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
@@ -101,16 +114,24 @@ assert:
         owner: redis
         group: redis
 
-    # 2. FORCE RE-READ: три community.redis.command (CONFIG SET tls-*-file), addr на
-    #    tls-порт, tls=true, tls_ca = CA коннекта, args на пути в /etc/redis/tls/,
-    #    changed=true (операция-действие, форсит re-read SSL_CTX мимо config-diff).
+    # 2. APPLIER-REGISTER МАТЕРИАЛИЗОВАН: терминальная core.noop.run(register=tls_certs)
+    #    — якорь onchanges-гейта (id-дизамбигуатор; register∪id, см. ExpectedTask.ID).
+    #    Эмитится движком ПОСЛЕ дочерних destiny-задач apply-шага, агрегирует OR(changed).
+    #    Без этого узла onchanges:[tls_certs] не резолвился бы (ErrOnChangesUnknownRegister)
+    #    — это и был мотив старого force-обхода (52b16ed снял ограничение).
+    - module: core.noop.run
+      id: tls_certs
+
+    # 3. RE-READ ПОД onchanges-ГЕЙТОМ: три community.redis.command (CONFIG SET tls-*-file),
+    #    addr на tls-порт, tls=true, tls_ca = CA коннекта, args на пути в /etc/redis/tls/.
+    #    changed=true (force) УБРАН — гейтинг теперь onchanges:[tls_certs] (см. task_absent
+    #    ниже: регресс обратно на force ловится). Args — дизамбигуатор трёх вызовов.
     - module: community.redis.command
       params_subset:
         addr: "127.0.0.1:7379"
         password: rot-redis-pass-16chars
         tls: true
         tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
-        changed: true
         args: ["CONFIG", "SET", "tls-cert-file", "/etc/redis/tls/redis.crt"]
     - module: community.redis.command
       params_subset:
@@ -118,7 +139,6 @@ assert:
         password: rot-redis-pass-16chars
         tls: true
         tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
-        changed: true
         args: ["CONFIG", "SET", "tls-key-file", "/etc/redis/tls/redis.key"]
     - module: community.redis.command
       params_subset:
@@ -126,6 +146,24 @@ assert:
         password: rot-redis-pass-16chars
         tls: true
         tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+        args: ["CONFIG", "SET", "tls-ca-cert-file", "/etc/redis/tls/ca.crt"]
+
+  # ★ GUARD идемпотентности (render-уровень): force changed:true с reload-задач УБРАН.
+  #    Любая community.redis.command CONFIG SET-tls с changed:true → регресс обратно на
+  #    неидемпотентный force-путь (re-read на КАЖДЫЙ прогон, минуя onchanges). task_absent
+  #    ловит его: ≥1 совпадение → fail. Покрыты ВСЕ ТРИ reload-задачи (cert/key/ca) — иначе
+  #    частичный регресс force на одной из них прошёл бы незамеченным. Args-дизамбигуатор.
+  task_absent:
+    - module: community.redis.command
+      params_subset:
+        changed: true
+        args: ["CONFIG", "SET", "tls-cert-file", "/etc/redis/tls/redis.crt"]
+    - module: community.redis.command
+      params_subset:
+        changed: true
+        args: ["CONFIG", "SET", "tls-key-file", "/etc/redis/tls/redis.key"]
+    - module: community.redis.command
+      params_subset:
         changed: true
         args: ["CONFIG", "SET", "tls-ca-cert-file", "/etc/redis/tls/ca.crt"]
 

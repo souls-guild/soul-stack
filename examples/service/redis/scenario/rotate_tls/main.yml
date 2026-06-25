@@ -12,28 +12,27 @@ description: >-
 
   Оператор задаёт НОВЫЕ Vault-ПУТИ серверного cert/key/CA (не сам PEM — секрет идёт
   через vault() в ячейке content destiny, seal-маскинг). Сценарий: (1) destiny redis
-  перерендеривает PEM в ${conf_dir}/tls/{redis.crt,redis.key,ca.crt} из НОВЫХ refs;
-  (2) три community.redis.command шлют CONFIG SET tls-cert-file / tls-key-file /
-  tls-ca-cert-file — Redis 6.2+ ПЕРЕСОЗДАЁТ SSL_CTX и перечитывает PEM live, даже если
-  путь не изменился (один command = одна команда → три шага).
+  перерендеривает PEM в ${conf_dir}/tls/{redis.crt,redis.key,ca.crt} из НОВЫХ refs
+  (apply: register: tls_certs — агрегат changed по дочерним core.file.present);
+  (2) три community.redis.command CONFIG SET tls-cert-file / tls-key-file /
+  tls-ca-cert-file ПОД onchanges:[tls_certs] — Redis 6.2+ ПЕРЕСОЗДАЁТ SSL_CTX и
+  перечитывает PEM live (даже при неизменном пути), но ТОЛЬКО когда PEM реально сменился
+  (один command = одна команда → три шага, все на одном onchanges-гейте).
 
   ★ ПРЕДУСЛОВИЕ: TLS уже ВКЛЮЧЁН на инстансе (state.tls.enable=true). Ротация на
   plaintext-инстансе бессмысленна (нечего ротировать) — validate рвёт прогон ДО
   applying. Включение TLS на работающем plaintext-Redis — отдельная операция (требует
   рестарта для открытия TLS-listener-а: tls-port startup-only), не rotate_tls.
 
-  ★ НЕИДЕМПОТЕНТНОСТЬ ПО КОНСТРУКЦИИ: rotate_tls — ЯВНАЯ операция ротации. CONFIG SET
-  через command-state форсит re-read SSL_CTX на КАЖДЫЙ вызов (changed:true), минуя
-  diff-skip community.redis.config (который счёл бы no-op при неизменном пути и не
-  дёрнул бы CONFIG SET → Redis не перечитал бы новый cert). Это сознательный выбор,
-  как сознательно неидемпотентен cluster-reshard: оператор зовёт rotate_tls = «форсни
-  re-read нового материала», а не «приведи к состоянию». Гейтинг по onchanges здесь
-  невозможен (PEM-register destiny scenario не виден; applier-register рендером не
-  материализуется), да и не нужен — re-read дешёв и безопасен.
-
-  Идемпотентность РЕНДЕРА сохранена: рендер PEM idempotent по content (тот же ref →
-  тот же PEM → файл не меняется). Day-2: инстанс УЖЕ работает, коннект — по TLS
-  (state.tls, как restart). Неидемпотентен только сам force-reload (command-шаги).
+  ★ ИДЕМПОТЕНТНОСТЬ ПО onchanges: три CONFIG SET гейтятся onchanges:[tls_certs] (НЕ
+  force changed:true), где tls_certs — applier-register apply-шага 2. Движок эмитит
+  синтетическую core.noop.run с register_data = OR(changed) по дочерним destiny-
+  задачам (orchestration.md §2.1.1, материализовано в 52b16ed). re-read SSL_CTX
+  срабатывает ТОЛЬКО когда PEM реально сменился (новый ref → новый PEM → core.file.
+  present changed → агрегат tls_certs.changed=true); повторный прогон с тем же
+  материалом → файлы не меняются → агрегат changed=false → три CONFIG SET skipped →
+  весь сценарий no-op. Это «приведи к состоянию», а не «форсни re-read на каждый
+  вызов». Рендер PEM сам по себе тоже idempotent по content (тот же ref → тот же PEM).
 
   Таргетинг — на весь incarnation (on опущен, ADR-008/009): новый PEM + reload идут
   на КАЖДЫЙ redis-server-хост. TLS-материал host-инвариантен (один cert/CA на кластер).
@@ -124,7 +123,9 @@ tasks:
   #    server.yml кладёт cert/key/ca через core.file.present + vault(ref) в ячейке
   #    (seal-маскинг). config — текущий state.redis_config (redis.conf не меняется при
   #    ротации; tls-*-file пути те же). version/conf_dir/data_dir/users — из state.
+  #    register: tls_certs — applier-register, гейтящий reload ниже (см. шапку).
   - name: Re-render TLS PEM material from the new Vault refs
+    register: tls_certs
     apply:
       destiny: redis
       input:
@@ -153,41 +154,41 @@ tasks:
              : {} }
 
   # 3. HOT-RELOAD CERT: три community.redis.command (CONFIG SET tls-cert-file /
-  #    tls-key-file / tls-ca-cert-file) форсят re-read SSL_CTX на live-инстансе. command
-  #    (raw verb-state) бьёт МИМО diff-skip community.redis.config: тот сравнил бы
-  #    значения CONFIG GET, счёл no-op (путь тот же) и не дёрнул бы CONFIG SET → Redis
-  #    не перечитал бы новый PEM. Redis 6.2+ ПЕРЕСОЗДАЁТ SSL_CTX по CONFIG SET tls-*-file
-  #    даже при неизменном пути. changed:true — это операция-действие (force re-read),
-  #    rotate_tls неидемпотентен по конструкции (см. шапку). Один command = один verb →
-  #    три шага. Пути PEM — из conf_dir (туда destiny положил материал шагом 2). addr/
-  #    TLS-дискриминатор/пароль — из state.tls (compute.tls_*) + vault(), коннект по TLS
-  #    (rotate только на TLS-инстансе).
-  - name: Force re-read of the rotated TLS cert (CONFIG SET tls-cert-file)
+  #    tls-key-file / tls-ca-cert-file) пересоздают SSL_CTX на live-инстансе. Redis 6.2+
+  #    ПЕРЕСОЗДАЁТ SSL_CTX по CONFIG SET tls-*-file даже при неизменном пути → читает
+  #    свежий PEM с диска. command (raw verb-state) бьёт МИМО diff-skip
+  #    community.redis.config (тот сравнил бы значения CONFIG GET, счёл no-op при том же
+  #    пути и не дёрнул бы CONFIG SET) — нужен raw CONFIG SET, чтобы re-read сработал.
+  #    Гейт — onchanges:[tls_certs] (идемпотентность, см. шапку): один command = один
+  #    verb → три шага, все на одном гейте. Пути PEM — из conf_dir (туда destiny положил
+  #    материал шагом 2). addr/TLS-дискриминатор/пароль — из state.tls (compute.tls_*) +
+  #    vault(), коннект по TLS (rotate только на TLS-инстансе).
+  - name: Re-read the rotated TLS cert when it changed (CONFIG SET tls-cert-file)
     module: community.redis.command
+    onchanges: [tls_certs]
     params:
       addr:     "127.0.0.1:${ compute.tls_port }"
       password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
       tls:      "${ compute.tls_on }"
       tls_ca:   "${ compute.tls_ca }"
       args:     ["CONFIG", "SET", "tls-cert-file", "${ compute.conf_dir + '/tls/redis.crt' }"]
-      changed:  true
 
-  - name: Force re-read of the rotated TLS key (CONFIG SET tls-key-file)
+  - name: Re-read the rotated TLS key when it changed (CONFIG SET tls-key-file)
     module: community.redis.command
+    onchanges: [tls_certs]
     params:
       addr:     "127.0.0.1:${ compute.tls_port }"
       password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
       tls:      "${ compute.tls_on }"
       tls_ca:   "${ compute.tls_ca }"
       args:     ["CONFIG", "SET", "tls-key-file", "${ compute.conf_dir + '/tls/redis.key' }"]
-      changed:  true
 
-  - name: Force re-read of the rotated TLS CA cert (CONFIG SET tls-ca-cert-file)
+  - name: Re-read the rotated TLS CA cert when it changed (CONFIG SET tls-ca-cert-file)
     module: community.redis.command
+    onchanges: [tls_certs]
     params:
       addr:     "127.0.0.1:${ compute.tls_port }"
       password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
       tls:      "${ compute.tls_on }"
       tls_ca:   "${ compute.tls_ca }"
       args:     ["CONFIG", "SET", "tls-ca-cert-file", "${ compute.conf_dir + '/tls/ca.crt' }"]
-      changed:  true
