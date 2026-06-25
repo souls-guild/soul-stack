@@ -701,6 +701,24 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				registerHumaSoulCovenAssign(newHumaSoulAPI(r, auditWriter, audit.EventSoulCovenChanged, logger), soulH)
 			})
 
+			// POST /v1/souls/traits — bulk trait-assign (ADR-060, write-path Slice 2).
+			// Existence-gate `RequireAction(soul, traits-assign)` — «есть ли право в
+			// ЛЮБОМ scope-измерении», БЕЗ селектора: trait-КЛЮЧ НЕ является RBAC-
+			// измерением scope (в отличие от Coven-метки — у той гейт b через
+			// SoulCovenLabelSelector с `{coven: label}`). Селекторный RequirePermission
+			// здесь отрезал бы coven-scoped оператора (его `coven=dev`-permission не
+			// сматчила бы запрос без coven-контекста), хотя он ВПРАВЕ менять traits на
+			// своих dev-хостах. Поэтому паттерн `soul.list`: existence-gate на наличие
+			// права, а least-privilege сужает ОДИН гейт (a) — service-слой
+			// (soul.BulkAssignTraits/BulkReplaceTraits) пересекает целевые хосты с
+			// coven-scope оператора (тот же BulkScope, что coven-assign). Audit —
+			// EventSoulTraitsChanged с source=api; payload — вариант B (SetHumaAuditPayload).
+			r.With(
+				apimiddleware.RequireAction(enforcer, "soul", "traits-assign"),
+			).Group(func(r chi.Router) {
+				registerHumaSoulTraitsAssign(newHumaSoulAPI(r, auditWriter, audit.EventSoulTraitsChanged, logger), soulH)
+			})
+
 			// GET /v1/souls/{sid} + /soulprint + /history — single-soul read для UI
 			// detail-page. Permission `soul.list` покрывает list+get+soulprint+history
 			// (паттерн service.list / omen.list — одно permission на чтение реестра;

@@ -136,6 +136,7 @@ func fullSpecGroups() []specGroup {
 			stub := handlers.SoulSpecStub()
 			registerHumaSoulCreate(api, stub)
 			registerHumaSoulCovenAssign(api, stub)
+			registerHumaSoulTraitsAssign(api, stub)
 			registerHumaSoulList(api, stub)
 			registerHumaSoulGet(api, stub)
 			registerHumaSoulSoulprint(api, stub)

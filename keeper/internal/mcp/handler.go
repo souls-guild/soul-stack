@@ -468,6 +468,8 @@ func (h *Handler) handleToolsCall(ctx context.Context, claims *jwt.Claims, req j
 		return h.callSoulIssueToken(ctx, claims, req, p.Arguments), false
 	case "keeper.soul.coven-assign":
 		return h.callSoulCovenAssign(ctx, claims, req, p.Arguments), false
+	case "keeper.soul.traits-assign":
+		return h.callSoulTraitsAssign(ctx, claims, req, p.Arguments), false
 	case "keeper.soul.ssh-target.update":
 		return h.callSoulSshTargetUpdate(ctx, claims, req, p.Arguments), false
 

@@ -82,6 +82,20 @@ type soulCovenAssignReply struct {
 	DryRun  bool     `json:"dry_run" doc:"dry-run-прогон без записи"`
 }
 
+// soulTraitsAssignReply — alias-цель схемы POST /v1/souls/traits 200-тела (ADR-060). Имя
+// типа = контрактное имя схемы (huma DefaultSchemaNamer капитализирует → "SoulTraitsAssignReply").
+// keys[] — output-эхо набора затронутых trait-ключей (per-element pattern = soul.TraitKeyPattern);
+// trait-ЗНАЧЕНИЯ в выдачу НЕ кладутся (секрет-гигиена, симметрия с audit). matched/changed —
+// int32 (соглашение envelope-домена soul). reply output-only → input-422-риска pattern нет.
+type soulTraitsAssignReply struct {
+	Mode    string   `json:"mode" doc:"режим операции (merge/replace/remove)"`
+	Keys    []string `json:"keys" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$" doc:"затронутые trait-ключи (зеркало input)"` // ← soul.TraitKeyPattern (per-element, output-эхо)
+	Matched int32    `json:"matched" doc:"сколько хостов попало под selector ∩ scope"`
+	Changed int32    `json:"changed" doc:"сколько строк фактически изменено"`
+	Status  string   `json:"status" enum:"completed,partial" doc:"completed — все чанки закоммичены; partial — фейл середины"`
+	DryRun  bool     `json:"dry_run" doc:"dry-run-прогон без записи"`
+}
+
 // soulListReply — alias-цель схемы GET /v1/souls envelope (CURSOR, 6 полей). Форма сверена с
 // committed-рукописью (docs/keeper/openapi.yaml :6766 → SoulListReply): items/offset/limit/total
 // (required) + next_cursor (string, optional) + total_approximate (boolean, optional). offset/
@@ -122,5 +136,10 @@ func registerSoulEnvelopes(api huma.API) {
 	schemas.RegisterTypeAlias(
 		reflect.TypeFor[handlers.SoulCovenAssignResponse](),
 		reflect.TypeFor[soulCovenAssignReply](),
+	)
+	// traits-assign (ADR-060): handler-тип wire-body → контрактное имя SoulTraitsAssignReply.
+	schemas.RegisterTypeAlias(
+		reflect.TypeFor[handlers.SoulTraitsAssignResponse](),
+		reflect.TypeFor[soulTraitsAssignReply](),
 	)
 }

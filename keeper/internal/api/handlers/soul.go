@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -1468,6 +1469,217 @@ func SoulCovenLabelSelector(r *http.Request) map[string]string {
 	// дальше bare-permission. Coven-scoped без scope-match отвалится на
 	// service-гейте (BulkReplaceCoven проверит, что целевые хосты ⊆ scope).
 	return nil
+}
+
+// === POST /v1/souls/traits (traits-assign) — bulk operator-set trait-метки (ADR-060) ===
+
+// SoulTraitsAssignInput — NATIVE request-форма POST /v1/souls/traits (handler-native).
+// Traits — это map (key → scalar|list), отдельная ось рядом с плоским Coven (read/target
+// пилот уже в HEAD: souls.traits jsonb, soulprint.self.traits). Mode-семантика:
+//   - merge (дефолт): set/overwrite ключи из Traits, остальные сохранить;
+//   - replace: заменить ВЕСЬ traits-map на Traits целиком (пустой = очистить);
+//   - remove: удалить ключи из Keys (список имён).
+//
+// XOR Traits↔Keys по mode: merge/replace принимают `traits` (map), remove — `keys`
+// (список имён). Selector — то же подмножество таргетинга soul.* (all/sids/coven/
+// incarnation/status), что у coven-assign.
+type SoulTraitsAssignInput struct {
+	Mode     string
+	Traits   map[string]any
+	Keys     []string
+	DryRun   bool
+	Selector SoulCovenAssignSelectorInput
+}
+
+// soulTraitsAssignResponse — 200 body. status ∈ completed | partial. `keys` — список
+// затронутых trait-КЛЮЧЕЙ (merge/replace → ключи переданного набора; remove → удаляемые).
+// Значения traits в ответе НЕ эхуются (симметрия с audit-payload: фиксируем форму операции,
+// не содержимое — trait-значения могут нести инфраструктурные данные хоста).
+type soulTraitsAssignResponse struct {
+	Mode    string   `json:"mode"`
+	Keys    []string `json:"keys"`
+	Matched int      `json:"matched"`
+	Changed int      `json:"changed"`
+	Status  string   `json:"status"`
+	DryRun  bool     `json:"dry_run"`
+}
+
+// SoulTraitsAssignResponse — экспортированный алиас на внутренний wire-тип (через него
+// huma-роут типизирует output; имя схемы выравнивает alias soulTraitsAssignReply в
+// huma_soul_envelope.go).
+type SoulTraitsAssignResponse = soulTraitsAssignResponse
+
+// SoulTraitsAssignReply — результат [SoulHandler.AssignTraitsTyped] (handler-native):
+// 200-тело + audit-payload.
+type SoulTraitsAssignReply struct {
+	Body         soulTraitsAssignResponse
+	AuditPayload middleware.AuditPayload
+}
+
+// AssignTraitsTyped — доменная функция POST /v1/souls/traits (handler-native): bulk
+// trait-assign со scope-intersection (гейт a — целевые хосты ⊆ coven-scope оператора).
+// rawReq — native input; dryRunQuery — флаг из `?dry_run=true` (OR с body.dry_run).
+//
+// БЕЗОПАСНОСТЬ. Least-privilege держится тем же [soul.BulkScope] (coven-scope оператора),
+// что и coven-assign: bulk не ослаблен. trait-КЛЮЧ НЕ является RBAC-измерением scope (в
+// отличие от Coven-метки), поэтому гейта (b) на ключи нет — coven-scoped оператор не может
+// мутировать traits хостов вне своего coven-scope (гейт a в WHERE-предикате), но любой
+// валидный ключ внутри scope ему доступен.
+//
+// Ошибки — *problemError (422 невалидный mode / ключ / значение / nested / XOR-нарушение /
+// пустой selector; 500 scoper nil / PG); успех — [SoulTraitsAssignReply] (200-тело +
+// audit-payload, в т.ч. partial-семантика → 200).
+func (h *SoulHandler) AssignTraitsTyped(ctx context.Context, claims *jwt.Claims, rawReq SoulTraitsAssignInput, dryRunQuery bool) (SoulTraitsAssignReply, error) {
+	var zero SoulTraitsAssignReply
+	if h.scoper == nil {
+		h.logger.Error("soul.traits-assign: scoper not configured")
+		return zero, &problemError{problem.New(problem.TypeInternalError, "", "traits-assign unavailable")}
+	}
+
+	mode := soul.TraitMode(rawReq.Mode)
+	if mode == "" {
+		mode = soul.TraitMerge // дефолт.
+	}
+	if !soul.ValidTraitMode(mode) {
+		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
+			"field 'mode' must be one of: merge, replace, remove")}
+	}
+
+	// XOR traits↔keys по mode + format/значение-валидация. merge/replace оперируют
+	// map-ом ключ→значение; remove — списком имён ключей.
+	switch mode {
+	case soul.TraitMerge, soul.TraitReplace:
+		if len(rawReq.Keys) > 0 {
+			return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
+				"field 'keys' is allowed only for mode=remove; use 'traits' for merge/replace")}
+		}
+		if err := soul.ValidateTraitDelta(rawReq.Traits); err != nil {
+			return zero, &problemError{problem.New(problem.TypeValidationFailed, "", err.Error())}
+		}
+	case soul.TraitRemove:
+		if len(rawReq.Traits) > 0 {
+			return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
+				"field 'traits' is allowed only for mode=merge/replace; use 'keys' for remove")}
+		}
+		if len(rawReq.Keys) == 0 {
+			return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
+				"field 'keys' is required and must be non-empty for mode=remove")}
+		}
+		if err := soul.ValidateTraitKeys(rawReq.Keys); err != nil {
+			return zero, &problemError{problem.New(problem.TypeValidationFailed, "", err.Error())}
+		}
+	}
+
+	sel := soul.BulkSelector{
+		All:         rawReq.Selector.All,
+		SIDs:        rawReq.Selector.SIDs,
+		Coven:       rawReq.Selector.Coven,
+		Incarnation: rawReq.Selector.Incarnation,
+	}
+	if rawReq.Selector.Status != "" {
+		st := soul.Status(rawReq.Selector.Status)
+		if !soul.ValidStatus(st) {
+			return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
+				"selector 'status' must be one of pending/connected/disconnected/revoked/expired/destroyed")}
+		}
+		sel.Status = st
+	}
+	for _, s := range rawReq.Selector.SIDs {
+		if !soul.ValidSID(s) {
+			return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "selector 'sids' entry "+s+" must match "+soul.SIDPattern)}
+		}
+	}
+	if rawReq.Selector.Coven != "" && !soul.ValidCoven(rawReq.Selector.Coven) {
+		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "selector 'coven' must match "+soul.CovenPattern)}
+	}
+	if rawReq.Selector.Incarnation != "" && !incarnation.ValidName(rawReq.Selector.Incarnation) {
+		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "selector 'incarnation' must match "+incarnation.NamePattern)}
+	}
+
+	pv := h.scoper.ResolvePurview(claims.Subject, "soul", "traits-assign")
+	scope := soul.BulkScope{Covens: pv.Covens, Unrestricted: pv.Unrestricted}
+
+	dryRun := rawReq.DryRun || dryRunQuery
+
+	if dryRun {
+		matched, err := soul.CountBulkMatched(ctx, h.pool, sel, scope)
+		if err != nil {
+			return zero, h.bulkErrorToProblem(err)
+		}
+		return h.buildTraitsAssignReply(rawReq, mode, scope, soul.Report{Matched: matched, Status: soul.BulkCompleted}, true), nil
+	}
+
+	var (
+		rep soul.Report
+		err error
+	)
+	if mode == soul.TraitReplace {
+		rep, err = soul.BulkReplaceTraits(ctx, h.pool, sel, scope, rawReq.Traits)
+	} else {
+		rep, err = soul.BulkAssignTraits(ctx, h.pool, sel, scope, mode, rawReq.Traits, rawReq.Keys)
+	}
+	if err != nil {
+		// partial: часть чанков закоммичена — 200 + status:partial (идемпотентно
+		// до-повторяется оператором, откатывать небезопасно — паритет coven).
+		if rep.Status == soul.BulkPartial {
+			h.logger.Warn("soul.traits-assign: partial",
+				slog.String("mode", rawReq.Mode),
+				slog.Int("changed", rep.Changed),
+				slog.Int("chunks", rep.ChunksCommitted),
+				slog.Any("error", err),
+			)
+			return h.buildTraitsAssignReply(rawReq, mode, scope, rep, false), nil
+		}
+		return zero, h.bulkErrorToProblem(err)
+	}
+
+	return h.buildTraitsAssignReply(rawReq, mode, scope, rep, false), nil
+}
+
+// buildTraitsAssignReply собирает 200-ответ + audit-payload. `keys` — отсортированный
+// список затронутых ключей (для merge/replace — ключи переданного набора; для remove —
+// удаляемые). trait-значения НЕ кладутся ни в ответ, ни в audit (секрет-гигиена).
+func (h *SoulHandler) buildTraitsAssignReply(req SoulTraitsAssignInput, mode soul.TraitMode, scope soul.BulkScope, rep soul.Report, dryRun bool) SoulTraitsAssignReply {
+	keys := affectedTraitKeys(mode, req.Traits, req.Keys)
+	payload := middleware.AuditPayload{
+		"mode":          string(mode),
+		"selector":      normalizeCovenSelector(covenAssignSelectorFields(req.Selector)),
+		"keys":          keys,
+		"matched":       rep.Matched,
+		"changed":       rep.Changed,
+		"status":        string(rep.Status),
+		"scope_applied": !scope.Unrestricted,
+		"dry_run":       dryRun,
+		"source":        "api",
+	}
+	resp := soulTraitsAssignResponse{
+		Mode:    string(mode),
+		Keys:    keys,
+		Matched: rep.Matched,
+		Changed: rep.Changed,
+		Status:  string(rep.Status),
+		DryRun:  dryRun,
+	}
+	return SoulTraitsAssignReply{Body: resp, AuditPayload: payload}
+}
+
+// affectedTraitKeys — отсортированный набор затронутых trait-ключей: для merge/replace —
+// ключи map-а Traits, для remove — список Keys. nil → []string{} (устойчивый JSON `[]`).
+func affectedTraitKeys(mode soul.TraitMode, traits map[string]any, keys []string) []string {
+	var out []string
+	if mode == soul.TraitRemove {
+		out = append([]string(nil), keys...)
+	} else {
+		out = make([]string, 0, len(traits))
+		for k := range traits {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	if out == nil {
+		out = []string{}
+	}
+	return out
 }
 
 // SoulSIDSelector — middleware-helper для RBAC: извлекает SID из path-param

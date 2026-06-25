@@ -131,6 +131,51 @@ func soulCovenAssignOperation() huma.Operation {
 	}
 }
 
+// === POST /v1/souls/traits (traits-assign) — WRITE+AUDIT soul.traits-changed (200+body) ===
+
+// soulTraitsAssignInput — huma-input POST /v1/souls/traits (FULL-TYPED). Body — typed тело
+// (mode + traits/keys XOR + selector). DryRun также из query (?dry_run=true, OR с body).
+type soulTraitsAssignInput struct {
+	Body   SoulTraitsAssignRequest
+	DryRun bool `query:"dry_run" doc:"посчитать matched без UPDATE (OR с body.dry_run)"`
+}
+
+// SoulTraitsAssignRequest — Go-форма тела POST /v1/souls/traits (code-first источник схемы И
+// валидации; ADR-060). Имя структуры = контрактное имя схемы (huma DefaultSchemaNamer). mode
+// (merge/replace/remove, дефолт merge) + XOR traits↔keys (домен валидирует → 422) + selector
+// (хотя бы один критерий) + опц. dry_run. traits — map ключ→(scalar|list of scalars); вложенные
+// объекты/массивы отвергаются доменом. additionalProperties:false → unknown поле → 400.
+type SoulTraitsAssignRequest struct {
+	Mode     string                  `json:"mode,omitempty" enum:"merge,replace,remove" doc:"merge (дефолт) — set/overwrite ключи; replace — заменить весь map; remove — удалить ключи из keys"`
+	Traits   map[string]any          `json:"traits,omitempty" doc:"набор ключ→значение для merge/replace (значение — scalar или list of scalars); запрещён для remove"`
+	Keys     []string                `json:"keys,omitempty" doc:"список имён ключей для remove (kebab-case); запрещён для merge/replace"`
+	DryRun   bool                    `json:"dry_run,omitempty" doc:"посчитать matched без UPDATE"`
+	Selector SoulCovenAssignSelector `json:"selector" required:"true" doc:"таргетинг (хотя бы один критерий; комбинации AND)"`
+}
+
+// soulTraitsAssignOutput — huma-output POST /v1/souls/traits (FULL-TYPED). Status=200; Body —
+// typed 200-тело (handlers.SoulTraitsAssignResponse).
+type soulTraitsAssignOutput struct {
+	Status int `json:"-"`
+	Body   handlers.SoulTraitsAssignResponse
+}
+
+// soulTraitsAssignOperation — метаданные POST /v1/souls/traits. DefaultStatus=200. Permission
+// soul.traits-assign + audit soul.traits-changed. Errors: 400 unknown/malformed, 403 RBAC,
+// 422 валидация mode/traits/keys/selector, 500.
+func soulTraitsAssignOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "assignSoulTraits",
+		Method:        http.MethodPost,
+		Path:          "/traits",
+		Summary:       "Массовое назначение trait-меток",
+		Description:   "Bulk merge/replace/remove operator-set trait-меток (souls.traits jsonb, ADR-060) на хостах под selector ∩ coven-scope. Permission soul.traits-assign. partial → 200 status:partial.",
+		Tags:          []string{"soul"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
+}
+
 // === POST /v1/souls/{sid}/issue-token (issue-token) — WRITE+AUDIT soul.token-issued (200+body) ===
 
 // soulIssueTokenInput — huma-input POST /v1/souls/{sid}/issue-token. SID — path; Force —

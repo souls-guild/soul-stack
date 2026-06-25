@@ -71,6 +71,27 @@ func registerHumaSoulCovenAssign(humaAPI huma.API, soulH *handlers.SoulHandler) 
 	})
 }
 
+// registerHumaSoulTraitsAssign монтирует POST /v1/souls/traits через huma (WRITE+AUDIT вариант B —
+// event soul.traits-changed). soulH nil → no-op. Handler: claims → конверт typed-body →
+// AssignTraitsTyped → audit-payload → 200 С ТЕЛОМ.
+func registerHumaSoulTraitsAssign(humaAPI huma.API, soulH *handlers.SoulHandler) {
+	if soulH == nil {
+		return
+	}
+	huma.Register(humaAPI, soulTraitsAssignOperation(), func(ctx context.Context, in *soulTraitsAssignInput) (*soulTraitsAssignOutput, error) {
+		claims, ok := apimiddleware.ClaimsFromContext(ctx)
+		if !ok {
+			return nil, soulMissingClaims()
+		}
+		reply, err := soulH.AssignTraitsTyped(ctx, claims, toSoulTraitsAssignInput(in.Body), in.DryRun)
+		if err != nil {
+			return nil, soulProblem(err)
+		}
+		apimiddleware.SetHumaAuditPayload(ctx, apimiddleware.AuditPayload(reply.AuditPayload))
+		return &soulTraitsAssignOutput{Status: 200, Body: reply.Body}, nil
+	})
+}
+
 // registerHumaSoulIssueToken монтирует POST /v1/souls/{sid}/issue-token через huma (WRITE+AUDIT
 // вариант B — event soul.token-issued). soulH nil → no-op. Handler: claims → IssueTokenTyped →
 // audit-payload → 200 С ТЕЛОМ (jwt; parity operator issue-token).
@@ -296,6 +317,25 @@ func toSoulCovenAssignInput(b SoulCovenAssignRequest) handlers.SoulCovenAssignIn
 	}
 }
 
+// toSoulTraitsAssignInput — конверт typed huma-body → NATIVE доменная модель
+// handlers.SoulTraitsAssignInput (handler-native §Pattern шаг 3). huma-форма map/slice
+// пробрасывается напрямую (handler трактует пустые поля как «не задано», mode "" → merge).
+func toSoulTraitsAssignInput(b SoulTraitsAssignRequest) handlers.SoulTraitsAssignInput {
+	return handlers.SoulTraitsAssignInput{
+		Mode:   b.Mode,
+		Traits: b.Traits,
+		Keys:   b.Keys,
+		DryRun: b.DryRun,
+		Selector: handlers.SoulCovenAssignSelectorInput{
+			All:         b.Selector.All,
+			SIDs:        b.Selector.Sids,
+			Coven:       b.Selector.Coven,
+			Incarnation: b.Selector.Incarnation,
+			Status:      b.Selector.Status,
+		},
+	}
+}
+
 // toSoulSshTargetInput — конверт typed huma-body → NATIVE доменная модель
 // handlers.SoulSshTargetInput. ssh_provider пусто → routing на coven/cluster default.
 func toSoulSshTargetInput(b SoulSshTarget) handlers.SoulSshTargetInput {
@@ -351,6 +391,7 @@ func HumaSoulSpecYAML() (string, error) {
 		stub := handlers.SoulSpecStub()
 		registerHumaSoulCreate(api, stub)
 		registerHumaSoulCovenAssign(api, stub)
+		registerHumaSoulTraitsAssign(api, stub)
 		registerHumaSoulIssueToken(api, stub)
 		registerHumaSoulSshTarget(api, stub)
 		registerHumaSoulExec(api, handlers.ErrandSpecStub())

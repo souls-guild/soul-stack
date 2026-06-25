@@ -376,11 +376,12 @@ func TestRoleTools_InManifest(t *testing.T) {
 	}
 }
 
-// TestCatalog_TotalCount — каталог должен содержать ровно 82 tool (72 + 5
-// keeper.herald.* + 5 keeper.tiding.* по ADR-052 S4).
+// TestCatalog_TotalCount — каталог должен содержать ровно 83 tool (72 + 5
+// keeper.herald.* + 5 keeper.tiding.* по ADR-052 S4 + keeper.soul.traits-assign
+// по ADR-060).
 func TestCatalog_TotalCount(t *testing.T) {
-	if n := len(listAllTools()); n != 82 {
-		t.Errorf("catalog size = %d, want 82", n)
+	if n := len(listAllTools()); n != 83 {
+		t.Errorf("catalog size = %d, want 83", n)
 	}
 }
 

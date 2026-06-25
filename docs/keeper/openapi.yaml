@@ -2918,6 +2918,75 @@ components:
         - expired
         - destroyed
       type: string
+    SoulTraitsAssignReply:
+      additionalProperties: false
+      properties:
+        changed:
+          description: сколько строк фактически изменено
+          format: int32
+          type: integer
+        dry_run:
+          description: dry-run-прогон без записи
+          type: boolean
+        keys:
+          description: затронутые trait-ключи (зеркало input)
+          items:
+            pattern: ^[a-z][a-z0-9]*(-[a-z0-9]+)*$
+            type: string
+          type:
+            - array
+            - "null"
+        matched:
+          description: сколько хостов попало под selector ∩ scope
+          format: int32
+          type: integer
+        mode:
+          description: режим операции (merge/replace/remove)
+          type: string
+        status:
+          description: completed — все чанки закоммичены; partial — фейл середины
+          enum:
+            - completed
+            - partial
+          type: string
+      required:
+        - mode
+        - keys
+        - matched
+        - changed
+        - status
+        - dry_run
+      type: object
+    SoulTraitsAssignRequest:
+      additionalProperties: false
+      properties:
+        dry_run:
+          description: посчитать matched без UPDATE
+          type: boolean
+        keys:
+          description: список имён ключей для remove (kebab-case); запрещён для merge/replace
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        mode:
+          description: merge (дефолт) — set/overwrite ключи; replace — заменить весь map; remove — удалить ключи из keys
+          enum:
+            - merge
+            - replace
+            - remove
+          type: string
+        selector:
+          $ref: "#/components/schemas/SoulCovenAssignSelector"
+          description: таргетинг (хотя бы один критерий; комбинации AND)
+        traits:
+          additionalProperties: {}
+          description: набор ключ→значение для merge/replace (значение — scalar или list of scalars); запрещён для remove
+          type: object
+      required:
+        - selector
+      type: object
     SoulTransport:
       description: Способ доставки конфигурации. agent — демон soul поверх mTLS gRPC stream; ssh — push без агента.
       enum:
@@ -8907,6 +8976,58 @@ paths:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Internal Server Error
       summary: Массовое назначение Coven-меток
+      tags:
+        - soul
+  /v1/souls/traits:
+    post:
+      description: Bulk merge/replace/remove operator-set trait-меток (souls.traits jsonb, ADR-060) на хостах под selector ∩ coven-scope. Permission soul.traits-assign. partial → 200 status:partial.
+      operationId: assignSoulTraits
+      parameters:
+        - description: посчитать matched без UPDATE (OR с body.dry_run)
+          explode: false
+          in: query
+          name: dry_run
+          schema:
+            description: посчитать matched без UPDATE (OR с body.dry_run)
+            type: boolean
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SoulTraitsAssignRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SoulTraitsAssignReply"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Bad Request
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Массовое назначение trait-меток
       tags:
         - soul
   /v1/souls/{sid}:

@@ -110,6 +110,7 @@ var auditedWriteRoutes = map[route]auditedRoute{
 	// souls (middleware-audit; exec → errand.invoked, middleware + dispatcher).
 	{http.MethodPost, "/v1/souls"}:                   {events: []audit.EventType{audit.EventSoulCreated}},
 	{http.MethodPost, "/v1/souls/coven"}:             {events: []audit.EventType{audit.EventSoulCovenChanged}},
+	{http.MethodPost, "/v1/souls/traits"}:            {events: []audit.EventType{audit.EventSoulTraitsChanged}},
 	{http.MethodPost, "/v1/souls/{sid}/issue-token"}: {events: []audit.EventType{audit.EventSoulTokenIssued}},
 	{http.MethodPut, "/v1/souls/{sid}/ssh-target"}:   {events: []audit.EventType{audit.EventSoulSshTargetUpdated}},
 	{http.MethodPost, "/v1/souls/{sid}/exec"}:        {events: []audit.EventType{audit.EventTypeErrandInvoked}},

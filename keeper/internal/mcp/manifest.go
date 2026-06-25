@@ -312,9 +312,9 @@ var catalogManifest = []toolEntry{
 		},
 	},
 
-	// --- Soul (5) — create + issue-token + coven-assign + ssh-target.update
-	// implemented (паритет REST POST /v1/souls + issue-token + coven +
-	// ssh-target); list остаётся stub (ждёт M2). ---
+	// --- Soul (6) — create + issue-token + coven-assign + traits-assign +
+	// ssh-target.update implemented (паритет REST POST /v1/souls + issue-token +
+	// coven + traits + ssh-target); list остаётся stub (ждёт M2). ---
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
@@ -340,6 +340,15 @@ var catalogManifest = []toolEntry{
 			Description:  "Массово добавляет (mode=append) / снимает (mode=remove) ОДНУ Coven-метку либо ЗАМЕНЯЕТ (mode=replace) набор Coven-меток на хостах под selector (all/sids/coven/incarnation/status) ∩ coven-scope оператора. append/remove требует поле 'label', replace требует 'labels[]' (может быть пустым = снять все). Coven — холодная PG-метка. Permission: soul.coven-assign. dry_run=true возвращает matched без UPDATE. Откажет с code=validation-failed на пустом селекторе или метке/каждой метке набора вне coven-scope оператора.",
 			InputSchema:  schemaSoulCovenAssignInput,
 			OutputSchema: schemaSoulCovenAssignOutput,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
+			Name:         "keeper.soul.traits-assign",
+			Description:  "Массово назначает operator-set trait-метки (souls.traits jsonb, ADR-060) на хостах под selector (all/sids/coven/incarnation/status) ∩ coven-scope оператора. mode=merge (дефолт) set/overwrite ключи из 'traits' (остальные сохранить); mode=replace заменить весь map целиком ('traits', пустой = очистить); mode=remove удалить ключи из 'keys'. Значение trait — scalar (string/number/bool) или list of scalars (вложенные объекты/массивы запрещены). Permission: soul.traits-assign. dry_run=true возвращает matched без UPDATE. trait-ключ НЕ scope-измерение: least-privilege держится coven-scope (целевые хосты ⊆ scope). Откажет с code=validation-failed на пустом селекторе / битом ключе / вложенном значении.",
+			InputSchema:  schemaSoulTraitsAssignInput,
+			OutputSchema: schemaSoulTraitsAssignOutput,
 		},
 	},
 	{
@@ -1390,6 +1399,43 @@ var (
 "mode":{"type":"string"},
 "label":{"type":"string","description":"Применённая метка для append/remove."},
 "labels":{"type":"array","items":{"type":"string"},"description":"Применённый набор меток для replace."},
+"matched":{"type":"integer","minimum":0,"description":"Хосты под selector ∩ scope."},
+"changed":{"type":"integer","minimum":0,"description":"Фактически изменённые строки (0 для dry_run)."},
+"status":{"type":"string","enum":["completed","partial"]},
+"dry_run":{"type":"boolean"}}}`)
+
+	// trait-value — scalar (string/number/bool) или list of scalars (depth ≤ 1,
+	// ADR-060). JSON Schema выражает «scalar | list<scalar>» через oneOf;
+	// вложенные объекты/массивы отвергаются доменом (ValidTraitValue) — основная
+	// проверка в handler/MCP (422). `traits` ↔ `keys` — XOR по mode: merge/replace
+	// → traits (map), remove → keys[] (имена). selector — то же подмножество, что
+	// у coven-assign. Минимум один критерий селектора обязателен (runtime-проверка
+	// ErrBulkEmptySelector → validation-failed).
+	schemaSoulTraitsAssignInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["selector"],
+"properties":{
+"mode":{"type":"string","enum":["merge","replace","remove"],"description":"merge (дефолт) — set/overwrite ключи; replace — заменить весь traits-map; remove — удалить ключи из keys."},
+"traits":{"type":"object","additionalProperties":{"oneOf":[{"type":"string"},{"type":"number"},{"type":"boolean"},{"type":"array","items":{"oneOf":[{"type":"string"},{"type":"number"},{"type":"boolean"}]}}]},"propertyNames":{"pattern":"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"},"description":"Набор ключ→значение для merge/replace; значение — scalar или list of scalars. Запрещён для remove."},
+"keys":{"type":"array","items":{"type":"string","pattern":"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"},"description":"Список имён ключей для remove (kebab-case). Запрещён для merge/replace."},
+"selector":{"type":"object","additionalProperties":false,"description":"Таргет хостов; пересекается с coven-scope оператора. Минимум один критерий обязателен.","properties":{
+"all":{"type":"boolean","description":"Весь реестр (∩ scope). Без host-фильтра."},
+"sids":{"type":"array","items":{"type":"string","pattern":"^[a-z0-9][a-z0-9.-]{0,253}$"},"description":"Точечный список SID."},
+"coven":{"type":"string","pattern":"^[a-z][a-z0-9]*(-[a-z0-9]+)*$","description":"Хосты, у которых есть эта Coven-метка."},
+"incarnation":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$","description":"Хосты этой incarnation (имя incarnation как корневая Coven-метка, ADR-008)."},
+"status":{"type":"string","enum":["pending","connected","disconnected","revoked","expired","destroyed"],"description":"Фильтр по статусу."}}},
+"dry_run":{"type":"boolean","description":"true — вернуть matched под selector ∩ scope без UPDATE."}}}`)
+
+	schemaSoulTraitsAssignOutput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["mode","keys","matched","changed","status","dry_run"],
+"properties":{
+"mode":{"type":"string"},
+"keys":{"type":"array","items":{"type":"string"},"description":"Затронутые trait-ключи (merge/replace — ключи набора; remove — удалённые). Значения не эхуются."},
 "matched":{"type":"integer","minimum":0,"description":"Хосты под selector ∩ scope."},
 "changed":{"type":"integer","minimum":0,"description":"Фактически изменённые строки (0 для dry_run)."},
 "status":{"type":"string","enum":["completed","partial"]},

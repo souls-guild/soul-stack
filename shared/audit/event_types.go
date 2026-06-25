@@ -255,6 +255,19 @@ const (
 	//     scope_applied, dry_run, source}`.
 	EventSoulCovenChanged EventType = "soul.coven-changed"
 
+	// EventSoulTraitsChanged — изменён набор operator-set trait-меток Soul-а
+	// (jsonb-колонка `souls.traits`, ADR-060) через bulk-API
+	// `POST /v1/souls/traits` (массовое merge/replace/remove по селектору).
+	// `source: api`, `archon_aid` — инициатор (из claims, кладёт audit-middleware).
+	// Один event на всю операцию (не per-chunk). Payload: `{mode, selector,
+	// matched, changed, status, scope_applied, dry_run, source, keys}` — `keys`
+	// = список затронутых trait-КЛЮЧЕЙ (для merge/replace — ключи переданного
+	// набора; для remove — удаляемые ключи); сами trait-ЗНАЧЕНИЯ в payload НЕ
+	// кладутся (могут нести инфраструктурные данные хоста — audit-trail фиксирует
+	// факт мутации и набор ключей, не содержимое). Симметрично
+	// `soul.coven-changed`, отдельная ось меток.
+	EventSoulTraitsChanged EventType = "soul.traits-changed"
+
 	// EventCloudProvisioned — keeper-side core-модуль `core.cloud.provisioned`
 	// (ADR-017) создал или удалил VM через CloudDriver-плагин. `source:
 	// keeper_internal`, `archon_aid: NULL`. Payload:

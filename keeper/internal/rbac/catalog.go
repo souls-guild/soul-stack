@@ -11,13 +11,13 @@ package rbac
 import "sort"
 
 // AllowedPermissions — каталог permission-имён из rbac.md → §Каталог
-// permissions. 66 имён MVP:
+// permissions. 67 имён MVP:
 //
 //   - operator (5): create / revoke / issue-token / list / read;
 //   - role (6): create / delete / list / update / grant-operator / revoke-operator;
 //   - synod (8): create / update / delete / list / add-operator / remove-operator / grant-role / revoke-role (ADR-049);
 //   - incarnation (12): create / create-rerun / run / get / list / history / unlock / upgrade / destroy / check-drift / update-hosts / update (deprecated-alias);
-//   - soul (5): list / create / issue-token / coven-assign / ssh-target-update;
+//   - soul (6): list / create / issue-token / coven-assign / traits-assign / ssh-target-update;
 //   - plugin (3): allow / revoke / list;
 //   - sigil (4): key-introduce / key-retire / key-list / key-set-primary;
 //   - service (4): register / update / list / deregister;
@@ -121,6 +121,15 @@ var AllowedPermissions = map[string]struct{}{
 	"soul.create":       {},
 	"soul.issue-token":  {},
 	"soul.coven-assign": {},
+	// soul.traits-assign — bulk-мутация operator-set trait-меток (jsonb-колонка
+	// `souls.traits`, ADR-060) массово по селектору: merge/replace/remove.
+	// Action — hyphenated (`traits-assign`), т.к. permission-грамматика — ровно
+	// `<resource>.<action>` (паттерн soul.coven-assign / soul.ssh-target-update).
+	// Селектор тот же, что у soul.coven-assign (`coven=` / `host=` / bare): bulk
+	// trait-assign гейтится тем же coven-scope (гейт a, целевые хосты ⊆ scope) —
+	// least-privilege не ослаблен. trait-КЛЮЧ НЕ является scope-измерением (в
+	// отличие от Coven-метки), поэтому гейта (b) на ключи нет.
+	"soul.traits-assign": {},
 	// soul.ssh-target-update — изменение per-host SSH-реквизитов push-flow
 	// (ADR-032 amendment 2026-05-26, S7-1). Action — hyphenated (`ssh-target-update`),
 	// т.к. permission-грамматика — ровно `<resource>.<action>` (3-сегментный
