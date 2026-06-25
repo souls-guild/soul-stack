@@ -3,6 +3,7 @@ package scenario
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"testing"
@@ -145,6 +146,34 @@ func TestApplyKeeperTask_NoFinalEvent(t *testing.T) {
 	if !strings.Contains(msg, "no final event") {
 		t.Fatalf("message = %q, want содержащее 'no final event'", msg)
 	}
+}
+
+// TestSyncTraitsOnRegistered_Gating — bind-хук релокации Trait (ADR-060 amend
+// R1) фильтрует точку врезки: ТОЛЬКО успешный core.soul.registered триггерит
+// проекцию. Для прочих модулей / пустого incName / nil-DB — no-op без обращения
+// к БД (Runner без Deps.DB не паникует). Полная проекция доказана в integration
+// (incarnation/traits_integration_test.go).
+func TestSyncTraitsOnRegistered_Gating(t *testing.T) {
+	r := &Runner{} // Deps.DB == nil
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// Не registered-модуль → ранний выход по адресу (DB не нужна).
+	r.syncTraitsOnRegistered(context.Background(), "redis-prod",
+		&render.RenderedTask{Module: "core.vault.kv-read"}, log)
+	r.syncTraitsOnRegistered(context.Background(), "redis-prod",
+		&render.RenderedTask{Module: "core.cloud.provisioned"}, log)
+
+	// registered, но incName пуст (прямой keeper-test без инкарнации) → no-op.
+	r.syncTraitsOnRegistered(context.Background(), "",
+		&render.RenderedTask{Module: "core.soul.registered"}, log)
+
+	// registered + incName, но Deps.DB == nil → no-op (не паникует, не лезет в БД).
+	r.syncTraitsOnRegistered(context.Background(), "redis-prod",
+		&render.RenderedTask{Module: "core.soul.registered"}, log)
+
+	// Бракованный адрес модуля → ранний выход (SplitModuleAddr !ok).
+	r.syncTraitsOnRegistered(context.Background(), "redis-prod",
+		&render.RenderedTask{Module: "bogus"}, log)
 }
 
 func TestComposeKeeperFailure(t *testing.T) {

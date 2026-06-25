@@ -52,6 +52,7 @@ func newIncRow(inc *incarnation.Incarnation) incRow {
 		inc.CreatedAt,
 		inc.UpdatedAt,
 		inc.Covens,
+		mustJSON(inc.Traits),
 		inc.LastDriftCheckAt,
 		driftSummary,
 	}}

@@ -90,6 +90,14 @@ type Incarnation struct {
 	// Пустой массив для incarnation без env-тегов (DEFAULT '{}').
 	Covens []string `json:"covens"`
 
+	// Traits — operator-set key-value метки incarnation (ADR-060 amend, R1,
+	// колонка incarnation.traits jsonb). Источник истины Trait-ов: задаётся
+	// оператором в incarnation.spec при create, проецируется МАТЕРИАЛИЗОВАННО в
+	// souls.traits хостов-членов через sync-hook (incarnation create + bind хоста
+	// через core.soul.registered). Значение полиморфно (scalar | list). Пустой
+	// map для incarnation без traits (DEFAULT '{}').
+	Traits map[string]any `json:"traits"`
+
 	// LastDriftCheckAt — время завершения последнего dry_run-прогона converge
 	// (ADR-031 Slice C, миграция 050). nil = ни разу не сканировали.
 	// Заполняется через [UpdateDriftScanResult] (Slice B on-demand + Slice C

@@ -95,8 +95,8 @@ var (
 const insertSQL = `
 INSERT INTO incarnation (
     name, service, service_version, state_schema_version,
-    spec, state, status, status_details, created_by_aid, covens
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    spec, state, status, status_details, created_by_aid, covens, traits
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 RETURNING created_at, updated_at
 `
 
@@ -104,7 +104,7 @@ RETURNING created_at, updated_at
 const selectByNameSQL = `
 SELECT name, service, service_version, state_schema_version,
        spec, state, status, status_details, created_by_aid,
-       created_at, updated_at, covens,
+       created_at, updated_at, covens, traits,
        last_drift_check_at, last_drift_summary
 FROM incarnation
 WHERE name = $1
@@ -311,6 +311,14 @@ func Create(ctx context.Context, db ExecQueryRower, inc *Incarnation) error {
 		covens = []string{}
 	}
 
+	// traits — NOT NULL DEFAULT '{}'::jsonb (ADR-060 amend, R1): nil/пустой map →
+	// `{}` ([]byte), как marshalTraitPayload в bulk-write. pgx-codec-auto для
+	// jsonb сознательно не используется — единообразно с Spec/State и souls.traits.
+	traitsBytes, err := marshalJSONB(inc.Traits)
+	if err != nil {
+		return fmt.Errorf("incarnation: marshal traits: %w", err)
+	}
+
 	row := db.QueryRow(ctx, insertSQL,
 		inc.Name,
 		inc.Service,
@@ -322,6 +330,7 @@ func Create(ctx context.Context, db ExecQueryRower, inc *Incarnation) error {
 		statusDetailsArg,
 		createdByAID,
 		covens,
+		traitsBytes,
 	)
 	if err := row.Scan(&inc.CreatedAt, &inc.UpdatedAt); err != nil {
 		return mapInsertError(err)
@@ -360,6 +369,7 @@ func scanIncarnation(row pgx.Row) (*Incarnation, error) {
 		stateBytes         []byte
 		statusDetailsBytes []byte
 		createdByAID       *string
+		traitsBytes        []byte
 		driftSummaryBytes  []byte
 	)
 	err := row.Scan(
@@ -375,6 +385,7 @@ func scanIncarnation(row pgx.Row) (*Incarnation, error) {
 		&inc.CreatedAt,
 		&inc.UpdatedAt,
 		&inc.Covens,
+		&traitsBytes,
 		&inc.LastDriftCheckAt,
 		&driftSummaryBytes,
 	)
@@ -391,6 +402,11 @@ func scanIncarnation(row pgx.Row) (*Incarnation, error) {
 	}
 	if inc.State, err = unmarshalJSONB(stateBytes); err != nil {
 		return nil, fmt.Errorf("incarnation: unmarshal state: %w", err)
+	}
+	// traits jsonb (ADR-060 amend, R1): `{}` (NOT NULL DEFAULT) → пустой map, не
+	// nil (read/projection-путь не различает «нет колонки» / «нет меток»).
+	if inc.Traits, err = unmarshalJSONB(traitsBytes); err != nil {
+		return nil, fmt.Errorf("incarnation: unmarshal traits: %w", err)
 	}
 	if len(statusDetailsBytes) > 0 {
 		if err := json.Unmarshal(statusDetailsBytes, &inc.StatusDetails); err != nil {
@@ -453,7 +469,7 @@ func SelectAll(ctx context.Context, db ExecQueryRower, filter ListFilter, scope 
 	// Items — с offset/limit, append-ом к тем же args.
 	listSQL := `SELECT name, service, service_version, state_schema_version,
        spec, state, status, status_details, created_by_aid,
-       created_at, updated_at, covens,
+       created_at, updated_at, covens, traits,
        last_drift_check_at, last_drift_summary
 FROM incarnation` + whereSQL + orderSQL +
 		fmt.Sprintf(" OFFSET $%d LIMIT $%d", len(args)+1, len(args)+2)

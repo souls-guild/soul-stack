@@ -224,6 +224,7 @@ func makeIncarnationRow(name string) pgx.Row {
 		[]byte("{}"), []byte("{}"), "ready",
 		[]byte(nil), any(nil),
 		now, now, []string(nil),
+		[]byte("{}"),          // traits (ADR-060 amend R1)
 		any(nil), []byte(nil), // last_drift_check_at, last_drift_summary (ADR-031 Slice C)
 	}}
 }
@@ -476,6 +477,7 @@ func TestIncarnation_Get_200_StateMasked(t *testing.T) {
 				"ready",
 				[]byte(nil), any(nil),
 				now, now, []string(nil),
+				[]byte("{}"),          // traits
 				any(nil), []byte(nil), // ADR-031 Slice C
 			}}
 		},
@@ -932,7 +934,7 @@ func (r *incRows) Values() ([]any, error)                       { return nil, ni
 func (r *incRows) RawValues() [][]byte                          { return nil }
 func (r *incRows) Conn() *pgx.Conn                              { return nil }
 
-// incListRow конструирует staticRow под SelectAll-list (14 колонок порядка
+// incListRow конструирует staticRow под SelectAll-list (15 колонок порядка
 // scanIncarnation) с заданными name/covens/state.
 func incListRow(name string, covens []string, state map[string]any) staticRow {
 	now := time.Now()
@@ -950,6 +952,7 @@ func incListRow(name string, covens []string, state map[string]any) staticRow {
 		[]byte("{}"), stateBytes, "ready",
 		[]byte(nil), any(nil),
 		now, now, covenArg,
+		[]byte("{}"), // traits
 		any(nil), []byte(nil),
 	}}
 }
@@ -1446,6 +1449,7 @@ func TestIncarnationScopeSelector_ReadsRow(t *testing.T) {
 			[]byte("{}"), []byte("{}"), "ready",
 			[]byte(nil), any(nil),
 			now, now, []string{"prod"},
+			[]byte("{}"),          // traits
 			any(nil), []byte(nil), // ADR-031 Slice C
 		}}
 	}}
@@ -1586,6 +1590,7 @@ func makeIncStatusRow(name, status string) pgx.Row {
 		[]byte("{}"), []byte("{}"), status,
 		[]byte(nil), any(nil),
 		now, now, []string(nil),
+		[]byte("{}"),          // traits
 		any(nil), []byte(nil), // ADR-031 Slice C
 	}}
 }
@@ -1956,6 +1961,7 @@ func makeIncRowVer(name, serviceVersion string, schema int) pgx.Row {
 		[]byte("{}"), []byte("{}"), "ready",
 		[]byte(nil), any(nil),
 		now, now, []string(nil),
+		[]byte("{}"),          // traits
 		any(nil), []byte(nil), // ADR-031 Slice C
 	}}
 }
@@ -2505,6 +2511,7 @@ func makeIncRowWithHosts(name, status string, hosts []map[string]any) pgx.Row {
 		specBytes, []byte("{}"), status,
 		[]byte(nil), any(nil),
 		now, now, []string(nil),
+		[]byte("{}"), // traits
 		any(nil), []byte(nil),
 	}}
 }

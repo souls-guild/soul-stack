@@ -138,7 +138,7 @@ func UpdateHosts(ctx context.Context, pool TxBeginner, in UpdateHostsInput) (*Up
 	const selectForUpdateSQL = `
 SELECT name, service, service_version, state_schema_version,
        spec, state, status, status_details, created_by_aid,
-       created_at, updated_at, covens,
+       created_at, updated_at, covens, traits,
        last_drift_check_at, last_drift_summary
 FROM incarnation
 WHERE name = $1

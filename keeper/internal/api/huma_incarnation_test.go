@@ -994,6 +994,7 @@ func incRow(name, status, state string) pgx.Row {
 		[]byte("{}"), []byte(state), status,
 		[]byte(nil), any(nil),
 		now, now, []string(nil),
+		[]byte("{}"), // traits
 		any(nil), []byte(nil),
 	}}
 }

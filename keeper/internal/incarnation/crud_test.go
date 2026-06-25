@@ -180,8 +180,8 @@ func TestCreate_HappyPath(t *testing.T) {
 	if !strings.Contains(f.queryRowSQL, "INSERT INTO incarnation") {
 		t.Errorf("SQL: %q", f.queryRowSQL)
 	}
-	if len(f.queryRowArgs) != 10 {
-		t.Fatalf("args len = %d, want 10", len(f.queryRowArgs))
+	if len(f.queryRowArgs) != 11 {
+		t.Fatalf("args len = %d, want 11", len(f.queryRowArgs))
 	}
 	if f.queryRowArgs[0] != "redis-prod" {
 		t.Errorf("args[0] name = %v", f.queryRowArgs[0])
@@ -422,7 +422,8 @@ func TestSelectByName_HappyPath(t *testing.T) {
 				[]byte(nil),
 				any("archon-alice"),
 				now, now, []string{"prod"},
-				any(nil), []byte(nil), // last_drift_check_at, last_drift_summary
+				[]byte(`{"team":"dba"}`), // traits
+				any(nil), []byte(nil),    // last_drift_check_at, last_drift_summary
 			}}
 		},
 	}
@@ -448,6 +449,10 @@ func TestSelectByName_HappyPath(t *testing.T) {
 	if len(inc.Covens) != 1 || inc.Covens[0] != "prod" {
 		t.Errorf("Covens = %v, want [prod]", inc.Covens)
 	}
+	// traits jsonb (ADR-060 amend R1) — round-trip scan в Incarnation.Traits.
+	if inc.Traits["team"] != "dba" {
+		t.Errorf("Traits = %v, want team=dba", inc.Traits)
+	}
 }
 
 func TestSelectByName_NotFound(t *testing.T) {
@@ -472,12 +477,14 @@ func TestSelectAll_NoFilter(t *testing.T) {
 					"a", "redis", "v1", 1,
 					[]byte("{}"), []byte("{}"), "ready",
 					[]byte(nil), any(nil), now, now, []string(nil),
+					[]byte("{}"), // traits
 					any(nil), []byte(nil),
 				}},
 				{values: []any{
 					"b", "redis", "v1", 1,
 					[]byte("{}"), []byte("{}"), "applying",
 					[]byte(nil), any(nil), now, now, []string(nil),
+					[]byte("{}"), // traits
 					any(nil), []byte(nil),
 				}},
 			}}, nil

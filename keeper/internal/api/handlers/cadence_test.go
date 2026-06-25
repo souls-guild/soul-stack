@@ -1028,6 +1028,7 @@ func scopedIncReader() *fakeIncDB {
 			[]byte("{}"), []byte("{}"), "ready",
 			[]byte(nil), any(nil),
 			now, now, []string{coven},
+			[]byte("{}"), // traits
 			any(nil), []byte(nil),
 		}}
 	}}

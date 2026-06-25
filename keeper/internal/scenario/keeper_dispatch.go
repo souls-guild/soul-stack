@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
+	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
@@ -98,6 +99,13 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, log *slo
 		// Soul-side accumulateRegister. Без register: (rt.Register=="") / no_log
 		// задача в накопитель не пишется (loadRegisterByHost их и так не резолвит).
 		r.accumulateKeeperRegister(ctx, spec.ApplyID, rt, changed, failed, output, log)
+
+		// Sync-hook bind-пути (ADR-060 amend, R1): после успешного
+		// core.soul.registered хост(ы) привязан(ы) к coven инкарнации — проецируем
+		// incarnation.traits в souls.traits хостов-членов, чтобы новопривязанный
+		// подхватил traits своей инкарнации. Гейтится именно registered-модулем
+		// (bind-граница); прочие keeper-задачи (cloud/vault) членство не меняют.
+		r.syncTraitsOnRegistered(ctx, spec.IncarnationName, rt, log)
 	}
 
 	if err := applyrun.UpdateStatus(ctx, r.deps.DB, spec.ApplyID, render.KeeperTargetSID, 0, applyrun.StatusSuccess, nil); err != nil {
@@ -250,6 +258,48 @@ func (r *Runner) accumulateKeeperRegister(ctx context.Context, applyID string, r
 	}); err != nil {
 		log.Warn("scenario: аккумуляция register keeper-задачи провалена",
 			slog.Int("task_idx", rt.Index), slog.Any("error", err))
+	}
+}
+
+// registeredModuleBase — base-адрес keeper-side core-модуля core.soul.registered
+// (coremod/soul.Name). Локальная константа: scenario НЕ импортирует coremod/soul
+// (тот тянет PG-store/presence-deps) — bind-граница распознаётся по адресу задачи,
+// а не по типу модуля.
+const (
+	registeredModuleBase  = "core.soul"
+	registeredModuleState = "registered"
+)
+
+// syncTraitsOnRegistered — sync-hook bind-пути релокации Trait (ADR-060 amend,
+// R1). После УСПЕШНОГО core.soul.registered хост(ы) привязан(ы) к coven
+// инкарнации; проецируем incarnation.traits в souls.traits хостов-членов, чтобы
+// новопривязанный подхватил traits своей инкарнации. Гейтится именно
+// registered-модулем — прочие keeper-задачи (cloud/vault) членство не меняют.
+//
+// Лучше-эффортно: incName пуст (прямой keeper-test без incarnation) / инкарнация
+// без traits / сбой загрузки → лог, прогон не валим (traits — организационная
+// метка, не блокирует apply). Идемпотентно: повторный bind пере-проецирует тот же
+// источник.
+func (r *Runner) syncTraitsOnRegistered(ctx context.Context, incName string, rt *render.RenderedTask, log *slog.Logger) {
+	base, state, ok := config.SplitModuleAddr(rt.Module)
+	if !ok || base != registeredModuleBase || state != registeredModuleState {
+		return
+	}
+	if incName == "" || r.deps.DB == nil {
+		return
+	}
+	inc, err := incarnation.SelectByName(ctx, r.deps.DB, incName)
+	if err != nil {
+		log.Warn("scenario: bind-sync traits — загрузка инкарнации провалена (best-effort)",
+			slog.String("incarnation", incName), slog.Any("error", err))
+		return
+	}
+	if len(inc.Traits) == 0 {
+		return
+	}
+	if serr := incarnation.SyncTraitsToHosts(ctx, r.deps.DB, incName, inc.Traits); serr != nil {
+		log.Warn("scenario: bind-sync traits → souls провален (best-effort)",
+			slog.String("incarnation", incName), slog.Any("error", serr))
 	}
 }
 

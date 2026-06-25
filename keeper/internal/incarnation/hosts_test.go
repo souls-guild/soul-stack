@@ -123,6 +123,7 @@ func makeHostsIncRow(name, status string, hosts []SpecHost) pgx.Row {
 		specBytes, []byte("{}"), status,
 		[]byte(nil), any(nil),
 		now, now, []string(nil),
+		[]byte("{}"), // traits
 		any(nil), []byte(nil),
 	}}
 }

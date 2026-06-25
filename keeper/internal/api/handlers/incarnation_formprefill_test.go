@@ -29,6 +29,7 @@ func makeIncRowWithStateVersion(name, version string, state map[string]any) pgx.
 		[]byte("{}"), stateBytes, "ready",
 		[]byte(nil), any(nil),
 		now, now, []string(nil),
+		[]byte("{}"), // traits
 		any(nil), []byte(nil),
 	}}
 }

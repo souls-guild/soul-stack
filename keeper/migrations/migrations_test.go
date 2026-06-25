@@ -203,6 +203,8 @@ func TestEmbed_ContainsExpectedMigrations(t *testing.T) {
 		"086_seed_archon_system.up.sql",
 		"087_add_souls_traits.down.sql",
 		"087_add_souls_traits.up.sql",
+		"088_add_incarnation_traits.down.sql",
+		"088_add_incarnation_traits.up.sql",
 	}
 	if len(names) != len(want) {
 		t.Fatalf("got %d files, want %d: %v", len(names), len(want), names)
@@ -776,6 +778,50 @@ func TestEmbed_IncarnationCovens(t *testing.T) {
 	}
 	if !strings.Contains(string(d), "DROP COLUMN IF EXISTS covens") {
 		t.Errorf("down.sql does not drop covens column; content: %.200s", d)
+	}
+}
+
+// TestEmbed_IncarnationTraits — sanity на 088 (ADR-060 amend, R1): Trait
+// релоцирован per-soul → per-incarnation. up добавляет jsonb-колонку
+// incarnation.traits (NOT NULL DEFAULT '{}', зеркало souls.traits 087) +
+// GIN-индекс; down дропает индекс и колонку. souls.traits в down НЕ упоминается
+// (эта миграция его не трогает — projection target остаётся).
+func TestEmbed_IncarnationTraits(t *testing.T) {
+	b, err := FS.ReadFile("088_add_incarnation_traits.up.sql")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	body := string(b)
+	for _, frag := range []string{
+		"ALTER TABLE incarnation",
+		"ADD COLUMN traits JSONB NOT NULL DEFAULT '{}'::jsonb",
+		"CREATE INDEX incarnation_traits_idx",
+		"USING GIN (traits)",
+	} {
+		if !strings.Contains(body, frag) {
+			t.Errorf("088 up.sql missing %q; content head: %.300s", frag, body)
+		}
+	}
+	d, err := FS.ReadFile("088_add_incarnation_traits.down.sql")
+	if err != nil {
+		t.Fatalf("read down: %v", err)
+	}
+	dbody := string(d)
+	for _, frag := range []string{
+		"DROP INDEX IF EXISTS incarnation_traits_idx",
+		"DROP COLUMN IF EXISTS traits",
+	} {
+		if !strings.Contains(dbody, frag) {
+			t.Errorf("088 down.sql missing %q; content: %.200s", frag, dbody)
+		}
+	}
+	// down не ОПЕРИРУЕТ над souls (projection target, миграция 087 его и снимает);
+	// упоминание `souls.traits` в комментарии допустимо, но никаких
+	// ALTER/DROP по souls / souls_traits_idx.
+	for _, bad := range []string{"ALTER TABLE souls", "souls_traits_idx"} {
+		if strings.Contains(dbody, bad) {
+			t.Errorf("088 down.sql must NOT operate on souls (%q); content: %.200s", bad, dbody)
+		}
 	}
 }
 

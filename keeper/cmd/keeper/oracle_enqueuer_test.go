@@ -63,12 +63,12 @@ func (r enqErrRow) Scan(...any) error { return r.err }
 
 // enqIncRow эмулирует строку incarnation в порядке scanIncarnation:
 // name, service, service_version, state_schema_version, spec, state, status,
-// status_details, created_by_aid, created_at, updated_at, covens,
+// status_details, created_by_aid, created_at, updated_at, covens, traits,
 // last_drift_check_at, last_drift_summary.
 type enqIncRow struct{ inc *incarnation.Incarnation }
 
 func (r enqIncRow) Scan(dest ...any) error {
-	if len(dest) != 14 {
+	if len(dest) != 15 {
 		return errors.New("enqIncRow: len mismatch")
 	}
 	*dest[0].(*string) = r.inc.Name
@@ -83,8 +83,9 @@ func (r enqIncRow) Scan(dest ...any) error {
 	*dest[9].(*time.Time) = time.Now()
 	*dest[10].(*time.Time) = time.Now()
 	*dest[11].(*[]string) = r.inc.Covens
-	*dest[12].(**time.Time) = nil
-	*dest[13].(*[]byte) = nil
+	*dest[12].(*[]byte) = []byte("{}") // traits (ADR-060 amend R1)
+	*dest[13].(**time.Time) = nil
+	*dest[14].(*[]byte) = nil
 	return nil
 }
 

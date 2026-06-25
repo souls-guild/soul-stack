@@ -170,6 +170,18 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 		spec["input"] = input
 	}
 
+	// Trait per-incarnation (ADR-060 amend, R1): operator-set traits живут в
+	// incarnation.spec.traits. На create-пути извлекаем их в колонку
+	// incarnation.traits — она источник истины, проецируемый в souls.traits
+	// хостов-членов sync-hook-ом ниже. Невалидный набор (формат ключа/значения)
+	// → 422 ДО insert. Operator-facing API-поле под spec.traits (top-level/MCP)
+	// — следующий слайс (relocate per-soul bulk → per-incarnation); сейчас
+	// мост spec→колонка готов, на create обычно nil (traits не заданы).
+	traits, err := incarnation.TraitsFromSpec(spec)
+	if err != nil {
+		return zero, incProblem(problem.TypeValidationFailed, err.Error())
+	}
+
 	creator := claims.Subject
 	inc := &incarnation.Incarnation{
 		Name:               req.Name,
@@ -181,6 +193,7 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 		Status:             incarnation.StatusReady,
 		CreatedByAID:       &creator,
 		Covens:             covens,
+		Traits:             traits,
 	}
 	if err := incarnation.Create(ctx, h.db, inc); err != nil {
 		if errors.Is(err, incarnation.ErrIncarnationAlreadyExists) {
@@ -190,6 +203,20 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 			slog.String("name", req.Name), slog.String("service", req.Service),
 			slog.String("by_aid", claims.Subject), slog.Any("error", err))
 		return zero, incProblem(problem.TypeInternalError, "insert incarnation failed")
+	}
+
+	// Sync-hook (ADR-060 amend, R1): incarnation.traits → souls.traits хостов-
+	// членов. Гейтится непустыми traits — иначе на каждом create без traits
+	// проекция затирала бы per-soul traits в `{}` (footgun переходного периода).
+	// На create обычно 0 членов (онбординг идёт в scenario create) → no-op;
+	// bind-хук в keeper-dispatch добьёт хосты, привязавшиеся в прогоне. Не валим
+	// create на сбое проекции (best-effort, лог): инкарнация уже создана, sync
+	// до-сойдётся при следующем bind/create-повторе.
+	if len(traits) > 0 {
+		if serr := incarnation.SyncTraitsToHosts(ctx, h.db, req.Name, traits); serr != nil {
+			h.logger.Warn("incarnation.create: sync traits → souls провален (best-effort)",
+				slog.String("name", req.Name), slog.Any("error", serr))
+		}
 	}
 
 	var applyID string
