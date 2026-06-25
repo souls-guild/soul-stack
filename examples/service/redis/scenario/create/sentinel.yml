@@ -2,8 +2,11 @@
 # перенос redis-cluster (master-replica) + redis-sentinel прежних сервисов).
 # Подключается из main.yml через include: и раскрывается в плоский список ДО
 # render. Каждая задача несёт `when: input.redis_type == 'sentinel'` — статический
-# предикат (только input.*), Keeper гасит его placeholder-skip-ом на standalone/
-# cluster-прогоне (isStaticWhen) и рендерит на sentinel-прогоне.
+# предикат (только input.*), Keeper гасит его placeholder-skip-ом на cluster-прогоне
+# (isStaticWhen) и рендерит на sentinel-прогоне.
+#
+# ★ sentinel — БАЗОВАЯ ветка деплоя (после удаления standalone-ветки 2026-06-25):
+# replicas_per_master=0 даёт standalone-эквивалент (один master + sentinel-демон).
 #
 # ★ АНТИ-TILING-урок (qa 2026-06-22, brief «Sentinel-режим»): граница apply.input
 #   vs шаблон .self строго по «одно значение для всех» / «у каждого своё»:
@@ -23,25 +26,25 @@
 
 # 1. SIZE-GUARD — fail-fast ДО любого install (assert:, ADR-009 amendment 2026-06-23;
 #    тот же механизм, что size-guard cluster.yml). Топология sentinel-режима: 1 master
-#    + replicas реплик → size(soulprint.hosts) == 1+replicas. Предикат вычисляется
-#    KEEPER-SIDE на РЕНДЕРЕ (там доступен soulprint.hosts; на Soul-е во flow_context
-#    его НЕТ → Soul-side failed_when неприменим). false ОБРЫВАЕТ render (НИ одной
-#    задачи на Soul, прогон не стартует) с message — раньше и понятнее, чем shell-guard
-#    на хосте. assert НЕ emit RenderedTask — задачи sentinel-ветки после него позиций
-#    не занимают. int() от uint64 (YAML→uint64 в L0, JSON→double в проде) унифицирует
-#    числовой тип CEL.
+#    + replicas_per_master реплик → size(soulprint.hosts) == 1+replicas_per_master.
+#    Предикат вычисляется KEEPER-SIDE на РЕНДЕРЕ (там доступен soulprint.hosts; на
+#    Soul-е во flow_context его НЕТ → Soul-side failed_when неприменим). false ОБРЫВАЕТ
+#    render (НИ одной задачи на Soul, прогон не стартует) с message — раньше и понятнее,
+#    чем shell-guard на хосте. assert НЕ emit RenderedTask — задачи sentinel-ветки после
+#    него позиций не занимают. int() от uint64 (YAML→uint64 в L0, JSON→double в проде)
+#    унифицирует числовой тип CEL.
 - name: Guard sentinel topology size matches one master and replicas
   when: "input.redis_type == 'sentinel'"
   assert:
     that:
-      - "int(size(soulprint.hosts)) == 1 + int(input.replicas)"
-    message: "topology mismatch: hosts != 1 + replicas"
+      - "int(size(soulprint.hosts)) == 1 + int(input.replicas_per_master)"
+    message: "topology mismatch: hosts != 1 + replicas_per_master"
 
 # 2. Per-host install + render redis.conf + users.acl + sentinel.conf + units.
-#    Та же destiny `redis` (режим-агностична), что standalone, но с
+#    Та же destiny `redis` (режим-агностична), что и cluster, но с
 #    sentinel_enabled=true → дополнительно рендерится sentinel.conf + redis-sentinel
 #    unit и поднимается демон. config — базовый merge (БЕЗ cluster-директив:
-#    sentinel-режим — обычный standalone redis + отдельный sentinel-демон).
+#    sentinel-режим — обычный redis-master + отдельный sentinel-демон).
 #
 #    sentinel.master_ip — HOST-ИНВАРИАНТНЫЙ адрес master-а (master-election:
 #    soulprint.hosts[0].network.primary_ip, первый по SID). Резолвится run_once и
@@ -56,7 +59,9 @@
       version:  "${ has(input.version) ? input.version : '' }"
       # install: способ установки (package default / binary), as-is в destiny-диспетч.
       install:  "${ default(input.install, {}) }"
-      # conf_dir/data_dir: host-layout (директива B), сквозь-проброс — см. standalone.yml.
+      # conf_dir/data_dir: host-layout (директива B), оператор-переопределяемы в destiny.
+      # Прокидываем СКВОЗЬ (иначе override мёртв: destiny взяла бы только дефолт). Дефолт
+      # = текущий путь (back-compat). HOST-ИНВАРИАНТ → apply.input.
       conf_dir: "${ default(input.conf_dir, '/etc/redis') }"
       data_dir: "${ default(input.data_dir, '/var/lib/redis') }"
       password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
@@ -78,10 +83,10 @@
            : {} }
       # Redis-модули — НАБОР больше НЕ передаётся (директива «модули ВСЕГДА ВСЕ»):
       # destiny разворачивает полный набор из vars.redis_modules сама, version-guard
-      # Redis 8+ тоже в destiny — см. standalone.yml. scenario отдаёт только источник
-      # .so (modules_base_url), host-инвариант → apply.input; арх-URL строит destiny
-      # per-host, .so качаются по content-идемпотентности (без verify).
-      modules_base_url: "${ default(input.modules_base_url, '') }"
+      # Redis 8+ тоже в destiny. scenario отдаёт только источник .so
+      # (compute.modules_base_url из essence), host-инвариант → apply.input; арх-URL
+      # строит destiny per-host, .so качаются по content-идемпотентности (без verify).
+      modules_base_url: "${ compute.modules_base_url }"
       # Host-tuning extras (концепция роли), режим-агностичны — как в standalone/cluster.
       # THP/logrotate/sysctl БЕЗУСЛОВНЫ (рекомендация Redis / hardening) — операторских
       # флагов нет, задачи destiny `redis` всегда активны. sysctl_settings — essence,
@@ -100,11 +105,15 @@
         ca_ref:   "${ compute.tls_ca_ref }"
       sentinel_enabled: true
       sentinel:
-        master_name: "${ input.sentinel_master_name }"
+        # master_name — из essence (essence.sentinel_master_name, дефолт 'master';
+        # операторского поля больше нет, 2026-06-25).
+        master_name: "${ default(essence.sentinel_master_name, 'master') }"
         # master-election: первый по SID хост = master. HOST-ИНВАРИАНТНО → apply.input.
         master_ip:   "${ soulprint.hosts[0].network.primary_ip }"
         master_port: 6379
-        quorum:      "${ has(input.sentinel_quorum) ? int(input.sentinel_quorum) : (int(size(soulprint.hosts)) / 2 + 1) }"
+        # quorum — АВТО (большинство): size(soulprint.hosts)/2+1. Операторского поля
+        # sentinel_quorum больше нет (убрано 2026-06-25).
+        quorum:      "${ int(size(soulprint.hosts)) / 2 + 1 }"
         auth_pass:   "${ vault('secret/redis/' + incarnation.name + '#password') }"
 
 # 3. Health-gate per-host: PING живого Redis после старта (каждый узел обязан
@@ -165,14 +174,15 @@
   module: community.redis.sentinel
   params:
     addr:        "127.0.0.1:26379"
-    master_name: "${ input.sentinel_master_name }"
+    master_name: "${ default(essence.sentinel_master_name, 'master') }"
     auth_pass:   "${ vault('secret/redis/' + incarnation.name + '#password') }"
     redis_version: "${ compute.redis_version }"
     monitor:
       # HOST-ИНВАРИАНТНЫЙ адрес master-а (master-election: soulprint.hosts[0]).
       ip:     "${ soulprint.hosts[0].network.primary_ip }"
       port:   6379
-      quorum: "${ has(input.sentinel_quorum) ? int(input.sentinel_quorum) : (int(size(soulprint.hosts)) / 2 + 1) }"
+      # quorum — АВТО (большинство): size(soulprint.hosts)/2+1.
+      quorum: "${ int(size(soulprint.hosts)) / 2 + 1 }"
 
 # 6. Health-gate per-host: SENTINEL отвечает PONG на :26379 (демон поднялся и
 #    сконфигурирован). ★ СТРОГО same-task register.self (НЕ cross-passage

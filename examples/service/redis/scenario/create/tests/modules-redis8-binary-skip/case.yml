@@ -21,16 +21,18 @@ name: redis 8 version guard via install.version skips modules on binary install
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
-  soulprint:
-    network:
-      primary_ip: 10.0.0.5
-    os:
-      arch: amd64
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
   essence:
-    redis_type: standalone
+    redis_type: sentinel
+    sentinel_master_name: master
     memory_reserve_percent: 75
     persistence_presets:
       rdb:
@@ -42,7 +44,7 @@ fixtures:
   # version (top-level distro-пин) НЕ передан: method=binary → required_when=package
   # не срабатывает; эффективная версия — install.version 8.0.0 (мажор 8 → redis8).
   input:
-    redis_type: standalone
+    redis_type: sentinel
     persistence: rdb
     install:
       method: binary
@@ -79,7 +81,7 @@ assert:
               save: "900 1 300 10 60 10000"
               appendonly: "no"
           self:
-            sid: trial-host
+            sid: node-solo.example.com
             covens: [create]
             choirs: []
             # traits — registry-проекция (ADR-060), пустой объект без меток.
@@ -117,7 +119,7 @@ assert:
         name: redis-server
 
   state_changes:
-    redis_type: standalone
+    redis_type: sentinel
     # redis_version из install.version (compute.redis_version: binary → upstream-semver).
     redis_version: "8.0.0"
     # Redis 8+ → модули встроены, .so не качаются → развёрнутый набор пуст.

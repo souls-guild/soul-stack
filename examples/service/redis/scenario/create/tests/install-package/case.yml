@@ -1,23 +1,26 @@
 # L0-испытание (Trial, ADR-023): install.method=package (ЯВНО). Зеркало install-binary.
-# Guard: при method=package активна package-ветка install.yml (core.pkg.installed
-# redis-server на index 0), а binary-ветка (url.fetched/archive/user/group/три
-# core.file.present-бинаря/unit/restart, индексы 1-9) — placeholder-skip (params
-# пусты). Поведение БИТ-В-БИТ совпадает с default-режимом (install не передан):
-# явный method=package = дефолт.
+# Режим sentinel single-host (1 master + 0 реплик = standalone-эквивалент) — install-
+# ветка install.yml режим-агностична. Guard: при method=package активна package-ветка
+# install.yml (core.pkg.installed redis-server на index 0), а binary-ветка
+# (url.fetched/archive/user/group/три core.file.present-бинаря/unit/restart) —
+# placeholder-skip (params пусты). Явный method=package = дефолт.
 name: install method package installs the distro redis-server package
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
-  soulprint:
-    network:
-      primary_ip: 10.0.0.5
-    os:
-      arch: amd64
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
   essence:
-    redis_type: standalone
+    redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
     memory_reserve_percent: 75
     persistence_presets:
       rdb:
@@ -27,9 +30,8 @@ fixtures:
       maxmemory: "256mb"
 
   input:
-    redis_type: standalone
+    redis_type: sentinel
     version: "5:7.0.15-1~deb12u7"
-    modules_base_url: "https://artifacts.example.com/redis/modules"
     persistence: rdb
     install:
       method: package
@@ -60,7 +62,7 @@ assert:
         path: /usr/local/bin/redis-server
 
   state_changes:
-    redis_type: standalone
+    redis_type: sentinel
     redis_version: "5:7.0.15-1~deb12u7"
     redis_config:
       maxmemory: "256mb"
@@ -68,4 +70,6 @@ assert:
       appendonly: "no"
     redis_users: {}
     redis_hosts: []
-    redis_sentinel: {}
+    redis_sentinel:
+      master_name: master
+      quorum: 0

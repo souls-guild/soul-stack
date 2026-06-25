@@ -25,11 +25,12 @@ name: conf_dir override flows through to redis.conf TLS directives and PEM paths
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
-  soulprint:
-    network:
-      primary_ip: 10.0.0.5
-    os:
-      arch: amd64
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
   # Мок Vault: requirepass + TLS PEM-материал (cert/key/ca). scenario резолвит TLS-refs
   # из essence.tls_*_ref (доверенный путь автора); override conf_dir НЕ трогает refs —
   # только КУДА destiny кладёт PEM и куда redis.conf на них ссылается.
@@ -41,7 +42,9 @@ fixtures:
       key:  "-----BEGIN PRIVATE KEY-----\nSERVERKEY\n-----END PRIVATE KEY-----"
       ca:   "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
   essence:
-    redis_type: standalone
+    redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules/6.2"
     memory_reserve_percent: 75
     persistence_presets:
       rdb:
@@ -58,10 +61,9 @@ fixtures:
     tls_ca_ref:   "secret/services/redis/tls#ca"
 
   input:
-    redis_type: standalone
+    redis_type: sentinel
     version: "5:6.2.7"
     persistence: rdb
-    modules_base_url: "https://artifacts.example.com/redis/modules/6.2"
     # ★ OVERRIDE host-layout (директива B): нестандартные conf/data каталоги.
     conf_dir: /opt/redis
     data_dir: /srv/redis-data
@@ -135,7 +137,7 @@ assert:
               save: "900 1 300 10 60 10000"
               appendonly: "no"
           self:
-            sid: trial-host
+            sid: node-solo.example.com
             covens: [create]
             choirs: []
             # traits — registry-проекция (ADR-060), пустой объект без меток.
@@ -173,7 +175,7 @@ assert:
         path: /var/lib/redis/modules/redisearch.so
 
   state_changes:
-    redis_type: standalone
+    redis_type: sentinel
     redis_version: "5:6.2.7"
     # redis_config DRIFT-GUARD: TLS-директивы в state бит-в-бит = config redis.conf,
     # включая override-пути /opt/redis/tls/* (host-инвариант → пишутся в state).
@@ -195,7 +197,6 @@ assert:
       key_ref:  "secret/services/redis/tls#key"
       ca_ref:   "secret/services/redis/tls#ca"
     modules: [bloom, json, search, timeseries]
-    modules_base_url: "https://artifacts.example.com/redis/modules/6.2"
     # ★ override персистит в state → day-2 add_node читает его (тот же layout у новой ноды).
     conf_dir: /opt/redis
     data_dir: /srv/redis-data

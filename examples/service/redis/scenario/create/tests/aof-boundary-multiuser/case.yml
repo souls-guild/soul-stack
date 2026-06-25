@@ -11,11 +11,12 @@ name: aof + memory boundary 64mb + essence policy fallback + multi-user map
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
-  soulprint:
-    network:
-      primary_ip: 10.0.0.5
-    os:
-      arch: amd64
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
@@ -26,7 +27,9 @@ fixtures:
     secret/redis/create/users/mike:
       password: mike-secret-pass
   essence:
-    redis_type: standalone
+    redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
     memory_reserve_percent: 75
     persistence_presets:
       off:
@@ -48,11 +51,10 @@ fixtures:
       timeout:          300
 
   input:
-    redis_type: standalone
+    redis_type: sentinel
     # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
     # distro-native пин (мажор < 8 → version-gate модулей не активен).
     version: "7.2.4"
-    modules_base_url: "https://artifacts.example.com/redis/modules"
     memory_mb: 64
     persistence: aof
     # maxmemory_policy НЕ задан — должен прийти из essence (allkeys-lru).
@@ -100,7 +102,7 @@ assert:
                 state: "off"
                 password: mike-secret-pass
           self:
-            sid: trial-host
+            sid: node-solo.example.com
             covens: [create]
             choirs: []
             # traits — registry-проекция (ADR-060), пустой объект без меток.
@@ -143,7 +145,7 @@ assert:
               save: ""
               appendonly: "yes"
           self:
-            sid: trial-host
+            sid: node-solo.example.com
             covens: [create]
             choirs: []
             # traits — registry-проекция (ADR-060), пустой объект без меток.
@@ -157,7 +159,7 @@ assert:
           essence: {}
 
   state_changes:
-    redis_type: standalone
+    redis_type: sentinel
     redis_version: "7.2.4"
     # DRIFT-GUARD: идентичен apply.input.config (index 3).
     redis_config:

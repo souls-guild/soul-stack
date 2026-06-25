@@ -33,7 +33,7 @@
     owner: "${ vars.redis_user }"
     group: "${ vars.redis_group }"
     vars:
-      master_name: "${ default(input.sentinel.master_name, 'mymaster') }"
+      master_name: "${ default(input.sentinel.master_name, 'master') }"
       master_ip:   "${ input.sentinel.master_ip }"
       # master_port/quorum — has()?string(X):Y: then-ветка вызов string(), НЕ голый
       # X → default() (select-chain-only) тут неприменим, оставлено тернаром.

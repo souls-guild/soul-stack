@@ -1,10 +1,11 @@
 # L0-испытание create в режиме sentinel (redis-консолидация). Multi-host roster
-# (fixtures.hosts) из 3 хостов: replicas=2 → топология 1+2=3 (size-guard проходит).
-# Master-election: первый по SID хост (node-1) = master; node-2/node-3 = реплики.
+# (fixtures.hosts) из 3 хостов: replicas_per_master=2 → топология 1+2=3 (size-guard
+# проходит). Master-election: первый по SID хост (node-1) = master; node-2/node-3 =
+# реплики.
 #
-# Render-only, герметично. Диспетчер create инклудит standalone.yml + cluster.yml
-# + sentinel.yml; на sentinel-прогоне standalone/cluster-ветки гасятся placeholder-
-# skip-ом (static-when input.redis_type != 'sentinel'), sentinel-ветка рендерится.
+# Render-only, герметично. Диспетчер create инклудит cluster.yml + sentinel.yml; на
+# sentinel-прогоне cluster-ветка гасится placeholder-skip-ом (static-when
+# input.redis_type != 'sentinel'), sentinel-ветка рендерится.
 #
 # Что ассертим (критерий приёмки слайса):
 #   1. size-guard PASS-форма: 3 == 1 + 2 → "true" встроено в test (обе ветки size-
@@ -15,7 +16,8 @@
 #      (отдельный destiny_redis_sentinel_tmpl_test.go).
 #   3. plugin community.redis.replica: addr=127.0.0.1:6379 (per-host инвариант,
 #      локальный), master_addr=10.0.0.1:6379 (master-election).
-#   4. plugin community.redis.sentinel: monitor.ip=10.0.0.1, quorum=2 (input).
+#   4. plugin community.redis.sentinel: monitor.ip=10.0.0.1, quorum=2 (АВТО:
+#      size(3)/2+1=2). master_name=master (essence-дефолт).
 #
 # ВНИМАНИЕ L0-ограничение: apply.input host-инвариантен в пилоте (резолвится на
 # ПЕРВОМ targeted-хосте, resolveApplyInput) → render_context.self в destiny =
@@ -49,6 +51,8 @@ fixtures:
       password: s3cr3t-redis-pass-create
   essence:
     redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
     memory_reserve_percent: 75
     persistence_presets:
       rdb:
@@ -65,10 +69,7 @@ fixtures:
     # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
     # distro-native пин (мажор < 8 → version-gate модулей не активен).
     version: "7.2.4"
-    modules_base_url: "https://artifacts.example.com/redis/modules"
-    replicas: 2
-    sentinel_quorum: 2
-    sentinel_master_name: mymaster
+    replicas_per_master: 2
 
 assert:
   # sentinel size-guard PASS: 3 == 1+2 → assert: (ADR-009 amendment), в план не
@@ -134,12 +135,12 @@ assert:
 
     # ── SENTINEL MONITOR reconcile (community.redis.sentinel) ───────────────
     # monitor.ip — HOST-ИНВАРИАНТНЫЙ адрес master-а (master-election node-1).
-    # quorum=2 (input.sentinel_quorum). auth_pass — keeper-side vault()-резолв.
-    # sentinel_only-вариант — placeholder-skip → единственная активная.
+    # quorum=2 (АВТО: size(3)/2+1). master_name=master (essence-дефолт). auth_pass —
+    # keeper-side vault()-резолв. Единственная активная.
     - module: community.redis.sentinel
       params_subset:
         addr: "127.0.0.1:26379"
-        master_name: mymaster
+        master_name: master
         auth_pass: s3cr3t-redis-pass-create
         redis_version: "7.2.4"
         monitor:
@@ -163,12 +164,13 @@ assert:
     redis_users: {}
     redis_hosts: []
     redis_sentinel:
-      master_name: mymaster
-      quorum: 2
-    # ── namedfields (read-model, v3): топология sentinel. replicas=2 (sentinel →
-    # input.replicas, реплик master-а), sentinel_quorum=2 (input). shards=0 (не cluster).
+      master_name: master
+      quorum: 0
+    # ── namedfields (read-model, v3): топология sentinel. replicas=2 (UNIFIED
+    # replicas_per_master, реплик master-а), sentinel_quorum=0 (АВТО, не материализуется
+    # в state). shards=0 (не cluster).
     replicas: 2
-    sentinel_quorum: 2
+    sentinel_quorum: 0
     shards: 0
     persistence: rdb
     maxmemory_policy: ""

@@ -30,16 +30,19 @@ name: install method binary fetches upstream tarball and lays out binaries with 
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
-  soulprint:
-    network:
-      primary_ip: 10.0.0.5
-    os:
-      arch: amd64
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
   essence:
-    redis_type: standalone
+    redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
     memory_reserve_percent: 75
     persistence_presets:
       rdb:
@@ -51,9 +54,8 @@ fixtures:
   # version (top-level distro-пин) НЕ передан: method=binary → required_when=package
   # не срабатывает. install.version (upstream-semver) несёт версию tarball-а.
   input:
-    redis_type: standalone
+    redis_type: sentinel
     persistence: rdb
-    modules_base_url: "https://artifacts.example.com/redis/modules"
     install:
       method: binary
       base_url: "https://downloads.example.com/redis"
@@ -162,7 +164,7 @@ assert:
         name: redis-server
 
   state_changes:
-    redis_type: standalone
+    redis_type: sentinel
     # redis_version из install.version (compute.redis_version: binary → upstream-semver).
     redis_version: "7.2.4"
     redis_config:
@@ -171,7 +173,9 @@ assert:
       appendonly: "no"
     redis_users: {}
     redis_hosts: []
-    redis_sentinel: {}
+    redis_sentinel:
+      master_name: master
+      quorum: 0
     # ── namedfields (read-model, v3): install=binary (тот же compute.install, что
     # ушёл в destiny apply.input). tarball качается по content-идемпотентности.
     install:

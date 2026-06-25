@@ -1,6 +1,6 @@
-# L0-испытание (Trial, ADR-023): TLS standalone (концепция Ansible-роли redis:
-# redis_tls_*). TLS включён ИЗ ESSENCE (essence.tls_enable=true, оператор input.tls
-# не задал) — back-compat: essence остаётся дефолтом, новый input.tls — опционален.
+# L0-испытание (Trial, ADR-023): TLS в режиме sentinel single-host (концепция
+# Ansible-роли redis: redis_tls_*). TLS включён ИЗ ESSENCE (essence.tls_enable=true,
+# оператор input.tls не задал) — back-compat: essence остаётся дефолтом, input.tls — опц.
 # Главный guard слайса — что при включённом TLS:
 #   1. PEM-файлы /etc/redis/tls/{redis.crt,redis.key,ca.crt} раскладываются
 #      core.file.present (mode 0600, owner redis), content = vault(tls.<x>_ref) →
@@ -19,15 +19,16 @@
 # (cert/key/ca) — один и тот же module core.file.present, дизамбигуируются по path
 # (/etc/redis/tls/{redis.crt,redis.key,ca.crt}); каждая несёт СВОЙ content (PEM из
 # vault) + mode 0600 — guard на права и на правильный материал в правильном файле.
-name: tls enabled standalone renders PEM files and TLS directives, port 0 on tls_only
+name: tls enabled renders PEM files and TLS directives, port 0 on tls_only
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
-  soulprint:
-    network:
-      primary_ip: 10.0.0.5
-    os:
-      arch: amd64
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
   # Мок Vault: requirepass + TLS PEM-материал (cert/key/ca под secret/services/redis/tls).
   # scenario резолвит их из essence.tls_*_ref (доверенный путь автора).
   vault:
@@ -38,7 +39,9 @@ fixtures:
       key:  "-----BEGIN PRIVATE KEY-----\nSERVERKEY\n-----END PRIVATE KEY-----"
       ca:   "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
   essence:
-    redis_type: standalone
+    redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
     memory_reserve_percent: 75
     persistence_presets:
       rdb:
@@ -58,11 +61,10 @@ fixtures:
     tls_ca_ref:   "secret/services/redis/tls#ca"
 
   input:
-    redis_type: standalone
+    redis_type: sentinel
     # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
     # distro-native пин (мажор < 8 → version-gate модулей не активен).
     version: "7.2.4"
-    modules_base_url: "https://artifacts.example.com/redis/modules"
     persistence: rdb
 
 assert:
@@ -138,7 +140,7 @@ assert:
               save: "900 1 300 10 60 10000"
               appendonly: "no"
           self:
-            sid: trial-host
+            sid: node-solo.example.com
             covens: [create]
             choirs: []
             # traits — registry-проекция (ADR-060), пустой объект без меток.
@@ -165,7 +167,7 @@ assert:
   # DRIFT-GUARD: redis_config в state ОБЯЗАН быть бит-в-бит равен apply.input.config
   # (redis.conf выше), включая TLS-директивы + port 0 (host-инвариант → пишутся в state).
   state_changes:
-    redis_type: standalone
+    redis_type: sentinel
     redis_version: "7.2.4"
     redis_config:
       port: "0"
@@ -182,7 +184,9 @@ assert:
       appendonly: "no"
     redis_users: {}
     redis_hosts: []
-    redis_sentinel: {}
+    redis_sentinel:
+      master_name: master
+      quorum: 0
     # ── namedfields (read-model, v3): из тех же compute.tls_*, что TLS-блок redis_config.
     # tls включён+only из essence → enable/only true, port 7379, refs из essence.
     tls:

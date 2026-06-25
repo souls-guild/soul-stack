@@ -10,11 +10,12 @@ name: tls enabled without tls_only still connects plugin over TLS (no plaintext 
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
-  soulprint:
-    network:
-      primary_ip: 10.0.0.5
-    os:
-      arch: amd64
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
@@ -23,7 +24,9 @@ fixtures:
       key:  "-----BEGIN PRIVATE KEY-----\nSERVERKEY\n-----END PRIVATE KEY-----"
       ca:   "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
   essence:
-    redis_type: standalone
+    redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
     memory_reserve_percent: 75
     persistence_presets:
       rdb:
@@ -44,11 +47,10 @@ fixtures:
     tls_ca_ref:   "secret/services/redis/tls#ca"
 
   input:
-    redis_type: standalone
+    redis_type: sentinel
     # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
     # distro-native пин (мажор < 8 → version-gate модулей не активен).
     version: "7.2.4"
-    modules_base_url: "https://artifacts.example.com/redis/modules"
     persistence: rdb
 
 assert:
@@ -83,7 +85,7 @@ assert:
               save: "900 1 300 10 60 10000"
               appendonly: "no"
           self:
-            sid: trial-host
+            sid: node-solo.example.com
             covens: [create]
             choirs: []
             # traits — registry-проекция (ADR-060), пустой объект без меток.
@@ -109,7 +111,7 @@ assert:
         args: ["PING"]
 
   state_changes:
-    redis_type: standalone
+    redis_type: sentinel
     redis_version: "7.2.4"
     redis_config:
       tls-port: "7379"
@@ -125,4 +127,6 @@ assert:
       appendonly: "no"
     redis_users: {}
     redis_hosts: []
-    redis_sentinel: {}
+    redis_sentinel:
+      master_name: master
+      quorum: 0

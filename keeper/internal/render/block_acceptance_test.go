@@ -222,14 +222,15 @@ func TestAcceptance_SentinelReplicaExcludesMaster(t *testing.T) {
 	}
 	// Зеркало прода (scenario.run §4.5) / trial (harness.go:120): эффективный input
 	// материализуется через ResolveInputValues ДО сборки RenderInput — дефолты схемы
-	// (master_port=6379, persistence=rdb) подставляются, required enforce-ятся.
-	// version — required без default → задаём явно в фикстуре.
+	// (persistence=rdb) подставляются, required enforce-ятся. version — required без
+	// default → задаём явно в фикстуре. replicas_per_master=2 — UNIFIED-поле d1 (2026-
+	// 06-25, бывшее `replicas`): size-guard sentinel-ветки сверяет size(hosts)==1+
+	// replicas_per_master (3==1+2). sentinel_quorum/sentinel_master_name из контракта
+	// убраны (quorum АВТО size/2+1, master_name — essence) — больше не задаём.
 	effectiveInput, err := config.ResolveInputValues(m.Input, map[string]any{
-		"redis_type":           "sentinel",
-		"version":              "5:7.0.15-1~deb12u7",
-		"replicas":             2,
-		"sentinel_quorum":      2,
-		"sentinel_master_name": "mymaster",
+		"redis_type":          "sentinel",
+		"version":             "5:7.0.15-1~deb12u7",
+		"replicas_per_master": 2,
 	})
 	if err != nil {
 		t.Fatalf("ResolveInputValues: %v", err)
@@ -355,51 +356,31 @@ func (r realRedisDestinyResolver) Resolve(_ context.Context, name string) (*Reso
 	}, nil
 }
 
-// TestAcceptance_SentinelOnlySkipsRedisServer — ★ ПРИЁМКА режима sentinel_only:
-// deploy_redis=false НЕ разворачивает data-плоскость redis-server. Реальный
-// потребитель examples/service/redis/scenario/create/main.yml (диспетчер) +
-// РЕАЛЬНАЯ destiny redis (tasks/main.yml) на multi-host roster-е.
+// TestAcceptance_SentinelOnlySkipsRedisServer — ★ ПРИЁМКА DESTINY-capability
+// sentinel_only: deploy_redis=false НЕ разворачивает data-плоскость redis-server,
+// при этом sentinel-демон поднимается. Это ГИБКОСТЬ кирпича destiny `redis`
+// (sentinel_enabled/deploy_redis), переиспользуемая, напр., для DragonFly «только
+// sentinel». Сервисный режим redis_type=sentinel_only УБРАН (2026-06-25, сужение
+// enum до [sentinel, cluster]) — поэтому вход теста гонится НА DESTINY-УРОВЕНЬ
+// напрямую (apply: destiny: redis + destiny-input deploy_redis/sentinel_enabled),
+// а НЕ через удалённый сервис-режим. Capability жива в destiny → тест её и упражняет.
 //
 // ★ Гейт deploy_redis в destiny redis стоит НА include (tasks/main.yml: `include:
 // server.yml` `when: default(input.deploy_redis, true)`, conditional-include
 // group-drop, ADR-009 amendment) — НЕ внутри файла. Поэтому при deploy_redis=false
 // include server.yml дропается ЦЕЛИКОМ: задачи data-плоскости ФИЗИЧЕСКИ ОТСУТСТВУЮТ
-// в плане (group-drop, не placeholder-skip — не эмитятся вовсе). Это уточняет прежнюю
-// проверку «placeholder-skip с Params==nil»: теперь byName[...] == nil.
+// в плане (group-drop, не placeholder-skip — не эмитятся вовсе): byName[...] == nil.
 //
-// Доказывает на отрендеренном плане:
+// Доказывает на отрендеренном плане destiny:
 //   - redis.conf-задача (core.file.rendered) ОТСУТСТВУЕТ (include server.yml
 //     group-dropped): deploy_redis=false дропнул всю data-плоскость;
 //   - core.service redis-server running ОТСУТСТВУЕТ (та же группа);
 //   - sentinel.conf-задача (core.file.rendered) РЕНДЕРИТСЯ (Params != nil):
-//     sentinel-демон поднимается, мониторя ВНЕШНИЙ master из input.master_ip;
+//     sentinel-демон поднимается (sentinel_enabled=true), мониторя ВНЕШНИЙ master
+//     из input.sentinel.master_ip;
 //   - пакет redis ставится ВСЕГДА (core.pkg.installed рендерится, Params != nil;
-//     install.yml безусловен).
+//     install.yml безусловен — несёт redis-sentinel).
 func TestAcceptance_SentinelOnlySkipsRedisServer(t *testing.T) {
-	path := filepath.FromSlash("../../../examples/service/redis/scenario/create/main.yml")
-	m, _, diags, err := config.LoadScenarioManifest(path, config.ValidateOptions{})
-	if err != nil {
-		t.Fatalf("LoadScenarioManifest: %v", err)
-	}
-	for _, d := range diags {
-		if d.Level == diag.LevelError {
-			t.Fatalf("scenario diagnostic (%s): %s", d.Code, d.Message)
-		}
-	}
-
-	scenarioDir := filepath.Dir(path)
-	expanded, idiags := config.ExpandIncludes(m.Tasks, func(name string) ([]byte, string, error) {
-		full := filepath.Join(scenarioDir, name)
-		data, rerr := os.ReadFile(full)
-		return data, full, rerr
-	})
-	for _, d := range idiags {
-		if d.Level == diag.LevelError {
-			t.Fatalf("ExpandIncludes diagnostic (%s): %s", d.Code, d.Message)
-		}
-	}
-	m.Tasks = expanded
-
 	node := func(sid, ip string) *topology.HostFacts {
 		return host(sid, []string{"redis"}, map[string]any{
 			"network": map[string]any{"primary_ip": ip},
@@ -411,27 +392,28 @@ func TestAcceptance_SentinelOnlySkipsRedisServer(t *testing.T) {
 		node("node-2.example.com", "10.0.0.2"),
 	}
 
-	engine, err := cel.New(cel.WithVault(stubKV{"secret/redis/redis": {"password": "fixture-redis-pass-16+"}}))
-	if err != nil {
-		t.Fatalf("cel.New(WithVault): %v", err)
+	// sentinel_only через destiny-input напрямую: deploy_redis=false (skip data-
+	// плоскости) + sentinel_enabled=true (поднять демон). master уже резолвлен caller-ом
+	// (destiny «глупая» — получает ГОТОВЫЕ значения), поэтому master_ip/auth_pass —
+	// литералы в apply.input, без vault() в ячейках destiny. Required destiny-input:
+	// version (install.method=package), password (≥16), sentinel.master_ip.
+	applyInput := map[string]any{
+		"deploy_redis":     false,
+		"sentinel_enabled": true,
+		"version":          "5:7.0.15-1~deb12u7",
+		"password":         "fixture-redis-pass-16+",
+		"sentinel": map[string]any{
+			"master_name": "master",
+			"master_ip":   "10.9.9.9",
+			"master_port": 6379,
+			"quorum":      2,
+			"auth_pass":   "fixture-redis-pass-16+",
+		},
 	}
-	// Зеркало прода (scenario.run §4.5) / trial (harness.go:120): эффективный input
-	// материализуется через ResolveInputValues ДО сборки RenderInput — дефолты схемы
-	// (master_port=6379, persistence=rdb) подставляются, required enforce-ятся.
-	// version — required без default → задаём явно в фикстуре.
-	effectiveInput, err := config.ResolveInputValues(m.Input, map[string]any{
-		"redis_type": "sentinel_only",
-		"version":    "5:7.0.15-1~deb12u7",
-		"master_ip":  "10.9.9.9",
-	})
-	if err != nil {
-		t.Fatalf("ResolveInputValues: %v", err)
-	}
-	p := NewPipeline(stubKV{}, engine, nil, nil)
+
+	p := NewPipeline(stubKV{}, newEngine(t), nil, nil)
 	in := RenderInput{
-		Scenario:    m,
-		Input:       effectiveInput,
-		Essence:     redisSentinelEssence(),
+		Scenario:    applyDestinyScenario("redis", applyInput),
 		Incarnation: IncarnationMeta{Name: "redis", Service: "redis"},
 		Hosts:       hosts,
 		Destiny:     realRedisDestinyResolver{dir: filepath.FromSlash("../../../examples/destiny/redis")},
@@ -439,7 +421,7 @@ func TestAcceptance_SentinelOnlySkipsRedisServer(t *testing.T) {
 
 	tasks, _, err := p.Render(context.Background(), in)
 	if err != nil {
-		t.Fatalf("Render (приёмка create/main.yml sentinel_only): %v", err)
+		t.Fatalf("Render (приёмка destiny redis sentinel_only: deploy_redis=false): %v", err)
 	}
 
 	// Находим задачи destiny по Name. group-dropped задачи (include server.yml выключен)

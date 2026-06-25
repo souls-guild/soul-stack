@@ -1,12 +1,12 @@
 # L0-испытание size-guard create в режиме sentinel — FAIL-ветка (mismatch), assert:.
-# Roster из 3 хостов, но replicas=1 → ожидается 1+1=2 хоста. 3 != 2 → size-guard
-# (assert:, ADR-009 amendment 2026-06-23; тот же механизм, что cluster size-guard)
-# вычисляет предикат that[0] в FALSE на РЕНДЕРЕ Keeper-side → render ОБРЫВАЕТСЯ
-# ошибкой с message "topology mismatch: ..." ДО dispatch (ни одной задачи на Soul).
-# harness ассертит обрыв через expect_render_error (ADR-023 amendment).
+# Roster из 3 хостов, но replicas_per_master=1 → ожидается 1+1=2 хоста. 3 != 2 →
+# size-guard (assert:, ADR-009 amendment 2026-06-23; тот же механизм, что cluster
+# size-guard) вычисляет предикат that[0] в FALSE на РЕНДЕРЕ Keeper-side → render
+# ОБРЫВАЕТСЯ ошибкой с message "topology mismatch: ..." ДО dispatch (ни одной задачи
+# на Soul). harness ассертит обрыв через expect_render_error (ADR-023 amendment).
 #
 # Парный с sentinel-create-1master-2replica (true-ветка): тот же guard-предикат
-# (size == 1 + replicas), противоположный исход — обе полярности покрыты.
+# (size == 1 + replicas_per_master), противоположный исход — обе полярности покрыты.
 name: sentinel size-guard fails on topology mismatch (3 hosts != 1 + 1 replica)
 
 fixtures:
@@ -29,6 +29,8 @@ fixtures:
       password: s3cr3t-redis-pass-create
   essence:
     redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
     memory_reserve_percent: 75
     persistence_presets:
       rdb:
@@ -45,12 +47,9 @@ fixtures:
     # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
     # distro-native пин (мажор < 8 → version-gate модулей не активен).
     version: "7.2.4"
-    # modules_base_url обязателен на Redis < 8 (директива «модули ВСЕГДА ВСЕ»): иначе
-    # validate[3] 422-нул бы ДО render, скрыв ожидаемый ниже size-guard render-error.
-    modules_base_url: "https://artifacts.example.com/redis/modules"
-    replicas: 1
+    replicas_per_master: 1
 
 # Render ОБРЫВАЕТСЯ assert-провалом sentinel size-guard-а: ожидаем ошибку рендера с
 # message из assert. expect_render_error взаимоисключим с assert.rendered_tasks
 # (плана нет — прогон не стартовал).
-expect_render_error: "topology mismatch: hosts != 1 + replicas"
+expect_render_error: "topology mismatch: hosts != 1 + replicas_per_master"

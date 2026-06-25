@@ -14,16 +14,19 @@ name: modules fetch all four shared objects by content idempotency without check
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
-  soulprint:
-    network:
-      primary_ip: 10.0.0.5
-    os:
-      arch: amd64
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
   essence:
-    redis_type: standalone
+    redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules/6.2"
     memory_reserve_percent: 75
     persistence_presets:
       off:
@@ -45,11 +48,10 @@ fixtures:
       timeout:          300
 
   input:
-    redis_type: standalone
+    redis_type: sentinel
     version: "5:6.2.7"
     # input.modules НЕ задаётся (набор-инвариант). ВСЕ четыре модуля fetch-ятся по
     # content-идемпотентности (без checksum).
-    modules_base_url: "https://artifacts.example.com/redis/modules/6.2"
 
 assert:
   task_present:
@@ -80,7 +82,7 @@ assert:
               save: "900 1 300 10 60 10000"
               appendonly: "no"
           self:
-            sid: trial-host
+            sid: node-solo.example.com
             covens: [create]
             choirs: []
             # traits — registry-проекция (ADR-060), пустой объект без меток.
@@ -146,7 +148,7 @@ assert:
         args: ["PING"]
 
   state_changes:
-    redis_type: standalone
+    redis_type: sentinel
     redis_version: "5:6.2.7"
     redis_config:
       maxmemory: "256mb"
@@ -157,6 +159,8 @@ assert:
       appendonly: "no"
     redis_users: {}
     redis_hosts: []
-    redis_sentinel: {}
+    redis_sentinel:
+      master_name: master
+      quorum: 0
     # Redis 6 (< 8) → полный набор развёрнут (модули всегда все).
     modules: [bloom, json, search, timeseries]

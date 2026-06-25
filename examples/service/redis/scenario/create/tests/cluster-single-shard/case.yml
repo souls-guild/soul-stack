@@ -21,6 +21,7 @@ fixtures:
       password: s3cr3t-redis-pass-create
   essence:
     redis_type: cluster
+    modules_base_url: "https://artifacts.example.com/redis/modules"
     memory_reserve_percent: 75
     persistence_presets:
       rdb:
@@ -37,9 +38,8 @@ fixtures:
     # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
     # distro-native пин (мажор < 8 → version-gate модулей не активен).
     version: "7.2.4"
-    modules_base_url: "https://artifacts.example.com/redis/modules"
     shards: 1
-    replicas_per_shard: 0
+    replicas_per_master: 0
     cluster_node_timeout: 5000
 
 assert:

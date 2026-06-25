@@ -15,14 +15,21 @@ description: >-
       update_config (отдельный сценарий), в create плагин config НЕ вызываем.
 
   ДИСПЕТЧЕР ПО redis_type (2026-06-22): этот файл — диспетчер. Тело прогона вынесено
-  в ветки create/standalone.yml / cluster.yml / sentinel.yml / sentinel-only.yml,
-  подключаемые через include: ниже. include: раскрывается БЕЗУСЛОВНО в плоский список
-  ДО render (when: на самой include-задаче запрещён), поэтому ветвление делает не
-  include, а `when:` на каждой задаче ветки: предикат по input.redis_type статичен
-  (isStaticWhen — только input.*), Keeper вычисляет его at-render и гасит неактивную
-  ветку placeholder-skip-ом (ADR-012(d) Вариант b). Оператор всегда зовёт create;
-  режим выбирает redis_type. Порядок include — standalone, cluster, sentinel,
-  sentinel_only: ветки добавляются В ХВОСТ, индексы предыдущих веток не сдвигаются.
+  в ветки create/cluster.yml / sentinel.yml, подключаемые через include: ниже.
+  include: раскрывается БЕЗУСЛОВНО в плоский список ДО render (when: на самой
+  include-задаче запрещён), поэтому ветвление делает не include, а `when:` на каждой
+  задаче ветки: предикат по input.redis_type статичен (isStaticWhen — только input.*),
+  Keeper вычисляет его at-render и гасит неактивную ветку placeholder-skip-ом
+  (ADR-012(d) Вариант b). Оператор всегда зовёт create; режим выбирает redis_type.
+  Порядок include — cluster, sentinel: ветки добавляются В ХВОСТ, индексы предыдущих
+  веток не сдвигаются.
+
+  ★ РЕЖИМЫ СЕРВИСА сужены до sentinel/cluster (2026-06-25): standalone и sentinel_only
+  убраны из сервиса (решение пользователя). standalone покрывается sentinel с 0 реплик
+  (один master + sentinel-демон); sentinel_only нужен только в DESTINY `redis` (её
+  гибкость sentinel_enabled/deploy_redis остаётся для переиспользования, напр. DragonFly),
+  но не как режим этого сервиса. Сужение enum redis_type ([sentinel, cluster]) — bump
+  state_schema_version 3→4 + миграция 003_to_004 (forward-only remap старых режимов).
 
   Пароли НЕ во входном контракте: лежат в Vault, резолвятся KEEPER-SIDE через CEL
   vault() в render-фазе (templating.md §2.3/§4) — на хост доезжает уже ЗНАЧЕНИЕ
@@ -30,25 +37,22 @@ description: >-
 
 # ── Входной контракт оператора (docs/input.md) ────────────────────────────────
 # Простые типизированные понятия. Трансляция в redis.conf — в ветках диспетчера.
-# Реализованы ВСЕ четыре режима: standalone (standalone.yml), cluster (cluster.yml),
-# sentinel (sentinel.yml), sentinel_only (sentinel-only.yml — только sentinel-демон,
-# мониторящий ВНЕШНИЙ master из input.master_ip). Неизвестный режим отвергается
-# input-валидацией Keeper-а (enum redis_type ниже) ДО рендера — понятным отказом,
-# а не молчаливым зелёным no-op (все ветки gated на свой redis_type).
+# Режимы сервиса: sentinel (sentinel.yml) и cluster (cluster.yml). standalone-
+# развёртывание покрывается sentinel с replicas_per_master=0 (один master + sentinel-
+# демон). Неизвестный режим отвергается input-валидацией Keeper-а (enum redis_type
+# ниже) ДО рендера — понятным отказом, а не молчаливым зелёным no-op (обе ветки
+# gated на свой redis_type).
 input:
   redis_type:
     type: string
     required: false
-    default: standalone
-    enum: [standalone, sentinel, cluster, sentinel_only]
+    default: sentinel
+    enum: [sentinel, cluster]
     description: >-
-      Режим развёртывания (концепция роли). Реализованы ВСЕ четыре режима:
-      standalone, cluster, sentinel (master-replica + sentinel-демон) и
-      sentinel_only (тонкий sentinel-слой, мониторящий ВНЕШНИЙ master из
-      input.master_ip — data-плоскость redis-server не разворачивается).
-      redis_type выбирает ветку диспетчера (include: standalone.yml /
-      cluster.yml / sentinel.yml / sentinel-only.yml + when: по redis_type на
-      каждой задаче).
+      Режим развёртывания (концепция роли). Два режима: sentinel (master-replica +
+      sentinel-демон; replicas_per_master=0 даёт standalone-эквивалент) и cluster
+      (honest hash-slot Redis Cluster). redis_type выбирает ветку диспетчера
+      (include: cluster.yml / sentinel.yml + when: по redis_type на каждой задаче).
 
   version:
     type: string
@@ -157,10 +161,28 @@ input:
       Политика вытеснения при достижении maxmemory. Не задана → берётся из
       merge-подложки essence.redis_config.
 
+  # ── Реплики на master (UNIFIED, оба режима) ──────────────────────────────────
+  # ОДНО поле replicas_per_master на оба режима (унификация 2026-06-25): реплик на
+  # каждый master. cluster — реплик на шард (состав roster-а: shards мастеров +
+  # shards*replicas_per_master реплик); sentinel — реплик master-а (состав roster-а:
+  # 1 master + replicas_per_master реплик). default:0 → size-guard читает
+  # int(input.replicas_per_master) без has()-обвязки.
+  replicas_per_master:
+    type: integer
+    required: false
+    default: 0
+    min: 0
+    description: >-
+      Реплик на каждый master. cluster — реплик на шард (roster =
+      shards*(1+replicas_per_master)); sentinel — реплик master-а (roster =
+      1+replicas_per_master). 0 (дефолт) — без реплик (cluster: только мастера;
+      sentinel: только master, standalone-эквивалент). size-guard каждой ветки
+      сверяет состав roster-а.
+
   # ── Топология cluster (режим redis_type=cluster) ─────────────────────────────
   # Counts задают РАСКЛАДКУ ролей по таргетированным souls (pull-native, Вариант A):
-  # оператор объявляет shards и replicas_per_shard, а сценарий проверяет, что число
-  # хостов roster-а ровно shards*(1+replicas_per_shard) (size-guard cluster.yml), и
+  # оператор объявляет shards и replicas_per_master, а сценарий проверяет, что число
+  # хостов roster-а ровно shards*(1+replicas_per_master) (size-guard cluster.yml), и
   # строит nodes-MAP для плагина. cloud-создание машин — post-бета.
   shards:
     type: integer
@@ -171,19 +193,8 @@ input:
       Число master-шардов Redis Cluster (режим cluster). 16384 hash-слота делятся
       поровну между shards мастерами (раскладку делает плагин community.redis.cluster
       детерминированно). Размер roster-а прогона обязан быть shards*(1+
-      replicas_per_shard) — иначе size-guard рвёт прогон fail-fast. Обязателен при
+      replicas_per_master) — иначе size-guard рвёт прогон fail-fast. Обязателен при
       redis_type=cluster (required_when) — пропуск рвёт прогон на input-валидации.
-
-  replicas_per_shard:
-    type: integer
-    required: false
-    default: 0
-    min: 0
-    description: >-
-      Реплик на один master-шард (режим cluster). 0 (дефолт) — кластер без реплик
-      (только мастера). Состав roster-а: shards мастеров + shards*replicas_per_shard
-      реплик. default:0 — чтобы size-guard читал int(input.replicas_per_shard) без
-      has()-обвязки (контраст: shards остаётся guard-only, см. shards-guard cluster.yml).
 
   cluster_node_timeout:
     type: integer
@@ -196,67 +207,14 @@ input:
 
   # ── Топология sentinel (режим redis_type=sentinel) ───────────────────────────
   # Counts задают РАСКЛАДКУ ролей по таргетированным souls (pull-native, Вариант A):
-  # 1 master + replicas реплик. size-guard create/sentinel.yml проверяет, что число
-  # хостов roster-а ровно 1+replicas. master-election (кто master) — run_once по
-  # sort soulprint.hosts (первый по SID); на create роль declared (probe невозможен,
-  # redis ещё не поднят). sentinel-демон поднимается на КАЖДОМ хосте.
-  replicas:
-    type: integer
-    required: false
-    default: 0
-    min: 0
-    description: >-
-      Реплик master-а (режим sentinel). 0 (дефолт) — только master (без реплик).
-      Состав roster-а прогона: 1 master + replicas реплик (size-guard сверяет
-      size(soulprint.hosts) == 1+replicas). default:0 — чтобы size-guard читал
-      int(input.replicas) без has()-обвязки.
-
-  sentinel_quorum:
-    type: integer
-    required: false
-    min: 1
-    description: >-
-      Quorum sentinel-ов для признания master down (режим sentinel). Не задан →
-      вычисляется size(soulprint.hosts)/2+1 (большинство). Передаётся в плагин
-      community.redis.sentinel (SENTINEL MONITOR quorum) и в sentinel.conf.
-
-  sentinel_master_name:
-    type: string
-    required: false
-    default: mymaster
-    description: >-
-      Логическое имя monitored master в Sentinel (режимы sentinel/sentinel_only).
-      По умолчанию mymaster. Уходит в sentinel.conf и в community.redis.sentinel
-      (master_name).
-
-  # ── Топология sentinel_only (режим redis_type=sentinel_only) ─────────────────
-  # Тонкий sentinel-слой: разворачиваем ТОЛЬКО sentinel-демон (deploy_redis=false —
-  # redis-server НЕ ставим), мониторящий ВНЕШНИЙ master. Адрес master-а оператор
-  # задаёт явно (master_ip) — он НЕ выбирается из roster-а (master живёт вне этого
-  # прогона). master_ip — HOST-ИНВАРИАНТ (один на кластер) → apply.input. REQUIRED
-  # при sentinel_only — enforced условной обязательностью `required_when`
-  # (input.redis_type == 'sentinel_only'): пропуск рвёт прогон на input-валидации
-  # ДО рендера понятным сообщением. sentinel-демон поднимается на
-  # КАЖДОМ таргетированном хосте; size-guard в этом режиме НЕ нужен (любое число
-  # sentinel-ов валидно — кворум считается от их количества).
-  master_ip:
-    type: string
-    required: false
-    required_when: "input.redis_type == 'sentinel_only'"
-    description: >-
-      IP/адрес ВНЕШНЕГО redis-master, который мониторит sentinel-кластер (режим
-      sentinel_only). Обязателен при sentinel_only (required_when рвёт прогон на
-      input-валидации при пропуске). В прочих режимах не используется (master
-      выбирается из roster-а).
-
-  master_port:
-    type: integer
-    required: false
-    default: 6379
-    min: 1
-    description: >-
-      Порт ВНЕШНЕГО redis-master (режим sentinel_only). По умолчанию 6379. Уходит в
-      sentinel.conf (sentinel monitor) и в community.redis.sentinel (monitor.port).
+  # 1 master + replicas_per_master реплик. size-guard create/sentinel.yml проверяет,
+  # что число хостов roster-а ровно 1+replicas_per_master. master-election (кто master)
+  # — run_once по sort soulprint.hosts (первый по SID); на create роль declared (probe
+  # невозможен, redis ещё не поднят). sentinel-демон поднимается на КАЖДОМ хосте.
+  # Реплик master-а задаёт UNIFIED-поле replicas_per_master (см. выше).
+  # sentinel_quorum — АВТО (size(soulprint.hosts)/2+1, большинство): операторского
+  # поля нет (убрано 2026-06-25). sentinel_master_name — в essence (дефолт `master`),
+  # не в input.
 
   users:
     type: object
@@ -332,17 +290,12 @@ input:
   # 8+ модули ВСТРОЕНЫ — version-guard (по compute.redis_version) гасит .so и в destiny
   # (include modules.yml group-drop), и в read-model (state.modules=[]).
   #
-  # Оператор задаёт лишь ИСТОЧНИК .so: modules_base_url (откуда брать бинари модулей).
-  # modules_base_url ОБЯЗАТЕЛЕН на Redis < 8 (без него destiny нечем строить URL .so) —
-  # см. validate:. .so качаются по content-идемпотентности (SHA-256 содержимого), без
-  # integrity-verify (как node-exporter).
-  modules_base_url:
-    type: string
-    required: false
-    description: >-
-      Базовый URL источника .so-модулей (без арх-сегмента). destiny `redis` строит
-      полный URL per-host как <base_url>/<arch>/<имя.so>. Обязателен на Redis < 8
-      (модули разворачиваются всегда все).
+  # ★ ИСТОЧНИК .so — essence-плейсхолдер (2026-06-25): modules_base_url убран из
+  # операторского input. Это author-context-параметр (essence.modules_base_url, дефолт
+  # ""), который оператор переопределяет в spec.essence инкарнации, а не в Run-форме
+  # каждого прогона. На Redis < 8 без источника .so destiny не построит URL — мягкая
+  # проверка в validate: (см. ниже). .so качаются по content-идемпотентности (SHA-256
+  # содержимого), без integrity-verify (как node-exporter).
 
 # ── Презентационный слой формы (form:, top-level scenario-ключ) ───────────────────
 # form: — ЧИСТАЯ ПРЕЗЕНТАЦИЯ: как UI группирует и подписывает поля input в Run-форме.
@@ -375,25 +328,14 @@ form:
         - { name: persistence, label: "Режим persistence" }
         - { name: maxmemory_policy, label: "Политика вытеснения" }
 
-    - key: cluster
-      title: "Топология Cluster"
-      description: "Только для режима cluster"
+    - key: topology
+      title: "Топология"
+      description: "Реплики (оба режима) и параметры Cluster"
       collapsed: true
       fields:
-        - { name: shards, label: "Число master-шардов" }
-        - { name: replicas_per_shard, label: "Реплик на шард" }
-        - { name: cluster_node_timeout, label: "Таймаут gossip, мс" }
-
-    - key: sentinel
-      title: "Топология Sentinel"
-      description: "Для режимов sentinel / sentinel_only"
-      collapsed: true
-      fields:
-        - { name: replicas, label: "Реплик master-а" }
-        - { name: sentinel_quorum, label: "Quorum sentinel-ов" }
-        - { name: sentinel_master_name, label: "Имя monitored master" }
-        - { name: master_ip, label: "IP внешнего master (sentinel_only)" }
-        - { name: master_port, label: "Порт внешнего master" }
+        - { name: replicas_per_master, label: "Реплик на master" }
+        - { name: shards, label: "Число master-шардов (cluster)" }
+        - { name: cluster_node_timeout, label: "Таймаут gossip, мс (cluster)" }
 
     - key: security
       title: "ACL и TLS"
@@ -406,7 +348,6 @@ form:
       collapsed: true
       fields:
         - { name: redis_settings, label: "Passthrough-директивы redis.conf" }
-        - { name: modules_base_url, label: "URL источника .so-модулей" }
 
 # ── Декларативные input-инварианты (validate:, ADR-009 amendment 2026-06-23) ──────
 # validate: — кросс-полевые предусловия ВВОДА, не выразимые одним schema-ключом и
@@ -420,16 +361,6 @@ form:
 # нужен полный scenario-контекст с soulprint.hosts. validate здесь — про САМ ВВОД
 # (соотношение чисел), вычислимо ДО резолва roster.
 validate:
-  # Кворум sentinel-ов не может превышать ЧИСЛО sentinel-ов (1 master-хост +
-  # replicas реплик-хостов = 1+replicas sentinel-демонов в режиме sentinel).
-  # Иначе failover НИКОГДА не сработает: кворум недостижим даже при всех живых.
-  # Проверяем ТОЛЬКО когда quorum задан явно (has()) и режим sentinel — иначе
-  # auto-quorum (size/2+1) корректен по построению, а прочие режимы quorum не
-  # используют. Не выразимо min/max (потолок — другое поле) и не required_when
-  # (это не про присутствие, а про соотношение).
-  - that: "!has(input.sentinel_quorum) || input.redis_type != 'sentinel' || int(input.sentinel_quorum) <= 1 + int(input.replicas)"
-    message: "sentinel_quorum не может превышать число sentinel-ов (1 + replicas): кворум станет недостижим и failover не сработает"
-
   # Нельзя только-TLS без TLS: tls.only=true требует tls.enable=true. Иначе у Redis
   # НИ ОДНОГО listener-а — plain-порт закрыт (only → `port 0`), а TLS-порт не открыт
   # (enable=false → tls-port не пишется) → сервер недоступен по сети. Это и есть
@@ -452,17 +383,12 @@ validate:
   - that: "!(has(input.install) && has(input.install.method) && input.install.method == 'binary') || (has(input.install.base_url) && has(input.install.version))"
     message: "install.method=binary требует install.base_url и install.version: без них не из чего собрать URL upstream-tarball-а redis"
 
-  # modules_base_url ОБЯЗАТЕЛЕН на Redis < 8 (директива «модули ВСЕГДА ВСЕ»): destiny
-  # разворачивает полный набор .so и строит URL из modules_base_url — без него ячейка
-  # URL упала бы криптичным CEL «no such key: modules_base_url» в render-фазе destiny.
-  # Явный 422 ДО applying понятнее. На Redis 8+ модули встроены → URL не нужен (правило
-  # тривиально истинно). data-плоскость (sentinel_only) — отдельный слой, но base_url
-  # дёшев и для неё требовать его незачем: ВЕРСИЯ-гейт уже покрывает основной кейс,
-  # sentinel_only гасит modules.yml через deploy_redis. INPUT-ONLY (has()-цепочка):
-  # redis8 истинно, когда эффективная версия (version distro-пин ИЛИ install.version)
-  # мажором >= 8. sentinel_only НЕ грузит модули (redis-server нет) → исключаем его.
-  - that: "(input.redis_type == 'sentinel_only') || (has(input.version) ? input.version : (has(input.install) && has(input.install.version) ? input.install.version : '')).matches('^([0-9]+:)?(8|9|[1-9][0-9])\\\\.') || has(input.modules_base_url)"
-    message: "modules_base_url обязателен на Redis < 8: модули разворачиваются всегда все, без источника .so destiny не сможет их скачать"
+  # ★ Правило «modules_base_url обязателен на Redis < 8» УБРАНО (2026-06-25): источник
+  # .so переехал из operator-input в essence.modules_base_url (author-context, дефолт ""),
+  # а validate-контекст INPUT-ONLY — essence в нём недоступен (структурный CEL-барьер).
+  # Проверить заполненность essence.modules_base_url тут нельзя. Подложка essence по
+  # умолчанию задаёт источник, оператор переопределяет в spec.essence; пустой источник
+  # на Redis < 8 проявится при render-е destiny (URL .so), а не на input-валидации.
 
 # ── Host-tuning extras (концепция Ansible-роли) ──────────────────────────────────
 # Режим-агностичные per-host добавки — THP-отключение, logrotate, sysctl — БЕЗУСЛОВНЫ
@@ -481,12 +407,9 @@ validate:
 #
 # compute.redis_config — ИТОГ трансляции простого ввода в redis.conf-map. Ветвится
 # по input.redis_type:
-#   - sentinel_only → ПУСТОЙ {} (data-плоскость redis-server не разворачивается,
-#     redis.conf не рендерится; в этом режиме config: ветки = минимальная
-#     essence-подложка, а state удовлетворяется присутствием ключа = {});
 #   - cluster → базовый merge + cluster-директивы (cluster-enabled/config-file/
 #     node-timeout) + tls-cluster yes при TLS;
-#   - standalone/sentinel → базовый merge (без cluster-директив).
+#   - sentinel → базовый merge (без cluster-директив).
 # Слои merge (SHALLOW last-wins, слева направо): essence.redis_config (дефолты) →
 # persistence-пресет → вычисленные maxmemory/policy (has-guard) → input.redis_settings
 # (passthrough оператора) → TLS-блок (после redis_settings, оператор не ломает TLS).
@@ -539,6 +462,13 @@ compute:
     ${ compute.redis_version.matches('^([0-9]+:)?(8|9|[1-9][0-9])\\.')
          ? []
          : ['bloom', 'json', 'search', 'timeseries'] }
+  # ── Источник .so Redis-модулей (essence-плейсхолдер, 2026-06-25) ─────────────
+  # modules_base_url переехал из operator-input в essence.modules_base_url (author-
+  # context, дефолт ""; оператор переопределяет в spec.essence). Объявлен ОДНИМ compute-
+  # var, чтобы ветки (apply.input.modules_base_url) и state_changes читали одно значение.
+  # default() ловит отсутствие листа на существующем essence-map; дефолт "" симметричен
+  # прежнему default(input.modules_base_url, '').
+  modules_base_url: "${ default(essence.modules_base_url, '') }"
   # ── install как namedfield (read-model): нормализуем absent input.install →
   # {method: 'package'} (default-поведение, см. input.install). method всегда
   # присутствует; base_url/version — только при method=binary (берём из input.install
@@ -578,9 +508,7 @@ compute:
   tls_key_ref:  "${ has(compute.tls_in.key_ref)  ? compute.tls_in.key_ref  : (has(essence.tls_key_ref)  ? essence.tls_key_ref  : '') }"
   tls_ca_ref:   "${ has(compute.tls_in.ca_ref)   ? compute.tls_in.ca_ref   : (has(essence.tls_ca_ref)   ? essence.tls_ca_ref   : '') }"
   redis_config: >-
-    ${ (input.redis_type == 'sentinel_only')
-         ? {}
-         : (input.redis_type == 'cluster')
+    ${ (input.redis_type == 'cluster')
          ? merge(
              essence.redis_config,
              essence.persistence_presets[input.persistence],
@@ -637,12 +565,10 @@ compute:
 # ── Мутация incarnation.state ─────────────────────────────────────────────────
 # После успешного apply Keeper фиксирует развёрнутое (ADR-009 §7.1, ADR-057
 # list-форма). redis_config — ИТОГ трансляции (тот же compute.redis_config, что ушёл
-# в render redis.conf веток standalone/cluster/sentinel): повторный apply и day-2-
-# сценарии видят один источник истины. Раньше выражение merge() ДУБЛИРОВАЛОСЬ здесь
-# и в apply.input.config веток (DRIFT-GUARD руками); теперь оно объявлено ОДИН раз в
-# compute: выше — drift снят самим compute. В sentinel_only compute.redis_config = {}
-# (config: ветки = минимальная essence-подложка, а state — пустой объект: data-
-# плоскости нет, required-ключ удовлетворён присутствием).
+# в render redis.conf веток cluster/sentinel): повторный apply и day-2-сценарии видят
+# один источник истины. Раньше выражение merge() ДУБЛИРОВАЛОСЬ здесь и в
+# apply.input.config веток (DRIFT-GUARD руками); теперь оно объявлено ОДИН раз в
+# compute: выше — drift снят самим compute.
 state_changes:
   - set: redis_type
     value: "${ input.redis_type }"
@@ -690,11 +616,11 @@ state_changes:
   # встроены). НЕ operator-выбор (input.modules удалён) — compute.redis_modules_deployed.
   - set: modules
     value: "${ compute.redis_modules_deployed }"
-  # modules_base_url: источник .so (read-model). Сохраняем для day-2 (add_node читает
-  # его из state, чтобы новая нода тянула .so из того же источника). Пусто → оператор
-  # не задавал (Redis 8+ — модули встроены, источник не нужен).
+  # modules_base_url: источник .so (read-model, из essence). Сохраняем для day-2
+  # (add_node читает его из state, чтобы новая нода тянула .so из того же источника).
+  # Пусто → не задан в essence (Redis 8+ — модули встроены, источник не нужен).
   - set: modules_base_url
-    value: "${ default(input.modules_base_url, '') }"
+    value: "${ compute.modules_base_url }"
   # conf_dir/data_dir: host-layout (read-model, директива B). Сохраняем для day-2
   # (add_node читает их из state, чтобы новая нода знала тот же layout, что и кластер).
   # default = текущий путь (back-compat). Симметрично modules_base_url.
@@ -708,19 +634,17 @@ state_changes:
     value: "${ default(essence.sysctl_settings, {}) }"
   # ── Топология (counts) ──────────────────────────────────────────────────────
   # shards/replicas/sentinel_quorum — из тех же input.*, что size-guard/cluster-build/
-  # sentinel-ветки. Режим-зависимы: cluster использует shards+replicas_per_shard;
-  # sentinel — replicas+sentinel_quorum. Не задан → 0 (плоский set всегда создаёт ключ;
-  # 0 = «не применимо к режиму / auto»). replicas: cluster — replicas_per_shard (реплик
-  # на шард), sentinel — replicas (реплик master-а); оба читаются из своего input-поля.
+  # sentinel-ветки. shards — только cluster (не задан → 0). replicas — UNIFIED
+  # int(default(input.replicas_per_master, 0)) в обоих режимах (реплик на каждый master;
+  # cluster — на шард, sentinel — master-а). sentinel_quorum — ВСЕГДА 0 (операторского
+  # поля больше нет, кворум АВТО size/2+1 вычисляется в apply, в state не материализуется;
+  # 0 = «auto»).
   - set: shards
     value: "${ int(default(input.shards, 0)) }"
   - set: replicas
-    value: >-
-      ${ (input.redis_type == 'cluster')
-           ? int(default(input.replicas_per_shard, 0))
-           : int(default(input.replicas, 0)) }
+    value: "${ int(default(input.replicas_per_master, 0)) }"
   - set: sentinel_quorum
-    value: "${ int(default(input.sentinel_quorum, 0)) }"
+    value: "${ 0 }"
 
   - set: redis_users
     value: "${ default(input.users, {}) }"
@@ -731,25 +655,18 @@ state_changes:
   # не в state (симметрично cluster, где роли раскладывает плагин).
   - set: redis_hosts
     value: "${ [] }"
-  # redis_sentinel: факты monitored master (режимы sentinel/sentinel_only). quorum
-  # берётся ТОЛЬКО из input (size(soulprint.hosts) в state_changes недоступен, см.
-  # выше): задан → пишем его; не задан → 0 (auto-quorum size/2+1 вычисляется в apply,
-  # в state не материализуется). sentinel_only ДОПОЛНИТЕЛЬНО пишет master_ip
-  # (ВНЕШНИЙ master, оператор задал явно — единственный факт топологии этого режима);
-  # в режиме sentinel master выбирается из roster-а (host-вариативен) → master_ip в
-  # state НЕ материализуется. Вне sentinel-режимов — пустой объект.
+  # redis_sentinel: факты monitored master (режим sentinel). master_name — из essence
+  # (essence.sentinel_master_name, дефолт 'master'; операторского поля больше нет).
+  # quorum в state НЕ материализуется (auto-quorum size/2+1 вычисляется в apply,
+  # size(soulprint.hosts) в state_changes недоступен) → 0. master_ip больше не пишется
+  # (режим sentinel_only убран: master выбирается из roster-а, host-вариативен). Вне
+  # режима sentinel — пустой объект (только cluster остаётся).
   - set: redis_sentinel
     value: >-
-      ${ (input.redis_type == 'sentinel_only')
+      ${ (input.redis_type == 'sentinel')
            ? {
-               'master_name': input.sentinel_master_name,
-               'master_ip':   default(input.master_ip, ''),
-               'quorum':      int(default(input.sentinel_quorum, 0))
-             }
-           : (input.redis_type == 'sentinel')
-           ? {
-               'master_name': input.sentinel_master_name,
-               'quorum':      int(default(input.sentinel_quorum, 0))
+               'master_name': default(essence.sentinel_master_name, 'master'),
+               'quorum':      0
              }
            : {} }
 
@@ -757,12 +674,10 @@ state_changes:
 # (orchestration.md §6); ветвление по redis_type — через `when:` на их задачах.
 #
 # Mode-guard (прежняя core.cmd.shell-задача «режим реализован») УБРАН: неизвестный
-# redis_type отвергает input-валидация Keeper-а по enum redis_type ([standalone,
-# cluster, sentinel, sentinel_only]) ДО рендера — раньше и понятнее, чем shell-test
-# на Soul. Все ветки gated на свой redis_type, enum гарантирует попадание в одну из
-# них (тихого зелёного no-op быть не может).
+# redis_type отвергает input-валидация Keeper-а по enum redis_type ([sentinel,
+# cluster]) ДО рендера — раньше и понятнее, чем shell-test на Soul. Обе ветки gated
+# на свой redis_type, enum гарантирует попадание в одну из них (тихого зелёного no-op
+# быть не может).
 tasks:
-  - include: standalone.yml
   - include: cluster.yml
   - include: sentinel.yml
-  - include: sentinel-only.yml

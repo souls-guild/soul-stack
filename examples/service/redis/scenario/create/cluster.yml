@@ -2,8 +2,8 @@
 # слота; перенос инварианта из прежнего redis-cluster-live). Подключается из
 # main.yml через include: и раскрывается в плоский список ДО render. Каждая задача
 # несёт `when: input.redis_type == 'cluster'` — статический предикат (только
-# input.*), Keeper гасит его placeholder-skip-ом на standalone-прогоне (isStaticWhen)
-# и рендерит на cluster-прогоне. См. standalone.yml — тот же механизм диспетчера.
+# input.*), Keeper гасит его placeholder-skip-ом на sentinel-прогоне (isStaticWhen)
+# и рендерит на cluster-прогоне. См. sentinel.yml — тот же механизм диспетчера.
 #
 # Раскладку ролей master/replica и слотов делает ПЛАГИН (community.redis.cluster
 # action create) детерминированно по сортировке ключей nodes. Scenario лишь строит
@@ -28,17 +28,17 @@
 #    оператор получает понятный отказ раньше и без произвольного shell на хосте.
 #    Поэтому int(input.shards) здесь читается голым (shards гарантированно присутствует
 #    в cluster-прогоне, дошедшем до render); has()-тернар больше не нужен.
-#    replicas_per_shard имеет default:0 → int() безопасен без обёртки.
+#    replicas_per_master имеет default:0 → int() безопасен без обёртки.
 - name: Guard cluster topology size matches shards and replicas
   when: "input.redis_type == 'cluster'"
   assert:
     that:
-      - "size(soulprint.hosts) == int(input.shards) * (1 + int(input.replicas_per_shard))"
-    message: "topology mismatch: hosts != shards*(1+replicas_per_shard)"
+      - "size(soulprint.hosts) == int(input.shards) * (1 + int(input.replicas_per_master))"
+    message: "topology mismatch: hosts != shards*(1+replicas_per_master)"
 
 # 2. Per-host install + render redis.conf (с cluster-директивами) + render
 #    users.acl + systemd. Та же destiny `redis` (режим-агностична), что и
-#    standalone, но merged config ДОПОЛНЕН cluster-директивами поверх базового
+#    sentinel, но merged config ДОПОЛНЕН cluster-директивами поверх базового
 #    merge. Они — обычные ключи config-map-а (destiny range-ит их в redis.conf):
 #      - cluster-enabled yes        — включить cluster-режим инстанса;
 #      - cluster-config-file        — где Redis ведёт топологию (nodes.conf);
@@ -63,7 +63,7 @@
       version:  "${ has(input.version) ? input.version : '' }"
       # install: способ установки (package default / binary), as-is в destiny-диспетч.
       install:  "${ default(input.install, {}) }"
-      # conf_dir/data_dir: host-layout (директива B), сквозь-проброс — см. standalone.yml.
+      # conf_dir/data_dir: host-layout (директива B), сквозь-проброс — см. sentinel.yml.
       conf_dir: "${ default(input.conf_dir, '/etc/redis') }"
       data_dir: "${ default(input.data_dir, '/var/lib/redis') }"
       password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
@@ -86,16 +86,16 @@
            : {} }
       # Redis-модули — НАБОР больше НЕ передаётся (директива «модули ВСЕГДА ВСЕ»):
       # destiny разворачивает полный набор из vars.redis_modules сама, version-guard
-      # Redis 8+ тоже в destiny — см. standalone.yml. scenario отдаёт только источник
-      # .so (modules_base_url), host-инвариант → apply.input; арх-URL строит destiny
-      # per-host, .so качаются по content-идемпотентности (без verify).
-      modules_base_url: "${ default(input.modules_base_url, '') }"
-      # Host-tuning extras (концепция роли), режим-агностичны — как в standalone-ветке.
+      # Redis 8+ тоже в destiny — см. sentinel.yml. scenario отдаёт только источник
+      # .so (compute.modules_base_url из essence), host-инвариант → apply.input;
+      # арх-URL строит destiny per-host, .so качаются по content-идемпотентности.
+      modules_base_url: "${ compute.modules_base_url }"
+      # Host-tuning extras (концепция роли), режим-агностичны — как в sentinel-ветке.
       # THP/logrotate/sysctl БЕЗУСЛОВНЫ (рекомендация Redis / hardening) — операторских
       # флагов нет, задачи destiny `redis` всегда активны. sysctl_settings — essence,
       # host-инвариантна → apply.input.
       sysctl_settings:  "${ default(essence.sysctl_settings, {}) }"
-      # TLS — единый dict (enable/only/port + cert_ref/key_ref/ca_ref) — см. standalone.
+      # TLS — единый dict (enable/only/port + cert_ref/key_ref/ca_ref) — см. sentinel.
       # HOST-ИНВАРИАНТ → apply.input. enable/only/port — compute-vars (input.tls.* бьёт
       # essence). cert_ref/key_ref/ca_ref — Vault-ПУТИ (destiny читает PEM через vault()
       # в ячейке content, seal-маскинг). refs из input.tls.* с дефолтом essence.tls_*_ref.
@@ -151,7 +151,9 @@
   params:
     action:             create
     nodes:              "${ merge(soulprint.hosts.map(h, { h.sid: { 'addr': h.network.primary_ip + ':' + (compute.tls_on ? string(compute.tls_port) : '6379') } })) }"
-    replicas_per_shard: "${ int(input.replicas_per_shard) }"
+    # plugin-param `replicas_per_shard` — КОНТРАКТ community.redis.cluster (не меняем),
+    # источник → unified input.replicas_per_master (реплик на каждый шард).
+    replicas_per_shard: "${ int(input.replicas_per_master) }"
     password:           "${ vault('secret/redis/' + incarnation.name + '#password') }"
     tls:                "${ compute.tls_on }"
     tls_ca:             "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"

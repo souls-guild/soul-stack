@@ -51,7 +51,7 @@ fixtures:
   # (write-model) присутствует тоже (реалистичный v3-state), но дискриминатор его
   # больше НЕ читает.
   state:
-    redis_type: standalone
+    redis_type: sentinel
     redis_version: "7.2.4"
     tls:
       enable:   true

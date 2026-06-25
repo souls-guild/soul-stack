@@ -22,7 +22,7 @@ fixtures:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
   essence:
-    redis_type: standalone
+    redis_type: sentinel
     memory_reserve_percent: 75
     persistence_presets:
       rdb:
@@ -37,7 +37,7 @@ fixtures:
 
   # Оператор просит только-TLS, но не включает TLS — validate-правило false.
   input:
-    redis_type: standalone
+    redis_type: sentinel
     version: "7.2.4"
     persistence: rdb
     tls:

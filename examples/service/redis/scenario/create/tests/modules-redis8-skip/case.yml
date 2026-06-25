@@ -20,16 +20,19 @@ name: redis 8 version guard skips module download (modules builtin)
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
-  soulprint:
-    network:
-      primary_ip: 10.0.0.5
-    os:
-      arch: amd64
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
   essence:
-    redis_type: standalone
+    redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules/8.0"
     memory_reserve_percent: 75
     persistence_presets:
       off:
@@ -51,11 +54,10 @@ fixtures:
       timeout:          300
 
   input:
-    redis_type: standalone
+    redis_type: sentinel
     version: "8.0.0"
     # Redis 8+ → version-guard гасит модули (встроены в сервер). modules_base_url задан,
     # но на 8+ не используется (URL не строится — include modules.yml group-drop).
-    modules_base_url: "https://artifacts.example.com/redis/modules/8.0"
 
 assert:
   task_present:
@@ -82,7 +84,7 @@ assert:
               save: "900 1 300 10 60 10000"
               appendonly: "no"
           self:
-            sid: trial-host
+            sid: node-solo.example.com
             covens: [create]
             choirs: []
             # traits — registry-проекция (ADR-060), пустой объект без меток.
@@ -117,7 +119,7 @@ assert:
         path: /var/lib/redis/modules/redisearch.so
 
   state_changes:
-    redis_type: standalone
+    redis_type: sentinel
     redis_version: "8.0.0"
     redis_config:
       maxmemory: "256mb"
@@ -128,6 +130,8 @@ assert:
       appendonly: "no"
     redis_users: {}
     redis_hosts: []
-    redis_sentinel: {}
+    redis_sentinel:
+      master_name: master
+      quorum: 0
     # Redis 8+ → модули встроены, .so не качаются → развёрнутый набор пуст.
     modules: []

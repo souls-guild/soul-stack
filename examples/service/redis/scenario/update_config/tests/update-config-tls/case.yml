@@ -36,7 +36,7 @@ fixtures:
 
   # Развёрнутый incarnation.state v3 (от create с TLS): tls.enable=true + port 7379.
   state:
-    redis_type: standalone
+    redis_type: sentinel
     redis_version: "7.2.4"
     conf_dir: /etc/redis
     data_dir: /var/lib/redis

@@ -8,9 +8,22 @@
 # §2.3). НИЧЕГО из этой трансляции не уходит в плагин — она нужна только render-у
 # redis.conf at-create (источник истины).
 
-# Режим развёртывания по умолчанию. В pilot — standalone (единственный
-# реализованный режим).
-redis_type: standalone
+# Режим развёртывания по умолчанию. Режимы сервиса — sentinel/cluster (2026-06-25);
+# sentinel с replicas_per_master=0 даёт standalone-эквивалент.
+redis_type: sentinel
+
+# Логическое имя monitored master в Sentinel (директива sentinel.conf SENTINEL
+# MONITOR + community.redis.sentinel master_name). Переехало из operator-input в
+# essence (2026-06-25): author-context, оператор переопределяет в spec.essence.
+# Дефолт `master` (раньше operator-default был `mymaster`).
+sentinel_master_name: master
+
+# Базовый URL источника .so Redis-модулей (без арх-сегмента). destiny `redis` строит
+# полный URL per-host как <base_url>/<arch>/<имя.so> (Redis < 8: модули разворачиваются
+# всегда все). Переехало из operator-input в essence (2026-06-25): author-context,
+# оператор переопределяет в spec.essence под свой mirror. Дефолт "" — не задан (Redis
+# 8+ — модули встроены, источник не нужен; на Redis < 8 оператор обязан переопределить).
+modules_base_url: ""
 
 # Доля бюджета памяти (input.memory_mb), отдаваемая Redis под maxmemory; остаток —
 # резерв под ОС/накладные. scenario вычисляет maxmemory = memory_mb*pct/100 (МБ).

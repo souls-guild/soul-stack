@@ -1,25 +1,27 @@
 name: redis
-state_schema_version: 3
+state_schema_version: 4
 description: >-
-  Redis по концепции Ansible-роли: ОДИН сервис на все режимы развёртывания
-  (redis_type ∈ standalone/sentinel/cluster/sentinel_only). Per-host install +
-  render redis.conf делает destiny `redis` (режим-агностичный кирпич, ADR-009
-  B-гибрид); ЖИВОЙ Redis-рантайм (CONFIG SET, ACL, cluster, sentinel, failover)
-  идёт через плагин `community.redis`; оркестрация (порядок/таргетинг/rolling/
-  health-gate) — в scenario сервиса.
+  Redis по концепции Ansible-роли: ОДИН сервис на режимы развёртывания
+  (redis_type ∈ sentinel/cluster). Per-host install + render redis.conf делает
+  destiny `redis` (режим-агностичный кирпич, ADR-009 B-гибрид); ЖИВОЙ Redis-рантайм
+  (CONFIG SET, ACL, cluster, sentinel, failover) идёт через плагин `community.redis`;
+  оркестрация (порядок/таргетинг/rolling/health-gate) — в scenario сервиса.
 
-  Статус (2026-06-25): scenario `create` реализован для ВСЕХ четырёх режимов —
-  standalone, cluster, sentinel и sentinel_only (диспетчер по redis_type). Day-2
-  hot-reload реализован: `update_config` (CONFIG SET hot-settable + REWRITE),
-  `add_user` (ACL LOAD), `rotate_tls` (CONFIG SET tls-*-file, live cert-reload), а
-  также `restart` (systemd-unit-уровень), `add_node`/`remove_node`/`reshard`
-  (cluster). Производственная конвенция: для config/acl/tls — hot-reload (без
-  рестарта), рестарт только за systemd-unit-уровнем (hardening drop-in). В backlog:
+  Статус (2026-06-25): scenario `create` реализован для ДВУХ режимов сервиса —
+  cluster и sentinel (диспетчер по redis_type). sentinel с replicas_per_master=0
+  даёт standalone-эквивалент (один master + sentinel-демон). Режимы standalone и
+  sentinel_only убраны из СЕРВИСА (sentinel_only остаётся capability в destiny
+  `redis` для переиспользования, напр. DragonFly). Day-2 hot-reload реализован:
+  `update_config` (CONFIG SET hot-settable + REWRITE), `add_user` (ACL LOAD),
+  `rotate_tls` (CONFIG SET tls-*-file, live cert-reload), а также `restart`
+  (systemd-unit-уровень), `add_node`/`remove_node`/`reshard` (cluster).
+  Производственная конвенция: для config/acl/tls — hot-reload (без рестарта),
+  рестарт только за systemd-unit-уровнем (hardening drop-in). В backlog:
   failover-сценарий, плагинный state community.redis.failover, установка из
   бинарного дистрибутива (Шаг B припаркован)
   (redis-консолидация .pm/tasks/2026-06-22-redis-consolidation).
 
-# state_schema_version = 3: цепочка миграций forward-only (ADR-019).
+# state_schema_version = 4: цепочка миграций forward-only (ADR-019).
 #   - 001_to_002 (migrations/001_to_002.yml): redis_users из списка имён в map
 #     name → {perms, state} (демо-грамматики DSL — rename + set + foreach + delete).
 #   - 002_to_003 (migrations/002_to_003.yml): «richer state» — opaque redis_config
@@ -27,6 +29,10 @@ description: >-
 #     persistence/memory_mb/maxmemory_policy/modules/sysctl_settings + топология
 #     (shards/replicas/sentinel_quorum). Best-effort: извлекаемое — из redis_config/
 #     redis_sentinel, неизвлекаемое — консервативный default (см. описание миграции).
+#   - 003_to_004 (migrations/003_to_004.yml): СУЖЕНИЕ enum redis_type до
+#     [sentinel, cluster]. Forward-only remap старых режимов: standalone → sentinel,
+#     sentinel_only → sentinel (чтобы state остался schema-валиден). ★ СЕМАНТИКА
+#     remap-а требует архитектурного подтверждения (см. описание миграции).
 # incarnation.state фиксирует, что развёрнуто, чтобы оператор видел инсталляцию и
 # повторный apply был idempotent.
 #
@@ -45,11 +51,11 @@ state_schema:
   properties:
     # Режим развёртывания (концепция роли). Порождает производные флаги
     # (deploy_redis/deploy_sentinel/cluster_enabled), уходящие в destiny через
-    # apply: input: в соответствующих scenario. Реализованы все четыре режима:
-    # standalone/cluster/sentinel/sentinel_only.
+    # apply: input: в соответствующих scenario. Режимы сервиса: sentinel/cluster
+    # (standalone/sentinel_only убраны 2026-06-25, см. 003_to_004 migration).
     redis_type:
       type: string
-      enum: [standalone, sentinel, cluster, sentinel_only]
+      enum: [sentinel, cluster]
     redis_version:
       type: string
     # Итоговый конфиг redis.conf (merged default→preset→user из essence). Уходит и

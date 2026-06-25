@@ -37,7 +37,7 @@ fixtures:
   # Развёрнутый incarnation.state v3 (от create): plaintext (tls.enable=false), уже
   # развёрнутый redis_config + namedfields. update_config мержит дельту ПОВЕРХ него.
   state:
-    redis_type: standalone
+    redis_type: sentinel
     redis_version: "7.2.4"
     conf_dir: /etc/redis
     data_dir: /var/lib/redis

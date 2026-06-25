@@ -1,0 +1,69 @@
+name: sentinel-only-to-sentinel
+description: >
+  Ремап redis_type sentinel_only → sentinel (режим убран из сервиса 2026-06-25).
+  sentinel_only-state нёс redis_sentinel.master_ip (внешний master) — он переезжает
+  бит-в-бит (миграция не чистит data-плоскость, лишь ремапит режим). Остальной state
+  без изменений; меняется ТОЛЬКО redis_type. ★ Семантика ремапа (нет data-плоскости →
+  sentinel с roster-master) требует архитектурного подтверждения — см. 003_to_004.yml.
+
+state_before:
+  redis_type: sentinel_only
+  redis_version: "7.2.4"
+  redis_config: {}
+  redis_users: {}
+  redis_hosts: []
+  redis_sentinel:
+    master_name: master
+    master_ip: 10.9.9.9
+    quorum: 2
+  tls:
+    enable: false
+    only: false
+    port: 7379
+    cert_ref: ""
+    key_ref: ""
+    ca_ref: ""
+  install:
+    method: package
+  persistence: rdb
+  maxmemory_policy: ""
+  memory_mb: 0
+  modules: []
+  modules_base_url: ""
+  conf_dir: /etc/redis
+  data_dir: /var/lib/redis
+  sysctl_settings: {}
+  shards: 0
+  replicas: 0
+  sentinel_quorum: 2
+
+state_after:
+  redis_type: sentinel
+  redis_version: "7.2.4"
+  redis_config: {}
+  redis_users: {}
+  redis_hosts: []
+  redis_sentinel:
+    master_name: master
+    master_ip: 10.9.9.9
+    quorum: 2
+  tls:
+    enable: false
+    only: false
+    port: 7379
+    cert_ref: ""
+    key_ref: ""
+    ca_ref: ""
+  install:
+    method: package
+  persistence: rdb
+  maxmemory_policy: ""
+  memory_mb: 0
+  modules: []
+  modules_base_url: ""
+  conf_dir: /etc/redis
+  data_dir: /var/lib/redis
+  sysctl_settings: {}
+  shards: 0
+  replicas: 0
+  sentinel_quorum: 2

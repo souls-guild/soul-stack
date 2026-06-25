@@ -32,6 +32,7 @@ fixtures:
       password: s3cr3t-redis-pass-create
   essence:
     redis_type: cluster
+    modules_base_url: "https://artifacts.example.com/redis/modules/6.2"
     memory_reserve_percent: 75
     persistence_presets:
       off:
@@ -56,11 +57,10 @@ fixtures:
     redis_type: cluster
     version: "5:6.2.7"
     shards: 3
-    replicas_per_shard: 0
+    replicas_per_master: 0
     cluster_node_timeout: 5000
     # input.modules НЕ задаётся (набор-инвариант). .so качаются по content-
     # идемпотентности (без checksum).
-    modules_base_url: "https://artifacts.example.com/redis/modules/6.2"
 
 assert:
   task_present:

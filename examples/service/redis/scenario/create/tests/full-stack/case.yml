@@ -1,12 +1,13 @@
-# L0-испытание (Trial, ADR-023) сценария create сервиса redis (режим standalone,
-# redis-консолидация концепции Ansible-роли). ГЛАВНЫЙ guard этого слайса —
-# трансляция ПРОСТОГО типизированного ввода оператора в детальный redis.conf через
-# merge() (SHALLOW last-wins) + render users.acl с полными ACL-строками.
+# L0-испытание (Trial, ADR-023) сценария create сервиса redis (режим sentinel single-
+# host = 1 master + 0 реплик, standalone-эквивалент; redis-консолидация концепции
+# Ansible-роли). ГЛАВНЫЙ guard этого слайса — трансляция ПРОСТОГО типизированного
+# ввода оператора в детальный redis.conf через merge() (SHALLOW last-wins) + render
+# users.acl с полными ACL-строками.
 #
 # Render-only, герметично. План = задачи destiny `redis` (изолированный
-# render-проход, ADR-009) + задача community.redis.command (PING health-gate).
-# Изоляция видна по тому, что params destiny собраны из её apply.input, а не из
-# scenario-scope.
+# render-проход, ADR-009; включая sentinel.conf/демон) + community.redis.command
+# (PING health-gate). Изоляция видна по тому, что params destiny собраны из её
+# apply.input, а не из scenario-scope.
 #
 # Что ассертим (критерий приёмки слайса):
 #   1. ВЫЧИСЛЕННЫЙ maxmemory: memory_mb=1024 * reserve=75 / 100 = 768 → "768mb"
@@ -27,11 +28,12 @@ name: create translates simple input to merged redis.conf + users.acl
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
-  soulprint:
-    network:
-      primary_ip: 10.0.0.5
-    os:
-      arch: amd64
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
   # Мок Vault KV: requirepass + пароль ACL-юзера app. secret/-префикс снимается
   # нормализацией fixtureVault; #-поле — ключ внутри секрета.
   vault:
@@ -42,7 +44,9 @@ fixtures:
   # essence — слой трансляции: persistence_presets (данные-таблица),
   # memory_reserve_percent (резерв ОС), redis_config (merge-подложка дефолтов).
   essence:
-    redis_type: standalone
+    redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
     memory_reserve_percent: 75
     persistence_presets:
       off:
@@ -67,9 +71,8 @@ fixtures:
 # ACL-юзер с полной ACL-строкой + passthrough redis_settings с КОНФЛИКТУЮЩИМ
 # ключом (timeout).
   input:
-    redis_type: standalone
+    redis_type: sentinel
     version: "5:7.0.15-1~deb12u7"
-    modules_base_url: "https://artifacts.example.com/redis/modules"
     memory_mb: 1024
     persistence: rdb
     maxmemory_policy: volatile-lru
@@ -124,7 +127,7 @@ assert:
                 # хешируется sha256 уже в шаблоне). Ассерт ловит регресс резолва.
                 password: app-user-secret-pass
           self:
-            sid: trial-host
+            sid: node-solo.example.com
             covens: [create]
             choirs: []
             # traits — registry-проекция (ADR-060), пустой объект без меток.
@@ -172,7 +175,7 @@ assert:
               # passthrough redis_settings долетел.
               tcp-backlog: 511
           self:
-            sid: trial-host
+            sid: node-solo.example.com
             covens: [create]
             choirs: []
             # traits — registry-проекция (ADR-060), пустой объект без меток.
@@ -186,8 +189,8 @@ assert:
           essence: {}
 
     # redis-server: enabled-at-boot. Дизамбигуатор от sentinel-демона
-    # (core.service.running redis-sentinel — group-dropped, include sentinel.yml
-    # выключен) — name.
+    # (core.service.running redis-sentinel — sentinel.yml тоже активен в режиме
+    # sentinel) — name.
     - module: core.service.running
       params_subset:
         name: redis-server
@@ -198,27 +201,14 @@ assert:
         name: redis-server
 
     # ── community.redis.command (PING health-gate) ──────────────────────────
-    # addr localhost, пароль — тот же requirepass vault()-резолв, args [PING].
-    # cluster/sentinel PING-ветки — placeholder-skip (без params), дизамбигуатор —
-    # args/addr в params_subset.
+    # addr localhost, пароль — тот же requirepass vault()-резолв, args [PID]. cluster
+    # PING-ветка — placeholder-skip (без params), дизамбигуатор — args/addr в
+    # params_subset. (sentinel PING на :26379 — отдельная задача, не матчится этим addr.)
     - module: community.redis.command
       params_subset:
         addr: "127.0.0.1:6379"
         password: s3cr3t-redis-pass-create
         args: ["PING"]
-
-  task_absent:
-    # GUARD «standalone НЕ разворачивает sentinel-демон»: include tasks/sentinel.yml
-    # gated на input.sentinel_enabled (отсутствует → conditional-include group-drop).
-    # Её sentinel.conf и сам демон ФИЗИЧЕСКИ отсутствуют в плане (include дропнут
-    # целиком, не placeholder). Регресс «sentinel протёк в standalone» = задача
-    # отрендерится с реальными params → match → fail task_absent.
-    - module: core.file.rendered
-      params_subset:
-        path: /etc/redis/sentinel.conf
-    - module: core.service.running
-      params_subset:
-        name: redis-sentinel
 
   # Регресс на класс багов «state_changes падает на render» + сверка ИТОГА
   # трансляции, записываемого в incarnation.state (тот же merge(), что ушёл в
@@ -230,7 +220,7 @@ assert:
   # ложный дрифт «state ≠ live config». Дублирование значений в ассерте намеренно:
   # это и есть guard на синхронность двух inline-merge.
   state_changes:
-    redis_type: standalone
+    redis_type: sentinel
     redis_version: "5:7.0.15-1~deb12u7"
     redis_config:
       maxmemory: "768mb"
@@ -246,7 +236,9 @@ assert:
         state: "on"
     redis_hosts: []
     # standalone — не sentinel → redis_sentinel пуст.
-    redis_sentinel: {}
+    redis_sentinel:
+      master_name: master
+      quorum: 0
     # ── namedfields (read-model, v3): NON-ZERO/NON-EMPTY guard. memory_mb=1024 и
     # maxmemory_policy=volatile-lru заданы оператором → ровно эти значения (read-model
     # хранит НАМЕРЕНИЕ, не вычисленный maxmemory "768mb"). persistence=rdb.

@@ -47,7 +47,7 @@ fixtures:
   # Развёрнутый incarnation.state v3 с ВКЛЮЧЁННЫМ TLS (rotate-предусловие). Текущие refs
   # — старые; input даёт новые.
   state:
-    redis_type: standalone
+    redis_type: sentinel
     redis_version: "7.2.4"
     conf_dir: /etc/redis
     data_dir: /var/lib/redis
