@@ -15,9 +15,18 @@
 // или после cloud-provision). Bootstrap-токены/SoulSeed не выписывает —
 // это компетенция онбординга.
 //
-// `refresh_soulprint` MVP игнорируется: сценарий-уровень scenario-runner-а
-// пока не существует (M2.x). Поле принимается и эхо-выдаётся в output как
-// `refreshed: false`, чтобы input-схема была стабильной.
+// `sid` принимает строку ИЛИ список строк (ADR-061): одиночный SID остаётся
+// валиден (обратная совместимость), список — регистрация+ожидание N созданных
+// хостов одним шагом-барьером. `coven` применяется ко всем SID списка.
+//
+// Барьер онбординга (ADR-061): при `await_online: true` после регистрации
+// всех SID шаг блокирующе поллит presence (Redis SID-lease через
+// PresenceChecker) до `await_min_count` online или `await_timeout`. B1-strict:
+// недобор кворума к таймауту → шаг failed (см. await.go).
+//
+// `refresh_soulprint` MVP принимается и валидируется (mid-run re-resolve roster
+// — слайсы S2/S3, ADR-061): эхо-выдаётся в output как `refreshed: false`, пока
+// scenario-runner не научится пере-резолвить roster между Passage.
 package soul
 
 import (
@@ -53,15 +62,51 @@ type Store interface {
 	UpdateCoven(ctx context.Context, sid string, coven []string) ([]string, error)
 }
 
+// PresenceChecker — узкая поверхность batch-проверки «жив ли Redis SID-lease»
+// (presence=online, ADR-006(a)/ADR-061), нужная барьеру онбординга
+// `await_online`. Сужение до одного метода изолирует модуль от полного
+// keeperredis.Client и допускает fake в unit-тестах; реальная реализация —
+// обёртка над keeperredis.SoulsStreamAlive, собранная в cmd/keeper
+// (симметрично topology.SoulLeaseChecker).
+//
+// Источник истины «online» — именно lease (живой EventStream), а НЕ PG
+// souls.status (lifecycle-снимок, отстаёт): барьер не должен считать хост
+// online до фактического стрима.
+type PresenceChecker interface {
+	SoulsStreamAlive(ctx context.Context, sids []string) (map[string]struct{}, error)
+}
+
 // Module — реализация sdk/module.SoulModule поверх Store.
+//
+// presence/maxAwaitTimeout заполняются опционально через WithPresence — нужны
+// только барьеру онбординга (`await_online`, ADR-061). Без них шаг работает
+// как до ADR-061 (регистрация без барьера); запрос `await_online: true` без
+// сконфигурированного presence-checker-а завершается failed (барьер не может
+// работать без источника presence — молчаливый success недопустим).
 type Module struct {
-	Store Store
+	Store    Store
+	presence PresenceChecker
+	// maxAwaitTimeout — провайдер строкового потолка await_timeout из текущего
+	// snapshot keeper.yml (hot-reload: читается на каждом Apply). nil → дефолт
+	// config.DefaultMaxAwaitTimeout. Функция (а не значение): config.Store.Get()
+	// меняется при reload.
+	maxAwaitTimeout func() string
 }
 
 // New строит модуль с переданным Store. Caller обычно даёт adapter поверх
 // pgxpool — см. NewPGStore.
 func New(store Store) *Module {
 	return &Module{Store: store}
+}
+
+// WithPresence подключает presence-checker (Redis SID-lease) и провайдер
+// потолка await_timeout для барьера онбординга (ADR-061). maxAwaitTimeout —
+// функция, возвращающая текущее строковое значение keeper.yml::max_await_timeout
+// (hot-reload-aware); nil-функция или пустая строка → config.DefaultMaxAwaitTimeout.
+func (m *Module) WithPresence(p PresenceChecker, maxAwaitTimeout func() string) *Module {
+	m.presence = p
+	m.maxAwaitTimeout = maxAwaitTimeout
+	return m
 }
 
 // Validate проверяет state и обязательные параметры. Запускается host-ом
@@ -79,7 +124,8 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 	if req.State != "registered" {
 		errs = append(errs, fmt.Sprintf("unknown state %q (want registered)", req.State))
 	}
-	if _, err := util.StringParam(req.Params, "sid"); err != nil {
+	sids, err := util.StringOrSliceParam(req.Params, "sid")
+	if err != nil {
 		errs = append(errs, err.Error())
 	}
 	if _, err := util.StringSliceParam(req.Params, "coven"); err != nil {
@@ -90,6 +136,7 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 	} else if mode != "" && !isValidMode(mode) {
 		errs = append(errs, fmt.Sprintf("param %q: unknown mode (want append/replace/remove)", "mode"))
 	}
+	errs = append(errs, validateAwaitParams(req.Params, len(sids))...)
 	return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
 
@@ -107,12 +154,17 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		return util.SendFailed(stream, fmt.Sprintf("unknown state %q", req.State))
 	}
 
-	sid, err := util.StringParam(req.Params, "sid")
+	// sid принимает строку ИЛИ список (ADR-061). Одиночная строка нормализуется
+	// в список из одного элемента; форма output (агрегат vs одиночный) выбирается
+	// по len(sids) в самом конце.
+	sids, err := util.StringOrSliceParam(req.Params, "sid")
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
-	if !keepersoul.ValidSID(sid) {
-		return util.SendFailed(stream, fmt.Sprintf("invalid sid %q", sid))
+	for _, sid := range sids {
+		if !keepersoul.ValidSID(sid) {
+			return util.SendFailed(stream, fmt.Sprintf("invalid sid %q", sid))
+		}
 	}
 	wanted, err := util.StringSliceParam(req.Params, "coven")
 	if err != nil {
@@ -138,11 +190,20 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		return util.SendFailed(stream, fmt.Sprintf("unknown mode %q (want append/replace/remove)", modeParam))
 	}
 
-	// refresh_soulprint принимается, но не выполняется в MVP — scenario-applier
-	// keeper-стороны пока не интегрирован. Echo в output для стабильной формы.
+	// refresh_soulprint принимается и валидируется как известный флаг (ADR-061);
+	// mid-run re-resolve roster — слайсы S2/S3 (scenario-runner ещё не
+	// пере-резолвит roster между Passage). Echo в output как refreshed:false.
 	_, _, err = util.OptBoolParam(req.Params, "refresh_soulprint")
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
+	}
+
+	// Барьер онбординга (ADR-061): разбор+валидация ДО любых side-effect-ов в
+	// souls — недостижимый кворум / превышение потолка не должны оставлять
+	// частичную регистрацию (fail-fast на параметрах барьера).
+	awaitCfg, aerr := m.parseAwait(req.Params, len(sids))
+	if aerr != nil {
+		return util.SendFailed(stream, aerr.Error())
 	}
 
 	// replace + пустой coven — ошибка (двойная footgun-защита).
@@ -150,35 +211,101 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		return util.SendFailed(stream, "mode=replace requires non-empty coven (footgun protection: host must keep at least one coven label)")
 	}
 
+	// Регистрация всех SID (общий набор coven применяется к каждому).
+	anyCreated := false
+	anyChanged := false
+	var savedFirst, removedFirst []string
+	for i, sid := range sids {
+		res, rerr := m.registerOne(ctx, sid, wanted, keepersoul.CovenMode(modeParam))
+		if rerr != nil {
+			return util.SendFailed(stream, rerr.Error())
+		}
+		anyCreated = anyCreated || res.created
+		anyChanged = anyChanged || res.created || res.covenChanged
+		if i == 0 {
+			savedFirst, removedFirst = res.saved, res.removed
+		}
+	}
+
+	// Барьер: блокирующе ждём presence по всем SID до min_count/timeout.
+	var online, pending []string
+	satisfied := true
+	if awaitCfg != nil {
+		var lastErr error
+		online, pending, satisfied, lastErr, err = m.awaitOnline(ctx, sids, awaitCfg)
+		if err != nil {
+			return util.SendFailed(stream, err.Error())
+		}
+		if !satisfied {
+			// B1-strict: недобор кворума к таймауту → failed (fail-stop прогона,
+			// state не коммитится → error_locked).
+			msg := fmt.Sprintf(
+				"onboarding barrier: %d/%d souls online to await_min_count=%d within %s (pending: %v)",
+				len(online), len(sids), awaitCfg.minCount, awaitCfg.timeout, pending)
+			// Persistent presence-сбой на последних опросах: иначе infra-проблема
+			// (redis недоступен) маскируется под «хосты не онбордились».
+			if lastErr != nil {
+				msg += fmt.Sprintf(" (last presence error: %v)", lastErr)
+			}
+			return util.SendFailed(stream, msg)
+		}
+	}
+
+	out := buildOutput(sids, savedFirst, modeParam, anyCreated, removedFirst, awaitCfg != nil, online, pending, satisfied)
+	return util.SendFinal(stream, anyChanged, out)
+}
+
+// registerResult — итог регистрации одного SID.
+type registerResult struct {
+	created      bool
+	covenChanged bool
+	saved        []string
+	removed      []string
+}
+
+// registerOne создаёт/обновляет souls-запись одного SID и применяет coven-mode.
+func (m *Module) registerOne(ctx context.Context, sid string, wanted []string, mode keepersoul.CovenMode) (registerResult, error) {
 	cur, created, ferr := m.fetchOrCreate(ctx, sid)
 	if ferr != nil {
-		return util.SendFailed(stream, ferr.Error())
+		return registerResult{}, ferr
 	}
-
 	before := append([]string(nil), cur.Coven...)
-	final, removed := keepersoul.ApplyCovenMode(before, wanted, keepersoul.CovenMode(modeParam))
-
+	final, removed := keepersoul.ApplyCovenMode(before, wanted, mode)
 	covenChanged := !keepersoul.CovenSetEqual(before, final)
-	changed := created || covenChanged
-	var saved []string
+	saved := before
 	if covenChanged {
+		var err error
 		saved, err = m.Store.UpdateCoven(ctx, sid, final)
 		if err != nil {
-			return util.SendFailed(stream, fmt.Sprintf("update coven: %v", err))
+			return registerResult{}, fmt.Errorf("update coven %q: %w", sid, err)
 		}
-	} else {
-		saved = before
 	}
+	return registerResult{created: created, covenChanged: covenChanged, saved: saved, removed: removed}, nil
+}
 
+// buildOutput собирает register-payload. Одиночный SID сохраняет историческую
+// форму (`sid` строкой, `coven`/`removed` от единственного хоста); список —
+// `sid` массивом. Поля барьера (online/pending/satisfied) добавляются только
+// при await.
+func buildOutput(sids, savedFirst []string, mode string, created bool, removedFirst []string, awaited bool, online, pending []string, satisfied bool) map[string]any {
 	out := map[string]any{
-		"sid":       sid,
-		"coven":     toAnySlice(saved),
-		"mode":      modeParam,
+		"mode":      mode,
 		"created":   created,
 		"refreshed": false,
-		"removed":   toAnySlice(removed),
+		"coven":     toAnySlice(savedFirst),
+		"removed":   toAnySlice(removedFirst),
 	}
-	return util.SendFinal(stream, changed, out)
+	if len(sids) == 1 {
+		out["sid"] = sids[0]
+	} else {
+		out["sid"] = toAnySlice(sids)
+	}
+	if awaited {
+		out["online"] = toAnySlice(online)
+		out["pending"] = toAnySlice(pending)
+		out["satisfied"] = satisfied
+	}
+	return out
 }
 
 // fetchOrCreate возвращает текущую запись souls; если её нет — создаёт под

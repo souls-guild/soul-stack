@@ -1,0 +1,103 @@
+# ADR-061. Единый-прогон provision→онбординг→роль: onboarding-await + mid-run re-resolve roster
+
+> **Статус: active.** Решение пользователя + дизайн architect-а (эпик «Путь-2», слайсы S0 (этот ADR) / S1 (пилот await_online) / S2 (Stratify-passage-граница) / S3 (фактический re-resolve roster в run.go)). Канон фиксируется docs-first ДО кода; этот ADR **amends [ADR-009](0009-scenario-dsl.md), [ADR-056](0056-staged-render-passage.md), [ADR-006](0006-cache-redis.md), [ADR-017](0017-keeper-side-core.md)**. propose-and-wait закрыт (новые способности — флаги на существующем `core.soul.registered`, не новая сущность).
+>
+> **Прогресс имплементации.** S1 (пилот `await_online`) реализован: блокирующий poll Redis SID-lease + B1-strict fail + list-SID + потолок `keeper.yml::max_await_timeout`. S2/S3 (Stratify-passage-граница для `refresh_soulprint` + фактический re-resolve roster в run.go) — **не реализованы**: флаг `refresh_soulprint` валидируется, но re-resolve остаётся заглушкой (`refreshed: false`), как до этого ADR. WB cloud e2e — отдельный слайс.
+
+**Контекст.** Целевой сценарий — **один create-scenario** разворачивает N-шардовый кластер из «ничего»:
+
+1. `core.cloud.provisioned` (`on: keeper`, [ADR-017](0017-keeper-side-core.md)) создаёт N VM, register-output несёт их `sid` / bootstrap-токены / cloud-метаданные;
+2. созданные VM онбордятся (cloud-init + CSR-bootstrap, [ADR-012](0012-keeper-soul-grpc.md)), их `soul`-агенты поднимают EventStream к Keeper-у;
+3. последующие задачи сценария применяют redis-роль к **уже онбордившимся** хостам — `on: [incarnation.name]`, `where: …`, чтение `soulprint.hosts`.
+
+Этот сценарий **не работает** на текущем движке по трём связанным причинам:
+
+- **`soulprint.hosts` — снимок на старте прогона.** Roster инкарнации резолвится один раз перед первым Passage и в пределах прогона не растёт. VM, созданные шагом (1), в roster шага (3) **не попадают** — `soulprint.hosts` их не видит, `on: [incarnation.name]` их не таргетит.
+- **`refresh_soulprint` — заглушка.** Флаг на `core.soul.registered` принимается, но игнорируется (`register.<name>.refreshed` всегда `false`, [ADR-017](0017-keeper-side-core.md), `keeper/internal/coremod/soul/registered.go`). Нет способа сказать движку «перечитай roster».
+- **Нет барьера онбординга.** Между «VM создана» и «`soul`-агент на ней online» проходит время (boot + cloud-init + bootstrap). Сценарий не может дождаться, пока созданные хосты станут online, прежде чем применять к ним роль — нет блокирующего шага-барьера.
+
+**Решение.** Две способности на существующем keeper-side core-модуле `core.soul.registered` (НЕ новый модуль — решение пользователя: консолидация на `registered`, рядом с записью souls+coven, естественна; отдельный `core.soul.online`/барьер-модуль отвергнут как лишняя сущность).
+
+## Способность 1 — onboarding-await (барьер онбординга, S1)
+
+Новые **опциональные** input-поля `core.soul.registered`:
+
+| Поле | Тип | Обяз. | Семантика |
+|---|---|---|---|
+| `await_online` | bool | — | `true` — после записи souls+coven шаг БЛОКИРУЮЩЕ ждёт онбординга. Default `false` (поведение до ADR не меняется). |
+| `await_timeout` | duration | **да при `await_online: true`** | Верхняя граница ожидания. Без него при `await_online: true` — ошибка валидации (барьер не должен висеть вечно). |
+| `await_min_count` | int | — | Минимум online-хостов для успеха. Default — **число регистрируемых SID** (все должны подняться). `0 < await_min_count ≤ len(sids)`. |
+| `await_poll_interval` | duration | — | Период опроса presence. Default ~2s (parity `acolyte_poll_interval`). |
+
+**Семантика барьера.**
+
+1. Шаг сперва выполняет обычную регистрацию (souls+coven, как до ADR) для **всех** регистрируемых SID.
+2. Затем, если `await_online: true`, **блокирующе поллит presence** с периодом `await_poll_interval` под `context.WithTimeout(await_timeout)`, пока число online-хостов среди регистрируемых SID не достигнет `await_min_count`.
+3. **Источник истины «online» — Redis SID-lease** (`soul:<sid>:lock` EXISTS, [ADR-006(a)](0006-cache-redis.md), `keeper/internal/redis/SoulsStreamAlive`), **НЕ** PG `souls.status`. PG-статус — lifecycle-снимок, отстаёт; живой EventStream-lease — авторитетный признак, что агент реально на связи (тот же источник, что presence-фильтр таргет-резолвера и lease-aware Reaper).
+4. **B1-strict (failure-семантика, решение пользователя).** Если к `await_timeout` online `< await_min_count` — шаг завершается `failed` → fail-stop прогона → `incarnation.state` **не коммитится** → `incarnation.status: error_locked`. Частично-онбордившийся флот не «протекает» в роль-применение: либо набрали кворум, либо явный fail с диагностикой.
+5. **output `register.<name>`** дополняется полями барьера: `online: []string` (онлайн SID на момент успеха/таймаута), `pending: []string` (не успевшие), `satisfied: bool` (достигнут ли `await_min_count`). При успехе `satisfied: true`; при failed — событие `failed` + те же поля для диагностики.
+
+**Потолок `await_timeout` (DoS-guard, fail-closed).** Новое поле `keeper.yml::max_await_timeout` (duration). Если шаг задаёт `await_timeout` > потолка — шаг `failed` (а не «тихо обрезали до потолка»: явная ошибка лучше скрытого поведения). Default-потолок — [`DefaultMaxAwaitTimeout`](../../shared/config/keeper.go) (30m). Барьер не должен висеть вечно — это правило защищает кластер от сценария-DoS (зловредный/ошибочный `await_timeout: 100h` держал бы run-goroutine/Acolyte-воркер занятым).
+
+## Способность 2 — mid-run re-resolve roster (S3)
+
+Оживление флага **`refresh_soulprint: true`** на `core.soul.registered` (сейчас заглушка, см. Контекст).
+
+**Семантика.** После **успеха** шага `core.soul.registered` с `refresh_soulprint: true` scenario-runner **пере-резолвит roster инкарнации перед СЛЕДУЮЩИМ Passage**. Созданные+онбордившиеся хосты становятся видны последующим шагам: `soulprint.hosts`, `on: [incarnation.name]`, `soulprint.self.*` уже включают новые SID.
+
+**Ослабление инварианта стабильности roster (amends [ADR-009 §7](0009-scenario-dsl.md)).** Прежний инвариант — «roster прогона стабилен на весь прогон». Новый — **«roster стабилен в пределах одного Passage»** (не всего прогона). Между Passage roster может вырасти, **если** в завершившемся Passage был успешный `refresh_soulprint: true`-шаг.
+
+- **Монотонный рост (только +хосты).** Re-resolve **добавляет** созданные+онбордившиеся хосты; удаление хостов из roster mid-run **запрещено** (иначе таргетинг последующих шагов стал бы недетерминирован относительно уже принятых решений). Re-resolve = `roster ∪ newly_online`, не полная переподмена.
+- **Barrier/state-commit-инвариант §7 НЕ ослаблен.** `incarnation.state` по-прежнему коммитится **один раз** после последнего Passage. Re-resolve — ось **roster** (кого таргетить), не ось коммита.
+
+**Реализация re-resolve — S3 (run.go).** Этот ADR фиксирует контракт; фактический пере-резолв (run-goroutine + Acolyte-путь, повторный `topology.Resolve` с накоплением roster между Passage) — отдельный слайс. До S3 `refresh_soulprint` **валидируется как известный флаг** (не no-op-ошибка), но re-resolve не выполняется, `register.<name>.refreshed: false`.
+
+## Stratify — `refresh_soulprint` делает шаг passage-определяющим (S2)
+
+Чтобы re-resolve проявился, потребители выросшего roster должны оказаться в **следующем** Passage относительно `refresh_soulprint`-шага. Иначе — silent-wrong-target ([ADR-056](0056-staged-render-passage.md): render до dispatch видел бы старый roster).
+
+**Контракт (amends [ADR-056](0056-staged-render-passage.md)).** Задача `core.soul.registered` с `refresh_soulprint: true` — **passage-определяющая граница**, симметрично probe-эмиттеру `register.X`. Стратификатор ([ADR-056(б)](0056-staged-render-passage.md)) укладывает любого потребителя `soulprint.hosts` / `on: [incarnation.name]` / `soulprint.self.*` в Passage **строго ПОСЛЕ** `refresh_soulprint`-шага. Источник этой зависимости — статический признак `refresh_soulprint: true` на задаче (как `register: X` — для probe). **Реализация стратификации — S2** (этот ADR фиксирует контракт).
+
+## list-SID — регистрация+ожидание N хостов одним шагом (S1)
+
+`core.cloud.provisioned` отдаёт **список** созданных хостов (`register.provision.hosts`). Чтобы зарегистрировать и дождаться их одним шагом-барьером, `core.soul.registered` принимает **список SID**:
+
+- `params.sid` принимает **строку ИЛИ список строк** (runtime, `util.StringOrSliceParam`). Список естественнее одиночного `loop:` — барьер `await_online` агрегирует presence **по всем** SID (нужен общий `await_min_count` поверх набора, а не независимые per-iteration барьеры).
+- `params.coven` применяется ко **всем** SID списка (общий набор Coven-меток шага).
+- output `register.<name>`: при списочной форме `sid` — массив; при одиночной — строка (историческая форма сохранена). `online`/`pending` — списки SID; `created`/`removed` отражают совокупный side-effect.
+- Одиночная строка `sid` остаётся валидной (обратная совместимость) — внутренне нормализуется в список из одного элемента.
+
+**Manifest-DSL trade-off (вскрыт консолидацией, осознанное решение).** Урезанный manifest-input DSL ([`shared/coremanifest`](../../shared/coremanifest/)) **не выражает union `string|list`**, а смена объявленного типа `sid` на `list` сломала бы обратную совместимость одиночно-строковой author-формы (`sid: host.example.com`). Поэтому `sid` объявлен **`type: string`**: одиночная литеральная строка проходит soul-lint как раньше; **список приходит CEL-выражением** `${ register.<step>.hosts }` (основной реальный путь — SID-список из `core.cloud.provisioned`), которое soul-lint пропускает мимо type-check-а независимо от объявленного типа ([ADR-010](0010-templating.md): `${…}`-значение статически не типизируется). **Литеральный список `sid: [a, b]`** соответственно **не проходит статический type-check** soul-lint — приемлемо: на практике SID-список всегда из `register.*` (CEL), а runtime (`StringOrSliceParam`) корректно принимает обе формы. Введение union-типа в manifest-DSL — отдельный ADR (правка публичного контракта), если литеральный список SID понадобится статически.
+
+## HA — provision-сценарии через Voyage
+
+Single-binary провижн-прогон с долгим барьером `await_online` уязвим к крашу инстанса: блокирующий poll держит run-goroutine. **Рекомендация — гнать provision→онбординг→роль сценарии через Voyage** ([ADR-043](0043-voyage.md)), где recovery закрыт ([ADR-027(l)](0027-apply-work-queue.md): осиротевший claim переклеймит другой воркер). Standalone (run-goroutine) staged-recovery для долгого барьера — **открыт** ([ADR-056 §S4](0056-staged-render-passage.md)): при крахе single-keeper run-goroutine во время `await_online`-poll прогон осиротеет в `applying` и потребует ручного разлока (как любой standalone-прогон до Acolyte-cutover). Отмечено в DoD.
+
+## Контракт-сводка
+
+- `core.soul.registered` input расширен: `await_online` (bool), `await_timeout` (duration, required-when await_online), `await_min_count` (int, opt), `await_poll_interval` (duration, opt), `sid` (string **или** list). `refresh_soulprint` (bool) — оживлён.
+- `keeper.yml::max_await_timeout` (duration, default 30m) — потолок барьера.
+- output `register.<name>` дополнен `online[]` / `pending[]` / `satisfied`.
+- presence-источник барьера — Redis SID-lease, не PG.
+
+## Отвергнутые альтернативы
+
+- **Отдельный модуль `core.soul.online` / отдельный барьер-шаг.** Отвергнут (решение пользователя): барьер логически прилегает к регистрации (зарегистрировал созданные SID → дождался их онбординга — одна операция); отдельная сущность — лишний модуль в реестре и в naming-rules без выигрыша.
+- **Presence по PG `souls.status`.** Отвергнут: статус отстаёт (lifecycle-снимок), а не реальный online; lease — конструктивно авторитетный признак живого EventStream ([ADR-006(a)](0006-cache-redis.md)). Барьер по PG ложно «увидел» бы хост online до фактического стрима.
+- **B0/B2 failure-семантики** (best-effort продолжение при частичном кворуме / warn-без-fail). Отвергнуты в пользу **B1-strict** (решение пользователя): частично-поднятый кластер не должен молча получить роль на неполном наборе — лучше `error_locked` с явной диагностикой `pending[]`.
+- **Тихое обрезание `await_timeout` до потолка.** Отвергнуто: явная ошибка `failed` лучше скрытого изменения заявленного поведения.
+- **Полная переподмена roster при re-resolve.** Отвергнута: только монотонный рост (`∪ newly_online`) — удаление хостов mid-run сделало бы таргетинг недетерминированным относительно уже принятых решений.
+
+## Amends
+
+- **[ADR-009 §7](0009-scenario-dsl.md)** — инвариант стабильности roster ослаблен: «стабилен в пределах Passage» (не всего прогона), монотонный рост между Passage при `refresh_soulprint`. Barrier/state-commit-инвариант §7 НЕ затронут.
+- **[ADR-056](0056-staged-render-passage.md)** — `refresh_soulprint: true` делает задачу passage-определяющей границей (симметрично probe-эмиттеру); потребители выросшего roster стратифицируются в следующий Passage.
+- **[ADR-006](0006-cache-redis.md)** — Redis SID-lease получает дополнительного потребителя: источник истины барьера онбординга `await_online`.
+- **[ADR-017](0017-keeper-side-core.md)** — `core.soul.registered` расширен барьером онбординга + оживлён `refresh_soulprint`; новый config-потолок `keeper.yml::max_await_timeout`.
+
+## DoD
+
+- S1 (этот слайс): `await_online` блокирует на Redis-lease до `await_min_count`/timeout; B1-strict fail; list-SID; потолок `max_await_timeout`; guard-тесты (ждёт→online; B1 timeout→failed; кворум→ok; источник=lease не PG; потолок).
+- S2: стратификатор укладывает потребителей roster после `refresh_soulprint`-шага.
+- S3: scenario-runner пере-резолвит roster между Passage; монотонный рост; `register.<name>.refreshed: true`.
+- Открытый риск: standalone staged-recovery долгого барьера ([ADR-056 §S4](0056-staged-render-passage.md)) — provision-сценарии рекомендуется гнать через Voyage.

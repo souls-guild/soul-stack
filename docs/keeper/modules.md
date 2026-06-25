@@ -39,7 +39,7 @@ Keeper-side core-модули регистрируются в keeper-side Regist
 
 ## `core.soul.registered`
 
-**Первый Keeper-side core-модуль.** Управляет привязкой Soul-а (по `SID`) к набору стабильных Coven-меток в реестре keeper-а (таблицы `souls` + coven, [storage.md](storage.md)). Опционально синхронно обновляет `soulprint.hosts` текущего прогона (чтобы следующий шаг сценария видел нового хоста сразу).
+**Первый Keeper-side core-модуль.** Управляет привязкой Soul-а (по `SID`) к набору стабильных Coven-меток в реестре keeper-а (таблицы `souls` + coven, [storage.md](storage.md)). Принимает **строку ИЛИ список SID** (регистрация N созданных хостов одним шагом) и опционально несёт **барьер онбординга** `await_online` (блокирующе ждёт, пока зарегистрированные Souls станут online) — [ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md).
 
 ### Адресация и сторона
 
@@ -53,14 +53,20 @@ Keeper-side core-модули регистрируются в keeper-side Regist
 
 Если записи в `souls` для этого `sid` ещё нет — модуль создаёт её под `status: pending` (новый хост, добавленный сценарием — например, host-ветка `add_replica` или после cloud-create через `core.cloud.provisioned`). Создание записи здесь — единственный side-effect помимо обновления coven; модуль не выписывает bootstrap-токены и не запускает CSR-цикл (это компетенция онбординга, [soul/onboarding.md](../soul/onboarding.md)).
 
+При списочной форме `sid` (см. [list-SID](#list-sid--регистрацияожидание-n-хостов-одним-шагом)) переданный набор `coven` применяется к **каждому** SID списка; `await_online`-барьер (если задан) агрегирует presence поверх **всего** набора.
+
 ### Параметры (`params:`)
 
 | Параметр | Тип | Обязательность | Default | Описание |
 |---|---|---|---|---|
-| `sid` | string, `format: fqdn` | required | — | `SID` Soul-а (FQDN), к которому применяется привязка. |
-| `coven` | array of string, `pattern: "^[a-z][a-z0-9-]*$"`, `min_items: 1`, `unique: true` | required | — | Набор стабильных Coven-меток. Минимум одна метка. |
+| `sid` | string **или** array of string, `format: fqdn` | required | — | `SID` Soul-а (FQDN), к которому применяется привязка. Принимает **одиночную строку ИЛИ список** ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md), см. [list-SID](#list-sid--регистрацияожидание-n-хостов-одним-шагом)). Список на практике приходит CEL-выражением `${ register.<provision>.hosts }` (SID-список от `core.cloud.provisioned`); литеральный список `sid: [a, b]` статически `soul-lint` **не** проходит (manifest объявляет `sid` как `string`) — это осознанный trade-off, см. [list-SID](#list-sid--регистрацияожидание-n-хостов-одним-шагом). |
+| `coven` | array of string, `pattern: "^[a-z][a-z0-9-]*$"`, `min_items: 1`, `unique: true` | required | — | Набор стабильных Coven-меток. Минимум одна метка. При списочном `sid` применяется к каждому SID. |
 | `mode` | string, `enum: [append, replace, remove]` | optional | `append` | Стратегия применения набора `coven` к существующим меткам (см. ниже). |
-| `refresh_soulprint` | boolean | optional | `true` | Синхронно обновить `soulprint.hosts` текущего scenario-прогона, чтобы следующий шаг видел обновлённые `covens` сразу. Если destiny вызывается не из scenario-контекста — флаг безопасно игнорируется. |
+| `refresh_soulprint` | boolean | optional | `false` | **Pending (слайсы S2/S3 [ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)).** Намерение: после успешного шага пере-резолвить roster прогона, чтобы следующий Passage видел новые online-хосты. Сейчас флаг **валидируется как известный** (не ошибка), но фактический mid-run re-resolve **не реализован** — output всегда `refreshed: false`. Не полагаться на работающий re-resolve до S3. |
+| `await_online` | boolean | optional | `false` | **Барьер онбординга** ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)). `true` — после записи `souls`+coven для всех SID шаг **блокирующе** ждёт, пока зарегистрированные Souls станут online. Источник «online» — **Redis SID-lease** (живой EventStream), **не** PG `souls.status`. Требует сконфигурированного presence-checker-а на keeper-е: `await_online: true` без него → шаг `failed`. |
+| `await_timeout` | duration | **required при `await_online: true`** | — | Верхняя граница ожидания барьера. **Обязателен** при `await_online: true` — без него валидация падает (барьер не должен висеть вечно). Сверху ограничен `keeper.yml::max_await_timeout` (см. [потолок](#потолок-await_timeout-max_await_timeout)). |
+| `await_min_count` | int | optional | число регистрируемых SID | Минимум online-хостов для успеха барьера. Default — **все** зарегистрированные SID (`len(sids)`). Допустимый диапазон: `0 < await_min_count ≤ len(sids)`. |
+| `await_poll_interval` | duration | optional | `2s` | Период опроса presence (Redis SID-lease) во время барьера. |
 
 ### Семантика `mode`
 
@@ -72,20 +78,52 @@ Keeper-side core-модули регистрируются в keeper-side Regist
 
 `replace` с непустым `coven`, не содержащим корневой `incarnation.name` — модуль **не блокирует** на уровне семантики mode (set операция симметрична), но это пользовательская ошибка-footgun. Гарантия «хост всегда несёт корневой coven incarnation» — invariant на уровне `souls`+coven таблицы / резолвера (см. [storage.md](storage.md), [scenario/orchestration.md §3](../scenario/orchestration.md#3-таргет-шага--on)), не на уровне отдельного вызова модуля.
 
+### list-SID — регистрация+ожидание N хостов одним шагом
+
+Параметр `sid` принимает **строку ИЛИ список строк** ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)). Целевой сценарий — один create-scenario, который через `core.cloud.provisioned` создаёт N VM (их `sid` приходят списком в `register.<provision>.hosts`), затем одним шагом-барьером `core.soul.registered` регистрирует их и ждёт онбординга. Список естественнее `loop:`: барьер `await_online` агрегирует presence поверх **всего** набора SID (общий `await_min_count`), а не запускает независимые per-iteration барьеры.
+
+- Переданный `coven` применяется ко **всем** SID списка (общий набор Coven-меток шага).
+- Одиночная строка `sid` остаётся валидной (обратная совместимость) — внутренне нормализуется в список из одного элемента.
+- **Форма output по `sid`:** одиночная строка → `register.<name>.sid` строкой (историческая форма); список → массивом. Поля `coven`/`removed` отражают набор первого SID; `created`/`removed`-факт совокупный; `online`/`pending` — списки SID.
+
+**Manifest-DSL trade-off.** Урезанный manifest-input DSL ([`shared/coremanifest/soul.yaml`](../../shared/coremanifest/soul.yaml)) не выражает union `string|list`, а смена объявленного типа `sid` на `list` сломала бы одиночно-строковую author-форму. Поэтому `sid` объявлен `type: string`: одиночная литеральная строка проходит `soul-lint` как раньше; **список приходит CEL-выражением** `${ register.<step>.hosts }`, которое `soul-lint` пропускает мимо type-check-а ([ADR-010](../adr/0010-templating.md): `${…}`-значение статически не типизируется). **Литеральный список `sid: [a, b]` статический type-check `soul-lint` не проходит** — приемлемо: на практике SID-список всегда из `register.*` (CEL), а runtime принимает обе формы.
+
+### Барьер онбординга (`await_online`)
+
+При `await_online: true` шаг работает в два этапа ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)):
+
+1. Сперва — обычная регистрация (souls+coven, как без барьера) для **всех** SID.
+2. Затем — **блокирующий** опрос presence с периодом `await_poll_interval` под общим таймаутом `await_timeout`, пока число online-хостов среди регистрируемых SID не достигнет `await_min_count`.
+
+**Источник истины «online» — Redis SID-lease** (живой EventStream-lease, [ADR-006(a)](../adr/0006-cache-redis.md)), **НЕ** PG `souls.status`. PG-статус — lifecycle-снимок, отстаёт от реального состояния стрима; lease — конструктивно авторитетный признак, что агент на связи (тот же источник, что presence-фильтр таргет-резолвера и lease-aware Reaper). Барьер не считает хост online до фактического стрима.
+
+**B1-strict (failure-семантика).** Если к `await_timeout` online `< await_min_count` — шаг завершается **`failed`** → fail-stop прогона → `incarnation.state` **не коммитится** → `incarnation.status: error_locked`. Частично-онбордившийся флот не «протекает» в роль-применение: либо набран кворум, либо явный fail с диагностикой (`pending[]` в сообщении и в output). Персистентная Redis-ошибка опроса (источник presence недоступен) — тоже `failed`, не «слепой» успех; отмена прогона (context-cancel) — `failed`.
+
+Запрос `await_online: true` без сконфигурированного presence-checker-а на keeper-е завершается `failed` (молчаливый success при отсутствии источника presence недопустим).
+
+#### Потолок `await_timeout` (`max_await_timeout`)
+
+DoS-guard, fail-closed. Поле `keeper.yml::max_await_timeout` (duration, default `30m` — [`DefaultMaxAwaitTimeout`](../../shared/config/keeper.go)) ограничивает сверху `await_timeout`. Если шаг задаёт `await_timeout` **больше** потолка — шаг `failed` **до** любого опроса (явная ошибка, а **не** тихое обрезание до потолка: скрытое изменение заявленного поведения отвергнуто). Это защищает кластер от сценария-DoS (зловредный/ошибочный `await_timeout: 100h` держал бы run-goroutine / Acolyte-воркер занятым). Потолок читается hot-reload-aware (из текущего snapshot `keeper.yml` на каждый `Apply`); пустое/невалидное/`≤0` значение конфига → дефолт `30m`.
+
+> **HA.** Single-binary провижн-прогон с долгим `await_online`-барьером уязвим к крашу инстанса (блокирующий poll держит run-goroutine). Provision→онбординг→роль сценарии рекомендуется гнать через **Voyage** ([ADR-043](../adr/0043-voyage.md)), где recovery закрыт (осиротевший claim переклеймит другой воркер, [ADR-027(l)](../adr/0027-apply-work-queue.md)). Standalone staged-recovery долгого барьера — открытый риск ([ADR-056 §S4](../adr/0056-staged-render-passage.md)).
+
 ### Выходной контракт (`output:` модуля)
 
 Модуль возвращает в `register.<имя>.*` (схема, попадающая в applier-`register:` либо в `register:` обычной module-задачи):
 
 | Поле | Тип | Описание |
 |---|---|---|
-| `sid` | string | `SID`, к которому применилось действие (эхо `params.sid`, удобно для join-ов в логах). |
-| `coven` | array of string | **Итоговый** набор coven-меток на хосте после применения `mode` (а не переданный набор-аргумент). |
+| `sid` | string **или** array of string | `SID`, к которому применилось действие. **Строка** при одиночном `sid`, **массив** при списочном (форма зеркалит вход, [list-SID](#list-sid--регистрацияожидание-n-хостов-одним-шагом)). |
+| `coven` | array of string | **Итоговый** набор coven-меток на хосте после применения `mode` (а не переданный набор-аргумент). При списочном `sid` — набор первого SID. |
 | `mode` | string | Применённый `mode` (эхо `params.mode`, удобно при шаблонной композиции). |
-| `created` | boolean | `true`, если запись в `souls` для этого `sid` была создана модулем; `false`, если уже существовала. |
-| `refreshed` | boolean | `true`, если `soulprint.hosts` текущего прогона был обновлён синхронно (требует `refresh_soulprint: true` И scenario-контекста). |
+| `created` | boolean | `true`, если хотя бы одна запись в `souls` была создана модулем; `false`, если все уже существовали. |
+| `refreshed` | boolean | **Всегда `false`** в текущем срезе (mid-run re-resolve — pending S3, см. `refresh_soulprint`). Поле эхо-выдаётся для стабильной формы output. |
 | `removed` | array of string | **Только при `mode: remove`**: метки, которые были фактически сняты. Пустой массив, если no-op (или mode ≠ `remove`). |
+| `online` | array of string | **Только при `await_online: true`**: SID, ставшие online (Redis SID-lease) к моменту успеха/таймаута барьера. |
+| `pending` | array of string | **Только при `await_online: true`**: SID, не успевшие стать online к таймауту (диагностика B1-strict-провала). |
+| `satisfied` | boolean | **Только при `await_online: true`**: достигнут ли `await_min_count`. При успехе `true`; при `failed`-провале — `false` (поля `online`/`pending` несут диагностику). |
 
-Плюс стандартные `.changed` / `.failed` DSL-ядра ([destiny/tasks.md §8](../destiny/tasks.md#8-requisites--salt-style-зависимости)).
+Поля `online`/`pending`/`satisfied` присутствуют в output **только** когда задан `await_online: true`; без барьера их нет. Плюс стандартные `.changed` / `.failed` DSL-ядра ([destiny/tasks.md §8](../destiny/tasks.md#8-requisites--salt-style-зависимости)).
 
 ### Пример вызова из сценария
 
@@ -101,11 +139,32 @@ Keeper-side core-модули регистрируются в keeper-side Regist
     refresh_soulprint: true
 ```
 
-После этого шага `soulprint.hosts` сценария содержит нового хоста с корневым coven incarnation, и следующий шаг может его таргетировать через обычный `on: ["{{ incarnation.name }}"]`.
+После этого шага запись в реестре `souls` создана/обновлена. (Mid-run re-resolve roster через `refresh_soulprint` — pending S3, [ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md): сейчас следующий Passage старого roster ещё не растёт автоматически.)
+
+### Пример: регистрация+барьер для N созданных VM
+
+Регистрация списка SID от `core.cloud.provisioned` и блокирующее ожидание онбординга — один шаг ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)):
+
+```yaml
+- name: Register provisioned shards and await onboarding
+  on: keeper
+  module: core.soul.registered
+  register: shards
+  params:
+    sid:                 "${ register.provision.hosts }"   # список SID из cloud-provision
+    coven:               ["${ incarnation.name }"]
+    mode:                append
+    await_online:        true
+    await_timeout:       10m                                # ≤ keeper.yml::max_await_timeout (default 30m)
+    await_min_count:     "${ register.provision.count }"    # опц.; default = все SID
+    await_poll_interval: 2s
+```
+
+Шаг сперва регистрирует все SID списка, затем блокирующе поллит Redis SID-lease. Если к `10m` online `< await_min_count` — шаг `failed` (B1-strict), прогон уходит в `error_locked`, `register.shards.pending` несёт не успевшие SID.
 
 ### Отношение к destiny `coven-assign`
 
-Существующая destiny `coven-assign` ([examples/destiny/coven-assign/](../../examples/destiny/coven-assign/)) остаётся как **тонкая обёртка** вокруг этого модуля: её `tasks/main.yml` сводится к одному шагу `module: core.soul.registered` с `mode: append` и `refresh_soulprint: false` (destiny вызывается не в scenario-контексте — refresh не имеет смысла). `destiny.yml` `coven-assign` (input-контракт `sid`+`coven`) — совместим, не меняется.
+Существующая destiny `coven-assign` ([examples/destiny/coven-assign/](../../examples/destiny/coven-assign/)) остаётся как **тонкая обёртка** вокруг этого модуля: её `tasks/main.yml` сводится к одному шагу `module: core.soul.registered` с `mode: append` (одиночный `sid`, без барьера и без `refresh_soulprint`). `destiny.yml` `coven-assign` (input-контракт `sid`+`coven`) — совместим, не меняется.
 
 Когда писать вызов модуля напрямую, а когда `apply: { destiny: coven-assign }`:
 

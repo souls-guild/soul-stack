@@ -65,6 +65,44 @@ func StringSliceParam(params *structpb.Struct, key string) ([]string, error) {
 	return out, nil
 }
 
+// StringOrSliceParam — обязательный параметр, принимающий строку ИЛИ список
+// строк, нормализованный в []string. Используется `core.soul.registered` для
+// `params.sid` (ADR-061): одиночный SID-строкой остаётся валиден (обратная
+// совместимость), список — регистрация+ожидание N хостов одним шагом-барьером.
+// Пустой список / пустые элементы — ошибка (каждый SID должен быть непустым).
+func StringOrSliceParam(params *structpb.Struct, key string) ([]string, error) {
+	v, err := lookup(params, key)
+	if err != nil {
+		return nil, err
+	}
+	switch k := v.Kind.(type) {
+	case *structpb.Value_StringValue:
+		if k.StringValue == "" {
+			return nil, fmt.Errorf("param %q: empty string", key)
+		}
+		return []string{k.StringValue}, nil
+	case *structpb.Value_ListValue:
+		vals := k.ListValue.Values
+		if len(vals) == 0 {
+			return nil, fmt.Errorf("param %q: empty list", key)
+		}
+		out := make([]string, 0, len(vals))
+		for i, item := range vals {
+			s, ok := item.Kind.(*structpb.Value_StringValue)
+			if !ok {
+				return nil, fmt.Errorf("param %q[%d]: expected string, got %T", key, i, item.Kind)
+			}
+			if s.StringValue == "" {
+				return nil, fmt.Errorf("param %q[%d]: empty string", key, i)
+			}
+			out = append(out, s.StringValue)
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("param %q: expected string or list of strings, got %T", key, v.Kind)
+	}
+}
+
 // OptStringSliceParam — опциональный список строк (для cloud `fields`,
 // `vm_ids` и т.п.). nil если ключа нет.
 func OptStringSliceParam(params *structpb.Struct, key string) ([]string, error) {

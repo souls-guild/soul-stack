@@ -910,7 +910,18 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 	userdataProvider := &cloudInitProvider{store: d.store, resolver: cloudinit.NewResolver(d.vc)}
 
 	coreReg := coremod.Default(coremod.Deps{
-		SoulStore:  coremodsoul.NewPGStore(d.pool),
+		SoulStore: coremodsoul.NewPGStore(d.pool),
+		// SoulPresence / MaxAwaitTimeout — барьер онбординга `core.soul.registered`
+		// `await_online` (ADR-061). Presence читает d.redisClient лениво (setupRedis
+		// идёт позже); потолок await_timeout берётся из текущего snapshot keeper.yml
+		// (hot-reload через d.store.Get).
+		SoulPresence: lazySoulPresence{d: d},
+		MaxAwaitTimeout: func() string {
+			if cfg := d.store.Get(); cfg != nil {
+				return cfg.MaxAwaitTimeout
+			}
+			return "" // → config.DefaultMaxAwaitTimeout в модуле
+		},
 		PluginHost: cloudAdapter,
 		// CloudResolver — A-flow: Provider-реестр (PG) + Vault → driver-имя +
 		// plain-credentials. d.vc всегда не-nil после setupVault (тот валит
@@ -4491,6 +4502,23 @@ func mcpSoulPresence(d *daemon) handlers.SoulPresence {
 		return nil
 	}
 	return topologyLeaseChecker{rc: d.redisClient}
+}
+
+// lazySoulPresence — presence-checker барьера онбординга `core.soul.registered`
+// `await_online` (ADR-061), читающий d.redisClient ЛЕНИВО на каждом вызове.
+// setupCoreModules идёт ДО setupRedis (redisClient ещё nil на сборке Registry),
+// поэтому захват прямого значения дал бы навсегда-nil; ленивое чтение
+// подхватывает поднятый позже Redis. nil-Redis (dev/single без топологии) →
+// ErrNoPresence: барьер не может работать без источника presence → шаг failed
+// (B1-strict, молчаливый success недопустим). Тот же источник истины, что
+// topologyLeaseChecker (keeperredis.SoulsStreamAlive).
+type lazySoulPresence struct{ d *daemon }
+
+func (p lazySoulPresence) SoulsStreamAlive(ctx context.Context, sids []string) (map[string]struct{}, error) {
+	if p.d.redisClient == nil {
+		return nil, errors.New("presence unavailable: Redis not configured (await_online barrier requires SID-lease)")
+	}
+	return keeperredis.SoulsStreamAlive(ctx, p.d.redisClient, sids)
 }
 
 // leaseOwnerChecker адаптирует Redis-клиент под multi-keeper-guard старого

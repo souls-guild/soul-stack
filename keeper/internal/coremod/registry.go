@@ -41,6 +41,18 @@ type Deps struct {
 	// SoulStore — keeper/internal/coremod/soul.Store.
 	SoulStore soul.Store
 
+	// SoulPresence — presence-checker (Redis SID-lease) для барьера онбординга
+	// `core.soul.registered` `await_online` (ADR-061). nil допустим (тестовые
+	// сборки / dev без Redis): шаг с `await_online: true` тогда завершится failed
+	// (барьер не может работать без источника presence). Прод — обёртка над
+	// keeperredis.SoulsStreamAlive (тот же источник, что topology.SoulLeaseChecker).
+	SoulPresence soul.PresenceChecker
+
+	// MaxAwaitTimeout — провайдер строкового потолка keeper.yml::max_await_timeout
+	// (ADR-061), hot-reload-aware (читается на каждом Apply). nil → дефолт
+	// config.DefaultMaxAwaitTimeout. Прод — обёртка над config.Store.Get().
+	MaxAwaitTimeout func() string
+
 	// PluginHost — keeper/internal/coremod/cloud.PluginHost. До завершения
 	// Plugin.d caller передаёт cloud.StubHost{}; интерфейс зафиксирован
 	// заранее, чтобы Registry собирался без зависимости от Plugin.d.
@@ -103,8 +115,12 @@ func Default(d Deps) *Registry {
 	if d.CloudUserdata != nil {
 		cloudMod = cloudMod.WithUserdata(d.CloudUserdata)
 	}
+	// core.soul.registered с барьером онбординга (ADR-061): presence-checker +
+	// провайдер потолка await_timeout подключаются опционально. nil presence —
+	// шаг с await_online: true завершится failed (тестовые/dev-сборки без Redis).
+	soulMod := soul.New(d.SoulStore).WithPresence(d.SoulPresence, d.MaxAwaitTimeout)
 	mods := map[string]module.SoulModule{
-		soul.Name:  soul.New(d.SoulStore),
+		soul.Name:  soulMod,
 		cloud.Name: cloudMod,
 		vault.Name: vault.New(d.Vault, d.Audit),
 	}

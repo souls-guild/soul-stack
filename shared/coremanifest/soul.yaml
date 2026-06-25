@@ -6,9 +6,23 @@ name: soul
 spec:
   states:
     registered:
-      description: Keeper-side (on:keeper). Soul с sid в реестре привязан к набору Coven-меток (ADR-017).
+      description: Keeper-side (on:keeper). Soul с sid в реестре привязан к набору Coven-меток (ADR-017). Барьер онбординга — ADR-061.
       input:
-        sid:               { type: string, required: true, description: "SID (FQDN) целевого Soul." }
-        coven:             { type: list,   required: true, items: { type: string }, description: "Набор Coven-меток (kebab-case)." }
-        mode:              { type: string, description: "append (default) | replace | remove." }
-        refresh_soulprint: { type: bool,   description: "Обновить soulprint.hosts прогона (MVP игнорируется, echo refreshed:false)." }
+        # sid — строка ИЛИ список строк (ADR-061). Объявлен string ради обратной
+        # совместимости (одиночная литеральная строка остаётся валидной author-
+        # формой). Список SID приходит на практике CEL-выражением
+        # `${ register.<step>.hosts }` (например hosts из core.cloud.provisioned):
+        # ${…}-значения пропускаются type-check-ом soul-lint независимо от типа.
+        # Урезанный manifest-DSL не выражает union string|list; runtime
+        # (StringOrSliceParam) принимает обе формы, барьер await агрегирует по
+        # всему набору. Литеральный список `sid: [a,b]` соответственно не пройдёт
+        # статический type-check soul-lint (поступает через CEL) — осознанный
+        # trade-off, см. ADR-061.
+        sid:                 { type: string, required: true, description: "SID (FQDN) целевого Soul: одиночная строка ИЛИ список (через CEL `${ register.<step>.hosts }`) — регистрация N хостов одним шагом-барьером, ADR-061." }
+        coven:               { type: list,     required: true, items: { type: string }, description: "Набор Coven-меток (kebab-case), применяется ко всем SID." }
+        mode:                { type: string,   description: "append (default) | replace | remove." }
+        refresh_soulprint:   { type: bool,     description: "Mid-run re-resolve roster прогона (ADR-061; стратификация/re-resolve — слайсы S2/S3, echo refreshed:false)." }
+        await_online:        { type: bool,   description: "Барьер онбординга (ADR-061): после регистрации блокирующе ждать, пока созданные Souls станут online (Redis SID-lease)." }
+        await_timeout:       { type: string, format: duration, description: "Верхняя граница ожидания барьера. ОБЯЗАТЕЛЕН при await_online: true. Потолок — keeper.yml::max_await_timeout." }
+        await_min_count:     { type: int,    description: "Минимум online-хостов для успеха барьера. Default — число регистрируемых SID (все)." }
+        await_poll_interval: { type: string, format: duration, description: "Период опроса presence (default ~2s)." }

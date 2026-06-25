@@ -242,6 +242,39 @@ type KeeperConfig struct {
 	// отдельным шагом scenario (типично `keeper.push` через SSH-провайдер).
 	// См. ADR-017(h) amendment и docs/keeper/cloud.md → «Cloud-init bootstrap (MVP)».
 	CloudInit *KeeperCloudInit `yaml:"cloud_init,omitempty"`
+
+	// MaxAwaitTimeout — оператор-потолок верхней границы `await_timeout` барьера
+	// онбординга `core.soul.registered` (ADR-061). Шаг с `await_online: true`
+	// блокирующе ждёт presence (Redis SID-lease) до `await_min_count`/timeout;
+	// без потолка зловредный/ошибочный `await_timeout: 100h` держал бы
+	// run-goroutine/Acolyte-воркер занятым (DoS). Fail-closed: шаг с
+	// `await_timeout` > потолка завершается `failed` (явная ошибка, НЕ тихое
+	// обрезание). Тип `duration` (Go-`time.ParseDuration` либо `<N>d`), пустое →
+	// дефолт [DefaultMaxAwaitTimeout] (30m). Валидация формата — semantic-фаза,
+	// диапазон (>0) резолвится дефолтом в [KeeperConfig.ResolvedMaxAwaitTimeout]
+	// (стиль `acolyte_*`).
+	MaxAwaitTimeout string `yaml:"max_await_timeout,omitempty"`
+}
+
+// DefaultMaxAwaitTimeout — дефолтный потолок `await_timeout` барьера онбординга
+// `core.soul.registered` (ADR-061). 30m: облачный VM обычно онбордится за
+// единицы минут (boot + cloud-init + CSR-bootstrap); 30m — щедрый запас под
+// медленный провайдер/большой батч, но не «вечно».
+const DefaultMaxAwaitTimeout = 30 * time.Minute
+
+// ResolvedMaxAwaitTimeout возвращает эффективный потолок `await_timeout`:
+// пустое/0/невалидное → [DefaultMaxAwaitTimeout] (30m); иначе распарсенное
+// значение. Формат уже проверен semantic-фазой; здесь резолвится диапазон
+// (>0), как у прочих duration-потолков (стиль `acolyte_*`).
+func (c *KeeperConfig) ResolvedMaxAwaitTimeout() time.Duration {
+	if c == nil || c.MaxAwaitTimeout == "" {
+		return DefaultMaxAwaitTimeout
+	}
+	d, err := ParseDuration(c.MaxAwaitTimeout)
+	if err != nil || d <= 0 {
+		return DefaultMaxAwaitTimeout
+	}
+	return d
 }
 
 // WebUIMounted возвращает эффективный тоггл встроенного UI (`/ui`, ADR-055):

@@ -113,6 +113,11 @@ func semanticValidateKeeper(c *KeeperConfig, root *ast.MappingNode) []diag.Diagn
 	// здесь только формат (стиль acolyte_* / oracle_circuit_window).
 	out = append(out, checkDuration(root, "$.watchman_interval", c.WatchmanInterval)...)
 
+	// max_await_timeout (ADR-061): duration-формат потолка барьера онбординга
+	// `core.soul.registered`. Диапазон (>0) резолвится дефолтом в
+	// ResolvedMaxAwaitTimeout; здесь только формат (стиль acolyte_* / watchman_interval).
+	out = append(out, checkDuration(root, "$.max_await_timeout", c.MaxAwaitTimeout)...)
+
 	// toll.* (cluster-wide detector массового оттока, ADR-038): duration-форматы
 	// под-полей. Диапазоны (>0) резолвятся дефолтом в daemon; здесь только формат.
 	// Threshold — float, диапазон проверяется schema-фазой.

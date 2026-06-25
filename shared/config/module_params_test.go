@@ -187,3 +187,26 @@ func TestModuleParams_KeeperSoulRegistered(t *testing.T) {
 		t.Errorf("ожидался unknown_param для covenn:, got %v", diagCodesP(diags))
 	}
 }
+
+// TestModuleParams_KeeperSoulRegistered_AwaitFields — барьер онбординга
+// (ADR-061): новые await-поля проходят статическую валидацию author-формы;
+// sid-список через CEL-выражение от register предыдущего шага не реджектится
+// type-check-ом (CEL-значение статически не типизируется, ADR-010).
+func TestModuleParams_KeeperSoulRegistered_AwaitFields(t *testing.T) {
+	valid := "- name: provision\n  on: keeper\n  module: core.exec.run\n  register: provision\n" +
+		"  changed_when: \"false\"\n" +
+		"  params:\n    cmd: echo\n    args: [ok]\n" +
+		"- name: t\n  on: keeper\n  module: core.soul.registered\n  register: r\n" +
+		"  params:\n" +
+		"    sid: \"${ register.provision.stdout }\"\n" +
+		"    coven: [redis, prod]\n" +
+		"    await_online: true\n" +
+		"    await_timeout: 10m\n" +
+		"    await_min_count: 3\n" +
+		"    await_poll_interval: 2s\n" +
+		"    refresh_soulprint: true\n"
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(valid), ValidateOptions{})
+	if diag.HasErrors(diags) {
+		t.Fatalf("валидная await-форма дала ошибки: %v", diags)
+	}
+}
