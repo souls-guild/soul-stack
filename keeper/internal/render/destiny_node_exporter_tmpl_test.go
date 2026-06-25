@@ -54,6 +54,15 @@ func TestNodeExporterTemplates_ParseAndRender(t *testing.T) {
 			"group":        "node_exporter",
 			"listen":       "127.0.0.1:9100",
 			"textfile_dir": "/var/lib/node_exporter",
+			// Прод-параметры демона (node_exporter.service.tmpl §коммент): дефолты,
+			// при которых опц. флаги опускаются, а log.* подставляются всегда.
+			"gomaxprocs":              int64(0),
+			"disabled_collectors":     []any{},
+			"enabled_collectors":      []any{},
+			"log_level":               "info",
+			"log_format":              "logfmt",
+			"fs_mount_points_exclude": "",
+			"netdev_device_exclude":   "",
 		},
 		"self": map[string]any{
 			"os":      map[string]any{"family": "debian"},
@@ -96,6 +105,15 @@ var nodeExporterRenderVars = map[string]any{
 		"group":        "node_exporter",
 		"listen":       "127.0.0.1:9100",
 		"textfile_dir": "/var/lib/node_exporter",
+		// Прод-параметры демона (node_exporter.service.tmpl §коммент): дефолты,
+		// при которых опц. флаги опускаются, а log.* подставляются всегда.
+		"gomaxprocs":              int64(0),
+		"disabled_collectors":     []any{},
+		"enabled_collectors":      []any{},
+		"log_level":               "info",
+		"log_format":              "logfmt",
+		"fs_mount_points_exclude": "",
+		"netdev_device_exclude":   "",
 	},
 	"self": map[string]any{
 		"os":      map[string]any{"family": "debian"},

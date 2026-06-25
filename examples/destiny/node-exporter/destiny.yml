@@ -99,3 +99,77 @@ input:
     description: >-
       Каталог textfile-метрик (--collector.textfile.directory). node_exporter
       читает .prom из него; oneshot-сборщики туда пишут.
+
+  # ── Прод-параметры демона node_exporter (анализ wb-роли + node_exporter --help).
+  #    Все ОПЦИОНАЛЬНЫЕ с дефолтами; пустое/0 → флаг в ExecStart НЕ добавляется
+  #    (условный рендер в templates/node_exporter.service.tmpl). Web-config-TLS
+  #    сознательно НЕ включён — отдельная сущность. ──────────────────────────────
+
+  # gomaxprocs — GOMAXPROCS демона (--runtime.gomaxprocs). 0 = НЕ задавать (Go сам
+  # берёт число CPU). wb-роль пинит 4: на больших хостах ограничение нужно, чтобы
+  # exporter не разворачивал планировщик на все ядра. >0 → --runtime.gomaxprocs=N.
+  gomaxprocs:
+    type: integer
+    default: 0
+    min: 0
+    description: >-
+      GOMAXPROCS демона (--runtime.gomaxprocs). 0 — не задавать (Go сам по числу
+      CPU); >0 — закрепить лимит горутин-планировщика (wb пинит 4).
+
+  # disabled_collectors — коллекторы под гашение (--no-collector.<name> per item).
+  # Главный пробел vs wb-роль: гасить шумные/дорогие коллекторы (например mdadm,
+  # arp, infiniband) точечно, не отключая остальное. Имена — БЕЗ префикса collector.
+  disabled_collectors:
+    type: array
+    default: []
+    items:
+      type: string
+      pattern: "^[a-z0-9_]+$"
+    description: >-
+      Коллекторы для отключения (--no-collector.<name> на элемент). Имена без
+      префикса collector. (например: mdadm, arp). Гасит шумные/дорогие коллекторы.
+
+  # enabled_collectors — включить disabled-by-default коллекторы (--collector.<name>
+  # per item; например systemd, processes). Имена — БЕЗ префикса collector.
+  enabled_collectors:
+    type: array
+    default: []
+    items:
+      type: string
+      pattern: "^[a-z0-9_]+$"
+    description: >-
+      Коллекторы для явного включения (--collector.<name> на элемент). Имена без
+      префикса collector. (например: systemd, processes) — disabled-by-default.
+
+  # log_level — уровень лога демона (--log.level). Дефолт info.
+  log_level:
+    type: string
+    default: info
+    enum: [debug, info, warn, error]
+    description: Уровень логирования node_exporter (--log.level). По умолчанию info.
+
+  # log_format — формат лога демона (--log.format). Дефолт logfmt.
+  log_format:
+    type: string
+    default: logfmt
+    enum: [logfmt, json]
+    description: Формат логов node_exporter (--log.format). По умолчанию logfmt.
+
+  # fs_mount_points_exclude — regex путей-точек монтирования, исключаемых из
+  # filesystem-коллектора (--collector.filesystem.mount-points-exclude). Пусто =
+  # НЕ задавать (node_exporter применит свой встроенный дефолт-regex).
+  fs_mount_points_exclude:
+    type: string
+    default: ""
+    description: >-
+      Regex точек монтирования для исключения из filesystem-коллектора
+      (--collector.filesystem.mount-points-exclude). Пусто — не задавать.
+
+  # netdev_device_exclude — regex сетевых интерфейсов, исключаемых из netdev-
+  # коллектора (--collector.netdev.device-exclude). Пусто = НЕ задавать.
+  netdev_device_exclude:
+    type: string
+    default: ""
+    description: >-
+      Regex сетевых интерфейсов для исключения из netdev-коллектора
+      (--collector.netdev.device-exclude). Пусто — не задавать.

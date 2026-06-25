@@ -129,6 +129,16 @@ assert:
             group: node_exporter
             listen: ":9100"
             textfile_dir: /var/lib/node_exporter
+            # Прод-параметры демона (destiny node-exporter input-дефолты): scenario
+            # их не переопределяет → значения берутся из destiny.yml. gomaxprocs:0 и
+            # пустые list/string → флаг в ExecStart НЕ добавляется (условный рендер).
+            gomaxprocs: 0
+            disabled_collectors: []
+            enabled_collectors: []
+            log_level: "info"
+            log_format: "logfmt"
+            fs_mount_points_exclude: ""
+            netdev_device_exclude: ""
           self:
             sid: trial-host
             # single-host сахар (fixtures.soulprint) несёт корневую

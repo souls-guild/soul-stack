@@ -2,8 +2,17 @@
   systemd-unit node_exporter. Контекст рендера (docs/templating.md §3.2):
     .vars  — явно переданные core.file.rendered (exporter_bin — готовый путь
              бинаря из vars.bin_path, user, group, listen, textfile_dir);
+             прод-параметры демона: gomaxprocs (int), disabled_collectors /
+             enabled_collectors (list<string>), log_level, log_format,
+             fs_mount_points_exclude, netdev_device_exclude (string);
     .self  — стабильные факты хоста (здесь не используются).
   Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010).
+
+  ExecStart собирается условно (флаг-конвенция node_exporter --help): list →
+  per-item --no-collector.<name> / --collector.<name>; gomaxprocs>0 →
+  --runtime.gomaxprocs=N; пустые string-параметры (fs/netdev-exclude) флаг НЕ
+  добавляют — node_exporter применяет встроенный дефолт. systemd допускает
+  перенос строк ExecStart через `\` — флаги разнесены для читаемости.
 
   Сервис-аккаунт — стабильный system-user .vars.user (прод-конвенция §2,
   stateful-ветка): textfile-каталог переживает рестарты и читается root-
@@ -28,7 +37,16 @@ Wants=network-online.target
 Type=simple
 User={{ .vars.user }}
 Group={{ .vars.group }}
-ExecStart={{ .vars.exporter_bin }} --collector.textfile.directory={{ .vars.textfile_dir }} --web.listen-address={{ .vars.listen }}
+ExecStart={{ .vars.exporter_bin }} \
+    --collector.textfile.directory={{ .vars.textfile_dir }} \
+    --web.listen-address={{ .vars.listen }} \
+    --log.level={{ .vars.log_level }} \
+    --log.format={{ .vars.log_format }}{{ range .vars.disabled_collectors }} \
+    --no-collector.{{ . }}{{ end }}{{ range .vars.enabled_collectors }} \
+    --collector.{{ . }}{{ end }}{{ if gt (int .vars.gomaxprocs) 0 }} \
+    --runtime.gomaxprocs={{ .vars.gomaxprocs }}{{ end }}{{ if .vars.fs_mount_points_exclude }} \
+    --collector.filesystem.mount-points-exclude={{ .vars.fs_mount_points_exclude }}{{ end }}{{ if .vars.netdev_device_exclude }} \
+    --collector.netdev.device-exclude={{ .vars.netdev_device_exclude }}{{ end }}
 SyslogIdentifier=node_exporter
 Restart=on-failure
 RestartSec=5

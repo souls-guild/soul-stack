@@ -56,6 +56,16 @@
       group:         "${ input.group }"
       listen:        "${ input.listen }"
       textfile_dir:  "${ input.textfile_dir }"
+      # Прод-параметры демона: проброшены как есть; флаг-конвенция (--no-collector
+      # на item, пустое/0 → флаг опускается) собирается в шаблоне условным рендером.
+      # list-поля уходят нативным типом (вся ячейка = один ${…} → ADR-010 non-string).
+      gomaxprocs:              "${ input.gomaxprocs }"
+      disabled_collectors:     "${ input.disabled_collectors }"
+      enabled_collectors:      "${ input.enabled_collectors }"
+      log_level:               "${ input.log_level }"
+      log_format:              "${ input.log_format }"
+      fs_mount_points_exclude: "${ input.fs_mount_points_exclude }"
+      netdev_device_exclude:   "${ input.netdev_device_exclude }"
 
 - name: Ensure node_exporter is running and enabled at boot
   module: core.service.running

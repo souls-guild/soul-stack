@@ -39,6 +39,15 @@ assert:
             textfile_dir: /var/lib/node_exporter
             user: node_exporter
             group: node_exporter
+            # Прод-параметры демона — дефолты destiny (флаг в ExecStart НЕ добавят:
+            # gomaxprocs 0, пустые list/string опускают флаг условным рендером .tmpl).
+            gomaxprocs: 0
+            disabled_collectors: []
+            enabled_collectors: []
+            log_level: info
+            log_format: logfmt
+            fs_mount_points_exclude: ""
+            netdev_device_exclude: ""
           self:
             choirs: []
             # traits — registry-проекция (ADR-060), пустой объект без меток.
