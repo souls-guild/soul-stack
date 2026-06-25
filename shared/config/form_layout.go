@@ -37,11 +37,19 @@ type FormLayout struct {
 // Description — опц. пояснение под заголовком. Collapsed — стартовое состояние
 // «свёрнута» (default false). Fields — поля input, отрисовываемые в этой секции,
 // в порядке объявления.
+//
+// ShowWhen — опц. CEL-предикат над `input.*`: секция видима в UI, КОГДА он истинен
+// (нет ключа → видима всегда, бит-в-бит forward-compat). КАВЕТ: это ПРЕЗЕНТАЦИЯ,
+// НЕ валидационный гейт. Вычисляется client-side в UI (вариант A): backend отдаёт
+// строку как есть, сам предикат не вычисляет. Скрытие секции не отменяет валидацию
+// и резолв её полей backend-ом — если значение прислано, оно проверяется как
+// обычно. Пара с required_when: show_when прячет, required_when требует.
 type FormSection struct {
 	Key         string      `yaml:"key"`
 	Title       string      `yaml:"title,omitempty"`
 	Description string      `yaml:"description,omitempty"`
 	Collapsed   bool        `yaml:"collapsed,omitempty"`
+	ShowWhen    string      `yaml:"show_when,omitempty"`
 	Fields      []FormField `yaml:"fields,omitempty"`
 }
 
@@ -50,9 +58,19 @@ type FormSection struct {
 // Name — имя ключа из `input:` (обязан существовать там; cross-инвариант
 // form_field_unknown). Label — подпись в UI; опционален: пустой → UI берёт
 // fallback (description поля input или само имя).
+//
+// ShowWhen — опц. CEL-предикат над `input.*` для условной видимости поля
+// (семантика и кавет — как у FormSection.ShowWhen: презентация, client-side eval,
+// НЕ гейт валидации). Placeholder / Hint — чистая презентация UI-виджета (текст в
+// пустом поле / подсказка под полем); НЕ дублируют `input:`-контракт (description
+// поля остаётся в `input:`, типы/обязательность тоже). Все три опциональны;
+// отсутствие любого → бит-в-бит как до фичи.
 type FormField struct {
-	Name  string `yaml:"name"`
-	Label string `yaml:"label,omitempty"`
+	Name        string `yaml:"name"`
+	Label       string `yaml:"label,omitempty"`
+	ShowWhen    string `yaml:"show_when,omitempty"`
+	Placeholder string `yaml:"placeholder,omitempty"`
+	Hint        string `yaml:"hint,omitempty"`
 }
 
 // reFormSectionKey — стабильный машинный id секции: kebab/snake-идентификатор
@@ -68,7 +86,9 @@ var reFormSectionKey = regexp.MustCompile(`^[a-z][a-z0-9]*([_-][a-z0-9]+)*$`)
 //   - section.key — обязателен, формат reFormSectionKey, УНИКАЛЕН (ERROR при дубле);
 //   - field.name — обязателен, существует ключом в `input:` (ERROR form_field_unknown);
 //   - имя поля не встречается в >1 секции суммарно (ERROR form_field_duplicate);
-//   - field.label — пустая строка → WARNING (fallback на description/имя);
+//   - field.label/placeholder/hint — пустая строка → WARNING (fallback / drop ключ);
+//   - section/field.show_when — если есть, компилируемый CEL над input.* (иначе
+//     ERROR form_show_when_invalid; input-only sandbox, как required_when);
 //   - поле `input:`, не попавшее ни в одну секцию → WARNING form_field_uncovered.
 //
 // inputKeys — множество имён из `input:` (nil-безопасно: nil → form_field_unknown
@@ -209,7 +229,7 @@ func validateFormSection(
 	}
 
 	var out []diag.Diagnostic
-	var keyKV, fieldsKV *ast.MappingValueNode
+	var keyKV, fieldsKV, showWhenKV *ast.MappingValueNode
 	for _, kv := range mm.Values {
 		tok := kv.Key.GetToken()
 		if tok == nil {
@@ -220,6 +240,8 @@ func validateFormSection(
 			keyKV = kv
 		case "fields":
 			fieldsKV = kv
+		case "show_when":
+			showWhenKV = kv
 		case "title", "description", "collapsed":
 			// презентационные скаляры — форму проверяет reflect-walker по тегам;
 			// здесь только cross-инварианты.
@@ -228,15 +250,55 @@ func validateFormSection(
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 				Code:     "unknown_key",
 				Message:  `unknown field "` + tok.Value + `" in form section`,
-				Hint:     "section accepts key / title / description / collapsed / fields",
+				Hint:     "section accepts key / title / description / collapsed / show_when / fields",
 				YAMLPath: path + "." + tok.Value,
 			}))
 		}
 	}
 
 	out = append(out, validateFormSectionKey(keyKV, path, seenKeys)...)
+	out = append(out, validateFormShowWhen(showWhenKV, path)...)
 	out = append(out, validateFormFields(fieldsKV, path, inputKeys, covered, fieldOwner, secIdx)...)
 	return out
+}
+
+// validateFormShowWhen — schema-time проверка опц. ключа `show_when` (секции или
+// поля): если присутствует — это непустая, компилируемая через [compileRequiredWhen]
+// CEL-строка над `input.*` (тот же input-only sandbox, что у required_when).
+// Обращение к essence/soulprint/register/vault/now → undeclared-reference compile-
+// ошибка → form_show_when_invalid (зеркало input_required_when_invalid).
+//
+// КАВЕТ (вариант A, client-side eval): show_when — ПРЕЗЕНТАЦИЯ, не валидационный
+// гейт. Линтер проверяет лишь компилируемость; сам предикат вычисляет UI. Скрытое
+// поле всё равно валидируется/резолвится backend-ом, если значение прислано.
+//
+// kv == nil (ключа нет) → видимо всегда, ноль диагностик (forward-compat).
+func validateFormShowWhen(kv *ast.MappingValueNode, path string) []diag.Diagnostic {
+	if kv == nil {
+		return nil
+	}
+	sn, isStr := kv.Value.(*ast.StringNode)
+	if !isStr || sn.Value == "" {
+		// Пустая строка / не-строка — бессмысленный предикат: тихо «никогда не
+		// видимо» — footgun автора. Отвергаем явно (симметрия с required_when).
+		return []diag.Diagnostic{diagAtKV(kv, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+			Code:     "form_show_when_invalid",
+			Message:  "show_when must be a non-empty CEL predicate over input.*",
+			Hint:     `e.g. show_when: "input.tls_enabled"`,
+			YAMLPath: path + ".show_when",
+		})}
+	}
+	if _, err := compileRequiredWhen(sn.Value); err != nil {
+		return []diag.Diagnostic{diagAtKV(kv, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+			Code:     "form_show_when_invalid",
+			Message:  fmt.Sprintf("show_when does not compile as CEL over input.*: %v", err),
+			Hint:     "predicate may reference only input.* (no essence/soulprint/register/vault/now)",
+			YAMLPath: path + ".show_when",
+		})}
+	}
+	return nil
 }
 
 // validateFormSectionKey — key обязателен, формата reFormSectionKey, уникален.
@@ -329,7 +391,7 @@ func validateFormField(
 	}
 
 	var out []diag.Diagnostic
-	var nameKV, labelKV *ast.MappingValueNode
+	var nameKV, labelKV, showWhenKV, placeholderKV, hintKV *ast.MappingValueNode
 	for _, kv := range mm.Values {
 		tok := kv.Key.GetToken()
 		if tok == nil {
@@ -340,12 +402,18 @@ func validateFormField(
 			nameKV = kv
 		case "label":
 			labelKV = kv
+		case "show_when":
+			showWhenKV = kv
+		case "placeholder":
+			placeholderKV = kv
+		case "hint":
+			hintKV = kv
 		default:
 			out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 				Code:     "unknown_key",
 				Message:  `unknown field "` + tok.Value + `" in form field`,
-				Hint:     "form field accepts only name / label",
+				Hint:     "form field accepts name / label / show_when / placeholder / hint",
 				YAMLPath: path + "." + tok.Value,
 			}))
 		}
@@ -381,7 +449,32 @@ func validateFormField(
 			}))
 		}
 	}
+
+	out = append(out, validateFormShowWhen(showWhenKV, path)...)
+	// placeholder / hint — презентационные подсказки UI; пустая строка
+	// бессмысленна (drop ключ) → WARNING, как у пустого label.
+	out = append(out, warnEmptyPresentation(placeholderKV, name, "placeholder", path)...)
+	out = append(out, warnEmptyPresentation(hintKV, name, "hint", path)...)
 	return out
+}
+
+// warnEmptyPresentation — пустая строка у опц. презентационного ключа (placeholder
+// / hint) бессмысленна: drop ключ. Эмитит form_field_empty_label WARNING (тот же
+// класс, что у label — «пустая презентационная подпись»). kv == nil → ничего.
+func warnEmptyPresentation(kv *ast.MappingValueNode, name, key, path string) []diag.Diagnostic {
+	if kv == nil {
+		return nil
+	}
+	if sn, isStr := kv.Value.(*ast.StringNode); isStr && sn.Value == "" {
+		return []diag.Diagnostic{diagAtKV(kv, diag.Diagnostic{
+			Level: diag.LevelWarning, Phase: diag.PhaseSchemaValidate,
+			Code:     "form_field_empty_label",
+			Message:  fmt.Sprintf("form field %q has an empty %s", name, key),
+			Hint:     "drop the key, or set a non-empty value",
+			YAMLPath: path + "." + key,
+		})}
+	}
+	return nil
 }
 
 // checkFormFieldName — name ∈ input (form_field_unknown), не дубль между секциями

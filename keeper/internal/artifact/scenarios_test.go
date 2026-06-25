@@ -213,20 +213,24 @@ random_field: 123
 }
 
 // TestListScenarios_FormProjection — top-level `form:` парсится в Scenario.Form:
-// секции с key/title/collapsed и полями name/label попадают в listing-проекцию.
+// секции с key/title/collapsed/show_when и полями name/label/show_when/placeholder/
+// hint попадают в listing-проекцию.
 func TestListScenarios_FormProjection(t *testing.T) {
 	root := t.TempDir()
 	writeScenario(t, root, "create", `description: ok
 input:
   tls_enabled: { type: boolean }
+  tls_port: { type: integer }
   redis_password: { type: string }
 form:
   sections:
     - key: connection
       title: "Подключение"
       collapsed: false
+      show_when: "input.tls_enabled"
       fields:
         - { name: tls_enabled, label: "TLS" }
+        - { name: tls_port, show_when: "input.tls_enabled", placeholder: "6379", hint: "TCP-порт" }
     - key: secrets
       title: "Секреты"
       collapsed: true
@@ -247,11 +251,46 @@ form:
 	if f.Sections[0].Key != "connection" || f.Sections[0].Title != "Подключение" || f.Sections[0].Collapsed {
 		t.Errorf("section[0] = %#v", f.Sections[0])
 	}
+	if f.Sections[0].ShowWhen != "input.tls_enabled" {
+		t.Errorf("section[0].show_when = %q, want input.tls_enabled", f.Sections[0].ShowWhen)
+	}
 	if f.Sections[1].Key != "secrets" || !f.Sections[1].Collapsed {
 		t.Errorf("section[1] = %#v, want collapsed=true", f.Sections[1])
 	}
 	if f.Sections[0].Fields[0].Name != "tls_enabled" || f.Sections[0].Fields[0].Label != "TLS" {
 		t.Errorf("field[0] = %#v", f.Sections[0].Fields[0])
+	}
+	f1 := f.Sections[0].Fields[1]
+	if f1.ShowWhen != "input.tls_enabled" || f1.Placeholder != "6379" || f1.Hint != "TCP-порт" {
+		t.Errorf("field[1] show_when/placeholder/hint = %#v", f1)
+	}
+}
+
+// TestListScenarios_FormUXKeysOmitted — поле без show_when/placeholder/hint: ключи
+// отсутствуют в JSON reply (omitempty, бит-в-бит как до фичи; forward-compat).
+func TestListScenarios_FormUXKeysOmitted(t *testing.T) {
+	root := t.TempDir()
+	writeScenario(t, root, "create", `description: ok
+input:
+  a: { type: string }
+form:
+  sections:
+    - key: s1
+      fields:
+        - { name: a, label: "A" }
+`)
+	got, err := ListScenarios(root, discardLogger())
+	if err != nil {
+		t.Fatalf("ListScenarios: %v", err)
+	}
+	out, err := json.Marshal(got[0])
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	for _, key := range []string{`"show_when"`, `"placeholder"`, `"hint"`} {
+		if strings.Contains(string(out), key) {
+			t.Errorf("ключ %s не должен присутствовать без значения (omitempty), got %s", key, out)
+		}
 	}
 }
 

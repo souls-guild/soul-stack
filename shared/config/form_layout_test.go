@@ -251,6 +251,150 @@ tasks: []
 	}
 }
 
+// TestForm_ShowWhen_Valid — show_when над input.* на секции И поле → нет
+// диагностик; строки попадают в распарсенную форму как есть (eval — client-side).
+func TestForm_ShowWhen_Valid(t *testing.T) {
+	src := `name: x
+input:
+  tls_enabled: { type: boolean, default: false }
+  tls_port: { type: integer, default: 6379 }
+form:
+  sections:
+    - key: tls
+      title: "TLS"
+      show_when: "input.tls_enabled"
+      fields:
+        - { name: tls_enabled, label: "Включить TLS" }
+        - { name: tls_port, show_when: "input.tls_enabled" }
+tasks: []
+`
+	cfg, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	if len(diags) != 0 {
+		dump(t, diags)
+		t.Fatalf("expected zero diagnostics on valid show_when, got %d", len(diags))
+	}
+	if cfg.Form == nil || cfg.Form.Sections[0].ShowWhen != "input.tls_enabled" {
+		t.Fatalf("section show_when not parsed: %#v", cfg.Form)
+	}
+	if cfg.Form.Sections[0].Fields[1].ShowWhen != "input.tls_enabled" {
+		t.Errorf("field show_when not parsed: %#v", cfg.Form.Sections[0].Fields[1])
+	}
+}
+
+// TestForm_ShowWhen_EssenceRef — show_when ссылается на essence.* (вне input-only
+// sandbox) → form_show_when_invalid ERROR (undeclared-reference compile-ошибка).
+func TestForm_ShowWhen_FieldEssenceRef(t *testing.T) {
+	src := `name: x
+input:
+  a: { type: string }
+form:
+  sections:
+    - key: s1
+      fields:
+        - { name: a, show_when: "essence.tls.enabled" }
+tasks: []
+`
+	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	if !hasCodeAt(diags, "form_show_when_invalid", "$.form.sections[0].fields[0].show_when") {
+		dump(t, diags)
+		t.Fatalf("expected form_show_when_invalid on essence-ref field show_when")
+	}
+}
+
+// TestForm_ShowWhen_SectionEssenceRef — то же на уровне секции.
+func TestForm_ShowWhen_SectionEssenceRef(t *testing.T) {
+	src := `name: x
+input:
+  a: { type: string }
+form:
+  sections:
+    - key: s1
+      show_when: "soulprint.self.os.family == 'debian'"
+      fields:
+        - { name: a }
+tasks: []
+`
+	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	if !hasCodeAt(diags, "form_show_when_invalid", "$.form.sections[0].show_when") {
+		dump(t, diags)
+		t.Fatalf("expected form_show_when_invalid on soulprint-ref section show_when")
+	}
+}
+
+// TestForm_ShowWhen_Empty — show_when: "" → form_show_when_invalid ERROR
+// (бессмысленный «никогда не видимо»; симметрия с пустым required_when).
+func TestForm_ShowWhen_Empty(t *testing.T) {
+	src := `name: x
+input:
+  a: { type: string }
+form:
+  sections:
+    - key: s1
+      fields:
+        - { name: a, show_when: "" }
+tasks: []
+`
+	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	if !hasCode(diags, "form_show_when_invalid") {
+		dump(t, diags)
+		t.Fatalf("expected form_show_when_invalid on empty show_when")
+	}
+}
+
+// TestForm_PlaceholderHint_Valid — placeholder/hint парсятся, непустые → нет
+// диагностик; omitempty-семантика: отсутствие ключей не эмитит ничего.
+func TestForm_PlaceholderHint_Valid(t *testing.T) {
+	src := `name: x
+input:
+  port: { type: integer }
+  host: { type: string }
+form:
+  sections:
+    - key: s1
+      fields:
+        - { name: port, placeholder: "6379", hint: "TCP-порт Redis" }
+        - { name: host }
+tasks: []
+`
+	cfg, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	if len(diags) != 0 {
+		dump(t, diags)
+		t.Fatalf("expected zero diagnostics, got %d", len(diags))
+	}
+	f0 := cfg.Form.Sections[0].Fields[0]
+	if f0.Placeholder != "6379" || f0.Hint != "TCP-порт Redis" {
+		t.Errorf("placeholder/hint not parsed: %#v", f0)
+	}
+	f1 := cfg.Form.Sections[0].Fields[1]
+	if f1.Placeholder != "" || f1.Hint != "" {
+		t.Errorf("absent placeholder/hint must be empty: %#v", f1)
+	}
+}
+
+// TestForm_PlaceholderHint_Empty — placeholder: "" / hint: "" → form_field_empty_label
+// WARNING (не error), как у пустого label.
+func TestForm_PlaceholderHint_Empty(t *testing.T) {
+	src := `name: x
+input:
+  a: { type: string }
+form:
+  sections:
+    - key: s1
+      fields:
+        - { name: a, placeholder: "", hint: "" }
+tasks: []
+`
+	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	if diag.HasErrors(diags) {
+		dump(t, diags)
+		t.Fatalf("empty placeholder/hint must NOT be an error")
+	}
+	if !hasWarn(diags, "form_field_empty_label") {
+		dump(t, diags)
+		t.Fatalf("expected form_field_empty_label WARNING on empty placeholder/hint")
+	}
+}
+
 // TestForm_NotMapping — form: <scalar> → type_mismatch ERROR.
 func TestForm_NotMapping(t *testing.T) {
 	src := `name: x

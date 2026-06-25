@@ -64,18 +64,32 @@ type ScenarioForm struct {
 }
 
 // ScenarioFormSection — одна визуальная группа полей формы.
+//
+// ShowWhen — опц. CEL-предикат над input.* для условной видимости секции. КАВЕТ:
+// это ПРЕЗЕНТАЦИЯ, НЕ валидационный гейт — listing отдаёт строку как есть, eval
+// делает UI client-side (вариант A); backend предикат НЕ вычисляет. Скрытие секции
+// не отменяет валидацию её полей backend-ом. omitempty — нет ключа → видимо всегда.
 type ScenarioFormSection struct {
 	Key         string              `json:"key"`
 	Title       string              `json:"title,omitempty"`
 	Description string              `json:"description,omitempty"`
 	Collapsed   bool                `json:"collapsed,omitempty"`
+	ShowWhen    string              `json:"show_when,omitempty"`
 	Fields      []ScenarioFormField `json:"fields,omitempty"`
 }
 
-// ScenarioFormField — ссылка на поле input с опц. подписью.
+// ScenarioFormField — ссылка на поле input с опц. подписью и UX-подсказками.
+//
+// ShowWhen — условная видимость поля (семантика/кавет — как у секции: презентация,
+// client-side eval, не гейт). Placeholder / Hint — чистая презентация виджета
+// (текст в пустом поле / подсказка под полем), НЕ дублируют input-контракт. Все
+// три omitempty — отсутствие любого бит-в-бит как до фичи.
 type ScenarioFormField struct {
-	Name  string `json:"name"`
-	Label string `json:"label,omitempty"`
+	Name        string `json:"name"`
+	Label       string `json:"label,omitempty"`
+	ShowWhen    string `json:"show_when,omitempty"`
+	Placeholder string `json:"placeholder,omitempty"`
+	Hint        string `json:"hint,omitempty"`
 }
 
 // Значения [Scenario.Kind] — closed enum дискриминатора сценария для UI
@@ -128,12 +142,16 @@ type scenarioFormSectionYAML struct {
 	Title       string                  `yaml:"title"`
 	Description string                  `yaml:"description"`
 	Collapsed   bool                    `yaml:"collapsed"`
+	ShowWhen    string                  `yaml:"show_when"`
 	Fields      []scenarioFormFieldYAML `yaml:"fields"`
 }
 
 type scenarioFormFieldYAML struct {
-	Name  string `yaml:"name"`
-	Label string `yaml:"label"`
+	Name        string `yaml:"name"`
+	Label       string `yaml:"label"`
+	ShowWhen    string `yaml:"show_when"`
+	Placeholder string `yaml:"placeholder"`
+	Hint        string `yaml:"hint"`
 }
 
 // ListScenarios сканирует `scenario/*/main.yml` в материализованном снапшоте
@@ -249,10 +267,17 @@ func scenarioFormProjection(in *scenarioFormYAML) *ScenarioForm {
 			Title:       s.Title,
 			Description: s.Description,
 			Collapsed:   s.Collapsed,
+			ShowWhen:    s.ShowWhen,
 			Fields:      make([]ScenarioFormField, 0, len(s.Fields)),
 		}
 		for _, f := range s.Fields {
-			sec.Fields = append(sec.Fields, ScenarioFormField{Name: f.Name, Label: f.Label})
+			sec.Fields = append(sec.Fields, ScenarioFormField{
+				Name:        f.Name,
+				Label:       f.Label,
+				ShowWhen:    f.ShowWhen,
+				Placeholder: f.Placeholder,
+				Hint:        f.Hint,
+			})
 		}
 		out.Sections = append(out.Sections, sec)
 	}

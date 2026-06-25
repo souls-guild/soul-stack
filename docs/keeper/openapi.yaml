@@ -2464,9 +2464,15 @@ components:
     ScenarioFormField:
       additionalProperties: false
       properties:
+        hint:
+          type: string
         label:
           type: string
         name:
+          type: string
+        placeholder:
+          type: string
+        show_when:
           type: string
       required:
         - name
@@ -2485,6 +2491,8 @@ components:
             - array
             - "null"
         key:
+          type: string
+        show_when:
           type: string
         title:
           type: string
