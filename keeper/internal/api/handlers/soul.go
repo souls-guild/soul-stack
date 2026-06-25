@@ -425,6 +425,7 @@ type SoulListView struct {
 	Transport     string
 	Status        string
 	Covens        []string
+	Traits        map[string]any
 	LastSeenAt    *time.Time
 	LastSeenByKid *string
 	RegisteredAt  time.Time
@@ -440,6 +441,7 @@ func toSoulListView(s *soul.Soul) SoulListView {
 		Transport:     string(s.Transport),
 		Status:        string(s.Status),
 		Covens:        coalesceCoven(s.Coven),
+		Traits:        coalesceTraits(s.Traits),
 		LastSeenByKid: s.LastSeenByKID,
 		RegisteredAt:  s.RegisteredAt.UTC(),
 		CreatedByAID:  s.CreatedByAID,
@@ -747,6 +749,7 @@ func scopeEvalRowToListItem(row soul.ScopeEvalRow) SoulListView {
 		Transport:     string(row.Transport),
 		Status:        string(row.Status),
 		Covens:        coalesceCoven(row.Coven),
+		Traits:        coalesceTraits(row.Traits),
 		LastSeenByKid: row.LastSeenByKID,
 		RegisteredAt:  row.RegisteredAt.UTC(),
 		CreatedByAID:  row.CreatedByAID,
@@ -1806,4 +1809,15 @@ func coalesceCoven(c []string) []string {
 		return []string{}
 	}
 	return c
+}
+
+// coalesceTraits нормализует nil-map в пустой — для JSON `{}` вместо `null`
+// (traits объявлен non-nullable в OpenAPI, симметрично coalesceCoven). bare-soul
+// без operator-set меток отдаётся как `{}`, а не `null` — UI может рендерить
+// пустой набор без nil-проверки (ADR-060 read-path).
+func coalesceTraits(t map[string]any) map[string]any {
+	if t == nil {
+		return map[string]any{}
+	}
+	return t
 }

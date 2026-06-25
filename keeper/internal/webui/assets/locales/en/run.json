@@ -197,5 +197,6 @@
   "notifyProjectionAddBtn": "Add path",
   "notifyProjectionRemoveBtn": "Remove",
   "notifyOnHint": "empty = all three terminals",
-  "notifyAnnotationAddBtn": "Add"
+  "notifyAnnotationAddBtn": "Add",
+  "formDefaultSection": "Other"
 }

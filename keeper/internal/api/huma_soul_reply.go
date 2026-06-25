@@ -76,22 +76,24 @@ type SoulSshTargetReply struct {
 }
 
 // SoulListEntry — native проекция реестра souls (shared get-Body GET /v1/souls/{sid} +
-// element list-envelope). Форма 1:1 с SoulListEntry (types.gen.go :3322): covens — []string
-// БЕЗ omitempty (всегда массив); created_by_aid/last_seen_at/last_seen_by_kid/requested_at —
-// *-БЕЗ-omitempty (nil → `null`); status/transport — oapi-enum ($ref через aliasSoulStatusTransport);
-// registered_at — наносекундный time-wire. Имя структуры = контрактное имя схемы. ★ Envelope-
-// element ссылается на эту же схему через alias-ключ PagedResponse[SoulListEntry] → схемы
-// get-Body и envelope-element идентичны (TestFullSpec_NoSchemaCollision).
+// element list-envelope). covens — []string БЕЗ omitempty (всегда массив); traits — map БЕЗ
+// omitempty (всегда object; bare-soul → `{}` через coalesceTraits, ADR-060 read-path);
+// created_by_aid/last_seen_at/last_seen_by_kid/requested_at — *-БЕЗ-omitempty (nil → `null`);
+// status/transport — oapi-enum ($ref через aliasSoulStatusTransport); registered_at —
+// наносекундный time-wire. Имя структуры = контрактное имя схемы. ★ Envelope-element
+// ссылается на эту же схему через alias-ключ PagedResponse[SoulListEntry] → схемы get-Body
+// и envelope-element идентичны (TestFullSpec_NoSchemaCollision).
 type SoulListEntry struct {
-	Covens        []string      `json:"covens" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"`         // ← soul.CovenPattern (per-element)
-	CreatedByAID  *string       `json:"created_by_aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
-	LastSeenAt    *time.Time    `json:"last_seen_at"`
-	LastSeenByKid *string       `json:"last_seen_by_kid"`
-	RegisteredAt  time.Time     `json:"registered_at"`
-	RequestedAt   *time.Time    `json:"requested_at"`
-	SID           string        `json:"sid" pattern:"^[a-z0-9][a-z0-9.-]{0,253}$"` // ← soul.SIDPattern
-	Status        SoulStatus    `json:"status"`
-	Transport     SoulTransport `json:"transport"`
+	Covens        []string       `json:"covens" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"` // ← soul.CovenPattern (per-element)
+	Traits        map[string]any `json:"traits" doc:"operator-set key→value метки (ADR-060); значение — scalar или list of scalars; bare-soul → {}"`
+	CreatedByAID  *string        `json:"created_by_aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
+	LastSeenAt    *time.Time     `json:"last_seen_at"`
+	LastSeenByKid *string        `json:"last_seen_by_kid"`
+	RegisteredAt  time.Time      `json:"registered_at"`
+	RequestedAt   *time.Time     `json:"requested_at"`
+	SID           string         `json:"sid" pattern:"^[a-z0-9][a-z0-9.-]{0,253}$"` // ← soul.SIDPattern
+	Status        SoulStatus     `json:"status"`
+	Transport     SoulTransport  `json:"transport"`
 }
 
 // SoulHistoryReply — native 200-envelope GET /v1/souls/{sid}/history (самостоятельный envelope,
@@ -167,10 +169,12 @@ func newSoulSshTargetReply(v handlers.SoulSshTargetView) SoulSshTargetReply {
 
 // newSoulListEntry проецирует плоскую доменную handlers.SoulListView в native SoulListEntry
 // (shared get-Body + envelope-element). Covens — slice as-is (non-nullable, handler даёт `[]`);
-// nullable-указатели as-is; status/transport — native enum-каст.
+// Traits — map as-is (non-nullable, handler даёт `{}` через coalesceTraits); nullable-указатели
+// as-is; status/transport — native enum-каст.
 func newSoulListEntry(v handlers.SoulListView) SoulListEntry {
 	return SoulListEntry{
 		Covens:        v.Covens,
+		Traits:        v.Traits,
 		CreatedByAID:  v.CreatedByAID,
 		LastSeenAt:    v.LastSeenAt,
 		LastSeenByKid: v.LastSeenByKid,

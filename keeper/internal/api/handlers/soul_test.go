@@ -349,8 +349,8 @@ func containsStr(xs []string, v string) bool {
 
 // scopeEvalRows — pgx.Rows над []soul.ScopeEvalRow (ПОЛНАЯ карточка souls) для
 // keyset-режима List. Порядок Scan совпадает с ListForScopeEval-проекцией:
-// sid, transport, status, coven, registered_at, last_seen_at, last_seen_by_kid,
-// created_by_aid, requested_at, note.
+// sid, transport, status, coven, traits, registered_at, last_seen_at,
+// last_seen_by_kid, created_by_aid, requested_at, note.
 type scopeEvalRows struct {
 	rows []soul.ScopeEvalRow
 	idx  int
@@ -370,16 +370,26 @@ func (r *scopeEvalRows) Scan(dest ...any) error {
 	*dest[1].(*string) = string(row.Transport)
 	*dest[2].(*string) = string(row.Status)
 	*dest[3].(*[]string) = row.Coven
-	*dest[4].(*time.Time) = row.RegisteredAt
-	*dest[5].(**time.Time) = row.LastSeenAt
-	*dest[6].(**string) = row.LastSeenByKID
-	*dest[7].(**string) = row.CreatedByAID
-	*dest[8].(**time.Time) = row.RequestedAt
+	// traits jsonb (ADR-060): nil Traits → nil-bytes (ListForScopeEval → пустой map).
+	if len(row.Traits) > 0 {
+		b, err := json.Marshal(row.Traits)
+		if err != nil {
+			return err
+		}
+		*dest[4].(*[]byte) = b
+	} else {
+		*dest[4].(*[]byte) = nil
+	}
+	*dest[5].(*time.Time) = row.RegisteredAt
+	*dest[6].(**time.Time) = row.LastSeenAt
+	*dest[7].(**string) = row.LastSeenByKID
+	*dest[8].(**string) = row.CreatedByAID
+	*dest[9].(**time.Time) = row.RequestedAt
 	if row.Note == "" {
-		*dest[9].(**string) = nil
+		*dest[10].(**string) = nil
 	} else {
 		note := row.Note
-		*dest[9].(**string) = &note
+		*dest[10].(**string) = &note
 	}
 	return nil
 }
@@ -1549,6 +1559,7 @@ func TestSoulList_Happy(t *testing.T) {
 			{
 				SID: "redis-01.example.com", Transport: soul.TransportAgent, Status: soul.StatusConnected,
 				Coven: []string{"redis-prod", "dc-eu"}, RegisteredAt: time.Now().UTC(),
+				Traits:     map[string]any{"tier": "gold", "rack": "r12"},
 				LastSeenAt: &seen, LastSeenByKID: &kid, CreatedByAID: &creator,
 			},
 			{
@@ -1565,14 +1576,15 @@ func TestSoulList_Happy(t *testing.T) {
 	}
 	var out struct {
 		Items []struct {
-			SID           string   `json:"sid"`
-			Transport     string   `json:"transport"`
-			Status        string   `json:"status"`
-			Covens        []string `json:"covens"`
-			LastSeenAt    *string  `json:"last_seen_at"`
-			LastSeenByKID *string  `json:"last_seen_by_kid"`
-			RegisteredAt  string   `json:"registered_at"`
-			CreatedByAID  *string  `json:"created_by_aid"`
+			SID           string         `json:"sid"`
+			Transport     string         `json:"transport"`
+			Status        string         `json:"status"`
+			Covens        []string       `json:"covens"`
+			Traits        map[string]any `json:"traits"`
+			LastSeenAt    *string        `json:"last_seen_at"`
+			LastSeenByKID *string        `json:"last_seen_by_kid"`
+			RegisteredAt  string         `json:"registered_at"`
+			CreatedByAID  *string        `json:"created_by_aid"`
 		} `json:"items"`
 		Total  int `json:"total"`
 		Offset int `json:"offset"`
@@ -1597,9 +1609,21 @@ func TestSoulList_Happy(t *testing.T) {
 	if first.CreatedByAID == nil || *first.CreatedByAID != "archon-alice" {
 		t.Errorf("item[0].created_by_aid = %v", first.CreatedByAID)
 	}
+	// traits (ADR-060 read-path): хост с метками отдаёт их как object.
+	if first.Traits["tier"] != "gold" || first.Traits["rack"] != "r12" {
+		t.Errorf("item[0].traits = %v, want {tier:gold rack:r12}", first.Traits)
+	}
 	// ssh-host без coven → covens должен быть `[]`, не null (coalesceCoven).
 	if out.Items[1].Covens == nil {
 		t.Errorf("item[1].covens = null, want [] (coalesceCoven)")
+	}
+	// bare-soul без traits → `{}`, не null (coalesceTraits): UI рендерит пустой
+	// набор без nil-проверки.
+	if out.Items[1].Traits == nil {
+		t.Errorf("item[1].traits = null, want {} (coalesceTraits)")
+	}
+	if len(out.Items[1].Traits) != 0 {
+		t.Errorf("item[1].traits = %v, want empty", out.Items[1].Traits)
 	}
 }
 

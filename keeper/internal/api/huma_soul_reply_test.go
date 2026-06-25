@@ -4,6 +4,7 @@
 //
 //   - категория A (date-time): registered_at/expires_at/started_at/last_seen_at → RFC3339Nano;
 //   - категория B ([]-vs-null): covens (SoulListEntry) — БЕЗ omitempty → `[]`/значение;
+//     traits (SoulListEntry) — map БЕЗ omitempty → `{}`/object (handler coalesce → `{}`);
 //   - категория C (omitempty): bootstrap_token/covens(create)/expires_at; history-поля
 //     finished_at/incarnation/module/scenario/voyage_id — ключ опущен при nil;
 //   - категория D (nullable): SoulListEntry.created_by_aid/last_seen_at/last_seen_by_kid/
@@ -65,13 +66,15 @@ func TestGoldenWire_SoulReply(t *testing.T) {
 	// --- SoulListEntry: full (все nullable заданы, covens массив) ---
 	aid := "archon-alice"
 	kid := "keeper-01"
+	traits := map[string]any{"tier": "gold"}
 	goldenSoulWire(t, "ListEntry/full",
-		SoulListEntry{Covens: covens, CreatedByAID: &aid, LastSeenAt: &ts, LastSeenByKid: &kid, RegisteredAt: ts2, RequestedAt: &ts2, SID: "web1.example.com", Status: SoulStatus("connected"), Transport: SoulTransport("agent")},
-		`{"covens":["prod","eu"],"created_by_aid":"archon-alice","last_seen_at":"2026-06-14T12:34:56.789012345Z","last_seen_by_kid":"keeper-01","registered_at":"2026-06-13T01:02:03.456789012Z","requested_at":"2026-06-13T01:02:03.456789012Z","sid":"web1.example.com","status":"connected","transport":"agent"}`)
-	// --- SoulListEntry: nullable nil → `null` (БЕЗ omitempty), covens пустой массив ---
+		SoulListEntry{Covens: covens, Traits: traits, CreatedByAID: &aid, LastSeenAt: &ts, LastSeenByKid: &kid, RegisteredAt: ts2, RequestedAt: &ts2, SID: "web1.example.com", Status: SoulStatus("connected"), Transport: SoulTransport("agent")},
+		`{"covens":["prod","eu"],"traits":{"tier":"gold"},"created_by_aid":"archon-alice","last_seen_at":"2026-06-14T12:34:56.789012345Z","last_seen_by_kid":"keeper-01","registered_at":"2026-06-13T01:02:03.456789012Z","requested_at":"2026-06-13T01:02:03.456789012Z","sid":"web1.example.com","status":"connected","transport":"agent"}`)
+	// --- SoulListEntry: nullable nil → `null` (БЕЗ omitempty), covens/traits пустые (handler
+	// coalesce → `[]`/`{}`) ---
 	goldenSoulWire(t, "ListEntry/nil_nullables",
-		SoulListEntry{Covens: []string{}, CreatedByAID: nil, LastSeenAt: nil, LastSeenByKid: nil, RegisteredAt: ts, RequestedAt: nil, SID: "db1.example.com", Status: SoulStatus("pending"), Transport: SoulTransport("ssh")},
-		`{"covens":[],"created_by_aid":null,"last_seen_at":null,"last_seen_by_kid":null,"registered_at":"2026-06-14T12:34:56.789012345Z","requested_at":null,"sid":"db1.example.com","status":"pending","transport":"ssh"}`)
+		SoulListEntry{Covens: []string{}, Traits: map[string]any{}, CreatedByAID: nil, LastSeenAt: nil, LastSeenByKid: nil, RegisteredAt: ts, RequestedAt: nil, SID: "db1.example.com", Status: SoulStatus("pending"), Transport: SoulTransport("ssh")},
+		`{"covens":[],"traits":{},"created_by_aid":null,"last_seen_at":null,"last_seen_by_kid":null,"registered_at":"2026-06-14T12:34:56.789012345Z","requested_at":null,"sid":"db1.example.com","status":"pending","transport":"ssh"}`)
 
 	// --- SoulHistoryReply: scenario-item (incarnation/scenario заданы, module nil) ---
 	inc := "web-prod"
@@ -118,12 +121,13 @@ func TestGoldenWire_SoulProjection(t *testing.T) {
 		`{"sid":"h","ssh_target":{"soul_path":"/s","ssh_port":22,"ssh_user":"u"}}`)
 
 	aid := "archon-x"
-	entryV := handlers.SoulListView{Covens: covens, CreatedByAID: &aid, LastSeenAt: &ts, LastSeenByKid: &aid, RegisteredAt: ts, RequestedAt: &ts, SID: "h", Status: "connected", Transport: "agent"}
+	entryV := handlers.SoulListView{Covens: covens, Traits: map[string]any{"tier": "gold"}, CreatedByAID: &aid, LastSeenAt: &ts, LastSeenByKid: &aid, RegisteredAt: ts, RequestedAt: &ts, SID: "h", Status: "connected", Transport: "agent"}
 	goldenSoulWire(t, "proj/ListEntry", newSoulListEntry(entryV),
-		`{"covens":["a"],"created_by_aid":"archon-x","last_seen_at":"2026-06-14T12:00:00.123456789Z","last_seen_by_kid":"archon-x","registered_at":"2026-06-14T12:00:00.123456789Z","requested_at":"2026-06-14T12:00:00.123456789Z","sid":"h","status":"connected","transport":"agent"}`)
-	entryNilV := handlers.SoulListView{Covens: []string{}, CreatedByAID: nil, LastSeenAt: nil, LastSeenByKid: nil, RegisteredAt: ts, RequestedAt: nil, SID: "h", Status: "pending", Transport: "ssh"}
+		`{"covens":["a"],"traits":{"tier":"gold"},"created_by_aid":"archon-x","last_seen_at":"2026-06-14T12:00:00.123456789Z","last_seen_by_kid":"archon-x","registered_at":"2026-06-14T12:00:00.123456789Z","requested_at":"2026-06-14T12:00:00.123456789Z","sid":"h","status":"connected","transport":"agent"}`)
+	// covens/traits пусты (handler coalesce → `[]`/`{}`); проекция byte-passthrough сохраняет форму.
+	entryNilV := handlers.SoulListView{Covens: []string{}, Traits: map[string]any{}, CreatedByAID: nil, LastSeenAt: nil, LastSeenByKid: nil, RegisteredAt: ts, RequestedAt: nil, SID: "h", Status: "pending", Transport: "ssh"}
 	goldenSoulWire(t, "proj/ListEntry_nil", newSoulListEntry(entryNilV),
-		`{"covens":[],"created_by_aid":null,"last_seen_at":null,"last_seen_by_kid":null,"registered_at":"2026-06-14T12:00:00.123456789Z","requested_at":null,"sid":"h","status":"pending","transport":"ssh"}`)
+		`{"covens":[],"traits":{},"created_by_aid":null,"last_seen_at":null,"last_seen_by_kid":null,"registered_at":"2026-06-14T12:00:00.123456789Z","requested_at":null,"sid":"h","status":"pending","transport":"ssh"}`)
 
 	inc := "i"
 	histV := handlers.SoulHistoryView{Items: []handlers.SoulHistoryItemView{{ID: "a", Type: "scenario", Status: "ok", StartedAt: ts, Incarnation: &inc}}, Limit: 10, Offset: 0, SID: "h", Total: 1}

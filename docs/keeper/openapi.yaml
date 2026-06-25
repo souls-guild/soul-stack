@@ -2866,10 +2866,15 @@ components:
           type: string
         status:
           $ref: "#/components/schemas/SoulStatus"
+        traits:
+          additionalProperties: {}
+          description: operator-set key→value метки (ADR-060); значение — scalar или list of scalars; bare-soul → {}
+          type: object
         transport:
           $ref: "#/components/schemas/SoulTransport"
       required:
         - covens
+        - traits
         - created_by_aid
         - last_seen_at
         - last_seen_by_kid

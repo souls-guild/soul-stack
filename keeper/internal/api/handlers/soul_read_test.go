@@ -103,9 +103,19 @@ func (f *fakeReadPool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row
 		if s.Note != "" {
 			note = s.Note
 		}
+		// traits jsonb (ADR-060): nil Traits → NULL-bytes (scanSoul → пустой
+		// map); заданные метки маршалятся, как в реальном pgx-scan.
+		traitsArg := []byte(nil)
+		if len(s.Traits) > 0 {
+			b, err := json.Marshal(s.Traits)
+			if err != nil {
+				return errRow{err: err}
+			}
+			traitsArg = b
+		}
 		return staticRow{values: []any{
 			s.SID, string(s.Transport), string(s.Status), s.Coven,
-			[]byte(nil), // traits jsonb (ADR-060): NULL → пустой map в scanSoul
+			traitsArg,
 			s.RegisteredAt, lastSeenAt, lastSeenByKID, createdByAID, requestedAt, note,
 		}}
 	}
@@ -176,13 +186,14 @@ func doGetSoulprintScoped(t *testing.T, h *SoulHandler, sid, aid string) *httpte
 
 // soulListViewJSON проецирует доменный SoulListView в map с теми же json-ключами, что
 // прежний wire (для downstream-ассертов теста по полям ответа GET /v1/souls/{sid}).
-// Воспроизводит форму native SoulListEntry (covens non-null, nullable как null).
+// Воспроизводит форму native SoulListEntry (covens/traits non-null, nullable как null).
 func soulListViewJSON(v SoulListView) map[string]any {
 	m := map[string]any{
 		"sid":              v.SID,
 		"transport":        v.Transport,
 		"status":           v.Status,
 		"covens":           v.Covens,
+		"traits":           v.Traits,
 		"registered_at":    v.RegisteredAt,
 		"created_by_aid":   v.CreatedByAID,
 		"last_seen_at":     v.LastSeenAt,
@@ -217,6 +228,50 @@ func TestGetSoul_Happy(t *testing.T) {
 	covens, _ := out["covens"].([]any)
 	if len(covens) != 1 || covens[0] != "dev" {
 		t.Errorf("covens = %v, want [dev]", out["covens"])
+	}
+	// bare-soul без traits → `{}` (object), не null/отсутствие ключа (ADR-060
+	// read-path coalesceTraits): UI рендерит пустой набор без nil-проверки.
+	traits, ok := out["traits"].(map[string]any)
+	if !ok {
+		t.Fatalf("traits = %v (%T), want object {}", out["traits"], out["traits"])
+	}
+	if len(traits) != 0 {
+		t.Errorf("traits = %v, want empty {}", traits)
+	}
+}
+
+// TestGetSoul_WithTraits — detail-ответ несёт operator-set traits как object
+// (ADR-060 read-path: souls.traits jsonb → SoulListView.Traits → SoulListEntry).
+func TestGetSoul_WithTraits(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	pool := &fakeReadPool{soul: &soul.Soul{
+		SID:          "soul.example.com",
+		Transport:    soul.TransportAgent,
+		Status:       soul.StatusConnected,
+		Coven:        []string{"dev"},
+		Traits:       map[string]any{"tier": "gold", "zones": []any{"a", "b"}},
+		RegisteredAt: now,
+	}}
+	h := NewSoulHandler(pool, fakeScoper{unrestricted: true}, nil, nil)
+
+	rec := doGetSoulScoped(t, h, "soul.example.com", "archon-alice")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var out map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	traits, ok := out["traits"].(map[string]any)
+	if !ok {
+		t.Fatalf("traits = %v (%T), want object", out["traits"], out["traits"])
+	}
+	if traits["tier"] != "gold" {
+		t.Errorf("traits[tier] = %v, want gold", traits["tier"])
+	}
+	zones, _ := traits["zones"].([]any)
+	if len(zones) != 2 || zones[0] != "a" || zones[1] != "b" {
+		t.Errorf("traits[zones] = %v, want [a b]", traits["zones"])
 	}
 }
 

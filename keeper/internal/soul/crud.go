@@ -968,6 +968,7 @@ type ScopeEvalRow struct {
 	Transport     Transport
 	Status        Status
 	Coven         []string
+	Traits        map[string]any
 	RegisteredAt  time.Time
 	LastSeenAt    *time.Time
 	LastSeenByKID *string
@@ -987,7 +988,7 @@ type KeysetCursorBound struct {
 // scopeEvalSelectSQL — проекция keyset-окна (полная карточка, как [SelectAll]).
 // WHERE/ORDER/LIMIT достраиваются [buildScopeEvalSQL] динамически: user-filter
 // (status/transport/coven) комбинируется с keyset-предикатом через AND.
-const scopeEvalSelectSQL = `SELECT sid, transport, status, coven,
+const scopeEvalSelectSQL = `SELECT sid, transport, status, coven, traits,
        registered_at, last_seen_at, last_seen_by_kid,
        created_by_aid, requested_at, note
 FROM souls`
@@ -1067,10 +1068,11 @@ func ListForScopeEval(ctx context.Context, db ExecQueryRower, filter ListFilter,
 			r            ScopeEvalRow
 			transportStr string
 			statusStr    string
+			traitsJSON   []byte
 			note         *string
 		)
 		if err := rows.Scan(
-			&r.SID, &transportStr, &statusStr, &r.Coven,
+			&r.SID, &transportStr, &statusStr, &r.Coven, &traitsJSON,
 			&r.RegisteredAt, &r.LastSeenAt, &r.LastSeenByKID,
 			&r.CreatedByAID, &r.RequestedAt, &note,
 		); err != nil {
@@ -1078,6 +1080,13 @@ func ListForScopeEval(ctx context.Context, db ExecQueryRower, filter ListFilter,
 		}
 		r.Transport = Transport(transportStr)
 		r.Status = Status(statusStr)
+		// traits jsonb (ADR-060): '{}' (NOT NULL DEFAULT) → пустой map, не nil
+		// (симметрично scanSoul).
+		if len(traitsJSON) > 0 {
+			if err := json.Unmarshal(traitsJSON, &r.Traits); err != nil {
+				return nil, fmt.Errorf("soul: scope-eval unmarshal traits for %q: %w", r.SID, err)
+			}
+		}
 		if note != nil {
 			r.Note = *note
 		}
