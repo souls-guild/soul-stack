@@ -753,8 +753,8 @@ func TestDispatch_ToolsList_HasAllTools(t *testing.T) {
 	if err := json.Unmarshal(resp.Result, &res); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(res.Tools) != 83 {
-		t.Errorf("tool count = %d, want 83", len(res.Tools))
+	if len(res.Tools) != 89 {
+		t.Errorf("tool count = %d, want 89", len(res.Tools))
 	}
 	// Имена должны быть стабильны (spec — mcp-tools.md).
 	names := map[string]bool{}
@@ -778,7 +778,8 @@ func TestDispatch_ToolsList_HasAllTools(t *testing.T) {
 		"keeper.push.apply", "keeper.push.cleanup",
 		"keeper.push-provider.create", "keeper.push-provider.update", "keeper.push-provider.delete",
 		"keeper.push-provider.list", "keeper.push-provider.read",
-		"keeper.provider.create", "keeper.profile.create",
+		"keeper.provider.create", "keeper.provider.read", "keeper.provider.list", "keeper.provider.delete",
+		"keeper.profile.create", "keeper.profile.read", "keeper.profile.list", "keeper.profile.delete",
 	}
 	for _, m := range must {
 		if !names[m] {

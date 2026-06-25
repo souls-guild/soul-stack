@@ -11,7 +11,7 @@ package rbac
 import "sort"
 
 // AllowedPermissions — каталог permission-имён из rbac.md → §Каталог
-// permissions. 67 имён MVP:
+// permissions. 71 имя MVP:
 //
 //   - operator (5): create / revoke / issue-token / list / read;
 //   - role (6): create / delete / list / update / grant-operator / revoke-operator;
@@ -34,7 +34,8 @@ import "sort"
 //   - tiding (5): create / read / list / update / delete (ADR-052, S4);
 //   - provisioning (2): read / update (ADR-058 Часть B — политика способов создания операторов);
 //   - audit (1): read;
-//   - provider/profile (2): create / create.
+//   - provider (3): create / read / delete (ADR-017, Cloud CRUD);
+//   - profile (3): create / read / delete (ADR-017, Cloud CRUD).
 //
 // Wildcard `*` в `<action>` (`incarnation.*`) разворачивается на этапе
 // resolve и матчит любое известное `<action>` для данного `<resource>`.
@@ -295,9 +296,22 @@ var AllowedPermissions = map[string]struct{}{
 	// удваивает таблицу).
 	"audit.read": {},
 
-	// cloud
+	// provider.* / profile.* — operator-facing CRUD реестров Cloud-Provider-ов
+	// (`providers`) и Cloud-Profile-ей (`profiles`, ADR-017, docs/keeper/cloud.md).
+	// resource — `provider` / `profile`; actions — create / read / delete
+	// (паттерн push-provider.*, без update: Provider/Profile иммутабельны —
+	// смена параметров = delete+create, защита от частичной мутации live-VM-
+	// spec). Селектор — NoSelector в MVP: CRUD оперирует самим реестром (как
+	// push-provider.* / service.*); per-name scope — отдельный slice при
+	// появлении мульти-тенант-RBAC. Mutating-CRUD аудируется
+	// (provider.created/deleted + profile.created/deleted). `read` гейтит и
+	// list, и get (как operator.list↔read: одно право на оба read-роута).
 	"provider.create": {},
+	"provider.read":   {},
+	"provider.delete": {},
 	"profile.create":  {},
+	"profile.read":    {},
+	"profile.delete":  {},
 }
 
 // deprecatedActionAliases — DEPRECATED permission-имена → каноническое.

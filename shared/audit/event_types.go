@@ -969,4 +969,31 @@ const (
 	// `{aid, auth_method, display_name, roles, groups}` — роли/группы не секрет;
 	// пароль / bind-creds в payload НЕ кладутся.
 	EventOperatorProvisioned EventType = "operator.provisioned"
+
+	// EventProviderCreated — Архонт создал Cloud Provider (реестр `providers`,
+	// ADR-017, docs/keeper/cloud.md) через Operator API (`POST /v1/providers`)
+	// или MCP-tool `keeper.provider.create`. `source: api`/`mcp`, `archon_aid` —
+	// инициатор. Payload: `{name, type, region, credentials_ref}` — все поля
+	// cleartext-инфраструктура: `credentials_ref` это ПУТЬ (`vault:<path>`), не
+	// сам секрет (security-гигиена как у jwt-signing-key-ref); реальные creds в
+	// audit НЕ резолвятся и НЕ пишутся.
+	EventProviderCreated EventType = "provider.created"
+
+	// EventProviderDeleted — Архонт удалил Cloud Provider через
+	// `DELETE /v1/providers/{name}` или MCP-tool `keeper.provider.delete`.
+	// `source: api`/`mcp`, `archon_aid` — инициатор. Payload: `{name}`.
+	EventProviderDeleted EventType = "provider.deleted"
+
+	// EventProfileCreated — Архонт создал Cloud Profile (VM-spec поверх
+	// Provider-а, реестр `profiles`, ADR-017) через `POST /v1/profiles` или
+	// MCP-tool `keeper.profile.create`. `source: api`/`mcp`, `archon_aid` —
+	// инициатор. Payload: `{name, provider, params_keys}` — VALUE params в audit
+	// НЕ кладутся (только ключи, симметрия с push-provider): freeform VM-spec
+	// может нести чувствительные значения.
+	EventProfileCreated EventType = "profile.created"
+
+	// EventProfileDeleted — Архонт удалил Cloud Profile через
+	// `DELETE /v1/profiles/{name}` или MCP-tool `keeper.profile.delete`.
+	// `source: api`/`mcp`, `archon_aid` — инициатор. Payload: `{name}`.
+	EventProfileDeleted EventType = "profile.deleted"
 )

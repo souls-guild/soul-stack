@@ -109,6 +109,18 @@ const (
 	// TypePushProviderExists, 409). ADR-032 amendment 2026-05-26, S7-2.
 	mcpCodePushProviderExists = "push-provider-already-exists"
 
+	// mcpCodeProviderExists / mcpCodeProfileExists — UNIQUE-violation на
+	// providers.name / profiles.name (REST TypeProviderExists / TypeProfileExists,
+	// 409). not-found Provider / Profile (вкл. FK Profile→missing Provider, который
+	// MCP profile.create отдаёт как validation-failed, parity REST 422) — общий
+	// mcpCodeNotFound; валидация — общий mcpCodeValidationFailed. Cloud CRUD (ADR-017).
+	mcpCodeProviderExists = "provider-already-exists"
+	mcpCodeProfileExists  = "profile-already-exists"
+
+	// mcpCodeProviderHasProfiles — удаление Provider-а заблокировано зависимыми
+	// Profile-ями (REST TypeProviderHasProfiles, 409, FK RESTRICT). ADR-017.
+	mcpCodeProviderHasProfiles = "provider-has-profiles"
+
 	// mcpCodeHeraldExists / mcpCodeTidingExists — UNIQUE-violation на heralds.name /
 	// tidings.name (REST TypeHeraldExists / TypeTidingExists, 409). not-found
 	// Herald / Tiding (вкл. FK Tiding→missing Herald) — общий mcpCodeNotFound;

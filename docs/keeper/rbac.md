@@ -439,14 +439,18 @@ Read-only-доступ к ленте audit-событий (`audit_log`) чере
 |---|---|
 | `audit.read` | Чтение `audit_log` с фильтрами (`type` multi-value, `source` multi-value, `archon_aid`, `correlation_id`, `started_after`/`started_before`). Селектор — NoSelector в MVP; per-AID/coven-scope на audit-trail — отдельный slice при необходимости. |
 
-### Cloud (2) — [cloud.md](cloud.md)
+### Cloud (6) — [cloud.md](cloud.md)
 
-| Permission | Семантика |
-|---|---|
-| `provider.create` | Создание Provider record в Postgres (настроенная учётка облака). |
-| `profile.create` | Создание Profile record (многоразовый шаблон VM). |
+CRUD реестров Cloud-Provider-ов (`providers`) и Cloud-Profile-ей (`profiles`, ADR-017). Полная поверхность **реализована** (REST `/v1/providers*` + `/v1/profiles*` и MCP `keeper.provider.*` / `keeper.profile.*`). Селектор — **NoSelector** (CRUD оперирует самим реестром, паттерн `push-provider.*` / `service.*`). **`update`-permission НЕТ** — Provider/Profile иммутабельны (смена параметров = `delete` + `create`); read-видимость (list + get) гейтит одна permission `*.read` (паттерн `operator.list`↔`read`). Мутирующие пишут audit, read-only — нет.
 
-Будущие кандидаты (`provider.list`, `profile.list`, `provider.delete`, `profile.delete`) — вводятся отдельным PR по мере появления соответствующих CRUD-операций.
+| Permission | Семантика | Audit-event |
+|---|---|---|
+| `provider.create` | Создание Provider record в Postgres (`POST /v1/providers`) — настроенная учётка облака. `409 provider-already-exists` на дубль `name`; `credentials_ref` обязан быть `vault:<path>` (creds не резолвятся в API). | `provider.created` |
+| `provider.read` | Перечисление Provider-ов (`GET /v1/providers`) и чтение одного (`GET /v1/providers/{name}`) — паттерн one-permission-on-read. | — (read-only) |
+| `provider.delete` | Удаление Provider record (`DELETE /v1/providers/{name}`). `409 provider-has-profiles`, если на Provider ссылаются Profile-и (FK `ON DELETE RESTRICT`, миграция 020) — сперва удалить зависимые Profile-и. | `provider.deleted` |
+| `profile.create` | Создание Profile record (`POST /v1/profiles`) — многоразовый VM-spec поверх Provider-а. `409 profile-already-exists` на дубль `name`; `422 validation-failed` на ссылку на несуществующий Provider (FK). | `profile.created` |
+| `profile.read` | Перечисление Profile-ей (`GET /v1/profiles`, опц. фильтр `provider=`) и чтение одного (`GET /v1/profiles/{name}`). | — (read-only) |
+| `profile.delete` | Удаление Profile record (`DELETE /v1/profiles/{name}`). | `profile.deleted` |
 
 ### Augur (6) — [ADR-025](../adr/0025-augur.md#adr-025-augur--keeper-side-брокер-внешнего-доступа-soul) / [augur.md](augur.md)
 
@@ -589,7 +593,13 @@ role: soul-reader
   operators:   ["archon-monitor-01"]
 
 role: cloud-admin
-  permissions: ["provider.create", "profile.create"]
+  permissions:
+    - "provider.create"
+    - "provider.read"
+    - "provider.delete"
+    - "profile.create"
+    - "profile.read"
+    - "profile.delete"
   operators:   ["archon-cloud-01"]
 ```
 

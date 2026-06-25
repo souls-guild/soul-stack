@@ -64,6 +64,8 @@ FROM profiles
 WHERE name = $1
 `
 
+const deleteSQL = `DELETE FROM profiles WHERE name = $1`
+
 // Insert вставляет новый Profile.
 //
 // Pre-conditions:
@@ -163,6 +165,23 @@ func scanProfile(row pgx.Row) (*Profile, error) {
 		return nil, fmt.Errorf("profile: unmarshal params: %w", err)
 	}
 	return &p, nil
+}
+
+// Delete удаляет Profile по PK. [ErrProfileNotFound], если запись
+// отсутствует (RowsAffected==0). Profile-ы — листовые записи (на них FK не
+// ссылается), поэтому FK-violation-ветки delete-у не нужно.
+func Delete(ctx context.Context, db ExecQueryRower, name string) error {
+	if !ValidName(name) {
+		return fmt.Errorf("profile: invalid name %q (must match %s)", name, NamePattern)
+	}
+	tag, err := db.Exec(ctx, deleteSQL, name)
+	if err != nil {
+		return fmt.Errorf("profile: delete: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrProfileNotFound
+	}
+	return nil
 }
 
 // SelectAll возвращает страницу Profile-ей и общее количество (без

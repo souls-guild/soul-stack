@@ -4,7 +4,24 @@
 
 ## Provider и Profile в Postgres
 
-**Provider** — настроенная учётка облака (AWS-аккаунт, GCP-проект, OpenStack-tenant). Хранится в Postgres ([storage.md](storage.md)), управляется через OpenAPI / MCP. REST-роуты `POST /v1/providers` / `POST /v1/profiles` **отложены** (cloud-CRUD не реализован, [operator-api.md → Cloud](operator-api.md#cloud--отложено-rest-роутов-нет)); форма тел Provider/Profile описана ниже.
+**Provider** — настроенная учётка облака (AWS-аккаунт, GCP-проект, OpenStack-tenant). Хранится в Postgres ([storage.md](storage.md)), управляется через OpenAPI / MCP. CRUD-поверхность **реализована**:
+
+| Метод + путь | Permission | MCP-tool | Назначение |
+|---|---|---|---|
+| `POST /v1/providers` | `provider.create` | `keeper.provider.create` | Создать Provider; `409 provider-already-exists` на дубль `name`. |
+| `GET /v1/providers` | `provider.read` | `keeper.provider.list` | Перечислить (paged `offset`/`limit`). |
+| `GET /v1/providers/{name}` | `provider.read` | `keeper.provider.get` | Прочитать один; `404 not-found`. |
+| `DELETE /v1/providers/{name}` | `provider.delete` | `keeper.provider.delete` | Удалить; `404 not-found`; `409 provider-has-profiles` при привязанных Profile-ях (FK RESTRICT, миграция 020). |
+| `POST /v1/profiles` | `profile.create` | `keeper.profile.create` | Создать Profile; `409 profile-already-exists` на дубль `name`; `422 validation-failed` на ссылку на несуществующий Provider (FK). |
+| `GET /v1/profiles` | `profile.read` | `keeper.profile.list` | Перечислить (опц. фильтр `provider=`). |
+| `GET /v1/profiles/{name}` | `profile.read` | `keeper.profile.get` | Прочитать один; `404 not-found`. |
+| `DELETE /v1/profiles/{name}` | `profile.delete` | `keeper.profile.delete` | Удалить; `404 not-found`. |
+
+**Иммутабельность.** `update`-операции **нет**: Provider/Profile неизменяемы, смена параметров = `delete` + `create`. Это защита от частичной мутации `spec` уже-живущих VM (нельзя на лету подменить регион/credentials под работающим флотом). Поэтому в каталоге [rbac.md](rbac.md#cloud-6--cloudmd) — только `create`/`read`/`delete` (без `update`), а MCP-tools — `create`/`list`/`get`/`delete`.
+
+**`credentials_ref` — только vault-путь.** Поле принимает строку `vault:<mount>/<path>`; сами credentials API **НЕ резолвит и НЕ возвращает** — отдаёт `credentials_ref` как путь (секрет-гигиена, симметрия с jwt-signing-key-ref). Резолв vault-секрета происходит на scenario-слое при вызове `core.cloud.provisioned` (см. [Credentials-flow](#credentials-flow)), не в CRUD.
+
+`provider.created` / `provider.deleted` и `profile.created` / `profile.deleted` пишутся в audit-журнал ([rbac.md](rbac.md)); read-роуты audit не пишут. Форма тел Provider/Profile описана ниже.
 
 ```yaml
 keeper.provider.create

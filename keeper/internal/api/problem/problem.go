@@ -81,6 +81,20 @@ const (
 	// ADR-032 amendment 2026-05-26, S7-2). Симметрия с TypeServiceExists /
 	// TypeOperatorExists.
 	TypePushProviderExists = "https://soul-stack.io/errors/push-provider-already-exists"
+	// Cloud Provider / Profile — operator-facing CRUD реестров providers /
+	// profiles (ADR-017, docs/keeper/cloud.md).
+	// *-already-exists — UNIQUE-violation на providers.name / profiles.name
+	// (409, симметрия с TypePushProviderExists / TypeServiceExists). not-found
+	// Provider / Profile — общий TypeNotFound; FK Profile→missing Provider —
+	// тоже TypeNotFound (ErrProviderNotFound из profile, parity Tiding→Herald);
+	// битый name/type/credentials_ref — общий TypeValidationFailed (422).
+	TypeProviderExists = "https://soul-stack.io/errors/provider-already-exists"
+	TypeProfileExists  = "https://soul-stack.io/errors/profile-already-exists"
+	// TypeProviderHasProfiles — удаление Provider-а заблокировано зависимыми
+	// Profile-ями (FK profiles_provider_fk ON DELETE RESTRICT, миграция 020).
+	// 409 Conflict: «целевое состояние недостижимо, есть зависимости» —
+	// оператор обязан сначала удалить профили.
+	TypeProviderHasProfiles = "https://soul-stack.io/errors/provider-has-profiles"
 	// TypeErrandNotCancellable — попытка отменить Errand, уже находящийся в
 	// терминальном статусе (DELETE /v1/errands/{errand_id}, ADR-033 slice E5).
 	// 409 Conflict — корректный код «целевое состояние недостижимо».
@@ -177,6 +191,9 @@ var titles = map[string]string{
 	TypeSoulprintNotReceived:       "Soulprint not yet received",
 	TypeClusterDegraded:            "Cluster is in degraded mode",
 	TypePushProviderExists:         "Push provider already exists",
+	TypeProviderExists:             "Cloud provider already exists",
+	TypeProfileExists:              "Cloud profile already exists",
+	TypeProviderHasProfiles:        "Cloud provider has dependent profiles",
 	TypeErrandNotCancellable:       "Errand is not cancellable",
 	TypeBadGateway:                 "Bad gateway",
 	TypeChoirExists:                "Choir already exists",
@@ -264,6 +281,9 @@ var statuses = map[string]int{
 	TypeSoulprintNotReceived:       http.StatusGone,
 	TypeClusterDegraded:            http.StatusServiceUnavailable,
 	TypePushProviderExists:         http.StatusConflict,
+	TypeProviderExists:             http.StatusConflict,
+	TypeProfileExists:              http.StatusConflict,
+	TypeProviderHasProfiles:        http.StatusConflict,
 	TypeErrandNotCancellable:       http.StatusConflict,
 	TypeBadGateway:                 http.StatusBadGateway,
 	TypeChoirExists:                http.StatusConflict,

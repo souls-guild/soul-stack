@@ -41,6 +41,8 @@ func webUIRouter(t *testing.T, verifier *keeperjwt.Verifier, webUIEnabled bool) 
 		stubServiceHandler(t), nil, stubAugurHandler(t), stubOracleHandler(t),
 		nil, // pushH
 		nil, // pushProviderH
+		nil, // providerH
+		nil, // profileH
 		nil, // errandH
 		nil, // voyageH
 		nil, // cadenceH

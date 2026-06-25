@@ -427,6 +427,49 @@ func TestSelectAll_RejectsZeroLimit(t *testing.T) {
 	}
 }
 
+// --- Delete ------------------------------------------------------------
+
+// execDB — fakeDB-вариант с управляемым результатом Exec (Delete-тесты).
+type execDB struct {
+	tag pgconn.CommandTag
+	err error
+}
+
+func (f *execDB) Exec(_ context.Context, _ string, _ ...any) (pgconn.CommandTag, error) {
+	return f.tag, f.err
+}
+func (f *execDB) QueryRow(_ context.Context, _ string, _ ...any) pgx.Row {
+	return errRow{err: pgx.ErrNoRows}
+}
+func (f *execDB) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
+	return &fakeRows{}, nil
+}
+
+func TestDelete(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("ok", func(t *testing.T) {
+		db := &execDB{tag: pgconn.NewCommandTag("DELETE 1")}
+		if err := Delete(ctx, db, "web"); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+	})
+
+	t.Run("not-found", func(t *testing.T) {
+		db := &execDB{tag: pgconn.NewCommandTag("DELETE 0")}
+		if err := Delete(ctx, db, "ghost"); !errors.Is(err, ErrProfileNotFound) {
+			t.Fatalf("Delete = %v, want ErrProfileNotFound", err)
+		}
+	})
+
+	t.Run("invalid-name", func(t *testing.T) {
+		db := &execDB{}
+		if err := Delete(ctx, db, "Bad_Name"); err == nil {
+			t.Fatal("Delete invalid name: want error")
+		}
+	})
+}
+
 // --- ValidName --------------------------------------------------------
 
 func TestValidName(t *testing.T) {

@@ -25,6 +25,8 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/keeper/internal/operator"
 	"github.com/souls-guild/soul-stack/keeper/internal/oracle"
+	"github.com/souls-guild/soul-stack/keeper/internal/profile"
+	"github.com/souls-guild/soul-stack/keeper/internal/provider"
 	"github.com/souls-guild/soul-stack/keeper/internal/pushorch"
 	"github.com/souls-guild/soul-stack/keeper/internal/pushprovider"
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
@@ -204,6 +206,15 @@ type Deps struct {
 	// в `keeper run` передаёт *herald.Service поверх pgxpool.Pool + dispatcher-
 	// инвалидатор + Redis-publisher (herald:invalidate).
 	HeraldSvc *herald.Service
+
+	// ProviderSvc / ProfileSvc — operator-facing CRUD реестров Cloud-Provider-ов
+	// (`providers`) и Cloud-Profile-ей (`profiles`, ADR-017, docs/keeper/cloud.md).
+	// При nil соответствующие provider.*/profile.*-роуты не подключаются (паттерн
+	// PushProviderSvc/AugurSvc). credentials_ref отдаётся как vault-путь, секрет
+	// не резолвится. БЕЗ Redis-publisher: Cloud-Provider/Profile читаются on-demand
+	// на scenario-слое (`core.cloud.provisioned`), не hot-reload-ятся.
+	ProviderSvc *provider.Service
+	ProfileSvc  *profile.Service
 
 	// ErrandDispatcher / ErrandStore — pull-ad-hoc Errand contour (ADR-033).
 	// При nil обоих errand.*-роуты не подключаются (паттерн PushRun). Wire-up
@@ -600,6 +611,17 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 		heraldH = handlers.NewHeraldHandler(deps.HeraldSvc, logger)
 	}
 
+	// providerH / profileH опциональны: при nil соответствующего Svc provider.*/
+	// profile.*-роуты не подключаются (паттерн pushProviderH). Cloud-CRUD (ADR-017).
+	var providerH *handlers.ProviderHandler
+	if deps.ProviderSvc != nil {
+		providerH = handlers.NewProviderHandler(deps.ProviderSvc, logger)
+	}
+	var profileH *handlers.ProfileHandler
+	if deps.ProfileSvc != nil {
+		profileH = handlers.NewProfileHandler(deps.ProfileSvc, logger)
+	}
+
 	// moduleCatalogH монтируется ВСЕГДА: core-каталог (`GET /v1/modules`) не
 	// требует внешних зависимостей (статическая doc-таблица). ModuleCatalogPlugins
 	// опционален — при nil plugin-секция каталога пуста.
@@ -693,7 +715,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 		}
 	}
 
-	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, augurH, oracleH, pushH, pushProviderH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.LoginGuard, deps.LoginLimitCfg, logger)
+	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, augurH, oracleH, pushH, pushProviderH, providerH, profileH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.LoginGuard, deps.LoginLimitCfg, logger)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,

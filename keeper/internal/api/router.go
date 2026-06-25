@@ -110,6 +110,14 @@ import (
 //	GET    /v1/push-providers/{name}                 — read Push-Provider (S7-2).
 //	PUT    /v1/push-providers/{name}                 — update Push-Provider (S7-2).
 //	DELETE /v1/push-providers/{name}                 — delete Push-Provider (S7-2).
+//	POST   /v1/providers                             — create Cloud-Provider (ADR-017).
+//	GET    /v1/providers                             — list Cloud-Providers (ADR-017).
+//	GET    /v1/providers/{name}                      — read Cloud-Provider (ADR-017).
+//	DELETE /v1/providers/{name}                      — delete Cloud-Provider (ADR-017).
+//	POST   /v1/profiles                              — create Cloud-Profile (ADR-017).
+//	GET    /v1/profiles                              — list Cloud-Profiles (ADR-017).
+//	GET    /v1/profiles/{name}                       — read Cloud-Profile (ADR-017).
+//	DELETE /v1/profiles/{name}                       — delete Cloud-Profile (ADR-017).
 //	POST   /v1/modules/{name}/form-prep              — резолвер source-каталогов UI-формы модуля (ADR-045 S3).
 //	GET    /v1/permissions                           — каталог RBAC-permissions (auth-only, фикс UI hardcode).
 //	GET    /v1/event-types                           — каталог event-types для Tiding-подписки (auth-only, фикс UI hardcode).
@@ -134,7 +142,7 @@ const (
 // Health/meta вынесены вне `/v1/*` по operator-api.md § Health / Meta.
 // chi.NotFound и chi.MethodNotAllowed заменены на problem+json-handlers,
 // чтобы 404/405 не приходили в text/plain default-формате stdlib.
-func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.OperatorHandler, incH *handlers.IncarnationHandler, soulH *handlers.SoulHandler, roleH *handlers.RoleHandler, synodH *handlers.SynodHandler, sigilH *handlers.SigilHandler, sigilKeyH *handlers.SigilKeyHandler, serviceH *handlers.ServiceHandler, provisioningPolicyH *handlers.ProvisioningPolicyHandler, augurH *handlers.AugurHandler, oracleH *handlers.OracleHandler, pushH *handlers.PushHandler, pushProviderH *handlers.PushProviderHandler, errandH *handlers.ErrandHandler, voyageH *handlers.VoyageHandler, cadenceH *handlers.CadenceHandler, auditH *handlers.AuditHandler, choirH *handlers.ChoirHandler, heraldH *handlers.HeraldHandler, moduleCatalogH *handlers.ModuleCatalogHandler, moduleFormPrepH *handlers.ModuleFormPrepHandler, permCatalogH *handlers.PermissionCatalogHandler, eventTypeCatalogH *handlers.EventTypeCatalogHandler, meH *handlers.MyPermissionsHandler, enforcer RBACProvider, auditWriter audit.Writer, metricsHTTP *obs.HTTPMetrics, tollDegraded toll.DegradedReader, tempoLimiter apimiddleware.RateLimiter, tempoMetrics apimiddleware.RateLimitMetrics, tempoVoyageCreateLimits func() apimiddleware.RateLimitLimits, tempoVoyagePreviewLimits func() apimiddleware.RateLimitLimits, webUIEnabled bool, ldapAuth *LDAPAuthDeps, oidcAuth *OIDCAuthDeps, loginGuard apimiddleware.LoginGuard, loginLimitCfg apimiddleware.AuthLoginLimitConfig, logger *slog.Logger) http.Handler {
+func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.OperatorHandler, incH *handlers.IncarnationHandler, soulH *handlers.SoulHandler, roleH *handlers.RoleHandler, synodH *handlers.SynodHandler, sigilH *handlers.SigilHandler, sigilKeyH *handlers.SigilKeyHandler, serviceH *handlers.ServiceHandler, provisioningPolicyH *handlers.ProvisioningPolicyHandler, augurH *handlers.AugurHandler, oracleH *handlers.OracleHandler, pushH *handlers.PushHandler, pushProviderH *handlers.PushProviderHandler, providerH *handlers.ProviderHandler, profileH *handlers.ProfileHandler, errandH *handlers.ErrandHandler, voyageH *handlers.VoyageHandler, cadenceH *handlers.CadenceHandler, auditH *handlers.AuditHandler, choirH *handlers.ChoirHandler, heraldH *handlers.HeraldHandler, moduleCatalogH *handlers.ModuleCatalogHandler, moduleFormPrepH *handlers.ModuleFormPrepHandler, permCatalogH *handlers.PermissionCatalogHandler, eventTypeCatalogH *handlers.EventTypeCatalogHandler, meH *handlers.MyPermissionsHandler, enforcer RBACProvider, auditWriter audit.Writer, metricsHTTP *obs.HTTPMetrics, tollDegraded toll.DegradedReader, tempoLimiter apimiddleware.RateLimiter, tempoMetrics apimiddleware.RateLimitMetrics, tempoVoyageCreateLimits func() apimiddleware.RateLimitLimits, tempoVoyagePreviewLimits func() apimiddleware.RateLimitLimits, webUIEnabled bool, ldapAuth *LDAPAuthDeps, oidcAuth *OIDCAuthDeps, loginGuard apimiddleware.LoginGuard, loginLimitCfg apimiddleware.AuthLoginLimitConfig, logger *slog.Logger) http.Handler {
 	r := chi.NewRouter()
 
 	// huma error-override (ADR-054, FULL-TYPED): глобальный huma.NewError →
@@ -1320,6 +1328,71 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 					apimiddleware.RequirePermission(enforcer, "push-provider", "delete", apimiddleware.NoSelector),
 				).Group(func(r chi.Router) {
 					registerHumaPushProviderDelete(newHumaPushProviderAPI(r, auditWriter, audit.EventPushProviderDeleted, logger), pushProviderH)
+				})
+			})
+		}
+
+		// /v1/providers — CRUD реестра Cloud-Provider-ов (ADR-017,
+		// docs/keeper/cloud.md). Подключается только при non-nil providerH
+		// (Deps.ProviderSvc прокинут). Selector — NoSelector: provider.* оперирует
+		// самим реестром (как push-provider.* / service.*).
+		//
+		// Audit на 2 мутирующих роутах (create/delete). list/get — read-only, без
+		// audit. credentials_ref отдаётся как vault-путь, секрет не резолвится.
+		//
+		// Permission-маппинг: POST→provider.create, GET list/{name}→provider.read,
+		// DELETE→provider.delete. create/delete — WRITE+AUDIT вариант B (huma-audit-
+		// middleware, своя chi-группа с собственным event-типом). MCP provider-tools
+		// зовут provider.Service напрямую (мимо handler).
+		if providerH != nil {
+			r.Route("/providers", func(r chi.Router) {
+				r.With(
+					apimiddleware.RequirePermission(enforcer, "provider", "create", apimiddleware.NoSelector),
+				).Group(func(r chi.Router) {
+					registerHumaProviderCreate(newHumaProviderAPI(r, auditWriter, audit.EventProviderCreated, logger), providerH)
+				})
+
+				r.With(
+					apimiddleware.RequirePermission(enforcer, "provider", "read", apimiddleware.NoSelector),
+				).Group(func(r chi.Router) {
+					registerHumaProviderList(newHumaCadenceAPI(r), providerH)
+					registerHumaProviderGet(newHumaCadenceAPI(r), providerH)
+				})
+
+				r.With(
+					apimiddleware.RequirePermission(enforcer, "provider", "delete", apimiddleware.NoSelector),
+				).Group(func(r chi.Router) {
+					registerHumaProviderDelete(newHumaProviderAPI(r, auditWriter, audit.EventProviderDeleted, logger), providerH)
+				})
+			})
+		}
+
+		// /v1/profiles — CRUD реестра Cloud-Profile-ей (ADR-017, docs/keeper/cloud.md).
+		// Подключается только при non-nil profileH (Deps.ProfileSvc прокинут).
+		// Selector — NoSelector. Audit на create/delete; list/get — read-only.
+		// VALUE params в audit НЕ пишутся (только ключи).
+		//
+		// Permission-маппинг: POST→profile.create, GET list/{name}→profile.read,
+		// DELETE→profile.delete.
+		if profileH != nil {
+			r.Route("/profiles", func(r chi.Router) {
+				r.With(
+					apimiddleware.RequirePermission(enforcer, "profile", "create", apimiddleware.NoSelector),
+				).Group(func(r chi.Router) {
+					registerHumaProfileCreate(newHumaProfileAPI(r, auditWriter, audit.EventProfileCreated, logger), profileH)
+				})
+
+				r.With(
+					apimiddleware.RequirePermission(enforcer, "profile", "read", apimiddleware.NoSelector),
+				).Group(func(r chi.Router) {
+					registerHumaProfileList(newHumaCadenceAPI(r), profileH)
+					registerHumaProfileGet(newHumaCadenceAPI(r), profileH)
+				})
+
+				r.With(
+					apimiddleware.RequirePermission(enforcer, "profile", "delete", apimiddleware.NoSelector),
+				).Group(func(r chi.Router) {
+					registerHumaProfileDelete(newHumaProfileAPI(r, auditWriter, audit.EventProfileDeleted, logger), profileH)
 				})
 			})
 		}

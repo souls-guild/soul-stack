@@ -54,6 +54,8 @@ import (
 	keeperpg "github.com/souls-guild/soul-stack/keeper/internal/pg"
 	"github.com/souls-guild/soul-stack/keeper/internal/plugingit"
 	"github.com/souls-guild/soul-stack/keeper/internal/pluginhost"
+	"github.com/souls-guild/soul-stack/keeper/internal/profile"
+	"github.com/souls-guild/soul-stack/keeper/internal/provider"
 	"github.com/souls-guild/soul-stack/keeper/internal/push"
 	"github.com/souls-guild/soul-stack/keeper/internal/pushorch"
 	"github.com/souls-guild/soul-stack/keeper/internal/pushprovider"
@@ -237,6 +239,13 @@ type daemon struct {
 	// heraldInvalidation — подписка на `herald:invalidate` (cross-keeper сброс
 	// снимка dispatcher-кэша). nil при выключенном Redis.
 	heraldInvalidation *keeperredis.HeraldInvalidateSubscription
+	// providerSvc / profileSvc — operator-facing CRUD-фасады реестров Cloud-
+	// Provider-ов / Profile-ей (ADR-017). Один источник правды для REST
+	// (api.Deps.ProviderSvc/ProfileSvc) и MCP. Поднимаются всегда (PG-таблицы
+	// доступны), БЕЗ Redis-publisher (читаются on-demand на scenario-слое).
+	// Собираются в setupCloudCRUD; ДО setupAPIServer/setupMCPServer.
+	providerSvc *provider.Service
+	profileSvc  *profile.Service
 
 	// --- metrics ---
 	metricsReg      *obs.Registry
@@ -1746,6 +1755,36 @@ func (d *daemon) setupHeraldSvc(ctx context.Context) error {
 		slog.Bool("redis_publisher", d.redisClient != nil),
 		slog.Bool("redis_subscription", d.heraldInvalidation != nil),
 		slog.Bool("in_process_invalidate", d.heraldDispatcher != nil))
+	return nil
+}
+
+// setupCloudCRUD — operator-facing CRUD-фасады реестров Cloud-Provider-ов
+// (`providers`) и Cloud-Profile-ей (`profiles`, ADR-017, docs/keeper/cloud.md).
+//
+// Поднимаются всегда (PG-таблицы доступны), независимо от наличия CloudDriver-
+// плагинов: оператор должен иметь возможность завести Provider/Profile до
+// конфигурации cloud-инфраструктуры (REST /v1/providers /v1/profiles + MCP
+// keeper.provider.* / keeper.profile.* работают). БЕЗ Redis-publisher: записи
+// читаются on-demand на scenario-слое (`core.cloud.provisioned`), не hot-reload-ятся.
+//
+// После setupPG (нужен d.pool); ДО setupAPIServer/setupMCPServer (api.Deps и
+// HandlerDeps читают d.providerSvc/d.profileSvc).
+func (d *daemon) setupCloudCRUD(_ context.Context) error {
+	provSvc, err := provider.NewService(d.pool)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "keeper run: build provider service: %v\n", err)
+		return errSetupFailed
+	}
+	d.providerSvc = provSvc
+
+	profSvc, err := profile.NewService(d.pool)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "keeper run: build profile service: %v\n", err)
+		return errSetupFailed
+	}
+	d.profileSvc = profSvc
+
+	d.logger.Info("keeper run: cloud CRUD services ready (ADR-017)")
 	return nil
 }
 
@@ -3889,8 +3928,13 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		PushRun:           d.pushRun,
 		PushProviderSvc:   d.pushProviderSvc,
 		HeraldSvc:         d.heraldSvc,
-		ErrandDispatcher:  d.errandDispatcher,
-		ErrandStore:       d.errandStore,
+		// ProviderSvc / ProfileSvc — Cloud-CRUD-фасады (ADR-017). Те же
+		// экземпляры, что MCP-HandlerDeps (single source of truth). nil только
+		// если pool не создан (не должно случиться в production-path).
+		ProviderSvc:      d.providerSvc,
+		ProfileSvc:       d.profileSvc,
+		ErrandDispatcher: d.errandDispatcher,
+		ErrandStore:      d.errandStore,
 		// VoyageDB / резолверы — Voyage contour (ADR-043, S5). Тот же
 		// *pgxpool.Pool, что несёт IncarnationDB (voyages/voyage_targets в той же
 		// БД). Scenario-резолвер → имена инкарнаций (incarnations[] ∪ service/
@@ -4281,6 +4325,12 @@ func (d *daemon) setupMCPServer(ctx context.Context) error {
 			// HeraldSvc — тот же *herald.Service, что REST прокидывает в
 			// api.Deps.HeraldSvc (single source of truth, ADR-052 S4).
 			HeraldSvc: d.heraldSvc,
+
+			// ProviderSvc / ProfileSvc — те же Cloud-CRUD-фасады, что REST
+			// прокидывает в api.Deps.* (single source of truth, ADR-017). nil →
+			// keeper.provider.* / keeper.profile.* вернут «не сконфигурировано».
+			ProviderSvc: d.providerSvc,
+			ProfileSvc:  d.profileSvc,
 
 			// ErrandDispatcher / ErrandStore — те же экземпляры, что REST
 			// прокидывает в api.Deps.* (single source of truth, ADR-033 slice

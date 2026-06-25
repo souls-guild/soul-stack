@@ -370,6 +370,11 @@ func runDaemon(args []string) int {
 		// setupAudit (d.heraldDispatcher) и setupRedis (publisher); ДО
 		// setupAPIServer / setupMCPServer (api.Deps и HandlerDeps читают d.heraldSvc).
 		d.setupHeraldSvc,
+		// setupCloudCRUD — CRUD-фасады реестров providers/profiles (ADR-017,
+		// operator-facing Cloud-Provider/Profile). Поднимаются всегда (PG-таблицы),
+		// БЕЗ Redis. После setupPG (d.pool); ДО setupAPIServer/setupMCPServer
+		// (api.Deps и HandlerDeps читают d.providerSvc/d.profileSvc).
+		d.setupCloudCRUD,
 		// runLegacyAutoImport — opt-in one-shot миграция inline
 		// `keeper.yml::push.targets[]` / `push.providers[]` в PG-источники
 		// (ADR-032 amendment 2026-05-26, S7-4). При оба флага false → no-op.

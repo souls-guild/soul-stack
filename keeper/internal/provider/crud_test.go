@@ -355,6 +355,54 @@ func TestSelectAll_RejectsZeroLimit(t *testing.T) {
 
 // --- ValidName / ValidCredentialsRef ----------------------------------
 
+// execDB — fakeDB-вариант с управляемым результатом Exec (для Delete-тестов).
+type execDB struct {
+	tag pgconn.CommandTag
+	err error
+}
+
+func (f *execDB) Exec(_ context.Context, _ string, _ ...any) (pgconn.CommandTag, error) {
+	return f.tag, f.err
+}
+func (f *execDB) QueryRow(_ context.Context, _ string, _ ...any) pgx.Row {
+	return errRow{err: pgx.ErrNoRows}
+}
+func (f *execDB) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
+	return &fakeRows{}, nil
+}
+
+func TestDelete(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("ok", func(t *testing.T) {
+		db := &execDB{tag: pgconn.NewCommandTag("DELETE 1")}
+		if err := Delete(ctx, db, "aws"); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+	})
+
+	t.Run("not-found", func(t *testing.T) {
+		db := &execDB{tag: pgconn.NewCommandTag("DELETE 0")}
+		if err := Delete(ctx, db, "ghost"); !errors.Is(err, ErrProviderNotFound) {
+			t.Fatalf("Delete = %v, want ErrProviderNotFound", err)
+		}
+	})
+
+	t.Run("has-profiles-fk", func(t *testing.T) {
+		db := &execDB{err: &pgconn.PgError{Code: "23503", ConstraintName: "profiles_provider_fk"}}
+		if err := Delete(ctx, db, "aws"); !errors.Is(err, ErrProviderHasProfiles) {
+			t.Fatalf("Delete = %v, want ErrProviderHasProfiles", err)
+		}
+	})
+
+	t.Run("invalid-name", func(t *testing.T) {
+		db := &execDB{}
+		if err := Delete(ctx, db, "Bad_Name"); err == nil {
+			t.Fatal("Delete invalid name: want error")
+		}
+	})
+}
+
 func TestValidName(t *testing.T) {
 	good := []string{"a", "aws", "aws-eu", "yc-ru-1", "1cloud"}
 	bad := []string{"", "Upper", "with_underscore", "x:colon", strings.Repeat("a", 64)}

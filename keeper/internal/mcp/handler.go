@@ -16,6 +16,8 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/keeper/internal/operator"
 	"github.com/souls-guild/soul-stack/keeper/internal/oracle"
+	"github.com/souls-guild/soul-stack/keeper/internal/profile"
+	"github.com/souls-guild/soul-stack/keeper/internal/provider"
 	"github.com/souls-guild/soul-stack/keeper/internal/pushorch"
 	"github.com/souls-guild/soul-stack/keeper/internal/pushprovider"
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
@@ -166,6 +168,14 @@ type HandlerDeps struct {
 	// truth). При nil herald/tiding-tools диспатчатся, но возвращают internal-
 	// error «herald registry is not configured» (паттерн PushProviderSvc).
 	HeraldSvc *herald.Service
+
+	// ProviderSvc / ProfileSvc — Cloud-CRUD-фасады (keeper.provider.* /
+	// keeper.profile.*, ADR-017). Те же экземпляры, что REST прокидывает в
+	// api.Deps.ProviderSvc/ProfileSvc (single source of truth). При nil
+	// соответствующие tools диспатчатся, но возвращают internal-error
+	// «provider/profile registry is not configured» (паттерн PushProviderSvc).
+	ProviderSvc *provider.Service
+	ProfileSvc  *profile.Service
 
 	// ErrandDispatcher / ErrandStore — pull-ad-hoc Errand contour (ADR-033) для
 	// keeper.soul.errand.run / keeper.errand.list / keeper.errand.get. Те же
@@ -569,6 +579,29 @@ func (h *Handler) handleToolsCall(ctx context.Context, claims *jwt.Claims, req j
 		return h.callPushProviderList(ctx, claims, req, p.Arguments), false
 	case "keeper.push-provider.read":
 		return h.callPushProviderRead(ctx, claims, req, p.Arguments), false
+
+	// Cloud Provider / Profile-tools (CRUD реестров providers/profiles, ADR-017).
+	// 1:1 с REST POST/GET/DELETE /v1/providers* и /v1/profiles* и permission
+	// (keeper.provider.<verb> ↔ provider.<verb>, keeper.profile.<verb> ↔
+	// profile.<verb>). Диспатчатся только при непустом ProviderSvc/ProfileSvc
+	// (опц. поля HandlerDeps); иначе call-метод вернёт «… registry is not
+	// configured». БЕЗ update (Provider/Profile иммутабельны).
+	case "keeper.provider.create":
+		return h.callProviderCreate(ctx, claims, req, p.Arguments), false
+	case "keeper.provider.read":
+		return h.callProviderRead(ctx, claims, req, p.Arguments), false
+	case "keeper.provider.delete":
+		return h.callProviderDelete(ctx, claims, req, p.Arguments), false
+	case "keeper.provider.list":
+		return h.callProviderList(ctx, claims, req, p.Arguments), false
+	case "keeper.profile.create":
+		return h.callProfileCreate(ctx, claims, req, p.Arguments), false
+	case "keeper.profile.read":
+		return h.callProfileRead(ctx, claims, req, p.Arguments), false
+	case "keeper.profile.delete":
+		return h.callProfileDelete(ctx, claims, req, p.Arguments), false
+	case "keeper.profile.list":
+		return h.callProfileList(ctx, claims, req, p.Arguments), false
 
 	// Herald/Tiding-tools (CRUD реестров уведомлений, ADR-052, S4). 1:1 с REST
 	// POST/GET/PUT/DELETE /v1/heralds* и /v1/tidings* и permission

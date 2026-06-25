@@ -16,6 +16,10 @@ import (
 var (
 	ErrProviderAlreadyExists = errors.New("provider: name already exists")
 	ErrProviderNotFound      = errors.New("provider: name not found")
+	// ErrProviderHasProfiles — попытка удалить Provider, на который ссылаются
+	// Profile-и (FK profiles_provider_fk ON DELETE RESTRICT, миграция 020).
+	// Handler маппит в 409 (delete заблокирован зависимостями).
+	ErrProviderHasProfiles = errors.New("provider: has dependent profiles")
 )
 
 const (
@@ -55,6 +59,8 @@ SELECT ` + selectColumns + `
 FROM providers
 WHERE name = $1
 `
+
+const deleteSQL = `DELETE FROM providers WHERE name = $1`
 
 // Insert вставляет новый Provider.
 //
@@ -142,6 +148,32 @@ func scanProvider(row pgx.Row) (*Provider, error) {
 	}
 	p.CreatedByAID = createdByAID
 	return &p, nil
+}
+
+// Delete удаляет Provider по PK. [ErrProviderNotFound], если запись
+// отсутствует (RowsAffected==0).
+//
+// FK profiles_provider_fk (ON DELETE RESTRICT, миграция 020): удаление
+// Provider-а с зависимыми Profile-ями отдаёт wrapped FK-violation
+// ([ErrProviderHasProfiles]) — handler маппит её в 409, симметрично
+// «удаление невозможно, есть зависимости».
+func Delete(ctx context.Context, db ExecQueryRower, name string) error {
+	if !ValidName(name) {
+		return fmt.Errorf("provider: invalid name %q (must match %s)", name, NamePattern)
+	}
+	tag, err := db.Exec(ctx, deleteSQL, name)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == pgErrCodeForeignKeyViolation {
+			return fmt.Errorf("%w (constraint %s): %w",
+				ErrProviderHasProfiles, pgErr.ConstraintName, err)
+		}
+		return fmt.Errorf("provider: delete: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrProviderNotFound
+	}
+	return nil
 }
 
 // SelectAll возвращает страницу Provider-ов и общее количество (без

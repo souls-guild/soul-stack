@@ -152,6 +152,13 @@ var auditedWriteRoutes = map[route]auditedRoute{
 	{http.MethodPut, "/v1/push-providers/{name}"}:    {events: []audit.EventType{audit.EventPushProviderUpdated}},
 	{http.MethodDelete, "/v1/push-providers/{name}"}: {events: []audit.EventType{audit.EventPushProviderDeleted}},
 
+	// providers + profiles — Cloud CRUD (middleware-audit, ADR-017). Без update
+	// (Provider/Profile иммутабельны).
+	{http.MethodPost, "/v1/providers"}:          {events: []audit.EventType{audit.EventProviderCreated}},
+	{http.MethodDelete, "/v1/providers/{name}"}: {events: []audit.EventType{audit.EventProviderDeleted}},
+	{http.MethodPost, "/v1/profiles"}:           {events: []audit.EventType{audit.EventProfileCreated}},
+	{http.MethodDelete, "/v1/profiles/{name}"}:  {events: []audit.EventType{audit.EventProfileDeleted}},
+
 	// heralds + tidings (middleware-audit).
 	{http.MethodPost, "/v1/heralds"}:          {events: []audit.EventType{audit.EventHeraldCreated}},
 	{http.MethodPut, "/v1/heralds/{name}"}:    {events: []audit.EventType{audit.EventHeraldUpdated}},

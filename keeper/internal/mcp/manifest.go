@@ -727,23 +727,88 @@ var catalogManifest = []toolEntry{
 		},
 	},
 
-	// --- Cloud (2) — stubs в M0.7.a (ждёт CloudDriver-инфраструктуры) ---
+	// --- Cloud Provider (4) — operator-facing CRUD реестра providers (ADR-017) ---
+	//
+	// keeper.provider.<verb> ↔ permission provider.<verb> ↔ REST POST/GET/DELETE
+	// /v1/providers*. Бизнес-логика — provider.Service; tool — транспорт.
+	// Диспатчатся только при непустом ProviderSvc; иначе «provider registry is
+	// not configured». БЕЗ update (Provider иммутабелен). credentials_ref
+	// отдаётся как vault-путь, секрет НЕ резолвится.
 	{
-		status: toolStatusStub,
+		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.provider.create",
-			Description:  "Создаёт Cloud Provider в реестре providers. Permission: provider.create.",
+			Description:  "Создаёт Cloud Provider в реестре providers (ADR-017). credentials_ref — vault-ссылка (vault:<path>), сам секрет НЕ резолвится. Permission: provider.create. 409 — name занят.",
 			InputSchema:  schemaProviderCreateInput,
 			OutputSchema: schemaProviderCreateOutput,
 		},
 	},
 	{
-		status: toolStatusStub,
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
+			Name:         "keeper.provider.read",
+			Description:  "Читает один Cloud Provider по имени. Permission: provider.read. credentials_ref — путь, секрет не резолвится. code=not-found, если записи нет.",
+			InputSchema:  schemaProviderByNameInput,
+			OutputSchema: schemaProviderCreateOutput,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
+			Name:         "keeper.provider.list",
+			Description:  "Перечисление Cloud Provider-ов (sort created_at DESC). Permission: provider.read.",
+			InputSchema:  schemaProviderListInput,
+			OutputSchema: schemaPaginatedListOutput,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
+			Name:         "keeper.provider.delete",
+			Description:  "Удаляет Cloud Provider. Permission: provider.delete. code=not-found, если записи нет; code=provider-has-profiles, если на него ссылаются Profile-и (FK RESTRICT).",
+			InputSchema:  schemaProviderByNameInput,
+			OutputSchema: schemaEmptyObject,
+		},
+	},
+
+	// --- Cloud Profile (4) — operator-facing CRUD реестра profiles (ADR-017) ---
+	//
+	// keeper.profile.<verb> ↔ permission profile.<verb> ↔ REST POST/GET/DELETE
+	// /v1/profiles*. БЕЗ update. VALUE params в audit НЕ кладутся (только ключи).
+	{
+		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.profile.create",
-			Description:  "Создаёт Cloud Profile (VM-параметры) в реестре profiles. Permission: profile.create.",
+			Description:  "Создаёт Cloud Profile (VM-spec поверх Provider-а) в реестре profiles (ADR-017). Permission: profile.create. 409 — name занят; validation-failed — provider не существует.",
 			InputSchema:  schemaProfileCreateInput,
 			OutputSchema: schemaProfileCreateOutput,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
+			Name:         "keeper.profile.read",
+			Description:  "Читает один Cloud Profile по имени. Permission: profile.read. code=not-found, если записи нет.",
+			InputSchema:  schemaProfileByNameInput,
+			OutputSchema: schemaProfileCreateOutput,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
+			Name:         "keeper.profile.list",
+			Description:  "Перечисление Cloud Profile-ей (sort created_at DESC) с опц. фильтром provider. Permission: profile.read.",
+			InputSchema:  schemaProfileListInput,
+			OutputSchema: schemaPaginatedListOutput,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
+			Name:         "keeper.profile.delete",
+			Description:  "Удаляет Cloud Profile. Permission: profile.delete. code=not-found, если записи нет.",
+			InputSchema:  schemaProfileByNameInput,
+			OutputSchema: schemaEmptyObject,
 		},
 	},
 
@@ -1931,7 +1996,7 @@ var (
 "additionalProperties":false,
 "required":["name","type","region","credentials_ref"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z][a-z0-9-]*$"},
+"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$"},
 "type":{"type":"string"},
 "region":{"type":"string"},
 "credentials_ref":{"type":"string","pattern":"^vault:"}}}`)
@@ -1955,7 +2020,7 @@ var (
 "additionalProperties":false,
 "required":["name","provider","params"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z][a-z0-9-]*$"},
+"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$"},
 "provider":{"type":"string"},
 "params":{"type":"object"},
 "cloud_init":{"type":"string"}}}`)
@@ -2176,6 +2241,41 @@ var (
 "cloud_init":{"type":"string"},
 "created_at":{"type":"string","format":"date-time"},
 "created_by_aid":{"type":"string"}}}`)
+
+	// Cloud Provider/Profile — read/delete (by-name) и list (paged) input-schemas
+	// (ADR-017). name-pattern symmetric с provider/profile.NamePattern (kebab 1..63).
+	schemaProviderByNameInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["name"],
+"properties":{
+"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Имя Cloud-Provider-а."}}}`)
+
+	schemaProviderListInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"properties":{
+"offset":{"type":"integer","minimum":0,"description":"Сдвиг от начала набора."},
+"limit":{"type":"integer","minimum":1,"description":"Размер страницы (дефолт 100)."}}}`)
+
+	schemaProfileByNameInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["name"],
+"properties":{
+"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Имя Cloud-Profile-а."}}}`)
+
+	schemaProfileListInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"properties":{
+"provider":{"type":"string","description":"Фильтр по имени Provider-а (опц.)."},
+"offset":{"type":"integer","minimum":0},
+"limit":{"type":"integer","minimum":1,"description":"Размер страницы (дефолт 100)."}}}`)
 
 	// Push-Provider (S7-2) — input/output schemas. name-pattern symmetric с
 	// pushprovider.NamePattern (`^[a-z][a-z0-9-]{0,62}$` — env-var-name-safe).

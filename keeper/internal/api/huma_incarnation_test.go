@@ -56,6 +56,8 @@ func TestHumaIncarnation_ChiCoexistence(t *testing.T) {
 		stubServiceHandler(t), nil, stubAugurHandler(t), stubOracleHandler(t),
 		nil,                                     // pushH
 		nil,                                     // pushProviderH
+		nil,                                     // providerH
+		nil,                                     // profileH
 		nil,                                     // errandH
 		nil,                                     // voyageH
 		nil,                                     // cadenceH

@@ -8,7 +8,7 @@
 - формат tool declaration по MCP spec;
 - async-convention `_apply_id`;
 - mapping ошибок RFC 7807 → MCP-tool error;
-- каталог 82 tool с input/output schemas;
+- каталог 89 tool с input/output schemas;
 - что **не** публикуется как MCP-tool;
 - формат SSE event-payloads для `GET /mcp/events?apply_id=<ULID>`.
 
@@ -88,7 +88,7 @@
 }
 ```
 
-По этому шаблону декларируется каждый из 82 tool каталога. Полное соответствие input/output schema полям HTTP endpoint-а — см. [operator-api.md → Endpoint-секции](operator-api.md#endpoint-секции).
+По этому шаблону декларируется каждый из 89 tool каталога. Полное соответствие input/output schema полям HTTP endpoint-а — см. [operator-api.md → Endpoint-секции](operator-api.md#endpoint-секции).
 
 **Enum serialization.** MCP-сервер использует тот же enum mapping (короткие snake_case значения без family-prefix: `"ready"`, `"connected"`, `"agent"`, …), что HTTP API — см. [operator-api.md → Conventions → Enum serialization](operator-api.md#conventions). Полные proto-константы (`INCARNATION_STATUS_READY`, …) в MCP input/output не пробрасываются.
 
@@ -149,6 +149,9 @@ RFC 7807 ProblemDetails Operator API ([operator-api.md → Error format](operato
 | `service-already-exists` | `name` Service-а занят в реестре `service_registry` (`keeper.service.register`). |
 | `service-not-registered` | `service` отсутствует в `keeper.yml → services[]`. |
 | `omen-already-exists` | `name` Omen-а занят в реестре `omens` (`keeper.augur.omen.create`). |
+| `provider-already-exists` | `name` Provider-а занят в реестре `providers` (`keeper.provider.create`). |
+| `profile-already-exists` | `name` Profile-я занят в реестре `profiles` (`keeper.profile.create`). |
+| `provider-has-profiles` | Удаление Provider-а заблокировано — на него ссылаются Profile-и (`keeper.provider.delete`; FK `ON DELETE RESTRICT`). |
 | `errand-not-cancellable` | Errand уже в терминальном статусе — отменять нечего (`keeper.errand.cancel`, ADR-033 slice E5). |
 | `internal-error` | Незапланированная ошибка; полная диагностика — в OTel-trace. |
 
@@ -156,7 +159,7 @@ RFC 7807 ProblemDetails Operator API ([operator-api.md → Error format](operato
 
 Расширение списка кодов — only-add симметрично Operator API.
 
-## Каталог 82 MCP-tool
+## Каталог 89 MCP-tool
 
 1:1 с HTTP endpoints из [operator-api.md → Mapping endpoint ↔ MCP-tool ↔ permission](operator-api.md#mapping-endpoint--mcp-tool--permission). Для каждого tool: input schema (краткая таблица полей), output schema, cross-link на endpoint-секцию operator-api.md как источник правды по семантике.
 
@@ -276,49 +279,81 @@ RFC 7807 ProblemDetails Operator API ([operator-api.md → Error format](operato
 
 Вынесены в доменный файл — [mcp-tools/push.md](mcp-tools/push.md): `keeper.push.apply`, `keeper.push.cleanup`. Источник правды по семантике — [operator-api/push.md](operator-api/push.md).
 
-### Cloud (2)
+### Cloud (8)
+
+CRUD реестров Cloud-Provider-ов (`providers`) и Cloud-Profile-ей (`profiles`, ADR-017, [cloud.md → Provider и Profile](cloud.md#provider-и-profile-в-postgres)). **Реализовано** (REST + MCP, один источник правды `provider.Service` / `profile.Service`): по четыре tool на сущность — `create` / `list` / `get` / `delete`. **`update`-tool-а нет** — Provider/Profile иммутабельны (смена параметров = `delete` + `create`, защита от частичной мутации spec живущих VM); поэтому read-видимость гейтит одна permission `provider.read` / `profile.read` (паттерн `operator.list`↔`read`). Селектор — NoSelector. Tools доступны только при подключённом реестре; при выключенном вызов возвращает `internal-error`. Async: нет. Источник правды по семантике — [cloud.md](cloud.md), permission-каталог — [rbac.md → Cloud](rbac.md#cloud-6--cloudmd).
+
+`credentials_ref` (только Provider) хранится и отдаётся как **путь** `vault:<mount>/<path>` — сами credentials API НЕ резолвит и НЕ возвращает; в audit пишется тоже путь (не секрет).
 
 #### `keeper.provider.create`
 
-Создание Provider. Permission: `provider.create`. **Tool без REST-роута** — `POST /v1/providers` не реализован (cloud-CRUD отложен, [operator-api.md → Cloud](operator-api.md#cloud--отложено-rest-роутов-нет)); tool остаётся в manifest как stub. Async: нет.
+Создание Provider. Permission: `provider.create`. Endpoint: `POST /v1/providers`. Audit: `provider.created`.
 
 **Input:**
 
 | Поле | Тип | Required | Смысл |
 |---|---|---|---|
 | `name` | `string` (kebab-case) | yes | Имя Provider. |
-| `type` | `string` | yes | Имя CloudDriver-плагина. |
+| `type` | `string` (kebab-case) | yes | Имя CloudDriver-плагина (`soul-cloud-<type>`). |
 | `region` | `string` | yes | Регион/zone. |
-| `credentials_ref` | `string` (`vault:<path>`) | yes | Vault-ref до credentials. |
+| `credentials_ref` | `string` (`vault:<path>`) | yes | Vault-ref до credentials (путь, не секрет). |
 
-**Output:**
+**Output:** `{name, type, region, credentials_ref, created_at (RFC 3339), created_by_aid?}` — зеркало input + server-side метки.
 
-| Поле | Тип | Смысл |
-|---|---|---|
-| `name`, `type`, `region`, `credentials_ref` | `string` | Зеркало input. |
-| `created_at` | `string` (RFC 3339) | Время создания. |
-| `created_by_aid` | `string` | AID создателя. |
+Ошибки: `provider-already-exists` (`409`, дубль `name`); `validation-failed` (битый `name`/`type`/`region`/`credentials_ref`).
+
+#### `keeper.provider.list`
+
+Перечисление Provider-ов (paged). Permission: `provider.read`. Endpoint: `GET /v1/providers`.
+
+**Input:** `{offset?, limit?}` (`limit` default `100`). **Output:** `{items: [...], offset, limit, total}`.
+
+#### `keeper.provider.get`
+
+Чтение одного Provider по имени. Permission: `provider.read`. Endpoint: `GET /v1/providers/{name}`.
+
+**Input:** `{name}`. **Output:** `providerViewOut`. Ошибки: `not-found`.
+
+#### `keeper.provider.delete`
+
+Удаление Provider. Permission: `provider.delete`. Endpoint: `DELETE /v1/providers/{name}`. Audit: `provider.deleted`.
+
+**Input:** `{name}`. **Output:** пустой объект. Ошибки: `not-found`; `provider-has-profiles` (`409` — на Provider ссылаются Profile-и, FK `ON DELETE RESTRICT`; сперва удалить зависимые Profile-и).
 
 #### `keeper.profile.create`
 
-Создание Profile. Permission: `profile.create`. **Tool без REST-роута** — `POST /v1/profiles` не реализован (cloud-CRUD отложен, [operator-api.md → Cloud](operator-api.md#cloud--отложено-rest-роутов-нет)); tool остаётся в manifest как stub. Async: нет.
+Создание Profile. Permission: `profile.create`. Endpoint: `POST /v1/profiles`. Audit: `profile.created`.
 
 **Input:**
 
 | Поле | Тип | Required | Смысл |
 |---|---|---|---|
 | `name` | `string` (kebab-case) | yes | Имя Profile. |
-| `provider` | `string` | yes | Имя зарегистрированного Provider. |
-| `params` | `object` | yes | Параметры VM, валидируются против `profile_schema` CloudDriver-плагина. |
+| `provider` | `string` | yes | Имя зарегистрированного Provider (FK). |
+| `params` | `object` | optional | Параметры VM (freeform jsonb; валидируются против `profile_schema` CloudDriver-плагина на scenario-слое, не в CRUD). |
 | `cloud_init` | `string` | optional | Сырая cloud-init userdata. |
 
-**Output:**
+**Output:** `{name, provider, params, cloud_init?, created_at, created_by_aid?}`.
 
-| Поле | Тип | Смысл |
-|---|---|---|
-| `name`, `provider`, `params`, `cloud_init` | `string` / `object` | Зеркало input. |
-| `created_at` | `string` (RFC 3339) | Время создания. |
-| `created_by_aid` | `string` | AID создателя. |
+Ошибки: `profile-already-exists` (`409`, дубль `name`); `validation-failed` (`422` — ссылка на несуществующий Provider (FK) либо битый `name`/`provider`).
+
+#### `keeper.profile.list`
+
+Перечисление Profile-ей (paged; опц. фильтр по Provider-у). Permission: `profile.read`. Endpoint: `GET /v1/profiles`.
+
+**Input:** `{provider?, offset?, limit?}`. **Output:** `{items: [...], offset, limit, total}`.
+
+#### `keeper.profile.get`
+
+Чтение одного Profile по имени. Permission: `profile.read`. Endpoint: `GET /v1/profiles/{name}`.
+
+**Input:** `{name}`. **Output:** `profileViewOut`. Ошибки: `not-found`.
+
+#### `keeper.profile.delete`
+
+Удаление Profile. Permission: `profile.delete`. Endpoint: `DELETE /v1/profiles/{name}`. Audit: `profile.deleted`.
+
+**Input:** `{name}`. **Output:** пустой объект. Ошибки: `not-found`.
 
 ### Push-Provider (5)
 
@@ -348,7 +383,7 @@ RFC 7807 ProblemDetails Operator API ([operator-api.md → Error format](operato
 
 ### Будущие чтения и удаления
 
-Каталог 82 tool — 1:1 с MVP-каталогом permissions из [rbac.md → Каталог permissions](rbac.md#каталог-permissions). Чтения / удаления, отложенные до появления соответствующих permissions (`operator.get`, `soul.get`, `provider.list`, `profile.list`, `provider.delete`, `profile.delete` и т.п.), добавляются в этот каталог одним PR с расширением `rbac.md` + `operator-api.md` + этого документа.
+Каталог 89 tool — 1:1 с MVP-каталогом permissions из [rbac.md → Каталог permissions](rbac.md#каталог-permissions). Чтения / удаления, отложенные до появления соответствующих permissions (`operator.get`, `soul.get` и т.п.), добавляются в этот каталог одним PR с расширением `rbac.md` + `operator-api.md` + этого документа. Cloud-CRUD (`provider.*` / `profile.*`) — больше не отложен: реализован полностью (create/list/get/delete по каждой сущности, см. [§ Cloud](#cloud-8)).
 
 ## SSE event payloads
 

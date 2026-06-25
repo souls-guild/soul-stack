@@ -96,6 +96,18 @@ var pathAllowlist = map[route]string{
 	{method: http.MethodPut, path: "/v1/push-providers/{name}"}:    "S7-2 push-provider update: роут подключён ТОЛЬКО при non-nil pushProviderH",
 	{method: http.MethodDelete, path: "/v1/push-providers/{name}"}: "S7-2 push-provider delete: роут подключён ТОЛЬКО при non-nil pushProviderH",
 
+	// provider.* / profile.* — Cloud CRUD (ADR-017): роуты подключаются ТОЛЬКО
+	// при non-nil providerH/profileH; drift-test собирает router с nil → в спеке
+	// объявлены, в роутере отсутствуют (документированный opt-in, паттерн push-provider).
+	{method: http.MethodPost, path: "/v1/providers"}:          "ADR-017 provider create: роут подключён ТОЛЬКО при non-nil providerH",
+	{method: http.MethodGet, path: "/v1/providers"}:           "ADR-017 provider list: роут подключён ТОЛЬКО при non-nil providerH",
+	{method: http.MethodGet, path: "/v1/providers/{name}"}:    "ADR-017 provider get: роут подключён ТОЛЬКО при non-nil providerH",
+	{method: http.MethodDelete, path: "/v1/providers/{name}"}: "ADR-017 provider delete: роут подключён ТОЛЬКО при non-nil providerH",
+	{method: http.MethodPost, path: "/v1/profiles"}:           "ADR-017 profile create: роут подключён ТОЛЬКО при non-nil profileH",
+	{method: http.MethodGet, path: "/v1/profiles"}:            "ADR-017 profile list: роут подключён ТОЛЬКО при non-nil profileH",
+	{method: http.MethodGet, path: "/v1/profiles/{name}"}:     "ADR-017 profile get: роут подключён ТОЛЬКО при non-nil profileH",
+	{method: http.MethodDelete, path: "/v1/profiles/{name}"}:  "ADR-017 profile delete: роут подключён ТОЛЬКО при non-nil profileH",
+
 	// push-runs list: роут подключён ТОЛЬКО при non-nil pushH (UI-4); drift-test
 	// собирает router с pushH=nil. Парный per-id detail (`GET /v1/push/{apply_id}`)
 	// и `POST /v1/push/apply` уже в allowlist выше.
@@ -184,6 +196,8 @@ func collectRoutes(t *testing.T) map[route]struct{} {
 		stubOracleHandler(t),
 		nil, // pushH — push.*-роуты подключаются только при non-nil pushH (router.go); сейчас в allowlist
 		nil, // pushProviderH — push-provider.*-роуты подключаются только при non-nil; в allowlist
+		nil, // providerH — provider.*-роуты подключаются только при non-nil; в allowlist
+		nil, // profileH — profile.*-роуты подключаются только при non-nil; в allowlist
 		nil, // errandH — errand.*-роуты подключаются только при non-nil errandH; в allowlist
 		nil, // voyageH — voyage.*-роуты подключаются только при non-nil voyageH (ADR-043 S5); в allowlist
 		nil, // cadenceH — cadence.*-роуты подключаются только при non-nil cadenceH (ADR-046 S4); в allowlist
