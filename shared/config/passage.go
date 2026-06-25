@@ -25,6 +25,13 @@ package config
 // Все они резолвятся Keeper-side ДО dispatch, поэтому обязаны видеть register
 // предыдущего Passage → определяют Passage.
 //
+// roster-refresh граница (ADR-0061 §S2, ОТДЕЛЬНАЯ ОСЬ от register): задача
+// `core.soul.registered` с `refresh_soulprint: true` — passage-определяющий эмиттер
+// «roster-refreshed»; roster-потребитель (on:[incarnation.name] / soulprint.hosts /
+// soulprint.self.* / опущенный on:) ПОСЛЕ него едет в следующий Passage. Это не
+// register-граф (refresh не вводит register-ссылок → reads⊆refs не затрагивается);
+// логика — в passage_refresh.go, ребро вшито в visit() ниже. См. passage_refresh.go.
+//
 // requisites (`onchanges`/`onfail`/`require`) — НЕ passage-определяющие (адресные
 // ссылки, не интерполяция). Flow-control CEL `when`/`changed_when`/`failed_when`/
 // `retry.until` тоже НЕ определяет passage (ADR-056:85) — это Soul-side per-task
@@ -130,9 +137,25 @@ func Stratify(tasks []Task) (Passage, error) {
 	emitter := emitterIndex(tasks)
 	reads := make([][]string, n)
 	emits := make([]bool, n)
+	// roster-refresh граница (ADR-0061 §S2): refresh-эмиттеры (core.soul.registered
+	// с refresh_soulprint: true) и roster-потребители (on:[incarnation.name] /
+	// soulprint.hosts / soulprint.self.* / опущенный on:). Любой roster-потребитель
+	// ПОСЛЕ refresh-эмиттера (program-order) едет в следующий Passage — иначе
+	// отрендерился бы по СТАРОМУ roster (silent-wrong-target, ★ БЛОКЕР ADR-056).
+	// refreshEmitters пуст → граница не активна, Count БИТ-В-БИТ как до ADR-0061.
+	var refreshEmitters []int
+	readsRoster := make([]bool, n)
 	for i := range tasks {
 		reads[i] = taskRegisterReads(&tasks[i])
 		emits[i] = taskEmitsRegister(&tasks[i])
+		if taskIsRefreshEmitter(&tasks[i]) {
+			refreshEmitters = append(refreshEmitters, i)
+		}
+	}
+	if len(refreshEmitters) > 0 {
+		for i := range tasks {
+			readsRoster[i] = taskReadsRoster(&tasks[i])
+		}
 	}
 
 	// Висячая ссылка: читатель register.X, которого никто не эмитит. Падаем ДО
@@ -193,6 +216,26 @@ func Stratify(tasks []Task) (Passage, error) {
 				}
 				if p > level {
 					level = p
+				}
+			}
+		}
+
+		// roster-refresh ребро (ADR-0061 §S2): задача-roster-потребитель едет в
+		// Passage СТРОГО ПОСЛЕ любого ПРЕДШЕСТВУЮЩЕГО (program-order) refresh-
+		// эмиттера. Это roster-ось, симметричная register-ребру выше: refresh-эмиттер
+		// сигналит «roster вырос», потребитель обязан увидеть выросший набор. Цикла
+		// тут быть не может — ребро строго направлено по program-order (j < i).
+		if readsRoster[i] {
+			for _, j := range refreshEmitters {
+				if j >= i {
+					break // refreshEmitters отсортированы по возрастанию (append в порядке обхода).
+				}
+				p, err := visit(j)
+				if err != nil {
+					return 0, err
+				}
+				if p+1 > level {
+					level = p + 1
 				}
 			}
 		}

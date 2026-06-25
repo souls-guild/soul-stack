@@ -84,6 +84,14 @@
 
 **Flow-control CEL** (`when:` / `changed_when:` / `failed_when:` / `retry.until:`) — **НЕ passage-определяющий**: исполняется Soul-side (sandboxed, [ADR-012(d)](0012-keeper-soul-grpc.md)) из register, накопленного в рамках одного `ApplyRequest`. **Не включается в граф стратификации** (`collectTaskReads`) — см. amend (2026-06-21) ниже. `loop.when:` — исключение: остаётся passage-определяющим (fan-out цикла строится Keeper-side ДО dispatch, как `loop.items:`).
 
+**Класс «roster-refresh» — ОТДЕЛЬНАЯ ось passage-определяющего ребра (amend [ADR-061](0061-onboarding-await-and-midrun-reresolve.md) §S2).** Рядом с register-источниками таблицы выше стратификатор учитывает второй, независимый класс passage-определяющего ребра — **roster-refresh**:
+
+| Класс ребра | Эмиттер | Потребитель | Семантика |
+|---|---|---|---|
+| roster-refresh | `core.soul.registered` с `refresh_soulprint: true` | roster-чтение: `on: [incarnation.name]` / опущенный `on:` / `soulprint.hosts` / `soulprint.where(...)` / `soulprint.self.*` | потребитель едет в Passage строго ПОСЛЕ refresh-эмиттера (program-order), иначе render отрендерил бы по СТАРОМУ roster (silent-wrong-target) |
+
+Это **НЕ register-граф**: refresh-граница не вводит register-ссылок, поэтому инвариант reads⊆refs (ниже) её НЕ затрагивает — roster-ось ортогональна register-оси. На refresh-границе scenario-runner пере-резолвит roster **live-снимком** текущего online-набора ([ADR-061 §S3](0061-onboarding-await-and-midrun-reresolve.md)). Логика — `shared/config/passage_refresh.go` (ребро вшито в `Stratify`); guard-тесты — `shared/config/passage_refresh_test.go`.
+
 **Amend (2026-06-21): flow-control gating — narrow-fix стратификатора + cross-passage UNSUPPORTED (FC-5).** Прежний канон включал flow-control (`when`/`changed_when`/`failed_when`/`retry.until`) в граф стратификатора как «conservative over-approximation». Это был **БАГ**: register-зависимый `when:` **расщеплял** probe и его same-passage-потребителя по разным Passage (probe→Passage 0, `when: register.X`-потребитель→Passage 1), где Soul cross-passage register **не видит** → `no such key`, задача FAILED. `when` (Soul-side gating, [ADR-012(d)]) cross-passage **не умеет**; `where` (Keeper-side targeting) — умеет (Keeper пере-рендерит `where` с накопленным register предыдущего Passage). Асимметрия легитимна.
 
 - **Narrow-fix:** `when`/`changed_when`/`failed_when`/`retry.until` **убраны из `collectTaskReads`** (passage-определяющих reads). Register-зависимый `when` БОЛЬШЕ НЕ расщепляет Passage → probe и same-passage when-потребитель в одном Passage → Soul видит register → `when` работает same-passage (как задумано [ADR-012(d)]).

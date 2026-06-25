@@ -24,9 +24,10 @@
 // PresenceChecker) до `await_min_count` online или `await_timeout`. B1-strict:
 // недобор кворума к таймауту → шаг failed (см. await.go).
 //
-// `refresh_soulprint` MVP принимается и валидируется (mid-run re-resolve roster
-// — слайсы S2/S3, ADR-061): эхо-выдаётся в output как `refreshed: false`, пока
-// scenario-runner не научится пере-резолвить roster между Passage.
+// `refresh_soulprint` (ADR-061 §S2/§S3 — оживлён): при `true` шаг становится
+// passage-определяющей границей (Stratify), а scenario-runner ПОСЛЕ его успеха
+// пере-резолвит roster перед следующим Passage (run.go stage-loop). Output несёт
+// `refreshed` = значение флага (true ⇒ re-resolve гарантированно выполнится).
 package soul
 
 import (
@@ -190,10 +191,13 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		return util.SendFailed(stream, fmt.Sprintf("unknown mode %q (want append/replace/remove)", modeParam))
 	}
 
-	// refresh_soulprint принимается и валидируется как известный флаг (ADR-061);
-	// mid-run re-resolve roster — слайсы S2/S3 (scenario-runner ещё не
-	// пере-резолвит roster между Passage). Echo в output как refreshed:false.
-	_, _, err = util.OptBoolParam(req.Params, "refresh_soulprint")
+	// refresh_soulprint (ADR-061 §S3 — оживлён). При true scenario-runner ПОСЛЕ
+	// успеха этого шага пере-резолвит roster перед СЛЕДУЮЩИМ Passage (S2 уже сделала
+	// шаг passage-определяющим, S3 исполняет re-resolve в run.go stage-loop). Поэтому
+	// echo refreshed = значение флага: true ⇒ re-resolve гарантированно выполнится
+	// (созданные+онбордившиеся хосты войдут в roster последующих Passage). false /
+	// отсутствие ⇒ refreshed:false (поведение до ADR не меняется).
+	refreshSoulprint, _, err := util.OptBoolParam(req.Params, "refresh_soulprint")
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
@@ -251,7 +255,7 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		}
 	}
 
-	out := buildOutput(sids, savedFirst, modeParam, anyCreated, removedFirst, awaitCfg != nil, online, pending, satisfied)
+	out := buildOutput(sids, savedFirst, modeParam, anyCreated, removedFirst, refreshSoulprint, awaitCfg != nil, online, pending, satisfied)
 	return util.SendFinal(stream, anyChanged, out)
 }
 
@@ -287,11 +291,11 @@ func (m *Module) registerOne(ctx context.Context, sid string, wanted []string, m
 // форму (`sid` строкой, `coven`/`removed` от единственного хоста); список —
 // `sid` массивом. Поля барьера (online/pending/satisfied) добавляются только
 // при await.
-func buildOutput(sids, savedFirst []string, mode string, created bool, removedFirst []string, awaited bool, online, pending []string, satisfied bool) map[string]any {
+func buildOutput(sids, savedFirst []string, mode string, created bool, removedFirst []string, refreshed, awaited bool, online, pending []string, satisfied bool) map[string]any {
 	out := map[string]any{
 		"mode":      mode,
 		"created":   created,
-		"refreshed": false,
+		"refreshed": refreshed,
 		"coven":     toAnySlice(savedFirst),
 		"removed":   toAnySlice(removedFirst),
 	}

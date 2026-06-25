@@ -168,6 +168,50 @@ func TestApply_CreatesSoulWhenAbsent_Append(t *testing.T) {
 	}
 }
 
+// TestApply_RefreshSoulprint_OutputTrue — ★ ADR-061 §S3 (оживление). refresh_soulprint:
+// true → output.refreshed == true (заглушка false снята): scenario-runner пере-резолвит
+// roster перед следующим Passage. Ловит регресс «хардкод refreshed:false».
+func TestApply_RefreshSoulprint_OutputTrue(t *testing.T) {
+	fs := newFakeStore()
+	m := coremodsoul.New(fs)
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State: "registered",
+		Params: mustStruct(t, map[string]any{
+			"sid":               "h1.example.com",
+			"coven":             []any{"prod"},
+			"refresh_soulprint": true,
+		}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	out := stream.Last().Output.AsMap()
+	if out["refreshed"] != true {
+		t.Errorf("refreshed=%v, want true (ADR-061 §S3: флаг оживлён)", out["refreshed"])
+	}
+}
+
+// TestApply_NoRefreshSoulprint_OutputFalse — без refresh_soulprint → refreshed:false
+// (поведение до ADR-061 не меняется: re-resolve не запрашивается).
+func TestApply_NoRefreshSoulprint_OutputFalse(t *testing.T) {
+	fs := newFakeStore()
+	m := coremodsoul.New(fs)
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State: "registered",
+		Params: mustStruct(t, map[string]any{
+			"sid":   "h1.example.com",
+			"coven": []any{"prod"},
+		}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	out := stream.Last().Output.AsMap()
+	if out["refreshed"] != false {
+		t.Errorf("refreshed=%v, want false (нет refresh_soulprint)", out["refreshed"])
+	}
+}
+
 func TestApply_Append_Idempotent_NoChange(t *testing.T) {
 	fs := newFakeStore()
 	fs.byID["h1.example.com"] = &keepersoul.Soul{SID: "h1.example.com", Coven: []string{"prod", "db"}}

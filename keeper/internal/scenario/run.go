@@ -16,6 +16,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
+	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 	"github.com/souls-guild/soul-stack/shared/audit"
 	"github.com/souls-guild/soul-stack/shared/config"
 	"github.com/souls-guild/soul-stack/shared/diag"
@@ -187,8 +188,11 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	}
 	scn.Tasks = expanded
 
-	// 3. Резолв хостов прогона (roster по Coven-метке incarnation).
-	hosts, err := r.deps.Topology.LoadIncarnationHosts(ctx, spec.IncarnationName)
+	// 3. Резолв хостов прогона (roster по Coven-метке incarnation). Вынесен в
+	//    resolveRoster — он вызывается ПОВТОРНО в stage-loop на refresh-границах
+	//    (mid-run re-resolve, ADR-0061 §S3): после успешного `refresh_soulprint:
+	//    true`-шага созданные+онбордившиеся хосты входят в roster следующего Passage.
+	hosts, err := r.resolveRoster(ctx, spec.IncarnationName)
 	if err != nil {
 		abort("topology_failed", err)
 		return
@@ -280,6 +284,15 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		return
 	}
 	staged := passage.Count > 1
+
+	// 4.91. Roster-refresh границы (ADR-0061 §S2/§S3). refreshBoundaries[P] — нужен
+	//       ли re-resolve roster ПЕРЕД render-ом Passage P (в Passage P-1 завершился
+	//       успешный `refresh_soulprint: true`-шаг → онбордившиеся хосты вошли в
+	//       souls+coven → live-снимок roster изменился). out[0]=false (up-front roster).
+	//       Без refresh-эмиттера все false → re-resolve не выполняется (БИТ-В-БИТ).
+	//       RefreshBoundaries — чистая функция над тем же scn.Tasks и passage:
+	//       границы стоят перед каждым Passage, следующим за Passage с refresh-эмиттером.
+	refreshBoundaries := config.RefreshBoundaries(scn.Tasks, passage)
 
 	// 4.92. Within-block register-зависимость — KEEPER-SIDE FAIL-CLOSED страховка
 	//       (ADR-056, §«Риски — silent-wrong-target»). Потомок block:, читающий
@@ -449,6 +462,34 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		passageTasks, passagePlans := tasks, plans
 		for p := 0; p < passage.Count; p++ {
 			if p > 0 {
+				// Mid-run re-resolve roster (ADR-0061 §S3) на refresh-границе: в
+				// Passage P-1 завершился успешный `refresh_soulprint: true`-шаг → его
+				// барьер сошёлся (созданные+онбордившиеся хосты записаны в souls+coven)
+				// → пере-резолвим roster ПЕРЕД render-ом Passage P. Семантика re-resolve —
+				// СВЕЖИЙ LIVE-СНИМОК roster incarnation на refresh-границе (resolveRoster →
+				// LoadIncarnationHosts → filterAlive): отражает ТЕКУЩИЙ online-набор. Он
+				// растёт по мере онбординга провиженных хостов (созданные VM поднялись →
+				// видны), но это НЕ монотонная операция: хост, ушедший offline к границе
+				// (упал lease / status≠connected), из live-снимка ИСКЛЮЧАЕТСЯ — таргетинг
+				// идёт на реально-online набор (на offline-хост роль катить не надо).
+				// Обновлённый renderIn.Hosts прокидывается в повторный Render → soulprint.hosts
+				// и on:[incarnation.name]-таргетинг Passage P видят актуальный набор
+				// (resolveTargets/soulprint.hosts строятся из in.Hosts). Roster СТАБИЛЕН в
+				// пределах Passage: re-resolve только на границах, per-Passage детерминизм
+				// (волны/run_once/assert неизменны внутри Passage). Re-resolve fail → abort
+				// (не молча на старом roster).
+				if refreshBoundaries[p] {
+					grown, rerr := r.resolveRoster(ctx, spec.IncarnationName)
+					if rerr != nil {
+						abort("topology_failed", fmt.Errorf("scenario: re-resolve roster перед Passage %d: %w", p, rerr))
+						return
+					}
+					prevSize := len(renderIn.Hosts)
+					renderIn.Hosts = grown
+					log.Info("scenario: roster пере-резолвлен на refresh-границе — live-снимок (ADR-0061 §S3)",
+						slog.Int("passage", p), slog.Int("roster_size", len(grown)), slog.Int("prev_roster_size", prevSize))
+				}
+
 				// Staged-прогон, P>0: повторный Render с накопленным per-host register
 				// Passage < P. Задачи будущих Passage (> P) эмитятся placeholder-ами
 				// (register не готов, ADR-056 §в.1); активный Passage P и предыдущие —
@@ -615,6 +656,17 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	// выше своим путём — destroy_completed/destroy_failed; provals — через abort).
 	// Best-effort: не валит уже-успешный прогон (result=runResultOK зафиксирован).
 	r.emitRunCompleted(ctx, spec, runCompletedStatusSuccess, tasks, plans, log)
+}
+
+// resolveRoster резолвит roster хостов прогона по корневой Coven-метке
+// incarnation (online-souls + soulprint + declared/Choir-роль). Вынесено из run()
+// шага 3, потому что вызывается ПОВТОРНО в stage-loop на refresh-границах
+// (mid-run re-resolve, ADR-0061 §S3): один и тот же путь резолва даёт up-front
+// roster и пере-резолвленный roster между Passage. Источник истины presence —
+// Redis SID-lease (фаза 2 Resolver), та же, что у барьера онбординга `await_online`
+// — поэтому re-resolve видит ровно тех, кого барьер refresh-шага дождался online.
+func (r *Runner) resolveRoster(ctx context.Context, incarnationName string) ([]*topology.HostFacts, error) {
+	return r.deps.Topology.LoadIncarnationHosts(ctx, incarnationName)
 }
 
 // lockRun резолвит incarnation, проверяет статус под FOR UPDATE и переводит её

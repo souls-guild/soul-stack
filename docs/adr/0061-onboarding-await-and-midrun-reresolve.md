@@ -2,7 +2,7 @@
 
 > **Статус: active.** Решение пользователя + дизайн architect-а (эпик «Путь-2», слайсы S0 (этот ADR) / S1 (пилот await_online) / S2 (Stratify-passage-граница) / S3 (фактический re-resolve roster в run.go)). Канон фиксируется docs-first ДО кода; этот ADR **amends [ADR-009](0009-scenario-dsl.md), [ADR-056](0056-staged-render-passage.md), [ADR-006](0006-cache-redis.md), [ADR-017](0017-keeper-side-core.md)**. propose-and-wait закрыт (новые способности — флаги на существующем `core.soul.registered`, не новая сущность).
 >
-> **Прогресс имплементации.** S1 (пилот `await_online`) реализован: блокирующий poll Redis SID-lease + B1-strict fail + list-SID + потолок `keeper.yml::max_await_timeout`. S2/S3 (Stratify-passage-граница для `refresh_soulprint` + фактический re-resolve roster в run.go) — **не реализованы**: флаг `refresh_soulprint` валидируется, но re-resolve остаётся заглушкой (`refreshed: false`), как до этого ADR. WB cloud e2e — отдельный слайс.
+> **Прогресс имплементации.** S1 (пилот `await_online`) реализован: блокирующий poll Redis SID-lease + B1-strict fail + list-SID + потолок `keeper.yml::max_await_timeout`. S2 (Stratify-passage-граница для `refresh_soulprint`) и S3 (фактический re-resolve roster в run.go) **реализованы**: `refresh_soulprint: true` делает шаг passage-определяющим эмиттером, scenario-runner пере-резолвит roster на refresh-границе (live-снимок, см. §S3), `register.<name>.refreshed` эхает значение флага. WB cloud e2e — отдельный слайс.
 
 **Контекст.** Целевой сценарий — **один create-scenario** разворачивает N-шардовый кластер из «ничего»:
 
@@ -43,20 +43,24 @@
 
 Оживление флага **`refresh_soulprint: true`** на `core.soul.registered` (сейчас заглушка, см. Контекст).
 
-**Семантика.** После **успеха** шага `core.soul.registered` с `refresh_soulprint: true` scenario-runner **пере-резолвит roster инкарнации перед СЛЕДУЮЩИМ Passage**. Созданные+онбордившиеся хосты становятся видны последующим шагам: `soulprint.hosts`, `on: [incarnation.name]`, `soulprint.self.*` уже включают новые SID.
+**Семантика.** После **успеха** шага `core.soul.registered` с `refresh_soulprint: true` scenario-runner **пере-резолвит roster инкарнации перед СЛЕДУЮЩИМ Passage**. Онбордившиеся хосты становятся видны последующим шагам: `soulprint.hosts`, `on: [incarnation.name]`, `soulprint.self.*` уже включают актуальный online-набор.
 
-**Ослабление инварианта стабильности roster (amends [ADR-009 §7](0009-scenario-dsl.md)).** Прежний инвариант — «roster прогона стабилен на весь прогон». Новый — **«roster стабилен в пределах одного Passage»** (не всего прогона). Между Passage roster может вырасти, **если** в завершившемся Passage был успешный `refresh_soulprint: true`-шаг.
+**Re-resolve = live-snapshot (не монотонный рост).** Пере-резолв на refresh-границе — это **свежий live-снимок текущего online-набора инкарнации** (`topology.LoadIncarnationHosts → filterAlive`), а НЕ объединение со старым roster. Это правильная семантика для целевого сценария: роль катится на реально-online хосты.
 
-- **Монотонный рост (только +хосты).** Re-resolve **добавляет** созданные+онбордившиеся хосты; удаление хостов из roster mid-run **запрещено** (иначе таргетинг последующих шагов стал бы недетерминирован относительно уже принятых решений). Re-resolve = `roster ∪ newly_online`, не полная переподмена.
-- **Barrier/state-commit-инвариант §7 НЕ ослаблен.** `incarnation.state` по-прежнему коммитится **один раз** после последнего Passage. Re-resolve — ось **roster** (кого таргетить), не ось коммита.
+- Набор **растёт** по мере онбординга провиженных хостов (созданные VM подняли EventStream → видны).
+- Набор может и **уменьшиться**: хост P0-roster, ушедший offline к refresh-границе (упал lease / `status≠connected`), из live-снимка **исключается** — на offline-хост роль катить не надо. Это не «удаление хоста из плана», а отражение факта: таргетинг идёт на актуальный online-набор, как и обычный up-front roster.
 
-**Реализация re-resolve — S3 (run.go).** Этот ADR фиксирует контракт; фактический пере-резолв (run-goroutine + Acolyte-путь, повторный `topology.Resolve` с накоплением roster между Passage) — отдельный слайс. До S3 `refresh_soulprint` **валидируется как известный флаг** (не no-op-ошибка), но re-resolve не выполняется, `register.<name>.refreshed: false`.
+**Ослабление инварианта стабильности roster (amends [ADR-009 §7](0009-scenario-dsl.md)).** Прежний инвариант — «roster прогона стабилен на весь прогон». Новый — **«roster стабилен в пределах одного Passage; на refresh-границе пере-резолвится (live-снимок)»**. Между Passage roster пере-резолвится, **если** в завершившемся Passage был успешный `refresh_soulprint: true`-шаг.
+
+**Barrier/state-commit-инвариант §7 НЕ ослаблен.** `incarnation.state` по-прежнему коммитится **один раз** после последнего Passage. Re-resolve — ось **roster** (кого таргетить), не ось коммита.
+
+**Реализация re-resolve — S3 (run.go).** Реализован: stage-loop run.go на refresh-границе (`RefreshBoundaries`) вызывает `resolveRoster` (live-снимок) и прокидывает результат в повторный Render следующего Passage; `register.<name>.refreshed` эхает значение флага. Re-resolve fail → abort (не молча на старом roster).
 
 ## Stratify — `refresh_soulprint` делает шаг passage-определяющим (S2)
 
-Чтобы re-resolve проявился, потребители выросшего roster должны оказаться в **следующем** Passage относительно `refresh_soulprint`-шага. Иначе — silent-wrong-target ([ADR-056](0056-staged-render-passage.md): render до dispatch видел бы старый roster).
+Чтобы re-resolve проявился, потребители обновлённого roster должны оказаться в **следующем** Passage относительно `refresh_soulprint`-шага. Иначе — silent-wrong-target ([ADR-056](0056-staged-render-passage.md): render до dispatch видел бы старый roster).
 
-**Контракт (amends [ADR-056](0056-staged-render-passage.md)).** Задача `core.soul.registered` с `refresh_soulprint: true` — **passage-определяющая граница**, симметрично probe-эмиттеру `register.X`. Стратификатор ([ADR-056(б)](0056-staged-render-passage.md)) укладывает любого потребителя `soulprint.hosts` / `on: [incarnation.name]` / `soulprint.self.*` в Passage **строго ПОСЛЕ** `refresh_soulprint`-шага. Источник этой зависимости — статический признак `refresh_soulprint: true` на задаче (как `register: X` — для probe). **Реализация стратификации — S2** (этот ADR фиксирует контракт).
+**Контракт (amends [ADR-056](0056-staged-render-passage.md)).** Введён **НОВЫЙ КЛАСС passage-определяющего ребра — «roster-refresh»**, ОТДЕЛЬНАЯ ось от register-зависимости и program-order: задача `core.soul.registered` с `refresh_soulprint: true` — passage-определяющий эмиттер сигнала «roster-refreshed». Стратификатор ([ADR-056(б)](0056-staged-render-passage.md)) укладывает любого roster-потребителя (`soulprint.hosts` / `soulprint.where(...)` / `on: [incarnation.name]` / опущенный `on:` / `soulprint.self.*`) в Passage **строго ПОСЛЕ** `refresh_soulprint`-шага. Источник этой зависимости — статический признак `refresh_soulprint: true` на задаче (как `register: X` — для probe), но это **не register-граф**: refresh-граница НЕ вводит register-ссылок, поэтому инвариант reads⊆refs ([ADR-056](0056-staged-render-passage.md)) НЕ затрагивается (roster-ось ортогональна register-оси). Семантика re-resolve на этой границе — **live-snapshot** (§S3, не «монотонный рост»). **Реализация — S2** (`shared/config/passage_refresh.go`, ребро вшито в `Stratify`).
 
 ## list-SID — регистрация+ожидание N хостов одним шагом (S1)
 
@@ -86,18 +90,18 @@ Single-binary провижн-прогон с долгим барьером `awai
 - **Presence по PG `souls.status`.** Отвергнут: статус отстаёт (lifecycle-снимок), а не реальный online; lease — конструктивно авторитетный признак живого EventStream ([ADR-006(a)](0006-cache-redis.md)). Барьер по PG ложно «увидел» бы хост online до фактического стрима.
 - **B0/B2 failure-семантики** (best-effort продолжение при частичном кворуме / warn-без-fail). Отвергнуты в пользу **B1-strict** (решение пользователя): частично-поднятый кластер не должен молча получить роль на неполном наборе — лучше `error_locked` с явной диагностикой `pending[]`.
 - **Тихое обрезание `await_timeout` до потолка.** Отвергнуто: явная ошибка `failed` лучше скрытого изменения заявленного поведения.
-- **Полная переподмена roster при re-resolve.** Отвергнута: только монотонный рост (`∪ newly_online`) — удаление хостов mid-run сделало бы таргетинг недетерминированным относительно уже принятых решений.
+- **Монотонный рост `roster ∪ newly_online` (только добавление).** Рассматривался, но отвергнут в пользу **live-snapshot**: re-resolve читает свежий online-набор инкарнации. Это правильная семантика для целевого сценария — роль катится на реально-online хосты; хост, ушедший offline к refresh-границе, исключается (катить роль на упавший хост не надо). Объединение со старым roster тащило бы offline-хост в таргетинг. Детерминизм сохраняется: roster стабилен В ПРЕДЕЛАХ Passage, re-resolve только на границах.
 
 ## Amends
 
-- **[ADR-009 §7](0009-scenario-dsl.md)** — инвариант стабильности roster ослаблен: «стабилен в пределах Passage» (не всего прогона), монотонный рост между Passage при `refresh_soulprint`. Barrier/state-commit-инвариант §7 НЕ затронут.
-- **[ADR-056](0056-staged-render-passage.md)** — `refresh_soulprint: true` делает задачу passage-определяющей границей (симметрично probe-эмиттеру); потребители выросшего roster стратифицируются в следующий Passage.
+- **[ADR-009 §7](0009-scenario-dsl.md)** — инвариант стабильности roster ослаблен: «стабилен в пределах Passage; на refresh-границе пере-резолвится (live-снимок)» (не «стабилен на весь прогон»). Barrier/state-commit-инвариант §7 НЕ затронут.
+- **[ADR-056](0056-staged-render-passage.md)** — введён новый класс passage-определяющего ребра «roster-refresh» (отдельная ось от register/program-order): `refresh_soulprint: true` делает задачу passage-определяющим эмиттером; roster-потребители стратифицируются в следующий Passage. Refresh-граница не вводит register-ссылок → reads⊆refs не затрагивается.
 - **[ADR-006](0006-cache-redis.md)** — Redis SID-lease получает дополнительного потребителя: источник истины барьера онбординга `await_online`.
 - **[ADR-017](0017-keeper-side-core.md)** — `core.soul.registered` расширен барьером онбординга + оживлён `refresh_soulprint`; новый config-потолок `keeper.yml::max_await_timeout`.
 
 ## DoD
 
 - S1 (этот слайс): `await_online` блокирует на Redis-lease до `await_min_count`/timeout; B1-strict fail; list-SID; потолок `max_await_timeout`; guard-тесты (ждёт→online; B1 timeout→failed; кворум→ok; источник=lease не PG; потолок).
-- S2: стратификатор укладывает потребителей roster после `refresh_soulprint`-шага.
-- S3: scenario-runner пере-резолвит roster между Passage; монотонный рост; `register.<name>.refreshed: true`.
+- S2: стратификатор укладывает потребителей roster после `refresh_soulprint`-шага (новый класс ребра «roster-refresh»).
+- S3: scenario-runner пере-резолвит roster на refresh-границе (live-snapshot текущего online-набора); `register.<name>.refreshed` эхает флаг.
 - Открытый риск: standalone staged-recovery долгого барьера ([ADR-056 §S4](0056-staged-render-passage.md)) — provision-сценарии рекомендуется гнать через Voyage.
