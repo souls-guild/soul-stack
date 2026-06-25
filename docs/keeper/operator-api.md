@@ -446,9 +446,22 @@ CRUD топологии Choir/Voice внутри инкарнации (`/v1/inca
 
 `GET /v1/permissions` — машиночитаемый каталог RBAC-permissions (источник — `rbac.catalog.go`), UI фетчит реальные имена для назначения прав роли. `GET /v1/event-types` — машиночитаемый каталог event-types, допустимых для подписки [Tiding](operator-api/tidings.md) (источник — `herald/eventtypes.go`, тот же scope, что валидирует CRUD Tiding); UI Tiding-формы фетчит допустимые типы вместо хардкода. Тело — две группы: `areas` (области area-glob-подписки, готовая форма `<area>.*` — `scenario_run.*`/`command_run.*`/`voyage.*`/`cadence.*`) + `point_events` (точечные типы вне area-glob — `incarnation.drift_checked`/`incarnation.run_completed`). `GET /v1/me/permissions` — эффективные права текущего Архонта (показывать/прятать кнопки). Все три монтируются всегда (статика из пакетов `rbac`/`herald` / снимок enforcer-а, без внешних зависимостей).
 
-### Cloud — отложено, REST-роутов нет
+### Cloud (8) — реестры Cloud-Provider / Cloud-Profile, [ADR-017](../adr/0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read) / [cloud.md](cloud.md)
 
-MCP-tools `keeper.provider.create` / `keeper.profile.create` существуют в manifest, но **REST-роуты `/v1/providers` / `/v1/profiles` не реализованы** (cloud-CRUD отложен решением пользователя; декларации удалены из спеки 2026-06-10). В роут-счёт не входят. Provider/Profile-семантика — [cloud.md](cloud.md); при появлении CRUD-роутов добавляются новым PR с расширением каталога [rbac.md](rbac.md#каталог-permissions).
+CRUD реестров `providers` (учётка облака) и `profiles` (VM-spec поверх Provider-а) в Postgres, managed через OpenAPI/MCP. `provider.*` / `profile.*` — NoSelector (CRUD оперирует самим реестром, как `service.*` / `push-provider.*`). **Иммутабельность:** `update`-операции **нет** — смена параметров = `delete` + `create` (защита от частичной мутации spec уже-живущих VM), поэтому read-видимость гейтит одна permission `provider.read` / `profile.read`. `credentials_ref` принимает строку `vault:<mount>/<path>`; сами credentials API **НЕ резолвит и НЕ возвращает** (секрет-гигиена). Источник правды по семантике, телам — [cloud.md → Provider и Profile](cloud.md#provider-и-profile-в-postgres); MCP-сторона — [mcp-tools.md → Cloud](mcp-tools.md#cloud-8). Роуты монтируются только при сконфигурированном реестре (`Deps.ProviderSvc` / `Deps.ProfileSvc`).
+
+| Method | Path | Permission | MCP-tool |
+|---|---|---|---|
+| `POST` | `/v1/providers` | `provider.create` | `keeper.provider.create` |
+| `GET` | `/v1/providers` | `provider.read` | `keeper.provider.list` |
+| `GET` | `/v1/providers/{name}` | `provider.read` | `keeper.provider.get` |
+| `DELETE` | `/v1/providers/{name}` | `provider.delete` | `keeper.provider.delete` |
+| `POST` | `/v1/profiles` | `profile.create` | `keeper.profile.create` |
+| `GET` | `/v1/profiles` | `profile.read` | `keeper.profile.list` |
+| `GET` | `/v1/profiles/{name}` | `profile.read` | `keeper.profile.get` |
+| `DELETE` | `/v1/profiles/{name}` | `profile.delete` | `keeper.profile.delete` |
+
+Permission-маппинг: `POST`→`<resource>.create`, `GET`(list + get-`{name}`)→`<resource>.read`, `DELETE`→`<resource>.delete`. Мутирующие 4 роута (create/delete по каждой сущности) аудируются — audit-события `provider.created` / `provider.deleted` / `profile.created` / `profile.deleted` ([ADR-022](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)); `provider.read`/`profile.read` (list + get) — read-only, без audit (audit Profile-create пишет только ключи `params`, не значения). Граничные случаи: `409 provider-already-exists` / `409 profile-already-exists` на дубль `name`; `409 provider-has-profiles` при удалении Provider-а с привязанными Profile-ями (FK `ON DELETE RESTRICT`, миграция 020 — сперва удалить зависимые Profile-и); `422 validation-failed` на ссылку Profile-я на несуществующий Provider (FK) либо битый `name`/`type`/`region`/`credentials_ref`; `404 not-found` на get/delete отсутствующей записи. 3-сегментный MCP-tool `keeper.<resource>.<verb>` ↔ 2-сегментная permission `<resource>.<verb>` (read-tool назван `get`, permission verb — `read`).
 
 ### Service (9) — реестр Service-ов (CRUD + git-проекции), [ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres) / [service/manifest.md](../service/manifest.md)
 
@@ -527,7 +540,7 @@ Permission-маппинг: `POST`→`service.register`, `GET`(list + get-`{name}
 
 Read-only-лента событий `audit_log` для UI iteration 2 (placeholder `/audit`). Read-эндпоинт сам в audit-trail НЕ пишется (избегаем рекурсии — каждый GET удваивал бы таблицу). MCP-tool-симметрия отложена.
 
-**Итого: 4 health/meta на API-фасаде (`/healthz`, `/readyz`, `/openapi.yaml`, `/openapi.json`) + 118 endpoint-ов под permissions/auth-only** (Operator 5 + Audit 1 + Role 6 + Synod 8 + Incarnation 11 + Choir 6 + Soul 8 + Errand 4 + Plugin 3 + Sigil-key 4 + Service 9 + Module-catalog 3 + Self-describing 3 + Augur 7 + Oracle 8 + Push 2 + Push-runs 1 + Push-Provider 5 + Herald 5 + Tiding 5 + Voyage 6 + Cadence 8) **= 118 роутов в этой таблице.** `/metrics` в этот фасадный счёт **не входит** — Prometheus-эндпоинт вынесен на отдельный metrics-listener (`listen.metrics.addr`, [ADR-024](../adr/0024-observability.md#adr-024-observability-prometheus-primary--otel-bridge)), в `router.go` фасада не монтируется. Все реализованные в [`router.go`](../../keeper/internal/api/router.go) `/v1/*`-роуты теперь сведены — незакрытых секций не осталось. (Voyage «(6)» — пять MCP-парных/RBAC-by-kind строк + шестой REST-роут `GET /v1/voyages/{id}/targets`, read/REST-only. Augur — 7 роутов: 4 omen + 3 rite. Cloud не считается — REST-роуты `/v1/providers`/`/v1/profiles` не реализованы.)
+**Итого: 4 health/meta на API-фасаде (`/healthz`, `/readyz`, `/openapi.yaml`, `/openapi.json`) + 126 endpoint-ов под permissions/auth-only** (Operator 5 + Audit 1 + Role 6 + Synod 8 + Incarnation 11 + Choir 6 + Soul 8 + Errand 4 + Plugin 3 + Sigil-key 4 + Service 9 + Module-catalog 3 + Self-describing 3 + Augur 7 + Oracle 8 + Push 2 + Push-runs 1 + Push-Provider 5 + Cloud 8 + Herald 5 + Tiding 5 + Voyage 6 + Cadence 8) **= 126 роутов в этой таблице.** `/metrics` в этот фасадный счёт **не входит** — Prometheus-эндпоинт вынесен на отдельный metrics-listener (`listen.metrics.addr`, [ADR-024](../adr/0024-observability.md#adr-024-observability-prometheus-primary--otel-bridge)), в `router.go` фасада не монтируется. Все реализованные в [`router.go`](../../keeper/internal/api/router.go) `/v1/*`-роуты теперь сведены — незакрытых секций не осталось. (Voyage «(6)» — пять MCP-парных/RBAC-by-kind строк + шестой REST-роут `GET /v1/voyages/{id}/targets`, read/REST-only. Augur — 7 роутов: 4 omen + 3 rite. Cloud — 8 роутов: 4 provider (create/list/get/delete) + 4 profile, реализованы и смонтированы.)
 
 > **Tool-счёт vs роут-счёт — легитимно разные множества.** Заголовки секций в [mcp-tools.md](mcp-tools.md) считают **MCP-tools**, а здесь — **REST-роуты**; один домен может нести больше REST-роутов, чем MCP-tool-ов. Сверка с кодом (`router.go` + `keeper/internal/mcp/manifest.go`):
 >
@@ -565,7 +578,7 @@ Read-only-лента событий `audit_log` для UI iteration 2 (placehold
 
 ### Cloud endpoints
 
-REST-роуты `POST /v1/providers` / `POST /v1/profiles` **не реализованы** — cloud-CRUD отложен решением пользователя, декларации удалены из спеки 2026-06-10 (в `router.go` роуты не смонтированы). MCP-tools `keeper.provider.create` / `keeper.profile.create` остаются в manifest как stub-ы. Provider/Profile-модель (`name`/`type`/`region`/`credentials_ref` для Provider; `name`/`provider`/`params`/`cloud_init` для Profile) и форма тел — [cloud.md → Provider и Profile](cloud.md#provider-и-profile-в-postgres); при появлении REST-роутов request/response-секции возвращаются сюда.
+CRUD реестров Cloud-Provider / Cloud-Profile — `POST/GET/DELETE /v1/providers*` + `POST/GET/DELETE /v1/profiles*` (без `PUT`/`PATCH`: Provider/Profile иммутабельны, смена параметров = `delete` + `create`). Provider-тело — `name`/`type`/`region`/`credentials_ref` (`credentials_ref` — строка `vault:<mount>/<path>`, секрет API не резолвит и не возвращает); Profile-тело — `name`/`provider` (FK на Provider)/`params`/`cloud_init`. Источник правды по семантике, телам, граничным случаям (`409` дубль-`name`, `409 provider-has-profiles` FK RESTRICT, `422` ссылка на несуществующий Provider) и Credentials-flow — [cloud.md → Provider и Profile](cloud.md#provider-и-profile-в-postgres). MCP-сторона — [mcp-tools.md → Cloud](mcp-tools.md#cloud-8).
 
 ### Voyage endpoints
 
@@ -612,7 +625,7 @@ REST-роуты `POST /v1/providers` / `POST /v1/profiles` **не реализо
 - [mcp-tools.md](mcp-tools.md) — MCP-сторона каталога: транспорт, auth, формат tool declaration, `_apply_id`-convention, error mapping.
 - [config.md → `listen.openapi.addr`](config.md#listen) — bind-адрес фасада. [config.md → `auth`](config.md#auth) — JWT-подпись.
 - [push.md](push.md) — модель push-режима, источник правды по `POST /v1/push/apply`.
-- [cloud.md](cloud.md) — Provider/Profile-семантика (REST-роуты `/v1/providers` / `/v1/profiles` отложены, не смонтированы).
+- [cloud.md](cloud.md) — Provider/Profile-семантика и Credentials-flow (REST-роуты `/v1/providers` / `/v1/profiles` реализованы и смонтированы, см. [§ Cloud](#cloud-8--реестры-cloud-provider--cloud-profile-adr-017--cloudmd)).
 - [plugins.md](plugins.md) — `profile_schema` / `params_schema` плагинов, используется в `422 validation-failed`.
 - [storage.md](storage.md) — реестр `operators`, `souls`, `incarnation`, `state_history` в Postgres.
 - [`../architecture.md → ADR-013`](../adr/0013-bootstrap-archon.md#adr-013-bootstrap-первого-архонта) — Bootstrap первого Архонта.
