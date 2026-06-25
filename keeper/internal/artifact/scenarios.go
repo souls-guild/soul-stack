@@ -44,6 +44,38 @@ type Scenario struct {
 	Description string         `json:"description,omitempty"`
 	InputSchema map[string]any `json:"input_schema,omitempty"`
 	Tags        []string       `json:"tags,omitempty"`
+	// Form — опциональный презентационный слой формы (top-level `form:` scenario-
+	// манифеста): секции с подписями полей для UI Run-modal. omitempty — нет form:
+	// в YAML → поля нет в reply (бит-в-бит как до фичи); UI рисует input плоско
+	// (forward-compat). Группировка/валидация ввода живёт в input_schema, form —
+	// только презентация. Серверная сторона НЕ валидирует form (это делает
+	// soul-lint/render-валидатор); listing отдаёт его как есть для UI.
+	Form *ScenarioForm `json:"form,omitempty"`
+}
+
+// ScenarioForm / ScenarioFormSection / ScenarioFormField — JSON-проекция top-level
+// `form:` для UI listing-а (симметрично [Scenario.InputSchema] как сырому input).
+// Это презентационный слой: секции группируют поля input под подписями. Поля имён
+// JSON совпадают с YAML-ключами манифеста; типы минимально-достаточные (UI рисует,
+// не валидирует). Валидацию инвариантов (поле ∈ input, уникальность key) делает
+// soul-lint (shared/config.validateFormLayout) — listing отдаёт form как есть.
+type ScenarioForm struct {
+	Sections []ScenarioFormSection `json:"sections,omitempty"`
+}
+
+// ScenarioFormSection — одна визуальная группа полей формы.
+type ScenarioFormSection struct {
+	Key         string              `json:"key"`
+	Title       string              `json:"title,omitempty"`
+	Description string              `json:"description,omitempty"`
+	Collapsed   bool                `json:"collapsed,omitempty"`
+	Fields      []ScenarioFormField `json:"fields,omitempty"`
+}
+
+// ScenarioFormField — ссылка на поле input с опц. подписью.
+type ScenarioFormField struct {
+	Name  string `json:"name"`
+	Label string `json:"label,omitempty"`
 }
 
 // Значения [Scenario.Kind] — closed enum дискриминатора сценария для UI
@@ -77,6 +109,31 @@ type scenarioYAML struct {
 	Input       map[string]any `yaml:"input"`
 	InputSchema map[string]any `yaml:"input_schema"`
 	Tags        []string       `yaml:"tags"`
+	// Form — опциональный презентационный слой (top-level `form:`). Нестандартные
+	// под-ключи игнорируются (yaml.Unmarshal в struct ловит только перечисленные);
+	// строгую валидацию формы делает soul-lint, не listing.
+	Form *scenarioFormYAML `yaml:"form"`
+}
+
+// scenarioFormYAML / scenarioFormSectionYAML / scenarioFormFieldYAML — YAML-форма
+// `form:` для listing-парса. Структурно совпадает с JSON-проекцией [ScenarioForm]
+// (те же имена полей), но отдельный тип под yaml-теги: listing не тянет
+// shared/config (изоляция артефакт-пакета, направление импорта обратное).
+type scenarioFormYAML struct {
+	Sections []scenarioFormSectionYAML `yaml:"sections"`
+}
+
+type scenarioFormSectionYAML struct {
+	Key         string                  `yaml:"key"`
+	Title       string                  `yaml:"title"`
+	Description string                  `yaml:"description"`
+	Collapsed   bool                    `yaml:"collapsed"`
+	Fields      []scenarioFormFieldYAML `yaml:"fields"`
+}
+
+type scenarioFormFieldYAML struct {
+	Name  string `yaml:"name"`
+	Label string `yaml:"label"`
 }
 
 // ListScenarios сканирует `scenario/*/main.yml` в материализованном снапшоте
@@ -173,5 +230,31 @@ func loadScenario(serviceRoot, name string, logger *slog.Logger) (Scenario, bool
 		Description: raw.Description,
 		InputSchema: schema,
 		Tags:        raw.Tags,
+		Form:        scenarioFormProjection(raw.Form),
 	}, true
+}
+
+// scenarioFormProjection переводит YAML-форму `form:` в JSON-проекцию [ScenarioForm]
+// для reply. nil вход (нет ключа `form:`) → nil (поле omitempty опускается в reply —
+// бит-в-бит как до фичи). Тривиальная перепись полей: listing не валидирует форму
+// (это делает soul-lint), только отдаёт её UI как есть.
+func scenarioFormProjection(in *scenarioFormYAML) *ScenarioForm {
+	if in == nil {
+		return nil
+	}
+	out := &ScenarioForm{Sections: make([]ScenarioFormSection, 0, len(in.Sections))}
+	for _, s := range in.Sections {
+		sec := ScenarioFormSection{
+			Key:         s.Key,
+			Title:       s.Title,
+			Description: s.Description,
+			Collapsed:   s.Collapsed,
+			Fields:      make([]ScenarioFormField, 0, len(s.Fields)),
+		}
+		for _, f := range s.Fields {
+			sec.Fields = append(sec.Fields, ScenarioFormField{Name: f.Name, Label: f.Label})
+		}
+		out.Sections = append(out.Sections, sec)
+	}
+	return out
 }

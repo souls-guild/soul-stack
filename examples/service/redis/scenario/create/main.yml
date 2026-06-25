@@ -359,6 +359,71 @@ input:
       type: string
       pattern: "^[0-9a-f]{64}$"
 
+# ── Презентационный слой формы (form:, top-level scenario-ключ) ───────────────────
+# form: — ЧИСТАЯ ПРЕЗЕНТАЦИЯ: как UI группирует и подписывает поля input в Run-форме.
+# Контракт ввода (типы/валидация/обязательность) живёт ИСКЛЮЧИТЕЛЬНО в input: выше —
+# form ссылается на поля по имени, ничего не дублирует и не меняет. Опционален:
+# уберёшь блок → UI рисует input плоско (forward-compat). soul-lint сверяет
+# инварианты (каждое name ∈ input:, имя в одной секции, key уникален); поле input
+# без секции — WARNING (UI дорисует в дефолтную секцию в конце), не error.
+form:
+  sections:
+    - key: mode
+      title: "Режим и установка"
+      description: "Тип развёртывания и способ установки Redis"
+      fields:
+        - { name: redis_type, label: "Режим развёртывания" }
+        - { name: install, label: "Способ установки" }
+        - { name: version, label: "Версия пакета (distro-пин)" }
+
+    - key: layout
+      title: "Раскладка на хосте"
+      collapsed: true
+      fields:
+        - { name: conf_dir, label: "Каталог конфигурации" }
+        - { name: data_dir, label: "Каталог данных" }
+
+    - key: resources
+      title: "Память и persistence"
+      fields:
+        - { name: memory_mb, label: "Бюджет памяти, МБ" }
+        - { name: persistence, label: "Режим persistence" }
+        - { name: maxmemory_policy, label: "Политика вытеснения" }
+
+    - key: cluster
+      title: "Топология Cluster"
+      description: "Только для режима cluster"
+      collapsed: true
+      fields:
+        - { name: shards, label: "Число master-шардов" }
+        - { name: replicas_per_shard, label: "Реплик на шард" }
+        - { name: cluster_node_timeout, label: "Таймаут gossip, мс" }
+
+    - key: sentinel
+      title: "Топология Sentinel"
+      description: "Для режимов sentinel / sentinel_only"
+      collapsed: true
+      fields:
+        - { name: replicas, label: "Реплик master-а" }
+        - { name: sentinel_quorum, label: "Quorum sentinel-ов" }
+        - { name: sentinel_master_name, label: "Имя monitored master" }
+        - { name: master_ip, label: "IP внешнего master (sentinel_only)" }
+        - { name: master_port, label: "Порт внешнего master" }
+
+    - key: security
+      title: "ACL и TLS"
+      fields:
+        - { name: users, label: "ACL-пользователи" }
+        - { name: tls, label: "TLS" }
+
+    - key: advanced
+      title: "Дополнительно"
+      collapsed: true
+      fields:
+        - { name: redis_settings, label: "Passthrough-директивы redis.conf" }
+        - { name: modules_base_url, label: "URL источника .so-модулей" }
+        - { name: modules_sha256, label: "SHA-256 .so-модулей" }
+
 # ── Декларативные input-инварианты (validate:, ADR-009 amendment 2026-06-23) ──────
 # validate: — кросс-полевые предусловия ВВОДА, не выразимые одним schema-ключом и
 # не покрываемые required_when (присутствие) или enum/min/max (одно поле). Контекст

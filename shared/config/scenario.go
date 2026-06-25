@@ -31,6 +31,11 @@ type ScenarioManifest struct {
 	Compute      ComputeBlock   `yaml:"compute,omitempty"`
 	Vars         map[string]any `yaml:"vars,omitempty"`
 	Tasks        []Task         `yaml:"tasks"`
+
+	// Form — опциональный презентационный слой `input:`-формы (form_layout.go):
+	// как UI группирует/подписывает поля input в секции. nil = ключа нет (UI
+	// рисует input плоско, forward-compat). Не влияет на контракт ввода/валидацию.
+	Form *FormLayout `yaml:"form,omitempty"`
 }
 
 // ValidateRule — одно правило top-level scenario-секции `validate:` (ADR-009
@@ -564,6 +569,13 @@ func schemaValidateScenario(path string, root *ast.MappingNode, m *ScenarioManif
 	// 5a) `validate:` — top-level список input-инвариантов (только если ключ есть).
 	if topKeys["validate"] {
 		out = append(out, validateValidateBlock(root, "$.validate")...)
+	}
+
+	// 5b) `form:` — презентационный слой формы + cross-инварианты против input:
+	// (form_field_unknown/duplicate/uncovered, section.key уникальность). Активен
+	// только при наличии ключа.
+	if topKeys["form"] {
+		out = append(out, validateFormLayout(root, m, "$.form")...)
 	}
 
 	// 6) `tasks[]` — полиморфная валидация каждой задачи.

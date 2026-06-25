@@ -1,10 +1,12 @@
 package artifact
 
 import (
+	"encoding/json"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -207,6 +209,73 @@ random_field: 123
 	}
 	if got[0].Description != "ok" {
 		t.Errorf("Description = %q", got[0].Description)
+	}
+}
+
+// TestListScenarios_FormProjection — top-level `form:` парсится в Scenario.Form:
+// секции с key/title/collapsed и полями name/label попадают в listing-проекцию.
+func TestListScenarios_FormProjection(t *testing.T) {
+	root := t.TempDir()
+	writeScenario(t, root, "create", `description: ok
+input:
+  tls_enabled: { type: boolean }
+  redis_password: { type: string }
+form:
+  sections:
+    - key: connection
+      title: "Подключение"
+      collapsed: false
+      fields:
+        - { name: tls_enabled, label: "TLS" }
+    - key: secrets
+      title: "Секреты"
+      collapsed: true
+      fields:
+        - { name: redis_password, label: "Пароль Redis" }
+`)
+	got, err := ListScenarios(root, discardLogger())
+	if err != nil {
+		t.Fatalf("ListScenarios: %v", err)
+	}
+	if len(got) != 1 || got[0].Form == nil {
+		t.Fatalf("Form не распарсен: %+v", got)
+	}
+	f := got[0].Form
+	if len(f.Sections) != 2 {
+		t.Fatalf("Sections len = %d, want 2", len(f.Sections))
+	}
+	if f.Sections[0].Key != "connection" || f.Sections[0].Title != "Подключение" || f.Sections[0].Collapsed {
+		t.Errorf("section[0] = %#v", f.Sections[0])
+	}
+	if f.Sections[1].Key != "secrets" || !f.Sections[1].Collapsed {
+		t.Errorf("section[1] = %#v, want collapsed=true", f.Sections[1])
+	}
+	if f.Sections[0].Fields[0].Name != "tls_enabled" || f.Sections[0].Fields[0].Label != "TLS" {
+		t.Errorf("field[0] = %#v", f.Sections[0].Fields[0])
+	}
+}
+
+// TestListScenarios_FormAbsentOmitted — нет `form:` → Form==nil И поле отсутствует
+// в JSON reply (omitempty, бит-в-бит как до фичи; forward-compat).
+func TestListScenarios_FormAbsentOmitted(t *testing.T) {
+	root := t.TempDir()
+	writeScenario(t, root, "create", `description: ok
+input:
+  a: { type: string }
+`)
+	got, err := ListScenarios(root, discardLogger())
+	if err != nil {
+		t.Fatalf("ListScenarios: %v", err)
+	}
+	if len(got) != 1 || got[0].Form != nil {
+		t.Fatalf("Form должен быть nil без form:, got %+v", got)
+	}
+	out, err := json.Marshal(got[0])
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if strings.Contains(string(out), `"form"`) {
+		t.Errorf("ключ \"form\" не должен присутствовать в JSON при отсутствии form:, got %s", out)
 	}
 }
 

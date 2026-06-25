@@ -59,6 +59,13 @@ var computeBlockType = reflect.TypeOf(ComputeBlock(nil))
 // suppress (симметрично stateChangesType/computeBlockType).
 var validateRuleSliceType = reflect.TypeOf([]ValidateRule(nil))
 
+// formLayoutType — точка остановки reflect-walker-а для `form:`. У блока
+// собственный AST-валидатор validateFormLayout (cross-инварианты против input:
+// + unknown_key с осмысленным hint-ом по секциям/полям). Generic-walker по
+// FormLayout-структуре дублировал бы unknown_key на ту же line/col — suppress
+// (симметрично validateRuleSliceType/computeBlockType).
+var formLayoutType = reflect.TypeOf(FormLayout{})
+
 // walkUnknownKeys обходит AST-mapping `root` и yaml-теги типа `cfg`,
 // собирая `unknown_key` диагностики для ключей, которых нет в Go-структуре.
 //
@@ -179,6 +186,11 @@ func walkValueAgainstType(n ast.Node, t reflect.Type, path string) []diag.Diagno
 	// []ValidateRule — собственный AST-валидатор validateValidateBlock; generic-
 	// walker по slice-of-struct сюда не заходит (дублировал бы unknown_key).
 	if t == validateRuleSliceType {
+		return nil
+	}
+	// FormLayout — собственный AST-валидатор validateFormLayout (cross-инварианты +
+	// unknown_key по секциям/полям); generic-walker сюда не заходит.
+	if t == formLayoutType {
 		return nil
 	}
 
