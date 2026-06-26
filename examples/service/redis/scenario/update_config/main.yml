@@ -73,12 +73,18 @@ input:
     type: object
     required: false
     description: >-
-      Passthrough-директивы redis.conf (key→value), перекрывают дефолты/пресет в
-      merge (last-wins). Для директив, не покрытых простыми полями. Сливаются ПОВЕРХ
+      Passthrough-директивы redis.conf (key→value, строки), перекрывают дефолты/пресет
+      в merge (last-wins). Для директив, не покрытых простыми полями. Сливаются ПОВЕРХ
       ранее развёрнутого incarnation.state.redis_config (накопительно: не заданное
-      здесь сохраняет прежнее значение).
+      здесь сохраняет прежнее значение). UI — KEY→VALUE-редактор.
+    # ★ #6-симметрия create (qa-gap): additional_properties сужен до {type: string} —
+    # директивы redis.conf плоский map имя→строка (`maxmemory 512mb`), value-тип string
+    # точен (ADR-045: object + скалярный value-тип → key→value-виджет, не сырой JSON).
+    # Раньше тут было additional_properties: true (произвольный JSON) — UI рисовал
+    # сырой JSON, а опечатка day-2 директивы протаскивалась молча (assert ниже её ловит).
     properties: {}
-    additional_properties: true
+    additional_properties:
+      type: string
 
 # ── Декларативные input-инварианты (validate:) ───────────────────────────────────
 # day-2 обязан иметь, что апдейтить: хотя бы одно изменяемое поле. INPUT-ONLY
@@ -100,6 +106,13 @@ compute:
   tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
   tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
   tls_ca:   "${ compute.tls_on ? vault(essence.tls_ca_ref) : '' }"
+
+  # ── Эффективная версия redis (для version-aware валидатора redis_settings, #6) ──
+  # day-2 версию НЕ переустанавливает — берём РАЗВЁРНУТУЮ из incarnation.state
+  # (зафиксирована create). Серия major.minor этой версии выбирает набор валидных
+  # директив в каталоге (assert ниже). Старые инкарнации без поля → '' (assert skip:
+  # не-каталожную версию не блокируем). Симметрия с compute.redis_version create.
+  redis_version: "${ default(incarnation.state.redis_version, '') }"
 
   # Эффективное persistence: вход бьёт развёрнутое state (подложка), default rdb для
   # совсем старых инкарнаций без поля.
@@ -146,6 +159,38 @@ state_changes:
     value: "${ default(input.maxmemory_policy, default(incarnation.state.maxmemory_policy, '')) }"
 
 tasks:
+  # ── Version-aware валидатор имён директив redis_settings (assert, #6) ─────────────
+  # ★ qa-gap (day-2): update_config принимает redis_settings (passthrough KEY→VALUE) —
+  # без проверки оператор молча протащит опечатку (`maxmemoyr 512mb`) или директиву
+  # чужой версии → CONFIG SET отвергнет / redis-server не перезапустится (поздний,
+  # непонятный отказ). Тот же assert-валидатор, что в create/main.yml: сверяет КАЖДОЕ
+  # ИМЯ директивы input.redis_settings против каталога валидных имён ДЛЯ РАЗВЁРНУТОЙ
+  # версии (essence.redis_directives[<серия compute.redis_version>], где
+  # compute.redis_version = incarnation.state.redis_version) — первый неизвестный ключ
+  # рвёт render (422 assert-failed) ДО applying, понятным сообщением.
+  #
+  # ПОЧЕМУ assert, а не validate: каталог живёт в essence, а validate-контекст
+  # INPUT-ONLY (essence недоступен, структурный CEL-барьер). essence.redis_directives
+  # доступен ТОЛЬКО assert-у (полный scenario-контекст). Run-level, host-инвариантно.
+  #
+  # ВЕРСИЯ — compute.redis_version (РАЗВЁРНУТАЯ, из incarnation.state). day-2 версию не
+  # меняет → валидируем против той же серии, что задеплоена. EMPTY-CATALOG-SKIP
+  # (!has(essence.redis_directives)) — каталог опционален (минимальные fixtures);
+  # версия вне каталога (compute.redis_version == '' или серия отсутствует) → skip.
+  # default(input.redis_settings, {}) — поле опционально; .all над {} = true.
+  #
+  # Механика version→серия БЕЗ split (как create): итерируем ключи каталога (.all(s,…))
+  # и матчим версию регуляркой `^([0-9]+:)?<s>[.]` (epoch-префикс distro-пина опционален,
+  # трейлинг `[.]` — граница серии); для серий не той версии предикат вакуумно true.
+  - name: Validate redis_settings directive names against the catalog for the deployed Redis version
+    assert:
+      # that[] и message — СКАЛЯРНЫЕ строки (не block-scalar): soul-lint требует
+      # *ast.StringNode, block-scalar = type_mismatch. Предикат идентичен create/main.yml
+      # (источник — incarnation.state.redis_version вместо input.version).
+      that:
+        - "!has(essence.redis_directives) || default(input.redis_settings, {}).all(k, essence.redis_directives.all(s, compute.redis_version.matches('^([0-9]+:)?' + s + '[.]') ? (k in essence.redis_directives[s]) : true))"
+      message: "redis_settings содержит неизвестную директиву redis.conf для развёрнутой версии Redis (incarnation.state.redis_version): сверь имя с каталогом валидных директив этой версии (essence.redis_directives[<major.minor>]) — опечатка или директива из другой версии Redis. Каталог генерируется scripts/gen-redis-catalog.sh из src/config.c."
+
   # 1. Перерендерить redis.conf на диск с новым merged config (тот же режим-агностичный
   #    destiny redis, что create/add_node). Это desired state на диске — для следующего
   #    рестарта процесса (startup-only-директивы из state.redis_config + новые). conf_dir/

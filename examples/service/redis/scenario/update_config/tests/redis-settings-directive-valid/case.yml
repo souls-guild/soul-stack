@@ -1,0 +1,87 @@
+# L0-испытание version-aware валидатора имён директив redis_settings в update_config
+# (assert, #6) — ПОЗИТИВ, day-2. essence несёт каталог redis_directives с серией 7.2;
+# РАЗВЁРНУТАЯ версия (incarnation.state.redis_version) = 7.2.4 → серия 7.2.
+# redis_settings содержит ВАЛИДНОЕ имя (appendfsync ∈ каталог[7.2]) → assert проходит,
+# директива доезжает до hot-reload (community.redis.config) и итогового redis_config.
+#
+# Парный к day-2 redis-settings-directive-unknown (там опечатка рвёт render). Покрывает
+# true-ветку assert и доказывает, что валидатор не ложно-блокирует валидную day-2-директиву.
+name: day-2 redis_settings with a valid directive name passes the catalog assert
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.5 }
+    os: { arch: amd64 }
+
+  essence:
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_directives:
+      "7.2":
+        - maxmemory
+        - maxmemory-policy
+        - maxclients
+        - timeout
+        - appendonly
+        - appendfsync
+        - save
+
+  state:
+    redis_type: sentinel
+    redis_version: "7.2.4"
+    conf_dir: /etc/redis
+    data_dir: /var/lib/redis
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    persistence: rdb
+    memory_mb: 1024
+    maxmemory_policy: allkeys-lru
+    redis_config:
+      maxmemory:        "768mb"
+      maxmemory-policy: allkeys-lru
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+    redis_users: []
+
+  input:
+    # Дельта оператора: ВАЛИДНАЯ passthrough-директива (∈ каталог[7.2]). Перекрывает
+    # appendfsync last-wins; assert пропускает, директива доезжает до hot-reload.
+    redis_settings:
+      appendfsync: everysec
+
+  vault:
+    secret/redis/update_config:
+      password: upd-redis-pass-16chars
+
+assert:
+  task_present:
+    # hot-reload несёт перевычисленный merged config с долитой passthrough-директивой.
+    - module: community.redis.config
+      params_subset:
+        addr: "127.0.0.1:6379"
+        rewrite: true
+        config:
+          maxmemory: "768mb"
+          maxmemory-policy: allkeys-lru
+          save: "900 1 300 10 60 10000"
+          appendonly: "no"
+          appendfsync: everysec
+
+  state_changes:
+    # state.redis_config ≡ config hot-reload (один compute): passthrough долился last-wins.
+    redis_config:
+      maxmemory: "768mb"
+      maxmemory-policy: allkeys-lru
+      save: "900 1 300 10 60 10000"
+      appendonly: "no"
+      appendfsync: everysec

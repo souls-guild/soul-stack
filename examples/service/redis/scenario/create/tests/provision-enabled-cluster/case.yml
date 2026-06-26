@@ -1,0 +1,120 @@
+# L0-испытание provision (ADR-061, Вариант A) — режим cluster, provision ВКЛЮЧЁН.
+# Парный к provision-enabled-sentinel: проверяет, что ЧИСЛО VM выводится из
+# cluster-топологии = shards*(1+replicas_per_master), а не из 1+replicas (sentinel).
+# shards=2, replicas_per_master=1 → count = 2*(1+1) = 4. Это главный guard: count
+# ветвится по input.redis_type (provision.yml шаг (а)), для cluster берётся формула
+# шардов.
+#
+# ★ register.provision — из mocks.register (L0-проброс core.cloud.created, шаг (а) не
+# исполняется): шаги (б)/(в) и state_changes читают vm_ids/hosts отсюда. Roster — 4
+# хоста (в проде их даёт refresh_soulprint; в L0 mid-run re-resolve — stub, roster =
+# статичный fixture).
+name: provision enabled in cluster mode sizes VM count from shards (count = shards * (1 + replicas))
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: vm-1.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: vm-2.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: vm-3.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+    - sid: vm-4.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.4 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    redis_type: cluster
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    provision_await_timeout: "10m"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+  input:
+    redis_type: cluster
+    version: "7.2.4"
+    shards: 2
+    replicas_per_master: 1
+    provision:
+      enabled: true
+      provider: wb-dev
+      profile: redis-small
+      await_timeout: "5m"
+
+# register.provision — готовый payload core.cloud.created (L0-проброс). 4 VM под
+# cluster-топологию (2 шарда * 2). sid-ы = SID-ы roster-а.
+mocks:
+  register:
+    provision:
+      vm_ids: [i-aaa111, i-bbb222, i-ccc333, i-ddd444]
+      hosts:
+        - { sid: vm-1.example.com, vm_id: i-aaa111, primary_ip: 10.0.0.1 }
+        - { sid: vm-2.example.com, vm_id: i-bbb222, primary_ip: 10.0.0.2 }
+        - { sid: vm-3.example.com, vm_id: i-ccc333, primary_ip: 10.0.0.3 }
+        - { sid: vm-4.example.com, vm_id: i-ddd444, primary_ip: 10.0.0.4 }
+
+assert:
+  task_present:
+    # (а) core.cloud.created: count = shards*(1+replicas) = 2*(1+1) = 4 (НЕ 1+replicas).
+    - module: core.cloud.created
+      params_subset:
+        provider: wb-dev
+        profile: redis-small
+        count: 4
+        generate_userdata: true
+
+    # (в) core.soul.registered: sid — список SID созданных VM; await_online +
+    # refresh_soulprint; await_timeout из input.provision (5m, перекрывает essence-дефолт).
+    - module: core.soul.registered
+      params_subset:
+        sid: [vm-1.example.com, vm-2.example.com, vm-3.example.com, vm-4.example.com]
+        coven: [create]
+        await_online: true
+        refresh_soulprint: true
+        await_timeout: "5m"
+
+    # cluster-build катится после provision (nodes-MAP всех 4 хостов).
+    - module: community.redis.cluster
+      params_subset:
+        action: create
+        replicas_per_shard: 1
+
+  state_changes:
+    redis_type: cluster
+    redis_version: "7.2.4"
+    provisioned_vm_ids: [i-aaa111, i-bbb222, i-ccc333, i-ddd444]
+    provisioned_provider: wb-dev

@@ -1,0 +1,73 @@
+# L0-испытание version-aware валидатора имён директив redis_settings в update_config
+# (assert, #6) — НЕГАТИВ, day-2. ★ qa-gap: day-2 update_config принимает redis_settings
+# (passthrough KEY→VALUE) — без проверки опечатка молча уходила бы в CONFIG SET / следующий
+# рестарт. essence несёт каталог redis_directives с серией 7.2; РАЗВЁРНУТАЯ версия
+# (incarnation.state.redis_version) = 7.2.4 → серия 7.2. redis_settings содержит
+# НЕИЗВЕСТНОЕ имя (опечатка `maxmemoyr` — нет в каталоге) → assert false → render
+# рвётся на KEEPER-SIDE (422 assert-failed) ДО любого dispatch, понятным сообщением.
+#
+# Симметрия create/tests/redis-settings-directive-unknown: тот же замысел (passthrough
+# не протаскивает мусорное имя молча), но на day-2-пути — версию берём из state, не из
+# input. validate-фаза проходит (redis_settings задан → has() true), обрыв даёт assert.
+name: day-2 redis_settings with an unknown directive name aborts at render (catalog assert)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.5 }
+    os: { arch: amd64 }
+
+  essence:
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    # Каталог директив (подмножество серии 7.2) — активирует assert-валидатор.
+    redis_directives:
+      "7.2":
+        - maxmemory
+        - maxmemory-policy
+        - maxclients
+        - timeout
+        - appendonly
+        - appendfsync
+        - save
+
+  # Развёрнутый incarnation.state (от create): version 7.2.4 (серия 7.2). Plaintext.
+  state:
+    redis_type: sentinel
+    redis_version: "7.2.4"
+    conf_dir: /etc/redis
+    data_dir: /var/lib/redis
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    persistence: rdb
+    memory_mb: 1024
+    maxmemory_policy: allkeys-lru
+    redis_config:
+      maxmemory:        "768mb"
+      maxmemory-policy: allkeys-lru
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+    redis_users: []
+
+  input:
+    # Дельта оператора: passthrough-директива с ОПЕЧАТКОЙ (должно быть maxmemory).
+    # validate проходит (redis_settings задан); имя ловит assert против каталога[7.2].
+    redis_settings:
+      maxmemoyr: "512mb"
+
+  vault:
+    secret/redis/update_config:
+      password: upd-redis-pass-16chars
+
+# Прогон обрывается на render: assert «Validate redis_settings directive names…» false
+# (maxmemoyr ∉ каталог[7.2]). Подстрока — message assert-правила (update_config/main.yml).
+expect_render_error: "redis_settings содержит неизвестную директиву redis.conf для развёрнутой версии Redis"
