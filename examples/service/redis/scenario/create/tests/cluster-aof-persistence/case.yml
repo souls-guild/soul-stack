@@ -144,5 +144,5 @@ assert:
       cluster-enabled:      "yes"
       cluster-config-file:  "nodes.conf"
       cluster-node-timeout: "5000"
-    redis_users: {}
+    redis_users: []
     redis_hosts: []

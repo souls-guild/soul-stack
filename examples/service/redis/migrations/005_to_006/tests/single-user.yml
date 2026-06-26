@@ -1,0 +1,11 @@
+name: single-user
+description: >
+  Один пользователь: map с одним ключом → массив из одного элемента.
+
+state_before:
+  redis_users:
+    app: { perms: "~* +@all", state: "on" }
+
+state_after:
+  redis_users:
+    - { name: "app", perms: "~* +@all", state: "on" }

@@ -101,9 +101,7 @@ fixtures:
     persistence: rdb
     maxmemory_policy: volatile-lru
     users:
-      app:
-        perms: "~app:* +@read +@write -@dangerous"
-        state: "on"
+      - { name: app, perms: "~app:* +@read +@write -@dangerous", state: "on" }
     redis_settings:
       timeout: 60
       tcp-backlog: 511
@@ -273,9 +271,7 @@ assert:
       appendonly: "no"
       tcp-backlog: 511
     redis_users:
-      app:
-        perms: "~app:* +@read +@write -@dangerous"
-        state: "on"
+      - { name: app, perms: "~app:* +@read +@write -@dangerous", state: "on" }
     redis_hosts: []
     # standalone — не sentinel → redis_sentinel пуст.
     redis_sentinel:

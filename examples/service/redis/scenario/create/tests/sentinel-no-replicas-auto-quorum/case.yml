@@ -95,7 +95,7 @@ assert:
   state_changes:
     redis_type: sentinel
     redis_version: "7.2.4"
-    redis_users: {}
+    redis_users: []
     redis_hosts: []
     # auto-quorum НЕ материализуется в state → 0; master_name из essence (master).
     redis_sentinel:

@@ -69,7 +69,7 @@ fixtures:
       tls-key-file:     /etc/redis/tls/redis.key
       tls-ca-cert-file: /etc/redis/tls/ca.crt
       tls-replication:  "yes"
-    redis_users: {}
+    redis_users: []
 
   input:
     # Новые refs (ротация всех трёх).

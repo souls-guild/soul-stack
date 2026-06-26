@@ -1,5 +1,5 @@
 name: redis
-state_schema_version: 5
+state_schema_version: 6
 description: >-
   Redis по концепции Ansible-роли: ОДИН сервис на режимы развёртывания
   (redis_type ∈ sentinel/cluster). Per-host install + render redis.conf делает
@@ -21,7 +21,7 @@ description: >-
   бинарного дистрибутива (Шаг B припаркован)
   (redis-консолидация .pm/tasks/2026-06-22-redis-consolidation).
 
-# state_schema_version = 5: цепочка миграций forward-only (ADR-019).
+# state_schema_version = 6: цепочка миграций forward-only (ADR-019).
 #   - 001_to_002 (migrations/001_to_002.yml): redis_users из списка имён в map
 #     name → {perms, state} (демо-грамматики DSL — rename + set + foreach + delete).
 #   - 002_to_003 (migrations/002_to_003.yml): «richer state» — opaque redis_config
@@ -38,6 +38,14 @@ description: >-
 #     Только для sentinel-инкарнаций (redis_sentinel непуст); для cluster (redis_sentinel
 #     {}) — no-op. Best-effort default = роль-дефолты 5000/60000 (точное значение
 #     восстанавливается на следующем create-override). Симметрично 002_to_003 namedfields.
+#   - 005_to_006 (migrations/005_to_006.yml): redis_users из map name→{perms,state} в
+#     ТИПИЗИРОВАННЫЙ массив [{name, perms, state}] (wave 1b types-эпика, ADR-062 AclUser).
+#     map-ключ (имя) переезжает в поле name элемента. Выразимо ОДНИМ set с CEL-форой
+#     state.redis_users.map(n, {name: n, ...}) — нативный .map() над MAP-ом итерирует
+#     КЛЮЧИ (зеркало 001_to_002 list→map, инверсия); keys() в migration-CEL НЕ
+#     зарегистрирован и НЕ нужен. Порядок массива в state НЕ детерминирован (.map()
+#     над Go-map не сортирует) — детерминизм итогового ACL даёт sorted-range по MAP в
+#     users.acl.tmpl, НЕ порядок элементов state. Пустой/отсутствующий map → пустой массив.
 # incarnation.state фиксирует, что развёрнуто, чтобы оператор видел инсталляцию и
 # повторный apply был idempotent.
 #
@@ -150,15 +158,20 @@ state_schema:
     replicas:        { type: integer }
     sentinel_quorum: { type: integer }
 
-    # ACL-пользователи Redis: map username → {perms, state}. perms — полная ACL-
-    # строка (директивы Redis ACL как есть). Наполняется create из input.users;
-    # пароли — НЕ в state (keeper-side Vault, ADR-012).
+    # ACL-пользователи Redis: ТИПИЗИРОВАННЫЙ массив [{name, perms, state}] (wave 1b
+    # types-эпика, ADR-062 AclUser; перевод map→array, миграция 005_to_006). name —
+    # имя юзера (раньше был map-ключ); perms — полная ACL-строка (директивы Redis ACL
+    # как есть). Наполняется create из input.users (тоже массив AclUser); пароли — НЕ
+    # в state (keeper-side Vault, ADR-012). day-2 (add_user/add_node/update_config/
+    # rotate_tls) читают массив через .map(u, {u.name: {...}}) → собирают тот же
+    # destiny-map имя→{perms,state,password}, что и прежде (destiny-контракт не менялся).
     redis_users:
-      type: object
-      additionalProperties:
+      type: array
+      items:
         type: object
-        required: [perms, state]
+        required: [name, perms, state]
         properties:
+          name:  { type: string }
           perms: { type: string }
           state: { type: string, enum: [on, off] }
         additionalProperties: false

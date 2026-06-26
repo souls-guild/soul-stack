@@ -182,5 +182,5 @@ assert:
       save: ""
       appendonly: "no"
     # Пустой map юзеров (чистый state).
-    redis_users: {}
+    redis_users: []
     redis_hosts: []

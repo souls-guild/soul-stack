@@ -54,12 +54,15 @@
       # ★ СИСТЕМНЫЕ + operator-extra (system-ACL-users, дизайн d2 Вариант A): сначала
       # СЛУЖЕБНЫЕ юзеры (replica/monitoring/sentinel/haproxy) из essence.system_acl_users
       # (perms-строка → {perms,state:'on',password vault()}), ПОВЕРХ — operator-extra
-      # (input.users), last-wins (operator перекрывает одноимённого системного). Без
-      # системных репликация/sentinel/health-check сломаются. default — НЕ здесь (он в
-      # requirepass redis.conf). Имена системных закрыты validate-guard (input.users не
-      # может пересечься). Пароль каждого — Vault secret/redis/<inc>/users/<name>#password
-      # (та же ветка, что operator-extra). merge(list-of-maps) сворачивает оба списка
-      # одноключевых map-ов в один (templating §2.3); порядок аргументов = приоритет.
+      # (input.users — МАССИВ AclUser, wave 1b), last-wins (operator перекрывает
+      # одноимённого системного). Без системных репликация/sentinel/health-check сломаются.
+      # default — НЕ здесь (он в requirepass redis.conf). Имена системных закрыты
+      # validate-guard (input.users не может пересечься). Пароль каждого — Vault
+      # secret/redis/<inc>/users/<name>#password (та же ветка, что operator-extra).
+      # ★ wave 1b: operator-extra теперь массив → .map(u, {u.name: …}) (имя из поля
+      # u.name, раньше map-ключ); системные остаются map → .map(name, {name: …}) как
+      # есть. Обе .map дают СПИСОК одноключевых map-ов, merge(list-of-maps) сворачивает
+      # их в один map (templating §2.3); порядок аргументов = приоритет.
       users: >-
         ${ merge(
              merge(default(essence.system_acl_users, {}).map(name, {
@@ -70,11 +73,11 @@
                }
              })),
              has(input.users)
-               ? merge(input.users.map(name, {
-                   name: {
-                     'perms':    input.users[name].perms,
-                     'state':    input.users[name].state,
-                     'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+               ? merge(input.users.map(u, {
+                   u.name: {
+                     'perms':    u.perms,
+                     'state':    u.state,
+                     'password': vault('secret/redis/' + incarnation.name + '/users/' + u.name + '#password')
                    }
                  }))
                : {}

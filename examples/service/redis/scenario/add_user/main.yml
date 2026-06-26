@@ -76,18 +76,23 @@ compute:
   tls_ca:   "${ compute.tls_on ? vault(essence.tls_ca_ref) : '' }"
 
   # ── Новый набор ACL-юзеров: РАЗВЁРНУТЫЙ state.redis_users + добавляемый юзер ──
-  # merge SHALLOW last-wins: новый юзер перекрывает одноимённого (upsert). Каждый
-  # юзер несёт perms/state; пароль add НЕ хранит в state — он keeper-side vault.
-  # has()-guard на redis_users — back-compat для инкарнаций без ACL-юзеров.
+  # ★ wave 1b (2026-06-26): state.redis_users — МАССИВ AclUser [{name,perms,state}]
+  # (map→array). Прежний map-upsert через merge() заменён array-upsert: ОТФИЛЬТРОВАТЬ
+  # из текущего массива одноимённого (filter u.name != new) + ДОПИСАТЬ нового элементом.
+  # filter+конкатенация даёт ту же upsert-семантику last-wins (новый перекрывает
+  # существующего с тем же именем), что и прежний merge-map. Каждый юзер несёт
+  # name/perms/state; пароль add НЕ хранит в state — он keeper-side vault. has()-guard
+  # на redis_users — back-compat для инкарнаций без ACL-юзеров (пустой массив).
   users_new: >-
-    ${ merge(
-         has(incarnation.state.redis_users) ? incarnation.state.redis_users : {},
-         { input.username: { 'perms': input.perms, 'state': default(input.state, 'on') } }
-       ) }
+    ${ (has(incarnation.state.redis_users)
+          ? incarnation.state.redis_users.filter(u, u.name != input.username)
+          : [])
+       + [{ 'name': input.username, 'perms': input.perms, 'state': default(input.state, 'on') }] }
 
 # ── Мутация incarnation.state ─────────────────────────────────────────────────
-# day-2 фиксирует НОВЫЙ набор ACL-юзеров (имя→{perms,state}, БЕЗ пароля — он
-# keeper-side vault, ADR-012). Тот же compute.users_new, что ушёл в render users.acl.
+# day-2 фиксирует НОВЫЙ набор ACL-юзеров (массив AclUser [{name,perms,state}], wave
+# 1b, БЕЗ пароля — он keeper-side vault, ADR-012). Тот же compute.users_new (массив),
+# что ушёл в render users.acl.
 state_changes:
   - set: redis_users
     value: "${ compute.users_new }"
@@ -110,8 +115,8 @@ tasks:
         config:   "${ incarnation.state.redis_config }"
         modules_base_url: "${ default(incarnation.state.modules_base_url, '') }"
         # ★★ КРИТИЧНО (system-ACL-users d2): ПОЛНЫЙ users.acl = СИСТЕМНЫЕ (из essence,
-        # ПЕРВЫМИ) + operator-extra (state.redis_users + новый, compute.users_new,
-        # ПОВЕРХ). add_user перерендеривает ВЕСЬ файл (не append) → БЕЗ долива системных
+        # ПЕРВЫМИ) + operator-extra (state.redis_users + новый, compute.users_new — МАССИВ
+        # AclUser, wave 1b, ПОВЕРХ). add_user перерендеривает ВЕСЬ файл (не append) → БЕЗ долива системных
         # этот рендер СТЁР БЫ replica/monitoring/sentinel/haproxy → сломал бы репликацию/
         # sentinel/health-check на day-2. Системные доливаются на КАЖДОМ рендере из
         # essence.system_acl_users (они НЕ в state — state хранит только operator-extra,
@@ -127,11 +132,11 @@ tasks:
                    'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
                  }
                })),
-               merge(compute.users_new.map(name, {
-                 name: {
-                   'perms':    compute.users_new[name].perms,
-                   'state':    compute.users_new[name].state,
-                   'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+               merge(compute.users_new.map(u, {
+                 u.name: {
+                   'perms':    u.perms,
+                   'state':    u.state,
+                   'password': vault('secret/redis/' + incarnation.name + '/users/' + u.name + '#password')
                  }
                }))
              ) }

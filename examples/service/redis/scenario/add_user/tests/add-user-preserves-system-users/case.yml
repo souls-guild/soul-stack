@@ -36,9 +36,7 @@ fixtures:
       save:             "900 1 300 10 60 10000"
       appendonly:       "no"
     redis_users:
-      bob:
-        perms: "~app:* +@read"
-        state: "on"
+      - { name: bob, perms: "~app:* +@read", state: "on" }
 
   essence:
     # Системные ACL redis-server (perms 1:1 из роли, БЕЗ default). add_user ОБЯЗАН их
@@ -124,12 +122,10 @@ assert:
         password: addusr-redis-pass-16ch
         tls: false
 
-  # state_changes: redis_users несёт alice+bob БЕЗ системных (write-model = operator-extra).
+  # state_changes: redis_users несёт bob+alice БЕЗ системных (write-model = operator-
+  # extra, МАССИВ AclUser wave 1b). Порядок array-upsert: сохранённый bob ПЕРВЫМ,
+  # новый alice ДОПИСАН (filter(name != alice) + [alice]).
   state_changes:
     redis_users:
-      alice:
-        perms: "~* +@all"
-        state: "on"
-      bob:
-        perms: "~app:* +@read"
-        state: "on"
+      - { name: bob, perms: "~app:* +@read", state: "on" }
+      - { name: alice, perms: "~* +@all", state: "on" }

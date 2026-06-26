@@ -46,7 +46,7 @@ fixtures:
       tls-key-file:     /etc/redis/tls/redis.key
       tls-ca-cert-file: /etc/redis/tls/ca.crt
       tls-replication:  "yes"
-    redis_users: {}
+    redis_users: []
 
   input:
     username: alice
@@ -97,6 +97,4 @@ assert:
 
   state_changes:
     redis_users:
-      alice:
-        perms: "~app:* +@read +@write"
-        state: "on"
+      - { name: alice, perms: "~app:* +@read +@write", state: "on" }

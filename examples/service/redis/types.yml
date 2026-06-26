@@ -1,0 +1,41 @@
+# Переиспользуемые именованные input-типы сервиса redis (ADR-062, named input types).
+# Резолв — service-level: `$type: <Имя>` в любом `input:` сценария ЭТОГО сервиса
+# замещается развёрнутой схемой отсюда на input-стадии (cycle-checked). Имя типа —
+# PascalCase (отличает тип-ссылку от snake_case-параметра визуально и в парсере).
+types:
+  # AclUser — одна запись ACL-пользователя Redis (operator-extra). Переиспользуется
+  # сценариями, читающими operator-extra ACL: create (массив таких записей,
+  # input.users), будущие add_user/update_acl. Раньше эта структура дублировалась
+  # inline в каждом сценарии (и расходилась) — теперь один источник правды.
+  #
+  # ★ Wave 1b (2026-06-26): ТОЛЬКО текущие поля (name/perms/state). keys/channels/
+  # commands — wave 2 (структурный ACL вместо одной perms-строки), здесь НЕ заводятся.
+  AclUser:
+    type: object
+    additional_properties: false
+    required: [name, perms]
+    properties:
+      # Имя ACL-пользователя. Паттерн строже прежнего inline-варианта (lowercase-старт):
+      # Redis ACL имена регистрозависимы, но конвенция роли — lowercase-идентификатор.
+      name:
+        type: string
+        pattern: "^[a-z][a-z0-9_-]*$"
+        description: >-
+          Имя ACL-пользователя Redis (уникально в массиве users). Рендерится в
+          users.acl; пароль резолвится keeper-side из Vault по конвенции
+          secret/redis/<incarnation>/users/<name>#password.
+      # ПОЛНАЯ ACL-строка прав (не алиас): директивы Redis ACL как есть.
+      perms:
+        type: string
+        description: >-
+          Полная ACL-строка прав (директивы Redis ACL как есть), напр. "~* +@all"
+          или "~app:* +@read +@write -@dangerous". Пишется в users.acl как есть.
+      # Состояние: on (активен) / off (заблокирован, правило хранится). default on.
+      # Не в object-level required → опционально; default доливается на input-стадии.
+      state:
+        type: string
+        default: "on"
+        enum: [on, off]
+        description: >-
+          Состояние пользователя: on (активен) / off (заблокирован, но правило
+          хранится). По умолчанию on.

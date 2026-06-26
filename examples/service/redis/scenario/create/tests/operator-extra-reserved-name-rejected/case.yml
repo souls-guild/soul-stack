@@ -41,9 +41,7 @@ fixtures:
     version: "7.2.4"
     persistence: rdb
     users:
-      replica:
-        perms: "~* +@all"
-        state: "on"
+      - { name: replica, perms: "~* +@all", state: "on" }
 
 # Прогон обрывается на validate: правило «имя зарезервировано за служебным» false.
 # Подстрока — message правила (create/main.yml validate).

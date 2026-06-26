@@ -213,26 +213,24 @@ input:
       sentinel). По истечении sentinel считает failover провалившимся и пробует снова.
       Не задан → 60000.
 
+  # ★ wave 1b types-эпик (2026-06-26): operator-extra ACL — ТИПИЗИРОВАННЫЙ массив
+  # элементов AclUser (types.yml, ADR-062 $type). Прежний нетипизированный map
+  # username→{perms,state} заменён массивом [{name, perms, state}]: имя юзера переехало
+  # в поле name элемента (раньше было map-ключом). Форма AclUser объявлена ОДИН раз в
+  # types.yml (источник правды), будущие add_user/update_acl ссылаются на тот же тип.
+  # Ветки cluster/sentinel итерируют массив (.map(u, {u.name: …})) → собирают тот же
+  # destiny-map имя→{perms,state,password}, что и прежде (destiny-контракт не менялся).
   users:
-    type: object
+    type: array
     required: false
+    items:
+      $type: AclUser
     description: >-
-      ACL-пользователи Redis: ключ — имя, значение — {perms, state}. perms —
-      ПОЛНАЯ ACL-строка (не алиас): директивы Redis ACL как есть, напр.
-      "~* +@all" или "~app:* +@read +@write -@dangerous". Рендерятся в users.acl
-      (destiny `redis`); пароль каждого юзера резолвится keeper-side из Vault по
-      конвенции secret/redis/<incarnation>/users/<name>#password.
-    properties: {}
-    additional_properties:
-      type: object
-      required: [perms, state]
-      additional_properties: false
-      properties:
-        perms:
-          type: string
-        state:
-          type: string
-          enum: [on, off]
+      ACL-пользователи Redis (массив AclUser: {name, perms, state}). perms — ПОЛНАЯ
+      ACL-строка (не алиас): директивы Redis ACL как есть, напр. "~* +@all" или
+      "~app:* +@read +@write -@dangerous". Рендерятся в users.acl (destiny `redis`);
+      пароль каждого юзера резолвится keeper-side из Vault по конвенции
+      secret/redis/<incarnation>/users/<name>#password.
 
   # ── redis_settings: passthrough-директивы redis.conf (KEY→VALUE, #6) ─────────
   # ★ #6 (2026-06-26): additional_properties: true (произвольный JSON) сужено до
@@ -418,8 +416,9 @@ validate:
   # отказом, а не молчаливым переопределением. INPUT-ONLY (essence в validate
   # недоступен — структурный CEL-барьер): список зарезервированных имён захардкожен
   # здесь (он же essence.system_acl_users[_sentinel] keys + default из requirepass).
-  # has()-guard — input.users опционален; .all() над map итерирует по ключам.
-  - that: "!has(input.users) || input.users.all(name, !(name in ['default', 'replica', 'monitoring', 'sentinel', 'haproxy']))"
+  # has()-guard — input.users опционален; .all() над МАССИВОМ итерирует элементы
+  # AclUser (wave 1b), имя — поле u.name (раньше map-ключ name).
+  - that: "!has(input.users) || input.users.all(u, !(u.name in ['default', 'replica', 'monitoring', 'sentinel', 'haproxy']))"
     message: "имя ACL-пользователя зарезервировано за служебным (default/replica/monitoring/sentinel/haproxy): выбери другое имя — служебные юзеры заводятся автоматически из essence"
 
   # ★ Правило «modules_base_url обязателен на Redis < 8» УБРАНО (2026-06-25): источник
@@ -700,8 +699,10 @@ state_changes:
   - set: sentinel_quorum
     value: "${ 0 }"
 
+  # redis_users — ТИПИЗИРОВАННЫЙ массив AclUser (wave 1b, map→array). state хранит
+  # input.users как есть (массив [{name,perms,state}]); пароли НЕ в state (Vault).
   - set: redis_users
-    value: "${ default(input.users, {}) }"
+    value: "${ default(input.users, []) }"
   # redis_hosts пустой во ВСЕХ режимах: state_changes рендерятся per-host с
   # soulprint.SELF (AllowHosts=false, orchestration.md §7.1) — roster soulprint.hosts
   # тут НЕДОСТУПЕН (граница: state — per-run, роли раскладывает apply-сторона).

@@ -19,9 +19,7 @@ fixtures:
     redis_config:
       maxmemory: "256mb"
     redis_users:
-      bob:
-        perms: "~app:* +@read"
-        state: "on"
+      - { name: bob, perms: "~app:* +@read", state: "on" }
 
   essence:
     system_acl_users:

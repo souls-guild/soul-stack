@@ -23,7 +23,7 @@ fixtures:
     network: { primary_ip: 10.0.0.5 }
     os: { arch: amd64 }
 
-  # Развёрнутый incarnation.state v3: уже есть юзер bob; add_user добавляет alice.
+  # Развёрнутый incarnation.state v6: уже есть юзер bob; add_user добавляет alice.
   state:
     redis_type: sentinel
     redis_version: "7.2.4"
@@ -43,9 +43,7 @@ fixtures:
       save:             "900 1 300 10 60 10000"
       appendonly:       "no"
     redis_users:
-      bob:
-        perms: "~app:* +@read"
-        state: "on"
+      - { name: bob, perms: "~app:* +@read", state: "on" }
 
   input:
     username: alice
@@ -100,12 +98,10 @@ assert:
         password: addusr-redis-pass-16ch
         tls: false
 
-  # state_changes: redis_users несёт alice+bob БЕЗ пароля (write-model).
+  # state_changes: redis_users несёт bob+alice БЕЗ пароля (write-model, МАССИВ AclUser
+  # wave 1b). Порядок = array-upsert: сохранённый bob (filter оставил) ПЕРВЫМ, новый
+  # alice ДОПИСАН в конец (compute.users_new = filter(name != alice) + [alice]).
   state_changes:
     redis_users:
-      alice:
-        perms: "~* +@all"
-        state: "on"
-      bob:
-        perms: "~app:* +@read"
-        state: "on"
+      - { name: bob, perms: "~app:* +@read", state: "on" }
+      - { name: alice, perms: "~* +@all", state: "on" }

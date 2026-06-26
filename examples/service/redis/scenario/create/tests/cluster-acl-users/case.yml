@@ -95,12 +95,8 @@ fixtures:
     replicas_per_master: 0
     cluster_node_timeout: 5000
     users:
-      zeta:
-        perms: "~* +@all"
-        state: "on"
-      alpha:
-        perms: "~app:* +@read +@write"
-        state: "on"
+      - { name: zeta, perms: "~* +@all", state: "on" }
+      - { name: alpha, perms: "~app:* +@read +@write", state: "on" }
 
 assert:
   # mode-guard (cluster реализован → no-op) и size-guard (assert: PASS, не задача)
@@ -232,13 +228,10 @@ assert:
       cluster-enabled:      "yes"
       cluster-config-file:  "nodes.conf"
       cluster-node-timeout: "5000"
-    # ACL-юзеры в state — имя→{perms,state} (БЕЗ пароля; он keeper-side vault).
+    # ACL-юзеры в state — МАССИВ AclUser [{name,perms,state}] (БЕЗ пароля; он keeper-
+    # side vault). wave 1b: порядок = порядок input.users (state хранит массив как есть).
     # GUARD «per-user пароль НЕ в state»: deep-compare redis_users без password.
     redis_users:
-      zeta:
-        perms: "~* +@all"
-        state: "on"
-      alpha:
-        perms: "~app:* +@read +@write"
-        state: "on"
+      - { name: zeta, perms: "~* +@all", state: "on" }
+      - { name: alpha, perms: "~app:* +@read +@write", state: "on" }
     redis_hosts: []

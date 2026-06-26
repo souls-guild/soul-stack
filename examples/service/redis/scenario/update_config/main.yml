@@ -165,10 +165,11 @@ tasks:
         # ★★ КРИТИЧНО (system-ACL-users d2): redis.conf-рендер этой задачи перерендеривает
         # и users.acl (тот же destiny `redis` кирпич) → ОБЯЗАН долить системные из essence,
         # иначе update_config СТЁР БЫ replica/monitoring/sentinel/haproxy (как add_user).
-        # Системные ПЕРВЫМИ, operator-extra (state.redis_users) ПОВЕРХ (last-wins). Системные
-        # НЕ в state (пункт 7 d2) — доливаются из essence на каждом рендере. has()-guard на
-        # state.redis_users — back-compat (инкарнации без operator-extra). Vault-пароль той
-        # же ветки secret/redis/<inc>/users/<name>#password.
+        # Системные ПЕРВЫМИ, operator-extra (state.redis_users — МАССИВ AclUser, wave 1b)
+        # ПОВЕРХ (last-wins). Системные НЕ в state (пункт 7 d2) — доливаются из essence на
+        # каждом рендере. has()-guard на state.redis_users — back-compat (инкарнации без
+        # operator-extra). Vault-пароль той же ветки secret/redis/<inc>/users/<name>#password.
+        # operator-extra: .map(u, {u.name: …}) (имя из поля u.name, раньше map-ключ).
         users: >-
           ${ merge(
                merge(default(essence.system_acl_users, {}).map(name, {
@@ -179,11 +180,11 @@ tasks:
                  }
                })),
                has(incarnation.state.redis_users)
-                 ? merge(incarnation.state.redis_users.map(name, {
-                     name: {
-                       'perms':    incarnation.state.redis_users[name].perms,
-                       'state':    incarnation.state.redis_users[name].state,
-                       'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+                 ? merge(incarnation.state.redis_users.map(u, {
+                     u.name: {
+                       'perms':    u.perms,
+                       'state':    u.state,
+                       'password': vault('secret/redis/' + incarnation.name + '/users/' + u.name + '#password')
                      }
                    }))
                  : {}

@@ -83,15 +83,9 @@ fixtures:
     persistence: aof
     # maxmemory_policy НЕ задан — должен прийти из essence (allkeys-lru).
     users:
-      zeta:
-        perms: "~* +@all"
-        state: "on"
-      alpha:
-        perms: "~app:* +@read"
-        state: "on"
-      mike:
-        perms: "~m:* +@write"
-        state: "off"
+      - { name: zeta, perms: "~* +@all", state: "on" }
+      - { name: alpha, perms: "~app:* +@read", state: "on" }
+      - { name: mike, perms: "~m:* +@write", state: "off" }
 
 assert:
   task_present:
@@ -212,13 +206,7 @@ assert:
       save: ""
       appendonly: "yes"
     redis_users:
-      zeta:
-        perms: "~* +@all"
-        state: "on"
-      alpha:
-        perms: "~app:* +@read"
-        state: "on"
-      mike:
-        perms: "~m:* +@write"
-        state: "off"
+      - { name: zeta, perms: "~* +@all", state: "on" }
+      - { name: alpha, perms: "~app:* +@read", state: "on" }
+      - { name: mike, perms: "~m:* +@write", state: "off" }
     redis_hosts: []

@@ -157,5 +157,5 @@ assert:
       cluster-config-file:  "nodes.conf"
       cluster-node-timeout: "7000"
       tcp-backlog: 511
-    redis_users: {}
+    redis_users: []
     redis_hosts: []

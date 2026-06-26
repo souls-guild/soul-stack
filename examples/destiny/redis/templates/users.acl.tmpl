@@ -2,9 +2,10 @@
   users.acl — внешний ACL-файл Redis (aclfile в redis.conf). Контекст рендера
   (docs/templating.md §3.2):
     .vars.users — MAP ACL-юзеров имя→{perms, state, password}, собранный scenario
-                  сервиса из своего typed-map input.users (формой merge(list(map))
-                  над .map(...)-comprehension); password каждого юзера зарезолвлен
-                  keeper-side из Vault (ADR-012).
+                  сервиса из своего typed-array input.users (массив AclUser, wave 1b;
+                  формой merge(list(map)) над .map(u, {u.name: …})-comprehension);
+                  password каждого юзера зарезолвлен keeper-side из Vault (ADR-012).
+                  Контракт destiny (этот MAP) НЕ менялся при map→array в scenario.
   Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010).
 
   ДЕТЕРМИНИЗМ ПОРЯДКА (docs/templating.md §6): range по MAP обходит ключи в

@@ -82,7 +82,7 @@ passthrough-директивы оператора, SHALLOW last-wins ([templatin
 | `redis_type` | enum `sentinel`/`cluster` | режим развёртывания (реализованы оба) |
 | `redis_version` | string | эффективная версия Redis: distro-native пин (`install.method=package`, из input `version`) **или** upstream-semver (`install.method=binary`, из `install.version`); см. input `version` / `install` |
 | `redis_config` | object | **итог трансляции** — merged-конфиг `redis.conf` (default → preset → вычисления → passthrough; для `cluster` — плюс `cluster-*`-директивы) |
-| `redis_users` | map `username → {perms, state}` | **operator-extra** ACL-пользователи Redis (только заведённые оператором); `perms` — полная ACL-строка (пароли НЕ в state — keeper-side Vault). **Системные** служебные юзеры (`replica`/`monitoring`/`sentinel`/`haproxy` и т.д.) сюда **НЕ** пишутся — они доливаются в `users.acl` из `essence.system_acl_users` на каждом рендере (см. [«Системные ACL-юзеры»](#системные-acl-юзеры)) |
+| `redis_users` | array `AclUser` (`[{name, perms, state}]`) | **operator-extra** ACL-пользователи Redis (только заведённые оператором). Элемент — типизированный `AclUser` (`name` + `perms` обязательны, `state` дефолт `on`) из [`types.yml`](types.yml), переиспользуемый через `$type: AclUser` в `input:` сценариев (ADR-062). До state_schema v6 это был map `username → {perms, state}` — миграция [`005_to_006.yml`](migrations/005_to_006.yml) свернула map→array (имя-ключ → поле `name`). `perms` — полная ACL-строка (пароли НЕ в state — keeper-side Vault). **Системные** служебные юзеры (`replica`/`monitoring`/`sentinel`/`haproxy` и т.д.) сюда **НЕ** пишутся — они доливаются в `users.acl` из `essence.system_acl_users` на каждом рендере (см. [«Системные ACL-юзеры»](#системные-acl-юзеры)) |
 | `redis_hosts` | array `{sid, role}` | хосты топологии (пишется `[]`; точные роли `primary`/`replica`/`sentinel` для cluster/sentinel раскладывает apply-сторона — в state не фиксируются) |
 | `redis_sentinel` | object `{master_name, quorum}` | факты sentinel-режима: имя monitored master (из `essence.sentinel_master_name`, дефолт `master`) + quorum. `quorum` всегда `0` (auto `size/2+1` вычисляется в apply, в state не материализуется). Вне режима `sentinel` — пустой объект |
 
@@ -621,7 +621,7 @@ namedfields. Параметры state `config` (вкл. денилист) — в
    `aclfile` целиком. Идемпотентно по конструкции; плагин делает diff `ACL LIST`
    до/после (`changed=false` при совпадении).
 
-`state.redis_users` мутируется новым набором (имя→`{perms,state}`, **без** пароля — ИБ).
+`state.redis_users` мутируется новым набором — типизированный массив `AclUser` (`[{name, perms, state}]`, upsert по полю `name`, **без** пароля — ИБ; тип из [`types.yml`](types.yml), ADR-062).
 Один юзер за прогон (атомарная операция). Параметры state `acl` — в
 [per-module doc](../../../docs/module/community/redis/README.md#acl--params).
 

@@ -100,7 +100,11 @@ transform:
 
 ### Доступные CEL-функции
 
-Стандартные CEL-функции (`int`, `string`, `bool`, `size`, `has`, `keys`, `values`, comprehensions `map`/`filter`/`all`/`exists`/`exists_one`) + операторы (`+`/`-`/`*`/`/`/`==`/`!=`/`<`/`>`/`<=`/`>=`/`&&`/`||`/`!`/`in`/`?:`).
+Стандартные CEL-функции (`int`, `string`, `bool`, `size`, `has`, comprehensions `map`/`filter`/`all`/`exists`/`exists_one`) + операторы (`+`/`-`/`*`/`/`/`==`/`!=`/`<`/`>`/`<=`/`>=`/`&&`/`||`/`!`/`in`/`?:`).
+
+migration-CEL — sandbox с минимальной surface area: только stdlib (объявлена лишь переменная `state`). `glob()`/`merge()`/`default()` и любые pure-расширения обычного CEL здесь **не** зарегистрированы (расширение требует отдельного ADR). `keys()`/`values()` в этом списке **нет** — их в migration-CEL нет, `${ keys(...) }` падает на компиляции (`undeclared reference`).
+
+Для итерации по map используется нативный макрос `.map()` **над самим map-ом**: он обходит **ключи** (элемент итерации = ключ), значение достаётся индексом `m[k]`. Так свёртывается `map → array` без `keys()` — см. миграцию [`examples/service/redis/migrations/005_to_006.yml`](../examples/service/redis/migrations/005_to_006.yml) (`state.redis_users.map(n, {'name': n, 'perms': state.redis_users[n].perms, ...})`).
 
 ### Запрещено в migration-CEL
 

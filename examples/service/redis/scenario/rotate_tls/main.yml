@@ -144,11 +144,11 @@ tasks:
           ca_ref:   "${ compute.ca_ref }"
         users: >-
           ${ has(incarnation.state.redis_users)
-             ? merge(incarnation.state.redis_users.map(name, {
-                 name: {
-                   'perms':    incarnation.state.redis_users[name].perms,
-                   'state':    incarnation.state.redis_users[name].state,
-                   'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+             ? merge(incarnation.state.redis_users.map(u, {
+                 u.name: {
+                   'perms':    u.perms,
+                   'state':    u.state,
+                   'password': vault('secret/redis/' + incarnation.name + '/users/' + u.name + '#password')
                  }
                }))
              : {} }

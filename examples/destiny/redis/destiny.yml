@@ -166,8 +166,9 @@ input:
     additional_properties: true
 
   # ACL-пользователи Redis: MAP имя→{perms, state, password}. scenario строит
-  # этот map из своего typed-map input.users (формой merge(list(map)) над
-  # .map(...)-comprehension) и резолвит password каждого юзера keeper-side из
+  # этот map из своего typed-array input.users (массив AclUser, wave 1b; формой
+  # merge(list(map)) над .map(u, {u.name: …})-comprehension) и резолвит password
+  # каждого юзера keeper-side из
   # Vault. Шаблон users.acl.tmpl range-ит MAP (Go сортирует ключи → строки
   # ACL детерминированы между прогонами — нет ложного change/рестарта) и хеширует
   # пароль (Redis ACL #<sha256>) — plaintext в файл НЕ пишется. Пустой/не передан

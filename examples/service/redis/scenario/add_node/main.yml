@@ -103,10 +103,11 @@ tasks:
         modules_base_url: "${ default(incarnation.state.modules_base_url, '') }"
         # ★★ КРИТИЧНО (system-ACL-users d2): новая нода ОБЯЗАНА получить тот же users.acl,
         # что и кластер — СИСТЕМНЫЕ (из essence, ПЕРВЫМИ: replica/monitoring/sentinel/
-        # haproxy) + operator-extra (state.redis_users, ПОВЕРХ). БЕЗ системного replica
-        # новая нода НЕ сможет реплицировать (PSYNC) — кластер не примет её как реплику.
-        # Системные НЕ в state (пункт 7 d2) — доливаются из essence. Vault-пароль той же
-        # ветки secret/redis/<inc>/users/<name>#password.
+        # haproxy) + operator-extra (state.redis_users — МАССИВ AclUser, wave 1b, ПОВЕРХ).
+        # БЕЗ системного replica новая нода НЕ сможет реплицировать (PSYNC) — кластер не
+        # примет её как реплику. Системные НЕ в state (пункт 7 d2) — доливаются из essence.
+        # Vault-пароль той же ветки secret/redis/<inc>/users/<name>#password. operator-extra:
+        # .map(u, {u.name: …}) (имя из поля u.name, раньше map-ключ).
         users: >-
           ${ merge(
                merge(default(essence.system_acl_users, {}).map(name, {
@@ -117,11 +118,11 @@ tasks:
                  }
                })),
                has(incarnation.state.redis_users)
-                 ? merge(incarnation.state.redis_users.map(name, {
-                     name: {
-                       'perms':    incarnation.state.redis_users[name].perms,
-                       'state':    incarnation.state.redis_users[name].state,
-                       'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+                 ? merge(incarnation.state.redis_users.map(u, {
+                     u.name: {
+                       'perms':    u.perms,
+                       'state':    u.state,
+                       'password': vault('secret/redis/' + incarnation.name + '/users/' + u.name + '#password')
                      }
                    }))
                  : {}

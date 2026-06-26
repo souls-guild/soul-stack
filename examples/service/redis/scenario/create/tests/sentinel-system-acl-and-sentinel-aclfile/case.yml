@@ -149,7 +149,7 @@ assert:
     redis_type: sentinel
     redis_version: "7.2.4"
     # operator-extra нет → системные не в state → redis_users пуст.
-    redis_users: {}
+    redis_users: []
     redis_hosts: []
     redis_sentinel:
       master_name: master

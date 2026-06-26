@@ -196,7 +196,7 @@ assert:
       maxmemory: "256mb"
       save: "900 1 300 10 60 10000"
       appendonly: "no"
-    redis_users: {}
+    redis_users: []
     redis_hosts: []
     redis_sentinel:
       master_name: master

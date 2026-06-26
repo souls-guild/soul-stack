@@ -57,7 +57,7 @@ fixtures:
       maxmemory-policy: allkeys-lru
       save:             "900 1 300 10 60 10000"
       appendonly:       "no"
-    redis_users: {}
+    redis_users: []
 
   input:
     # Дельта оператора: только новая политика вытеснения.

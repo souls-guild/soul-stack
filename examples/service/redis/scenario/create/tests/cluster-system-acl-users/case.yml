@@ -64,9 +64,7 @@ fixtures:
     replicas_per_master: 0
     cluster_node_timeout: 5000
     users:
-      app:
-        perms: "~app:* +@read +@write"
-        state: "on"
+      - { name: app, perms: "~app:* +@read +@write", state: "on" }
 
 assert:
   task_present:
@@ -122,9 +120,7 @@ assert:
     redis_version: "7.2.4"
     # ★ GUARD «системные НЕ в state»: redis_users несёт ТОЛЬКО operator-extra (app),
     # БЕЗ replica/monitoring/sentinel/haproxy (они доливаются из essence, deep-compare
-    # ловит лишний системный ключ как расхождение).
+    # ловит лишний системный элемент как расхождение). wave 1b: МАССИВ AclUser.
     redis_users:
-      app:
-        perms: "~app:* +@read +@write"
-        state: "on"
+      - { name: app, perms: "~app:* +@read +@write", state: "on" }
     redis_hosts: []

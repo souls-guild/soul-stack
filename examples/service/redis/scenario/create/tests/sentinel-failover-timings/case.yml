@@ -76,7 +76,7 @@ assert:
   state_changes:
     redis_type: sentinel
     redis_version: "7.2.4"
-    redis_users: {}
+    redis_users: []
     redis_hosts: []
     # ★ read-model day-2: тайминги оператора в state.redis_sentinel.
     redis_sentinel:

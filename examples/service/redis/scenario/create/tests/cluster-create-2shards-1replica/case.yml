@@ -153,7 +153,7 @@ assert:
       cluster-enabled:      "yes"
       cluster-config-file:  "nodes.conf"
       cluster-node-timeout: "8000"
-    redis_users: {}
+    redis_users: []
     redis_hosts: []
     # ── namedfields (read-model, v3): топология cluster. shards=2 (input.shards),
     # replicas=1 (UNIFIED input.replicas_per_master, реплик на шард). sentinel_quorum

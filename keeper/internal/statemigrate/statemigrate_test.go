@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/goccy/go-yaml"
@@ -46,29 +47,64 @@ type migrationTestCase struct {
 	StateAfter  map[string]any `yaml:"state_after"`
 }
 
-// TestApply_RealFixture_UsersListToMap — прогон реальной миграции 001_to_002 на
-// её основном кейсе: единственный источник истины семантики foreach list→element
-// (имя пользователя → ключ map-а). Авторитет над docs-примерами (assert против
-// фикстуры).
-func TestApply_RealFixture_UsersListToMap(t *testing.T) {
-	mig := mustParseFile(t, filepath.Join(fixtureDir, "001_to_002.yml"))
+// TestApply_AllFixtures — GENERIC-обход всех фикстур миграций redis-сервиса. Для
+// каждой пары «файл миграции <N>_to_<M>.yml + каталог <N>_to_<M>/tests/*.yml»
+// прогоняет ОДИН шаг <N>→<M> на state_before и сверяет с state_after. Это гейт от
+// молчаливой регрессии: любая существующая фикстура (вкл. 4 шт. 005_to_006)
+// исполняется без ручного хардкода пути. Авторитет над docs-примерами.
+//
+// Каждый каталог тестов привязан к одношаговой миграции (имя каталога = имя файла
+// без .yml), а версии шага берутся из самого файла (Parse). Поэтому достаточно
+// одношаговой Chain — multi-step цепочки покрываются step-снапшот-тестами ниже.
+func TestApply_AllFixtures(t *testing.T) {
 	ev := mustEvaluator(t)
 
-	path := filepath.Join(fixtureDir, "001_to_002", "tests", "users-list-to-map.yml")
-	data, err := os.ReadFile(path)
+	migFiles, err := filepath.Glob(filepath.Join(fixtureDir, "*_to_*.yml"))
 	if err != nil {
-		t.Fatalf("read case: %v", err)
+		t.Fatalf("glob migrations: %v", err)
 	}
-	var tc migrationTestCase
-	if err := yaml.Unmarshal(data, &tc); err != nil {
-		t.Fatalf("unmarshal case: %v", err)
+	if len(migFiles) == 0 {
+		t.Fatalf("не найдено ни одного файла миграции в %s", fixtureDir)
 	}
 
-	res, err := Apply(context.Background(), tc.StateBefore, Chain{mig}, ev)
-	if err != nil {
-		t.Fatalf("Apply: %v", err)
+	var totalCases int
+	for _, migFile := range migFiles {
+		stepName := strings.TrimSuffix(filepath.Base(migFile), ".yml") // напр. 005_to_006
+		caseFiles, err := filepath.Glob(filepath.Join(fixtureDir, stepName, "tests", "*.yml"))
+		if err != nil {
+			t.Fatalf("glob cases %s: %v", stepName, err)
+		}
+		if len(caseFiles) == 0 {
+			// Миграция без фикстур — потенциальная дыра покрытия, но не падение
+			// (некоторые шаги могут быть тривиальными). Помечаем явно.
+			t.Logf("миграция %s: тест-фикстур нет", stepName)
+			continue
+		}
+
+		mig := mustParseFile(t, migFile)
+		for _, caseFile := range caseFiles {
+			caseName := stepName + "/" + strings.TrimSuffix(filepath.Base(caseFile), ".yml")
+			t.Run(caseName, func(t *testing.T) {
+				data, err := os.ReadFile(caseFile)
+				if err != nil {
+					t.Fatalf("read case: %v", err)
+				}
+				var tc migrationTestCase
+				if err := yaml.Unmarshal(data, &tc); err != nil {
+					t.Fatalf("unmarshal case: %v", err)
+				}
+
+				res, err := Apply(context.Background(), tc.StateBefore, Chain{mig}, ev)
+				if err != nil {
+					t.Fatalf("Apply %s: %v", caseName, err)
+				}
+				assertDeepEqualJSON(t, res.FinalState, tc.StateAfter)
+			})
+			totalCases++
+		}
 	}
-	assertDeepEqualJSON(t, res.FinalState, tc.StateAfter)
+
+	t.Logf("прогнано миграций: %d, тест-кейсов: %d", len(migFiles), totalCases)
 }
 
 // TestApply_RealFixture_EmptyUsers — пустой список пользователей даёт пустой map.
