@@ -9,6 +9,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 	"github.com/souls-guild/soul-stack/shared/cel"
 	"github.com/souls-guild/soul-stack/shared/config"
+	"github.com/souls-guild/soul-stack/shared/tmpl"
 )
 
 // destinyWithFileVars — плоская destiny из одной module-задачи, читающей
@@ -422,6 +423,121 @@ func TestDestinyFileVars_OnlyViaApplyInput(t *testing.T) {
 	}
 	if got := tasks[0].Params.GetFields()["cmd"].GetStringValue(); got != "echo /acl/carol" {
 		t.Errorf("cmd = %q, want echo /acl/carol (scenario.input → apply.input → destiny vars.yml)", got)
+	}
+}
+
+// TestDestinyFileVars_InRenderedTemplateContext — file-level vars.yml доступен
+// шаблону core.file.rendered как `.vars.<file_var>` НАПРЯМУЮ, без passthrough
+// через params.vars задачи (симметрия Варианта A: render_context.vars = file-vars
+// база + task-level params.vars override). Это ровно node-exporter-кейс: шаблон
+// читает `.vars.bin_path`, где bin_path — file-var (vars.yml), а в params.vars
+// задачи ЕГО НЕТ.
+func TestDestinyFileVars_InRenderedTemplateContext(t *testing.T) {
+	const tmplPath = "templates/unit.tmpl"
+	const tmplBody = "ExecStart={{ .vars.bin_path }}\n"
+
+	resolved := &ResolvedDestiny{
+		Name:  "pilot-rendered",
+		Input: config.InputSchemaMap{"bin_dir": {Type: "string", Default: "/usr/local/bin"}},
+		Vars: map[string]any{
+			"bin_path": "${ input.bin_dir + '/node_exporter' }",
+		},
+		Templates: fakeReader{files: map[string][]byte{tmplPath: []byte(tmplBody)}},
+		Tasks: []config.Task{
+			{
+				Name: "render unit",
+				Module: &config.ModuleTask{
+					Module: moduleFileRendered,
+					Params: map[string]any{
+						"path":     "/etc/systemd/system/node_exporter.service",
+						"template": tmplPath,
+						// НЕТ params.vars: file-var bin_path должен дойти НАПРЯМУЮ.
+					},
+				},
+			},
+		},
+	}
+	res := &stubDestinyResolver{resolved: resolved}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario:    applyScenario("pilot-rendered", map[string]any{}),
+		Incarnation: IncarnationMeta{Name: "svc"},
+		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
+		Destiny:     res,
+	}
+	tasks, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	rc := tasks[0].Params.GetFields()[paramRenderContext].GetStructValue().AsMap()
+	vars, _ := rc["vars"].(map[string]any)
+	if vars["bin_path"] != "/usr/local/bin/node_exporter" {
+		t.Fatalf("render_context.vars.bin_path = %#v, want /usr/local/bin/node_exporter (file-var НАПРЯМУЮ в .vars)", vars["bin_path"])
+	}
+
+	// Исполняем тем же движком, что Soul, render_context КОРНЕМ.
+	engine, err := tmpl.New()
+	if err != nil {
+		t.Fatalf("tmpl.New: %v", err)
+	}
+	out, err := engine.Render(tasks[0].Params.GetFields()[paramTemplateContent].GetStringValue(), rc)
+	if err != nil {
+		t.Fatalf("soul-render упал (.vars.bin_path недоступен?): %v", err)
+	}
+	if !strings.Contains(out, "ExecStart=/usr/local/bin/node_exporter") {
+		t.Errorf(".vars.bin_path (file-var) не подставлен:\n%s", out)
+	}
+}
+
+// TestDestinyFileVars_TaskVarsOverrideFileInRenderContext — в render_context.vars
+// действует та же Вариант-A семантика, что в CEL-фазе: одноимённый task-level
+// params.vars перетирает file-var. Гарантирует, что слияние file→task под `.vars`
+// детерминировано (побеждает task), а не теряет один из слоёв.
+func TestDestinyFileVars_TaskVarsOverrideFileInRenderContext(t *testing.T) {
+	const tmplPath = "templates/unit.tmpl"
+	const tmplBody = "bin {{ .vars.bin_path }}\nextra {{ .vars.extra }}\n"
+
+	resolved := &ResolvedDestiny{
+		Name: "pilot-rendered-override",
+		Vars: map[string]any{
+			"bin_path": "/from/file",
+			"extra":    "/file-only",
+		},
+		Templates: fakeReader{files: map[string][]byte{tmplPath: []byte(tmplBody)}},
+		Tasks: []config.Task{
+			{
+				Name: "render unit",
+				Module: &config.ModuleTask{
+					Module: moduleFileRendered,
+					Params: map[string]any{
+						"path":     "/etc/x.service",
+						"template": tmplPath,
+						// task-var bin_path перетирает file-var; extra остаётся file-var.
+						"vars": map[string]any{"bin_path": "/from/task"},
+					},
+				},
+			},
+		},
+	}
+	res := &stubDestinyResolver{resolved: resolved}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario:    applyScenario("pilot-rendered-override", map[string]any{}),
+		Incarnation: IncarnationMeta{Name: "svc"},
+		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
+		Destiny:     res,
+	}
+	tasks, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	vars, _ := tasks[0].Params.GetFields()[paramRenderContext].GetStructValue().AsMap()["vars"].(map[string]any)
+	if vars["bin_path"] != "/from/task" {
+		t.Errorf("render_context.vars.bin_path = %#v, want /from/task (task-var override file-var, Вариант A)", vars["bin_path"])
+	}
+	if vars["extra"] != "/file-only" {
+		t.Errorf("render_context.vars.extra = %#v, want /file-only (file-var без одноимённого task-var)", vars["extra"])
 	}
 }
 

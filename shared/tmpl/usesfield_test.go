@@ -54,3 +54,60 @@ func TestUsesRootField_ParseError(t *testing.T) {
 		t.Fatalf("ожидалась ошибка парсинга битого шаблона")
 	}
 }
+
+// TestRootFieldSubKeys — сбор подключей `.<field>.<subkey>`, реально читаемых
+// шаблоном (AST). Основа точечной инъекции file-vars в render_context.vars:
+// инъектим РОВНО те file-vars, чей ключ шаблон читает. Должен ловить subkey в
+// action/range/if/with/pipeline/вложенном define и игнорировать упоминание в
+// литеральном тексте/комментарии и голое `.<field>` без подключа.
+func TestRootFieldSubKeys(t *testing.T) {
+	e := newEngine(t)
+
+	cases := []struct {
+		name  string
+		field string
+		body  string
+		want  map[string]bool
+	}{
+		{"single subkey", "vars", `ExecStart={{ .vars.bin_path }}`, map[string]bool{"bin_path": true}},
+		{"multiple subkeys", "vars", `{{ .vars.a }}{{ .vars.b }}`, map[string]bool{"a": true, "b": true}},
+		{"subkey in range", "vars", `{{ range .vars.loadmodules }}{{ . }}{{ end }}`, map[string]bool{"loadmodules": true}},
+		{"subkey in if", "vars", `{{ if .vars.config }}x{{ end }}`, map[string]bool{"config": true}},
+		{"subkey in pipeline arg", "vars", `{{ default "x" .vars.password }}`, map[string]bool{"password": true}},
+		{"nested define", "vars", `{{ define "t" }}{{ .vars.users }}{{ end }}{{ template "t" . }}`, map[string]bool{"users": true}},
+		{"deep chain takes second ident", "vars", `{{ .vars.config.maxmemory }}`, map[string]bool{"config": true}},
+
+		// Голое `.vars` без подключа — подключей нет.
+		{"bare field no subkey", "vars", `{{ .vars }}`, map[string]bool{}},
+		// Другое поле игнорируется.
+		{"other field ignored", "vars", `{{ .input.user }}{{ .self.os.family }}`, map[string]bool{}},
+		// Упоминание в комментарии/тексте — TextNode, не обращение.
+		{"in comment text", "vars", "# .vars.bin_path резолвится из vars.yml\nbind 0.0.0.0", map[string]bool{}},
+		{"empty template", "vars", `bind 0.0.0.0`, map[string]bool{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := e.RootFieldSubKeys(tc.body, tc.field)
+			if err != nil {
+				t.Fatalf("RootFieldSubKeys: %v", err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("RootFieldSubKeys(%q) = %v, want %v", tc.field, got, tc.want)
+			}
+			for k := range tc.want {
+				if !got[k] {
+					t.Errorf("RootFieldSubKeys(%q): отсутствует ключ %q (got %v)", tc.field, k, got)
+				}
+			}
+		})
+	}
+}
+
+// TestRootFieldSubKeys_ParseError — битый шаблон → ErrParse (симметрично
+// UsesRootField).
+func TestRootFieldSubKeys_ParseError(t *testing.T) {
+	e := newEngine(t)
+	if _, err := e.RootFieldSubKeys(`{{ .vars.x `, "vars"); err == nil {
+		t.Fatalf("ожидалась ошибка парсинга битого шаблона")
+	}
+}

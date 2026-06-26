@@ -34,7 +34,7 @@ assert:
         template_content: "<present>"
         render_context:
           vars:
-            exporter_bin: /usr/local/bin/node_exporter
+            bin_path: /usr/local/bin/node_exporter
           input:
             version: "1.11.1"
             base_url: "https://github.com/prometheus/node_exporter/releases/download"

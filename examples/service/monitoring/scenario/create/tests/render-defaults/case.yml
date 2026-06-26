@@ -124,11 +124,12 @@ assert:
         group: root
         # Вариант B (ADR-010 §3.2 amendment): operator-input destiny едет в
         # render_context.input напрямую (user/group/listen/textfile_dir +
-        # прод-параметры демона), без passthrough params.vars. В vars остаётся
-        # только производный exporter_bin (готовый путь бинаря из vars.bin_path).
+        # прод-параметры демона), без passthrough params.vars. vars несёт РЕФЕРЕНСНЫЙ
+        # file-var bin_path (шаблон читает `.vars.bin_path` напрямую, passthrough
+        # exporter_bin убран) — прочие file-vars vars.yml шаблон не читает.
         render_context:
           vars:
-            exporter_bin: /usr/local/bin/node_exporter
+            bin_path: /usr/local/bin/node_exporter
           input:
             # apply:input от monitoring + дефолты destiny node-exporter (scenario
             # их не переопределяет → значения из destiny.yml). gomaxprocs:0 и пустые

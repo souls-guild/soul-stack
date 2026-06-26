@@ -43,11 +43,12 @@ func TestNodeExporterTemplates_ParseAndRender(t *testing.T) {
 	}
 
 	// Корень text/template-контекста core.file.rendered (templating.md §3.2,
-	// Вариант B): {vars, input, self, role, essence}. vars — производные значения
-	// (bin_dir/exporter_bin из vars.yml); input — operator-input прохода
-	// (user/group/listen/textfile_dir + прод-параметры демона), читаются шаблоном
-	// `.input.<name>` напрямую (Вариант B, ADR-010 §3.2 amendment). Шаблоны без
-	// input/vars (скрипты, таймеры) лишних ключей просто не читают.
+	// Вариант B): {vars, input, self, role, essence}. vars — destiny-локалы vars.yml
+	// (bin_dir/bin_path), доступны шаблону `.vars.<file_var>` НАПРЯМУЮ (без
+	// passthrough params.vars); input — operator-input прохода (user/group/listen/
+	// textfile_dir + прод-параметры демона), читаются шаблоном `.input.<name>`
+	// напрямую (Вариант B, ADR-010 §3.2 amendment). Шаблоны без input/vars (скрипты,
+	// таймеры) лишних ключей просто не читают.
 	root := nodeExporterRenderVars
 
 	for _, f := range files {
@@ -73,20 +74,21 @@ func TestNodeExporterTemplates_ParseAndRender(t *testing.T) {
 }
 
 // nodeExporterRenderVars — корень рендера для content-ассертов (Вариант B,
-// templating.md §3.2): {vars, input, self, role, essence}. vars — производные
-// значения, поднятые в params.vars (bin_dir/exporter_bin из vars.yml); input —
-// operator-input прохода (user/group/listen/textfile_dir + прод-параметры
+// templating.md §3.2): {vars, input, self, role, essence}. vars — destiny-локалы
+// vars.yml (bin_dir/bin_path), доступные шаблону `.vars.<file_var>` НАПРЯМУЮ;
+// input — operator-input прохода (user/group/listen/textfile_dir + прод-параметры
 // демона), читаемый шаблоном `.input.<name>`. Один на оба теста (ParseAndRender
 // использует тот же набор).
 var nodeExporterRenderVars = map[string]any{
-	// vars — суперсет ключей, поднятых в params.vars ШАГАМИ destiny: основной unit
-	// (service.yml, Вариант B) поднимает только exporter_bin; collector-шаги
-	// (collectors.yml — ВНЕ скоупа Варианта B) всё ещё пробрасывают user/
-	// textfile_dir/bin_dir через свои params.vars, поэтому collector-.tmpl читают
-	// `.vars.user`/`.vars.textfile_dir`. Синтетический корень даёт оба слоя.
+	// vars — суперсет file-vars и values, поднятых в params.vars ШАГАМИ destiny:
+	// основной unit (service.yml, Вариант B) НЕ поднимает params.vars вовсе —
+	// читает file-var `.vars.bin_path` напрямую; collector-шаги (collectors.yml —
+	// ВНЕ скоупа Варианта B) всё ещё пробрасывают user/textfile_dir/bin_dir через
+	// свои params.vars, поэтому collector-.tmpl читают `.vars.user`/`.vars.
+	// textfile_dir`. Синтетический корень даёт оба слоя.
 	"vars": map[string]any{
 		"bin_dir":      "/usr/local/bin",
-		"exporter_bin": "/usr/local/bin/node_exporter",
+		"bin_path":     "/usr/local/bin/node_exporter",
 		"user":         "node_exporter",
 		"textfile_dir": "/var/lib/node_exporter",
 	},
@@ -330,6 +332,18 @@ func TestNodeExporterService_CollectorOptionsDeterministic(t *testing.T) {
 		if firstOptIdx < logIdx {
 			t.Fatalf("прогон %d: collector_options отрендерены до --log.format — нарушена позиция блока\n--- рендер ---\n%s", run, out)
 		}
+	}
+}
+
+// TestNodeExporterService_ExecStartBinPath — ★регресс на «убран последний
+// vars-passthrough»: ExecStart берёт путь бинаря из file-var `.vars.bin_path`
+// (vars.yml), а не из снятого passthrough `.vars.exporter_bin`. Путь обязан
+// остаться тем же (/usr/local/bin/node_exporter) — поведение ExecStart не
+// изменилось, изменился только канал доставки (file-var напрямую).
+func TestNodeExporterService_ExecStartBinPath(t *testing.T) {
+	out := renderNodeExporterTmpl(t, "node_exporter.service.tmpl")
+	if !strings.Contains(out, "ExecStart=/usr/local/bin/node_exporter ") {
+		t.Errorf("ExecStart не берёт путь бинаря из .vars.bin_path:\n%s", out)
 	}
 }
 

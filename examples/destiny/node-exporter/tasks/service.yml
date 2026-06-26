@@ -45,10 +45,11 @@
 # Вариант B (ADR-010 §3.2 amendment): operator-input доезжает в шаблон через
 # render_context.input напрямую — шаблон читает `.input.<name>` (user/group/
 # listen/textfile_dir + прод-параметры демона), БЕЗ redundant passthrough
-# `params.vars` каждого input-поля. В params.vars поднимается ТОЛЬКО производное
-# значение, которого нет в operator-input как есть: exporter_bin = готовый путь
-# бинаря (vars.bin_path резолвится из vars.yml, а не из input) → шаблон читает
-# его как `.vars.exporter_bin`. Прод-параметры (gomaxprocs/disabled_collectors/
+# `params.vars` каждого input-поля. ПРОИЗВОДНЫЕ destiny-локалы (vars.yml) тоже
+# доезжают в шаблон НАПРЯМУЮ: render_context.vars = file-vars (vars.yml) + task-
+# level params.vars (override). Поэтому params.vars здесь НЕ нужен вовсе — путь
+# бинаря шаблон читает как `.vars.bin_path` (file-var из vars.yml), а не через
+# passthrough exporter_bin. Прод-параметры (gomaxprocs/disabled_collectors/
 # enabled_collectors/collector_options/log_level/log_format/web_telemetry_path/
 # fs_mount_points_exclude/netdev_device_exclude) — это input-поля; шаблон берёт
 # их из `.input.*` нативным типом (list/int/map уезжают как есть, ADR-010).
@@ -61,8 +62,6 @@
     mode: "0644"
     owner: root
     group: root
-    vars:
-      exporter_bin: "${ vars.bin_path }"
 
 - name: Ensure node_exporter is running and enabled at boot
   module: core.service.running

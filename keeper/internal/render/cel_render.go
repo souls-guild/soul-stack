@@ -233,11 +233,22 @@ func hostRegister(in RenderInput, host *topology.HostFacts) map[string]any {
 // `.vars.*`/`.self.*`/`.role`/`.essence.*` (и `.input.*` при injectInput).
 //
 // self — ТА ЖЕ soulprintSelfMap, что в CEL-фазе (hostVars): единая точка правды
-// (ADR-018, soulprint.self.<path> в CEL ≡ .self.<path> в шаблоне). vars —
-// CEL-резолвленный `params.vars` шага (см. templating.md §6: автор поднимает
-// нужные значения в `params.vars`, шаблон читает `.vars.<name>`); под ключ vars,
-// НЕ плоским корнем. essence — effective-слой incarnation (host-инвариантный
-// snapshot). role — declared-роль хоста из spec (bootstrap-create; может быть "").
+// (ADR-018, soulprint.self.<path> в CEL ≡ .self.<path> в шаблоне). vars — слияние
+// РЕФЕРЕНСНЫХ destiny-локалов `vars.yml` (fileVars, БАЗА — только ключи, что шаблон
+// читает как `.vars.<key>`, см. referencedFileVars) и CEL-резолвленного
+// `params.vars` шага (override); под ключ vars, НЕ плоским корнем. essence —
+// effective-слой incarnation (host-инвариантный snapshot). role — declared-роль
+// хоста из spec (bootstrap-create; может быть "").
+//
+// vars-слой ЗЕРКАЛИТ CEL-фазу (resolveTaskVars, Вариант A vars.md): file-vars
+// доступны шаблону как `.vars.<file_var>` НАПРЯМУЮ, без redundant passthrough
+// через `params.vars` каждого file-var (node-exporter: `.vars.bin_path`). Поверх
+// file-vars кладётся `params.vars` шага — одноимённый task-var перетирает file-var
+// (детерминированный override). ТОЧЕЧНОСТЬ (referencedFileVars): подкладываются
+// только file-vars, чей ключ шаблон реально читает — шаблон без `.vars.<file_var>`
+// (redis: читает task-var-ключи) лишних file-var-ключей НЕ получает, его `.vars`
+// БИТ-В-БИТ как до фичи. В scenario-проходе fileVars пуст (vars.yml — destiny-
+// сущность) → `.vars` = только params.vars, поведение БИТ-В-БИТ как было.
 //
 // input — резолвнутый operator-input прохода (Вариант B, ADR-010 §3.2
 // amendment): шаблон читает `.input.<name>` напрямую, без passthrough
@@ -258,16 +269,17 @@ func hostRegister(in RenderInput, host *topology.HostFacts) map[string]any {
 // (sealRenderContextInput), И ТОЛЬКО когда input реально инъектится (тот же
 // injectInput-гейт), а не по присутствию выражения в params.
 //
-// paramsVars — CEL-rendered значение `params.vars` (nil/отсутствует → пустой
-// map: шаблон с `.vars.*` упадёт strict-mode, что корректно — обращение к
-// незаявленной vars-переменной = ошибка автора).
-func buildRenderContext(in RenderInput, host *topology.HostFacts, paramsVars map[string]any, injectInput bool) map[string]any {
-	vars := paramsVars
-	if vars == nil {
-		vars = map[string]any{}
-	}
+// fileVars — резолвленные destiny-локалы `vars.yml` хоста (база `.vars`-слоя,
+// fileVarsForHost). paramsVars — CEL-rendered значение `params.vars` шага (override).
+// Оба nil/пусты → `.vars` пустой map: шаблон с `.vars.*` упадёт strict-mode, что
+// корректно — обращение к незаявленной vars-переменной = ошибка автора.
+func buildRenderContext(in RenderInput, host *topology.HostFacts, fileVars, paramsVars map[string]any, injectInput bool) map[string]any {
+	// `.vars` = file-vars (база) + params.vars (override) — Вариант A, как
+	// resolveTaskVars в CEL-фазе. Зеркало гарантирует: file-var виден и в params
+	// (CEL `vars.<x>`), и в шаблоне (`.vars.<x>`). orEmptyMap нормализует nil
+	// (mergeVars отдаёт nil при обоих пустых) — `.vars` всегда присутствует ключом.
 	rc := map[string]any{
-		"vars":    vars,
+		"vars":    orEmptyMap(mergeVars(fileVars, paramsVars)),
 		"self":    soulprintSelfMap(host),
 		"role":    host.Role,
 		"essence": in.Essence,

@@ -9,7 +9,8 @@
 # ADR-010 §3.2 amendment: operator-input доезжает в render_context.input
 # напрямую, без passthrough params.vars). Ассертим render_context unit-задачи
 # целиком — он детерминирован для синтетического L0-хоста; ключевая величина —
-# input.listen = ":9100". В vars остаётся только производный exporter_bin.
+# input.listen = ":9100". vars несёт РЕФЕРЕНСНЫЙ file-var bin_path (шаблон читает
+# его как `.vars.bin_path` напрямую) — прочие file-vars vars.yml не читаются.
 name: node-exporter binds to all interfaces when primary_ip is non-10
 
 fixtures:
@@ -34,10 +35,12 @@ assert:
         template_content: "<present>"
         # render_context.input.listen = ":9100" — пустой host (primary_ip не 10.*).
         # Вариант B: operator-input (резолвнутый destiny-input + defaults) едет в
-        # render_context.input целиком; vars несёт лишь производный exporter_bin.
+        # render_context.input целиком; vars несёт РЕФЕРЕНСНЫЙ file-var bin_path
+        # (шаблон читает `.vars.bin_path` напрямую) — прочие file-vars vars.yml
+        # шаблон не читает, в render_context.vars их нет (точечная инъекция).
         render_context:
           vars:
-            exporter_bin: /usr/local/bin/node_exporter
+            bin_path: /usr/local/bin/node_exporter
           input:
             # apply:input passthrough (version/listen/collectors/base_url/
             # collector_options/web_telemetry_path) + дефолты destiny-схемы.

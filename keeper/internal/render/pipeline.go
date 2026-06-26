@@ -452,6 +452,7 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 	// тоже. content переиспользуется injectTemplateContent ниже (не читаем дважды).
 	var templateContent string
 	var injectInput bool
+	var fileVarKeys map[string]bool
 	if isRendered {
 		content, uses, terr := p.resolveTemplateUsesInput(in, resolved)
 		if terr != nil {
@@ -459,6 +460,19 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		}
 		templateContent = content
 		injectInput = uses
+
+		// Точечная инъекция destiny-локалов (vars.yml) в render_context.vars: какие
+		// `.vars.<key>` шаблон РЕАЛЬНО читает (AST). В `.vars` подкладываем ТОЛЬКО
+		// эти file-vars (buildRenderContext), а не весь vars.yml — симметрия с
+		// injectInput для `.input`. Шаблон без `.vars.<file_var>` (redis: читает
+		// task-var-ключи password/config, не file-vars) лишних file-var-ключей НЕ
+		// получает → render_context.vars БИТ-В-БИТ как был. Host-инвариантно (путь
+		// шаблона один), считаем один раз ДО per-host цикла.
+		keys, kerr := templateVarSubKeys(templateContent)
+		if kerr != nil {
+			return nil, fmt.Errorf("render: task %q: %w", task.Name, kerr)
+		}
+		fileVarKeys = keys
 
 		// seal S-1 (ADR-010 §7.4, Вариант B): operator-input доезжает в шаблон через
 		// render_context.input напрямую — сырого `${ input.X }` в params больше нет,
@@ -484,16 +498,19 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 			return nil, fmt.Errorf("render: task %q (host %s): %w", task.Name, h.SID, err)
 		}
 		// core.file.rendered: собираем per-host render_context {vars,self,role,
-		// essence} (templating.md §3.2) из CEL-rendered params.vars и кладём в
-		// params рядом с template_content. Плоский ключ vars удаляем — Soul читает
-		// корень только из render_context (template_content + render_context, см.
-		// §3.2/§6). render_context host-вариативен (self per-host) — он исключён из
-		// host-инвариантной сверки ниже. Для golden-path (один хост) rt.Params
-		// несёт render_context именно этого хоста.
+		// essence} (templating.md §3.2) и кладём в params рядом с template_content.
+		// `.vars` = РЕФЕРЕНСНЫЕ file-vars (vars.yml, только ключи fileVarKeys, что
+		// шаблон читает как `.vars.<key>`) база + CEL-rendered params.vars override
+		// (Вариант A) — file-var доступен шаблону `.vars.<x>` НАПРЯМУЮ, без passthrough.
+		// Плоский ключ vars удаляем — Soul читает корень только из render_context
+		// (template_content + render_context, см. §3.2/§6). render_context host-
+		// вариативен (self per-host) — исключён из host-инвариантной сверки ниже. Для
+		// golden-path (один хост) rt.Params несёт render_context именно этого хоста.
 		if isRendered {
 			paramsVars := extractParamsVars(st)
 			delete(st.Fields, paramVars)
-			if err := setRenderContext(st, buildRenderContext(in, h, paramsVars, injectInput)); err != nil {
+			fileVars := referencedFileVars(fileVarsForHost(in, h), fileVarKeys)
+			if err := setRenderContext(st, buildRenderContext(in, h, fileVars, paramsVars, injectInput)); err != nil {
 				return nil, fmt.Errorf("render: task %q (host %s): %w", task.Name, h.SID, err)
 			}
 		}
@@ -1248,6 +1265,45 @@ func (p *Pipeline) resolveTemplateUsesInput(in RenderInput, resolved map[string]
 	content := string(data)
 	uses, derr := usesInputField(content)
 	return content, uses, derr
+}
+
+// templateVarField — корневое поле render_context, под которым едут производные
+// значения шаблона (`.vars.<name>`): сюда точечно подкладываются file-vars vars.yml,
+// чей ключ шаблон реально читает.
+const templateVarField = "vars"
+
+// templateVarSubKeys возвращает множество подключей `.vars.<key>`, которые шаблон
+// реально читает (AST, tmpl.RootFieldSubKeys) — основа точечной инъекции file-vars
+// в render_context.vars. Пустой content (inline без файла/не-rendered) → пустой
+// набор. Битый шаблон → ошибка (caller падает render_failed как Soul на рендере).
+func templateVarSubKeys(content string) (map[string]bool, error) {
+	if content == "" {
+		return nil, nil
+	}
+	engine, err := usesFieldEngine()
+	if err != nil {
+		return nil, fmt.Errorf("сборка tmpl-движка: %w", err)
+	}
+	return engine.RootFieldSubKeys(content, templateVarField)
+}
+
+// referencedFileVars отбирает из резолвленных destiny-локалов (vars.yml) только те,
+// чей ключ шаблон реально читает как `.vars.<key>` (keys). Так в render_context.vars
+// попадают РОВНО нужные file-vars, а не весь vars.yml: node-exporter получает
+// bin_path, redis (читает task-var-ключи, не file-vars) — ничего лишнего. Пустые
+// fileVars/keys → nil (buildRenderContext подставит пустой `.vars`-слой). НЕ мутирует
+// вход.
+func referencedFileVars(fileVars map[string]any, keys map[string]bool) map[string]any {
+	if len(fileVars) == 0 || len(keys) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(keys))
+	for k := range keys {
+		if v, ok := fileVars[k]; ok {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // usesInputField детектит обращение шаблона к корневому `.input` через AST

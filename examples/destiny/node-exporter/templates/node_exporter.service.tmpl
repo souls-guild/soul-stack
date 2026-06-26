@@ -1,8 +1,9 @@
 {{/*
   systemd-unit node_exporter. Контекст рендера (docs/templating.md §3.2, Вариант B):
-    .vars  — производные значения, поднятые в params.vars: exporter_bin —
-             готовый путь бинаря из vars.bin_path (резолвится из vars.yml, не из
-             operator-input);
+    .vars  — destiny-локалы vars.yml (file-vars), доступны шаблону НАПРЯМУЮ как
+             `.vars.<file_var>` без passthrough через params.vars: bin_path —
+             целевой путь бинаря (input.bin_dir + '/node_exporter', резолвится в
+             vars.yml, не operator-input);
     .input — operator-input прохода (Вариант B, ADR-010 §3.2 amendment): user,
              group, listen, textfile_dir; прод-параметры демона: gomaxprocs
              (int), disabled_collectors / enabled_collectors (list<string>),
@@ -42,7 +43,7 @@ Wants=network-online.target
 Type=simple
 User={{ .input.user }}
 Group={{ .input.group }}
-ExecStart={{ .vars.exporter_bin }} \
+ExecStart={{ .vars.bin_path }} \
     --collector.textfile.directory={{ .input.textfile_dir }} \
     --web.listen-address={{ .input.listen }} \
     --web.telemetry-path={{ .input.web_telemetry_path }} \

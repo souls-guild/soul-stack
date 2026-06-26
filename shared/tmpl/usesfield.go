@@ -45,6 +45,94 @@ func (e *Engine) UsesRootField(templateContent, field string) (bool, error) {
 	return false, nil
 }
 
+// RootFieldSubKeys возвращает множество вторых идентификаторов цепочек
+// `.<field>.<subkey>`, к которым шаблон реально обращается action-узлом (а не
+// упоминанием в литеральном тексте). Например, для field=="vars" и шаблона
+// `ExecStart={{ .vars.bin_path }}` → {"bin_path"}.
+//
+// Используется Keeper-side рендером core.file.rendered для ТОЧЕЧНОЙ инъекции
+// destiny-локалов (vars.yml) в render_context.vars: в `.vars` подкладываются
+// ТОЛЬКО те file-vars, чей ключ шаблон реально читает как `.vars.<key>` — а не весь
+// набор vars.yml. Так file-var доезжает в шаблон напрямую (node-exporter:
+// `.vars.bin_path`), но шаблоны, читающие лишь task-var-ключи (redis:
+// `.vars.password`/`.vars.config` — это params.vars, не file-vars), НЕ получают
+// лишних file-var-ключей → их render_context.vars остаётся БИТ-В-БИТ как был
+// (deep-equal-фикстуры стабильны). Симметрия с UsesRootField (Вариант B для input):
+// инъектим ровно то, что шаблон читает, не больше.
+//
+// Детекция — по AST (та же машинерия, что UsesRootField): FieldNode с
+// Ident=[field, subkey, …] → subkey попадает в множество. Голое `.<field>` без
+// подключа (Ident=[field]) подключей не даёт. Ошибка парсинга → ErrParse (caller
+// падает как на Render).
+func (e *Engine) RootFieldSubKeys(templateContent, field string) (map[string]bool, error) {
+	t := template.New("subkeys").Funcs(e.funcs)
+	t, err := t.Parse(templateContent)
+	if err != nil {
+		return nil, &ErrParse{Err: err}
+	}
+	keys := map[string]bool{}
+	for _, tmpl := range t.Templates() {
+		if tmpl.Tree == nil || tmpl.Tree.Root == nil {
+			continue
+		}
+		collectSubKeys(tmpl.Tree.Root, field, keys)
+	}
+	return keys, nil
+}
+
+// collectSubKeys рекурсивно обходит parse-AST и собирает вторые идентификаторы
+// цепочек `.<field>.<subkey>` (та же структура обхода, что walkUsesRootField).
+func collectSubKeys(node parse.Node, field string, keys map[string]bool) {
+	if node == nil {
+		return
+	}
+	switch n := node.(type) {
+	case *parse.ListNode:
+		if n == nil {
+			return
+		}
+		for _, child := range n.Nodes {
+			collectSubKeys(child, field, keys)
+		}
+	case *parse.ActionNode:
+		collectSubKeys(n.Pipe, field, keys)
+	case *parse.PipeNode:
+		if n == nil {
+			return
+		}
+		for _, cmd := range n.Cmds {
+			collectSubKeys(cmd, field, keys)
+		}
+	case *parse.CommandNode:
+		for _, arg := range n.Args {
+			collectSubKeys(arg, field, keys)
+		}
+	case *parse.FieldNode:
+		if len(n.Ident) >= 2 && n.Ident[0] == field {
+			keys[n.Ident[1]] = true
+		}
+	case *parse.IfNode:
+		collectSubKeysBranch(&n.BranchNode, field, keys)
+	case *parse.RangeNode:
+		collectSubKeysBranch(&n.BranchNode, field, keys)
+	case *parse.WithNode:
+		collectSubKeysBranch(&n.BranchNode, field, keys)
+	case *parse.TemplateNode:
+		collectSubKeys(n.Pipe, field, keys)
+	}
+}
+
+// collectSubKeysBranch обходит общую часть if/range/with (BranchNode).
+func collectSubKeysBranch(b *parse.BranchNode, field string, keys map[string]bool) {
+	collectSubKeys(b.Pipe, field, keys)
+	if b.List != nil {
+		collectSubKeys(b.List, field, keys)
+	}
+	if b.ElseList != nil {
+		collectSubKeys(b.ElseList, field, keys)
+	}
+}
+
 // walkUsesRootField рекурсивно обходит parse-AST в поисках обращения к корневому
 // полю `.<field>`. Признак — FieldNode, чей первый идентификатор == field
 // (FieldNode представляет цепочку `.a.b.c` от dot-контекста: Ident=["a","b","c"]).

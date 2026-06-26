@@ -95,7 +95,7 @@ func TestRenderContext_InputRootPresent(t *testing.T) {
 // injectInput=true и nil Input кладёт пустой map (не паникует, strict-mode на
 // `.input.X` корректен).
 func TestRenderContext_BuildRenderContext_EmptyInput(t *testing.T) {
-	rc := buildRenderContext(RenderInput{}, &topology.HostFacts{}, nil, true)
+	rc := buildRenderContext(RenderInput{}, &topology.HostFacts{}, nil, nil, true)
 	if _, ok := rc["input"].(map[string]any); !ok {
 		t.Fatalf("render_context.input при nil Input должен быть пустым map, got %#v", rc["input"])
 	}
@@ -108,7 +108,7 @@ func TestRenderContext_BuildRenderContext_EmptyInput(t *testing.T) {
 func TestRenderContext_BuildRenderContext_InputOmitted(t *testing.T) {
 	rc := buildRenderContext(
 		RenderInput{Input: map[string]any{"secret": "x"}},
-		&topology.HostFacts{}, nil, false)
+		&topology.HostFacts{}, nil, nil, false)
 	if _, present := rc["input"]; present {
 		t.Fatalf("при injectInput=false ключ input не должен присутствовать: %#v", rc)
 	}
