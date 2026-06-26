@@ -48,6 +48,16 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
+    # Per-user секреты системных юзеров (secret/redis/<inc>/users/<name>#password) —
+    # их резолвит keeper-side vault() при доливе system_acl_users в apply.input.users.
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
     # Per-user секреты — РАЗНЫЕ значения: cross-leak (пароль одного юзера в строке
     # другого) детектируется ассертом на отдельные значения.
     secret/redis/create/users/zeta:
@@ -68,6 +78,14 @@ fixtures:
       maxclients:       10000
       timeout:          300
 
+    # Системные ACL-юзеры redis-server (1:1 из essence/_default.yaml). ОБЯЗАТЕЛЬНЫ:
+    # guard create/cluster.yml (assert 1b) рвёт render при пустом system_acl_users
+    # (тихий fail-open недопустим — без них репликация/health-check сломались бы).
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
   input:
     redis_type: cluster
     # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
@@ -102,7 +120,25 @@ assert:
         group: redis
         render_context:
           vars:
+            # СИСТЕМНЫЕ (4, из essence.system_acl_users, доливаются ОБЯЗАТЕЛЬНО — guard 1b)
+            # + operator-extra zeta/alpha (last-wins). Имена не пересекаются с системными.
             users:
+              replica:
+                perms: "+psync +replconf +ping"
+                state: "on"
+                password: replica-sys-secret-pass
+              monitoring:
+                perms: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+                state: "on"
+                password: monitoring-sys-secret-pass
+              sentinel:
+                perms: "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+                state: "on"
+                password: sentinel-sys-secret-pass
+              haproxy:
+                perms: "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+                state: "on"
+                password: haproxy-sys-secret-pass
               zeta:
                 perms: "~* +@all"
                 state: "on"

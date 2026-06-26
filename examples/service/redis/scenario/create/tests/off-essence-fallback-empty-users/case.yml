@@ -3,9 +3,12 @@
 #   - memory_mb НЕ задан → maxmemory из essence ("256mb"), has-guard НЕ
 #     материализует computed-слой (нет ложного "0mb");
 #   - maxmemory_policy НЕ задан → из essence (allkeys-lru);
-#   - users НЕ задан (пусто) → users.acl без юзеров (валидный aclfile);
-#     redis_users в state — пустой map.
-name: persistence off + essence maxmemory/policy fallback + empty users
+#   - input.users НЕ задан → operator-extra пуст: redis_users в state — пустой map.
+#     users.acl при этом НЕ пуст — в нём ОБЯЗАТЕЛЬНЫЕ системные юзеры из essence
+#     (replica/monitoring/sentinel/haproxy), без которых guard create/sentinel.yml
+#     (assert 1b) оборвал бы render. «empty users» здесь = пустой operator-extra,
+#     НЕ пустой users.acl (тихий fail-open недопустим).
+name: persistence off + essence maxmemory/policy fallback + empty operator users
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
@@ -18,9 +21,32 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
+    # Per-user секреты системных юзеров (secret/redis/<inc>/users/<name>#password) —
+    # их резолвит keeper-side vault() при доливе system_acl_users в apply.input.users.
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
   essence:
     redis_type: sentinel
     sentinel_master_name: master
+    # Системные ACL-юзеры (1:1 из essence/_default.yaml) — ОБЯЗАТЕЛЬНЫ: guard
+    # create/sentinel.yml (assert 1b) рвёт render при пустом любом наборе. operator-extra
+    # (input.users) пуст — в users.acl попадают ТОЛЬКО эти системные.
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default:    "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
     modules_base_url: "https://artifacts.example.com/redis/modules"
     memory_reserve_percent: 75
     persistence_presets:
@@ -58,7 +84,10 @@ assert:
         name: redis-server
         version: "7.2.4"
 
-    # users.acl: пустой map (users не задан → {}). Шаблон рендерит файл без строк.
+    # users.acl: operator-extra пуст (input.users не задан), но системные ОБЯЗАТЕЛЬНЫ
+    # → в users.acl ровно 4 системных redis-server юзера (replica/monitoring/sentinel/
+    # haproxy) из essence.system_acl_users, каждый с per-user vault-паролем. Пустого
+    # users.acl быть не может — это был бы тихий fail-open (guard 1b его и ловит).
     # Дизамбигуатор от redis.conf (тот же core.file.rendered) — path.
     - module: core.file.rendered
       params_subset:
@@ -69,7 +98,23 @@ assert:
         group: redis
         render_context:
           vars:
-            users: {}
+            users:
+              replica:
+                perms: "+psync +replconf +ping"
+                state: "on"
+                password: replica-sys-secret-pass
+              monitoring:
+                perms: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+                state: "on"
+                password: monitoring-sys-secret-pass
+              sentinel:
+                perms: "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+                state: "on"
+                password: sentinel-sys-secret-pass
+              haproxy:
+                perms: "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+                state: "on"
+                password: haproxy-sys-secret-pass
           self:
             sid: node-solo.example.com
             covens: [create]

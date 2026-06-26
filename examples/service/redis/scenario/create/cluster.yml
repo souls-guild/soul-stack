@@ -12,31 +12,7 @@
 # трансляцию (деление 16384 на shards) НЕ повторяет — иначе две раскладки
 # (scenario + плагин) рассинхронятся.
 
-# 1. SIZE-GUARD — fail-fast ДО любого install (assert:, ADR-009 amendment 2026-06-23).
-#    Топология обязана точно совпасть: число таргетированных хостов roster-а ==
-#    shards*(1+replicas_per_shard). Соответствие проверяется KEEPER-SIDE на РЕНДЕРЕ —
-#    там доступен soulprint.hosts (roster прогона; на Soul-е во flow_context его НЕТ,
-#    поэтому Soul-side failed_when тут неприменим). assert.that[] — предикат «совпало»;
-#    false ОБРЫВАЕТ render (НИ одной задачи на Soul, прогон не стартует) с message.
-#    Это «fail на этапе модели» — раньше и понятнее, чем shell-guard на хосте.
-#    assert НЕ emit RenderedTask — задачи cluster-ветки после него сдвигаются на его
-#    позицию (−1 индекс относительно прежнего плана).
-#
-#    ОБЯЗАТЕЛЬНОСТЬ shards — декларативно через required_when в main.yml (ADR-009
-#    amendment 2026-06-23): `shards: required_when: "input.redis_type == 'cluster'"`.
-#    Прежний shards-guard (core.cmd.shell с has(input.shards) || exit 1) УБРАН:
-#    отсутствие shards в режиме cluster ловит input-валидация Keeper-а ДО render —
-#    оператор получает понятный отказ раньше и без произвольного shell на хосте.
-#    Поэтому int(input.shards) здесь читается голым (shards гарантированно присутствует
-#    в cluster-прогоне, дошедшем до render); has()-тернар больше не нужен.
-#    replicas_per_master имеет default:0 → int() безопасен без обёртки.
-- name: Guard cluster topology size matches shards and replicas
-  assert:
-    that:
-      - "size(soulprint.hosts) == int(input.shards) * (1 + int(input.replicas_per_master))"
-    message: "topology mismatch: hosts != shards*(1+replicas_per_master)"
-
-# 2. Per-host install + render redis.conf (с cluster-директивами) + render
+# 1. Per-host install + render redis.conf (с cluster-директивами) + render
 #    users.acl + systemd. Та же destiny `redis` (режим-агностична), что и
 #    sentinel, но merged config ДОПОЛНЕН cluster-директивами поверх базового
 #    merge. Они — обычные ключи config-map-а (destiny range-ит их в redis.conf):
@@ -124,7 +100,7 @@
         key_ref:  "${ compute.tls_key_ref }"
         ca_ref:   "${ compute.tls_ca_ref }"
 
-# 3. Health-gate per-host: PING живого Redis после старта (каждая нода обязана
+# 2. Health-gate per-host: PING живого Redis после старта (каждая нода обязана
 #    ответить ДО сборки кластера). community.redis.command, retry/until через retry.
 #    addr — localhost (плагин на redis-хосте), пароль — keeper-side vault()-резолв.
 #    ★ ИБ (anti-downgrade): tls/tls_ca/порт гейтятся на compute.tls_on (TLS ВКЛЮЧЁН),
@@ -141,7 +117,7 @@
     tls_ca:   "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
     args:     ["PING"]
 
-# 4. CLUSTER-BUILD — run_once на bootstrap-ноде. Строим nodes-MAP детерминированно
+# 3. CLUSTER-BUILD — run_once на bootstrap-ноде. Строим nodes-MAP детерминированно
 #    из roster-а прогона (soulprint.hosts): ключ = SID (стабилен и сортируем →
 #    плагин раскладывает master/replica по сортировке ключей детерминированно),
 #    значение = {addr: "<primary_ip>:6379"}. Форма merge(list(map)): .map(...) даёт

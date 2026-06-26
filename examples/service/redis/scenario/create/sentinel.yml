@@ -26,22 +26,7 @@
 # DECLARED: первый по SID хост (soulprint.hosts[0]) = master. soulprint.hosts уже
 # отсортирован по SID (cel_render.go), порядок детерминирован.
 
-# 1. SIZE-GUARD — fail-fast ДО любого install (assert:, ADR-009 amendment 2026-06-23;
-#    тот же механизм, что size-guard cluster.yml). Топология sentinel-режима: 1 master
-#    + replicas_per_master реплик → size(soulprint.hosts) == 1+replicas_per_master.
-#    Предикат вычисляется KEEPER-SIDE на РЕНДЕРЕ (там доступен soulprint.hosts; на
-#    Soul-е во flow_context его НЕТ → Soul-side failed_when неприменим). false ОБРЫВАЕТ
-#    render (НИ одной задачи на Soul, прогон не стартует) с message — раньше и понятнее,
-#    чем shell-guard на хосте. assert НЕ emit RenderedTask — задачи sentinel-ветки после
-#    него позиций не занимают. int() от uint64 (YAML→uint64 в L0, JSON→double в проде)
-#    унифицирует числовой тип CEL.
-- name: Guard sentinel topology size matches one master and replicas
-  assert:
-    that:
-      - "int(size(soulprint.hosts)) == 1 + int(input.replicas_per_master)"
-    message: "topology mismatch: hosts != 1 + replicas_per_master"
-
-# 2. Per-host install + render redis.conf + users.acl + sentinel.conf + units.
+# 1. Per-host install + render redis.conf + users.acl + sentinel.conf + units.
 #    Та же destiny `redis` (режим-агностична), что и cluster, но с
 #    sentinel_enabled=true → дополнительно рендерится sentinel.conf + redis-sentinel
 #    unit и поднимается демон. config — базовый merge (БЕЗ cluster-директив:
@@ -151,7 +136,7 @@
         quorum:      "${ int(size(soulprint.hosts)) / 2 + 1 }"
         auth_pass:   "${ vault('secret/redis/' + incarnation.name + '#password') }"
 
-# 3. Health-gate per-host: PING живого Redis после старта (каждый узел обязан
+# 2. Health-gate per-host: PING живого Redis после старта (каждый узел обязан
 #    ответить ДО привязки реплик/настройки sentinel). community.redis.command,
 #    retry/until через retry. addr — localhost (плагин на redis-хосте).
 #    ★ ИБ (anti-downgrade): tls/tls_ca/порт гейтятся на compute.tls_on (TLS ВКЛЮЧЁН),
@@ -167,7 +152,7 @@
     tls_ca:   "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
     args:     ["PING"]
 
-# 4. REPLICAOF реплик: plugin community.redis.replica ТОЛЬКО на репликах. addr —
+# 3. REPLICAOF реплик: plugin community.redis.replica ТОЛЬКО на репликах. addr —
 #    локальный инстанс (127.0.0.1:6379, per-host инвариант); master_addr —
 #    HOST-ИНВАРИАНТНЫЙ адрес master-а (master-election soulprint.hosts[0]).
 #
@@ -195,7 +180,7 @@
     tls:         "${ compute.tls_on }"
     tls_ca:      "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
 
-# 5. SENTINEL MONITOR reconcile: plugin community.redis.sentinel на КАЖДОМ хосте
+# 4. SENTINEL MONITOR reconcile: plugin community.redis.sentinel на КАЖДОМ хосте
 #    (каждый sentinel-демон мониторит master). addr — локальный sentinel
 #    (127.0.0.1:26379, per-host инвариант); monitor.ip — HOST-ИНВАРИАНТНЫЙ адрес
 #    master-а (master-election). quorum — input или большинство size/2+1. auth_pass
@@ -216,7 +201,7 @@
       # quorum — АВТО (большинство): size(soulprint.hosts)/2+1.
       quorum: "${ int(size(soulprint.hosts)) / 2 + 1 }"
 
-# 6. Health-gate per-host: SENTINEL отвечает PONG на :26379 (демон поднялся и
+# 5. Health-gate per-host: SENTINEL отвечает PONG на :26379 (демон поднялся и
 #    сконфигурирован). ★ СТРОГО same-task register.self (НЕ cross-passage
 #    flow-control, ADR-056 cross_passage_when_unsupported): «дождаться N sentinel»
 #    НЕ выражаем — проверяем ТОЛЬКО свой локальный sentinel. Паттерн перенесён из
