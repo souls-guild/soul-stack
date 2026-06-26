@@ -118,6 +118,7 @@ func fullSpecGroups() []specGroup {
 			registerHumaIncarnationCheckDrift(api, stub)
 			registerHumaIncarnationDestroy(api, stub)
 			registerHumaIncarnationUpdateHosts(api, stub)
+			registerHumaIncarnationSetTraits(api, stub)
 			return nil
 		}},
 		// choir смонтирован на группе /v1/incarnations, Operation.Path несёт

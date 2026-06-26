@@ -62,6 +62,10 @@ type IncarnationCreateRequestInput struct {
 	Service string
 	Covens  []string
 	Input   map[string]any
+	// Traits — operator-set trait-метки инкарнации (ADR-060 amend R1): кладутся в
+	// spec.traits → incarnation.traits (источник истины) + проекция в souls.traits
+	// хостов-членов. nil = «не задано» (parity legacy omitempty-декода).
+	Traits map[string]any
 }
 
 // IncarnationCreateReply — typed reply CreateTyped. Body — плоская доменная проекция 202-тела;
@@ -169,14 +173,15 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	if input != nil {
 		spec["input"] = input
 	}
+	if req.Traits != nil {
+		spec["traits"] = req.Traits
+	}
 
 	// Trait per-incarnation (ADR-060 amend, R1): operator-set traits живут в
-	// incarnation.spec.traits. На create-пути извлекаем их в колонку
-	// incarnation.traits — она источник истины, проецируемый в souls.traits
-	// хостов-членов sync-hook-ом ниже. Невалидный набор (формат ключа/значения)
-	// → 422 ДО insert. Operator-facing API-поле под spec.traits (top-level/MCP)
-	// — следующий слайс (relocate per-soul bulk → per-incarnation); сейчас
-	// мост spec→колонка готов, на create обычно nil (traits не заданы).
+	// incarnation.spec.traits (top-level API-поле `traits`, прокинуто в spec
+	// выше). На create-пути извлекаем их в колонку incarnation.traits — она
+	// источник истины, проецируемый в souls.traits хостов-членов sync-hook-ом
+	// ниже. Невалидный набор (формат ключа/значения) → 422 ДО insert.
 	traits, err := incarnation.TraitsFromSpec(spec)
 	if err != nil {
 		return zero, incProblem(problem.TypeValidationFailed, err.Error())
@@ -887,6 +892,63 @@ func (h *IncarnationHandler) UpdateHostsTyped(ctx context.Context, claims *jwt.C
 	}
 
 	// schema-aware маскинг spec/state в reply update-hosts (тот же детальный вид).
+	schema := h.secretSchemaForIncarnation(ctx, res.Incarnation)
+	return toIncarnationGetView(res.Incarnation, schema), nil
+}
+
+// --- SetTraits (SELF-AUDIT incarnation.traits_changed) ----------------
+
+// SetTraitsTyped — извлечённая доменная функция PUT /v1/incarnations/{name}/traits
+// (SELF-AUDIT: incarnation.traits_changed пишет САМ handler — payload old/new keys
+// после UpdateTraits). Зеркало per-soul bulk replace, но на источнике истины:
+// целиком заменяет incarnation.traits → персист (одна tx FOR UPDATE) → проекция в
+// souls.traits хостов-членов ([incarnation.SyncTraitsToHosts]) → 200 + полный
+// IncarnationGetView. traits приходит аргументом (native, биндится на huma-слое).
+// Невалидный набор (формат ключа/значения, nested) → 422 ДО записи. Пустой/nil
+// map = очистить метки.
+func (h *IncarnationHandler) SetTraitsTyped(ctx context.Context, claims *jwt.Claims, name string, traits map[string]any) (IncarnationGetView, error) {
+	var zero IncarnationGetView
+
+	if !incarnation.ValidName(name) {
+		return zero, incProblem(problem.TypeValidationFailed, "path 'name' must match "+incarnation.NamePattern)
+	}
+	if err := soul.ValidateTraitDelta(traits); err != nil {
+		return zero, incProblem(problem.TypeValidationFailed, err.Error())
+	}
+
+	res, err := incarnation.UpdateTraits(ctx, h.db, name, traits)
+	if err != nil {
+		if errors.Is(err, incarnation.ErrIncarnationNotFound) {
+			return zero, incProblem(problem.TypeNotFound, "incarnation "+name+" not found")
+		}
+		h.logger.Error("incarnation.set-traits: failed",
+			slog.String("name", name), slog.Any("error", err))
+		return zero, incProblem(problem.TypeInternalError, "update incarnation traits failed")
+	}
+
+	// Sync-hook (ADR-060 amend, R1): incarnation.traits → souls.traits хостов-
+	// членов. Best-effort (лог, не валим запрос): incarnation.traits уже записан —
+	// проекция до-сойдётся при следующем bind/sync. Replace целиком, в т.ч. на
+	// пустом map (очистить метки хостов-членов).
+	if serr := incarnation.SyncTraitsToHosts(ctx, h.db, name, res.Incarnation.Traits); serr != nil {
+		h.logger.Warn("incarnation.set-traits: sync traits → souls провален (best-effort)",
+			slog.String("name", name), slog.Any("error", serr))
+	}
+
+	if h.auditW != nil {
+		_ = h.auditW.Write(ctx, &audit.Event{
+			EventType: audit.EventIncarnationTraitsChanged,
+			Source:    apimiddleware.ScenarioInvocationSource(ctx),
+			ArchonAID: claims.Subject,
+			Payload: map[string]any{
+				"name":     name,
+				"old_keys": res.OldKeys,
+				"new_keys": res.NewKeys,
+			},
+		})
+	}
+
+	// schema-aware маскинг spec/state в reply (тот же детальный вид, что GET / update-hosts).
 	schema := h.secretSchemaForIncarnation(ctx, res.Incarnation)
 	return toIncarnationGetView(res.Incarnation, schema), nil
 }

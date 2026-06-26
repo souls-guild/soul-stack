@@ -57,6 +57,7 @@ func registerHumaIncarnationCreate(humaAPI huma.API, incH *handlers.IncarnationH
 			Service: in.Body.Service,
 			Covens:  in.Body.Covens,
 			Input:   in.Body.Input,
+			Traits:  in.Body.Traits,
 		})
 		if err != nil {
 			return nil, incProblem(err)
@@ -226,6 +227,26 @@ func registerHumaIncarnationUpdateHosts(humaAPI huma.API, incH *handlers.Incarna
 	})
 }
 
+// registerHumaIncarnationSetTraits монтирует PUT /v1/incarnations/{name}/traits
+// (SELF-AUDIT incarnation.traits_changed — пишет САМ handler внутри SetTraitsTyped).
+// incH nil → no-op.
+func registerHumaIncarnationSetTraits(humaAPI huma.API, incH *handlers.IncarnationHandler) {
+	if incH == nil {
+		return
+	}
+	huma.Register(humaAPI, incSetTraitsOperation(), func(ctx context.Context, in *incSetTraitsInput) (*incSetTraitsOutput, error) {
+		claims, ok := apimiddleware.ClaimsFromContext(ctx)
+		if !ok {
+			return nil, incMissingClaims()
+		}
+		body, err := incH.SetTraitsTyped(ctx, claims, in.Name, in.Body.Traits)
+		if err != nil {
+			return nil, incProblem(err)
+		}
+		return &incSetTraitsOutput{Body: newIncarnationGetReply(body)}, nil
+	})
+}
+
 // --- READ ---
 
 // registerHumaIncarnationGet монтирует GET /v1/incarnations/{name} (READ, БЕЗ audit).
@@ -378,6 +399,7 @@ func HumaIncarnationSpecYAML() (string, error) {
 		registerHumaIncarnationCheckDrift(api, stub)
 		registerHumaIncarnationDestroy(api, stub)
 		registerHumaIncarnationUpdateHosts(api, stub)
+		registerHumaIncarnationSetTraits(api, stub)
 		return nil
 	})
 }

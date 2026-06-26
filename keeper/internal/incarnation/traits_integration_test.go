@@ -178,3 +178,79 @@ func TestIntegration_ProjectedTraits_ContainmentTargeting(t *testing.T) {
 		t.Errorf("containment matched %d souls, want 2 (только спроецированные члены)", n)
 	}
 }
+
+// TestIntegration_UpdateTraits_PersistsAndReturnsKeys — day-2 PUT-путь: целостная
+// замена incarnation.traits персистится в колонку, OldKeys/NewKeys корректны.
+func TestIntegration_UpdateTraits_PersistsAndReturnsKeys(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	ctx := context.Background()
+
+	creator := "archon-alice"
+	if err := Create(ctx, integrationPool, &Incarnation{
+		Name: "redis-prod", Service: "redis", ServiceVersion: "v1",
+		StateSchemaVersion: 1, Status: StatusReady, CreatedByAID: &creator,
+		Traits: map[string]any{"team": "dba"},
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	res, err := UpdateTraits(ctx, integrationPool, "redis-prod",
+		map[string]any{"env": "prod", "az": "a"})
+	if err != nil {
+		t.Fatalf("UpdateTraits: %v", err)
+	}
+	if len(res.OldKeys) != 1 || res.OldKeys[0] != "team" {
+		t.Errorf("OldKeys = %v, want [team]", res.OldKeys)
+	}
+	if len(res.NewKeys) != 2 || res.NewKeys[0] != "az" || res.NewKeys[1] != "env" {
+		t.Errorf("NewKeys = %v, want [az env] (sorted)", res.NewKeys)
+	}
+
+	// Колонка заменена ЦЕЛИКОМ (старый ключ team исчез).
+	got, _ := SelectByName(ctx, integrationPool, "redis-prod")
+	if got.Traits["env"] != "prod" || got.Traits["az"] != "a" {
+		t.Errorf("persisted traits = %v, want env=prod az=a", got.Traits)
+	}
+	if _, stillThere := got.Traits["team"]; stillThere {
+		t.Errorf("persisted traits still has team — replace должен затереть весь map: %v", got.Traits)
+	}
+}
+
+// TestIntegration_UpdateTraits_EmptyClears — пустой map очищает метки (колонка → `{}`).
+func TestIntegration_UpdateTraits_EmptyClears(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	ctx := context.Background()
+
+	creator := "archon-alice"
+	if err := Create(ctx, integrationPool, &Incarnation{
+		Name: "redis-prod", Service: "redis", ServiceVersion: "v1",
+		StateSchemaVersion: 1, Status: StatusReady, CreatedByAID: &creator,
+		Traits: map[string]any{"team": "dba"},
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	res, err := UpdateTraits(ctx, integrationPool, "redis-prod", map[string]any{})
+	if err != nil {
+		t.Fatalf("UpdateTraits(empty): %v", err)
+	}
+	if len(res.NewKeys) != 0 {
+		t.Errorf("NewKeys = %v, want [] (очистка)", res.NewKeys)
+	}
+	got, _ := SelectByName(ctx, integrationPool, "redis-prod")
+	if len(got.Traits) != 0 {
+		t.Errorf("traits after clear = %v, want empty", got.Traits)
+	}
+}
+
+// TestIntegration_UpdateTraits_NotFound — несуществующая инкарнация → ErrIncarnationNotFound.
+func TestIntegration_UpdateTraits_NotFound(t *testing.T) {
+	resetAll(t)
+	ctx := context.Background()
+	_, err := UpdateTraits(ctx, integrationPool, "nope", map[string]any{"team": "dba"})
+	if err == nil {
+		t.Fatal("UpdateTraits(missing) returned nil")
+	}
+}

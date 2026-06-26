@@ -1029,6 +1029,10 @@ components:
           description: имя сервиса из реестра (ADR-029)
           pattern: ^[a-z0-9][a-z0-9-]{0,62}$
           type: string
+        traits:
+          additionalProperties: {}
+          description: operator-set trait-метки (ключ → scalar|list of scalars), ADR-060
+          type: object
       required:
         - name
         - service
@@ -1222,6 +1226,14 @@ components:
         scenario:
           description: echo path-scenario (игнорируется)
           type: string
+      type: object
+    IncarnationSetTraitsRequest:
+      additionalProperties: false
+      properties:
+        traits:
+          additionalProperties: {}
+          description: полный набор trait-меток (ключ → scalar|list of scalars); пустой/опущен = очистить (ADR-060)
+          type: object
       type: object
     IncarnationSpecHost:
       additionalProperties: false
@@ -6831,6 +6843,64 @@ paths:
       summary: Pre-fill day-2-формы сценария из incarnation.state
       tags:
         - incarnation
+  /v1/incarnations/{name}/traits:
+    put:
+      description: Целостная замена incarnation.traits (ADR-060) — источника истины, проецируемого в souls.traits хостов-членов. Permission incarnation.traits-set.
+      operationId: setIncarnationTraits
+      parameters:
+        - description: имя инкарнации
+          in: path
+          name: name
+          required: true
+          schema:
+            description: имя инкарнации
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IncarnationSetTraitsRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IncarnationGetReply"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Bad Request
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Заменить operator-set trait-метки инкарнации
+      tags:
+        - incarnation
   /v1/incarnations/{name}/unlock:
     post:
       description: error_locked / migration_failed → ready под FOR UPDATE; state не меняется (ADR-009/019). Permission incarnation.unlock.
@@ -9580,7 +9650,8 @@ paths:
         - soul
   /v1/souls/traits:
     post:
-      description: Bulk merge/replace/remove operator-set trait-меток (souls.traits jsonb, ADR-060) на хостах под selector ∩ coven-scope. Permission soul.traits-assign. partial → 200 status:partial.
+      deprecated: true
+      description: "DEPRECATED (ADR-060): используйте PUT /v1/incarnations/{name}/traits (incarnation.traits — источник истины, проецируется в souls.traits). Bulk merge/replace/remove operator-set trait-меток (souls.traits jsonb) на хостах под selector ∩ coven-scope. Per-soul write перетирается проекцией incarnation.traits. Permission soul.traits-assign. partial → 200 status:partial."
       operationId: assignSoulTraits
       parameters:
         - description: посчитать matched без UPDATE (OR с body.dry_run)
@@ -9627,7 +9698,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Internal Server Error
-      summary: Массовое назначение trait-меток
+      summary: Массовое назначение trait-меток (deprecated)
       tags:
         - soul
   /v1/souls/{sid}:

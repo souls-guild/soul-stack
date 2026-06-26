@@ -29,6 +29,7 @@ var incarnationContractSchemas = []string{
 	"IncarnationRerunCreateReply",
 	"IncarnationCheckDriftRequest",
 	"IncarnationUpdateHostsRequest",
+	"IncarnationSetTraitsRequest",
 	"IncarnationSpecHost",
 	"IncarnationGetReply",
 	"IncarnationDestroyReply",
@@ -83,6 +84,65 @@ func TestSchemaNames_Incarnation(t *testing.T) {
 		if _, ok := schemas[name]; ok {
 			t.Errorf("техническое huma-имя %q ПРИСУТСТВУЕТ в спеке — имя не выровнено под контракт", name)
 		}
+	}
+}
+
+// TestTraitsRelocation_OpenAPI — гейт релокации Trait per-soul → per-incarnation
+// (ADR-060 amend R1): (1) POST /v1/incarnations несёт top-level `traits`-поле;
+// (2) PUT /v1/incarnations/{name}/traits смонтирован (operationId setIncarnationTraits);
+// (3) per-soul POST /v1/souls/traits помечен deprecated:true. Любой откат краснит.
+func TestTraitsRelocation_OpenAPI(t *testing.T) {
+	y, err := HumaFullSpecYAML()
+	if err != nil {
+		t.Fatalf("HumaFullSpecYAML: %v", err)
+	}
+
+	var doc struct {
+		Paths      map[string]map[string]yaml.Node `yaml:"paths"`
+		Components struct {
+			Schemas map[string]struct {
+				Properties map[string]yaml.Node `yaml:"properties"`
+			} `yaml:"schemas"`
+		} `yaml:"components"`
+	}
+	if err := yaml.Unmarshal([]byte(y), &doc); err != nil {
+		t.Fatalf("спека не парсится: %v", err)
+	}
+
+	// (1) create-request несёт traits-поле.
+	if _, ok := doc.Components.Schemas["IncarnationCreateRequest"].Properties["traits"]; !ok {
+		t.Error("IncarnationCreateRequest без поля traits — top-level create-traits не прокинут")
+	}
+
+	// (2) PUT .../traits смонтирован.
+	put, ok := doc.Paths["/v1/incarnations/{name}/traits"]
+	if !ok {
+		t.Fatal("путь /v1/incarnations/{name}/traits ОТСУТСТВУЕТ в спеке")
+	}
+	if _, ok := put["put"]; !ok {
+		t.Errorf("у /v1/incarnations/{name}/traits нет PUT-операции: %v", put)
+	}
+	if !strings.Contains(y, "setIncarnationTraits") {
+		t.Error("operationId setIncarnationTraits отсутствует в спеке")
+	}
+
+	// (3) per-soul deprecated:true.
+	soulTraits, ok := doc.Paths["/v1/souls/traits"]
+	if !ok {
+		t.Fatal("путь /v1/souls/traits ОТСУТСТВУЕТ в спеке")
+	}
+	postNode, ok := soulTraits["post"]
+	if !ok {
+		t.Fatal("/v1/souls/traits без POST-операции")
+	}
+	var op struct {
+		Deprecated bool `yaml:"deprecated"`
+	}
+	if err := postNode.Decode(&op); err != nil {
+		t.Fatalf("decode soul.traits POST: %v", err)
+	}
+	if !op.Deprecated {
+		t.Error("POST /v1/souls/traits НЕ помечен deprecated:true (релокация per-soul → per-incarnation не отражена)")
 	}
 }
 

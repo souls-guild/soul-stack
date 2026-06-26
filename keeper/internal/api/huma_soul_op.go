@@ -165,11 +165,17 @@ type soulTraitsAssignOutput struct {
 // 422 валидация mode/traits/keys/selector, 500.
 func soulTraitsAssignOperation() huma.Operation {
 	return huma.Operation{
-		OperationID:   "assignSoulTraits",
-		Method:        http.MethodPost,
-		Path:          "/traits",
-		Summary:       "Массовое назначение trait-меток",
-		Description:   "Bulk merge/replace/remove operator-set trait-меток (souls.traits jsonb, ADR-060) на хостах под selector ∩ coven-scope. Permission soul.traits-assign. partial → 200 status:partial.",
+		OperationID: "assignSoulTraits",
+		Method:      http.MethodPost,
+		Path:        "/traits",
+		Summary:     "Массовое назначение trait-меток (deprecated)",
+		// DEPRECATED (ADR-060 amend R1): operator-set trait-управление перенесено
+		// per-soul → per-incarnation. Источник истины — incarnation.traits
+		// (PUT /v1/incarnations/{name}/traits), проецируемый в souls.traits
+		// sync-hook-ом. Per-soul write здесь перетирается следующей проекцией.
+		// Эндпоинт сохранён forward-compat (НЕ удалён); вызов пишет warn-лог.
+		Deprecated:    true,
+		Description:   "DEPRECATED (ADR-060): используйте PUT /v1/incarnations/{name}/traits (incarnation.traits — источник истины, проецируется в souls.traits). Bulk merge/replace/remove operator-set trait-меток (souls.traits jsonb) на хостах под selector ∩ coven-scope. Per-soul write перетирается проекцией incarnation.traits. Permission soul.traits-assign. partial → 200 status:partial.",
 		Tags:          []string{"soul"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},

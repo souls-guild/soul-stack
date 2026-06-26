@@ -468,6 +468,8 @@ func (h *Handler) handleToolsCall(ctx context.Context, claims *jwt.Claims, req j
 		return h.callIncarnationDestroy(ctx, claims, req, p.Arguments), false
 	case "keeper.incarnation.check-drift":
 		return h.callIncarnationCheckDrift(ctx, claims, req, p.Arguments), false
+	case "keeper.incarnation.traits-set":
+		return h.callIncarnationTraitsSet(ctx, claims, req, p.Arguments), false
 
 	// Soul-tools (паритет REST POST /v1/souls + issue-token). soul.list
 	// остаётся stub (ловится status==toolStatusStub выше). 1:1 с permission

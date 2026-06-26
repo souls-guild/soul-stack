@@ -55,6 +55,7 @@ import (
 //	POST   /v1/incarnations/{name}/upgrade           — перевод state_schema_version (ADR-019).
 //	DELETE /v1/incarnations/{name}                   — destroy incarnation (S-D4).
 //	PATCH  /v1/incarnations/{name}/hosts             — править declared spec.hosts[] (ADR-008).
+//	PUT    /v1/incarnations/{name}/traits            — заменить operator-set trait-метки (ADR-060).
 //	POST   /v1/voyages                               — создать Voyage (ADR-043 S5, RBAC-by-kind).
 //	POST   /v1/voyages/preview                       — dry-resolve scope без создания Voyage (ADR-043 amendment §4).
 //	GET    /v1/voyages                                — list Voyage-прогонов (ADR-043 S5).
@@ -598,6 +599,18 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				apimiddleware.RequirePermissionMulti(enforcer, "incarnation", "update-hosts", incScope),
 			).Group(func(r chi.Router) {
 				registerHumaIncarnationUpdateHosts(newHumaCadenceAPI(r), incH)
+			})
+
+			// PUT /v1/incarnations/{name}/traits — целостная замена operator-set
+			// trait-меток (ADR-060 amend R1, релокация per-soul → per-incarnation).
+			// incarnation.traits — источник истины, проецируемый в souls.traits
+			// хостов-членов. Permission incarnation.traits-set, scope incScope.
+			// WRITE-SELF-AUDIT: incarnation.traits_changed пишет сам handler (payload
+			// old/new keys после UpdateTraits; audit-middleware НЕ навешан).
+			r.With(
+				apimiddleware.RequirePermissionMulti(enforcer, "incarnation", "traits-set", incScope),
+			).Group(func(r chi.Router) {
+				registerHumaIncarnationSetTraits(newHumaCadenceAPI(r), incH)
 			})
 
 			// /v1/incarnations/{name}/choirs — CRUD топологии Choir/Voice (ADR-044,

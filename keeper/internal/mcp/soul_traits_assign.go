@@ -62,6 +62,12 @@ type soulTraitsAssignOutput struct {
 func (h *Handler) callSoulTraitsAssign(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.soul.traits-assign"
 
+	// DEPRECATED (ADR-060 amend R1): per-soul trait-write перенесён на
+	// per-incarnation (keeper.incarnation.traits-set). Per-soul write перетирается
+	// проекцией incarnation.traits. Tool сохранён forward-compat; вызов сигналим.
+	h.deps.Logger.Warn("mcp: soul.traits-assign DEPRECATED per-soul trait-write (ADR-060) — используйте keeper.incarnation.traits-set",
+		slog.String("by_aid", claims.Subject))
+
 	if h.deps.SoulDB == nil {
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "soul DB is not configured")
 	}

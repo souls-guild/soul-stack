@@ -53,10 +53,11 @@ func incCreate(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorde
 		Service string         `json:"service"`
 		Covens  []string       `json:"covens"`
 		Input   map[string]any `json:"input"`
+		Traits  map[string]any `json:"traits"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	reply, err := h.CreateTyped(r.Context(), claims, IncarnationCreateRequestInput{
-		Name: body.Name, Service: body.Service, Covens: body.Covens, Input: body.Input,
+		Name: body.Name, Service: body.Service, Covens: body.Covens, Input: body.Input, Traits: body.Traits,
 	})
 	if err != nil {
 		renderProblem(rec, err)
@@ -266,6 +267,25 @@ func incUpdateHosts(h *IncarnationHandler, r *http.Request) *httptest.ResponseRe
 		items[i] = IncarnationSpecHostInput{SID: hst.SID, Role: role}
 	}
 	view, err := h.UpdateHostsTyped(r.Context(), claims, name, body.Mode, items)
+	if err != nil {
+		renderProblem(rec, err)
+		return rec
+	}
+	writeJSON(rec, http.StatusOK, shimGetReplyJSON(view), shimLogger)
+	return rec
+}
+
+// incSetTraits — шим PUT /v1/incarnations/{name}/traits: декод body.traits →
+// SetTraitsTyped.
+func incSetTraits(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	claims, _ := shimClaims(r)
+	name := chi.URLParam(r, "name")
+	var body struct {
+		Traits map[string]any `json:"traits"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	view, err := h.SetTraitsTyped(r.Context(), claims, name, body.Traits)
 	if err != nil {
 		renderProblem(rec, err)
 		return rec

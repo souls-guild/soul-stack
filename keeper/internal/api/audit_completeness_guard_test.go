@@ -100,6 +100,7 @@ var auditedWriteRoutes = map[route]auditedRoute{
 	{http.MethodPost, "/v1/incarnations/{name}/check-drift"}:          {events: []audit.EventType{audit.EventIncarnationDriftChecked}, note: "self-audit: handler пишет внутри CheckDriftTyped"},
 	{http.MethodDelete, "/v1/incarnations/{name}"}:                    {events: []audit.EventType{audit.EventIncarnationDestroyStarted}, note: "self-audit: destroy_started пишет service-слой incarnation.Destroy"},
 	{http.MethodPatch, "/v1/incarnations/{name}/hosts"}:               {events: []audit.EventType{audit.EventIncarnationHostsUpdated}, note: "self-audit: handler пишет внутри UpdateHostsTyped"},
+	{http.MethodPut, "/v1/incarnations/{name}/traits"}:                {events: []audit.EventType{audit.EventIncarnationTraitsChanged}, note: "self-audit: handler пишет внутри SetTraitsTyped"},
 
 	// choir (self-audit внутри *Typed через writeAuditCtx).
 	{http.MethodPost, "/v1/incarnations/{name}/choirs"}:                        {events: []audit.EventType{audit.EventChoirCreated}, note: "self-audit"},

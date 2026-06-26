@@ -138,3 +138,32 @@ func TestSyncTraitsToHosts_RejectsInvalidName(t *testing.T) {
 		t.Fatal("SyncTraitsToHosts(invalid name) returned nil")
 	}
 }
+
+// --- UpdateTraits: name-guard + traitKeys ---
+
+// TestUpdateTraits_RejectsInvalidName — невалидное имя отбивается ДО BeginTx
+// (pool=nil здесь безопасен: проверка имени первая).
+func TestUpdateTraits_RejectsInvalidName(t *testing.T) {
+	_, err := UpdateTraits(context.Background(), nil, "Bad_Name", map[string]any{"team": "dba"})
+	if err == nil {
+		t.Fatal("UpdateTraits(invalid name) returned nil")
+	}
+}
+
+// TestTraitKeys — отсортированный nil-safe набор ключей для audit-payload.
+func TestTraitKeys(t *testing.T) {
+	got := traitKeys(map[string]any{"team": "dba", "env": "prod", "az": "a"})
+	want := []string{"az", "env", "team"}
+	if len(got) != len(want) {
+		t.Fatalf("traitKeys len = %d (%v), want %d", len(got), got, len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("traitKeys[%d] = %q, want %q (sorted)", i, got[i], want[i])
+		}
+	}
+	// nil / пустой → пустой slice (не nil), устойчивый JSON.
+	if empty := traitKeys(nil); empty == nil || len(empty) != 0 {
+		t.Errorf("traitKeys(nil) = %v, want non-nil empty slice", empty)
+	}
+}

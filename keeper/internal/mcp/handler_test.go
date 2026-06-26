@@ -134,8 +134,16 @@ func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row 
 		_, total := f.historyItems(name, incarnation.HistoryFilter{})
 		return countRow{n: total}
 	}
-	// FOR UPDATE-select из incarnation (unlock: state,status / upgrade:
-	// state,state_schema_version,status). args[0] = name.
+	// UPDATE incarnation … RETURNING updated_at (UpdateHosts/UpdateTraits day-2
+	// мутации): отдаём свежий updated_at на Scan(*time.Time). Идёт ДО общего
+	// `FROM incarnation`-матча (тот предикат стоит и в WHERE этого UPDATE).
+	if contains(sql, "UPDATE incarnation") && contains(sql, "RETURNING updated_at") {
+		return staticRow{values: []any{time.Now().UTC()}}
+	}
+	// FOR UPDATE-select из incarnation. ПОЛНАЯ строка (UpdateTraits:
+	// `covens, traits` в проекции → scanIncarnation) → newIncRow. Частичная
+	// (unlock: state,status / upgrade: state,state_schema_version,status) →
+	// forUpdateIncRow. args[0] = name.
 	if contains(sql, "FROM incarnation") && contains(sql, "FOR UPDATE") {
 		if f.incFn == nil {
 			return errRow{err: pgx.ErrNoRows}
@@ -143,6 +151,9 @@ func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row 
 		inc, err := f.incFn(args[0].(string))
 		if err != nil {
 			return errRow{err: err}
+		}
+		if contains(sql, "covens, traits") {
+			return newIncRow(inc)
 		}
 		return forUpdateIncRow{inc: inc, withVersion: contains(sql, "state_schema_version")}
 	}
@@ -753,8 +764,8 @@ func TestDispatch_ToolsList_HasAllTools(t *testing.T) {
 	if err := json.Unmarshal(resp.Result, &res); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(res.Tools) != 89 {
-		t.Errorf("tool count = %d, want 89", len(res.Tools))
+	if len(res.Tools) != 90 {
+		t.Errorf("tool count = %d, want 90", len(res.Tools))
 	}
 	// Имена должны быть стабильны (spec — mcp-tools.md).
 	names := map[string]bool{}

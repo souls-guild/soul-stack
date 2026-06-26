@@ -4,7 +4,7 @@
 
 ## Endpoint-секции
 
-Mapping endpoint ↔ MCP-tool ↔ permission (таблица 11 роутов) — в корневом [operator-api.md → Incarnation (11)](../operator-api.md#incarnation-11--жизненный-цикл-runtime-инстансов-adr-009).
+Mapping endpoint ↔ MCP-tool ↔ permission (таблица 12 роутов) — в корневом [operator-api.md → Incarnation (12)](../operator-api.md#incarnation-12--жизненный-цикл-runtime-инстансов-adr-009).
 
 #### `POST /v1/incarnations` — создать instance
 
@@ -19,6 +19,7 @@ Permission: `incarnation.create`. MCP-tool: `keeper.incarnation.create`.
 | `name` | `string` (kebab-case) | yes | Имя нового instance, оно же корневая Coven-метка ([ADR-008](../../adr/0008-coven-stable-tags.md#adr-008-coven--только-стабильные-логические-теги)). |
 | `service` | `string` | yes | Имя сервиса из `keeper.yml → services[].name` ([config.md → services](../config.md#services--default_destiny_source--default_module_source)). |
 | `covens` | `list<string>` | optional | Declared environment-теги incarnation ([ADR-008](../../adr/0008-coven-stable-tags.md#adr-008-coven--только-стабильные-логические-теги) amendment a). Формат каждой метки — `^[a-z][a-z0-9]*(-[a-z0-9]+)*$` (как у Soul-меток). По умолчанию `[]`. Несут RBAC coven-scope incarnation-операций (см. ниже). |
+| `traits` | `object` | optional | Operator-set key-value trait-метки инкарнации ([ADR-060](../../adr/0060-traits.md) R1 slice a): ключ → значение `scalar` ИЛИ `list of scalars` (`{"owner": "alice", "owners": ["alice", "bob"]}`). Кладутся в `incarnation.traits` (источник истины) и материализованно проецируются в `souls.traits` хостов-членов. Вложенный объект/массив-в-массиве → `422`. По умолчанию `{}` (нет меток). Day-2 замена — `PUT /v1/incarnations/{name}/traits`. |
 | `input` | `object` | optional | Input для scenario `create`, валидируется против `scenario/create/input:`-схемы сервиса. По умолчанию `{}`. |
 
 ```json
@@ -363,3 +364,35 @@ Permission: `incarnation.update-hosts`. Path-param: `name`. **REST-only — MCP-
 **RBAC:** scope-селектор `incScope` (env-RBAC, паритет `run`/`upgrade`/`destroy` — `coven=`/`service=`/`incarnation=` по path-`name`: declared `covens ∪ {name}` + `service`). Permission `incarnation.update-hosts` сужена с прежней `incarnation.update` (PM-decision 2026-06-02); backcompat-alias `incarnation.update` канонизируется в `incarnation.update-hosts` на load снимка RBAC.
 
 **Audit:** `incarnation.hosts_updated` (`source: api` / `mcp`, `archon = JWT.sub`, payload `{name, mode, old_hosts, new_hosts}`) — пишется handler-ом **после** commit-а (payload содержит old/new snapshot, доступный только после `UpdateHosts`); не идёт через generic audit-middleware.
+
+#### `PUT /v1/incarnations/{name}/traits` — заменить trait-метки инкарнации
+
+Permission: `incarnation.traits-set`. MCP-tool: `keeper.incarnation.traits-set`. Path-param: `name`. **Sync-операция** (не async): правка operator-set меток — это не прогон, ответом возвращается обновлённый incarnation, без `apply_id`.
+
+Целостно **заменяет** operator-set trait-метки инкарнации (`incarnation.traits` jsonb — источник истины, [ADR-060](../../adr/0060-traits.md) R1 slice a). Trait — организационная метка владельца/продукта/namespace всего инстанса (`owner=alice`, `product=aboba`, `namespace=dba-ns`), **отдельная ось рядом с плоским Coven** ([ADR-008](../../adr/0008-coven-stable-tags.md#adr-008-coven--только-стабильные-логические-теги)): Coven — членство/таргетинг/RBAC, Trait — key-value атрибуты. Атомарность — одна PG-транзакция (`SELECT FOR UPDATE` → `UPDATE traits`); статус-гейта нет (метки безопасно менять на любом статусе). После commit-а sync-hook **материализованно проецирует** новый набор в `souls.traits` всех хостов-членов инкарнации (хост = SID, у которого имя инкарнации ∈ `souls.coven[]`). Проекция best-effort: её сбой не валит запрос (`incarnation.traits` уже записан, до-сойдётся при следующем bind/sync).
+
+Заменяет per-soul write-путь `POST /v1/souls/traits` (deprecated, см. [Soul → bulk traits](souls.md)). Per-soul write ещё работает, но **перетирается проекцией** `incarnation.traits` при следующем sync.
+
+**Request `IncarnationSetTraitsRequest`:**
+
+| Поле | Тип | Required | Смысл |
+|---|---|---|---|
+| `traits` | `object` | optional | Полный набор trait-меток: ключ → значение `scalar` (`string`/`number`/`boolean`) ИЛИ `list of scalars` (`["alice", "bob"]`). Ключ — `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`. **Replace-семантика** — переданный набор заменяет текущий целиком; пустой `{}` / опущенное поле = **очистить** все метки. Вложенный объект / массив-в-массиве → `422`. |
+
+```json
+{
+  "traits": {
+    "owner": "alice",
+    "owners": ["alice", "bob"],
+    "namespace": "dba-ns"
+  }
+}
+```
+
+**Response `200 OK`:** полный `IncarnationGetReply` (та же форма, что у `GET /v1/incarnations/{name}`) с уже применённой заменой `traits`. `state`/`spec` маскируются по общему правилу ([§ Маскинг state/spec в GET-ответах](../operator-api.md#маскинг-state--spec-в-get-ответах-defense-in-depth)).
+
+**Errors:** `400 malformed-request` (битый JSON / неизвестное поле тела), `403 forbidden`, `404 not-found` (incarnation не существует), `422 validation-failed` (невалидный path-`name` / невалидный ключ / вложенное trait-значение), `500 internal-error`.
+
+**RBAC:** scope-селектор тот же, что у `incarnation.update-hosts` (env-RBAC, `coven=`/`service=`/`incarnation=` по path-`name`: declared `covens ∪ {name}` + `service`). trait-**ключ** НЕ scope-измерение — гейта на ключи нет.
+
+**Audit:** `incarnation.traits_changed` (`source: api` / `mcp`, `archon = JWT.sub`, payload `{name, old_keys, new_keys}`) — пишется handler-ом **после** commit-а. Payload несёт только отсортированные списки trait-**КЛЮЧЕЙ** до и после; сами trait-**ЗНАЧЕНИЯ** в audit НЕ кладутся (секрет-гигиена: trait-value может нести инфраструктурные данные хоста — симметрично `soul.traits-changed`).

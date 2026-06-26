@@ -33,6 +33,12 @@ type fakeIncDB struct {
 	// Create-path
 	insertRow   func() pgx.Row
 	insertCalls int
+	// insertArgs — последние аргументы INSERT INTO incarnation (spec=$5, traits=$11)
+	// для проверки прокидки spec.traits на create-пути (ADR-060 amend R1).
+	insertArgs []any
+	// updateTraitsArg — jsonb-арг $2 UPDATE incarnation SET traits (PUT .../traits,
+	// ADR-060 amend R1): целостная замена incarnation.traits.
+	updateTraitsArg []byte
 
 	// Get/History/Run existence-probe + Unlock SELECT FOR UPDATE
 	selectByNameRow func(name string) pgx.Row
@@ -87,6 +93,7 @@ func (f *fakeIncDB) Exec(_ context.Context, sql string, _ ...any) (pgconn.Comman
 func (f *fakeIncDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 	if strings.Contains(sql, "INSERT INTO incarnation") {
 		f.insertCalls++
+		f.insertArgs = args
 		if f.insertRow != nil {
 			return f.insertRow()
 		}
@@ -114,8 +121,12 @@ func (f *fakeIncDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row
 	// UpdateHosts: UPDATE incarnation SET spec = ... RETURNING updated_at.
 	// Этот UPDATE-with-RETURNING приходит ДО общего match-а "WHERE name = $1"
 	// (тот же предикат стоит и здесь), поэтому обрабатывается отдельной веткой
-	// и возвращает свежий timestamp на Scan(*time.Time).
+	// и возвращает свежий timestamp на Scan(*time.Time). UpdateTraits (SET traits)
+	// — тот же RETURNING updated_at, фиксируем его jsonb-арг $2 в updateTraitsArg.
 	if strings.Contains(sql, "UPDATE incarnation") && strings.Contains(sql, "RETURNING updated_at") {
+		if strings.Contains(sql, "SET traits") && len(args) >= 2 {
+			f.updateTraitsArg, _ = args[1].([]byte)
+		}
 		return staticRow{values: []any{time.Now().UTC()}}
 	}
 	if strings.Contains(sql, "FROM incarnation\nWHERE name") || strings.Contains(sql, "WHERE name = $1") {

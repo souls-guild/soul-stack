@@ -3,6 +3,9 @@ package incarnation
 import (
 	"context"
 	"fmt"
+	"slices"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 )
@@ -83,4 +86,98 @@ func SyncTraitsToHosts(ctx context.Context, db soul.BulkPool, incName string, tr
 		return fmt.Errorf("incarnation: sync traits → souls of %q: %w", incName, err)
 	}
 	return nil
+}
+
+// UpdateTraitsResult — итог [UpdateTraits]: снимки old/new ключей для audit-
+// payload + полная обновлённая запись incarnation для response. trait-ЗНАЧЕНИЯ
+// несёт только [Incarnation.Traits]; OldKeys/NewKeys — лишь имена (секрет-гигиена
+// audit-trail, симметрично soul.traits-assign).
+type UpdateTraitsResult struct {
+	OldKeys     []string
+	NewKeys     []string
+	Incarnation *Incarnation
+}
+
+// UpdateTraits целиком ЗАМЕНЯЕТ operator-set trait-метки инкарнации
+// (`incarnation.traits`, ADR-060 amend R1) — зеркало per-soul bulk replace, но на
+// уровне источника истины. Тот же транзакционный паттерн, что [UpdateHosts] /
+// [Unlock]: одна tx SELECT … FOR UPDATE (сериализация с конкурентным
+// Unlock/Upgrade/Destroy/scenario-runner) → UPDATE traits/updated_at → commit.
+// Проекция в `souls.traits` хостов-членов делается caller-ом отдельным
+// sync-hook-ом ([SyncTraitsToHosts]) ПОСЛЕ commit-а — она вне транзакции
+// incarnation (bulk-write по другим строкам, идемпотентна и до-повторяема).
+//
+// traits валидируется caller-ом ([soul.ValidateTraitDelta]); пустой/nil map —
+// «очистить метки» (колонка → `{}`). Возврат [ErrIncarnationNotFound] (404), если
+// name не существует. Статус-гейта НЕТ намеренно: traits — operator-set метки,
+// не state/spec прогона; replace на любом статусе безопасен (проекция выровняет
+// хосты при следующем bind/sync).
+func UpdateTraits(ctx context.Context, pool TxBeginner, name string, traits map[string]any) (*UpdateTraitsResult, error) {
+	if !ValidName(name) {
+		return nil, fmt.Errorf("incarnation: invalid name %q", name)
+	}
+
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("incarnation: begin update-traits tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	const selectForUpdateSQL = `
+SELECT name, service, service_version, state_schema_version,
+       spec, state, status, status_details, created_by_aid,
+       created_at, updated_at, covens, traits,
+       last_drift_check_at, last_drift_summary
+FROM incarnation
+WHERE name = $1
+FOR UPDATE
+`
+	inc, err := scanIncarnation(tx.QueryRow(ctx, selectForUpdateSQL, name))
+	if err != nil {
+		return nil, err
+	}
+
+	oldKeys := traitKeys(inc.Traits)
+
+	traitsBytes, err := marshalJSONB(traits)
+	if err != nil {
+		return nil, fmt.Errorf("incarnation: marshal traits: %w", err)
+	}
+
+	const updateSQL = `
+UPDATE incarnation
+SET traits     = $2,
+    updated_at = NOW()
+WHERE name = $1
+RETURNING updated_at
+`
+	if err := tx.QueryRow(ctx, updateSQL, name, traitsBytes).Scan(&inc.UpdatedAt); err != nil {
+		return nil, fmt.Errorf("incarnation: update traits: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("incarnation: commit update-traits tx: %w", err)
+	}
+
+	// nil-map нормализуем к `{}`-проекции: read/response-путь не различает «нет
+	// колонки» / «нет меток» (scanIncarnation тоже даёт nil на `{}`).
+	if traits == nil {
+		traits = map[string]any{}
+	}
+	inc.Traits = traits
+	return &UpdateTraitsResult{
+		OldKeys:     oldKeys,
+		NewKeys:     traitKeys(traits),
+		Incarnation: inc,
+	}, nil
+}
+
+// traitKeys — отсортированный набор ключей trait-map (для audit-payload). nil/
+// пустой → пустой slice (устойчивый JSON-вывод).
+func traitKeys(traits map[string]any) []string {
+	keys := make([]string, 0, len(traits))
+	for k := range traits {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
 }

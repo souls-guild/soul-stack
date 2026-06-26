@@ -177,11 +177,9 @@ RFC 7807 ProblemDetails Operator API ([operator-api.md → Error format](operato
 
 Вынесены в доменный файл — [mcp-tools/synods.md](mcp-tools/synods.md): `keeper.synod.create`, `keeper.synod.delete`, `keeper.synod.list`, `keeper.synod.update`, `keeper.synod.add-operator`, `keeper.synod.remove-operator`, `keeper.synod.grant-role`, `keeper.synod.revoke-role`. Источник правды по семантике — [operator-api/synods.md](operator-api/synods.md) (тела и инварианты — [rbac.md → REST `/v1/synods`](rbac.md#rest-v1synods)).
 
-### Incarnation (10)
+### Incarnation (11)
 
-Вынесены в доменный файл — [mcp-tools/incarnations.md](mcp-tools/incarnations.md): `keeper.incarnation.create`, `keeper.incarnation.rerun-create`, `keeper.incarnation.run`, `keeper.incarnation.get`, `keeper.incarnation.list`, `keeper.incarnation.history`, `keeper.incarnation.unlock`, `keeper.incarnation.upgrade`, `keeper.incarnation.check-drift`, `keeper.incarnation.destroy` — десять tool-ов с MCP-парностью к REST-роутам [operator-api.md → Incarnation (11)](operator-api.md#incarnation-11--жизненный-цикл-runtime-инстансов-adr-009). 11-й REST-роут `PATCH /v1/incarnations/{name}/hosts` — REST-only (MCP-tool-а нет). Источник правды по семантике — [operator-api/incarnations.md](operator-api/incarnations.md).
-
-> **Счётчик-ремарка.** В `keeper/internal/mcp/manifest.go` секция-комментарий помечен «Incarnation (9)», но фактических tool-деклараций — **10** (`rerun-create` добавлен позже комментария). Источник правды по числу — сам список деклараций, не комментарий; здесь и в operator-api.md — 10.
+Вынесены в доменный файл — [mcp-tools/incarnations.md](mcp-tools/incarnations.md): `keeper.incarnation.create`, `keeper.incarnation.rerun-create`, `keeper.incarnation.run`, `keeper.incarnation.get`, `keeper.incarnation.list`, `keeper.incarnation.history`, `keeper.incarnation.unlock`, `keeper.incarnation.upgrade`, `keeper.incarnation.check-drift`, `keeper.incarnation.destroy`, `keeper.incarnation.traits-set` — одиннадцать tool-ов с MCP-парностью к REST-роутам [operator-api.md → Incarnation (12)](operator-api.md#incarnation-12--жизненный-цикл-runtime-инстансов-adr-009). 12-й REST-роут `PATCH /v1/incarnations/{name}/hosts` — REST-only (MCP-tool-а нет). Источник правды по семантике — [operator-api/incarnations.md](operator-api/incarnations.md).
 
 ### Soul (5)
 

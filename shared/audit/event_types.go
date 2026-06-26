@@ -119,6 +119,19 @@ const (
 	// меняет namespacing topology resolver-а для следующего прогона.
 	EventIncarnationHostsUpdated EventType = "incarnation.hosts_updated"
 
+	// EventIncarnationTraitsChanged — Архонт целиком заменил operator-set
+	// trait-метки инкарнации (`incarnation.traits`, ADR-060 amend R1) через
+	// Operator API (`PUT /v1/incarnations/{name}/traits`) или MCP-зеркало
+	// (`keeper.incarnation.traits-set`). incarnation.traits — источник истины,
+	// который sync-hook материализованно проецирует в `souls.traits` хостов-
+	// членов; per-soul bulk-API (`POST /v1/souls/traits`) — deprecated в пользу
+	// этого пути. `source: api` / `mcp`, `archon_aid` — инициатор. Payload:
+	// `{name, old_keys, new_keys}` — отсортированные списки trait-КЛЮЧЕЙ до и
+	// после замены; сами trait-ЗНАЧЕНИЯ в payload НЕ кладутся (могут нести
+	// инфраструктурные данные хоста — audit-trail фиксирует факт мутации и набор
+	// ключей, не содержимое, симметрично `soul.traits-changed`).
+	EventIncarnationTraitsChanged EventType = "incarnation.traits_changed"
+
 	// EventIncarnationDestroyFailed — teardown (scenario `destroy`) упал на
 	// хостах: инстанс НЕ удалён, incarnation переведена в `destroy_failed`
 	// (state остался last known-good). `source: keeper_internal` (write-path —

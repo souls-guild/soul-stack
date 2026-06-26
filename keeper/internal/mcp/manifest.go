@@ -215,12 +215,13 @@ var catalogManifest = []toolEntry{
 		},
 	},
 
-	// --- Incarnation (10) ---
+	// --- Incarnation (11) ---
 	//
-	// Все 10 tools (create/run/get/list/history/unlock/rerun-create/upgrade/destroy/check-drift)
+	// Все 11 tools (create/run/get/list/history/unlock/rerun-create/upgrade/destroy/check-drift/traits-set)
 	// Implemented: dispatch-ветки заведены, тела — паритет REST
 	// IncarnationHandler. destroy подключён в S-D4 (DELETE /v1/incarnations/{name}).
-	// check-drift подключён в ADR-031 Slice B (Scry on-demand-пилот).
+	// check-drift подключён в ADR-031 Slice B (Scry on-demand-пилот). traits-set —
+	// ADR-060 amend R1 (PUT /v1/incarnations/{name}/traits, релокация per-soul).
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
@@ -311,6 +312,15 @@ var catalogManifest = []toolEntry{
 			OutputSchema: schemaIncarnationCheckDriftOutput,
 		},
 	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
+			Name:         "keeper.incarnation.traits-set",
+			Description:  "Целостно ЗАМЕНЯЕТ operator-set trait-метки инкарнации (incarnation.traits jsonb — источник истины, ADR-060) и проецирует их в souls.traits хостов-членов. 'traits' — полный набор ключ→(scalar|list of scalars); пустой/опущен = очистить метки. Заменяет per-soul keeper.soul.traits-assign (deprecated). Permission: incarnation.traits-set (scope incarnation/coven/service по имени). Откажет с code=validation-failed на битом ключе / вложенном значении; not-found если инкарнации нет.",
+			InputSchema:  schemaIncarnationTraitsSetInput,
+			OutputSchema: schemaIncarnationTraitsSetOutput,
+		},
+	},
 
 	// --- Soul (6) — create + issue-token + coven-assign + traits-assign +
 	// ssh-target.update implemented (паритет REST POST /v1/souls + issue-token +
@@ -346,7 +356,7 @@ var catalogManifest = []toolEntry{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.soul.traits-assign",
-			Description:  "Массово назначает operator-set trait-метки (souls.traits jsonb, ADR-060) на хостах под selector (all/sids/coven/incarnation/status) ∩ coven-scope оператора. mode=merge (дефолт) set/overwrite ключи из 'traits' (остальные сохранить); mode=replace заменить весь map целиком ('traits', пустой = очистить); mode=remove удалить ключи из 'keys'. Значение trait — scalar (string/number/bool) или list of scalars (вложенные объекты/массивы запрещены). Permission: soul.traits-assign. dry_run=true возвращает matched без UPDATE. trait-ключ НЕ scope-измерение: least-privilege держится coven-scope (целевые хосты ⊆ scope). Откажет с code=validation-failed на пустом селекторе / битом ключе / вложенном значении.",
+			Description:  "DEPRECATED (ADR-060): используйте keeper.incarnation.traits-set (incarnation.traits — источник истины, проецируется в souls.traits). Per-soul write перетирается проекцией. Массово назначает operator-set trait-метки (souls.traits jsonb) на хостах под selector (all/sids/coven/incarnation/status) ∩ coven-scope оператора. mode=merge (дефолт) set/overwrite ключи из 'traits' (остальные сохранить); mode=replace заменить весь map целиком ('traits', пустой = очистить); mode=remove удалить ключи из 'keys'. Значение trait — scalar (string/number/bool) или list of scalars (вложенные объекты/массивы запрещены). Permission: soul.traits-assign. dry_run=true возвращает matched без UPDATE. trait-ключ НЕ scope-измерение: least-privilege держится coven-scope (целевые хосты ⊆ scope). Откажет с code=validation-failed на пустом селекторе / битом ключе / вложенном значении.",
 			InputSchema:  schemaSoulTraitsAssignInput,
 			OutputSchema: schemaSoulTraitsAssignOutput,
 		},
@@ -1381,6 +1391,27 @@ var (
 "hosts_clean":{"type":"integer","minimum":0},
 "hosts_unsupported":{"type":"integer","minimum":0},
 "hosts_failed":{"type":"integer","minimum":0}}}}}`)
+
+	// traits-set: целостная замена incarnation.traits (ADR-060). 'traits' —
+	// полный набор ключ→(scalar|list of scalars); пустой/опущен = очистить.
+	// Форма значения симметрична soul.traits-assign (запрет nested).
+	schemaIncarnationTraitsSetInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["name"],
+"properties":{
+"name":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$","description":"Имя incarnation."},
+"traits":{"type":"object","additionalProperties":{"oneOf":[{"type":"string"},{"type":"number"},{"type":"boolean"},{"type":"array","items":{"oneOf":[{"type":"string"},{"type":"number"},{"type":"boolean"}]}}]},"propertyNames":{"pattern":"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"},"description":"Полный набор operator-set trait-меток ключ→(scalar|list of scalars). Пустой/опущен = очистить метки. Заменяет incarnation.traits целиком."}}}`)
+
+	schemaIncarnationTraitsSetOutput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["incarnation","keys"],
+"properties":{
+"incarnation":{"type":"string"},
+"keys":{"type":"array","items":{"type":"string"},"description":"Итоговый набор trait-ключей после замены (отсортирован). Значения не эхуются (секрет-гигиена)."}}}`)
 
 	schemaSoulCreateInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",

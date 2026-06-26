@@ -40,6 +40,12 @@ type IncarnationCreateRequest struct {
 	Service string         `json:"service" required:"true" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"имя сервиса из реестра (ADR-029)"`
 	Covens  []string       `json:"covens,omitempty" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$" maxLength:"63" doc:"declared environment-теги (ADR-008 amendment a)"`
 	Input   map[string]any `json:"input,omitempty" doc:"input для scenario create"`
+	// Traits — operator-set trait-метки инкарнации (ADR-060 amend R1): map ключ →
+	// scalar | list of scalars. Кладутся в incarnation.traits (источник истины) и
+	// материализованно проецируются в souls.traits хостов-членов. Формат/значение
+	// валидирует домен (вложенный объект/массив → 422). Day-2 замена — PUT
+	// .../traits.
+	Traits map[string]any `json:"traits,omitempty" doc:"operator-set trait-метки (ключ → scalar|list of scalars), ADR-060"`
 }
 
 // incCreateOutput — huma-output POST /v1/incarnations (FULL-TYPED). Status=202;
@@ -423,5 +429,40 @@ func incUpdateHostsOperation() huma.Operation {
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
+}
+
+// === PUT /v1/incarnations/{name}/traits (set-traits) — SELF-AUDIT incarnation.traits_changed (200+body) ===
+
+// incSetTraitsInput — huma-input PUT .../traits. Name — path; Body — typed тело.
+type incSetTraitsInput struct {
+	Name string `path:"name" doc:"имя инкарнации"`
+	Body IncarnationSetTraitsRequest
+}
+
+// IncarnationSetTraitsRequest — Go-форма тела PUT .../traits. traits — целостная
+// замена operator-set trait-меток (key → scalar|list of scalars); пустой/отсутствует
+// = очистить. Формат значения (запрет nested) валидирует домен → 422.
+// additionalProperties:false → unknown поле → 400. Имя = контрактное имя схемы.
+type IncarnationSetTraitsRequest struct {
+	Traits map[string]any `json:"traits,omitempty" doc:"полный набор trait-меток (ключ → scalar|list of scalars); пустой/опущен = очистить (ADR-060)"`
+}
+
+// incSetTraitsOutput — huma-output PUT .../traits (FULL-TYPED). Status=200; Body —
+// полный native IncarnationGetReply после замены (byte-exact с GET / update-hosts).
+type incSetTraitsOutput struct {
+	Body IncarnationGetReply
+}
+
+func incSetTraitsOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "setIncarnationTraits",
+		Method:        http.MethodPut,
+		Path:          "/{name}/traits",
+		Summary:       "Заменить operator-set trait-метки инкарнации",
+		Description:   "Целостная замена incarnation.traits (ADR-060) — источника истины, проецируемого в souls.traits хостов-членов. Permission incarnation.traits-set.",
+		Tags:          []string{"incarnation"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
 	}
 }

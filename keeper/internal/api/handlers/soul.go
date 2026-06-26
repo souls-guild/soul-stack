@@ -1534,6 +1534,12 @@ type SoulTraitsAssignReply struct {
 // audit-payload, в т.ч. partial-семантика → 200).
 func (h *SoulHandler) AssignTraitsTyped(ctx context.Context, claims *jwt.Claims, rawReq SoulTraitsAssignInput, dryRunQuery bool) (SoulTraitsAssignReply, error) {
 	var zero SoulTraitsAssignReply
+	// DEPRECATED (ADR-060 amend R1): operator-set trait-управление перенесено
+	// per-soul → per-incarnation (incarnation.traits — источник истины, PUT
+	// /v1/incarnations/{name}/traits). Per-soul write перетирается следующей
+	// проекцией. Эндпоинт сохранён forward-compat; вызов сигналим в лог.
+	h.logger.Warn("soul.traits-assign: DEPRECATED per-soul trait-write (ADR-060) — используйте PUT /v1/incarnations/{name}/traits",
+		slog.String("by_aid", claims.Subject))
 	if h.scoper == nil {
 		h.logger.Error("soul.traits-assign: scoper not configured")
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "traits-assign unavailable")}

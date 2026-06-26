@@ -1,8 +1,8 @@
 # Incarnation — MCP-tools жизненного цикла runtime-инстансов
 
-Доменная секция [каталога MCP-tools](../mcp-tools.md): tools `keeper.incarnation.*` (создание / прогон сценариев / чтение / unlock / upgrade / drift / destroy). Транспорт, auth, формат tool declaration, async-convention `_apply_id`, error mapping — в корневом [mcp-tools.md](../mcp-tools.md). Источник правды по семантике — [operator-api.md → Incarnation](../operator-api/incarnations.md).
+Доменная секция [каталога MCP-tools](../mcp-tools.md): tools `keeper.incarnation.*` (создание / прогон сценариев / чтение / unlock / upgrade / drift / destroy / traits-set). Транспорт, auth, формат tool declaration, async-convention `_apply_id`, error mapping — в корневом [mcp-tools.md](../mcp-tools.md). Источник правды по семантике — [operator-api.md → Incarnation](../operator-api/incarnations.md).
 
-### Incarnation (9)
+### Incarnation (11)
 
 #### `keeper.incarnation.create`
 
@@ -14,6 +14,8 @@
 |---|---|---|---|
 | `name` | `string` (kebab-case) | yes | Имя нового instance. |
 | `service` | `string` | yes | Имя сервиса. |
+| `covens` | `array<string>` | optional | Declared env-Coven-метки ([ADR-008](../../adr/0008-coven-stable-tags.md#adr-008-coven--только-стабильные-логические-теги) amendment a). |
+| `traits` | `object` | optional | Operator-set trait-метки инкарнации (ключ → `scalar`\|`list of scalars`, [ADR-060](../../adr/0060-traits.md)). Кладутся в `incarnation.traits` + проекция в `souls.traits` хостов-членов. Day-2 замена — `keeper.incarnation.traits-set`. |
 | `input` | `object` | optional | Input scenario `create`. |
 
 **Output:**
@@ -195,3 +197,25 @@ Keeper рендерит `scenario/converge/main.yml` сервиса и шлёт 
 | Поле | Тип | Смысл |
 |---|---|---|
 | `_apply_id` | `string` (ULID) | ID запуска. |
+
+#### `keeper.incarnation.traits-set`
+
+Целостная замена operator-set trait-меток инкарнации. Permission: `incarnation.traits-set`. Endpoint: [`PUT /v1/incarnations/{name}/traits`](../operator-api/incarnations.md#put-v1incarnationsnametraits--заменить-trait-метки-инкарнации). Async: **нет** (sync — replace + проекция в `souls.traits`, ответом компактная сводка).
+
+Заменяет `incarnation.traits` (jsonb — источник истины, [ADR-060](../../adr/0060-traits.md) R1 slice a) целиком: пустой/опущенный `traits` = очистить метки. Одной tx `FOR UPDATE`, затем sync-hook материализованно проецирует набор в `souls.traits` хостов-членов инкарнации. RBAC — body-scoped OR-Check по coven/service-scope инкарнации (`covens ∪ {name}`, зеркало REST). Заменяет per-soul [`keeper.soul.traits-assign`](souls.md) (deprecated). Audit-событие — `incarnation.traits_changed` (только trait-**КЛЮЧИ**, не значения).
+
+**Input:**
+
+| Поле | Тип | Required | Смысл |
+|---|---|---|---|
+| `name` | `string` | yes | Имя instance. |
+| `traits` | `object` | optional | Полный набор trait-меток: ключ → `scalar` (`string`/`number`/`boolean`) ИЛИ `list of scalars`. Replace-семантика; пустой/опущен = очистить. Вложенный объект/массив → `validation-failed`. |
+
+**Output:**
+
+| Поле | Тип | Смысл |
+|---|---|---|
+| `incarnation` | `string` | Имя instance. |
+| `keys` | `array<string>` | Отсортированные trait-**КЛЮЧИ** после замены (значения НЕ эхуются — секрет-гигиена). |
+
+**Errors:** `validation-failed` (битый `name` / невалидный ключ / вложенное trait-значение), `not-found` (incarnation не существует), `forbidden` (нет `incarnation.traits-set` в scope инкарнации), `internal-error`.

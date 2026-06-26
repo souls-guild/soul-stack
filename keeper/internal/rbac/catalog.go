@@ -16,7 +16,7 @@ import "sort"
 //   - operator (5): create / revoke / issue-token / list / read;
 //   - role (6): create / delete / list / update / grant-operator / revoke-operator;
 //   - synod (8): create / update / delete / list / add-operator / remove-operator / grant-role / revoke-role (ADR-049);
-//   - incarnation (12): create / create-rerun / run / get / list / history / unlock / upgrade / destroy / check-drift / update-hosts / update (deprecated-alias);
+//   - incarnation (13): create / create-rerun / run / get / list / history / unlock / upgrade / destroy / check-drift / update-hosts / update (deprecated-alias) / traits-set;
 //   - soul (6): list / create / issue-token / coven-assign / traits-assign / ssh-target-update;
 //   - plugin (3): allow / revoke / list;
 //   - sigil (4): key-introduce / key-retire / key-list / key-set-primary;
@@ -116,6 +116,16 @@ var AllowedPermissions = map[string]struct{}{
 	// [ParsePermission] канонизирует его в `incarnation.update-hosts` (см.
 	// [deprecatedActionAliases]), поэтому такие роли сохраняют доступ к /hosts.
 	"incarnation.update": {},
+	// incarnation.traits-set — целостная замена operator-set trait-меток
+	// инкарнации (`incarnation.traits` jsonb, ADR-060 amend R1) через
+	// `PUT /v1/incarnations/{name}/traits`. incarnation.traits — источник истины,
+	// проецируемый sync-hook-ом в `souls.traits` хостов-членов; перенос
+	// operator-facing trait-управления с per-soul (`soul.traits-assign`,
+	// deprecated) на per-incarnation. Action — hyphenated (`traits-set`), т.к.
+	// permission-грамматика — ровно `<resource>.<action>` (паттерн
+	// soul.traits-assign / incarnation.update-hosts). Тот же scope-селектор
+	// incarnation/coven/service по path-{name}, что у incarnation.update-hosts.
+	"incarnation.traits-set": {},
 
 	// soul.*
 	"soul.list":         {},
