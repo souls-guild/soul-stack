@@ -222,10 +222,10 @@ type ListFilter struct {
 // JWT, резолвится handler-ом из [rbac.Purview]). Оба пересекаются AND-ом в WHERE
 // (фильтр сужает ВНУТРИ scope, не наоборот).
 //
-// Измерения scope (Covens + StateNames) объединяются OR-ом («всё мне
+// Измерения scope (Covens + StateNames + Traits) объединяются OR-ом («всё мне
 // доступное»): incarnation видна, если она в одном из scope-ковенов ЛИБО её
-// state удовлетворяет одному из state-предикатов scope. Это OR между
-// измерениями, в отличие от AND filter∩scope.
+// state удовлетворяет одному из state-предикатов scope ЛИБО её traits содержат
+// одну из scope-пар. Это OR между измерениями, в отличие от AND filter∩scope.
 //
 //   - Covens — coven∪{name} матчер (ADR-008 amendment a): scope-coven матчит
 //     incarnation и по `covens[] && ARRAY[Covens]`, и по `name = ANY(Covens)`
@@ -236,16 +236,31 @@ type ListFilter struct {
 //     keeper/internal/statepredicate (CEL-движок не дублируется), затем
 //     приходят сюда множеством имён → `name = ANY(StateNames)` чистым
 //     SQL-pushdown-ом (total/offset когерентны, без Go-постфильтр-дрейфа).
+//   - Traits — `key:value`-пары exact-match по `incarnation.traits` (ADR-047
+//     amendment, ADR-060 п.7 slice 1). Каждая пара — отдельное плечо OR
+//     (`traits @> $n::jsonb`, GIN-pushdown по jsonb-containment). Чистый SQL —
+//     CEL/Go-постфильтр не нужен (точное равенство), total/offset когерентны.
 //
-// Семантика — fail-closed (ADR-047): пустой scope (Covens и StateNames пусты)
-// при !Unrestricted даёт заведомо-ложный предикат (ни одной incarnation), а НЕ
-// весь список. Unrestricted=true снимает scope-фильтр (весь список). Пустой
+// Семантика — fail-closed (ADR-047): пустой scope (Covens, StateNames и Traits
+// пусты) при !Unrestricted даёт заведомо-ложный предикат (ни одной incarnation),
+// а НЕ весь список. Unrestricted=true снимает scope-фильтр (весь список). Пустой
 // scope handler НЕ передаёт сюда — он отдаёт пустой ответ до запроса в БД (как
 // souls-пилот), но defensive-ветка ниже сохраняет fail-closed и здесь.
 type ListScope struct {
 	Covens       []string
 	StateNames   []string
+	Traits       []TraitPair
 	Unrestricted bool
+}
+
+// TraitPair — одна `key:value` trait-пара scope (ADR-047 amendment, ADR-060 п.7
+// slice 1). Scalar-only (значение Trait в scope — скаляр; list-Trait одним
+// равенством не выражается). Матчится `traits @> '{"<key>":"<value>"}'::jsonb`
+// (GIN-containment): ключ/значение НЕ конкатенируются в SQL-текст — уходят
+// JSON-bind-параметром, инъекция через ключ невозможна.
+type TraitPair struct {
+	Key   string
+	Value string
 }
 
 // Create вставляет новый incarnation. status проставляется caller-ом
@@ -555,19 +570,23 @@ func buildListWhere(f ListFilter, scope ListScope) (string, []any, error) {
 }
 
 // appendScopeClause добавляет RBAC scope-предикат (`GET /v1/incarnations`,
-// ADR-047 S3b-3) одним AND-clause к пользовательскому фильтру. Внутри scope
-// измерения (coven∪{name} ∪ state-names) объединяются OR-ом — единый блок в
-// скобках, чтобы не «протечь» через соседние AND-clause фильтра:
+// ADR-047 S3b-3 + amendment trait) одним AND-clause к пользовательскому фильтру.
+// Внутри scope измерения (coven∪{name} ∪ state-names ∪ traits) объединяются
+// OR-ом — единый блок в скобках, чтобы не «протечь» через соседние AND-clause
+// фильтра:
 //
-//		((covens && ARRAY[$c] OR name = ANY($c)) OR name = ANY($s))
+//		((covens && ARRAY[$c] OR name = ANY($c)) OR name = ANY($s) OR traits @> $t::jsonb)
 //
 //	  - coven∪{name}: scope-coven матчит incarnation и по covens[]-пересечению,
 //	    и по равенству имени (ADR-008: имя incarnation — корневая Coven-метка).
 //	  - state-names: предрезолвнутые имена incarnation-ов, чей state удовлетворил
 //	    state-CEL scope (StateExprs) — приходят множеством, матчатся `name = ANY`.
+//	  - traits: каждая scope-пара (`key:value`, ADR-060 п.7 slice 1) — отдельное
+//	    плечо `traits @> $t::jsonb` (jsonb-containment, GIN-pushdown); пара уходит
+//	    JSON-bind-параметром, ключ/значение в SQL-текст не конкатенируются.
 //
 // Unrestricted — без ограничения (scope снят). fail-closed: пустой scope (нет
-// ни coven, ни state-names) при !Unrestricted даёт `FALSE` — ни одной
+// ни coven, ни state-names, ни traits) при !Unrestricted даёт `FALSE` — ни одной
 // incarnation (а НЕ весь список). Это симметрично [soul.appendScopeClause].
 func appendScopeClause(clauses []string, args []any, scope ListScope) ([]string, []any) {
 	if scope.Unrestricted {
@@ -584,6 +603,18 @@ func appendScopeClause(clauses []string, args []any, scope ListScope) ([]string,
 	if len(scope.StateNames) > 0 {
 		args = append(args, scope.StateNames)
 		dims = append(dims, fmt.Sprintf("name = ANY($%d)", len(args)))
+	}
+	for _, tp := range scope.Traits {
+		// jsonb-containment плечо: одна scope-пара → один `{"<key>":"<value>"}`
+		// JSON-объект bind-параметром. marshal не падает (scalar string-пара);
+		// defensive — пропускаем пару при ошибке marshal (не роняем весь List,
+		// fail-closed по этому плечу).
+		jb, err := json.Marshal(map[string]string{tp.Key: tp.Value})
+		if err != nil {
+			continue
+		}
+		args = append(args, jb)
+		dims = append(dims, fmt.Sprintf("traits @> $%d::jsonb", len(args)))
 	}
 
 	if len(dims) == 0 {

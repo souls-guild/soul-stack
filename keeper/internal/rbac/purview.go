@@ -49,6 +49,14 @@ type Purview struct {
 	// слайс S3b ([EvalStateExpr] через keeper/internal/statepredicate); здесь
 	// Purview лишь несёт предикаты (как Covens несёт coven-метки).
 	StateExprs []string
+
+	// TraitExprs — `key:value`-пары exact-match по `incarnation.traits` (ADR-047
+	// amendment, ADR-060 п.7 slice 1; дедуп, отсортировано). Union по ролям
+	// (OR-измерение, как Covens). Реальный match против traits инкарнации —
+	// incarnation-list/get резолвер (slice 1 п.7: `inc.Traits[key]==value`); здесь
+	// Purview лишь несёт пары (как Covens несёт coven-метки). В отличие от
+	// Soulprint/State — не CEL-предикат, а точное равенство.
+	TraitExprs []string
 }
 
 // ResolvePurview резолвит [Purview] оператора для (resource, action) —
@@ -96,6 +104,7 @@ func (e *Enforcer) ResolvePurview(aid, resource, action string) Purview {
 	seenRegex := make(map[string]struct{})
 	seenSoulprint := make(map[string]struct{})
 	seenState := make(map[string]struct{})
+	seenTrait := make(map[string]struct{})
 	for _, role := range roles {
 		for _, p := range role.Permissions {
 			if p.IsWildcard {
@@ -143,6 +152,14 @@ func (e *Enforcer) ResolvePurview(aid, resource, action string) Purview {
 				seenState[expr] = struct{}{}
 			}
 
+			// trait-измерение (ADR-047 amendment, ADR-060 п.7 slice 1): `key:value`-
+			// пары exact-match по incarnation.traits — union по ролям (как coven).
+			// Реальный match против traits инкарнации — incarnation-list/get резолвер
+			// (slice 1 п.7); здесь Purview несёт пары для резолвера и subset.
+			for _, pair := range eff["trait"] {
+				seenTrait[pair] = struct{}{}
+			}
+
 			vals, hasCoven := eff["coven"]
 			if !hasCoven {
 				// Эффективный селектор без ключа coven (host/incarnation/
@@ -162,7 +179,8 @@ func (e *Enforcer) ResolvePurview(aid, resource, action string) Purview {
 			}
 		}
 	}
-	if len(seen) == 0 && len(seenRegex) == 0 && len(seenSoulprint) == 0 && len(seenState) == 0 {
+	if len(seen) == 0 && len(seenRegex) == 0 && len(seenSoulprint) == 0 &&
+		len(seenState) == 0 && len(seenTrait) == 0 {
 		return Purview{}
 	}
 	return Purview{
@@ -170,6 +188,7 @@ func (e *Enforcer) ResolvePurview(aid, resource, action string) Purview {
 		Regexes:        sortedKeys(seenRegex),
 		SoulprintExprs: sortedKeys(seenSoulprint),
 		StateExprs:     sortedKeys(seenState),
+		TraitExprs:     sortedKeys(seenTrait),
 	}
 }
 

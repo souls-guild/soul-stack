@@ -104,6 +104,16 @@ func (p Permission) Matches(resource, action string, context map[string]string) 
 			// Симметрия с soulprint-веткой.
 			return false
 		}
+		if key == "trait" {
+			// ADR-047 amendment (ADR-060 п.7 slice 1): trait — `key:value`-match по
+			// incarnation.traits. Текущий context (map[string]string) НЕ несёт nested
+			// incarnation.traits, поэтому в slice 1 trait-измерение fail-closed: deny.
+			// РЕАЛЬНЫЙ match против traits инкарнации — incarnation-list/get резолвер
+			// (slice 1 п.7: inc.Traits[key]==value); подача traits в Check-context
+			// потребовала бы расширения сигнатуры Matches и здесь НЕ делается.
+			// Симметрия с state/soulprint-ветками.
+			return false
+		}
 		ctxVal, ok := context[key]
 		if !ok {
 			return false

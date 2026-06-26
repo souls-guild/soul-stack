@@ -149,7 +149,7 @@ func parseSelector(s, raw string) (map[string][]string, error) {
 		return nil, fmt.Errorf("permission %q: selector key %q does not match [a-z][a-z0-9-]*", raw, key)
 	}
 	if !IsAllowedSelectorKey(key) {
-		return nil, fmt.Errorf("permission %q: unknown selector key %q (allowed: service|coven|incarnation|host|regex|soulprint|state)", raw, key)
+		return nil, fmt.Errorf("permission %q: unknown selector key %q (allowed: service|coven|incarnation|host|regex|soulprint|state|trait)", raw, key)
 	}
 	if values == "" {
 		return nil, fmt.Errorf("permission %q: selector value-list is empty", raw)
@@ -194,6 +194,21 @@ func parseSelector(s, raw string) (map[string][]string, error) {
 			return nil, err
 		}
 		return map[string][]string{key: {expr}}, nil
+	}
+
+	// trait-ключ (ADR-047 amendment, ADR-060 п.7 slice 1) — exact key:value-match
+	// по incarnation.traits. Форма `trait=key:value`: ровно ОДНА `:` (разделитель
+	// ключа и значения), обе половины — непустые [a-zA-Z0-9_.-]+ (scalar-only, как
+	// обычные exact-значения). Хранится в Selector["trait"] одной строкой
+	// `key:value` (не разбивается) — match сравнивает её целиком против пары
+	// traits-ключа инкарнации (slice 1 п.7). Один trait на ключ (multi-key через
+	// `,` — follow-up: AND-сужение по нескольким парам).
+	if key == "trait" {
+		pair, err := parseTraitValue(values, raw)
+		if err != nil {
+			return nil, err
+		}
+		return map[string][]string{key: {pair}}, nil
 	}
 
 	parts := strings.Split(values, ",")
@@ -277,4 +292,32 @@ func parseStateValue(values, raw string) (string, error) {
 		return "", fmt.Errorf("permission %q: state predicate %q does not compile: %w", raw, expr, err)
 	}
 	return expr, nil
+}
+
+// parseTraitValue валидирует `key:value`-форму trait-селектора на load снимка
+// (ADR-047 amendment, ADR-060 п.7 slice 1) и возвращает её нормализованной
+// строкой `key:value`. Требования: РОВНО одна `:` (одно вхождение — разделитель
+// ключа/значения), обе половины непустые и матчат [reSelValue] (scalar-only, тот
+// же символьный класс, что у обычных exact-значений). Нарушение → error (load
+// фейлится, как битый soulprint/state). Двоеточие внутри ключа/значения
+// запрещено: оно не проходит reSelValue, поэтому неоднозначности «какая `:`
+// разделитель» не возникает — допустимо ровно одно вхождение.
+func parseTraitValue(values, raw string) (string, error) {
+	key, value, found := strings.Cut(values, ":")
+	if !found {
+		return "", fmt.Errorf("permission %q: trait value %q must be key:value (single ':')", raw, values)
+	}
+	if strings.Contains(value, ":") {
+		return "", fmt.Errorf("permission %q: trait value %q must contain exactly one ':' (key:value)", raw, values)
+	}
+	if key == "" || value == "" {
+		return "", fmt.Errorf("permission %q: trait %q has empty key or value", raw, values)
+	}
+	if !reSelValue.MatchString(key) {
+		return "", fmt.Errorf("permission %q: trait key %q does not match [a-zA-Z0-9_.-]+", raw, key)
+	}
+	if !reSelValue.MatchString(value) {
+		return "", fmt.Errorf("permission %q: trait value %q does not match [a-zA-Z0-9_.-]+", raw, value)
+	}
+	return key + ":" + value, nil
 }

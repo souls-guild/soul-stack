@@ -265,13 +265,13 @@ func (e *Enforcer) HoldsAction(aid, resource, action string) bool {
 //   - Deny → false (forward-compat S2+: «введённое пустое измерение» = явный
 //     scope-deny);
 //   - иначе bare/`*` (Unrestricted) ИЛИ любое заполненное измерение
-//     (coven/regex/soulprint/state) → true.
+//     (coven/regex/soulprint/state/trait) → true.
 func holdsFromPurview(p Purview) bool {
 	if p.Deny {
 		return false
 	}
 	return p.Unrestricted ||
-		len(p.Covens)+len(p.Regexes)+len(p.SoulprintExprs)+len(p.StateExprs) > 0
+		len(p.Covens)+len(p.Regexes)+len(p.SoulprintExprs)+len(p.StateExprs)+len(p.TraitExprs) > 0
 }
 
 // RolesOf возвращает имена ролей, привязанных к AID. Используется

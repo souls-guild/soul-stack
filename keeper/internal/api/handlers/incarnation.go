@@ -259,16 +259,16 @@ func joinStateExprs(exprs []string) string {
 }
 
 // scopeEmpty — true для fail-closed Purview: не Unrestricted и ни одного
-// введённого измерения, значимого для incarnation-scope (Covens / StateExprs).
-// regex/soulprint — soul-факты, к incarnations НЕ применяются (ТЗ S3b-3), потому
-// в счёт «введённых измерений» здесь НЕ идут: Purview только с soulprint/regex
-// (без coven/state) для incarnation-scope = пусто (нечего матчить) → fail-closed.
-// Deny (заготовка S2) трактуется как fail-closed.
+// введённого измерения, значимого для incarnation-scope (Covens / StateExprs /
+// TraitExprs). regex/soulprint — soul-факты, к incarnations НЕ применяются (ТЗ
+// S3b-3), потому в счёт «введённых измерений» здесь НЕ идут: Purview только с
+// soulprint/regex (без coven/state/trait) для incarnation-scope = пусто (нечего
+// матчить) → fail-closed. Deny (заготовка S2) трактуется как fail-closed.
 func scopeEmpty(pv rbac.Purview) bool {
 	if pv.Deny {
 		return true
 	}
-	return len(pv.Covens) == 0 && len(pv.StateExprs) == 0
+	return len(pv.Covens) == 0 && len(pv.StateExprs) == 0 && len(pv.TraitExprs) == 0
 }
 
 // statePredicateOps — допустимые префиксы оператора в query-значении
@@ -357,6 +357,42 @@ func (h *IncarnationHandler) GetInScopeFor(claims *jwt.Claims, action string) fu
 				return true
 			}
 		}
+		// trait-измерение (ADR-047 amendment, ADR-060 п.7 slice 1): scope-пара
+		// `key:value` даёт доступ, если incarnation.traits[key] == value (scalar).
+		for _, pair := range pv.TraitExprs {
+			key, value, ok := splitTraitPair(pair)
+			if !ok {
+				continue
+			}
+			if traitScalarEquals(inc.Traits, key, value) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// splitTraitPair разбивает trait-scope-строку `key:value` (нормализованную
+// [rbac.parseTraitValue] — ровно одна `:`, непустые половины) на ключ и значение.
+// ok=false при отсутствии `:` (defensive против рассинхрона с парсером).
+func splitTraitPair(pair string) (key, value string, ok bool) {
+	return strings.Cut(pair, ":")
+}
+
+// traitScalarEquals — true, если traits[key] — скаляр, строковая форма которого
+// равна value (slice 1 — scalar-only trait-scope). list-Trait одним равенством
+// не покрывается (follow-up), поэтому non-scalar → false. fmt.Sprint даёт
+// каноничную строку для string/число/bool (jsonb-числа приходят float64/json.Number).
+func traitScalarEquals(traits map[string]any, key, value string) bool {
+	v, ok := traits[key]
+	if !ok {
+		return false
+	}
+	switch v.(type) {
+	case string, float64, bool, json.Number, int, int64:
+		return fmt.Sprint(v) == value
+	default:
+		// map / slice (list-Trait) — не scalar-match (slice 1 не покрывает).
 		return false
 	}
 }
@@ -388,6 +424,16 @@ func (h *IncarnationHandler) ResolveListScopeFor(ctx context.Context, claims *jw
 			} else {
 				scope.StateNames = names
 			}
+		}
+		// trait-измерение (ADR-047 amendment, ADR-060 п.7 slice 1): scope-пары
+		// `key:value` → SQL-pushdown `traits @> $n::jsonb` (без CEL/резолва, точное
+		// равенство). Битая пара (рассинхрон с парсером) пропускается, не роняет List.
+		for _, pair := range pv.TraitExprs {
+			key, value, ok := splitTraitPair(pair)
+			if !ok {
+				continue
+			}
+			scope.Traits = append(scope.Traits, incarnation.TraitPair{Key: key, Value: value})
 		}
 		return scope, true
 	}

@@ -378,6 +378,16 @@ func IsAllowedPermission(resource, action string) bool {
 // keeper/internal/statepredicate (migration-sandbox корень `state`) на load;
 // реальный CEL-eval против state — слайс S3b ([Permission.Matches] для state
 // fail-closed без incarnation.state в context).
+//
+// `trait` (ADR-047 amendment, ADR-060 п.7 slice 1) — exact key:value-match по
+// `incarnation.traits` (operator-set key-value метки инкарнации, jsonb). Форма
+// `trait=key:value` (ровно одна `:`; обе половины — [a-zA-Z0-9_.-]+, scalar-only).
+// В отличие от CEL-измерений soulprint/state — это точное равенство (как coven),
+// не предикат: значение Trait в [Permission.Matches] fail-closed (текущий
+// map[string]string-context не несёт nested incarnation.traits — реальный match
+// делает incarnation-list/get резолвер, slice 1 п.7). Семантика slice 1 —
+// OR-измерение Purview (incarnation видна, если её traits[key]==value); AND-
+// сужение по нескольким парам — follow-up multi-key.
 var allowedSelectorKeys = map[string]struct{}{
 	"service":     {},
 	"coven":       {},
@@ -386,6 +396,7 @@ var allowedSelectorKeys = map[string]struct{}{
 	"regex":       {},
 	"soulprint":   {},
 	"state":       {},
+	"trait":       {},
 }
 
 // IsAllowedSelectorKey — проверка ключа селектора против closed enum.

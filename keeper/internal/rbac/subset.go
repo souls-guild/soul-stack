@@ -338,6 +338,21 @@ func callerHolds(callerPerms []Permission, req Permission) bool {
 			}
 			continue
 		}
+		if key == "trait" {
+			// ADR-047 amendment (ADR-060 п.7 slice 1): trait-subset = string-equality
+			// fail-closed. trait — точная `key:value`-пара (не предикат), но логика
+			// покрытия та же, что у state/soulprint: caller вправе выдать ТОЛЬКО
+			// идентичную пару (есть в его эффективном trait-наборе) ЛИБО имеет более
+			// широкое право (`*` / bare без trait-селектора этого resource.action).
+			// Через Matches идти НЕЛЬЗЯ (trait fail-closed без traits в context) —
+			// прямое сравнение пар, симметрично state/soulprint-веткам.
+			for _, pair := range values {
+				if !callerHoldsTrait(callerPerms, req.Resource, req.Action, pair) {
+					return false
+				}
+			}
+			continue
+		}
 		for _, v := range values {
 			if !matchesAny(callerPerms, req.Resource, req.Action, map[string]string{key: v}) {
 				return false
@@ -446,6 +461,40 @@ func callerHoldsState(callerPerms []Permission, resource, action, expr string) b
 		}
 		for _, cexpr := range cp.Selector["state"] {
 			if cexpr == expr {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// callerHoldsTrait — покрывает ли caller выдачу trait-пары pair (`key:value`) для
+// (resource, action). MVP-семантика (ADR-047 amendment / ADR-060 п.7 slice 1,
+// fail-closed, параллель [callerHoldsState]): покрыто, если у caller-а есть
+//   - `*`-permission (покрывает всё), ИЛИ
+//   - матчащая (resource, action) BARE-permission (Selector==nil — caller ничем
+//     не ограничен, вправе выдать любую trait-пару), ИЛИ
+//   - матчащая permission с ИДЕНТИЧНОЙ trait-парой (string-equality).
+//
+// Caller с ОГРАНИЧЕНИЕМ В ДРУГОМ измерении (`coven=prod` / иная trait-пара) НЕ
+// покрывает trait-грант — симметрия с exact-ключами, regex, soulprint и state.
+func callerHoldsTrait(callerPerms []Permission, resource, action, pair string) bool {
+	for _, cp := range callerPerms {
+		if cp.IsWildcard {
+			return true
+		}
+		if cp.Resource != resource {
+			continue
+		}
+		if cp.Action != "*" && cp.Action != action {
+			continue
+		}
+		if cp.Selector == nil {
+			// bare-permission caller-а — не ограничен по trait, покрывает любую.
+			return true
+		}
+		for _, cpair := range cp.Selector["trait"] {
+			if cpair == pair {
 				return true
 			}
 		}
