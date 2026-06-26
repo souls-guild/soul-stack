@@ -1,0 +1,20 @@
+name: provisioned-sids-default-back-compat
+description: >
+  Инкарнация без provisioned_sids (развёрнута до v8) → консервативный default:
+  provisioned_sids=[]. has()-guard back-compat для отсутствующего ключа (копия
+  паттерна 006_to_007 provisioned_vm_ids).
+
+state_before:
+  redis_type: "sentinel"
+  redis_config:
+    maxmemory: "256mb"
+  provisioned_vm_ids: ["i-aaa111"]
+  provisioned_provider: "wb-dev"
+
+state_after:
+  redis_type: "sentinel"
+  redis_config:
+    maxmemory: "256mb"
+  provisioned_vm_ids: ["i-aaa111"]
+  provisioned_provider: "wb-dev"
+  provisioned_sids: []

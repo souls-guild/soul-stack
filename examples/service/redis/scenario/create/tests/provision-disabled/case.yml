@@ -80,5 +80,8 @@ assert:
     redis_type: sentinel
     redis_version: "7.2.4"
     # read-model: VM никем не провижены этим прогоном → консервативный default.
+    # provisioned_sids=[] покрывает non-provision-ветку guard-а (register.provision
+    # не существует на group-drop → тернар короткозамыкает, sids не читаются).
     provisioned_vm_ids: []
+    provisioned_sids: []
     provisioned_provider: ""

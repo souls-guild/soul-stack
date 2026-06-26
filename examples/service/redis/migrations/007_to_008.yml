@@ -1,0 +1,28 @@
+from_version: 7
+to_version: 8
+
+description: >-
+  state_schema v7 → v8: cascade-destroy read-model (ADR-061, дополнение к v7
+  cloud-provision). state ДОПОЛНЯЕТСЯ полем:
+    - provisioned_sids (array string) — SID (FQDN) каждой VM, поднятой нашим
+      create-прогоном. day-2 teardown (cascade destroy) читает их, чтобы добить
+      осиротевшие souls (→destroyed), seeds (→orphaned) и bootstrap-токены
+      (→burned): Reaper НЕ снимает pending-VM-souls (mark_disconnected только
+      connected→disconnected), без sids они повисли бы (нарушение anti-replay).
+
+  Зачем рядом с provisioned_vm_ids: vm_ids — provider-side идентификатор (для
+  core.cloud.destroyed), sids — Keeper-side идентичность Soul (для cascade-destroy
+  реестров souls/seeds/tokens). Это разные ключи разных подсистем, оба нужны.
+
+  Forward-only (down: не поддерживается; восстановление — через state_history).
+  Существующие инкарнации развёрнуты до v8 (без sids в state) → консервативный
+  default: provisioned_sids=[] (хосты не провиженные сервисом, либо v7-провижен
+  без записанных sids). ОДИН плоский set; has()-guard — back-compat для инкарнаций
+  без ключа (идемпотентность повторного прогона: ключ есть → сохраняется как есть,
+  иначе ставится []). Остальной state (включая provisioned_vm_ids/provisioned_provider)
+  НЕ трогается. Зеркало паттерна 006_to_007.
+
+transform:
+  - set:
+      path:  state.provisioned_sids
+      value: "${ has(state.provisioned_sids) ? state.provisioned_sids : [] }"

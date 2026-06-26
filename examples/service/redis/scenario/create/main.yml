@@ -761,6 +761,18 @@ state_changes:
       ${ (has(input.provision) && input.provision.enabled)
            ? register.provision.vm_ids
            : [] }
+  # provisioned_sids: SID (FQDN) созданных VM — для cascade-destroy day-2 teardown
+  # (souls→destroyed/seeds→orphaned/tokens→burned; Reaper НЕ снимает pending-VM-souls).
+  # Тот же GUARD по input.provision, что vm_ids/provider (на non-provision-прогоне
+  # register.provision не существует → тернар короткозамыкает, register.* не трогается).
+  # sids собираются из register.provision.hosts[].sid (.map — то же выражение, что
+  # params.sid шага (в) core.soul.registered в provision.yml); отдельного register
+  # .provision.sids нет. Иначе [] (хосты не провиженные сервисом).
+  - set: provisioned_sids
+    value: >-
+      ${ (has(input.provision) && input.provision.enabled)
+           ? register.provision.hosts.map(h, h.sid)
+           : [] }
   - set: provisioned_provider
     value: >-
       ${ (has(input.provision) && input.provision.enabled)
