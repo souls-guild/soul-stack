@@ -95,8 +95,9 @@ var (
 const insertSQL = `
 INSERT INTO incarnation (
     name, service, service_version, state_schema_version,
-    spec, state, status, status_details, created_by_aid, covens, traits
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    spec, state, status, status_details, created_by_aid, covens, traits,
+    created_scenario
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 RETURNING created_at, updated_at
 `
 
@@ -105,7 +106,7 @@ const selectByNameSQL = `
 SELECT name, service, service_version, state_schema_version,
        spec, state, status, status_details, created_by_aid,
        created_at, updated_at, covens, traits,
-       last_drift_check_at, last_drift_summary
+       last_drift_check_at, last_drift_summary, created_scenario
 FROM incarnation
 WHERE name = $1
 `
@@ -338,6 +339,14 @@ func Create(ctx context.Context, db ExecQueryRower, inc *Incarnation) error {
 		return fmt.Errorf("incarnation: marshal traits: %w", err)
 	}
 
+	// created_scenario — имя стартового сценария (механизм нескольких create,
+	// миграция 089). Пустое значение caller-а нормализуем к дефолту `create`
+	// (back-compat: старый код / тесты без явного поля создают через `create`).
+	createdScenario := inc.CreatedScenario
+	if createdScenario == "" {
+		createdScenario = createScenarioLabel
+	}
+
 	row := db.QueryRow(ctx, insertSQL,
 		inc.Name,
 		inc.Service,
@@ -350,6 +359,7 @@ func Create(ctx context.Context, db ExecQueryRower, inc *Incarnation) error {
 		createdByAID,
 		covens,
 		traitsBytes,
+		createdScenario,
 	)
 	if err := row.Scan(&inc.CreatedAt, &inc.UpdatedAt); err != nil {
 		return mapInsertError(err)
@@ -407,6 +417,7 @@ func scanIncarnation(row pgx.Row) (*Incarnation, error) {
 		&traitsBytes,
 		&inc.LastDriftCheckAt,
 		&driftSummaryBytes,
+		&inc.CreatedScenario,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -489,7 +500,7 @@ func SelectAll(ctx context.Context, db ExecQueryRower, filter ListFilter, scope 
 	listSQL := `SELECT name, service, service_version, state_schema_version,
        spec, state, status, status_details, created_by_aid,
        created_at, updated_at, covens, traits,
-       last_drift_check_at, last_drift_summary
+       last_drift_check_at, last_drift_summary, created_scenario
 FROM incarnation` + whereSQL + orderSQL +
 		fmt.Sprintf(" OFFSET $%d LIMIT $%d", len(args)+1, len(args)+2)
 	listArgs := append(append([]any{}, args...), offset, limit)
@@ -865,9 +876,16 @@ var _ TxBeginner = (*pgxpool.Pool)(nil)
 
 // UnlockResult — итог [Unlock]: статус до снятия блока (для reply / audit) и
 // идентификатор записанного state_history-snapshot-а.
+//
+// CreatedScenario заполняется ТОЛЬКО [UnlockForRerun] (для [Unlock] — ""):
+// имя стартового сценария инкарнации (incarnation.created_scenario), которое
+// caller перезапускает через runner.Start. Заменяет хардкод `create` в rerun-
+// create-handler-ах — инкарнация, созданная `create_cluster`, перезапускает
+// `create_cluster`.
 type UnlockResult struct {
-	PreviousStatus Status
-	HistoryID      string
+	PreviousStatus  Status
+	HistoryID       string
+	CreatedScenario string
 }
 
 // unlockScenarioLabel — значение `state_history.scenario` для unlock-перехода.
@@ -1220,16 +1238,17 @@ func UnlockForRerun(ctx context.Context, pool TxBeginner, name, reason, rerunByA
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	const selectForUpdateSQL = `
-SELECT state, status
+SELECT state, status, created_scenario
 FROM incarnation
 WHERE name = $1
 FOR UPDATE
 `
 	var (
-		stateBytes []byte
-		statusStr  string
+		stateBytes      []byte
+		statusStr       string
+		createdScenario string
 	)
-	if err := tx.QueryRow(ctx, selectForUpdateSQL, name).Scan(&stateBytes, &statusStr); err != nil {
+	if err := tx.QueryRow(ctx, selectForUpdateSQL, name).Scan(&stateBytes, &statusStr, &createdScenario); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrIncarnationNotFound
 		}
@@ -1239,13 +1258,21 @@ FOR UPDATE
 	if previous != StatusErrorLocked {
 		return nil, ErrIncarnationNotErrorLocked
 	}
+	// created_scenario — стартовый сценарий, которым создавали инкарнацию (механизм
+	// нескольких create, миграция 089). Пустое (теоретически у строки до миграции,
+	// перекрытой DEFAULT) → дефолт `create` (back-compat).
+	if createdScenario == "" {
+		createdScenario = createScenarioLabel
+	}
 
-	// Scope=create: rerun-create перезапускает строго bootstrap `create`. Сценарий,
-	// упавший в error_locked, читаем из последнего snapshot-а state_history (run.go::
-	// abort→lockIncarnation→UpdateStateFromRun пишет туда scenario имени упавшего
-	// сценария). Если это НЕ create (например add_user) — отказ: rerun исполнил бы
-	// create вместо фактически провалившейся операции. Та же FOR UPDATE-tx: чтение
-	// сериализовано относительно конкурентного scenario-runner-а.
+	// Scope=created-scenario: rerun-create перезапускает строго СОЗДАВШИЙ bootstrap-
+	// сценарий (тот, что в incarnation.created_scenario — может быть `create` ИЛИ
+	// `create_cluster`/`create_standalone` при нескольких create). Сценарий, упавший
+	// в error_locked, читаем из последнего snapshot-а state_history (run.go::abort→
+	// lockIncarnation→UpdateStateFromRun пишет туда имя упавшего сценария). Если это
+	// НЕ создавший сценарий (например day-2 add_user тоже залочил инкарнацию) — отказ:
+	// rerun перезапустил бы bootstrap вместо фактически провалившейся операции. Та же
+	// FOR UPDATE-tx: чтение сериализовано относительно конкурентного scenario-runner-а.
 	const lastScenarioSQL = `
 SELECT scenario
 FROM state_history
@@ -1258,12 +1285,12 @@ LIMIT 1
 		if errors.Is(err, pgx.ErrNoRows) {
 			// error_locked без единого snapshot-а — недостижимо штатно (lockIncarnation
 			// всегда пишет state_history при провале). Fail-closed: не считаем
-			// отсутствие следа за create.
+			// отсутствие следа за создавший сценарий.
 			return nil, ErrRerunScenarioNotCreate
 		}
 		return nil, fmt.Errorf("incarnation: rerun-create last scenario probe: %w", err)
 	}
-	if lastScenario != createScenarioLabel {
+	if lastScenario != createdScenario {
 		return nil, ErrRerunScenarioNotCreate
 	}
 
@@ -1302,7 +1329,7 @@ WHERE name = $1
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("incarnation: commit rerun-create tx: %w", err)
 	}
-	return &UnlockResult{PreviousStatus: previous, HistoryID: historyID}, nil
+	return &UnlockResult{PreviousStatus: previous, HistoryID: historyID, CreatedScenario: createdScenario}, nil
 }
 
 // migrationScenarioLabel — значение `state_history.scenario` для шага

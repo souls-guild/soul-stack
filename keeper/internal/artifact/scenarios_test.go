@@ -333,3 +333,62 @@ func TestScenarioListerFunc_CompileTime(t *testing.T) {
 	}
 	_ = s
 }
+
+// TestListScenarios_CreateFlag — top-level `create: true|false` парсится в
+// Scenario.Create; отсутствие ключа → false (back-compat). Дискриминатор create-
+// kind для UI-фильтра «выбрать стартовый сценарий».
+func TestListScenarios_CreateFlag(t *testing.T) {
+	root := t.TempDir()
+
+	writeScenario(t, root, "create", `description: дефолтный bootstrap
+create: true
+`)
+	writeScenario(t, root, "create_cluster", `description: cluster-bootstrap
+create: true
+`)
+	writeScenario(t, root, "add_user", `description: day-2 операция
+create: false
+`)
+	writeScenario(t, root, "restart", `description: рестарт без флага
+`)
+
+	got, err := ListScenarios(root, discardLogger())
+	if err != nil {
+		t.Fatalf("ListScenarios: %v", err)
+	}
+	want := map[string]bool{
+		"create":         true,
+		"create_cluster": true,
+		"add_user":       false,
+		"restart":        false,
+	}
+	for _, s := range got {
+		exp, ok := want[s.Name]
+		if !ok {
+			t.Fatalf("unexpected scenario %q", s.Name)
+		}
+		if s.Create != exp {
+			t.Errorf("%s.Create = %v, want %v", s.Name, s.Create, exp)
+		}
+	}
+}
+
+// TestListScenarios_CreateFlagJSONOmitempty — Scenario.Create сериализуется в JSON
+// под ключом `create` и опускается при false (omitempty: бит-в-бит как до фичи для
+// non-create сценариев).
+func TestListScenarios_CreateFlagJSONOmitempty(t *testing.T) {
+	withCreate, err := json.Marshal(Scenario{Name: "create", Create: true})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(withCreate), `"create":true`) {
+		t.Errorf("create=true scenario JSON must carry \"create\":true, got %s", withCreate)
+	}
+	noCreate, err := json.Marshal(Scenario{Name: "restart", Create: false})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(noCreate), `"create"`) {
+		t.Errorf("create=false scenario JSON must omit \"create\" (omitempty), got %s", noCreate)
+	}
+}

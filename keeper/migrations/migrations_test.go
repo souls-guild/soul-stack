@@ -205,6 +205,8 @@ func TestEmbed_ContainsExpectedMigrations(t *testing.T) {
 		"087_add_souls_traits.up.sql",
 		"088_add_incarnation_traits.down.sql",
 		"088_add_incarnation_traits.up.sql",
+		"089_add_incarnation_created_scenario.down.sql",
+		"089_add_incarnation_created_scenario.up.sql",
 	}
 	if len(names) != len(want) {
 		t.Fatalf("got %d files, want %d: %v", len(names), len(want), names)
@@ -822,6 +824,33 @@ func TestEmbed_IncarnationTraits(t *testing.T) {
 		if strings.Contains(dbody, bad) {
 			t.Errorf("088 down.sql must NOT operate on souls (%q); content: %.200s", bad, dbody)
 		}
+	}
+}
+
+// TestEmbed_IncarnationCreatedScenario — sanity на 089 (механизм нескольких
+// create-сценариев, Вариант A): колонка incarnation.created_scenario
+// (NOT NULL DEFAULT 'create') хранит имя стартового сценария; rerun-create
+// перезапускает именно его. up добавляет колонку с DEFAULT; down дропает.
+func TestEmbed_IncarnationCreatedScenario(t *testing.T) {
+	b, err := FS.ReadFile("089_add_incarnation_created_scenario.up.sql")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	body := string(b)
+	for _, frag := range []string{
+		"ALTER TABLE incarnation",
+		"ADD COLUMN created_scenario TEXT NOT NULL DEFAULT 'create'",
+	} {
+		if !strings.Contains(body, frag) {
+			t.Errorf("089 up.sql missing %q; content head: %.300s", frag, body)
+		}
+	}
+	d, err := FS.ReadFile("089_add_incarnation_created_scenario.down.sql")
+	if err != nil {
+		t.Fatalf("read down: %v", err)
+	}
+	if !strings.Contains(string(d), "DROP COLUMN IF EXISTS created_scenario") {
+		t.Errorf("089 down.sql does not drop created_scenario; content: %.200s", d)
 	}
 }
 

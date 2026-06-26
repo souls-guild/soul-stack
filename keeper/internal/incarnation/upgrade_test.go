@@ -475,10 +475,10 @@ func TestUnlockForRerun_FromErrorLocked(t *testing.T) {
 	const applyID = "01HRERUN00000000000000000A"
 	tx := &fakeTx{
 		execErrAt: -1,
-		// QueryRow #1 — FOR UPDATE (state, status); #2 — last-scenario probe
-		// (scope=create: последний упавший сценарий = create → допуск).
+		// QueryRow #1 — FOR UPDATE (state, status, created_scenario); #2 — last-scenario
+		// probe (scope=created-scenario: последний упавший = создавший `create` → допуск).
 		queryRows: []scriptedRow{
-			{values: []any{[]byte(`{"primary":"redis-01"}`), "error_locked"}},
+			{values: []any{[]byte(`{"primary":"redis-01"}`), "error_locked", "create"}},
 			{values: []any{"create"}},
 		},
 	}
@@ -490,6 +490,9 @@ func TestUnlockForRerun_FromErrorLocked(t *testing.T) {
 	}
 	if res.PreviousStatus != StatusErrorLocked {
 		t.Errorf("PreviousStatus = %q, want error_locked", res.PreviousStatus)
+	}
+	if res.CreatedScenario != "create" {
+		t.Errorf("CreatedScenario = %q, want create", res.CreatedScenario)
 	}
 	if !tx.committed {
 		t.Error("rerun-create tx not committed")
@@ -524,7 +527,7 @@ func TestUnlockForRerun_RejectNonErrorLocked(t *testing.T) {
 		t.Run(status, func(t *testing.T) {
 			tx := &fakeTx{
 				execErrAt: -1,
-				selectRow: scriptedRow{values: []any{[]byte(`{}`), status}},
+				selectRow: scriptedRow{values: []any{[]byte(`{}`), status, "create"}},
 			}
 			pool := &fakePool{txs: []*fakeTx{tx}}
 
@@ -549,7 +552,7 @@ func TestUnlockForRerun_RejectNonCreateScenario(t *testing.T) {
 	tx := &fakeTx{
 		execErrAt: -1,
 		queryRows: []scriptedRow{
-			{values: []any{[]byte(`{"primary":"redis-01"}`), "error_locked"}},
+			{values: []any{[]byte(`{"primary":"redis-01"}`), "error_locked", "create"}},
 			{values: []any{"add_user"}},
 		},
 	}
@@ -564,6 +567,56 @@ func TestUnlockForRerun_RejectNonCreateScenario(t *testing.T) {
 	}
 	if tx.execN != 0 {
 		t.Errorf("Exec = %d, want 0 (отказ ДО мутации)", tx.execN)
+	}
+}
+
+// TestUnlockForRerun_CustomCreateScenario — инкарнация СОЗДАНА `create_cluster`
+// (incarnation.created_scenario), последний упавший = `create_cluster` → допуск
+// + UnlockResult.CreatedScenario == "create_cluster" (механизм нескольких create:
+// rerun перезапускает СОЗДАВШИЙ сценарий, не хардкод `create`). GUARD на пункт 4 ТЗ.
+func TestUnlockForRerun_CustomCreateScenario(t *testing.T) {
+	const applyID = "01HRERUN00000000000000000F"
+	tx := &fakeTx{
+		execErrAt: -1,
+		queryRows: []scriptedRow{
+			{values: []any{[]byte(`{"shards":3}`), "error_locked", "create_cluster"}},
+			{values: []any{"create_cluster"}},
+		},
+	}
+	pool := &fakePool{txs: []*fakeTx{tx}}
+
+	res, err := UnlockForRerun(context.Background(), pool, "redis-prod", "rerun cluster", "archon-alice", "01HRERUNHIST000000000000F", applyID)
+	if err != nil {
+		t.Fatalf("UnlockForRerun created_scenario=create_cluster: %v", err)
+	}
+	if res.CreatedScenario != "create_cluster" {
+		t.Errorf("CreatedScenario = %q, want create_cluster (рестарт СОЗДАВШЕГО сценария)", res.CreatedScenario)
+	}
+	if !tx.committed {
+		t.Error("rerun-create tx not committed для валидного custom create-сценария")
+	}
+}
+
+// TestUnlockForRerun_LastScenarioNotCreatedOne — инкарнация создана `create_cluster`,
+// но последний упавший — day-2 `add_user` (тоже залочил) → ErrRerunScenarioNotCreate:
+// rerun перезапускает СОЗДАВШИЙ bootstrap, а не любую упавшую операцию (guard сохранён
+// при нескольких create).
+func TestUnlockForRerun_LastScenarioNotCreatedOne(t *testing.T) {
+	tx := &fakeTx{
+		execErrAt: -1,
+		queryRows: []scriptedRow{
+			{values: []any{[]byte(`{"shards":3}`), "error_locked", "create_cluster"}},
+			{values: []any{"add_user"}},
+		},
+	}
+	pool := &fakePool{txs: []*fakeTx{tx}}
+
+	_, err := UnlockForRerun(context.Background(), pool, "redis-prod", "x", "archon-alice", "01HRERUNHIST00000000000G", "01HRERUN0000000000000000G")
+	if !errors.Is(err, ErrRerunScenarioNotCreate) {
+		t.Fatalf("err = %v, want ErrRerunScenarioNotCreate (last=add_user ≠ created=create_cluster)", err)
+	}
+	if tx.committed {
+		t.Error("tx committed (должен быть отказ без мутации)")
 	}
 }
 

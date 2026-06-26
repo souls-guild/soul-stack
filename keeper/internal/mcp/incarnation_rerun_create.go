@@ -109,13 +109,15 @@ func (h *Handler) callIncarnationRerunCreate(ctx context.Context, claims *jwt.Cl
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	// Перезапуск scenario `create` (async): статус уже applying (UnlockForRerun).
-	// FromLocked — lockRun не транзитит статус повторно, обязан увидеть applying.
+	// Перезапуск создавшего стартового сценария (async): статус уже applying
+	// (UnlockForRerun). FromLocked — lockRun не транзитит статус повторно, обязан
+	// увидеть applying. ScenarioName — incarnation.created_scenario из UnlockResult
+	// (механизм нескольких create: рестарт СОЗДАВШЕГО сценария, не хардкод `create`).
 	if err := h.deps.ScenarioRunner.Start(ctx, scenario.RunSpec{
 		ApplyID:         applyID,
 		IncarnationName: a.Name,
 		ServiceRef:      serviceRef,
-		ScenarioName:    scenario.CreateScenarioName,
+		ScenarioName:    res.CreatedScenario,
 		StartedByAID:    claims.Subject,
 		FromLocked:      true,
 	}); err != nil {

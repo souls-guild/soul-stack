@@ -39,13 +39,18 @@ type IncarnationCreateRequest struct {
 	Name    string         `json:"name" required:"true" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"имя нового instance (kebab-case), корневая Coven-метка"`
 	Service string         `json:"service" required:"true" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"имя сервиса из реестра (ADR-029)"`
 	Covens  []string       `json:"covens,omitempty" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$" maxLength:"63" doc:"declared environment-теги (ADR-008 amendment a)"`
-	Input   map[string]any `json:"input,omitempty" doc:"input для scenario create"`
+	Input   map[string]any `json:"input,omitempty" doc:"input для выбранного create-сценария"`
 	// Traits — operator-set trait-метки инкарнации (ADR-060 amend R1): map ключ →
 	// scalar | list of scalars. Кладутся в incarnation.traits (источник истины) и
 	// материализованно проецируются в souls.traits хостов-членов. Формат/значение
 	// валидирует домен (вложенный объект/массив → 422). Day-2 замена — PUT
 	// .../traits.
 	Traits map[string]any `json:"traits,omitempty" doc:"operator-set trait-метки (ключ → scalar|list of scalars), ADR-060"`
+	// CreateScenario — выбор стартового сценария (механизм нескольких create-
+	// сценариев). Опц.; пусто → default `create` (back-compat). Непустое имя обязано
+	// входить в create-набор сервиса (scenario с `create: true`), иначе 422; выбор
+	// сохраняется в incarnation.created_scenario и rerun-create перезапускает его.
+	CreateScenario string `json:"create_scenario,omitempty" pattern:"^[a-z][a-z0-9_]*$" doc:"имя стартового сценария (механизм нескольких create); пусто → create"`
 }
 
 // incCreateOutput — huma-output POST /v1/incarnations (FULL-TYPED). Status=202;

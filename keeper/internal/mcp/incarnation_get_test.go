@@ -13,14 +13,15 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac/rbactest"
 )
 
-// incRow — pgx.Row для scanIncarnation: 14 колонок (name, service,
+// incRow — pgx.Row для scanIncarnation: 16 колонок (name, service,
 // service_version, state_schema_version, spec, state, status, status_details,
-// created_by_aid, created_at, updated_at, covens, last_drift_check_at,
-// last_drift_summary). spec/state/status_details/last_drift_summary
-// сериализуются в JSONB-bytes — ровно как читает scanIncarnation из реального
-// pool-а (db.QueryRow(selectByNameSQL)). covens — text[], scanIncarnation
-// читает её в *[]string (env-RBAC, миграция 046); last_drift_*
-// — ADR-031 Slice C, миграция 050.
+// created_by_aid, created_at, updated_at, covens, traits, last_drift_check_at,
+// last_drift_summary, created_scenario). spec/state/status_details/traits/
+// last_drift_summary сериализуются в JSONB-bytes — ровно как читает
+// scanIncarnation из реального pool-а (db.QueryRow(selectByNameSQL)). covens —
+// text[], scanIncarnation читает её в *[]string (env-RBAC, миграция 046);
+// last_drift_* — ADR-031 Slice C, миграция 050; created_scenario — механизм
+// нескольких create-сценариев (TEXT NOT NULL DEFAULT 'create'), миграция 089.
 type incRow struct{ vals []any }
 
 func newIncRow(inc *incarnation.Incarnation) incRow {
@@ -39,6 +40,12 @@ func newIncRow(inc *incarnation.Incarnation) incRow {
 	if inc.LastDriftSummary != nil {
 		driftSummary, _ = json.Marshal(inc.LastDriftSummary)
 	}
+	// created_scenario — NOT NULL DEFAULT 'create' (миграция 089): реальная БД
+	// никогда не вернёт пусто, поэтому unset-фикстуры коалесцируем в 'create'.
+	createdScenario := inc.CreatedScenario
+	if createdScenario == "" {
+		createdScenario = "create"
+	}
 	return incRow{vals: []any{
 		inc.Name,
 		inc.Service,
@@ -55,6 +62,7 @@ func newIncRow(inc *incarnation.Incarnation) incRow {
 		mustJSON(inc.Traits),
 		inc.LastDriftCheckAt,
 		driftSummary,
+		createdScenario,
 	}}
 }
 

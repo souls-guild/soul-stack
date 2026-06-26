@@ -36,6 +36,13 @@ type Scenario struct {
 	Name string `json:"name"`
 	Path string `json:"path"`
 	Kind string `json:"kind"`
+	// Create — дискриминатор «сценарий годен как стартовый (bootstrap новой
+	// incarnation)»: top-level `create: true` в main.yml (механизм нескольких
+	// create-сценариев). UI фильтрует по нему список «выбрать стартовый сценарий»
+	// в Create-форме; default-выбор — сценарий с именем `create` (back-compat).
+	// omitempty — false (non-create сценарий) опускается из reply бит-в-бит как до
+	// фичи. `destroy` этим флагом НЕ помечается (teardown — спец-флоу DELETE).
+	Create bool `json:"create,omitempty"`
 	// Runnable — признак «запускаем оператором из Run-формы» (ADR-042 «тупой
 	// фронт»): create=true, destroy=false (удаление — спец-флоу DELETE),
 	// operational=true. Размечает listing-handler по канону scenario-пакета
@@ -123,6 +130,12 @@ type scenarioYAML struct {
 	Input       map[string]any `yaml:"input"`
 	InputSchema map[string]any `yaml:"input_schema"`
 	Tags        []string       `yaml:"tags"`
+	// Create — top-level `create:` флаг стартового сценария. `*bool` ради
+	// различения «не задано» (nil → не стартовый) от явного `create: false`;
+	// listing проецирует в Scenario.Create через !=nil && *Create (см.
+	// loadScenario). Строгую валидацию типа делает soul-lint (config-валидатор);
+	// тут best-effort проекция для UI — невалидный тип останется nil → false.
+	Create *bool `yaml:"create"`
 	// Form — опциональный презентационный слой (top-level `form:`). Нестандартные
 	// под-ключи игнорируются (yaml.Unmarshal в struct ловит только перечисленные);
 	// строгую валидацию формы делает soul-lint, не listing.
@@ -252,6 +265,7 @@ func loadScenario(serviceRoot, name string, logger *slog.Logger) (Scenario, bool
 	return Scenario{
 		Name:        name,
 		Path:        relPath,
+		Create:      raw.Create != nil && *raw.Create,
 		Description: raw.Description,
 		InputSchema: schema,
 		Tags:        raw.Tags,

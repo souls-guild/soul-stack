@@ -53,11 +53,12 @@ func registerHumaIncarnationCreate(humaAPI huma.API, incH *handlers.IncarnationH
 			return nil, incMissingClaims()
 		}
 		reply, err := incH.CreateTyped(ctx, claims, handlers.IncarnationCreateRequestInput{
-			Name:    in.Body.Name,
-			Service: in.Body.Service,
-			Covens:  in.Body.Covens,
-			Input:   in.Body.Input,
-			Traits:  in.Body.Traits,
+			Name:           in.Body.Name,
+			Service:        in.Body.Service,
+			Covens:         in.Body.Covens,
+			Input:          in.Body.Input,
+			Traits:         in.Body.Traits,
+			CreateScenario: in.Body.CreateScenario,
 		})
 		if err != nil {
 			return nil, incProblem(err)

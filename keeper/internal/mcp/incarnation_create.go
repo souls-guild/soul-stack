@@ -22,6 +22,10 @@ type incarnationCreateArgs struct {
 	Service string         `json:"service"`
 	Covens  []string       `json:"covens,omitempty"`
 	Input   map[string]any `json:"input,omitempty"`
+	// CreateScenario — выбор стартового сценария (механизм нескольких create,
+	// Вариант A; паритет REST `create_scenario`). Пусто → default `create`;
+	// непустое имя обязано входить в create-набор сервиса, иначе validation-failed.
+	CreateScenario string `json:"create_scenario,omitempty"`
 }
 
 // incarnationCreateOutput — output keeper.incarnation.create
@@ -114,9 +118,30 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 	// autoCreate — политика lifecycle.auto_create манифеста (default true). false
 	// → инкарнация создаётся ready без прогона (apply_id в ответе отсутствует),
 	// оператор запускает `create` вручную (паритет REST Create).
+	// createScenario — фактический стартовый сценарий (механизм нескольких create).
+	// Дефолт `create` (back-compat); при наличии loader-а валидируется выбор оператора
+	// на членство в create-наборе сервиса. Сохраняется в incarnation.created_scenario;
+	// rerun-create перезапускает именно его.
+	createScenario := scenario.CreateScenarioName
 	autoCreate := true
 	if h.deps.ServiceLoader != nil {
-		if err := scenario.ValidateInput(ctx, h.deps.ServiceLoader, serviceRef, scenario.CreateScenarioName, a.Input); err != nil {
+		chosen, cerr := scenario.ValidateCreateScenarioChoice(ctx, h.deps.ServiceLoader, serviceRef, a.CreateScenario)
+		if cerr != nil {
+			if errors.Is(cerr, scenario.ErrCreateScenarioNotEligible) {
+				return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
+					"create_scenario_invalid: "+cerr.Error())
+			}
+			h.deps.Logger.Error("mcp: incarnation.create resolve create scenario failed",
+				slog.String("name", a.Name),
+				slog.String("service", a.Service),
+				slog.Any("error", cerr),
+			)
+			return h.toolError(req.ID, toolName, mcpCodeInternalError,
+				"resolve create scenario failed")
+		}
+		createScenario = chosen
+
+		if err := scenario.ValidateInput(ctx, h.deps.ServiceLoader, serviceRef, createScenario, a.Input); err != nil {
 			if errors.Is(err, scenario.ErrInputInvalid) {
 				return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
 					"input_invalid: "+err.Error())
@@ -165,6 +190,7 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 		Status:             incarnation.StatusReady,
 		CreatedByAID:       &creator,
 		Covens:             a.Covens,
+		CreatedScenario:    createScenario,
 	}
 	if err := incarnation.Create(ctx, h.deps.IncarnationDB, inc); err != nil {
 		if errors.Is(err, incarnation.ErrIncarnationAlreadyExists) {
@@ -190,7 +216,7 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 			ApplyID:         applyID,
 			IncarnationName: a.Name,
 			ServiceRef:      serviceRef,
-			ScenarioName:    scenario.CreateScenarioName,
+			ScenarioName:    createScenario,
 			Input:           a.Input,
 			StartedByAID:    claims.Subject,
 		}); err != nil {

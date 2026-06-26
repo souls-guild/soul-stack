@@ -237,6 +237,7 @@ func makeIncarnationRow(name string) pgx.Row {
 		now, now, []string(nil),
 		[]byte("{}"),          // traits (ADR-060 amend R1)
 		any(nil), []byte(nil), // last_drift_check_at, last_drift_summary (ADR-031 Slice C)
+		"create", // created_scenario (миграция 089, NOT NULL DEFAULT)
 	}}
 }
 
@@ -490,6 +491,7 @@ func TestIncarnation_Get_200_StateMasked(t *testing.T) {
 				now, now, []string(nil),
 				[]byte("{}"),          // traits
 				any(nil), []byte(nil), // ADR-031 Slice C
+				"create", // created_scenario (миграция 089, NOT NULL DEFAULT)
 			}}
 		},
 	}
@@ -965,6 +967,7 @@ func incListRow(name string, covens []string, state map[string]any) staticRow {
 		now, now, covenArg,
 		[]byte("{}"), // traits
 		any(nil), []byte(nil),
+		"create", // created_scenario (миграция 089, NOT NULL DEFAULT)
 	}}
 }
 
@@ -1462,6 +1465,7 @@ func TestIncarnationScopeSelector_ReadsRow(t *testing.T) {
 			now, now, []string{"prod"},
 			[]byte("{}"),          // traits
 			any(nil), []byte(nil), // ADR-031 Slice C
+			"create", // created_scenario (миграция 089, NOT NULL DEFAULT)
 		}}
 	}}
 	sel := IncarnationScopeSelector(db)
@@ -1603,13 +1607,16 @@ func makeIncStatusRow(name, status string) pgx.Row {
 		now, now, []string(nil),
 		[]byte("{}"),          // traits
 		any(nil), []byte(nil), // ADR-031 Slice C
+		"create", // created_scenario (миграция 089, NOT NULL DEFAULT)
 	}}
 }
 
-// makeUnlockSelectRow конструирует staticRow под Unlock SELECT FOR UPDATE
-// (state, status).
+// makeUnlockSelectRow конструирует staticRow под FOR UPDATE-select unlock-семейства.
+// Несёт 3 колонки в порядке rerun-select-а (state, status, created_scenario): plain
+// Unlock / Destroy сканируют только первые две (staticRow.Scan читает ровно len(dest)),
+// UnlockForRerun — все три (created_scenario, миграция 089; дефолт 'create').
 func makeUnlockSelectRow(status string) pgx.Row {
-	return staticRow{values: []any{[]byte("{}"), status}}
+	return staticRow{values: []any{[]byte("{}"), status, "create"}}
 }
 
 func newRunHandler(db *fakeIncDB, starter *fakeStarter, resolver *fakeResolver) *IncarnationHandler {
@@ -1974,6 +1981,7 @@ func makeIncRowVer(name, serviceVersion string, schema int) pgx.Row {
 		now, now, []string(nil),
 		[]byte("{}"),          // traits
 		any(nil), []byte(nil), // ADR-031 Slice C
+		"create", // created_scenario (миграция 089, NOT NULL DEFAULT)
 	}}
 }
 
@@ -2524,6 +2532,7 @@ func makeIncRowWithHosts(name, status string, hosts []map[string]any) pgx.Row {
 		now, now, []string(nil),
 		[]byte("{}"), // traits
 		any(nil), []byte(nil),
+		"create", // created_scenario (миграция 089, NOT NULL DEFAULT)
 	}}
 }
 

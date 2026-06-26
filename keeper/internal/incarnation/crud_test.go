@@ -180,11 +180,15 @@ func TestCreate_HappyPath(t *testing.T) {
 	if !strings.Contains(f.queryRowSQL, "INSERT INTO incarnation") {
 		t.Errorf("SQL: %q", f.queryRowSQL)
 	}
-	if len(f.queryRowArgs) != 11 {
-		t.Fatalf("args len = %d, want 11", len(f.queryRowArgs))
+	if len(f.queryRowArgs) != 12 {
+		t.Fatalf("args len = %d, want 12", len(f.queryRowArgs))
 	}
 	if f.queryRowArgs[0] != "redis-prod" {
 		t.Errorf("args[0] name = %v", f.queryRowArgs[0])
+	}
+	// created_scenario (args[11]): caller не задал поле → нормализация к дефолту `create`.
+	if f.queryRowArgs[11] != "create" {
+		t.Errorf("args[11] created_scenario = %v, want create (default)", f.queryRowArgs[11])
 	}
 	if f.queryRowArgs[1] != "redis" {
 		t.Errorf("args[1] service = %v", f.queryRowArgs[1])
@@ -424,6 +428,7 @@ func TestSelectByName_HappyPath(t *testing.T) {
 				now, now, []string{"prod"},
 				[]byte(`{"team":"dba"}`), // traits
 				any(nil), []byte(nil),    // last_drift_check_at, last_drift_summary
+				"create", // created_scenario
 			}}
 		},
 	}
@@ -479,6 +484,7 @@ func TestSelectAll_NoFilter(t *testing.T) {
 					[]byte(nil), any(nil), now, now, []string(nil),
 					[]byte("{}"), // traits
 					any(nil), []byte(nil),
+					"create", // created_scenario
 				}},
 				{values: []any{
 					"b", "redis", "v1", 1,
@@ -486,6 +492,7 @@ func TestSelectAll_NoFilter(t *testing.T) {
 					[]byte(nil), any(nil), now, now, []string(nil),
 					[]byte("{}"), // traits
 					any(nil), []byte(nil),
+					"create", // created_scenario
 				}},
 			}}, nil
 		},
@@ -1494,5 +1501,51 @@ func TestValidStatus(t *testing.T) {
 		if ValidStatus(s) {
 			t.Errorf("ValidStatus(%q) = true, want false", s)
 		}
+	}
+}
+
+// TestCreate_CreatedScenarioPassedThrough — явный CreatedScenario пишется
+// аргументом insert (механизм нескольких create: инкарнация запоминает, каким
+// стартовым сценарием создана).
+func TestCreate_CreatedScenarioPassedThrough(t *testing.T) {
+	f := &fakeDB{
+		queryRowFunc: func(_ string) pgx.Row {
+			return staticRow{values: []any{time.Now(), time.Now()}}
+		},
+	}
+	inc := &Incarnation{
+		Name: "redis-cluster", Service: "redis", ServiceVersion: "v1",
+		StateSchemaVersion: 1, Status: StatusReady,
+		CreatedScenario: "create_cluster",
+	}
+	if err := Create(context.Background(), f, inc); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if f.queryRowArgs[11] != "create_cluster" {
+		t.Errorf("args[11] created_scenario = %v, want create_cluster", f.queryRowArgs[11])
+	}
+}
+
+// TestSelectByName_ReadsCreatedScenario — created_scenario вычитывается в
+// Incarnation.CreatedScenario (round-trip scan).
+func TestSelectByName_ReadsCreatedScenario(t *testing.T) {
+	now := time.Date(2026, 6, 26, 12, 0, 0, 0, time.UTC)
+	f := &fakeDB{
+		queryRowFunc: func(_ string) pgx.Row {
+			return staticRow{values: []any{
+				"redis-cluster", "redis", "v1", 1,
+				[]byte("{}"), []byte("{}"), "ready",
+				[]byte(nil), any(nil), now, now, []string(nil),
+				[]byte("{}"), any(nil), []byte(nil),
+				"create_cluster", // created_scenario
+			}}
+		},
+	}
+	inc, err := SelectByName(context.Background(), f, "redis-cluster")
+	if err != nil {
+		t.Fatalf("SelectByName: %v", err)
+	}
+	if inc.CreatedScenario != "create_cluster" {
+		t.Errorf("CreatedScenario = %q, want create_cluster", inc.CreatedScenario)
 	}
 }

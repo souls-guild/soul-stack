@@ -31,6 +31,7 @@ func makeIncRowWithStateVersion(name, version string, state map[string]any) pgx.
 		now, now, []string(nil),
 		[]byte("{}"), // traits
 		any(nil), []byte(nil),
+		"create", // created_scenario (миграция 089, NOT NULL DEFAULT)
 	}}
 }
 

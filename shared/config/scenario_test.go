@@ -1340,3 +1340,84 @@ state_changes:
 		t.Fatalf("корректный foreach с as: sid не должен давать ошибок")
 	}
 }
+
+// --- create: top-level флаг стартового сценария (механизм нескольких create) ---
+
+// TestLoadScenarioManifest_CreateFlagTrue — `create: true` парсится в *bool и
+// CreateScenarioEnabled()==true (сценарий объявлен как стартовый/bootstrap-годный).
+func TestLoadScenarioManifest_CreateFlagTrue(t *testing.T) {
+	src := `name: create_cluster
+create: true
+tasks: []
+`
+	cfg, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	if diag.HasErrors(diags) {
+		dump(t, diags)
+		t.Fatalf("create: true должен быть валидным top-level ключом")
+	}
+	if cfg.Create == nil || *cfg.Create != true {
+		t.Fatalf("cfg.Create = %v, want *true", cfg.Create)
+	}
+	if !cfg.CreateScenarioEnabled() {
+		t.Fatalf("CreateScenarioEnabled() = false, want true")
+	}
+}
+
+// TestLoadScenarioManifest_CreateFlagFalse — `create: false` отличимо от «не задано»
+// (явный opt-out из create-набора).
+func TestLoadScenarioManifest_CreateFlagFalse(t *testing.T) {
+	src := `name: add_user
+create: false
+tasks: []
+`
+	cfg, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	if diag.HasErrors(diags) {
+		dump(t, diags)
+		t.Fatalf("create: false должен быть валидным")
+	}
+	if cfg.Create == nil || *cfg.Create != false {
+		t.Fatalf("cfg.Create = %v, want *false", cfg.Create)
+	}
+	if cfg.CreateScenarioEnabled() {
+		t.Fatalf("CreateScenarioEnabled() = true, want false")
+	}
+}
+
+// TestLoadScenarioManifest_CreateFlagAbsent — отсутствие ключа: Create==nil,
+// CreateScenarioEnabled()==false (back-compat: обычный operational-сценарий не
+// становится create-стартовым молча).
+func TestLoadScenarioManifest_CreateFlagAbsent(t *testing.T) {
+	src := `name: restart
+tasks: []
+`
+	cfg, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	if diag.HasErrors(diags) {
+		dump(t, diags)
+		t.Fatalf("отсутствие create: — валидно")
+	}
+	if cfg.Create != nil {
+		t.Fatalf("cfg.Create = %v, want nil", cfg.Create)
+	}
+	if cfg.CreateScenarioEnabled() {
+		t.Fatalf("CreateScenarioEnabled() = true для сценария без create:, want false")
+	}
+}
+
+// TestLoadScenarioManifest_CreateFlagBadType — не-bool значение `create:` → type_mismatch
+// (ключ известен struct-полю, decode-фаза ловит несовпадение типа).
+func TestLoadScenarioManifest_CreateFlagBadType(t *testing.T) {
+	src := `name: x
+create: "yes"
+tasks: []
+`
+	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	if !hasCode(diags, "type_mismatch") {
+		dump(t, diags)
+		t.Fatalf("create: \"yes\" должен дать type_mismatch (ожидается boolean)")
+	}
+	// `create:` НЕ должен ловиться как unknown_key (он известен struct-полю).
+	if hasCodeAt(diags, "unknown_key", "$.create") {
+		dump(t, diags)
+		t.Fatalf("create: не должен быть unknown_key (известное поле)")
+	}
+}

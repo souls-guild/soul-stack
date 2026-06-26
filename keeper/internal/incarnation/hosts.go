@@ -139,7 +139,7 @@ func UpdateHosts(ctx context.Context, pool TxBeginner, in UpdateHostsInput) (*Up
 SELECT name, service, service_version, state_schema_version,
        spec, state, status, status_details, created_by_aid,
        created_at, updated_at, covens, traits,
-       last_drift_check_at, last_drift_summary
+       last_drift_check_at, last_drift_summary, created_scenario
 FROM incarnation
 WHERE name = $1
 FOR UPDATE

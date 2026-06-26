@@ -1017,9 +1017,13 @@ components:
           type:
             - array
             - "null"
+        create_scenario:
+          description: имя стартового сценария (механизм нескольких create); пусто → create
+          pattern: ^[a-z][a-z0-9_]*$
+          type: string
         input:
           additionalProperties: {}
-          description: input для scenario create
+          description: input для выбранного create-сценария
           type: object
         name:
           description: имя нового instance (kebab-case), корневая Coven-метка
@@ -2436,6 +2440,8 @@ components:
     Scenario:
       additionalProperties: false
       properties:
+        create:
+          type: boolean
         description:
           type: string
         form:

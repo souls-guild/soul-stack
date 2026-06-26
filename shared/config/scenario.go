@@ -32,10 +32,32 @@ type ScenarioManifest struct {
 	Vars         map[string]any `yaml:"vars,omitempty"`
 	Tasks        []Task         `yaml:"tasks"`
 
+	// Create — опциональный флаг «сценарий годен как стартовый (bootstrap новой
+	// incarnation)». `*bool` ради различения «не задано» (nil → НЕ стартовый,
+	// обычный operational-сценарий) от явного `create: true|false`. Сервис может
+	// объявить НЕСКОЛЬКО create-сценариев (`create_standalone`, `create_cluster`),
+	// из которых оператор выбирает один при `POST /v1/incarnations`; default —
+	// сценарий с именем `create` (back-compat). Совместимо с auto-discover
+	// (ADR-029): набор create-сценариев — это подмножество auto-discover-енных
+	// `scenario/<name>/`, помеченных этим флагом. Чтение — через
+	// [ScenarioManifest.CreateScenarioEnabled] (nil-safe). `destroy` НЕ помечается
+	// этим флагом (teardown — отдельный спец-флоу DELETE).
+	Create *bool `yaml:"create,omitempty"`
+
 	// Form — опциональный презентационный слой `input:`-формы (form_layout.go):
 	// как UI группирует/подписывает поля input в секции. nil = ключа нет (UI
 	// рисует input плоско, forward-compat). Не влияет на контракт ввода/валидацию.
 	Form *FormLayout `yaml:"form,omitempty"`
+}
+
+// CreateScenarioEnabled — nil-safe чтение флага `create:`: сценарий годен как
+// стартовый (bootstrap новой incarnation) только при явном `create: true`.
+// Отсутствие ключа (nil) ИЛИ `create: false` → false: обычный operational-
+// сценарий НЕ становится create-стартовым молча (back-compat). Имя-конвенция
+// `create` (default-выбор) проверяется СЛОЕМ ВЫШЕ (keeper-резолв create-набора),
+// а не этим флагом — флаг чисто декларативен «годен/не годен».
+func (m *ScenarioManifest) CreateScenarioEnabled() bool {
+	return m != nil && m.Create != nil && *m.Create
 }
 
 // ValidateRule — одно правило top-level scenario-секции `validate:` (ADR-009

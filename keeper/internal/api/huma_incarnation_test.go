@@ -598,7 +598,7 @@ func TestHumaIncarnation_RerunCreate_SelfAudit(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	db := &incTestDB{
 		selectByName: func(name string) pgx.Row { return incRow(name, "error_locked", "{}") },
-		unlockSelect: func() pgx.Row { return staticRow2Bytes([]byte("{}"), "error_locked") },
+		unlockSelect: func() pgx.Row { return rerunSelectRow([]byte("{}"), "error_locked") },
 	}
 	incH := handlers.NewIncarnationHandler(db, &incTestStarter{}, nil, nil, &incTestResolver{ok: true}, nil, auditCap, nil, nil)
 	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
@@ -625,7 +625,7 @@ func TestHumaIncarnation_RerunCreate_NotErrorLocked_409_NoAudit(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	db := &incTestDB{
 		selectByName: func(name string) pgx.Row { return incRow(name, "ready", "{}") },
-		unlockSelect: func() pgx.Row { return staticRow2Bytes([]byte("{}"), "ready") }, // не error_locked → ErrNotErrorLocked
+		unlockSelect: func() pgx.Row { return rerunSelectRow([]byte("{}"), "ready") }, // не error_locked → ErrNotErrorLocked
 	}
 	incH := handlers.NewIncarnationHandler(db, &incTestStarter{}, nil, nil, &incTestResolver{ok: true}, nil, auditCap, nil, nil)
 	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
@@ -996,6 +996,7 @@ func incRow(name, status, state string) pgx.Row {
 		now, now, []string(nil),
 		[]byte("{}"), // traits
 		any(nil), []byte(nil),
+		"create", // created_scenario (миграция 089, NOT NULL DEFAULT)
 	}}
 }
 
@@ -1045,6 +1046,13 @@ func staticRow1Int(n int) pgx.Row                { return incStaticRow{values: [
 func staticRow1Time(t time.Time) pgx.Row         { return incStaticRow{values: []any{t}} }
 func staticRow2(a, b time.Time) pgx.Row          { return incStaticRow{values: []any{a, b}} }
 func staticRow2Bytes(b []byte, s string) pgx.Row { return incStaticRow{values: []any{b, s}} }
+
+// rerunSelectRow — FOR UPDATE-select под UnlockForRerun (state, status,
+// created_scenario; миграция 089). Отдельно от staticRow2Bytes: rerun-путь
+// сканирует ТРИ колонки, plain Unlock/Destroy — две.
+func rerunSelectRow(state []byte, status string) pgx.Row {
+	return incStaticRow{values: []any{state, status, "create"}}
+}
 
 type errRow2 struct{ err error }
 

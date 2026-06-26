@@ -66,6 +66,12 @@ type IncarnationCreateRequestInput struct {
 	// spec.traits → incarnation.traits (источник истины) + проекция в souls.traits
 	// хостов-членов. nil = «не задано» (parity legacy omitempty-декода).
 	Traits map[string]any
+	// CreateScenario — выбор стартового сценария (механизм нескольких create,
+	// Вариант A). Пустая строка → default `create` (back-compat). Непустое имя
+	// обязано входить в create-набор сервиса (scenario с `create: true`), иначе
+	// 422; выбор сохраняется в incarnation.created_scenario и rerun-create
+	// перезапускает именно его.
+	CreateScenario string
 }
 
 // IncarnationCreateReply — typed reply CreateTyped. Body — плоская доменная проекция 202-тела;
@@ -106,6 +112,12 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	var serviceRef artifact.ServiceRef
 	runScenario := h.runner != nil && h.services != nil
 	autoCreate := true
+	// createScenario — фактический стартовый сценарий (механизм нескольких create).
+	// Дефолт `create` (back-compat); при наличии loader-а валидируется выбор оператора
+	// (req.CreateScenario) на членство в create-наборе сервиса. Используется во всех
+	// фазах bootstrap-прогона (ValidateInput / PreflightAssert / runner.Start) и
+	// сохраняется в incarnation.created_scenario.
+	createScenario := scenario.CreateScenarioName
 	if runScenario {
 		ref, ok := h.services.Resolve(req.Service)
 		if !ok {
@@ -116,7 +128,20 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 		serviceVersion = ref.Ref
 
 		if h.loader != nil {
-			if err := scenario.ValidateInput(ctx, h.loader, serviceRef, scenario.CreateScenarioName, input); err != nil {
+			// Резолв+валидация выбора стартового сценария ДО ValidateInput: input
+			// валидируется против `input:`-схемы ИМЕННО выбранного сценария.
+			chosen, cerr := scenario.ValidateCreateScenarioChoice(ctx, h.loader, serviceRef, req.CreateScenario)
+			if cerr != nil {
+				if errors.Is(cerr, scenario.ErrCreateScenarioNotEligible) {
+					return zero, incProblem(problem.TypeValidationFailed, "create_scenario_invalid: "+cerr.Error())
+				}
+				h.logger.Error("incarnation.create: resolve create scenario failed",
+					slog.String("name", req.Name), slog.String("service", req.Service), slog.Any("error", cerr))
+				return zero, incProblem(problem.TypeInternalError, "resolve create scenario failed")
+			}
+			createScenario = chosen
+
+			if err := scenario.ValidateInput(ctx, h.loader, serviceRef, createScenario, input); err != nil {
 				if errors.Is(err, scenario.ErrInputInvalid) {
 					return zero, incProblem(problem.TypeValidationFailed, "input_invalid: "+err.Error())
 				}
@@ -154,7 +179,7 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 				if err := pf.PreflightAssert(ctx, scenario.RunSpec{
 					IncarnationName: req.Name,
 					ServiceRef:      serviceRef,
-					ScenarioName:    scenario.CreateScenarioName,
+					ScenarioName:    createScenario,
 					Input:           input,
 					StartedByAID:    claims.Subject,
 				}); err != nil {
@@ -199,6 +224,7 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 		CreatedByAID:       &creator,
 		Covens:             covens,
 		Traits:             traits,
+		CreatedScenario:    createScenario,
 	}
 	if err := incarnation.Create(ctx, h.db, inc); err != nil {
 		if errors.Is(err, incarnation.ErrIncarnationAlreadyExists) {
@@ -234,7 +260,7 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 			ApplyID:         applyID,
 			IncarnationName: req.Name,
 			ServiceRef:      serviceRef,
-			ScenarioName:    scenario.CreateScenarioName,
+			ScenarioName:    createScenario,
 			Input:           input,
 			StartedByAID:    claims.Subject,
 		}); err != nil {
@@ -590,16 +616,19 @@ func (h *IncarnationHandler) RerunCreateTyped(ctx context.Context, claims *jwt.C
 		}
 	}
 
+	// rerun-create перезапускает СОЗДАВШИЙ стартовый сценарий (механизм нескольких
+	// create): UnlockForRerun вернул incarnation.created_scenario под FOR UPDATE.
 	if err := h.runner.Start(ctx, scenario.RunSpec{
 		ApplyID:         applyID,
 		IncarnationName: name,
 		ServiceRef:      serviceRef,
-		ScenarioName:    scenario.CreateScenarioName,
+		ScenarioName:    res.CreatedScenario,
 		StartedByAID:    claims.Subject,
 		FromLocked:      true,
 	}); err != nil {
 		h.logger.Error("incarnation.rerun-create: scenario start failed",
-			slog.String("name", name), slog.String("apply_id", applyID), slog.Any("error", err))
+			slog.String("name", name), slog.String("apply_id", applyID),
+			slog.String("scenario", res.CreatedScenario), slog.Any("error", err))
 		return zero, incProblem(problem.TypeInternalError, "start scenario create failed")
 	}
 

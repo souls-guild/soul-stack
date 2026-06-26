@@ -1248,7 +1248,8 @@ var (
 "name":{"type":"string","pattern":"^[a-z][a-z0-9-]*$"},
 "service":{"type":"string"},
 "covens":{"type":"array","items":{"type":"string","pattern":"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"},"description":"Declared env-Coven-метки incarnation (ADR-008 amendment a). Влияют на RBAC-scope create: оператор со scoped-permission incarnation.create on coven=X может создать только incarnation с covens в своём scope."},
-"input":{"type":"object"}}}`)
+"input":{"type":"object"},
+"create_scenario":{"type":"string","pattern":"^[a-z][a-z0-9_]*$","description":"Имя стартового сценария (механизм нескольких create-сценариев). Пусто → default create. Непустое обязано входить в create-набор сервиса (scenario с create: true), иначе validation-failed; сохраняется в incarnation.created_scenario и rerun-create перезапускает его."}}}`)
 
 	schemaIncarnationRunInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",

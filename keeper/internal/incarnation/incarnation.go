@@ -90,6 +90,14 @@ type Incarnation struct {
 	// Пустой массив для incarnation без env-тегов (DEFAULT '{}').
 	Covens []string `json:"covens"`
 
+	// CreatedScenario — имя стартового сценария, которым создана incarnation
+	// (механизм нескольких create-сценариев, Вариант A; колонка
+	// incarnation.created_scenario, миграция 089). Runtime-факт: оператор
+	// выбирает его при POST /v1/incarnations (поле `create_scenario`, default
+	// `create`). rerun-create перезапускает ИМЕННО этот сценарий (а не хардкод
+	// `create`). DEFAULT 'create' — back-compat для строк до миграции.
+	CreatedScenario string `json:"created_scenario"`
+
 	// Traits — operator-set key-value метки incarnation (ADR-060 amend, R1,
 	// колонка incarnation.traits jsonb). Источник истины Trait-ов: задаётся
 	// оператором в incarnation.spec при create, проецируется МАТЕРИАЛИЗОВАННО в
