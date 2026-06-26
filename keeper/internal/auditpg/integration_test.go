@@ -193,6 +193,52 @@ func TestIntegration_PGXWriter_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestIntegration_Reader_ArchonAID_ILIKE — runtime-доказательство ILIKE-семантики
+// поиска по archon_aid: частичная подстрока в ДРУГОМ регистре («ALIC») находит
+// запись `archon-alice`. Exact-`=` (прежнее поведение) её бы не нашёл. Параллельно
+// — что несовпадающая подстрока («bob») не даёт ложных срабатываний.
+func TestIntegration_Reader_ArchonAID_ILIKE(t *testing.T) {
+	resetAuditLog(t)
+	ctx := context.Background()
+
+	w := NewWriter(integrationPool)
+	reader := NewReader(integrationPool)
+
+	// archon-alice — единственный seed-нутый FK-валидный AID (см. run()).
+	if err := w.Write(ctx, &audit.Event{
+		EventType:     audit.EventConfigReloadSucceeded,
+		Source:        audit.SourceAPI,
+		ArchonAID:     "archon-alice",
+		CorrelationID: audit.NewULID(),
+		Payload:       map[string]any{"path": "/etc/keeper.yml"},
+	}); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+
+	// Подстрока в другом регистре — должна найти (case-insensitive substring).
+	for _, q := range []string{"ALIC", "alice", "archon-", "ALICE"} {
+		rows, total, err := reader.List(ctx, ListFilter{ArchonAID: q}, 0, 50)
+		if err != nil {
+			t.Fatalf("List(ArchonAID=%q): %v", q, err)
+		}
+		if total != 1 || len(rows) != 1 {
+			t.Fatalf("ArchonAID=%q total = %d, want 1 (case-insensitive substring)", q, total)
+		}
+		if rows[0].ArchonAID == nil || *rows[0].ArchonAID != "archon-alice" {
+			t.Errorf("ArchonAID=%q matched wrong row: %v", q, rows[0].ArchonAID)
+		}
+	}
+
+	// Несовпадающая подстрока — пусто (нет ложных срабатываний).
+	_, total, err := reader.List(ctx, ListFilter{ArchonAID: "bob"}, 0, 50)
+	if err != nil {
+		t.Fatalf("List(ArchonAID=bob): %v", err)
+	}
+	if total != 0 {
+		t.Errorf("ArchonAID=bob total = %d, want 0", total)
+	}
+}
+
 func TestIntegration_PGXWriter_MaskSecrets(t *testing.T) {
 	resetAuditLog(t)
 	ctx := context.Background()

@@ -4318,7 +4318,7 @@ paths:
         - auth
   /v1/audit:
     get:
-      description: Read-only-лента audit_log с фильтрами (type/source multi-OR, archon_aid/correlation_id/payload_herald/payload_voyage exact, started_after/before RFC3339) и пагинацией. Permission audit.read. Read-only, без audit (чтение не пишется — рекурсия).
+      description: Read-only-лента audit_log с фильтрами (type/source multi-OR, archon_aid/correlation_id case-insensitive substring ILIKE, payload_herald/payload_voyage exact, started_after/before RFC3339) и пагинацией. Permission audit.read. Read-only, без audit (чтение не пишется — рекурсия).
       operationId: listAuditEvents
       parameters:
         - description: multi-value ?type=X&type=Y — exact-match OR по event_type
@@ -4351,19 +4351,19 @@ paths:
             type:
               - array
               - "null"
-        - description: AID Архонта-инициатора (exact match)
+        - description: AID Архонта-инициатора (case-insensitive substring, ILIKE)
           explode: false
           in: query
           name: archon_aid
           schema:
-            description: AID Архонта-инициатора (exact match)
+            description: AID Архонта-инициатора (case-insensitive substring, ILIKE)
             type: string
-        - description: ULID цепочки связанных событий (exact match)
+        - description: ULID цепочки связанных событий (case-insensitive substring, ILIKE)
           explode: false
           in: query
           name: correlation_id
           schema:
-            description: ULID цепочки связанных событий (exact match)
+            description: ULID цепочки связанных событий (case-insensitive substring, ILIKE)
             type: string
         - description: имя Herald-канала из payload->>'herald' (exact match)
           explode: false

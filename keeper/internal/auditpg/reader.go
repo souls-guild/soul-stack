@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -40,8 +41,11 @@ func NewReader(pool queryRower) *Reader {
 // Multi-value по convention `?type=X&type=Y` парсится handler-ом из
 // `url.Values.Get`-эквивалентного multi-getter-а (см. handler).
 type ListFilter struct {
-	Types         []string
-	Sources       []string
+	Types   []string
+	Sources []string
+	// ArchonAID / CorrelationID — case-insensitive substring (ILIKE `%val%`):
+	// оператор ищет по части AID/correlation_id в любом регистре. LIKE-метасимволы
+	// во вводе экранируются (поиск литеральный). Пусто = без фильтра.
 	ArchonAID     string
 	CorrelationID string
 	// PayloadHerald — exact-match по строковому полю `herald` в JSONB-payload
@@ -129,12 +133,12 @@ func buildAuditWhere(f ListFilter) (string, []any) {
 		conds = append(conds, "source IN ("+placeholders(&args, anyOfStrings(f.Sources))+")")
 	}
 	if f.ArchonAID != "" {
-		args = append(args, f.ArchonAID)
-		conds = append(conds, "archon_aid = $"+strconv.Itoa(len(args)))
+		args = append(args, likeContains(f.ArchonAID))
+		conds = append(conds, "archon_aid ILIKE $"+strconv.Itoa(len(args)))
 	}
 	if f.CorrelationID != "" {
-		args = append(args, f.CorrelationID)
-		conds = append(conds, "correlation_id = $"+strconv.Itoa(len(args)))
+		args = append(args, likeContains(f.CorrelationID))
+		conds = append(conds, "correlation_id ILIKE $"+strconv.Itoa(len(args)))
 	}
 	if f.PayloadHerald != "" {
 		args = append(args, f.PayloadHerald)
@@ -163,6 +167,17 @@ func buildAuditWhere(f ListFilter) (string, []any) {
 		out += c
 	}
 	return out, args
+}
+
+// likeContains оборачивает пользовательскую строку в `%…%` для ILIKE-поиска
+// «вхождение подстроки». LIKE-метасимволы (`\`/`%`/`_`) во вводе экранируются,
+// чтобы поиск оставался литеральным: оператор, набравший `%` или `_`, ищет именно
+// этот символ, а не wildcard. Значение уходит bind-параметром (инъекция исключена
+// на уровне pgx), здесь — только семантика поиска. Дефолтный escape-char ESCAPE —
+// `\`, отдельный ESCAPE-clause не нужен.
+func likeContains(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return "%" + r.Replace(s) + "%"
 }
 
 // placeholders добавляет values в args и возвращает строку плейсхолдеров

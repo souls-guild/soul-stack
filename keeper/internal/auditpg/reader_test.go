@@ -36,7 +36,7 @@ func TestBuildAuditWhere_PayloadVoyage(t *testing.T) {
 
 // TestBuildAuditWhere_VoyageDeliveryCombo — voyage-секция: correlation_id +
 // multi-type herald.delivered/failed комбинируются через AND, плейсхолдеры
-// позиционно согласованы.
+// позиционно согласованы. correlation_id — case-insensitive substring (ILIKE).
 func TestBuildAuditWhere_VoyageDeliveryCombo(t *testing.T) {
 	where, args := buildAuditWhere(ListFilter{
 		Types:         []string{"herald.delivered", "herald.failed"},
@@ -45,14 +45,56 @@ func TestBuildAuditWhere_VoyageDeliveryCombo(t *testing.T) {
 	if !strings.Contains(where, "event_type IN ($1,$2)") {
 		t.Errorf("where = %q, want event_type IN ($1,$2)", where)
 	}
-	if !strings.Contains(where, "correlation_id = $3") {
-		t.Errorf("where = %q, want correlation_id = $3", where)
+	if !strings.Contains(where, "correlation_id ILIKE $3") {
+		t.Errorf("where = %q, want correlation_id ILIKE $3", where)
 	}
 	if !strings.Contains(where, " AND ") {
 		t.Errorf("where = %q, want AND-join", where)
 	}
-	if len(args) != 3 {
-		t.Fatalf("args = %v, want 3", args)
+	if len(args) != 3 || args[2] != "%voyage-1%" {
+		t.Fatalf("args = %v, want correlation_id wrapped in %%…%%", args)
+	}
+}
+
+// TestBuildAuditWhere_ArchonAID_ILIKE — фильтр archon_aid материализуется как
+// case-insensitive substring: предикат ILIKE с bind-параметром `%val%` (НЕ
+// строковая конкатенация в SQL — %-обёртка в значении args). Ловит регресс к
+// exact `=`-семантике поиска.
+func TestBuildAuditWhere_ArchonAID_ILIKE(t *testing.T) {
+	where, args := buildAuditWhere(ListFilter{ArchonAID: "Alice"})
+	if !strings.Contains(where, "archon_aid ILIKE $1") {
+		t.Fatalf("where = %q, want archon_aid ILIKE predicate", where)
+	}
+	if len(args) != 1 || args[0] != "%Alice%" {
+		t.Fatalf("args = %v, want [%%Alice%%]", args)
+	}
+}
+
+// TestBuildAuditWhere_CorrelationID_ILIKE — фильтр correlation_id — ILIKE-
+// substring с %-обёрткой в bind-значении (параметризованный плейсхолдер).
+func TestBuildAuditWhere_CorrelationID_ILIKE(t *testing.T) {
+	where, args := buildAuditWhere(ListFilter{CorrelationID: "abc"})
+	if !strings.Contains(where, "correlation_id ILIKE $1") {
+		t.Fatalf("where = %q, want correlation_id ILIKE predicate", where)
+	}
+	if len(args) != 1 || args[0] != "%abc%" {
+		t.Fatalf("args = %v, want [%%abc%%]", args)
+	}
+}
+
+// TestLikeContains_EscapesWildcards — LIKE-метасимволы (`\`/`%`/`_`) во вводе
+// экранируются, чтобы ILIKE-поиск оставался литеральным (оператор ищет именно
+// символ `%`/`_`, а не wildcard). Защита от «`%` находит всё».
+func TestLikeContains_EscapesWildcards(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"plain", "%plain%"},
+		{"50%", `%50\%%`},
+		{"a_b", `%a\_b%`},
+		{`c\d`, `%c\\d%`},
+	} {
+		if got := likeContains(tc.in); got != tc.want {
+			t.Errorf("likeContains(%q) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }
 
@@ -84,8 +126,8 @@ func TestBuildAuditWhere_AllFilters(t *testing.T) {
 	for _, want := range []string{
 		"event_type IN ($1)",
 		"source IN ($2)",
-		"archon_aid = $3",
-		"correlation_id = $4",
+		"archon_aid ILIKE $3",
+		"correlation_id ILIKE $4",
 		"payload->>'herald' = $5",
 		"payload->>'voyage_id' = $6",
 		"created_at >= $7",
@@ -97,5 +139,8 @@ func TestBuildAuditWhere_AllFilters(t *testing.T) {
 	}
 	if len(args) != 8 {
 		t.Fatalf("args len = %d, want 8", len(args))
+	}
+	if args[2] != "%archon-alice%" || args[3] != "%voyage-1%" {
+		t.Errorf("args[2..3] = %v / %v, want %%-wrapped ILIKE values", args[2], args[3])
 	}
 }

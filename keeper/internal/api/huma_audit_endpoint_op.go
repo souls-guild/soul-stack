@@ -57,8 +57,8 @@ import (
 type auditListInput struct {
 	Types         []string  `query:"type,explode" doc:"multi-value ?type=X&type=Y — exact-match OR по event_type"`
 	Sources       []string  `query:"source,explode" enum:"signal,api,mcp,keeper_internal,soul_grpc,background,config_bootstrap" doc:"multi-value ?source=api&source=mcp — exact-match OR; значение вне enum → 422"`
-	ArchonAID     string    `query:"archon_aid" doc:"AID Архонта-инициатора (exact match)"`
-	CorrelationID string    `query:"correlation_id" doc:"ULID цепочки связанных событий (exact match)"`
+	ArchonAID     string    `query:"archon_aid" doc:"AID Архонта-инициатора (case-insensitive substring, ILIKE)"`
+	CorrelationID string    `query:"correlation_id" doc:"ULID цепочки связанных событий (case-insensitive substring, ILIKE)"`
 	PayloadHerald string    `query:"payload_herald" doc:"имя Herald-канала из payload->>'herald' (exact match)"`
 	PayloadVoyage string    `query:"payload_voyage" doc:"voyage_id из payload->>'voyage_id' (exact match)"`
 	StartedAfter  time.Time `query:"started_after" doc:"created_at >= started_after (RFC3339, включающая); bad-value → 400"`
@@ -88,7 +88,7 @@ func auditListOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/audit",
 		Summary:       "Лента audit-events (paged + фильтры)",
-		Description:   "Read-only-лента audit_log с фильтрами (type/source multi-OR, archon_aid/correlation_id/payload_herald/payload_voyage exact, started_after/before RFC3339) и пагинацией. Permission audit.read. Read-only, без audit (чтение не пишется — рекурсия).",
+		Description:   "Read-only-лента audit_log с фильтрами (type/source multi-OR, archon_aid/correlation_id case-insensitive substring ILIKE, payload_herald/payload_voyage exact, started_after/before RFC3339) и пагинацией. Permission audit.read. Read-only, без audit (чтение не пишется — рекурсия).",
 		Tags:          []string{"audit"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},
