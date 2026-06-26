@@ -4,11 +4,15 @@
   управляется СВОИМ юнитом — пакет не всегда заводит redis-sentinel.service под
   нужный конфиг. Полный юнит, не drop-in.
 
-  Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010). Путь конфига
-  фиксирован /etc/redis/sentinel.conf. .vars несёт ТОЛЬКО пути бинарей:
-    .vars.sentinel_bin — путь redis-sentinel (/usr/bin при install.method=package,
-                         /usr/local/bin при binary — где их разложил install.yml);
-    .vars.cli_bin      — путь redis-cli (для ExecStop shutdown).
+  Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010). .vars:
+    .vars.sentinel_bin   — путь redis-sentinel (/usr/bin при install.method=package,
+                           /usr/local/bin при binary — где их разложил install.yml);
+    .vars.cli_bin        — путь redis-cli (для ExecStop shutdown);
+    .vars.conf_dir       — conf-каталог (sentinel.conf лежит тут, vars.redis_conf_dir_eff);
+    .vars.sentinel_port  — sentinel-порт для ExecStop shutdown (vars.sentinel_port);
+    .vars.redis_user/.vars.redis_group — system-аккаунт сервиса (vars.redis_user/_group);
+    .vars.data_dir/.vars.log_dir/.vars.run_dir — RW-каталоги hardening (ProtectSystem
+                           =strict требует явных ReadWritePaths под фактические пути).
   Так один юнит-шаблон обслуживает обе install-ветки без дубля.
 
   Type=notify + supervised systemd в sentinel.conf: redis-sentinel остаётся
@@ -21,17 +25,17 @@ Wants=network-online.target
 
 [Service]
 Type=notify
-ExecStart={{ .vars.sentinel_bin }}/redis-sentinel /etc/redis/sentinel.conf --supervised systemd
-ExecStop={{ .vars.cli_bin }}/redis-cli -p 26379 shutdown nosave
+ExecStart={{ .vars.sentinel_bin }}/redis-sentinel {{ .vars.conf_dir }}/sentinel.conf --supervised systemd
+ExecStop={{ .vars.cli_bin }}/redis-cli -p {{ .vars.sentinel_port }} shutdown nosave
 Restart=always
-User=redis
-Group=redis
+User={{ .vars.redis_user }}
+Group={{ .vars.redis_group }}
 RuntimeDirectory=redis
 RuntimeDirectoryMode=0755
 
 # systemd-hardening (симметрично hardening drop-in redis-server).
 ProtectSystem=strict
-ReadWritePaths=/var/lib/redis /var/log/redis /var/run/redis
+ReadWritePaths={{ .vars.data_dir }} {{ .vars.log_dir }} {{ .vars.run_dir }}
 ProtectHome=yes
 PrivateTmp=yes
 ProtectKernelTunables=yes

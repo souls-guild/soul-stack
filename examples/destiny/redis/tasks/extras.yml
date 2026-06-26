@@ -37,6 +37,9 @@
     mode: "${ vars.unit_file_mode }"
     owner: "${ vars.root_owner }"
     group: "${ vars.root_group }"
+    vars:
+      # glob лог-файлов из системного лог-каталога (директива «хардкод пути → var»).
+      log_dir: "${ vars.log_dir }"
 
 # sysctl: bulk-набор kernel-параметров под Redis ОДНИМ drop-in
 # /etc/sysctl.d/30-redis.conf. БЕЗУСЛОВНО (как THP/logrotate). core.sysctl.applied

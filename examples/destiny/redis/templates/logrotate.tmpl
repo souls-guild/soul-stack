@@ -2,13 +2,13 @@
   logrotate-конфиг для лог-файлов Redis (/etc/logrotate.d/redis). Образец —
   Ansible templates/logrotate.j2 роли redis. Контекст рендера
   (docs/templating.md §3.2):
-    .vars  — пуст (ротация лог-файла под фиксированным путём, не параметризуется);
-    .self  — стабильные факты хоста (здесь не используются).
+    .vars.log_dir — системный лог-каталог redis (vars.log_dir, дефолт /var/log/redis);
+    .self         — стабильные факты хоста (здесь не используются).
   Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010).
 
-  Путь /var/log/redis/*.log синхронен logfile в redis.conf.tmpl
-  (/var/log/redis/redis-server.log) и sentinel.conf.tmpl
-  (/var/log/redis/redis-sentinel.log) — glob покрывает оба демона.
+  Glob {{ .vars.log_dir }}/*.log синхронен logfile в redis.conf.tmpl
+  ({log_dir}/redis-server.log) и sentinel.conf.tmpl ({log_dir}/redis-sentinel.log) —
+  оба демона пишут в один log_dir, glob покрывает оба.
 
   copytruncate: Redis держит лог-файл открытым и не умеет реагировать на сигнал
   пере-открытия лога, поэтому ротация копированием+усечением (а не rename+создание)
@@ -18,7 +18,7 @@
   notifempty: лог может отсутствовать (сервис не стартовал) или быть пустым —
   не ошибка.
 */}}
-/var/log/redis/*.log {
+{{ .vars.log_dir }}/*.log {
   daily
   rotate 7
   size 512M

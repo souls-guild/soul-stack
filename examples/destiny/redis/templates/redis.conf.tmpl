@@ -24,8 +24,13 @@
       users.acl в ${conf_dir}/users.acl (server.yml) — redis.conf обязан смотреть ТУДА ЖЕ,
       иначе при override conf_dir aclfile разъезжается с реальным путём.
     - daemonize/supervised/pidfile/logfile — под управление systemd-юнитом
-      redis-server (Type=notify, supervised systemd). logfile/pidfile — СИСТЕМНЫЕ
-      каталоги (/var/log/redis, /var/run/redis), вне conf_dir/data_dir-скоупа → не из vars.
+      redis-server (Type=notify, supervised systemd). pidfile/logfile — СИСТЕМНЫЕ
+      run-/log-каталоги (.vars.run_dir/.vars.log_dir, дефолт /var/run/redis,
+      /var/log/redis); каталоги вынесены в vars (vars.run_dir/vars.log_dir), basename
+      файла (redis-server.pid/.log) — имя демона, литерал.
+    - `port {{ "{{" }} .vars.port {{ "}}" }}` — well-known порт redis-server
+      (vars.redis_port, дефолт 6379). merged .vars.config ниже может переопределить
+      last-wins (напр. `port 0` при tls.only).
 
   Persistence (save/appendonly) НЕ зашита здесь: она приходит в .vars.config от
   persistence-пресета scenario (essence.persistence_presets[input.persistence]) и
@@ -48,7 +53,7 @@
   `cluster-enabled` в config: вне cluster-режима строки announce-ip нет.
 */}}
 bind {{ .self.network.primary_ip }} 127.0.0.1
-port 6379
+port {{ .vars.port }}
 protected-mode yes
 
 # Управление через systemd-юнит redis-server (пакет дистрибутива).
@@ -56,8 +61,8 @@ protected-mode yes
 # сам уведомляет systemd о готовности (Type=notify в юните).
 daemonize no
 supervised systemd
-pidfile /var/run/redis/redis-server.pid
-logfile /var/log/redis/redis-server.log
+pidfile {{ .vars.run_dir }}/redis-server.pid
+logfile {{ .vars.log_dir }}/redis-server.log
 
 # Рабочий каталог под RDB/AOF из data_dir (директива B). КРИТИЧНО: без него Redis
 # пишет дамп в `/` (read-only для redis) и зависает при рестарте; при override

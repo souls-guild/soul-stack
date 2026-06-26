@@ -140,6 +140,9 @@ func TestRedisConf_ClusterAnnounceIP_PerHost(t *testing.T) {
 				"config":   clusterConfig,
 				"data_dir": "/var/lib/redis",
 				"conf_dir": "/etc/redis",
+				"port":     6379,
+				"run_dir":  "/var/run/redis",
+				"log_dir":  "/var/log/redis",
 			},
 		}
 		out := renderRedisTmpl(t, "redis.conf.tmpl", root)
@@ -176,6 +179,9 @@ func TestRedisConf_ClusterAnnounceIP_StandaloneOmitsLine(t *testing.T) {
 			"password": "s3cr3t-redis-pass",
 			"data_dir": "/var/lib/redis",
 			"conf_dir": "/etc/redis",
+			"port":     6379,
+			"run_dir":  "/var/run/redis",
+			"log_dir":  "/var/log/redis",
 			"config": map[string]any{
 				"maxmemory":  "256mb",
 				"appendonly": "no",
@@ -227,6 +233,9 @@ func TestSentinelConf_AnnounceIP_PerHost(t *testing.T) {
 		"auth_pass":       "",
 		"data_dir":        "/var/lib/redis",
 		"conf_dir":        "/etc/redis",
+		"port":            26379,
+		"run_dir":         "/var/run/redis",
+		"log_dir":         "/var/log/redis",
 		"sentinel_config": map[string]any{},
 	}
 
@@ -284,6 +293,9 @@ func TestSentinelConf_DirectivesDeterministicOrder(t *testing.T) {
 			"auth_pass":   "",
 			"data_dir":    "/var/lib/redis",
 			"conf_dir":    "/etc/redis",
+			"port":        26379,
+			"run_dir":     "/var/run/redis",
+			"log_dir":     "/var/log/redis",
 			// Намеренно не отсортированы: range по MAP обязан отсортировать ключи.
 			"sentinel_config": map[string]any{
 				"sentinel down-after-milliseconds mymaster": "12000",
@@ -336,6 +348,9 @@ func TestSentinelConf_AuthRendered(t *testing.T) {
 			"auth_pass":       "s3cr3t-sentinel-pass",
 			"data_dir":        "/var/lib/redis",
 			"conf_dir":        "/etc/redis",
+			"port":            26379,
+			"run_dir":         "/var/run/redis",
+			"log_dir":         "/var/log/redis",
 			"sentinel_config": map[string]any{},
 		},
 	}
@@ -382,6 +397,9 @@ func TestRedisConf_Loadmodule_NoTrailingSpace(t *testing.T) {
 			"loadmodules": loadmodules,
 			"data_dir":    "/var/lib/redis",
 			"conf_dir":    "/etc/redis",
+			"port":        6379,
+			"run_dir":     "/var/run/redis",
+			"log_dir":     "/var/log/redis",
 		},
 	}
 
@@ -439,6 +457,9 @@ func TestRedisConf_Loadmodule_EmptyAndAbsent(t *testing.T) {
 			"config":   map[string]any{"maxmemory": "256mb"},
 			"data_dir": "/var/lib/redis",
 			"conf_dir": "/etc/redis",
+			"port":     6379,
+			"run_dir":  "/var/run/redis",
+			"log_dir":  "/var/log/redis",
 		}
 		if loadmodules != nil {
 			vars["loadmodules"] = loadmodules
@@ -477,6 +498,9 @@ func TestSentinelConf_AclfileSecondFile(t *testing.T) {
 			"auth_pass":       "",
 			"data_dir":        "/var/lib/redis",
 			"conf_dir":        "/opt/redis-conf", // нестандартный conf_dir — aclfile обязан следовать
+			"port":            26379,
+			"run_dir":         "/var/run/redis",
+			"log_dir":         "/var/log/redis",
 			"sentinel_config": map[string]any{},
 		},
 	}

@@ -168,40 +168,25 @@
         mode: "${ vars.unit_file_mode }"
         owner: "${ vars.root_owner }"
         group: "${ vars.root_group }"
+        # bin_dir/conf_dir/аккаунт из vars (директива «хардкод → var»): литералы
+        # /usr/local/bin, /etc/redis, redis в ExecStart/User/Group по шаблону устранены.
+        vars:
+          bin_dir:     "${ vars.redis_bin_dir }"
+          conf_dir:    "${ vars.redis_conf_dir_eff }"
+          redis_user:  "${ vars.redis_user }"
+          redis_group: "${ vars.redis_group }"
 
-    # 6. Рестарт redis-server на смену бинаря (апгрейд версии) или своего юнита.
-    #    onchanges принимает список register-ов (docs/module/core/service): рестарт
-    #    триггерится, если изменился хотя бы один. redis_server_bin несёт честный
-    #    changed от core.file.present (true только при смене байт redis-server, т.е.
-    #    реальном апгрейде); redis_cli_bin/redis_sentinel_bin добавлены для полноты
-    #    (версии трёх бинарей в одном tarball согласованы, но смена любого = повод
-    #    рестартить сервис, версии которого они часть); redis_server_unit — смена
-    #    своего systemd-юнита. Все register'ы живут В ЭТОМ файле → onchanges
-    #    резолвится per-file (cross-file линтер не отверг бы; см. шапку). Gated
-    #    ДОПОЛНИТЕЛЬНО на deploy_redis: в sentinel_only (deploy_redis=false) redis-server
-    #    не разворачивается — рестартить нечего (бинари redis-* всё равно разложены, но
-    #    как сервис не поднят; sentinel-демон рестартит sentinel.yml).
-    #    daemon-reload при смене юнита core.service делает сам перед рестартом. server.yml
-    #    рестартит на смену config/ACL/TLS/hardening — здесь ОТДЕЛЬНЫЙ триггер на
-    #    апгрейд бинаря (тот же сервис redis-server, разные источники изменения).
-    # id: стабильный адрес binary-restart — дизамбигуатор от config/hardening-restart
-    # server.yml (оба core.service.restarted name=redis-server). register у задачи нет
-    # (onchanges-only), поэтому id допустим (id ⊕ register запрещены вместе). Раньше
-    # различались when-ом, но гейт deploy_redis ушёл на include (server.yml-restart →
-    # when пуст, этот binary-restart несёт merged binary-block-when) → нужен явный якорь.
-    - name: Restart redis-server because the binary or unit changed
-      module: core.service.restarted
-      id: redis_binary_restart
-      when: "default(input.deploy_redis, true)"
-      onchanges: [redis_server_bin, redis_cli_bin, redis_sentinel_bin, redis_server_unit]
-      timeout: 30s
-      params:
-        name: "${ vars.redis_service_name }"
+    # 6. Свой systemd-юнит redis-server.service завершает binary-блок. Рестарт
+    #    redis-server на смену бинаря/юнита вынесен НИЖЕ как top-level задача — он
+    #    обязан идти ПОСЛЕ создания каталога unix-сокета (сокет нужен сервису при
+    #    старте), а сокет — top-level (нужен в обеих ветках). Внутри binary-блока
+    #    рестарт оказался бы ВЫШЕ сокета, поэтому он вынесен наружу.
 
 # ── Каталог unix-сокета (обе ветки) ─────────────────────────────────────────────
 # ТОЛЬКО если в merged-конфиге есть директива unixsocket. Пакетный systemd создаёт
-# каталог через RuntimeDirectory лишь при старте юнита (хрупко); создаём явно ДО старта,
-# но ПОСЛЕ установки (нужен пользователь/группа redis — пакет или binary-ветка их завели).
+# каталог через RuntimeDirectory лишь при старте юнита (хрупко); создаём явно ДО старта/
+# рестарта redis-server, но ПОСЛЕ установки (нужен пользователь/группа redis — пакет или
+# binary-ветка их завели; поэтому задача идёт после обоих установочных блоков).
 # Декларативное core.file.directory: idempotent по mode/owner/group, чинит дрейф,
 # dry-run. mode 0755: владелец redis пишет сокет, остальные обходят каталог; доступ к
 # сокету режет unixsocketperm (директива конфига). НЕ gated на install.method (нужен в
@@ -219,3 +204,31 @@
     owner: "${ vars.redis_user }"
     group: "${ vars.redis_group }"
     mode: "0755"
+
+# ── Рестарт redis-server на смену бинаря/юнита (binary-ветка) ────────────────────
+# onchanges принимает список register-ов (docs/module/core/service): рестарт триггерится,
+# если изменился хотя бы один. redis_server_bin несёт честный changed от core.file.present
+# (true только при смене байт redis-server, т.е. реальном апгрейде); redis_sentinel_bin
+# добавлен для полноты (версии бинарей в одном tarball согласованы, но смена sentinel-
+# бинаря = повод рестартить сервис, частью которого он идёт). redis_cli_bin В onchanges НЕ
+# входит: замена cli-бинаря не меняет рантайм redis-server и рестарта не требует.
+# redis_server_unit — смена своего systemd-юнита. Все register'ы объявлены В ЭТОМ файле
+# (binary-блок выше) → onchanges резолвится per-file (cross-file линтер не отверг бы; см.
+# шапку). Задача вынесена top-level ПОСЛЕ создания каталога сокета: при апгрейде бинаря
+# рестартующийся сервис должен застать сокет-каталог на месте. when несёт binary-гейт И
+# deploy_redis: в package-ветке register'ы binary-блока погашены static-skip-ом (changed
+# пуст → onchanges не сработает); в sentinel_only (deploy_redis=false) redis-server не
+# поднят — рестартить нечего. daemon-reload при смене юнита core.service делает сам перед
+# рестартом. server.yml рестартит на смену config/ACL/TLS/hardening — здесь ОТДЕЛЬНЫЙ
+# триггер на апгрейд бинаря (тот же сервис redis-server, разные источники изменения).
+# id: стабильный адрес binary-restart — дизамбигуатор от config/hardening-restart
+# server.yml (оба core.service.restarted name=redis-server). register у задачи нет
+# (onchanges-only), поэтому id допустим (id ⊕ register запрещены вместе).
+- name: Restart redis-server because the binary or unit changed
+  module: core.service.restarted
+  id: redis_binary_restart
+  when: "has(input.install) && has(input.install.method) && input.install.method == 'binary' && default(input.deploy_redis, true)"
+  onchanges: [redis_server_bin, redis_sentinel_bin, redis_server_unit]
+  timeout: 30s
+  params:
+    name: "${ vars.redis_service_name }"

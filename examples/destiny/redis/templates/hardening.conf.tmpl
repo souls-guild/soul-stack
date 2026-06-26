@@ -1,7 +1,10 @@
 {{/*
   systemd drop-in hardening для redis-server. Контекст рендера (docs/templating.md §3.2):
-    .vars  — пуст (статический hardening, под input не параметризуется);
-    .self  — стабильные факты хоста (здесь не используются).
+    .vars.data_dir — рабочий каталог RDB/AOF (vars.redis_data_dir_eff — следует за
+                     override data_dir оператора, ReadWritePaths под фактический путь);
+    .vars.run_dir  — run-каталог pidfile/socket (vars.run_dir, дефолт /var/run/redis);
+    .vars.log_dir  — лог-каталог (vars.log_dir, дефолт /var/log/redis);
+    .self          — стабильные факты хоста (здесь не используются).
   Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010).
 
   ПОЧЕМУ drop-in, а не свой unit. Redis ставится дистрибутивным пакетом
@@ -40,7 +43,7 @@
 [Service]
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/var/lib/redis /var/run/redis /var/log/redis
+ReadWritePaths={{ .vars.data_dir }} {{ .vars.run_dir }} {{ .vars.log_dir }}
 ProtectHome=yes
 PrivateTmp=yes
 ProtectKernelTunables=yes

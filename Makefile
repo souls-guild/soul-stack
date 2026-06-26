@@ -706,33 +706,39 @@ lint: build
 	@echo "lint: корпус examples/ валиден"
 
 # L0-испытания (soul-trial, ADR-023): render-only, герметичные. Гоняем рекурсивно
-# по КАЖДОМУ сервису examples/service/<svc> с хотя бы одним tests/<case>/case.yml.
-# Бинарь soul-trial собирается в рамках `build` (зависимость). Раньше эти кейсы
-# жили ВНЕ гейта (`make lint` = только soul-lint-схема, `make test` = go test) —
-# поэтому сломанные ассерты (напр. off-by-5 индексы add_node после sentinel-слайса)
-# оставались зелёными. Теперь гейт реально исполняет L0.
+# по КАЖДОМУ корпус-каталогу examples/service/<svc> И examples/destiny/<svc> с хотя
+# бы одним tests/<case>/case.yml (soul-trial сам ищет case.yml рекурсивно, в т.ч.
+# под _trial/scenario/.../tests/). Бинарь soul-trial собирается в рамках `build`
+# (зависимость). Раньше эти кейсы жили ВНЕ гейта (`make lint` = только soul-lint-
+# схема, `make test` = go test) — поэтому сломанные ассерты (напр. off-by-5 индексы
+# add_node после sentinel-слайса) оставались зелёными. Теперь гейт реально исполняет
+# L0. До 2026-06-26 обходились ТОЛЬКО examples/service/ — destiny-корпус (node-exporter
+# и др. с _trial-кейсами) выпадал из гейта; теперь покрыт.
 #
 # L2 (stand-based, требуют поднятый стенд) harness пропускает сам — в гейт не
-# тащим; ценность гейта — service-level L0 render-инварианты.
+# тащим; ценность гейта — L0 render-инварианты.
 #
-# Skip-list ($(TRIAL_SKIP)) печатается ГРОМКО per-service: исключение видно в логе,
-# не маскирует регресс. Сервис без case.yml тихо пропускается (нечего гонять).
+# Skip-list ($(TRIAL_SKIP)) печатается ГРОМКО per-каталог: исключение видно в логе,
+# не маскирует регресс. Каталог без case.yml тихо пропускается (нечего гонять).
 trial: build
-	@for svc in examples/service/*/; do \
-		name=$$(basename "$$svc"); \
-		skip=""; \
-		for s in $(TRIAL_SKIP); do [ "$$s" = "$$name" ] && skip=1; done; \
-		if [ -n "$$skip" ]; then \
-			echo "SKIP trial $$name (в TRIAL_SKIP — pre-existing L0-drift, см. Makefile-комментарий)"; \
-			continue; \
-		fi; \
-		if ! find "$$svc" -name case.yml | grep -q .; then \
-			continue; \
-		fi; \
-		echo "soul-trial run $$svc"; \
-		$(TRIAL_BIN) run "$$svc" || exit 1; \
+	@for root in examples/service examples/destiny; do \
+		for svc in "$$root"/*/; do \
+			[ -d "$$svc" ] || continue; \
+			name=$$(basename "$$svc"); \
+			skip=""; \
+			for s in $(TRIAL_SKIP); do [ "$$s" = "$$name" ] && skip=1; done; \
+			if [ -n "$$skip" ]; then \
+				echo "SKIP trial $$name (в TRIAL_SKIP — pre-existing L0-drift, см. Makefile-комментарий)"; \
+				continue; \
+			fi; \
+			if ! find "$$svc" -name case.yml | grep -q .; then \
+				continue; \
+			fi; \
+			echo "soul-trial run $$svc"; \
+			$(TRIAL_BIN) run "$$svc" || exit 1; \
+		done; \
 	done
-	@echo "trial: L0-испытания корпуса examples/service/ пройдены"
+	@echo "trial: L0-испытания корпуса examples/service/ + examples/destiny/ пройдены"
 
 # --- Нагрузочное тестирование (soul-legion) ---
 # Однокнопочный прогон нагрузочного генератора soul-legion (tests/load/, ADR-004:

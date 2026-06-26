@@ -148,6 +148,12 @@
       # переопределяет под свой storage; при дефолте рендер бит-в-бит прежний.
       conf_dir: "${ vars.redis_conf_dir_eff }"
       data_dir: "${ vars.redis_data_dir_eff }"
+      # port/run_dir/log_dir из vars (директива «хардкод → var»): well-known порт
+      # 6379 (merged config может переопределить last-wins), системные каталоги
+      # pidfile/logfile (/var/run/redis, /var/log/redis) — литералы по шаблону устранены.
+      port:     "${ vars.redis_port }"
+      run_dir:  "${ vars.run_dir }"
+      log_dir:  "${ vars.log_dir }"
       # Директивы loadmodule — отдельной секцией шаблона (НЕ ключи config-map: range
       # `{{key}} {{value}}` дал бы хвостовой пробел у loadmodule без значения).
       # ★ ДИРЕКТИВА «модули ВСЕГДА ВСЕ»: version-guard (vars.redis_is_v8plus) и путь
@@ -182,8 +188,13 @@
 # фактические каталоги записи redis (data-dir/socket/pid/log). register — чтобы
 # реактивно дернуть рестарт только при изменении (daemon-reload core.service делает
 # сам перед рестартом). Подробности — в шаблоне.
+# ★ ТОЛЬКО package-install: drop-in мержится в ДИСТРИБУТИВНЫЙ юнит (override). При
+# binary-install свой юнит редис-сервера рендерится в install.yml уже с hardening —
+# дистрибутивного юнита нет, override-у нечего покрывать. Гейт — та же форма, что
+# package-ветка install.yml (install не передан / method не задан / method=='package').
 - name: Render redis-server systemd hardening drop-in
   module: core.file.rendered
+  when: "!has(input.install) || !has(input.install.method) || input.install.method == 'package'"
   register: redis_hardening
   params:
     path: "${ vars.systemd_dir + '/' + vars.redis_service_name + '.service.d/hardening.conf' }"
@@ -191,6 +202,13 @@
     mode: "${ vars.unit_file_mode }"
     owner: "${ vars.root_owner }"
     group: "${ vars.root_group }"
+    # ReadWritePaths из vars (директива «хардкод → var»): data_dir следует за
+    # override оператора (раньше литерал /var/lib/redis расходился бы с фактическим
+    # каталогом), run_dir/log_dir — системные каталоги socket/pid/log.
+    vars:
+      data_dir: "${ vars.redis_data_dir_eff }"
+      run_dir:  "${ vars.run_dir }"
+      log_dir:  "${ vars.log_dir }"
 
 # core.service redis-server running/restarted. sentinel_only (deploy_redis=false)
 # сервис redis-server НЕ держит — весь файл group-drop (include-when ложно).
@@ -229,8 +247,12 @@
 # инвариант, что у node-exporter: install-register живёт рядом с рестартом).
 # Поэтому binary-ветка несёт СВОЙ рестарт redis-server в install.yml. Порядок
 # гарантирован позицией задач.
+# ★ ТОЛЬКО package-install (см. гейт hardening drop-in выше): в binary-ветке drop-in
+# не рендерится → redis_hardening не меняется → рестарт-на-hardening не нужен (свой
+# binary-юнит несёт hardening сразу, его рестарт — в install.yml).
 - name: Restart redis-server because the systemd hardening drop-in changed
   module: core.service.restarted
+  when: "!has(input.install) || !has(input.install.method) || input.install.method == 'package'"
   onchanges: [redis_hardening]
   timeout: 30s
   params:

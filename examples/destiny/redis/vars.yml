@@ -42,6 +42,15 @@ redis_group: redis
 redis_service_name:    redis-server
 sentinel_service_name: redis-sentinel
 
+# ── Дефолтные порты (директива «хардкод порта → var») ───────────────────────────
+# ИНВАРИАНТ (vars, не input): well-known порт redis-server (6379) и redis-sentinel
+# (26379). redis.conf печатает `port 6379` ПЕРВОЙ строкой (merged config от scenario
+# может переопределить last-wins — напр. `port 0` при tls.only); sentinel.conf —
+# `port 26379`; ExecStop redis-sentinel.service шлёт shutdown на этот же sentinel-порт.
+# Это дефолт кирпича, не operator-input (TLS-порт — отдельно в input.tls.port).
+redis_port:    6379
+sentinel_port: 26379
+
 # ── Базовые пути host-layout (директива B: инвариантные базовые пути → vars) ────
 # ИНВАРИАНТ (vars, не input): системные каталоги распаковки конфигурации Redis,
 # ОДИНАКОВЫЕ для всех incarnation. Конкретные файлы выводятся из этих баз в задачах
@@ -108,10 +117,29 @@ redis_src_dir:         "${ '/tmp/redis-' + vars.redis_install_ver }"
 # строят путь из vars.redis_service_name.
 systemd_dir: /etc/systemd/system
 
+# ── Системные run-/log-каталоги Redis (директива «хардкод пути → var») ──────────
+# ИНВАРИАНТ (vars, не input): системные каталоги runtime-состояния (pidfile/unix-сокет)
+# и логов redis-server/redis-sentinel. ОДИНАКОВЫ для всех incarnation, привязаны к
+# host-layout пакета/systemd (не storage-выбор оператора как conf_dir/data_dir) →
+# не operator-переопределяемое. Один источник правды: redis.conf/sentinel.conf
+# (pidfile/logfile), оба .service-юнита (ReadWritePaths), redis-sentinel.service
+# (RuntimeDirectory), logrotate (glob лог-файлов), hardening drop-in (ReadWritePaths)
+# собирают пути из ЭТИХ vars — литералы /var/run/redis, /var/log/redis по шаблонам
+# устранены. Вынос сохраняет рендер бит-в-бит (те же пути).
+
+# Run-каталог redis: pidfile (redis-server.pid/redis-sentinel.pid) и unix-сокет.
+# RuntimeDirectory=redis у systemd-юнита создаёт именно /var/run/redis. socket_dir
+# ниже ссылается сюда (var→var) — каталог сокета и run-каталог совпадают, один литерал.
+run_dir: /var/run/redis
+
+# Лог-каталог redis: logfile redis-server.log/redis-sentinel.log (redis.conf/
+# sentinel.conf), glob *.log в logrotate.d, ReadWritePaths логов в hardening/юнитах.
+log_dir: /var/log/redis
+
 # Каталог unix-сокета redis. core.file.directory создаёт его в обеих ветках, когда в
-# merged-конфиге есть директива unixsocket (см. install.yml). Совпадает с дефолтным
-# unixsocket-путём, который scenario передаёт в config.
-socket_dir: /var/run/redis
+# merged-конфиге есть директива unixsocket (см. install.yml). Совпадает с run-каталогом
+# (pidfile/socket — один системный каталог) → var→var на run_dir, один источник правды.
+socket_dir: "${ vars.run_dir }"
 
 # ── Каталог Redis-модулей и полный набор (директива C: модули ВСЕГДА ВСЕ) ───────
 # ИНВАРИАНТ (vars, не input): фиксированная таблица алиас→имя .so-файла Redis-модулей.

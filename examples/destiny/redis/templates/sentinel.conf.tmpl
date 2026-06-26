@@ -2,7 +2,8 @@
   sentinel.conf для redis-sentinel-демона (режим sentinel). Образец —
   Ansible templates/sentinel.conf.j2 роли redis. Контекст рендера
   (docs/templating.md §3.2):
-    .vars  — явно переданные core.file.rendered (sentinel_config, monitor, auth, data_dir).
+    .vars  — явно переданные core.file.rendered (sentinel_config, monitor, auth,
+             data_dir/conf_dir, port/run_dir/log_dir — каталоги/порт из vars).
     .self  — стабильные факты ЭТОГО хоста; primary_ip нужен для announce-ip.
   Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010).
 
@@ -19,16 +20,17 @@
   Содержит startup-only директивы (dir/loglevel/down-after-milliseconds/...);
   monitor/auth выносятся ОТДЕЛЬНЫМИ строками ниже (для них нужно имя master + quorum).
 */}}
-port 26379
+port {{ .vars.port }}
 
 # Под управление systemd-юнитом redis-sentinel (Type=notify, supervised systemd).
 daemonize no
 supervised systemd
-pidfile /var/run/redis/redis-sentinel.pid
-logfile /var/log/redis/redis-sentinel.log
+pidfile {{ .vars.run_dir }}/redis-sentinel.pid
+logfile {{ .vars.log_dir }}/redis-sentinel.log
 # Рабочий каталог из data_dir (директива B): sentinel пишет сюда свой state.
-# logfile/pidfile — системные каталоги (вне conf_dir/data_dir-скоупа). Дефолт
-# /var/lib/redis (vars.redis_data_dir).
+# pidfile/logfile — системные run-/log-каталоги (.vars.run_dir/.vars.log_dir, дефолт
+# /var/run/redis, /var/log/redis); basename (redis-sentinel.pid/.log) — имя демона.
+# port — well-known sentinel-порт (.vars.port, vars.sentinel_port, дефолт 26379).
 dir {{ .vars.data_dir }}
 
 # ВТОРОЙ aclfile — ТОЛЬКО для sentinel-демона (системные юзеры с sentinel-командами,

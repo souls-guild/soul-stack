@@ -101,6 +101,9 @@ assert:
             # отсутствуют/= дефолт → deepEqualJSON render_context FAIL.
             conf_dir: /opt/redis
             data_dir: /srv/redis-data
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
             loadmodules:
               - /srv/redis-data/modules/redisbloom.so
               - /srv/redis-data/modules/rejson.so

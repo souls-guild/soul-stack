@@ -6,9 +6,12 @@
   hardening.conf) ложится поверх ЭТОГО юнита, и core.service redis-server рестарт
   работает В ОБЕИХ install-ветках без ветвления.
 
-  Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010). .vars/.self
-  юнит не использует (статичен): путь конфига фиксирован /etc/redis/redis.conf,
-  бинарь — /usr/local/bin/redis-server (install.yml разложил его туда core.file.present src:).
+  Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010). .vars:
+    .vars.bin_dir   — каталог бинарей binary-ветки (vars.redis_bin_dir, /usr/local/bin —
+                      install.yml разложил redis-server/redis-cli туда core.file.present src:);
+    .vars.conf_dir  — conf-каталог (redis.conf лежит тут, vars.redis_conf_dir_eff);
+    .vars.redis_user/.vars.redis_group — system-аккаунт сервиса (vars.redis_user/_group).
+  .self юнит не использует.
 
   Type=notify + supervised systemd в redis.conf (redis.conf.tmpl: supervised systemd):
   redis-server остаётся foreground-процессом и сам уведомляет systemd о готовности —
@@ -26,11 +29,11 @@ Wants=network-online.target
 
 [Service]
 Type=notify
-ExecStart=/usr/local/bin/redis-server /etc/redis/redis.conf --supervised systemd
-ExecStop=/usr/local/bin/redis-cli shutdown nosave
+ExecStart={{ .vars.bin_dir }}/redis-server {{ .vars.conf_dir }}/redis.conf --supervised systemd
+ExecStop={{ .vars.bin_dir }}/redis-cli shutdown nosave
 Restart=always
-User=redis
-Group=redis
+User={{ .vars.redis_user }}
+Group={{ .vars.redis_group }}
 RuntimeDirectory=redis
 RuntimeDirectoryMode=0755
 
