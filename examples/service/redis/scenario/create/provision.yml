@@ -1,0 +1,75 @@
+# Ветка create — cloud-provision (ADR-061, Вариант A: один create-прогон поднимает VM
+# И деплоит redis). Подключается из main.yml через CONDITIONAL-INCLUDE СТРОГО ПЕРЕД
+# cluster/sentinel: `when: has(input.provision) && input.provision.enabled` стоит НА
+# include — при enabled=false / опущенной секции весь файл placeholder-skip (object-
+# input не статичен → не group-drop, но шаги не таргетят никого), при enabled=true
+# раскрывается в плоский список.
+#
+# Поток (целевой сценарий ADR-061): (а) core.cloud.created создаёт VM под топологию;
+# (б) keeper.push доставляет per-VM bootstrap-токен (иллюстративный шаг); (в)
+# core.soul.registered регистрирует созданные SID, БЛОКИРУЮЩЕ ждёт онбординга
+# (await_online) и помечает шаг refresh_soulprint → scenario-runner пере-резолвит roster
+# ПЕРЕД cluster/sentinel-веткой (live-снимок online-набора). Без этого cluster/sentinel
+# увидели бы пустой/старый soulprint.hosts (созданные VM ещё не в roster-е).
+#
+# ★ ЧИСЛО VM — ИЗ ТОПОЛОГИИ (единственный источник истины размера кластера):
+#   - cluster:  shards*(1+replicas_per_master) (мастера + реплики на каждый шард);
+#   - sentinel: 1+replicas_per_master           (один master + реплики).
+# Отдельного node_count в input.provision НЕТ намеренно — он рассинхронился бы с
+# size-guard веток (assert size(soulprint.hosts) == та же формула). Образец флоу —
+# examples/service/example-cloud-bootstrap/scenario/create/main.yml.
+#
+# ★ teardown (destroy) — НЕ здесь (отдельный сценарий).
+
+# (а) Создание VM через CloudDriver (on: keeper, ADR-017). count выводится из топологии
+#     по input.redis_type. generate_userdata: true (ADR-017(h) B-flat): Keeper рендерит
+#     cloud-init из keeper.yml::cloud_init (CA + soul-binary URL); userdata НЕ несёт
+#     токены. Per-VM bootstrap-токен попадает в register.provision.hosts[].bootstrap_token
+#     (plain one-time, маскируется audit.MaskSecrets на всех выходах).
+- name: Provision VMs for the redis topology (cloud-init bootstrap)
+  on: keeper
+  module: core.cloud.created
+  register: provision
+  params:
+    provider: "${ input.provision.provider }"
+    profile:  "${ input.provision.profile }"
+    # count = размер кластера по топологии: cluster shards*(1+replicas); sentinel 1+replicas.
+    # int() унифицирует числовой тип (YAML→uint64 в L0, JSON→double в проде). ОДНОСТРОЧНЫЙ
+    # quoted-string (НЕ block-scalar `>-`): goccy парсит block-scalar как LiteralNode, а
+    # CEL-wrapped-skip param-type-check (module_params.go) ловит только StringNode → int-
+    # param `count` ложно реджектился бы как param_type_mismatch на folded-форме.
+    count: "${ (input.redis_type == 'cluster') ? int(input.shards) * (1 + int(input.replicas_per_master)) : 1 + int(input.replicas_per_master) }"
+    generate_userdata: true
+
+# (б) Доставка per-VM bootstrap-токена по SSH (иллюстративный шаг, как в
+#     example-cloud-bootstrap — render-only). Берёт hosts из register предыдущего шага;
+#     реальный контракт модуля доставки — docs/keeper/push.md. require: provision —
+#     токены приходят из его register.
+- name: Deliver per-VM bootstrap token over SSH
+  on: keeper
+  module: keeper.push.applied
+  params:
+    hosts: "${ register.provision.hosts }"
+  require:
+    - provision
+
+# (в) Регистрация созданных SID + БЛОКИРУЮЩИЙ барьер онбординга + refresh_soulprint
+#     (on: keeper, core.soul.registered, ADR-061). sid — СПИСОК из register.provision.hosts
+#     (h.sid каждой созданной VM; список приходит CEL-выражением, list-SID ADR-061). coven —
+#     корневой incarnation.name (роль таргетится по нему). await_online:true → шаг ждёт,
+#     пока созданные Souls станут online (Redis SID-lease), под await_timeout; B1-strict:
+#     недобор кворума → шаг failed → state не коммитится → error_locked. refresh_soulprint:
+#     true → после успеха roster пере-резолвится, cluster/sentinel-ветка видит online-набор.
+#     await_timeout: input.provision.await_timeout → essence.provision_await_timeout → '10m'.
+- name: Register provisioned VMs and await their onboarding
+  on: keeper
+  module: core.soul.registered
+  register: onboarded
+  require:
+    - provision
+  params:
+    sid:               "${ register.provision.hosts.map(h, h.sid) }"
+    coven:             ["${ incarnation.name }"]
+    await_online:      true
+    await_timeout:     "${ default(input.provision.await_timeout, default(essence.provision_await_timeout, '10m')) }"
+    refresh_soulprint: true

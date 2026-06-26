@@ -1,0 +1,15 @@
+name: preserves-existing-provision
+description: >
+  Идемпотентность: инкарнация, у которой provision-поля УЖЕ есть (повторный
+  прогон миграции / inline-seed), сохраняет их значения как есть (has()-guard
+  возвращает текущее значение, не перезатирает default-ом).
+
+state_before:
+  redis_type: "cluster"
+  provisioned_vm_ids: ["vm-aaa", "vm-bbb", "vm-ccc"]
+  provisioned_provider: "aws-prod"
+
+state_after:
+  redis_type: "cluster"
+  provisioned_vm_ids: ["vm-aaa", "vm-bbb", "vm-ccc"]
+  provisioned_provider: "aws-prod"

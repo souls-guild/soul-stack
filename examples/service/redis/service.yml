@@ -1,5 +1,5 @@
 name: redis
-state_schema_version: 6
+state_schema_version: 7
 description: >-
   Redis по концепции Ansible-роли: ОДИН сервис на режимы развёртывания
   (redis_type ∈ sentinel/cluster). Per-host install + render redis.conf делает
@@ -21,7 +21,7 @@ description: >-
   бинарного дистрибутива (Шаг B припаркован)
   (redis-консолидация .pm/tasks/2026-06-22-redis-consolidation).
 
-# state_schema_version = 6: цепочка миграций forward-only (ADR-019).
+# state_schema_version = 7: цепочка миграций forward-only (ADR-019).
 #   - 001_to_002 (migrations/001_to_002.yml): redis_users из списка имён в map
 #     name → {perms, state} (демо-грамматики DSL — rename + set + foreach + delete).
 #   - 002_to_003 (migrations/002_to_003.yml): «richer state» — opaque redis_config
@@ -46,6 +46,13 @@ description: >-
 #     зарегистрирован и НЕ нужен. Порядок массива в state НЕ детерминирован (.map()
 #     над Go-map не сортирует) — детерминизм итогового ACL даёт sorted-range по MAP в
 #     users.acl.tmpl, НЕ порядок элементов state. Пустой/отсутствующий map → пустой массив.
+#   - 006_to_007 (migrations/006_to_007.yml): cloud-provision read-model (ADR-061,
+#     Вариант A: create поднимает VM в том же прогоне). state ДОПОЛНЯЕТСЯ полями
+#     provisioned_vm_ids (array string — provider-vm-id созданных VM, day-2 teardown
+#     читает их для destroy) и provisioned_provider (string — имя cloud-Provider).
+#     Существующим инкарнациям (развёрнутым БЕЗ provision) — консервативный default:
+#     provisioned_vm_ids=[] и provisioned_provider='' (не провиженные нашим сервисом).
+#     ДВА плоских set (поля независимы) — has()-guard back-compat для инкарнаций без них.
 # incarnation.state фиксирует, что развёрнуто, чтобы оператор видел инсталляцию и
 # повторный apply был idempotent.
 #
@@ -147,6 +154,19 @@ state_schema:
       type: object
       additionalProperties:
         type: string
+
+    # ── cloud-provision read-model (v7, ADR-061) ──────────────────────────────
+    # ФАКТ «эти хосты подняты нашим create-прогоном через cloud-create». Заполняется
+    # create ТОЛЬКО когда input.provision.enabled (provider/vm_ids из register
+    # core.cloud.created); иначе [] / '' (хосты не провиженные сервисом — declared
+    # roster). day-2 teardown читает provisioned_vm_ids для core.cloud.destroyed.
+    # provider — имя cloud-Provider в реестре (для того же destroy-вызова).
+    provisioned_vm_ids:
+      type: array
+      items:
+        type: string
+    provisioned_provider:
+      type: string
 
     # ── Топология (counts, v3) ────────────────────────────────────────────────
     # Раскладка ролей по таргетированным souls. Из input.shards/replicas/
