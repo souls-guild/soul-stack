@@ -1,0 +1,74 @@
+# L0-кейс: под-опции коллекторов (collector_options, формат B1).
+#
+# Доказывает CEL-проброс input.collector_options нативным типом (map<string,
+# map<string,string>>) в render_context.vars основного unit-шага (core.file.
+# rendered кладёт CEL-собранные vars в render_context). Сам двойной range по
+# ОТСОРТИРОВАННЫМ ключам (детерминизм флагов ExecStart) исполняется text/template-
+# фазой и покрыт unit-тестом keeper/internal/render
+# (TestNodeExporterService_CollectorOptionsDeterministic) — L0 text/template не
+# гоняет, поэтому здесь фиксируется только корректная доставка map в render_context.
+#
+# render_context сверяется deep-equal целиком (harness), поэтому vars перечислены
+# полностью (как listen-non10); ключевая величина — collector_options. Insertion-
+# порядок ключей намеренно не-лексикографичен — детерминизм рендера обеспечивается
+# range-фазой, не порядком в этом фикстуре.
+name: node-exporter renders collector sub-options (collector_options map)
+
+fixtures:
+  default_destiny_source: "file://../../{name}"
+  input:
+    version: "1.9.0"
+    collectors: [smartmon]
+    collector_options:
+      systemd:
+        unit-include: ".+\\.service"
+        enable-restarts-metrics: "true"
+      cpu:
+        info: "true"
+  soulprint:
+    os:
+      arch: amd64
+    network:
+      primary_ip: "10.0.0.5"
+
+assert:
+  task_present:
+    # Основной unit-шаг (дизамбигуатор — path). collector_options доехал в
+    # render_context.vars нативным map'ом, ключ-в-ключ.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/systemd/system/node_exporter.service
+        template_content: "<present>"
+        render_context:
+          vars:
+            exporter_bin: /usr/local/bin/node_exporter
+            listen: "10.0.0.5:9100"
+            textfile_dir: /var/lib/node_exporter
+            user: node_exporter
+            group: node_exporter
+            gomaxprocs: 0
+            disabled_collectors: []
+            enabled_collectors: []
+            collector_options:
+              systemd:
+                unit-include: ".+\\.service"
+                enable-restarts-metrics: "true"
+              cpu:
+                info: "true"
+            log_level: info
+            log_format: logfmt
+            web_telemetry_path: "/metrics"
+            fs_mount_points_exclude: ""
+            netdev_device_exclude: ""
+          self:
+            choirs: []
+            traits: {}
+            covens: [apply]
+            network:
+              primary_ip: "10.0.0.5"
+            os:
+              arch: amd64
+            role: ""
+            sid: trial-host
+          role: ""
+          essence: {}

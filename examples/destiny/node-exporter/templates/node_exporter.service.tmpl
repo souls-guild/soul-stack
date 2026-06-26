@@ -3,8 +3,10 @@
     .vars  — явно переданные core.file.rendered (exporter_bin — готовый путь
              бинаря из vars.bin_path, user, group, listen, textfile_dir);
              прод-параметры демона: gomaxprocs (int), disabled_collectors /
-             enabled_collectors (list<string>), log_level, log_format,
-             fs_mount_points_exclude, netdev_device_exclude (string);
+             enabled_collectors (list<string>), collector_options
+             (map<string,map<string,string>>), log_level, log_format,
+             web_telemetry_path, fs_mount_points_exclude,
+             netdev_device_exclude (string);
     .self  — стабильные факты хоста (здесь не используются).
   Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010).
 
@@ -40,10 +42,12 @@ Group={{ .vars.group }}
 ExecStart={{ .vars.exporter_bin }} \
     --collector.textfile.directory={{ .vars.textfile_dir }} \
     --web.listen-address={{ .vars.listen }} \
+    --web.telemetry-path={{ .vars.web_telemetry_path }} \
     --log.level={{ .vars.log_level }} \
     --log.format={{ .vars.log_format }}{{ range .vars.disabled_collectors }} \
     --no-collector.{{ . }}{{ end }}{{ range .vars.enabled_collectors }} \
-    --collector.{{ . }}{{ end }}{{ if gt (int .vars.gomaxprocs) 0 }} \
+    --collector.{{ . }}{{ end }}{{ range $name, $opts := .vars.collector_options }}{{ range $k, $v := $opts }} \
+    --collector.{{ $name }}.{{ $k }}={{ $v }}{{ end }}{{ end }}{{ if gt (int .vars.gomaxprocs) 0 }} \
     --runtime.gomaxprocs={{ .vars.gomaxprocs }}{{ end }}{{ if .vars.fs_mount_points_exclude }} \
     --collector.filesystem.mount-points-exclude={{ .vars.fs_mount_points_exclude }}{{ end }}{{ if .vars.netdev_device_exclude }} \
     --collector.netdev.device-exclude={{ .vars.netdev_device_exclude }}{{ end }}

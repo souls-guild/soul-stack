@@ -62,8 +62,12 @@
       gomaxprocs:              "${ input.gomaxprocs }"
       disabled_collectors:     "${ input.disabled_collectors }"
       enabled_collectors:      "${ input.enabled_collectors }"
+      # collector_options — map<string,map<string,string>> нативным типом (вся
+      # ячейка = один ${…} → ADR-010 non-string), как enabled/disabled_collectors.
+      collector_options:       "${ input.collector_options }"
       log_level:               "${ input.log_level }"
       log_format:              "${ input.log_format }"
+      web_telemetry_path:      "${ input.web_telemetry_path }"
       fs_mount_points_exclude: "${ input.fs_mount_points_exclude }"
       netdev_device_exclude:   "${ input.netdev_device_exclude }"
 

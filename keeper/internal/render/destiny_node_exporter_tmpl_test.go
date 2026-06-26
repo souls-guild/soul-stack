@@ -55,12 +55,15 @@ func TestNodeExporterTemplates_ParseAndRender(t *testing.T) {
 			"listen":       "127.0.0.1:9100",
 			"textfile_dir": "/var/lib/node_exporter",
 			// Прод-параметры демона (node_exporter.service.tmpl §коммент): дефолты,
-			// при которых опц. флаги опускаются, а log.* подставляются всегда.
+			// при которых опц. флаги опускаются, а log.*/web.telemetry-path
+			// подставляются всегда.
 			"gomaxprocs":              int64(0),
 			"disabled_collectors":     []any{},
 			"enabled_collectors":      []any{},
+			"collector_options":       map[string]any{},
 			"log_level":               "info",
 			"log_format":              "logfmt",
+			"web_telemetry_path":      "/metrics",
 			"fs_mount_points_exclude": "",
 			"netdev_device_exclude":   "",
 		},
@@ -106,12 +109,15 @@ var nodeExporterRenderVars = map[string]any{
 		"listen":       "127.0.0.1:9100",
 		"textfile_dir": "/var/lib/node_exporter",
 		// Прод-параметры демона (node_exporter.service.tmpl §коммент): дефолты,
-		// при которых опц. флаги опускаются, а log.* подставляются всегда.
+		// при которых опц. флаги опускаются, а log.*/web.telemetry-path
+		// подставляются всегда.
 		"gomaxprocs":              int64(0),
 		"disabled_collectors":     []any{},
 		"enabled_collectors":      []any{},
+		"collector_options":       map[string]any{},
 		"log_level":               "info",
 		"log_format":              "logfmt",
+		"web_telemetry_path":      "/metrics",
 		"fs_mount_points_exclude": "",
 		"netdev_device_exclude":   "",
 	},
@@ -171,6 +177,8 @@ func TestNodeExporterTemplates_HardeningContent(t *testing.T) {
 				"NoNewPrivileges=yes",
 				"--web.listen-address=",
 				"--collector.textfile.directory=",
+				// web.telemetry-path рендерится ВСЕГДА (дефолт непустой /metrics).
+				"--web.telemetry-path=/metrics",
 			},
 		},
 		{
@@ -240,5 +248,110 @@ func TestNodeExporterTemplates_HardeningContent(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// renderNodeExporterServiceWithVars рендерит основной node_exporter.service.tmpl
+// с подменой части .vars (поверх дефолтного суперсета): нужен content-тестам,
+// варьирующим collector_options/web_telemetry_path. Базовый набор —
+// nodeExporterRenderVars; overrides мёрджатся в его .vars-подмапу.
+func renderNodeExporterServiceWithVars(t *testing.T, overrides map[string]any) string {
+	t.Helper()
+	engine, err := tmpl.New()
+	if err != nil {
+		t.Fatalf("tmpl.New: %v", err)
+	}
+	base := nodeExporterRenderVars["vars"].(map[string]any)
+	vars := make(map[string]any, len(base)+len(overrides))
+	for k, v := range base {
+		vars[k] = v
+	}
+	for k, v := range overrides {
+		vars[k] = v
+	}
+	root := map[string]any{
+		"vars":    vars,
+		"self":    nodeExporterRenderVars["self"],
+		"role":    nodeExporterRenderVars["role"],
+		"essence": nodeExporterRenderVars["essence"],
+	}
+	body, err := os.ReadFile(filepath.Join(nodeExporterTemplatesDir, "node_exporter.service.tmpl"))
+	if err != nil {
+		t.Fatalf("read node_exporter.service.tmpl: %v", err)
+	}
+	out, err := engine.Render(string(body), root)
+	if err != nil {
+		t.Fatalf("render node_exporter.service.tmpl: %v", err)
+	}
+	return out
+}
+
+// TestNodeExporterService_CollectorOptionsDeterministic — ★двойная проверка ТЗ:
+// двойной range по map<string,map<string,string>> collector_options в ExecStart
+// ДЕТЕРМИНИРОВАН (Go text/template range по map обходит ключи в ОТСОРТИРОВАННОМ
+// порядке — инвариант, на который опираются и users.acl.tmpl/redis). Тест задаёт
+// заведомо не-в-лексикографическом insertion-порядке набор коллекторов и опций и
+// требует, чтобы рендер выдавал флаги строго по возрастанию имён коллекторов, а
+// внутри коллектора — по возрастанию ключей опций. Прогон повторяется, чтобы
+// исключить случайное совпадение с порядком итерации одной хеш-таблицы.
+func TestNodeExporterService_CollectorOptionsDeterministic(t *testing.T) {
+	// Insertion-порядок намеренно перемешан (systemd до cpu; внутри systemd
+	// unit-allowlist до enable-restart). Ожидаемый рендер — отсортированный.
+	collectorOptions := map[string]any{
+		"systemd": map[string]any{
+			"unit-include":            ".+\\.service",
+			"enable-restarts-metrics": "true",
+		},
+		"cpu": map[string]any{
+			"info": "true",
+		},
+	}
+
+	// Ожидаемый порядок флагов: коллекторы cpu<systemd, внутри systemd ключи
+	// enable-restarts-metrics<unit-include (лексикографически).
+	wantOrder := []string{
+		"--collector.cpu.info=true",
+		"--collector.systemd.enable-restarts-metrics=true",
+		"--collector.systemd.unit-include=.+\\.service",
+	}
+
+	// Несколько прогонов: range по разным экземплярам map не должен менять
+	// порядок (если бы он зависел от итерации хеш-таблицы — расходился бы).
+	for run := 0; run < 8; run++ {
+		out := renderNodeExporterServiceWithVars(t, map[string]any{"collector_options": collectorOptions})
+
+		prev := -1
+		for _, flag := range wantOrder {
+			idx := strings.Index(out, flag)
+			if idx < 0 {
+				t.Fatalf("прогон %d: флаг %q отсутствует в ExecStart\n--- рендер ---\n%s", run, flag, out)
+			}
+			if idx <= prev {
+				t.Fatalf("прогон %d: флаг %q идёт не по возрастанию (idx=%d, prev=%d) — порядок range НЕ детерминирован\n--- рендер ---\n%s", run, flag, idx, prev, out)
+			}
+			prev = idx
+		}
+
+		// collector_options-флаги стоят ПОСЛЕ enabled/disabled-коллекторов и
+		// ПЕРЕД gomaxprocs (позиция блока в ExecStart, ТЗ §1c). gomaxprocs=0 →
+		// флага нет, поэтому проверяем относительно --log.format (предыдущий
+		// безусловный флаг) и отсутствия gomaxprocs.
+		logIdx := strings.Index(out, "--log.format=")
+		firstOptIdx := strings.Index(out, "--collector.cpu.info=")
+		if firstOptIdx < logIdx {
+			t.Fatalf("прогон %d: collector_options отрендерены до --log.format — нарушена позиция блока\n--- рендер ---\n%s", run, out)
+		}
+	}
+}
+
+// TestNodeExporterService_TelemetryPathOverride — web_telemetry_path != /metrics
+// рендерится в ExecStart как --web.telemetry-path=<override> (флаг безусловный).
+func TestNodeExporterService_TelemetryPathOverride(t *testing.T) {
+	out := renderNodeExporterServiceWithVars(t, map[string]any{"web_telemetry_path": "/node/metrics"})
+	if !strings.Contains(out, "--web.telemetry-path=/node/metrics") {
+		t.Errorf("web_telemetry_path override не отрендерен\n--- рендер ---\n%s", out)
+	}
+	if strings.Contains(out, "--web.telemetry-path=/metrics") {
+		t.Errorf("остался дефолтный --web.telemetry-path=/metrics при override\n--- рендер ---\n%s", out)
 	}
 }

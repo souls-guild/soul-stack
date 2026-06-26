@@ -44,8 +44,10 @@ assert:
             gomaxprocs: 0
             disabled_collectors: []
             enabled_collectors: []
+            collector_options: {}
             log_level: info
             log_format: logfmt
+            web_telemetry_path: "/metrics"
             fs_mount_points_exclude: ""
             netdev_device_exclude: ""
           self:

@@ -1,0 +1,61 @@
+# L0-кейс: переопределённый web_telemetry_path (!= /metrics).
+#
+# web_telemetry_path=/node/metrics → apply:input передаёт его в destiny →
+# render_context.vars.web_telemetry_path основного unit-шага. Контраст с
+# render-defaults (дефолт /metrics). Флаг --web.telemetry-path рендерится ВСЕГДА
+# (дефолт непустой); сам text/template-рендер флага покрыт unit-тестом
+# keeper/internal/render (TestNodeExporterService_TelemetryPathOverride) — L0
+# фиксирует только CEL-проброс значения в render_context.
+#
+# render_context сверяется deep-equal целиком (harness), поэтому vars перечислены
+# полностью (как listen-non10); ключевая величина — web_telemetry_path.
+name: node-exporter renders overridden web telemetry path
+
+fixtures:
+  default_destiny_source: "file://../../{name}"
+  input:
+    version: "1.9.0"
+    collectors: [smartmon]
+    web_telemetry_path: "/node/metrics"
+  soulprint:
+    os:
+      arch: amd64
+    network:
+      primary_ip: "10.0.0.5"
+
+assert:
+  task_present:
+    # Основной unit-шаг (дизамбигуатор — path). web_telemetry_path доехал в
+    # render_context.vars override-значением, collector_options — дефолт {}.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/systemd/system/node_exporter.service
+        template_content: "<present>"
+        render_context:
+          vars:
+            exporter_bin: /usr/local/bin/node_exporter
+            listen: "10.0.0.5:9100"
+            textfile_dir: /var/lib/node_exporter
+            user: node_exporter
+            group: node_exporter
+            gomaxprocs: 0
+            disabled_collectors: []
+            enabled_collectors: []
+            collector_options: {}
+            log_level: info
+            log_format: logfmt
+            web_telemetry_path: "/node/metrics"
+            fs_mount_points_exclude: ""
+            netdev_device_exclude: ""
+          self:
+            choirs: []
+            traits: {}
+            covens: [apply]
+            network:
+              primary_ip: "10.0.0.5"
+            os:
+              arch: amd64
+            role: ""
+            sid: trial-host
+          role: ""
+          essence: {}

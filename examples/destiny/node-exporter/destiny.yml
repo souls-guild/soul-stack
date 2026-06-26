@@ -141,6 +141,35 @@ input:
       Коллекторы для явного включения (--collector.<name> на элемент). Имена без
       префикса collector. (например: systemd, processes) — disabled-by-default.
 
+  # collector_options — под-опции коллекторов (--collector.<name>.<key>=<value>).
+  # Формат B1: отдельный input-map имя-коллектора→{ключ: значение}, образец
+  # redis.users (map<string, map<string, string>>). Рендерится двойным range по
+  # ОТСОРТИРОВАННЫМ ключам (детерминизм ExecStart). Runtime-валидация вглубь map не
+  # идёт (MVP, как redis.users); схема описывает структуру для документации/формы.
+  collector_options:
+    type: object
+    default: {}
+    required: false
+    description: >-
+      Под-опции коллекторов node_exporter (имя коллектора → {ключ: значение}), рендерятся в
+      --collector.<name>.<key>=<value>. НЕ дублировать fs_mount_points_exclude/netdev_device_exclude
+      (повтор флага сломает запуск).
+    properties: {}
+    additional_properties:
+      type: object
+      properties: {}
+      additional_properties:
+        type: string
+
+  # web_telemetry_path — путь HTTP-эндпоинта метрик (--web.telemetry-path). Дефолт
+  # непустой (/metrics), поэтому флаг в ExecStart рендерится ВСЕГДА (без условного
+  # опускания, в отличие от fs/netdev-exclude).
+  web_telemetry_path:
+    type: string
+    default: "/metrics"
+    pattern: "^/.*"
+    description: Путь HTTP-эндпоинта метрик (--web.telemetry-path). По умолчанию /metrics.
+
   # log_level — уровень лога демона (--log.level). Дефолт info.
   log_level:
     type: string

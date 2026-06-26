@@ -135,6 +135,12 @@ assert:
             gomaxprocs: 0
             disabled_collectors: []
             enabled_collectors: []
+            # под-опции коллекторов (имя→{ключ:значение}); дефолт пустой map →
+            # двойной range в .tmpl ничего не рендерит.
+            collector_options: {}
+            # путь HTTP-эндпоинта метрик (--web.telemetry-path); дефолт непустой →
+            # флаг рендерится всегда (в отличие от fs/netdev-exclude).
+            web_telemetry_path: "/metrics"
             log_level: "info"
             log_format: "logfmt"
             fs_mount_points_exclude: ""

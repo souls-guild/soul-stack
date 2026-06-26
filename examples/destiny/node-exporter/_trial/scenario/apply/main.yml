@@ -32,6 +32,24 @@ input:
   base_url_override:
     type: string
     default: ""
+  # collector_options — passthrough под-опций коллекторов в destiny.collector_options
+  # (формат B1, map<string,map<string,string>>). Дефолт {} → destiny применит свой.
+  # Нужен L0-кейсу collector-options.
+  collector_options:
+    type: object
+    default: {}
+    properties: {}
+    additional_properties:
+      type: object
+      properties: {}
+      additional_properties:
+        type: string
+  # web_telemetry_path — passthrough пути метрик в destiny.web_telemetry_path.
+  # Дефолт /metrics (совпадает с destiny-дефолтом). Нужен L0-кейсу telemetry-path-override.
+  web_telemetry_path:
+    type: string
+    default: "/metrics"
+    pattern: "^/.*"
 
 tasks:
   - name: Apply node-exporter destiny
@@ -55,3 +73,8 @@ tasks:
         # CEL-тернарник: непустой override → его значение; пустой → тот же
         # destiny-default (idempotent passthrough, не ломает render-defaults).
         base_url:   "${ input.base_url_override != '' ? input.base_url_override : 'https://github.com/prometheus/node_exporter/releases/download' }"
+        # collector_options / web_telemetry_path — passthrough новых полей destiny
+        # нативным типом (вся ячейка = один ${…}). Дефолты обёртки совпадают с
+        # destiny-дефолтами, поэтому существующие кейсы рендерятся как раньше.
+        collector_options:  "${ input.collector_options }"
+        web_telemetry_path: "${ input.web_telemetry_path }"
