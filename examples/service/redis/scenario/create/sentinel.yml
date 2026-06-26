@@ -40,15 +40,16 @@
   apply:
     destiny: redis
     input:
-      # version: distro-пин (method=package). При method=binary absent → has()-guard ''.
+      # version: distro-пин (package). При binary version в state из essence.binary_version
+      # (compute.redis_version); destiny не ставит distro-пакет → has()-guard ''.
       version:  "${ has(input.version) ? input.version : '' }"
-      # install: способ установки (package default / binary), as-is в destiny-диспетч.
-      install:  "${ default(input.install, {}) }"
-      # conf_dir/data_dir: host-layout (директива B), оператор-переопределяемы в destiny.
-      # Прокидываем СКВОЗЬ (иначе override мёртв: destiny взяла бы только дефолт). Дефолт
-      # = текущий путь (back-compat). HOST-ИНВАРИАНТ → apply.input.
-      conf_dir: "${ default(input.conf_dir, '/etc/redis') }"
-      data_dir: "${ default(input.data_dir, '/var/lib/redis') }"
+      # install: способ установки {method, base_url, version} — compute.install из
+      # install_method + essence.binary_* (#1). as-is в destiny-диспетчер install.yml.
+      install:  "${ compute.install }"
+      # conf_dir/data_dir: host-layout из essence (#2). compute.conf_dir/data_dir
+      # (default = текущий путь, back-compat). HOST-ИНВАРИАНТ → apply.input.
+      conf_dir: "${ compute.conf_dir }"
+      data_dir: "${ compute.data_dir }"
       password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
       # Единый compute.redis_config (объявлен ОДИН раз в main.yml compute:, ADR-009):
       # тот же map, что уйдёт в state_changes.redis_config — drift «state ≡ live
@@ -113,9 +114,10 @@
       # host-инвариантна → apply.input.
       sysctl_settings:  "${ default(essence.sysctl_settings, {}) }"
       # TLS — единый dict (enable/only/port + cert_ref/key_ref/ca_ref) — см. standalone.
-      # HOST-ИНВАРИАНТ → apply.input. enable/only/port — compute-vars (input.tls.* бьёт
-      # essence). cert_ref/key_ref/ca_ref — Vault-ПУТИ (destiny читает PEM через vault()
-      # в ячейке content, seal-маскинг). refs из input.tls.* с дефолтом essence.tls_*_ref.
+      # HOST-ИНВАРИАНТ → apply.input. enable/only/port — compute-vars (2 галочки
+      # tls_enabled/tls_keep_plain + порт из essence, #5). cert_ref/key_ref/ca_ref —
+      # Vault-ПУТИ (destiny читает PEM через vault() в ячейке content, seal-маскинг);
+      # refs — только из essence.tls_*_ref (override через input нет).
       tls:
         enable:   "${ compute.tls_on }"
         only:     "${ compute.tls_only_on }"
@@ -135,6 +137,10 @@
         # sentinel_quorum больше нет (убрано 2026-06-25).
         quorum:      "${ int(size(soulprint.hosts)) / 2 + 1 }"
         auth_pass:   "${ vault('secret/redis/' + incarnation.name + '#password') }"
+        # ★ #7: стартовые per-master тайминги failover в sentinel.conf (down-after/
+        # failover-timeout). compute.sentinel_directives — map `sentinel <opt> <master>`
+        # → значение; шаблон sentinel.conf.tmpl range-ит .vars.sentinel_config.
+        config:      "${ compute.sentinel_directives }"
 
 # 2. Health-gate per-host: PING живого Redis после старта (каждый узел обязан
 #    ответить ДО привязки реплик/настройки sentinel). community.redis.command,
@@ -187,6 +193,10 @@
 #    — keeper-side vault()-резолв (маскируется, в логи не течёт). Алгоритм
 #    reconcile (MONITOR/REMOVE+MONITOR/SET/CONFIG SET) перенесён 1:1 из Ansible
 #    redis_sentinel_update.py (см. плагин sentinel.go).
+#    ★ #7: config — те же per-master тайминги (compute.sentinel_directives), что в
+#    стартовом sentinel.conf. Плагин classifyConfig раскладывает ключи `sentinel <opt>
+#    <master>` в per-master и применяет SENTINEL SET (reconcileMasterParams) — на create
+#    идемпотентно совпадёт со стартовым конфигом, на day-2 даст live-апдейт таймингов.
 - name: Configure each sentinel to monitor the elected master (SENTINEL MONITOR)
   module: community.redis.sentinel
   params:
@@ -194,6 +204,7 @@
     master_name: "${ default(essence.sentinel_master_name, 'master') }"
     auth_pass:   "${ vault('secret/redis/' + incarnation.name + '#password') }"
     redis_version: "${ compute.redis_version }"
+    config:      "${ compute.sentinel_directives }"
     monitor:
       # HOST-ИНВАРИАНТНЫЙ адрес master-а (master-election: soulprint.hosts[0]).
       ip:     "${ soulprint.hosts[0].network.primary_ip }"

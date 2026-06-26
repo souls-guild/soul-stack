@@ -25,8 +25,8 @@ func TestLoadServiceManifest_Golden(t *testing.T) {
 	if cfg.Name != "redis" {
 		t.Errorf("name: got %q want redis", cfg.Name)
 	}
-	if cfg.StateSchemaVersion != 4 {
-		t.Errorf("state_schema_version: got %d want 4", cfg.StateSchemaVersion)
+	if cfg.StateSchemaVersion != 5 {
+		t.Errorf("state_schema_version: got %d want 5", cfg.StateSchemaVersion)
 	}
 	if len(cfg.Destiny) != 1 {
 		t.Errorf("destiny len: got %d want 1", len(cfg.Destiny))

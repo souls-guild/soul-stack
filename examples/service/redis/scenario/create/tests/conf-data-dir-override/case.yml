@@ -54,6 +54,12 @@ fixtures:
     redis_config:
       maxmemory: "256mb"
 
+    # ★ #2 OVERRIDE host-layout: нестандартные conf/data каталоги через essence
+    # (spec.essence инкарнации). compute.conf_dir/data_dir читают их отсюда и гонят в
+    # destiny + персистят в state.
+    conf_dir: /opt/redis
+    data_dir: /srv/redis-data
+
     # Системные ACL-юзеры redis-server + sentinel-демона (1:1 из essence/_default.yaml).
     # ОБА ОБЯЗАТЕЛЬНЫ: guard create/sentinel.yml (assert 1b) рвёт render при пустом
     # любом из наборов (тихий fail-open недопустим — без них репликация/sentinel↔redis
@@ -72,9 +78,6 @@ fixtures:
     redis_type: sentinel
     version: "5:6.2.7"
     persistence: rdb
-    # ★ OVERRIDE host-layout (директива B): нестандартные conf/data каталоги.
-    conf_dir: /opt/redis
-    data_dir: /srv/redis-data
 
 assert:
   task_present:

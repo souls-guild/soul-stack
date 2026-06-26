@@ -34,13 +34,15 @@
   apply:
     destiny: redis
     input:
-      # version: distro-пин (method=package). При method=binary absent → has()-guard ''.
+      # version: distro-пин (package). При binary version в state из essence.binary_version
+      # (compute.redis_version); destiny не ставит distro-пакет → has()-guard ''.
       version:  "${ has(input.version) ? input.version : '' }"
-      # install: способ установки (package default / binary), as-is в destiny-диспетч.
-      install:  "${ default(input.install, {}) }"
-      # conf_dir/data_dir: host-layout (директива B), сквозь-проброс — см. sentinel.yml.
-      conf_dir: "${ default(input.conf_dir, '/etc/redis') }"
-      data_dir: "${ default(input.data_dir, '/var/lib/redis') }"
+      # install: способ установки {method, base_url, version} — compute.install из
+      # install_method + essence.binary_* (#1). as-is в destiny-диспетчер install.yml.
+      install:  "${ compute.install }"
+      # conf_dir/data_dir: host-layout из essence (#2) — см. sentinel.yml. compute.*.
+      conf_dir: "${ compute.conf_dir }"
+      data_dir: "${ compute.data_dir }"
       password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
       # Единый compute.redis_config (объявлен ОДИН раз в main.yml compute:, ADR-009):
       # тот же map, что уйдёт в state_changes.redis_config — drift «state ≡ live
@@ -89,9 +91,10 @@
       # host-инвариантна → apply.input.
       sysctl_settings:  "${ default(essence.sysctl_settings, {}) }"
       # TLS — единый dict (enable/only/port + cert_ref/key_ref/ca_ref) — см. sentinel.
-      # HOST-ИНВАРИАНТ → apply.input. enable/only/port — compute-vars (input.tls.* бьёт
-      # essence). cert_ref/key_ref/ca_ref — Vault-ПУТИ (destiny читает PEM через vault()
-      # в ячейке content, seal-маскинг). refs из input.tls.* с дефолтом essence.tls_*_ref.
+      # HOST-ИНВАРИАНТ → apply.input. enable/only/port — compute-vars (2 галочки
+      # tls_enabled/tls_keep_plain + порт из essence, #5). cert_ref/key_ref/ca_ref —
+      # Vault-ПУТИ (destiny читает PEM через vault() в ячейке content, seal-маскинг);
+      # refs — только из essence.tls_*_ref (override через input нет).
       tls:
         enable:   "${ compute.tls_on }"
         only:     "${ compute.tls_only_on }"

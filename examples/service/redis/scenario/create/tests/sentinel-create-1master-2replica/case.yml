@@ -164,12 +164,17 @@ assert:
     # monitor.ip — HOST-ИНВАРИАНТНЫЙ адрес master-а (master-election node-1).
     # quorum=2 (АВТО: size(3)/2+1). master_name=master (essence-дефолт). auth_pass —
     # keeper-side vault()-резолв. Единственная активная.
+    # ★ #7: config несёт per-master тайминги failover (дефолты 5000/60000) ключами
+    # `sentinel <opt> <master>` — плагин classifyConfig раскладывает их в per-master.
     - module: community.redis.sentinel
       params_subset:
         addr: "127.0.0.1:26379"
         master_name: master
         auth_pass: s3cr3t-redis-pass-create
         redis_version: "7.2.4"
+        config:
+          "sentinel down-after-milliseconds master": "5000"
+          "sentinel failover-timeout master": "60000"
         monitor:
           ip: 10.0.0.1
           port: 6379
@@ -193,6 +198,8 @@ assert:
     redis_sentinel:
       master_name: master
       quorum: 0
+      down_after_ms: 5000
+      failover_timeout_ms: 60000
     # ── namedfields (read-model, v3): топология sentinel. replicas=2 (UNIFIED
     # replicas_per_master, реплик master-а), sentinel_quorum=0 (АВТО, не материализуется
     # в state). shards=0 (не cluster).

@@ -281,6 +281,8 @@ assert:
     redis_sentinel:
       master_name: master
       quorum: 0
+      down_after_ms: 5000
+      failover_timeout_ms: 60000
     # ── namedfields (read-model, v3): NON-ZERO/NON-EMPTY guard. memory_mb=1024 и
     # maxmemory_policy=volatile-lru заданы оператором → ровно эти значения (read-model
     # хранит НАМЕРЕНИЕ, не вычисленный maxmemory "768mb"). persistence=rdb.

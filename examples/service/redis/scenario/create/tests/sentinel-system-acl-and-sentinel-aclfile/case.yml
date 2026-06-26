@@ -154,3 +154,5 @@ assert:
     redis_sentinel:
       master_name: master
       quorum: 0
+      down_after_ms: 5000
+      failover_timeout_ms: 60000

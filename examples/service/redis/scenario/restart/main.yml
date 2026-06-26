@@ -63,8 +63,9 @@ state_changes: {}
 #
 # ★ Источник истины — incarnation.state.tls (ИМЕНОВАННОЕ поле намерения, state_schema
 # v3, day-2-конвенция docs/destiny/production-conventions.md §7a, ADR-057 amendment),
-# НЕ essence и НЕ парсинг redis_config: create транслирует operator-input.tls в namedfield
-# state.tls (тот же compute.tls_*, что дал TLS-блок redis_config); на day-2 essence
+# НЕ essence и НЕ парсинг redis_config: create транслирует operator-ввод TLS
+# (tls_enabled/tls_keep_plain) → named-field state.tls (тот же compute.tls_*, что дал
+# TLS-блок redis_config); на day-2 essence
 # НЕПОЛНА (не видит operator-override). Раньше дискриминатор парсил opaque write-model
 # (`'tls-port' in incarnation.state.redis_config`); v3 даёт ИМЕНОВАННЫЙ read-model
 # state.tls.enable — читаемее и без bracket-нотации дефисного ключа.

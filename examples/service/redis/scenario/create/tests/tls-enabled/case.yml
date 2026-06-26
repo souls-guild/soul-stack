@@ -62,9 +62,8 @@ fixtures:
       maxmemory-policy: allkeys-lru
       maxclients:       10000
       timeout:          300
-    # TLS ВКЛЮЧЁН + only-TLS: plain закрыт, плагин обязан по TLS.
-    tls_enable: true
-    tls_only:   true
+    # ★ #5: TLS-параметры (порт, Vault-пути PEM) — в essence. Включение/закрытие plain
+    # — операторские галочки input.tls_enabled/tls_keep_plain.
     tls_port:   7379
     tls_cert_ref: "secret/services/redis/tls#cert"
     tls_key_ref:  "secret/services/redis/tls#key"
@@ -90,6 +89,9 @@ fixtures:
     # distro-native пин (мажор < 8 → version-gate модулей не активен).
     version: "7.2.4"
     persistence: rdb
+    # ★ #5: оператор включает TLS + закрывает plain-порт (only-TLS).
+    tls_enabled: true
+    tls_keep_plain: false
 
 assert:
   task_present:
@@ -211,6 +213,8 @@ assert:
     redis_sentinel:
       master_name: master
       quorum: 0
+      down_after_ms: 5000
+      failover_timeout_ms: 60000
     # ── namedfields (read-model, v3): из тех же compute.tls_*, что TLS-блок redis_config.
     # tls включён+only из essence → enable/only true, port 7379, refs из essence.
     tls:

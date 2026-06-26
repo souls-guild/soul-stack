@@ -47,10 +47,7 @@ fixtures:
       maxmemory-policy: allkeys-lru
       maxclients:       10000
       timeout:          300
-    # TLS ВКЛЮЧЁН, но НЕ only-TLS: plain-порт 6379 ещё открыт. Плагин всё равно
-    # обязан коннектиться по TLS (anti-downgrade) — это и проверяет кейс.
-    tls_enable: true
-    tls_only:   false
+    # ★ #5: порт/refs — в essence; включение — input.tls_enabled (plain открыт по дефолту).
     tls_port:   7379
     tls_cert_ref: "secret/services/redis/tls#cert"
     tls_key_ref:  "secret/services/redis/tls#key"
@@ -76,6 +73,8 @@ fixtures:
     # distro-native пин (мажор < 8 → version-gate модулей не активен).
     version: "7.2.4"
     persistence: rdb
+    # ★ #5: TLS включён, plain-порт оставлен открытым (tls_keep_plain дефолт true → не only).
+    tls_enabled: true
 
 assert:
   task_present:
@@ -154,3 +153,5 @@ assert:
     redis_sentinel:
       master_name: master
       quorum: 0
+      down_after_ms: 5000
+      failover_timeout_ms: 60000

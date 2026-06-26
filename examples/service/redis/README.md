@@ -763,8 +763,9 @@ TLS- и install-кейсы под [`scenario/create/tests/`](scenario/create/tes
   `tls-cert-file`/… в merged `redis.conf`, `port 0` при `only`.
 - [`tls-enabled-no-only`](scenario/create/tests/tls-enabled-no-only/case.yml)
   — `tls.enable: true`, `tls.only` не задан: TLS-порт открыт, plain-порт остаётся.
-- [`tls-input-dict`](scenario/create/tests/tls-input-dict/case.yml)
-  — operator-dict `tls` бьёт essence-дефолты (под-поля переопределяются точечно).
+- [`tls-essence-refs`](scenario/create/tests/tls-essence-refs/case.yml)
+  — TLS включён галочками (`tls_enabled`/`tls_keep_plain`), порт и Vault-пути PEM —
+  из essence (нестандартный `tls_port` 7400, refs `secret/ops/redis/tls`).
 - [`tls-disabled`](scenario/create/tests/tls-disabled/case.yml)
   — `tls` не передан: TLS off, PEM-задачи placeholder-skip, директив TLS нет.
 - [`tls-only-without-enable`](scenario/create/tests/tls-only-without-enable/case.yml)

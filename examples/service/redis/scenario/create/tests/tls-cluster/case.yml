@@ -53,8 +53,7 @@ fixtures:
       maxmemory-policy: allkeys-lru
       maxclients:       10000
       timeout:          300
-    tls_enable: true
-    tls_only:   true
+    # ★ #5: порт/refs — в essence; включение/закрытие plain — input.tls_enabled/keep_plain.
     tls_port:   7379
     tls_cert_ref: "secret/services/redis/tls#cert"
     tls_key_ref:  "secret/services/redis/tls#key"
@@ -76,6 +75,9 @@ fixtures:
     shards: 3
     replicas_per_master: 0
     cluster_node_timeout: 5000
+    # ★ #5: TLS включён + plain закрыт (only-TLS).
+    tls_enabled: true
+    tls_keep_plain: false
 
 assert:
   # size-guard PASS — assert: (ADR-009 amendment), в план не эмитится.

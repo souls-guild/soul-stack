@@ -1,0 +1,86 @@
+# L0-испытание (#7, 2026-06-26): оператор задаёт НЕСТАНДАРТНЫЕ тайминги failover
+# sentinel (sentinel_down_after_ms / sentinel_failover_timeout_ms). FALSIFICATION:
+# значения 12000/70000 (≠ дефолты 5000/60000) ОБЯЗАНЫ доехать:
+#   1. в плагин community.redis.sentinel params.config ключами
+#      `sentinel down-after-milliseconds master` / `sentinel failover-timeout master`
+#      (per-master SENTINEL SET reconcile — классифицируется плагином);
+#   2. в state.redis_sentinel.down_after_ms / failover_timeout_ms (read-model day-2).
+# Регресс «тайминги захардкожены/не читаются из input» = плагин/state получили бы
+# дефолты 5000/60000. Single-host sentinel (1 master + 0 реплик = standalone-эквивалент).
+name: operator sentinel failover timings flow to plugin config and state
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory: "256mb"
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default:    "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    redis_type: sentinel
+    version: "7.2.4"
+    replicas_per_master: 0
+    # ★ #7: нестандартные тайминги failover (≠ дефолты 5000/60000).
+    sentinel_down_after_ms: 12000
+    sentinel_failover_timeout_ms: 70000
+
+assert:
+  task_present:
+    # ★ Плагин получает per-master тайминги ключами `sentinel <opt> <master>` со
+    # значениями ОПЕРАТОРА (12000/70000) — доказывает чтение input, не хардкод.
+    - module: community.redis.sentinel
+      params_subset:
+        addr: "127.0.0.1:26379"
+        master_name: master
+        config:
+          "sentinel down-after-milliseconds master": "12000"
+          "sentinel failover-timeout master": "70000"
+        monitor:
+          ip: 10.0.0.5
+          port: 6379
+          quorum: 1
+
+  state_changes:
+    redis_type: sentinel
+    redis_version: "7.2.4"
+    redis_users: {}
+    redis_hosts: []
+    # ★ read-model day-2: тайминги оператора в state.redis_sentinel.
+    redis_sentinel:
+      master_name: master
+      quorum: 0
+      down_after_ms: 12000
+      failover_timeout_ms: 70000

@@ -61,8 +61,12 @@ fixtures:
     redis_config:
       maxmemory: "256mb"
 
-  # version (top-level distro-пин) НЕ передан: method=binary → required_when=package
-  # не срабатывает. install.version (upstream-semver) несёт версию tarball-а.
+    # ★ #1: URL/версия бинаря — в essence (binary_base_url/binary_version), не в input.
+    binary_base_url: "https://downloads.example.com/redis"
+    binary_version:  "7.2.4"
+
+  # version (top-level distro-пин) НЕ передан: install_method=binary → required_when=
+  # package не срабатывает. essence.binary_version несёт версию tarball-а.
     # Системные ACL-юзеры redis-server + sentinel-демона (1:1 из essence/_default.yaml).
     # ОБА ОБЯЗАТЕЛЬНЫ: guard create/sentinel.yml (assert 1b) рвёт render при пустом
     # любом из наборов (тихий fail-open недопустим — без них репликация/sentinel↔redis
@@ -80,10 +84,7 @@ fixtures:
   input:
     redis_type: sentinel
     persistence: rdb
-    install:
-      method: binary
-      base_url: "https://downloads.example.com/redis"
-      version: "7.2.4"
+    install_method: binary
 
 assert:
   task_present:
@@ -189,7 +190,7 @@ assert:
 
   state_changes:
     redis_type: sentinel
-    # redis_version из install.version (compute.redis_version: binary → upstream-semver).
+    # redis_version из essence.binary_version (compute.redis_version: binary → upstream-semver).
     redis_version: "7.2.4"
     redis_config:
       maxmemory: "256mb"
@@ -200,8 +201,10 @@ assert:
     redis_sentinel:
       master_name: master
       quorum: 0
-    # ── namedfields (read-model, v3): install=binary (тот же compute.install, что
-    # ушёл в destiny apply.input). tarball качается по content-идемпотентности.
+      down_after_ms: 5000
+      failover_timeout_ms: 60000
+    # ── namedfields (read-model): install=binary (тот же compute.install, что ушёл в
+    # destiny apply.input). base_url/version из essence.binary_* (#1).
     install:
       method:   binary
       base_url: "https://downloads.example.com/redis"

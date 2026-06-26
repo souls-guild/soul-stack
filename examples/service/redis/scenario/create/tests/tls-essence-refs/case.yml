@@ -1,11 +1,12 @@
-# L0-испытание (Trial, ADR-023): TLS через ОПЕРАТОРСКИЙ dict-input input.tls (#1).
-# В отличие от tls-enabled-standalone (TLS из essence), здесь essence TLS НЕ включает,
-# а оператор задаёт input.tls целиком: enable=true, only=true, СВОЙ port (7400, бьёт
-# essence/дефолт 7379) и СВОИ cert_ref/key_ref/ca_ref (Vault-пути под operator-конвенцией
-# secret/ops/redis/tls). Guard: input.tls бьёт essence (оператор контролирует TLS), а
-# refs из input.tls идут в vault(ref) → PEM в content (seal-маскинг). Доказывает, что
-# TLS теперь управляется оператором, а не только essence-подложкой.
-name: tls via operator input dict overrides essence and uses operator vault refs
+# L0-испытание (Trial, ADR-023): TLS через 2 галочки + essence-параметры (#5). Оператор
+# включает only-TLS галочками (tls_enabled=true, tls_keep_plain=false), а технические
+# параметры — НЕстандартный tls_port 7400 (бьёт дефолт 7379) и Vault-пути PEM под
+# operator-конвенцией secret/ops/redis/tls — живут в essence (author-context, оператор
+# переопределяет в spec.essence под свою инсталляцию). Guard: tls_port из essence даёт
+# tls-port 7400 в redis.conf; refs из essence идут в vault(ref) → PEM в content
+# (seal-маскинг). Доказывает разделение: включение TLS — операторские галочки, порт/
+# пути — essence-подложка.
+name: tls enabled by checkboxes uses essence port and vault refs
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
@@ -28,7 +29,7 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
-    # PEM по ОПЕРАТОРСКИМ ref-ам (input.tls.*_ref), НЕ essence.tls_*_ref.
+    # PEM по essence.tls_*_ref (operator-конвенция secret/ops/redis/tls).
     secret/ops/redis/tls:
       cert: "-----BEGIN CERTIFICATE-----\nOPCERT\n-----END CERTIFICATE-----"
       key:  "-----BEGIN PRIVATE KEY-----\nOPKEY\n-----END PRIVATE KEY-----"
@@ -47,8 +48,12 @@ fixtures:
       maxmemory-policy: allkeys-lru
       maxclients:       10000
       timeout:          300
-    # essence TLS НЕ включает (tls_enable отсутствует) → дефолт off. Оператор включает
-    # через input.tls. essence.tls_*_ref тоже не задаём — refs приходят из input.tls.
+    # ★ #5: TLS-параметры в essence: НЕстандартный порт 7400 (бьёт дефолт 7379) +
+    # operator-конвенция Vault-путей PEM. Включение TLS — input.tls_enabled (галочка).
+    tls_port:     7400
+    tls_cert_ref: "secret/ops/redis/tls#cert"
+    tls_key_ref:  "secret/ops/redis/tls#key"
+    tls_ca_ref:   "secret/ops/redis/tls#ca"
 
     # Системные ACL-юзеры redis-server + sentinel-демона (1:1 из essence/_default.yaml).
     # ОБА ОБЯЗАТЕЛЬНЫ: guard create/sentinel.yml (assert 1b) рвёт render при пустом
@@ -68,18 +73,13 @@ fixtures:
     redis_type: sentinel
     version: "7.2.4"
     persistence: rdb
-    # Оператор включает TLS целиком: only-TLS, свой порт, свои Vault-пути.
-    tls:
-      enable: true
-      only: true
-      port: 7400
-      cert_ref: "secret/ops/redis/tls#cert"
-      key_ref:  "secret/ops/redis/tls#key"
-      ca_ref:   "secret/ops/redis/tls#ca"
+    # ★ #5: оператор включает TLS + закрывает plain-порт (only-TLS) галочками.
+    tls_enabled: true
+    tls_keep_plain: false
 
 assert:
   task_present:
-    # TLS server cert: content = vault(input.tls.cert_ref) → operator-PEM.
+    # TLS server cert: content = vault(essence.tls_cert_ref) → operator-PEM.
     # Дизамбигуатор PEM (тот же core.file.present) — path.
     - module: core.file.present
       params_subset:
@@ -89,7 +89,7 @@ assert:
         owner: redis
         group: redis
 
-    # TLS private key: content = vault(input.tls.key_ref) → operator-PEM.
+    # TLS private key: content = vault(essence.tls_key_ref) → operator-PEM.
     - module: core.file.present
       params_subset:
         path: /etc/redis/tls/redis.key
@@ -98,8 +98,8 @@ assert:
         owner: redis
         group: redis
 
-    # redis.conf: TLS-директивы на ОПЕРАТОРСКОМ порту 7400 (бьёт essence/7379) + port 0
-    # (only). КРИТИЧНО: tls-port 7400 доказывает, что input.tls.port победил.
+    # redis.conf: TLS-директивы на порту 7400 из essence (бьёт дефолт 7379) + port 0
+    # (only). КРИТИЧНО: tls-port 7400 доказывает, что essence.tls_port победил.
     # Дизамбигуатор от users.acl/hardening — path.
     - module: core.file.rendered
       params_subset:
@@ -141,7 +141,7 @@ assert:
           role: ""
           essence: {}
 
-    # PING: tls=true, addr на operator-порту 7400, tls_ca = operator-CA-PEM.
+    # PING: tls=true, addr на tls_port 7400 (essence), tls_ca = operator-CA-PEM.
     # cluster/sentinel PING — placeholder-skip; дизамбигуатор addr/args.
     - module: community.redis.command
       params_subset:
@@ -172,3 +172,5 @@ assert:
     redis_sentinel:
       master_name: master
       quorum: 0
+      down_after_ms: 5000
+      failover_timeout_ms: 60000

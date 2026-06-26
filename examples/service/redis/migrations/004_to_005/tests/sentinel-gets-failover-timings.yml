@@ -1,0 +1,75 @@
+name: sentinel-gets-failover-timings
+description: >
+  sentinel-инкарнация: redis_sentinel непуст → дополняется down_after_ms/
+  failover_timeout_ms (роль-дефолты 5000/60000, #7 read-model day-2). Существующие
+  master_name/quorum СОХРАНЯЮТСЯ (has-guard). Остальной state — бит-в-бит.
+
+state_before:
+  redis_type: sentinel
+  redis_version: "7.2.4"
+  redis_config:
+    maxmemory: "256mb"
+    maxmemory-policy: allkeys-lru
+    save: "900 1 300 10 60 10000"
+    appendonly: "no"
+  redis_users: {}
+  redis_hosts: []
+  redis_sentinel:
+    master_name: master
+    quorum: 0
+  tls:
+    enable: false
+    only: false
+    port: 7379
+    cert_ref: ""
+    key_ref: ""
+    ca_ref: ""
+  install:
+    method: package
+  persistence: rdb
+  maxmemory_policy: allkeys-lru
+  memory_mb: 0
+  modules: []
+  modules_base_url: ""
+  conf_dir: /etc/redis
+  data_dir: /var/lib/redis
+  sysctl_settings: {}
+  shards: 0
+  replicas: 2
+  sentinel_quorum: 0
+
+state_after:
+  redis_type: sentinel
+  redis_version: "7.2.4"
+  redis_config:
+    maxmemory: "256mb"
+    maxmemory-policy: allkeys-lru
+    save: "900 1 300 10 60 10000"
+    appendonly: "no"
+  redis_users: {}
+  redis_hosts: []
+  redis_sentinel:
+    master_name: master
+    quorum: 0
+    down_after_ms: 5000
+    failover_timeout_ms: 60000
+  tls:
+    enable: false
+    only: false
+    port: 7379
+    cert_ref: ""
+    key_ref: ""
+    ca_ref: ""
+  install:
+    method: package
+  persistence: rdb
+  maxmemory_policy: allkeys-lru
+  memory_mb: 0
+  modules: []
+  modules_base_url: ""
+  conf_dir: /etc/redis
+  data_dir: /var/lib/redis
+  sysctl_settings: {}
+  shards: 0
+  replicas: 2
+  sentinel_quorum: 0

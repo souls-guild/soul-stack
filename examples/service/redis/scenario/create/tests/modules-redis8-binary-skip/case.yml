@@ -51,8 +51,13 @@ fixtures:
     redis_config:
       maxmemory: "256mb"
 
-  # version (top-level distro-пин) НЕ передан: method=binary → required_when=package
-  # не срабатывает; эффективная версия — install.version 8.0.0 (мажор 8 → redis8).
+    # ★ #1: URL/версия бинаря — в essence (binary_base_url/binary_version). version 8.0.0
+    # (мажор 8 → redis8) → version-guard гасит модули.
+    binary_base_url: "https://downloads.example.com/redis"
+    binary_version:  "8.0.0"
+
+  # version (top-level distro-пин) НЕ передан: install_method=binary → required_when=
+  # package не срабатывает; эффективная версия — essence.binary_version 8.0.0 (redis8).
     # Системные ACL-юзеры redis-server + sentinel-демона (1:1 из essence/_default.yaml).
     # ОБА ОБЯЗАТЕЛЬНЫ: guard create/sentinel.yml (assert 1b) рвёт render при пустом
     # любом из наборов (тихий fail-open недопустим — без них репликация/sentinel↔redis
@@ -70,10 +75,7 @@ fixtures:
   input:
     redis_type: sentinel
     persistence: rdb
-    install:
-      method: binary
-      base_url: "https://downloads.example.com/redis"
-      version: "8.0.0"
+    install_method: binary
 
 assert:
   task_present:
@@ -144,7 +146,7 @@ assert:
 
   state_changes:
     redis_type: sentinel
-    # redis_version из install.version (compute.redis_version: binary → upstream-semver).
+    # redis_version из essence.binary_version (compute.redis_version: binary → upstream-semver).
     redis_version: "8.0.0"
     # Redis 8+ → модули встроены, .so не качаются → развёрнутый набор пуст.
     modules: []

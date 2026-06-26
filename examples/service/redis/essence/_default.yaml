@@ -25,6 +25,23 @@ sentinel_master_name: master
 # 8+ — модули встроены, источник не нужен; на Redis < 8 оператор обязан переопределить).
 modules_base_url: ""
 
+# ── Способ установки binary: источник upstream-tarball (#1, 2026-06-26) ──────────
+# install_method=binary тянет redis из upstream-tarball. URL и версия бинаря — НЕ
+# операторский Run-ввод, а author-context (переехали из object-input install в essence,
+# симметрично modules_base_url): оператор переопределяет в spec.essence под свой mirror.
+# destiny строит имя файла per-host из binary_base_url + binary_version + soulprint.self.
+# os.arch. Дефолты "" — заполнить под реальную инсталляцию (при install_method=binary).
+binary_base_url: ""
+binary_version:  ""
+
+# ── Host-layout: базовые каталоги конфигурации и данных Redis (#2, 2026-06-26) ───
+# conf_dir/data_dir переехали из operator-input в essence (author-context): оператор
+# переопределяет раскладку в spec.essence под свой storage-layout, а не в Run-форме
+# каждого прогона. compute читает их отсюда и гонит в destiny (apply.input) + персистит
+# в state (day-2 add_node читает layout из incarnation.state). Дефолт = текущий путь.
+conf_dir: /etc/redis
+data_dir: /var/lib/redis
+
 # Доля бюджета памяти (input.memory_mb), отдаваемая Redis под maxmemory; остаток —
 # резерв под ОС/накладные. scenario вычисляет maxmemory = memory_mb*pct/100 (МБ).
 memory_reserve_percent: 75

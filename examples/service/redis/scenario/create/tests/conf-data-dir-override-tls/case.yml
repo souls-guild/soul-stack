@@ -62,9 +62,11 @@ fixtures:
         appendonly: "no"
     redis_config:
       maxmemory: "256mb"
-    # TLS ВКЛЮЧЁН + only-TLS: plain закрыт (port 0). Источник refs — essence (back-compat).
-    tls_enable: true
-    tls_only:   true
+    # ★ #2/#5: host-layout override + TLS-параметры — в essence. Включение TLS/закрытие
+    # plain — input-галочки (tls_enabled/tls_keep_plain). conf_dir override проверяет, что
+    # TLS-пути redis.conf следуют conf_dir (не хардкод /etc/redis/tls).
+    conf_dir: /opt/redis
+    data_dir: /srv/redis-data
     tls_port:   7379
     tls_cert_ref: "secret/services/redis/tls#cert"
     tls_key_ref:  "secret/services/redis/tls#key"
@@ -88,9 +90,9 @@ fixtures:
     redis_type: sentinel
     version: "5:6.2.7"
     persistence: rdb
-    # ★ OVERRIDE host-layout (директива B): нестандартные conf/data каталоги.
-    conf_dir: /opt/redis
-    data_dir: /srv/redis-data
+    # ★ #5: TLS включён + plain закрыт (only-TLS).
+    tls_enabled: true
+    tls_keep_plain: false
 
 assert:
   task_present:

@@ -1,5 +1,5 @@
 name: redis
-state_schema_version: 4
+state_schema_version: 5
 description: >-
   Redis по концепции Ansible-роли: ОДИН сервис на режимы развёртывания
   (redis_type ∈ sentinel/cluster). Per-host install + render redis.conf делает
@@ -21,7 +21,7 @@ description: >-
   бинарного дистрибутива (Шаг B припаркован)
   (redis-консолидация .pm/tasks/2026-06-22-redis-consolidation).
 
-# state_schema_version = 4: цепочка миграций forward-only (ADR-019).
+# state_schema_version = 5: цепочка миграций forward-only (ADR-019).
 #   - 001_to_002 (migrations/001_to_002.yml): redis_users из списка имён в map
 #     name → {perms, state} (демо-грамматики DSL — rename + set + foreach + delete).
 #   - 002_to_003 (migrations/002_to_003.yml): «richer state» — opaque redis_config
@@ -33,6 +33,11 @@ description: >-
 #     [sentinel, cluster]. Forward-only remap старых режимов: standalone → sentinel,
 #     sentinel_only → sentinel (чтобы state остался schema-валиден). ★ СЕМАНТИКА
 #     remap-а требует архитектурного подтверждения (см. описание миграции).
+#   - 004_to_005 (migrations/004_to_005.yml): тайминги failover sentinel (#7) —
+#     redis_sentinel ДОПОЛНЯЕТСЯ down_after_ms/failover_timeout_ms (read-model day-2).
+#     Только для sentinel-инкарнаций (redis_sentinel непуст); для cluster (redis_sentinel
+#     {}) — no-op. Best-effort default = роль-дефолты 5000/60000 (точное значение
+#     восстанавливается на следующем create-override). Симметрично 002_to_003 namedfields.
 # incarnation.state фиксирует, что развёрнуто, чтобы оператор видел инсталляцию и
 # повторный apply был idempotent.
 #
@@ -168,18 +173,22 @@ state_schema:
         properties:
           sid:  { type: string, format: fqdn }
           role: { type: string, enum: [primary, replica, sentinel] }
-    # Факты sentinel-режимов (master_name + quorum monitored master). Наполняется
-    # create при redis_type=sentinel/sentinel_only; для прочих режимов пуст.
+    # Факты sentinel-режимов (master_name + quorum monitored master + тайминги
+    # failover). Наполняется create при redis_type=sentinel; для cluster пуст.
     # master_ip материализуется ТОЛЬКО в sentinel_only (ВНЕШНИЙ master, заданный
     # оператором явно — единственный факт топологии режима); в режиме sentinel
     # master выбирается из roster-а (host-вариативен) → master_ip в state не пишется.
+    # ★ #7 (v5): down_after_ms/failover_timeout_ms — тайминги failover (read-model
+    # day-2). Из input.sentinel_down_after_ms/sentinel_failover_timeout_ms (оба default).
     redis_sentinel:
       type: object
       additionalProperties: false
       properties:
-        master_name: { type: string }
-        master_ip:   { type: string }
-        quorum:      { type: integer }
+        master_name:         { type: string }
+        master_ip:           { type: string }
+        quorum:              { type: integer }
+        down_after_ms:       { type: integer }
+        failover_timeout_ms: { type: integer }
 
 # Зависимости-destiny (ADR-007: версия зависимости = git ref, не semver-range).
 # Резолв git-URL — гибрид (docs/keeper/config.md::default_destiny_source):

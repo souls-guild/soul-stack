@@ -1,15 +1,15 @@
 # L0-испытание top-level validate:-секции (ADR-009 amendment 2026-06-23, DSL wave 2):
-# FAIL-ветка кросс-полевого input-инварианта «tls.only требует tls.enable».
+# FAIL-ветка кросс-полевого input-инварианта «хотя бы один listener» (#5).
 #
-# Оператор задаёт input.tls.only=true БЕЗ input.tls.enable (и essence TLS не включает):
-# только-TLS закрывает plain-порт (`port 0`), но TLS-порт не открыт (enable=false) →
-# у Redis НИ ОДНОГО listener-а. validate:-правило create/main.yml ловит это НА INPUT-
-# ВАЛИДАЦИИ (config.EvalValidateRules, input-only eval) ДО render — понятным сообщением.
+# Оператор выключает TLS (tls_enabled=false) И закрывает plain-порт (tls_keep_plain=
+# false): plain-порт закрыт (`port 0`), TLS-порт не открыт (TLS off) → у Redis НИ ОДНОГО
+# listener-а. validate:-правило create/main.yml ловит это НА INPUT-ВАЛИДАЦИИ
+# (config.EvalValidateRules, input-only eval) ДО render — понятным сообщением.
 #
-# validate-CEL — input-only БЕЗ custom-функций (default()/vault() недоступны): absent-
-# нормализация через has()-цепочку. Правило false → expect_render_error по подстроке
-# message (create/main.yml validate[1]).
-name: tls.only without tls.enable aborts at input validation (no listener)
+# validate-CEL — input-only; оба поля имеют default → присутствуют, прямой предикат
+# input.tls_enabled || input.tls_keep_plain. Правило false → expect_render_error по
+# подстроке message (create/main.yml validate[0]).
+name: no listener when tls disabled and plain port closed aborts at input validation
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
@@ -33,16 +33,16 @@ fixtures:
       maxmemory-policy: allkeys-lru
       maxclients:       10000
       timeout:          300
-    # essence TLS НЕ включает (tls_enable отсутствует) → дефолт off.
+    # essence TLS не включает (дефолт off).
 
-  # Оператор просит только-TLS, но не включает TLS — validate-правило false.
+  # Оператор закрывает plain-порт, но НЕ включает TLS — validate-правило false.
   input:
     redis_type: sentinel
     version: "7.2.4"
     persistence: rdb
-    tls:
-      only: true
+    tls_enabled: false
+    tls_keep_plain: false
 
-# Прогон обрывается на validate: правило «tls.only требует tls.enable» false.
-# Подстрока — message правила (create/main.yml validate[1]).
-expect_render_error: "tls.only требует tls.enable"
+# Прогон обрывается на validate: правило «хотя бы один listener» false.
+# Подстрока — message правила (create/main.yml validate[0]).
+expect_render_error: "ни одного listener"
