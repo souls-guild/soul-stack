@@ -236,9 +236,10 @@ type ListFilter struct {
 //     keeper/internal/statepredicate (CEL-движок не дублируется), затем
 //     приходят сюда множеством имён → `name = ANY(StateNames)` чистым
 //     SQL-pushdown-ом (total/offset когерентны, без Go-постфильтр-дрейфа).
-//   - Traits — `key:value`-пары exact-match по `incarnation.traits` (ADR-047
-//     amendment, ADR-060 п.7 slice 1). Каждая пара — отдельное плечо OR
-//     (`traits @> $n::jsonb`, GIN-pushdown по jsonb-containment). Чистый SQL —
+//   - Traits — `key:value`-пары scalar-equality-match по `incarnation.traits`
+//     (ADR-047 amendment, ADR-060 п.7 slice 1). Каждая пара — отдельное плечо OR
+//     `traits->>$key = $value` (scalar-only — НЕ jsonb-containment `@>`, тот со
+//     скаляр-RHS матчил бы list-Trait, расходясь с GET-путём). Чистый SQL —
 //     CEL/Go-постфильтр не нужен (точное равенство), total/offset когерентны.
 //
 // Семантика — fail-closed (ADR-047): пустой scope (Covens, StateNames и Traits
@@ -255,9 +256,12 @@ type ListScope struct {
 
 // TraitPair — одна `key:value` trait-пара scope (ADR-047 amendment, ADR-060 п.7
 // slice 1). Scalar-only (значение Trait в scope — скаляр; list-Trait одним
-// равенством не выражается). Матчится `traits @> '{"<key>":"<value>"}'::jsonb`
-// (GIN-containment): ключ/значение НЕ конкатенируются в SQL-текст — уходят
-// JSON-bind-параметром, инъекция через ключ невозможна.
+// равенством не выражается). Матчится `traits->>'<key>' = '<value>'` (скалярное
+// равенство, выровнено с GET-путём [traitScalarEquals]): для list-Trait `->>`
+// отдаёт текст массива ≠ скаляр-значению → list НЕ матчится (в отличие от
+// containment `@>`, который матчил бы массив со скаляр-RHS). Ключ/значение НЕ
+// конкатенируются в SQL-текст — уходят раздельными bind-параметрами, инъекция
+// через ключ невозможна.
 type TraitPair struct {
 	Key   string
 	Value string
@@ -575,15 +579,17 @@ func buildListWhere(f ListFilter, scope ListScope) (string, []any, error) {
 // OR-ом — единый блок в скобках, чтобы не «протечь» через соседние AND-clause
 // фильтра:
 //
-//		((covens && ARRAY[$c] OR name = ANY($c)) OR name = ANY($s) OR traits @> $t::jsonb)
+//		((covens && ARRAY[$c] OR name = ANY($c)) OR name = ANY($s) OR traits->>$tk = $tv)
 //
 //	  - coven∪{name}: scope-coven матчит incarnation и по covens[]-пересечению,
 //	    и по равенству имени (ADR-008: имя incarnation — корневая Coven-метка).
 //	  - state-names: предрезолвнутые имена incarnation-ов, чей state удовлетворил
 //	    state-CEL scope (StateExprs) — приходят множеством, матчатся `name = ANY`.
 //	  - traits: каждая scope-пара (`key:value`, ADR-060 п.7 slice 1) — отдельное
-//	    плечо `traits @> $t::jsonb` (jsonb-containment, GIN-pushdown); пара уходит
-//	    JSON-bind-параметром, ключ/значение в SQL-текст не конкатенируются.
+//	    плечо `traits->>$tk = $tv` (scalar-equality, scalar-only — НЕ containment
+//	    `@>`, тот со скаляр-RHS матчил бы list-Trait, расходясь с GET-путём
+//	    [traitScalarEquals]); ключ/значение уходят раздельными bind-параметрами,
+//	    в SQL-текст не конкатенируются.
 //
 // Unrestricted — без ограничения (scope снят). fail-closed: пустой scope (нет
 // ни coven, ни state-names, ни traits) при !Unrestricted даёт `FALSE` — ни одной
@@ -605,16 +611,19 @@ func appendScopeClause(clauses []string, args []any, scope ListScope) ([]string,
 		dims = append(dims, fmt.Sprintf("name = ANY($%d)", len(args)))
 	}
 	for _, tp := range scope.Traits {
-		// jsonb-containment плечо: одна scope-пара → один `{"<key>":"<value>"}`
-		// JSON-объект bind-параметром. marshal не падает (scalar string-пара);
-		// defensive — пропускаем пару при ошибке marshal (не роняем весь List,
-		// fail-closed по этому плечу).
-		jb, err := json.Marshal(map[string]string{tp.Key: tp.Value})
-		if err != nil {
-			continue
-		}
-		args = append(args, jb)
-		dims = append(dims, fmt.Sprintf("traits @> $%d::jsonb", len(args)))
+		// scalar-equality плечо (slice 1 — scalar-only): `traits->>$key = $value`.
+		// НЕ jsonb-containment `@>`: PG-containment со скаляр-RHS МАТЧИТ массив
+		// (`{"env":["prod","stage"]} @> {"env":"prod"}` = TRUE — array-contains-
+		// primitive, PG §8.14.3), из-за чего list-Trait попадал в List, но GET-путь
+		// ([traitScalarEquals]) его НЕ видит (list → false) — рассинхрон List↔Get.
+		// `traits->>'<key>'` для массива даёт его ТЕКСТ (`["prod", "stage"]`) ≠
+		// '<value>' → list НЕ матчится, ровно как traitScalarEquals (оба scalar-only,
+		// семантика выровнена). Ключ и значение — раздельные bind-параметры (в SQL-
+		// текст не конкатенируются, инъекция через ключ невозможна).
+		args = append(args, tp.Key)
+		keyPos := len(args)
+		args = append(args, tp.Value)
+		dims = append(dims, fmt.Sprintf("traits->>$%d = $%d", keyPos, len(args)))
 	}
 
 	if len(dims) == 0 {

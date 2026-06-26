@@ -698,6 +698,110 @@ func TestSelectAll_ScopeWithUserFilter_AND(t *testing.T) {
 	}
 }
 
+// --- SelectAll: trait-scope SQL-форма (BUG #1 fix — scalar, не @>) ---------
+
+// TestSelectAll_ScopeTrait_ScalarEquality — trait-плечо обязано быть СКАЛЯРНЫМ
+// равенством `traits->>$1 = $2` (ключ+значение раздельными bind-параметрами), а
+// НЕ jsonb-containment `@>`: containment со скаляр-RHS матчит массив (list-Trait),
+// расходясь с GET-путём (traitScalarEquals). Значения в SQL-текст не утекают.
+func TestSelectAll_ScopeTrait_ScalarEquality(t *testing.T) {
+	f := newCountQueryFakeDB()
+	_, _, err := SelectAll(context.Background(), f, ListFilter{},
+		ListScope{Traits: []TraitPair{{Key: "env", Value: "prod"}}}, 0, 50)
+	if err != nil {
+		t.Fatalf("SelectAll: %v", err)
+	}
+	if !strings.Contains(f.querySQL, "traits->>$1 = $2") {
+		t.Errorf("trait-плечо должно быть scalar `traits->>$1 = $2`, got: %q", f.querySQL)
+	}
+	// Регресс-guard: старая containment-форма НЕ должна вернуться (она и есть BUG #1).
+	if strings.Contains(f.querySQL, "@>") {
+		t.Errorf("trait-плечо использует containment @> (BUG #1 — матчит list): %q", f.querySQL)
+	}
+	// Ключ и значение — раздельные bind-параметры (не конкатенация в SQL-текст).
+	if len(f.queryArgs) < 2 || f.queryArgs[0] != "env" || f.queryArgs[1] != "prod" {
+		t.Errorf("trait bind-args = %v, want [env prod] раздельно", f.queryArgs)
+	}
+	if strings.Contains(f.querySQL, "env") || strings.Contains(f.querySQL, "prod") {
+		t.Errorf("ключ/значение утекли в текст SQL (должны быть bind): %q", f.querySQL)
+	}
+	// Тот же предикат — в COUNT (иначе total разойдётся с items).
+	if !strings.Contains(f.queryRowSQL, "traits->>$1 = $2") {
+		t.Errorf("trait-плечо отсутствует в COUNT: %q", f.queryRowSQL)
+	}
+}
+
+// TestAppendScopeClause_Table — табличный обзор формы scope-предиката по разным
+// комбинациям измерений ListScope: содержание trait-плеча, OR-объединение в
+// скобках, fail-closed FALSE на пустом не-Unrestricted scope, отсутствие clause
+// при Unrestricted. Проверяет SQL через SelectAll (единственный публичный путь к
+// appendScopeClause), сверяя f.querySQL.
+func TestAppendScopeClause_Table(t *testing.T) {
+	tests := []struct {
+		name       string
+		scope      ListScope
+		wantSubstr []string // подстроки, обязанные присутствовать
+		denySubstr []string // подстроки, обязанные ОТСУТСТВОВАТЬ
+	}{
+		{
+			name:       "один trait → scalar-плечо без OR",
+			scope:      ListScope{Traits: []TraitPair{{Key: "owner", Value: "alice"}}},
+			wantSubstr: []string{"traits->>$1 = $2"},
+			denySubstr: []string{"@>", " OR ", "FALSE"},
+		},
+		{
+			name: "два trait → OR между плечами в общих скобках",
+			scope: ListScope{Traits: []TraitPair{
+				{Key: "owner", Value: "alice"},
+				{Key: "team", Value: "dba"},
+			}},
+			wantSubstr: []string{"(traits->>$1 = $2 OR traits->>$3 = $4)"},
+			denySubstr: []string{"@>", "FALSE"},
+		},
+		{
+			name: "coven ∪ trait → OR измерений, trait-плечо после coven-бинда",
+			scope: ListScope{
+				Covens: []string{"prod"},
+				Traits: []TraitPair{{Key: "owner", Value: "alice"}},
+			},
+			// coven занимает $1, trait — $2(key)/$3(value).
+			wantSubstr: []string{"((covens && $1 OR name = ANY($1)) OR traits->>$2 = $3)"},
+			denySubstr: []string{"@>", "FALSE"},
+		},
+		{
+			name:  "пустой scope, не Unrestricted → fail-closed FALSE",
+			scope: ListScope{},
+			// FALSE-предикат в WHERE; ни одного scope-плеча (имена колонок
+			// traits/covens в SELECT-листе не считаются — проверяем предикаты).
+			wantSubstr: []string{"WHERE FALSE"},
+			denySubstr: []string{"traits->>", "covens &&"},
+		},
+		{
+			name:       "Unrestricted → ни одного scope-предиката",
+			scope:      ListScope{Unrestricted: true},
+			denySubstr: []string{"FALSE", "traits->>", "covens &&"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCountQueryFakeDB()
+			if _, _, err := SelectAll(context.Background(), f, ListFilter{}, tc.scope, 0, 50); err != nil {
+				t.Fatalf("SelectAll: %v", err)
+			}
+			for _, want := range tc.wantSubstr {
+				if !strings.Contains(f.querySQL, want) {
+					t.Errorf("SQL не содержит %q: %q", want, f.querySQL)
+				}
+			}
+			for _, deny := range tc.denySubstr {
+				if strings.Contains(f.querySQL, deny) {
+					t.Errorf("SQL содержит запрещённое %q: %q", deny, f.querySQL)
+				}
+			}
+		})
+	}
+}
+
 func TestSelectAll_RejectsNegativeOffset(t *testing.T) {
 	f := &fakeDB{}
 	_, _, err := SelectAll(context.Background(), f, ListFilter{}, ListScope{Unrestricted: true}, -1, 50)

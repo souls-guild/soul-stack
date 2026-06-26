@@ -10,6 +10,7 @@ package incarnation
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
@@ -252,5 +253,116 @@ func TestIntegration_UpdateTraits_NotFound(t *testing.T) {
 	_, err := UpdateTraits(ctx, integrationPool, "nope", map[string]any{"team": "dba"})
 	if err == nil {
 		t.Fatal("UpdateTraits(missing) returned nil")
+	}
+}
+
+// TestIntegration_PgContainmentMatchesArrayWithScalarRHS — ПОДТВЕРЖДЕНИЕ корня
+// BUG #1 на реальном PG (psql-эквивалент из ТЗ): jsonb-containment `@>` со скаляр-
+// RHS МАТЧИТ массив (array-contains-primitive, PG §8.14.3). Именно это делало
+// старое SQL-плечо `traits @> '{"env":"prod"}'::jsonb` истинным для list-Trait
+// `{"env":["prod","stage"]}`, расходясь с GET-путём traitScalarEquals (list→false).
+// Фикс заменил containment на scalar-equality `traits->>$ = $`, которое массив НЕ
+// матчит — что и проверяет соседний скаляр-плечевой тест ниже.
+func TestIntegration_PgContainmentMatchesArrayWithScalarRHS(t *testing.T) {
+	ctx := context.Background()
+	var containmentMatch, scalarMatch bool
+	// @> со скаляр-RHS против массива → TRUE (корень бага).
+	if err := integrationPool.QueryRow(ctx,
+		`SELECT '{"env":["prod","stage"]}'::jsonb @> '{"env":"prod"}'::jsonb`).Scan(&containmentMatch); err != nil {
+		t.Fatalf("containment probe: %v", err)
+	}
+	if !containmentMatch {
+		t.Error("PG @> со скаляр-RHS НЕ сматчил массив — предпосылка BUG #1 не воспроизвелась (ожидался TRUE)")
+	}
+	// scalar-форма `->>` против массива → текст массива ≠ 'prod' → FALSE (фикс).
+	if err := integrationPool.QueryRow(ctx,
+		`SELECT ('{"env":["prod","stage"]}'::jsonb)->>'env' = 'prod'`).Scan(&scalarMatch); err != nil {
+		t.Fatalf("scalar probe: %v", err)
+	}
+	if scalarMatch {
+		t.Error("scalar `->>'env' = 'prod'` сматчил массив — фикс не закрыл рассинхрон (ожидался FALSE)")
+	}
+}
+
+// TestIntegration_ScopeTrait_ListVsScalar_ConsistentWithGet — ГЛАВНЫЙ guard
+// BUG #1: List-путь (SelectAll trait-scope SQL) и GET-путь (traitScalarEquals,
+// scalar-only) дают ОДИНАКОВЫЙ ответ на одних данных. Две инкарнации:
+//   - redis-list  traits={env:[prod,stage]}  (list-Trait);
+//   - redis-scalar traits={env:prod}          (scalar-Trait).
+//
+// Scope trait=env:prod: scalar — видна (оба пути), list — НЕ видна (оба пути,
+// scalar-only). Раньше List показывал list-инкарнацию (containment @>), а GET
+// давал 404 (traitScalarEquals list→false) — рассинхрон. Здесь доказываем, что
+// после фикса оба пути согласованы на live-PG.
+func TestIntegration_ScopeTrait_ListVsScalar_ConsistentWithGet(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	ctx := context.Background()
+	creator := "archon-alice"
+
+	for _, seed := range []struct {
+		name   string
+		traits map[string]any
+	}{
+		{"redis-list", map[string]any{"env": []any{"prod", "stage"}}},
+		{"redis-scalar", map[string]any{"env": "prod"}},
+	} {
+		if err := Create(ctx, integrationPool, &Incarnation{
+			Name: seed.name, Service: "redis", ServiceVersion: "v1",
+			StateSchemaVersion: 1, Status: StatusReady, CreatedByAID: &creator,
+			Traits: seed.traits,
+		}); err != nil {
+			t.Fatalf("Create %s: %v", seed.name, err)
+		}
+	}
+
+	scope := ListScope{Traits: []TraitPair{{Key: "env", Value: "prod"}}}
+
+	// List-путь: SQL trait-scope. Видна должна быть ровно redis-scalar.
+	out, total, err := SelectAll(ctx, integrationPool, ListFilter{}, scope, 0, 50)
+	if err != nil {
+		t.Fatalf("SelectAll trait-scope: %v", err)
+	}
+	listVisible := map[string]bool{}
+	for _, inc := range out {
+		listVisible[inc.Name] = true
+	}
+	if total != 1 || !listVisible["redis-scalar"] {
+		t.Errorf("List: total=%d visible=%v, want только redis-scalar (scalar-only)", total, listVisible)
+	}
+	if listVisible["redis-list"] {
+		t.Error("List ВИДИТ list-Trait инкарнацию через trait-scope — BUG #1 не исправлен (containment-семантика)")
+	}
+
+	// GET-путь: тот же scalar-предикат, что traitScalarEquals (scalar-only). Должен
+	// совпасть с List на каждой инкарнации.
+	for _, name := range []string{"redis-list", "redis-scalar"} {
+		inc, err := SelectByName(ctx, integrationPool, name)
+		if err != nil {
+			t.Fatalf("SelectByName %s: %v", name, err)
+		}
+		getVisible := traitScalarEqualsLocal(inc.Traits, "env", "prod")
+		if getVisible != listVisible[name] {
+			t.Errorf("РАССИНХРОН List↔Get для %s: List=%v Get=%v (traits=%v)",
+				name, listVisible[name], getVisible, inc.Traits)
+		}
+	}
+}
+
+// traitScalarEqualsLocal дублирует scalar-only семантику handlers.traitScalarEquals
+// (тот не экспортируется и живёт в api-пакете) для проверки List↔Get-консистентности
+// внутри incarnation-пакета: scalar (string/число/bool) → строковое равенство;
+// list/map → false. Сознательная копия (несколько строк против межпакетной
+// зависимости incarnation→api, которой быть не должно).
+func traitScalarEqualsLocal(traits map[string]any, key, value string) bool {
+	v, ok := traits[key]
+	if !ok {
+		return false
+	}
+	switch v.(type) {
+	case string, float64, bool, int, int64:
+		return fmt.Sprint(v) == value
+	default:
+		return false
 	}
 }

@@ -307,6 +307,10 @@ func parseTraitValue(values, raw string) (string, error) {
 	if !found {
 		return "", fmt.Errorf("permission %q: trait value %q must be key:value (single ':')", raw, values)
 	}
+	// redundant-defensive: вторую `:` ловит и reSelValue ниже (двоеточие вне
+	// [a-zA-Z0-9_.-]+) — отказ был бы и без этой ветки. Оставлена ради точного
+	// сообщения оператору на load keeper.yml («exactly one ':'» понятнее, чем
+	// «value не матчит класс»); диагностика битого permission — системная граница.
 	if strings.Contains(value, ":") {
 		return "", fmt.Errorf("permission %q: trait value %q must contain exactly one ':' (key:value)", raw, values)
 	}
