@@ -10,7 +10,7 @@ name: node-exporter renders arm64 download url from soulprint arch
 fixtures:
   default_destiny_source: "file://../../{name}"
   input:
-    version: "1.9.0"
+    version: "1.11.1"
     collectors: [smartmon, nvme, ipmi]
   soulprint:
     os:
@@ -23,10 +23,10 @@ assert:
     # Единственный core.url.fetched в плане.
     - module: core.url.fetched
       params_subset:
-        url: https://github.com/prometheus/node_exporter/releases/download/v1.9.0/node_exporter-1.9.0.linux-arm64.tar.gz
-        path: /tmp/node_exporter-1.9.0.tar.gz
+        url: https://github.com/prometheus/node_exporter/releases/download/v1.11.1/node_exporter-1.11.1.linux-arm64.tar.gz
+        path: /tmp/node_exporter-1.11.1.tar.gz
     # install-шаг разворачивает arm64-каталог в unless/cmd (через arch).
     - module: core.archive.extracted
       params_subset:
-        path: /tmp/node_exporter-1.9.0.tar.gz
-        dest: /tmp/node_exporter-1.9.0
+        path: /tmp/node_exporter-1.11.1.tar.gz
+        dest: /tmp/node_exporter-1.11.1

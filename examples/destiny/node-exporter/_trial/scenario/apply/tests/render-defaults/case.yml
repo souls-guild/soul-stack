@@ -22,7 +22,7 @@ name: node-exporter destiny renders fetch/extract/install/account/unit/collector
 fixtures:
   default_destiny_source: "file://../../{name}"
   input:
-    version: "1.9.0"
+    version: "1.11.1"
     collectors: [smartmon, nvme, ipmi]
   # soulprint синтетического L0-хоста: destiny берёт arch напрямую из
   # soulprint.self.os.arch (URL/install-путь), а apply:input — primary_ip из
@@ -47,15 +47,15 @@ assert:
     # содержимого). Единственный core.url.fetched в плане.
     - module: core.url.fetched
       params_subset:
-        url: https://github.com/prometheus/node_exporter/releases/download/v1.9.0/node_exporter-1.9.0.linux-amd64.tar.gz
-        path: /tmp/node_exporter-1.9.0.tar.gz
+        url: https://github.com/prometheus/node_exporter/releases/download/v1.11.1/node_exporter-1.11.1.linux-amd64.tar.gz
+        path: /tmp/node_exporter-1.11.1.tar.gz
         mode: "0644"
 
     # Единственный core.archive.extracted в плане.
     - module: core.archive.extracted
       params_subset:
-        path: /tmp/node_exporter-1.9.0.tar.gz
-        dest: /tmp/node_exporter-1.9.0
+        path: /tmp/node_exporter-1.11.1.tar.gz
+        dest: /tmp/node_exporter-1.11.1
 
     # ── account.yml: стабильный сервис-аккаунт + textfile-каталог ───────────────
     - module: core.group.present
@@ -90,7 +90,7 @@ assert:
     - module: core.file.present
       params_subset:
         path: /usr/local/bin/node_exporter
-        src: /tmp/node_exporter-1.9.0/node_exporter-1.9.0.linux-amd64/node_exporter
+        src: /tmp/node_exporter-1.11.1/node_exporter-1.11.1.linux-amd64/node_exporter
         mode: "0755"
         owner: root
         group: root

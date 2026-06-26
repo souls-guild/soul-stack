@@ -10,7 +10,7 @@ name: node-exporter renders download url from base_url mirror override
 fixtures:
   default_destiny_source: "file://../../{name}"
   input:
-    version: "1.9.0"
+    version: "1.11.1"
     collectors: [smartmon, nvme, ipmi]
     base_url_override: "https://nexus.internal/ne"
   soulprint:
@@ -24,5 +24,5 @@ assert:
     # Единственный core.url.fetched в плане.
     - module: core.url.fetched
       params_subset:
-        url: https://nexus.internal/ne/v1.9.0/node_exporter-1.9.0.linux-amd64.tar.gz
-        path: /tmp/node_exporter-1.9.0.tar.gz
+        url: https://nexus.internal/ne/v1.11.1/node_exporter-1.11.1.linux-amd64.tar.gz
+        path: /tmp/node_exporter-1.11.1.tar.gz

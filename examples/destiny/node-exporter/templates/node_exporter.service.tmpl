@@ -1,12 +1,15 @@
 {{/*
-  systemd-unit node_exporter. Контекст рендера (docs/templating.md §3.2):
-    .vars  — явно переданные core.file.rendered (exporter_bin — готовый путь
-             бинаря из vars.bin_path, user, group, listen, textfile_dir);
-             прод-параметры демона: gomaxprocs (int), disabled_collectors /
-             enabled_collectors (list<string>), collector_options
-             (map<string,map<string,string>>), log_level, log_format,
-             web_telemetry_path, fs_mount_points_exclude,
-             netdev_device_exclude (string);
+  systemd-unit node_exporter. Контекст рендера (docs/templating.md §3.2, Вариант B):
+    .vars  — производные значения, поднятые в params.vars: exporter_bin —
+             готовый путь бинаря из vars.bin_path (резолвится из vars.yml, не из
+             operator-input);
+    .input — operator-input прохода (Вариант B, ADR-010 §3.2 amendment): user,
+             group, listen, textfile_dir; прод-параметры демона: gomaxprocs
+             (int), disabled_collectors / enabled_collectors (list<string>),
+             collector_options (map<string,map<string,string>>), log_level,
+             log_format, web_telemetry_path, fs_mount_points_exclude,
+             netdev_device_exclude (string). Читаются `.input.<name>` напрямую,
+             без passthrough через params.vars;
     .self  — стабильные факты хоста (здесь не используются).
   Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010).
 
@@ -23,7 +26,7 @@
   Под root основной демон НЕ работает.
 
   systemd-hardening (прод-конвенция §3, «безопасность на первом месте»): полный
-  блок беспривилегированного Go-демона. ReadOnlyPaths=.vars.textfile_dir — демон
+  блок беспривилегированного Go-демона. ReadOnlyPaths=.input.textfile_dir — демон
   только ЧИТАЕТ .prom из textfile-каталога (пишут туда oneshot-сборщики), поэтому
   каталог для него только-чтение. MemoryDenyWriteExecute уместен (Go-бинарь без
   W+X-страниц). CapabilityBoundingSet пуст — публичные метрики ядра/ФС привилегий
@@ -37,20 +40,20 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User={{ .vars.user }}
-Group={{ .vars.group }}
+User={{ .input.user }}
+Group={{ .input.group }}
 ExecStart={{ .vars.exporter_bin }} \
-    --collector.textfile.directory={{ .vars.textfile_dir }} \
-    --web.listen-address={{ .vars.listen }} \
-    --web.telemetry-path={{ .vars.web_telemetry_path }} \
-    --log.level={{ .vars.log_level }} \
-    --log.format={{ .vars.log_format }}{{ range .vars.disabled_collectors }} \
-    --no-collector.{{ . }}{{ end }}{{ range .vars.enabled_collectors }} \
-    --collector.{{ . }}{{ end }}{{ range $name, $opts := .vars.collector_options }}{{ range $k, $v := $opts }} \
-    --collector.{{ $name }}.{{ $k }}={{ $v }}{{ end }}{{ end }}{{ if gt (int .vars.gomaxprocs) 0 }} \
-    --runtime.gomaxprocs={{ .vars.gomaxprocs }}{{ end }}{{ if .vars.fs_mount_points_exclude }} \
-    --collector.filesystem.mount-points-exclude={{ .vars.fs_mount_points_exclude }}{{ end }}{{ if .vars.netdev_device_exclude }} \
-    --collector.netdev.device-exclude={{ .vars.netdev_device_exclude }}{{ end }}
+    --collector.textfile.directory={{ .input.textfile_dir }} \
+    --web.listen-address={{ .input.listen }} \
+    --web.telemetry-path={{ .input.web_telemetry_path }} \
+    --log.level={{ .input.log_level }} \
+    --log.format={{ .input.log_format }}{{ range .input.disabled_collectors }} \
+    --no-collector.{{ . }}{{ end }}{{ range .input.enabled_collectors }} \
+    --collector.{{ . }}{{ end }}{{ range $name, $opts := .input.collector_options }}{{ range $k, $v := $opts }} \
+    --collector.{{ $name }}.{{ $k }}={{ $v }}{{ end }}{{ end }}{{ if gt (int .input.gomaxprocs) 0 }} \
+    --runtime.gomaxprocs={{ .input.gomaxprocs }}{{ end }}{{ if .input.fs_mount_points_exclude }} \
+    --collector.filesystem.mount-points-exclude={{ .input.fs_mount_points_exclude }}{{ end }}{{ if .input.netdev_device_exclude }} \
+    --collector.netdev.device-exclude={{ .input.netdev_device_exclude }}{{ end }}
 SyslogIdentifier=node_exporter
 Restart=on-failure
 RestartSec=5
@@ -68,7 +71,7 @@ MemoryDenyWriteExecute=yes
 LockPersonality=yes
 RestrictNamespaces=yes
 ProtectProc=invisible
-ReadOnlyPaths={{ .vars.textfile_dir }}
+ReadOnlyPaths={{ .input.textfile_dir }}
 
 [Install]
 WantedBy=multi-user.target

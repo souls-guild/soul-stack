@@ -5,16 +5,17 @@
 # порт). Контраст с render-defaults (primary_ip 10.0.0.5 → listen "10.0.0.5:9100").
 # Доказывает internal-bind-логику: вне 10/8 host пуст.
 #
-# listen попадает в render_context.vars.listen основного unit-шага (core.file.
-# rendered кладёт CEL-собранные vars в render_context). Ассертим render_context
-# unit-задачи (index 6) целиком — он детерминирован для синтетического L0-хоста;
-# ключевая величина — vars.listen = ":9100".
+# listen попадает в render_context.input.listen основного unit-шага (Вариант B,
+# ADR-010 §3.2 amendment: operator-input доезжает в render_context.input
+# напрямую, без passthrough params.vars). Ассертим render_context unit-задачи
+# целиком — он детерминирован для синтетического L0-хоста; ключевая величина —
+# input.listen = ":9100". В vars остаётся только производный exporter_bin.
 name: node-exporter binds to all interfaces when primary_ip is non-10
 
 fixtures:
   default_destiny_source: "file://../../{name}"
   input:
-    version: "1.9.0"
+    version: "1.11.1"
     collectors: [smartmon, nvme, ipmi]
   soulprint:
     os:
@@ -31,11 +32,20 @@ assert:
         # template_content присутствует (literal .tmpl доставлен Keeper→Soul);
         # точную посимвольную сверку шаблона не делаем (хрупко), см. presentMarker.
         template_content: "<present>"
-        # render_context.vars.listen = ":9100" — пустой host (primary_ip не 10.*).
+        # render_context.input.listen = ":9100" — пустой host (primary_ip не 10.*).
+        # Вариант B: operator-input (резолвнутый destiny-input + defaults) едет в
+        # render_context.input целиком; vars несёт лишь производный exporter_bin.
         render_context:
           vars:
             exporter_bin: /usr/local/bin/node_exporter
+          input:
+            # apply:input passthrough (version/listen/collectors/base_url/
+            # collector_options/web_telemetry_path) + дефолты destiny-схемы.
+            version: "1.11.1"
+            base_url: "https://github.com/prometheus/node_exporter/releases/download"
             listen: ":9100"
+            collectors: [smartmon, nvme, ipmi]
+            bin_dir: /usr/local/bin
             textfile_dir: /var/lib/node_exporter
             user: node_exporter
             group: node_exporter

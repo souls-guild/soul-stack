@@ -32,7 +32,7 @@ stand:
 # (стандартный порт node_exporter); collectors=[] — на VM-стенде коллекторы
 # железа gate-ятся.
 input:
-  version: "1.9.0"
+  version: "1.11.1"
   listen: ":9100"
   collectors: []
   bin_dir: /usr/local/bin

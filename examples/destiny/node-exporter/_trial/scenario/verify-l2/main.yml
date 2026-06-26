@@ -31,7 +31,7 @@ description: >-
 input:
   version:
     type: string
-    default: "1.9.0"
+    default: "1.11.1"
     pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
     description: Версия node_exporter (passthrough контракта; в L2 не качается).
   listen:

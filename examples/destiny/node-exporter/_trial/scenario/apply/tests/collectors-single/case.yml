@@ -13,7 +13,7 @@ name: node-exporter renders with single collector (smartmon only)
 fixtures:
   default_destiny_source: "file://../../{name}"
   input:
-    version: "1.9.0"
+    version: "1.11.1"
     collectors: [smartmon]
   soulprint:
     os:

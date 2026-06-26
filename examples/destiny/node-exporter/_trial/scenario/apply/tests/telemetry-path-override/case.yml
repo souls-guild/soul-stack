@@ -1,20 +1,21 @@
 # L0-кейс: переопределённый web_telemetry_path (!= /metrics).
 #
 # web_telemetry_path=/node/metrics → apply:input передаёт его в destiny →
-# render_context.vars.web_telemetry_path основного unit-шага. Контраст с
-# render-defaults (дефолт /metrics). Флаг --web.telemetry-path рендерится ВСЕГДА
-# (дефолт непустой); сам text/template-рендер флага покрыт unit-тестом
-# keeper/internal/render (TestNodeExporterService_TelemetryPathOverride) — L0
-# фиксирует только CEL-проброс значения в render_context.
+# render_context.input.web_telemetry_path основного unit-шага (Вариант B,
+# ADR-010 §3.2 amendment: operator-input едет в render_context.input напрямую).
+# Контраст с render-defaults (дефолт /metrics). Флаг --web.telemetry-path
+# рендерится ВСЕГДА (дефолт непустой); сам text/template-рендер флага покрыт
+# unit-тестом keeper/internal/render (TestNodeExporterService_TelemetryPathOverride)
+# — L0 фиксирует только CEL-проброс значения в render_context.
 #
-# render_context сверяется deep-equal целиком (harness), поэтому vars перечислены
+# render_context сверяется deep-equal целиком (harness), поэтому input перечислен
 # полностью (как listen-non10); ключевая величина — web_telemetry_path.
 name: node-exporter renders overridden web telemetry path
 
 fixtures:
   default_destiny_source: "file://../../{name}"
   input:
-    version: "1.9.0"
+    version: "1.11.1"
     collectors: [smartmon]
     web_telemetry_path: "/node/metrics"
   soulprint:
@@ -26,7 +27,7 @@ fixtures:
 assert:
   task_present:
     # Основной unit-шаг (дизамбигуатор — path). web_telemetry_path доехал в
-    # render_context.vars override-значением, collector_options — дефолт {}.
+    # render_context.input override-значением, collector_options — дефолт {}.
     - module: core.file.rendered
       params_subset:
         path: /etc/systemd/system/node_exporter.service
@@ -34,7 +35,12 @@ assert:
         render_context:
           vars:
             exporter_bin: /usr/local/bin/node_exporter
+          input:
+            version: "1.11.1"
+            base_url: "https://github.com/prometheus/node_exporter/releases/download"
             listen: "10.0.0.5:9100"
+            collectors: [smartmon]
+            bin_dir: /usr/local/bin
             textfile_dir: /var/lib/node_exporter
             user: node_exporter
             group: node_exporter

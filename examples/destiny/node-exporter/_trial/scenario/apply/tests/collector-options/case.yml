@@ -1,14 +1,14 @@
 # L0-кейс: под-опции коллекторов (collector_options, формат B1).
 #
 # Доказывает CEL-проброс input.collector_options нативным типом (map<string,
-# map<string,string>>) в render_context.vars основного unit-шага (core.file.
-# rendered кладёт CEL-собранные vars в render_context). Сам двойной range по
-# ОТСОРТИРОВАННЫМ ключам (детерминизм флагов ExecStart) исполняется text/template-
-# фазой и покрыт unit-тестом keeper/internal/render
+# map<string,string>>) в render_context.input основного unit-шага (Вариант B,
+# ADR-010 §3.2 amendment: operator-input едет в render_context.input напрямую).
+# Сам двойной range по ОТСОРТИРОВАННЫМ ключам (детерминизм флагов ExecStart)
+# исполняется text/template-фазой и покрыт unit-тестом keeper/internal/render
 # (TestNodeExporterService_CollectorOptionsDeterministic) — L0 text/template не
 # гоняет, поэтому здесь фиксируется только корректная доставка map в render_context.
 #
-# render_context сверяется deep-equal целиком (harness), поэтому vars перечислены
+# render_context сверяется deep-equal целиком (harness), поэтому input перечислен
 # полностью (как listen-non10); ключевая величина — collector_options. Insertion-
 # порядок ключей намеренно не-лексикографичен — детерминизм рендера обеспечивается
 # range-фазой, не порядком в этом фикстуре.
@@ -17,7 +17,7 @@ name: node-exporter renders collector sub-options (collector_options map)
 fixtures:
   default_destiny_source: "file://../../{name}"
   input:
-    version: "1.9.0"
+    version: "1.11.1"
     collectors: [smartmon]
     collector_options:
       systemd:
@@ -34,7 +34,7 @@ fixtures:
 assert:
   task_present:
     # Основной unit-шаг (дизамбигуатор — path). collector_options доехал в
-    # render_context.vars нативным map'ом, ключ-в-ключ.
+    # render_context.input нативным map'ом, ключ-в-ключ.
     - module: core.file.rendered
       params_subset:
         path: /etc/systemd/system/node_exporter.service
@@ -42,7 +42,12 @@ assert:
         render_context:
           vars:
             exporter_bin: /usr/local/bin/node_exporter
+          input:
+            version: "1.11.1"
+            base_url: "https://github.com/prometheus/node_exporter/releases/download"
             listen: "10.0.0.5:9100"
+            collectors: [smartmon]
+            bin_dir: /usr/local/bin
             textfile_dir: /var/lib/node_exporter
             user: node_exporter
             group: node_exporter
