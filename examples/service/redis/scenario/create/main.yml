@@ -314,19 +314,25 @@ form:
       fields:
         - { name: redis_type, label: "Режим развёртывания" }
         - { name: install, label: "Способ установки" }
-        - { name: version, label: "Версия пакета (distro-пин)" }
+        - name: version
+          label: "Версия пакета (distro-пин)"
+          placeholder: "5:7.0.15-1~deb12u7"
+          hint: "Distro-native пин (=version). Обязательно при install.method=package; при binary версия задаётся в install.version."
 
     - key: layout
       title: "Раскладка на хосте"
       collapsed: true
       fields:
-        - { name: conf_dir, label: "Каталог конфигурации" }
-        - { name: data_dir, label: "Каталог данных" }
+        - { name: conf_dir, label: "Каталог конфигурации", placeholder: "/etc/redis" }
+        - { name: data_dir, label: "Каталог данных", placeholder: "/var/lib/redis" }
 
     - key: resources
       title: "Память и persistence"
       fields:
-        - { name: memory_mb, label: "Бюджет памяти, МБ" }
+        - name: memory_mb
+          label: "Бюджет памяти, МБ"
+          placeholder: "1024"
+          hint: "Бюджет памяти под Redis на хосте. maxmemory вычисляется как доля от него (минус резерв ОС). Не задан → maxmemory из подложки essence."
         - { name: persistence, label: "Режим persistence" }
         - { name: maxmemory_policy, label: "Политика вытеснения" }
 
@@ -335,9 +341,23 @@ form:
       description: "Реплики (оба режима) и параметры Cluster"
       collapsed: true
       fields:
-        - { name: replicas_per_master, label: "Реплик на master" }
-        - { name: shards, label: "Число master-шардов (cluster)" }
-        - { name: cluster_node_timeout, label: "Таймаут gossip, мс (cluster)" }
+        - name: replicas_per_master
+          label: "Реплик на master"
+          placeholder: "0"
+          hint: "0 = один master без реплик (cluster: только мастера; sentinel: standalone-эквивалент)."
+        # cluster-специфичные поля: видимы ТОЛЬКО в режиме cluster (для sentinel
+        # не используются). show_when — презентация, не гейт: shards.required_when
+        # на input-валидации остаётся независимо (defence-in-depth).
+        - name: shards
+          label: "Число master-шардов (cluster)"
+          show_when: "input.redis_type == 'cluster'"
+          placeholder: "3"
+          hint: "16384 hash-слота делятся поровну между шардами. Roster прогона обязан быть shards*(1+реплик)."
+        - name: cluster_node_timeout
+          label: "Таймаут gossip, мс (cluster)"
+          show_when: "input.redis_type == 'cluster'"
+          placeholder: "5000"
+          hint: "Таймаут gossip между нодами кластера (cluster-node-timeout). Не задан → 5000."
 
     - key: security
       title: "ACL и TLS"
