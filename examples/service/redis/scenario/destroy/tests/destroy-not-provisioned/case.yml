@@ -1,0 +1,43 @@
+# L0-испытание destroy (teardown, ADR-061) — инкарнация развёрнута БЕЗ cloud-
+# provision (deploy на существующие VM). incarnation.state НЕ несёт provisioned
+# vm_ids/sids (либо они пусты — консервативный default create без provision: []/'').
+# destroy на таких VM не имеет смысла (машины не наши), задача core.cloud.destroyed
+# group-drop.
+#
+# Guard `when: size(provisioned_vm_ids) > 0` на задаче destroyed — статический
+# предикат (incarnation.* только, isStaticWhen) → render-phase GROUP-DROP: при
+# пустом provisioned_vm_ids (0 > 0 = false) задача физически исключается из плана
+# (НЕ placeholder-skip). assert парности sids↔vm_ids (0 == 0) вакуумно проходит,
+# не мешая teardown без provision.
+#
+# Парный к destroy-provisioned: там state несёт vm_ids → задача в плане. Этот
+# кейс доказывает, что инкарнация без provision проходит teardown БЕЗ cloud-
+# вызова (никаких лишних core.cloud.destroyed).
+name: destroy of a non-provisioned incarnation drops core.cloud.destroyed (group-drop)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [destroy]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
+
+  # incarnation.state без provisioned_* (инкарнация развёрнута на существующие VM).
+  # Поля провижена пусты (как их пишет create без provision: [] / ''). default()
+  # в when/assert ловит и полное отсутствие ключа (back-compat до v7/v8), и пустой
+  # массив — оба дают size 0.
+  state:
+    redis_type: sentinel
+    redis_config: {}
+    provisioned_vm_ids: []
+    provisioned_sids: []
+    provisioned_provider: ""
+
+assert:
+  task_absent:
+    # core.cloud.destroyed group-drop: пустой provisioned_vm_ids → when 0 > 0 false
+    # → задача исключена из плана (render-phase group-drop, не placeholder). На
+    # не-провиженной инкарнации teardown не зовёт cloud-destroy.
+    - module: core.cloud.destroyed
