@@ -1,4 +1,4 @@
-# core.cloud.provisioned
+# core.cloud
 
 Создание / удаление cloud-инстансов через CloudDriver-плагин (`soul-cloud-*`).
 **Keeper-side**, диспетчер `on: keeper` — шаг исполняется на самом Keeper-е, не
@@ -7,6 +7,14 @@
 `on: keeper`» ([ADR-017](../../../adr/0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read):
 это keeper-side операция, не пакет задач для Soul). Реализация —
 [`keeper/internal/coremod/cloud/provisioned.go`](../../../../keeper/internal/coremod/cloud/provisioned.go).
+
+> **★ Author-адрес — `core.cloud.created` / `core.cloud.destroyed`** (base `core.cloud` + state).
+> Именно это пишет оператор в `module:`. Форма `core.cloud.provisioned` **НЕ
+> существует** как адрес задачи: реестр ([`registry.go`](../../../../keeper/internal/coremod/registry.go))
+> делит адрес на base (`core.cloud`, идёт в `Lookup`) + state (`created`/`destroyed`,
+> идёт в `ApplyRequest.state`), а `provisioned` — неизвестный state (integration-тест
+> ловит её как fail). «provisioned» — историческое имя Go-пакета и формулировка ADR-017,
+> не author-facing адрес. Имя этого файла оставлено `core/cloud/` по base-имени.
 
 CloudDriver вызывается через PluginHost (gRPC-over-stdio плагин `soul-cloud-<provider>`).
 SID создаваемого хоста = FQDN, который вернул провайдер (`VmInfo.fqdn`); VM без

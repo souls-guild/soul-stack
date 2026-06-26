@@ -33,7 +33,12 @@ passthrough-директивы оператора, SHALLOW last-wins ([templatin
 > [`update_config`](scenario/update_config/main.yml) /
 > [`add_user`](scenario/add_user/main.yml) /
 > [`update_users`](scenario/update_users/main.yml) /
-> [`rotate_tls`](scenario/rotate_tls/main.yml). Неизвестный `redis_type` (вне enum)
+> [`rotate_tls`](scenario/rotate_tls/main.yml). Опционально `create` может в **том же
+> прогоне** поднять VM под топологию через cloud-provision (`input.provision`,
+> state_schema bumped 4→7) — см. [«Cloud-provision»](#cloud-provision-create-поднимает-vm-experimental).
+> **★ Cloud-provision — EXPERIMENTAL / render-only, НЕ для прода** (шаг доставки
+> bootstrap-токена `keeper.push.applied` keeper-side не реализован — live оборвётся на
+> await-таймауте; подробности в разделе). Неизвестный `redis_type` (вне enum)
 > отвергает **input-валидация Keeper-а ДО рендера** (понятный отказ, прогон не
 > стартует) — прежний shell-mode-guard убран. Остальной backlog (sentinel
 > failover/day-2, плагинный `failover`, sentinel-демон TLS) — см.
@@ -58,7 +63,7 @@ passthrough-директивы оператора, SHALLOW last-wins ([templatin
 
 ## state_schema
 
-[`service.yml → state_schema`](service.yml), `state_schema_version: 4`. Цепочка
+[`service.yml → state_schema`](service.yml), `state_schema_version: 7`. Цепочка
 миграций forward-only (ADR-019):
 
 - [`001_to_002.yml`](migrations/001_to_002.yml) — `redis_users` из списка имён в map
@@ -73,7 +78,20 @@ passthrough-директивы оператора, SHALLOW last-wins ([templatin
   режимов из сервиса. Сам файл миграции несёт флаг `needs_architect` (★★): remap
   меняет живой смысл инкарнации (standalone не имел sentinel-демона; `sentinel_only`
   не имел data-плоскости) — корректность target-режима для живых
-  standalone/`sentinel_only`-инкарнаций должна быть подтверждена до прода.
+  standalone/`sentinel_only`-инкарнаций должна быть подтверждена до прода;
+- [`004_to_005.yml`](migrations/004_to_005.yml) — тайминги failover sentinel:
+  `redis_sentinel` дополнен `down_after_ms`/`failover_timeout_ms` (read-model day-2,
+  default-роль `5000`/`60000`); только для sentinel-инкарнаций, для cluster (`redis_sentinel
+  {}`) — no-op;
+- [`005_to_006.yml`](migrations/005_to_006.yml) — `redis_users` из map `name→{perms,state}`
+  в **типизированный массив `[{name, perms, state}]`** (ADR-062 `AclUser`): map-ключ
+  (имя) переезжает в поле `name`;
+- [`006_to_007.yml`](migrations/006_to_007.yml) — **cloud-provision read-model**
+  ([ADR-061](../../../docs/adr/0061-onboarding-await-and-midrun-reresolve.md), Вариант A):
+  state дополнен двумя независимыми полями `provisioned_vm_ids` (array string) и
+  `provisioned_provider` (string). Существующим инкарнациям (развёрнутым **без** provision)
+  — консервативный default `[]` / `''` (хосты — declared roster, не провиженные сервисом);
+  два плоских `set` с `has()`-guard (back-compat + идемпотентность повторного прогона).
 
 `incarnation.state` фиксирует, что развёрнуто, чтобы оператор видел инсталляцию, а
 повторный apply был идемпотентен:
@@ -85,7 +103,9 @@ passthrough-директивы оператора, SHALLOW last-wins ([templatin
 | `redis_config` | object | **итог трансляции** — merged-конфиг `redis.conf` (default → preset → вычисления → passthrough; для `cluster` — плюс `cluster-*`-директивы) |
 | `redis_users` | array `AclUser` (`[{name, perms, state}]`) | **operator-extra** ACL-пользователи Redis (только заведённые оператором). Элемент — типизированный `AclUser` (`name` + `perms` обязательны, `state` дефолт `on`) из [`types.yml`](types.yml), переиспользуемый через `$type: AclUser` в `input:` сценариев (ADR-062). До state_schema v6 это был map `username → {perms, state}` — миграция [`005_to_006.yml`](migrations/005_to_006.yml) свернула map→array (имя-ключ → поле `name`). `perms` — полная ACL-строка (пароли НЕ в state — keeper-side Vault). **Системные** служебные юзеры (`replica`/`monitoring`/`sentinel`/`haproxy` и т.д.) сюда **НЕ** пишутся — они доливаются в `users.acl` из `essence.system_acl_users` на каждом рендере (см. [«Системные ACL-юзеры»](#системные-acl-юзеры)) |
 | `redis_hosts` | array `{sid, role}` | хосты топологии (пишется `[]`; точные роли `primary`/`replica`/`sentinel` для cluster/sentinel раскладывает apply-сторона — в state не фиксируются) |
-| `redis_sentinel` | object `{master_name, quorum}` | факты sentinel-режима: имя monitored master (из `essence.sentinel_master_name`, дефолт `master`) + quorum. `quorum` всегда `0` (auto `size/2+1` вычисляется в apply, в state не материализуется). Вне режима `sentinel` — пустой объект |
+| `redis_sentinel` | object `{master_name, master_ip, quorum, down_after_ms, failover_timeout_ms}` | факты sentinel-режима: имя monitored master (из `essence.sentinel_master_name`, дефолт `master`) + quorum + тайминги failover (v5, default `5000`/`60000`). `quorum` всегда `0` (auto `size/2+1` вычисляется в apply, в state не материализуется); `master_ip` материализуется только для убранного режима `sentinel_only` (внешний master). Вне режима `sentinel` — пустой объект |
+| `provisioned_vm_ids` | array string | **(v7, cloud-provision read-model, [ADR-061](../../../docs/adr/0061-onboarding-await-and-midrun-reresolve.md))** provider-vm-id VM, поднятых **этим** create-прогоном через `core.cloud.created` (из `register.provision.vm_ids`). Day-2 teardown читает их для `core.cloud.destroyed`. Без provision (`input.provision` опущен/`enabled:false`) — `[]` (хосты — declared roster, не провиженные сервисом). См. [«Cloud-provision»](#cloud-provision-create-поднимает-vm-experimental) |
+| `provisioned_provider` | string | **(v7)** имя cloud-Provider в реестре (тот же `destroy`-вызов; из `input.provision.provider`). Без provision — `''` |
 
 Кроме перечисленных, `state_schema` несёт **именованные поля намерения** (read-model,
 v3): `tls` / `install` / `persistence` / `memory_mb` / `maxmemory_policy` / `modules`
@@ -117,8 +137,9 @@ v3): `tls` / `install` / `persistence` / `memory_mb` / `maxmemory_policy` / `mod
 | `shards` | integer, обяз. при `cluster` (`required_when`), min `1` | **(cluster)** число master-шардов; 16384 hash-слота делятся поровну между мастерами. Обязателен при `redis_type=cluster` через `required_when: "input.redis_type == 'cluster'"` — пропуск рвёт input-валидацию ДО рендера |
 | `cluster_node_timeout` | integer, опц., default `5000`, min `1` | **(cluster)** таймаут gossip между нодами, мс (директива `cluster-node-timeout`) |
 | `users` | array `AclUser` (`[{name, perms, state}]`) | **operator-extra** ACL-юзеры; элемент — типизированный `AclUser` ([`types.yml`](types.yml), ADR-062 `$type`): `name` + `perms` обязательны, `state` ∈ `on`/`off` (дефолт `on`). `perms` — полная ACL-строка Redis, валидируется re2-паттерном `AclUser` (token-shape-фильтр). Имя **не может** совпасть с системным служебным (`default`/`replica`/`monitoring`/`sentinel`/`haproxy`) — коллизию отвергает input-валидация (422, см. [«Системные ACL-юзеры»](#системные-acl-юзеры)). Сливается **поверх** системных (last-wins) в `users.acl` |
-| `redis_settings` | object (passthrough) | произвольные директивы `redis.conf` key→value; **бьют всё** в итоговом merge |
+| `redis_settings` | object (passthrough) | произвольные директивы `redis.conf` key→value; **бьют всё** в итоговом merge. **Имена** директив version-aware-валидируются `assert`-ом против каталога валидных директив выбранной версии Redis (см. [«Валидатор имён директив»](#валидатор-имён-директив-redis_settings)) — опечатка / директива из чужой версии рвёт прогон на render (422) ДО applying |
 | `tls` | object `{enable, only, port, cert_ref, key_ref, ca_ref}`, опц. | **(TLS)** параметры TLS Redis (концепция `redis_tls_*` роли). operator-input **бьёт essence** (каждое под-поле опционально; недостающие берут дефолт из `essence.tls_*`). `enable` — главный гейт рендера PEM/директив; `only` — закрыть plain-порт (scenario ставит `port 0`); `port` — TLS-порт (директива `tls-port`, дефолт essence `7379`); `cert_ref`/`key_ref`/`ca_ref` — Vault-**ПУТИ** серверного cert/key и CA (форма `<mount>/<path>#<field>`, **не** сам PEM). destiny читает PEM через `vault(ref)` в ячейке `content` (`core.file.present`, seal-маскинг — НЕ `.tmpl`). Пустой/не передан → TLS off. `tls.only` требует `tls.enable` (`validate`) |
+| `provision` | object `{enabled, provider, profile, await_timeout}`, опц. | **★ EXPERIMENTAL** ([«Cloud-provision»](#cloud-provision-create-поднимает-vm-experimental)): поднять VM под топологию в **том же** create-прогоне ([ADR-061](../../../docs/adr/0061-onboarding-await-and-midrun-reresolve.md), Вариант A). `enabled: true` → cloud-create + барьер онбординга, потом redis-роль на созданные хосты; опущен / `enabled: false` → прогон по существующему roster-у (поведение бит-в-бит как без фичи). `provider`/`profile` — имена в реестрах `providers`/`profiles`; `await_timeout` (`<N>{s\|m\|h}`) — потолок ожидания онбординга (не задан → `essence.provision_await_timeout`, дефолт `10m`). **Числа VM в `provision` нет** — выводится из топологии (`shards`/`replicas_per_master`). **Не для прода** (шаг доставки bootstrap-токена не реализован keeper-side — см. раздел) |
 **Чего во входном контракте нет (essence-параметры или авто-вычисление):**
 
 - `sentinel_quorum` — **авто** `size(hosts)/2+1` (большинство), вычисляется в apply.
@@ -474,6 +495,84 @@ per-module doc [`docs/module/community/redis/README.md`](../../../docs/module/co
 > [`redis`](../../destiny/redis/)** (флаги `deploy_redis: false` / `sentinel_enabled:
 > true`) — для переиспользования другими сервисами (например DragonFly), но через
 > сервис redis она больше не вызывается.
+
+### Cloud-provision (`create` поднимает VM, EXPERIMENTAL)
+
+> **★★ EXPERIMENTAL / render-only — НЕ для прода.** Поток валиден на render (L0
+> Trial), но **live оборвётся**: шаг доставки per-VM bootstrap-токена
+> `keeper.push.applied` (б) **keeper-side НЕ реализован** (SSH-доставка push). Без
+> доставки токена созданные VM не пройдут CSR-онбординг → барьер `await_online` (в) не
+> наберёт presence → шаг `failed` по `await_timeout` → state не коммитится →
+> `error_locked`. Включать `input.provision.enabled: true` против живого Keeper **до
+> реализации `keeper.push` SSH-доставки нельзя**. Образец того же флоу —
+> [`examples/service/example-cloud-bootstrap/`](../example-cloud-bootstrap/).
+
+Опциональная способность `create` (state_schema v7, [ADR-061](../../../docs/adr/0061-onboarding-await-and-midrun-reresolve.md),
+Вариант A): **один** create-прогон поднимает VM под топологию **и** деплоит на них Redis.
+Гейтится `input.provision` ([«Входной контракт»](#входной-контракт-оператора)) — задан и
+`enabled: true` включает ветку [`scenario/create/provision.yml`](scenario/create/provision.yml)
+(conditional-include **строго перед** cluster/sentinel); опущен / `enabled: false` —
+прогон по существующему roster-у, поведение бит-в-бит как без фичи.
+
+**Поток** (`provision.yml`, все три шага `on: keeper`):
+
+1. **(а) cloud-create** — `module: core.cloud.created` ([keeper-side core](../../../docs/keeper/cloud.md),
+   ADR-017). Создаёт VM через CloudDriver-плагин `soul-cloud-<provider>`. **Число VM
+   выводится из топологии** (`cluster`: `shards * (1 + replicas_per_master)`; `sentinel`:
+   `1 + replicas_per_master`) — отдельного `node_count` в `input.provision` нет (рассинхронился
+   бы с size-формулой). `generate_userdata: true` (ADR-017(h) B-flat): Keeper рендерит
+   cloud-init из `keeper.yml::cloud_init` (CA + soul-binary URL); userdata токены **НЕ**
+   несёт. Per-VM bootstrap-токен → `register.provision.hosts[].bootstrap_token` (plain
+   one-time, маскируется `audit.MaskSecrets`).
+2. **(б) доставка токена** — `module: keeper.push.applied` (по SSH). **★ Иллюстративный
+   шаг, render-only**: берёт `register.provision.hosts`, но keeper-side доставка push
+   **не реализована** (см. блок выше).
+3. **(в) регистрация + барьер онбординга** — `module: core.soul.registered` ([ADR-061](../../../docs/adr/0061-onboarding-await-and-midrun-reresolve.md)).
+   `sid` — **список** SID созданных VM (`register.provision.hosts.map(h, h.sid)`, list-SID
+   ADR-061); `coven` — корневой `incarnation.name`. `await_online: true` блокирующе ждёт,
+   пока созданные Souls станут online (Redis SID-lease) под `await_timeout`; **B1-strict**:
+   недобор кворума → шаг `failed` → state не коммитится → `error_locked`. `refresh_soulprint:
+   true` → после успеха scenario-runner пере-резолвит roster **перед** cluster/sentinel-веткой
+   (иначе ветка увидела бы пустой/старый `soulprint.hosts` — созданные VM ещё не в roster-е).
+
+После успеха cluster/sentinel-ветка катит redis-роль на уже-online хосты. `state_changes`
+пишет `provisioned_vm_ids` (из `register.provision.vm_ids`) и `provisioned_provider` (из
+`input.provision.provider`) — **только** на provision-пути (guard по `input.provision`, не
+`has(register.provision)`); на non-provision-прогоне остаются `[]` / `''`.
+
+**Teardown (destroy) — отдельного сценария ПОКА НЕТ.** Поля `provisioned_vm_ids` /
+`provisioned_provider` в state зарезервированы под будущий day-2 teardown (читает их для
+`core.cloud.destroyed`), но самого `scenario/destroy/` в сервисе **нет** — это backlog
+([«В работе»](#в-работе)). `provision.yml` явно отмечает «teardown — не здесь».
+
+### Валидатор имён директив `redis_settings`
+
+`create` сверяет **каждое имя** директивы в `input.redis_settings` (passthrough в
+`redis.conf`) против каталога валидных имён для выбранной версии Redis — `assert:` на
+render-стороне ([`scenario/create/main.yml`](scenario/create/main.yml), шаг
+«Version-aware валидатор»). Неизвестное имя (опечатка `maxmemoyr` или директива из чужой
+версии) рвёт прогон на render (**422 `assert_failed`**) **ДО applying**, понятным
+сообщением — а не поздним `redis-server`-фейлом на хосте.
+
+- **Каталог — `essence.redis_directives`** ([`essence/_default.yaml`](essence/_default.yaml)).
+  ★ Имя `redis_directives` — рабочее (предложено в этом эпике). Структура: ключ = серия
+  Redis `major.minor`, значение = плоский список валидных имён директив этой серии.
+  Покрыты **шесть** серий: `6.2` / `7.0` / `7.2` / `7.4` / `8.0` / `8.2`.
+- **Источник — `src/config.c` апстрима Redis** (таблица `standardConfig` + специальные
+  директивы), **не** `redis.conf` (прозаические комментарии неотличимы от commented-примеров
+  директив). Каталог **committed** (на render-пути сети нет); перегенерация при добавлении
+  версии — [`scripts/gen-redis-catalog.sh`](../../../scripts/gen-redis-catalog.sh) (от корня
+  репо), вывод вклеивается в `essence`.
+- **MVP — только имена**, значения директив не валидируются.
+- **Series-skip:** `input.version` (distro-пин `5:7.0.15-1~deb12u7` **или** semver) → серия
+  `X.Y` извлекается регуляркой; серии **нет** в каталоге → `assert` пропускается (валидируются
+  только известные версии, не-каталожная не блокируется). **Empty-catalog-skip:** нет
+  `essence.redis_directives` (старый essence) → проверка пропускается (back-compat).
+- **Почему `assert`, а не `validate`:** каталог живёт в `essence`, а `validate`-контекст
+  **input-only** (essence недоступен, структурный CEL-барьер); `assert` видит
+  `essence`+`input`+`compute`.
+- **Только в `create`:** day-2 `update_config` (тоже принимает `redis_settings`) этого
+  валидатора пока **не несёт** — расширение follow-up.
 
 ### `add_node` (day-2: присоединить ноду к кластеру)
 
@@ -851,7 +950,16 @@ Day-2 hot-reload реализован: `update_config` (live `CONFIG SET` дел
   reshard) / `replica` / `sentinel` уже есть);
 - TLS sentinel-демона (`:26379`): data-плоскость redis-server TLS уже реализована
   (operator-dict `tls.enable`/`tls.only`, бьёт essence), TLS для sentinel-демона —
-  follow-up.
+  follow-up;
+- **cloud-provision (`input.provision`) — EXPERIMENTAL / render-only**: шаг доставки
+  bootstrap-токена `keeper.push.applied` keeper-side **не реализован** (см.
+  [«Cloud-provision»](#cloud-provision-create-поднимает-vm-experimental)) — против живого
+  Keeper не запускать до реализации `keeper.push` SSH-доставки;
+- **teardown (destroy) cloud-provisioned VM** — отдельного `scenario/destroy/` пока **нет**;
+  state-поля `provisioned_vm_ids` / `provisioned_provider` под него зарезервированы (read-model
+  v7), сам сценарий — backlog;
+- **version-aware валидатор `redis_settings` в day-2 `update_config`** — пока только в
+  `create` (см. [«Валидатор имён директив»](#валидатор-имён-директив-redis_settings)).
 
 Состояние плагина `community.redis` (какие states реализованы) — в его per-module
 doc [`docs/module/community/redis/README.md`](../../../docs/module/community/redis/README.md).

@@ -57,8 +57,7 @@ keeper.profile.create
 ```yaml
 - name: provision
   on: keeper                             # шаг исполняется на keeper-е
-  module: core.cloud.provisioned
-  state: created
+  module: core.cloud.created             # base core.cloud + state created (state — последний сегмент адреса)
   params:
     provider: "${ input.spawn.provider }"  # ИМЯ Provider-а из реестра providers
     profile:  "${ input.spawn.profile }"
@@ -66,7 +65,13 @@ keeper.profile.create
     userdata: "${ input.spawn.cloud_init }" # опц. cloud-init blob для bootstrap soul
 ```
 
-Что делает `core.cloud.provisioned` (state `created`):
+> **★ State — последний сегмент `module:`-адреса**, не отдельный ключ. Пишется
+> `module: core.cloud.created` / `core.cloud.destroyed`; формы `module:
+> core.cloud.provisioned` или отдельного `state: created`-ключа **не существует**
+> (реестр делит адрес `core.cloud.created` на base `core.cloud` + state `created`,
+> поля `state:` в задаче нет).
+
+Что делает `core.cloud` (state `created`):
 
 1. **Резолвит Provider-реестр.** `params.provider` — это имя строки `providers` (не имя CloudDriver-плагина). Keeper читает строку, берёт `type` (= имя плагина `soul-cloud-<type>`), `region` и `credentials_ref`.
 2. **Резолвит credentials.** По `credentials_ref` (`vault:<mount>/<path>`) Keeper читает секрет из Vault KV тем же keeper-side Vault-клиентом, что `core.vault.kv-read`, и кладёт plain-секрет + `region` в `CreateRequest.credentials`. Драйвер в Vault **НЕ ходит** (см. [Credentials-flow](#credentials-flow) ниже).
@@ -144,8 +149,7 @@ Hot-reload работает: правка `keeper.yml` через `keeper-reload
 ```yaml
 - name: provision
   on: keeper
-  module: core.cloud.provisioned
-  state: created
+  module: core.cloud.created           # base core.cloud + state created (НЕ core.cloud.provisioned; state — последний сегмент)
   params:
     provider:          aws-prod
     profile:           {image: ami-0001, instance_type: t3.medium}
