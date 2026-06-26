@@ -113,18 +113,30 @@ func resolveOn(engine *cel.Engine, in RenderInput, on any) ([]string, error) {
 // недоступны (обращение к ним в params keeper-задачи — штатная CEL-ошибка
 // no-such-key, как и должно быть: keeper-шаг оперирует input/incarnation/essence,
 // не фактами хоста).
+//
+// incarnation.state — read-only pre-run снимок (RenderInput.State, тот же stateBefore
+// под FOR UPDATE, см. [incarnationVars]): keeper-задача (core.cloud.destroyed и пр.)
+// читает `incarnation.state.<path>` в params симметрично Soul-side. Снимок инвариантен
+// (фиксируется один раз, не накапливается между passages). nil-State → ключ `state`
+// не кладётся: `incarnation.state.<x>` даёт штатный no-such-key (push/trial без State,
+// backward-compat). Граница keeper↔soul соблюдена: state — operator-факты (не секреты),
+// soulprint.self/.hosts по-прежнему недоступны (хостов нет).
 func keeperVars(in RenderInput) cel.Vars {
+	inc := map[string]any{
+		"name":            in.Incarnation.Name,
+		"service":         in.Incarnation.Service,
+		"service_version": in.Incarnation.ServiceVersion,
+		"host_count":      0,
+	}
+	if in.State != nil {
+		inc["state"] = in.State
+	}
 	return cel.Vars{
-		Input:    in.Input,
-		Register: in.Register,
-		Incarnation: map[string]any{
-			"name":            in.Incarnation.Name,
-			"service":         in.Incarnation.Service,
-			"service_version": in.Incarnation.ServiceVersion,
-			"host_count":      0,
-		},
-		Essence: in.Essence,
-		Ctx:     in.Ctx,
+		Input:       in.Input,
+		Register:    in.Register,
+		Incarnation: inc,
+		Essence:     in.Essence,
+		Ctx:         in.Ctx,
 	}
 }
 

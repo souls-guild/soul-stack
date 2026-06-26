@@ -887,6 +887,61 @@ func TestRender_OnKeeper_SoulprintUnavailable(t *testing.T) {
 	}
 }
 
+// TestRender_OnKeeper_StateReadable — keeper-side задача читает incarnation.state.<path>
+// в params: pre-run снимок (RenderInput.State) симметрично Soul-side. Разблокирует
+// core.cloud.destroyed (on: keeper) от чтения incarnation.state.provisioned_*.
+func TestRender_OnKeeper_StateReadable(t *testing.T) {
+	manifest := &config.ScenarioManifest{
+		Name: "k",
+		Tasks: []config.Task{
+			{Name: "t", On: "keeper", Module: &config.ModuleTask{Module: "core.cloud.provisioned", Params: map[string]any{
+				"vm_id": "${ incarnation.state.provisioned_vm_id }",
+			}}},
+		},
+	}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario:    manifest,
+		Incarnation: IncarnationMeta{Name: "svc"},
+		State:       map[string]any{"provisioned_vm_id": "vm-42"},
+		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
+	}
+	tasks, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("len(tasks) = %d, want 1", len(tasks))
+	}
+	got := tasks[0].Params.GetFields()["vm_id"].GetStringValue()
+	if got != "vm-42" {
+		t.Fatalf("params.vm_id = %q, want vm-42 (keeper-задача видит incarnation.state)", got)
+	}
+}
+
+// TestRender_OnKeeper_StateNilNoSuchKey — без RenderInput.State обращение к
+// incarnation.state.<path> в params keeper-задачи — штатный no-such-key (push/trial
+// back-compat), не молчаливый пустой результат. Симметрично Soul-side nil-State.
+func TestRender_OnKeeper_StateNilNoSuchKey(t *testing.T) {
+	manifest := &config.ScenarioManifest{
+		Name: "k",
+		Tasks: []config.Task{
+			{Name: "t", On: "keeper", Module: &config.ModuleTask{Module: "core.cloud.provisioned", Params: map[string]any{
+				"vm_id": "${ incarnation.state.provisioned_vm_id }",
+			}}},
+		},
+	}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario:    manifest,
+		Incarnation: IncarnationMeta{Name: "svc"}, // State == nil
+		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
+	}
+	if _, _, err := p.Render(context.Background(), in); err == nil {
+		t.Fatalf("Render: err = nil, want no-such-key (incarnation.state без State)")
+	}
+}
+
 // TestRender_WhereExcludesAll — where: отфильтровал всех → пустой DispatchPlan,
 // но RenderedTask присутствует.
 func TestRender_WhereExcludesAll(t *testing.T) {
