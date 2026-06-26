@@ -392,3 +392,142 @@ func (c *concurrentKV) ReadKV(_ context.Context, path string) (map[string]any, e
 	}
 	return data, nil
 }
+
+// ── per-render-pass memo: дедуп vault()-резолвов в одном проходе ─────────────
+
+// countingKV — KVReader со счётчиком backend-вызовов по пути (проверка дедупа).
+type countingKV struct {
+	secrets map[string]map[string]any
+	mu      sync.Mutex
+	count   map[string]int
+}
+
+func newCountingKV(secrets map[string]map[string]any) *countingKV {
+	return &countingKV{secrets: secrets, count: map[string]int{}}
+}
+
+func (c *countingKV) ReadKV(_ context.Context, path string) (map[string]any, error) {
+	c.mu.Lock()
+	c.count[path]++
+	c.mu.Unlock()
+	data, ok := c.secrets[path]
+	if !ok {
+		return nil, errors.New("vault: KV path not found: " + path)
+	}
+	return data, nil
+}
+
+func (c *countingKV) calls(path string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.count[path]
+}
+
+// Повторный vault(тот-же-путь) в ОДНОМ render-pass = ровно 1 backend-вызов.
+func TestVaultMemo_SamePathOneBackendCall(t *testing.T) {
+	kv := newCountingKV(map[string]map[string]any{
+		"secret/redis/admin": {"password": "s3cr3t"},
+	})
+	e := newVaultEngine(t, kv)
+
+	ctx := WithVaultMemo(context.Background())
+	const expr = "${ vault('secret/redis/admin#password') }"
+	for i := 0; i < 16; i++ { // redis-масштаб: десятки одинаковых vault()
+		out, err := e.EvalInterpolation(expr, Vars{Ctx: ctx})
+		if err != nil {
+			t.Fatalf("eval #%d: %v", i, err)
+		}
+		if out != "s3cr3t" {
+			t.Fatalf("eval #%d = %v, want s3cr3t", i, out)
+		}
+	}
+	if got := kv.calls("secret/redis/admin"); got != 1 {
+		t.Fatalf("backend-вызовов ReadKV = %d, want 1 (memo дедуп в одном pass)", got)
+	}
+}
+
+// Разные #field одного секрета бьют один backend-вызов (ReadKV видит body без
+// #field), но каждое поле резолвится корректно из кешированного map.
+func TestVaultMemo_DifferentFieldsSameSecretOneCall(t *testing.T) {
+	kv := newCountingKV(map[string]map[string]any{
+		"secret/redis/inc": {"password": "PWD", "tls": "TLS-CERT"},
+	})
+	e := newVaultEngine(t, kv)
+
+	ctx := WithVaultMemo(context.Background())
+	pwd, err := e.EvalInterpolation("${ vault('secret/redis/inc#password') }", Vars{Ctx: ctx})
+	if err != nil {
+		t.Fatalf("eval #password: %v", err)
+	}
+	tls, err := e.EvalInterpolation("${ vault('secret/redis/inc#tls') }", Vars{Ctx: ctx})
+	if err != nil {
+		t.Fatalf("eval #tls: %v", err)
+	}
+	if pwd != "PWD" || tls != "TLS-CERT" {
+		t.Fatalf("разные #field перепутаны: password=%v tls=%v", pwd, tls)
+	}
+	if got := kv.calls("secret/redis/inc"); got != 1 {
+		t.Fatalf("backend-вызовов = %d, want 1 (один ReadKV на секрет, поля из кеша)", got)
+	}
+}
+
+// Разные render-pass-ы НЕ делят кеш: каждый pass со своим memo-ctx → отдельный
+// backend-вызов. Закрепляет per-pass scope (нет межзапросной утечки/stale).
+func TestVaultMemo_SeparatePassesDoNotShareCache(t *testing.T) {
+	kv := newCountingKV(map[string]map[string]any{
+		"secret/redis/admin": {"password": "s3cr3t"},
+	})
+	e := newVaultEngine(t, kv)
+
+	const expr = "${ vault('secret/redis/admin#password') }"
+	for pass := 0; pass < 3; pass++ {
+		ctx := WithVaultMemo(context.Background()) // новый pass = новый memo
+		if _, err := e.EvalInterpolation(expr, Vars{Ctx: ctx}); err != nil {
+			t.Fatalf("pass #%d: %v", pass, err)
+		}
+		if _, err := e.EvalInterpolation(expr, Vars{Ctx: ctx}); err != nil {
+			t.Fatalf("pass #%d (повтор): %v", pass, err)
+		}
+	}
+	// 3 pass-а × дедуп внутри pass-а = 3 backend-вызова (не 1, не 6).
+	if got := kv.calls("secret/redis/admin"); got != 3 {
+		t.Fatalf("backend-вызовов = %d, want 3 (по одному на pass, кеш не общий)", got)
+	}
+}
+
+// Без WithVaultMemo (ctx без кеша — soul-lint/Trial/прямой unit-eval) поведение
+// прежнее: каждый vault() бьёт backend. Memo — оптимизация, не контракт.
+func TestVaultMemo_NoMemoEveryCallHitsBackend(t *testing.T) {
+	kv := newCountingKV(map[string]map[string]any{
+		"secret/redis/admin": {"password": "s3cr3t"},
+	})
+	e := newVaultEngine(t, kv)
+
+	const expr = "${ vault('secret/redis/admin#password') }"
+	for i := 0; i < 4; i++ {
+		if _, err := e.EvalInterpolation(expr, Vars{Ctx: context.Background()}); err != nil {
+			t.Fatalf("eval #%d: %v", i, err)
+		}
+	}
+	if got := kv.calls("secret/redis/admin"); got != 4 {
+		t.Fatalf("backend-вызовов = %d, want 4 (без memo — каждый вызов бьёт Vault)", got)
+	}
+}
+
+// Ошибка ReadKV НЕ кешируется: retry того же пути в pass-е повторяет чтение
+// (транзиентный сбой Vault не «залипает» на весь прогон).
+func TestVaultMemo_ErrorsNotCached(t *testing.T) {
+	kv := newCountingKV(map[string]map[string]any{}) // секрета нет → ошибка
+	e := newVaultEngine(t, kv)
+
+	ctx := WithVaultMemo(context.Background())
+	const expr = "${ vault('secret/redis/admin#password') }"
+	for i := 0; i < 3; i++ {
+		if _, err := e.EvalInterpolation(expr, Vars{Ctx: ctx}); err == nil {
+			t.Fatalf("eval #%d: ожидали ошибку missing-secret", i)
+		}
+	}
+	if got := kv.calls("secret/redis/admin"); got != 3 {
+		t.Fatalf("backend-вызовов = %d, want 3 (ошибки не кешируются)", got)
+	}
+}

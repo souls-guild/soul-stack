@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common"
@@ -78,6 +79,80 @@ type vaultResolver struct {
 	kv  KVReader
 }
 
+// vaultMemoKey — приватный тип ключа context-value для per-render-pass кеша
+// vault()-резолвов (см. [WithVaultMemo], [vaultMemo]). Неэкспортируемый тип —
+// чтобы значение нельзя было перезаписать снаружи пакета случайной коллизией
+// ключа.
+type vaultMemoKey struct{}
+
+// vaultMemo — кеш резолвов vault() в рамках ОДНОГО render-pass. Ключ — `body`
+// (путь Vault БЕЗ `#field`), то есть ровно аргумент ReadKV; значение — весь map
+// секрета. Дедуп привязан к backend-вызову: vault('secret/x#password') и
+// vault('secret/x#tls') бьют один ReadKV('secret/x'), поэтому кешируем map
+// целиком, а нужное поле выбирается per-call ПОСЛЕ кеша (корректность по
+// #field сохраняется — разные поля выбираются из одного кешированного map).
+//
+// Scope — per-render-pass: кеш живёт в context.Context, который Keeper
+// заводит на один Pipeline.Render (одна инкарнация, один прогон) и прокидывает
+// в Vars.Ctx всех eval-вызовов этого pass-а. Не package-level и не на Engine
+// (Engine шарится между инкарнациями) — иначе была бы межзапросная утечка
+// секретов и stale-значения. Разные render-pass-ы несут разные context-ы → не
+// делят кеш.
+//
+// Concurrency: в пределах одного render-pass eval-вызовы последовательны
+// (Pipeline.Render — sequential per-task), но mu держим для безопасности на
+// случай конкурентного per-host fan-out над общим ctx. Промах кеша может
+// привести к параллельному двойному ReadKV одного пути (безвредно: значение
+// идемпотентно), но запись в map синхронизирована.
+type vaultMemo struct {
+	mu sync.Mutex
+	m  map[string]map[string]any
+}
+
+// WithVaultMemo привязывает к ctx per-render-pass кеш vault()-резолвов. Зовётся
+// Keeper-ом ОДИН раз на старте render-pass (Pipeline.Render), полученный ctx
+// прокидывается в Vars.Ctx всех eval-вызовов pass-а. Повторный vault() с тем же
+// путём в этом pass-е берётся из кеша — Vault не бьётся снова. Без вызова (или с
+// ctx без memo — soul-lint/Trial, прямые unit-eval) vault() работает как раньше,
+// бьёт ReadKV каждый раз: кеш — оптимизация, не контракт результата.
+func WithVaultMemo(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, ok := ctx.Value(vaultMemoKey{}).(*vaultMemo); ok {
+		return ctx // идемпотентно: повторная привязка не плодит вложенные кеши.
+	}
+	return context.WithValue(ctx, vaultMemoKey{}, &vaultMemo{m: map[string]map[string]any{}})
+}
+
+// readKVMemoized читает секрет body через kv с дедупом в рамках render-pass.
+// Кеш берётся из ctx ([vaultMemoKey], заведён [WithVaultMemo]). Если кеша нет
+// (ctx без memo) — прямой ReadKV без кеширования. Ошибки ReadKV НЕ кешируются:
+// retry в том же pass-е (напр. транзиентный сбой Vault) повторит чтение.
+func readKVMemoized(ctx context.Context, kv KVReader, body string) (map[string]any, error) {
+	memo, ok := ctx.Value(vaultMemoKey{}).(*vaultMemo)
+	if !ok {
+		return kv.ReadKV(ctx, body)
+	}
+
+	memo.mu.Lock()
+	cached, hit := memo.m[body]
+	memo.mu.Unlock()
+	if hit {
+		return cached, nil
+	}
+
+	data, err := kv.ReadKV(ctx, body)
+	if err != nil {
+		return nil, err
+	}
+
+	memo.mu.Lock()
+	memo.m[body] = data
+	memo.mu.Unlock()
+	return data, nil
+}
+
 // vaultResolverType — opaque CEL-тип resolver-а (не часть пользовательской
 // type-model; resolver — hidden-аргумент макроса).
 var vaultResolverType = types.NewOpaqueType("soulstack.vaultResolver")
@@ -139,7 +214,7 @@ func callVault(pathVal, resolverVal ref.Val) ref.Val {
 		return types.NewErr("vault(): %v", err)
 	}
 
-	data, rerr := res.kv.ReadKV(res.ctx, body)
+	data, rerr := readKVMemoized(res.ctx, res.kv, body)
 	if rerr != nil {
 		// rerr может нести bare-путь (vault.ErrVaultKVNotFound: secret/<path>),
 		// который НЕ ловится маркером CredentialsRefPrefix (`vault:secret/`) —

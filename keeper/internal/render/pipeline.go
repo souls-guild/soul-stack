@@ -114,7 +114,12 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 		span.End()
 	}()
 
-	in.Ctx = ctx // прокинуть в CEL vault() (отмена/таймаут ReadKV)
+	// per-render-pass vault()-memo: повторный vault(тот-же-путь) в этом проходе
+	// (per-host × day-2 redis ACL/sentinel — десятки одинаковых чтений) берётся из
+	// кеша, Vault не бьётся снова. Scope — ровно этот Render-вызов (одна
+	// инкарнация): кеш живёт в ctx, не на Engine (тот шарится между прогонами).
+	ctx = cel.WithVaultMemo(ctx)
+	in.Ctx = ctx // прокинуть в CEL vault() (отмена/таймаут ReadKV + memo)
 
 	// compute: резолвится ОДИН раз на прогон (рун-уровневый контекст без soulprint,
 	// барьер host-инвариантности) ДО рендера задач — результат `compute.<name>`
@@ -745,7 +750,8 @@ func (p *Pipeline) EvalAsserts(ctx context.Context, in RenderInput) error {
 	if in.Scenario == nil {
 		return fmt.Errorf("render: scenario manifest is nil")
 	}
-	in.Ctx = ctx // assert.that[] может звать vault() — прокинуть отмену/таймаут
+	ctx = cel.WithVaultMemo(ctx) // per-pass vault()-memo (assert pre-flight — отдельный pass)
+	in.Ctx = ctx                 // assert.that[] может звать vault() — прокинуть отмену/таймаут + memo
 	// compute: доступен в assert.that[] так же, как в params/where (один резолв,
 	// рун-уровневый контекст без soulprint). Идемпотентно с Render/RenderStateOps.
 	computed, cerr := p.resolveCompute(in)
