@@ -1,0 +1,139 @@
+# L0-guard pattern на AclUser.perms (positive): валидная насыщенная ACL-строка
+# ПРОХОДИТ input-валидацию и долетает до state. Оператор задаёт двух юзеров с
+# валидными, но «широкими» perms: `allkeys +@all` (полные права) и `~app:* +@read
+# -@dangerous` (точечные). Оба — корректный Redis-ACL-синтаксис → pattern пропускает,
+# юзеры попадают в state_changes.redis_users (write-model: name/perms/state, без пароля).
+# Доказывает, что pattern НЕ ложно-срабатывает на легитимных правах (включая allkeys/+@all).
+# Топология cluster shards=3 replicas=0 → 3 хоста (size-guard PASS).
+name: valid wide acl perms pass input validation and reach state
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-b.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-c.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+    - sid: node-a.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+    secret/redis/create/users/admin:
+      password: admin-user-secret-pass
+    secret/redis/create/users/app:
+      password: app-user-secret-pass
+  essence:
+    redis_type: cluster
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+  input:
+    redis_type: cluster
+    version: "7.2.4"
+    shards: 3
+    replicas_per_master: 0
+    cluster_node_timeout: 5000
+    users:
+      - { name: admin, perms: "allkeys +@all", state: "on" }
+      - { name: app, perms: "~app:* +@read -@dangerous", state: "on" }
+
+assert:
+  # users.acl: системные (4, из essence) + admin (allkeys +@all) + app (точечные).
+  # Прямое доказательство, что валидные «широкие» perms прошли pattern и долетели в
+  # render_context.vars.users (deep-compare map) с per-user vault-паролями. Дизамбигуатор
+  # от redis.conf — path + register-якорь.
+  task_present:
+    - module: core.file.rendered
+      id: redis_acl
+      params_subset:
+        path: /etc/redis/users.acl
+        render_context:
+          vars:
+            users:
+              replica:
+                perms: "+psync +replconf +ping"
+                state: "on"
+                password: replica-sys-secret-pass
+              monitoring:
+                perms: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+                state: "on"
+                password: monitoring-sys-secret-pass
+              sentinel:
+                perms: "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+                state: "on"
+                password: sentinel-sys-secret-pass
+              haproxy:
+                perms: "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+                state: "on"
+                password: haproxy-sys-secret-pass
+              admin:
+                perms: "allkeys +@all"
+                state: "on"
+                password: admin-user-secret-pass
+              app:
+                perms: "~app:* +@read -@dangerous"
+                state: "on"
+                password: app-user-secret-pass
+          self:
+            sid: node-a.example.com
+            covens: [create, redis]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+  # Оба юзера прошли pattern на input-валидации и попали в write-model state.
+  # redis_users — МАССИВ AclUser [{name,perms,state}] БЕЗ пароля (keeper-side vault).
+  state_changes:
+    redis_type: cluster
+    redis_version: "7.2.4"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+      cluster-enabled:      "yes"
+      cluster-config-file:  "nodes.conf"
+      cluster-node-timeout: "5000"
+    redis_users:
+      - { name: admin, perms: "allkeys +@all", state: "on" }
+      - { name: app, perms: "~app:* +@read -@dangerous", state: "on" }
+    redis_hosts: []

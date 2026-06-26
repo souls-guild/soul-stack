@@ -144,3 +144,89 @@ tasks: []
 		t.Fatalf("ожидался ErrInputInvalid, got %v", err)
 	}
 }
+
+// typesAclUserPerms — каталог с AclUser, несущим pattern на perms (token-shape-
+// фильтр Redis-ACL, examples/service/redis/types.yml). pattern проверяется на
+// RUNTIME-пути ValidateInput → ResolveInputValues → validateValueAt для каждого
+// элемента массива users. Источник pattern — types.yml сервиса redis; здесь
+// продублирован 1:1 как канон guard-теста.
+const typesAclUserPerms = `types:
+  AclUser:
+    type: object
+    required: [name, perms]
+    properties:
+      name:
+        type: string
+        pattern: "^[a-z][a-z0-9_-]*$"
+      perms:
+        type: string
+        pattern: "^(?:(?:(?:on|off|nopass|resetpass|reset|clearselectors|sanitize-payload|skip-sanitize-payload|nosanitize-payload|allkeys|allchannels|allcommands|nocommands)|(?:%R~|%W~|%RW~|~)[A-Za-z0-9:_.*?\\[\\]{}\\\\-]+|&[A-Za-z0-9:_.*?\\[\\]{}\\\\-]+|[+-](?:@[a-z][a-z0-9-]*|[a-z][a-z0-9-]*(?:\\|[a-z][a-z0-9-]*)?)|[><][A-Za-z0-9:_.@%/+=-]+|[#!][0-9a-fA-F]{64}|\\([^()]*\\))(?: (?:(?:on|off|nopass|resetpass|reset|clearselectors|sanitize-payload|skip-sanitize-payload|nosanitize-payload|allkeys|allchannels|allcommands|nocommands)|(?:%R~|%W~|%RW~|~)[A-Za-z0-9:_.*?\\[\\]{}\\\\-]+|&[A-Za-z0-9:_.*?\\[\\]{}\\\\-]+|[+-](?:@[a-z][a-z0-9-]*|[a-z][a-z0-9-]*(?:\\|[a-z][a-z0-9-]*)?)|[><][A-Za-z0-9:_.@%/+=-]+|[#!][0-9a-fA-F]{64}|\\([^()]*\\)))*)?$"
+      state:
+        type: string
+        default: "on"
+        enum: [on, off]
+`
+
+// TestValidateInput_AclUserPerms_GarbageRejected — token-shape pattern на
+// AclUser.perms отшивает мусор/инъекции на RUNTIME-пути ValidateInput. Каждый
+// кейс — операторский input.users с одним элементом; perms — не-Redis-ACL-строка.
+// Доказывает, что pattern энфорсится на элементах массива $type:AclUser (прод-путь
+// резолва $type → ResolveInputValues → validateValueAt), а не только в lint.
+func TestValidateInput_AclUserPerms_GarbageRejected(t *testing.T) {
+	root := writeServiceWithTypes(t, scenarioUsersOfType, typesAclUserPerms)
+	loader := &dirInputLoader{root: root}
+
+	cases := map[string]string{
+		"произвольный текст":        "произвольный текст",
+		"shell-инъекция через ;":    "~* +@all; rm -rf /",
+		"перевод строки":            "~app:* +@read\n~evil:* +@all",
+		"неизвестный сигил =":       "~* =foo",
+		"pipe вне сабкоманды":       "~* +@all | cat",
+		"backtick":                  "~* `whoami`",
+		"command substitution":      "~* $(id)",
+		"ключевое-слово без сигила": "hello",
+	}
+	for name, perms := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
+				map[string]any{"users": []any{map[string]any{"name": "app", "perms": perms, "state": "on"}}})
+			if err == nil {
+				t.Fatalf("мусорная perms %q должна быть отклонена pattern-ом, got nil", perms)
+			}
+			if !errors.Is(err, ErrInputInvalid) {
+				t.Fatalf("ожидался ErrInputInvalid (perms не соответствует pattern), got %v", err)
+			}
+		})
+	}
+}
+
+// TestValidateInput_AclUserPerms_ValidAccepted — валидные Redis-ACL-строки
+// ПРОХОДЯТ pattern: точечные права, широкие (allkeys +@all) и РЕАЛЬНЫЕ системные
+// строки из essence (replica/monitoring/sentinel/haproxy, с дефисными сабкомандами
+// типа sentinel|is-master-down-by-addr). Замыкает guard — pattern не ложно-режет.
+func TestValidateInput_AclUserPerms_ValidAccepted(t *testing.T) {
+	root := writeServiceWithTypes(t, scenarioUsersOfType, typesAclUserPerms)
+	loader := &dirInputLoader{root: root}
+
+	valid := []string{
+		"~app:* +@read +@write -@dangerous",
+		"~* +@all",
+		"allkeys +@all",
+		"+psync +replconf +ping", // системный replica
+		"-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs",   // системный monitoring
+		"allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill", // системный sentinel
+		"-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info",                            // системный haproxy
+		"allchannels -@all +auth +sentinel|is-master-down-by-addr +sentinel|get-master-addr-by-name +sentinel|myid",                         // дефисные сабкоманды
+		// NB: пустая строка pattern-ом разрешена (бесправный off-юзер), но perms в
+		// required:[name,perms] → пустая отвергается required-логикой ДО pattern.
+		// Бесправный юзер выражается токеном `off`, не пустой строкой.
+		"off",
+	}
+	for _, perms := range valid {
+		err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
+			map[string]any{"users": []any{map[string]any{"name": "app", "perms": perms, "state": "on"}}})
+		if err != nil {
+			t.Fatalf("валидная perms %q должна проходить pattern, got %v", perms, err)
+		}
+	}
+}

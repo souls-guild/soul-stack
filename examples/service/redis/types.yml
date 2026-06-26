@@ -25,11 +25,31 @@ types:
           users.acl; пароль резолвится keeper-side из Vault по конвенции
           secret/redis/<incarnation>/users/<name>#password.
       # ПОЛНАЯ ACL-строка прав (не алиас): директивы Redis ACL как есть.
+      #
+      # pattern — НЕ полный Redis-парсер, а token-shape-фильтр (re2): отшивает
+      # произвольный текст, переводы строк, пробелы-в-токене, shell-инъекции
+      # (`;`/`|`-вне-сабкоманды/`&&`/backticks/`$()`) и неизвестные сигилы;
+      # семантику добивает Redis на `ACL SETUSER`. Вся строка = пробел-разделённые
+      # токены, каждый — одна из форм: ключи `~pat`/`%R~`/`%W~`/`%RW~`/`allkeys`;
+      # каналы `&pat`/`allchannels`; команды `+cmd`/`-cmd`/`+@cat`/`-@cat`/
+      # `+cmd|sub`/`allcommands`/`nocommands`; служебные `on`/`off`/`nopass`/
+      # `resetpass`/`reset`/`clearselectors`/`(no|skip-|)sanitize-payload`;
+      # пароли `>pwd`/`<pwd`/`#hex64`/`!hex64`; селектор `(...)` (один chunk без
+      # вложенных скобок). Сам pattern допускает пустую строку, но perms в
+      # object-level required → пустую отсекает required-логика ДО pattern;
+      # бесправный юзер выражается токеном `off`, не пустой строкой.
+      # Пароли в perms-строке маскируются на выходе (логи/UI) общим secret-маскингом.
       perms:
         type: string
+        pattern: "^(?:(?:(?:on|off|nopass|resetpass|reset|clearselectors|sanitize-payload|skip-sanitize-payload|nosanitize-payload|allkeys|allchannels|allcommands|nocommands)|(?:%R~|%W~|%RW~|~)[A-Za-z0-9:_.*?\\[\\]{}\\\\-]+|&[A-Za-z0-9:_.*?\\[\\]{}\\\\-]+|[+-](?:@[a-z][a-z0-9-]*|[a-z][a-z0-9-]*(?:\\|[a-z][a-z0-9-]*)?)|[><][A-Za-z0-9:_.@%/+=-]+|[#!][0-9a-fA-F]{64}|\\([^()]*\\))(?: (?:(?:on|off|nopass|resetpass|reset|clearselectors|sanitize-payload|skip-sanitize-payload|nosanitize-payload|allkeys|allchannels|allcommands|nocommands)|(?:%R~|%W~|%RW~|~)[A-Za-z0-9:_.*?\\[\\]{}\\\\-]+|&[A-Za-z0-9:_.*?\\[\\]{}\\\\-]+|[+-](?:@[a-z][a-z0-9-]*|[a-z][a-z0-9-]*(?:\\|[a-z][a-z0-9-]*)?)|[><][A-Za-z0-9:_.@%/+=-]+|[#!][0-9a-fA-F]{64}|\\([^()]*\\)))*)?$"
         description: >-
-          Полная ACL-строка прав (директивы Redis ACL как есть), напр. "~* +@all"
-          или "~app:* +@read +@write -@dangerous". Пишется в users.acl как есть.
+          Redis ACL: права одной строкой, токены через пробел. Пример:
+          `~app:* +@read +@write -@dangerous` (ключи app:* + чтение/запись, минус
+          опасные). Формы токенов: ключи `~<pat>`/`%R~`/`%W~`/`%RW~`/`allkeys`;
+          каналы `&<pat>`/`allchannels`; команды `+<cmd>`/`-<cmd>`/`+@<cat>`/
+          `-@<cat>`/`+<cmd>|<sub>`/`allcommands`/`nocommands`; пароли
+          `><pwd>`/`#<hex64>`; служебные `on`/`off`/`nopass`/`reset`. Пишется в
+          users.acl как есть; синтаксис проверяется (мусор/инъекции отшиваются).
       # Состояние: on (активен) / off (заблокирован, правило хранится). default on.
       # Не в object-level required → опционально; default доливается на input-стадии.
       state:
