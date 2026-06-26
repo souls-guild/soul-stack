@@ -1,0 +1,93 @@
+# L0-испытание update_users: ПУСТОЙ набор удаляет ВСЕХ operator-extra, системные остаются.
+# Развёрнутый state.redis_users = {bob}; оператор задаёт input.users: [] (пустой набор).
+# bulk-replace → ВСЕ operator-extra выпадают:
+#   1. users.acl рендерится ТОЛЬКО с системными (из essence) — bob отсутствует;
+#   2. state_changes.redis_users = [] (operator-extra нет).
+# Этот кейс доказывает граничный случай bulk-replace (пустой массив = очистить operator-
+# extra) И что системные ВСЁ РАВНО доливаются (репликация/sentinel не ломаются при очистке).
+name: update_users with empty set removes all operator-extra but keeps system users
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.5 }
+    os: { arch: amd64 }
+
+  state:
+    redis_type: sentinel
+    redis_version: "7.2.4"
+    conf_dir: /etc/redis
+    data_dir: /var/lib/redis
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+    redis_users:
+      - { name: bob, perms: "~app:* +@read", state: "on" }
+
+  essence:
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+
+  # Пустой набор: убрать всех operator-extra.
+  input:
+    users: []
+
+  vault:
+    secret/redis/update_users:
+      password: updusr-redis-pass-16ch
+    secret/redis/update_users/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/update_users/users/monitoring:
+      password: monitoring-sys-secret-pass
+
+assert:
+  task_present:
+    # users.acl несёт ТОЛЬКО системные (replica/monitoring) — bob удалён. deep-compare
+    # ловит лишнего operator-extra (регресс «empty не очистил») И исчезновение системного.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/users.acl
+        render_context:
+          vars:
+            users:
+              replica:
+                perms: "+psync +replconf +ping"
+                state: "on"
+                password: replica-sys-secret-pass
+              monitoring:
+                perms: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+                state: "on"
+                password: monitoring-sys-secret-pass
+          self:
+            sid: trial-host
+            covens: [update_users]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    - module: community.redis.acl
+      params_subset:
+        addr: "127.0.0.1:6379"
+        password: updusr-redis-pass-16ch
+        tls: false
+
+  # state_changes: redis_users = [] (operator-extra очищены, системные не в state).
+  state_changes:
+    redis_users: []

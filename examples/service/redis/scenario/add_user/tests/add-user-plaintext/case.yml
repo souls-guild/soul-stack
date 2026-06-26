@@ -46,9 +46,10 @@ fixtures:
       - { name: bob, perms: "~app:* +@read", state: "on" }
 
   input:
-    username: alice
-    perms: "~* +@all"
-    state: "on"
+    user:
+      name: alice
+      perms: "~* +@all"
+      state: "on"
 
   vault:
     secret/redis/add_user:

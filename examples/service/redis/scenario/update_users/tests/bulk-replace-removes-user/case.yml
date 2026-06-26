@@ -1,0 +1,89 @@
+# ★★ ЦЕНТРАЛЬНЫЙ guard update_users: BULK-REPLACE удаляет юзера, выпавшего из набора.
+# Развёрнутый state.redis_users = {alice, bob}; оператор задаёт НОВЫЙ полный набор
+# input.users = {alice (с ИЗМЕНЁННЫМИ perms)} — bob в наборе НЕТ. update_users заменяет
+# state.redis_users ЦЕЛИКОМ:
+#   1. users.acl рендерится с alice (новые perms) — БЕЗ bob (удалён из ACL);
+#   2. state_changes.redis_users = [alice] (bob выпал — bulk-replace, не upsert).
+# Регресс «update_users мержит/апсертит вместо replace» = bob остался бы в users.acl
+# и/или в state_changes → ассерт красный. Render-only, герметично. Plaintext (addr 6379).
+name: update_users bulk-replaces the set and drops a user absent from input (plaintext)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.5 }
+    os: { arch: amd64 }
+
+  # Развёрнутый incarnation.state v6: operator-extra alice + bob.
+  state:
+    redis_type: sentinel
+    redis_version: "7.2.4"
+    conf_dir: /etc/redis
+    data_dir: /var/lib/redis
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+    redis_users:
+      - { name: alice, perms: "~* +@all", state: "on" }
+      - { name: bob, perms: "~app:* +@read", state: "on" }
+
+  # Новый полный набор: только alice (с НОВЫМИ perms). bob удаляется.
+  input:
+    users:
+      - { name: alice, perms: "~app:* +@read +@write", state: "on" }
+
+  vault:
+    secret/redis/update_users:
+      password: updusr-redis-pass-16ch
+    secret/redis/update_users/users/alice:
+      password: alice-user-secret-pass
+
+assert:
+  task_present:
+    # 1. users.acl несёт ТОЛЬКО alice с НОВЫМИ perms — bob отсутствует (bulk-replace).
+    #    deep-compare: лишний bob = красный ассерт.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/users.acl
+        render_context:
+          vars:
+            users:
+              alice:
+                perms: "~app:* +@read +@write"
+                state: "on"
+                password: alice-user-secret-pass
+          self:
+            sid: trial-host
+            covens: [update_users]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # 2. HOT-RELOAD ACL: community.redis.acl к живому plain-инстансу.
+    - module: community.redis.acl
+      params_subset:
+        addr: "127.0.0.1:6379"
+        password: updusr-redis-pass-16ch
+        tls: false
+
+  # state_changes: redis_users = НОВЫЙ набор ЦЕЛИКОМ (только alice, bob выпал — bulk-
+  # replace, БЕЗ пароля). Регресс upsert/merge = bob остался бы → красный.
+  state_changes:
+    redis_users:
+      - { name: alice, perms: "~app:* +@read +@write", state: "on" }

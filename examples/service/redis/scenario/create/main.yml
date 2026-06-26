@@ -217,7 +217,7 @@ input:
   # элементов AclUser (types.yml, ADR-062 $type). Прежний нетипизированный map
   # username→{perms,state} заменён массивом [{name, perms, state}]: имя юзера переехало
   # в поле name элемента (раньше было map-ключом). Форма AclUser объявлена ОДИН раз в
-  # types.yml (источник правды), будущие add_user/update_acl ссылаются на тот же тип.
+  # types.yml (источник правды), add_user/update_users ссылаются на тот же тип.
   # Ветки cluster/sentinel итерируют массив (.map(u, {u.name: …})) → собирают тот же
   # destiny-map имя→{perms,state,password}, что и прежде (destiny-контракт не менялся).
   users:

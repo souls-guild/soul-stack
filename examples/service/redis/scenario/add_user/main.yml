@@ -5,8 +5,11 @@ description: >-
   (docs/destiny/production-conventions.md §3a/§6): ACL применяется на лету командой
   ACL LOAD (перечитать aclfile), рестарт демона не нужен.
 
-  Оператор задаёт простые понятия (username + perms + state) — те же, что элемент
-  create input.users. Пароль НЕ во входном контракте: лежит в Vault по конвенции
+  Оператор задаёт ОДНУ запись AclUser (name + perms + state) — тот же тип, что элемент
+  массива create input.users (types.yml, ADR-062). perms валидируется тем же re2-
+  паттерном AclUser, что в create (закрывает day-2-мусор: невалидная ACL-строка
+  отсекается на input-валидации, а не доезжает до users.acl). Пароль НЕ во входном
+  контракте: лежит в Vault по конвенции
   secret/redis/<incarnation>/users/<name>#password (как create/add_node), резолвится
   keeper-side через vault() в render-фазе. Сценарий мержит нового юзера в РАЗВЁРНУТЫЙ
   incarnation.state.redis_users, рендерит ПОЛНЫЙ users.acl на диск и ОЖИВЛЯЕТ через
@@ -27,34 +30,27 @@ description: >-
   идут на КАЖДЫЙ redis-server-хост. ACL host-инвариантен (один набор юзеров на кластер).
 
 # ── Входной контракт оператора (docs/input.md) ────────────────────────────────
-# Простые типизированные понятия: имя юзера, его ACL-права, on/off. Пароль — НЕ во
-# входе (Vault-конвенция, см. description). Один юзер за прогон — атомарная day-2
-# операция «добавить пользователя» (несколько → несколько прогонов / будущий bulk).
+# ОДНА запись AclUser (types.yml, ADR-062 $type): имя юзера, его ACL-права, on/off.
+# Тот же тип, что элемент массива create input.users — единый источник правды формы
+# и валидации (perms-pattern). Пароль — НЕ во входе (Vault-конвенция, см. description).
+# Один юзер за прогон — атомарная day-2 операция «добавить пользователя» (массовое
+# редактирование набора → update_users, bulk-replace).
+#
+# ★ wave 2 (2026-06-26): прежний нетипизированный {username, perms, state} заменён
+# ОДНИМ полем user: {$type: AclUser}. Имя юзера переехало из top-level username в
+# поле user.name. Эффект — perms теперь валидируется re2-паттерном AclUser (token-shape-
+# фильтр create), которого у прежнего свободного perms не было: невалидная ACL-строка
+# (мусор/инъекции/переводы строк) отсекается на input-валидации (422), а не доезжает
+# до users.acl на day-2.
 input:
-  username:
-    type: string
-    required: true
-    pattern: "^[A-Za-z0-9._-]+$"
-    description: >-
-      Имя ACL-пользователя Redis. Добавляется в users.acl (или переопределяет
-      существующего с тем же именем — idempotent upsert). default-юзер не задаётся
-      этим сценарием (он объявлен в redis.conf отдельно).
-
-  perms:
-    type: string
+  user:
+    $type: AclUser
     required: true
     description: >-
-      ПОЛНАЯ ACL-строка прав (директивы Redis ACL как есть), напр. "~* +@all" или
-      "~app:* +@read +@write -@dangerous". Не алиас — пишется в users.acl как есть.
-
-  state:
-    type: string
-    required: false
-    default: "on"
-    enum: [on, off]
-    description: >-
-      Состояние пользователя: on (активен) / off (заблокирован, но правило хранится).
-      По умолчанию on.
+      ACL-пользователь Redis (AclUser: name + perms + state). Добавляется в users.acl
+      (или переопределяет существующего с тем же name — idempotent upsert). perms —
+      ПОЛНАЯ ACL-строка (директивы Redis ACL как есть), валидируется паттерном AclUser.
+      default-юзер этим сценарием не задаётся (он объявлен в redis.conf отдельно).
 
 # ── Декларативные input-инварианты (validate:) ───────────────────────────────────
 # ★ system-ACL-users guard (дизайн d2): operator НЕ может добавить юзера с именем
@@ -63,7 +59,7 @@ input:
 # перекрыл бы replica-perms репликации. Ловим на INPUT-валидации (422 ДО applying),
 # как в create. INPUT-ONLY (essence недоступен): список имён захардкожен (= create).
 validate:
-  - that: "!(input.username in ['default', 'replica', 'monitoring', 'sentinel', 'haproxy'])"
+  - that: "!(input.user.name in ['default', 'replica', 'monitoring', 'sentinel', 'haproxy'])"
     message: "имя ACL-пользователя зарезервировано за служебным (default/replica/monitoring/sentinel/haproxy): выбери другое имя — служебные юзеры заводятся автоматически из essence"
 
 # ── Вычисляемые scenario-vars (compute:) ─────────────────────────────────────────
@@ -83,11 +79,15 @@ compute:
   # существующего с тем же именем), что и прежний merge-map. Каждый юзер несёт
   # name/perms/state; пароль add НЕ хранит в state — он keeper-side vault. has()-guard
   # на redis_users — back-compat для инкарнаций без ACL-юзеров (пустой массив).
+  # ★ wave 2 (2026-06-26): добавляемый юзер — input.user (AclUser, $type). Имя/права/
+  # состояние из полей user.name/user.perms/user.state (раньше top-level username/
+  # perms/state). default(user.state,'on') — back-compat: $type доливает default на
+  # input-стадии, но default() безопасен и для сырого input без state.
   users_new: >-
     ${ (has(incarnation.state.redis_users)
-          ? incarnation.state.redis_users.filter(u, u.name != input.username)
+          ? incarnation.state.redis_users.filter(u, u.name != input.user.name)
           : [])
-       + [{ 'name': input.username, 'perms': input.perms, 'state': default(input.state, 'on') }] }
+       + [{ 'name': input.user.name, 'perms': input.user.perms, 'state': default(input.user.state, 'on') }] }
 
 # ── Мутация incarnation.state ─────────────────────────────────────────────────
 # day-2 фиксирует НОВЫЙ набор ACL-юзеров (массив AclUser [{name,perms,state}], wave

@@ -1,4 +1,4 @@
-# L0-испытание add_user НА TLS-инстансе. Парный guard к add-user-plaintext —
+# L0-испытание update_users НА TLS-инстансе. Парный guard к bulk-replace-removes-user —
 # покрывает TLS-ветку дискриминатора (compute.tls_on=true). Render-only, герметично.
 #
 # ★ Инвариант (day-2-конвенция §7a): при state.tls.enable=true ACL LOAD-шаг
@@ -7,11 +7,11 @@
 # Redis провалит ACL LOAD.
 #
 # Что ассертим:
-#   1. users.acl перерендерен с merged-набором (alice — первый юзер инкарнации).
+#   1. users.acl перерендерен с новым набором {alice} (bulk-replace, без системных в state).
 #   2. hot-reload (community.redis.acl): addr 127.0.0.1:7379 (TLS-порт), tls=true,
 #      tls_ca = PEM CA.
 #   3. state_changes: redis_users = {alice}.
-name: add_user over TLS hot-reloads ACL on tls-port from incarnation.state
+name: update_users over TLS hot-reloads ACL on tls-port from incarnation.state
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
@@ -22,7 +22,7 @@ fixtures:
   essence:
     tls_ca_ref: "secret/services/redis/tls#ca"
 
-  # Развёрнутый incarnation.state v3 с TLS; ACL ещё пуст (alice — первый юзер).
+  # Развёрнутый incarnation.state v6 с TLS; ранее был bob, новый набор = {alice}.
   state:
     redis_type: sentinel
     redis_version: "7.2.4"
@@ -46,18 +46,17 @@ fixtures:
       tls-key-file:     /etc/redis/tls/redis.key
       tls-ca-cert-file: /etc/redis/tls/ca.crt
       tls-replication:  "yes"
-    redis_users: []
+    redis_users:
+      - { name: bob, perms: "~app:* +@read", state: "on" }
 
   input:
-    user:
-      name: alice
-      perms: "~app:* +@read +@write"
-      state: "on"
+    users:
+      - { name: alice, perms: "~app:* +@read +@write", state: "on" }
 
   vault:
-    secret/redis/add_user:
-      password: addusr-redis-pass-16ch
-    secret/redis/add_user/users/alice:
+    secret/redis/update_users:
+      password: updusr-redis-pass-16ch
+    secret/redis/update_users/users/alice:
       password: alice-user-secret-pass
     secret/services/redis/tls:
       ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
@@ -76,9 +75,8 @@ assert:
                 password: alice-user-secret-pass
           self:
             sid: trial-host
-            covens: [add_user]
+            covens: [update_users]
             choirs: []
-            # traits — registry-проекция (ADR-060), пустой объект без меток.
             traits: {}
             role: ""
             network:
@@ -92,7 +90,7 @@ assert:
     - module: community.redis.acl
       params_subset:
         addr: "127.0.0.1:7379"
-        password: addusr-redis-pass-16ch
+        password: updusr-redis-pass-16ch
         tls: true
         tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
 

@@ -1,14 +1,15 @@
-# ★★ КРИТИЧНЫЙ guard-инвариант (system-ACL-users d2): add_user НЕ СТИРАЕТ системных.
-# add_user перерендеривает ПОЛНЫЙ users.acl из state.redis_users (только operator-extra).
+# ★★ КРИТИЧНЫЙ guard-инвариант (system-ACL-users d2): update_users НЕ СТИРАЕТ системных.
+# update_users перерендеривает ПОЛНЫЙ users.acl, заменяя operator-extra на input.users.
 # БЕЗ долива системных из essence этот рендер СТЁР БЫ replica/monitoring/sentinel/haproxy
 # → сломал бы репликацию/sentinel/health-check на day-2. Этот кейс ДОКАЗЫВАЕТ, что
-# add_user доливает системных из essence.system_acl_users на КАЖДОМ рендере:
-#   users.acl несёт СИСТЕМНЫЕ (replica/monitoring/sentinel/haproxy) + operator-extra
-#   (новый alice + сохранённый bob), КАЖДЫЙ со своим vault-паролем.
-# state_changes.redis_users несёт ТОЛЬКО operator-extra (alice+bob) — системные НЕ в
-# state (пункт 7 d2). Регресс «add_user стёр системных» = расхождение vars.users
-# (нет replica/monitoring/sentinel/haproxy) → ассерт красный.
-name: add_user re-renders full acl WITHOUT wiping system users (preserve guard)
+# update_users доливает системных из essence.system_acl_users на КАЖДОМ рендере, даже
+# при полной замене operator-extra:
+#   users.acl несёт СИСТЕМНЫЕ (replica/monitoring/sentinel/haproxy) + НОВЫЙ operator-extra
+#   набор (alice+carol), КАЖДЫЙ со своим vault-паролем; старый bob — удалён.
+# state_changes.redis_users несёт ТОЛЬКО operator-extra (alice+carol) — системные НЕ в
+# state (пункт 7 d2). Регресс «update_users стёр системных» = расхождение vars.users
+# (нет replica/...) → ассерт красный.
+name: update_users re-renders full acl WITHOUT wiping system users (preserve guard)
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
@@ -39,7 +40,7 @@ fixtures:
       - { name: bob, perms: "~app:* +@read", state: "on" }
 
   essence:
-    # Системные ACL redis-server (perms 1:1 из роли, БЕЗ default). add_user ОБЯЗАН их
+    # Системные ACL redis-server (perms 1:1 из роли, БЕЗ default). update_users ОБЯЗАН их
     # долить, иначе rerender стирает служебных.
     system_acl_users:
       replica:    "+psync +replconf +ping"
@@ -47,32 +48,32 @@ fixtures:
       sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
 
+  # Новый полный набор operator-extra: alice + carol (bob удалён).
   input:
-    user:
-      name: alice
-      perms: "~* +@all"
-      state: "on"
+    users:
+      - { name: alice, perms: "~* +@all", state: "on" }
+      - { name: carol, perms: "~cache:* +@read", state: "off" }
 
   vault:
-    secret/redis/add_user:
-      password: addusr-redis-pass-16ch
-    secret/redis/add_user/users/alice:
+    secret/redis/update_users:
+      password: updusr-redis-pass-16ch
+    secret/redis/update_users/users/alice:
       password: alice-user-secret-pass
-    secret/redis/add_user/users/bob:
-      password: bob-user-secret-pass
-    secret/redis/add_user/users/replica:
+    secret/redis/update_users/users/carol:
+      password: carol-user-secret-pass
+    secret/redis/update_users/users/replica:
       password: replica-sys-secret-pass
-    secret/redis/add_user/users/monitoring:
+    secret/redis/update_users/users/monitoring:
       password: monitoring-sys-secret-pass
-    secret/redis/add_user/users/sentinel:
+    secret/redis/update_users/users/sentinel:
       password: sentinel-sys-secret-pass
-    secret/redis/add_user/users/haproxy:
+    secret/redis/update_users/users/haproxy:
       password: haproxy-sys-secret-pass
 
 assert:
   task_present:
-    # users.acl несёт СИСТЕМНЫЕ + operator-extra (alice+bob). deep-compare ловит
-    # ЛЮБОЕ исчезновение системного (регресс стирания).
+    # users.acl несёт СИСТЕМНЫЕ + НОВЫЙ operator-extra (alice+carol). bob отсутствует
+    # (bulk-replace). deep-compare ловит ЛЮБОЕ исчезновение системного (регресс стирания).
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/users.acl
@@ -99,13 +100,13 @@ assert:
                 perms: "~* +@all"
                 state: "on"
                 password: alice-user-secret-pass
-              bob:
-                perms: "~app:* +@read"
-                state: "on"
-                password: bob-user-secret-pass
+              carol:
+                perms: "~cache:* +@read"
+                state: "off"
+                password: carol-user-secret-pass
           self:
             sid: trial-host
-            covens: [add_user]
+            covens: [update_users]
             choirs: []
             traits: {}
             role: ""
@@ -120,13 +121,12 @@ assert:
     - module: community.redis.acl
       params_subset:
         addr: "127.0.0.1:6379"
-        password: addusr-redis-pass-16ch
+        password: updusr-redis-pass-16ch
         tls: false
 
-  # state_changes: redis_users несёт bob+alice БЕЗ системных (write-model = operator-
-  # extra, МАССИВ AclUser wave 1b). Порядок array-upsert: сохранённый bob ПЕРВЫМ,
-  # новый alice ДОПИСАН (filter(name != alice) + [alice]).
+  # state_changes: redis_users = НОВЫЙ набор operator-extra (alice+carol) БЕЗ системных,
+  # БЕЗ пароля (write-model). bob выпал (bulk-replace).
   state_changes:
     redis_users:
-      - { name: bob, perms: "~app:* +@read", state: "on" }
       - { name: alice, perms: "~* +@all", state: "on" }
+      - { name: carol, perms: "~cache:* +@read", state: "off" }

@@ -30,9 +30,10 @@ fixtures:
 
   # Оператор пытается добавить юзера с зарезервированным именем sentinel.
   input:
-    username: sentinel
-    perms: "~* +@all"
-    state: "on"
+    user:
+      name: sentinel
+      perms: "~* +@all"
+      state: "on"
 
   vault:
     secret/redis/add_user:
