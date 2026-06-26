@@ -54,19 +54,60 @@ func scenarioSealSources(in RenderInput) cel.SealSources {
 }
 
 // secretInputNames — имена input-параметров, объявленных secret:true в схеме
-// прохода (scenario.Input / destiny.Input — обе config.InputSchemaMap). nil →
-// пустой набор.
+// прохода (scenario.Input / destiny.Input — обе config.InputSchemaMap), а также
+// поля с непустым vault_scope (он по контракту config-валидатора применим только
+// к secret:true, но проверяем явно — defense-in-depth, имя секрета не должно
+// зависеть от инварианта чужого валидатора). nil → пустой набор.
 func secretInputNames(scn *config.ScenarioManifest) map[string]bool {
 	if scn == nil || len(scn.Input) == 0 {
 		return nil
 	}
 	out := make(map[string]bool, len(scn.Input))
 	for name, s := range scn.Input {
-		if s != nil && s.Secret {
+		if s != nil && (s.Secret || s.VaultScope != "") {
 			out[name] = true
 		}
 	}
 	return out
+}
+
+// renderContextInputPrefix — префикс пути ячейки render_context.input.<field>
+// (Вариант B, ADR-010 §7.4 S-1). render_context живёт в params под ключом
+// render_context (paramRenderContext), input — подсекция корня §3.2; путь ячейки
+// конкретного input-поля для seal-маскинга — render_context.input.<field>.
+const renderContextInputPrefix = paramRenderContext + ".input."
+
+// sealRenderContextInput помечает sealed пути render_context.input.<secret> для
+// каждого secret-input активной схемы прохода (ADR-010 §7.4, механизм S-1,
+// Вариант B). Декларативно закрывает seal-разрыв, образовавшийся при отказе от
+// passthrough `params.vars`: раньше `${ input.secret }` физически жил в сырых
+// params (params.vars.<x>) и его ловил collectSealed/DetectSealed по AST; теперь
+// operator-input доезжает в шаблон через render_context.input напрямую, сырого
+// `${…}`-выражения в params нет — провенанс восстанавливается ПО СХЕМЕ (список
+// secret-имён), не по присутствию выражения.
+//
+// ★УСЛОВНО (injectInput): зовётся ТОЛЬКО когда render_context.input реально
+// инъектится для этой задачи (шаблон читает `.input.*`, тот же гейт
+// tmpl.UsesRootField, что и buildRenderContext). Если input НЕ инъектится
+// (шаблон на одних `.vars` — redis), ключа render_context.input в params нет,
+// секрет туда не попадает → seal-пути под него не нужны (иначе плодили бы мёртвые
+// sealed-пути на несуществующую ячейку). Гейт держит seal-набор ровно в синхроне
+// с реальным составом render_context.
+//
+// Источник списка — secretInputNames(in.Scenario): secret:true + vault_scope
+// активной input-схемы прохода (scenario-проход — scenario.Input; destiny-проход
+// — destiny.Input, см. ограничение пилота в destiny.go: схема destiny-input в
+// пилоте не пробрасывается, набор пуст — vault()-провенанс destiny ловится без
+// схемы). set nil → no-op (коллекция выключена: push/trial/Acolyte). Вызывается
+// per-task ОДИН раз (secret-набор host-инвариантен): путь render_context.input.
+// <field> один и тот же на всех хостах, маскинг сверяет по ТОЧНОМУ пути.
+func sealRenderContextInput(set *SealedSet, in RenderInput) {
+	if set == nil {
+		return
+	}
+	for name := range secretInputNames(in.Scenario) {
+		set.add(renderContextInputPrefix + name)
+	}
 }
 
 // collectSealed обходит СЫРЫЕ params (до vault-resolve+CEL) тем же path-обходом,

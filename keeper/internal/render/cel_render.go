@@ -227,10 +227,10 @@ func hostRegister(in RenderInput, host *topology.HostFacts) map[string]any {
 
 // buildRenderContext собирает корень text/template-контекста для шага
 // core.file.rendered по нормативу templating.md §3.2: `{ vars, self, role,
-// essence }`. Это per-host структура (self host-вариативен), которую Keeper
-// кладёт в params.render_context и доставляет Soul-у; Soul передаёт её КОРНЕМ
-// в text/template (rendered.go), поэтому шаблон видит `.vars.*`/`.self.*`/
-// `.role`/`.essence.*`.
+// essence }` + УСЛОВНО `input`. Это per-host структура (self host-вариативен),
+// которую Keeper кладёт в params.render_context и доставляет Soul-у; Soul
+// передаёт её КОРНЕМ в text/template (rendered.go), поэтому шаблон видит
+// `.vars.*`/`.self.*`/`.role`/`.essence.*` (и `.input.*` при injectInput).
 //
 // self — ТА ЖЕ soulprintSelfMap, что в CEL-фазе (hostVars): единая точка правды
 // (ADR-018, soulprint.self.<path> в CEL ≡ .self.<path> в шаблоне). vars —
@@ -239,20 +239,43 @@ func hostRegister(in RenderInput, host *topology.HostFacts) map[string]any {
 // НЕ плоским корнем. essence — effective-слой incarnation (host-инвариантный
 // snapshot). role — declared-роль хоста из spec (bootstrap-create; может быть "").
 //
+// input — резолвнутый operator-input прохода (Вариант B, ADR-010 §3.2
+// amendment): шаблон читает `.input.<name>` напрямую, без passthrough
+// `params.vars` каждого input-поля. Источник — in.Input (host-инвариантен: общий
+// контекст прогона). ★УСЛОВНО: ключ `input` кладётся ТОЛЬКО когда injectInput ==
+// true — т.е. шаблон реально читает `.input.*` (детект по AST до per-host цикла,
+// renderTaskIter → tmpl.UsesRootField). Шаблоны на одних `.vars` (redis: секреты
+// едут через `.vars`) `input` НЕ получают → их render_context БИТ-В-БИТ как до
+// Варианта B (deep-equal-фикстуры стабильны, секреты в render_context.input не
+// попадают). При injectInput && nil-Input → пустой map: `.input.*` упадёт
+// strict-mode на незаявленном поле, что корректно.
+//
+// ★Security (seal S-1, ADR-010 §7.4): убрав passthrough vars, теряем
+// seal-провенанс секретов из сырых params (раньше `${ input.secret }` физически
+// в params.vars → collectSealed ловил). Провенанс восстанавливается
+// ДЕКЛАРАТИВНО — caller (renderTaskIter) помечает sealed пути
+// `render_context.input.<secret>` для каждого secret-input активной схемы
+// (sealRenderContextInput), И ТОЛЬКО когда input реально инъектится (тот же
+// injectInput-гейт), а не по присутствию выражения в params.
+//
 // paramsVars — CEL-rendered значение `params.vars` (nil/отсутствует → пустой
 // map: шаблон с `.vars.*` упадёт strict-mode, что корректно — обращение к
 // незаявленной vars-переменной = ошибка автора).
-func buildRenderContext(in RenderInput, host *topology.HostFacts, paramsVars map[string]any) map[string]any {
+func buildRenderContext(in RenderInput, host *topology.HostFacts, paramsVars map[string]any, injectInput bool) map[string]any {
 	vars := paramsVars
 	if vars == nil {
 		vars = map[string]any{}
 	}
-	return map[string]any{
+	rc := map[string]any{
 		"vars":    vars,
 		"self":    soulprintSelfMap(host),
 		"role":    host.Role,
 		"essence": in.Essence,
 	}
+	if injectInput {
+		rc["input"] = orEmptyMap(in.Input)
+	}
+	return rc
 }
 
 // flowContextSelfKey — ключ host-вариативной секции flow_context (per-host

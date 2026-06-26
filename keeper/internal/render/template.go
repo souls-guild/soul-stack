@@ -104,17 +104,23 @@ func (r *SnapshotTemplateReader) Read(relPath string) ([]byte, error) {
 }
 
 // injectTemplateContent для шага core.file.rendered заменяет в уже CEL-rendered
-// params путь `template` на literal-содержимое `template_content`, прочитанное
-// через reader (A1, ADR-012(d)). text/template здесь НЕ исполняется — рендер на
-// Soul (rendered.go). Возвращает literal-содержимое для RawTemplate-поля.
+// params путь `template` на literal-содержимое `template_content` (A1,
+// ADR-012(d)). text/template здесь НЕ исполняется — рендер на Soul (rendered.go).
+//
+// preloaded — содержимое, уже прочитанное caller-ом (renderTaskIter →
+// resolveTemplateUsesInput) при детекте `.input`-обращения, чтобы файл не читался
+// дважды. Непустое preloaded → используется как есть (reader не трогается).
+// Пустое preloaded (inline-шаблон, либо не-rendered модуль) → fallback на чтение
+// через reader по params.template, как раньше.
 //
 // Прочие модули проходят насквозь (rt.Params не трогаются, "" RawTemplate).
-// reader=nil для core.file.rendered — ошибка handoff (Keeper не настроен
-// доставлять содержимое; именно этот пробел был прод-блокером golden-path).
+// reader=nil для core.file.rendered с params.template и без preloaded — ошибка
+// handoff (Keeper не настроен доставлять содержимое; именно этот пробел был
+// прод-блокером golden-path).
 //
 // params.template обязан быть строкой-путём (после CEL-фазы; non-string —
 // ошибка). После инъекции ключ template удаляется — Soul-у путь не нужен.
-func injectTemplateContent(rt *RenderedTask, reader TemplateReader) error {
+func injectTemplateContent(rt *RenderedTask, reader TemplateReader, preloaded string) error {
 	if rt.Module != moduleFileRendered {
 		return nil
 	}
@@ -126,6 +132,7 @@ func injectTemplateContent(rt *RenderedTask, reader TemplateReader) error {
 	if !ok {
 		// template_content уже задан напрямую (inline-шаблон без файла) — пропускаем.
 		if _, has := fields[paramTemplateContent]; has {
+			rt.RawTemplate = preloaded
 			return nil
 		}
 		return fmt.Errorf("render: task %q (core.file.rendered): нет ни %q (путь), ни %q (inline-содержимое)", rt.Name, paramTemplate, paramTemplateContent)
@@ -134,17 +141,21 @@ func injectTemplateContent(rt *RenderedTask, reader TemplateReader) error {
 	if _, isStr := tv.GetKind().(*structpb.Value_StringValue); !isStr || rel == "" {
 		return fmt.Errorf("render: task %q (core.file.rendered): %q должен быть непустой строкой-путём, получено %v", rt.Name, paramTemplate, tv.AsInterface())
 	}
-	if reader == nil {
-		return fmt.Errorf("render: task %q (core.file.rendered): TemplateReader не сконфигурирован — Keeper не может доставить содержимое шаблона %q (RenderInput.Templates=nil)", rt.Name, rel)
+
+	content := preloaded
+	if content == "" {
+		if reader == nil {
+			return fmt.Errorf("render: task %q (core.file.rendered): TemplateReader не сконфигурирован — Keeper не может доставить содержимое шаблона %q (RenderInput.Templates=nil)", rt.Name, rel)
+		}
+		data, err := reader.Read(rel)
+		if err != nil {
+			return fmt.Errorf("render: task %q (core.file.rendered): %w", rt.Name, err)
+		}
+		content = string(data)
 	}
 
-	content, err := reader.Read(rel)
-	if err != nil {
-		return fmt.Errorf("render: task %q (core.file.rendered): %w", rt.Name, err)
-	}
-
-	fields[paramTemplateContent] = structpb.NewStringValue(string(content))
+	fields[paramTemplateContent] = structpb.NewStringValue(content)
 	delete(fields, paramTemplate)
-	rt.RawTemplate = string(content)
+	rt.RawTemplate = content
 	return nil
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 	"github.com/souls-guild/soul-stack/shared/cel"
 	"github.com/souls-guild/soul-stack/shared/config"
+	"github.com/souls-guild/soul-stack/shared/tmpl"
 )
 
 // tracer для in-process span-а render-пайплайна (ADR-024 §4). Берёт глобальный
@@ -443,6 +444,34 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 	collectSealed(p.cel, in.Sealed, task.Module.Params, scenarioSealSources(in), "")
 
 	isRendered := task.Module.Module == moduleFileRendered
+
+	// core.file.rendered: ДО per-host цикла читаем содержимое шаблона ОДИН раз и
+	// детектим, ссылается ли он на корневое `.input.*` (tmpl.UsesRootField по AST,
+	// не string-search — упоминание `.input` в комментарии тела не считается).
+	// Путь шаблона host-инвариантен (пилот-контракт), поэтому содержимое и флаг —
+	// тоже. content переиспользуется injectTemplateContent ниже (не читаем дважды).
+	var templateContent string
+	var injectInput bool
+	if isRendered {
+		content, uses, terr := p.resolveTemplateUsesInput(in, resolved)
+		if terr != nil {
+			return nil, fmt.Errorf("render: task %q: %w", task.Name, terr)
+		}
+		templateContent = content
+		injectInput = uses
+
+		// seal S-1 (ADR-010 §7.4, Вариант B): operator-input доезжает в шаблон через
+		// render_context.input напрямую — сырого `${ input.X }` в params больше нет,
+		// collectSealed его не ловит. Помечаем sealed пути render_context.input.
+		// <secret> по СХЕМЕ — НО ТОЛЬКО когда input реально инъектится (injectInput):
+		// при шаблоне на одних `.vars` ключа render_context.input нет, секрет туда не
+		// попадает, seal под него не нужен (синхрон с реальным составом контекста).
+		// Host-инвариантно — один раз на задачу, ДО per-host цикла.
+		if injectInput {
+			sealRenderContextInput(in.Sealed, in)
+		}
+	}
+
 	var firstSID string
 	for hi, h := range renderHosts {
 		vars := hostLoopVars(in, h, len(targeted), loopVars)
@@ -464,7 +493,7 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		if isRendered {
 			paramsVars := extractParamsVars(st)
 			delete(st.Fields, paramVars)
-			if err := setRenderContext(st, buildRenderContext(in, h, paramsVars)); err != nil {
+			if err := setRenderContext(st, buildRenderContext(in, h, paramsVars, injectInput)); err != nil {
 				return nil, fmt.Errorf("render: task %q (host %s): %w", task.Name, h.SID, err)
 			}
 		}
@@ -519,9 +548,9 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 
 	// core.file.rendered: после CEL-фазы заменяем params.template (путь) на
 	// literal template_content (Keeper читает .tmpl, A1/ADR-012(d)). text/template
-	// не исполняется — рендер на Soul. Путь шаблона host-инвариантен, читаем один
-	// раз после сборки rt.Params.
-	if err := injectTemplateContent(rt, in.Templates); err != nil {
+	// не исполняется — рендер на Soul. Содержимое уже прочитано до per-host цикла
+	// (resolveTemplateUsesInput) — переиспользуем, не читаем файл повторно.
+	if err := injectTemplateContent(rt, in.Templates, templateContent); err != nil {
 		return nil, err
 	}
 
@@ -1143,8 +1172,97 @@ func extractParamsVars(st *structpb.Struct) map[string]any {
 	return sv.StructValue.AsMap()
 }
 
+// templateInputField — корневое поле render_context-контекста, инъекция которого
+// условна (Вариант B, ADR-010 §3.2): `input` кладётся только в шаблоны, реально
+// читающие `.input.*`.
+const templateInputField = "input"
+
+// usesFieldEngine — ленивый text/template-Engine для детекции обращения шаблона к
+// корневому полю (tmpl.UsesRootField). Тот же allowlist FuncMap, что Soul-side
+// рендер (rendered.go) — парсер знает легальные функции, не падает на их вызове.
+// Stateless/потокобезопасен, собирается один раз (паттерн flowControlEngine):
+// конструктор от рантайма не зависит, но строить FuncMap на каждый rendered-task
+// — лишняя работа в render-горячем пути.
+var (
+	usesFieldEngineOnce sync.Once
+	usesFieldEngineInst *tmpl.Engine
+	usesFieldEngineErr  error
+)
+
+func usesFieldEngine() (*tmpl.Engine, error) {
+	usesFieldEngineOnce.Do(func() {
+		usesFieldEngineInst, usesFieldEngineErr = tmpl.New()
+	})
+	return usesFieldEngineInst, usesFieldEngineErr
+}
+
+// resolveTemplateUsesInput читает содержимое .tmpl шага core.file.rendered ОДИН
+// раз (host-инвариантный путь) и сообщает, инъектить ли в render_context корневой
+// `input` (Вариант B, ADR-010 §3.2): true ⇔ шаблон реально читает `.input.*`
+// (детект по AST tmpl.UsesRootField — упоминание `.input` в литеральном тексте/
+// комментарии тела НЕ считается). Содержимое возвращается caller-у, чтобы
+// injectTemplateContent не читал файл повторно.
+//
+// Путь берётся из resolved params (после vault-resolve, ДО CEL). В пилоте он —
+// строковый литерал; на случай `${ … }`-выражения резолвится через CEL на
+// keeper-контексте (без soulprint) — путь шаблона host-инвариантен по
+// пилот-контракту, поэтому keeper-контекст достаточен. inline-шаблон без файла
+// (params.template_content задан напрямую, params.template отсутствует) → читать
+// нечего: content="" , detect по уже-имеющемуся template_content.
+//
+// reader=nil при наличии params.template — ошибка handoff (как в
+// injectTemplateContent): Keeper не настроен доставлять содержимое.
+func (p *Pipeline) resolveTemplateUsesInput(in RenderInput, resolved map[string]any) (string, bool, error) {
+	tv, hasPath := resolved[paramTemplate]
+	if !hasPath {
+		// inline template_content (без файла): детектим прямо по нему.
+		cv, hasContent := resolved[paramTemplateContent]
+		content, _ := cv.(string)
+		if !hasContent || content == "" {
+			return "", false, nil
+		}
+		uses, err := usesInputField(content)
+		return content, uses, err
+	}
+
+	rel, ok := tv.(string)
+	if !ok || rel == "" {
+		// non-string/`${}`-путь: резолвим через CEL на keeper-контексте.
+		st, err := renderParams(p.cel, map[string]any{paramTemplate: tv}, keeperVars(in))
+		if err != nil {
+			return "", false, fmt.Errorf("резолв пути шаблона: %w", err)
+		}
+		rel = st.GetFields()[paramTemplate].GetStringValue()
+		if rel == "" {
+			return "", false, fmt.Errorf("%q должен резолвиться в непустую строку-путь, получено %v", paramTemplate, tv)
+		}
+	}
+
+	if in.Templates == nil {
+		return "", false, fmt.Errorf("TemplateReader не сконфигурирован — Keeper не может доставить содержимое шаблона %q (RenderInput.Templates=nil)", rel)
+	}
+	data, err := in.Templates.Read(rel)
+	if err != nil {
+		return "", false, err
+	}
+	content := string(data)
+	uses, derr := usesInputField(content)
+	return content, uses, derr
+}
+
+// usesInputField детектит обращение шаблона к корневому `.input` через AST
+// (tmpl.UsesRootField). Битый шаблон → ошибка (caller падает render_failed так
+// же, как упал бы Soul на рендере).
+func usesInputField(content string) (bool, error) {
+	engine, err := usesFieldEngine()
+	if err != nil {
+		return false, fmt.Errorf("сборка tmpl-движка: %w", err)
+	}
+	return engine.UsesRootField(content, templateInputField)
+}
+
 // setRenderContext кладёт собранный render-context в params под ключ
-// render_context (structpb-конвертация {vars,self,role,essence}).
+// render_context (structpb-конвертация {vars,self,role,essence}; input условно).
 func setRenderContext(st *structpb.Struct, rc map[string]any) error {
 	rcStruct, err := structpb.NewStruct(rc)
 	if err != nil {

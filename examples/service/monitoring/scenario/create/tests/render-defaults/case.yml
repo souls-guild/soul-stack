@@ -122,16 +122,25 @@ assert:
         mode: "0644"
         owner: root
         group: root
+        # Вариант B (ADR-010 §3.2 amendment): operator-input destiny едет в
+        # render_context.input напрямую (user/group/listen/textfile_dir +
+        # прод-параметры демона), без passthrough params.vars. В vars остаётся
+        # только производный exporter_bin (готовый путь бинаря из vars.bin_path).
         render_context:
           vars:
             exporter_bin: /usr/local/bin/node_exporter
+          input:
+            # apply:input от monitoring + дефолты destiny node-exporter (scenario
+            # их не переопределяет → значения из destiny.yml). gomaxprocs:0 и пустые
+            # list/string → флаг в ExecStart НЕ добавляется (условный рендер).
+            version: "1.8.2"
+            base_url: "https://github.com/prometheus/node_exporter/releases/download"
+            listen: ":9100"
+            collectors: []
+            bin_dir: /usr/local/bin
             user: node_exporter
             group: node_exporter
-            listen: ":9100"
             textfile_dir: /var/lib/node_exporter
-            # Прод-параметры демона (destiny node-exporter input-дефолты): scenario
-            # их не переопределяет → значения берутся из destiny.yml. gomaxprocs:0 и
-            # пустые list/string → флаг в ExecStart НЕ добавляется (условный рендер).
             gomaxprocs: 0
             disabled_collectors: []
             enabled_collectors: []
@@ -226,6 +235,10 @@ assert:
         mode: "0644"
         owner: root
         group: root
+        # Шаблон redis_exporter читает ТОЛЬКО .vars.* (поднятые этим scenario-шагом
+        # значения). Вариант B (ADR-010 §3.2) инъектит render_context.input УСЛОВНО —
+        # только в шаблоны, реально обращающиеся к .input; redis_exporter к нему не
+        # обращается → render_context остаётся {vars,self,role,essence} без input.
         render_context:
           vars:
             bin_dir: /usr/local/bin

@@ -139,11 +139,12 @@ text/template — **только** для рендера файлов в `templa
 
 Контекст рендера `.tmpl` — **изолированный**, не глобальный. text/template не видит `essence.*`, `register.*`, `soulprint.*`, `input.*` напрямую — только явно поднятые автором значения (`params.vars`) плюс фиксированный набор системных полей.
 
-**Корень контекста** — ровно `{ vars, self, role, essence }` (обращение к чему-то ещё в корне → strict-mode ошибка). Этот корень собирает **Keeper-side, per-host** и доставляет рядом с `template_content` (см. [§4](#4-соотношение-фаз-обработки-yaml) и [ADR-012(d)](adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add)); Soul передаёт его движку **корнем**, поэтому шаблон обращается `.vars.<name>`, `.self.<path>`, `.role`, `.essence.<path>`.
+**Корень контекста** — `{ vars, self, role, essence }` плюс **условный** `input` (обращение к чему-то ещё в корне → strict-mode ошибка). Этот корень собирает **Keeper-side, per-host** и доставляет рядом с `template_content` (см. [§4](#4-соотношение-фаз-обработки-yaml) и [ADR-012(d)](adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add)); Soul передаёт его движку **корнем**, поэтому шаблон обращается `.vars.<name>`, `.self.<path>`, `.role`, `.essence.<path>` (и `.input.<name>`, когда шаблон его читает).
 
 | Поле корня | Содержание |
 |---|---|
-| `vars.*` | CEL-rendered значения, явно поднятые автором в `params.vars` шага `core.file.rendered` ([§6](#6-передача-данных-между-движками-конвейер)). Единственный канал «прокинуть данные из YAML в шаблон». |
+| `vars.*` | CEL-rendered значения, явно поднятые автором в `params.vars` шага `core.file.rendered` ([§6](#6-передача-данных-между-движками-конвейер)). Канал «прокинуть в шаблон ПРОИЗВОДНОЕ значение» (вычисленное CEL-ом, которого нет в operator-input как есть). |
+| `input.*` (условно) | Резолвнутый operator-input прохода (Вариант B). Шаблон читает `.input.<name>` **напрямую**, без passthrough-обёртки `params.vars` для каждого input-поля. Host-инвариантен (общий контекст прогона). **★Условно:** ключ `input` Keeper кладёт **только когда шаблон реально обращается к `.input.*`** (детект по обходу parse-AST `.tmpl`, не string-search — упоминание `.input` в комментарии тела не считается обращением). Шаблоны на одних `.vars` (например, redis) `input` НЕ получают, их `render_context` остаётся `{ vars, self, role, essence }`. ★Secret-маскинг: secret-поле в `render_context.input` запечатывается по схеме прохода (механизм S-1, [§7.4](#74-secret-маскинг)) — тоже при инъекции `input`. |
 | `self.network.*` | сетевые факты хоста (адреса, интерфейсы): `self.network.primary_ip`, `self.network.interfaces[]` |
 | `self.os.*` | os.family, os.version, distribution; составные ключи **snake_case**: `self.os.pkg_mgr`, `self.os.init_system` |
 | `self.sid` | SID текущего хоста |
@@ -276,7 +277,7 @@ command: "redis-cli replicaof ${ register.master.stdout } 6379"
 Движки **не пересекаются** — они последовательно передают данные (и работают на разных сторонах, [ADR-012(d)](adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add)):
 
 1. **CEL в YAML (Keeper)** вычисляет значения `params.vars` шага `core.file.rendered`. CEL имеет полный контекст scenario (`input`, `essence`, `register`, `soulprint`, `vars`). Keeper же доставляет literal `.tmpl` в `params.template_content`.
-2. **text/template в `.tmpl` (Soul)** получает корень `{ vars, self, role, essence }` ([§3.2](#32-контекст-рендера)): `vars` — CEL-rendered `params.vars`, `self`/`role`/`essence` — системные поля, собранные Keeper-ом per-host (`render_context`). Контекст text/template **не содержит** прямого доступа к `input`/`register`/`soulprint.hosts` — только то, что автор явно поднял в `vars` на Keeper-фазе, плюс узкий системный набор. Soul рендерит `template_content` локально, без обращения к внешним системам.
+2. **text/template в `.tmpl` (Soul)** получает корень `{ vars, self, role, essence }` + **условный** `input` ([§3.2](#32-контекст-рендера)): `vars` — CEL-rendered `params.vars` (производные значения), `input` — резолвнутый operator-input прохода (Вариант B: шаблон читает `.input.<name>` напрямую; ключ кладётся Keeper-ом **только когда шаблон к нему обращается**, детект по parse-AST), `self`/`role`/`essence` — системные поля, собранные Keeper-ом per-host (`render_context`). Контекст text/template **не содержит** прямого доступа к `register`/`soulprint.hosts` — только operator-`input`, явно поднятые автором `vars` и узкий системный набор. Soul рендерит `template_content` локально, без обращения к внешним системам.
 
 Пример (runtime-операция, master определяется живым probe):
 
@@ -366,7 +367,7 @@ text/template более опасен (исторически — vector SSTI в
 
 1. **Strict mode** ([§3.1](#31-strict-mode)) — опечатка в имени поля = ошибка, не молча подставленный `<no value>`.
 2. **Sprig allowlist без `exec`, `env`, `tpl`** ([§3.3](#33-sprig-allowlist)) — нет функций для выполнения команд, чтения окружения, выполнения произвольной строки как шаблона.
-3. **Изолированный контекст рендера** ([§3.2](#32-контекст-рендера)) — нет глобального доступа к `essence`/`input`/`register`/`soulprint`, доступен только явно переданный `vars` + узкий системный набор.
+3. **Изолированный контекст рендера** ([§3.2](#32-контекст-рендера)) — нет глобального доступа к `register`/`soulprint.hosts` и нет вызова внешних систем; доступны ровно поля корня `{ vars, self, role, essence }` (+ условный `input` прохода, когда шаблон к нему обращается) + явно поднятый `vars` + узкий системный набор, собранные Keeper-ом per-host.
 
 ### 7.3. SSTI через данные
 
@@ -404,9 +405,12 @@ CEL обрабатывает значения с `secret: true` (из `input:`/e
 3. **seal / sealed-paths** (render-time provenance/taint, центральная механика) — Keeper на render-фазе помечает путь ячейки `params` **sealed**, когда её CEL-выражение читает secret-источник:
    - `input.<name>`, где `<name>` объявлен `secret: true` в активной input-схеме прохода (scenario-input на scenario, destiny-input на destiny);
    - `vault(...)`;
-   - транзитивно — `vars.<x>`/`compute.<x>`, чьё значение само sealed.
+   - транзитивно — `vars.<x>`/`compute.<x>`, чьё значение само sealed;
+   - **источник `render_context.input.<secret>` (механизм S-1, Вариант B)** — для шага `core.file.rendered` operator-input доезжает в шаблон через `render_context.input` напрямую, без passthrough `params.vars`; сырого `${ input.<secret> }`-выражения в params больше нет, поэтому AST-обход его не видит. Провенанс восстанавливается **декларативно**: Keeper помечает sealed путь `render_context.input.<name>` для каждого input-поля, объявленного `secret: true` (или несущего `vault_scope`) в активной схеме прохода. Источник списка — input-схема прохода (имена secret-полей), **не** присутствие выражения в params.
 
    Детекция — **AST-обход** выражения (не single-ident-матч): тернарник `has(input.tls_cert) ? input.tls_cert : ''` обходится по всем веткам — любая читает секрет → ячейка sealed (whole-cell taint); склейка `literal + ${ secret }` → весь результат sealed (whole-value taint, безопасно). Набор sealed-путей (in-memory, текущий прогон) прикрепляется к результату render-прохода и доводится до write-точек прогона (`status_details` / `error_summary` / логи), где маскинг идёт по провенансу (`audit.MaskSecretsSealed`). Метафора — «запечатанные пути» (см. [naming-rules.md → seal/sealed-paths](naming-rules.md#сущности-предметной-области)).
+
+   > **Ограничение destiny-прохода (S-1).** Механизм S-1 берёт secret-имена из input-схемы прохода. В **destiny-проходе** (`apply: destiny`) destiny-input-схема в пилоте **не пробрасывается** (`renderApplyDestiny` строит изолированный проход без `Input`-схемы — то же ограничение, что и для AST-провенанса destiny-secret-input, см. spec `core.file.rendered`). Поэтому secret-поля destiny-input, доехавшие в `render_context.input`, S-1 **не запечатывает** — для них остаётся только vault-происхождение (если значение — `vault:`-ref) и regex-last-resort (если имя ключа матчит `sensitiveKeyRe`). Закрытие провенанса destiny-input-секретов — **отдельный слайс** (требует проброса destiny-input-схемы в seal-источник).
 
 4. **regex-last-resort** (`sensitiveKeyRe` по имени ключа) — НЕ удалён, оставлен последним рубежом. Ловит класс sensitive-by-name, не покрытый декларативом (внутренние `bootstrap_token`/`jwt`/credentials без схемы). Когда секрет поймал **только** regex (schema/vault/seal по этому пути молчали) — инкрементится метрика `keeper_mask_regex_fallback_total` + warn-лог: сигнал пробела декларатива, чтобы класс закрывать структурно, а не полагаться на имя ключа.
 

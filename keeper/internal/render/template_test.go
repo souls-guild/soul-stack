@@ -42,7 +42,7 @@ func TestInjectTemplateContent_PathToContent(t *testing.T) {
 		"templates/redis.conf.tmpl": []byte("port {{ .vars.port }}\n"),
 	}}
 
-	if err := injectTemplateContent(rt, reader); err != nil {
+	if err := injectTemplateContent(rt, reader, ""); err != nil {
 		t.Fatalf("injectTemplateContent: %v", err)
 	}
 	fields := rt.Params.GetFields()
@@ -68,7 +68,7 @@ func TestInjectTemplateContent_OtherModulePassthrough(t *testing.T) {
 		"path":    "/etc/x",
 		"content": "data",
 	})
-	if err := injectTemplateContent(rt, fakeReader{}); err != nil {
+	if err := injectTemplateContent(rt, fakeReader{}, ""); err != nil {
 		t.Fatalf("injectTemplateContent: %v", err)
 	}
 	if rt.RawTemplate != "" {
@@ -86,7 +86,7 @@ func TestInjectTemplateContent_NilReaderIsError(t *testing.T) {
 		"path":     "/etc/x",
 		"template": "templates/x.tmpl",
 	})
-	err := injectTemplateContent(rt, nil)
+	err := injectTemplateContent(rt, nil, "")
 	if err == nil {
 		t.Fatal("ожидалась ошибка: TemplateReader не сконфигурирован")
 	}
@@ -101,7 +101,7 @@ func TestInjectTemplateContent_InlineContentKept(t *testing.T) {
 		"path":             "/etc/x",
 		"template_content": "inline {{ .vars.y }}",
 	})
-	if err := injectTemplateContent(rt, nil); err != nil {
+	if err := injectTemplateContent(rt, nil, ""); err != nil {
 		t.Fatalf("inline template_content не должен требовать reader: %v", err)
 	}
 	if got := rt.Params.GetFields()["template_content"].GetStringValue(); got != "inline {{ .vars.y }}" {
@@ -112,7 +112,7 @@ func TestInjectTemplateContent_InlineContentKept(t *testing.T) {
 // Ни template, ни template_content — ошибка.
 func TestInjectTemplateContent_MissingBoth(t *testing.T) {
 	rt := renderedTask(moduleFileRendered, map[string]any{"path": "/etc/x"})
-	if err := injectTemplateContent(rt, fakeReader{}); err == nil {
+	if err := injectTemplateContent(rt, fakeReader{}, ""); err == nil {
 		t.Fatal("ожидалась ошибка: нет ни template, ни template_content")
 	}
 }
@@ -123,7 +123,7 @@ func TestInjectTemplateContent_NonStringTemplate(t *testing.T) {
 		"path":     "/etc/x",
 		"template": 42,
 	})
-	if err := injectTemplateContent(rt, fakeReader{}); err == nil {
+	if err := injectTemplateContent(rt, fakeReader{}, ""); err == nil {
 		t.Fatal("ожидалась ошибка: template не строка")
 	}
 }

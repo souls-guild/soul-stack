@@ -42,38 +42,13 @@ func TestNodeExporterTemplates_ParseAndRender(t *testing.T) {
 		t.Fatalf("tmpl.New: %v", err)
 	}
 
-	// Корень text/template-контекста core.file.rendered (templating.md §3.2):
-	// {vars, self, role, essence}. vars — суперсет всех ключей, которые поднимают
-	// в params.vars шаги этой destiny (tasks/main.yml): шаблоны без vars (скрипты,
-	// таймеры) лишних ключей просто не читают, шаблоны с vars читают свои.
-	root := map[string]any{
-		"vars": map[string]any{
-			"bin_dir":      "/usr/local/bin",
-			"exporter_bin": "/usr/local/bin/node_exporter",
-			"user":         "node_exporter",
-			"group":        "node_exporter",
-			"listen":       "127.0.0.1:9100",
-			"textfile_dir": "/var/lib/node_exporter",
-			// Прод-параметры демона (node_exporter.service.tmpl §коммент): дефолты,
-			// при которых опц. флаги опускаются, а log.*/web.telemetry-path
-			// подставляются всегда.
-			"gomaxprocs":              int64(0),
-			"disabled_collectors":     []any{},
-			"enabled_collectors":      []any{},
-			"collector_options":       map[string]any{},
-			"log_level":               "info",
-			"log_format":              "logfmt",
-			"web_telemetry_path":      "/metrics",
-			"fs_mount_points_exclude": "",
-			"netdev_device_exclude":   "",
-		},
-		"self": map[string]any{
-			"os":      map[string]any{"family": "debian"},
-			"network": map[string]any{"primary_ip": "10.0.0.1"},
-		},
-		"role":    "",
-		"essence": map[string]any{},
-	}
+	// Корень text/template-контекста core.file.rendered (templating.md §3.2,
+	// Вариант B): {vars, input, self, role, essence}. vars — производные значения
+	// (bin_dir/exporter_bin из vars.yml); input — operator-input прохода
+	// (user/group/listen/textfile_dir + прод-параметры демона), читаются шаблоном
+	// `.input.<name>` напрямую (Вариант B, ADR-010 §3.2 amendment). Шаблоны без
+	// input/vars (скрипты, таймеры) лишних ключей просто не читают.
+	root := nodeExporterRenderVars
 
 	for _, f := range files {
 		name := filepath.Base(f)
@@ -97,13 +72,25 @@ func TestNodeExporterTemplates_ParseAndRender(t *testing.T) {
 	}
 }
 
-// nodeExporterRenderVars — vars-контекст рендера для content-ассертов: суперсет
-// всех ключей, которые поднимают в params.vars шаги destiny (tasks/main.yml).
-// Один на оба теста (ParseAndRender выше использует тот же набор).
+// nodeExporterRenderVars — корень рендера для content-ассертов (Вариант B,
+// templating.md §3.2): {vars, input, self, role, essence}. vars — производные
+// значения, поднятые в params.vars (bin_dir/exporter_bin из vars.yml); input —
+// operator-input прохода (user/group/listen/textfile_dir + прод-параметры
+// демона), читаемый шаблоном `.input.<name>`. Один на оба теста (ParseAndRender
+// использует тот же набор).
 var nodeExporterRenderVars = map[string]any{
+	// vars — суперсет ключей, поднятых в params.vars ШАГАМИ destiny: основной unit
+	// (service.yml, Вариант B) поднимает только exporter_bin; collector-шаги
+	// (collectors.yml — ВНЕ скоупа Варианта B) всё ещё пробрасывают user/
+	// textfile_dir/bin_dir через свои params.vars, поэтому collector-.tmpl читают
+	// `.vars.user`/`.vars.textfile_dir`. Синтетический корень даёт оба слоя.
 	"vars": map[string]any{
 		"bin_dir":      "/usr/local/bin",
 		"exporter_bin": "/usr/local/bin/node_exporter",
+		"user":         "node_exporter",
+		"textfile_dir": "/var/lib/node_exporter",
+	},
+	"input": map[string]any{
 		"user":         "node_exporter",
 		"group":        "node_exporter",
 		"listen":       "127.0.0.1:9100",
@@ -252,25 +239,27 @@ func TestNodeExporterTemplates_HardeningContent(t *testing.T) {
 }
 
 // renderNodeExporterServiceWithVars рендерит основной node_exporter.service.tmpl
-// с подменой части .vars (поверх дефолтного суперсета): нужен content-тестам,
-// варьирующим collector_options/web_telemetry_path. Базовый набор —
-// nodeExporterRenderVars; overrides мёрджатся в его .vars-подмапу.
+// с подменой части .input (поверх дефолтного набора): нужен content-тестам,
+// варьирующим collector_options/web_telemetry_path. Вариант B: эти поля —
+// operator-input, шаблон читает их `.input.<name>`, поэтому overrides мёрджатся в
+// input-подмапу. Базовый набор — nodeExporterRenderVars.
 func renderNodeExporterServiceWithVars(t *testing.T, overrides map[string]any) string {
 	t.Helper()
 	engine, err := tmpl.New()
 	if err != nil {
 		t.Fatalf("tmpl.New: %v", err)
 	}
-	base := nodeExporterRenderVars["vars"].(map[string]any)
-	vars := make(map[string]any, len(base)+len(overrides))
+	base := nodeExporterRenderVars["input"].(map[string]any)
+	input := make(map[string]any, len(base)+len(overrides))
 	for k, v := range base {
-		vars[k] = v
+		input[k] = v
 	}
 	for k, v := range overrides {
-		vars[k] = v
+		input[k] = v
 	}
 	root := map[string]any{
-		"vars":    vars,
+		"vars":    nodeExporterRenderVars["vars"],
+		"input":   input,
 		"self":    nodeExporterRenderVars["self"],
 		"role":    nodeExporterRenderVars["role"],
 		"essence": nodeExporterRenderVars["essence"],
