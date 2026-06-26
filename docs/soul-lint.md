@@ -65,6 +65,21 @@ input:
 
 **Зависимости.** Шаблонизатор зафиксирован [ADR-010](adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов) (CEL для top-level expression-keys, `cel-go`-парсер); scenario использует тот же engine ([ADR-009](adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация)). Resolved-путь двухуровневого резолва ресурсов (локально → service-level) печатается движком и проверяется линтером — см. [`docs/scenario/orchestration.md §6`](scenario/orchestration.md#6-двухуровневый-резолв-ресурсов).
 
+### B3. Резолв именованных input-типов (`$type` / `types:`)
+
+**Проблема.** Сценарий ссылается на переиспользуемый именованный тип директивой `$type: <Имя>` ([ADR-062](adr/0062-input-types.md), [`docs/input.md → «Переиспользуемые именованные типы»`](input.md#переиспользуемые-именованные-типы-types--type)). Битая ссылка (опечатка в имени, тип не объявлен), цикл в графе типов или конфликт `$type` с inline-схемой не видны на глаз и проявились бы только в рантайме (или, при цикле, вообще зациклили бы резолвер). Это статически ловимый класс — линтер обязан его отрезать.
+
+**Что должен делать линтер.** При проверке сценарного `input:` (и схем внутри `service/<name>/types.yml`) резолвить `$type`-ссылки **service-level** и эмитить:
+
+- `input_type_unknown` (`error`) — `$type: <Имя>` ссылается на тип, отсутствующий в `types:` сервиса;
+- `input_type_cycle` (`error`) — цикл в графе ссылок типов (`A→B→A`, самоссылка `A→A`); резолвер обходит граф с детектором цикла, не разворачивает бесконечно;
+- `input_type_duplicate` (`error`) — дубль имени в секции `types:`;
+- `input_type_ref_conflict` (`error`) — `$type` указан вместе с inline-схемой на том же узле (`type:`/`properties:`/`items:`/…); ссылка и inline взаимоисключимы.
+
+**Границы.** Резолв строго service-level (типы того же сервиса) — кросс-сервис и local-per-scenario объявления вне MVP ([ADR-062](adr/0062-input-types.md), границы MVP). После успешного резолва развёрнутая схема проверяется обычными input-проверками (`input_*`) рекурсивно, как любой inline-`object`/`array`.
+
+**Зависимости.** Источник истины формата — [`docs/input.md`](input.md); словарь имён (`types:`/`$type`/`x-type`/`input_type_*`) — [`docs/naming-rules.md`](naming-rules.md).
+
 **Статус реализации (текущий MVP).** Cross-ref `register.<name>` против объявлений в плане задачи (включая block-вложенность) — реализован (codes `duplicate_task_address`, `unknown_register_reference`; `register.self.*` исключён). `duplicate_task_address` ловит дубль в адресном пространстве подписки `register ∪ id` (два `register`, два `id`, либо `register` одной задачи == `id` другой; ADR-052 §h, [destiny/tasks.md §8](destiny/tasks.md)) — last-wins-резолв тихо привязал бы зависимость/алерт не к той задаче. Cross-file (дубль адреса между основным файлом и подключённым через `include:`) проверяется на плоском плане после раскрытия include. Дополнительно подключена статпроверка `soulprint.<...>`-ссылок в CEL-предикатах (`where`/`when`/`changed_when`/`failed_when`/`retry.until`/`loop.when`):
 - голая `soulprint.<x>` без `.self`/`.hosts`/`.where` → `soulprint_naked_reference` (каноническая форма обязательна, см. [`docs/soul/soulprint.md`](soul/soulprint.md));
 - `soulprint.self.<unknown_top>` (опечатка типа `memmory`/`familly` на верхнем сегменте) → `soulprint_unknown_path` со сверкой по typed-схеме [ADR-018](adr/0018-soulprint-typed.md#adr-018-soulprint-typed-схема-mvp) (`sid`/`hostname`/`os`/`kernel`/`cpu`/`memory`/`network`/`covens`/`role`);

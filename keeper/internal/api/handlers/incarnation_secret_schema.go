@@ -6,7 +6,6 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/shared/audit"
-	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 // secret-схема read-path-маскинга ([ADR-010] §7.4, декларативный слой 1).
@@ -157,7 +156,7 @@ func collectCreateInputSecrets(loader ServiceSnapshotLoader, art *artifact.Servi
 	if err != nil || len(data) == 0 {
 		return
 	}
-	scn, _, _, perr := config.LoadScenarioManifestFromBytes("scenario/create/main.yml", data, config.ValidateOptions{})
+	scn, _, _, perr := artifact.LoadScenarioManifestResolved(art, "scenario/create/main.yml", data)
 	if perr != nil || scn == nil {
 		return
 	}

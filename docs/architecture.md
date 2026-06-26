@@ -526,6 +526,10 @@ Soul Stack принимает «исполняемый файл, который 
 
 Вынесен в [`docs/adr/0061-onboarding-await-and-midrun-reresolve.md`](adr/0061-onboarding-await-and-midrun-reresolve.md). **Один create-scenario** разворачивает N-шардовый кластер из «ничего»: provision N VM (`core.cloud.provisioned`, `on: keeper`, [ADR-017](#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read)) → ожидание онбординга созданных Souls → mid-run рост roster → применение redis-роли к уже online хостам. Закрывает блокер «`soulprint.hosts` — снимок на старте, mid-run не растёт; `refresh_soulprint` игнорируется; барьера онбординга нет». Две способности на существующем `core.soul.registered` (**НЕ** новый модуль — решение пользователя: барьер прилегает к регистрации; отдельный `core.soul.online` отвергнут как лишняя сущность). **(1) onboarding-await:** новые input-флаги `await_online` (bool) / `await_timeout` (duration, required-when `await_online`) / `await_min_count` (int, opt, default = число регистрируемых SID) / `await_poll_interval` (duration, opt, ~2s) — после register+coven шаг блокирующе поллит **Redis SID-lease** (`keeper/internal/redis/SoulsStreamAlive`, источник истины online — НЕ PG `souls.status`, [ADR-006](#adr-006-кэш-и-координация--redis)) до `await_min_count`/timeout; **B1-strict** (online < min к таймауту → шаг `failed` → fail-stop → `incarnation.state` не коммитится → `error_locked`); output `register.<name>` дополнен `online[]`/`pending[]`/`satisfied`; потолок `keeper.yml::max_await_timeout` (DoS-guard, fail-closed — превышение → `failed`, не тихое обрезание). **list-SID:** `params.sid` принимает строку ИЛИ список (барьер агрегирует presence по всем SID одним шагом). **(2) mid-run re-resolve:** оживлён флаг `refresh_soulprint` (был заглушкой `refreshed: false`) — после успеха шага scenario-runner пере-резолвит roster инкарнации перед СЛЕДУЮЩИМ Passage; **монотонный рост** (только +хосты, удаление mid-run запрещено). Инвариант стабильности roster ослаблен: «стабилен в пределах Passage» (не всего прогона). barrier/state-commit-инвариант [ADR-009 §7](#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) **НЕ** ослаблен (state коммитится один раз после последнего Passage). **Stratify:** `refresh_soulprint: true` делает задачу passage-определяющей границей ([ADR-056](#adr-056-staged-render--прогон-сценария-как-n-упорядоченных-passage-probewhere-реально-работает), симметрично probe-эмиттеру) — потребители `soulprint.hosts`/`on: [incarnation.name]`/`soulprint.self.*` уезжают в Passage строго ПОСЛЕ. **HA:** provision-сценарии рекомендуется гнать через Voyage ([ADR-043](#adr-043-voyage--унифицированный-батчевый-прогон), recovery закрыт); standalone staged-recovery долгого барьера — открыт. **S1 (`await_online`) реализован; S2 (Stratify-граница) / S3 (фактический re-resolve в run.go) — контракт зафиксирован, имплементация отдельными слайсами.** **Amends [ADR-009 §7](#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) / [ADR-056](#adr-056-staged-render--прогон-сценария-как-n-упорядоченных-passage-probewhere-реально-работает) / [ADR-006](#adr-006-кэш-и-координация--redis) / [ADR-017](#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read).**
 
+### [ADR-062. Named input types — переиспользуемые именованные схемы input через `types:` + `$type`](adr/0062-input-types.md)
+
+Вынесен в [`docs/adr/0062-input-types.md`](adr/0062-input-types.md). Переиспользуемые именованные input-схемы вместо дублирования inline-`object` между сценариями сервиса. Секция **`types:`** в service-level файле `service/<name>/types.yml` — map `<PascalCase>` → схема в **том же** InputSchema-DSL ([docs/input.md](input.md)); ссылка **`$type: <Имя>`** как самостоятельное поле ИЛИ `items: {$type: <Имя>}` для массива. Резолв **service-level** (НЕ local-per-scenario, НЕ кросс-сервис); MVP = object + array-of-type + вложенность тип→тип с **обязательным cycle-detection**; БЕЗ scalar-alias / generics / кросс-сервис. Ошибки `input_type_unknown` / `input_type_cycle` / `input_type_duplicate` / `input_type_ref_conflict`. DTO `/v1/scenarios` резолвит `$type` **backend-side ДО проекции** (UI получает развёрнутую inline-схему) + аннотация **`x-type: <Имя>`** (forward-compat UI-виджет). **Заменяет нереализованный задел `$ref`/`schemas/`** — он удалён из этого документа и [service/manifest.md](service/manifest.md). **Amends задел `$ref` в [ADR-003](#adr-003-формат-destiny--yaml-с-типизированной-схемой-cuejson-schema) / [ADR-009](#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация).**
+
 ## Plugin-инфраструктура
 
 В Soul Stack три категории расширений: **модули Destiny**, **cloud-провайдеры** и **SSH-провайдеры для push-режима**. Все три используют **единую plugin-инфраструктуру** — один и тот же handshake-механизм, протокол, requirements к артефакту. Меняется только service-контракт (gRPC-сервис), который плагин реализует.
@@ -624,8 +628,7 @@ redis/
 │   │   └── main.yml
 │   └── restart/
 │       └── main.yml
-├── schemas/                            # ОПЦИОНАЛЬНО: переиспользуемые JSON Schema-файлы
-│   └── user.yaml
+├── types.yml                           # ОПЦ.: переиспользуемые именованные input-типы (секция types:, $type-ссылка — ADR-062)
 ├── migrations/                         # миграции state_schema между версиями
 │   ├── 001_to_002.yml
 │   └── 001_to_002/
@@ -773,14 +776,37 @@ tasks:
 
 Блок `input:` валидирует входные параметры сценария до прогона (по стандарту [docs/input.md](input.md)). `state_changes` — **упорядоченный список CRUD-глаголов** (`set`/`add`/`modify`/`remove` + `foreach`, [ADR-057](#adr-057-state_changes--упорядоченный-список-crud-глаголов)): декларирует, **что** сценарий пишет в `incarnation.state` при успехе и **откуда** берётся значение (CEL `${ … }`, рендерится keeper-ом после барьера); множественность — через `match`-предикат. Нормативно — [scenario/orchestration.md §7.1](scenario/orchestration.md#71-грамматика-state_changes--список-crud-операций).
 
-**Опциональный `$ref`** — для очень больших или переиспользуемых схем:
+**Переиспользуемые именованные типы** — для составных схем, встречающихся в нескольких сценариях сервиса ([ADR-062](#adr-062-named-input-types--переиспользуемые-именованные-схемы-input-через-types--type)). Тип объявляется в service-level файле `service/<name>/types.yml` (секция `types:`, тот же input-DSL), а сценарий ссылается на него директивой `$type`:
 
 ```yaml
-input:
-  $ref: "../../schemas/user.yaml"
+# service/<name>/types.yml
+types:
+  AclUser:
+    type: object
+    additional_properties: false
+    required: [name, perms, state]
+    properties:
+      name:  { type: string, pattern: "^[a-zA-Z0-9_-]+$" }
+      perms: { type: string }
+      state: { type: string, enum: [on, off] }
 ```
 
-Папка `schemas/` появляется в репо только при реальной потребности — если схема в одном сценарии, держим её inline.
+```yaml
+# scenario/add_user/main.yml
+input:
+  user:
+    $type: AclUser            # одиночный объект объявленного типа
+
+# scenario/create/main.yml
+input:
+  users:
+    type: array
+    items:
+      $type: AclUser          # массив объявленного типа
+    min_items: 1
+```
+
+`$type` резолвится service-level на input-стадии (с cycle-detection); типы в одном сценарии держим inline, в `types.yml` выносим только переиспользуемые. Прежний задел `$ref` на внешний JSON-Schema-файл в `schemas/` **отменён** (нереализован, заменён named-типами) — см. [ADR-062](#adr-062-named-input-types--переиспользуемые-именованные-схемы-input-через-types--type) и [docs/input.md → «Переиспользуемые именованные типы»](input.md#переиспользуемые-именованные-типы-types--type).
 
 ## Essence: pipeline сборки
 

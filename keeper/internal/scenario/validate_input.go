@@ -90,7 +90,11 @@ func ValidateInput(ctx context.Context, loader InputScenarioLoader, ref artifact
 	if err != nil {
 		return fmt.Errorf("scenario: validate input: read %s: %w", rel, err)
 	}
-	scn, _, diags, err := config.LoadScenarioManifestFromBytes(rel, data, config.ValidateOptions{})
+	// $type-ссылки input-схемы резолвятся ЗДЕСЬ (на загрузке), чтобы
+	// config.ResolveInputValues ниже валидировал submitted-значение поля с $type
+	// против РЕЗОЛВНУТОЙ type-формы (object/array/properties/required), а не
+	// принимал его молча (узел-ссылка имеет пустой Type → пропуск проверки).
+	scn, _, diags, err := artifact.LoadScenarioManifestResolved(art, rel, data)
 	if err != nil {
 		return fmt.Errorf("scenario: validate input: parse %s: %w", rel, err)
 	}

@@ -114,6 +114,18 @@ type InputSchema struct {
 
 	Properties           InputSchemaMap `yaml:"properties,omitempty"`
 	AdditionalProperties any            `yaml:"additional_properties,omitempty"`
+
+	// TypeRef — имя переиспользуемого именованного типа из `service/<name>/
+	// types.yml` (ключ-дискриминатор `$type` в input-DSL). Узел `{$type: <Имя>}`
+	// — ссылка: при резолве сервиса схема типа подставляется на место узла
+	// (ResolveTypeRefs). Самостоятельная форма поля (`<param>: { $type: T }`) ИЛИ
+	// массива элементов (`items: { $type: T }`). `$type` ВМЕСТЕ с любым из
+	// `type:`/`properties:`/`items:` — input_type_ref_conflict (непонятно, что
+	// побеждает; items:{$type} — это items-ССЫЛКА на уровне родителя, не conflict).
+	//
+	// Поле помечено `yaml:"-"`: заполняется в UnmarshalYAML из `$type`-узла (имя
+	// `$type` невалидно как Go-yaml-тег). Пустая строка = ссылки нет.
+	TypeRef string `yaml:"-"`
 }
 
 // InputSource — объект-дискриминатор каталога-источника значений поля (ADR-044
@@ -177,6 +189,12 @@ var (
 		"properties": true, "additional_properties": true,
 
 		"source": true,
+
+		// $type — ключ-дискриминатор ссылки на переиспользуемый именованный тип
+		// (service/<name>/types.yml). Узел с `$type` = ссылка, резолвится при
+		// загрузке сервиса (ResolveTypeRefs). Конфликт с type:/properties:/items:
+		// ловит validateInputSchemaNode (input_type_ref_conflict).
+		"$type": true,
 	}
 
 	// inputSourceKnownKeys — закрытый набор под-ключей объекта-дискриминатора
@@ -204,10 +222,11 @@ func (s *InputSchema) UnmarshalYAML(node ast.Node) error {
 	if !ok {
 		return fmt.Errorf("input schema must be a mapping, got %T", node)
 	}
-	// Snapshot `required`-узел и `additional_properties`-узел, выкусываем их
-	// из mapping-а перед общим decode-ом: оба — поля с особой семантикой
-	// (см. doc-комменты), goccy не знает, как их типизировать корректно.
-	var reqNode, apNode ast.Node
+	// Snapshot `required`-узел, `additional_properties`-узел и `$type`-узел,
+	// выкусываем их из mapping-а перед общим decode-ом: все три — поля с особой
+	// семантикой (см. doc-комменты), goccy не знает, как их типизировать
+	// корректно (`$type` — ещё и невалидный Go-yaml-тег с `$`).
+	var reqNode, apNode, typeRefNode ast.Node
 	filtered := &ast.MappingNode{
 		BaseNode:    m.BaseNode,
 		Start:       m.Start,
@@ -224,6 +243,9 @@ func (s *InputSchema) UnmarshalYAML(node ast.Node) error {
 				continue
 			case "additional_properties":
 				apNode = kv.Value
+				continue
+			case "$type":
+				typeRefNode = kv.Value
 				continue
 			}
 		}
@@ -258,6 +280,13 @@ func (s *InputSchema) UnmarshalYAML(node ast.Node) error {
 	default:
 		// Любой иной тип — `validateObjectSchema` поднимет type_mismatch
 		// по AST; здесь оставляем nil.
+	}
+
+	// $type: <Имя> — ссылка на именованный тип. Допустимо только строковое
+	// значение; иные виды узла (mapping/sequence/число) оставляют TypeRef
+	// пустым, а validateInputSchemaNode поднимает type_mismatch по AST.
+	if sn, ok := typeRefNode.(*ast.StringNode); ok {
+		s.TypeRef = sn.Value
 	}
 
 	// Разбор `required` по типу узла.
@@ -365,6 +394,16 @@ func validateInputSchemaNode(s *InputSchema, node *ast.MappingNode, path string)
 			continue
 		}
 		present[name] = kv
+	}
+
+	// $type — ссылка на именованный тип. Узел с `$type` НЕ объявляет `type`/
+	// собственную форму — он подменяется схемой типа при резолве сервиса
+	// (ResolveTypeRefs). Поэтому такой узел пропускает per-type валидацию ниже
+	// (type-required + per-key проверки) — здесь только структурные инварианты
+	// ССЫЛКИ: непустое строковое имя + отсутствие конфликтующих ключей.
+	if refKV, ok := present["$type"]; ok {
+		out = append(out, validateTypeRefNode(s, refKV, present, path)...)
+		return out
 	}
 
 	// type — required.

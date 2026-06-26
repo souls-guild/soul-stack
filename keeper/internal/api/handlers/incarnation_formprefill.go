@@ -31,9 +31,9 @@ import (
 	"log/slog"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
+	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/scenario"
-	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 // FormPrefillResult — NATIVE результат POST .../form-prefill (handler-native).
@@ -155,7 +155,7 @@ func (h *IncarnationHandler) prefillFieldsForScenario(ctx context.Context, inc *
 	if err != nil || len(data) == 0 {
 		return nil
 	}
-	scn, _, _, perr := config.LoadScenarioManifestFromBytes("scenario/"+scenarioName+"/main.yml", data, config.ValidateOptions{})
+	scn, _, _, perr := artifact.LoadScenarioManifestResolved(art, "scenario/"+scenarioName+"/main.yml", data)
 	if perr != nil || scn == nil {
 		return nil
 	}

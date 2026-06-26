@@ -40,8 +40,7 @@ service-<name>/
 │   │   └── main.yml
 │   └── restart/
 │       └── main.yml
-├── schemas/                            # ОПЦ.: переиспользуемые JSON Schema-файлы для scenario-input через $ref
-│   └── user.yaml
+├── types.yml                           # ОПЦ.: переиспользуемые именованные input-типы (секция types:, $type-ссылка — ADR-062)
 ├── migrations/                         # ОПЦ.: state_schema миграции (если state_schema_version > 1)
 │   ├── 001_to_002.yml
 │   ├── 001_to_002/
@@ -167,6 +166,10 @@ modules:
 ### Когда нужны соседи `main.yml`
 
 Один `main.yml` справляется, пока сценарий остаётся обозримым (~150 строк). Если внутри явно выделяются логические подразделы — выносим их в `scenario/<name>/<sub>.yml` и подключаем через `include:`. Аналогично [`docs/destiny/manifest.md → Когда нужны соседи tasks/main.yml`](../destiny/manifest.md#когда-нужны-соседи-tasksmainyml).
+
+## Переиспользуемые именованные input-типы — `types.yml`
+
+Опциональный service-level файл `types.yml` объявляет **переиспользуемые именованные input-схемы** — секция `types:` с map `<PascalCase>` → схема в том же input-DSL ([`docs/input.md`](../input.md)). Сценарий ссылается на тип директивой `$type: <Имя>` (как самостоятельное поле или `items: {$type: <Имя>}` для массива) — так составной тип (например запись пользователя `{name, perms, state}`) не дублируется inline в каждом сценарии. Резолв — service-level (только этот сервис), с обязательным cycle-detection. Полный формат, резолв, классы ошибок и границы MVP — [`docs/input.md → «Переиспользуемые именованные типы»`](../input.md#переиспользуемые-именованные-типы-types--type), [ADR-062](../adr/0062-input-types.md). Прежний нереализованный задел `$ref` на внешний JSON-Schema-файл в `schemas/` им заменён.
 
 ## Essence
 

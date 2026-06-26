@@ -100,6 +100,10 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 		// unknown_register на парсе). Прогоняется даже при наличии диагностик парса
 		// (stageDiagnostics сам решает по nil scn, надёжен ли граф).
 		diags = append(diags, stageDiagnostics(opts.Path, scn)...)
+		// Резолв $type-ссылок против каталога типов сервиса (`../../types.yml`):
+		// ловит input_type_unknown/cycle/duplicate ДО keeper. Структурный
+		// $type-ref-conflict config-валидатор уже поднял на парсе сценария.
+		diags = append(diags, typeRefDiagnostics(opts.Path, scn)...)
 	case KindManifest:
 		_, diags = sharedplugin.LoadFromBytes(opts.Path, src)
 	default:

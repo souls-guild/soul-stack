@@ -186,6 +186,12 @@ func ListScenarios(serviceRoot string, logger *slog.Logger) ([]Scenario, error) 
 		return nil, fmt.Errorf("artifact: чтение scenario-каталога %s: %w", scenarioDir, err)
 	}
 
+	// Каталог переиспользуемых именованных типов сервиса (`types.yml`) — общий
+	// для всех сценариев, читается один раз. $type-ссылки в InputSchema каждого
+	// сценария резолвятся backend-side ДО проекции в reply (см. loadScenario):
+	// UI получает уже подставленную схему + аннотацию x-type, а не сырой $type.
+	catalog := loadTypeCatalog(serviceRoot, logger)
+
 	out := make([]Scenario, 0, len(entries))
 	for _, e := range entries {
 		if !e.IsDir() {
@@ -196,6 +202,7 @@ func ListScenarios(serviceRoot string, logger *slog.Logger) ([]Scenario, error) 
 		if !ok {
 			continue
 		}
+		sc.InputSchema = resolveScenarioTypeRefs(sc.InputSchema, catalog)
 		out = append(out, sc)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

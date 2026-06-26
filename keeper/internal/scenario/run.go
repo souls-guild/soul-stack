@@ -781,7 +781,9 @@ func parseScenarioFromArtifact(loader *artifact.ServiceLoader, art *artifact.Ser
 	if err != nil {
 		return nil, fmt.Errorf("scenario: read %s: %w", rel, err)
 	}
-	scn, _, diags, err := config.LoadScenarioManifestFromBytes(rel, data, config.ValidateOptions{})
+	// Резолв $type на загрузке: render-pipeline и value-валидация ниже работают
+	// с самодостаточной input-схемой (см. artifact.LoadScenarioManifestResolved).
+	scn, _, diags, err := artifact.LoadScenarioManifestResolved(art, rel, data)
 	if err != nil {
 		return nil, fmt.Errorf("scenario: parse %s: %w", rel, err)
 	}

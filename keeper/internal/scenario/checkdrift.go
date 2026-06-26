@@ -213,7 +213,7 @@ func (r *Runner) CheckDrift(ctx context.Context, spec CheckDriftSpec) (*DriftRep
 			slog.String("ref", spec.ServiceRef.Ref), slog.Any("error", err))
 		return nil, ErrConvergeMissing
 	}
-	scn, _, diags, err := config.LoadScenarioManifestFromBytes(relMain, data, config.ValidateOptions{})
+	scn, _, diags, err := artifact.LoadScenarioManifestResolved(art, relMain, data)
 	if err != nil {
 		span.RecordError(err)
 		return nil, fmt.Errorf("scenario: check-drift parse %s: %w", relMain, err)
