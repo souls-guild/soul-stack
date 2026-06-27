@@ -7,16 +7,18 @@
 // ноду к УЖЕ сформированному кластеру (day-2); action=remove-node выводит ОДНУ
 // ноду из кластера (day-2, с миграцией её слотов на оставшиеся masters, если она
 // master со слотами). action=reshard переносит N слотов с одного master-а на
-// другой (day-2, зеркало redis-cli `--cluster reshard`). action=join-external
-// вливает НОВЫЕ ноды в ЧУЖОЙ (старый) кластер репликами его мастеров 1:1 — первый
-// шаг миграции «старый кластер → новый» (см. migrate.go); failover/forget старых
-// — отдельная операция (следующий батч), здесь её нет.
+// другой (day-2, зеркало redis-cli `--cluster reshard`). Миграция «старый кластер
+// → новый» (см. migrate.go) — три шага: action=join-external вливает НОВЫЕ ноды в
+// ЧУЖОЙ (старый) кластер репликами его мастеров 1:1; action=failover-takeover
+// промоутит эти реплики в мастера через graceful CLUSTER FAILOVER (после sync-gate,
+// fail-closed без FORCE/TAKEOVER); action=forget-external выкидывает старые узлы
+// (CLUSTER FORGET, без миграции слотов — слоты уже у новых мастеров).
 //
 // ★ reshard ИМПЕРАТИВЕН и НЕ идемпотентен (осознанно, как старый
 // redis-cluster-live без unless): повторный apply сдвинет ещё N слотов. Это
 // exec-style day-2 операция — оператор зовёт её явно, она НЕ часть converge.
-// create/add-node/remove-node/join-external, напротив, идемпотентны (no-op на
-// сошедшемся входе).
+// create/add-node/remove-node/join-external/failover-takeover/forget-external,
+// напротив, идемпотентны (no-op на сошедшемся входе: узел уже реплика/master/забыт).
 //
 // Раскладка ролей и слотов СТРОГО детерминирована (сортировка ключей nodes):
 // один и тот же вход → одна и та же топология master/replica и одни и те же
@@ -91,9 +93,13 @@ func validateCluster(f map[string]*structpb.Value) []string {
 		return validateClusterReshard(f)
 	case "join-external":
 		return validateClusterJoinExternal(f)
+	case "failover-takeover":
+		return validateClusterFailoverTakeover(f)
+	case "forget-external":
+		return validateClusterForgetExternal(f)
 	default:
 		return []string{fmt.Sprintf(
-			"params.action: %q not supported (only \"create\", \"add-node\", \"remove-node\", \"reshard\", \"join-external\")", stringOrEmpty(f["action"]))}
+			"params.action: %q not supported (only \"create\", \"add-node\", \"remove-node\", \"reshard\", \"join-external\", \"failover-takeover\", \"forget-external\")", stringOrEmpty(f["action"]))}
 	}
 }
 
@@ -208,9 +214,13 @@ func (m *RedisModule) applyCluster(ctx context.Context, stream grpc.ServerStream
 		return m.applyClusterReshard(ctx, stream, params)
 	case "join-external":
 		return m.applyClusterJoinExternal(ctx, stream, params)
+	case "failover-takeover":
+		return m.applyClusterFailoverTakeover(ctx, stream, params)
+	case "forget-external":
+		return m.applyClusterForgetExternal(ctx, stream, params)
 	default:
 		return sendFailure(stream, fmt.Sprintf(
-			"cluster: action %q not supported (only \"create\", \"add-node\", \"remove-node\", \"reshard\", \"join-external\")",
+			"cluster: action %q not supported (only \"create\", \"add-node\", \"remove-node\", \"reshard\", \"join-external\", \"failover-takeover\", \"forget-external\")",
 			stringOrEmpty(params.GetFields()["action"])))
 	}
 }

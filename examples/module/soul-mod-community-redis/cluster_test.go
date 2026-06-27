@@ -37,6 +37,15 @@ type clusterConn struct {
 	// Покрывает слот с >migrateBatch ключей (несколько итераций цикла migrateOneSlot).
 	// keysInSlot и keysInSlotBatches на ОДНОМ слоте одновременно не задаются.
 	keysInSlotBatches map[int][][]string
+
+	// infoRepl — ответ на INFO replication (failover-takeover sync-gate читает
+	// master_link_status/role). Пусто → "" (parseInfoSection вернёт пустой map →
+	// role/master_link_status отсутствуют, sync-gate трактует как нештатный INFO).
+	infoRepl string
+
+	// forgetErr — ошибка на CLUSTER FORGET (forget-external идемпотентность: нода
+	// уже забыла старого → "Unknown node", глотается). nil → FORGET успешен ("OK").
+	forgetErr error
 }
 
 func (c *clusterConn) Do(_ context.Context, args ...any) (string, error) {
@@ -52,7 +61,16 @@ func (c *clusterConn) Do(_ context.Context, args ...any) (string, error) {
 				return c.info, nil
 			case "NODES":
 				return c.nodesResponse(), nil
+			case "FORGET":
+				if c.forgetErr != nil {
+					return "", c.forgetErr
+				}
+				return "OK", nil
 			}
+		}
+		// INFO replication — sync-gate failover-takeover (master_link_status/role).
+		if strings.EqualFold(v0, "INFO") && strings.EqualFold(v1, "replication") {
+			return c.infoRepl, nil
 		}
 	}
 	return "OK", nil

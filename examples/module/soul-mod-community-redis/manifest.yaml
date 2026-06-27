@@ -4,10 +4,10 @@
 # scenario сервиса оркеструет порядок/таргетинг, плагин исполняет ОДНУ операцию
 # над одним Redis-инстансом. Сейчас реализованы states command + pinged/role/
 # replica-synced/offset-synced (read-probe) + config + acl (ACL LOAD hot-reload) +
-# cluster (action create + add-node + remove-node + reshard) + replica (REPLICAOF,
-# вкл. внешний источник source_external) + detached (REPLICAOF NO ONE, промоушен) +
-# sentinel (MONITOR/SET reconcile); failover — планируется (следующий батч), его в
-# spec.states пока НЕТ (объявляем только реализованное).
+# cluster (action create + add-node + remove-node + reshard + join-external +
+# failover-takeover + forget-external) + replica (REPLICAOF, вкл. внешний источник
+# source_external) + detached (REPLICAOF NO ONE, промоушен) + sentinel (MONITOR/SET
+# reconcile).
 #
 # СОЗНАТЕЛЬНО БЕЗ dry-run preview: плагин НЕ реализует PlanReadSafe — на dry_run
 # host (Soul) применяет default-deny (задача получает честный «drift не
@@ -563,9 +563,28 @@ spec:
     #                     мастеров != shards_dest → 1:1 невозможен (runtime-assert
     #                     shards_source==shards_dest, источник render-фазе не виден).
     #                     Идемпотентен: узел уже реплика нужного мастера → no-op.
-    #                     ★ graceful failover (промоушен новых в мастера) + forget
-    #                     старых — ОТДЕЛЬНАЯ операция (следующий батч), здесь НЕТ:
-    #                     только join + replicate + sync-готовность.
+    #                     Промоушен новых в мастера + выкидывание старых — следующие
+    #                     шаги failover-takeover + forget-external (ниже).
+    #   action=failover-takeover — промоутить новые узлы (реплики старых мастеров
+    #                     после join-external) в мастера через GRACEFUL CLUSTER
+    #                     FAILOVER (day-2 migration step 2). ★СНАЧАЛА sync-gate: на
+    #                     КАЖДОМ новом узле INFO replication master_link_status==up
+    #                     (реплика догнала старый мастер) — хоть один не догнал →
+    #                     ОШИБКА ДО первого failover (ранний failover теряет хвост).
+    #                     Затем на каждом узле GRACEFUL CLUSTER FAILOVER (без
+    #                     аргументов: мастер останавливает запись + дослать хвост,
+    #                     лосслесс) → poll до role==master со слотами. ★FAIL-CLOSED:
+    #                     graceful не сошёлся за лимит → ОШИБКА, БЕЗ эскалации на
+    #                     FORCE/TAKEOVER (split-brain). Идемпотентен: узел уже master
+    #                     → no-op.
+    #   action=forget-external — выкинуть старые узлы из кластера через CLUSTER
+    #                     FORGET на каждой новой ноде (day-2 migration step 3, после
+    #                     failover-takeover): коннект к source_nodes → CLUSTER NODES
+    #                     старого кластера → ВСЕ старые node-id (мастера И реплики) →
+    #                     CLUSTER FORGET <old-id> на КАЖДОЙ новой ноде. ★БЕЗ миграции
+    #                     слотов (слоты уже у новых мастеров после failover).
+    #                     Идемпотентен: старый id уже неизвестен ноде → "Unknown
+    #                     node", глотается как no-op.
     #
     # add-node слоты НЕ двигает (role=master добавляет ПУСТОЙ master); перенос
     # слотов на новый master — это reshard.
@@ -586,8 +605,13 @@ spec:
         — влить новые cluster-mode ноды в СТАРЫЙ кластер репликами старых мастеров
         1:1 (MEET old-seed + REPLICATE; маппинг узлы↔мастера по ключу/первому
         слоту); fail-fast если число старых мастеров != shards_dest; идемпотентен
-        (узел уже реплика нужного мастера → no-op); failover+forget — отдельный
-        батч. Без dry-run preview (плагин не реализует PlanReadSafe).
+        (узел уже реплика нужного мастера → no-op). action=failover-takeover —
+        промоутить эти реплики в мастера через GRACEFUL CLUSTER FAILOVER (сначала
+        sync-gate master_link_status==up на ВСЕХ; fail-closed без FORCE/TAKEOVER;
+        идемпотентен — узел уже master → no-op). action=forget-external — выкинуть
+        старые узлы (CLUSTER FORGET всех старых node-id на каждой новой ноде, без
+        миграции слотов; идемпотентен — Unknown node → no-op). Без dry-run preview
+        (плагин не реализует PlanReadSafe).
       input:
         action:
           type: string
@@ -596,17 +620,22 @@ spec:
             Операция над кластером: "create" (сборка кластера из nodes),
             "add-node" (присоединение одной ноды к сформированному кластеру),
             "remove-node" (вывод одной ноды из кластера), "reshard" (перенос N
-            слотов с master from на master to; НЕ идемпотентен) или
-            "join-external" (вливание новых нод репликами старого кластера 1:1).
-        # ── action=create ────────────────────────────────────────────────────
+            слотов с master from на master to; НЕ идемпотентен), "join-external"
+            (вливание новых нод репликами старого кластера 1:1), "failover-takeover"
+            (промоушен новых реплик в мастера через graceful CLUSTER FAILOVER) или
+            "forget-external" (выкидывание старых узлов через CLUSTER FORGET).
+        # ── action=create / join-external / failover-takeover / forget-external ─
         nodes:
           type: map
           required: false
           description: >-
-            (action=create) Узлы кластера: map стабильный-ключ (SID/имя) ->
-            { addr: "host:port" } либо { ip: "10.0.0.1", port: 6379 }. Ключи
-            СОРТИРУЮТСЯ — детерминируют раскладку master/replica. addr — для
-            коннекта, ip+port — для CLUSTER MEET (gossip оперирует ip:port).
+            Узлы: map стабильный-ключ (SID/имя) -> { addr: "host:port" } либо
+            { ip: "10.0.0.1", port: 6379 }. addr — для коннекта, ip+port — для
+            CLUSTER MEET (gossip оперирует ip:port). (action=create) узлы СОБИРАЕМОГО
+            кластера, ключи СОРТИРУЮТСЯ → детерминируют раскладку master/replica.
+            (join-external) НОВЫЕ узлы вступающего кластера (1:1-маппинг по ключу).
+            (failover-takeover) НОВЫЕ узлы-реплики, промоутируемые в мастера.
+            (forget-external) НОВЫЕ узлы, на которых исполняется CLUSTER FORGET.
         replicas_per_shard:
           type: int
           required: false
@@ -678,19 +707,20 @@ spec:
             (action=reshard) Сколько слотов перенести с from на to (>= 1).
             Берутся ПЕРВЫЕ slots слотов источника по возрастанию. ★ НЕ
             идемпотентно: повторный apply перенесёт ещё slots слотов.
-        # ── action=join-external ─────────────────────────────────────────────
-        # nodes (выше, action=create) — НОВЫЕ узлы вступающего кластера: тот же
-        # map стабильный-ключ -> {addr|ip+port}, ключи сортируются и задают
-        # детерминированный 1:1-маппинг (узел i ↔ старый мастер i). Число узлов
-        # обязано равняться shards_dest (одна реплика на старый мастер).
+        # ── action=join-external / forget-external ───────────────────────────
+        # nodes (выше) — НОВЫЕ узлы: join-external маппит их 1:1 на старых мастеров
+        # (число узлов == shards_dest), forget-external исполняет на каждом CLUSTER
+        # FORGET всех старых node-id.
         source_nodes:
           type: list
           required: false
           description: >-
-            (action=join-external) Seed-ноды СТАРОГО кластера: список host:port.
-            Перебираются по порядку — первая ответившая CLUSTER NODES задаёт
-            топологию (мастера + слоты) и служит точкой MEET для новых узлов. Тот
-            же пароль/TLS, что у новых нод (общий кластер; оператор выравнивает).
+            Seed-ноды СТАРОГО кластера: список host:port. Перебираются по порядку —
+            первая ответившая CLUSTER NODES задаёт результат. (join-external) её
+            топология (мастера + слоты) задаёт 1:1-маппинг и служит точкой MEET для
+            новых узлов. (forget-external) её CLUSTER NODES даёт ВСЕ старые node-id
+            (мастера И реплики), которые забываются на новых нодах. Тот же пароль/TLS,
+            что у новых нод (общий кластер; оператор выравнивает).
         shards_dest:
           type: int
           required: false
