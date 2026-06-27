@@ -51,6 +51,24 @@
       - "size(soulprint.hosts) == int(input.shards) * (1 + int(input.replicas_per_master))"
     message: "cluster migration guard: размер roster-а прогона должен быть ровно shards*(1+replicas_per_master) (мастера нового кластера + реплики на каждый шард) — задай столько же хостов, сколько узлов в целевой топологии"
 
+# ── 0b. REPLICA-GUARD (пилот): replicas_per_master == 0 ────────────────────────────
+# B3-пилот cluster-миграции переносит ТОЛЬКО мастера: join-external (migrate.go) вливает
+# новые ноды 1:1 на старые мастера и runtime-assert-ит len(newNodes) == shards_dest (ровно
+# одна новая нода на старый мастер — реплик в новом кластере НЕ создаёт). При replicas>0
+# size-guard выше пропускает roster shards*(1+replicas) (вместе с репликами), но плагин
+# тогда упёрся бы в len(newNodes) != shards_dest — поздний runtime-fail ПОСЛЕ joinable-
+# деплоя (error_locked). Отдельный assert (НЕ слитый в size-guard выше: тот корректен для
+# топологии — при replicas=0 он сводится к size==shards, что и нужно join-external)
+# превращает поздний runtime-отказ в ранний внятный render-отказ ДО любого dispatch.
+# ★ Поддержка реплик в новом кластере при миграции — отдельный слайс (затрагивает
+# join-external/forget-external + раскладку master/replica). create реплики поддерживает
+# полноценно (этот гейт — только cluster-MIGRATION-пилот, create им не задет).
+- name: Guard cluster migration pilot supports masters only (no replicas)
+  assert:
+    that:
+      - "int(default(input.replicas_per_master, 0)) == 0"
+    message: "cluster-migration (B3-пилот) поддерживает только replicas_per_master=0 — реплики в новом кластере пока не переносятся (join-external вливает ровно одну новую ноду на старый мастер); поддержка реплик = отдельный слайс. Запустите с replicas_per_master=0"
+
 # ── 1. JOINABLE-ДЕПЛОЙ новых cluster-нод (S4-3a) ──────────────────────────────────
 # Поднять НОВЫЕ ноды cluster-mode (install + render redis.conf с cluster-директивами/
 # users.acl + systemd + PING-gate), но БЕЗ финального CLUSTER MEET/ADDSLOTS/REPLICATE —

@@ -1,0 +1,100 @@
+# L0-испытание migrate_cluster в режиме cluster — FAIL-ветка replica-guard (B3-пилот
+# поддерживает ТОЛЬКО replicas_per_master=0). Зеркало cluster-migrate-2shards (тот же
+# happy-path вход cluster + внешний источник из 2 seed-нод), но replicas_per_master=1 →
+# топология shards*(1+replicas)=2*(1+1)=4. Roster СПЕЦИАЛЬНО подобран в 4 хоста, чтобы
+# size-guard (0.) ПРОШЁЛ (4 == 2*(1+1)) и прогон уперся именно в replica-guard (0b.) —
+# кейс изолирует НОВЫЙ guard, а не size-guard.
+#
+# ★ ПОЧЕМУ это нужно (QA-bug, major): join-external плагина (migrate.go) вливает новые
+# ноды 1:1 на старые мастера и runtime-assert-ит len(newNodes) == shards_dest (реплик в
+# новом кластере НЕ создаёт — пилот переносит ТОЛЬКО мастера). При replicas>0 size-guard
+# пропускал roster shards*(1+replicas), но плагин тогда падал бы на len(newNodes) !=
+# shards_dest — поздний runtime-fail ПОСЛЕ joinable-деплоя → error_locked. replica-guard
+# (0b.) превращает поздний runtime-отказ в ранний внятный render-отказ ДО любого dispatch.
+#
+# Парный с cluster-migrate-2shards (replicas=0 → render проходит до плановых join/failover/
+# forget шагов). ОТЛИЧИЕ от размерного size-guard-mismatch (create): там roster != топологии;
+# здесь roster == топологии (size-guard PASS), но топология с репликами не поддержана пилотом.
+#
+# Render-only, герметично. Диспетчер migrate_cluster инклудит cluster.yml + sentinel.yml
+# через CONDITIONAL-INCLUDE: на cluster-прогоне sentinel-ветка group-drop, cluster.yml
+# раскрывается — size-guard assert (PASS, 4==4) → replica-guard assert (FAIL, 1!=0) обрывает
+# render ДО include redis-deploy-cluster-joinable.yml (joinable-деплой не стартует).
+name: cluster migrate with replicas_per_master>0 aborts at render (replica-guard)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  # Roster из 4 хостов = ровно shards*(1+replicas)=2*(1+1) → size-guard (0.) ПРОХОДИТ,
+  # прогон доходит до replica-guard (0b.) и обрывается на нём (replicas=1 != 0). Порядок
+  # намеренно не отсортирован — guard оперирует size(), не позицией.
+  hosts:
+    - sid: node-2.example.com
+      covens: [migrate_cluster, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-1.example.com
+      covens: [migrate_cluster, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-4.example.com
+      covens: [migrate_cluster, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.4 }
+        os: { arch: amd64 }
+    - sid: node-3.example.com
+      covens: [migrate_cluster, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/migrate_cluster:
+      password: s3cr3t-redis-pass-migrate
+    secret/redis/migrate_cluster/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/migrate_cluster/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/migrate_cluster/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/migrate_cluster/users/haproxy:
+      password: haproxy-sys-secret-pass
+    secret/redis/migrate/oldcluster:
+      password: old-cluster-source-pass
+  essence:
+    redis_type: cluster
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+  input:
+    redis_type: cluster
+    version: "7.2.4"
+    shards: 2
+    # ★ replicas_per_master=1 — топология с репликами. size-guard (0.) PASS (4==2*(1+1)),
+    # но replica-guard (0b.) обрывает render: пилот переносит только мастера.
+    replicas_per_master: 1
+    cluster_node_timeout: 5000
+    source:
+      hosts:
+        - "10.9.0.1:6379"
+        - "10.9.0.2:6379"
+      password_ref: "secret/redis/migrate/oldcluster#password"
+      tls: false
+
+# Прогон обрывается на render: replica-guard assert «Guard cluster migration pilot supports
+# masters only (no replicas)» false (1 != 0). Подстрока — message assert-правила cluster.yml.
+expect_render_error: "cluster-migration (B3-пилот) поддерживает только replicas_per_master=0"
