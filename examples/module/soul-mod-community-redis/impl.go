@@ -100,10 +100,12 @@ func (m *RedisModule) Validate(_ context.Context, req *pluginv1.ValidateRequest)
 		if len(stringList(f["args"])) == 0 {
 			errs = append(errs, "params.args: must be a non-empty list (e.g. [\"PING\"])")
 		}
-	case "pinged", "role", "replica-synced":
-		// Read-probe: единственное обязательное — addr (PING / INFO replication
-		// сами по себе аргументов не требуют).
+	case "pinged", "role", "replica-synced", "detached":
+		// Read-probe + detached: единственное обязательное — addr (PING / INFO
+		// replication / REPLICAOF NO ONE доп. аргументов не требуют).
 		errs = append(errs, validateAddr(f)...)
+	case "offset-synced":
+		errs = append(errs, validateOffsetSynced(f)...)
 	case "config":
 		errs = append(errs, validateAddr(f)...)
 		if len(stringMap(f["config"])) == 0 {
@@ -122,7 +124,7 @@ func (m *RedisModule) Validate(_ context.Context, req *pluginv1.ValidateRequest)
 	case "sentinel":
 		errs = append(errs, validateSentinel(f)...)
 	default:
-		errs = append(errs, fmt.Sprintf("unknown state %q (expected command|pinged|role|replica-synced|config|acl|cluster|replica|sentinel)", req.GetState()))
+		errs = append(errs, fmt.Sprintf("unknown state %q (expected command|pinged|role|replica-synced|offset-synced|config|acl|cluster|replica|detached|sentinel)", req.GetState()))
 	}
 
 	if len(errs) > 0 {
@@ -164,16 +166,20 @@ func (m *RedisModule) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStream
 		return m.applyRole(ctx, stream, conn, req.GetParams())
 	case "replica-synced":
 		return m.applyReplicaSynced(ctx, stream, conn, req.GetParams())
+	case "offset-synced":
+		return m.applyOffsetSynced(ctx, stream, conn, req.GetParams())
 	case "config":
 		return m.applyConfig(ctx, stream, conn, req.GetParams())
 	case "acl":
 		return m.applyACL(ctx, stream, conn, req.GetParams())
 	case "replica":
 		return m.applyReplica(ctx, stream, conn, req.GetParams())
+	case "detached":
+		return m.applyDetached(ctx, stream, conn, req.GetParams())
 	case "sentinel":
 		return m.applySentinel(ctx, stream, conn, req.GetParams())
 	default:
-		return sendFailure(stream, fmt.Sprintf("unknown state %q (expected command|pinged|role|replica-synced|config|acl|cluster|replica|sentinel)", req.GetState()))
+		return sendFailure(stream, fmt.Sprintf("unknown state %q (expected command|pinged|role|replica-synced|offset-synced|config|acl|cluster|replica|detached|sentinel)", req.GetState()))
 	}
 }
 

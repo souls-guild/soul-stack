@@ -403,3 +403,145 @@ func TestApplyReplica_NoPasswordSkipsMasterauth(t *testing.T) {
 		t.Errorf("REPLICAOF должен выполниться и без пароля: %v", conn.calls)
 	}
 }
+
+// --- Apply replica: source_external (внешний master) ---
+
+// masterSourcePass — пароль ВНЕШНЕГО источника (master_password). Отличается от
+// secretPass (своего password), чтобы доказать: masterauth берётся из источника,
+// а НЕ из своего пароля. Тоже не должен утечь в события.
+const masterSourcePass = "vault-resolved-external-source-7b2d9e4a1c"
+
+// TestApplyReplica_SourceExternal_MasterauthFromMasterPassword — source_external:
+// masterauth ставится из master_password (НЕ из password). Доказывает (3)-й
+// пункт контракта source_external.
+func TestApplyReplica_SourceExternal_MasterauthFromMasterPassword(t *testing.T) {
+	conn := &replConn{infoReply: "# Replication\r\nrole:master\r\n"}
+	m := replModule(conn)
+	stream := &applyStream{}
+
+	err := m.Apply(&pluginv1.ApplyRequest{
+		State: "replica",
+		Params: mustStruct(t, map[string]any{
+			"addr":            "127.0.0.1:6379",
+			"master_addr":     "203.0.113.5:6379", // внешний источник
+			"password":        secretPass,         // СВОЙ пароль — НЕ должен идти в masterauth
+			"source_external": true,
+			"master_password": masterSourcePass,
+		}),
+	}, stream)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	fin := stream.final()
+	if fin == nil || fin.Failed || !fin.Changed {
+		t.Fatalf("ждали успех changed=true, got %+v", fin)
+	}
+	// masterauth именно из master_password.
+	if !hasCall(conn.calls, "CONFIG", "SET", "masterauth", masterSourcePass) {
+		t.Errorf("masterauth должен ставиться из master_password: %v", conn.calls)
+	}
+	// СВОЙ password НЕ должен попасть в masterauth-аргумент.
+	if hasCall(conn.calls, "CONFIG", "SET", "masterauth", secretPass) {
+		t.Errorf("свой password утёк в masterauth (ждали master_password): %v", conn.calls)
+	}
+	if !hasCall(conn.calls, "REPLICAOF", "203.0.113.5", "6379") {
+		t.Errorf("нет REPLICAOF на внешний источник: %v", conn.calls)
+	}
+	// Оба пароля не должны утечь в события.
+	assertEventsNoSecret(t, stream)
+	for i, ev := range stream.sent {
+		if strings.Contains(ev.GetMessage(), masterSourcePass) {
+			t.Errorf("событие[%d].Message несёт master_password: %q", i, ev.GetMessage())
+		}
+	}
+}
+
+// TestApplyReplica_SourceExternal_SelfGuardDisabled — при source_external self-
+// guard addr==master_addr ОТКЛЮЧЁН: даже при совпадении адресов идёт настоящая
+// привязка (INFO + REPLICAOF), а не тихий no-op. Доказывает (1)-й пункт контракта.
+func TestApplyReplica_SourceExternal_SelfGuardDisabled(t *testing.T) {
+	conn := &replConn{infoReply: "# Replication\r\nrole:master\r\n"}
+	m := replModule(conn)
+	stream := &applyStream{}
+
+	err := m.Apply(&pluginv1.ApplyRequest{
+		State: "replica",
+		Params: mustStruct(t, map[string]any{
+			"addr":            "203.0.113.5:6379", // совпадает с master_addr
+			"master_addr":     "203.0.113.5:6379",
+			"source_external": true,
+			"master_password": masterSourcePass,
+		}),
+	}, stream)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	fin := stream.final()
+	if fin == nil || fin.Failed {
+		t.Fatalf("ждали не-failed, got %+v", fin)
+	}
+	// self-guard отключён → INFO replication ВЫЗВАН (без guard ранний return до INFO).
+	if !hasCall(conn.calls, "INFO", "replication") {
+		t.Errorf("self-guard НЕ отключён: INFO replication не вызван (ранний no-op): %v", conn.calls)
+	}
+	// И настоящий REPLICAOF (не no-op-ветка master).
+	if !hasCall(conn.calls, "REPLICAOF", "203.0.113.5", "6379") {
+		t.Errorf("ждали REPLICAOF (self-guard отключён): %v", conn.calls)
+	}
+}
+
+// TestApplyReplica_SourceExternal_MasteruserFromMasterUsername — masteruser
+// берётся из master_username (НЕ из своего username) при source_external.
+func TestApplyReplica_SourceExternal_MasteruserFromMasterUsername(t *testing.T) {
+	conn := &replConn{infoReply: "# Replication\r\nrole:master\r\n"}
+	m := replModule(conn)
+	stream := &applyStream{}
+
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State: "replica",
+		Params: mustStruct(t, map[string]any{
+			"addr":            "127.0.0.1:6379",
+			"master_addr":     "203.0.113.5:6379",
+			"username":        "own-user", // свой — НЕ должен идти в masteruser
+			"source_external": true,
+			"master_password": masterSourcePass,
+			"master_username": "source-replicator",
+		}),
+	}, stream)
+
+	if !hasCall(conn.calls, "CONFIG", "SET", "masteruser", "source-replicator") {
+		t.Errorf("masteruser должен ставиться из master_username: %v", conn.calls)
+	}
+	if hasCall(conn.calls, "CONFIG", "SET", "masteruser", "own-user") {
+		t.Errorf("свой username утёк в masteruser (ждали master_username): %v", conn.calls)
+	}
+}
+
+// TestApplyReplica_NotSourceExternal_SelfGuardActive — БЕЗ source_external
+// self-guard работает как прежде (addr==master_addr → no-op). Регресс-guard:
+// новый флаг не сломал старое поведение.
+func TestApplyReplica_NotSourceExternal_SelfGuardActive(t *testing.T) {
+	conn := &replConn{}
+	m := replModule(conn)
+	stream := &applyStream{}
+
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State: "replica",
+		Params: mustStruct(t, map[string]any{
+			"addr":        "10.0.0.1:6379",
+			"master_addr": "10.0.0.1:6379",
+			"password":    secretPass,
+			// source_external не задан (default false) → guard активен
+		}),
+	}, stream)
+
+	fin := stream.final()
+	if fin == nil || fin.Failed || fin.Changed {
+		t.Fatalf("ждали no-op changed=false (self-guard активен по умолчанию), got %+v", fin)
+	}
+	if len(conn.calls) != 0 {
+		t.Errorf("self-guard должен сработать ДО INFO (без source_external): %v", conn.calls)
+	}
+}

@@ -24,30 +24,30 @@ import (
 // кластере с проверкой лосслесс-переноса и корректной смены владельца слотов.
 //
 // TODO(L3c-future, нужна harness-сущность «live redis cluster», propose-and-wait):
-//   1. Поднять РЕАЛЬНЫЙ Redis-кластер минимум из 2 master-ов (testcontainers /
-//      docker-compose redis:7 cluster, --cluster-enabled yes) → endpoint-ы
-//      from/to + node-id обоих master-ов.
-//   2. Записать в слоты, принадлежащие source master (from), набор ключей,
-//      ОБЯЗАТЕЛЬНО включая:
-//        - whitespace-имена ("user 42", "a\tb", "c\nd") — лосслесс-инвариант
-//          типизированного GetKeysInSlot (см. brief P3/remove-node-фикс);
-//        - ключи с TTL (SET k v EX 3600) — проверить, что TTL переехал (MIGRATE
-//          переносит TTL вместе со значением), TTL на target > 0 и близок к 3600;
-//        - обычные ключи для контраста.
-//      Зафиксировать множество ключей source и суммарный DBSIZE до reshard.
-//   3. Вызвать m.Apply(state=cluster, action=reshard, from, to, slots=N) ОДИН раз
-//      (императивно). slots <= числу слотов source.
-//   4. Инварианты ПОСЛЕ:
-//        - CLUSTER NODES: перенесённые N слотов теперь принадлежат to (node-id
-//          target), у from их больше нет; остальные слоты не тронуты.
-//        - cluster_state:ok (CLUSTER INFO), 16384 слота покрыты, нет дыр.
-//        - все ключи перенесённых слотов читаются С TARGET (вкл. whitespace+TTL),
-//          и НЕ читаются с source → лосслесс, ни одного потерянного ключа.
-//        - DBSIZE(from) + DBSIZE(to) == исходная сумма (ничего не пропало и не
-//          задвоилось).
-//   5. ★ Проверить НЕ-идемпотентность отдельным под-кейсом: повторный reshard
-//      тех же from→to slots=N сдвигает ЕЩЁ N слотов (a НЕ no-op) — это
-//      зафиксированная семантика, тест её утверждает, а не ловит как регресс.
+//  1. Поднять РЕАЛЬНЫЙ Redis-кластер минимум из 2 master-ов (testcontainers /
+//     docker-compose redis:7 cluster, --cluster-enabled yes) → endpoint-ы
+//     from/to + node-id обоих master-ов.
+//  2. Записать в слоты, принадлежащие source master (from), набор ключей,
+//     ОБЯЗАТЕЛЬНО включая:
+//     - whitespace-имена ("user 42", "a\tb", "c\nd") — лосслесс-инвариант
+//     типизированного GetKeysInSlot (см. brief P3/remove-node-фикс);
+//     - ключи с TTL (SET k v EX 3600) — проверить, что TTL переехал (MIGRATE
+//     переносит TTL вместе со значением), TTL на target > 0 и близок к 3600;
+//     - обычные ключи для контраста.
+//     Зафиксировать множество ключей source и суммарный DBSIZE до reshard.
+//  3. Вызвать m.Apply(state=cluster, action=reshard, from, to, slots=N) ОДИН раз
+//     (императивно). slots <= числу слотов source.
+//  4. Инварианты ПОСЛЕ:
+//     - CLUSTER NODES: перенесённые N слотов теперь принадлежат to (node-id
+//     target), у from их больше нет; остальные слоты не тронуты.
+//     - cluster_state:ok (CLUSTER INFO), 16384 слота покрыты, нет дыр.
+//     - все ключи перенесённых слотов читаются С TARGET (вкл. whitespace+TTL),
+//     и НЕ читаются с source → лосслесс, ни одного потерянного ключа.
+//     - DBSIZE(from) + DBSIZE(to) == исходная сумма (ничего не пропало и не
+//     задвоилось).
+//  5. ★ Проверить НЕ-идемпотентность отдельным под-кейсом: повторный reshard
+//     тех же from→to slots=N сдвигает ЕЩЁ N слотов (a НЕ no-op) — это
+//     зафиксированная семантика, тест её утверждает, а не ловит как регресс.
 func TestL3cReshard_LiveLossless(t *testing.T) {
 	t.Skip("L3c-skeleton: нужен живой Redis-кластер (harness-сущность «live redis cluster», " +
 		"propose-and-wait). L0 cluster_test.go доказывает последовательность команд + лосслесс " +

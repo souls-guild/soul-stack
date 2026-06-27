@@ -341,6 +341,85 @@ func TestMaskSecrets_RedisRenderContextTLSVars(t *testing.T) {
 	}
 }
 
+// TestMaskSecrets_MigrateClusterSecrets — security-blocker S1-пилота
+// migrate_cluster (community.redis): задача миграции получает secret-поля
+// источника/мастера (master_*/source_*), которые попадают в params коннект-
+// задачи и через RunResult/audit-payload утекли бы plaintext в логи/OTel/UI.
+// Имена несут фрагменты password / tls_(key|cert|ca), поэтому ловятся
+// substring-каталогом БЕЗ его расширения — тест доказывает покрытие как
+// поведенческий инвариант (регрессия на leak), а не вводит новые ключи.
+// master_username — НЕ секрет (фрагмента user в каталоге нет) → passthrough.
+func TestMaskSecrets_MigrateClusterSecrets(t *testing.T) {
+	const pemKey = "-----BEGIN PRIVATE KEY-----\nMIGRSRC\n-----END PRIVATE KEY-----"
+	const pemCert = "-----BEGIN CERTIFICATE-----\nMIGRSRC\n-----END CERTIFICATE-----"
+	in := map[string]any{
+		"master_password": "m-p4ss",
+		"source_password": "s-p4ss",
+		"master_tls_key":  pemKey,
+		"master_tls_cert": pemCert,
+		"master_tls_ca":   pemCert,
+		"source_tls_key":  pemKey,
+		"source_tls_cert": pemCert,
+		"source_tls_ca":   pemCert,
+		// Несекретные поля коннекта миграции — passthrough.
+		"master_username": "admin",
+		"master_host":     "10.0.0.1",
+		"master_port":     6379,
+	}
+	out := MaskSecrets(in)
+
+	for _, k := range []string{
+		"master_password", "source_password",
+		"master_tls_key", "master_tls_cert", "master_tls_ca",
+		"source_tls_key", "source_tls_cert", "source_tls_ca",
+	} {
+		if out[k] != maskedValue {
+			t.Errorf("%s = %v, want %q (secret миграции обязан маскироваться)", k, out[k], maskedValue)
+		}
+	}
+	if out["master_username"] != "admin" {
+		t.Errorf("master_username = %v, want passthrough (не секрет)", out["master_username"])
+	}
+	if out["master_host"] != "10.0.0.1" {
+		t.Errorf("master_host = %v, want passthrough", out["master_host"])
+	}
+	if out["master_port"] != 6379 {
+		t.Errorf("master_port = %v, want passthrough", out["master_port"])
+	}
+}
+
+// TestMaskSecrets_MigrateClusterRunResultShape — те же secret-поля, но в форме
+// RunResult/audit-payload задачи миграции: TaskEvent.params вложены под именем
+// задачи. Доказывает, что рекурсивный walk маскирует master_password/
+// source_password/source_tls_ca на вложенном уровне (а не только в top-level
+// map), т.е. инвариант держится в реальном наблюдаемом канале.
+func TestMaskSecrets_MigrateClusterRunResultShape(t *testing.T) {
+	const pemCA = "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+	payload := map[string]any{
+		"task":   "migrate from source cluster",
+		"module": "community.redis.migrate_cluster",
+		"params": map[string]any{
+			"master_username": "admin",
+			"master_password": "m-p4ss",
+			"source_password": "s-p4ss",
+			"source_tls_ca":   pemCA,
+		},
+	}
+	out := MaskSecrets(payload)
+	params, ok := out["params"].(map[string]any)
+	if !ok {
+		t.Fatalf("params: not map[string]any, got %T", out["params"])
+	}
+	for _, k := range []string{"master_password", "source_password", "source_tls_ca"} {
+		if params[k] != maskedValue {
+			t.Errorf("params.%s = %v, want %q (secret обязан маскироваться в RunResult-payload)", k, params[k], maskedValue)
+		}
+	}
+	if params["master_username"] != "admin" {
+		t.Errorf("params.master_username = %v, want passthrough", params["master_username"])
+	}
+}
+
 func TestMaskSecrets_BootstrapTokenExact(t *testing.T) {
 	// Конкретный кейс из verification-плана: {"bootstrap_token":"secret123"}
 	// → {"bootstrap_token":"***MASKED***"}.

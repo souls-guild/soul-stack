@@ -3,9 +3,10 @@
 # ОСНОВНОЙ интерфейс к живому Redis в redis-консолидации (концепция Ansible-роли):
 # scenario сервиса оркеструет порядок/таргетинг, плагин исполняет ОДНУ операцию
 # над одним Redis-инстансом. Сейчас реализованы states command + pinged/role/
-# replica-synced (read-probe) + config + acl (ACL LOAD hot-reload) + cluster (action
-# create + add-node + remove-node + reshard) + replica (REPLICAOF) + sentinel
-# (MONITOR/SET reconcile); failover — планируется (следующий батч), его в
+# replica-synced/offset-synced (read-probe) + config + acl (ACL LOAD hot-reload) +
+# cluster (action create + add-node + remove-node + reshard) + replica (REPLICAOF,
+# вкл. внешний источник source_external) + detached (REPLICAOF NO ONE, промоушен) +
+# sentinel (MONITOR/SET reconcile); failover — планируется (следующий батч), его в
 # spec.states пока НЕТ (объявляем только реализованное).
 #
 # СОЗНАТЕЛЬНО БЕЗ dry-run preview: плагин НЕ реализует PlanReadSafe — на dry_run
@@ -17,7 +18,7 @@ namespace: community
 name: redis
 
 # TLS-коннект (концепция Ansible-роли redis: defaults redis_tls_*). Все states
-# (command/pinged/role/replica-synced/config/cluster/replica/sentinel) принимают ОБЩИЕ TLS-параметры коннекта:
+# (command/pinged/role/replica-synced/offset-synced/config/cluster/replica/detached/sentinel) принимают ОБЩИЕ TLS-параметры коннекта:
 #   - tls             (bool, default false) — коннектиться по TLS. В режиме only-TLS
 #                     (redis `port 0`, plain закрыт) ОБЯЗАТЕЛЕН — иначе плагин не
 #                     достучится. tls=false → plaintext (back-compat).
@@ -711,7 +712,221 @@ spec:
           type: string
           required: false
           description: >-
-            ACL-username для репликации (CONFIG SET masteruser). Опционально.
+            ACL-username для репликации СВОЕЙ инкарнации (CONFIG SET masteruser).
+            Опционально. При source_external=true masteruser берётся НЕ отсюда, а
+            из master_username (реквизиты внешнего источника).
+        # ── source_external: привязка к ВНЕШНЕМУ master-у (миграция) ───────────
+        source_external:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            master_addr указывает на ВНЕШНИЙ master (чужая инкарнация / миграция),
+            а не на хост своей инкарнации. true → (1) self-guard addr==master_addr
+            отключён; (2) masterauth берётся из master_password (НЕ password);
+            (3) masteruser — из master_username. По умолчанию false (master — свой).
+        master_password:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            (source_external) Пароль ВНЕШНЕГО master-источника (CONFIG SET
+            masterauth). vault-ref; keeper резолвит до Apply. Маскируется. Пустой →
+            masterauth не ставится (источник без requirepass).
+        master_username:
+          type: string
+          required: false
+          description: >-
+            (source_external) ACL-username внешнего источника для репликации
+            (CONFIG SET masteruser). Опционально.
+        master_tls:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            (source_external) Источник принимает реплику по TLS. ОБЪЯВЛЕНО для
+            полноты контракта, но самим REPLICAOF НЕ применяется: tls-replication
+            настраивается директивами CONFIG SET tls-* (config-state) ДО replica.
+            TODO (S-batch): шаг, ставящий tls-replication из master_tls*.
+        master_tls_ca:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            (source_external) PEM CA внешнего источника для TLS-репликации.
+            Маскируется (secret). Пока декларативно (см. master_tls TODO).
+        master_tls_cert:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            (source_external) PEM client-cert для mTLS-репликации к источнику
+            (опц., вместе с master_tls_key). Маскируется. Пока декларативно.
+        master_tls_key:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            (source_external) PEM client-key для mTLS-репликации к источнику
+            (опц., вместе с master_tls_cert). Маскируется; в события не попадает.
+            Пока декларативно (см. master_tls TODO).
+    # offset-synced — safety-gate миграции из ВНЕШНЕГО источника через go-redis:
+    # «link жив ≠ данные догнаны». СВОЙ INFO replication (slave_repl_offset,
+    # master_sync_in_progress, master_link_status) сверяется с ВНЕШНИМ master-ом
+    # (ВТОРОЙ коннект к source_addr со source-секретами → master_repl_offset).
+    # Read-only, changed=false КОНСТРУКТИВНО (probe). caught_up=true ТОЛЬКО когда
+    # link up + НЕТ идущей full-sync + (master − slave) <= lag_threshold.
+    offset-synced:
+      description: |
+        Safety-gate миграции реплики из внешнего источника через go-redis: «link
+        жив ≠ данные догнаны». Сверяет slave_repl_offset своего инстанса с
+        master_repl_offset внешнего master-а (второй коннект к source_addr).
+        Read-only, changed=false конструктивно (probe). Output.caught_up (bool) —
+        условие health-gate (until: register.self.caught_up == true): true ТОЛЬКО
+        при master_link_status=up + master_sync_in_progress=0 + lag<=lag_threshold.
+        Output.lag_bytes / master_sync_in_progress — для диагностики; при
+        !skip_checksum опц. dbsize_source/dbsize_replica. Без dry-run preview.
+      input:
+        addr:
+          type: string
+          required: true
+          description: >-
+            Адрес СВОЕГО инстанса (реплики): host:port (TCP) либо "unix:/path".
+        source_addr:
+          type: string
+          required: true
+          description: >-
+            Адрес ВНЕШНЕГО master-источника host:port. Второй коннект (источник
+            master_repl_offset — авторитетный head для расчёта lag).
+        password:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            Пароль СВОЕГО инстанса (vault-ref; keeper резолвит до Apply).
+            Маскируется — не попадает в события/логи.
+        source_password:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            Пароль ВНЕШНЕГО источника для второго коннекта (vault-ref; keeper
+            резолвит до Apply). Маскируется — не попадает в события/логи.
+        lag_threshold:
+          type: int
+          required: false
+          default: 0
+          description: >-
+            Допустимое отставание (master_repl_offset − slave_repl_offset) в
+            БАЙТАХ для caught_up=true. По умолчанию 0 (строгая полная догонка).
+        skip_checksum:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            Пропустить опц. сверку DBSIZE обоих инстансов. По умолчанию false
+            (DBSIZE источника и реплики кладутся в Output как вспомогательный
+            сигнал; на caught_up НЕ влияют — авторитет offset).
+        tls:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            Коннектиться к СВОЕМУ инстансу по TLS. По умолчанию false.
+        tls_ca:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM CA для проверки сертификата СВОЕГО инстанса (RootCAs). Маскируется.
+        source_tls:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            Коннектиться к ВНЕШНЕМУ источнику по TLS. По умолчанию false.
+        source_tls_ca:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM CA для проверки сертификата ВНЕШНЕГО источника (RootCAs).
+            Маскируется (secret).
+    # detached — отвязать инстанс от master-а (REPLICAOF NO ONE) через go-redis,
+    # промоутя его в самостоятельный master. Финальный шаг миграции из внешнего
+    # источника (после offset-synced подтвердил догонку). Идемпотентен: INFO
+    # replication → role==master уже → changed=false, no-op (безопасен к повтору).
+    detached:
+      description: |
+        Отвязать Redis от master-а через REPLICAOF NO ONE (go-redis), промоутя в
+        самостоятельный master. Финальный шаг миграции (после offset-synced).
+        Идемпотентен: уже master (INFO replication role==master) → changed=false,
+        no-op. Output.changed + Output.previous_master (прежний master host:port,
+        для аудита). Без dry-run preview (плагин не реализует PlanReadSafe).
+      input:
+        addr:
+          type: string
+          required: true
+          description: >-
+            Адрес ЭТОГО инстанса: host:port (TCP) либо "unix:/path".
+        password:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            Пароль Redis (vault-ref; keeper резолвит до Apply). Маскируется — не
+            попадает в события/логи. В аргументы REPLICAOF не передаётся.
+        username:
+          type: string
+          required: false
+          description: ACL-username для коннекта (если не default-user).
+        tls:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            Коннектиться к Redis по TLS. Обязателен в only-TLS (port 0).
+            По умолчанию false (plaintext).
+        tls_ca:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM CA-сертификата для проверки серверного сертификата (RootCAs).
+            Маскируется (secret).
+        tls_cert:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM client-сертификата для mTLS (опц., только вместе с tls_key).
+            Маскируется (secret).
+        tls_key:
+          type: string
+          required: false
+          secret: true
+          pattern: "^vault:.*"
+          description: >-
+            PEM client-ключа для mTLS (опц., только вместе с tls_cert).
+            Маскируется (secret); в события/ошибки не попадает.
+        tls_skip_verify:
+          type: bool
+          required: false
+          default: false
+          description: >-
+            ЯВНЫЙ opt-out проверки серверного сертификата. По умолчанию false
+            (проверка включена — default secure).
     # sentinel — горячая реконсиляция Redis Sentinel через go-redis (без redis-cli):
     # SENTINEL MASTERS/MASTER (diff) → MONITOR/REMOVE+MONITOR → SET → CONFIG GET/SET.
     # Алгоритм перенесён 1:1 из Ansible library/redis_sentinel_update.py. monitor.ip —

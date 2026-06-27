@@ -48,6 +48,21 @@ func parseTLS(f map[string]*structpb.Value) tlsParams {
 	}
 }
 
+// parseSourceTLS — TLS-параметры коннекта к ВНЕШНЕМУ источнику (source_tls*),
+// отдельные от своих tls* (offset-synced открывает ВТОРОЙ коннект к чужому
+// master-у со своими CA/верификацией). Симметрия parseTLS, префикс source_.
+// mTLS-пара (source_tls_cert/source_tls_key) и skip_verify тоже поддержаны для
+// единообразия, хотя пилот ожидает обычно лишь source_tls + source_tls_ca.
+func parseSourceTLS(f map[string]*structpb.Value) tlsParams {
+	return tlsParams{
+		enabled:    boolOrDefault(f["source_tls"], false),
+		caPEM:      stringOrEmpty(f["source_tls_ca"]),
+		certPEM:    stringOrEmpty(f["source_tls_cert"]),
+		keyPEM:     stringOrEmpty(f["source_tls_key"]),
+		skipVerify: boolOrDefault(f["source_tls_skip_verify"], false),
+	}
+}
+
 // buildTLSConfig строит *tls.Config из tlsParams. Возвращает nil, nil когда TLS
 // не включён (caller строит plaintext-коннект). Ошибка — только на битом PEM
 // (CA не распарсился / client-cert невалиден): текст ошибки НЕ содержит PEM
