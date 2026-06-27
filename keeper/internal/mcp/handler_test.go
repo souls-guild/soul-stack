@@ -55,6 +55,24 @@ type fakePool struct {
 	// эмуляция UNIQUE / FK / прочих сбоев.
 	incInsertFn func(name, service string) error
 
+	// insertIncArgs — захваченные args INSERT INTO incarnation (создаётся
+	// create-tool-ом): [0]=name … [4]=spec(jsonb []byte) … [10]=traits(jsonb).
+	// Позволяет тесту проверить прокидку spec.traits на create-пути (ADR-060
+	// amend R1, паритет REST insertArgs).
+	insertIncArgs []any
+
+	// lastScenarioFn — backing для rerun-create probe `SELECT scenario FROM
+	// state_history … ORDER BY history_id DESC LIMIT 1` (UnlockForRerun scope-
+	// check). nil → отдаём имя создавшего сценария из incFn-строки (дефолт
+	// `create`), что моделирует «последний упавший сценарий = create».
+	lastScenarioFn func(name string) (string, error)
+
+	// soulBulkCountFn — backing для souls-bulk-проекции traits (SyncTraitsToHosts
+	// → CountBulkMatched: `SELECT COUNT(*) FROM souls …`). nil → 0 (0 хостов-членов,
+	// sync-hook no-op — как обычно на create до онбординга). Ненулевое → столько
+	// «членов», и тест может проверить, что проекция была вызвана.
+	soulBulkCountFn func() int
+
 	// deleteTag — RowsAffected для single-winner `DELETE FROM incarnation`
 	// (destroy force-путь, DeleteAfterTeardown). zero-value → "DELETE 1".
 	deleteTag pgconn.CommandTag
@@ -114,6 +132,7 @@ func (f *fakePool) Exec(_ context.Context, sql string, args ...any) (pgconn.Comm
 func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 	// INSERT INTO incarnation … RETURNING created_at, updated_at (Create).
 	if contains(sql, "INSERT INTO incarnation") {
+		f.insertIncArgs = args
 		name := args[0].(string)
 		service := args[1].(string)
 		if f.incInsertFn != nil {
@@ -122,6 +141,16 @@ func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row 
 			}
 		}
 		return staticRow{values: []any{time.Time{}, time.Time{}}}
+	}
+	// SELECT COUNT(*) FROM souls … (SyncTraitsToHosts → CountBulkMatched). Без
+	// этой ветки souls-bulk-count упал бы в errFakeUnexpected и sync-hook (best-
+	// effort) лишь логировал бы warning; ветка делает проекцию наблюдаемой.
+	if contains(sql, "COUNT(*) FROM souls") {
+		n := 0
+		if f.soulBulkCountFn != nil {
+			n = f.soulBulkCountFn()
+		}
+		return countRow{n: n}
 	}
 	// COUNT(*) FROM incarnation (list total) — без name-arg.
 	if contains(sql, "COUNT(*) FROM incarnation") {
@@ -141,7 +170,8 @@ func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row 
 		return staticRow{values: []any{time.Now().UTC()}}
 	}
 	// FOR UPDATE-select из incarnation. ПОЛНАЯ строка (UpdateTraits:
-	// `covens, traits` в проекции → scanIncarnation) → newIncRow. Частичная
+	// `covens, traits` в проекции → scanIncarnation) → newIncRow. rerun-create
+	// (state, status, created_scenario) → rerunForUpdateRow. Частичная
 	// (unlock: state,status / upgrade: state,state_schema_version,status) →
 	// forUpdateIncRow. args[0] = name.
 	if contains(sql, "FROM incarnation") && contains(sql, "FOR UPDATE") {
@@ -155,7 +185,31 @@ func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row 
 		if contains(sql, "covens, traits") {
 			return newIncRow(inc)
 		}
+		if contains(sql, "created_scenario") {
+			return rerunForUpdateRow{inc: inc}
+		}
 		return forUpdateIncRow{inc: inc, withVersion: contains(sql, "state_schema_version")}
+	}
+	// rerun-create scope-probe: SELECT scenario FROM state_history … LIMIT 1.
+	// Идёт ДО общего `FROM state_history`/COUNT (тот требует COUNT-токен).
+	if contains(sql, "SELECT scenario") && contains(sql, "FROM state_history") {
+		name := args[0].(string)
+		if f.lastScenarioFn != nil {
+			s, err := f.lastScenarioFn(name)
+			if err != nil {
+				return errRow{err: err}
+			}
+			return staticRow{values: []any{s}}
+		}
+		// Дефолт: «последний упавший сценарий = создавший». created_scenario
+		// строки берём из incFn (если задан), иначе канонический `create`.
+		last := "create"
+		if f.incFn != nil {
+			if inc, err := f.incFn(name); err == nil && inc.CreatedScenario != "" {
+				last = inc.CreatedScenario
+			}
+		}
+		return staticRow{values: []any{last}}
 	}
 	// SelectByName / existence-probe (полная строка incarnation).
 	if contains(sql, "FROM incarnation") {
@@ -343,6 +397,26 @@ func (r forUpdateIncRow) Scan(dest ...any) error {
 	}
 	*dest[0].(*[]byte) = mustJSON(r.inc.State)
 	*dest[1].(*string) = string(r.inc.Status)
+	return nil
+}
+
+// rerunForUpdateRow — pgx.Row для UnlockForRerun FOR UPDATE-select-а
+// `SELECT state, status, created_scenario`. Scan(state []byte, status string,
+// created_scenario string).
+type rerunForUpdateRow struct{ inc *incarnation.Incarnation }
+
+func (r rerunForUpdateRow) Scan(dest ...any) error {
+	if len(dest) != 3 {
+		return fmt.Errorf("rerunForUpdateRow.Scan: want 3 dest, got %d", len(dest))
+	}
+	state := []byte("null")
+	if r.inc.State != nil {
+		b, _ := json.Marshal(r.inc.State)
+		state = b
+	}
+	*dest[0].(*[]byte) = state
+	*dest[1].(*string) = string(r.inc.Status)
+	*dest[2].(*string) = r.inc.CreatedScenario
 	return nil
 }
 

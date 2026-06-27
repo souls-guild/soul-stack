@@ -1,13 +1,341 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac/rbactest"
+	"github.com/souls-guild/soul-stack/keeper/internal/scenario"
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
+
+// mcpStarterAssert — ScenarioStarter, ДОПОЛНИТЕЛЬНО реализующий assertPreflighter
+// (PreflightAssert). Под duck-typing-гейт create-tool-а: assertErr задаёт исход
+// pre-flight-а (scenario.ErrAssertFailed → 422 assert_failed; nil → проходит).
+// preflightCalls фиксирует факт вызова гейта, calls — реального scenario-start.
+type mcpStarterAssert struct {
+	assertErr      error
+	preflightCalls int
+	calls          int
+	gotSpec        scenario.RunSpec
+}
+
+func (f *mcpStarterAssert) PreflightAssert(_ context.Context, _ scenario.RunSpec) error {
+	f.preflightCalls++
+	return f.assertErr
+}
+
+func (f *mcpStarterAssert) Start(_ context.Context, spec scenario.RunSpec) error {
+	f.calls++
+	f.gotSpec = spec
+	return nil
+}
+
+// scenarioMCPValidateRule — scenario `create` с top-level `validate:`-правилом,
+// провально для любого input (that: false). Гонит ValidateInput в ветку
+// ErrValidateFailed (DSL wave 2), отдельную от ErrInputInvalid.
+const scenarioMCPValidateRule = `name: create
+state_changes: {}
+input:
+  replicas:
+    type: number
+    default: 1
+validate:
+  - that: "input.replicas > 100"
+    message: "replicas must exceed 100"
+tasks:
+  - name: noop
+    module: core.exec.run
+    params:
+      cmd: echo
+    changed_when: "false"
+`
+
+// TestToolsCall_IncarnationCreate_TraitsProjectedToSpec — top-level `traits` на
+// MCP-create доезжает до spec.traits jsonb-арга INSERT-а (источник истины
+// incarnation.traits, проецируемый в souls.traits). Паритет REST
+// TestIncarnation_Create_TraitsProjectedToSpec.
+func TestToolsCall_IncarnationCreate_TraitsProjectedToSpec(t *testing.T) {
+	pool := &fakePool{incInsertFn: func(_, _ string) error { return nil }}
+	starter := &mcpStarter{}
+	h, _ := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, nil)
+
+	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
+		`{"name":"redis-prod","service":"redis","traits":{"team":"dba","owners":["alice","bob"]}}`)
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+	if len(pool.insertIncArgs) < 11 {
+		t.Fatalf("insertIncArgs len = %d, want ≥11", len(pool.insertIncArgs))
+	}
+	specBytes, ok := pool.insertIncArgs[4].([]byte)
+	if !ok {
+		t.Fatalf("insertIncArgs[4] spec = %T, want []byte", pool.insertIncArgs[4])
+	}
+	var spec map[string]any
+	if err := json.Unmarshal(specBytes, &spec); err != nil {
+		t.Fatalf("spec not JSON: %v", err)
+	}
+	traits, ok := spec["traits"].(map[string]any)
+	if !ok {
+		t.Fatalf("spec.traits = %v (%T), want object", spec["traits"], spec["traits"])
+	}
+	if traits["team"] != "dba" {
+		t.Errorf("spec.traits.team = %v, want dba", traits["team"])
+	}
+	// traits-колонка ($11) тоже несёт набор (TraitsFromSpec → inc.Traits).
+	traitsBytes, ok := pool.insertIncArgs[10].([]byte)
+	if !ok {
+		t.Fatalf("insertIncArgs[10] traits = %T, want []byte", pool.insertIncArgs[10])
+	}
+	var col map[string]any
+	if err := json.Unmarshal(traitsBytes, &col); err != nil {
+		t.Fatalf("traits col not JSON: %v", err)
+	}
+	if col["team"] != "dba" {
+		t.Errorf("incarnation.traits col team = %v, want dba", col["team"])
+	}
+}
+
+// TestToolsCall_IncarnationCreate_TraitsProjectedToSouls — проекция
+// incarnation.traits → souls.traits хостов-членов ВЫЗВАНА на create (SyncTraitsToHosts
+// → CountBulkMatched бьёт по souls). Моделируем 2 члена → проекция исполняется.
+func TestToolsCall_IncarnationCreate_TraitsProjectedToSouls(t *testing.T) {
+	pool := &fakePool{
+		incInsertFn:     func(_, _ string) error { return nil },
+		soulBulkCountFn: func() int { return 2 },
+	}
+	starter := &mcpStarter{}
+	h, _ := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, nil)
+
+	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
+		`{"name":"redis-prod","service":"redis","traits":{"team":"dba"}}`)
+	// Проекция best-effort: даже если souls-bulk не до конца моделирован,
+	// create обязан остаться успешным (инвариант: sync-сбой не валит create).
+	if resp.Error != nil {
+		t.Fatalf("create must succeed despite projection: %+v", resp.Error)
+	}
+}
+
+// TestToolsCall_IncarnationCreate_NoTraits_NoSpecKey — без `traits` ключа spec.traits
+// нет (отличимо для CEL от «заданы пустыми»). Паритет REST.
+func TestToolsCall_IncarnationCreate_NoTraits_NoSpecKey(t *testing.T) {
+	pool := &fakePool{incInsertFn: func(_, _ string) error { return nil }}
+	h, _ := newTestHandlerFull(t, pool, creatorRBAC(), &mcpStarter{}, &mcpResolver{ok: true}, nil)
+
+	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
+		`{"name":"redis-prod","service":"redis"}`)
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+	specBytes, _ := pool.insertIncArgs[4].([]byte)
+	var spec map[string]any
+	_ = json.Unmarshal(specBytes, &spec)
+	if _, has := spec["traits"]; has {
+		t.Errorf("spec.traits present без traits в запросе: %v", spec)
+	}
+}
+
+// TestToolsCall_IncarnationCreate_InvalidTraitValue_422 — nested trait-значение
+// отбивается доменом (TraitsFromSpec → ValidateTraitDelta) ДО insert. Паритет REST.
+func TestToolsCall_IncarnationCreate_InvalidTraitValue_422(t *testing.T) {
+	pool := &fakePool{incInsertFn: func(_, _ string) error {
+		t.Error("Create must NOT insert on invalid trait value")
+		return nil
+	}}
+	starter := &mcpStarter{}
+	h, rec := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, nil)
+
+	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
+		`{"name":"redis-prod","service":"redis","traits":{"bad":{"nested":1}}}`)
+	if resp.Error == nil {
+		t.Fatal("expected validation error for nested trait value")
+	}
+	if data := mustToolErrorData(t, resp.Error.Data); data.Code != mcpCodeValidationFailed {
+		t.Errorf("data.code = %q, want validation-failed", data.Code)
+	}
+	if starter.calls != 0 {
+		t.Error("invalid trait must not start scenario")
+	}
+	if len(rec.events) != 0 {
+		t.Error("invalid trait must not write audit")
+	}
+}
+
+// TestToolsCall_IncarnationCreate_ValidateRuleFails_422 — top-level `validate:`-
+// правило сценария create не сходится на смерженном input → validation-failed
+// (scenario.ErrValidateFailed), ОТДЕЛЬНО от input_invalid. scenario НЕ
+// запускается, audit не пишется. Паритет REST validation_failed-ветки CreateTyped.
+func TestToolsCall_IncarnationCreate_ValidateRuleFails_422(t *testing.T) {
+	pool := &fakePool{incInsertFn: func(_, _ string) error {
+		t.Error("Create must NOT insert when validate rule fails")
+		return nil
+	}}
+	starter := &mcpStarter{}
+	loader := &mcpLoader{scenarioYAML: scenarioMCPValidateRule}
+	h, rec := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, loader)
+
+	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
+		`{"name":"redis-prod","service":"redis","input":{"replicas":3}}`)
+	if resp.Error == nil {
+		t.Fatal("expected validation_failed for failing validate rule")
+	}
+	if data := mustToolErrorData(t, resp.Error.Data); data.Code != mcpCodeValidationFailed {
+		t.Errorf("data.code = %q, want validation-failed", data.Code)
+	}
+	if starter.calls != 0 {
+		t.Error("validate-fail must not start scenario")
+	}
+	if len(rec.events) != 0 {
+		t.Error("validate-fail must not write audit")
+	}
+}
+
+// TestToolsCall_IncarnationCreate_AssertFails_422 — pre-flight assert-гейт
+// (форма A): assert-предикат сценария create не сошёлся → validation-failed
+// СИНХРОННО, БЕЗ insert / scenario-start / audit. Паритет REST assert_failed-
+// ветки CreateTyped (отказ на этапе модели, не postfactum error_locked).
+func TestToolsCall_IncarnationCreate_AssertFails_422(t *testing.T) {
+	pool := &fakePool{incInsertFn: func(_, _ string) error {
+		t.Error("Create must NOT insert when pre-flight assert fails")
+		return nil
+	}}
+	starter := &mcpStarterAssert{assertErr: scenario.ErrAssertFailed}
+	h, rec := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, nil)
+
+	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
+		`{"name":"redis-prod","service":"redis"}`)
+	if resp.Error == nil {
+		t.Fatal("expected assert_failed (422)")
+	}
+	if data := mustToolErrorData(t, resp.Error.Data); data.Code != mcpCodeValidationFailed {
+		t.Errorf("data.code = %q, want validation-failed", data.Code)
+	}
+	if starter.preflightCalls != 1 {
+		t.Errorf("preflight calls = %d, want 1", starter.preflightCalls)
+	}
+	if starter.calls != 0 {
+		t.Error("assert-fail must not start scenario")
+	}
+	if len(pool.insertIncArgs) != 0 {
+		t.Error("assert-fail must not insert incarnation")
+	}
+	if len(rec.events) != 0 {
+		t.Error("assert-fail must not write audit")
+	}
+}
+
+// TestToolsCall_IncarnationCreate_AssertPasses_Inserts — assert сошёлся → create
+// проходит: pre-flight вызван, scenario стартует ровно один раз. Гарантирует, что
+// гейт не ложно-режет happy path.
+func TestToolsCall_IncarnationCreate_AssertPasses_Inserts(t *testing.T) {
+	pool := &fakePool{incInsertFn: func(_, _ string) error { return nil }}
+	starter := &mcpStarterAssert{assertErr: nil}
+	h, _ := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, nil)
+
+	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
+		`{"name":"redis-prod","service":"redis"}`)
+	if resp.Error != nil {
+		t.Fatalf("assert pass should create: %+v", resp.Error)
+	}
+	if starter.preflightCalls != 1 {
+		t.Errorf("preflight calls = %d, want 1", starter.preflightCalls)
+	}
+	if starter.calls != 1 {
+		t.Errorf("scenario start calls = %d, want 1", starter.calls)
+	}
+}
+
+// --- create_scenario (механизм нескольких create-сценариев, Вариант A) ---
+
+// TestToolsCall_IncarnationCreate_CreateScenarioInvalidName — синтаксически битое
+// имя create_scenario (traversal/мусор) отбивается до резолва набора как
+// validation-failed (ErrCreateScenarioNotEligible), insert НЕ выполняется. Гейт
+// валиден только при наличии loader-а. strictUnmarshal сперва не режет (поле
+// объявлено), отбой даёт ValidateCreateScenarioChoice.
+func TestToolsCall_IncarnationCreate_CreateScenarioInvalidName(t *testing.T) {
+	pool := &fakePool{incInsertFn: func(_, _ string) error {
+		t.Error("Create must NOT insert on invalid create_scenario")
+		return nil
+	}}
+	starter := &mcpStarter{}
+	loader := &mcpLoader{}
+	h, rec := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, loader)
+
+	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
+		`{"name":"redis-prod","service":"redis","create_scenario":"..bad"}`)
+	if resp.Error == nil {
+		t.Fatal("expected validation-failed for invalid create_scenario")
+	}
+	if data := mustToolErrorData(t, resp.Error.Data); data.Code != mcpCodeValidationFailed {
+		t.Errorf("data.code = %q, want validation-failed", data.Code)
+	}
+	if starter.calls != 0 {
+		t.Error("invalid create_scenario must not start scenario")
+	}
+	if len(rec.events) != 0 {
+		t.Error("invalid create_scenario must not write audit")
+	}
+}
+
+// TestToolsCall_IncarnationCreate_CreateScenarioNotEligible — валидное по форме,
+// но НЕ входящее в create-набор сервиса имя (нет `create: true`, в снапшоте
+// отсутствует) → validation-failed, insert НЕ выполняется. Защита от bootstrap-а
+// инкарнации произвольным (например day-2) сценарием.
+func TestToolsCall_IncarnationCreate_CreateScenarioNotEligible(t *testing.T) {
+	pool := &fakePool{incInsertFn: func(_, _ string) error {
+		t.Error("Create must NOT insert on non-eligible create_scenario")
+		return nil
+	}}
+	starter := &mcpStarter{}
+	loader := &mcpLoader{}
+	h, rec := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, loader)
+
+	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
+		`{"name":"redis-prod","service":"redis","create_scenario":"add_user"}`)
+	if resp.Error == nil {
+		t.Fatal("expected validation-failed for non-eligible create_scenario")
+	}
+	if data := mustToolErrorData(t, resp.Error.Data); data.Code != mcpCodeValidationFailed {
+		t.Errorf("data.code = %q, want validation-failed", data.Code)
+	}
+	if starter.calls != 0 {
+		t.Error("non-eligible create_scenario must not start scenario")
+	}
+	if len(rec.events) != 0 {
+		t.Error("non-eligible create_scenario must not write audit")
+	}
+}
+
+// TestToolsCall_IncarnationCreate_CreateScenarioDefault — опущенный create_scenario
+// → дефолт `create` (back-compat): валидируется без загрузки снапшота, прогон
+// стартует ИМЕННО `create`, имя сохраняется в incarnation.created_scenario ($12).
+func TestToolsCall_IncarnationCreate_CreateScenarioDefault(t *testing.T) {
+	pool := &fakePool{incInsertFn: func(_, _ string) error { return nil }}
+	starter := &mcpStarter{}
+	// Минимальный валидный scenario `create` (без required-input / validate),
+	// чтобы ValidateInput прошёл и проявилась дефолт-ветвь выбора create_scenario.
+	loader := &mcpLoader{scenarioYAML: "name: create\nstate_changes: {}\ntasks: []\n"}
+	h, _ := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, loader)
+
+	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
+		`{"name":"redis-prod","service":"redis"}`)
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+	if starter.gotSpec.ScenarioName != "create" {
+		t.Errorf("RunSpec.ScenarioName = %q, want create", starter.gotSpec.ScenarioName)
+	}
+	// created_scenario-колонка ($12) = create.
+	if len(pool.insertIncArgs) < 12 {
+		t.Fatalf("insertIncArgs len = %d, want ≥12", len(pool.insertIncArgs))
+	}
+	if cs, _ := pool.insertIncArgs[11].(string); cs != "create" {
+		t.Errorf("created_scenario col = %q, want create", cs)
+	}
+}
 
 func creatorRBAC() *rbactest.Config {
 	return &rbactest.Config{

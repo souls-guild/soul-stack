@@ -26,6 +26,21 @@ type incarnationCreateArgs struct {
 	// Вариант A; паритет REST `create_scenario`). Пусто → default `create`;
 	// непустое имя обязано входить в create-набор сервиса, иначе validation-failed.
 	CreateScenario string `json:"create_scenario,omitempty"`
+	// Traits — operator-set trait-метки инкарнации (ADR-060 amend R1, паритет
+	// REST CreateTyped поля `traits`): ключ → scalar|list of scalars. Извлекаются
+	// в колонку incarnation.traits (источник истины) и проецируются в souls.traits
+	// хостов-членов sync-hook-ом после insert.
+	Traits map[string]any `json:"traits,omitempty"`
+}
+
+// assertPreflighter — локальная узкая поверхность scenario.Runner для
+// pre-flight-гейта `assert:` (ADR-009/ADR-027 amendment 2026-06-23, форма A),
+// duck-typing над h.deps.ScenarioRunner. Объявлена ЛОКАЛЬНО (не импортируется из
+// handlers): mcp не зависит от REST-handler-слоя, а *scenario.Runner так же
+// удовлетворяет ей. ScenarioStarter-фейки без PreflightAssert → type-assertion
+// не проходит, гейт no-op (как в REST).
+type assertPreflighter interface {
+	PreflightAssert(ctx context.Context, spec scenario.RunSpec) error
 }
 
 // incarnationCreateOutput — output keeper.incarnation.create
@@ -143,6 +158,10 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 				return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
 					"input_invalid: "+err.Error())
 			}
+			if errors.Is(err, scenario.ErrValidateFailed) {
+				return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
+					"validation_failed: "+err.Error())
+			}
 			h.deps.Logger.Error("mcp: incarnation.create input validation failed",
 				slog.String("name", a.Name),
 				slog.String("service", a.Service),
@@ -168,12 +187,56 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 		}
 	}
 
+	// Pre-flight assert-гейт (ADR-009/ADR-027 amendment 2026-06-23, форма A,
+	// паритет REST CreateTyped): ПОСЛЕ ValidateInput (input материализован) и ДО
+	// incarnation.Create/Start — синхронно вычисляем assert-предикаты сценария
+	// create. Любой false → validation-failed БЕЗ записи incarnation и БЕЗ
+	// fail-статуса (отказ на этапе модели, не postfactum error_locked через async
+	// render). Гейтится autoCreate (при false прогон create не стартует). pre-flight
+	// опционален (type-assertion над runner-ом): runner без PreflightAssert /
+	// сценарий без assert-задач → no-op. render-assert остаётся fail-safe для TOCTOU.
+	if autoCreate {
+		if pf, ok := h.deps.ScenarioRunner.(assertPreflighter); ok {
+			if err := pf.PreflightAssert(ctx, scenario.RunSpec{
+				IncarnationName: a.Name,
+				ServiceRef:      serviceRef,
+				ScenarioName:    createScenario,
+				Input:           a.Input,
+				StartedByAID:    claims.Subject,
+			}); err != nil {
+				if errors.Is(err, scenario.ErrAssertFailed) {
+					return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
+						"assert_failed: "+err.Error())
+				}
+				h.deps.Logger.Error("mcp: incarnation.create pre-flight assert failed",
+					slog.String("name", a.Name),
+					slog.String("service", a.Service),
+					slog.Any("error", err),
+				)
+				return h.toolError(req.ID, toolName, mcpCodeInternalError,
+					"pre-flight assert evaluation failed")
+			}
+		}
+	}
+
 	// spec.input пишем только при непустом input — иначе scenario-runner
 	// увидел бы `"input": null` (присутствующий ключ) вместо «оператор не
 	// передал input», что неотличимо для CEL (паритет REST).
 	spec := map[string]any{}
 	if a.Input != nil {
 		spec["input"] = a.Input
+	}
+	if a.Traits != nil {
+		spec["traits"] = a.Traits
+	}
+
+	// Trait per-incarnation (ADR-060 amend R1, паритет REST CreateTyped): operator-
+	// set traits из spec.traits извлекаются в колонку incarnation.traits (источник
+	// истины, проецируемый в souls.traits). Невалидный набор (формат ключа/значения)
+	// → validation-failed ДО insert.
+	traits, err := incarnation.TraitsFromSpec(spec)
+	if err != nil {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, err.Error())
 	}
 
 	creator := claims.Subject
@@ -187,6 +250,7 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 		Status:             incarnation.StatusReady,
 		CreatedByAID:       &creator,
 		Covens:             a.Covens,
+		Traits:             traits,
 		CreatedScenario:    createScenario,
 	}
 	if err := incarnation.Create(ctx, h.deps.IncarnationDB, inc); err != nil {
@@ -201,6 +265,18 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 			slog.Any("error", err),
 		)
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "insert incarnation failed")
+	}
+
+	// Sync-hook (ADR-060 amend R1, паритет REST CreateTyped): incarnation.traits →
+	// souls.traits хостов-членов. Гейтится непустыми traits (иначе проекция затёрла
+	// бы per-soul traits в `{}`). На create обычно 0 членов (онбординг идёт в
+	// scenario create) → no-op; bind-хук добьёт хосты позже. Best-effort (лог, не
+	// валим create): инкарнация уже создана, sync до-сойдётся при следующем bind.
+	if len(traits) > 0 {
+		if serr := incarnation.SyncTraitsToHosts(ctx, h.deps.IncarnationDB, a.Name, traits); serr != nil {
+			h.deps.Logger.Warn("mcp: incarnation.create sync traits → souls провален (best-effort)",
+				slog.String("name", a.Name), slog.Any("error", serr))
+		}
 	}
 
 	// apply_id генерируется только при запуске scenario `create`
