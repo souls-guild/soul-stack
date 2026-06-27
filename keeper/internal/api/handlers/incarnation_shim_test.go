@@ -49,15 +49,17 @@ func incCreate(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorde
 	rec := httptest.NewRecorder()
 	claims, _ := shimClaims(r)
 	var body struct {
-		Name    string         `json:"name"`
-		Service string         `json:"service"`
-		Covens  []string       `json:"covens"`
-		Input   map[string]any `json:"input"`
-		Traits  map[string]any `json:"traits"`
+		Name           string         `json:"name"`
+		Service        string         `json:"service"`
+		Covens         []string       `json:"covens"`
+		Input          map[string]any `json:"input"`
+		Traits         map[string]any `json:"traits"`
+		CreateScenario string         `json:"create_scenario"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	reply, err := h.CreateTyped(r.Context(), claims, IncarnationCreateRequestInput{
 		Name: body.Name, Service: body.Service, Covens: body.Covens, Input: body.Input, Traits: body.Traits,
+		CreateScenario: body.CreateScenario,
 	})
 	if err != nil {
 		renderProblem(rec, err)

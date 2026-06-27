@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1554,11 +1555,13 @@ func (f *fakeResolver) Resolve(service string) (artifact.ServiceRef, bool) {
 }
 
 // fakeIncScoper — мок [PurviewResolver] для scoped List/Get-тестов (ADR-047
-// S3b-3). Поля мапятся в [rbac.Purview]: covens → Covens, stateExprs → StateExprs.
+// S3b-3). Поля мапятся в [rbac.Purview]: covens → Covens, stateExprs → StateExprs,
+// traitExprs → TraitExprs (ADR-060 п.7 slice 1, `key:value`-пары).
 // empty=true → Purview{} (fail-closed). Симметрично soul_test.fakeScoper.
 type fakeIncScoper struct {
 	covens       []string
 	stateExprs   []string
+	traitExprs   []string
 	unrestricted bool
 	empty        bool
 }
@@ -1570,6 +1573,7 @@ func (s fakeIncScoper) ResolvePurview(_, _, _ string) rbac.Purview {
 	return rbac.Purview{
 		Covens:       s.covens,
 		StateExprs:   s.stateExprs,
+		TraitExprs:   s.traitExprs,
 		Unrestricted: s.unrestricted,
 	}
 }
@@ -1916,6 +1920,16 @@ type fakeLoader struct {
 	// Перекрывает hasDestroyScenario-ветку.
 	scenarioYAML string
 
+	// localDir — корень реального снапшота на диске (temp). Непустое → Load
+	// проставляет его в ServiceArtifact.LocalDir, а ReadFile читает запрошенный
+	// файл с диска (path-aware). Нужно для механизма нескольких create-сценариев:
+	// scenario.ResolveCreateScenarios сканирует art.LocalDir (artifact.ListScenarios),
+	// а scenario.ValidateInput читает scenario/<chosen>/main.yml — обе фазы должны
+	// видеть один и тот же снапшот, поэтому per-path-ответ обязателен. Зеркало
+	// dirInputLoader из scenario/validate_input_types_test.go. Перекрывает
+	// scenarioYAML/hasDestroyScenario-ветки в ReadFile.
+	localDir string
+
 	// lifecycle — блок lifecycle манифеста снапшота (S3: auto_create/auto_destroy).
 	// nil → манифест без lifecycle (оба флага дефолтно true, backcompat).
 	lifecycle *config.LifecycleConfig
@@ -1941,6 +1955,7 @@ func (f *fakeLoader) Load(_ context.Context, ref artifact.ServiceRef) (*artifact
 	}
 	return &artifact.ServiceArtifact{
 		Ref:      ref,
+		LocalDir: f.localDir,
 		Manifest: &config.ServiceManifest{StateSchemaVersion: f.targetSchema, Lifecycle: f.lifecycle, StateSchema: f.stateSchema},
 	}, nil
 }
@@ -1953,13 +1968,18 @@ func (f *fakeLoader) LoadMigrationChain(_ *artifact.ServiceArtifact, _, _ int) (
 	return f.chain, nil
 }
 
-// ReadFile — для destroy PrepareDestroy pre-check (наличие scenario `destroy`).
-// hasDestroyScenario=true → файл «есть»; false → os.ErrNotExist (нет scenario).
-// readErr (если задан) перекрывает оба — для теста I/O-сбоя.
-func (f *fakeLoader) ReadFile(_ *artifact.ServiceArtifact, _ string) ([]byte, error) {
+// ReadFile — для destroy PrepareDestroy pre-check (наличие scenario `destroy`)
+// и sync input-валидации. localDir (если задан) — path-aware чтение с диска
+// (read scenario/<name>/main.yml реального снапшота); иначе scenarioYAML/
+// hasDestroyScenario-заглушки. hasDestroyScenario=true → файл «есть»; false →
+// os.ErrNotExist (нет scenario). readErr (если задан) перекрывает всё — для теста I/O-сбоя.
+func (f *fakeLoader) ReadFile(_ *artifact.ServiceArtifact, file string) ([]byte, error) {
 	f.readFileCalls++
 	if f.readErr != nil {
 		return nil, f.readErr
+	}
+	if f.localDir != "" {
+		return os.ReadFile(filepath.Join(f.localDir, filepath.FromSlash(file)))
 	}
 	if f.scenarioYAML != "" {
 		return []byte(f.scenarioYAML), nil
