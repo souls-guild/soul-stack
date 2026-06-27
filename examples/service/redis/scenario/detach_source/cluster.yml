@@ -1,13 +1,23 @@
-# Ветка диспетчера detach_source — режим cluster. ★ ЗАГЛУШКА (S1-пилот): отцепление
-# слот-aware Redis Cluster от внешнего источника в пилот НЕ входит (парно с
-# migrate_cluster/cluster.yml — миграция cluster тоже S4). Запланирована на S4.
+# Ветка диспетчера detach_source — режим cluster. ★ NO-OP (B3, S4-3b): в cluster-режиме
+# отцеплять НЕЧЕГО — миграция cluster АТОМАРНА. B3-поток migrate_cluster/cluster.yml уже
+# выкинул старые ноды из кластера шагом forget-external (CLUSTER FORGET) в migrate-фазе
+# ТОГО прогона, и выставил seeded_from.detached := true сразу (main.yml ветвит detached
+# по redis_type). К моменту day-2 у cluster-инкарнации источник УЖЕ отцеплён — отдельного
+# REPLICAOF NO ONE, как в sentinel (где источник остаётся жив до ручного detach), нет.
 #
-# Подключается из main.yml через CONDITIONAL-INCLUDE (`when: incarnation.state.redis_type
-# == 'cluster'`): на cluster-инкарнации раскрывается и упирается в fail-closed assert.
-# Без заглушки detach на cluster-инкарнации дал бы тихий зелёный no-op (диспетчер без
-# cluster-ветки). Заглушка → явный отказ ДО applying.
-- name: Cluster source detach is not implemented yet (S1 pilot is sentinel-only)
+# Это ОТЛИЧАЕТ cluster от sentinel-ветки: sentinel.yml делает финальный offset-gate +
+# REPLICAOF NO ONE (источник живёт до day-2), cluster — ничего (forget атомарен в
+# migrate). Подключается из main.yml через CONDITIONAL-INCLUDE (`when: incarnation.state
+# .redis_type == 'cluster'`). state_changes main.yml безусловно мержит detached:true —
+# для cluster-инкарнации это идемпотентно (B3 уже выставил true).
+#
+# assert ниже — render-фазный keeper-side guard (НЕ emit RenderedTask), он ПРОХОДИТ на
+# нормально-мигрированной cluster-инкарнации (detached уже true) и даёт ВНЯТНОЕ сообщение
+# лишь в аномалии: cluster-инкарнация с detached==false означала бы прерванную/не
+# завершённую B3-миграцию (forget не отработал) — её НЕ чинит detach_source (cluster
+# отцепляется атомарно в migrate_cluster, не здесь), нужен повторный прогон migrate_cluster.
+- name: Cluster source is already detached by migrate_cluster (B3 forget is atomic)
   assert:
     that:
-      - "false"
-    message: "detach_source в режиме cluster не реализован (S1-пилот — только sentinel): отцепление Redis Cluster от внешнего источника запланировано на S4 (парно с migrate_cluster cluster-веткой)."
+      - "default(incarnation.state.seeded_from.detached, false)"
+    message: "detach_source в режиме cluster: отцеплять нечего — B3-миграция cluster атомарна, forget старых нод выполнен в migrate_cluster (CLUSTER FORGET в migrate-фазе), seeded_from.detached уже true. detached==false означает прерванную миграцию — её чинит повторный прогон migrate_cluster, не detach_source."

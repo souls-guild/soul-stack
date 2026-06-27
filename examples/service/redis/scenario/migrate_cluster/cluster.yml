@@ -1,17 +1,130 @@
-# Ветка диспетчера migrate_cluster — режим cluster. ★ ЗАГЛУШКА (S1-пилот): миграция
-# honest hash-slot Redis Cluster с внешнего источника в пилот НЕ входит — она требует
-# СЛОТ-AWARE seeding (per-shard репликация диапазонов hash-слотов с внешнего кластера,
-# а не единый REPLICAOF master→master, как sentinel) и отдельного дизайна. Запланирована
-# на S4.
+# Ветка диспетчера migrate_cluster — режим cluster (B3-поток, S4-3b). Мигрирует honest
+# hash-slot Redis Cluster со СТАРОГО (внешнего) кластера на НОВЫЙ той же топологии. В
+# отличие от sentinel-ветки (нативный REPLICAOF master→master + offset-gate), cluster
+# мигрирует СЛОТ-AWARE через четыре атомарных шага плагина community.redis.cluster:
+#   1. include redis-deploy-cluster-joinable.yml (S4-3a) — поднять НОВЫЕ cluster-mode
+#      ноды БЕЗ сборки своего кластера (cluster-enabled yes, но без CLUSTER MEET/ADDSLOTS).
+#   2. JOIN (action: join-external)   — влить новые ноды в СТАРЫЙ кластер репликами его
+#      мастеров 1:1 (MEET old-seed → REPLICATE), новые догоняют данные старых.
+#   3. FAILOVER (action: failover-takeover) — graceful-промоушен новых нод в мастера
+#      (CLUSTER FAILOVER): слоты переходят с старых мастеров на новые без потери хвоста,
+#      ПОКА старый мастер жив.
+#   4. FORGET (action: forget-external) — выкинуть старые ноды из кластера (CLUSTER
+#      FORGET на всех новых) — миграция завершена, остаётся только новый кластер.
+# Все четыре — в migrate-фазе ОДНОГО прогона → миграция атомарна (state коммитится
+# только после успеха FORGET; любой fail → state НЕ коммитится → error_locked).
 #
 # Подключается из main.yml через CONDITIONAL-INCLUDE (`when: input.redis_type ==
-# 'cluster'`): на cluster-прогоне раскрывается и СРАЗУ упирается в fail-closed assert.
-# enum redis_type [sentinel, cluster] пропускает cluster на input-валидации, поэтому без
-# этой заглушки cluster-прогон дал бы ТИХИЙ ЗЕЛЁНЫЙ no-op (диспетчер без cluster-ветки →
-# ни одна задача не таргетится). Заглушка превращает его в ЯВНЫЙ отказ с понятным
-# сообщением (assert that:false рвёт render ДО applying — раньше и понятнее no-op).
-- name: Cluster migration is not implemented yet (S1 pilot is sentinel-only)
+# 'cluster'` на include): на sentinel-прогоне весь файл group-drop, на cluster-прогоне
+# раскрывается в плоский список ДО render. compute.* (redis_config/tls_*/conf_dir/
+# data_dir/install/modules_base_url/redis_version) объявлены в migrate_cluster/main.yml
+# (compute: — top-level scenario-блок, один на сценарий, orchestration.md §2.4) и видны
+# здесь как compute.<name>.
+#
+# ★★★ ОПЕРАЦИОННЫЕ ПРЕДУСЛОВИЯ (НЕ входит, на операторе) ★★★
+#   (1) Cluster-bus связность старый↔новый кластер на client-port+10000 (по умолчанию
+#       16379) ДВУНАПРАВЛЕННО: gossip Redis Cluster ходит по отдельной шине; без неё
+#       MEET/REPLICATE/FAILOVER не сойдутся. Открыть оба направления — на операторе
+#       (Soul Stack не управляет сетью между чужим источником и новыми VM).
+#   (2) Пароль/TLS НОВОГО кластера ВЫРОВНЕН == СТАРОМУ (один кластер на время join):
+#       после join-external новые ноды коннектятся к старому тем же AUTH-секретом —
+#       compute читает ОБЩИЙ secret/redis/<incarnation>#password для всех шагов. Если
+#       оператор не выровнял — join отвалится на AUTH (вне ответственности сценария).
+#   (3) Graceful failover НЕ теряет хвост данных, ПОКА старый мастер ЖИВ: CLUSTER
+#       FAILOVER (takeover) синхронизирует реплику-кандидата с мастером ДО смены ролей.
+#       Оператор НЕ гасит источник до завершения FAILOVER — иначе хвост, не успевший
+#       реплицироваться, потеряется.
+
+# ── 0. SIZE-GUARD (топология) — keeper-side render-time assert ─────────────────────
+# Размер roster-а нового кластера ОБЯЗАН быть shards*(1+replicas_per_master) (мастера
+# нового кластера + реплики на каждый шард), как в create/cluster. Тот же механизм, что
+# size-guard create/reshard-guard (assert:, ADR-009 amendment 2026-06-23): предикат
+# вычисляется KEEPER-SIDE на РЕНДЕРЕ — там доступен soulprint.hosts (на Soul-е его НЕТ).
+# false ОБРЫВАЕТ render с message ДО любого dispatch (раньше и понятнее, чем runtime-
+# отказ плагина). assert НЕ emit RenderedTask. ПОЧЕМУ assert, а не validate: size-guard
+# нужен soulprint.hosts (roster), а validate-контекст INPUT-ONLY (структурный CEL-барьер).
+# ★ Второй инвариант — size(input.source.hosts) >= 1 (источник непуст) — уже в validate:
+# main.yml (наследуется cluster-прогоном, дубль не нужен). Здесь только топология.
+- name: Guard cluster roster size matches shards and replicas
   assert:
     that:
-      - "false"
-    message: "migrate_cluster в режиме cluster не реализован (S1-пилот — только sentinel): миграция Redis Cluster требует слот-aware seeding и запланирована на S4. Для миграции используй redis_type=sentinel либо дождись S4."
+      - "size(soulprint.hosts) == int(input.shards) * (1 + int(input.replicas_per_master))"
+    message: "cluster migration guard: размер roster-а прогона должен быть ровно shards*(1+replicas_per_master) (мастера нового кластера + реплики на каждый шард) — задай столько же хостов, сколько узлов в целевой топологии"
+
+# ── 1. JOINABLE-ДЕПЛОЙ новых cluster-нод (S4-3a) ──────────────────────────────────
+# Поднять НОВЫЕ ноды cluster-mode (install + render redis.conf с cluster-директивами/
+# users.acl + systemd + PING-gate), но БЕЗ финального CLUSTER MEET/ADDSLOTS/REPLICATE —
+# ноды НЕ собирают свой кластер, они вступят в СТАРЫЙ (шаг 2 ниже). ★ ОБЩЕЕ joinable-
+# деплой-тело service-level (scenario/redis-deploy-cluster-joinable.yml) — то же, что
+# redis-deploy-cluster.yml МИНУС сборка. Тело ссылается на compute.* (объявлены в
+# migrate_cluster/main.yml::compute, ИНВАРИАНТ инклудящего — см. шапку joinable-тела;
+# cross-file дрейф soul-lint НЕ ловит). scenario-include резолвит имя файла локально
+# (scenario/migrate_cluster/) → фоллбэкает на service-level (orchestration.md §6).
+- include: redis-deploy-cluster-joinable.yml
+
+# ── 2. JOIN: влить новые ноды в старый кластер репликами 1:1 (join-external) ────────
+# community.redis.cluster action: join-external, run_once на hosts[0] (первый по SID =
+# bootstrap-нода прогона, как cluster-build create). nodes-MAP строится ТОЧНО как
+# redis-deploy-cluster.yml в action:create — merge(soulprint.hosts.map(h, {SID: {addr}})):
+# ключ = SID (сортируется в плагине → детерминированный 1:1-маппинг новый-узел↔старый-
+# мастер), addr = primary_ip + порт (TLS-порт при tls_on, иначе 6379). source_nodes —
+# seed-ноды СТАРОГО кластера (input.source.hosts, host:port). shards_dest — число шардов
+# назначения (int(input.shards)); плагин runtime-assert-ит shards_source==shards_dest
+# (число старых мастеров render-фазе не видно — живая топология). password/tls/tls_ca —
+# ОБЩИЙ кластер: secret/redis/<inc>#password (precondition: == старому), tls по compute.tls_on.
+# ★ ИБ (anti-downgrade): tls/tls_ca/порт гейтятся на compute.tls_on (TLS ВКЛЮЧЁН), НЕ
+# tls_only — TLS включён → плагин ОБЯЗАН по TLS к каждой ноде И к source-seed (иначе AUTH
+# к старому кластеру ушёл бы plaintext-ом). nodes-addr-ы на compute.tls_port + tls_ca.
+- name: Join new nodes into the source cluster as replicas (CLUSTER MEET/REPLICATE)
+  run_once: true
+  module: community.redis.cluster
+  register: joined
+  params:
+    action:       join-external
+    nodes:        "${ merge(soulprint.hosts.map(h, { h.sid: { 'addr': h.network.primary_ip + ':' + (compute.tls_on ? string(compute.tls_port) : '6379') } })) }"
+    shards_dest:  "${ int(input.shards) }"
+    source_nodes: "${ input.source.hosts }"
+    password:     "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    tls:          "${ compute.tls_on }"
+    tls_ca:       "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
+
+# ── 3. FAILOVER: промоушен новых нод в мастера (failover-takeover) ─────────────────
+# community.redis.cluster action: failover-takeover, run_once на hosts[0], require:
+# [joined] (порядок: failover ТОЛЬКО после успешного join — иначе кандидаты ещё не
+# реплицируют данные). register: failed_over. nodes/password/tls/tls_ca — те же, что
+# JOIN (тот же кластер, тот же anti-downgrade-гейт на compute.tls_on). graceful FAILOVER
+# (takeover) синхронизирует кандидата с мастером ДО смены ролей → хвост не теряется,
+# ПОКА старый мастер жив (см. операционные предусловия в шапке). source_nodes плагину
+# на этом шаге НЕ нужен (failover оперирует уже-влитыми новыми нодами кластера).
+- name: Promote the new nodes to masters taking over the slots (CLUSTER FAILOVER)
+  run_once: true
+  module: community.redis.cluster
+  require: [joined]
+  register: failed_over
+  params:
+    action:   failover-takeover
+    nodes:    "${ merge(soulprint.hosts.map(h, { h.sid: { 'addr': h.network.primary_ip + ':' + (compute.tls_on ? string(compute.tls_port) : '6379') } })) }"
+    password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    tls:      "${ compute.tls_on }"
+    tls_ca:   "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
+
+# ── 4. FORGET: выкинуть старые ноды из кластера (forget-external) ──────────────────
+# community.redis.cluster action: forget-external, run_once на hosts[0], require:
+# [failed_over] (порядок: forget ТОЛЬКО после того, как новые стали мастерами — иначе
+# выкинули бы носителей слотов). register: forgotten. nodes — новые ноды (на них шлётся
+# CLUSTER FORGET старых). source_nodes (input.source.hosts) — какие именно старые ноды
+# выкинуть (их id плагин снимает с топологии). password/tls/tls_ca — те же anti-downgrade-
+# гейты. ПОСЛЕ успеха FORGET миграция завершена: старый кластер отцеплён, остаётся только
+# новый → state_changes.seeded_from.detached := true (main.yml ветвит по redis_type).
+- name: Forget the old source nodes from the cluster (CLUSTER FORGET)
+  run_once: true
+  module: community.redis.cluster
+  require: [failed_over]
+  register: forgotten
+  params:
+    action:       forget-external
+    nodes:        "${ merge(soulprint.hosts.map(h, { h.sid: { 'addr': h.network.primary_ip + ':' + (compute.tls_on ? string(compute.tls_port) : '6379') } })) }"
+    source_nodes: "${ input.source.hosts }"
+    password:     "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    tls:          "${ compute.tls_on }"
+    tls_ca:       "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"

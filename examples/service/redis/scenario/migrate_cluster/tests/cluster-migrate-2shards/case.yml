@@ -1,0 +1,238 @@
+# L0-испытание migrate_cluster в режиме cluster (B3-поток S4-3b, happy-path, existing-
+# таргет). Multi-host roster из 2 хостов: shards=2, replicas_per_master=0 → топология
+# ровно 2*(1+0)=2 (size-guard проходит). Оба хоста — мастера нового кластера. Внешний
+# источник — старый Redis Cluster из 2 seed-нод (source.hosts, shards_dest=2 совпадает).
+#
+# Render-only, герметично. Диспетчер migrate_cluster инклудит cluster.yml + sentinel.yml
+# через CONDITIONAL-INCLUDE (when: на include): на cluster-прогоне sentinel-ветка
+# group-drop (статически-ложный when), cluster.yml раскрывается. cluster.yml: size-guard
+# assert (НЕ emit RenderedTask) → include redis-deploy-cluster-joinable.yml (joinable-
+# деплой новых нод БЕЗ сборки своего кластера) → 3 шага плагина community.redis.cluster
+# (join-external → failover-takeover → forget-external, run_once на hosts[0]).
+#
+# ★ make trial может падать на этом кейсе, ПОКА S4-2 не влил в плагин actions
+# failover-takeover/forget-external (unknown action) — это ОЖИДАЕМО; soul-lint structural
+# + presence-форма кейса от этого не зависят (presence-матчер сверяет params, не runtime).
+#
+# Что ассертим (критерий приёмки слайса):
+#   1. JOINABLE-ДЕПЛОЙ (из redis-deploy-cluster-joinable.yml): redis.conf render с
+#      cluster-директивами (cluster-enabled yes / cluster-config-file nodes.conf /
+#      cluster-node-timeout) — новые ноды поднимаются cluster-mode, но БЕЗ CLUSTER MEET/
+#      ADDSLOTS (сборки своего кластера нет — присутствие community.redis.cluster
+#      action:create ОТСУТСТВУЕТ, проверяется отдельно тем, что в плане только join/
+#      failover/forget actions).
+#   2. ★ JOIN: community.redis.cluster action:join-external, nodes-MAP детерминирован
+#      (SID→{addr:primary_ip+":6379"}), shards_dest=2, source_nodes=внешний источник.
+#   3. ★ FAILOVER: community.redis.cluster action:failover-takeover, тот же nodes-MAP.
+#   4. ★ FORGET: community.redis.cluster action:forget-external, nodes-MAP + source_nodes.
+#   5. state_changes: create-набор (cluster) + seeded_from {source_endpoints:[источник],
+#      detached:TRUE} — cluster B3 атомарна, forget в migrate-фазе → detached сразу true
+#      (в отличие от sentinel, где detached:false и отцеп — day-2).
+#
+# ВНИМАНИЕ L0-ограничение (как create/cluster-3shards): apply.input host-инвариантен в
+# пилоте (резолвится на ПЕРВОМ targeted-хосте) → render_context.self в destiny = node-1.
+# Per-host cluster-announce-ip НЕ в config, рендерится в .tmpl из .self.network.primary_ip
+# каждого хоста (доказано destiny_redis_tmpl_test.go). nodes-MAP, наоборот, строится из
+# ВСЕГО roster-а (soulprint.hosts) и несёт адреса обоих хостов.
+name: cluster migrate joins source cluster then fails over and forgets old nodes
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  # Multi-host roster: 2 хоста, порядок в YAML намеренно не отсортирован (2, 1) —
+  # harness и nodes-MAP обязаны отсортировать по SID (node-1 = bootstrap для run_once).
+  hosts:
+    - sid: node-2.example.com
+      covens: [migrate_cluster, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-1.example.com
+      covens: [migrate_cluster, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/migrate_cluster:
+      password: s3cr3t-redis-pass-migrate
+    secret/redis/migrate_cluster/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/migrate_cluster/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/migrate_cluster/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/migrate_cluster/users/haproxy:
+      password: haproxy-sys-secret-pass
+    # ★ Учётка ВНЕШНЕГО источника под pattern-guard secret/redis/migrate/*. В cluster
+    # B3 источник == новый кластер (выровненный пароль), но source.password_ref всё равно
+    # объявлен в input (required:true секции source). На cluster-шагах плагина пароль —
+    # ОБЩИЙ secret/redis/migrate_cluster#password (оператор выровнял старый == новый).
+    secret/redis/migrate/oldcluster:
+      password: old-cluster-source-pass
+  essence:
+    redis_type: cluster
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+  input:
+    redis_type: cluster
+    version: "7.2.4"
+    shards: 2
+    replicas_per_master: 0
+    cluster_node_timeout: 5000
+    # ★ Внешний источник: 2 seed-ноды старого кластера (shards_dest=2 совпадает) +
+    # Vault-ПУТЬ к паролю под pattern-guard. На cluster B3 пароль выровнен == новому.
+    source:
+      hosts:
+        - "10.9.0.1:6379"
+        - "10.9.0.2:6379"
+      password_ref: "secret/redis/migrate/oldcluster#password"
+      tls: false
+
+assert:
+  task_present:
+    # ── redis-deploy-cluster-joinable.yml: redis.conf с cluster-директивами ───────
+    # render_context.self = node-1 (host-инвариант apply.input). config несёт базовый
+    # merge + cluster-директивы (cluster-enabled/config-file/node-timeout). cluster-
+    # announce-ip в config НЕТ — per-host, рендерится в .tmpl. Дизамбигуатор от users.acl/
+    # hardening (тот же core.file.rendered) — path.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            password: s3cr3t-redis-pass-migrate
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
+            config:
+              maxmemory:        "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients:       10000
+              timeout:          300
+              save:             "900 1 300 10 60 10000"
+              appendonly:       "no"
+              cluster-enabled:      "yes"
+              cluster-config-file:  "nodes.conf"
+              cluster-node-timeout: "5000"
+          self:
+            sid: node-1.example.com
+            covens: [migrate_cluster, redis]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # ── JOIN: community.redis.cluster action:join-external ───────────────────────
+    # nodes-MAP детерминирован (ключ=SID, addr=primary_ip+":6379"), shards_dest=2,
+    # source_nodes=внешний источник (оба seed-а). password=общий (выровнен старый==новый).
+    # Дизамбигуатор от failover/forget (тот же module) — action.
+    - module: community.redis.cluster
+      params_subset:
+        action: join-external
+        shards_dest: 2
+        password: s3cr3t-redis-pass-migrate
+        source_nodes:
+          - "10.9.0.1:6379"
+          - "10.9.0.2:6379"
+        nodes:
+          node-1.example.com: { addr: "10.0.0.1:6379" }
+          node-2.example.com: { addr: "10.0.0.2:6379" }
+
+    # ── FAILOVER: community.redis.cluster action:failover-takeover ───────────────
+    # тот же nodes-MAP. source_nodes плагину НЕ нужен (оперирует уже-влитыми нодами).
+    # Дизамбигуатор от join/forget — action.
+    - module: community.redis.cluster
+      params_subset:
+        action: failover-takeover
+        password: s3cr3t-redis-pass-migrate
+        nodes:
+          node-1.example.com: { addr: "10.0.0.1:6379" }
+          node-2.example.com: { addr: "10.0.0.2:6379" }
+
+    # ── FORGET: community.redis.cluster action:forget-external ───────────────────
+    # nodes-MAP + source_nodes (какие старые ноды выкинуть). Дизамбигуатор от join/
+    # failover — action.
+    - module: community.redis.cluster
+      params_subset:
+        action: forget-external
+        password: s3cr3t-redis-pass-migrate
+        source_nodes:
+          - "10.9.0.1:6379"
+          - "10.9.0.2:6379"
+        nodes:
+          node-1.example.com: { addr: "10.0.0.1:6379" }
+          node-2.example.com: { addr: "10.0.0.2:6379" }
+
+  # cluster-набор state + seed-source read-model. redis_config с cluster-директивами.
+  # redis_sentinel пустой (cluster), shards=2. seeded_from: source_endpoints = source.hosts
+  # ЦЕЛИКОМ, detached:TRUE (cluster B3 атомарна — forget в migrate-фазе → detached сразу
+  # true, в отличие от sentinel detached:false). БЕЗ timestamp (детерминизм L0).
+  state_changes:
+    redis_type: cluster
+    redis_version: "7.2.4"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+      cluster-enabled:      "yes"
+      cluster-config-file:  "nodes.conf"
+      cluster-node-timeout: "5000"
+    redis_users: []
+    redis_hosts: []
+    redis_sentinel: {}
+    replicas: 0
+    sentinel_quorum: 0
+    shards: 2
+    persistence: rdb
+    maxmemory_policy: ""
+    install:
+      method: package
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    memory_mb: 0
+    modules: [bloom, json, search, timeseries]
+    sysctl_settings: {}
+    # ★ seed-source read-model (v9): откуда мигрировали + detached:TRUE (B3 атомарна).
+    seeded_from:
+      source_endpoints:
+        - "10.9.0.1:6379"
+        - "10.9.0.2:6379"
+      detached: true
