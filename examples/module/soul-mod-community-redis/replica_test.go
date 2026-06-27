@@ -77,6 +77,36 @@ func hasCall(calls [][]any, want ...string) bool {
 	return false
 }
 
+// callIndex — индекс ПЕРВОГО вызова с заданными первыми токенами (префикс-матч)
+// или -1, если такого нет.
+func callIndex(calls [][]any, want ...string) int {
+	for idx, call := range calls {
+		if len(call) < len(want) {
+			continue
+		}
+		ok := true
+		for i, w := range want {
+			s, _ := call[i].(string)
+			if !strings.EqualFold(s, w) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return idx
+		}
+	}
+	return -1
+}
+
+// callBefore — встретился ли вызов-префикс a РАНЬШЕ вызова-префикса b (оба должны
+// присутствовать). Для проверки порядка команд (tls-replication ДО REPLICAOF).
+func callBefore(calls [][]any, a, b []string) bool {
+	ia := callIndex(calls, a...)
+	ib := callIndex(calls, b...)
+	return ia >= 0 && ib >= 0 && ia < ib
+}
+
 // --- Validate: replica ---
 
 func TestValidate_ReplicaRequiresMasterAddr(t *testing.T) {
@@ -516,6 +546,102 @@ func TestApplyReplica_SourceExternal_MasteruserFromMasterUsername(t *testing.T) 
 	}
 	if hasCall(conn.calls, "CONFIG", "SET", "masteruser", "own-user") {
 		t.Errorf("свой username утёк в masteruser (ждали master_username): %v", conn.calls)
+	}
+}
+
+// TestApplyReplica_SourceExternal_MasterTLS_SetsReplicationDirective —
+// source_external + master_tls=true: плагин ставит CONFIG SET tls-replication yes
+// (исходящий replication-линк реплики переходит в TLS) ДО REPLICAOF. Доказывает
+// доведённый TLS-к-источнику (TODO S-batch снят): без директивы REPLICAOF к
+// TLS-only-источнику упёрся бы в его TLS-листенер.
+func TestApplyReplica_SourceExternal_MasterTLS_SetsReplicationDirective(t *testing.T) {
+	conn := &replConn{infoReply: "# Replication\r\nrole:master\r\n"}
+	m := replModule(conn)
+	stream := &applyStream{}
+
+	err := m.Apply(&pluginv1.ApplyRequest{
+		State: "replica",
+		Params: mustStruct(t, map[string]any{
+			"addr":            "127.0.0.1:6379",
+			"master_addr":     "203.0.113.5:6380", // TLS-листенер источника
+			"source_external": true,
+			"master_password": masterSourcePass,
+			"master_tls":      true,
+			"master_tls_ca":   "-----BEGIN CERTIFICATE-----\nSOURCE-CA\n-----END CERTIFICATE-----",
+		}),
+	}, stream)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	fin := stream.final()
+	if fin == nil || fin.Failed || !fin.Changed {
+		t.Fatalf("ждали успех changed=true, got %+v", fin)
+	}
+	// tls-replication yes выставлен.
+	if !hasCall(conn.calls, "CONFIG", "SET", "tls-replication", "yes") {
+		t.Errorf("нет CONFIG SET tls-replication yes при master_tls: %v", conn.calls)
+	}
+	// tls-replication ДО REPLICAOF (иначе линк поднимется plaintext до перехода в TLS).
+	if !callBefore(conn.calls, []string{"CONFIG", "SET", "tls-replication"}, []string{"REPLICAOF"}) {
+		t.Errorf("tls-replication должен ставиться ДО REPLICAOF: %v", conn.calls)
+	}
+	if !hasCall(conn.calls, "REPLICAOF", "203.0.113.5", "6380") {
+		t.Errorf("нет REPLICAOF на TLS-источник: %v", conn.calls)
+	}
+	// CA источника (master_tls_ca) — secret, не должен утечь в события (плагин его
+	// и не применяет: путь на диск кладёт render).
+	assertEventsNoSecret(t, stream)
+}
+
+// TestApplyReplica_SourceExternal_NoMasterTLS_SkipsReplicationDirective —
+// source_external БЕЗ master_tls (plaintext-источник): tls-replication НЕ ставится
+// (включение TLS-линка там навредило бы — источник слушает plaintext).
+func TestApplyReplica_SourceExternal_NoMasterTLS_SkipsReplicationDirective(t *testing.T) {
+	conn := &replConn{infoReply: "# Replication\r\nrole:master\r\n"}
+	m := replModule(conn)
+	stream := &applyStream{}
+
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State: "replica",
+		Params: mustStruct(t, map[string]any{
+			"addr":            "127.0.0.1:6379",
+			"master_addr":     "203.0.113.5:6379",
+			"source_external": true,
+			"master_password": masterSourcePass,
+			// master_tls не задан (default false)
+		}),
+	}, stream)
+
+	if hasCall(conn.calls, "CONFIG", "SET", "tls-replication") {
+		t.Errorf("без master_tls tls-replication не должен ставиться: %v", conn.calls)
+	}
+	if !hasCall(conn.calls, "REPLICAOF", "203.0.113.5", "6379") {
+		t.Errorf("REPLICAOF должен выполниться и без TLS: %v", conn.calls)
+	}
+}
+
+// TestApplyReplica_MasterTLSWithoutSourceExternal_NoDirective — master_tls=true,
+// но source_external НЕ задан (свой master): tls-replication НЕ ставится плагином —
+// TLS-режим линка своей инкарнации задан общим redis.conf при старте, отдельно
+// включать не нужно (директива относится только к внешнему источнику).
+func TestApplyReplica_MasterTLSWithoutSourceExternal_NoDirective(t *testing.T) {
+	conn := &replConn{infoReply: "# Replication\r\nrole:master\r\n"}
+	m := replModule(conn)
+	stream := &applyStream{}
+
+	_ = m.Apply(&pluginv1.ApplyRequest{
+		State: "replica",
+		Params: mustStruct(t, map[string]any{
+			"addr":        "127.0.0.1:6379",
+			"master_addr": "10.0.0.1:6379",
+			"password":    secretPass,
+			"master_tls":  true, // без source_external — не должно срабатывать
+		}),
+	}, stream)
+
+	if hasCall(conn.calls, "CONFIG", "SET", "tls-replication") {
+		t.Errorf("master_tls без source_external не должен включать tls-replication: %v", conn.calls)
 	}
 }
 

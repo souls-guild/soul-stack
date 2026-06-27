@@ -745,35 +745,45 @@ spec:
           required: false
           default: false
           description: >-
-            (source_external) Источник принимает реплику по TLS. ОБЪЯВЛЕНО для
-            полноты контракта, но самим REPLICAOF НЕ применяется: tls-replication
-            настраивается директивами CONFIG SET tls-* (config-state) ДО replica.
-            TODO (S-batch): шаг, ставящий tls-replication из master_tls*.
+            (source_external) Источник принимает реплику по TLS. true → плагин
+            ставит CONFIG SET tls-replication yes ДО REPLICAOF (исходящий
+            replication-линк реплики переходит в TLS). ★ ЗАВИСИМОСТЬ render: CA
+            источника (master_tls_ca) кладётся на ДИСК реплики и указывается через
+            CONFIG SET tls-ca-cert-file/-dir (config-state) ДО replica-шага — без
+            этого верификация server-cert источника при handshake провалится. Сам
+            master_tls_ca плагином в путь НЕ преобразуется (Redis читает CA по пути,
+            не inline; плагин файлы не пишет). Контракт для scenario — README S3.
         master_tls_ca:
           type: string
           required: false
           secret: true
           pattern: "^vault:.*"
           description: >-
-            (source_external) PEM CA внешнего источника для TLS-репликации.
-            Маскируется (secret). Пока декларативно (см. master_tls TODO).
+            (source_external, master_tls) PEM CA внешнего источника для проверки
+            его server-cert на replication-линке. Маскируется (secret). ★ Плагин
+            это значение НЕ применяет напрямую: Redis читает CA с диска по пути
+            (tls-ca-cert-file/-dir), поэтому render кладёт PEM файлом и указывает
+            путь через config-state ДО replica (плагин лишь включает tls-replication).
         master_tls_cert:
           type: string
           required: false
           secret: true
           pattern: "^vault:.*"
           description: >-
-            (source_external) PEM client-cert для mTLS-репликации к источнику
-            (опц., вместе с master_tls_key). Маскируется. Пока декларативно.
+            (source_external, master_tls) PEM client-cert реплики для mTLS на
+            replication-линке к источнику (опц., вместе с master_tls_key).
+            Маскируется. ★ Применяется как tls-cert-file (путь на диске) тем же
+            render-ом, что server-cert инстанса; плагин его значением не оперирует.
         master_tls_key:
           type: string
           required: false
           secret: true
           pattern: "^vault:.*"
           description: >-
-            (source_external) PEM client-key для mTLS-репликации к источнику
-            (опц., вместе с master_tls_cert). Маскируется; в события не попадает.
-            Пока декларативно (см. master_tls TODO).
+            (source_external, master_tls) PEM client-key реплики для mTLS на
+            replication-линке к источнику (опц., вместе с master_tls_cert).
+            Маскируется; в события не попадает. ★ Применяется как tls-key-file
+            (путь на диске) render-ом; плагин его значением не оперирует.
     # offset-synced — safety-gate миграции из ВНЕШНЕГО источника через go-redis:
     # «link жив ≠ данные догнаны». СВОЙ INFO replication (slave_repl_offset,
     # master_sync_in_progress, master_link_status) сверяется с ВНЕШНИМ master-ом

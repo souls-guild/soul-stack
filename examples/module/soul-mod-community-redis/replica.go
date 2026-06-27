@@ -16,13 +16,27 @@
 //
 // source_external — привязка к ВНЕШНЕМУ master-у (миграция из чужой инкарнации):
 // self-guard отключён, masterauth/masteruser берутся из master_password/
-// master_username (реквизиты источника). Параметры TLS-коннекта К ИСТОЧНИКУ
-// (master_tls/master_tls_ca/master_tls_cert/master_tls_key) ОБЪЯВЛЕНЫ в манифесте,
-// но НЕ применяются этим state-ом: TLS к master-у настраивается на стороне Redis
-// директивами tls-replication (CONFIG SET tls-* через config-state ДО replica),
-// сам REPLICAOF их не несёт. TODO (S-batch): отдельный state/расширение, ставящее
-// tls-replication-директивы из master_tls* одним шагом (не-TLS happy-path пилота
-// не блокируется — masterauth по паролю работает поверх уже включённого TLS).
+// master_username (реквизиты источника).
+//
+// TLS-к-источнику (master_tls=true): репликационный линк к master-у источника
+// идёт по TLS. На стороне Redis это управляется директивой `tls-replication yes`
+// — она переводит ИСХОДЯЩИЙ replication-коннект реплики в TLS-режим. Директива
+// hot-settable, поэтому плагин ставит её CONFIG SET-ом ДО REPLICAOF (рядом с
+// masterauth/masteruser): тогда последующий REPLICAOF поднимает TLS-линк, а не
+// plaintext. Без `tls-replication yes` REPLICAOF к TLS-master-у источника
+// упёрся бы в TLS-only-листенер источника (handshake-фейл) — TODO S-batch снят.
+//
+// ★ Зависимость от render/scenario (НЕ делается этим state-ом): доверие к серверному
+// сертификату ИСТОЧНИКА. Для верификации server-cert источника при handshake реплика
+// читает CA источника (master_tls_ca) с ДИСКА — Redis-директивы tls-ca-cert-file /
+// tls-ca-cert-dir принимают ПУТЬ, не inline-PEM, а CONFIG SET tls-ca-cert-file <путь>
+// требует, чтобы файл УЖЕ лежал на диске. Плагин файлы не пишет (capability —
+// network_outbound), поэтому CA источника на диск кладёт render (core.file.rendered)
+// ДО replica-шага, и он же указывает Redis-у путь через config-state (CONFIG SET
+// tls-ca-cert-file). Контракт для scenario-dev — в заголовке шага и в README S3.
+// master_tls_cert/master_tls_key (mTLS-cert реплики на линке) аналогично читаются
+// Redis-ом по пути (tls-cert-file/tls-key-file своего инстанса) — их кладёт тот же
+// render; этот state их значениями не оперирует, только включает tls-replication.
 package main
 
 import (
@@ -64,6 +78,7 @@ func (m *RedisModule) applyReplica(ctx context.Context, stream grpc.ServerStream
 	f := params.GetFields()
 	password := stringOrEmpty(f["password"])
 	sourceExternal := boolOrDefault(f["source_external"], false)
+	masterTLS := boolOrDefault(f["master_tls"], false)
 	masterAddr := strings.TrimSpace(stringOrEmpty(f["master_addr"]))
 
 	masterHost, masterPort, err := net.SplitHostPort(masterAddr)
@@ -115,6 +130,19 @@ func (m *RedisModule) applyReplica(ctx context.Context, stream grpc.ServerStream
 			"role":   "slave",
 			"master": masterAddr,
 		})
+	}
+
+	// tls-replication ДО REPLICAOF: переводит ИСХОДЯЩИЙ replication-линк реплики в
+	// TLS. Иначе REPLICAOF к TLS-only-источнику (master_tls=true) упёрся бы в его
+	// TLS-листенер (handshake-фейл). Только source_external (свой master живёт в
+	// той же инкарнации — TLS-режим линка уже задан общим redis.conf при старте,
+	// отдельно включать не нужно). CONFIG SET идемпотентен на стороне Redis;
+	// директива hot-settable. Server-cert источника верифицируется по CA с ДИСКА
+	// (tls-ca-cert-file/-dir указывает render через config-state — см. заголовок).
+	if sourceExternal && masterTLS {
+		if _, err := conn.Do(ctx, "CONFIG", "SET", "tls-replication", "yes"); err != nil {
+			return sendFailure(stream, "CONFIG SET tls-replication: "+redactError(err, password, masterPass))
+		}
 	}
 
 	// masterauth ДО REPLICAOF: реплика обязана знать пароль master-а, иначе

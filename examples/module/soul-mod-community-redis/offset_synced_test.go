@@ -300,6 +300,74 @@ func TestApplyOffsetSynced_SecondConnectUsesSourceSecrets(t *testing.T) {
 	}
 }
 
+// TestApplyOffsetSynced_SourceTLS_SecondConnectUsesTLS — source_tls=true:
+// ВТОРОЙ коннект (к внешнему источнику) идёт по TLS с source_tls_ca, а коннект к
+// СВОЕМУ инстансу — по своим tls-параметрам. Доказывает доведённый TLS-к-источнику
+// на offset-synced: source-секреты и source-TLS изолированы от своих.
+func TestApplyOffsetSynced_SourceTLS_SecondConnectUsesTLS(t *testing.T) {
+	self := &offsetConn{infoReply: selfReplInfo(1000, "up", 0)}
+	source := &offsetConn{infoReply: sourceReplInfo(1000)}
+	m := offsetModule(selfAddr, self, source)
+
+	const sourceCA = "-----BEGIN CERTIFICATE-----\nSOURCE-CA-OFFSET\n-----END CERTIFICATE-----"
+	_ = applyOffset(t, m, map[string]any{
+		"skip_checksum": true,
+		"source_tls":    true,
+		"source_tls_ca": sourceCA,
+	})
+
+	// Второй коннект (источник) — TLS включён, CA источника проброшен.
+	if !source.cfg.tls.enabled {
+		t.Error("source_tls=true не доехал до второго коннекта (TLS к источнику не включён)")
+	}
+	if source.cfg.tls.caPEM != sourceCA {
+		t.Errorf("source_tls_ca не доехал до второго коннекта: %q", source.cfg.tls.caPEM)
+	}
+	// Свой коннект НЕ должен унаследовать source-TLS (изоляция): tls не задан → false.
+	if self.cfg.tls.enabled {
+		t.Error("свой коннект ошибочно включил TLS из source_tls (нет изоляции)")
+	}
+}
+
+// TestApplyOffsetSynced_OwnTLSIndependentOfSource — свой tls=true и source_tls=true
+// читаются из РАЗНЫХ полей: свой коннект берёт tls/tls_ca, источник —
+// source_tls/source_tls_ca. Доказывает раздельность двух TLS-контекстов.
+func TestApplyOffsetSynced_OwnTLSIndependentOfSource(t *testing.T) {
+	self := &offsetConn{infoReply: selfReplInfo(1000, "up", 0)}
+	source := &offsetConn{infoReply: sourceReplInfo(1000)}
+	m := offsetModule(selfAddr, self, source)
+
+	const ownCA = "-----BEGIN CERTIFICATE-----\nOWN-CA\n-----END CERTIFICATE-----"
+	const srcCA = "-----BEGIN CERTIFICATE-----\nSRC-CA\n-----END CERTIFICATE-----"
+	_ = applyOffset(t, m, map[string]any{
+		"skip_checksum": true,
+		"tls":           true,
+		"tls_ca":        ownCA,
+		"source_tls":    true,
+		"source_tls_ca": srcCA,
+	})
+
+	if !self.cfg.tls.enabled || self.cfg.tls.caPEM != ownCA {
+		t.Errorf("свой коннект: ждали tls с ownCA, got enabled=%v ca=%q", self.cfg.tls.enabled, self.cfg.tls.caPEM)
+	}
+	if !source.cfg.tls.enabled || source.cfg.tls.caPEM != srcCA {
+		t.Errorf("коннект источника: ждали tls с srcCA, got enabled=%v ca=%q", source.cfg.tls.enabled, source.cfg.tls.caPEM)
+	}
+}
+
+// TestApplyOffsetSynced_NoSourceTLS_SecondConnectPlaintext — без source_tls
+// второй коннект plaintext (back-compat: tls=false → enabled=false).
+func TestApplyOffsetSynced_NoSourceTLS_SecondConnectPlaintext(t *testing.T) {
+	self := &offsetConn{infoReply: selfReplInfo(1000, "up", 0)}
+	source := &offsetConn{infoReply: sourceReplInfo(1000)}
+	m := offsetModule(selfAddr, self, source)
+
+	_ = applyOffset(t, m, map[string]any{"skip_checksum": true})
+	if source.cfg.tls.enabled {
+		t.Error("без source_tls второй коннект не должен включать TLS")
+	}
+}
+
 // TestApplyOffsetSynced_NoSecretLeak — ни свой, ни source-пароль не утекают в
 // события (ИБ-инвариант ADR-010).
 func TestApplyOffsetSynced_NoSecretLeak(t *testing.T) {
