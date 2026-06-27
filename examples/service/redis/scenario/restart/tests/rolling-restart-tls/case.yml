@@ -13,9 +13,9 @@
 #
 # ★ Дискриминатор — `default(incarnation.state.tls.enable, false)` (ИМЕНОВАННЫЙ
 # read-model v3, без bracket-нотации дефисного ключа). state.tls.port — INTEGER (7379)
-# → addr конкатенирует через string(...). tls_ca — PEM CA из vault(essence.tls_ca_ref)
-# (плагин ждёт PEM-содержимое, НЕ путь): секрет в state не лежит, резолвится тем же
-# ref-ом, что и create.
+# → addr конкатенирует через string(...). tls_ca — PEM CA из vault(state.tls.ca_ref)
+# (плагин ждёт PEM-содержимое, НЕ путь): в state лежит Vault-ПУТЬ, vault() резолвит в PEM.
+# Источник — ИМЕНОВАННЫЙ state.tls.ca_ref (актуальный после rotate_tls), НЕ essence-дефолт.
 #
 # Что ассертим (критерий приёмки TLS-ветки гейта):
 #   1. probe (community.redis.role): tls=true, addr 127.0.0.1:7379 (НЕ plain 6379),
@@ -57,9 +57,9 @@ fixtures:
       enable:   true
       only:     false
       port:     7379
-      cert_ref: ""
-      key_ref:  ""
-      ca_ref:   ""
+      cert_ref: "secret/services/redis/tls#cert"
+      key_ref:  "secret/services/redis/tls#key"
+      ca_ref:   "secret/services/redis/tls#ca"
     redis_config:
       maxmemory:        "256mb"
       maxmemory-policy: allkeys-lru
@@ -69,13 +69,8 @@ fixtures:
       tls-ca-cert-file: /etc/redis/tls/ca.crt
       tls-replication:  "yes"
 
-  # essence.tls_ca_ref — Vault-ПУТЬ источника PEM CA (author-context, host-инвариант):
-  # day-2 резолвит его через vault() ровно как create. Сам PEM — в fixtures.vault ниже.
-  essence:
-    tls_ca_ref: "secret/services/redis/tls#ca"
-
   # Пароль (secret/redis/restart#password, incarnation.name == restart) + PEM CA
-  # (secret/services/redis/tls#ca, по essence.tls_ca_ref).
+  # (secret/services/redis/tls#ca, по state.tls.ca_ref — day-2 резолвит его vault()).
   vault:
     secret/redis/restart:
       password: fixture-redis-pass-16+

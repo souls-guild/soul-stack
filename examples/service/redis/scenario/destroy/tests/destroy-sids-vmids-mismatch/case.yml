@@ -1,0 +1,46 @@
+# L0-GUARD парности provisioned_sids ↔ provisioned_vm_ids (security, аудит 2026-06-26).
+# Негатив-кейс к destroy-provisioned: incarnation.state несёт РАССОГЛАСОВАННЫЕ длины —
+# 4 vm_ids, но 3 sids. Это порча state (ручная правка / частичная миграция / баг
+# provision-guard), которую destroy ОБЯЗАН поймать ДО необратимого teardown.
+#
+# ★ ПОЧЕМУ ЭТО security-инвариант: vm_ids снимают VM у провайдера, sids чистят
+# keeper-реестры (souls→destroyed, soul_seeds→orphaned, bootstrap_tokens→burned).
+# Рассогласование длин = осиротевшие записи: VM снята, но её SID (с активным
+# soul_seed + неиспользованным bootstrap_token) остался в реестре. Это:
+#   (1) orphan souls/seeds — мусор, который Reaper НЕ снимает (mark_disconnected
+#       трогает только connected→disconnected, не pending-VM-souls);
+#   (2) нарушение anti-replay — НЕсожжённый bootstrap_token переиспользуем.
+# create пишет оба набора ОДНИМ guard-ом из register.provision.hosts (один источник
+# размера), поэтому в норме длины РАВНЫ; assert ловит порчу.
+#
+# ★ ПРОВЕРЯЕМЫЙ ИНВАРИАНТ: первый assert-шаг destroy/main.yml
+# (size(provisioned_sids) == size(provisioned_vm_ids)) вычисляется keeper-side в
+# render-фазе ОДИН раз, ДО dispatch core.cloud.destroyed. 3 != 4 → assert false →
+# render ОБРЫВАЕТСЯ (expect_render_error) ДО любого cloud-вызова и cascade. Парный к
+# destroy-provisioned (4 == 4, проходит). Render-only, герметично.
+name: destroy aborts when provisioned sids and vm_ids lengths disagree
+
+fixtures:
+  # destroy не несёт apply:destiny (keeper-only teardown), но харнесс держит ключ
+  # ради единообразия roster-резолва (как destroy-provisioned).
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: vm-1.example.com
+      covens: [destroy]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+
+  # incarnation.state с РАССОГЛАСОВАННЫМИ provisioned-наборами: 4 vm_id, но 3 sid
+  # (одна VM осталась бы без cascade своего SID → orphan soul/seed/token). assert
+  # парности (3 == 4 → false) рвёт прогон ДО dispatch core.cloud.destroyed.
+  state:
+    redis_type: cluster
+    redis_config: {}
+    provisioned_vm_ids: [i-aaa111, i-bbb222, i-ccc333, i-ddd444]
+    provisioned_sids: [vm-1.example.com, vm-2.example.com, vm-3.example.com]
+    provisioned_provider: wb-dev
+
+# Прогон обрывается на assert-шаге парности (destroy/main.yml tasks[0]).
+# Подстрока — message правила (длины обязаны совпадать).
+expect_render_error: "длины обязаны совпадать"

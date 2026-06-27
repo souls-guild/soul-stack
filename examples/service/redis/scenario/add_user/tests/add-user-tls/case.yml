@@ -3,13 +3,14 @@
 #
 # ★ Инвариант (day-2-конвенция §7a): при state.tls.enable=true ACL LOAD-шаг
 # (community.redis.acl) обязан коннектиться по TLS (addr на state.tls.port, tls=true,
-# tls_ca = PEM CA из vault(essence.tls_ca_ref)) — иначе plaintext-коннект на TLS-only
-# Redis провалит ACL LOAD.
+# tls_ca = PEM CA из vault(state.tls.ca_ref)) — иначе plaintext-коннект на TLS-only
+# Redis провалит ACL LOAD. CA берётся из ИМЕНОВАННОГО state.tls.ca_ref (актуальный после
+# rotate_tls), НЕ из essence-дефолта.
 #
 # Что ассертим:
 #   1. users.acl перерендерен с merged-набором (alice — первый юзер инкарнации).
 #   2. hot-reload (community.redis.acl): addr 127.0.0.1:7379 (TLS-порт), tls=true,
-#      tls_ca = PEM CA.
+#      tls_ca = PEM CA (из state.tls.ca_ref).
 #   3. state_changes: redis_users = {alice}.
 name: add_user over TLS hot-reloads ACL on tls-port from incarnation.state
 
@@ -19,10 +20,8 @@ fixtures:
     network: { primary_ip: 10.0.0.6 }
     os: { arch: amd64 }
 
-  essence:
-    tls_ca_ref: "secret/services/redis/tls#ca"
-
   # Развёрнутый incarnation.state v3 с TLS; ACL ещё пуст (alice — первый юзер).
+  # state.tls.ca_ref — источник CA day-2-коннекта (vault() резолвит путь в PEM).
   state:
     redis_type: sentinel
     redis_version: "7.2.4"

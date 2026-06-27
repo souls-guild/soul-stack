@@ -5,9 +5,9 @@
 # ★ Инвариант (day-2-конвенция §7a, ADR-057 amendment): дискриминатор TLS берётся из
 # ИМЕНОВАННОГО incarnation.state.tls (state_schema v3), НЕ из essence/redis_config.
 # При state.tls.enable=true hot-reload-шаг (community.redis.config) обязан коннектиться
-# по TLS: addr на state.tls.port, tls=true, tls_ca = PEM CA из vault(essence.tls_ca_ref).
-# Иначе plaintext-коннект на TLS-only Redis провалит CONFIG SET (а AUTH plaintext при
-# открытом plain — утечка пароля).
+# по TLS: addr на state.tls.port, tls=true, tls_ca = PEM CA из vault(state.tls.ca_ref)
+# (актуальный после rotate_tls, НЕ essence-дефолт). Иначе plaintext-коннект на TLS-only
+# Redis провалит CONFIG SET (а AUTH plaintext при открытом plain — утечка пароля).
 #
 # Что ассертим:
 #   1. redis.conf перерендерен с новым merged config (изменён maxmemory; TLS-директивы
@@ -31,10 +31,9 @@ fixtures:
       rdb:
         save: "900 1 300 10 60 10000"
         appendonly: "no"
-    # day-2 резолвит PEM CA через тот же ref, что create (host-инвариант author-context).
-    tls_ca_ref: "secret/services/redis/tls#ca"
 
   # Развёрнутый incarnation.state v3 (от create с TLS): tls.enable=true + port 7379.
+  # state.tls.ca_ref — источник CA day-2-коннекта (vault() резолвит путь в PEM).
   state:
     redis_type: sentinel
     redis_version: "7.2.4"

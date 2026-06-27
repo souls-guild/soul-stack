@@ -100,12 +100,14 @@ validate:
 # tls_* — дискриминатор коннекта плагина из ИМЕНОВАННОГО state.tls (state_schema v3,
 # day-2-конвенция §7a), идентично restart: плагин обязан коннектиться по TLS, если
 # Redis на TLS (иначе plaintext на TLS-only провалит шаг; AUTH plaintext при открытом
-# plain-порту — утечка пароля). tls_ca — PEM CA из vault(essence.tls_ca_ref) (плагин
-# ждёт PEM, не путь; секрет в state не лежит).
+# plain-порту — утечка пароля). tls_ca — PEM CA из vault(incarnation.state.tls.ca_ref)
+# (плагин ждёт PEM, не путь; в state лежит Vault-ПУТЬ, vault() резолвит в PEM).
 compute:
   tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
   tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
-  tls_ca:   "${ compute.tls_on ? vault(essence.tls_ca_ref) : '' }"
+  # tls_ca из ИМЕНОВАННОГО state.tls.ca_ref, симметрично tls_port из state.tls.port. После
+  # rotate_tls (меняет state.tls.ca_ref) day-2 коннект берёт АКТУАЛЬНЫЙ CA, не essence-дефолт.
+  tls_ca:   "${ compute.tls_on ? vault(incarnation.state.tls.ca_ref) : '' }"
 
   # ── Эффективная версия redis (для version-aware валидатора redis_settings, #6) ──
   # day-2 версию НЕ переустанавливает — берём РАЗВЁРНУТУЮ из incarnation.state

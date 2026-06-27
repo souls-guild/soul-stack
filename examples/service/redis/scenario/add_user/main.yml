@@ -69,7 +69,11 @@ validate:
 compute:
   tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
   tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
-  tls_ca:   "${ compute.tls_on ? vault(essence.tls_ca_ref) : '' }"
+  # tls_ca — PEM CA-СОДЕРЖИМОЕ коннекта (плагин ждёт PEM, не путь). Берётся из
+  # ИМЕНОВАННОГО state.tls.ca_ref (Vault-ПУТЬ в state, vault() резолвит в PEM),
+  # симметрично tls_port из state.tls.port. После rotate_tls (меняет state.tls.ca_ref
+  # на новый путь) day-2 коннект использует АКТУАЛЬНЫЙ CA — не устаревший essence-дефолт.
+  tls_ca:   "${ compute.tls_on ? vault(incarnation.state.tls.ca_ref) : '' }"
 
   # ── Новый набор ACL-юзеров: РАЗВЁРНУТЫЙ state.redis_users + добавляемый юзер ──
   # ★ wave 1b (2026-06-26): state.redis_users — МАССИВ AclUser [{name,perms,state}]

@@ -78,13 +78,13 @@ compute:
   # корня state/state.tls. tls_port — ИМЕНОВАННОЕ поле state.tls.port (INTEGER в v3,
   # симметрично create compute.tls_port), в addr конкатенируется через string(...).
   # tls_ca — PEM CA-СОДЕРЖИМОЕ (плагин ждёт PEM, не путь: tls.go AppendCertsFromPEM),
-  # резолвится vault(essence.tls_ca_ref) — секрет в state не лежит (ИБ), ref — стабильный
-  # host-инвариант author-context (как пароль ниже). state.tls.ca_ref на create в state
-  # есть, но это Vault-ПУТЬ, а не PEM → плагину нужен vault()-резолв; essence.tls_ca_ref
-  # совпадает с развёрнутым CA (create без ca_ref-override → essence-дефолт).
+  # резолвится vault(incarnation.state.tls.ca_ref) — секрет в state не лежит (ИБ), там
+  # стабильный Vault-ПУТЬ (read-model v3), симметрично tls_port из state.tls.port. После
+  # rotate_tls (меняет state.tls.ca_ref на новый путь) restart коннектится АКТУАЛЬНЫМ CA;
+  # essence.tls_ca_ref устарел бы (rotate его не трогает) → verify нового cert провалился бы.
   tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
   tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
-  tls_ca:   "${ compute.tls_on ? vault(essence.tls_ca_ref) : '' }"
+  tls_ca:   "${ compute.tls_on ? vault(incarnation.state.tls.ca_ref) : '' }"
 
 tasks:
   # Probe: фактическая роль каждого хоста через плагин community.redis.role
@@ -100,8 +100,8 @@ tasks:
   # tls_on/tls_port/tls_ca объявлены ОДИН раз, задачи ссылаются compute.<name>. Источник
   # истины — incarnation.state.tls (ИМЕНОВАННОЕ поле v3, day-2-конвенция §7a). ca_ref на
   # create записан в state.tls.ca_ref как Vault-ПУТЬ (не PEM), а плагину нужно PEM-
-  # СОДЕРЖИМОЕ → day-2 берёт CA через vault(essence.tls_ca_ref): essence-ref совпадает с
-  # развёрнутым CA при create БЕЗ ca_ref-override (essence-дефолт). addr на
+  # СОДЕРЖИМОЕ → day-2 берёт CA через vault(incarnation.state.tls.ca_ref): актуальный путь
+  # после rotate_tls, а не устаревший essence-дефолт. addr на
   # compute.tls_on/tls_port: TLS включён → '127.0.0.1:' + tls-порт (string(state.tls.port),
   # INTEGER в v3), иначе plaintext 6379.
   - name: Detect actual redis role per host

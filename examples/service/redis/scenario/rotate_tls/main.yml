@@ -81,7 +81,12 @@ validate:
 compute:
   tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
   tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
-  tls_ca:   "${ compute.tls_on ? vault(essence.tls_ca_ref) : '' }"
+  # tls_ca — CA коннекта (PEM из vault(state.tls.ca_ref)). incarnation.state — PRE-RUN
+  # снимок (мутация state.tls.ca_ref → compute.ca_ref применяется ПОСЛЕ успешного apply),
+  # поэтому ЗДЕСЬ это ТЕКУЩЕЕ доверие: на ЭТОМ rotate-прогоне сервер ещё со СТАРЫМ cert,
+  # CONFIG SET коннектится старым CA и сам же подменяет материал. На СЛЕДУЮЩИХ day-2
+  # state.tls.ca_ref уже новый → коннект новым CA. Симметрично tls_port из state.tls.port.
+  tls_ca:   "${ compute.tls_on ? vault(incarnation.state.tls.ca_ref) : '' }"
   conf_dir: "${ default(incarnation.state.conf_dir, '/etc/redis') }"
 
   # Эффективные refs: новый из input бьёт текущий из state (подложка — частичная

@@ -38,14 +38,15 @@ fixtures:
     network: { primary_ip: 10.0.0.5 }
     os: { arch: amd64 }
 
-  essence:
-    # day-2 резолвит PEM CA коннекта (tls_ca плагина) через essence.tls_ca_ref — тот же
-    # author-context ref, что create (host-инвариант). Это CA ТЕКУЩЕГО доверия коннекта;
-    # ротируемый ca_ref (input) — это новый CA, рендерящийся в файл для самого Redis.
-    tls_ca_ref: "secret/services/redis/tls#ca"
-
   # Развёрнутый incarnation.state v3 с ВКЛЮЧЁННЫМ TLS (rotate-предусловие). Текущие refs
-  # — старые; input даёт новые.
+  # — СТАРЫЕ (state.tls.*_ref); input даёт новые.
+  #
+  # ★ CA коннекта (compute.tls_ca) резолвится из incarnation.state.tls.ca_ref — а это
+  # PRE-RUN снимок (мутация на новый ref применяется ПОСЛЕ apply). Поэтому на ЭТОМ
+  # rotate-прогоне коннект идёт СТАРЫМ CA (tls#ca → CACERT) к серверу, у которого ещё
+  # старый cert; три CONFIG SET сами подменяют материал. Это ТЕКУЩЕЕ доверие коннекта;
+  # ротируемый ca_ref (input, tls-v2#ca) — новый CA, рендерящийся в файл для Redis и
+  # фиксируемый в state_changes (на СЛЕДУЮЩИХ day-2 коннект пойдёт уже им).
   state:
     redis_type: sentinel
     redis_version: "7.2.4"
@@ -80,7 +81,7 @@ fixtures:
   vault:
     secret/redis/rotate_tls:
       password: rot-redis-pass-16chars
-    # CA коннекта (essence.tls_ca_ref) — текущее доверие.
+    # CA коннекта (state.tls.ca_ref pre-run, tls#ca) — текущее доверие на этом прогоне.
     secret/services/redis/tls:
       ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
     # НОВЫЙ TLS-материал (по input refs) — рендерится в файлы для Redis.
