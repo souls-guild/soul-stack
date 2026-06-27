@@ -1,5 +1,5 @@
 name: redis
-state_schema_version: 9
+state_schema_version: 10
 description: >-
   Redis по концепции Ansible-роли: ОДИН сервис на режимы развёртывания
   (redis_type ∈ sentinel/cluster). Per-host install + render redis.conf делает
@@ -70,6 +70,19 @@ description: >-
 #     ОДИН плоский set с has()-guard на ВЕСЬ объект (CEL-map-литерал-дефолт): seeded_from
 #     уже есть → сохраняется как есть, иначе ставится дефолт. Зеркало 006_to_007/007_to_008
 #     (guard на объекте, не на листьях). Остальной state НЕ трогается.
+#   - 009_to_010 (migrations/009_to_010.yml): seeded_from ДОПОЛНЯЕТСЯ ССЫЛКАМИ на учётку
+#     внешнего источника — source_password_ref (Vault-ПУТЬ к паролю) + source_tls_ca_ref
+#     (Vault-ПУТЬ к CA), оба string. Прод-фикс блокера detach под AUTH-источником: day-2
+#     detach_source делает финальный offset-gate к ВНЕШНЕМУ источнику, но раньше учётка
+#     источника в state НЕ хранилась (только в input.source.* у migrate_cluster) → коннект
+#     к AUTH-источнику падал → detach НИКОГДА не проходил (error_locked). Теперь migrate
+#     ПЕРСИСТИТ ССЫЛКИ (НЕ секреты — Vault-пути), detach читает их vault()-ом keeper-side.
+#     Существующим v9-инкарнациям (и обычному create) — консервативный default: пустые
+#     ref'ы (source без AUTH/TLS, как было). ★ ЛИСТ-guard (has() на КАЖДОЕ новое поле
+#     внутри уже-существующего seeded_from), НЕ объект-guard как 008_to_009: seeded_from у
+#     v9 уже ЕСТЬ (008_to_009 его гарантировал), здесь добавляются ПОЛЯ в него —
+#     перезатереть объект целиком означало бы стереть source_endpoints/detached. Зеркало
+#     листового паттерна 006_to_007 (has() на каждое новое поле). Остальной state не трогается.
 # incarnation.state фиксирует, что развёрнуто, чтобы оператор видел инсталляцию и
 # повторный apply был idempotent.
 #
@@ -197,7 +210,7 @@ state_schema:
       items:
         type: string
 
-    # ── seed-source read-model (v9, S1-пилот migrate_cluster) ─────────────────
+    # ── seed-source read-model (v9–v10, S1-пилот migrate_cluster) ─────────────
     # ФАКТ «данные инкарнации залиты миграцией с ВНЕШНЕГО Redis-кластера» (S1
     # migrate_cluster). source_endpoints — адреса источника (откуда тянули);
     # detached — отцеплён ли источник: false сразу после migrate (источник ещё
@@ -205,7 +218,18 @@ state_schema:
     # больше не нужен). Время сюда НЕ кладём — оно в state_history (snapshot
     # per-change несёт время), а в самом state остаётся детерминированным (важно
     # для L0; timestamps в state — отложенный S-batch). Обычный create (не
-    # миграция) → консервативный default {source_endpoints: [], detached: false}.
+    # миграция) → консервативный default {source_endpoints: [], detached: false,
+    # source_password_ref: '', source_tls_ca_ref: ''}.
+    #
+    # ★ source_password_ref / source_tls_ca_ref (v10) — ССЫЛКИ (Vault-ПУТИ, НЕ
+    # значения) на учётку ВНЕШНЕГО источника, ПЕРСИСТЯТСЯ migrate_cluster из
+    # input.source.password_ref/tls_ca_ref. Прод-фикс: day-2 detach_source делает
+    # финальный offset-gate к источнику, и если источник под AUTH/TLS — без этих
+    # ref'ов коннект упирался бы в отказ (учётка не во входном контракте detach,
+    # секрет в state не оседает — ИБ). detach читает их vault()-ом keeper-side
+    # (vault(state.seeded_from.source_password_ref)) и аутентифицируется к
+    # источнику. Пусто → источник без AUTH/TLS (source_password=''), как было до
+    # фикса. В state лежит ПУТЬ, не PEM/пароль — симметрия с tls.*_ref (ИБ).
     seeded_from:
       type: object
       additionalProperties: false
@@ -216,6 +240,10 @@ state_schema:
             type: string
         detached:
           type: boolean
+        source_password_ref:
+          type: string
+        source_tls_ca_ref:
+          type: string
 
     # ── Топология (counts, v3) ────────────────────────────────────────────────
     # Раскладка ролей по таргетированным souls. Из input.shards/replicas/

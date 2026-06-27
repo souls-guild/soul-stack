@@ -230,9 +230,15 @@ assert:
     memory_mb: 0
     modules: [bloom, json, search, timeseries]
     sysctl_settings: {}
-    # ★ seed-source read-model (v9): откуда мигрировали + detached:TRUE (B3 атомарна).
+    # ★ seed-source read-model (v10): откуда мигрировали + detached:TRUE (B3 атомарна) +
+    # ССЫЛКИ на учётку источника. source_password_ref = input.source.password_ref;
+    # source_tls_ca_ref='' (tls:false, tls_ca_ref не задан). ★ cluster detached:true →
+    # detach_source/cluster.yml ничего не отцепляет, ref'ы не используются day-2, но
+    # персистятся симметрично sentinel (единая форма seeded_from v10).
     seeded_from:
       source_endpoints:
         - "10.9.0.1:6379"
         - "10.9.0.2:6379"
       detached: true
+      source_password_ref: "secret/redis/migrate/oldcluster#password"
+      source_tls_ca_ref: ""

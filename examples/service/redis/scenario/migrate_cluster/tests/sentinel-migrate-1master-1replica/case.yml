@@ -225,9 +225,13 @@ assert:
     memory_mb: 0
     modules: [bloom, json, search, timeseries]
     sysctl_settings: {}
-    # ★ seed-source read-model (v9): откуда мигрировали + detached:false.
+    # ★ seed-source read-model (v10): откуда мигрировали + detached:false + ССЫЛКИ на
+    # учётку источника. source_password_ref = input.source.password_ref (персист для
+    # day-2 detach-gate); source_tls_ca_ref='' (input.source.tls_ca_ref не задан, tls:false).
     seeded_from:
       source_endpoints:
         - "10.9.0.1:6379"
         - "10.9.0.2:6379"
       detached: false
+      source_password_ref: "secret/redis/migrate/oldcluster#password"
+      source_tls_ca_ref: ""

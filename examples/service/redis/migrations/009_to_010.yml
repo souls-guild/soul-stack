@@ -1,0 +1,50 @@
+from_version: 9
+to_version: 10
+
+description: >-
+  state_schema v9 → v10: seeded_from ДОПОЛНЯЕТСЯ ССЫЛКАМИ на учётку внешнего
+  источника (S1-пилот migrate_cluster, прод-фикс блокера detach под AUTH):
+    - source_password_ref (string) — Vault-ПУТЬ к паролю учётки ВНЕШНЕГО источника;
+    - source_tls_ca_ref   (string) — Vault-ПУТЬ к CA для TLS-коннекта к источнику.
+  Это ССЫЛКИ (Vault-пути), НЕ секреты — в state PEM/пароль не оседает (ИБ, симметрия
+  с tls.*_ref). migrate_cluster ПЕРСИСТИТ их из input.source.password_ref/tls_ca_ref;
+  day-2 detach_source читает их vault()-ом keeper-side для финального offset-gate к
+  источнику. До v10 учётка источника в state НЕ хранилась (только во входном контракте
+  migrate_cluster) → detach под AUTH/TLS-источником падал коннектом → НИКОГДА не
+  проходил (error_locked). Теперь detach аутентифицируется к защищённому источнику.
+
+  Forward-only (down: не поддерживается; восстановление — через state_history).
+  Существующие v9-инкарнации (и обычный create) → консервативный default: пустые
+  ref'ы '' (источник без AUTH/TLS, как было до фикса — detach с пустым ref шлёт
+  source_password='', поведение S1-пилота бит-в-бит).
+
+  ★ DSL-форма: migration-CEL sandbox (ADR-019) — ТОЛЬКО `state` + stdlib (НЕТ merge()/
+  default()). seeded_from пересобирается ОДНИМ плоским set с CEL-тернаром:
+    - внешний guard has(state.seeded_from): объект отсутствует (теоретически невалидный
+      v9-state) → ставим полный дефолт всех 4 полей;
+    - иначе (нормальный v9, seeded_from гарантирован 008_to_009) → map-литерал с
+      СОХРАНЕНИЕМ source_endpoints/detached через has()-guard + два новых ref-листа,
+      тоже под has()-guard (идемпотентность повторного прогона: уже-добавленный ref
+      сохраняется, не перезатирается ''-дефолтом).
+  ★ ЛИСТ-guard (has() на КАЖДОЕ поле), НЕ объект-guard как 008_to_009: там seeded_from
+  ВВОДИЛСЯ целиком (objects-guard); здесь в УЖЕ-существующий seeded_from добавляются
+  ПОЛЯ — перезатереть объект целиком стёрло бы source_endpoints/detached. Зеркало
+  листового паттерна 006_to_007 (has() на каждое новое поле). Остальной state не трогается.
+
+transform:
+  - set:
+      path:  state.seeded_from
+      value: >-
+        ${ has(state.seeded_from)
+             ? {
+                 'source_endpoints':    has(state.seeded_from.source_endpoints) ? state.seeded_from.source_endpoints : [],
+                 'detached':            has(state.seeded_from.detached) ? state.seeded_from.detached : false,
+                 'source_password_ref': has(state.seeded_from.source_password_ref) ? state.seeded_from.source_password_ref : '',
+                 'source_tls_ca_ref':   has(state.seeded_from.source_tls_ca_ref) ? state.seeded_from.source_tls_ca_ref : ''
+               }
+             : {
+                 'source_endpoints':    [],
+                 'detached':            false,
+                 'source_password_ref': '',
+                 'source_tls_ca_ref':   ''
+               } }

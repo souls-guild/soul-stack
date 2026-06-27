@@ -52,9 +52,14 @@
 #    ★ lag_threshold ЖЁСТКО 0: detach — точка невозврата (после REPLICAOF NO ONE хвост
 #    источника не подтянуть), поэтому финальная проверка требует ПОЛНОЙ синхронизации
 #    (offset совпал бит-в-бит), без допуска отставания. addr — локальный новый master
-#    (compute.tls_*); source_addr — внешний источник. ★ source_password='' — учётка
-#    источника на day-2 в state НЕ лежит (ИБ, см. compute detach_source/main.yml): если
-#    источник под AUTH, gate упрётся в коннект-ошибку (осознанное ограничение S1).
+#    (compute.tls_*); source_addr — внешний источник.
+#    ★ source_password/source_tls/source_tls_ca (v10 прод-фикс) — учётка ВНЕШНЕГО источника
+#    из ССЫЛОК в state (compute.source_password/source_tls_ca = vault() по seeded_from
+#    .source_password_ref/source_tls_ca_ref, персистнуты migrate_cluster). Теперь gate
+#    АУТЕНТИФИЦИРУЕТСЯ к AUTH/TLS-источнику (до v10 source_password='' → коннект к
+#    защищённому источнику падал → detach НИКОГДА не проходил). source_tls включается ровно
+#    когда есть CA (compute.source_tls_ca != '' — migrate резолвит CA только при source.tls).
+#    Источник без AUTH/TLS (ref пуст) → source_password=''/source_tls=false, как было.
 - name: Final offset gate before detach (master must be fully in sync with the source)
   run_once: true
   module: community.redis.offset-synced
@@ -68,7 +73,9 @@
     addr:            "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
     source_addr:     "${ compute.source_master }"
     password:        "${ vault('secret/redis/' + incarnation.name + '#password') }"
-    source_password: ""
+    source_password: "${ compute.source_password }"
+    source_tls:      "${ compute.source_tls_ca != '' }"
+    source_tls_ca:   "${ compute.source_tls_ca }"
     lag_threshold:   "${ 0 }"
     skip_checksum:   false
 

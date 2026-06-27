@@ -40,11 +40,18 @@ description: >-
 # Рун-уровневый контекст (incarnation/essence — без soulprint). source_master — master
 # ВНЕШНЕГО источника из state (записан migrate_cluster: seeded_from.source_endpoints[0]).
 # tls_* — дискриминатор коннекта к ЛОКАЛЬНОМУ инстансу из state.tls (как все day-2:
-# add_user/update_users/restart). source-учётка ВНЕШНЕГО источника на day-2 НЕДОСТУПНА
-# (input.source.password_ref был только у migrate_cluster, в state секрет не оседает —
-# ИБ): финальный offset-gate коннектится к источнику БЕЗ AUTH-пароля (source_password='').
-# Если источник требует AUTH — gate упрётся в ошибку коннекта (fail-closed), это
-# осознанное ограничение S1 (хранение source-учётки в state — отдельный S-batch).
+# add_user/update_users/restart).
+#
+# ★ source_password/source_tls_ca (v10 прод-фикс) — учётка ВНЕШНЕГО источника для
+# финального offset-gate, восстановленная из ССЫЛОК в state. migrate_cluster ПЕРСИСТИТ
+# Vault-ПУТИ (seeded_from.source_password_ref/source_tls_ca_ref), detach читает их
+# vault()-ом keeper-side и аутентифицируется к источнику. До v10 учётка в state НЕ
+# хранилась → gate к AUTH/TLS-источнику падал коннектом → detach НИКОГДА не проходил
+# (error_locked). Теперь полный цикл migrate→detach работает с защищённым источником.
+# ref пуст (источник без AUTH/TLS, либо state до v10-фикса) → '' (gate шлёт
+# source_password='', поведение S1-пилота бит-в-бит — НЕ ломаем detach без AUTH).
+# default('')-guard на сам ref — defensive back-compat (v10 ref гарантирует, но edge-
+# state без него не должен рвать eager-compute). Резолв keeper-side, значение маскируется.
 #
 # ★ source_master fail-soft на пустом source_endpoints: compute-блок резолвится ЦЕЛИКОМ
 # и EAGERLY один раз на прогон (render/compute.go), ДО tasks. Голый [0] на пустом списке
@@ -52,9 +59,12 @@ description: >-
 # assert-guard в sentinel.yml — оператор не понял бы, что инкарнация просто не
 # мигрировалась. guard `size(...) >= 1 ? [0] : ''` отдаёт '' на пустом (compute не
 # падает), а ВНЯТНЫЙ отказ даёт assert-таск sentinel.yml (он ПЕРВЫЙ в ветке, отсекает
-# не-мигрированные инкарнации до probe).
+# не-мигрированные инкарнации до probe). Тот же '' у source_password/source_tls_ca на
+# непрошедшей миграцию инкарнации (ref пуст) — assert-guard всё равно отсечёт её раньше gate.
 compute:
   source_master: "${ size(default(incarnation.state.seeded_from.source_endpoints, [])) >= 1 ? incarnation.state.seeded_from.source_endpoints[0] : '' }"
+  source_password: "${ default(default(incarnation.state.seeded_from, {}).source_password_ref, '') != '' ? vault(incarnation.state.seeded_from.source_password_ref) : '' }"
+  source_tls_ca:   "${ default(default(incarnation.state.seeded_from, {}).source_tls_ca_ref, '') != '' ? vault(incarnation.state.seeded_from.source_tls_ca_ref) : '' }"
   tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
   tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
   tls_ca:   "${ compute.tls_on ? vault(incarnation.state.tls.ca_ref) : '' }"

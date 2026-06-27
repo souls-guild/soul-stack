@@ -10,8 +10,10 @@
 # Что ассертим:
 #   1. ФИНАЛЬНЫЙ offset-gate ПЕРЕД detach (community.redis.offset-synced): source_addr=
 #      внешний источник из state (seeded_from.source_endpoints[0]=10.9.0.1:6379),
-#      lag_threshold=0 (жёстко — detach точка невозврата), source_password='' (учётка
-#      источника на day-2 в state НЕ лежит, ИБ).
+#      lag_threshold=0 (жёстко — detach точка невозврата). ★ source_password='' здесь —
+#      back-compat ветка (v10): у этой инкарнации seeded_from БЕЗ ref-полей (форма до
+#      v10-фикса) → compute.source_password резолвится в '' (источник без AUTH). Кейс с
+#      НЕПУСТЫМ ref (gate аутентифицируется к AUTH-источнику) — sentinel-detach-source-auth.
 #   2. REPLICAOF NO ONE (community.redis.detached): addr локальный, password наш.
 #   3. ★ SPLIT-BRAIN-ФИКС: SENTINEL MONITOR (community.redis.sentinel) ПРИСУТСТВУЕТ — он
 #      ПЕРЕНЕСЁН СЮДА из деплой-тела migrate_cluster (там был placeholder-skip, чтобы не
@@ -72,13 +74,15 @@ assert:
   task_present:
     # ── ФИНАЛЬНЫЙ offset-gate ПЕРЕД detach ──────────────────────────────────────
     # source_addr из state (seeded_from.source_endpoints[0]). lag_threshold=0 (жёстко).
-    # source_password='' (day-2: учётка источника не в state). password — наш локальный.
+    # source_password='' — back-compat (seeded_from без ref-полей → compute.source_password=''
+    # → источник без AUTH). source_tls=false (нет CA-ref). password — наш локальный.
     - module: community.redis.offset-synced
       params_subset:
         addr: "127.0.0.1:6379"
         source_addr: "10.9.0.1:6379"
         password: detach-redis-pass-16ch
         source_password: ""
+        source_tls: false
         lag_threshold: 0
         skip_checksum: false
 
