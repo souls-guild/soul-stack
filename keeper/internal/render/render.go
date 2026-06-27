@@ -17,9 +17,12 @@
 // input-scope, задачи вклеиваются в общий план) + `serial:`/`run_once:`
 // (orchestration.md §2.2: run_once режет таргет до первого хоста по SID,
 // serial вычисляет ширину волны в DispatchPlan — волновой dispatch делает
-// scenario-orchestrator). `include:` раскрывается ДО render (config.ExpandIncludes
-// на loader-слое), render получает плоский список. Ключи block:/loop:/parallel: →
-// [ErrUnsupportedDSL] (явная ошибка, не silent-skip).
+// scenario-orchestrator). `block:` (C1) и `loop:` (E1) реализованы — разворачиваются
+// в render-фазе в плоский список RenderedTask (renderBlockTask / renderLoopTask).
+// `include:` раскрывается ДО render (config.ExpandIncludes на loader-слое), render
+// получает плоский список; нераскрытый include: → [ErrUnexpandedInclude]. Из исходной
+// тройки вне pilot-объёма остаётся только `parallel:` → [ErrUnsupportedDSL] (явная
+// ошибка, не silent-skip).
 //
 // [ADR-010]: docs/adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов
 // [ADR-012]: docs/adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add
@@ -36,10 +39,11 @@ import (
 )
 
 // ErrUnsupportedDSL — scenario использует DSL-конструкцию вне pilot-объёма
-// (block:/loop:/parallel:). Это не ошибка автора scenario, а граница реализации
-// pilot-а: caller отличает «не поддержано в pilot» от «scenario сломан»
+// (в scenario-слое — `parallel:`). Это не ошибка автора scenario, а граница
+// реализации pilot-а: caller отличает «не поддержано в pilot» от «scenario сломан»
 // (симметрично cel.ErrUnsupported). serial:/run_once: больше сюда НЕ входят — они
-// реализованы (slice D). include: сюда НЕ входит — он раскрывается до render
+// реализованы (slice D); block: (C1) и loop: (E1) — тоже реализованы и сюда НЕ
+// входят (renderBlockTask / renderLoopTask). include: сюда НЕ входит — он раскрывается до render
 // (config.ExpandIncludes), см. ErrUnexpandedInclude. on: keeper больше сюда НЕ
 // входит — keeper-side задачи рендерятся в keeper-контексте (см. resolveOn /
 // renderKeeperTask).

@@ -1174,12 +1174,12 @@ WHERE name = $1 AND status = 'applying'
 // в истории отличается от обычного ручного unlock.
 const rerunCreateScenarioLabel = "rerun-create"
 
-// createScenarioLabel — имя bootstrap-сценария `create`. Должна совпадать с
-// scenario.CreateScenarioName (пакет incarnation НЕ импортирует scenario — он
-// нижний слой; держим локальную константу). [UnlockForRerun] сужает scope
-// rerun-create строго до повторного `create`: последний прогон, упавший в
-// error_locked, обязан быть именно create-сценарием — run.go::abort пишет в
-// state_history.scenario имя упавшего сценария, по нему и проверяем.
+// createScenarioLabel — имя дефолтного bootstrap-сценария `create`. Должна
+// совпадать с scenario.CreateScenarioName (пакет incarnation НЕ импортирует
+// scenario — он нижний слой; держим локальную константу). [UnlockForRerun]
+// использует её как back-compat-дефолт, когда incarnation.created_scenario пуст
+// (строка до миграции 089): scope rerun-create сверяется с created_scenario, а не
+// с жёстким `create`.
 const createScenarioLabel = "create"
 
 // UnlockForRerun — unlock-часть rerun-create (architecture.md → «Атомарность и
@@ -1191,19 +1191,23 @@ const createScenarioLabel = "create"
 //
 // Допуск ЖЁСТКО из error_locked: migration_failed / destroy_failed / ready /
 // applying / destroying → [ErrIncarnationNotErrorLocked] (для них — обычный
-// unlock + ручной run; rerun = специализированный rerun bootstrap-а `create`).
+// unlock + ручной run; rerun = специализированный rerun создавшего bootstrap-
+// сценария, см. ниже про scope).
 //
-// Scope=create: дополнительно сужает допуск — последний прогон, упавший в
-// error_locked (последний snapshot state_history), обязан быть `create`. Иной
-// сценарий (например add_user) → [ErrRerunScenarioNotCreate]: rerun-create
-// перезапускает строго bootstrap, не произвольную упавшую операцию.
+// Scope=created-scenario: дополнительно сужает допуск — последний прогон, упавший
+// в error_locked (последний snapshot state_history), обязан быть СОЗДАВШИМ
+// сценарием инкарнации (incarnation.created_scenario, миграция 089 — может быть
+// `create` ИЛИ `create_cluster`/`create_standalone`/… при нескольких bootstrap-
+// сценариях). Иной сценарий (например day-2 add_user, тоже залочивший инкарнацию)
+// → [ErrRerunScenarioNotCreate]: rerun-create перезапускает строго создавший
+// bootstrap, не произвольную упавшую операцию.
 //
-// Caller (handler / MCP-tool) ПОСЛЕ успешного коммита запускает scenario
-// `create` через runner.Start с тем же applyID, что передан сюда: статус уже
-// applying, lockRun стартующего прогона лочит ту же строку и видит applying как
-// валидный стартовый статус (как авто-create в create-handler-е). Передача
-// applyID сюда нужна для записи его в state_history.apply_id — снимок unlock-
-// перехода коррелирует с запускаемым прогоном.
+// Caller (handler / MCP-tool) ПОСЛЕ успешного коммита запускает создавший
+// сценарий (incarnation.created_scenario) через runner.Start с тем же applyID,
+// что передан сюда: статус уже applying, lockRun стартующего прогона лочит ту же
+// строку и видит applying как валидный стартовый статус (как авто-create в
+// create-handler-е). Передача applyID сюда нужна для записи его в
+// state_history.apply_id — снимок unlock-перехода коррелирует с запускаемым прогоном.
 //
 // Атомарность: одна транзакция SELECT … FOR UPDATE → gate error_locked →
 // INSERT state_history → UPDATE status=applying → commit. FOR UPDATE
@@ -1213,7 +1217,8 @@ const createScenarioLabel = "create"
 // Возврат:
 //   - [ErrIncarnationNotFound]       — name не существует (404).
 //   - [ErrIncarnationNotErrorLocked] — статус не error_locked (409).
-//   - [ErrRerunScenarioNotCreate]    — последний упавший сценарий не `create` (409).
+//   - [ErrRerunScenarioNotCreate]    — последний упавший сценарий не совпал с
+//     создавшим (incarnation.created_scenario) (409).
 //
 // reason пишется в audit-payload caller-ом (state_history-схема MVP не несёт
 // metadata-колонки); previous_status возвращается в [UnlockResult].
