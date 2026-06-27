@@ -1,0 +1,169 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║ ОБЩЕЕ ДЕПЛОЙ-ТЕЛО cluster-кластера (service-level include, переиспользуемое)    ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+# Один деплой нового Redis Cluster (honest hash-slot, 16384 слота): per-host install +
+# render redis.conf (с cluster-директивами) / users.acl + systemd + PING-gate +
+# CLUSTER MEET/ADDSLOTS/REPLICATE (плагин community.redis.cluster, action create,
+# run_once на bootstrap-ноде). Лежит на service-level (scenario/<file>), а не внутри
+# одного сценария, и инклудится потребителями по имени файла: scenario-include резолвит
+# `scenario/<name>/<file>`, затем фоллбэкает на `scenario/<file>` (orchestration.md §6,
+# include.go). Симметрично redis-deploy-sentinel.yml — общее тело без дубликата.
+#
+#   Потребители (на 2026-06-27):
+#     - scenario/create/cluster.yml — чистый деплой нового пустого кластера.
+#   (migrate_cluster/cluster.yml — fail-closed заглушка до S4: слот-aware seeding
+#    Redis Cluster требует отдельного дизайна, общее тело пока НЕ инклудит.)
+#
+# ★★ ИНВАРИАНТ ИНКЛУДЯЩЕГО (drift-guard руками — soul-lint cross-file НЕ ловит) ★★
+#   Этот файл ССЫЛАЕТСЯ на compute.<name>, но НЕ объявляет их (compute: — top-level
+#   scenario-блок, один на сценарий, orchestration.md §2.4; объявляется в main.yml
+#   ИНКЛУДЯЩЕГО). Любой сценарий, инклудящий этот файл, ОБЯЗАН объявить в своём
+#   compute: ВЕСЬ набор, который тело читает, С ТОЙ ЖЕ СЕМАНТИКОЙ:
+#       redis_config  conf_dir  data_dir  install  modules_base_url  redis_version
+#       tls_on  tls_only_on  tls_port  tls_cert_ref  tls_key_ref  tls_ca_ref
+#   Также из контекста инклудящего читаются: input.version (опц., package-пин)/
+#   input.users (опц.)/input.replicas_per_master (CLUSTER-BUILD replicas_per_shard),
+#   essence.system_acl_users/sysctl_settings, incarnation.name (Vault-пути),
+#   soulprint.hosts (nodes-MAP). Пропуск/переименование любого compute.<name> в
+#   инклудящем НЕ ловится статически (cross-file дрейф невидим soul-lint) — проявится
+#   падением render. Источник истины набора и семантики — create/main.yml::compute.
+#
+# ★ АНТИ-TILING (граница apply.input vs шаблон .self): host-инвариантные значения
+#   резолвятся run_once / apply.input (resolveApplyInput берёт первый по SID targeted[0]
+#   — для host-инвариантного значения это корректно). Пер-хостовый cluster-announce-ip —
+#   НЕ здесь, его рендерит destiny `redis` в redis.conf.tmpl из .self.network.primary_ip
+#   КАЖДОГО хоста (через apply.input зафиксировался бы IP первой ноды → cluster-bus за
+#   NAT/в облаке сломан). Раскладку ролей master/replica и слотов делает ПЛАГИН
+#   (community.redis.cluster action create) детерминированно по сортировке ключей nodes;
+#   scenario лишь строит топологию-MAP (SID→addr) и зовёт плагин run_once на bootstrap-
+#   ноде — саму трансляцию (деление 16384 на shards) НЕ повторяет, иначе две раскладки
+#   (scenario + плагин) рассинхронятся.
+
+# 1. Per-host install + render redis.conf (с cluster-директивами) + render users.acl +
+#    systemd. Та же destiny `redis` (режим-агностична), что и sentinel, но merged config
+#    ДОПОЛНЕН cluster-директивами поверх базового merge (они — обычные ключи config-map-а,
+#    destiny range-ит их в redis.conf): cluster-enabled yes / cluster-config-file
+#    nodes.conf / cluster-node-timeout (мс). Все три HOST-ИНВАРИАНТНЫ → их корректно гнать
+#    через apply.input.config (резолвится ОДИН раз на первом по SID хосте, targeted[0]).
+#    cluster-announce-ip ЗДЕСЬ НЕТ намеренно: per-host директива (IP ЭТОЙ ноды), её
+#    рендерит destiny `redis` в redis.conf.tmpl из {{ .self.network.primary_ip }} под
+#    гейтом cluster-enabled. compute.redis_config host-инвариантен → apply.input.
+- name: Apply redis destiny (cluster install + render redis.conf/users.acl + systemd)
+  apply:
+    destiny: redis
+    input:
+      # version: distro-пин (package). При binary version в state из essence.binary_version
+      # (compute.redis_version); destiny не ставит distro-пакет → has()-guard ''.
+      version:  "${ has(input.version) ? input.version : '' }"
+      # install: способ установки {method, base_url, version} — compute.install из
+      # install_method + essence.binary_* (#1). as-is в destiny-диспетчер install.yml.
+      install:  "${ compute.install }"
+      # conf_dir/data_dir: host-layout из essence (#2). compute.conf_dir/data_dir
+      # (default = текущий путь, back-compat). HOST-ИНВАРИАНТ → apply.input.
+      conf_dir: "${ compute.conf_dir }"
+      data_dir: "${ compute.data_dir }"
+      password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+      # Единый compute.redis_config (объявлен ОДИН раз в main.yml инклудящего, ADR-009):
+      # тот же map, что уйдёт в state_changes.redis_config — drift «state ≡ live config»
+      # снят самим compute. Для cluster = базовый merge + cluster-директивы (cluster-
+      # enabled/config-file/node-timeout) + tls-cluster yes при TLS. HOST-ИНВАРИАНТ →
+      # apply.input на targeted[0] корректен.
+      config: "${ compute.redis_config }"
+      # ★ СИСТЕМНЫЕ + operator-extra (system-ACL-users, дизайн d2 Вариант A): служебные
+      # replica/monitoring/sentinel/haproxy из essence.system_acl_users ПЕРВЫМИ,
+      # operator-extra (input.users — МАССИВ AclUser, wave 1b) ПОВЕРХ (last-wins).
+      # default — в requirepass redis.conf, не здесь. Без системных репликация (replica) и
+      # health-check сломаются. Vault-пароль — secret/redis/<inc>/users/<name>#password.
+      # operator-extra: .map(u, {u.name: …}) (имя из поля u.name). Обе .map дают СПИСОК
+      # одноключевых map-ов, merge(list-of-maps) сворачивает их в один map (templating
+      # §2.3); порядок аргументов = приоритет.
+      users: >-
+        ${ merge(
+             merge(default(essence.system_acl_users, {}).map(name, {
+               name: {
+                 'perms':    essence.system_acl_users[name],
+                 'state':    'on',
+                 'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+               }
+             })),
+             has(input.users)
+               ? merge(input.users.map(u, {
+                   u.name: {
+                     'perms':    u.perms,
+                     'state':    u.state,
+                     'password': vault('secret/redis/' + incarnation.name + '/users/' + u.name + '#password')
+                   }
+                 }))
+               : {}
+           ) }
+      # Redis-модули — НАБОР больше НЕ передаётся (директива «модули ВСЕГДА ВСЕ»): destiny
+      # разворачивает полный набор из vars.redis_modules сама, version-guard Redis 8+ тоже
+      # в destiny. scenario отдаёт только источник .so (compute.modules_base_url из essence),
+      # host-инвариант → apply.input; арх-URL строит destiny per-host, .so качаются по
+      # content-идемпотентности (без verify).
+      modules_base_url: "${ compute.modules_base_url }"
+      # Host-tuning extras (концепция роли), режим-агностичны. THP/logrotate/sysctl
+      # БЕЗУСЛОВНЫ (рекомендация Redis / hardening) — операторских флагов нет, задачи
+      # destiny `redis` всегда активны. sysctl_settings — essence, host-инвариант → apply.input.
+      sysctl_settings:  "${ default(essence.sysctl_settings, {}) }"
+      # TLS — единый dict (enable/only/port + cert_ref/key_ref/ca_ref). HOST-ИНВАРИАНТ →
+      # apply.input. enable/only/port — compute-vars (2 галочки tls_enabled/tls_keep_plain
+      # + порт из essence, #5). cert_ref/key_ref/ca_ref — Vault-ПУТИ (destiny читает PEM
+      # через vault() в ячейке content, seal-маскинг); refs — только из essence.tls_*_ref.
+      tls:
+        enable:   "${ compute.tls_on }"
+        only:     "${ compute.tls_only_on }"
+        port:     "${ compute.tls_port }"
+        cert_ref: "${ compute.tls_cert_ref }"
+        key_ref:  "${ compute.tls_key_ref }"
+        ca_ref:   "${ compute.tls_ca_ref }"
+
+# 2. Health-gate per-host: PING живого Redis после старта (каждая нода обязана ответить ДО
+#    сборки кластера). community.redis.command, retry/until через retry. addr — localhost
+#    (плагин на redis-хосте), пароль — keeper-side vault()-резолв.
+#    ★ ИБ (anti-downgrade): tls/tls_ca/порт гейтятся на compute.tls_on (TLS ВКЛЮЧЁН), НЕ
+#    tls_only (TLS включён → плагин ОБЯЗАН по TLS; при tls_only_on=false plain ещё открыт,
+#    но AUTH-пароль по plaintext недопустим). addr на compute.tls_port + tls_ca (CA-PEM,
+#    vault(ref) в scenario-проходе, seal vault-слоем).
+- name: Wait for each cluster node to answer PING
+  module: community.redis.command
+  retry: { count: 10, delay: 3s }
+  params:
+    addr:     "${ compute.tls_on ? '127.0.0.1:' + string(compute.tls_port) : '127.0.0.1:6379' }"
+    password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    tls:      "${ compute.tls_on }"
+    tls_ca:   "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
+    args:     ["PING"]
+
+# 3. CLUSTER-BUILD — run_once на bootstrap-ноде. Строим nodes-MAP детерминированно из
+#    roster-а прогона (soulprint.hosts): ключ = SID (стабилен и сортируем → плагин
+#    раскладывает master/replica по сортировке ключей детерминированно), значение =
+#    {addr: "<primary_ip>:6379"}. Форма merge(list(map)): .map(...) даёт СПИСОК
+#    одноключевых map-ов SID→{addr}, merge сворачивает в один map (templating §2.3).
+#    Плагин community.redis.cluster (action create) сам шлёт CLUSTER MEET/ADDSLOTS/
+#    REPLICATE по go-redis и делит 16384 слота — scenario топологию НЕ транслирует,
+#    передаёт готовую. Пароль — keeper-side vault()-резолв (плагин коннектится к каждой
+#    ноде; password маскируется, в логи не течёт).
+#    ★ ИБ (anti-downgrade): tls/tls_ca/порт nodes гейтятся на compute.tls_on (TLS
+#    ВКЛЮЧЁН), НЕ tls_only — TLS включён → плагин ОБЯЗАН коннектиться к нодам по TLS
+#    (иначе AUTH-пароль к каждой ноде ушёл бы plaintext-ом). addr-ы строятся на
+#    compute.tls_port, передаём tls=true + tls_ca (CA-PEM для verify).
+#    ★ mTLS cluster-bus: при включённом tls-cluster (взаимная аутентификация нод) плагину
+#    нужен КЛИЕНТСКИЙ cert — пробрасываем tls_cert/tls_key (vault(ref) тех же путей, что в
+#    redis.conf: compute.tls_cert_ref/tls_key_ref). Плагин строит mTLS-пару ТОЛЬКО когда
+#    заданы ОБА (tls.go: certPEM+keyPEM); без mutual-bus они не мешают handshake.
+#    cert/key host-инвариантны → apply.input корректен.
+- name: Build the redis cluster (CLUSTER MEET/ADDSLOTS/REPLICATE)
+  run_once: true
+  module: community.redis.cluster
+  params:
+    action:             create
+    nodes:              "${ merge(soulprint.hosts.map(h, { h.sid: { 'addr': h.network.primary_ip + ':' + (compute.tls_on ? string(compute.tls_port) : '6379') } })) }"
+    # plugin-param `replicas_per_shard` — КОНТРАКТ community.redis.cluster (не меняем),
+    # источник → unified input.replicas_per_master (реплик на каждый шард).
+    replicas_per_shard: "${ int(input.replicas_per_master) }"
+    password:           "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    tls:                "${ compute.tls_on }"
+    tls_ca:             "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
+    tls_cert:           "${ compute.tls_on ? vault(compute.tls_cert_ref) : '' }"
+    tls_key:            "${ compute.tls_on ? vault(compute.tls_key_ref) : '' }"
