@@ -446,6 +446,161 @@ func TestApplyForgetExternal_ForgetsAllOldOnEachNode(t *testing.T) {
 	}
 }
 
+// TestApplyForgetExternal_SharedTopologyNoSelfForget — ★пост-join реальность:
+// после join-external + failover-takeover новые ноды — члены ТОГО ЖЕ кластера, и
+// CLUSTER NODES старого seed перечисляет И старые, И новые ноды (по их РЕАЛЬНЫМ
+// id). forget-external обязан забыть ТОЛЬКО старые id и НИ ОДНА новая нода не должна
+// получить CLUSTER FORGET своего собственного id (Redis: "can't forget myself" —
+// hard-fail). Изолированная old-cluster-фикстура прячет этот баг; здесь топология
+// общая.
+func TestApplyForgetExternal_SharedTopologyNoSelfForget(t *testing.T) {
+	new0, new1 := "10.1.0.1:6379", "10.1.0.2:6379"
+	seed := "10.0.0.1:6379"
+	fl := newFleet(new0, new1, seed)
+
+	// SHARED-топология: старые мастера/реплика отдали слоты новым (после failover),
+	// старые — пустые мастера; новые ноды (n0/n1) — члены кластера с РЕАЛЬНЫМИ id.
+	// clusterNodesParam даёт ключи node-0/node-1, но id в топологии — собственные у
+	// каждой ноды (как реальный CLUSTER NODES).
+	const n0ID, n1ID = "newid0", "newid1"
+	fl.byAddr[seed].nodes = strings.Join([]string{
+		masterRowNoSlots("oldm0", "10.0.0.1:6379"), // старый мастер, слоты ушли
+		masterRowNoSlots("oldm1", "10.0.0.2:6379"),
+		replicaRow("oldr0", "10.0.0.4:6379", "oldm0"),
+		masterRowWithSlots(n0ID, new0, 0, 8191), // новая нода — теперь master СО слотами
+		masterRowWithSlots(n1ID, new1, 8192, 16383),
+	}, "\n")
+
+	m := fl.module()
+	stream := &applyStream{}
+	err := m.Apply(&pluginv1.ApplyRequest{
+		State: "cluster",
+		Params: mustStruct(t, map[string]any{
+			"action":       "forget-external",
+			"password":     secretPass,
+			"nodes":        clusterNodesParam(new0, new1),
+			"source_nodes": []any{seed},
+		}),
+	}, stream)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	fin := stream.final()
+	if fin == nil || fin.Failed {
+		t.Fatalf("ждали успех (self-forget исключён), got %+v", fin)
+	}
+	if !fin.Changed {
+		t.Error("ждали changed=true (старые забыты)")
+	}
+
+	// ★КРИТ: ни одна новая нода не форгетит СВОЙ id (и id соседней новой ноды).
+	for _, addr := range []string{new0, new1} {
+		for _, selfish := range []string{n0ID, n1ID} {
+			if hasClusterForget(fl.byAddr[addr], selfish) {
+				t.Errorf("узел %s форгетит НОВУЮ ноду %s (self-forget / forget-peer): %v",
+					addr, selfish, clusterForgetTargets(fl.byAddr[addr]))
+			}
+		}
+	}
+	// Каждая новая нода забыла ровно старые id (3 старых).
+	for _, addr := range []string{new0, new1} {
+		for _, oldID := range []string{"oldm0", "oldm1", "oldr0"} {
+			if !hasClusterForget(fl.byAddr[addr], oldID) {
+				t.Errorf("узел %s: ждали CLUSTER FORGET старого %s", addr, oldID)
+			}
+		}
+	}
+	// oldIDs = 3 (новые отфильтрованы из топологии seed), forgotten = 2 узла × 3.
+	if got := fin.GetOutput().GetFields()["old_nodes"].GetNumberValue(); got != 3 {
+		t.Errorf("old_nodes=%v, ждали 3 (новые ноды отфильтрованы)", got)
+	}
+	if got := fin.GetOutput().GetFields()["forgotten"].GetNumberValue(); got != 6 {
+		t.Errorf("forgotten=%v, ждали 6 (2 узла × 3 старых)", got)
+	}
+
+	assertEventsNoSecret(t, stream)
+	for addr, c := range fl.byAddr {
+		assertNoClusterSecret(t, addr, c)
+	}
+}
+
+// TestApplyForgetExternal_CantForgetSelfSwallowed — defense-in-depth: даже если
+// id новой ноды просочился в oldIDs (gossip-гонка между фильтром и FORGET, ip-форма
+// разошлась), Redis-ответ "I can't forget myself" глотается как идемпотентность —
+// прогон НЕ падает.
+func TestApplyForgetExternal_CantForgetSelfSwallowed(t *testing.T) {
+	new0 := "10.1.0.1:6379"
+	seed := "10.0.0.1:6379"
+	fl := newFleet(new0, seed)
+	fl.byAddr[seed].nodes = strings.Join([]string{
+		masterRowWithSlots("oldm0", "10.0.0.2:6379", 0, 16383),
+	}, "\n")
+	// Нода на FORGET отвечает "can't forget myself" (как если бы id был её собственный).
+	fl.byAddr[new0].forgetErr = errors.New("ERR I tried hard but I can't forget myself...")
+
+	m := fl.module()
+	stream := &applyStream{}
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State: "cluster",
+		Params: mustStruct(t, map[string]any{
+			"action":       "forget-external",
+			"nodes":        clusterNodesParam(new0),
+			"source_nodes": []any{seed},
+		}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	fin := stream.final()
+	if fin == nil || fin.Failed {
+		t.Fatalf("ждали успех (can't-forget-myself проглочен), got %+v", fin)
+	}
+	if got := fin.GetOutput().GetFields()["forgotten"].GetNumberValue(); got != 0 {
+		t.Errorf("forgotten=%v, ждали 0 (self-forget проглочен)", got)
+	}
+}
+
+// TestApplyForgetExternal_OnlyNewNodesLeftNoOp — старых в топологии seed уже не
+// осталось (все забыты предыдущим apply), seed перечисляет ТОЛЬКО новые ноды:
+// oldIDs пуст → changed=false, ни одного FORGET (steady-state no-op, не ошибка).
+func TestApplyForgetExternal_OnlyNewNodesLeftNoOp(t *testing.T) {
+	new0, new1 := "10.1.0.1:6379", "10.1.0.2:6379"
+	seed := new0 // seed теперь сама новая нода (старые погашены, оператор дал новый seed)
+	fl := newFleet(new0, new1)
+	fl.byAddr[new0].nodes = strings.Join([]string{
+		masterRowWithSlots("newid0", new0, 0, 8191),
+		masterRowWithSlots("newid1", new1, 8192, 16383),
+	}, "\n")
+
+	m := fl.module()
+	stream := &applyStream{}
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State: "cluster",
+		Params: mustStruct(t, map[string]any{
+			"action":       "forget-external",
+			"nodes":        clusterNodesParam(new0, new1),
+			"source_nodes": []any{seed},
+		}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	fin := stream.final()
+	if fin == nil || fin.Failed {
+		t.Fatalf("ждали успех (no-op), got %+v", fin)
+	}
+	if fin.Changed {
+		t.Error("ждали changed=false: старых не осталось (steady-state no-op)")
+	}
+	for _, addr := range []string{new0, new1} {
+		if len(clusterForgetTargets(fl.byAddr[addr])) != 0 {
+			t.Errorf("узел %s: ни одного FORGET не ждали (старых нет): %v", addr, clusterForgetTargets(fl.byAddr[addr]))
+		}
+	}
+	if got := fin.GetOutput().GetFields()["old_nodes"].GetNumberValue(); got != 0 {
+		t.Errorf("old_nodes=%v, ждали 0", got)
+	}
+}
+
 // TestApplyForgetExternal_NoSlotMigration — forget-external НЕ мигрирует слоты
 // (в отличие от remove-node): слоты уже у новых мастеров после failover. Ни
 // SETSLOT, ни MIGRATE.

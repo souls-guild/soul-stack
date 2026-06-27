@@ -546,14 +546,17 @@ func validateClusterForgetExternal(f map[string]*structpb.Value) []string {
 // FORGET на каждой новой ноде (day-2 migration step 3, после failover-takeover):
 //
 //  1. коннект к source_nodes (старые seed, перебор по порядку) → CLUSTER NODES →
-//     ВСЕ node-id старого кластера (мастера И реплики — выкидываем всех);
+//     node-id СТАРОГО кластера (мастера И реплики — выкидываем всех). ★Строки новых
+//     нод (по ip:port из nodes-map) ОТФИЛЬТРОВАНЫ: пост-join они в той же топологии,
+//     их id → self-forget;
 //  2. на КАЖДОЙ новой ноде: CLUSTER FORGET <old-id> для каждого старого id.
 //
 // ★БЕЗ миграции слотов (в отличие от remove-node): слоты УЖЕ у новых мастеров
 // после failover-takeover, старые мастера их лишились. Идемпотентно: старый id
-// уже неизвестен ноде → FORGET вернёт "Unknown node", глотаем (no-op). Старые
-// seed уже недоступны (выключены) → коннект к ним фейлит: тогда забывать нечего,
-// но это не идемпотентный путь (мы не знаем id) → ОШИБКА с понятным текстом.
+// уже неизвестен ноде → FORGET вернёт "Unknown node", глотаем (no-op); старых в
+// топологии seed уже не осталось (все забыты) → пустой oldIDs, changed=false. Все
+// старые seed недоступны (кластер уже погашен, id взять неоткуда) → ОШИБКА с
+// понятным текстом (мы не знаем, что забывать — не идемпотентный путь).
 //
 // Финальный Output несёт число забытых старых узлов и число новых нод, на которых
 // FORGET исполнен. Пароль НЕ попадает в события (ИБ ADR-010).
@@ -581,7 +584,12 @@ func (m *RedisModule) applyClusterForgetExternal(ctx context.Context, stream grp
 	}
 
 	// node-id старого кластера с первой доступной source-seed (как join-external).
-	oldIDs, seedEndpoint, err := sourceNodeIDs(ctx, connect, sources)
+	// ★ИСКЛЮЧАЕМ новые ноды: после join-external + failover-takeover новые ноды —
+	// члены ТОГО ЖЕ кластера, и CLUSTER NODES старого seed перечисляет их тоже. Без
+	// фильтра их id попали бы в oldIDs → нода форгетила бы СЕБЯ (Redis: "I can't
+	// forget myself" — это НЕ "unknown node", hard-fail). Фильтр — по ip:port из
+	// nodes-map (надёжнее, чем CLUSTER MYID на каждой ноде: один проход топологии).
+	oldIDs, seedEndpoint, err := sourceNodeIDs(ctx, connect, sources, newNodes)
 	if err != nil {
 		return sendFailure(stream, redactError(err, password))
 	}
@@ -609,13 +617,23 @@ func (m *RedisModule) applyClusterForgetExternal(ctx context.Context, stream grp
 }
 
 // sourceNodeIDs коннектится к source-seed-ам по порядку, берёт CLUSTER NODES с
-// первой ответившей и возвращает ВСЕ её node-id (мастера И реплики старого
-// кластера — забываем всех), детерминированно отсортированные. Возвращает также
-// endpoint сработавшего seed-а (для Output). Все seed-ы недоступны → ошибка.
+// первой ответившей и возвращает node-id СТАРОГО кластера (мастера И реплики —
+// забываем всех), детерминированно отсортированные. Возвращает также endpoint
+// сработавшего seed-а (для Output). Все seed-ы недоступны → ошибка.
+//
+// ★ Узлы, чей ip:port совпадает с newNodes, ИСКЛЮЧАЮТСЯ: после join-external +
+// failover-takeover новые ноды — члены того же кластера и попадают в CLUSTER NODES
+// старого seed; их id в oldIDs привёл бы к self-forget ("can't forget myself").
 //
 // Отличие от sourceMasters: тот берёт только мастеров со слотами (для маппинга
-// репликации), здесь нужны ВСЕ узлы (forget выкидывает целиком старый кластер).
-func sourceNodeIDs(ctx context.Context, connect func(clusterNode) (redisConn, error), seeds []clusterNode) ([]string, string, error) {
+// репликации), здесь нужны ВСЕ старые узлы (forget выкидывает целиком старый кластер).
+func sourceNodeIDs(ctx context.Context, connect func(clusterNode) (redisConn, error), seeds, newNodes []clusterNode) ([]string, string, error) {
+	// Set ip:port новых нод — их строки в топологии старого seed отбрасываем.
+	newEndpoints := make(map[string]struct{}, len(newNodes))
+	for _, n := range newNodes {
+		newEndpoints[net.JoinHostPort(n.ip, strconv.Itoa(n.port))] = struct{}{}
+	}
+
 	var lastErr error
 	for _, seed := range seeds {
 		conn, err := connect(seed)
@@ -630,16 +648,26 @@ func sourceNodeIDs(ctx context.Context, connect func(clusterNode) (redisConn, er
 			continue
 		}
 
-		var ids []string
-		for _, row := range parseClusterNodesTable(topology) {
-			if row.id != "" {
-				ids = append(ids, row.id)
-			}
-		}
-		if len(ids) == 0 {
+		rows := parseClusterNodesTable(topology)
+		if len(rows) == 0 {
+			// Битый/пустой ответ seed (ни одной строки) — пробуем следующий seed.
 			lastErr = fmt.Errorf("source seed %s: no nodes in CLUSTER NODES", seed.addr)
 			continue
 		}
+		var ids []string
+		for _, row := range rows {
+			if row.id == "" {
+				continue
+			}
+			if _, isNew := newEndpoints[row.ipPort]; isNew {
+				continue // новая нода (уже в кластере) — не забываем (иначе self-forget)
+			}
+			ids = append(ids, row.id)
+		}
+		// ids может быть пустым, если все строки топологии — новые ноды (старые уже
+		// забыты/выключены): забывать нечего — идемпотентный no-op (caller вернёт
+		// changed=false), а НЕ ошибка. Сюда мы дошли с непустой топологией (битый
+		// seed отсеян выше), поэтому пустой ids — это steady-state, а не сбой seed.
 		sort.Strings(ids) // детерминированный порядок FORGET (стабильный вывод/asserts)
 		return ids, net.JoinHostPort(seed.ip, strconv.Itoa(seed.port)), nil
 	}
@@ -650,10 +678,12 @@ func sourceNodeIDs(ctx context.Context, connect func(clusterNode) (redisConn, er
 }
 
 // forgetIDsOnNode исполняет CLUSTER FORGET <old-id> на одной новой ноде для каждого
-// старого id. Возвращает число реально забытых (где FORGET не вернул "Unknown
-// node"). "Unknown node" → нода уже забыла этот id (идемпотентность), глотаем.
-// Самозабывание исключено: id берутся из СТАРОГО кластера, новый узел сам туда не
-// входит (но даже если бы — FORGET своего id Redis отвергает, это не наш случай).
+// старого id. Возвращает число реально забытых. Два класса ошибок глотаются как
+// идемпотентность: "Unknown node" (нода уже забыла этот id — gossip-anti-entropy /
+// повторный apply) и "can't forget myself" (id оказался самой ноды — defense-in-
+// depth: oldIDs уже отфильтрован по ip:port в sourceNodeIDs, но gossip мог добавить
+// новую ноду в seed-топологию ПОСЛЕ фильтра, ip-форма могла разойтись — глотаем,
+// чтобы не падать на безопасном no-op).
 func forgetIDsOnNode(ctx context.Context, connect func(clusterNode) (redisConn, error), node clusterNode, oldIDs []string) (int, error) {
 	conn, err := connect(node)
 	if err != nil {
@@ -665,10 +695,9 @@ func forgetIDsOnNode(ctx context.Context, connect func(clusterNode) (redisConn, 
 	for _, id := range oldIDs {
 		_, err := conn.Do(ctx, "CLUSTER", "FORGET", id)
 		if err != nil {
-			// Нода уже забыла старого (gossip-anti-entropy / повторный apply) →
-			// "Unknown node": не ошибка, идём дальше (идемпотентность, как
-			// forgetOnRemaining в remove-node).
-			if isUnknownNodeErr(err) {
+			// Идемпотентность: нода уже забыла старого ("Unknown node") либо id — она
+			// сама ("can't forget myself", пост-join gossip-гонка). Не ошибка, дальше.
+			if isUnknownNodeErr(err) || isCantForgetSelfErr(err) {
 				continue
 			}
 			return done, fmt.Errorf("CLUSTER FORGET %s on %s: %w", id, node.addr, err)
@@ -676,4 +705,11 @@ func forgetIDsOnNode(ctx context.Context, connect func(clusterNode) (redisConn, 
 		done++
 	}
 	return done, nil
+}
+
+// isCantForgetSelfErr — CLUSTER FORGET по собственному node-id → Redis отвечает
+// "ERR I tried hard but I can't forget myself...". Пост-join новая нода — член того
+// же кластера; sourceNodeIDs её отфильтровывает, но на gossip-гонку глотаем и здесь.
+func isCantForgetSelfErr(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "can't forget myself")
 }
