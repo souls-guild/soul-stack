@@ -322,6 +322,13 @@ input:
           Верхняя граница ожидания онбординга созданных VM (барьер await_online,
           ADR-061; форма <N>{s|m|h}). Не задан → essence.provision_await_timeout (дефолт
           10m). Ограничен сверху keeper.yml::max_await_timeout.
+      ssh_provider:
+        type: string
+        description: >-
+          Имя SshProvider-плагина (keeper.yml::plugins.ssh_providers[].name) для
+          доставки per-VM bootstrap-токена по SSH (core.bootstrap.delivered, ADR-063).
+          Не задан / enabled=false → шаг доставки таргетит как placeholder (provision
+          выключен).
 
   # ── Redis-модули (концепция Ansible-роли redis: redis_module_*) ──────────────
   # ★ ДИРЕКТИВА «модули ВСЕГДА ВСЕ» (2026-06-25): НАБОР модулей больше НЕ operator-

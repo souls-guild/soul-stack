@@ -288,6 +288,14 @@ const (
 	// `created`/`destroyed`. Cloud-credentials не кладутся.
 	EventCloudProvisioned EventType = "cloud.provisioned"
 
+	// EventBootstrapDelivered — keeper-side core-модуль `core.bootstrap.delivered`
+	// (ADR-063) доставил per-VM bootstrap-токен по SSH на свежесозданные
+	// cloud-init-VM. `source: keeper_internal`, `archon_aid: NULL`. Payload:
+	// `{action: "delivered", ssh_provider, count, sids}` — БЕЗ токенов (сам
+	// plain-токен виден только в register предыдущего шага `core.cloud.created`
+	// и маскируется на всех его выходах; сюда не попадает).
+	EventBootstrapDelivered EventType = "bootstrap.delivered"
+
 	// EventApplyDispatched — Keeper отправил `ApplyRequest` Soul-у через
 	// EventStream (M2.5, outbound direction). `source: soul_grpc`,
 	// `archon_aid: NULL`, `correlation_id = apply_id`. Payload:

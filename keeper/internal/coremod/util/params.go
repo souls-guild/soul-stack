@@ -103,6 +103,22 @@ func StringOrSliceParam(params *structpb.Struct, key string) ([]string, error) {
 	}
 }
 
+// ListParam — обязательный список произвольных Value (для `hosts`
+// list-of-objects `core.bootstrap.delivered`). Возвращает сырые элементы;
+// разбор каждого (тип/поля) — на caller-е. Пустой список валиден на уровне
+// accessor-а (семантику «нечего обрабатывать» решает caller).
+func ListParam(params *structpb.Struct, key string) ([]*structpb.Value, error) {
+	v, err := lookup(params, key)
+	if err != nil {
+		return nil, err
+	}
+	lv, ok := v.Kind.(*structpb.Value_ListValue)
+	if !ok {
+		return nil, fmt.Errorf("param %q: expected list, got %T", key, v.Kind)
+	}
+	return lv.ListValue.Values, nil
+}
+
 // OptStringSliceParam — опциональный список строк (для cloud `fields`,
 // `vm_ids` и т.п.). nil если ключа нет.
 func OptStringSliceParam(params *structpb.Struct, key string) ([]string, error) {

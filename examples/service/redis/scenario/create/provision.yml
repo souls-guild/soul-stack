@@ -6,7 +6,7 @@
 # раскрывается в плоский список.
 #
 # Поток (целевой сценарий ADR-061): (а) core.cloud.created создаёт VM под топологию;
-# (б) keeper.push доставляет per-VM bootstrap-токен (иллюстративный шаг); (в)
+# (б) core.bootstrap.delivered доставляет per-VM bootstrap-токен по SSH (ADR-063); (в)
 # core.soul.registered регистрирует созданные SID, БЛОКИРУЮЩЕ ждёт онбординга
 # (await_online) и помечает шаг refresh_soulprint → scenario-runner пере-резолвит roster
 # ПЕРЕД cluster/sentinel-веткой (live-снимок online-набора). Без этого cluster/sentinel
@@ -41,15 +41,21 @@
     count: "${ (input.redis_type == 'cluster') ? int(input.shards) * (1 + int(input.replicas_per_master)) : 1 + int(input.replicas_per_master) }"
     generate_userdata: true
 
-# (б) Доставка per-VM bootstrap-токена по SSH (иллюстративный шаг, как в
-#     example-cloud-bootstrap — render-only). Берёт hosts из register предыдущего шага;
-#     реальный контракт модуля доставки — docs/keeper/push.md. require: provision —
-#     токены приходят из его register.
+# (б) Доставка per-VM bootstrap-токена по SSH (on: keeper, core.bootstrap.delivered,
+#     ADR-063). Берёт hosts из register предыдущего шага (каждый — {sid, primary_ip,
+#     bootstrap_token}); кладёт ТОЛЬКО токен (cloud-init B-flat уже поставил soul-бинарь+
+#     CA+unit) в /etc/soul/token (umask 077, 0400, ★токен в STDIN не в argv) и запускает
+#     soul (start_soul default true). ssh_provider — имя SshProvider-плагина для
+#     SSH-аутентификации. Ошибка любого хоста → шаг failed (B1-strict) → state не
+#     коммитится → error_locked. require: provision — токены приходят из его register.
+#     ★ C1 (required-для-live, след. слайс): cloud-init должен класть CA-signed host-key,
+#     иначе Dial реджектит host-cert свежей VM.
 - name: Deliver per-VM bootstrap token over SSH
   on: keeper
-  module: keeper.push.applied
+  module: core.bootstrap.delivered
   params:
-    hosts: "${ register.provision.hosts }"
+    hosts:        "${ register.provision.hosts }"
+    ssh_provider: "${ input.provision.ssh_provider }"
   require:
     - provision
 

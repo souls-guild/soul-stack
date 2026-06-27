@@ -74,18 +74,21 @@ fixtures:
       provider: wb-dev
       profile: redis-small
       await_timeout: "5m"
+      ssh_provider: ssh-wb
 
 # register.provision — готовый payload core.cloud.created (L0-проброс). 4 VM под
-# cluster-топологию (2 шарда * 2). sid-ы = SID-ы roster-а.
+# cluster-топологию (2 шарда * 2). sid-ы = SID-ы roster-а. bootstrap_token — per-VM
+# one-time (в проде маскируется audit.MaskSecrets на всех выходах; здесь нужен, т.к.
+# core.bootstrap.delivered шаг (б) читает register.provision.hosts[].bootstrap_token).
 mocks:
   register:
     provision:
       vm_ids: [i-aaa111, i-bbb222, i-ccc333, i-ddd444]
       hosts:
-        - { sid: vm-1.example.com, vm_id: i-aaa111, primary_ip: 10.0.0.1 }
-        - { sid: vm-2.example.com, vm_id: i-bbb222, primary_ip: 10.0.0.2 }
-        - { sid: vm-3.example.com, vm_id: i-ccc333, primary_ip: 10.0.0.3 }
-        - { sid: vm-4.example.com, vm_id: i-ddd444, primary_ip: 10.0.0.4 }
+        - { sid: vm-1.example.com, vm_id: i-aaa111, primary_ip: 10.0.0.1, bootstrap_token: tok-vm1 }
+        - { sid: vm-2.example.com, vm_id: i-bbb222, primary_ip: 10.0.0.2, bootstrap_token: tok-vm2 }
+        - { sid: vm-3.example.com, vm_id: i-ccc333, primary_ip: 10.0.0.3, bootstrap_token: tok-vm3 }
+        - { sid: vm-4.example.com, vm_id: i-ddd444, primary_ip: 10.0.0.4, bootstrap_token: tok-vm4 }
 
 assert:
   task_present:
@@ -97,19 +100,21 @@ assert:
         count: 4
         generate_userdata: true
 
-    # (б) keeper.push.applied: доставка per-VM bootstrap-токена (EXPERIMENTAL,
-    # provision.yml шаг (б)). Guard на ПРИСУТСТВИЕ шага доставки токена + форму
-    # hosts: ${ register.provision.hosts } (весь payload register, 4 VM). При смене
-    # контракта доставки (имя модуля / форма hosts) этот ассерт упадёт — без него
-    # регресс прошёл бы молча (шаг не сверялся ни одним provision-тестом). Единственный
-    # keeper.push.applied в плане → дизамбигуатор не нужен.
-    - module: keeper.push.applied
+    # (б) core.bootstrap.delivered: доставка per-VM bootstrap-токена по SSH (ADR-063,
+    # provision.yml шаг (б)). Guard на ПРИСУТСТВИЕ шага доставки токена + форму hosts:
+    # ${ register.provision.hosts } (весь payload register, 4 VM с bootstrap_token) +
+    # ssh_provider из input.provision. При смене контракта доставки (имя модуля / форма
+    # hosts / ssh_provider) этот ассерт упадёт — без него регресс прошёл бы молча (шаг
+    # не сверялся ни одним provision-тестом). Единственный core.bootstrap.delivered в
+    # плане → дизамбигуатор не нужен.
+    - module: core.bootstrap.delivered
       params_subset:
+        ssh_provider: ssh-wb
         hosts:
-          - { sid: vm-1.example.com, vm_id: i-aaa111, primary_ip: 10.0.0.1 }
-          - { sid: vm-2.example.com, vm_id: i-bbb222, primary_ip: 10.0.0.2 }
-          - { sid: vm-3.example.com, vm_id: i-ccc333, primary_ip: 10.0.0.3 }
-          - { sid: vm-4.example.com, vm_id: i-ddd444, primary_ip: 10.0.0.4 }
+          - { sid: vm-1.example.com, vm_id: i-aaa111, primary_ip: 10.0.0.1, bootstrap_token: tok-vm1 }
+          - { sid: vm-2.example.com, vm_id: i-bbb222, primary_ip: 10.0.0.2, bootstrap_token: tok-vm2 }
+          - { sid: vm-3.example.com, vm_id: i-ccc333, primary_ip: 10.0.0.3, bootstrap_token: tok-vm3 }
+          - { sid: vm-4.example.com, vm_id: i-ddd444, primary_ip: 10.0.0.4, bootstrap_token: tok-vm4 }
 
     # (в) core.soul.registered: sid — список SID созданных VM; await_online +
     # refresh_soulprint; await_timeout из input.provision (5m, перекрывает essence-дефолт).

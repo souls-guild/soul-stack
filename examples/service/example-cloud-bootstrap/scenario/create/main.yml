@@ -6,11 +6,13 @@ description: >-
     1. provision  — core.cloud.created (generate_userdata)
                     Создаёт `count` VM, выписывает per-VM bootstrap-токены,
                     кладёт в register.provision.hosts[].bootstrap_token.
-    2. push_token — keeper.push доставка per-VM-токена по SSH (через soul-ssh-*).
-                    Берёт токен из register предыдущего шага.
+    2. deliver    — core.bootstrap.delivered (ADR-063) доставка per-VM-токена по
+                    SSH (через soul-ssh-*). Берёт {sid, primary_ip, bootstrap_token}
+                    из register предыдущего шага; кладёт ТОЛЬКО токен (cloud-init
+                    B-flat уже поставил soul-бинарь+CA+unit) + systemctl start soul.
 
-  Зависимость: scenario/2 нужен SSH-доступ к VM (root@public_ip, ключ из Vault).
-  Configure keeper.yml::push.targets (или souls.ssh_target в PG) до запуска.
+  Зависимость: scenario/2 нужен SSH-доступ к VM (root@primary_ip) — SshProvider-плагин
+  (input.ssh_provider) + CA-signed host-cert (keeper.yml::push.host_ca_refs[]).
 
 input:
   provider:
@@ -25,6 +27,12 @@ input:
     type: integer
     required: false
     description: Количество VM в батче (default 1).
+  ssh_provider:
+    type: string
+    required: true
+    description: >-
+      Имя SshProvider-плагина (keeper.yml::plugins.ssh_providers[].name) для
+      доставки bootstrap-токена по SSH (шаг 2, core.bootstrap.delivered).
 
 tasks:
   # Шаг 1: создаём count VM через CloudDriver. Адрес core.cloud.created несёт
@@ -43,14 +51,18 @@ tasks:
       generate_userdata: true
     register: provision
 
-  # Шаг 2: доставка per-VM bootstrap-токена на каждую созданную VM по SSH.
-  # Реальный имя/контракт модуля доставки уточняется в docs/keeper/push.md; этот
-  # пример — иллюстрация двухшагового флоу (B-flat). Параметры (целевой path на
-  # VM, SSH-провайдер) — зависят от текущего push-контракта.
+  # Шаг 2: доставка per-VM bootstrap-токена на каждую созданную VM по SSH
+  # (core.bootstrap.delivered, ADR-063). Берёт {sid, primary_ip, bootstrap_token}
+  # из register предыдущего шага; кладёт ТОЛЬКО токен в /etc/soul/token (umask 077,
+  # 0400, ★токен в STDIN не в argv) и запускает soul (start_soul default true).
+  # ssh_provider — имя SshProvider-плагина. Ошибка любого хоста → шаг failed
+  # (B1-strict). ★ C1 (required-для-live, след. слайс): cloud-init должен класть
+  # CA-signed host-key, иначе Dial реджектит host-cert свежей VM.
   - name: Deliver per-VM bootstrap token over SSH
     on: keeper
-    module: keeper.push.applied
+    module: core.bootstrap.delivered
     params:
-      hosts: "${ register.provision.hosts }"
+      hosts:        "${ register.provision.hosts }"
+      ssh_provider: "${ input.ssh_provider }"
     require:
       - provision

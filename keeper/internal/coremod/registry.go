@@ -15,10 +15,12 @@
 package coremod
 
 import (
+	"github.com/souls-guild/soul-stack/keeper/internal/coremod/bootstrap"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/choir"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/cloud"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/soul"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/vault"
+	"github.com/souls-guild/soul-stack/keeper/internal/push"
 	"github.com/souls-guild/soul-stack/sdk/module"
 )
 
@@ -91,6 +93,18 @@ type Deps struct {
 	// в тестовых сборках без choir-сценариев (модуль тогда не регистрируется).
 	ChoirStore choir.Store
 
+	// BootstrapProviders / BootstrapHostCAs / BootstrapDial — зависимости
+	// keeper-side core-модуля `core.bootstrap.delivered` (ADR-063, доставка
+	// per-VM bootstrap-токена по SSH). Все три собираются wire-up-ом из той же
+	// push-инфраструктуры, что и SshDispatcher (дискаверенные SshProvider-плагины
+	// по manifest.Name + host-CA из Vault + push.Dial). Модуль регистрируется
+	// только при непустых BootstrapProviders И непустых BootstrapHostCAs И
+	// заданном BootstrapDial — иначе сборка без SSH-доступа (pull-only / нет
+	// host-CA), и шаг с этим адресом упадёт «unknown keeper-side module».
+	BootstrapProviders map[string]bootstrap.SshProviderHost
+	BootstrapHostCAs   []push.NamedHostKeyAuthority
+	BootstrapDial      push.Dialer
+
 	// Audit — единый audit-writer для keeper-side модулей (cloud/vault
 	// пишут audit-event-ы; soul/choir — нет). nil допустим (модули пропустят
 	// запись и продолжат), но в проде wire-up из main должен подсовывать
@@ -98,11 +112,12 @@ type Deps struct {
 	Audit AuditWriter
 }
 
-// AuditWriter — общий тип для audit-пишущих модулей (cloud/vault); всё
-// совпадает с shared/audit.Writer.
+// AuditWriter — общий тип для audit-пишущих модулей (cloud/vault/bootstrap);
+// всё совпадает с shared/audit.Writer.
 type AuditWriter interface {
 	cloud.AuditWriter
 	vault.AuditWriter
+	bootstrap.AuditWriter
 }
 
 // Default собирает Registry с keeper-side core-модулями: безусловно
@@ -129,6 +144,19 @@ func Default(d Deps) *Registry {
 	// тогда упадёт «unknown keeper-side module» (как любой не подключённый).
 	if d.ChoirStore != nil {
 		mods[choir.Name] = choir.New(d.ChoirStore)
+	}
+	// `core.bootstrap.delivered` (ADR-063) — регистрируется только при полном
+	// наборе SSH-зависимостей (провайдеры + host-CA + dialer). Любой пробел
+	// означает сборку без push-доступа (pull-only / нет host-CA): шаг с этим
+	// адресом тогда упадёт «unknown keeper-side module» (как любой не
+	// подключённый). Симметрично условной регистрации `core.choir`.
+	if len(d.BootstrapProviders) > 0 && len(d.BootstrapHostCAs) > 0 && d.BootstrapDial != nil {
+		mods[bootstrap.Name] = &bootstrap.Module{
+			Providers: d.BootstrapProviders,
+			HostCAs:   d.BootstrapHostCAs,
+			Dial:      d.BootstrapDial,
+			Audit:     d.Audit,
+		}
 	}
 	return NewRegistry(mods)
 }

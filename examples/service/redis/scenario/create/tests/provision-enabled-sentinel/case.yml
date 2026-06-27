@@ -81,19 +81,20 @@ fixtures:
       enabled: true
       provider: wb-dev
       profile: redis-small
+      ssh_provider: ssh-wb
 
 # register.provision — готовый payload core.cloud.created (L0-проброс, шаг (а) не
-# исполняется): vm_ids созданных VM + hosts[{sid,...}]. Шаги (б)/(в) и state_changes
-# читают его. sid-ы созданных VM = SID-ы roster-а (в проде refresh_soulprint их и
-# добавил бы; здесь roster уже несёт их).
+# исполняется): vm_ids созданных VM + hosts[{sid,...,bootstrap_token}]. Шаги (б)/(в) и
+# state_changes читают его. sid-ы созданных VM = SID-ы roster-а (в проде refresh_soulprint
+# их и добавил бы; здесь roster уже несёт их).
 mocks:
   register:
     provision:
       vm_ids: [i-aaa111, i-bbb222, i-ccc333]
       hosts:
-        - { sid: vm-1.example.com, vm_id: i-aaa111, primary_ip: 10.0.0.1 }
-        - { sid: vm-2.example.com, vm_id: i-bbb222, primary_ip: 10.0.0.2 }
-        - { sid: vm-3.example.com, vm_id: i-ccc333, primary_ip: 10.0.0.3 }
+        - { sid: vm-1.example.com, vm_id: i-aaa111, primary_ip: 10.0.0.1, bootstrap_token: tok-vm1 }
+        - { sid: vm-2.example.com, vm_id: i-bbb222, primary_ip: 10.0.0.2, bootstrap_token: tok-vm2 }
+        - { sid: vm-3.example.com, vm_id: i-ccc333, primary_ip: 10.0.0.3, bootstrap_token: tok-vm3 }
 
 assert:
   task_present:

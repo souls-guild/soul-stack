@@ -9,13 +9,13 @@
 | `on:` | Где исполняется | Подходит модулям |
 |---|---|---|
 | опущен / `[coven, …]` | на хостах incarnation | Soul-side core (`core.pkg.installed`, `core.file.present`, …) |
-| `keeper` | на самом keeper-е | Keeper-side core (`core.soul.registered`, `core.cloud.provisioned` — cloud-create через CloudDriver, …) |
+| `keeper` | на самом keeper-е | Keeper-side core (`core.soul.registered`, `core.cloud.created` — cloud-create через CloudDriver, `core.bootstrap.delivered` — доставка bootstrap-токена по SSH, …) |
 
 Запуск Soul-side core-модуля с `on: keeper` — ошибка валидации; и наоборот. Принадлежность модуля стороне декларируется в его манифесте; `soul-lint` сверяет статически.
 
 ## Регистрация и диспетчеризация по адресу (`base` + `state`)
 
-Keeper-side core-модули регистрируются в keeper-side Registry (`keeper/internal/coremod/registry.go`) по **базовому имени** — `<namespace>.<module>` без state-суффикса: `core.soul`, `core.cloud`, `core.choir`, `core.vault`. State приходит из последнего сегмента адреса задачи.
+Keeper-side core-модули регистрируются в keeper-side Registry (`keeper/internal/coremod/registry.go`) по **базовому имени** — `<namespace>.<module>` без state-суффикса: `core.soul`, `core.cloud`, `core.bootstrap`, `core.choir`, `core.vault`. State приходит из последнего сегмента адреса задачи.
 
 При исполнении keeper-side задачи (`keeper/internal/scenario/keeper_dispatch.go`) адрес `module: <namespace>.<module>.<state>` делится функцией `config.SplitModuleAddr` (единый разборщик для обеих сторон, тот же что у Soul-side runtime) на пару `(base, state)`:
 
@@ -28,10 +28,11 @@ Keeper-side core-модули регистрируются в keeper-side Regist
 |---|---|---|
 | `core.soul.registered` | `core.soul` | `registered` |
 | `core.cloud.created` / `core.cloud.destroyed` | `core.cloud` | `created` / `destroyed` |
+| `core.bootstrap.delivered` | `core.bootstrap` | `delivered` |
 | `core.choir.present` / `core.choir.absent` | `core.choir` | `present` / `absent` |
 | `core.vault.kv-read` | `core.vault` | `kv-read` |
 
-Бракованный адрес (`SplitModuleAddr` вернул `ok=false`: пустой, `.state`, `core.`) или `base`, которого нет в Registry, — keeper-задача падает (`failed`-событие «unknown keeper-side module»), как Soul-side на неизвестный модуль. Регистрация модуля в Registry условна по наличию его зависимости в `coremod.Deps`: `core.choir` подключается только при заданном `ChoirStore` (сборка без choir-сценариев его не несёт, и шаг с этим модулем упадёт «unknown»).
+Бракованный адрес (`SplitModuleAddr` вернул `ok=false`: пустой, `.state`, `core.`) или `base`, которого нет в Registry, — keeper-задача падает (`failed`-событие «unknown keeper-side module»), как Soul-side на неизвестный модуль. Регистрация модуля в Registry условна по наличию его зависимости в `coremod.Deps`: `core.choir` подключается только при заданном `ChoirStore`, `core.bootstrap` — только при полном наборе SSH-deps (provider-карта + host-CA + dialer), иначе сборка их не несёт, и шаг с этим модулем упадёт «unknown».
 
 ### Audit-след и per-task алертинг
 
@@ -216,6 +217,54 @@ DoS-guard, fail-closed. Поле `keeper.yml::max_await_timeout` (duration, defa
 - **Roster-growth** (новый Voice виден следующему шагу прогона) — не реализовано.
 
 Полный per-module справочник — [docs/module/core/choir/README.md](../module/core/choir/README.md).
+
+## `core.bootstrap.delivered`
+
+Тонкая доставка per-VM bootstrap-токена по SSH на свежесозданные cloud-init-VM ([ADR-063](../adr/0063-bootstrap-token-delivery.md)). **Keeper-side**, диспетчер `on: keeper`. Registry-ключ — base `core.bootstrap`; state `delivered` приходит из суффикса адреса. Регистрируется только при полном наборе SSH-зависимостей (`BootstrapProviders` + `BootstrapHostCAs` + `BootstrapDial` в `coremod.Deps`) — иначе шаг падает «unknown keeper-side module». Реализация — [`keeper/internal/coremod/bootstrap/delivered.go`](../../keeper/internal/coremod/bootstrap/delivered.go).
+
+**Закрывает BUG#2 cloud-provision.** До ADR-063 scenario нёс адрес-заглушку `keeper.push.applied`, которой keeper-side не существует (это audit-event push-прогона Destiny, не модуль) — созданная VM ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)) не получала токен, барьер `await_online` не набирал presence, прогон уходил в `error_locked`.
+
+### Дизайн A1 — «тонкая доставка»
+
+cloud-init (B-flat, [ADR-017(h)](../adr/0017-keeper-side-core.md)) уже поставил на VM soul-бинарь + CA + systemd-unit (но **намеренно НЕ токен** — userdata логируется провайдером). Модуль кладёт **ТОЛЬКО** токен и опционально запускает soul-агент. Поток per-host (**последовательно**):
+
+1. `SshProvider.Authorize(host, user)` — deny прерывает доставку до connect-а (**fail-closed**).
+2. ephemeral ed25519-keypair + `SshProvider.Sign(pubkey)` → `ssh.AuthMethod`-ы (переиспользует `push.NewEphemeralEd25519` + `push.AuthMethodsFromSign`). Приватник не покидает Keeper.
+3. `push.Dial` → `Session` (CA-signed host-cert verify, тот же путь, что `SshDispatcher.SendApply`).
+4. `session.Run("install -d -m 0700 /etc/soul && umask 077 && cat > <token_path> && chmod 0400 <token_path>", tokenBytes)` — **★ токен в STDIN, НЕ в argv** (иначе утечёт в `ps`/audit/journald на VM).
+5. если `start_soul` — `session.Run("systemctl start soul", nil)`.
+
+**B1-strict:** ошибка любого хоста (Authorize-deny / connect-fail / write-fail / start-fail) → шаг `failed` → state не коммитится → `error_locked`.
+
+### Адресация и сторона
+
+- Namespace `core`, module `bootstrap`, state `delivered`.
+- Полное имя задачи: `module: core.bootstrap.delivered`.
+- Сторона: **Keeper-side**. Шаг **обязан** нести `on: keeper`.
+
+### Параметры (`params:`)
+
+| Параметр | Тип | Обязательность | Default | Описание |
+|---|---|---|---|---|
+| `hosts` | array of object `{sid, primary_ip, bootstrap_token}` | required | — | Список VM. На практике приходит CEL-выражением `${ register.<provision>.hosts }` (выход `core.cloud.created`). Пустой список → `failed`. |
+| `ssh_provider` | string | required | — | Имя SshProvider-плагина (`keeper.yml::plugins.ssh_providers[].name`). |
+| `token_path` | string | optional | `/etc/soul/token` | Путь файла токена на VM. |
+| `ssh_user` | string | optional | `root` | SSH-пользователь. |
+| `ssh_port` | int (1..65535) | optional | `22` | TCP-порт sshd. |
+| `start_soul` | bool | optional | `true` | `systemctl start soul` после доставки. |
+
+### Выходной контракт (`output:` модуля)
+
+`register.<имя>.*`: `hosts[] = {sid, delivered, started}` + `count`. Плюс стандартные `.changed` (всегда `true` при успехе) / `.failed` DSL-ядра. **★ БЕЗ токена в output** — plain-токен виден только в register предыдущего шага (`core.cloud.created`, ключ `bootstrap_token`, маскируется `audit.MaskSecrets`); здесь его нет.
+
+### Безопасность
+
+- Токен в STDIN, не в argv (шаг 4). Audit-payload `bootstrap.delivered` — `{action, ssh_provider, count, sids}`, **без токенов**. Текст ошибки маскируется (`audit.MaskSecrets`) перед `failed`-event. CA-signed host-cert verify обязателен (пустой host-CA → явная ошибка). fail-closed Authorize.
+
+### Границы MVP (ADR-063)
+
+- Один key-based SshProvider, только токен, хосты последовательно.
+- **★ C1 — cloud-init CA-signed host-key (required-для-live, СЛЕДУЮЩИЙ слайс).** `push.Dial` доверяет только host-cert, подписанному host-CA (отказ от TOFU) — свежая VM обязана иметь CA-signed host-key, иначе handshake реджектится. До C1 модуль валиден на render (L0 Trial) + unit-тестах, но live-e2e не пройдёт.
 
 ## `core.vault.kv-read`
 
