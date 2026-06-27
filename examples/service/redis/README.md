@@ -35,10 +35,14 @@ passthrough-директивы оператора, SHALLOW last-wins ([templatin
 > [`update_users`](scenario/update_users/main.yml) /
 > [`rotate_tls`](scenario/rotate_tls/main.yml). Опционально `create` может в **том же
 > прогоне** поднять VM под топологию через cloud-provision (`input.provision`,
-> state_schema bumped 4→7) — см. [«Cloud-provision»](#cloud-provision-create-поднимает-vm-experimental).
-> **★ Cloud-provision — EXPERIMENTAL / render-only, НЕ для прода** (шаг доставки
-> bootstrap-токена `keeper.push.applied` keeper-side не реализован — live оборвётся на
-> await-таймауте; подробности в разделе). Неизвестный `redis_type` (вне enum)
+> state_schema bumped 4→7) — см. [«Cloud-provision»](#cloud-provision-create-поднимает-vm-live-ждёт-c1).
+> **★ Cloud-provision — keeper-side реализован, живой провизион ждёт C1 + live-e2e.**
+> Доставка bootstrap-токена реализована keeper-side (модуль `core.bootstrap.delivered`,
+> [ADR-063](../../../docs/adr/0063-bootstrap-token-delivery.md), SSH-доставка). Поток
+> валиден на render (L0 Trial) и проходит unit-тесты, но живой провизион «VM→redis в
+> один прогон» ещё **не пройдёт live-e2e** без слайса **C1** (cloud-init генерит CA-signed
+> host-key, чтобы Keeper верифицировал host-cert свежей VM без TOFU) — подробности в
+> разделе. Неизвестный `redis_type` (вне enum)
 > отвергает **input-валидация Keeper-а ДО рендера** (понятный отказ, прогон не
 > стартует) — прежний shell-mode-guard убран. Остальной backlog (sentinel
 > failover/day-2, плагинный `failover`, sentinel-демон TLS) — см.
@@ -104,7 +108,7 @@ passthrough-директивы оператора, SHALLOW last-wins ([templatin
 | `redis_users` | array `AclUser` (`[{name, perms, state}]`) | **operator-extra** ACL-пользователи Redis (только заведённые оператором). Элемент — типизированный `AclUser` (`name` + `perms` обязательны, `state` дефолт `on`) из [`types.yml`](types.yml), переиспользуемый через `$type: AclUser` в `input:` сценариев (ADR-062). До state_schema v6 это был map `username → {perms, state}` — миграция [`005_to_006.yml`](migrations/005_to_006.yml) свернула map→array (имя-ключ → поле `name`). `perms` — полная ACL-строка (пароли НЕ в state — keeper-side Vault). **Системные** служебные юзеры (`replica`/`monitoring`/`sentinel`/`haproxy` и т.д.) сюда **НЕ** пишутся — они доливаются в `users.acl` из `essence.system_acl_users` на каждом рендере (см. [«Системные ACL-юзеры»](#системные-acl-юзеры)) |
 | `redis_hosts` | array `{sid, role}` | хосты топологии (пишется `[]`; точные роли `primary`/`replica`/`sentinel` для cluster/sentinel раскладывает apply-сторона — в state не фиксируются) |
 | `redis_sentinel` | object `{master_name, master_ip, quorum, down_after_ms, failover_timeout_ms}` | факты sentinel-режима: имя monitored master (из `essence.sentinel_master_name`, дефолт `master`) + quorum + тайминги failover (v5, default `5000`/`60000`). `quorum` всегда `0` (auto `size/2+1` вычисляется в apply, в state не материализуется); `master_ip` материализуется только для убранного режима `sentinel_only` (внешний master). Вне режима `sentinel` — пустой объект |
-| `provisioned_vm_ids` | array string | **(v7, cloud-provision read-model, [ADR-061](../../../docs/adr/0061-onboarding-await-and-midrun-reresolve.md))** provider-vm-id VM, поднятых **этим** create-прогоном через `core.cloud.created` (из `register.provision.vm_ids`). Day-2 teardown читает их для `core.cloud.destroyed`. Без provision (`input.provision` опущен/`enabled:false`) — `[]` (хосты — declared roster, не провиженные сервисом). См. [«Cloud-provision»](#cloud-provision-create-поднимает-vm-experimental) |
+| `provisioned_vm_ids` | array string | **(v7, cloud-provision read-model, [ADR-061](../../../docs/adr/0061-onboarding-await-and-midrun-reresolve.md))** provider-vm-id VM, поднятых **этим** create-прогоном через `core.cloud.created` (из `register.provision.vm_ids`). Day-2 teardown читает их для `core.cloud.destroyed`. Без provision (`input.provision` опущен/`enabled:false`) — `[]` (хосты — declared roster, не провиженные сервисом). См. [«Cloud-provision»](#cloud-provision-create-поднимает-vm-live-ждёт-c1) |
 | `provisioned_provider` | string | **(v7)** имя cloud-Provider в реестре (тот же `destroy`-вызов; из `input.provision.provider`). Без provision — `''` |
 
 Кроме перечисленных, `state_schema` несёт **именованные поля намерения** (read-model,
@@ -139,7 +143,7 @@ v3): `tls` / `install` / `persistence` / `memory_mb` / `maxmemory_policy` / `mod
 | `users` | array `AclUser` (`[{name, perms, state}]`) | **operator-extra** ACL-юзеры; элемент — типизированный `AclUser` ([`types.yml`](types.yml), ADR-062 `$type`): `name` + `perms` обязательны, `state` ∈ `on`/`off` (дефолт `on`). `perms` — полная ACL-строка Redis, валидируется re2-паттерном `AclUser` (token-shape-фильтр). Имя **не может** совпасть с системным служебным (`default`/`replica`/`monitoring`/`sentinel`/`haproxy`) — коллизию отвергает input-валидация (422, см. [«Системные ACL-юзеры»](#системные-acl-юзеры)). Сливается **поверх** системных (last-wins) в `users.acl` |
 | `redis_settings` | object (passthrough) | произвольные директивы `redis.conf` key→value; **бьют всё** в итоговом merge. **Имена** директив version-aware-валидируются `assert`-ом против каталога валидных директив выбранной версии Redis (см. [«Валидатор имён директив»](#валидатор-имён-директив-redis_settings)) — опечатка / директива из чужой версии рвёт прогон на render (422) ДО applying |
 | `tls` | object `{enable, only, port, cert_ref, key_ref, ca_ref}`, опц. | **(TLS)** параметры TLS Redis (концепция `redis_tls_*` роли). operator-input **бьёт essence** (каждое под-поле опционально; недостающие берут дефолт из `essence.tls_*`). `enable` — главный гейт рендера PEM/директив; `only` — закрыть plain-порт (scenario ставит `port 0`); `port` — TLS-порт (директива `tls-port`, дефолт essence `7379`); `cert_ref`/`key_ref`/`ca_ref` — Vault-**ПУТИ** серверного cert/key и CA (форма `<mount>/<path>#<field>`, **не** сам PEM). destiny читает PEM через `vault(ref)` в ячейке `content` (`core.file.present`, seal-маскинг — НЕ `.tmpl`). Пустой/не передан → TLS off. `tls.only` требует `tls.enable` (`validate`) |
-| `provision` | object `{enabled, provider, profile, await_timeout}`, опц. | **★ EXPERIMENTAL** ([«Cloud-provision»](#cloud-provision-create-поднимает-vm-experimental)): поднять VM под топологию в **том же** create-прогоне ([ADR-061](../../../docs/adr/0061-onboarding-await-and-midrun-reresolve.md), Вариант A). `enabled: true` → cloud-create + барьер онбординга, потом redis-роль на созданные хосты; опущен / `enabled: false` → прогон по существующему roster-у (поведение бит-в-бит как без фичи). `provider`/`profile` — имена в реестрах `providers`/`profiles`; `await_timeout` (`<N>{s\|m\|h}`) — потолок ожидания онбординга (не задан → `essence.provision_await_timeout`, дефолт `10m`). **Числа VM в `provision` нет** — выводится из топологии (`shards`/`replicas_per_master`). **Не для прода** (шаг доставки bootstrap-токена не реализован keeper-side — см. раздел) |
+| `provision` | object `{enabled, provider, profile, ssh_provider, await_timeout}`, опц. | **★ keeper-side реализован, live ждёт C1** ([«Cloud-provision»](#cloud-provision-create-поднимает-vm-live-ждёт-c1)): поднять VM под топологию в **том же** create-прогоне ([ADR-061](../../../docs/adr/0061-onboarding-await-and-midrun-reresolve.md), Вариант A). `enabled: true` → cloud-create + доставка токена + барьер онбординга, потом redis-роль на созданные хосты; опущен / `enabled: false` → прогон по существующему roster-у (поведение бит-в-бит как без фичи). `provider`/`profile` — имена в реестрах `providers`/`profiles`; `ssh_provider` — имя SshProvider-плагина для доставки токена (`core.bootstrap.delivered`, [ADR-063](../../../docs/adr/0063-bootstrap-token-delivery.md)); `await_timeout` (`<N>{s\|m\|h}`) — потолок ожидания онбординга (не задан → `essence.provision_await_timeout`, дефолт `10m`). **Числа VM в `provision` нет** — выводится из топологии (`shards`/`replicas_per_master`). **Живой провизион ждёт слайса C1** (cloud-init CA-signed host-key) + live-e2e — см. раздел |
 **Чего во входном контракте нет (essence-параметры или авто-вычисление):**
 
 - `sentinel_quorum` — **авто** `size(hosts)/2+1` (большинство), вычисляется в apply.
@@ -496,15 +500,20 @@ per-module doc [`docs/module/community/redis/README.md`](../../../docs/module/co
 > true`) — для переиспользования другими сервисами (например DragonFly), но через
 > сервис redis она больше не вызывается.
 
-### Cloud-provision (`create` поднимает VM, EXPERIMENTAL)
+### Cloud-provision (`create` поднимает VM, live ждёт C1)
 
-> **★★ EXPERIMENTAL / render-only — НЕ для прода.** Поток валиден на render (L0
-> Trial), но **live оборвётся**: шаг доставки per-VM bootstrap-токена
-> `keeper.push.applied` (б) **keeper-side НЕ реализован** (SSH-доставка push). Без
-> доставки токена созданные VM не пройдут CSR-онбординг → барьер `await_online` (в) не
-> наберёт presence → шаг `failed` по `await_timeout` → state не коммитится →
-> `error_locked`. Включать `input.provision.enabled: true` против живого Keeper **до
-> реализации `keeper.push` SSH-доставки нельзя**. Образец того же флоу —
+> **★★ Keeper-side реализован, живой провизион ждёт C1 + live-e2e.** Доставка per-VM
+> bootstrap-токена реализована keeper-side — модуль `core.bootstrap.delivered`
+> ([ADR-063](../../../docs/adr/0063-bootstrap-token-delivery.md), SSH-доставка токена;
+> заменил заглушку `keeper.push.applied`). Поток валиден на render (L0 Trial) и проходит
+> unit-тесты. Но живой прогон «VM→redis в один проход» ещё **не пройдёт live-e2e** без
+> слайса **C1**: `push.Dial` доверяет только host-cert, подписанному host-CA (отказ от
+> TOFU), а у свежей VM после cloud-init host-key пока **голый** (не CA-signed) — handshake
+> при доставке токена реджектится на connect-е, токен не доставится → созданные VM не
+> пройдут CSR-онбординг → барьер `await_online` (в) не наберёт presence → `error_locked`.
+> C1 = cloud-init (B-flat userdata) генерит CA-signed host-key тем же host-CA, чтобы Keeper
+> верифицировал host-cert. До C1 + live-валидации WB cloud `input.provision.enabled: true`
+> против живого Keeper не доводит прогон до конца. Образец того же флоу —
 > [`examples/service/example-cloud-bootstrap/`](../example-cloud-bootstrap/).
 
 Опциональная способность `create` (state_schema v7, [ADR-061](../../../docs/adr/0061-onboarding-await-and-midrun-reresolve.md),
@@ -524,9 +533,16 @@ per-module doc [`docs/module/community/redis/README.md`](../../../docs/module/co
    cloud-init из `keeper.yml::cloud_init` (CA + soul-binary URL); userdata токены **НЕ**
    несёт. Per-VM bootstrap-токен → `register.provision.hosts[].bootstrap_token` (plain
    one-time, маскируется `audit.MaskSecrets`).
-2. **(б) доставка токена** — `module: keeper.push.applied` (по SSH). **★ Иллюстративный
-   шаг, render-only**: берёт `register.provision.hosts`, но keeper-side доставка push
-   **не реализована** (см. блок выше).
+2. **(б) доставка токена** — `module: core.bootstrap.delivered` ([keeper-side core](../../../docs/keeper/modules.md#corebootstrapdelivered),
+   [ADR-063](../../../docs/adr/0063-bootstrap-token-delivery.md)). Берёт
+   `register.provision.hosts` (sid + primary_ip + plain bootstrap-токен из шага (а)) и
+   тонко доставляет **только токен** по SSH на каждую VM (бинарь/CA/unit уже поставил
+   cloud-init): токен в STDIN (не argv) → `/etc/soul/token` (`mode 0400`), затем
+   `systemctl start soul` (`start_soul` default `true`). `ssh_provider` —
+   `input.provision.ssh_provider` (имя SshProvider-плагина). **B1-strict**: ошибка любого
+   хоста → шаг `failed` → state не коммитится → `error_locked`. **★ Реализовано
+   keeper-side, но требует C1** (CA-signed host-key VM) — без него `push.Dial` реджектит
+   host-cert на connect-е (см. врезку выше).
 3. **(в) регистрация + барьер онбординга** — `module: core.soul.registered` ([ADR-061](../../../docs/adr/0061-onboarding-await-and-midrun-reresolve.md)).
    `sid` — **список** SID созданных VM (`register.provision.hosts.map(h, h.sid)`, list-SID
    ADR-061); `coven` — корневой `incarnation.name`. `await_online: true` блокирующе ждёт,
@@ -951,10 +967,11 @@ Day-2 hot-reload реализован: `update_config` (live `CONFIG SET` дел
 - TLS sentinel-демона (`:26379`): data-плоскость redis-server TLS уже реализована
   (operator-dict `tls.enable`/`tls.only`, бьёт essence), TLS для sentinel-демона —
   follow-up;
-- **cloud-provision (`input.provision`) — EXPERIMENTAL / render-only**: шаг доставки
-  bootstrap-токена `keeper.push.applied` keeper-side **не реализован** (см.
-  [«Cloud-provision»](#cloud-provision-create-поднимает-vm-experimental)) — против живого
-  Keeper не запускать до реализации `keeper.push` SSH-доставки;
+- **cloud-provision (`input.provision`) — keeper-side реализован, live ждёт C1**: доставка
+  bootstrap-токена реализована keeper-side (модуль `core.bootstrap.delivered`, [ADR-063](../../../docs/adr/0063-bootstrap-token-delivery.md),
+  SSH-доставка). Поток render/L0-валиден и проходит unit-тесты, но живой провизион «VM→redis
+  в один прогон» ждёт слайса **C1** (cloud-init CA-signed host-key для verify host-cert без
+  TOFU) + live-e2e — см. [«Cloud-provision»](#cloud-provision-create-поднимает-vm-live-ждёт-c1);
 - **teardown (destroy) cloud-provisioned VM** — отдельного `scenario/destroy/` пока **нет**;
   state-поля `provisioned_vm_ids` / `provisioned_provider` под него зарезервированы (read-model
   v7), сам сценарий — backlog;

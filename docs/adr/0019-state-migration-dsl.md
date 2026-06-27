@@ -27,6 +27,8 @@
   
   При фейле — `ROLLBACK`, `incarnation.status: migration_failed` ([§«Versioning и миграции state_schema»](../architecture.md#versioning-и-миграции-state_schema)).
 
+  Финальный статус по успешному upgrade — **`drift`, не `ready`** (см. [Amendment ниже](#amendment-upgrade--drift-финальный-статус-2026-06-27); миграция меняет БД-state, но не раскатку на хостах).
+
   **(d) Reverse — только forward в MVP.** `down:`-блок не поддерживается. Восстановление при инциденте — через `state_history` snapshot. Расширение до optional `down:` post-MVP — без breaking change (новый optional ключ верхнего уровня файла).
 
   **(e) Escape-модуль (`state.migrate` / `core.incarnation.state-migrate`) — не вводится в MVP.** Старая ссылка в [§«Versioning и миграции state_schema»](../architecture.md#versioning-и-миграции-state_schema) на «destiny-модуль `state.migrate`» — отвергается: имя вне словаря (не в [naming-rules.md](../naming-rules.md)), и реальные сложные случаи (which согласно разведке составляют <10%) покрываются грамматикой (a). Если когда-нибудь понадобится — отдельный ADR с propose-and-wait по имени (`core.incarnation.state-migrate` — кандидат по образцу `core.soul.registered`).
@@ -45,3 +47,7 @@
   - Грамматика чуть шире плоского DSL — нужно специфицировать `foreach` (один новый ключ). Это компенсируется симметрией с essence-pipeline (`foreach: + as: + when:` уже зафиксированы) — оператор узнаёт паттерн.
   - `if`-ключ отложен — условные миграции записей делаются через `foreach + filter` в CEL (`in: ${ state.users.filter(u, u.flag) }`). Менее очевидно, чем явный `if`-в-DSL, но покрывает кейсы. Расширение до (c) — при первом запросе.
   - Forward-only — оператор не может откатить миграцию декларативно. Принимаем: восстановление через `state_history` — рабочий путь, mandatory `down:` — overkill для редкой операции.
+
+### Amendment: upgrade → drift (финальный статус, 2026-06-27)
+
+По успешному `keeper.incarnation.upgrade` (шаг 5 в (c)) финальный `UPDATE incarnation` ставит **`status = drift`, не `ready`**. Причина: upgrade-транзакция мигрировала `incarnation.state` + сменила `state_schema_version`/`service_version` в БД, но **хосты остались на старой раскатке** — реальное состояние расходится с новым state, и без сигнала рассинхрон state↔факт копился бы тихо до следующего apply. `drift` здесь — тот же информационный, не блокирующий статус, что у Scry ([ADR-031(d)](0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile)): сигнал оператору «накати новую версию сервиса на хосты»; remediation — **обычный apply** (`drift → ready`), отдельной команды не требуется. Переход фиксируется отдельной zero-diff `state_history`-записью со `scenario: upgrade-pending-apply` (после step-снимков миграции; `state_before == state_after` = пост-миграционный state), чтобы триаж отличал upgrade-drift от drift, найденного Scry-сканом. Gate upgrade-tx пропускает в финальный `UPDATE` только из `ready`/`drift` (`applying → Busy`, `error_locked`/`migration_failed → Locked` — не перетираются). Реализовано в [`keeper/internal/incarnation/crud.go`](../../keeper/internal/incarnation/crud.go) (`upgradeTx`, `writeUpgradeDriftHistory`, `upgradeDriftScenarioLabel`).

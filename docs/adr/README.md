@@ -26,7 +26,7 @@
 | [0016](0016-parity-license.md) | Стратегия parity + лицензия | amended | Apache 2.0, open core; гибрид core-рерайт + community-плагины; SDK Фаза 2 (amendments). **Вынесен в отдельный файл.** |
 | [0017](0017-keeper-side-core.md) | Keeper-side core расширены | amended | `core.cloud` (author-адрес `core.cloud.created`/`core.cloud.destroyed`, base+state — форма `core.cloud.provisioned` историческая, как адрес НЕ существует, amendment 2026-06-26) / `core.vault.kv-read`; cloud credentials-flow + 6 провайдеров (amendments). **Вынесен в отдельный файл.** |
 | [0018](0018-soulprint-typed.md) | Soulprint typed-схема MVP | amended | `SoulprintFacts` вместо Struct-stub; `choirs` как факт, typed_facts byte-passthrough (amendments). **Вынесен в отдельный файл.** |
-| [0019](0019-state-migration-dsl.md) | State_schema migration DSL | active | Плоский DSL + CEL + foreach, forward-only, атомарная PG-tx. **Вынесен в отдельный файл.** |
+| [0019](0019-state-migration-dsl.md) | State_schema migration DSL | amended | Плоский DSL + CEL + foreach, forward-only, атомарная PG-tx; upgrade → drift (amendment). **Вынесен в отдельный файл.** |
 | [0020](0020-plugin-infrastructure.md) | Plugin-инфраструктура | amended | manifest / handshake / lifecycle для трёх типов плагинов; SDK Фаза 2, SshProvider-набор (amendments). **Вынесен в отдельный файл.** |
 | [0021](0021-hot-reload-config.md) | Hot-reload конфига с write-back YAML | active | Hot-reload конфига с перезаписью изменённого обратно на диск. **Вынесен в отдельный файл.** |
 | [0022](0022-audit-pipeline.md) | Audit-pipeline | active | Storage / schema / retention аудит-журнала. **Вынесен в отдельный файл.** |
