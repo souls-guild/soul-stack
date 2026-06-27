@@ -1,0 +1,53 @@
+# L0-fail-кейс detach_source: инкарнация НЕ проходила migrate_cluster. seeded_from
+# существует (миграция 008_to_009 даёт его каждой v9-инкарнации), но source_endpoints
+# ПУСТ — отцеплять нечего. detach — обычный day-2 (нет runnable:false), оператор может
+# запустить его на create'нутой инкарнации; этот кейс фиксирует, что такой прогон
+# ОБРЫВАЕТСЯ ВНЯТНЫМ assert-отказом ДО probe, а НЕ опаковой ошибкой compute
+# `index out of bounds: 0` (которую дал бы голый source_endpoints[0]; см.
+# detach_source/main.yml compute.source_master fail-soft + assert-guard sentinel.yml).
+#
+# Render-only, герметично. Диспетчер инклудит sentinel.yml (state.redis_type=sentinel);
+# первым в ветке — assert-guard `size(seeded_from.source_endpoints) >= 1`, который на
+# пустом списке вычисляется в false → ErrAssertFailed. expect_render_error ловит обрыв
+# рендера по подстроке message (механизм keeper/internal/trial/case.go — НЕ expect_validate:
+# validate: input-only ADR-009, инвариант над incarnation.state выражается assert-таском).
+name: sentinel detach_source on a never-migrated incarnation aborts with a clear message
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.1 }
+    os: { arch: amd64 }
+
+  # incarnation.state v9 sentinel-инкарнации, НИКОГДА не проходившей migrate_cluster:
+  # seeded_from есть (форма от миграции 008_to_009), но source_endpoints ПУСТ.
+  state:
+    redis_type: sentinel
+    redis_version: "7.2.4"
+    conf_dir: /etc/redis
+    data_dir: /var/lib/redis
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+    redis_users: []
+    seeded_from:
+      source_endpoints: []
+      detached: false
+
+  vault:
+    secret/redis/detach_source:
+      password: detach-redis-pass-16ch
+
+# assert-guard sentinel.yml обрывает рендер ДО probe: source_endpoints пуст →
+# size(...) >= 1 == false → ErrAssertFailed с этим message (подстрока).
+expect_render_error: "отцеплять нечего"

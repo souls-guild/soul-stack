@@ -6,6 +6,13 @@
 # scenario-блок) и видны здесь как compute.<name>.
 #
 # Поток:
+#   0. PRECONDITION-GUARD: инкарнация ДОЛЖНА быть залита migrate_cluster (seeded_from
+#      .source_endpoints непуст). detach — обычный day-2 (нет runnable:false), оператор
+#      может запустить его на create'нутой инкарнации, которая никогда не мигрировала —
+#      у такой source_endpoints ПУСТ (миграция 008_to_009 даёт каждой v9 пустой
+#      seeded_from). assert ОТСЕКАЕТ её ВНЯТНЫМ отказом ДО probe (render-фазный
+#      fail-closed, симметрично cluster.yml-заглушке), вместо опаковой ошибки compute
+#      `index out of bounds`. Стоит ПЕРВЫМ — раньше любого коннекта к Redis.
 #   1. ФИНАЛЬНЫЙ offset-gate ПЕРЕД detach (повторно, как migrate_cluster шаг 3, но на
 #      day-2 источник из state): убедиться, что новый master ВСЁ ЕЩЁ синхронен с
 #      источником НЕПОСРЕДСТВЕННО перед разрывом. fail-closed: не синхронен за окно →
@@ -13,6 +20,18 @@
 #      останется привязан — безопаснее, чем отцепить недогнанную реплику и потерять хвост).
 #   2. REPLICAOF NO ONE (community.redis.detached) — перевести новый master в
 #      самостоятельный режим. ПОСЛЕ этого источник можно гасить (на стороне оператора).
+
+# 0. PRECONDITION-GUARD: seeded_from.source_endpoints непуст (инкарнация прошла
+#    migrate_cluster). assert — render-фазный keeper-side, видит incarnation.state в
+#    ПОЛНОМ scenario-CEL-контексте (как when:/cluster.yml-заглушка). false → ErrAssertFailed
+#    ДО dispatch (state не мутируется, error_locked не ставится — отказ на модели).
+#    Проверяем ИСХОДНЫЙ source_endpoints, НЕ compute.source_master (тот fail-soft отдаёт
+#    '' на пустом — по нему «пусто ли» уже не отличить; см. compute detach_source/main.yml).
+- name: Source must be seeded by migrate_cluster before detach
+  assert:
+    that:
+      - "size(default(incarnation.state.seeded_from.source_endpoints, [])) >= 1"
+    message: "инкарнация не была залита migrate_cluster — seeded_from пуст, отцеплять нечего"
 
 # 1. ФИНАЛЬНЫЙ offset-lag gate ПЕРЕД detach. Тот же community.redis.offset-synced, что
 #    migrate_cluster шаг 3, но источник — из incarnation.state.seeded_from (compute

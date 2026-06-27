@@ -23,9 +23,13 @@ description: >-
 
   Источник берётся из incarnation.state.seeded_from.source_endpoints[0] (записан
   migrate_cluster) — оператор НЕ передаёт его повторно (исключает рассинхрон «detach
-  не того источника»). Идемпотентность: detach уже отцеплённой инкарнации
-  (seeded_from.detached==true) — REPLICAOF NO ONE на самостоятельном master no-op
-  (плагин community.redis.detached идемпотентен).
+  не того источника»). ★ detach — обычный day-2 (нет runnable:false), оператор может
+  запустить его и на create'нутой инкарнации, которая НИКОГДА не мигрировала: у такой
+  seeded_from.source_endpoints ПУСТ (миграция 008_to_009 даёт каждой v9-инкарнации
+  пустой seeded_from). Этот случай отсекает assert-guard в sentinel.yml ВНЯТНЫМ отказом
+  «отцеплять нечего», а не опаковым index-out-of-bounds. Идемпотентность: detach уже
+  отцеплённой инкарнации (seeded_from.detached==true) — REPLICAOF NO ONE на
+  самостоятельном master no-op (плагин community.redis.detached идемпотентен).
 
 # Входного контракта оператора НЕТ: detach_source не принимает параметров — источник,
 # режим и коннект-данные берутся из incarnation.state (seeded_from/redis_type/tls/…),
@@ -41,8 +45,16 @@ description: >-
 # ИБ): финальный offset-gate коннектится к источнику БЕЗ AUTH-пароля (source_password='').
 # Если источник требует AUTH — gate упрётся в ошибку коннекта (fail-closed), это
 # осознанное ограничение S1 (хранение source-учётки в state — отдельный S-batch).
+#
+# ★ source_master fail-soft на пустом source_endpoints: compute-блок резолвится ЦЕЛИКОМ
+# и EAGERLY один раз на прогон (render/compute.go), ДО tasks. Голый [0] на пустом списке
+# упал бы ОПАКОВОЙ ошибкой `index out of bounds: 0` РАНЬШЕ, чем render дойдёт до
+# assert-guard в sentinel.yml — оператор не понял бы, что инкарнация просто не
+# мигрировалась. guard `size(...) >= 1 ? [0] : ''` отдаёт '' на пустом (compute не
+# падает), а ВНЯТНЫЙ отказ даёт assert-таск sentinel.yml (он ПЕРВЫЙ в ветке, отсекает
+# не-мигрированные инкарнации до probe).
 compute:
-  source_master: "${ incarnation.state.seeded_from.source_endpoints[0] }"
+  source_master: "${ size(default(incarnation.state.seeded_from.source_endpoints, [])) >= 1 ? incarnation.state.seeded_from.source_endpoints[0] : '' }"
   tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
   tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
   tls_ca:   "${ compute.tls_on ? vault(incarnation.state.tls.ca_ref) : '' }"
@@ -54,8 +66,11 @@ compute:
 # коллекции) к нему неприменим — патч поля объекта выражается через `set` целиком:
 # merge() старого объекта с {detached: true} (shallow last-wins, templating.md §2.3) —
 # сохраняет source_endpoints (и любые будущие поля seeded_from), меняет только detached.
-# seeded_from гарантирован у v9-инкарнаций (миграция 008_to_009); инкарнация без
-# migrate_cluster сюда не дойдёт (detach осмыслен только после migrate).
+# seeded_from-объект гарантирован у v9-инкарнаций (миграция 008_to_009), НО с ПУСТЫМ
+# source_endpoints у тех, что не проходили migrate_cluster (миграция даёт каждой v9
+# {source_endpoints:[], detached:false}). detach — обычный day-2 (нет runnable:false),
+# оператор может запустить его на create'нутой инкарнации — такую отсекает assert-guard
+# в sentinel.yml (size(source_endpoints) >= 1), до этого merge она не доходит.
 state_changes:
   - set: seeded_from
     value: "${ merge(incarnation.state.seeded_from, {'detached': true}) }"
