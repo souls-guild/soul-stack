@@ -1343,6 +1343,16 @@ WHERE name = $1
 // scenario; фиксируем под этой меткой каждый шаг цепочки.
 const migrationScenarioLabel = "migration"
 
+// upgradeDriftScenarioLabel — значение `state_history.scenario` для финального
+// перехода upgrade-а в drift (ADR-031, amendment поведения upgrade). Upgrade
+// меняет только incarnation.state + версии одной PG-tx — хосты остаются на
+// СТАРОЙ раскатке, реальное состояние расходится с новым state. Отдельная метка
+// (не `migration`, под которой идут шаги самой миграции) фиксирует ПРИЧИНУ
+// перехода в drift в истории — «новая версия ждёт применения на хостах», чтобы
+// триаж отличал upgrade-drift от drift, найденного Scry-сканом. Симметрично
+// другим transition-меткам (unlock / rerun-create / voyage-orphan-release).
+const upgradeDriftScenarioLabel = "upgrade-pending-apply"
+
 // UpgradeInput — вход [UpgradeStateSchema]. Caller (Slice 2) резолвит
 // TargetSchemaVer из service.yml целевого снапшота, собирает Chain через
 // [artifact.ServiceLoader.LoadMigrationChain] и генерит ApplyID (ULID одной
@@ -1386,6 +1396,15 @@ type UpgradeResult struct {
 // No-op (пустой Chain — сменился ref, но schema_version тот же): [Apply]
 // вернёт FinalState = копию state и пустые Steps; всё равно пишется одна
 // zero-diff state_history-запись (симметрично unlock) и UPDATE service_version.
+//
+// По успешному upgrade incarnation переходит в status=drift, НЕ ready (ADR-031,
+// amendment поведения upgrade): БД-state обновлён, но хосты остались на старой
+// раскатке — реальное состояние расходится с новым state, оператору нужен сигнал
+// «накати новую версию». drift информационный, не блокирующий (ADR-031(d));
+// remediation — обычный apply (drift→ready). Переход фиксируется отдельной
+// zero-diff history-записью с причиной ([writeUpgradeDriftHistory]). Это
+// касается и no-op ref-bump-а (смена git-ref без миграции тоже могла поменять
+// раскатку — например шаблоны/пакеты той же schema-версии).
 //
 // При ошибке [Apply] / любого write tx откатывается; затем ОТДЕЛЬНОЙ
 // background-tx incarnation помечается status=migration_failed с masked
@@ -1470,9 +1489,9 @@ FOR UPDATE
 	switch Status(statusStr) {
 	case StatusReady, StatusDrift:
 		// ready — штатный путь; drift (ADR-031, Scry) — информационный статус,
-		// upgrade его НЕ блокирует (как и обычный apply): новая state_schema
-		// может сама являться путём remediation расхождения. По окончании
-		// upgrade-tx статус уйдёт в ready через тот же UPDATE.
+		// upgrade его НЕ блокирует (как и обычный apply). По окончании upgrade-tx
+		// статус — снова drift (хосты ждут применения новой версии, см.
+		// финальный UPDATE), а не ready: смена БД-state ещё не раскатана на хосты.
 	case StatusApplying:
 		return nil, ErrIncarnationBusy
 	case StatusErrorLocked, StatusMigrationFailed:
@@ -1516,18 +1535,35 @@ FOR UPDATE
 		return nil, fmt.Errorf("incarnation: marshal migrated state: %w", err)
 	}
 
+	// Финальный статус — drift, НЕ ready (ADR-031, amendment поведения upgrade):
+	// upgrade сменил incarnation.state/версии в БД, но хосты остались на старой
+	// раскатке — реальное состояние расходится с новым state. drift —
+	// информационный, не блокирующий статус (ADR-031(d)): сигнал оператору
+	// «накати новую версию на хосты», remediation = обычный apply (drift→ready).
+	// Допустимый переход: gate выше пропускает в этот UPDATE только из ready/drift
+	// (applying→Busy, error_locked/migration_failed→Locked), оба валидно
+	// переходят в drift; error_locked/applying здесь недостижимы.
 	const updateSQL = `
 UPDATE incarnation
 SET state                = $2,
     state_schema_version = $3,
     service_version      = $4,
-    status               = 'ready',
+    status               = 'drift',
     status_details       = NULL,
     updated_at           = NOW()
 WHERE name = $1
 `
 	if _, err := tx.Exec(ctx, updateSQL, in.Name, finalBytes, in.TargetSchemaVer, in.TargetServiceVer); err != nil {
 		return nil, fmt.Errorf("incarnation: upgrade update: %w", err)
+	}
+
+	// Причина перехода в drift — отдельной zero-diff history-записью (после
+	// шагов миграции; state_before == state_after = пост-миграционный state).
+	// Фиксирует «upgrade to <ver>: hosts pending apply» в истории, отделяя
+	// upgrade-drift от Scry-drift при триаже (симметрично transition-записи
+	// Unlock). Общий apply_id со step-снимками связывает запись с этим upgrade-ом.
+	if err := writeUpgradeDriftHistory(ctx, tx, in, applyRes.FinalState); err != nil {
+		return nil, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -1539,6 +1575,34 @@ WHERE name = $1
 		ToSchemaVer:   in.TargetSchemaVer,
 		Steps:         len(applyRes.Steps),
 	}, nil
+}
+
+// writeUpgradeDriftHistory пишет zero-diff snapshot перехода incarnation в drift
+// по итогу upgrade-а (state_before == state_after = пост-миграционный final
+// state). scenario-метка [upgradeDriftScenarioLabel] несёт причину перехода
+// (хосты ждут применения новой версии); общий ApplyID связывает её со step-
+// снимками этого upgrade-а.
+func writeUpgradeDriftHistory(ctx context.Context, tx ExecQueryRower, in UpgradeInput, finalState map[string]any) error {
+	stateBytes, err := marshalJSONB(finalState)
+	if err != nil {
+		return fmt.Errorf("incarnation: marshal state (drift-transition history): %w", err)
+	}
+	var changedByArg any
+	if in.ChangedByAID != nil {
+		changedByArg = *in.ChangedByAID
+	}
+	const historyInsertSQL = `
+INSERT INTO state_history (
+    history_id, incarnation_name, scenario, state_before, state_after,
+    changed_by_aid, apply_id
+) VALUES ($1, $2, $3, $4, $4, $5, $6)
+`
+	if _, err := tx.Exec(ctx, historyInsertSQL,
+		audit.NewULID(), in.Name, upgradeDriftScenarioLabel, stateBytes, changedByArg, in.ApplyID,
+	); err != nil {
+		return fmt.Errorf("incarnation: insert drift-transition state_history: %w", err)
+	}
+	return nil
 }
 
 // writeMigrationHistory пишет per-step snapshot цепочки в state_history. Один

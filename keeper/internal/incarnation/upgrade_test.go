@@ -174,9 +174,10 @@ func TestUpgradeStateSchema_HappyMultiStep(t *testing.T) {
 		t.Error("tx not committed")
 	}
 
-	// 2 INSERT state_history (per-step) + 1 UPDATE incarnation = 3 Exec.
-	if tx.execN != 3 {
-		t.Fatalf("Exec calls = %d, want 3 (2 history + 1 update)", tx.execN)
+	// 2 INSERT state_history (per-step) + 1 UPDATE incarnation + 1 INSERT
+	// drift-transition history = 4 Exec.
+	if tx.execN != 4 {
+		t.Fatalf("Exec calls = %d, want 4 (2 step-history + update + drift-history)", tx.execN)
 	}
 	for i := 0; i < 2; i++ {
 		if !strings.Contains(tx.execSQLs[i], "INSERT INTO state_history") {
@@ -214,6 +215,162 @@ func TestUpgradeStateSchema_HappyMultiStep(t *testing.T) {
 	if up[3] != "v3.0.0" {
 		t.Errorf("UPDATE service_version arg = %v, want v3.0.0", up[3])
 	}
+	// Финальный статус — drift, НЕ ready (ADR-031 amendment): хосты ждут
+	// применения новой версии. status — литерал в SQL (не bind-arg), проверяем
+	// текст UPDATE-statement-а.
+	if !strings.Contains(tx.execSQLs[2], "status               = 'drift'") {
+		t.Errorf("UPDATE statement = %q, want status='drift' (ADR-031 upgrade→drift)", tx.execSQLs[2])
+	}
+
+	// Drift-transition history (Exec[3]): scenario=upgrade-pending-apply,
+	// zero-diff (state_before==state_after = пост-миграционный final state),
+	// общий apply_id со step-снимками.
+	if !strings.Contains(tx.execSQLs[3], "INSERT INTO state_history") {
+		t.Fatalf("Exec[3] = %q, want drift-transition state_history INSERT", tx.execSQLs[3])
+	}
+	dh := tx.execArgs[3]
+	if dh[2] != upgradeDriftScenarioLabel {
+		t.Errorf("drift-history scenario = %v, want %q", dh[2], upgradeDriftScenarioLabel)
+	}
+	if string(dh[3].([]byte)) != string(up[1].([]byte)) {
+		t.Errorf("drift-history state не равен пост-миграционному: %s vs %s", dh[3], up[1])
+	}
+	if dh[5] != "01HUPGRADE0000000000000000" {
+		t.Errorf("drift-history apply_id = %v, want shared ApplyID", dh[5])
+	}
+}
+
+// upgradeUPDATEStatus извлекает финальный статус из перехвата Exec-вызовов
+// upgrade-tx: ищет UPDATE incarnation, ставящий статус, и возвращает значение
+// литерала status='<x>'. Статус — литерал в SQL (не bind-arg), поэтому парсим
+// текст statement-а. Пустая строка, если UPDATE incarnation не найден.
+func upgradeUPDATEStatus(t *testing.T, tx *fakeTx) string {
+	t.Helper()
+	for _, sql := range tx.execSQLs {
+		if !strings.Contains(sql, "UPDATE incarnation") || !strings.Contains(sql, "state_schema_version") {
+			continue
+		}
+		const marker = "status               = '"
+		i := strings.Index(sql, marker)
+		if i < 0 {
+			t.Fatalf("UPDATE incarnation без status-литерала: %q", sql)
+		}
+		rest := sql[i+len(marker):]
+		j := strings.IndexByte(rest, '\'')
+		if j < 0 {
+			t.Fatalf("незакрытый status-литерал в UPDATE: %q", sql)
+		}
+		return rest[:j]
+	}
+	return ""
+}
+
+// TestUpgradeStateSchema_FinalStatusDrift — ПОВЕДЕНЧЕСКИЙ ИНВАРИАНТ (ADR-031
+// amendment, ловит регресс): по успешному upgrade incarnation ОБЯЗАНА уйти в
+// status=drift, НЕ ready. Дыра upgrade↔хосты: БД-state сменился, но хосты
+// остались на старой раскатке — drift сигналит оператору «накати на хосты».
+// Если будущая правка вернёт 'ready' в финальный UPDATE — тест краснеет. Кейсы:
+// миграция из ready, миграция из drift (drift→drift, повторный upgrade), no-op
+// ref-bump.
+func TestUpgradeStateSchema_FinalStatusDrift(t *testing.T) {
+	cases := []struct {
+		name      string
+		startStat string
+		chain     statemigrate.Chain
+		targetVer int
+		fromState string
+	}{
+		{"from_ready_migration", "ready", statemigrate.Chain{setStep(1, 2)}, 2, `{"v":1}`},
+		{"from_drift_migration", "drift", statemigrate.Chain{setStep(1, 2)}, 2, `{"v":1}`},
+		{"noop_ref_bump", "ready", statemigrate.Chain{}, 2, `{"v":2}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// Стартовая schema-версия FOR UPDATE-строки: для миграции =
+			// chain[0].From, для no-op = target (равна current).
+			startVer := c.targetVer
+			if len(c.chain) > 0 {
+				startVer = c.chain[0].FromVersion
+			}
+			tx := &fakeTx{
+				execErrAt: -1,
+				selectRow: scriptedRow{values: []any{[]byte(c.fromState), startVer, c.startStat}},
+			}
+			pool := &fakePool{txs: []*fakeTx{tx}}
+
+			_, err := UpgradeStateSchema(context.Background(), pool, UpgradeInput{
+				Name:             "redis-prod",
+				TargetServiceVer: "v9.9.9",
+				TargetSchemaVer:  c.targetVer,
+				Chain:            c.chain,
+				Evaluator:        newEvaluator(t),
+				ApplyID:          "01HUPGRADEDRIFT00000000000",
+			})
+			if err != nil {
+				t.Fatalf("UpgradeStateSchema: %v", err)
+			}
+			if !tx.committed {
+				t.Fatal("upgrade tx not committed")
+			}
+			if got := upgradeUPDATEStatus(t, tx); got != string(StatusDrift) {
+				t.Errorf("финальный статус = %q, want drift (ADR-031: upgrade оставляет хосты позади БД-state)", got)
+			}
+			// Причина перехода зафиксирована в истории отдельной записью.
+			var sawDriftHistory bool
+			for i, sql := range tx.execSQLs {
+				if strings.Contains(sql, "INSERT INTO state_history") && tx.execArgs[i][2] == upgradeDriftScenarioLabel {
+					sawDriftHistory = true
+				}
+			}
+			if !sawDriftHistory {
+				t.Errorf("нет state_history-записи перехода в drift (scenario=%q)", upgradeDriftScenarioLabel)
+			}
+		})
+	}
+}
+
+// TestUpgradeStateSchema_LockedStatusNotOverwritten — GUARD: блокирующие
+// статусы (error_locked / migration_failed / applying) НЕ перетираются upgrade-ом
+// в drift. Отказ до любой мутации (gate в upgradeTx): транзакция НЕ коммитится,
+// ни одного Exec. Защищает инвариант «upgrade не сбрасывает блокировку молча» —
+// error_locked/migration_failed требуют явного unlock, applying = идёт прогон.
+func TestUpgradeStateSchema_LockedStatusNotOverwritten(t *testing.T) {
+	cases := []struct {
+		status  string
+		wantErr error
+	}{
+		{"error_locked", ErrIncarnationLocked},
+		{"migration_failed", ErrIncarnationLocked},
+		{"applying", ErrIncarnationBusy},
+	}
+	for _, c := range cases {
+		t.Run(c.status, func(t *testing.T) {
+			tx := &fakeTx{
+				execErrAt: -1,
+				selectRow: scriptedRow{values: []any{[]byte(`{"v":1}`), 1, c.status}},
+			}
+			pool := &fakePool{txs: []*fakeTx{tx}}
+
+			_, err := UpgradeStateSchema(context.Background(), pool, UpgradeInput{
+				Name:             "redis-prod",
+				TargetServiceVer: "v2.0.0",
+				TargetSchemaVer:  2,
+				Chain:            statemigrate.Chain{setStep(1, 2)},
+				Evaluator:        newEvaluator(t),
+				ApplyID:          "01HUPGRADELOCKED0000000000",
+			})
+			if !errors.Is(err, c.wantErr) {
+				t.Fatalf("status=%s: err = %v, want %v", c.status, err, c.wantErr)
+			}
+			// Ни мутации, ни коммита: блокирующий статус сохранён as-is.
+			if tx.committed {
+				t.Errorf("status=%s: tx committed — блокирующий статус перетёрт", c.status)
+			}
+			if tx.execN != 0 {
+				t.Errorf("status=%s: Exec = %d, want 0 (отказ ДО мутации, статус не тронут)", c.status, tx.execN)
+			}
+		})
+	}
 }
 
 func TestUpgradeStateSchema_NoOpEmptyChain(t *testing.T) {
@@ -241,9 +398,9 @@ func TestUpgradeStateSchema_NoOpEmptyChain(t *testing.T) {
 	if !tx.committed {
 		t.Error("tx not committed")
 	}
-	// 1 zero-diff history + 1 UPDATE = 2 Exec.
-	if tx.execN != 2 {
-		t.Fatalf("Exec calls = %d, want 2 (zero-diff history + update)", tx.execN)
+	// 1 zero-diff migration-history + 1 UPDATE + 1 drift-transition history = 3 Exec.
+	if tx.execN != 3 {
+		t.Fatalf("Exec calls = %d, want 3 (zero-diff history + update + drift-history)", tx.execN)
 	}
 	// zero-diff: state_before == state_after.
 	h := tx.execArgs[0]
@@ -253,6 +410,13 @@ func TestUpgradeStateSchema_NoOpEmptyChain(t *testing.T) {
 	// service_version всё равно обновлён.
 	if tx.execArgs[1][3] != "v2.1.0" {
 		t.Errorf("UPDATE service_version = %v, want v2.1.0", tx.execArgs[1][3])
+	}
+	// No-op ref-bump тоже уходит в drift (раскатка нового ref ещё не на хостах).
+	if !strings.Contains(tx.execSQLs[1], "status               = 'drift'") {
+		t.Errorf("no-op UPDATE statement = %q, want status='drift'", tx.execSQLs[1])
+	}
+	if tx.execArgs[2][2] != upgradeDriftScenarioLabel {
+		t.Errorf("no-op drift-history scenario = %v, want %q", tx.execArgs[2][2], upgradeDriftScenarioLabel)
 	}
 }
 
