@@ -32,9 +32,8 @@ type incarnationTraitsSetArgs struct {
 }
 
 // incarnationTraitsSetOutput — output keeper.incarnation.traits-set. trait-ЗНАЧЕНИЯ
-// в output НЕ эхуются (секрет-гигиена, симметрия с audit): фиксируем факт замены
-// и набор ключей. См. operator-api.md → IncarnationGetReply за полным state — здесь
-// возвращаем компактную сводку.
+// в output НЕ эхуются (секрет-гигиена, симметрия с audit): фиксируем факт замены и
+// набор ключей. Полный state — через keeper.incarnation.get.
 type incarnationTraitsSetOutput struct {
 	Incarnation string   `json:"incarnation"`
 	Keys        []string `json:"keys"`

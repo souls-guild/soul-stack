@@ -35,7 +35,9 @@ type Purview struct {
 	// в S0 всегда false.
 	Deny bool
 
-	// Regexes — RE2-паттерны по SID. Заготовка под S2; в S0 всегда nil.
+	// Regexes — RE2-паттерны по SID (ADR-047 S2a; дедуп, отсортировано). Union по
+	// ролям. Реальный матчинг против SID — [Permission.Matches]; здесь Purview лишь
+	// несёт паттерны (как Covens несёт coven-метки).
 	Regexes []string
 
 	// SoulprintExprs — CEL-предикаты `soulprint.self.*` (ADR-047 S2b, ADR-018

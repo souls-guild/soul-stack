@@ -1,31 +1,18 @@
 {{/*
-  sentinel-users.acl — ВТОРОЙ внешний ACL-файл Redis, для sentinel-демона (aclfile в
-  sentinel.conf, ОТДЕЛЬНЫЙ от users.acl redis-server). Контекст рендера
-  (docs/templating.md §3.2):
-    .vars.users — MAP системных ACL-юзеров sentinel-демона имя→{perms, state, password},
-                  собранный scenario сервиса из essence.system_acl_users_sentinel
-                  (default/monitoring/sentinel/haproxy с SENTINEL-командами — отличны
-                  от users.acl redis-server); password зарезолвлен keeper-side из Vault
-                  (ADR-012). Образец — Ansible templates/sentinel-users.acl.j2 роли redis.
-  Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010).
+  sentinel-users.acl — ВТОРОЙ ACL-файл Redis, для sentinel-демона (aclfile в sentinel.conf,
+  ОТДЕЛЬНЫЙ от users.acl redis-server). Go text/template strict (ADR-010). .vars.users —
+  MAP имя→{perms, state, password} служебных юзеров sentinel-демона, собран scenario;
+  password зарезолвлен keeper-side из Vault (ADR-012).
 
-  ЗАЧЕМ ОТДЕЛЬНЫЙ ФАЙЛ: у sentinel-демона и redis-server РАЗНЫЕ требования к
-  командам (sentinel|* vs обычные redis-команды), поэтому role/perms служебных
-  юзеров не совпадают (redis_system_users vs redis_sentinel_system_users роли) →
-  два aclfile. users.acl.tmpl рендерит набор redis-server, этот — sentinel-демона.
+  ЗАЧЕМ ОТДЕЛЬНЫЙ ФАЙЛ: у sentinel-демона и redis-server РАЗНЫЕ требования к командам
+  (sentinel|* vs обычные redis-команды) → role/perms служебных юзеров не совпадают → два
+  aclfile. Детерминизм порядка (range по MAP сортирует ключи) — как в users.acl.tmpl.
 
-  ДЕТЕРМИНИЗМ ПОРЯДКА (docs/templating.md §6): range по MAP обходит ключи в
-  ОТСОРТИРОВАННОМ порядке → строки стабильны между прогонами (нет ложного change в
-  core.file.rendered и лишнего onchanges-рестарта sentinel-демона).
+  Формат строки (конвенция Redis ACL): user <name> <state> #<sha256(password)> <perms>.
+  Пароль — ХЕШЕМ (sprig sha256sum), НЕ plaintext-ом.
 
-  Формат строки (конвенция Redis ACL):
-    user <name> <state> #<sha256(password)> <perms>
-  Пароль — ХЕШЕМ (#<sha256hex>, sprig sha256sum), НЕ plaintext-ом. perms — полная
-  ACL-строка sentinel-команд. state — on/off.
-
-  Пустой map → файл без юзеров (валидный aclfile). default-юзер ЗДЕСЬ присутствует
-  (в отличие от users.acl redis-server, где он в requirepass): у sentinel-демона нет
-  requirepass-эквивалента для aclfile-доступа, поэтому default объявляется тут.
+  Пустой map → файл без юзеров. ★ default-юзер ЗДЕСЬ присутствует (в отличие от users.acl,
+  где он в requirepass): у sentinel-демона нет requirepass-эквивалента для aclfile-доступа.
 */}}
 {{- range $name, $u := .vars.users }}
 user {{ $name }} {{ $u.state }} #{{ $u.password | sha256sum }} {{ $u.perms }}

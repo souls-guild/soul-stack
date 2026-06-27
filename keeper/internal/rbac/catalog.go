@@ -11,7 +11,7 @@ package rbac
 import "sort"
 
 // AllowedPermissions — каталог permission-имён из rbac.md → §Каталог
-// permissions. 71 имя MVP:
+// permissions. 102 имени (сумма категорий ниже):
 //
 //   - operator (5): create / revoke / issue-token / list / read;
 //   - role (6): create / delete / list / update / grant-operator / revoke-operator;

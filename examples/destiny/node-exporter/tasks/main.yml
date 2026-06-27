@@ -6,12 +6,11 @@
 #   install.yml    — fetch tarball → extract (подготовка артефакта в /tmp);
 #   account.yml    — group + user node_exporter + textfile-каталог
 #                    (core.file.directory);
-#   service.yml    — install бинаря node_exporter (version-aware unless) + render
-#                    hardened-unit + core.service.running + restarted (auto
-#                    daemon-reload встроен в core.service). install-шаг бинаря
-#                    здесь, а не в install.yml: его register читает onchanges
-#                    рестарта, а ядро не раскрывает register через границу include
-#                    (cross-file register — open Q tasks.md §12);
+#   service.yml    — install бинаря node_exporter (core.file.present src:) + render
+#                    hardened-unit + core.service.running + restarted (auto daemon-reload
+#                    встроен в core.service). install-шаг бинаря здесь, а не в install.yml:
+#                    его register читает onchanges рестарта, а per-file линтер отвергает
+#                    cross-file onchanges;
 #   collectors.yml — textfile-коллекторы железа smartmon/nvme/ipmi
 #                    (when: членство в input.collectors).
 

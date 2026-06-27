@@ -809,17 +809,10 @@ state_changes:
              }
            : {} }
 
-# Тело прогона — ветки диспетчера, по одной на режим. CONDITIONAL-INCLUDE
-# (orchestration.md §6, Вариант B): `when:` стоит НА include — статический
-# input-предикат по redis_type РЕАЛЬНО исключает неактивную ветку из плана
-# (render-phase group-drop), её задачи физически не рендерятся. Прежний per-task when
-# внутри cluster.yml/sentinel.yml убран (гейт переехал сюда). Порядок include —
-# cluster, sentinel; индексы не важны (ветки взаимоисключающие по enum).
-#
-# Mode-guard (прежняя core.cmd.shell-задача «режим реализован») УБРАН: неизвестный
-# redis_type отвергает input-валидация Keeper-а по enum redis_type ([sentinel,
-# cluster]) ДО рендера — раньше и понятнее, чем shell-test на Soul. enum гарантирует
-# попадание ровно в одну ветку (тихого зелёного no-op быть не может).
+# Тело прогона — ветки диспетчера, по одной на режим (CONDITIONAL-INCLUDE, см. описание
+# сценария выше). Порядок include — cluster, sentinel; индексы не важны (ветки
+# взаимоисключающие по enum). Отдельного mode-guard нет: неизвестный redis_type
+# отвергает input-валидация Keeper-а по enum ДО рендера.
 tasks:
   # ── Version-aware валидатор имён директив redis_settings (assert, #6) ─────────────
   # ★ #6 (2026-06-26): redis_settings — passthrough KEY→VALUE: input-схема пропускает

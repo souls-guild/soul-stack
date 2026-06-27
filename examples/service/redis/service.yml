@@ -214,9 +214,8 @@ state_schema:
           perms: { type: string }
           state: { type: string, enum: [on, off] }
         additionalProperties: false
-    # Хосты топологии (sid + роль). Для standalone — один primary; для cluster/
-    # sentinel наполняется сценарием create (раскладка ролей по таргетированным
-    # souls). Точная роль каждого SID в state — follow-up.
+    # Хосты топологии (sid + роль). Для cluster/sentinel наполняется сценарием create
+    # (раскладка ролей по таргетированным souls). Точная роль каждого SID в state — follow-up.
     redis_hosts:
       type: array
       items:
@@ -225,11 +224,11 @@ state_schema:
         properties:
           sid:  { type: string, format: fqdn }
           role: { type: string, enum: [primary, replica, sentinel] }
-    # Факты sentinel-режимов (master_name + quorum monitored master + тайминги
+    # Факты sentinel-режима (master_name + quorum monitored master + тайминги
     # failover). Наполняется create при redis_type=sentinel; для cluster пуст.
-    # master_ip материализуется ТОЛЬКО в sentinel_only (ВНЕШНИЙ master, заданный
-    # оператором явно — единственный факт топологии режима); в режиме sentinel
-    # master выбирается из roster-а (host-вариативен) → master_ip в state не пишется.
+    # master_ip create НЕ пишет (master выбирается из roster-а, host-вариативен) —
+    # поле остаётся в схеме лишь для back-compat с legacy-state (ремап sentinel_only,
+    # 003_to_004); current-режимы его не материализуют.
     # ★ #7 (v5): down_after_ms/failover_timeout_ms — тайминги failover (read-model
     # day-2). Из input.sentinel_down_after_ms/sentinel_failover_timeout_ms (оба default).
     redis_sentinel:

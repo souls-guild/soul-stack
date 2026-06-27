@@ -79,28 +79,19 @@ const renderContextInputPrefix = paramRenderContext + ".input."
 
 // sealRenderContextInput помечает sealed пути render_context.input.<secret> для
 // каждого secret-input активной схемы прохода (ADR-010 §7.4, механизм S-1,
-// Вариант B). Декларативно закрывает seal-разрыв, образовавшийся при отказе от
-// passthrough `params.vars`: раньше `${ input.secret }` физически жил в сырых
-// params (params.vars.<x>) и его ловил collectSealed/DetectSealed по AST; теперь
-// operator-input доезжает в шаблон через render_context.input напрямую, сырого
-// `${…}`-выражения в params нет — провенанс восстанавливается ПО СХЕМЕ (список
-// secret-имён), не по присутствию выражения.
+// Вариант B). Закрывает seal-разрыв от отказа от passthrough `params.vars`: сырого
+// `${ input.secret }` в params больше нет → collectSealed/DetectSealed его не
+// ловит, и провенанс восстанавливается ДЕКЛАРАТИВНО — ПО СХЕМЕ (список secret-имён),
+// не по присутствию выражения.
 //
-// ★УСЛОВНО (injectInput): зовётся ТОЛЬКО когда render_context.input реально
-// инъектится для этой задачи (шаблон читает `.input.*`, тот же гейт
-// tmpl.UsesRootField, что и buildRenderContext). Если input НЕ инъектится
-// (шаблон на одних `.vars` — redis), ключа render_context.input в params нет,
-// секрет туда не попадает → seal-пути под него не нужны (иначе плодили бы мёртвые
-// sealed-пути на несуществующую ячейку). Гейт держит seal-набор ровно в синхроне
-// с реальным составом render_context.
+// ★УСЛОВНО (injectInput): caller зовёт ТОЛЬКО когда render_context.input реально
+// инъектится (тот же гейт, что buildRenderContext). Иначе секрет в params не
+// попадает, и seal-пути под него лишь плодили бы мёртвые записи на несуществующую
+// ячейку — гейт держит seal-набор в синхроне с реальным составом render_context.
 //
-// Источник списка — secretInputNames(in.Scenario): secret:true + vault_scope
-// активной input-схемы прохода (scenario-проход — scenario.Input; destiny-проход
-// — destiny.Input, см. ограничение пилота в destiny.go: схема destiny-input в
-// пилоте не пробрасывается, набор пуст — vault()-провенанс destiny ловится без
-// схемы). set nil → no-op (коллекция выключена: push/trial/Acolyte). Вызывается
-// per-task ОДИН раз (secret-набор host-инвариантен): путь render_context.input.
-// <field> один и тот же на всех хостах, маскинг сверяет по ТОЧНОМУ пути.
+// Источник списка — secretInputNames(in.Scenario): destiny-проход в пилоте схему
+// destiny-input не пробрасывает (набор пуст — vault()-провенанс destiny ловится
+// без схемы). set nil → no-op. Вызывается per-task один раз (путь host-инвариантен).
 func sealRenderContextInput(set *SealedSet, in RenderInput) {
 	if set == nil {
 		return

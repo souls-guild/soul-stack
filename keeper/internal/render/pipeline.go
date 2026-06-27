@@ -67,11 +67,11 @@ func NewPipeline(vc KVReader, engine *cel.Engine, logger *slog.Logger, metrics *
 // `on:`/`where:` и возвращает плоский список отрендеренных задач + план
 // диспатча (task → хосты).
 //
-// Pilot-объём DSL: поддержаны module-задачи (включая `core.file.rendered`) с
-// sequential-исполнением и per-host fan-out-ом, а также `apply: destiny` —
-// изолированный render-проход destiny (V2, ADR-009): destiny рендерится со СВОИМ
-// input-scope, её задачи вклеиваются в общий план. Ключи serial:/run_once:/
-// block:/include:/loop:/parallel: и on: keeper → [ErrUnsupportedDSL] (слайсы B/D/E).
+// Pilot-объём DSL: поддержаны module-задачи (включая `core.file.rendered`),
+// `apply: destiny` (изолированный render-проход, V2 ADR-009), serial:/run_once:
+// (slice D), loop: (E1) и block: (C1) — все раскрываются render-time fan-out-ом
+// в плоский слой, а также `on: keeper` (renderKeeperTask). Вне pilot-объёма
+// остаётся parallel: → [ErrUnsupportedDSL]; нераскрытый include: → [ErrUnexpandedInclude].
 //
 // Index/TaskIndex — сквозной индекс по итоговому плану: scenario-задачи и
 // вклеенные destiny-задачи нумеруются единым монотонным счётчиком (связь
@@ -461,26 +461,18 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		templateContent = content
 		injectInput = uses
 
-		// Точечная инъекция destiny-локалов (vars.yml) в render_context.vars: какие
-		// `.vars.<key>` шаблон РЕАЛЬНО читает (AST). В `.vars` подкладываем ТОЛЬКО
-		// эти file-vars (buildRenderContext), а не весь vars.yml — симметрия с
-		// injectInput для `.input`. Шаблон без `.vars.<file_var>` (redis: читает
-		// task-var-ключи password/config, не file-vars) лишних file-var-ключей НЕ
-		// получает → render_context.vars БИТ-В-БИТ как был. Host-инвариантно (путь
-		// шаблона один), считаем один раз ДО per-host цикла.
+		// Точечная инъекция file-vars (vars.yml): какие `.vars.<key>` шаблон реально
+		// читает (AST) — см. buildRenderContext/referencedFileVars. Host-инвариантно
+		// (путь шаблона один), считаем один раз ДО per-host цикла.
 		keys, kerr := templateVarSubKeys(templateContent)
 		if kerr != nil {
 			return nil, fmt.Errorf("render: task %q: %w", task.Name, kerr)
 		}
 		fileVarKeys = keys
 
-		// seal S-1 (ADR-010 §7.4, Вариант B): operator-input доезжает в шаблон через
-		// render_context.input напрямую — сырого `${ input.X }` в params больше нет,
-		// collectSealed его не ловит. Помечаем sealed пути render_context.input.
-		// <secret> по СХЕМЕ — НО ТОЛЬКО когда input реально инъектится (injectInput):
-		// при шаблоне на одних `.vars` ключа render_context.input нет, секрет туда не
-		// попадает, seal под него не нужен (синхрон с реальным составом контекста).
-		// Host-инвариантно — один раз на задачу, ДО per-host цикла.
+		// seal S-1 (ADR-010 §7.4, Вариант B): помечаем sealed пути render_context.
+		// input.<secret> по схеме, под тем же injectInput-гейтом, что и инъекция
+		// самого input (детали — sealRenderContextInput/buildRenderContext §Security).
 		if injectInput {
 			sealRenderContextInput(in.Sealed, in)
 		}
@@ -497,15 +489,11 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		if err != nil {
 			return nil, fmt.Errorf("render: task %q (host %s): %w", task.Name, h.SID, err)
 		}
-		// core.file.rendered: собираем per-host render_context {vars,self,role,
-		// essence} (templating.md §3.2) и кладём в params рядом с template_content.
-		// `.vars` = РЕФЕРЕНСНЫЕ file-vars (vars.yml, только ключи fileVarKeys, что
-		// шаблон читает как `.vars.<key>`) база + CEL-rendered params.vars override
-		// (Вариант A) — file-var доступен шаблону `.vars.<x>` НАПРЯМУЮ, без passthrough.
-		// Плоский ключ vars удаляем — Soul читает корень только из render_context
-		// (template_content + render_context, см. §3.2/§6). render_context host-
-		// вариативен (self per-host) — исключён из host-инвариантной сверки ниже. Для
-		// golden-path (один хост) rt.Params несёт render_context именно этого хоста.
+		// core.file.rendered: собираем per-host render_context (buildRenderContext)
+		// и кладём в params рядом с template_content. Плоский ключ params.vars
+		// удаляем — Soul читает корень ТОЛЬКО из render_context (§3.2/§6).
+		// render_context host-вариативен (self per-host) — исключён из
+		// host-инвариантной сверки ниже; rt.Params несёт значение первого хоста.
 		if isRendered {
 			paramsVars := extractParamsVars(st)
 			delete(st.Fields, paramVars)

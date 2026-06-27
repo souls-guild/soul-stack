@@ -16,11 +16,17 @@ import (
 // на одних `.vars` не получают лишнего `input`, deep-equal-фикстуры стабильны).
 //
 // Детекция — по AST, не по string-search: `text/template/parse` отделяет
-// action-узлы (FieldNode/VariableNode внутри `{{…}}`) от литерального текста
-// (TextNode). Поэтому `# ... apply.input ...` в комментарии redis.conf.tmpl —
-// TextNode → НЕ обращение; `{{ .input.user }}` — FieldNode с Ident[0]=="input" →
-// обращение. range/if/with/pipeline-аргументы/вложенные define обходятся
-// рекурсивно.
+// action-узлы внутри `{{…}}` от литерального текста (TextNode). Поэтому
+// `# ... apply.input ...` в комментарии redis.conf.tmpl — TextNode → НЕ обращение;
+// `{{ .input.user }}` — FieldNode с Ident[0]=="input" → обращение. range/if/with/
+// pipeline-аргументы/вложенные define обходятся рекурсивно.
+//
+// Распознаётся прямая dot-форма (FieldNode `.field.sub`). Формы через переменную
+// (`{{ $.field }}` — VariableNode, `{{ $x := .field }}…{{ $x.sub }}`) и chain через
+// builtin (`index .field "sub"` даёт голый FieldNode `.field` без подключа) не
+// разворачиваются — fail-closed: input просто не инъектится, шаблон упадёт
+// strict-mode явно (не утечка). В пилот-шаблонах эти формы для корневого `.input`
+// не встречаются.
 //
 // Парсинг идёт с тем же FuncMap, что и Render (e.funcs) — кастомные/sprig-функции
 // шаблона известны парсеру, парс не падает на легальном вызове. Ошибка парсинга

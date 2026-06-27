@@ -5,35 +5,27 @@ description: >-
   optional textfile collectors (smartmon / nvme / ipmi) shipped as privileged
   oneshot timers.
 
-# Версия destiny — git ref, под которым закоммичен файл (ADR-007). Поля
-# `version:` верхнего уровня намеренно нет.
+# Версия destiny — git ref (ADR-007). Поля `version:` верхнего уровня нет. Список задач
+# — в tasks/main.yml. Только core-модули → required_modules: не нужен.
 #
-# Список задач — НЕ в этом файле. Он живёт в tasks/main.yml. Здесь только
-# манифест: input-контракт. Эта destiny использует только core-модули →
-# required_modules: не нужен.
-#
-# Стабильный сервис-аккаунт node_exporter (НЕ DynamicUser — textfile-каталог
-# должен пережить рестарт и быть доступен root-сборщикам), textfile-коллекторы
-# железа крутятся отдельными oneshot-таймерами под жёстким systemd-sandbox.
+# Стабильный сервис-аккаунт node_exporter (НЕ DynamicUser — textfile-каталог должен
+# пережить рестарт и быть доступен root-сборщикам), textfile-коллекторы железа крутятся
+# отдельными oneshot-таймерами под жёстким systemd-sandbox.
 #
 # arch НЕ во input: tarball-архитектура читается напрямую из soulprint.self.os.arch
-# (soulprint доступен в destiny-CEL — см. tasks/main.yml). soulprint отдаёт
-# значение в нотации amd64/arm64 (proto soulprint.proto), маппинг не нужен.
+# (доступен в destiny-CEL). soulprint отдаёт amd64/arm64 (proto soulprint.proto),
+# маппинг не нужен.
 
 input:
-  # version — версия node_exporter (GitHub Releases prometheus/node_exporter).
-  # REQUIRED без дефолта: версия артефакта — осознанный выбор оператора, не
-  # «какая-нибудь».
+  # REQUIRED без дефолта: версия артефакта — осознанный выбор оператора, не «какая-нибудь».
   version:
     type: string
     required: true
     format: semver
     description: Версия node_exporter (GitHub Releases prometheus/node_exporter).
 
-  # base_url — корень GitHub Releases (или подменяемое зеркало/nexus-proxy).
   # https-only (core.url отвергнёт http:// на Validate без allow_http). Полный URL
-  # tarball-а собирается CEL-ом в tasks/main.yml из base_url + version + arch
-  # (arch — из soulprint.self.os.arch).
+  # tarball-а собирается CEL-ом в tasks/main.yml из base_url + version + arch.
   base_url:
     type: string
     default: "https://github.com/prometheus/node_exporter/releases/download"
@@ -42,20 +34,16 @@ input:
       Корень загрузки релизов node_exporter. По умолчанию GitHub Releases;
       переопределяется на внутреннее зеркало/nexus-proxy.
 
-  # listen — listen-адрес node_exporter (--web.listen-address). Дефолт :9100
-  # (стандартный порт node_exporter). Caller обычно передаёт адрес, привязанный к
-  # internal-сети (см. _trial/scenario).
+  # Caller обычно передаёт адрес, привязанный к internal-сети (см. _trial/scenario).
   listen:
     type: string
     default: ":9100"
     pattern: "^[A-Za-z0-9._-]*:[0-9]{1,5}$"
     description: Listen-адрес node_exporter (--web.listen-address). По умолчанию :9100.
 
-  # collectors — какие textfile-коллекторы железа устанавливать. Каждый ставит
-  # пакет + скрипт-сборщик + oneshot .service/.timer. systemd-Condition в юнитах
-  # не даёт коллектору стартовать на VM/без соответствующего железа (smartmon —
-  # ConditionVirtualization=no, nvme — наличие /dev/nvme*, ipmi — /dev/ipmi0),
-  # поэтому установка коллектора безопасна и там, где железа нет.
+  # systemd-Condition в юнитах не даёт коллектору стартовать без железа (smartmon —
+  # ConditionVirtualization=no, nvme — /dev/nvme*, ipmi — /dev/ipmi0), поэтому установка
+  # коллектора безопасна и там, где железа нет.
   collectors:
     type: array
     default: [smartmon, nvme, ipmi]
@@ -105,9 +93,7 @@ input:
   #    (условный рендер в templates/node_exporter.service.tmpl). Web-config-TLS
   #    сознательно НЕ включён — отдельная сущность. ──────────────────────────────
 
-  # gomaxprocs — GOMAXPROCS демона (--runtime.gomaxprocs). 0 = НЕ задавать (Go сам
-  # берёт число CPU). wb-роль пинит 4: на больших хостах ограничение нужно, чтобы
-  # exporter не разворачивал планировщик на все ядра. >0 → --runtime.gomaxprocs=N.
+  # Рендер: 0 → флаг опущен (Go сам по числу CPU); >0 → --runtime.gomaxprocs=N.
   gomaxprocs:
     type: integer
     default: 0
@@ -116,9 +102,7 @@ input:
       GOMAXPROCS демона (--runtime.gomaxprocs). 0 — не задавать (Go сам по числу
       CPU); >0 — закрепить лимит горутин-планировщика (wb пинит 4).
 
-  # disabled_collectors — коллекторы под гашение (--no-collector.<name> per item).
-  # Главный пробел vs wb-роль: гасить шумные/дорогие коллекторы (например mdadm,
-  # arp, infiniband) точечно, не отключая остальное. Имена — БЕЗ префикса collector.
+  # Точечно гасить шумные/дорогие коллекторы, не отключая остальное.
   disabled_collectors:
     type: array
     default: []
@@ -129,8 +113,6 @@ input:
       Коллекторы для отключения (--no-collector.<name> на элемент). Имена без
       префикса collector. (например: mdadm, arp). Гасит шумные/дорогие коллекторы.
 
-  # enabled_collectors — включить disabled-by-default коллекторы (--collector.<name>
-  # per item; например systemd, processes). Имена — БЕЗ префикса collector.
   enabled_collectors:
     type: array
     default: []
@@ -141,11 +123,9 @@ input:
       Коллекторы для явного включения (--collector.<name> на элемент). Имена без
       префикса collector. (например: systemd, processes) — disabled-by-default.
 
-  # collector_options — под-опции коллекторов (--collector.<name>.<key>=<value>).
-  # Формат B1: отдельный input-map имя-коллектора→{ключ: значение}, образец
-  # redis.users (map<string, map<string, string>>). Рендерится двойным range по
-  # ОТСОРТИРОВАННЫМ ключам (детерминизм ExecStart). Runtime-валидация вглубь map не
-  # идёт (MVP, как redis.users); схема описывает структуру для документации/формы.
+  # Формат B1: map имя-коллектора→{ключ: значение} (map<string, map<string, string>>).
+  # Рендерится двойным range по ОТСОРТИРОВАННЫМ ключам (детерминизм ExecStart). Runtime-
+  # валидация вглубь map не идёт (MVP); схема описывает структуру для формы.
   collector_options:
     type: object
     default: {}
@@ -161,32 +141,26 @@ input:
       additional_properties:
         type: string
 
-  # web_telemetry_path — путь HTTP-эндпоинта метрик (--web.telemetry-path). Дефолт
-  # непустой (/metrics), поэтому флаг в ExecStart рендерится ВСЕГДА (без условного
-  # опускания, в отличие от fs/netdev-exclude).
+  # Дефолт непустой → флаг в ExecStart рендерится ВСЕГДА (в отличие от fs/netdev-exclude).
   web_telemetry_path:
     type: string
     default: "/metrics"
     pattern: "^/.*"
     description: Путь HTTP-эндпоинта метрик (--web.telemetry-path). По умолчанию /metrics.
 
-  # log_level — уровень лога демона (--log.level). Дефолт info.
   log_level:
     type: string
     default: info
     enum: [debug, info, warn, error]
     description: Уровень логирования node_exporter (--log.level). По умолчанию info.
 
-  # log_format — формат лога демона (--log.format). Дефолт logfmt.
   log_format:
     type: string
     default: logfmt
     enum: [logfmt, json]
     description: Формат логов node_exporter (--log.format). По умолчанию logfmt.
 
-  # fs_mount_points_exclude — regex путей-точек монтирования, исключаемых из
-  # filesystem-коллектора (--collector.filesystem.mount-points-exclude). Пусто =
-  # НЕ задавать (node_exporter применит свой встроенный дефолт-regex).
+  # Пусто → флаг опущен (node_exporter применит свой встроенный дефолт-regex).
   fs_mount_points_exclude:
     type: string
     default: ""
@@ -194,8 +168,6 @@ input:
       Regex точек монтирования для исключения из filesystem-коллектора
       (--collector.filesystem.mount-points-exclude). Пусто — не задавать.
 
-  # netdev_device_exclude — regex сетевых интерфейсов, исключаемых из netdev-
-  # коллектора (--collector.netdev.device-exclude). Пусто = НЕ задавать.
   netdev_device_exclude:
     type: string
     default: ""

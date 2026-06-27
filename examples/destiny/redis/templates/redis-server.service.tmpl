@@ -1,26 +1,18 @@
 {{/*
-  systemd-юнит redis-server для binary-установки (install.method=binary). Distro-
-  пакет несёт свой redis-server.service; при upstream-tarball-е его нет → install.yml
-  рендерит ЭТОТ полный юнит. ★ Имя файла — redis-server.service (НЕ redis.service):
-  так server.yml hardening drop-in (/etc/systemd/system/redis-server.service.d/
-  hardening.conf) ложится поверх ЭТОГО юнита, и core.service redis-server рестарт
-  работает В ОБЕИХ install-ветках без ветвления.
+  systemd-юнит redis-server для binary-установки (install.method=binary). Distro-пакет
+  несёт свой redis-server.service; при upstream-tarball-е его нет → install.yml рендерит
+  ЭТОТ полный юнит. Go text/template strict (ADR-010). Контекст: .vars.bin_dir/conf_dir +
+  redis_user/redis_group.
 
-  Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010). .vars:
-    .vars.bin_dir   — каталог бинарей binary-ветки (vars.redis_bin_dir, /usr/local/bin —
-                      install.yml разложил redis-server/redis-cli туда core.file.present src:);
-    .vars.conf_dir  — conf-каталог (redis.conf лежит тут, vars.redis_conf_dir_eff);
-    .vars.redis_user/.vars.redis_group — system-аккаунт сервиса (vars.redis_user/_group).
-  .self юнит не использует.
+  ★ Имя файла — redis-server.service (НЕ redis.service): так server.yml hardening drop-in
+  (redis-server.service.d/hardening.conf) ложится поверх ЭТОГО юнита, и core.service
+  рестарт работает В ОБЕИХ install-ветках без ветвления.
 
-  Type=notify + supervised systemd в redis.conf (redis.conf.tmpl: supervised systemd):
-  redis-server остаётся foreground-процессом и сам уведомляет systemd о готовности —
-  симметрично дистрибутивному юниту, чтобы поведение совпало с package-веткой.
+  Type=notify + supervised systemd (симметрично дистрибутивному юниту).
 
   HARDENING тут НЕ дублируется: ProtectSystem/ReadWritePaths/Capability… доезжают
-  отдельным drop-in (hardening.conf.tmpl, server.yml) поверх этого юнита — общий для
-  обеих веток источник истины hardening. Здесь — только базовый запуск + User/Group/
-  RuntimeDirectory (то, что несёт дистрибутивный unit), drop-in мержит остальное.
+  отдельным drop-in (hardening.conf.tmpl, server.yml) — общий для обеих веток источник
+  истины. Здесь — только базовый запуск + User/Group/RuntimeDirectory.
 */}}
 [Unit]
 Description=Redis In-Memory Data Store

@@ -1,22 +1,12 @@
 {{/*
-  systemd-юнит redis-sentinel (режим sentinel). В отличие от redis-server (его
-  юнит несёт дистрибутивный пакет), отдельный sentinel-демон в этой раскладке
-  управляется СВОИМ юнитом — пакет не всегда заводит redis-sentinel.service под
-  нужный конфиг. Полный юнит, не drop-in.
+  systemd-юнит redis-sentinel (режим sentinel). В отличие от redis-server (его юнит несёт
+  дистрибутивный пакет), sentinel-демон управляется СВОИМ юнитом — пакет не всегда заводит
+  redis-sentinel.service под нужный конфиг. Полный юнит, не drop-in. Go text/template strict
+  (ADR-010). Контекст: .vars.sentinel_bin/cli_bin (/usr/bin при package, /usr/local/bin при
+  binary), conf_dir/sentinel_port, redis_user/redis_group, data_dir/log_dir/run_dir (RW-пути
+  hardening). Так один шаблон обслуживает обе install-ветки.
 
-  Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010). .vars:
-    .vars.sentinel_bin   — путь redis-sentinel (/usr/bin при install.method=package,
-                           /usr/local/bin при binary — где их разложил install.yml);
-    .vars.cli_bin        — путь redis-cli (для ExecStop shutdown);
-    .vars.conf_dir       — conf-каталог (sentinel.conf лежит тут, vars.redis_conf_dir_eff);
-    .vars.sentinel_port  — sentinel-порт для ExecStop shutdown (vars.sentinel_port);
-    .vars.redis_user/.vars.redis_group — system-аккаунт сервиса (vars.redis_user/_group);
-    .vars.data_dir/.vars.log_dir/.vars.run_dir — RW-каталоги hardening (ProtectSystem
-                           =strict требует явных ReadWritePaths под фактические пути).
-  Так один юнит-шаблон обслуживает обе install-ветки без дубля.
-
-  Type=notify + supervised systemd в sentinel.conf: redis-sentinel остаётся
-  foreground-процессом и сам уведомляет systemd о готовности.
+  Type=notify + supervised systemd (sentinel.conf).
 */}}
 [Unit]
 Description=Redis Sentinel

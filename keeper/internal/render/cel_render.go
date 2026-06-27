@@ -96,47 +96,31 @@ func evalWhere(engine *cel.Engine, where string, vars cel.Vars) (bool, error) {
 	return evalBoolExpr(engine, "where", where, vars)
 }
 
-// resolveTaskVars собирает финальный слой `vars.*` для рендера одной задачи на
-// одном хосте: БАЗА — резолвленные destiny-локалы `vars.yml` (fileVars,
-// docs/destiny/vars.md), ПОВЕРХ — task-level `vars:` (taskVars, destiny/tasks.md
-// §9). Вариант A (vars.md «Слияние file-vars ↔ task-vars»): task-var переопределяет
-// одноимённый file-var.
+// resolveTaskVars собирает финальный слой `vars.*` одной задачи на одном хосте:
+// БАЗА — резолвленные destiny-локалы `vars.yml` (fileVars), ПОВЕРХ — task-level
+// `vars:` (taskVars). Вариант A (vars.md): одноимённый task-var перетирает
+// file-var. В scenario-проходе fileVars пуст (vars.yml — destiny-сущность),
+// поведение scenario-задач БИТ-В-БИТ как до фичи. Оба пусты → base без изменений.
 //
-// fileVars уже резолвлены ОДИН раз на destiny-проход (resolveDestinyVars над
-// destiny-env input+soulprint.self+incarnation, изолированно от scenario-scope) —
-// здесь они только подкладываются базой. В scenario-проходе fileVars пуст (vars.yml
-// — destiny-сущность); поведение scenario-задач БИТ-В-БИТ как до фичи.
-//
-// taskVars резолвятся через resolveVarLayer над base, где base.Vars ПУСТ на старте
-// слоя — task-var видит ТОЛЬКО task-var того же слоя (var→var разрешён внутри слоя,
-// eager-topological), но НЕ file-var (межслойная изоляция: `${ vars.<file_var> }` в
-// task-var → ErrVarUnknownRef). Это сознательно: file-vars в base.Vars НЕ кладутся
-// ДО резолва task-vars, иначе task-var мог бы сослаться на file-var и нарушить
-// межслойную границу. Цикл task-var→task-var → ErrVarCycle, ссылка на несуществующий
-// task-var → ErrVarUnknownRef (зеркало resolveDestinyVars). Порядок ключей в taskVars
-// безразличен.
-//
-// file-vars подкладываются под task-vars ПОСЛЕ резолва (override, Вариант A):
-// одноимённый task-var перетирает file-var в финальной карте.
-//
-// Оба пусты → base без изменений (Vars=nil → штатный no-such-key на `vars.<key>`).
+// КРИТИЧНО (межслойная изоляция): taskVars резолвятся resolveVarLayer-ом с ПУСТЫМ
+// base.Vars на старте — task-var видит ТОЛЬКО task-var своего слоя (var→var внутри
+// слоя, eager-topological), но НЕ file-var. file-vars НЕ кладутся в base.Vars ДО
+// резолва task-vars сознательно: иначе `${ vars.<file_var> }` в task-var
+// резолвился бы вместо ErrVarUnknownRef, нарушив границу. Цикл task-var→task-var →
+// ErrVarCycle (зеркало resolveDestinyVars).
 func resolveTaskVars(engine *cel.Engine, fileVars, taskVars map[string]any, base cel.Vars) (cel.Vars, error) {
 	if len(fileVars) == 0 && len(taskVars) == 0 {
 		return base, nil
 	}
-	// task-vars резолвятся СВОИМ слоем над base с пустым base.Vars (resolveVarLayer
-	// накапливает их сам) — file-vars не видны, var→var живёт внутри task-слоя.
 	resolvedTask, err := resolveVarLayer(engine, taskVars, base)
 	if err != nil {
 		return cel.Vars{}, err
 	}
 	resolved := make(map[string]any, len(fileVars)+len(resolvedTask))
-	// База: file-vars уже резолвлены — копируются как есть (без CEL).
-	for key, val := range fileVars {
+	for key, val := range fileVars { // база: file-vars уже резолвлены (без CEL)
 		resolved[key] = val
 	}
-	// Поверх: task-vars перезаписывают одноимённые file-vars (Вариант A).
-	for key, val := range resolvedTask {
+	for key, val := range resolvedTask { // override: task-var перетирает file-var
 		resolved[key] = val
 	}
 	base.Vars = resolved
@@ -225,59 +209,30 @@ func hostRegister(in RenderInput, host *topology.HostFacts) map[string]any {
 	return in.Register
 }
 
-// buildRenderContext собирает корень text/template-контекста для шага
-// core.file.rendered по нормативу templating.md §3.2: `{ vars, self, role,
-// essence }` + УСЛОВНО `input`. Это per-host структура (self host-вариативен),
-// которую Keeper кладёт в params.render_context и доставляет Soul-у; Soul
-// передаёт её КОРНЕМ в text/template (rendered.go), поэтому шаблон видит
-// `.vars.*`/`.self.*`/`.role`/`.essence.*` (и `.input.*` при injectInput).
+// buildRenderContext собирает per-host корень text/template-контекста шага
+// core.file.rendered (templating.md §3.2): `{ vars, self, role, essence }` +
+// УСЛОВНО `input`. Soul передаёт его КОРНЕМ в text/template (rendered.go).
 //
-// self — ТА ЖЕ soulprintSelfMap, что в CEL-фазе (hostVars): единая точка правды
-// (ADR-018, soulprint.self.<path> в CEL ≡ .self.<path> в шаблоне). vars — слияние
-// РЕФЕРЕНСНЫХ destiny-локалов `vars.yml` (fileVars, БАЗА — только ключи, что шаблон
-// читает как `.vars.<key>`, см. referencedFileVars) и CEL-резолвленного
-// `params.vars` шага (override); под ключ vars, НЕ плоским корнем. essence —
-// effective-слой incarnation (host-инвариантный snapshot). role — declared-роль
-// хоста из spec (bootstrap-create; может быть "").
+//   - self — та же soulprintSelfMap, что в CEL-фазе (ADR-018: soulprint.self.<p>
+//     в CEL ≡ .self.<p> в шаблоне). role — declared-роль хоста (может быть "").
+//   - vars — file-vars (база, fileVars) + params.vars шага (override) — зеркало
+//     resolveTaskVars в CEL-фазе (Вариант A vars.md), под ключ vars, НЕ плоско.
+//     fileVars точечны (referencedFileVars: только ключи, что шаблон читает как
+//     `.vars.<key>`) — шаблон без `.vars.<file_var>` лишних не получает, его
+//     `.vars` БИТ-В-БИТ как до фичи. scenario-проход → fileVars пуст.
+//   - input — operator-input прохода (Вариант B, ADR-010 §3.2): кладётся ТОЛЬКО
+//     при injectInput (шаблон реально читает `.input.*`, детект по AST). vars-only
+//     шаблоны input НЕ получают → их render_context БИТ-В-БИТ как до Варианта B.
+//     injectInput && nil-Input → пустой map (`.input.*` упадёт strict-mode, что
+//     корректно).
 //
-// vars-слой ЗЕРКАЛИТ CEL-фазу (resolveTaskVars, Вариант A vars.md): file-vars
-// доступны шаблону как `.vars.<file_var>` НАПРЯМУЮ, без redundant passthrough
-// через `params.vars` каждого file-var (node-exporter: `.vars.bin_path`). Поверх
-// file-vars кладётся `params.vars` шага — одноимённый task-var перетирает file-var
-// (детерминированный override). ТОЧЕЧНОСТЬ (referencedFileVars): подкладываются
-// только file-vars, чей ключ шаблон реально читает — шаблон без `.vars.<file_var>`
-// (redis: читает task-var-ключи) лишних file-var-ключей НЕ получает, его `.vars`
-// БИТ-В-БИТ как до фичи. В scenario-проходе fileVars пуст (vars.yml — destiny-
-// сущность) → `.vars` = только params.vars, поведение БИТ-В-БИТ как было.
-//
-// input — резолвнутый operator-input прохода (Вариант B, ADR-010 §3.2
-// amendment): шаблон читает `.input.<name>` напрямую, без passthrough
-// `params.vars` каждого input-поля. Источник — in.Input (host-инвариантен: общий
-// контекст прогона). ★УСЛОВНО: ключ `input` кладётся ТОЛЬКО когда injectInput ==
-// true — т.е. шаблон реально читает `.input.*` (детект по AST до per-host цикла,
-// renderTaskIter → tmpl.UsesRootField). Шаблоны на одних `.vars` (redis: секреты
-// едут через `.vars`) `input` НЕ получают → их render_context БИТ-В-БИТ как до
-// Варианта B (deep-equal-фикстуры стабильны, секреты в render_context.input не
-// попадают). При injectInput && nil-Input → пустой map: `.input.*` упадёт
-// strict-mode на незаявленном поле, что корректно.
-//
-// ★Security (seal S-1, ADR-010 §7.4): убрав passthrough vars, теряем
-// seal-провенанс секретов из сырых params (раньше `${ input.secret }` физически
-// в params.vars → collectSealed ловил). Провенанс восстанавливается
-// ДЕКЛАРАТИВНО — caller (renderTaskIter) помечает sealed пути
-// `render_context.input.<secret>` для каждого secret-input активной схемы
-// (sealRenderContextInput), И ТОЛЬКО когда input реально инъектится (тот же
-// injectInput-гейт), а не по присутствию выражения в params.
-//
-// fileVars — резолвленные destiny-локалы `vars.yml` хоста (база `.vars`-слоя,
-// fileVarsForHost). paramsVars — CEL-rendered значение `params.vars` шага (override).
-// Оба nil/пусты → `.vars` пустой map: шаблон с `.vars.*` упадёт strict-mode, что
-// корректно — обращение к незаявленной vars-переменной = ошибка автора.
+// ★Security (seal S-1, ADR-010 §7.4): без passthrough vars сырого `${ input.secret }`
+// в params больше нет → collectSealed его не видит. Провенанс восстанавливает
+// caller (renderTaskIter → sealRenderContextInput) ДЕКЛАРАТИВНО по схеме, под тем
+// же injectInput-гейтом.
 func buildRenderContext(in RenderInput, host *topology.HostFacts, fileVars, paramsVars map[string]any, injectInput bool) map[string]any {
-	// `.vars` = file-vars (база) + params.vars (override) — Вариант A, как
-	// resolveTaskVars в CEL-фазе. Зеркало гарантирует: file-var виден и в params
-	// (CEL `vars.<x>`), и в шаблоне (`.vars.<x>`). orEmptyMap нормализует nil
-	// (mergeVars отдаёт nil при обоих пустых) — `.vars` всегда присутствует ключом.
+	// orEmptyMap нормализует nil (mergeVars отдаёт nil при обоих пустых) — `.vars`
+	// всегда присутствует ключом, шаблон с `.vars.*` падает осмысленно, не panic.
 	rc := map[string]any{
 		"vars":    orEmptyMap(mergeVars(fileVars, paramsVars)),
 		"self":    soulprintSelfMap(host),

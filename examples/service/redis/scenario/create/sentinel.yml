@@ -109,12 +109,12 @@
       # (compute.modules_base_url из essence), host-инвариант → apply.input; арх-URL
       # строит destiny per-host, .so качаются по content-идемпотентности (без verify).
       modules_base_url: "${ compute.modules_base_url }"
-      # Host-tuning extras (концепция роли), режим-агностичны — как в standalone/cluster.
+      # Host-tuning extras (концепция роли), режим-агностичны — как в cluster.yml.
       # THP/logrotate/sysctl БЕЗУСЛОВНЫ (рекомендация Redis / hardening) — операторских
       # флагов нет, задачи destiny `redis` всегда активны. sysctl_settings — essence,
       # host-инвариантна → apply.input.
       sysctl_settings:  "${ default(essence.sysctl_settings, {}) }"
-      # TLS — единый dict (enable/only/port + cert_ref/key_ref/ca_ref) — см. standalone.
+      # TLS — единый dict (enable/only/port + cert_ref/key_ref/ca_ref), как cluster.yml.
       # HOST-ИНВАРИАНТ → apply.input. enable/only/port — compute-vars (2 галочки
       # tls_enabled/tls_keep_plain + порт из essence, #5). cert_ref/key_ref/ca_ref —
       # Vault-ПУТИ (destiny читает PEM через vault() в ячейке content, seal-маскинг);

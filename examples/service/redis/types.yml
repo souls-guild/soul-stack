@@ -30,13 +30,8 @@ types:
       # pattern — НЕ полный Redis-парсер, а token-shape-фильтр (re2): отшивает
       # произвольный текст, переводы строк, пробелы-в-токене, shell-инъекции
       # (`;`/`|`-вне-сабкоманды/`&&`/backticks/`$()`) и неизвестные сигилы;
-      # семантику добивает Redis на `ACL SETUSER`. Вся строка = пробел-разделённые
-      # токены, каждый — одна из форм: ключи `~pat`/`%R~`/`%W~`/`%RW~`/`allkeys`;
-      # каналы `&pat`/`allchannels`; команды `+cmd`/`-cmd`/`+@cat`/`-@cat`/
-      # `+cmd|sub`/`allcommands`/`nocommands`; служебные `on`/`off`/`nopass`/
-      # `resetpass`/`reset`/`clearselectors`/`(no|skip-|)sanitize-payload`;
-      # пароли `>pwd`/`<pwd`/`#hex64`/`!hex64`; селектор `(...)` (один chunk без
-      # вложенных скобок). Сам pattern допускает пустую строку, но perms в
+      # семантику добивает Redis на `ACL SETUSER`. Перечень допустимых форм токена —
+      # в description ниже. Сам pattern допускает пустую строку, но perms в
       # object-level required → пустую отсекает required-логика ДО pattern;
       # бесправный юзер выражается токеном `off`, не пустой строкой.
       # Пароли в perms-строке маскируются на выходе (логи/UI) общим secret-маскингом.

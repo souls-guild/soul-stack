@@ -1,33 +1,18 @@
 # tasks/sentinel.yml — sentinel-демон (режим sentinel/sentinel_only). ВЕСЬ файл gated
-# на sentinel_enabled — гейт стоит НА include (main.yml: `when:
-# default(input.sentinel_enabled, false)`, conditional-include ADR-009 amendment), а
-# НЕ внутри файла. Вне sentinel-режима include дропается целиком (render-phase
-# group-drop): задачи sentinel физически отсутствуют в плане, не placeholder-skip.
-# master-election (кто master) делает scenario сервиса run_once и передаёт ГОТОВЫЕ
-# master_ip/master_port — destiny остаётся режим-агностичным «глупым» кирпичом.
+# на sentinel_enabled НА include (main.yml, conditional-include ADR-009 amendment), НЕ
+# внутри файла. Вне sentinel-режима include дропается целиком (group-drop). master-
+# election делает scenario сервиса run_once и передаёт ГОТОВЫЕ master_ip/master_port —
+# destiny остаётся режим-агностичным «глупым» кирпичом.
 #
 # ★ register'ы redis_sentinel_conf/redis_sentinel_unit и их onchanges-рестарт ОБЯЗАНЫ
-#   жить В ЭТОМ файле: register-ссылки в onchanges валидирует ЗАГРУЗОЧНЫЙ per-file
-#   линтер (validateTaskRefs, shared/config/destiny_tasks.go) — cross-file onchanges
-#   отвергается как unknown_register_reference. Within-destiny include уплощается ДО
-#   render (tasks.md §4) — keeper-side registerIndex плоский, — но проверка ссылок
-#   остаётся per-file. Явного daemon-reload-шага НЕТ: core.service (daemon_reload: auto)
-#   сам перечитывает unit при смене redis-sentinel.service ПЕРЕД restart, поэтому
-#   рестарт после смены юнита идёт ЧЕРЕЗ core.service.restarted (а не raw exec).
-#
-# ★ Прежде гейт sentinel_enabled жил во ВНЕШНЕМ block (block static-skip) — теперь он
-# на include (conditional-include): один статический input-предикат гасит группу
-# РЕАЛЬНЫМ исключением из плана. Внешний block-обёртка убран как избыточный (гейт
-# дублировал бы include-when). Задачи file внутренних when: не несут — на keep
-# (include-when истинно) рендерятся обычным путём.
+#   жить В ЭТОМ файле: per-file линтер (validateTaskRefs) отвергает cross-file onchanges.
+#   Явного daemon-reload-шага НЕТ: core.service (daemon_reload: auto) сам перечитывает
+#   unit ПЕРЕД restart — поэтому рестарт идёт ЧЕРЕЗ core.service.restarted (не raw exec).
 
-# sentinel-users.acl — ВТОРОЙ aclfile, ТОЛЬКО для sentinel-демона (отдельный
-# perms-набор: sentinel-команды). register — рестартить демон при изменении набора.
-# owner/group redis, mode 0640 — содержит password-хеши, читает только сервис.
-# Шаблон range-ит MAP (сортировка ключей → детерминизм) и хеширует пароль (sha256).
-# Пустой/не передан input.sentinel_users → файл без юзеров (валидный aclfile;
-# back-compat — destiny без поля рендерит пустой). ДО sentinel.conf: его aclfile-
-# директива ссылается на этот файл, при старте sentinel обязан его найти.
+# sentinel-users.acl — ВТОРОЙ aclfile, ТОЛЬКО для sentinel-демона (отдельный perms-набор:
+# sentinel-команды). register — рестарт демона при изменении. owner/group redis, mode
+# 0640 (password-хеши). Пустой/не передан → пустой aclfile (back-compat). ДО sentinel.conf:
+# его aclfile-директива ссылается на этот файл, sentinel обязан его найти при старте.
 - name: Render sentinel-users.acl
   module: core.file.rendered
   register: redis_sentinel_acl
@@ -62,13 +47,10 @@
       auth_user:   "${ default(input.sentinel.auth_user, '') }"
       auth_pass:   "${ default(input.sentinel.auth_pass, '') }"
       sentinel_config: "${ default(input.sentinel.config, {}) }"
-      # host-layout (директива B): шаблон выводит `dir` (рабочий каталог sentinel) из
-      # data_dir и `aclfile` (sentinel-users.acl) из conf_dir. Эффективные значения с
-      # дефолтами /var/lib/redis (vars.redis_data_dir) / /etc/redis (vars.redis_conf_dir).
+      # host-layout (директива B): шаблон выводит `dir` из data_dir и `aclfile`
+      # (sentinel-users.acl) из conf_dir.
       data_dir:    "${ vars.redis_data_dir_eff }"
       conf_dir:    "${ vars.redis_conf_dir_eff }"
-      # port/run_dir/log_dir из vars (директива «хардкод → var»): sentinel-порт 26379,
-      # системные каталоги pidfile/logfile (/var/run/redis, /var/log/redis) устранены.
       port:        "${ vars.sentinel_port }"
       run_dir:     "${ vars.run_dir }"
       log_dir:     "${ vars.log_dir }"
@@ -82,7 +64,6 @@
   module: core.file.rendered
   register: redis_sentinel_unit
   params:
-    # Путь юнит-файла из vars.systemd_dir + имени sentinel-сервиса (директива A).
     path: "${ vars.systemd_dir + '/' + vars.sentinel_service_name + '.service' }"
     template: templates/redis-sentinel.service.tmpl
     mode: "${ vars.unit_file_mode }"
@@ -95,8 +76,6 @@
     vars:
       sentinel_bin: "${ has(input.install) && has(input.install.method) && input.install.method == 'binary' ? vars.redis_bin_dir : '/usr/bin' }"
       cli_bin:      "${ has(input.install) && has(input.install.method) && input.install.method == 'binary' ? vars.redis_bin_dir : '/usr/bin' }"
-      # Путь конфига/порт/аккаунт/RW-каталоги из vars (директива «хардкод → var»):
-      # литералы /etc/redis, 26379, redis, /var/lib|log|run/redis по шаблону устранены.
       conf_dir:      "${ vars.redis_conf_dir_eff }"
       sentinel_port: "${ vars.sentinel_port }"
       redis_user:    "${ vars.redis_user }"

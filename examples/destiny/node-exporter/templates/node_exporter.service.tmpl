@@ -1,37 +1,20 @@
 {{/*
-  systemd-unit node_exporter. Контекст рендера (docs/templating.md §3.2, Вариант B):
-    .vars  — destiny-локалы vars.yml (file-vars), доступны шаблону НАПРЯМУЮ как
-             `.vars.<file_var>` без passthrough через params.vars: bin_path —
-             целевой путь бинаря (input.bin_dir + '/node_exporter', резолвится в
-             vars.yml, не operator-input);
-    .input — operator-input прохода (Вариант B, ADR-010 §3.2 amendment): user,
-             group, listen, textfile_dir; прод-параметры демона: gomaxprocs
-             (int), disabled_collectors / enabled_collectors (list<string>),
-             collector_options (map<string,map<string,string>>), log_level,
-             log_format, web_telemetry_path, fs_mount_points_exclude,
-             netdev_device_exclude (string). Читаются `.input.<name>` напрямую,
-             без passthrough через params.vars;
-    .self  — стабильные факты хоста (здесь не используются).
-  Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010).
+  systemd-unit node_exporter. Go text/template strict (ADR-010), Вариант B: operator-input
+  читается `.input.<name>` напрямую (без passthrough через params.vars), путь бинаря —
+  `.vars.bin_path` (file-var). Перечень полей — destiny.yml input:.
 
-  ExecStart собирается условно (флаг-конвенция node_exporter --help): list →
-  per-item --no-collector.<name> / --collector.<name>; gomaxprocs>0 →
-  --runtime.gomaxprocs=N; пустые string-параметры (fs/netdev-exclude) флаг НЕ
-  добавляют — node_exporter применяет встроенный дефолт. systemd допускает
-  перенос строк ExecStart через `\` — флаги разнесены для читаемости.
+  ExecStart собирается условно (флаг-конвенция node_exporter --help): list → per-item
+  --no-collector.<name> / --collector.<name>; gomaxprocs>0 → --runtime.gomaxprocs=N;
+  пустые string-параметры (fs/netdev-exclude) флаг НЕ добавляют. Перенос строк через `\`.
 
-  Сервис-аккаунт — стабильный system-user .vars.user (прод-конвенция §2,
-  stateful-ветка): textfile-каталог переживает рестарты и читается root-
-  сборщиками, поэтому нужен фиксированный uid-владелец (DynamicUser тут
-  непригоден — transient-uid не совпал бы с владельцем .prom между запусками).
-  Под root основной демон НЕ работает.
+  ★ Сервис-аккаунт — стабильный system-user (прод-конвенция §2, stateful): textfile-каталог
+  переживает рестарты и читается root-сборщиками → нужен фиксированный uid (DynamicUser тут
+  непригоден). Под root основной демон НЕ работает.
 
-  systemd-hardening (прод-конвенция §3, «безопасность на первом месте»): полный
-  блок беспривилегированного Go-демона. ReadOnlyPaths=.input.textfile_dir — демон
-  только ЧИТАЕТ .prom из textfile-каталога (пишут туда oneshot-сборщики), поэтому
-  каталог для него только-чтение. MemoryDenyWriteExecute уместен (Go-бинарь без
-  W+X-страниц). CapabilityBoundingSet пуст — публичные метрики ядра/ФС привилегий
-  не требуют.
+  ★ systemd-hardening (прод-конвенция §3, «безопасность на первом месте»): полный блок
+  беспривилегированного Go-демона. ReadOnlyPaths=.input.textfile_dir — демон только ЧИТАЕТ
+  .prom (пишут oneshot-сборщики). MemoryDenyWriteExecute уместен (Go-бинарь без W+X-страниц).
+  CapabilityBoundingSet пуст — публичные метрики привилегий не требуют.
 */}}
 [Unit]
 Description=Prometheus Node Exporter

@@ -1,16 +1,13 @@
 {{/*
-  oneshot-сборщик SMART-метрики дисков для node_exporter. Контекст рендера:
-    .vars.bin_dir      — каталог скрипта smartmon.sh;
-    .vars.textfile_dir — куда пишется smart_metrics.prom.
-  Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010).
+  oneshot-сборщик SMART-метрики дисков для node_exporter. Go text/template strict
+  (ADR-010). .vars.bin_dir (скрипт smartmon.sh), .vars.textfile_dir (выход .prom).
 
-  Запускается под User=root: smartctl требует прямого доступа к блочным
-  устройствам (RAW IO). systemd-sandbox жёсткий (ТЗ §коллекторы): запись только в
-  textfile-каталог, без сети, devices closed + точечный DeviceAllow на блочные
-  устройства, capabilities сужены до CAP_SYS_RAWIO/CAP_SYS_ADMIN.
+  ★ User=root: smartctl требует прямого доступа к блочным устройствам (RAW IO). systemd-
+  sandbox жёсткий (ТЗ §коллекторы): запись только в textfile-каталог, без сети, devices
+  closed + точечный DeviceAllow, capabilities сужены до CAP_SYS_RAWIO/CAP_SYS_ADMIN.
 
-  ConditionVirtualization=no — на VM физических дисков нет, коллектор не стартует
-  (защита от ручного start; та же Condition в .timer).
+  ConditionVirtualization=no — на VM физических дисков нет, коллектор не стартует (та же
+  Condition в .timer).
 */}}
 [Unit]
 Description=Collect SMART metrics for node_exporter

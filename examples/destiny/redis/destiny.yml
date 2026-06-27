@@ -10,26 +10,18 @@ description: >-
 # Список задач — в tasks/main.yml. Только core-модули → required_modules: не нужен
 # (community.redis вызывается из scenario сервиса, не из этой destiny).
 #
-# Режим-агностична: один и тот же кирпич обслуживает standalone, cluster и
-# sentinel (последний — через sentinel_enabled + sentinel.conf.tmpl/unit, gated-
-# задачи в хвосте tasks/main.yml). Режим выбирает scenario сервиса передачей флагов
-# и cluster-/sentinel-директив в config; destiny сама режим не знает. Конфиг
-# приходит ГОТОВЫМ merged map-ом через apply: input: config: (merge default→preset→
-# вычисления→passthrough делает scenario сервиса) — destiny остаётся «глупой», сама
-# ничего не сливает.
+# Режим-агностична: один и тот же кирпич обслуживает standalone, cluster и sentinel
+# (последний — через sentinel_enabled + conditional-include sentinel.yml). Режим
+# выбирает scenario сервиса передачей флагов и cluster-/sentinel-директив в config;
+# destiny сама режим не знает. Конфиг приходит ГОТОВЫМ merged map-ом через
+# apply: input: config: (merge делает scenario сервиса) — destiny остаётся «глупой».
 
 input:
   # ── Гейт data-плоскости redis-server (режим sentinel_only) ───────────────────
-  # deploy_redis=false → НЕ разворачиваем redis-server (data-плоскость): redis.conf,
-  # users.acl, PEM/TLS data-плоскости, systemd hardening drop-in и core.service
-  # redis-server running/restart — все gated placeholder-skip-ом. Пакет redis при
-  # этом ставится ВСЕГДА (sentinel-демон поставляется ТЕМ ЖЕ пакетом). Так режим
-  # sentinel_only поднимает ТОЛЬКО sentinel-демон (sentinel_enabled=true,
-  # deploy_redis=false), мониторящий ВНЕШНИЙ master (адрес из input.sentinel.*).
-  # default:true — стандартный путь (standalone/cluster/sentinel разворачивают
-  # redis-server). Гейт host-инвариантен → приходит через apply.input. Предикат
-  # static (только input.*) → Keeper гасит data-задачи placeholder-skip-ом без
-  # сдвига индексов (skip занимает слот).
+  # deploy_redis=false (режим sentinel_only) → НЕ разворачиваем redis-server: всю
+  # data-плоскость гасит include-when (server.yml/modules.yml group-drop). Пакет
+  # redis при этом ставится ВСЕГДА — sentinel-демон поставляется ТЕМ ЖЕ пакетом,
+  # поэтому sentinel_only поднимает только его, мониторящий ВНЕШНИЙ master.
   deploy_redis:
     type: boolean
     required: false
@@ -63,12 +55,10 @@ input:
   # ── Пути host-layout, переопределяемые оператором (директива B) ──────────────
   # conf_dir/data_dir — базовые каталоги конфигурации и данных Redis. ОПЕРАТОР-
   # ПЕРЕОПРЕДЛЯЕМЫ (input, не vars): оператор может развернуть конфиг/данные под свой
-  # storage-layout (отдельный mount под /data, нестандартный /etc-путь). Дефолт =
-  # ТЕКУЩИЙ путь (back-compat: не задан → тот же /etc/redis, /var/lib/redis). Задачи
-  # выводят конкретные файлы/подкаталоги из этих баз (redis.conf, users.acl, tls/,
-  # modules/ — см. tasks/*.yml). HOST-ИНВАРИАНТ (один layout на кластер) → приходят
-  # через apply.input. Инвариантные каталоги (имя юнит-файла, drop-in-dir) в input НЕ
-  # выносятся — менять их незачем (см. vars.yml граница vars↔input).
+  # storage-layout. Дефолт = текущий путь (back-compat). Задачи выводят конкретные
+  # файлы/подкаталоги из этих баз (redis.conf, users.acl, tls/, modules/). Инвариантные
+  # каталоги (имя юнит-файла, drop-in-dir) в input НЕ выносятся — см. vars.yml граница
+  # vars↔input.
   conf_dir:
     type: string
     required: false
@@ -89,12 +79,8 @@ input:
       под свой storage-layout.
 
   # ── install: способ установки redis (концепция Ansible-роли redis_install_*) ──
-  # Способ доставки бинарей redis: distro-пакет (default, поведение-сохраняющее) ИЛИ
-  # upstream-tarball (opt-in). Прецедент binary-install — node-exporter (install.yml:
-  # core.url.fetched → core.archive.extracted → core.file.present (src:)). Гейт install.method —
-  # host-инвариант (один способ установки на кластер) → приходит через apply.input.
-  # Предикат method static (только input.*) → Keeper гасит неактивную ветку install.yml
-  # placeholder-skip-ом без сдвига индексов.
+  # Гейт install.method static (только input.*) → Keeper гасит неактивную ветку
+  # install.yml placeholder-skip-ом без сдвига индексов (block static-skip).
   #
   # ★ binary-ветка САМА несёт всё, что distro-пакет даёт даром: systemd-юнит
   # redis-server.service (+ redis-sentinel.service в sentinel-режиме), distro-юзер/
@@ -165,14 +151,11 @@ input:
         min: 0
     additional_properties: true
 
-  # ACL-пользователи Redis: MAP имя→{perms, state, password}. scenario строит
-  # этот map из своего typed-array input.users (массив AclUser, wave 1b; формой
-  # merge(list(map)) над .map(u, {u.name: …})-comprehension) и резолвит password
-  # каждого юзера keeper-side из
-  # Vault. Шаблон users.acl.tmpl range-ит MAP (Go сортирует ключи → строки
-  # ACL детерминированы между прогонами — нет ложного change/рестарта) и хеширует
-  # пароль (Redis ACL #<sha256>) — plaintext в файл НЕ пишется. Пустой/не передан
-  # → users.acl без юзеров.
+  # ACL-пользователи Redis: MAP имя→{perms, state, password}. scenario строит этот
+  # map из своего typed-array input.users и резолвит password каждого юзера keeper-side
+  # из Vault. Шаблон users.acl.tmpl range-ит MAP (Go сортирует ключи → строки ACL
+  # детерминированы между прогонами, нет ложного change/рестарта) и хеширует пароль
+  # (Redis ACL #<sha256>) — plaintext в файл НЕ пишется.
   users:
     type: object
     required: false
@@ -196,15 +179,11 @@ input:
           type: string
           secret: true
 
-  # ── Системные ACL-юзеры sentinel-демона (2-й aclfile, system-ACL-users d2) ───
-  # ОПЦИОНАЛЬНОЕ additive-поле (only-add, forward-compat): MAP имя→{perms,state,
-  # password} СЛУЖЕБНЫХ юзеров sentinel-демона (default/monitoring/sentinel/haproxy
-  # с sentinel-командами — ОТЛИЧНЫ от users.acl redis-server). Передаётся scenario
-  # ТОЛЬКО в sentinel-режиме (sentinel_enabled=true) из essence.system_acl_users_sentinel.
-  # Рендерится в ОТДЕЛЬНЫЙ файл ${conf_dir}/sentinel-users.acl (задача sentinel.yml),
-  # на который указывает aclfile в sentinel.conf. Пустой/не передан → файл без юзеров
-  # (back-compat: destiny без поля рендерит пустой aclfile, sentinel.conf aclfile-
-  # директива безвредна). Структура — та же, что users (range по map хеширует пароль).
+  # ── Системные ACL-юзеры sentinel-демона (2-й aclfile) ────────────────────────
+  # ОПЦИОНАЛЬНОЕ additive-поле (only-add, forward-compat): служебные юзеры sentinel-
+  # демона с sentinel-командами (ОТЛИЧНЫ от users.acl redis-server). Рендерится в
+  # ОТДЕЛЬНЫЙ ${conf_dir}/sentinel-users.acl. Пустой/не передан → пустой aclfile
+  # (back-compat: destiny старого ref без поля рендерит пустой, директива безвредна).
   sentinel_users:
     type: object
     required: false
@@ -282,26 +261,15 @@ input:
 
   # ── Redis-модули (концепция Ansible-роли redis: redis_module_*) ──────────────
   # ★ ДИРЕКТИВА «модули ВСЕГДА ВСЕ» (2026-06-25): НАБОР модулей больше НЕ operator-
-  # выбор. Полная таблица алиас→.so (RediSearch/RedisJSON/RedisTimeSeries/RedisBloom)
-  # — ИНВАРИАНТ кирпича в vars.yml (redis_modules). На Redis < 8 разворачивается ВЕСЬ
-  # набор: .so качаются в <data_dir>/modules и подключаются loadmodule в redis.conf.
-  # Поэтому полей input.modules / input.modules_dir больше НЕТ (modules_dir выводится
-  # из input.data_dir). scenario модули НЕ передаёт.
+  # выбор — это ИНВАРИАНТ кирпича (таблица алиас→.so в vars.redis_modules). Поэтому
+  # полей input.modules / input.modules_dir больше НЕТ (modules_dir выводится из
+  # input.data_dir), scenario модули НЕ передаёт. version-gate Redis 8+ и механика —
+  # в vars.yml/modules.yml. Здесь в input остаётся ТОЛЬКО modules_base_url.
   #
-  # REDIS 8+ (version-guard сохранён, директива C): модули ВСТРОЕНЫ в сервер — .so не
-  # качаем и loadmodule НЕ пишем. Раньше version-gate делал scenario (передавал
-  # modules=[]); теперь, когда набор-инвариант в vars, гейт ПЕРЕЕХАЛ В DESTINY:
-  # version читается из input.version (distro-пин) / input.install.version (binary),
-  # мажор >= 8 → loadmodules пустой + include modules.yml group-drop (server.yml/
-  # modules.yml/main.yml). Так «всегда все» = для Redis < 8; на Redis 8+ — builtin-skip.
-  #
-  # URL .so АРХ-СПЕЦИФИЧЕН: destiny строит его per-host из modules_base_url + СВОЕГО
-  # soulprint.self.os.arch + имени файла из vars.redis_modules (soulprint доступен в
-  # destiny-CEL — прецедент arch-резолва node-exporter), поэтому mixed-arch incarnation
-  # корректен (каждый хост качает .so под свою арх). modules_base_url (откуда брать .so)
-  # ОСТАЁТСЯ в input — это deployment-артефакт под пару (version, arch) кластера, не
-  # инвариант кирпича. HOST-ИНВАРИАНТ → apply.input. .so качаются по content-
-  # идемпотентности (SHA-256 содержимого), без integrity-verify — как node-exporter.
+  # modules_base_url ОСТАЁТСЯ в input — это deployment-артефакт под пару (version,
+  # arch) кластера, не инвариант кирпича. URL .so АРХ-СПЕЦИФИЧЕН: destiny строит его
+  # per-host из modules_base_url + СВОЕГО soulprint.self.os.arch + имени .so (так
+  # mixed-arch incarnation корректен — каждый хост качает .so под свою арх).
   modules_base_url:
     type: string
     required: false

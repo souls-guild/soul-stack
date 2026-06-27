@@ -1,10 +1,6 @@
 {{/*
-  Таймер SMART-сборщика. Контекст рендера пуст (vars: {}) — шаблон статичен,
-  .tmpl обязателен для core.file.rendered. Движок — Go text/template strict
-  (ADR-010).
-
-  Та же ConditionVirtualization=no в [Unit], что и в .service: защита от ручного
-  start таймера там, где железа нет.
+  Таймер SMART-сборщика. Статичен (vars: {}), .tmpl обязателен для core.file.rendered.
+  Та же ConditionVirtualization=no, что и в .service: защита от ручного start без железа.
 */}}
 [Unit]
 Description=Run SMART metrics collection every 1 minute

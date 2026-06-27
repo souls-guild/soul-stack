@@ -5,13 +5,10 @@
 # валидации input). Файл закоммичен в git destiny-репо — секретов тут нет.
 
 # ── Имя systemd-сервиса node_exporter (директива «имя сервиса в vars, ВЕЗДЕ») ──
-# ИНВАРИАНТ (vars, не input): имя основного юнита — контракт между unit-файлом
-# (/etc/systemd/system/<service_name>.service), core.service.running/restarted и
-# SyslogIdentifier шаблона. Менять незачем (привязано к раскладке юнита) → не
-# operator-переопределяемое. Один источник правды: задачи берут ${ vars.service_name }
-# вместо литерала node_exporter. ВНИМАНИЕ: это имя СЕРВИСА (systemd) и имя бинаря —
-# совпадение значений случайно; имена collector-таймеров (node-exporter-smartmon.timer
-# и т.п.) — ОТДЕЛЬНЫЕ юниты, из этого var НЕ выводятся.
+# ИНВАРИАНТ (vars, не input): имя основного юнита — контракт между unit-файлом,
+# core.service.running/restarted и SyslogIdentifier шаблона. ВНИМАНИЕ: это имя СЕРВИСА
+# (systemd) и имя бинаря — совпадение значений случайно; имена collector-таймеров
+# (node-exporter-smartmon.timer и т.п.) — ОТДЕЛЬНЫЕ юниты, из этого var НЕ выводятся.
 service_name: node_exporter
 
 # ── Артефакт-пути во временном каталоге (директива «download path в vars») ─────
@@ -24,12 +21,9 @@ tarball_path: "${ '/tmp/node_exporter-' + input.version + '.tar.gz' }"
 extract_dir:  "${ '/tmp/node_exporter-' + input.version }"
 
 # ── Путь бинаря node_exporter (один источник правды на ВСЕ ссылки) ─────────────
-# bin_path — целевой путь установленного бинаря (input.bin_dir + '/node_exporter').
-# Дублировался в двух местах (service.yml core.file.present.path и ExecStart юнита);
-# вынесен в один var: задачи берут ${ vars.bin_path }, а unit-шаблон читает этот
-# file-var НАПРЯМУЮ как `.vars.bin_path` (render_context.vars несёт file-vars
-# vars.yml — passthrough через params.vars не нужен). Имя файла бинаря совпадает с
-# именем сервиса (service_name) случайно — это путь именно бинаря, не сервиса.
+# Целевой путь установленного бинаря. Задачи берут ${ vars.bin_path }, а unit-шаблон
+# читает file-var НАПРЯМУЮ как `.vars.bin_path` (render_context.vars несёт file-vars,
+# passthrough через params.vars не нужен).
 bin_path: "${ input.bin_dir + '/node_exporter' }"
 
 # src_bin — путь бинаря ВНУТРИ распакованного релиза (vars.extract_dir, а не

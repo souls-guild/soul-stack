@@ -14,11 +14,9 @@
     name: "${ input.group }"
     system: true
 
-# home НЕ задаём: core.user.present ВСЕГДА вызывает useradd с флагом -M (домашний
-# каталог не создаётся — docs/module/core/user, soul/internal/coremod/user/user.go),
-# поэтому отсутствие `home:` = «system-аккаунт без домашней директории» (паритет с
-# ansible create_home: no). Явный `home: /` лишний — он лишь прописал бы / в поле
-# home /etc/passwd, каталог всё равно не создаётся.
+# home НЕ задаём: core.user.present ВСЕГДА вызывает useradd с -M (каталог не создаётся),
+# поэтому отсутствие `home:` = system-аккаунт без домашней директории (паритет ansible
+# create_home: no). Явный `home: /` лишь прописал бы / в /etc/passwd, каталог не создаётся.
 - name: Ensure the node_exporter system user exists
   module: core.user.present
   params:

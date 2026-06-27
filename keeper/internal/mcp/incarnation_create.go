@@ -29,10 +29,9 @@ type incarnationCreateArgs struct {
 }
 
 // incarnationCreateOutput — output keeper.incarnation.create
-// (schemaApplyIDOutputWithIncarnation): apply_id + echo incarnation.
-// Симметричен REST createIncarnationResponse. ApplyID — `*string` (omitempty):
-// отсутствует при lifecycle.auto_create=false (инкарнация создана ready без
-// прогона), как nullable apply_id в REST IncarnationCreateReply.
+// (schemaApplyIDOutputWithIncarnation): apply_id + echo incarnation. ApplyID —
+// `*string` (omitempty): отсутствует при lifecycle.auto_create=false (инкарнация
+// создана ready без прогона), как nullable apply_id в REST IncarnationCreateReply.
 type incarnationCreateOutput struct {
 	ApplyID     *string `json:"_apply_id,omitempty"`
 	Incarnation string  `json:"incarnation"`
@@ -115,13 +114,11 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 	// async). nil loader → деградация без проверки (как в REST). Невалидный input
 	// → validation-failed; сбой загрузки снапшота → internal-error.
 	//
-	// autoCreate — политика lifecycle.auto_create манифеста (default true). false
-	// → инкарнация создаётся ready без прогона (apply_id в ответе отсутствует),
-	// оператор запускает `create` вручную (паритет REST Create).
-	// createScenario — фактический стартовый сценарий (механизм нескольких create).
-	// Дефолт `create` (back-compat); при наличии loader-а валидируется выбор оператора
-	// на членство в create-наборе сервиса. Сохраняется в incarnation.created_scenario;
-	// rerun-create перезапускает именно его.
+	// createScenario — стартовый сценарий (механизм нескольких create), дефолт
+	// `create` (back-compat); при наличии loader-а валидируется выбор оператора на
+	// членство в create-наборе сервиса, сохраняется в incarnation.created_scenario.
+	// autoCreate — политика lifecycle.auto_create (default true): false → инкарнация
+	// создаётся ready без прогона.
 	createScenario := scenario.CreateScenarioName
 	autoCreate := true
 	if h.deps.ServiceLoader != nil {

@@ -1,8 +1,6 @@
 # vars.yml — destiny-локалы redis (docs/destiny/vars.md): инварианты, ОДИНАКОВЫЕ для
 # всех incarnation и НЕ переопределяемые снаружи (не input — это контракт vs внутренности).
-# Литералы redis/redis (system-юзер/группа distro-пакета) и пути host-layout-а раньше
-# были зашиты по задачам копипастом / объявлены task-level vars — теперь один источник
-# правды здесь, задачи берут через ${ vars.* }.
+# Один источник правды; задачи берут через ${ vars.* }.
 #
 # Резолвятся ОДИН раз на destiny-проход (per-host) до задач. var→var-ссылка внутри слоя
 # разрешена (eager-topological, vars.md): vars.<other> резолвится на другой file-var того
@@ -34,11 +32,9 @@ redis_group: redis
 # ИНВАРИАНТ (vars, не input): имя юнита — контракт между binary-юнитом, hardening
 # drop-in (.service.d/), core.service running/restart и distro-пакетом. distro-пакет
 # зовёт сервис именно redis-server/redis-sentinel; менять имя НЕЛЬЗЯ, не сломав
-# package-ветку → не operator-переопределяемое. Один источник правды: задачи и пути
-# юнит-файлов собираются из ${ vars.*_service_name }, литералы redis-server/
-# redis-sentinel по задачам устранены. ВНИМАНИЕ: это имя СЕРВИСА (systemd), НЕ имя
-# пакета (core.pkg redis-server) и НЕ имя бинаря (/usr/local/bin/redis-server) — там
-# совпадение значений случайно, но семантика разная, потому те токены НЕ из этих vars.
+# package-ветку → не operator-переопределяемое. ВНИМАНИЕ: это имя СЕРВИСА (systemd),
+# НЕ имя пакета (core.pkg redis-server) и НЕ имя бинаря (/usr/local/bin/redis-server) —
+# совпадение значений случайно, семантика разная, те токены НЕ из этих vars.
 redis_service_name:    redis-server
 sentinel_service_name: redis-sentinel
 
@@ -51,30 +47,20 @@ sentinel_service_name: redis-sentinel
 redis_port:    6379
 sentinel_port: 26379
 
-# ── Базовые пути host-layout (директива B: инвариантные базовые пути → vars) ────
-# ИНВАРИАНТ (vars, не input): системные каталоги распаковки конфигурации Redis,
-# ОДИНАКОВЫЕ для всех incarnation. Конкретные файлы выводятся из этих баз в задачах
-# (${ vars.redis_conf_dir }/redis.conf и т.п.) — один источник правды на каталог.
-# Что НЕ здесь: data_dir и conf_dir дополнительно ВЫНЕСЕНЫ в input (см. destiny.yml
-# input.data_dir/input.conf_dir) — оператор может захотеть другое расположение data/
-# conf под свой storage-layout; vars-значения тут — дефолты, на которые ссылается
-# input.default. Имя unit-файла, tls-/modules-/drop-in-каталоги в input НЕ выносятся:
-# менять их незачем (привязаны к layout systemd/пакета), переопределяемость только
-# раздула бы контракт без сценария применения.
+# ── Базовые пути host-layout (директива B) ──────────────────────────────────────
+# data_dir/conf_dir дополнительно ВЫНЕСЕНЫ в input (destiny.yml) — оператор может
+# захотеть другое расположение под свой storage-layout; vars-значения тут — дефолты,
+# на которые ссылается input.default. Задачи берут НЕ эти raw-vars напрямую, а
+# эффективные _eff-vars ниже (резолв input→дефолт).
 
-# conf-dir redis: redis.conf, users.acl, sentinel.conf, tls/. ДЕФОЛТ для input.conf_dir
-# (оператор может переопределить). Задачи берут input.conf_dir (не этот var напрямую),
-# чтобы переопределение оператора доезжало; этот var — единый источник дефолта.
+# conf-dir redis: redis.conf, users.acl, sentinel.conf, tls/. ДЕФОЛТ для input.conf_dir.
 redis_conf_dir: /etc/redis
 
-# ── Эффективные пути conf/data (резолв input→дефолт ОДИН раз, директива «conf_dir в
-# vars») ────────────────────────────────────────────────────────────────────────
-# var→input CEL (vars.md, ADR-009/010 amendment 2026-06-24: file-var видит input.* и
-# другие file-vars того же слоя, eager-topological): резолв default(input.X, дефолт)
-# уходит СЮДА, задачи берут готовое ${ vars.redis_conf_dir_eff } вместо повторного
-# inline-default по файлам. Один источник правды на каталог; смена дефолта — в одном
-# месте. _eff-суффикс отделяет «эффективный путь (input или дефолт)» от raw-дефолта
-# redis_conf_dir/redis_data_dir выше (на который ссылается input.default в destiny.yml).
+# ── Эффективные пути conf/data (резолв input→дефолт ОДИН раз) ────────────────────
+# var→input CEL (eager-topological, vars.md): резолв default(input.X, дефолт) уходит
+# СЮДА, задачи берут готовое ${ vars.redis_conf_dir_eff } вместо повторного inline-
+# default по файлам. _eff-суффикс отделяет «эффективный путь (input или дефолт)» от
+# raw-дефолта redis_conf_dir/redis_data_dir (на который ссылается input.default).
 redis_conf_dir_eff: "${ default(input.conf_dir, vars.redis_conf_dir) }"
 redis_data_dir_eff: "${ default(input.data_dir, vars.redis_data_dir) }"
 
@@ -84,23 +70,16 @@ redis_data_dir_eff: "${ default(input.data_dir, vars.redis_data_dir) }"
 # B: modules_dir убран из input, путь производный от data-dir).
 redis_data_dir: /var/lib/redis
 
-# Каталог TLS PEM-материала (cert/key/CA). ИНВАРИАНТ (под conf_dir): tls/ внутри
-# conf-dir. Задачи строят путь как ${ input.conf_dir }/tls.
-
 # Каталог установки бинарей redis (redis-server/redis-cli/redis-sentinel) binary-ветки.
-# ИНВАРИАНТ (vars, не input): node-exporter-прецедент кладёт upstream-бинари в
-# /usr/local/bin — фиксированный layout-каталог, менять незачем. Задачи binary-ветки
-# собирают путь как ${ vars.redis_bin_dir }/redis-server (и -cli/-sentinel). Имя бинаря
-# совпадает со значением redis_service_name случайно (там семантика «имя СЕРВИСА»,
-# здесь «путь бинаря») — это РАЗНЫЕ vars, токен не переиспользуется.
+# ИНВАРИАНТ (vars, не input): фиксированный layout-каталог /usr/local/bin (прецедент
+# node-exporter), менять незачем. Задачи binary-ветки собирают путь как
+# ${ vars.redis_bin_dir }/redis-server (и -cli/-sentinel).
 redis_bin_dir: /usr/local/bin
 
 # ── Пути binary-install tarball-а (директива «путь в одном месте») ──────────────
-# ИНВАРИАНТ-производные (vars, не input): пути временного tarball-а и распакованного
-# каталога upstream-install собираются из upstream-версии (input.install.version) в
-# ОДНОМ месте, а не дублируются inline по install.yml-задачам (fetch/extract/три
-# core.file.present src:). var→input CEL (eager-topological): file-var видит input.* и
-# другие file-vars слоя.
+# Пути временного tarball-а и распакованного каталога upstream-install собираются из
+# upstream-версии (input.install.version) в ОДНОМ месте, а не дублируются inline по
+# install.yml-задачам.
 #
 # ★ render-safety в МЁРТВОМ package-проходе: при install.method=package binary-блок
 # static-skip, НО file-vars резолвятся per-host ДО skip-проекции (eager, до задач) —
@@ -119,13 +98,10 @@ systemd_dir: /etc/systemd/system
 
 # ── Системные run-/log-каталоги Redis (директива «хардкод пути → var») ──────────
 # ИНВАРИАНТ (vars, не input): системные каталоги runtime-состояния (pidfile/unix-сокет)
-# и логов redis-server/redis-sentinel. ОДИНАКОВЫ для всех incarnation, привязаны к
-# host-layout пакета/systemd (не storage-выбор оператора как conf_dir/data_dir) →
-# не operator-переопределяемое. Один источник правды: redis.conf/sentinel.conf
-# (pidfile/logfile), оба .service-юнита (ReadWritePaths), redis-sentinel.service
-# (RuntimeDirectory), logrotate (glob лог-файлов), hardening drop-in (ReadWritePaths)
-# собирают пути из ЭТИХ vars — литералы /var/run/redis, /var/log/redis по шаблонам
-# устранены. Вынос сохраняет рендер бит-в-бит (те же пути).
+# и логов redis-server/redis-sentinel. Привязаны к host-layout пакета/systemd (не
+# storage-выбор оператора как conf_dir/data_dir) → не operator-переопределяемое. Один
+# источник правды для redis.conf/sentinel.conf, обоих .service-юнитов, logrotate и
+# hardening drop-in.
 
 # Run-каталог redis: pidfile (redis-server.pid/redis-sentinel.pid) и unix-сокет.
 # RuntimeDirectory=redis у systemd-юнита создаёт именно /var/run/redis. socket_dir
@@ -136,25 +112,18 @@ run_dir: /var/run/redis
 # sentinel.conf), glob *.log в logrotate.d, ReadWritePaths логов в hardening/юнитах.
 log_dir: /var/log/redis
 
-# Каталог unix-сокета redis. core.file.directory создаёт его в обеих ветках, когда в
-# merged-конфиге есть директива unixsocket (см. install.yml). Совпадает с run-каталогом
-# (pidfile/socket — один системный каталог) → var→var на run_dir, один источник правды.
+# Каталог unix-сокета redis (создаётся, когда в merged-конфиге есть unixsocket — см.
+# install.yml). Совпадает с run-каталогом (pidfile/socket — один системный каталог) →
+# var→var на run_dir.
 socket_dir: "${ vars.run_dir }"
 
 # ── Каталог Redis-модулей и полный набор (директива C: модули ВСЕГДА ВСЕ) ───────
-# ИНВАРИАНТ (vars, не input): фиксированная таблица алиас→имя .so-файла Redis-модулей.
-# Имена .so — НЕ operator-выбор, а фиксированная номенклатура Redis (redisearch.so /
-# rejson.so / redistimeseries.so / redisbloom.so) → живёт в destiny. Директива
-# пользователя «модули ВСЕГДА ВСЕ»: разворачиваем ВЕСЬ набор всегда (на Redis < 8),
-# оператор НЕ выбирает подмножество. loadmodules в redis.conf (сорт-литерал алиасов
-# ['bloom','json','search','timeseries'].map(...)) и ЧЕТЫРЕ ЯВНЫЕ fetch-задачи
-# modules.yml (по одной на алиас) берут имена .so из ЭТОГО map-а (vars.redis_modules
-# .<alias>) — детерминированный порядок задаёт сортированный литерал алиасов, не
-# итерация по map. Источник .so (modules_base_url) ОСТАЁТСЯ в input — это deployment-
-# артефакт (где лежат бинари модулей под (version, arch) кластера), не инвариант кирпича.
-# .so качаются по content-идемпотентности (SHA-256 содержимого), без integrity-verify.
-# REDIS 8+: модули ВСТРОЕНЫ в сервер — .so не качаем и loadmodule не пишем (version-
-# guard в задачах по input.version/input.install.version, см. server.yml/modules.yml).
+# ИНВАРИАНТ (vars, не input): фиксированная таблица алиас→имя .so-файла (номенклатура
+# Redis, не operator-выбор). Директива «модули ВСЕГДА ВСЕ»: разворачиваем ВЕСЬ набор на
+# Redis < 8, оператор НЕ выбирает подмножество. loadmodules (server.yml) и ЧЕТЫРЕ ЯВНЫЕ
+# fetch-задачи (modules.yml) берут имена .so отсюда; детерминированный порядок задаёт
+# СОРТИРОВАННЫЙ литерал алиасов, а НЕ итерация по map (иначе ложный change/рестарт).
+# REDIS 8+: модули ВСТРОЕНЫ в сервер — version-guard в задачах (см. redis_is_v8plus).
 redis_modules:
   bloom:      redisbloom.so
   json:       rejson.so
@@ -165,27 +134,23 @@ redis_modules:
 # Задачи modules.yml/loadmodules берут готовый путь отсюда — один источник правды.
 redis_modules_dir: "${ vars.redis_data_dir_eff + '/modules' }"
 
-# ── Version-guard Redis 8+ (директива C: vars-вычисление, не inline по задачам) ──
+# ── Version-guard Redis 8+ (директива C) ────────────────────────────────────────
 # ЭФФЕКТИВНАЯ версия redis для version-gate модулей: input.version (distro-пин), когда
-# непуст (`!= ''`), ИНАЧЕ input.install.version (upstream-semver binary-ветки). scenario
-# передаёт ключ `version` ВСЕГДА (как '' при install.method=binary) → голый has() брал
-# бы '' и делал бы install.version мёртвой; поэтому нормализуем пустой version к
-# install.version. var→input CEL (eager, render-safe в любом проходе).
+# непуст (`!= ''`), ИНАЧЕ input.install.version (binary-ветка). ★ scenario передаёт ключ
+# `version` ВСЕГДА (как '' при install.method=binary) → голый has() брал бы '' и делал бы
+# install.version мёртвой; поэтому нормализуем пустой version к install.version.
 redis_effective_version: "${ (has(input.version) && input.version != '') ? input.version : (has(input.install) && has(input.install.version) ? input.install.version : '') }"
 
-# Redis 8+? Мажор >= 8 (regex по эффективной версии: опц. epoch `N:` + мажор 8/9/двузначный).
-# На Redis 8+ модули ВСТРОЕНЫ в сервер — .so не качаем и loadmodule не пишем (директива C).
-# Единый источник version-gate: loadmodules (server.yml), include modules.yml (main.yml).
-# var→var (redis_effective_version). Пустая версия (обе absent — невозможно при валидном
-# вводе) regex не матчит → false → не гейтим (модули проходят как < 8).
+# Redis 8+? Мажор >= 8 (regex: опц. epoch `N:` + мажор 8/9/двузначный). Единый источник
+# version-gate для loadmodules (server.yml) и include modules.yml (main.yml). Пустая
+# версия (обе absent — невозможно при валидном вводе) regex не матчит → false (< 8).
 redis_is_v8plus: >-
   ${ vars.redis_effective_version.matches('^([0-9]+:)?(8|9|[1-9][0-9])\\.') }
 
 # ── file-mode/owner инварианты (вынесены: >2 употреблений по задачам) ──────────
-# Литеральные значения; задачи берут через ${ vars.* }. Вынос сохраняет рендер
-# бит-в-бит — это те же mode-/owner-строки, что стояли инлайн. Точечные mode на
-# ≤2 задачи (0750 tls-dir/modules-dir, 0755 socket-/drop-in-dir) ОСТАЮТСЯ литералом:
-# общим инвариантом destiny не являются (vars.md — не плодить var ради одной задачи).
+# Точечные mode на ≤2 задачи (0750 tls-dir/modules-dir, 0755 socket-/drop-in-dir)
+# ОСТАЮТСЯ литералом: общим инвариантом destiny не являются (vars.md — не плодить var
+# ради одной задачи).
 
 # mode конфигов с секретами redis (содержат password-хеши / requirepass): redis.conf,
 # users.acl, sentinel.conf. 0640 owner/group redis — читает только сервис.
@@ -202,8 +167,6 @@ redis_pem_mode: "0600"
 # owner root-owned артефактов (systemd-юниты/drop-ины/logrotate.d): литерал root.
 root_owner: root
 
-# group root-owned артефактов. var→var-ссылка на root_owner (vars.md, ADR-009/ADR-010
-# amendment 2026-06-24: var→var внутри слоя разрешён, eager-topological): owner и group
-# совпадают, поэтому group выражена через owner — одна точка правды, при смене root_owner
-# группа едет автоматически. Резолвится в "root".
+# group root-owned артефактов. var→var на root_owner: owner и group совпадают,
+# поэтому group выражена через owner — одна точка правды (резолвится в "root").
 root_group: "${ vars.root_owner }"

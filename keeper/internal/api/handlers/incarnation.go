@@ -426,8 +426,9 @@ func (h *IncarnationHandler) ResolveListScopeFor(ctx context.Context, claims *jw
 			}
 		}
 		// trait-измерение (ADR-047 amendment, ADR-060 п.7 slice 1): scope-пары
-		// `key:value` → SQL-pushdown `traits @> $n::jsonb` (без CEL/резолва, точное
-		// равенство). Битая пара (рассинхрон с парсером) пропускается, не роняет List.
+		// `key:value` → SQL-pushdown `traits->>$key = $value` (scalar-equality, без
+		// CEL/резолва; НЕ containment `@>` — BUG#1 fix, [incarnation.appendScopeClause]).
+		// Битая пара (рассинхрон с парсером) пропускается, не роняет List.
 		for _, pair := range pv.TraitExprs {
 			key, value, ok := splitTraitPair(pair)
 			if !ok {

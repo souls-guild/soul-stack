@@ -1,21 +1,14 @@
 # tasks/install.yml — скачивание и распаковка релизного tarball-а node_exporter.
-# Тройка установки разнесена по границе include из-за ЗАГРУЗОЧНОГО per-file линтера:
-# register-ссылки в onchanges валидируются на уровне ОДНОГО файла (validateTaskRefs,
-# shared/config/destiny_tasks.go) — onchanges в одном include-файле на register из
-# ДРУГОГО отвергается как unknown_register_reference. (Within-destiny include
-# уплощается в плоский план ДО render — tasks.md §4, — keeper-side registerIndex
-# плоский, — но проверка ссылок остаётся per-file.) Поэтому register и его onchanges-
-# потребитель держатся в одном файле: раскладка бинаря (register node_exporter_bin)
-# живёт в service.yml рядом с рестартом, который на неё реагирует. Здесь — только
-# сетевая часть (fetch) + распаковка, без register-ов.
+# Тройка установки разнесена по границе include из-за ЗАГРУЗОЧНОГО per-file линтера
+# (validateTaskRefs, shared/config/destiny_tasks.go): cross-file onchanges отвергается
+# как unknown_register_reference, поэтому раскладка бинаря (register node_exporter_bin)
+# живёт в service.yml рядом с рестартом. Здесь — только fetch + распаковка, без register-ов.
 #
-# arch для URL берётся из soulprint.self.os.arch (soulprint доступен в destiny-CEL).
+# arch для URL берётся из soulprint.self.os.arch (доступен в destiny-CEL).
 
-# 1. Скачать tarball во временный путь. URL собирается CEL-ом из base_url +
-#    version + arch (soulprint.self.os.arch). Путь скачивания — vars.tarball_path
-#    (единый источник правды на download-путь, см. vars.yml). checksum не задаём —
-#    core.url трактует отсутствующий checksum как «без проверки» и идёт idempotency
-#    по SHA-256 содержимого (soul/internal/coremod/url/fetched.go: ветка checksum == "").
+# 1. Скачать tarball во временный путь. URL собирается CEL-ом из base_url + version +
+#    arch (soulprint.self.os.arch); путь — vars.tarball_path. checksum не задаём → core.url
+#    идёт idempotency по SHA-256 содержимого (fetched.go: ветка checksum == "").
 - name: Fetch node_exporter tarball
   module: core.url.fetched
   params:

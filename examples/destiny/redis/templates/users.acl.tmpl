@@ -1,28 +1,20 @@
 {{/*
-  users.acl — внешний ACL-файл Redis (aclfile в redis.conf). Контекст рендера
-  (docs/templating.md §3.2):
-    .vars.users — MAP ACL-юзеров имя→{perms, state, password}, собранный scenario
-                  сервиса из своего typed-array input.users (массив AclUser, wave 1b;
-                  формой merge(list(map)) над .map(u, {u.name: …})-comprehension);
-                  password каждого юзера зарезолвлен keeper-side из Vault (ADR-012).
-                  Контракт destiny (этот MAP) НЕ менялся при map→array в scenario.
-  Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010).
+  users.acl — внешний ACL-файл Redis (aclfile в redis.conf). Go text/template strict
+  (ADR-010). .vars.users — MAP имя→{perms, state, password}, собран scenario; password
+  зарезолвлен keeper-side из Vault (ADR-012).
 
-  ДЕТЕРМИНИЗМ ПОРЯДКА (docs/templating.md §6): range по MAP обходит ключи в
-  ОТСОРТИРОВАННОМ порядке. Поэтому строки users.acl стабильны между прогонами —
-  нет ложного change в core.file.rendered и лишнего onchanges-рестарта Redis (на
-  rolling-restart флоте — каскадного). Передача list-ом наследовала бы
-  недетерминированный порядок итерации Go-map (это и был tiling-критичный баг).
+  ДЕТЕРМИНИЗМ ПОРЯДКА (templating.md §6): range по MAP обходит ключи ОТСОРТИРОВАННО →
+  строки стабильны между прогонами (нет ложного change → нет лишнего onchanges-рестарта,
+  на rolling-restart флоте каскадного). Передача list-ом наследовала бы недетерминированный
+  порядок итерации Go-map (это и был tiling-критичный баг).
 
-  Формат строки (конвенция Redis ACL, образец users.acl.j2 роли):
+  Формат строки (конвенция Redis ACL):
     user <name> <state> #<sha256(password)> <perms>
-  Пароль пишется ХЕШЕМ (#<sha256hex>, sprig sha256sum), НЕ plaintext-ом: даже при
-  утечке файла исходный пароль не восстанавливается, а Redis принимает #<hash> в
-  ACL наравне с >password. perms — полная ACL-строка от оператора (~keys +cmds).
-  state — on/off.
+  Пароль пишется ХЕШЕМ (#<sha256hex>, sprig sha256sum), НЕ plaintext-ом: даже при утечке
+  файла исходный пароль не восстанавливается, Redis принимает #<hash> наравне с >password.
 
-  Пустой map → файл без юзеров (валидный aclfile; default-юзер с requirepass
-  объявлен в redis.conf отдельно). default-юзер здесь НЕ дублируется.
+  Пустой map → файл без юзеров (default-юзер с requirepass объявлен в redis.conf отдельно,
+  здесь НЕ дублируется).
 */}}
 {{- range $name, $u := .vars.users }}
 user {{ $name }} {{ $u.state }} #{{ $u.password | sha256sum }} {{ $u.perms }}

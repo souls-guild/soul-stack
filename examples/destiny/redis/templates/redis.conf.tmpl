@@ -1,9 +1,6 @@
 {{/*
-  redis.conf для режим-агностичного standalone-кирпича Redis. Контекст рендера
-  (docs/templating.md §3.2):
-    .vars  — явно переданные core.file.rendered (password, config).
-    .self  — стабильные факты хоста; primary_ip нужен для bind.
-  Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010).
+  redis.conf для режим-агностичного standalone-кирпича Redis (Go text/template strict,
+  ADR-010). Контекст: .vars (password, config + host-layout), .self (primary_ip для bind).
 
   Bind на primary_ip + 127.0.0.1: внешние клиенты — по IP хоста, локальные — по
   loopback.
@@ -64,17 +61,13 @@ supervised systemd
 pidfile {{ .vars.run_dir }}/redis-server.pid
 logfile {{ .vars.log_dir }}/redis-server.log
 
-# Рабочий каталог под RDB/AOF из data_dir (директива B). КРИТИЧНО: без него Redis
-# пишет дамп в `/` (read-only для redis) и зависает при рестарте; при override
-# data_dir дамп обязан идти в фактический каталог данных. Дефолт /var/lib/redis
-# (var.redis_data_dir) — каталог создаёт пакет redis.
+# Рабочий каталог под RDB/AOF (КРИТИЧНО, см. шапку: без него дамп в read-only `/` →
+# зависание рестарта).
 dir {{ .vars.data_dir }}
 
 requirepass {{ .vars.password }}
 
-# ACL-юзеры вынесены в отдельный файл (см. destiny task «Render users.acl»), путь
-# из conf_dir (директива B): destiny кладёт users.acl в ${conf_dir}/users.acl —
-# aclfile смотрит туда же, иначе при override conf_dir путь разъезжается.
+# ACL-юзеры в отдельном файле (см. шапку про aclfile/conf_dir).
 aclfile {{ .vars.conf_dir }}/users.acl
 
 {{- if (index .vars.config "cluster-enabled") }}
@@ -83,11 +76,10 @@ cluster-announce-ip {{ .self.network.primary_ip }}
 {{- end }}
 
 {{/*
-  Redis-модули (Redis < 8): директивы loadmodule идут ОТДЕЛЬНОЙ секцией, а НЕ
-  ключами .vars.config — у loadmodule нет значения, а range config-а печатает
-  `{{key}} {{value}}` (с пустым value → хвостовой пробел). .vars.loadmodules —
-  готовый список путей .so (вычислен scenario, host-инвариант). Пусто/не передан →
-  секции нет. На Redis 8+ scenario передаёт пустой список (модули встроены).
+  Redis-модули (Redis < 8): директивы loadmodule идут ОТДЕЛЬНОЙ секцией, а НЕ ключами
+  .vars.config — у loadmodule нет значения, а range config-а печатает `{{key}} {{value}}`
+  (с пустым value → хвостовой пробел). .vars.loadmodules — готовый список путей .so,
+  вычислен в server.yml (тернар по vars.redis_is_v8plus; на Redis 8+ пуст — встроены).
   `index .vars "loadmodules"` (built-in, как cluster-enabled выше): на отсутствующем
   ключе возвращает nil без ошибки в strict-mode (в отличие от `.vars.loadmodules`).
 */}}

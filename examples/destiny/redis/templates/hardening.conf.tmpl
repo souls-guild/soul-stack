@@ -1,19 +1,12 @@
 {{/*
-  systemd drop-in hardening для redis-server. Контекст рендера (docs/templating.md §3.2):
-    .vars.data_dir — рабочий каталог RDB/AOF (vars.redis_data_dir_eff — следует за
-                     override data_dir оператора, ReadWritePaths под фактический путь);
-    .vars.run_dir  — run-каталог pidfile/socket (vars.run_dir, дефолт /var/run/redis);
-    .vars.log_dir  — лог-каталог (vars.log_dir, дефолт /var/log/redis);
-    .self          — стабильные факты хоста (здесь не используются).
-  Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010).
+  systemd drop-in hardening для redis-server (Go text/template strict, ADR-010). Контекст:
+  .vars.data_dir/run_dir/log_dir — фактические каталоги записи redis под ReadWritePaths.
 
-  ПОЧЕМУ drop-in, а не свой unit. Redis ставится дистрибутивным пакетом
-  (core.pkg.installed redis-server, tasks/main.yml) вместе с его systemd-юнитом
-  redis-server.service. Дистрибутивный unit заменять целиком нельзя — он несёт
-  ExecStart/Type=notify/RuntimeDirectory и обновляется вместе с пакетом. Поэтому
-  hardening доезжает override-ом: /etc/systemd/system/redis-server.service.d/
-  hardening.conf поверх дистрибутивного unit-а (директивы [Service] мержатся, наши
-  имеют приоритет). Тот же паттерн, что в эталоне destiny redis-single.
+  ПОЧЕМУ drop-in, а не свой unit. Redis ставится дистрибутивным пакетом вместе с его
+  systemd-юнитом redis-server.service. Дистрибутивный unit заменять целиком нельзя — он
+  несёт ExecStart/Type=notify/RuntimeDirectory и обновляется вместе с пакетом. Поэтому
+  hardening доезжает override-ом: /etc/systemd/system/redis-server.service.d/hardening.conf
+  поверх дистрибутивного unit-а (директивы [Service] мержатся, наши имеют приоритет).
 
   СЕРВИС-АККАУНТ. User/Group в drop-in НЕ задаём намеренно. redis — stateful-сервис
   (прод-конвенция §2/§3): owned data-dir /var/lib/redis (RDB/AOF) требует стабильного
@@ -24,12 +17,9 @@
   core.user/core.group не нужны.
 
   HARDENING (прод-конвенция §3, «безопасность на первом месте», requirements.md).
-  Stateful-вариант блока: ProtectSystem=strict + ReadWritePaths под фактические
-  каталоги записи redis. БЕЗ ReadWritePaths strict делает весь / только-чтение и
-  redis не сможет писать RDB/AOF/socket/pid/log — прод-инцидент. RW-пути — дефолтные
-  каталоги дистрибутивного redis-пакета: data-dir /var/lib/redis, log /var/log/redis,
-  pidfile/socket под /var/run/redis (redis.conf.tmpl). Перечислены каталоги этих
-  путей, и только они.
+  Stateful-вариант: ProtectSystem=strict + ReadWritePaths под фактические каталоги записи
+  redis (data-dir/log/pidfile/socket). БЕЗ ReadWritePaths strict делает весь / только-
+  чтение и redis не сможет писать RDB/AOF/socket/pid/log — прод-инцидент.
 
   MemoryDenyWriteExecute НЕ ставим намеренно (в отличие от Go-бинарей exporter-ов).
   redis — на C, использует jemalloc и поддерживает loadable-модули; MDWE запрещает

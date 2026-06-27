@@ -1,24 +1,16 @@
 {{/*
-  sentinel.conf для redis-sentinel-демона (режим sentinel). Образец —
-  Ansible templates/sentinel.conf.j2 роли redis. Контекст рендера
-  (docs/templating.md §3.2):
-    .vars  — явно переданные core.file.rendered (sentinel_config, monitor, auth,
-             data_dir/conf_dir, port/run_dir/log_dir — каталоги/порт из vars).
-    .self  — стабильные факты ЭТОГО хоста; primary_ip нужен для announce-ip.
-  Движок — Go text/template + sprig-allowlist, strict-mode (ADR-010).
+  sentinel.conf для redis-sentinel-демона (режим sentinel). Go text/template strict
+  (ADR-010). Контекст: .vars (sentinel_config, monitor, auth, каталоги/порт), .self
+  (primary_ip для announce-ip).
 
   ПЕР-ХОСТ vs HOST-ИНВАРИАНТ (TILING-урок qa 2026-06-22):
     - sentinel announce-ip — ПЕР-ХОСТ (IP ИМЕННО этого sentinel-а в gossip), берётся
-      из .self.network.primary_ip (render_context.self пер-хост), НЕ из apply.input
-      (apply.input резолвится host-инвариантно на первом по SID хосте → все sentinel-ы
-      получили бы один IP → анонс сломан за NAT/в облаке).
-    - sentinel monitor <master>: его адрес (monitor.ip/port) — HOST-ИНВАРИАНТНЫЙ
-      (ОДИН master на кластер), приходит обычными .vars (apply.input корректен).
+      из .self.network.primary_ip, НЕ из apply.input (тот резолвится host-инвариантно на
+      первом по SID хосте → все sentinel-ы получили бы один IP → анонс сломан за NAT).
+    - sentinel monitor <master>: адрес HOST-ИНВАРИАНТНЫЙ (ОДИН master), приходит .vars.
 
-  .vars.sentinel_config — отсортированный map стартовых директив sentinel.conf
-  (детерминизм: range по MAP сортирует ключи → нет ложного change/рестарта).
-  Содержит startup-only директивы (dir/loglevel/down-after-milliseconds/...);
-  monitor/auth выносятся ОТДЕЛЬНЫМИ строками ниже (для них нужно имя master + quorum).
+  .vars.sentinel_config — отсортированный map стартовых директив (range по MAP сортирует
+  ключи → нет ложного change). monitor/auth — ОТДЕЛЬНЫМИ строками ниже (нужны master + quorum).
 */}}
 port {{ .vars.port }}
 
@@ -27,16 +19,11 @@ daemonize no
 supervised systemd
 pidfile {{ .vars.run_dir }}/redis-sentinel.pid
 logfile {{ .vars.log_dir }}/redis-sentinel.log
-# Рабочий каталог из data_dir (директива B): sentinel пишет сюда свой state.
-# pidfile/logfile — системные run-/log-каталоги (.vars.run_dir/.vars.log_dir, дефолт
-# /var/run/redis, /var/log/redis); basename (redis-sentinel.pid/.log) — имя демона.
-# port — well-known sentinel-порт (.vars.port, vars.sentinel_port, дефолт 26379).
+# Рабочий каталог: sentinel пишет сюда свой state.
 dir {{ .vars.data_dir }}
 
-# ВТОРОЙ aclfile — ТОЛЬКО для sentinel-демона (системные юзеры с sentinel-командами,
-# отдельный набор от users.acl redis-server). Путь из conf_dir (директива B): destiny
-# кладёт sentinel-users.acl в ${conf_dir}/sentinel-users.acl (задача sentinel.yml) —
-# директива смотрит туда же. Пустой файл валиден (back-compat).
+# ВТОРОЙ aclfile — ТОЛЬКО для sentinel-демона (отдельный набор от users.acl redis-server).
+# Пустой файл валиден (back-compat).
 aclfile {{ .vars.conf_dir }}/sentinel-users.acl
 
 # Стартовые директивы из переданного map (отсортированы range-ом по ключам).

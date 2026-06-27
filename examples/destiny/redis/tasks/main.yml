@@ -16,37 +16,20 @@
 # не резервируются. L0-кейсы ассертят presence-матчером (task_present/task_absent),
 # которому group-drop безопасен (позиционные индексы не важны).
 #
-#   install.yml  — установка бинарей redis (БЕЗУСЛОВНО, install всегда): диспетч по
-#                  install.method (package-block default = core.pkg.installed
-#                  redis-server; binary-block opt-in = url.fetched→archive.extracted→
-#                  user/group→три core.file.present (src:) redis-server/redis-cli/
-#                  redis-sentinel в /usr/local/bin→свой redis-server.service + СВОЙ
-#                  рестарт на смену бинаря/юнита, register redis_server_bin/
-#                  redis_cli_bin/redis_sentinel_bin/redis_server_unit) + каталог
-#                  unix-сокета. Метод-гейт — in-block (частичный: package активна
-#                  всегда, включая sentinel_only), на include НЕ выносится.
-#                  ★ binary-ветка несёт СВОЙ рестарт здесь, а не дёргает server.yml:
-#                  register-ссылки в onchanges линтер (validateTaskRefs) проверяет
-#                  per-file — cross-file onchanges отвергается (тот же инвариант, что
-#                  у node-exporter: install-register рядом с рестартом);
-#   server.yml   — data-плоскость redis-server (gated deploy_redis НА include): TLS-
-#                  каталог + 3 PEM-задачи (cert/key/ca, в nested tls.enable-block) →
-#                  users.acl → redis.conf → systemd hardening drop-in →
-#                  core.service.running/restarted. sentinel_only (deploy_redis=false)
-#                  → весь файл group-drop. register'ы redis_* и их onchanges-рестарт
-#                  ОБЯЗАНЫ жить В ЭТОМ файле (per-file линтер ссылок): разрыв расцепил
-#                  бы ротацию cert от рестарта (security-регрессия);
-#   sentinel.yml — sentinel-демон (gated sentinel_enabled НА include): sentinel.conf +
-#                  unit + core.service.running/restarted. Вне sentinel-режима — весь
-#                  файл group-drop. register'ы redis_sentinel_* и их onchanges — здесь;
-#   extras.yml   — host-tuning (THP-юнит / logrotate / sysctl), все БЕЗУСЛОВНЫ
-#                  (флагов в контракте нет). sysctl — один core.sysctl.applied
-#                  (модуль сам владеет drop-in + reload, без register→apply);
-#   modules.yml  — каталог .so + ЧЕТЫРЕ ЯВНЫЕ fetch-задачи (по одной на алиас) ВСЕХ
-#                  Redis-модулей из vars.redis_modules (директива «модули ВСЕГДА ВСЕ»;
-#                  gated НА include на deploy_redis И НЕ redis8): sentinel_only (нет
-#                  data-плоскости) / Redis 8+ (модули встроены) → весь файл group-drop.
-#                  Набор модулей — инвариант vars, не input; scenario модули не передаёт.
+#   install.yml  — установка бинарей redis (БЕЗУСЛОВНО): диспетч по install.method
+#                  (package default / binary opt-in) + каталог unix-сокета. Метод-гейт
+#                  in-block (package активна всегда, включая sentinel_only), на include
+#                  НЕ выносится. binary-ветка несёт СВОЙ рестарт здесь (per-file линтер
+#                  onchanges запрещает cross-file register);
+#   server.yml   — data-плоскость redis-server (gated deploy_redis НА include): PEM →
+#                  users.acl → redis.conf → hardening drop-in → core.service. sentinel_only
+#                  (deploy_redis=false) → group-drop;
+#   sentinel.yml — sentinel-демон (gated sentinel_enabled НА include). Вне sentinel-
+#                  режима — group-drop;
+#   extras.yml   — host-tuning (THP-юнит / logrotate / sysctl), все БЕЗУСЛОВНЫ;
+#   modules.yml  — каталог .so + ЧЕТЫРЕ ЯВНЫЕ fetch-задачи ВСЕХ Redis-модулей (директива
+#                  «модули ВСЕГДА ВСЕ»; gated НА include на deploy_redis И НЕ redis8).
+#                  sentinel_only / Redis 8+ → group-drop;
 #
 # Гейты include — статические input-предикаты (conditional-include требует
 # input./essence./incarnation./vars.; register./soulprint. на include запрещены).
@@ -67,12 +50,9 @@
 
 - include: extras.yml
 
-# Модули ВСЕГДА ВСЕ из vars.redis_modules (директива C), но ТОЛЬКО где есть data-
-# плоскость redis-server (deploy_redis: в sentinel_only redis-server нет → модулям
-# негде грузиться) И Redis < 8 (на 8+ модули встроены в сервер). version-guard вынесен
-# в vars (vars.redis_is_v8plus, единый источник с loadmodules server.yml) — здесь
-# просто `!vars.redis_is_v8plus`. conditional-include допускает vars. в предикате
-# (наряду с input./essence./incarnation.; register./soulprint. запрещены) → группа
-# РЕАЛЬНО исключается из плана на Redis 8+ / в sentinel_only.
+# Модули ВСЕГДА ВСЕ (директива C), но ТОЛЬКО где есть data-плоскость (sentinel_only —
+# redis-server нет, модулям негде грузиться) И Redis < 8 (на 8+ встроены). version-guard
+# вынесен в vars (vars.redis_is_v8plus, единый источник с loadmodules server.yml).
+# conditional-include допускает vars. в предикате → группа РЕАЛЬНО исключается из плана.
 - include: modules.yml
   when: "default(input.deploy_redis, true) && !vars.redis_is_v8plus"

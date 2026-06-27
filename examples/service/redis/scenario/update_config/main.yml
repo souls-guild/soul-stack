@@ -177,11 +177,7 @@ tasks:
   # меняет → валидируем против той же серии, что задеплоена. EMPTY-CATALOG-SKIP
   # (!has(essence.redis_directives)) — каталог опционален (минимальные fixtures);
   # версия вне каталога (compute.redis_version == '' или серия отсутствует) → skip.
-  # default(input.redis_settings, {}) — поле опционально; .all над {} = true.
-  #
-  # Механика version→серия БЕЗ split (как create): итерируем ключи каталога (.all(s,…))
-  # и матчим версию регуляркой `^([0-9]+:)?<s>[.]` (epoch-префикс distro-пина опционален,
-  # трейлинг `[.]` — граница серии); для серий не той версии предикат вакуумно true.
+  # Механика version→серия (без split) идентична create/main.yml.
   - name: Validate redis_settings directive names against the catalog for the deployed Redis version
     assert:
       # that[] и message — СКАЛЯРНЫЕ строки (не block-scalar): soul-lint требует
