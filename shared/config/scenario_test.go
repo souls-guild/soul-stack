@@ -1343,8 +1343,9 @@ state_changes:
 
 // --- create: top-level флаг стартового сценария (механизм нескольких create) ---
 
-// TestLoadScenarioManifest_CreateFlagTrue — `create: true` парсится в *bool и
-// CreateScenarioEnabled()==true (сценарий объявлен как стартовый/bootstrap-годный).
+// TestLoadScenarioManifest_CreateFlagTrue — `create: true` парсится в *bool
+// (сценарий объявлен как стартовый/bootstrap-годный; чтение флага — слоем выше,
+// keeper-резолв create-набора по artifact.Scenario.Create).
 func TestLoadScenarioManifest_CreateFlagTrue(t *testing.T) {
 	src := `name: create_cluster
 create: true
@@ -1357,9 +1358,6 @@ tasks: []
 	}
 	if cfg.Create == nil || *cfg.Create != true {
 		t.Fatalf("cfg.Create = %v, want *true", cfg.Create)
-	}
-	if !cfg.CreateScenarioEnabled() {
-		t.Fatalf("CreateScenarioEnabled() = false, want true")
 	}
 }
 
@@ -1378,14 +1376,10 @@ tasks: []
 	if cfg.Create == nil || *cfg.Create != false {
 		t.Fatalf("cfg.Create = %v, want *false", cfg.Create)
 	}
-	if cfg.CreateScenarioEnabled() {
-		t.Fatalf("CreateScenarioEnabled() = true, want false")
-	}
 }
 
-// TestLoadScenarioManifest_CreateFlagAbsent — отсутствие ключа: Create==nil,
-// CreateScenarioEnabled()==false (back-compat: обычный operational-сценарий не
-// становится create-стартовым молча).
+// TestLoadScenarioManifest_CreateFlagAbsent — отсутствие ключа: Create==nil
+// (back-compat: обычный operational-сценарий не становится create-стартовым молча).
 func TestLoadScenarioManifest_CreateFlagAbsent(t *testing.T) {
 	src := `name: restart
 tasks: []
@@ -1397,9 +1391,6 @@ tasks: []
 	}
 	if cfg.Create != nil {
 		t.Fatalf("cfg.Create = %v, want nil", cfg.Create)
-	}
-	if cfg.CreateScenarioEnabled() {
-		t.Fatalf("CreateScenarioEnabled() = true для сценария без create:, want false")
 	}
 }
 

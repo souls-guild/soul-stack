@@ -97,6 +97,20 @@ assert:
         count: 4
         generate_userdata: true
 
+    # (б) keeper.push.applied: доставка per-VM bootstrap-токена (EXPERIMENTAL,
+    # provision.yml шаг (б)). Guard на ПРИСУТСТВИЕ шага доставки токена + форму
+    # hosts: ${ register.provision.hosts } (весь payload register, 4 VM). При смене
+    # контракта доставки (имя модуля / форма hosts) этот ассерт упадёт — без него
+    # регресс прошёл бы молча (шаг не сверялся ни одним provision-тестом). Единственный
+    # keeper.push.applied в плане → дизамбигуатор не нужен.
+    - module: keeper.push.applied
+      params_subset:
+        hosts:
+          - { sid: vm-1.example.com, vm_id: i-aaa111, primary_ip: 10.0.0.1 }
+          - { sid: vm-2.example.com, vm_id: i-bbb222, primary_ip: 10.0.0.2 }
+          - { sid: vm-3.example.com, vm_id: i-ccc333, primary_ip: 10.0.0.3 }
+          - { sid: vm-4.example.com, vm_id: i-ddd444, primary_ip: 10.0.0.4 }
+
     # (в) core.soul.registered: sid — список SID созданных VM; await_online +
     # refresh_soulprint; await_timeout из input.provision (5m, перекрывает essence-дефолт).
     - module: core.soul.registered
