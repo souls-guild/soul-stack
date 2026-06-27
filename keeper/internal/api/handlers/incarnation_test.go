@@ -453,6 +453,40 @@ func TestToDTO_MasksSecretsInStateAndSpec(t *testing.T) {
 	}
 }
 
+// TestToIncarnationGetView_ProjectsTraitsAndCreatedScenario — handler-проекция
+// читает traits (ADR-060 operator-set метки) и created_scenario (механизм нескольких
+// create) из доменной incarnation-строки. Источник bug-а: оба поля не отдавались в
+// GET → UI traits-modal открывался без prefill, оператор не видел стартовый сценарий.
+func TestToIncarnationGetView_ProjectsTraitsAndCreatedScenario(t *testing.T) {
+	inc := &incarnation.Incarnation{
+		Name:            "redis-prod",
+		Status:          incarnation.StatusReady,
+		CreatedScenario: "create_cluster",
+		Traits:          map[string]any{"env": "prod", "az": []any{"a", "b"}},
+	}
+	view := toIncarnationGetView(inc, nil)
+
+	if view.CreatedScenario != "create_cluster" {
+		t.Errorf("CreatedScenario = %q, want create_cluster", view.CreatedScenario)
+	}
+	if got := view.Traits["env"]; got != "prod" {
+		t.Errorf("Traits[env] = %v, want prod", got)
+	}
+	if got, ok := view.Traits["az"].([]any); !ok || len(got) != 2 {
+		t.Errorf("Traits[az] = %v, want list len 2 (Trait полиморфен)", view.Traits["az"])
+	}
+
+	// Пустые домен-значения проходят как есть (omitempty опускает их в wire-проекции).
+	empty := &incarnation.Incarnation{Name: "x", Status: incarnation.StatusReady, Traits: map[string]any{}}
+	emptyView := toIncarnationGetView(empty, nil)
+	if emptyView.CreatedScenario != "" {
+		t.Errorf("CreatedScenario = %q, want empty", emptyView.CreatedScenario)
+	}
+	if len(emptyView.Traits) != 0 {
+		t.Errorf("Traits = %v, want empty", emptyView.Traits)
+	}
+}
+
 func TestToHistoryDTO_MasksSecretsInStateSnapshots(t *testing.T) {
 	e := &incarnation.HistoryEntry{
 		HistoryID:   "01HX",

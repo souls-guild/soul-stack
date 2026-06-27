@@ -28,11 +28,14 @@ import (
 // {name} (и list-element, и PATCH .../hosts). Пакет api проецирует её в native IncarnationGetReply.
 // Status — RAW string домена (native-тип в api держит enum-форму). Spec/State/StatusDetails —
 // map[string]any (nil → `null` через *map в проекции). CreatedByAID/LastDriftCheckAt/
-// LastDriftSummary — pointer-optional. covens — non-nil slice.
+// LastDriftSummary — pointer-optional. covens — non-nil slice. Traits (operator-set
+// метки, ADR-060) и CreatedScenario (стартовый сценарий, механизм нескольких create)
+// проецируются с omitempty (пустой map / пустая строка → ключ опущен).
 type IncarnationGetView struct {
 	Covens             []string
 	CreatedAt          time.Time
 	CreatedByAID       *string
+	CreatedScenario    string
 	LastDriftCheckAt   *time.Time
 	LastDriftSummary   *DriftScanSummaryView
 	Name               string
@@ -43,6 +46,7 @@ type IncarnationGetView struct {
 	StateSchemaVersion int32
 	Status             string
 	StatusDetails      map[string]any
+	Traits             map[string]any
 	UpdatedAt          time.Time
 }
 
@@ -92,6 +96,7 @@ func toIncarnationGetView(inc *incarnation.Incarnation, schema audit.SecretSchem
 		Covens:             coalesceCoven(inc.Covens),
 		CreatedAt:          inc.CreatedAt.UTC(),
 		CreatedByAID:       inc.CreatedByAID,
+		CreatedScenario:    inc.CreatedScenario,
 		Name:               inc.Name,
 		Service:            inc.Service,
 		ServiceVersion:     inc.ServiceVersion,
@@ -100,6 +105,7 @@ func toIncarnationGetView(inc *incarnation.Incarnation, schema audit.SecretSchem
 		StateSchemaVersion: int32(inc.StateSchemaVersion),
 		Status:             string(inc.Status),
 		StatusDetails:      inc.StatusDetails,
+		Traits:             inc.Traits,
 		UpdatedAt:          inc.UpdatedAt.UTC(),
 		LastDriftSummary:   toDriftScanSummaryView(inc.LastDriftSummary),
 	}

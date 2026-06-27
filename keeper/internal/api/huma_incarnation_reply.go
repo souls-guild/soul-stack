@@ -83,12 +83,14 @@ type IncarnationDestroyReply struct {
 // IncarnationGetReply — native тело GET /v1/incarnations/{name} (и PATCH .../hosts, list-element).
 // Форма 1:1 с прежней IncarnationGetReply: covens всегда массив (БЕЗ omitempty, не nil);
 // created_by_aid/spec/state/status_details — `*map`/`*string` БЕЗ omitempty (nil → `null`);
-// last_drift_check_at/last_drift_summary — С omitempty (nil → ключ опущен). created_at/
+// last_drift_check_at/last_drift_summary/created_scenario/traits — С omitempty (nil/пустой →
+// ключ опущен; traits — голый map, НЕ `*map`, чтобы пустой `{}` опускался). created_at/
 // updated_at — наносекундный time-wire (handler даёт .UTC() без Truncate).
 type IncarnationGetReply struct {
 	Covens             []string                `json:"covens" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"` // ← soul.CovenPattern (per-element)
 	CreatedAt          time.Time               `json:"created_at"`
 	CreatedByAID       *string                 `json:"created_by_aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
+	CreatedScenario    string                  `json:"created_scenario,omitempty"`                             // стартовый сценарий (механизм нескольких create); пустой → опущен
 	LastDriftCheckAt   *time.Time              `json:"last_drift_check_at,omitempty"`
 	LastDriftSummary   *DriftScanSummary       `json:"last_drift_summary,omitempty"`
 	Name               string                  `json:"name" pattern:"^[a-z0-9][a-z0-9-]{0,62}$"` // ← incarnation.NamePattern
@@ -99,6 +101,7 @@ type IncarnationGetReply struct {
 	StateSchemaVersion int32                   `json:"state_schema_version"`
 	Status             IncarnationStatus       `json:"status"`
 	StatusDetails      *map[string]interface{} `json:"status_details"`
+	Traits             map[string]interface{}  `json:"traits,omitempty"` // operator-set метки (ADR-060); пустой map → опущен
 	UpdatedAt          time.Time               `json:"updated_at"`
 }
 
@@ -184,6 +187,7 @@ func newIncarnationGetReply(v handlers.IncarnationGetView) IncarnationGetReply {
 		Covens:             v.Covens,
 		CreatedAt:          v.CreatedAt,
 		CreatedByAID:       v.CreatedByAID,
+		CreatedScenario:    v.CreatedScenario,
 		LastDriftCheckAt:   v.LastDriftCheckAt,
 		LastDriftSummary:   newDriftScanSummary(v.LastDriftSummary),
 		Name:               v.Name,
@@ -194,6 +198,7 @@ func newIncarnationGetReply(v handlers.IncarnationGetView) IncarnationGetReply {
 		StateSchemaVersion: v.StateSchemaVersion,
 		Status:             IncarnationStatus(v.Status),
 		StatusDetails:      ptrMap(v.StatusDetails),
+		Traits:             v.Traits,
 		UpdatedAt:          v.UpdatedAt,
 	}
 }

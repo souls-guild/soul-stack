@@ -1078,6 +1078,8 @@ components:
           type:
             - string
             - "null"
+        created_scenario:
+          type: string
         last_drift_check_at:
           format: date-time
           type: string
@@ -1102,6 +1104,9 @@ components:
         status:
           $ref: "#/components/schemas/IncarnationStatus"
         status_details:
+          additionalProperties: {}
+          type: object
+        traits:
           additionalProperties: {}
           type: object
         updated_at:

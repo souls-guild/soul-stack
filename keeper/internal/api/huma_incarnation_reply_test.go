@@ -134,3 +134,34 @@ func TestGoldenWire_IncarnationProjection(t *testing.T) {
 	goldenIncarnationWire(t, "proj/UnlockReply", newIncarnationUnlockReply(unlockV),
 		`{"name":"x","previous_status":"error_locked","status":"ready","unlocked_at":"2026-06-14T12:00:00.123456789Z","unlocked_by_aid":"archon-bob"}`)
 }
+
+// TestGoldenWire_IncarnationGetReply_TraitsCreatedScenario фиксирует проекцию двух
+// additive-полей GET-ответа (ADR-060 traits + created_scenario, механизм нескольких
+// create): непустые значения долетают до wire в alphabetical-позициях (created_scenario
+// после created_by_aid, traits после status_details), пустые — опускаются omitempty.
+// Источник bug-а: UI traits-modal открывался пустым (нет prefill) — поля не отдавались.
+func TestGoldenWire_IncarnationGetReply_TraitsCreatedScenario(t *testing.T) {
+	ts := time.Date(2026, 6, 14, 12, 0, 0, 123456789, time.UTC)
+	m := map[string]any{"k": "v"}
+
+	// Непустые traits (scalar + list — Trait полиморфен) + created_scenario долетают.
+	full := handlers.IncarnationGetView{
+		Covens: []string{}, CreatedAt: ts, CreatedScenario: "create_cluster",
+		Name: "x", Service: "s", ServiceVersion: "v1", Spec: m, State: m,
+		StateSchemaVersion: 7, Status: "ready", StatusDetails: m,
+		Traits: map[string]any{"env": "prod", "az": []any{"a", "b"}}, UpdatedAt: ts,
+	}
+	goldenIncarnationWire(t, "GetReply/traits+created_scenario", newIncarnationGetReply(full),
+		`{"covens":[],"created_at":"2026-06-14T12:00:00.123456789Z","created_by_aid":null,"created_scenario":"create_cluster","name":"x","service":"s","service_version":"v1","spec":{"k":"v"},"state":{"k":"v"},"state_schema_version":7,"status":"ready","status_details":{"k":"v"},"traits":{"az":["a","b"],"env":"prod"},"updated_at":"2026-06-14T12:00:00.123456789Z"}`)
+
+	// Пустые: created_scenario "" + traits {} → omitempty опускает оба ключа (byte-exact
+	// с прежней формой до additive-правки — обратная совместимость старых клиентов).
+	empty := handlers.IncarnationGetView{
+		Covens: []string{}, CreatedAt: ts, CreatedScenario: "",
+		Name: "x", Service: "s", ServiceVersion: "v1", Spec: nil, State: nil,
+		StateSchemaVersion: 1, Status: "ready", StatusDetails: nil,
+		Traits: map[string]any{}, UpdatedAt: ts,
+	}
+	goldenIncarnationWire(t, "GetReply/traits+created_scenario empty", newIncarnationGetReply(empty),
+		`{"covens":[],"created_at":"2026-06-14T12:00:00.123456789Z","created_by_aid":null,"name":"x","service":"s","service_version":"v1","spec":null,"state":null,"state_schema_version":1,"status":"ready","status_details":null,"updated_at":"2026-06-14T12:00:00.123456789Z"}`)
+}
