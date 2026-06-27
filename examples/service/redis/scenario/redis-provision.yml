@@ -1,22 +1,42 @@
-# Ветка create — cloud-provision (ADR-061, Вариант A: один create-прогон поднимает VM
-# И деплоит redis). Подключается из main.yml через CONDITIONAL-INCLUDE СТРОГО ПЕРЕД
-# cluster/sentinel: `when: has(input.provision) && input.provision.enabled` стоит НА
-# include — при enabled=false / опущенной секции весь файл placeholder-skip (object-
-# input не статичен → не group-drop, но шаги не таргетят никого), при enabled=true
-# раскрывается в плоский список.
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║ ОБЩЕЕ PROVISION-ТЕЛО (service-level include, переиспользуемое) — ADR-061         ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+# Cloud-provision новых VM под redis-топологию ПЕРЕД деплоем: (а) core.cloud.created
+# создаёт VM, (б) core.bootstrap.delivered доставляет per-VM bootstrap-токен по SSH,
+# (в) core.soul.registered регистрирует созданные SID + БЛОКИРУЮЩЕ ждёт онбординга
+# (await_online) + refresh_soulprint → scenario-runner пере-резолвит roster ПЕРЕД
+# деплой-веткой (live-снимок online-набора). Лежит на service-level (scenario/<file>),
+# а не внутри одного сценария, и инклудится ОБОИМИ потребителями по имени файла:
+# scenario-include резолвит `scenario/<name>/<file>`, затем фоллбэкает на
+# `scenario/<file>` (orchestration.md §6, include.go). Так create и migrate_cluster
+# делят ОДНО provision-тело без дубликата.
 #
-# Поток (целевой сценарий ADR-061): (а) core.cloud.created создаёт VM под топологию;
-# (б) core.bootstrap.delivered доставляет per-VM bootstrap-токен по SSH (ADR-063); (в)
-# core.soul.registered регистрирует созданные SID, БЛОКИРУЮЩЕ ждёт онбординга
-# (await_online) и помечает шаг refresh_soulprint → scenario-runner пере-резолвит roster
-# ПЕРЕД cluster/sentinel-веткой (live-снимок online-набора). Без этого cluster/sentinel
-# увидели бы пустой/старый soulprint.hosts (созданные VM ещё не в roster-е).
+#   Потребители (на 2026-06-27):
+#     - scenario/create/main.yml          — cloud-create + онбординг ПЕРЕД деплоем;
+#     - scenario/migrate_cluster/main.yml  — то же ПЕРЕД деплой+миграцией.
+#
+#   В обоих случаях include gated на `has(input.provision) && input.provision.enabled`
+#   у ИНКЛУДЯЩЕГО (placeholder-skip-форма include-when — object-input не статичен, не
+#   group-drop): при enabled=false / опущенной секции шаги тела не таргетят никого.
+#
+# ★★ ИНВАРИАНТ ИНКЛУДЯЩЕГО (drift-guard руками — soul-lint cross-file НЕ ловит) ★★
+#   Этот файл ССЫЛАЕТСЯ на input.*/incarnation.*/essence.*/register.*, но НЕ объявляет
+#   их. Любой сценарий, инклудящий это тело, ОБЯЗАН нести в своём контракте ВЕСЬ набор,
+#   который тело читает, С ТОЙ ЖЕ СЕМАНТИКОЙ:
+#       input.provision.{enabled, provider, profile, await_timeout, ssh_provider}
+#       input.redis_type   input.shards   input.replicas_per_master
+#       incarnation.name   essence.provision_await_timeout
+#   Шаги (б)/(в) читают register.provision.hosts — register ПЕРВОГО шага (а)
+#   core.cloud.created (он создаётся ЗДЕСЬ). Пропуск/переименование любого input-поля в
+#   инклудящем НЕ ловится статически (cross-file дрейф невидим soul-lint) — проявится
+#   падением render. Источник истины набора и схемы input.provision —
+#   create/main.yml::input.provision.
 #
 # ★ ЧИСЛО VM — ИЗ ТОПОЛОГИИ (единственный источник истины размера кластера):
 #   - cluster:  shards*(1+replicas_per_master) (мастера + реплики на каждый шард);
 #   - sentinel: 1+replicas_per_master           (один master + реплики).
 # Отдельного node_count в input.provision НЕТ намеренно — он рассинхронился бы с
-# size-guard веток (assert size(soulprint.hosts) == та же формула). Образец флоу —
+# size-guard деплой-веток (assert size(soulprint.hosts) == та же формула). Образец флоу —
 # examples/service/example-cloud-bootstrap/scenario/create/main.yml.
 #
 # ★ teardown (destroy) — НЕ здесь (отдельный сценарий).
@@ -65,7 +85,7 @@
 #     корневой incarnation.name (роль таргетится по нему). await_online:true → шаг ждёт,
 #     пока созданные Souls станут online (Redis SID-lease), под await_timeout; B1-strict:
 #     недобор кворума → шаг failed → state не коммитится → error_locked. refresh_soulprint:
-#     true → после успеха roster пере-резолвится, cluster/sentinel-ветка видит online-набор.
+#     true → после успеха roster пере-резолвится, деплой-ветка видит online-набор.
 #     await_timeout: input.provision.await_timeout → essence.provision_await_timeout → '10m'.
 - name: Register provisioned VMs and await their onboarding
   on: keeper

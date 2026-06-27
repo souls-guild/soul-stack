@@ -867,14 +867,16 @@ tasks:
       message: "redis_settings содержит неизвестную директиву redis.conf для выбранной версии Redis (input.version): сверь имя с каталогом валидных директив этой версии (essence.redis_directives[<major.minor>]) — опечатка или директива из другой версии Redis. Каталог генерируется scripts/gen-redis-catalog.sh из src/config.c."
 
   # ── provision (ADR-061, Вариант A): cloud-create + онбординг ПЕРЕД роль-веткой ──────
-  # CONDITIONAL-INCLUDE provision.yml СТРОГО ПЕРЕД cluster/sentinel: при enabled=true
+  # CONDITIONAL-INCLUDE redis-provision.yml СТРОГО ПЕРЕД cluster/sentinel: при enabled=true
   # его шаги (а) создают VM, (в) регистрируют+ждут онбординга с refresh_soulprint → roster
   # пере-резолвится, и ТОЛЬКО потом cluster/sentinel-ветка видит созданные хосты в
-  # soulprint.hosts. when по input.provision — НЕ статический (object-input, не enum) →
-  # placeholder-skip-форма include-when (не group-drop): на enabled=false/опущенной секции
-  # шаги provision.yml не таргетят никого. has()-guard — секция опциональна (no-such-key
-  # без неё). ★ teardown НЕ здесь.
-  - include: provision.yml
+  # soulprint.hosts. ★ ОБЩЕЕ PROVISION-ТЕЛО service-level (scenario/redis-provision.yml, то
+  # же, что инклудит migrate_cluster/main.yml — дубликата нет; scenario-include фоллбэкает
+  # имя файла на service-level, orchestration.md §6). when по input.provision — НЕ
+  # статический (object-input, не enum) → placeholder-skip-форма include-when (не
+  # group-drop): на enabled=false/опущенной секции шаги тела не таргетят никого. has()-guard
+  # — секция опциональна (no-such-key без неё). ★ teardown НЕ здесь.
+  - include: redis-provision.yml
     when: "has(input.provision) && input.provision.enabled"
 
   - include: cluster.yml

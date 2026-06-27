@@ -164,6 +164,52 @@ input:
     default: true
     description: Оставить ли открытым plain-порт при включённом TLS (как create).
 
+  # ── cloud-provision: поднять VM под топологию ПЕРЕД миграцией (ADR-061, как create) ─
+  # ★ Наследие create-контракта (scenario.input — inline per-scenario, общего include
+  # нет): схема скопирована as-is из create/main.yml::input.provision. Когда задан и
+  # enabled=true — migrate_cluster ОДНИМ прогоном (а) создаёт VM через core.cloud.created,
+  # (б) доставляет per-VM bootstrap-токен, (в) регистрирует созданные SID + БЛОКИРУЮЩЕ
+  # ждёт онбординга (await_online + refresh_soulprint, ADR-061), после чего roster
+  # пере-резолвится и деплой+миграция (redis-deploy-sentinel.yml + seed-шаги) катятся на
+  # уже-online хосты. Не задан / enabled=false → миграция по СУЩЕСТВУЮЩЕМУ roster-у
+  # (поведение S1-пилота бит-в-бит). Общее provision-тело — service-level
+  # scenario/redis-provision.yml (то же, что инклудит create/main.yml).
+  #
+  # ★ node_count тут НЕТ намеренно: число VM выводится из ТОПОЛОГИИ (как create) —
+  # единственный источник истины размера кластера. ★ teardown (destroy) — НЕ здесь.
+  provision:
+    type: object
+    required: false
+    description: >-
+      Поднять VM под топологию ПЕРЕД миграцией в том же прогоне (ADR-061, как create).
+      enabled=true → сначала cloud-create + онбординг (барьер await_online), потом
+      деплой нового кластера + заливка с внешнего источника. Не задан / enabled=false →
+      миграция по существующему roster-у.
+    additional_properties: false
+    properties:
+      enabled:
+        type: boolean
+        default: false
+        description: Главный гейт provision. false (или секция опущена) — provision-тело placeholder-skip.
+      provider:
+        type: string
+        description: Имя cloud-Provider в реестре providers (NOT plugin name → soul-cloud-<provider>).
+      profile:
+        type: string
+        description: Имя VM-профиля в реестре profiles (ресурсы/образ/сеть VM).
+      await_timeout:
+        type: string
+        pattern: "^[0-9]+[smh]$"
+        description: >-
+          Верхняя граница ожидания онбординга созданных VM (барьер await_online,
+          ADR-061; форма <N>{s|m|h}). Не задан → essence.provision_await_timeout (дефолт
+          10m). Ограничен сверху keeper.yml::max_await_timeout.
+      ssh_provider:
+        type: string
+        description: >-
+          Имя SshProvider-плагина (keeper.yml::plugins.ssh_providers[].name) для
+          доставки per-VM bootstrap-токена по SSH (core.bootstrap.delivered, ADR-063).
+
   # ── source: внешний (старый) кластер — ОТКУДА мигрируем ────────────────────────
   # Координаты и учётка ВНЕШНЕГО источника. password_ref/tls_ca_ref — Vault-ПУТИ (НЕ
   # значения): сценарий читает их авторским каналом ${ vault(input.source.<ref>) } в
@@ -422,6 +468,32 @@ state_changes:
                'failover_timeout_ms': int(input.sentinel_failover_timeout_ms)
              }
            : {} }
+
+  # ── cloud-provision read-model (ADR-061, как create) ────────────────────────
+  # ФАКТ «эти VM подняты ЭТИМ migrate-прогоном» — для cascade-destroy day-2 teardown
+  # (souls→destroyed/seeds→orphaned/tokens→burned). ★ GUARD по input.provision (НЕ
+  # has(register.provision)!): на non-provision-прогоне provision-тело placeholder-skip
+  # → register.provision не существует → обращение к нему вне guard рвануло бы. Гейт —
+  # input.provision (object-вход, has()-safe): задан И enabled → читаем register.provision
+  # (создан шагом (а) redis-provision.yml); иначе [] / ''. Тернар короткозамыкает —
+  # register.provision.* не трогается на non-provision-пути. Те же guard+форма, что
+  # create/main.yml::state_changes (provisioned_vm_ids/sids/provider).
+  - set: provisioned_vm_ids
+    value: >-
+      ${ (has(input.provision) && input.provision.enabled)
+           ? register.provision.vm_ids
+           : [] }
+  - set: provisioned_sids
+    value: >-
+      ${ (has(input.provision) && input.provision.enabled)
+           ? register.provision.hosts.map(h, h.sid)
+           : [] }
+  - set: provisioned_provider
+    value: >-
+      ${ (has(input.provision) && input.provision.enabled)
+           ? input.provision.provider
+           : '' }
+
   # ★ seed-source read-model (v9): ФАКТ «залито миграцией с внешнего кластера».
   # detached: false — источник ещё жив (отцепит day-2 detach_source). Без timestamp.
   - set: seeded_from
@@ -434,6 +506,20 @@ state_changes:
 # Тело прогона — ветки диспетчера по redis_type (CONDITIONAL-INCLUDE, как create).
 # S1-пилот: sentinel реализован, cluster — fail-closed заглушка (S4).
 tasks:
+  # ── provision (ADR-061, как create): cloud-create + онбординг ПЕРЕД деплой+миграцией ──
+  # CONDITIONAL-INCLUDE redis-provision.yml СТРОГО ПЕРЕД cluster/sentinel-веткой: при
+  # enabled=true его шаги (а) создают VM, (в) регистрируют+ждут онбординга с
+  # refresh_soulprint → roster пере-резолвится, и ТОЛЬКО потом sentinel-ветка (деплой
+  # нового кластера + заливка с внешнего источника) видит созданные хосты в soulprint.hosts.
+  # ★ ТО ЖЕ ОБЩЕЕ PROVISION-ТЕЛО service-level (scenario/redis-provision.yml), что инклудит
+  # create/main.yml — дубликата нет (scenario-include фоллбэкает имя файла на service-level,
+  # orchestration.md §6). when по input.provision — НЕ статический (object-input, не enum) →
+  # placeholder-skip-форма include-when (не group-drop): на enabled=false/опущенной секции
+  # шаги тела не таргетят никого. has()-guard — секция опциональна (no-such-key без неё).
+  # ★ teardown НЕ здесь.
+  - include: redis-provision.yml
+    when: "has(input.provision) && input.provision.enabled"
+
   - include: cluster.yml
     when: "input.redis_type == 'cluster'"
   - include: sentinel.yml
