@@ -1,0 +1,18 @@
+name: preserves-existing-seeded-from
+description: >
+  Идемпотентность: инкарнация, у которой seeded_from УЖЕ есть (повторный прогон
+  миграции / inline-seed migrate_cluster), сохраняет значение как есть — has()-guard
+  возвращает текущий объект, не перезатирает default-ом. detached: true (источник
+  уже отцеплен day-2) тоже проходит насквозь.
+
+state_before:
+  redis_type: "cluster"
+  seeded_from:
+    source_endpoints: ["old-1.example.com:6379", "old-2.example.com:6379"]
+    detached: true
+
+state_after:
+  redis_type: "cluster"
+  seeded_from:
+    source_endpoints: ["old-1.example.com:6379", "old-2.example.com:6379"]
+    detached: true

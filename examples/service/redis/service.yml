@@ -1,5 +1,5 @@
 name: redis
-state_schema_version: 8
+state_schema_version: 9
 description: >-
   Redis по концепции Ansible-роли: ОДИН сервис на режимы развёртывания
   (redis_type ∈ sentinel/cluster). Per-host install + render redis.conf делает
@@ -60,6 +60,16 @@ description: >-
 #     повисли бы, anti-replay нарушен). Рядом с provisioned_vm_ids: vm_ids — provider-id
 #     (для core.cloud.destroyed), sids — Keeper-id Soul (для cascade destroy) — разные
 #     подсистемы. ОДИН плоский set; default [] существующим (has()-guard). Зеркало 006_to_007.
+#   - 008_to_009 (migrations/008_to_009.yml): seed-source read-model (S1-пилот
+#     migrate_cluster). state ДОПОЛНЯЕТСЯ вложенным объектом seeded_from — ОТКУДА
+#     залиты данные при миграции с внешнего кластера: source_endpoints (array string)
+#     и detached (bool — false после migrate, true после day-2 detach_source). Время
+#     намеренно НЕ в state (детерминизм L0; now() в migration-CEL запрещён ADR-019) —
+#     берётся из state_history (snapshot per-change). Существующим инкарнациям (обычный
+#     create, не миграция) — консервативный default {source_endpoints: [], detached: false}.
+#     ОДИН плоский set с has()-guard на ВЕСЬ объект (CEL-map-литерал-дефолт): seeded_from
+#     уже есть → сохраняется как есть, иначе ставится дефолт. Зеркало 006_to_007/007_to_008
+#     (guard на объекте, не на листьях). Остальной state НЕ трогается.
 # incarnation.state фиксирует, что развёрнуто, чтобы оператор видел инсталляцию и
 # повторный apply был idempotent.
 #
@@ -186,6 +196,26 @@ state_schema:
       type: array
       items:
         type: string
+
+    # ── seed-source read-model (v9, S1-пилот migrate_cluster) ─────────────────
+    # ФАКТ «данные инкарнации залиты миграцией с ВНЕШНЕГО Redis-кластера» (S1
+    # migrate_cluster). source_endpoints — адреса источника (откуда тянули);
+    # detached — отцеплён ли источник: false сразу после migrate (источник ещё
+    # жив, реплицируем/догружаем), true после day-2 detach_source (источник
+    # больше не нужен). Время сюда НЕ кладём — оно в state_history (snapshot
+    # per-change несёт время), а в самом state остаётся детерминированным (важно
+    # для L0; timestamps в state — отложенный S-batch). Обычный create (не
+    # миграция) → консервативный default {source_endpoints: [], detached: false}.
+    seeded_from:
+      type: object
+      additionalProperties: false
+      properties:
+        source_endpoints:
+          type: array
+          items:
+            type: string
+        detached:
+          type: boolean
 
     # ── Топология (counts, v3) ────────────────────────────────────────────────
     # Раскладка ролей по таргетированным souls. Из input.shards/replicas/

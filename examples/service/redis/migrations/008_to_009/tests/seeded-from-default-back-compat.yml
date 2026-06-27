@@ -1,0 +1,19 @@
+name: seeded-from-default-back-compat
+description: >
+  Инкарнация без seeded_from (обычный create, не миграция с внешнего кластера) →
+  консервативный default {source_endpoints: [], detached: false}. has()-guard
+  back-compat для отсутствующего ключа (зеркало 007_to_008 provisioned_sids,
+  но guard на ВЕСЬ вложенный объект).
+
+state_before:
+  redis_type: "sentinel"
+  redis_config:
+    maxmemory: "256mb"
+
+state_after:
+  redis_type: "sentinel"
+  redis_config:
+    maxmemory: "256mb"
+  seeded_from:
+    source_endpoints: []
+    detached: false

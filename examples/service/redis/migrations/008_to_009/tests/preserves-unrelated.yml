@@ -1,0 +1,57 @@
+name: preserves-unrelated
+description: >
+  Миграция трогает ТОЛЬКО seeded_from: остальной state (redis_type/redis_config/
+  redis_users/redis_sentinel/namedfields/топология/provisioned_*) проходит насквозь
+  без изменений. Без seeded_from до миграции → оно доливается default-ом
+  ({source_endpoints: [], detached: false}), всё прочее — бит-в-бит.
+
+state_before:
+  redis_type: "sentinel"
+  redis_config:
+    maxmemory: "256mb"
+    appendonly: "yes"
+  redis_users:
+    - { name: "app", perms: "~* +@all", state: "on" }
+  redis_sentinel:
+    master_name: "master"
+    quorum: 2
+    down_after_ms: 5000
+    failover_timeout_ms: 60000
+  tls:
+    enable: true
+    only: false
+    port: 7379
+  persistence: "rdb_aof"
+  memory_mb: 1024
+  shards: 0
+  replicas: 1
+  provisioned_vm_ids: ["i-aaa111", "i-bbb222", "i-ccc333"]
+  provisioned_provider: "aws-prod"
+  provisioned_sids: ["vm-1.example.com", "vm-2.example.com", "vm-3.example.com"]
+
+state_after:
+  redis_type: "sentinel"
+  redis_config:
+    maxmemory: "256mb"
+    appendonly: "yes"
+  redis_users:
+    - { name: "app", perms: "~* +@all", state: "on" }
+  redis_sentinel:
+    master_name: "master"
+    quorum: 2
+    down_after_ms: 5000
+    failover_timeout_ms: 60000
+  tls:
+    enable: true
+    only: false
+    port: 7379
+  persistence: "rdb_aof"
+  memory_mb: 1024
+  shards: 0
+  replicas: 1
+  provisioned_vm_ids: ["i-aaa111", "i-bbb222", "i-ccc333"]
+  provisioned_provider: "aws-prod"
+  provisioned_sids: ["vm-1.example.com", "vm-2.example.com", "vm-3.example.com"]
+  seeded_from:
+    source_endpoints: []
+    detached: false

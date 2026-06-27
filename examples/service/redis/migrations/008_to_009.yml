@@ -1,0 +1,26 @@
+from_version: 8
+to_version: 9
+
+description: >-
+  state_schema v8 → v9: seed-source read-model (S1-пилот migrate_cluster). state
+  ДОПОЛНЯЕТСЯ вложенным объектом:
+    - seeded_from {source_endpoints: array string, detached: bool} — ОТКУДА залиты
+      данные при миграции с внешнего Redis-кластера. source_endpoints — адреса
+      источника; detached — отцеплён ли источник (false после migrate, источник ещё
+      жив; true после day-2 detach_source). Время в state НЕ кладём — детерминизм L0
+      (now() в migration-CEL запрещён ADR-019); момент берётся из state_history
+      (snapshot per-change несёт время). Timestamps в самом state — отложенный S-batch.
+
+  Forward-only (down: не поддерживается; восстановление — через state_history).
+  Существующие инкарнации развёрнуты обычным create (БЕЗ миграции с внешнего
+  кластера) → консервативный default: {source_endpoints: [], detached: false}.
+  ОДИН плоский set; has()-guard на ВЕСЬ объект (CEL-map-литерал-дефолт): seeded_from
+  уже есть → сохраняется как есть, иначе ставится дефолт целиком. Зеркало паттерна
+  006_to_007/007_to_008, но guard на объекте (не на отдельных листьях), т.к.
+  seeded_from — единый вложенный объект, а не набор независимых скаляров. Остальной
+  state НЕ трогается.
+
+transform:
+  - set:
+      path:  state.seeded_from
+      value: "${ has(state.seeded_from) ? state.seeded_from : {'source_endpoints': [], 'detached': false} }"
