@@ -341,6 +341,18 @@ compute:
          'sentinel down-after-milliseconds ' + default(essence.sentinel_master_name, 'master'): string(int(input.sentinel_down_after_ms)),
          'sentinel failover-timeout '         + default(essence.sentinel_master_name, 'master'): string(int(input.sentinel_failover_timeout_ms))
        } }
+  # ── sentinel_monitor_now=false: НЕ мониторить master во время заливки (split-brain-фикс) ──
+  # ★ КОНТРАКТ-ФЛАГ шага 4 деплой-тела (redis-deploy-sentinel.yml: проксируется в task-var и
+  # гейтится when: vars.sentinel_monitor_now; через task-var, т.к. flow-control when не видит
+  # compute.* напрямую). При миграции MONITOR ОТКЛАДЫВАЕТСЯ: к моменту деплоя новый master ещё НЕ привязан к
+  # внешнему источнику (REPLICAOF external — шаг 2 ниже, ПОСЛЕ include деплой-тела), а
+  # начавшаяся заливка переводит master в role:slave на время синка (> down-after 5с). Если
+  # бы sentinel замониторил его сразу, он увидел бы свой «master» как slave и инициировал
+  # failover → split-brain/разрыв заливки. Поэтому здесь false (sentinel-демоны поднимаются
+  # деплой-телом, но команду MONITOR НЕ дают) — фактический MONITOR делает detach_source/
+  # sentinel.yml ПОСЛЕ REPLICAOF NO ONE, когда новый master снова автономен. На create этот
+  # флаг=true (node-1 остаётся настоящим master). См. шапку redis-deploy-sentinel.yml.
+  sentinel_monitor_now: "${ false }"
   install: >-
     ${ (input.install_method == 'binary')
          ? {

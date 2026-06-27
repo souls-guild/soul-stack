@@ -573,6 +573,14 @@ compute:
          'sentinel down-after-milliseconds ' + default(essence.sentinel_master_name, 'master'): string(int(input.sentinel_down_after_ms)),
          'sentinel failover-timeout '         + default(essence.sentinel_master_name, 'master'): string(int(input.sentinel_failover_timeout_ms))
        } }
+  # ── sentinel_monitor_now: контракт-флаг шага 4 деплой-тела (split-brain-фикс) ──
+  # ★ Управляет, выполнять ли SENTINEL MONITOR ПРЯМО в этом деплое (redis-deploy-sentinel.yml
+  # шаг 4 проксирует его в task-var и гейтит when: vars.sentinel_monitor_now — when не видит
+  # compute.* напрямую). На create=true БЕЗУСЛОВНО: node-1 — настоящий master, sentinel
+  # мониторит его сразу. (У migrate_cluster этот флаг=false — новый master во время заливки в
+  # role:slave, ранний MONITOR инициировал бы failover → split-brain; там MONITOR переносится
+  # в detach_source. См. шапку redis-deploy-sentinel.yml.)
+  sentinel_monitor_now: "${ true }"
   # ── install: destiny-структура {method, base_url, version} (#1) ──────────────
   # ★ #1 (2026-06-26): собирается из install_method (enum, дефолт package) + essence.
   # binary_base_url/binary_version (URL/версия бинаря переехали в essence). method всегда

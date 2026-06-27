@@ -58,6 +58,27 @@ compute:
   tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
   tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
   tls_ca:   "${ compute.tls_on ? vault(incarnation.state.tls.ca_ref) : '' }"
+  # ── sentinel MONITOR ПОСЛЕ detach (split-brain-фикс): директивы/версия из STATE ──
+  # ★ Шаг SENTINEL MONITOR (sentinel.yml, перенесён сюда из деплой-тела migrate_cluster:
+  # его нельзя выполнять, пока новый master реплицирует источник — sentinel увидел бы
+  # role:slave и инициировал failover → split-brain. После REPLICAOF NO ONE master снова
+  # автономен, мониторить безопасно). day-2 берёт всё из incarnation.state (входного
+  # контракта у detach нет):
+  #   - sentinel_directives — те же per-master тайминги, что писал create/migrate в
+  #     sentinel.conf, но из state.redis_sentinel (down_after_ms/failover_timeout_ms/
+  #     master_name), а не из input. Форма ключей `sentinel <opt> <master>` идентична
+  #     create/main.yml::compute.sentinel_directives (плагин classifyConfig раскладывает
+  #     per-master). default()-guard на redis_sentinel — у v9-инкарнации объект гарантирован,
+  #     но дефолты (5000/60000/'master') страхуют legacy/неполный state.
+  #   - redis_version — для plugin community.redis.sentinel (version-gate команд), из
+  #     state.redis_version (записан create/migrate).
+  sentinel_master_name: "${ default(default(incarnation.state.redis_sentinel, {}).master_name, 'master') }"
+  redis_version:        "${ default(incarnation.state.redis_version, '') }"
+  sentinel_directives: >-
+    ${ {
+         'sentinel down-after-milliseconds ' + compute.sentinel_master_name: string(int(default(default(incarnation.state.redis_sentinel, {}).down_after_ms, 5000))),
+         'sentinel failover-timeout '         + compute.sentinel_master_name: string(int(default(default(incarnation.state.redis_sentinel, {}).failover_timeout_ms, 60000)))
+       } }
 
 # ── Мутация incarnation.state ─────────────────────────────────────────────────
 # Отметить источник отцеплённым: seeded_from.detached := true (source_endpoints

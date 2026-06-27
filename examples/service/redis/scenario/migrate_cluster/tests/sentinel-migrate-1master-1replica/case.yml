@@ -11,9 +11,16 @@
 #
 # Что ассертим (критерий приёмки слайса):
 #   1. deploy-задачи (из redis-deploy-sentinel.yml = деплой нового кластера): redis.conf
-#      render, ВНУТРИ-кластерный community.redis.replica (where master-excluded),
-#      community.redis.sentinel MONITOR — кластер реально поднимается (миграция = create
-#      + заливка извне).
+#      render, ВНУТРИ-кластерный community.redis.replica (where master-excluded) — кластер
+#      реально поднимается (миграция = create + заливка извне).
+#   1b. ★ SPLIT-BRAIN-ФИКС: SENTINEL MONITOR (community.redis.sentinel) НЕ исполняется в
+#       миграции (task_absent). Деплой-тело проксирует compute.sentinel_monitor_now в task-var
+#       и гейтит шаг 4 на when: vars.sentinel_monitor_now; у migrate_cluster=false → static-when
+#       placeholder-skip (Params=nil) → presence-матчер по нему НЕ срабатывает (skip ≠
+#       присутствие). sentinel-демоны при этом поднимаются (шаг 1), но команду MONITOR НЕ дают:
+#       пока новый master реплицирует внешний источник, он в role:slave — ранний MONITOR
+#       инициировал бы failover. Фактический MONITOR делает day-2 detach_source ПОСЛЕ
+#       REPLICAOF NO ONE (см. detach-кейс sentinel-detach-source).
 #   2. ★ МИГРАЦИЯ: community.redis.replica с source_external:true, master_addr=внешний
 #      источник (10.9.0.1:6379), master_password = vault(source.password_ref). ОТЛИЧАЕТСЯ
 #      от внутрикластерного replica по master_addr/source_external (presence дизамбигуирует).
@@ -147,19 +154,6 @@ assert:
         master_addr: "10.0.0.1:6379"
         password: s3cr3t-redis-pass-migrate
 
-    # ── deploy-тело: SENTINEL MONITOR (community.redis.sentinel) ─────────────────
-    # monitor.ip=node-1 (master-election), quorum=2 (size(2)/2+1). Единственная sentinel-задача.
-    - module: community.redis.sentinel
-      params_subset:
-        addr: "127.0.0.1:26379"
-        master_name: master
-        auth_pass: s3cr3t-redis-pass-migrate
-        redis_version: "7.2.4"
-        monitor:
-          ip: 10.0.0.1
-          port: 6379
-          quorum: 2
-
     # ── МИГРАЦИЯ: REPLICAOF на ВНЕШНИЙ источник (community.redis.replica, source_external) ──
     # run_once на node-1 (master нового кластера). master_addr=10.9.0.1:6379 (source.hosts[0]),
     # source_external:true, master_password = vault(source.password_ref). Дизамбигуатор от
@@ -184,6 +178,15 @@ assert:
         source_password: old-cluster-source-pass
         lag_threshold: 0
         skip_checksum: false
+
+  # ★ SPLIT-BRAIN-ФИКС (1b): SENTINEL MONITOR НЕ исполняется в миграции. Деплой-тело гейтит
+  # шаг 4 на when: vars.sentinel_monitor_now (=compute.sentinel_monitor_now=false у
+  # migrate_cluster) → static-when placeholder-skip (Params=nil) → presence-матчер по нему НЕ
+  # срабатывает (skip ≠ присутствие). Доказывает, что новый master НЕ мониторится sentinel,
+  # пока реплицирует внешний источник (иначе failover → split-brain). MONITOR переехал в
+  # day-2 detach_source (sentinel-detach-source кейс).
+  task_absent:
+    - module: community.redis.sentinel
 
   # create-набор state + seed-source read-model. redis_config БЕЗ cluster-директив
   # (sentinel). seeded_from: source_endpoints = source.hosts ЦЕЛИКОМ, detached:false

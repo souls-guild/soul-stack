@@ -13,7 +13,14 @@
 #      lag_threshold=0 (жёстко — detach точка невозврата), source_password='' (учётка
 #      источника на day-2 в state НЕ лежит, ИБ).
 #   2. REPLICAOF NO ONE (community.redis.detached): addr локальный, password наш.
-#   3. state_changes: seeded_from.detached := true (source_endpoints СОХРАНЯЕТСЯ).
+#   3. ★ SPLIT-BRAIN-ФИКС: SENTINEL MONITOR (community.redis.sentinel) ПРИСУТСТВУЕТ — он
+#      ПЕРЕНЕСЁН СЮДА из деплой-тела migrate_cluster (там был placeholder-skip, чтобы не
+#      мониторить master во время заливки → не словить failover). Выполняется ПОСЛЕ
+#      REPLICAOF NO ONE (master автономен): monitor.ip=10.0.0.1 (master-election, roster
+#      = новый master), quorum=1 (size(1)/2+1), master_name/тайминги/версия из state
+#      (compute.sentinel_master_name/sentinel_directives/redis_version). Симметрия с
+#      migrate-кейсами, где этот же модуль в task_absent.
+#   4. state_changes: seeded_from.detached := true (source_endpoints СОХРАНЯЕТСЯ).
 name: sentinel detach_source runs final offset gate then detaches the external source
 
 fixtures:
@@ -43,6 +50,14 @@ fixtures:
       save:             "900 1 300 10 60 10000"
       appendonly:       "no"
     redis_users: []
+    # ★ redis_sentinel (state_schema v9): тайминги/master_name sentinel. ОБЯЗАТЕЛЕН для
+    # перенесённого сюда SENTINEL MONITOR (split-brain-фикс): compute.sentinel_directives/
+    # sentinel_master_name day-2 собираются ИЗ НЕГО (входного контракта у detach нет).
+    redis_sentinel:
+      master_name: master
+      quorum: 0
+      down_after_ms: 5000
+      failover_timeout_ms: 60000
     seeded_from:
       source_endpoints:
         - "10.9.0.1:6379"
@@ -73,6 +88,26 @@ assert:
         addr: "127.0.0.1:6379"
         password: detach-redis-pass-16ch
         tls: false
+
+    # ── SENTINEL MONITOR (community.redis.sentinel) — ★ ПЕРЕНЕСЁН СЮДА (split-brain-фикс) ──
+    # Выполняется ПОСЛЕ REPLICAOF NO ONE (master снова автономен). monitor.ip=10.0.0.1
+    # (master-election: roster = новый master), quorum=1 (size(1)/2+1=1). master_name=master,
+    # redis_version=7.2.4, config (тайминги 5000/60000) — всё из incarnation.state (compute
+    # .sentinel_master_name/redis_version/sentinel_directives, day-2 нет input). auth_pass —
+    # наш secret/redis/<inc>#password. Единственная community.redis.sentinel в плане.
+    - module: community.redis.sentinel
+      params_subset:
+        addr: "127.0.0.1:26379"
+        master_name: master
+        auth_pass: detach-redis-pass-16ch
+        redis_version: "7.2.4"
+        config:
+          "sentinel down-after-milliseconds master": "5000"
+          "sentinel failover-timeout master": "60000"
+        monitor:
+          ip: 10.0.0.1
+          port: 6379
+          quorum: 1
 
   # seeded_from.detached := true (source_endpoints СОХРАНЯЕТСЯ — merge старого объекта
   # с {detached:true}). Остальной state detach_source не трогает.

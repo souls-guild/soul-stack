@@ -20,6 +20,17 @@
 #      останется привязан — безопаснее, чем отцепить недогнанную реплику и потерять хвост).
 #   2. REPLICAOF NO ONE (community.redis.detached) — перевести новый master в
 #      самостоятельный режим. ПОСЛЕ этого источник можно гасить (на стороне оператора).
+#   3. SENTINEL MONITOR (community.redis.sentinel) — ★ ПЕРЕНЕСЁН СЮДА из общего деплой-тела
+#      (redis-deploy-sentinel.yml шаг 4) prod-фиксом split-brain. При миграции sentinel НЕ
+#      мониторит master, пока тот реплицирует внешний источник (на синке role:slave > down-
+#      after → sentinel инициировал бы failover → split-brain/разрыв заливки; деплой-тело
+#      гейтит шаг 4 на compute.sentinel_monitor_now=false у migrate_cluster). detach снимает
+#      эту привязку шагом 2 (REPLICAOF NO ONE) — master СНОВА АВТОНОМЕН, и ТОЛЬКО ТЕПЕРЬ
+#      sentinel-демоны получают команду мониторить реального master. Форма задачи —
+#      1:1 копия шага 4 деплой-тела (community.redis.sentinel, monitor.ip=master-election,
+#      quorum=большинство, тайминги из compute.sentinel_directives); источники адаптированы
+#      на day-2-state (master_name/тайминги/версия из incarnation.state, см. compute main.yml).
+#      Стоит ПОСЛЕ шага 2 — мониторим уже автономный master, не реплику.
 
 # 0. PRECONDITION-GUARD: seeded_from.source_endpoints непуст (инкарнация прошла
 #    migrate_cluster). assert — render-фазный keeper-side, видит incarnation.state в
@@ -74,3 +85,33 @@
     password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
     tls:      "${ compute.tls_on }"
     tls_ca:   "${ compute.tls_ca }"
+
+# 3. SENTINEL MONITOR reconcile — ★ ПЕРЕНЕСЁН СЮДА из деплой-тела (redis-deploy-sentinel.yml
+#    шаг 4) prod-фиксом split-brain. Выполняется ТОЛЬКО ПОСЛЕ REPLICAOF NO ONE (шаг 2):
+#    новый master снова автономен (role:master), и sentinel-демоны (поднятые деплой-телом
+#    migrate_cluster, но БЕЗ MONITOR — sentinel_monitor_now=false) ТЕПЕРЬ получают команду
+#    мониторить реального master. Если бы MONITOR дали во время заливки (master в role:slave
+#    на синке > down-after 5с), sentinel инициировал бы failover → split-brain.
+#
+#    Форма — 1:1 копия шага 4 redis-deploy-sentinel.yml (community.redis.sentinel на КАЖДОМ
+#    хосте; addr — локальный sentinel 127.0.0.1:26379; monitor.ip — HOST-ИНВАРИАНТНЫЙ master
+#    из master-election soulprint.hosts[0]; quorum — большинство size/2+1; auth_pass — keeper-
+#    side vault()-резолв). Отличие — ИСТОЧНИКИ day-2 берутся из incarnation.state (входного
+#    контракта у detach нет): master_name/тайминги/версия — compute.sentinel_master_name/
+#    sentinel_directives/redis_version (собраны из state.redis_sentinel/redis_version, см.
+#    compute main.yml), а не из essence/input. На detach roster = новый master (soulprint
+#    .hosts[0] = он сам), MONITOR настраивает мониторинг автономного master.
+- name: Configure each sentinel to monitor the now-standalone master (SENTINEL MONITOR)
+  module: community.redis.sentinel
+  params:
+    addr:        "127.0.0.1:26379"
+    master_name: "${ compute.sentinel_master_name }"
+    auth_pass:   "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    redis_version: "${ compute.redis_version }"
+    config:      "${ compute.sentinel_directives }"
+    monitor:
+      # HOST-ИНВАРИАНТНЫЙ адрес master-а (master-election: soulprint.hosts[0]).
+      ip:     "${ soulprint.hosts[0].network.primary_ip }"
+      port:   6379
+      # quorum — АВТО (большинство): size(soulprint.hosts)/2+1.
+      quorum: "${ int(size(soulprint.hosts)) / 2 + 1 }"

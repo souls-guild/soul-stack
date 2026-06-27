@@ -19,7 +19,7 @@
 #   ИНКЛУДЯЩЕГО). Любой сценарий, инклудящий этот файл, ОБЯЗАН объявить в своём
 #   compute: ВЕСЬ набор, который тело читает, С ТОЙ ЖЕ СЕМАНТИКОЙ:
 #       redis_config  conf_dir  data_dir  install  modules_base_url
-#       sentinel_directives  redis_version
+#       sentinel_directives  redis_version  sentinel_monitor_now
 #       tls_on  tls_only_on  tls_port  tls_cert_ref  tls_key_ref  tls_ca_ref
 #   Также из контекста инклудящего читаются: input.version/input.users (опц.),
 #   essence.system_acl_users[_sentinel]/sentinel_master_name/sysctl_settings,
@@ -27,6 +27,21 @@
 #   Пропуск/переименование любого compute.<name> в инклудящем НЕ ловится статически
 #   (cross-file дрейф невидим soul-lint) — проявится падением render. Источник истины
 #   набора и семантики — create/main.yml::compute.
+#
+#   ★ sentinel_monitor_now (bool) — КОНТРАКТ-ФЛАГ шага 4 (SENTINEL MONITOR), введён
+#     prod-фиксом sentinel-migrate split-brain. Управляет, выполнять ли MONITOR в ЭТОМ
+#     деплое. Шаг 4 проксирует его в task-var (vars.sentinel_monitor_now = "${ compute.
+#     sentinel_monitor_now }") и гейтит `when: vars.sentinel_monitor_now` — флоу-control
+#     when не видит compute.* напрямую, поэтому через task-var (он CEL compute видит):
+#       - create/sentinel.yml         → true  (node-1 — настоящий master, мониторим сразу);
+#       - migrate_cluster/sentinel.yml → false (новый master ещё не привязан к внешнему
+#                                              источнику; MONITOR во время заливки увидел бы
+#                                              role:slave и инициировал failover → split-
+#                                              brain. MONITOR переносится в detach_source,
+#                                              ПОСЛЕ REPLICAOF NO ONE — кластер автономен).
+#     При false static-when даёт placeholder-skip шага 4 (Params=nil, presence task_absent
+#     проходит). sentinel-демоны при этом поднимаются (шаг 1) и проходят PONG-gate (шаг 5) —
+#     нет лишь команды MONITOR. Инклудящий ОБЯЗАН объявить этот compute-var.
 #
 # master-election: probe НЕВОЗМОЖЕН на create-фазе (redis ещё не поднят) → роль DECLARED:
 # первый по SID хост (soulprint.hosts[0]) = master. soulprint.hosts уже отсортирован по
@@ -199,7 +214,30 @@
 #    sentinel.conf. Плагин classifyConfig раскладывает ключи `sentinel <opt> <master>` в
 #    per-master и применяет SENTINEL SET (reconcileMasterParams) — на create идемпотентно
 #    совпадёт со стартовым конфигом, на day-2 даст live-апдейт таймингов.
+#
+#    ★★ КОНТРАКТ-ФЛАГ sentinel_monitor_now (prod-фикс sentinel-migrate split-brain) ★★
+#    Гейт `when: vars.sentinel_monitor_now` — выполнять ли MONITOR СЕЙЧАС (в этом деплое).
+#    НА create=true: node-1 остаётся НАСТОЯЩИМ master, мониторить безопасно сразу.
+#    НА migrate_cluster=false: к моменту деплоя новый master ЕЩЁ НЕ привязан к внешнему
+#    источнику (REPLICAOF external — отдельный шаг ПОСЛЕ include деплой-тела); если бы
+#    sentinel замониторил его до начала заливки, на реальном dataset (синк > down-after 5с)
+#    sentinel увидел бы свой «master» в role:slave и инициировал бы failover → split-brain/
+#    разрыв заливки. Поэтому при миграции MONITOR ОТКЛАДЫВАЕТСЯ: sentinel-демоны поднимаются
+#    шагом 1 (sentinel.conf + unit + PONG-gate шаг 5), но команду MONITOR НЕ дают — её
+#    выполняет detach_source/sentinel.yml ПОСЛЕ REPLICAOF NO ONE (новый master снова
+#    автономен).
+#    ★ МЕХАНИКА ГЕЙТА (compute → task-var → static-when): flow-control `when` НЕ видит
+#    compute.* напрямую (его CEL-env объявляет лишь input/vars/essence/incarnation/self/
+#    register), поэтому contract-флаг проксируется через task-level `vars:` —
+#    sentinel_monitor_now: "${ compute.sentinel_monitor_now }" (CEL task-var ВИДИТ compute).
+#    Тогда `when: vars.sentinel_monitor_now` СТАТИЧЕН (register-/soulprint-независим) →
+#    при false render даёт placeholder-skip (Params=nil): задача в плане как skip, но НЕ
+#    исполняется (для presence-матчера — task_absent проходит). Инклудящий ОБЯЗАН объявить
+#    compute.sentinel_monitor_now (см. шапку-инвариант выше).
 - name: Configure each sentinel to monitor the elected master (SENTINEL MONITOR)
+  vars:
+    sentinel_monitor_now: "${ compute.sentinel_monitor_now }"
+  when: "vars.sentinel_monitor_now"
   module: community.redis.sentinel
   params:
     addr:        "127.0.0.1:26379"

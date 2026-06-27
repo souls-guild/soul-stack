@@ -163,19 +163,6 @@ assert:
         master_addr: "10.0.0.1:6379"
         password: s3cr3t-redis-pass-migrate
 
-    # ── deploy-тело: SENTINEL MONITOR (community.redis.sentinel) ─────────────────
-    # monitor.ip=vm-1 (master-election), quorum=2 (size(2)/2+1). Единственная sentinel-задача.
-    - module: community.redis.sentinel
-      params_subset:
-        addr: "127.0.0.1:26379"
-        master_name: master
-        auth_pass: s3cr3t-redis-pass-migrate
-        redis_version: "7.2.4"
-        monitor:
-          ip: 10.0.0.1
-          port: 6379
-          quorum: 2
-
     # ── МИГРАЦИЯ: REPLICAOF на ВНЕШНИЙ источник (community.redis.replica, source_external) ──
     # run_once на vm-1 (master нового кластера). master_addr=10.9.0.1:6379 (source.hosts[0]),
     # source_external:true, master_password = vault(source.password_ref). Дизамбигуатор от
@@ -200,6 +187,13 @@ assert:
         source_password: old-cluster-source-pass
         lag_threshold: 0
         skip_checksum: false
+
+  # ★ SPLIT-BRAIN-ФИКС: SENTINEL MONITOR НЕ исполняется в миграции (как sentinel-migrate-
+  # 1master-1replica). when: vars.sentinel_monitor_now (=false) → static-when placeholder-skip
+  # шага 4 деплой-тела (Params=nil, presence task_absent проходит). MONITOR делает day-2
+  # detach_source ПОСЛЕ REPLICAOF NO ONE.
+  task_absent:
+    - module: community.redis.sentinel
 
   # create-набор state + cloud-provision read-model + seed-source read-model. redis_config
   # БЕЗ cluster-директив (sentinel). provisioned_* — ФАКТ «эти VM подняты этим migrate-
