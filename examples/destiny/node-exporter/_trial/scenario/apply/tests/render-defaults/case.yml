@@ -9,7 +9,10 @@
 #   install.yml   → 0 fetch, 1 extract
 #   account.yml   → 2 group, 3 user, 4 directory (core.file.directory)
 #   service.yml   → 5 install-бинаря, 6 unit, 7 running, 8 restarted
-#   collectors.yml→ smartmon 9..14, nvme 15..21, ipmi 22..29
+#   collectors.yml→ smartmon 9..15, nvme 16..23, ipmi 24..32
+#                   (каждый коллектор: pkg(+jq)/script/unit/timer/running/restarted/
+#                    cron-cleanup; restarted реактивно рестартит .timer на смену
+#                    его .service/.timer — симметрия с основным unit, см. ниже).
 name: node-exporter destiny renders fetch/extract/install/account/unit/collectors plan
 
 # L0-render берёт input как есть и НЕ применяет default-ы scenario-контракта
@@ -112,14 +115,17 @@ assert:
         name: node_exporter
         enabled: true
 
-    # Единственный core.service.restarted в плане.
+    # Основной демон рестартится реактивно. params_subset: name=node_exporter
+    # дизамбигуирует от трёх restarted-шагов коллекторов ниже (имя демона уникально).
     - module: core.service.restarted
       params_subset:
         name: node_exporter
 
     # ── collectors.yml: smartmon — module присутствует (when: остаётся в плане,
-    #    вычисляется на Soul). daemon-reload-шага НЕТ: core.service.running таймера
-    #    сам reload-ит при смене .timer-файла (auto). pkg разводится name. ─────────
+    #    вычисляется на Soul). pkg разводится name. core.service.running таймера
+    #    daemon-reload-ит при смене .timer (auto), но НЕ рестартит уже запущенный
+    #    .timer → отдельный restarted реактивно перезапускает таймер на смену его
+    #    .service/.timer (новое расписание/sandbox подхватываются). ────────────────
     - module: core.pkg.installed
       params_subset:
         name: smartmontools
@@ -133,11 +139,15 @@ assert:
       params_subset:
         name: node-exporter-smartmon.timer
         enabled: true
+    - module: core.service.restarted
+      params_subset:
+        name: node-exporter-smartmon.timer
     - module: core.file.absent
       params_subset:
         path: /etc/cron.d/node_exporter_smartmon
 
-    # ── nvme: nvme-cli + jq (две отдельные pkg-задачи) + timer/running/cron-cleanup ─
+    # ── nvme: nvme-cli + jq (две отдельные pkg-задачи) + timer/running/restarted/
+    #    cron-cleanup ──────────────────────────────────────────────────────────────
     - module: core.pkg.installed
       params_subset:
         name: nvme-cli
@@ -148,11 +158,14 @@ assert:
       params_subset:
         name: node-exporter-nvme.timer
         enabled: true
+    - module: core.service.restarted
+      params_subset:
+        name: node-exporter-nvme.timer
     - module: core.file.absent
       params_subset:
         path: /etc/cron.d/node_exporter_nvme
 
-    # ── ipmi: + udev-правило + udev-reload ──────────────────────────────────────
+    # ── ipmi: + udev-правило + udev-reload + timer/running/restarted/cron-cleanup ──
     - module: core.pkg.installed
       params_subset:
         name: ipmitool
@@ -169,6 +182,9 @@ assert:
       params_subset:
         name: node-exporter-ipmitool.timer
         enabled: true
+    - module: core.service.restarted
+      params_subset:
+        name: node-exporter-ipmitool.timer
     - module: core.file.absent
       params_subset:
         path: /etc/cron.d/node_exporter_ipmitool

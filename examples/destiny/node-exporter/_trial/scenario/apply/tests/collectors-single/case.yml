@@ -37,15 +37,20 @@ assert:
       params_subset:
         name: node-exporter-smartmon.timer
         enabled: true
+    # smartmon активен → его реактивный рестарт таймера тоже рендерится (Params!=nil).
+    - module: core.service.restarted
+      params_subset:
+        name: node-exporter-smartmon.timer
 
   # ── nvme/ipmi-pkg НЕВЫРАЗИМЫ в presence (см. отчёт) ───────────────────────────
   # nvme/ipmi не в списке → их шаги — STATIC-when:false skip-placeholder
   # (Params==nil): taskMatches их НЕ матчит ни present, ни absent. Кейс намеренно
   # фиксирует сохранение их index-слотов (одиночный список не вырезал план) —
   # позиционное свойство. Оставлено в rendered_tasks (формы сосуществуют): nvme-cli
-  # на index 15, ipmitool на 22 (раскладка коллекторов smartmon 9.. nvme 15.. ipmi 22..).
+  # на index 16, ipmitool на 24 (раскладка коллекторов smartmon 9.. nvme 16.. ipmi 24..;
+  # +1 restarted-шаг на smartmon сдвинул nvme/ipmi на 1 против прежних 15/22).
   rendered_tasks:
-    - index: 15
+    - index: 16
       module: core.pkg.installed
-    - index: 22
+    - index: 24
       module: core.pkg.installed

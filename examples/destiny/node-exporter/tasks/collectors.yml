@@ -7,6 +7,14 @@
 # Явных daemon-reload-шагов НЕТ: core.service.running таймера (daemon_reload:
 # auto, default) сам перечитывает systemd при смене .timer-файла перед start.
 # udev-reload (ipmi) остаётся — это udevadm, не systemctl.
+#
+# Реактивный рестарт таймера: running лишь поднимает остановленный .timer и делает
+# daemon-reload, но НЕ перезапускает УЖЕ ЗАПУЩЕННЫЙ таймер. Поэтому смена .service
+# или .timer коллектора (расписание OnCalendar, sandbox-директивы, пути из input)
+# должна реактивно рестартить таймер — иначе старое расписание/окружение остаётся
+# жить до ручного перезапуска. Симметрия с основным unit (tasks/service.yml:
+# core.service.restarted onchanges:[node_exporter_unit, node_exporter_bin]): на
+# каждый коллектор — свой restarted onchanges:[<c>_unit, <c>_timer].
 
 # ── Коллектор smartmon (SMART-метрики дисков) ───────────────────────────────
 - name: Install smartmontools for smartmon collector
@@ -62,6 +70,18 @@
   params:
     name: node-exporter-smartmon.timer
     enabled: true
+
+# Рестарт таймера реактивно на смену его .service (smartmon_unit) ИЛИ .timer
+# (smartmon_timer): running выше не перезапускает уже запущенный таймер, поэтому
+# новое расписание/sandbox подхватываются только этим шагом. daemon-reload перед
+# рестартом core.service делает сам (daemon_reload: auto).
+- name: Restart smartmon timer because its unit or timer changed
+  module: core.service.restarted
+  when: "'smartmon' in input.collectors"
+  onchanges: [smartmon_unit, smartmon_timer]
+  timeout: 30s
+  params:
+    name: node-exporter-smartmon.timer
 
 - name: Remove legacy smartmon cron job
   module: core.file.absent
@@ -127,6 +147,14 @@
   params:
     name: node-exporter-nvme.timer
     enabled: true
+
+- name: Restart nvme timer because its unit or timer changed
+  module: core.service.restarted
+  when: "'nvme' in input.collectors"
+  onchanges: [nvme_unit, nvme_timer]
+  timeout: 30s
+  params:
+    name: node-exporter-nvme.timer
 
 - name: Remove legacy nvme cron job
   module: core.file.absent
@@ -214,6 +242,14 @@
   params:
     name: node-exporter-ipmitool.timer
     enabled: true
+
+- name: Restart ipmi timer because its unit or timer changed
+  module: core.service.restarted
+  when: "'ipmi' in input.collectors"
+  onchanges: [ipmi_unit, ipmi_timer]
+  timeout: 30s
+  params:
+    name: node-exporter-ipmitool.timer
 
 - name: Remove legacy ipmi cron job
   module: core.file.absent
