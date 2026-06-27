@@ -9,10 +9,11 @@
 # сценарий, orchestration.md §2.4) и видны здесь как compute.<name>.
 #
 # Поток:
-#   1. include setup.yml — ПОДНЯТЬ новый кластер с нуля (install + redis.conf +
-#      users.acl + sentinel.conf + units + внутрикластерный REPLICAOF + SENTINEL
-#      MONITOR + health-gates). Миграция отличается от create ТОЛЬКО заливкой данных
-#      извне (шаги 2-3 ниже).
+#   1. include redis-deploy-sentinel.yml — ПОДНЯТЬ новый кластер с нуля (install +
+#      redis.conf + users.acl + sentinel.conf + units + внутрикластерный REPLICAOF +
+#      SENTINEL MONITOR + health-gates). ТО ЖЕ общее деплой-тело service-level, что
+#      делит create/sentinel.yml (см. scenario/redis-deploy-sentinel.yml; дубликата
+#      нет). Миграция отличается от create ТОЛЬКО заливкой данных извне (шаги 2-3 ниже).
 #   2. свежий master реплицирует ВНЕШНИЙ источник (community.redis.replica,
 #      source_external: true) — нативная репликация Redis тянет dataset из старого
 #      кластера. run_once на hosts[0] (тот же первый-по-SID, что master-election
@@ -22,28 +23,25 @@
 #      не прошёл за retry-окно → шаг failed → state НЕ коммитится → error_locked.
 
 # 1. ПОДНЯТЬ новый кластер целиком — install + render всех конфигов + внутрикластерная
-#    репликация/sentinel + health-gates. ★★ ВРЕМЕННО (S1-пилот, под замену): тело
-#    деплоя продублировано в СЕСТРИНСКОМ setup.yml (= копия create/sentinel.yml). Прямой
-#    include create/sentinel.yml НЕВОЗМОЖЕН: scenario-include резолвит ТОЛЬКО sibling-имя
-#    (локально → service-level, orchestration.md §6), а cross-scenario путь (../create/…
-#    или со слешем) рвёт парс name_invalid_format (reIncludeFile ^[a-z][a-z0-9_-]*\.yml$,
-#    scenario_task.go). Способ переиспользовать деплой create БЕЗ дубликата — вынести его
-#    на service-level (examples/service/redis/<file>) и сослаться И из create, И отсюда;
-#    это правка работающего create — РАЗВИЛКА ДЛЯ PM/architect (вынесена в отчёт, не
-#    решаю в пилоте). setup.yml ссылается на compute.* (redis_config/tls_*/
-#    sentinel_directives) — они объявлены в migrate_cluster/main.yml, имена те же, что в
-#    create/main.yml, поэтому копия резолвится без правок.
-- include: setup.yml
+#    репликация/sentinel + health-gates. ★ ОБЩЕЕ ДЕПЛОЙ-ТЕЛО service-level (S1, 2026-06-27):
+#    тот же scenario/redis-deploy-sentinel.yml, что инклудит create/sentinel.yml —
+#    дубликата нет. scenario-include резолвит имя файла локально (scenario/migrate_cluster/)
+#    → фоллбэкает на service-level (scenario/redis-deploy-sentinel.yml), orchestration.md §6.
+#    Тело ссылается на compute.* (redis_config/tls_*/sentinel_directives/conf_dir/data_dir/
+#    install/modules_base_url/redis_version) — они объявлены в migrate_cluster/main.yml::compute
+#    с теми же именами и семантикой, что в create/main.yml (ИНВАРИАНТ инклудящего, см. шапку
+#    redis-deploy-sentinel.yml; cross-file дрейф soul-lint НЕ ловит).
+- include: redis-deploy-sentinel.yml
 
 # 2. Свежий master реплицирует ВНЕШНИЙ источник (REPLICAOF на старый кластер).
 #    community.redis.replica с source_external: true — НЕ внутрикластерная привязка
-#    (та уже сделана include-ом create/sentinel), а подключение к ЧУЖОМУ master-у для
-#    заливки dataset. run_once на hosts[0] (первый по SID = master нового кластера, та
-#    же master-election, что create/sentinel) — реплицирует источник ИМЕННО новый
-#    master, реплики нового кластера тянут уже с него (каскад внутри кластера).
+#    (та уже сделана общим деплой-телом redis-deploy-sentinel.yml выше), а подключение к
+#    ЧУЖОМУ master-у для заливки dataset. run_once на hosts[0] (первый по SID = master
+#    нового кластера, та же master-election, что в деплой-теле) — реплицирует источник
+#    ИМЕННО новый master, реплики нового кластера тянут уже с него (каскад внутри кластера).
 #
 #    addr — ЛОКАЛЬНЫЙ инстанс нового master-а (127.0.0.1, на TLS-порту при tls_only —
-#    тот же набор, что внутрикластерный replica create/sentinel шаг 3). master_addr —
+#    тот же набор, что внутрикластерный replica деплой-тела, шаг 3). master_addr —
 #    ВНЕШНИЙ источник (compute.source_master = source.hosts[0]). password/tls/tls_ca —
 #    коннект к ЛОКАЛЬНОМУ инстансу (наш secret/redis/<inc>#password + compute.tls_*).
 #    master_password/master_tls/master_tls_ca — коннект к ВНЕШНЕМУ источнику (его учётка

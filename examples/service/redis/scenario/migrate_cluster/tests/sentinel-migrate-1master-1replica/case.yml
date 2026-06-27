@@ -6,12 +6,14 @@
 # Render-only, герметично. Диспетчер migrate_cluster инклудит cluster.yml + sentinel.yml
 # через CONDITIONAL-INCLUDE (when: на include): на sentinel-прогоне cluster-ветка
 # group-drop (статически-ложный when), sentinel.yml раскрывается. sentinel.yml инклудит
-# СЕСТРИНСКИЙ setup.yml (поднять новый кластер) + добавляет 2 шага миграции.
+# ОБЩЕЕ деплой-тело service-level (scenario/redis-deploy-sentinel.yml, то же, что делит
+# create/sentinel.yml) + добавляет 2 шага миграции.
 #
 # Что ассертим (критерий приёмки слайса):
-#   1. setup-задачи (из setup.yml = деплой нового кластера): redis.conf render, ВНУТРИ-
-#      кластерный community.redis.replica (where master-excluded), community.redis.sentinel
-#      MONITOR — кластер реально поднимается (миграция = create + заливка извне).
+#   1. deploy-задачи (из redis-deploy-sentinel.yml = деплой нового кластера): redis.conf
+#      render, ВНУТРИ-кластерный community.redis.replica (where master-excluded),
+#      community.redis.sentinel MONITOR — кластер реально поднимается (миграция = create
+#      + заливка извне).
 #   2. ★ МИГРАЦИЯ: community.redis.replica с source_external:true, master_addr=внешний
 #      источник (10.9.0.1:6379), master_password = vault(source.password_ref). ОТЛИЧАЕТСЯ
 #      от внутрикластерного replica по master_addr/source_external (presence дизамбигуирует).
@@ -91,7 +93,7 @@ fixtures:
 
 assert:
   task_present:
-    # ── setup.yml (деплой нового кластера): redis.conf render ────────────────────
+    # ── redis-deploy-sentinel.yml (деплой нового кластера): redis.conf render ─────
     # render_context.self = node-1 (master, host-инвариант apply.input). Дизамбигуатор
     # от users.acl/sentinel.conf/hardening (тот же core.file.rendered) — path.
     - module: core.file.rendered
@@ -134,7 +136,7 @@ assert:
           role: ""
           essence: {}
 
-    # ── setup.yml: ВНУТРИ-кластерный REPLICAOF (community.redis.replica) ─────────
+    # ── deploy-тело: ВНУТРИ-кластерный REPLICAOF (community.redis.replica) ───────
     # addr=127.0.0.1:6379 (per-host локальный), master_addr=10.0.0.1:6379 (master-
     # election node-1). where: master-excluded → только на node-2 (реплике). ОТЛИЧАЕТСЯ
     # от source-replica (шаг ниже) по master_addr (10.0.0.1 ВНУТРИ vs 10.9.0.1 ВНЕШНИЙ)
@@ -145,7 +147,7 @@ assert:
         master_addr: "10.0.0.1:6379"
         password: s3cr3t-redis-pass-migrate
 
-    # ── setup.yml: SENTINEL MONITOR (community.redis.sentinel) ───────────────────
+    # ── deploy-тело: SENTINEL MONITOR (community.redis.sentinel) ─────────────────
     # monitor.ip=node-1 (master-election), quorum=2 (size(2)/2+1). Единственная sentinel-задача.
     - module: community.redis.sentinel
       params_subset:

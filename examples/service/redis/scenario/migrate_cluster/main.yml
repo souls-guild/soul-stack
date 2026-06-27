@@ -16,11 +16,11 @@ description: >-
   ветку — cluster-прогон упрётся в явный отказ заглушки, а НЕ в тихий зелёный no-op.
 
   Поток sentinel-ветки (migrate_cluster/sentinel.yml):
-    1. include setup.yml — поднять НОВЫЙ кластер (install + redis.conf + users.acl +
-       sentinel.conf + units + REPLICAOF между своими нодами + SENTINEL MONITOR +
-       health-gates). setup.yml — ВРЕМЕННЫЙ дубликат create/sentinel.yml (прямой
-       cross-scenario include невозможен — см. setup.yml/sentinel.yml; вынос деплоя
-       create на service-level = развилка для architect).
+    1. include redis-deploy-sentinel.yml — поднять НОВЫЙ кластер (install + redis.conf +
+       users.acl + sentinel.conf + units + REPLICAOF между своими нодами + SENTINEL
+       MONITOR + health-gates). ОБЩЕЕ деплой-тело service-level (scenario/redis-deploy-
+       sentinel.yml), которое делит create/sentinel.yml — дубликата нет (scenario-include
+       фоллбэкает имя файла на service-level, orchestration.md §6).
     2. свежий master реплицирует ВНЕШНИЙ источник (community.redis.replica с
        source_external: true) — нативная репликация Redis тянет dataset из старого
        кластера.
@@ -255,12 +255,19 @@ validate:
 # ── Вычисляемые scenario-vars (compute:) ─────────────────────────────────────────
 # Рун-уровневый контекст (input/essence/incarnation — БЕЗ soulprint). compute.redis_config
 # и сопутствующие — ТОТ ЖЕ перевод простого ввода в redis.conf, что в create/main.yml
-# (нужен create/sentinel.yml-ветке для render redis.conf И state_changes ниже). Скопирован
-# as-is из create (scenario.compute inline per-scenario; миграция поднимает кластер той же
-# формы). ★ compute: — top-level scenario-блок (orchestration.md §2.4): объявляется ОДИН
-# раз ЗДЕСЬ (не в sentinel.yml-ветке — там только tasks) и виден как compute.<name> во
-# ВСЕХ ветках. source-специфичные vars (source_master/source_password/source_tls_ca)
-# объявлены тут же — их читает migrate_cluster/sentinel.yml.
+# (нужен общему деплой-телу redis-deploy-sentinel.yml для render redis.conf И state_changes
+# ниже). Скопирован as-is из create (scenario.compute inline per-scenario; миграция
+# поднимает кластер той же формы). ★ compute: — top-level scenario-блок (orchestration.md
+# §2.4): объявляется ОДИН раз ЗДЕСЬ (не в sentinel.yml-ветке — там только tasks) и виден
+# как compute.<name> во ВСЕХ ветках. source-специфичные vars (source_master/source_password/
+# source_tls_ca) объявлены тут же — их читает migrate_cluster/sentinel.yml.
+#
+# ★★ ИНВАРИАНТ инклудящего (redis-deploy-sentinel.yml шапка): этот compute: ОБЯЗАН
+# объявлять ВЕСЬ набор, который общее деплой-тело читает — redis_config/conf_dir/data_dir/
+# install/modules_base_url/sentinel_directives/redis_version/tls_on/tls_only_on/tls_port/
+# tls_cert_ref/tls_key_ref/tls_ca_ref — С ТОЙ ЖЕ СЕМАНТИКОЙ, что create/main.yml::compute.
+# Пропуск/переименование любого НЕ ловится soul-lint (cross-file дрейф невидим) — проявится
+# падением render. Источник истины набора — create/main.yml::compute.
 compute:
   # ── Внешний (старый) источник: координаты + секреты учётки ─────────────────────
   # source_master — master ВНЕШНЕГО кластера (hosts[0]), к которому привязывается
