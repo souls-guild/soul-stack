@@ -1,0 +1,17 @@
+# Ветка диспетчера migrate_cluster — режим cluster. ★ ЗАГЛУШКА (S1-пилот): миграция
+# honest hash-slot Redis Cluster с внешнего источника в пилот НЕ входит — она требует
+# СЛОТ-AWARE seeding (per-shard репликация диапазонов hash-слотов с внешнего кластера,
+# а не единый REPLICAOF master→master, как sentinel) и отдельного дизайна. Запланирована
+# на S4.
+#
+# Подключается из main.yml через CONDITIONAL-INCLUDE (`when: input.redis_type ==
+# 'cluster'`): на cluster-прогоне раскрывается и СРАЗУ упирается в fail-closed assert.
+# enum redis_type [sentinel, cluster] пропускает cluster на input-валидации, поэтому без
+# этой заглушки cluster-прогон дал бы ТИХИЙ ЗЕЛЁНЫЙ no-op (диспетчер без cluster-ветки →
+# ни одна задача не таргетится). Заглушка превращает его в ЯВНЫЙ отказ с понятным
+# сообщением (assert that:false рвёт render ДО applying — раньше и понятнее no-op).
+- name: Cluster migration is not implemented yet (S1 pilot is sentinel-only)
+  assert:
+    that:
+      - "false"
+    message: "migrate_cluster в режиме cluster не реализован (S1-пилот — только sentinel): миграция Redis Cluster требует слот-aware seeding и запланирована на S4. Для миграции используй redis_type=sentinel либо дождись S4."

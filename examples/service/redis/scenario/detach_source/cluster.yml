@@ -1,0 +1,13 @@
+# Ветка диспетчера detach_source — режим cluster. ★ ЗАГЛУШКА (S1-пилот): отцепление
+# слот-aware Redis Cluster от внешнего источника в пилот НЕ входит (парно с
+# migrate_cluster/cluster.yml — миграция cluster тоже S4). Запланирована на S4.
+#
+# Подключается из main.yml через CONDITIONAL-INCLUDE (`when: incarnation.state.redis_type
+# == 'cluster'`): на cluster-инкарнации раскрывается и упирается в fail-closed assert.
+# Без заглушки detach на cluster-инкарнации дал бы тихий зелёный no-op (диспетчер без
+# cluster-ветки). Заглушка → явный отказ ДО applying.
+- name: Cluster source detach is not implemented yet (S1 pilot is sentinel-only)
+  assert:
+    that:
+      - "false"
+    message: "detach_source в режиме cluster не реализован (S1-пилот — только sentinel): отцепление Redis Cluster от внешнего источника запланировано на S4 (парно с migrate_cluster cluster-веткой)."

@@ -1,0 +1,70 @@
+name: detach_source
+description: >-
+  Day-2: ОТЦЕПИТЬ внешний (старый) кластер от инкарнации, залитой через
+  migrate_cluster. После того как новый кластер догнал источник по offset (gate
+  migrate_cluster) И ОПЕРАТОР ОСТАНОВИЛ ЗАПИСЬ в старый кластер, этот сценарий
+  делает финальную проверку offset ещё раз (fail-closed) и переводит новый master
+  в самостоятельный режим (REPLICAOF NO ONE) — источник больше не нужен.
+
+  ★ ГРАНИЦА (★★ НЕ ВХОДИТ ★★): КВИЕС ЗАПИСИ В СТАРЫЙ КЛАСТЕР. Soul Stack НЕ
+  управляет клиентским трафиком приложений — остановку записи в источник перед
+  detach делает САМ ОПЕРАТОР. Сценарий лишь снимает финальный offset-snapshot и
+  отцепляет реплику; ЗАПИСИ, попавшие в источник ПОСЛЕ этого snapshot, будут
+  ПОТЕРЯНЫ (новый кластер их уже не подтянет — репликация разорвана). Порядок для
+  оператора: (1) остановить запись приложений в старый кластер; (2) запустить
+  detach_source. Этот инвариант — на операторе, сценарий его не форсит (нет канала
+  к клиентскому трафику).
+
+  ДИСПЕТЧЕР ПО incarnation.state.redis_type (day-2 знает режим из state, не из input —
+  входного redis_type у detach нет): для S1-пилота реализована ТОЛЬКО ветка sentinel
+  (detach_source/sentinel.yml). Ветка cluster — заглушка (detach_source/cluster.yml,
+  fail-closed assert) на S4: отцепление слот-aware Redis Cluster от источника требует
+  своего дизайна.
+
+  Источник берётся из incarnation.state.seeded_from.source_endpoints[0] (записан
+  migrate_cluster) — оператор НЕ передаёт его повторно (исключает рассинхрон «detach
+  не того источника»). Идемпотентность: detach уже отцеплённой инкарнации
+  (seeded_from.detached==true) — REPLICAOF NO ONE на самостоятельном master no-op
+  (плагин community.redis.detached идемпотентен).
+
+# Входного контракта оператора НЕТ: detach_source не принимает параметров — источник,
+# режим и коннект-данные берутся из incarnation.state (seeded_from/redis_type/tls/…),
+# записанных migrate_cluster и предыдущими сценариями. Оператор лишь ЗАПУСКАЕТ сценарий
+# (после ручного квиеса записи в источник, см. description).
+
+# ── Вычисляемые scenario-vars (compute:) ─────────────────────────────────────────
+# Рун-уровневый контекст (incarnation/essence — без soulprint). source_master — master
+# ВНЕШНЕГО источника из state (записан migrate_cluster: seeded_from.source_endpoints[0]).
+# tls_* — дискриминатор коннекта к ЛОКАЛЬНОМУ инстансу из state.tls (как все day-2:
+# add_user/update_users/restart). source-учётка ВНЕШНЕГО источника на day-2 НЕДОСТУПНА
+# (input.source.password_ref был только у migrate_cluster, в state секрет не оседает —
+# ИБ): финальный offset-gate коннектится к источнику БЕЗ AUTH-пароля (source_password='').
+# Если источник требует AUTH — gate упрётся в ошибку коннекта (fail-closed), это
+# осознанное ограничение S1 (хранение source-учётки в state — отдельный S-batch).
+compute:
+  source_master: "${ incarnation.state.seeded_from.source_endpoints[0] }"
+  tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
+  tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
+  tls_ca:   "${ compute.tls_on ? vault(incarnation.state.tls.ca_ref) : '' }"
+
+# ── Мутация incarnation.state ─────────────────────────────────────────────────
+# Отметить источник отцеплённым: seeded_from.detached := true (source_endpoints
+# СОХРАНЯЕТСЯ — историческая запись «откуда мигрировали»). ★ seeded_from — скалярный
+# ОБЪЕКТ, не коллекция, поэтому ADR-057 `modify` (match-предикат над ЭЛЕМЕНТАМИ
+# коллекции) к нему неприменим — патч поля объекта выражается через `set` целиком:
+# merge() старого объекта с {detached: true} (shallow last-wins, templating.md §2.3) —
+# сохраняет source_endpoints (и любые будущие поля seeded_from), меняет только detached.
+# seeded_from гарантирован у v9-инкарнаций (миграция 008_to_009); инкарнация без
+# migrate_cluster сюда не дойдёт (detach осмыслен только после migrate).
+state_changes:
+  - set: seeded_from
+    value: "${ merge(incarnation.state.seeded_from, {'detached': true}) }"
+
+# Тело прогона — ветки диспетчера по incarnation.state.redis_type. S1-пилот: sentinel
+# реализован, cluster — fail-closed заглушка (S4). when по state.redis_type — day-2
+# режим-гейт (как диспетчер create по input.redis_type, но источник — state).
+tasks:
+  - include: cluster.yml
+    when: "incarnation.state.redis_type == 'cluster'"
+  - include: sentinel.yml
+    when: "incarnation.state.redis_type == 'sentinel'"

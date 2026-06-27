@@ -1,0 +1,433 @@
+name: migrate_cluster
+description: >-
+  S1-пилот: РАЗВЕРНУТЬ новый Redis-кластер И ЗАЛИТЬ в него данные с ВНЕШНЕГО
+  (старого) кластера через нативную репликацию Redis (REPLICAOF на внешний
+  источник). Create-сценарий (create: true) — поднимает инфраструктуру с нуля,
+  как `create`, но дополнительно подключает свежий master к внешнему источнику и
+  ждёт, пока реплика догонит его по offset (gate). Источник остаётся ЖИВ —
+  отцепление (REPLICAOF NO ONE) выполняет отдельный day-2 `detach_source` ПОСЛЕ
+  того, как оператор остановит запись в старый кластер.
+
+  ДИСПЕТЧЕР ПО redis_type (как create): этот файл — диспетчер. Для S1-пилота
+  реализована ТОЛЬКО ветка sentinel (миграция master-replica + sentinel). Ветка
+  cluster — ЗАГЛУШКА (migrate_cluster/cluster.yml, fail-closed assert) на будущий
+  S4: миграция honest hash-slot Redis Cluster требует слот-aware seeding и в пилот
+  НЕ входит. enum redis_type [sentinel, cluster] гарантирует попадание ровно в одну
+  ветку — cluster-прогон упрётся в явный отказ заглушки, а НЕ в тихий зелёный no-op.
+
+  Поток sentinel-ветки (migrate_cluster/sentinel.yml):
+    1. include setup.yml — поднять НОВЫЙ кластер (install + redis.conf + users.acl +
+       sentinel.conf + units + REPLICAOF между своими нодами + SENTINEL MONITOR +
+       health-gates). setup.yml — ВРЕМЕННЫЙ дубликат create/sentinel.yml (прямой
+       cross-scenario include невозможен — см. setup.yml/sentinel.yml; вынос деплоя
+       create на service-level = развилка для architect).
+    2. свежий master реплицирует ВНЕШНИЙ источник (community.redis.replica с
+       source_external: true) — нативная репликация Redis тянет dataset из старого
+       кластера.
+    3. offset-lag gate (community.redis.offset-synced, retry/until) — БЛОКИРУЮЩЕ
+       ждёт, пока новый master догонит источник по репликационному offset (в
+       пределах lag_threshold). Только после этого прогон считается успешным.
+
+  ★ ГРАНИЦА (НЕ ВХОДИТ): квиес записи в СТАРЫЙ кластер. Soul Stack НЕ управляет
+  клиентским трафиком приложений — остановку записи в источник перед финальным
+  detach делает САМ ОПЕРАТОР. Этот сценарий лишь поднимает реплику и догоняет
+  offset; данные, записанные в источник ПОСЛЕ offset-snapshot detach_source, будут
+  потеряны, если оператор не остановил запись (см. detach_source).
+
+  Пароли НЕ во входном контракте сервиса (secret/redis/<incarnation>#password,
+  keeper-side vault() в render-фазе, ADR-012). ИСКЛЮЧЕНИЕ — учётка ВНЕШНЕГО
+  источника: его Vault-ПУТЬ (НЕ значение) задаёт оператор в input.source.password_ref
+  под жёстким pattern-guard secret/redis/migrate/* (см. input ниже) — источник чужой,
+  его секрет не лежит по нашей конвенции secret/redis/<inc>.
+
+# ── Входной контракт оператора (docs/input.md) ────────────────────────────────
+# Наследует ВЕСЬ create-контракт (redis_type/version/install_method/memory_mb/
+# persistence/maxmemory_policy/replicas_per_master/shards/cluster_node_timeout/
+# sentinel_*/users/redis_settings/tls_*) — миграция поднимает новый кластер ТОЙ ЖЕ
+# формы, что обычный create. Поля create скопированы as-is (scenario.input — inline
+# per-scenario, общего include-контракта нет). НОВОЕ — две секции: source (внешний
+# источник) и verify (параметры offset-gate).
+input:
+  # ── create-наследие ──────────────────────────────────────────────────────────
+  redis_type:
+    type: string
+    required: false
+    default: sentinel
+    enum: [sentinel, cluster]
+    description: >-
+      Режим развёртывания нового кластера (как create). S1-пилот реализует только
+      sentinel; cluster — заглушка-fail (S4).
+
+  version:
+    type: string
+    required_when: "input.install_method == 'package'"
+    pattern: "^([0-9]+:)?[0-9][A-Za-z0-9.~+-]*$"
+    description: >-
+      Версия пакета redis-server (distro-пин). ОБЯЗАТЕЛЬНА при install_method=package
+      (как create). При binary версия бинаря — в essence.binary_version.
+
+  install_method:
+    type: string
+    required: false
+    default: package
+    enum: [package, binary]
+    description: Способ установки redis нового кластера (как create).
+
+  memory_mb:
+    type: integer
+    required: false
+    min: 64
+    description: Бюджет памяти под Redis на хосте, МБ (как create).
+
+  persistence:
+    type: string
+    required: false
+    default: rdb
+    enum: [off, aof, rdb, rdb_aof]
+    description: Режим persistence (как create).
+
+  maxmemory_policy:
+    type: string
+    required: false
+    enum:
+      - noeviction
+      - allkeys-lru
+      - allkeys-lfu
+      - allkeys-random
+      - volatile-lru
+      - volatile-lfu
+      - volatile-random
+      - volatile-ttl
+    description: Политика вытеснения (как create).
+
+  replicas_per_master:
+    type: integer
+    required: false
+    default: 0
+    min: 0
+    description: >-
+      Реплик на каждый master нового кластера (как create). sentinel — реплик master-а
+      (roster = 1+replicas_per_master).
+
+  shards:
+    type: integer
+    required: false
+    required_when: "input.redis_type == 'cluster'"
+    min: 1
+    description: Число master-шардов (cluster; заглушка S4).
+
+  cluster_node_timeout:
+    type: integer
+    required: false
+    default: 5000
+    min: 1
+    description: Таймаут gossip между нодами кластера, мс (cluster).
+
+  sentinel_down_after_ms:
+    type: integer
+    required: false
+    default: 5000
+    min: 1
+    description: down-after-milliseconds sentinel (как create).
+
+  sentinel_failover_timeout_ms:
+    type: integer
+    required: false
+    default: 60000
+    min: 1
+    description: failover-timeout sentinel (как create).
+
+  users:
+    type: array
+    required: false
+    items:
+      $type: AclUser
+    description: ACL-пользователи Redis нового кластера (массив AclUser, как create).
+
+  redis_settings:
+    type: object
+    required: false
+    description: Passthrough-директивы redis.conf (key→value, как create).
+    properties: {}
+    additional_properties:
+      type: string
+
+  tls_enabled:
+    type: boolean
+    required: false
+    default: false
+    description: Включить TLS Redis нового кластера (как create).
+
+  tls_keep_plain:
+    type: boolean
+    required: false
+    default: true
+    description: Оставить ли открытым plain-порт при включённом TLS (как create).
+
+  # ── source: внешний (старый) кластер — ОТКУДА мигрируем ────────────────────────
+  # Координаты и учётка ВНЕШНЕГО источника. password_ref/tls_ca_ref — Vault-ПУТИ (НЕ
+  # значения): сценарий читает их авторским каналом ${ vault(input.source.<ref>) } в
+  # render-фазе (templating.md §2.3/§4). ★ pattern-guard secret/redis/migrate/* — ОБА
+  # ref ОБЯЗАНЫ лежать под этим префиксом: оператор не может навести vault() на
+  # произвольный путь своего Keeper-токена (closes path-injection caveat templating.md
+  # §4 — статический запрет input-производных vault()-путей). Это НЕ vault_scope
+  # (тот резолвит vault:-ЗНАЧЕНИЕ в input keeper-side ДО валидации, docs/input.md) —
+  # здесь оператор даёт ПУТЬ-строку, а читает сценарий сам (авторский канал).
+  source:
+    type: object
+    required: true
+    additional_properties: false
+    properties:
+      hosts:
+        type: array
+        items:
+          type: string
+        description: >-
+          host:port внешних нод старого кластера. hosts[0] — master источника
+          (откуда новый кластер реплицирует dataset).
+      password_ref:
+        type: string
+        # ★ pattern: добавлен `#` в символ-класс (к ТЗ-форме [A-Za-z0-9._/-]) — Vault-ref
+        # несёт field-суффикс через `#` (secret/redis/migrate/oldcluster#password, как вся
+        # redis-конвенция secret/redis/<inc>#password); без `#` валидный ref реджектился бы.
+        # Anchor ^secret/redis/migrate/ СОХРАНЁН — path-injection guard не ослаблен (оператор
+        # заперт в этом префиксе, навести vault() на secret/keeper/* нельзя).
+        pattern: "^secret/redis/migrate/[A-Za-z0-9._/#-]+$"
+        description: >-
+          Vault-ПУТЬ к паролю учётки ВНЕШНЕГО источника (НЕ значение). Под жёстким
+          pattern secret/redis/migrate/* (path-injection guard; `#field`-суффикс
+          допускается). Сценарий читает его через vault(input.source.password_ref) в
+          render-фазе; на хост уезжает уже значение (ADR-012). Не задан → источник без
+          AUTH (пустой пароль).
+      tls_ca_ref:
+        pattern: "^secret/redis/migrate/[A-Za-z0-9._/#-]+$"
+        type: string
+        description: >-
+          Vault-ПУТЬ к PEM CA для проверки TLS-сертификата ВНЕШНЕГО источника (НЕ
+          значение). Тот же pattern-guard (`#field`-суффикс допускается). Читается через
+          vault() при source.tls=true.
+      tls:
+        type: boolean
+        default: false
+        description: >-
+          Коннектиться к внешнему источнику по TLS. true → реплика и offset-probe
+          идут на источник по TLS, CA берётся из tls_ca_ref.
+
+  # ── verify: параметры offset-lag gate ────────────────────────────────────────
+  # Условие «реплика догнала источник». lag_threshold — допустимое отставание
+  # master_repl_offset (0 = полная синхронизация). skip_checksum — пропустить дорогую
+  # сверку контрольной суммы dataset (плагин offset-synced решает, как именно).
+  verify:
+    type: object
+    required: false
+    additional_properties: false
+    properties:
+      lag_threshold:
+        type: integer
+        default: 0
+        description: >-
+          Допустимое отставание реплики от источника по репликационному offset
+          (байт). 0 (дефолт) — требовать полную синхронизацию (offset совпал).
+      skip_checksum:
+        type: boolean
+        default: false
+        description: >-
+          Пропустить сверку контрольной суммы dataset в offset-gate (быстрее, но
+          слабее гарантия). По умолчанию false (сверять).
+
+# ── Декларативные input-инварианты (validate:, как create) ────────────────────────
+# INPUT-ONLY (essence/soulprint недоступны — структурный CEL-барьер).
+validate:
+  # create-инвариант «хотя бы один listener» (#5): нельзя TLS off И plain закрыт.
+  - that: "input.tls_enabled || input.tls_keep_plain"
+    message: "нельзя одновременно выключить TLS и закрыть plain-порт: у Redis не осталось бы ни одного listener-а — оставь plain-порт открытым (tls_keep_plain) либо включи TLS (tls_enabled)"
+
+  # create-инвариант: имя operator-extra ACL-юзера не может занять служебное.
+  - that: "!has(input.users) || input.users.all(u, !(u.name in ['default', 'replica', 'monitoring', 'sentinel', 'haproxy']))"
+    message: "имя ACL-пользователя зарезервировано за служебным (default/replica/monitoring/sentinel/haproxy): выбери другое имя — служебные юзеры заводятся автоматически из essence"
+
+  # ★ source.hosts непуст: миграция без источника бессмысленна. source.hosts[0] —
+  # master источника (sentinel.yml читает его first-by-index). Пустой массив прошёл бы
+  # required:true секции, но дал бы no-such-index при резолве source_master.
+  - that: "size(input.source.hosts) >= 1"
+    message: "source.hosts должен содержать хотя бы один host:port внешнего источника (source.hosts[0] = master старого кластера, откуда тянется dataset)"
+
+# ── Вычисляемые scenario-vars (compute:) ─────────────────────────────────────────
+# Рун-уровневый контекст (input/essence/incarnation — БЕЗ soulprint). compute.redis_config
+# и сопутствующие — ТОТ ЖЕ перевод простого ввода в redis.conf, что в create/main.yml
+# (нужен create/sentinel.yml-ветке для render redis.conf И state_changes ниже). Скопирован
+# as-is из create (scenario.compute inline per-scenario; миграция поднимает кластер той же
+# формы). ★ compute: — top-level scenario-блок (orchestration.md §2.4): объявляется ОДИН
+# раз ЗДЕСЬ (не в sentinel.yml-ветке — там только tasks) и виден как compute.<name> во
+# ВСЕХ ветках. source-специфичные vars (source_master/source_password/source_tls_ca)
+# объявлены тут же — их читает migrate_cluster/sentinel.yml.
+compute:
+  # ── Внешний (старый) источник: координаты + секреты учётки ─────────────────────
+  # source_master — master ВНЕШНЕГО кластера (hosts[0]), к которому привязывается
+  # свежий master нового кластера (REPLICAOF на внешний). source_password/source_tls_ca
+  # — авторский канал vault() по ПУТИ из operator-input (input.source.password_ref/
+  # tls_ca_ref под pattern-guard secret/redis/migrate/*; path-injection закрыт паттерном,
+  # templating.md §4). password_ref опционален → has()-guard, иначе '' (источник без AUTH);
+  # tls_ca читается ТОЛЬКО при source.tls=true. Резолв keeper-side, значение маскируется.
+  source_master:   "${ input.source.hosts[0] }"
+  source_password: "${ has(input.source.password_ref) ? vault(input.source.password_ref) : '' }"
+  source_tls_ca:   "${ input.source.tls ? vault(input.source.tls_ca_ref) : '' }"
+  redis_version: "${ input.install_method == 'binary' ? default(essence.binary_version, '') : (has(input.version) ? input.version : '') }"
+  redis_modules_deployed: >-
+    ${ compute.redis_version.matches('^([0-9]+:)?(8|9|[1-9][0-9])\\.')
+         ? []
+         : ['bloom', 'json', 'search', 'timeseries'] }
+  modules_base_url: "${ default(essence.modules_base_url, '') }"
+  sentinel_directives: >-
+    ${ {
+         'sentinel down-after-milliseconds ' + default(essence.sentinel_master_name, 'master'): string(int(input.sentinel_down_after_ms)),
+         'sentinel failover-timeout '         + default(essence.sentinel_master_name, 'master'): string(int(input.sentinel_failover_timeout_ms))
+       } }
+  install: >-
+    ${ (input.install_method == 'binary')
+         ? {
+             'method':   'binary',
+             'base_url': default(essence.binary_base_url, ''),
+             'version':  default(essence.binary_version, '')
+           }
+         : { 'method': 'package' } }
+  conf_dir: "${ default(essence.conf_dir, '/etc/redis') }"
+  data_dir: "${ default(essence.data_dir, '/var/lib/redis') }"
+  tls_on:      "${ input.tls_enabled }"
+  tls_only_on: "${ input.tls_enabled && !input.tls_keep_plain }"
+  tls_port:    "${ int(default(essence.tls_port, 7379)) }"
+  tls_cert_ref: "${ has(essence.tls_cert_ref) ? essence.tls_cert_ref : '' }"
+  tls_key_ref:  "${ has(essence.tls_key_ref)  ? essence.tls_key_ref  : '' }"
+  tls_ca_ref:   "${ has(essence.tls_ca_ref)   ? essence.tls_ca_ref   : '' }"
+  redis_config: >-
+    ${ (input.redis_type == 'cluster')
+         ? merge(
+             essence.redis_config,
+             essence.persistence_presets[input.persistence],
+             merge(
+               has(input.memory_mb)
+                 ? { 'maxmemory': string(int(input.memory_mb) * int(essence.memory_reserve_percent) / 100) + 'mb' }
+                 : {},
+               has(input.maxmemory_policy) ? { 'maxmemory-policy': input.maxmemory_policy } : {}
+             ),
+             default(input.redis_settings, {}),
+             {
+               'cluster-enabled':      'yes',
+               'cluster-config-file':  'nodes.conf',
+               'cluster-node-timeout': string(int(input.cluster_node_timeout))
+             },
+             compute.tls_on
+               ? merge(
+                   {
+                     'tls-port':         string(compute.tls_port),
+                     'tls-cert-file':    compute.conf_dir + '/tls/redis.crt',
+                     'tls-key-file':     compute.conf_dir + '/tls/redis.key',
+                     'tls-ca-cert-file': compute.conf_dir + '/tls/ca.crt',
+                     'tls-replication':  'yes',
+                     'tls-cluster':      'yes'
+                   },
+                   compute.tls_only_on ? { 'port': '0' } : {}
+                 )
+               : {}
+           )
+         : merge(
+             essence.redis_config,
+             essence.persistence_presets[input.persistence],
+             merge(
+               has(input.memory_mb)
+                 ? { 'maxmemory': string(int(input.memory_mb) * int(essence.memory_reserve_percent) / 100) + 'mb' }
+                 : {},
+               has(input.maxmemory_policy) ? { 'maxmemory-policy': input.maxmemory_policy } : {}
+             ),
+             default(input.redis_settings, {}),
+             compute.tls_on
+               ? merge(
+                   {
+                     'tls-port':         string(compute.tls_port),
+                     'tls-cert-file':    compute.conf_dir + '/tls/redis.crt',
+                     'tls-key-file':     compute.conf_dir + '/tls/redis.key',
+                     'tls-ca-cert-file': compute.conf_dir + '/tls/ca.crt',
+                     'tls-replication':  'yes'
+                   },
+                   compute.tls_only_on ? { 'port': '0' } : {}
+                 )
+               : {} ) }
+
+# ── Мутация incarnation.state ─────────────────────────────────────────────────
+# Create-набор (тот же, что create/main.yml — поднимаем кластер той же формы;
+# scenario.state_changes inline per-scenario, общего include нет) + НОВОЕ поле
+# seeded_from. ★ seeded_from БЕЗ timestamp (детерминизм L0, форма от state_schema v9:
+# {source_endpoints[], detached bool}): source_endpoints = input.source.hosts (откуда
+# мигрировали), detached: false (источник ещё ЖИВ — отцепит day-2 detach_source). Время
+# миграции — в state_history (snapshot per-change), не в самом state.
+state_changes:
+  - set: redis_type
+    value: "${ input.redis_type }"
+  - set: redis_version
+    value: "${ compute.redis_version }"
+  - set: redis_config
+    value: "${ compute.redis_config }"
+  - set: tls
+    value: >-
+      ${ {
+           'enable':   compute.tls_on,
+           'only':     compute.tls_only_on,
+           'port':     compute.tls_port,
+           'cert_ref': compute.tls_cert_ref,
+           'key_ref':  compute.tls_key_ref,
+           'ca_ref':   compute.tls_ca_ref
+         } }
+  - set: install
+    value: "${ compute.install }"
+  - set: persistence
+    value: "${ input.persistence }"
+  - set: memory_mb
+    value: "${ int(default(input.memory_mb, 0)) }"
+  - set: maxmemory_policy
+    value: "${ default(input.maxmemory_policy, '') }"
+  - set: modules
+    value: "${ compute.redis_modules_deployed }"
+  - set: modules_base_url
+    value: "${ compute.modules_base_url }"
+  - set: conf_dir
+    value: "${ compute.conf_dir }"
+  - set: data_dir
+    value: "${ compute.data_dir }"
+  - set: sysctl_settings
+    value: "${ default(essence.sysctl_settings, {}) }"
+  - set: shards
+    value: "${ int(default(input.shards, 0)) }"
+  - set: replicas
+    value: "${ int(default(input.replicas_per_master, 0)) }"
+  - set: sentinel_quorum
+    value: "${ 0 }"
+  - set: redis_users
+    value: "${ default(input.users, []) }"
+  - set: redis_hosts
+    value: "${ [] }"
+  - set: redis_sentinel
+    value: >-
+      ${ (input.redis_type == 'sentinel')
+           ? {
+               'master_name':       default(essence.sentinel_master_name, 'master'),
+               'quorum':            0,
+               'down_after_ms':     int(input.sentinel_down_after_ms),
+               'failover_timeout_ms': int(input.sentinel_failover_timeout_ms)
+             }
+           : {} }
+  # ★ seed-source read-model (v9): ФАКТ «залито миграцией с внешнего кластера».
+  # detached: false — источник ещё жив (отцепит day-2 detach_source). Без timestamp.
+  - set: seeded_from
+    value: >-
+      ${ {
+           'source_endpoints': input.source.hosts,
+           'detached':         false
+         } }
+
+# Тело прогона — ветки диспетчера по redis_type (CONDITIONAL-INCLUDE, как create).
+# S1-пилот: sentinel реализован, cluster — fail-closed заглушка (S4).
+tasks:
+  - include: cluster.yml
+    when: "input.redis_type == 'cluster'"
+  - include: sentinel.yml
+    when: "input.redis_type == 'sentinel'"

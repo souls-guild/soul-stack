@@ -1,0 +1,228 @@
+# L0-испытание migrate_cluster в режиме sentinel (S1-пилот, happy-path, existing-таргет).
+# Multi-host roster из 2 хостов (replicas_per_master=1 → топология 1+1=2). Master-election:
+# первый по SID (node-1) = master нового кластера; node-2 = реплика. Внешний источник —
+# старый кластер по адресу 10.9.0.1:6379 (source.hosts[0]).
+#
+# Render-only, герметично. Диспетчер migrate_cluster инклудит cluster.yml + sentinel.yml
+# через CONDITIONAL-INCLUDE (when: на include): на sentinel-прогоне cluster-ветка
+# group-drop (статически-ложный when), sentinel.yml раскрывается. sentinel.yml инклудит
+# СЕСТРИНСКИЙ setup.yml (поднять новый кластер) + добавляет 2 шага миграции.
+#
+# Что ассертим (критерий приёмки слайса):
+#   1. setup-задачи (из setup.yml = деплой нового кластера): redis.conf render, ВНУТРИ-
+#      кластерный community.redis.replica (where master-excluded), community.redis.sentinel
+#      MONITOR — кластер реально поднимается (миграция = create + заливка извне).
+#   2. ★ МИГРАЦИЯ: community.redis.replica с source_external:true, master_addr=внешний
+#      источник (10.9.0.1:6379), master_password = vault(source.password_ref). ОТЛИЧАЕТСЯ
+#      от внутрикластерного replica по master_addr/source_external (presence дизамбигуирует).
+#   3. ★ offset-gate: community.redis.offset-synced, source_addr=внешний источник,
+#      lag_threshold=0 (default verify).
+#   4. state_changes: create-набор + seeded_from {source_endpoints:[источник], detached:false}.
+#
+# ВНИМАНИЕ L0-ограничение (как sentinel-create): apply.input host-инвариантен в пилоте
+# (резолвится на ПЕРВОМ targeted-хосте) → render_context.self в destiny = node-1 (master).
+name: sentinel migrate raises a new cluster and seeds it from an external source
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  # Порядок намеренно не отсортирован (2, 1) — harness и master-election сортируют по SID.
+  hosts:
+    - sid: node-2.example.com
+      covens: [migrate_cluster, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-1.example.com
+      covens: [migrate_cluster, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/migrate_cluster:
+      password: s3cr3t-redis-pass-migrate
+    secret/redis/migrate_cluster/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/migrate_cluster/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/migrate_cluster/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/migrate_cluster/users/haproxy:
+      password: haproxy-sys-secret-pass
+    # ★ Учётка ВНЕШНЕГО источника под pattern-guard secret/redis/migrate/*. Читается
+    # авторским каналом vault(input.source.password_ref) — password_ref = ниже в input.
+    secret/redis/migrate/oldcluster:
+      password: old-cluster-source-pass
+  essence:
+    redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default:    "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    redis_type: sentinel
+    version: "7.2.4"
+    replicas_per_master: 1
+    # ★ Внешний источник: координаты + Vault-ПУТЬ к паролю (под pattern-guard).
+    source:
+      hosts:
+        - "10.9.0.1:6379"
+        - "10.9.0.2:6379"
+      password_ref: "secret/redis/migrate/oldcluster#password"
+      tls: false
+    # verify опущен → lag_threshold default 0, skip_checksum default false.
+
+assert:
+  task_present:
+    # ── setup.yml (деплой нового кластера): redis.conf render ────────────────────
+    # render_context.self = node-1 (master, host-инвариант apply.input). Дизамбигуатор
+    # от users.acl/sentinel.conf/hardening (тот же core.file.rendered) — path.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            password: s3cr3t-redis-pass-migrate
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
+            config:
+              maxmemory:        "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients:       10000
+              timeout:          300
+              save:             "900 1 300 10 60 10000"
+              appendonly:       "no"
+          self:
+            sid: node-1.example.com
+            covens: [migrate_cluster, redis]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # ── setup.yml: ВНУТРИ-кластерный REPLICAOF (community.redis.replica) ─────────
+    # addr=127.0.0.1:6379 (per-host локальный), master_addr=10.0.0.1:6379 (master-
+    # election node-1). where: master-excluded → только на node-2 (реплике). ОТЛИЧАЕТСЯ
+    # от source-replica (шаг ниже) по master_addr (10.0.0.1 ВНУТРИ vs 10.9.0.1 ВНЕШНИЙ)
+    # и отсутствию source_external — presence дизамбигуирует обе по params_subset.
+    - module: community.redis.replica
+      params_subset:
+        addr: "127.0.0.1:6379"
+        master_addr: "10.0.0.1:6379"
+        password: s3cr3t-redis-pass-migrate
+
+    # ── setup.yml: SENTINEL MONITOR (community.redis.sentinel) ───────────────────
+    # monitor.ip=node-1 (master-election), quorum=2 (size(2)/2+1). Единственная sentinel-задача.
+    - module: community.redis.sentinel
+      params_subset:
+        addr: "127.0.0.1:26379"
+        master_name: master
+        auth_pass: s3cr3t-redis-pass-migrate
+        redis_version: "7.2.4"
+        monitor:
+          ip: 10.0.0.1
+          port: 6379
+          quorum: 2
+
+    # ── МИГРАЦИЯ: REPLICAOF на ВНЕШНИЙ источник (community.redis.replica, source_external) ──
+    # run_once на node-1 (master нового кластера). master_addr=10.9.0.1:6379 (source.hosts[0]),
+    # source_external:true, master_password = vault(source.password_ref). Дизамбигуатор от
+    # внутрикластерного replica — source_external:true + master_addr=внешний.
+    - module: community.redis.replica
+      params_subset:
+        addr: "127.0.0.1:6379"
+        master_addr: "10.9.0.1:6379"
+        source_external: true
+        password: s3cr3t-redis-pass-migrate
+        master_password: old-cluster-source-pass
+        master_tls: false
+
+    # ── МИГРАЦИЯ: offset-gate (community.redis.offset-synced) ────────────────────
+    # run_once на node-1. source_addr=10.9.0.1:6379 (внешний), lag_threshold=0 (default
+    # verify), skip_checksum=false. source_password = vault(source.password_ref).
+    - module: community.redis.offset-synced
+      params_subset:
+        addr: "127.0.0.1:6379"
+        source_addr: "10.9.0.1:6379"
+        password: s3cr3t-redis-pass-migrate
+        source_password: old-cluster-source-pass
+        lag_threshold: 0
+        skip_checksum: false
+
+  # create-набор state + seed-source read-model. redis_config БЕЗ cluster-директив
+  # (sentinel). seeded_from: source_endpoints = source.hosts ЦЕЛИКОМ, detached:false
+  # (источник ещё жив — отцепит day-2 detach_source). БЕЗ timestamp (детерминизм L0).
+  state_changes:
+    redis_type: sentinel
+    redis_version: "7.2.4"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+    redis_users: []
+    redis_hosts: []
+    redis_sentinel:
+      master_name: master
+      quorum: 0
+      down_after_ms: 5000
+      failover_timeout_ms: 60000
+    replicas: 1
+    sentinel_quorum: 0
+    shards: 0
+    persistence: rdb
+    maxmemory_policy: ""
+    install:
+      method: package
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    memory_mb: 0
+    modules: [bloom, json, search, timeseries]
+    sysctl_settings: {}
+    # ★ seed-source read-model (v9): откуда мигрировали + detached:false.
+    seeded_from:
+      source_endpoints:
+        - "10.9.0.1:6379"
+        - "10.9.0.2:6379"
+      detached: false

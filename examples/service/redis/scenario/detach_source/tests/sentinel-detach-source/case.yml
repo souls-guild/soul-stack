@@ -1,0 +1,84 @@
+# L0-испытание detach_source в режиме sentinel (S1-пилот, happy-path). Day-2 для
+# инкарнации, ранее залитой migrate_cluster (incarnation.state.seeded_from с detached:false,
+# источник 10.9.0.1:6379). Roster из 1 хоста (новый master). Диспетчер по
+# incarnation.state.redis_type (day-2 знает режим из state).
+#
+# Render-only, герметично. Диспетчер инклудит cluster.yml + sentinel.yml через
+# CONDITIONAL-INCLUDE (when: на include по state.redis_type): sentinel-инкарнация →
+# cluster-ветка group-drop, sentinel.yml раскрывается.
+#
+# Что ассертим:
+#   1. ФИНАЛЬНЫЙ offset-gate ПЕРЕД detach (community.redis.offset-synced): source_addr=
+#      внешний источник из state (seeded_from.source_endpoints[0]=10.9.0.1:6379),
+#      lag_threshold=0 (жёстко — detach точка невозврата), source_password='' (учётка
+#      источника на day-2 в state НЕ лежит, ИБ).
+#   2. REPLICAOF NO ONE (community.redis.detached): addr локальный, password наш.
+#   3. state_changes: seeded_from.detached := true (source_endpoints СОХРАНЯЕТСЯ).
+name: sentinel detach_source runs final offset gate then detaches the external source
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.1 }
+    os: { arch: amd64 }
+
+  # Развёрнутый incarnation.state v9: sentinel-инкарнация, залитая migrate_cluster.
+  # seeded_from.detached=false (источник ещё привязан) — detach_source выставит true.
+  state:
+    redis_type: sentinel
+    redis_version: "7.2.4"
+    conf_dir: /etc/redis
+    data_dir: /var/lib/redis
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+    redis_users: []
+    seeded_from:
+      source_endpoints:
+        - "10.9.0.1:6379"
+        - "10.9.0.2:6379"
+      detached: false
+
+  vault:
+    secret/redis/detach_source:
+      password: detach-redis-pass-16ch
+
+assert:
+  task_present:
+    # ── ФИНАЛЬНЫЙ offset-gate ПЕРЕД detach ──────────────────────────────────────
+    # source_addr из state (seeded_from.source_endpoints[0]). lag_threshold=0 (жёстко).
+    # source_password='' (day-2: учётка источника не в state). password — наш локальный.
+    - module: community.redis.offset-synced
+      params_subset:
+        addr: "127.0.0.1:6379"
+        source_addr: "10.9.0.1:6379"
+        password: detach-redis-pass-16ch
+        source_password: ""
+        lag_threshold: 0
+        skip_checksum: false
+
+    # ── REPLICAOF NO ONE (community.redis.detached) ─────────────────────────────
+    - module: community.redis.detached
+      params_subset:
+        addr: "127.0.0.1:6379"
+        password: detach-redis-pass-16ch
+        tls: false
+
+  # seeded_from.detached := true (source_endpoints СОХРАНЯЕТСЯ — merge старого объекта
+  # с {detached:true}). Остальной state detach_source не трогает.
+  state_changes:
+    seeded_from:
+      source_endpoints:
+        - "10.9.0.1:6379"
+        - "10.9.0.2:6379"
+      detached: true

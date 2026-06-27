@@ -1,0 +1,57 @@
+# Ветка диспетчера detach_source — режим sentinel. Финальный offset-gate (fail-closed)
+# + отцепление нового master-а от внешнего источника (REPLICAOF NO ONE). Подключается из
+# main.yml через CONDITIONAL-INCLUDE (`when: incarnation.state.redis_type == 'sentinel'`).
+#
+# ★ compute.* (source_master/tls_*) объявлены в detach_source/main.yml (top-level
+# scenario-блок) и видны здесь как compute.<name>.
+#
+# Поток:
+#   1. ФИНАЛЬНЫЙ offset-gate ПЕРЕД detach (повторно, как migrate_cluster шаг 3, но на
+#      day-2 источник из state): убедиться, что новый master ВСЁ ЕЩЁ синхронен с
+#      источником НЕПОСРЕДСТВЕННО перед разрывом. fail-closed: не синхронен за окно →
+#      шаг failed → state НЕ коммитится → error_locked (detached НЕ выставится, источник
+#      останется привязан — безопаснее, чем отцепить недогнанную реплику и потерять хвост).
+#   2. REPLICAOF NO ONE (community.redis.detached) — перевести новый master в
+#      самостоятельный режим. ПОСЛЕ этого источник можно гасить (на стороне оператора).
+
+# 1. ФИНАЛЬНЫЙ offset-lag gate ПЕРЕД detach. Тот же community.redis.offset-synced, что
+#    migrate_cluster шаг 3, но источник — из incarnation.state.seeded_from (compute
+#    .source_master), а не из input. run_once на hosts[0] (новый master). changed_when:
+#    false (probe/gate). retry/until крутит, пока caught_up; failed_when: caught_up !=
+#    true — fail-closed (окно вышло, реплика отстала → НЕ отцепляем).
+#    ★ lag_threshold ЖЁСТКО 0: detach — точка невозврата (после REPLICAOF NO ONE хвост
+#    источника не подтянуть), поэтому финальная проверка требует ПОЛНОЙ синхронизации
+#    (offset совпал бит-в-бит), без допуска отставания. addr — локальный новый master
+#    (compute.tls_*); source_addr — внешний источник. ★ source_password='' — учётка
+#    источника на day-2 в state НЕ лежит (ИБ, см. compute detach_source/main.yml): если
+#    источник под AUTH, gate упрётся в коннект-ошибку (осознанное ограничение S1).
+- name: Final offset gate before detach (master must be fully in sync with the source)
+  run_once: true
+  module: community.redis.offset-synced
+  changed_when: false
+  retry:
+    count: 60
+    delay: 10s
+    until: "register.self.caught_up == true"
+  failed_when: "register.self.caught_up != true"
+  params:
+    addr:            "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
+    source_addr:     "${ compute.source_master }"
+    password:        "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    source_password: ""
+    lag_threshold:   "${ 0 }"
+    skip_checksum:   false
+
+# 2. REPLICAOF NO ONE — отцепить новый master от источника (community.redis.detached).
+#    run_once на hosts[0] (тот же новый master, что реплицировал источник в migrate_cluster).
+#    Идемпотентен: уже самостоятельный master (role:master, без master_host) → no-op.
+#    addr — локальный новый master (compute.tls_*); password — наш secret/redis/<inc>
+#    #password. ПОСЛЕ успеха state_changes выставит seeded_from.detached=true (main.yml).
+- name: Detach the fresh master from the external source (REPLICAOF NO ONE)
+  run_once: true
+  module: community.redis.detached
+  params:
+    addr:     "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
+    password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    tls:      "${ compute.tls_on }"
+    tls_ca:   "${ compute.tls_ca }"
