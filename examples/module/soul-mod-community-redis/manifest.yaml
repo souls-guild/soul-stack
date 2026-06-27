@@ -552,6 +552,20 @@ spec:
     #                     ещё N слотов — это императивная exec-style операция, НЕ
     #                     часть converge (оператор зовёт явно, как старый
     #                     redis-cluster-live без unless).
+    #   action=join-external — влить НОВЫЕ cluster-mode ноды в УЖЕ существующий
+    #                     (старый) кластер и сделать каждую репликой старого мастера
+    #                     1:1 (day-2 migration step 1): коннект к source_nodes →
+    #                     CLUSTER NODES старого кластера → маппинг новый-узел↔
+    #                     старый-мастер (узлы по ключу nodes, мастера по первому
+    #                     слоту) → MEET old-seed + waitConverge + REPLICATE на
+    #                     КАЖДОМ новом узле. ТА ЖЕ сеть и ТОТ ЖЕ пароль (оператор
+    #                     выравнивает новый==старый). ★ Fail-fast: число старых
+    #                     мастеров != shards_dest → 1:1 невозможен (runtime-assert
+    #                     shards_source==shards_dest, источник render-фазе не виден).
+    #                     Идемпотентен: узел уже реплика нужного мастера → no-op.
+    #                     ★ graceful failover (промоушен новых в мастера) + forget
+    #                     старых — ОТДЕЛЬНАЯ операция (следующий батч), здесь НЕТ:
+    #                     только join + replicate + sync-готовность.
     #
     # add-node слоты НЕ двигает (role=master добавляет ПУСТОЙ master); перенос
     # слотов на новый master — это reshard.
@@ -568,8 +582,12 @@ spec:
         с master from на master to (SETSLOT/MIGRATE первых N слотов источника).
         ★ reshard НЕ ИДЕМПОТЕНТЕН (осознанно): повторный apply сдвинет ещё N
         слотов — императивная exec-style day-2 операция, НЕ часть converge
-        (create/add-node/remove-node, напротив, идемпотентны). Без dry-run
-        preview (плагин не реализует PlanReadSafe).
+        (create/add-node/remove-node, напротив, идемпотентны). action=join-external
+        — влить новые cluster-mode ноды в СТАРЫЙ кластер репликами старых мастеров
+        1:1 (MEET old-seed + REPLICATE; маппинг узлы↔мастера по ключу/первому
+        слоту); fail-fast если число старых мастеров != shards_dest; идемпотентен
+        (узел уже реплика нужного мастера → no-op); failover+forget — отдельный
+        батч. Без dry-run preview (плагин не реализует PlanReadSafe).
       input:
         action:
           type: string
@@ -577,8 +595,9 @@ spec:
           description: >-
             Операция над кластером: "create" (сборка кластера из nodes),
             "add-node" (присоединение одной ноды к сформированному кластеру),
-            "remove-node" (вывод одной ноды из кластера) или "reshard" (перенос N
-            слотов с master from на master to; НЕ идемпотентен).
+            "remove-node" (вывод одной ноды из кластера), "reshard" (перенос N
+            слотов с master from на master to; НЕ идемпотентен) или
+            "join-external" (вливание новых нод репликами старого кластера 1:1).
         # ── action=create ────────────────────────────────────────────────────
         nodes:
           type: map
@@ -659,6 +678,28 @@ spec:
             (action=reshard) Сколько слотов перенести с from на to (>= 1).
             Берутся ПЕРВЫЕ slots слотов источника по возрастанию. ★ НЕ
             идемпотентно: повторный apply перенесёт ещё slots слотов.
+        # ── action=join-external ─────────────────────────────────────────────
+        # nodes (выше, action=create) — НОВЫЕ узлы вступающего кластера: тот же
+        # map стабильный-ключ -> {addr|ip+port}, ключи сортируются и задают
+        # детерминированный 1:1-маппинг (узел i ↔ старый мастер i). Число узлов
+        # обязано равняться shards_dest (одна реплика на старый мастер).
+        source_nodes:
+          type: list
+          required: false
+          description: >-
+            (action=join-external) Seed-ноды СТАРОГО кластера: список host:port.
+            Перебираются по порядку — первая ответившая CLUSTER NODES задаёт
+            топологию (мастера + слоты) и служит точкой MEET для новых узлов. Тот
+            же пароль/TLS, что у новых нод (общий кластер; оператор выравнивает).
+        shards_dest:
+          type: int
+          required: false
+          description: >-
+            (action=join-external) Ожидаемое число шардов назначения (>= 1).
+            Обязано совпасть И с числом новых узлов (params.nodes), И с числом
+            мастеров старого кластера — иначе 1:1-маппинг невозможен (fail-fast).
+            shards_source виден только в живой топологии источника, поэтому assert
+            на равенство выполняется в Apply (не на render-фазе).
         # ── общие ────────────────────────────────────────────────────────────
         password:
           type: string
@@ -668,6 +709,8 @@ spec:
           description: >-
             Пароль Redis (vault-ref в operator-input; keeper резолвит до Apply).
             Применяется при коннекте к КАЖДОЙ ноде. Маскируется в логах/трейсах/UI.
+            (join-external) ОДИН пароль на source-seed И на новые узлы — общий
+            пароль кластера (оператор выравнивает новый == старый до миграции).
         username:
           type: string
           required: false

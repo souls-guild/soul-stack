@@ -7,12 +7,16 @@
 // ноду к УЖЕ сформированному кластеру (day-2); action=remove-node выводит ОДНУ
 // ноду из кластера (day-2, с миграцией её слотов на оставшиеся masters, если она
 // master со слотами). action=reshard переносит N слотов с одного master-а на
-// другой (day-2, зеркало redis-cli `--cluster reshard`).
+// другой (day-2, зеркало redis-cli `--cluster reshard`). action=join-external
+// вливает НОВЫЕ ноды в ЧУЖОЙ (старый) кластер репликами его мастеров 1:1 — первый
+// шаг миграции «старый кластер → новый» (см. migrate.go); failover/forget старых
+// — отдельная операция (следующий батч), здесь её нет.
 //
 // ★ reshard ИМПЕРАТИВЕН и НЕ идемпотентен (осознанно, как старый
 // redis-cluster-live без unless): повторный apply сдвинет ещё N слотов. Это
 // exec-style day-2 операция — оператор зовёт её явно, она НЕ часть converge.
-// create/add-node/remove-node, напротив, идемпотентны (no-op на сошедшемся вход).
+// create/add-node/remove-node/join-external, напротив, идемпотентны (no-op на
+// сошедшемся входе).
 //
 // Раскладка ролей и слотов СТРОГО детерминирована (сортировка ключей nodes):
 // один и тот же вход → одна и та же топология master/replica и одни и те же
@@ -85,9 +89,11 @@ func validateCluster(f map[string]*structpb.Value) []string {
 		return validateClusterRemoveNode(f)
 	case "reshard":
 		return validateClusterReshard(f)
+	case "join-external":
+		return validateClusterJoinExternal(f)
 	default:
 		return []string{fmt.Sprintf(
-			"params.action: %q not supported (only \"create\", \"add-node\", \"remove-node\", \"reshard\")", stringOrEmpty(f["action"]))}
+			"params.action: %q not supported (only \"create\", \"add-node\", \"remove-node\", \"reshard\", \"join-external\")", stringOrEmpty(f["action"]))}
 	}
 }
 
@@ -200,9 +206,11 @@ func (m *RedisModule) applyCluster(ctx context.Context, stream grpc.ServerStream
 		return m.applyClusterRemoveNode(ctx, stream, params)
 	case "reshard":
 		return m.applyClusterReshard(ctx, stream, params)
+	case "join-external":
+		return m.applyClusterJoinExternal(ctx, stream, params)
 	default:
 		return sendFailure(stream, fmt.Sprintf(
-			"cluster: action %q not supported (only \"create\", \"add-node\", \"remove-node\", \"reshard\")",
+			"cluster: action %q not supported (only \"create\", \"add-node\", \"remove-node\", \"reshard\", \"join-external\")",
 			stringOrEmpty(params.GetFields()["action"])))
 	}
 }
