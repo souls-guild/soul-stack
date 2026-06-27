@@ -17,4 +17,24 @@
 # compute: набор, который тело читает (redis_config/conf_dir/data_dir/install/
 # modules_base_url/redis_version/tls_*). Все они объявлены в create/main.yml::compute
 # (этот сценарий). cross-file дрейф soul-lint НЕ ловит.
+
+# ── 0. SIZE-GUARD (топология) — keeper-side render-time assert ─────────────────────
+# Размер roster-а ОБЯЗАН быть ровно shards*(1+replicas_per_master) (мастера кластера +
+# реплики на каждый шард) — иначе плагин community.redis.cluster (action create) выведет
+# число шардов ИЗ числа нод и МОЛЧА проигнорирует declared input.shards (silent рассинхрон
+# declared↔actual). Тот же механизм, что size-guard migrate_cluster/cluster.yml (assert:,
+# ADR-009 amendment 2026-06-23): предикат вычисляется KEEPER-SIDE на РЕНДЕРЕ — там доступен
+# soulprint.hosts (на Soul-е его НЕТ). false ОБРЫВАЕТ render с message ДО любого dispatch
+# (раньше и понятнее, чем runtime-отказ/тихий no-op плагина). assert НЕ emit RenderedTask.
+# Стоит ПЕРЕД include деплой-тела — mismatch рвёт прогон fail-fast, до установки пакетов.
+# ★ ПОЧЕМУ assert, а не validate: size-guard нужен soulprint.hosts (roster), а validate-
+# контекст INPUT-ONLY (структурный CEL-барьер). Обязательность самого shards (присутствие
+# в режиме cluster) — отдельный required_when в main.yml, отсекает ДО render (см.
+# cluster-shards-guard-missing); здесь только сверка топологии с уже-присутствующим shards.
+- name: Guard cluster roster size matches shards and replicas
+  assert:
+    that:
+      - "size(soulprint.hosts) == int(input.shards) * (1 + int(input.replicas_per_master))"
+    message: "число хостов roster-а прогона должно быть ровно shards*(1+replicas_per_master) (мастера кластера + реплики на каждый шард) — задай столько же таргетированных souls, сколько узлов в объявленной топологии, иначе плагин вывел бы число шардов из числа нод и проигнорировал declared shards"
+
 - include: redis-deploy-cluster.yml

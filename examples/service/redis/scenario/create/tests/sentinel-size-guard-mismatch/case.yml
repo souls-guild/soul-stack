@@ -1,0 +1,76 @@
+# L0-испытание create в режиме sentinel — FAIL-ветка size-guard (топология != roster).
+# Зеркало sentinel-create-1master-2replica (тот же happy-path вход replicas_per_master=2),
+# но roster СПЕЦИАЛЬНО НЕ совпадает с объявленной топологией: replicas_per_master=2 →
+# ожидается ровно 1+2=3 хоста, а fixtures.hosts несёт 2. size-guard create/sentinel.yml
+# (assert, keeper-side render-time, ADR-009 amendment 2026-06-23) обязан ОБОРВАТЬ render ДО
+# любого dispatch — иначе master-election (первый по SID) и SENTINEL MONITOR/REPLICAOF
+# разъехались бы с declared-топологией: один хост МОЛЧА стал бы незаявленной репликой.
+#
+# Парный с sentinel-create-1master-2replica (там roster==топология → render проходит,
+# size-guard PASS) и симметричный cluster-size-guard-mismatch (формула там
+# shards*(1+replicas_per_master)).
+#
+# Render-only, герметично. Диспетчер create инклудит cluster.yml + sentinel.yml; на
+# sentinel-прогоне cluster-ветка group-drop (static-when input.redis_type != 'cluster'),
+# sentinel.yml раскрывается, первой задачей — size-guard assert (НЕ emit RenderedTask).
+name: sentinel create with roster size not matching replicas aborts at render (size-guard)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  # Roster из 2 хостов — НА ОДИН МЕНЬШЕ объявленной топологии (replicas=2 → 1+2=3).
+  # Порядок намеренно не отсортирован: size-guard оперирует size(), не позицией.
+  hosts:
+    - sid: node-2.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-1.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default:    "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    redis_type: sentinel
+    version: "7.2.4"
+    # replicas_per_master=2 → ожидается 1+2=3 хоста, а roster выше = 2 → 2 != 1+2.
+    replicas_per_master: 2
+
+# Прогон обрывается на render: size-guard assert «Guard sentinel roster size matches
+# replicas» false (2 != 1+2). Подстрока — message assert-правила create/sentinel.yml.
+expect_render_error: "число хостов roster-а прогона должно быть ровно 1+replicas_per_master"

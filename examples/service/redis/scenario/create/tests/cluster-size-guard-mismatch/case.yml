@@ -1,0 +1,83 @@
+# L0-испытание create в режиме cluster — FAIL-ветка size-guard (топология != roster).
+# Зеркало cluster-create-3shards (тот же happy-path вход), но roster СПЕЦИАЛЬНО НЕ
+# совпадает с объявленной топологией: shards=3, replicas_per_master=0 → ожидается ровно
+# 3*(1+0)=3 хоста, а fixtures.hosts несёт 4. size-guard create/cluster.yml (assert,
+# keeper-side render-time, ADR-009 amendment 2026-06-23) обязан ОБОРВАТЬ render ДО любого
+# dispatch — иначе плагин community.redis.cluster (action create) вывел бы число шардов из
+# числа нод (4 → иное разбиение слотов) и МОЛЧА проигнорировал declared shards=3.
+#
+# Парный с cluster-create-3shards (там roster==топология → render проходит, cluster-build
+# на месте) и симметричный migrate_cluster size-guard. ОТЛИЧИЕ от cluster-shards-guard-
+# missing: там shards вообще НЕ задан → обрыв на input-валидации (required_when) ДО render;
+# здесь shards задан, но размер roster-а не сходится → обрыв на render (assert).
+#
+# Render-only, герметично. Диспетчер create инклудит cluster.yml + sentinel.yml; на
+# cluster-прогоне sentinel-ветка group-drop (static-when input.redis_type != 'sentinel'),
+# cluster.yml раскрывается, первой задачей — size-guard assert (НЕ emit RenderedTask).
+name: cluster create with roster size not matching shards aborts at render (size-guard)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  # Roster из 4 хостов — НА ОДИН БОЛЬШЕ объявленной топологии (shards=3, replicas=0 → 3).
+  # Порядок намеренно не отсортирован: size-guard оперирует size(), не позицией.
+  hosts:
+    - sid: node-b.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-c.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+    - sid: node-a.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-d.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.4 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    redis_type: cluster
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+  input:
+    redis_type: cluster
+    version: "7.2.4"
+    # shards=3 ЗАДАН (required_when проходит), но roster выше = 4 → 4 != 3*(1+0).
+    shards: 3
+    replicas_per_master: 0
+    cluster_node_timeout: 5000
+
+# Прогон обрывается на render: size-guard assert «Guard cluster roster size matches shards
+# and replicas» false (4 != 3*(1+0)). Подстрока — message assert-правила create/cluster.yml.
+expect_render_error: "число хостов roster-а прогона должно быть ровно shards*(1+replicas_per_master)"
