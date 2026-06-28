@@ -118,6 +118,13 @@ func validateClusterCreate(f map[string]*structpb.Value) []string {
 		errs = append(errs, "params.replicas_per_shard: must be >= 0")
 	}
 
+	// Явная топология (params.topology) ВЫТЕСНЯЕТ авто-раскладку: при ней размер
+	// шардов задаёт оператор, а делимость nodes на 1+replicas НЕ проверяется
+	// (replicas_per_shard игнорируется — см. validateTopology про конфликт-гейт).
+	if hasTopology(f["topology"]) {
+		return append(errs, validateTopology(f["topology"], nodes, replicas)...)
+	}
+
 	// Состав nodes обязан ровно делиться на размер шарда (1 master + N replicas).
 	if len(nodes) > 0 && replicas >= 0 {
 		shardSize := 1 + replicas
@@ -129,6 +136,98 @@ func validateClusterCreate(f map[string]*structpb.Value) []string {
 	}
 
 	return errs
+}
+
+// hasTopology — задан ли непустой params.topology (list с хотя бы одним элементом).
+// Пустой список / отсутствие / не-список → false (авто-раскладка, старое поведение).
+func hasTopology(v *structpb.Value) bool {
+	if v == nil {
+		return false
+	}
+	lv, ok := v.GetKind().(*structpb.Value_ListValue)
+	return ok && len(lv.ListValue.GetValues()) > 0
+}
+
+// validateTopology проверяет явную топологию против nodes-map: каждый шард непуст,
+// каждый SID существует в nodes и встречается РОВНО один раз (нет дублей и нод в
+// двух шардах), все nodes покрыты (unused → ошибка). Дополнительно: если задан и
+// topology, И replicas_per_shard (>0) — размер КАЖДОГО шарда обязан совпасть с
+// 1+replicas (иначе fail-fast: противоречивый ввод). Без replicas_per_shard (0)
+// размеры шардов свободны — topology единственный источник раскладки.
+func validateTopology(v *structpb.Value, nodes map[string]map[string]*structpb.Value, replicas int) []string {
+	var errs []string
+
+	lv, ok := v.GetKind().(*structpb.Value_ListValue)
+	if !ok {
+		return []string{"params.topology: must be a list of shards (each a list of SID strings)"}
+	}
+
+	seen := make(map[string]int, len(nodes)) // SID -> сколько раз встретился
+	for i, shardVal := range lv.ListValue.GetValues() {
+		shard, ok := shardVal.GetKind().(*structpb.Value_ListValue)
+		if !ok {
+			errs = append(errs, fmt.Sprintf("params.topology[%d]: must be a list of SID strings", i))
+			continue
+		}
+		members := shard.ListValue.GetValues()
+		if len(members) == 0 {
+			errs = append(errs, fmt.Sprintf("params.topology[%d]: shard must have at least a master SID", i))
+			continue
+		}
+		// replicas_per_shard конфликт-гейт: размер шарда обязан быть 1+replicas.
+		if replicas > 0 && len(members) != 1+replicas {
+			errs = append(errs, fmt.Sprintf(
+				"params.topology[%d]: shard has %d nodes but replicas_per_shard=%d requires %d (1 master + %d replicas) — drop replicas_per_shard or fix the shard",
+				i, len(members), replicas, 1+replicas, replicas))
+		}
+		for _, m := range members {
+			sid, isStr := stringValue(m)
+			if !isStr {
+				errs = append(errs, fmt.Sprintf("params.topology[%d]: SID entries must be strings", i))
+				continue
+			}
+			if _, exists := nodes[sid]; !exists {
+				errs = append(errs, fmt.Sprintf("params.topology[%d]: SID %q not found in nodes", i, sid))
+			}
+			seen[sid]++
+		}
+	}
+
+	// Дубли: SID в двух шардах / дважды в одном.
+	for _, sid := range sortedSeenKeys(seen) {
+		if seen[sid] > 1 {
+			errs = append(errs, fmt.Sprintf("params.topology: SID %q appears %d times (must be exactly once)", sid, seen[sid]))
+		}
+	}
+
+	// Покрытие: каждая нода обязана попасть в топологию (unused → ошибка).
+	for _, key := range sortedNodeKeys(nodes) {
+		if seen[key] == 0 {
+			errs = append(errs, fmt.Sprintf("params.topology: node %q is not assigned to any shard (all nodes must be covered)", key))
+		}
+	}
+
+	return errs
+}
+
+// sortedSeenKeys / sortedNodeKeys — детерминированный порядок сообщений об ошибке
+// (стабильный вывод для тестов и операторских отчётов).
+func sortedSeenKeys(m map[string]int) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func sortedNodeKeys(m map[string]map[string]*structpb.Value) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // validateClusterAddNode — проверки add-node: непустые new_node и seed,
@@ -234,8 +333,12 @@ func roleOrDefault(v *structpb.Value) string {
 	return "replica"
 }
 
-// applyClusterCreate строит кластер из nodes-map. Идемпотентен: если кластер уже
-// сформирован (cluster_state:ok, все наши ноды на месте, 16384 слота покрыты) —
+// applyClusterCreate строит кластер из nodes-map. Раскладку ролей даёт ЛИБО
+// детерминированная авто-форма по sort ключей (buildClusterPlan, replicas_per_shard),
+// ЛИБО ЯВНАЯ топология оператора (params.topology — список шардов [master, replica…],
+// buildClusterPlanExplicit). Сборка дальше (MEET/ADDSLOTS/REPLICATE, идемпотентность)
+// одна и та же — план обе формы дают в одном clusterPlan. Идемпотентен: если кластер
+// уже сформирован (cluster_state:ok, все наши ноды на месте, 16384 слота покрыты) —
 // changed=false, no-op.
 func (m *RedisModule) applyClusterCreate(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], params *structpb.Struct) error {
 	f := params.GetFields()
@@ -248,7 +351,14 @@ func (m *RedisModule) applyClusterCreate(ctx context.Context, stream grpc.Server
 	}
 	replicas := intOrDefault(f["replicas_per_shard"], 0)
 
-	plan, err := buildClusterPlan(nodes, replicas)
+	// Явная топология (params.topology) → раскладка ИЗ списка оператора; иначе —
+	// детерминированная авто-раскладка по sort ключей (backward-compat бит-в-бит).
+	var plan clusterPlan
+	if topology := parseTopology(f["topology"]); len(topology) > 0 {
+		plan, err = buildClusterPlanExplicit(nodes, topology)
+	} else {
+		plan, err = buildClusterPlan(nodes, replicas)
+	}
 	if err != nil {
 		return sendFailure(stream, redactError(err, password))
 	}
@@ -977,6 +1087,30 @@ func parseClusterNodes(v *structpb.Value) ([]clusterNode, error) {
 	return out, nil
 }
 
+// parseTopology разбирает params.topology — список шардов, каждый шард — список
+// SID ([master_sid, replica_sid, ...], первый = master). Пустой/отсутствующий
+// topology → nil (caller трактует как «авто-раскладка», старое поведение). Не-строки
+// внутри шарда пропускаются (валидация в validateClusterCreate уже отвергла такой
+// вход; здесь fail-safe). Формат structpb: ListValue из ListValue-ов StringValue.
+func parseTopology(v *structpb.Value) [][]string {
+	if v == nil {
+		return nil
+	}
+	lv, ok := v.GetKind().(*structpb.Value_ListValue)
+	if !ok {
+		return nil
+	}
+	shards := lv.ListValue.GetValues()
+	if len(shards) == 0 {
+		return nil
+	}
+	out := make([][]string, 0, len(shards))
+	for _, shard := range shards {
+		out = append(out, stringList(shard))
+	}
+	return out
+}
+
 // resolveNodeEndpoint извлекает (ip, port, addr) из спецификации одной ноды.
 // Приоритет: явные ip+port; иначе split addr "host:port". addr для коннекта,
 // ip+port — для CLUSTER MEET (gossip оперирует ip:port).
@@ -1034,6 +1168,54 @@ func buildClusterPlan(nodes []clusterNode, replicas int) (clusterPlan, error) {
 	// Round-robin реплик к мастерам: replica j → master j%shards.
 	for j := range plan.replicas {
 		plan.replicaOf[j] = j % shards
+	}
+	return plan, nil
+}
+
+// buildClusterPlanExplicit раскладывает ноды по ролям ИЗ ЯВНОЙ ТОПОЛОГИИ оператора
+// (params.topology) — зеркало buildClusterPlan, но без авто-раскладки: оператор сам
+// задал список шардов, каждый шард — [master_sid, replica_sid, ...] (первый = master).
+//
+//	masters[i]  = nodes[topology[i][0]]            (master i-го шарда)
+//	replicas    = хвосты шардов (topology[i][1:]), replicaOf = i (их шард)
+//	слоты       = allocateSlots(len(topology))     (та же равномерная, что в авто)
+//
+// Порядок мастеров — порядок шардов topology (раскладка оператора, НЕ sort ключей).
+// Реплики обходятся шард-за-шардом (детерминированно). Слоты делятся РОВНО так же,
+// как в авто-раскладке (allocateSlots), — оператор управляет только тем, КТО master
+// и КТО чья реплика, а не размерами диапазонов. Все SID предполагаются валидными
+// (существуют в nodes, без дублей, шарды непусты) — это гарантирует
+// validateClusterCreate; здесь ошибка только при недостающем индексе (fail-safe).
+func buildClusterPlanExplicit(nodes []clusterNode, topology [][]string) (clusterPlan, error) {
+	if len(topology) == 0 {
+		return clusterPlan{}, fmt.Errorf("params.topology: must be a non-empty list of shards")
+	}
+	byKey := make(map[string]clusterNode, len(nodes))
+	for _, n := range nodes {
+		byKey[n.key] = n
+	}
+
+	plan := clusterPlan{
+		masters: make([]clusterNode, 0, len(topology)),
+		slots:   allocateSlots(len(topology)),
+	}
+	for i, shard := range topology {
+		if len(shard) == 0 {
+			return clusterPlan{}, fmt.Errorf("params.topology[%d]: shard must have at least a master SID", i)
+		}
+		master, ok := byKey[shard[0]]
+		if !ok {
+			return clusterPlan{}, fmt.Errorf("params.topology[%d]: master SID %q not found in nodes", i, shard[0])
+		}
+		plan.masters = append(plan.masters, master)
+		for _, sid := range shard[1:] {
+			replica, ok := byKey[sid]
+			if !ok {
+				return clusterPlan{}, fmt.Errorf("params.topology[%d]: replica SID %q not found in nodes", i, sid)
+			}
+			plan.replicas = append(plan.replicas, replica)
+			plan.replicaOf = append(plan.replicaOf, i)
+		}
 	}
 	return plan, nil
 }

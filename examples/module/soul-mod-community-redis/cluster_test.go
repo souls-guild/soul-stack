@@ -2034,3 +2034,294 @@ func assertSecretOnlyInMigrateAuth(t *testing.T, c *clusterConn) {
 		}
 	}
 }
+
+// ============================= explicit topology =============================
+//
+// Опциональный params.topology задаёт ЯВНУЮ раскладку шардов (оператор сам распихал
+// VM по зонам / закодировал anti-affinity в списке). buildClusterPlanExplicit —
+// зеркало buildClusterPlan: masters[i]=nodes[topology[i][0]], реплики из хвостов
+// (replicaOf=i), слоты — та же allocateSlots(len(topology)). Сборка (MEET/ADDSLOTS/
+// REPLICATE), идемпотентность и no-secret-leak переиспользуются (общий clusterPlan).
+
+// topologyParam строит params.topology — список шардов из списков SID.
+func topologyParam(shards ...[]string) []any {
+	out := make([]any, 0, len(shards))
+	for _, shard := range shards {
+		inner := make([]any, 0, len(shard))
+		for _, sid := range shard {
+			inner = append(inner, sid)
+		}
+		out = append(out, inner)
+	}
+	return out
+}
+
+// namedNodesParam строит params.nodes-map с ЯВНЫМИ ключами (SID) — topology
+// ссылается на ноды по ключу, а не по индексу (в отличие от clusterNodesParam).
+func namedNodesParam(byKey map[string]string) map[string]any {
+	nodes := map[string]any{}
+	for key, addr := range byKey {
+		nodes[key] = map[string]any{"addr": addr}
+	}
+	return nodes
+}
+
+// --- Validate: topology ---
+
+func TestValidate_ClusterTopology(t *testing.T) {
+	nodes := map[string]any{
+		"node-a": map[string]any{"addr": "10.0.0.1:6379"},
+		"node-b": map[string]any{"addr": "10.0.0.2:6379"},
+		"node-c": map[string]any{"addr": "10.0.0.3:6379"},
+		"node-d": map[string]any{"addr": "10.0.0.4:6379"},
+	}
+	cases := []struct {
+		name     string
+		params   map[string]any
+		wantOk   bool
+		errMatch string // подстрока в одной из ошибок (если wantOk=false)
+	}{
+		{
+			name: "happy: 2 shards x 1 replica covers all nodes",
+			params: map[string]any{
+				"action":   "create",
+				"nodes":    nodes,
+				"topology": topologyParam([]string{"node-a", "node-c"}, []string{"node-b", "node-d"}),
+			},
+			wantOk: true,
+		},
+		{
+			name: "happy: master-only shard (no replicas) is allowed without replicas_per_shard",
+			params: map[string]any{
+				"action": "create",
+				"nodes": map[string]any{
+					"node-a": map[string]any{"addr": "10.0.0.1:6379"},
+					"node-b": map[string]any{"addr": "10.0.0.2:6379"},
+				},
+				"topology": topologyParam([]string{"node-a"}, []string{"node-b"}),
+			},
+			wantOk: true,
+		},
+		{
+			name: "duplicate SID across shards rejected",
+			params: map[string]any{
+				"action":   "create",
+				"nodes":    nodes,
+				"topology": topologyParam([]string{"node-a", "node-c"}, []string{"node-a", "node-d"}),
+			},
+			wantOk:   false,
+			errMatch: "appears 2 times",
+		},
+		{
+			name: "non-existent SID rejected",
+			params: map[string]any{
+				"action": "create",
+				"nodes": map[string]any{
+					"node-a": map[string]any{"addr": "10.0.0.1:6379"},
+					"node-b": map[string]any{"addr": "10.0.0.2:6379"},
+				},
+				"topology": topologyParam([]string{"node-a", "node-ZZZ"}, []string{"node-b"}),
+			},
+			wantOk:   false,
+			errMatch: "not found in nodes",
+		},
+		{
+			name: "empty shard rejected",
+			params: map[string]any{
+				"action": "create",
+				"nodes": map[string]any{
+					"node-a": map[string]any{"addr": "10.0.0.1:6379"},
+				},
+				"topology": topologyParam([]string{"node-a"}, []string{}),
+			},
+			wantOk:   false,
+			errMatch: "at least a master SID",
+		},
+		{
+			name: "unused node (not covered by topology) rejected",
+			params: map[string]any{
+				"action":   "create",
+				"nodes":    nodes, // 4 ноды, но topology покрывает только 3
+				"topology": topologyParam([]string{"node-a", "node-c"}, []string{"node-b"}),
+			},
+			wantOk:   false,
+			errMatch: "not assigned to any shard",
+		},
+		{
+			name: "replicas_per_shard conflicting with shard size rejected (fail-fast)",
+			params: map[string]any{
+				"action":             "create",
+				"nodes":              nodes,
+				"replicas_per_shard": 2, // ждёт шарды по 3 ноды, а они по 2
+				"topology":           topologyParam([]string{"node-a", "node-c"}, []string{"node-b", "node-d"}),
+			},
+			wantOk:   false,
+			errMatch: "replicas_per_shard=2 requires 3",
+		},
+		{
+			name: "replicas_per_shard matching shard size accepted",
+			params: map[string]any{
+				"action":             "create",
+				"nodes":              nodes,
+				"replicas_per_shard": 1, // шарды по 2 = 1 master + 1 replica → ок
+				"topology":           topologyParam([]string{"node-a", "node-c"}, []string{"node-b", "node-d"}),
+			},
+			wantOk: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &RedisModule{}
+			reply, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
+				State:  "cluster",
+				Params: mustStruct(t, tc.params),
+			})
+			if reply.Ok != tc.wantOk {
+				t.Fatalf("Ok=%v, ждали %v (errors=%v)", reply.Ok, tc.wantOk, reply.Errors)
+			}
+			if tc.wantOk {
+				return
+			}
+			joined := strings.Join(reply.Errors, " | ")
+			if !strings.Contains(joined, tc.errMatch) {
+				t.Fatalf("ошибка не содержит %q: %v", tc.errMatch, reply.Errors)
+			}
+		})
+	}
+}
+
+// --- buildClusterPlanExplicit: раскладка из явной топологии ---
+
+func TestBuildClusterPlanExplicit_RolesAndSlots(t *testing.T) {
+	// Ключи расставлены так, что АВТО-раскладка (sort) дала бы мастерами node-a/node-b;
+	// topology же делает мастерами node-b/node-d — доказывает, что topology перекрывает
+	// sort, а не совпадает с ним случайно.
+	nodes := []clusterNode{
+		{key: "node-a", addr: "10.0.0.1:6379", ip: "10.0.0.1", port: 6379},
+		{key: "node-b", addr: "10.0.0.2:6379", ip: "10.0.0.2", port: 6379},
+		{key: "node-c", addr: "10.0.0.3:6379", ip: "10.0.0.3", port: 6379},
+		{key: "node-d", addr: "10.0.0.4:6379", ip: "10.0.0.4", port: 6379},
+	}
+	topology := [][]string{
+		{"node-b", "node-a"}, // shard 0: master node-b, replica node-a
+		{"node-d", "node-c"}, // shard 1: master node-d, replica node-c
+	}
+
+	plan, err := buildClusterPlanExplicit(nodes, topology)
+	if err != nil {
+		t.Fatalf("buildClusterPlanExplicit: %v", err)
+	}
+
+	// Мастера — ПЕРВЫЕ SID шардов в порядке topology (не sort).
+	if len(plan.masters) != 2 || plan.masters[0].key != "node-b" || plan.masters[1].key != "node-d" {
+		t.Fatalf("masters=%v, ждали [node-b node-d]", masterKeys(plan))
+	}
+	// Реплики — хвосты шардов, replicaOf указывает на их шард.
+	if len(plan.replicas) != 2 || len(plan.replicaOf) != 2 {
+		t.Fatalf("replicas=%v replicaOf=%v, ждали по 2", replicaKeys(plan), plan.replicaOf)
+	}
+	if plan.replicas[0].key != "node-a" || plan.replicaOf[0] != 0 {
+		t.Errorf("replica[0]=%q->shard%d, ждали node-a->shard0", plan.replicas[0].key, plan.replicaOf[0])
+	}
+	if plan.replicas[1].key != "node-c" || plan.replicaOf[1] != 1 {
+		t.Errorf("replica[1]=%q->shard%d, ждали node-c->shard1", plan.replicas[1].key, plan.replicaOf[1])
+	}
+	// Слоты — та же равномерная allocateSlots(2): полное покрытие 16384 без дыр.
+	if len(plan.slots) != 2 {
+		t.Fatalf("slots=%v, ждали 2 диапазона", plan.slots)
+	}
+	assertFullSlotCoverage(t, plan.slots...)
+}
+
+func TestBuildClusterPlanExplicit_MasterOnlyShards(t *testing.T) {
+	// Шарды без реплик (master-only) — реплик нет, replicaOf пуст, слоты полны.
+	nodes := []clusterNode{
+		{key: "node-a", addr: "10.0.0.1:6379", ip: "10.0.0.1", port: 6379},
+		{key: "node-b", addr: "10.0.0.2:6379", ip: "10.0.0.2", port: 6379},
+		{key: "node-c", addr: "10.0.0.3:6379", ip: "10.0.0.3", port: 6379},
+	}
+	plan, err := buildClusterPlanExplicit(nodes, [][]string{{"node-a"}, {"node-b"}, {"node-c"}})
+	if err != nil {
+		t.Fatalf("buildClusterPlanExplicit: %v", err)
+	}
+	if len(plan.masters) != 3 {
+		t.Fatalf("masters=%v, ждали 3", masterKeys(plan))
+	}
+	if len(plan.replicas) != 0 || len(plan.replicaOf) != 0 {
+		t.Fatalf("ждали 0 реплик, got replicas=%v replicaOf=%v", replicaKeys(plan), plan.replicaOf)
+	}
+	assertFullSlotCoverage(t, plan.slots...)
+}
+
+func masterKeys(p clusterPlan) []string {
+	out := make([]string, 0, len(p.masters))
+	for _, m := range p.masters {
+		out = append(out, m.key)
+	}
+	return out
+}
+
+func replicaKeys(p clusterPlan) []string {
+	out := make([]string, 0, len(p.replicas))
+	for _, r := range p.replicas {
+		out = append(out, r.key)
+	}
+	return out
+}
+
+// --- Apply create с явной топологией: MEET/ADDSLOTS/REPLICATE по списку оператора ---
+
+func TestApplyClusterCreate_ExplicitTopology(t *testing.T) {
+	addrByKey := map[string]string{
+		"node-a": "10.0.0.1:6379",
+		"node-b": "10.0.0.2:6379",
+		"node-c": "10.0.0.3:6379",
+		"node-d": "10.0.0.4:6379",
+	}
+	addrs := []string{addrByKey["node-a"], addrByKey["node-b"], addrByKey["node-c"], addrByKey["node-d"]}
+	fl := newFleet(addrs...)
+	fl.setConvergedNodesView()
+	m := fl.module()
+	stream := &applyStream{}
+
+	// topology: мастера node-b/node-d (НЕ первые по sort), реплики node-a/node-c.
+	err := m.Apply(&pluginv1.ApplyRequest{
+		State: "cluster",
+		Params: mustStruct(t, map[string]any{
+			"action":   "create",
+			"password": secretPass,
+			"nodes":    namedNodesParam(addrByKey),
+			"topology": topologyParam([]string{"node-b", "node-a"}, []string{"node-d", "node-c"}),
+		}),
+	}, stream)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	fin := stream.final()
+	if fin == nil || fin.Failed || !fin.Changed {
+		t.Fatalf("ждали успех changed=true, got %+v", fin)
+	}
+
+	masterB := fl.byAddr[addrByKey["node-b"]]
+	masterD := fl.byAddr[addrByKey["node-d"]]
+	replicaA := fl.byAddr[addrByKey["node-a"]]
+	replicaC := fl.byAddr[addrByKey["node-c"]]
+
+	// ADDSLOTS — только мастерам из topology (node-b/node-d), полное покрытие 16384.
+	rB := assertAddSlots(t, masterB)
+	rD := assertAddSlots(t, masterD)
+	assertNoAddSlots(t, replicaA)
+	assertNoAddSlots(t, replicaC)
+	assertFullSlotCoverage(t, rB, rD)
+
+	// REPLICATE — реплики привязаны к мастеру СВОЕГО шарда (а не round-robin по sort).
+	assertReplicateTo(t, replicaA, masterB.id)
+	assertReplicateTo(t, replicaC, masterD.id)
+
+	assertEventsNoSecret(t, stream)
+	for addr, c := range fl.byAddr {
+		assertNoClusterSecret(t, addr, c)
+	}
+}

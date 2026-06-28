@@ -178,6 +178,39 @@ input:
       Таймаут gossip между нодами кластера, мс (директива cluster-node-timeout
       redis.conf, режим cluster). Не задан → 5000.
 
+  # ── cluster_topology: ЯВНАЯ раскладка шардов (опц., режим cluster) ────────────
+  # ★ ЯВНАЯ ТОПОЛОГИЯ (propose-and-wait, имя cluster_topology — нет коллизии с
+  # input.shards): оператор САМ задаёт список шардов вместо авто-раскладки плагина по
+  # sort SID. Каждый элемент = ОДИН шард — список SID [master_sid, replica_sid, ...],
+  # ПЕРВЫЙ SID шарда = master, остальные = его реплики. Так оператор распихивает VM по
+  # зонам и кодирует anti-affinity прямо в списке (master и реплика шарда — в разных
+  # зонах). Плагин community.redis.cluster (action create) собирает кластер ПО НЕМУ
+  # (buildClusterPlanExplicit — зеркало авто-раскладки: те же 16384 слота поровну между
+  # мастерами, та же сборка CLUSTER MEET/ADDSLOTS/REPLICATE).
+  #
+  # ★ ОПЦИОНАЛЬНО (backward-compat): не задан → плагин раскладывает роли сам по sort SID
+  # (поведение до фичи бит-в-бит). Задан → ВЫТЕСНЯЕТ авто-раскладку; replicas_per_master
+  # при этом задаёт лишь размер VM-roster-а (size-guard ниже сверяет sum(len шардов)).
+  # Если задан И cluster_topology, И replicas_per_master, и размер шарда не совпадает с
+  # 1+replicas_per_master — плагин рвёт прогон fail-fast (валидация плагина).
+  #
+  # ★ SID-инвариант: каждый SID обязан быть среди таргетированных souls прогона
+  # (soulprint.hosts) и встречаться РОВНО один раз; все хосты roster-а обязаны попасть в
+  # топологию (плагин отвергает несуществующий/дублированный SID и непокрытую ноду).
+  cluster_topology:
+    type: array
+    required: false
+    items:
+      type: array
+      items:
+        type: string
+    description: >-
+      Явная раскладка шардов Redis Cluster (опционально, режим cluster). Список шардов;
+      каждый шард — список SID [master, replica, ...] (первый = master). Оператор сам
+      распихивает VM по зонам / кодирует anti-affinity. Не задан → плагин раскладывает
+      роли автоматически по sort SID. Каждый SID обязан быть среди таргетированных souls
+      и ровно один раз; все хосты roster-а покрыты.
+
   # ── Топология sentinel (режим redis_type=sentinel) ───────────────────────────
   # Counts задают РАСКЛАДКУ ролей по таргетированным souls (pull-native, Вариант A):
   # 1 master + replicas_per_master реплик. size-guard create/sentinel.yml проверяет,
@@ -396,6 +429,10 @@ form:
           show_when: "input.redis_type == 'cluster'"
           placeholder: "5000"
           hint: "Таймаут gossip между нодами кластера (cluster-node-timeout). Не задан → 5000."
+        - name: cluster_topology
+          label: "Явная топология шардов (cluster)"
+          show_when: "input.redis_type == 'cluster'"
+          hint: "Список шардов; каждый шард — список SID [master, replica, …] (первый = master). Оператор сам распихивает VM по зонам. Не задан → плагин раскладывает роли по sort SID автоматически."
         # sentinel-специфичные тайминги failover: видимы ТОЛЬКО в режиме sentinel.
         - name: sentinel_down_after_ms
           label: "down-after, мс (sentinel)"

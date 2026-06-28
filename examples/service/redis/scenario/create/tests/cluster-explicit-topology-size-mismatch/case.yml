@@ -1,0 +1,74 @@
+# L0-испытание create cluster — FAIL-ветка size-guard на SUM-форме (явная топология).
+# Зеркало cluster-explicit-topology (happy), но roster СПЕЦИАЛЬНО на один меньше суммы
+# размеров объявленных шардов: cluster_topology несёт 2 шарда по 2 ноды (sum=4), а
+# fixtures.hosts — только 3. size-guard create/cluster.yml на ВЕТКЕ cluster_topology
+# сверяет size(roster) с СУММОЙ размеров шардов (а не shards*(1+replicas)); 3 != 4 →
+# обрыв render ДО dispatch. Доказывает, что sum-форма size-guard реально вычисляется и
+# рвёт fail-fast (а не молча падает позже в плагине на непокрытой/несуществующей ноде).
+#
+# Парный с cluster-explicit-topology (roster == sum → render проходит). Симметричен
+# cluster-size-guard-mismatch (там старая формула shards*(1+replicas)).
+name: cluster create with explicit topology and roster smaller than declared sum aborts at render
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  # Roster из 3 хостов — НА ОДИН МЕНЬШЕ суммы размеров шардов топологии (2+2=4).
+  hosts:
+    - sid: node-2.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-1.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-3.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    redis_type: cluster
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+  input:
+    redis_type: cluster
+    version: "7.2.4"
+    shards: 2
+    replicas_per_master: 1
+    cluster_node_timeout: 5000
+    # Топология sum=4 (2 шарда по 2), а roster выше = 3 → 3 != 4.
+    cluster_topology:
+      - [node-2.example.com, node-1.example.com]
+      - [node-4.example.com, node-3.example.com]
+
+# Обрыв на render: size-guard sum-форма false (3 != sum(2+2)). Подстрока — общий message
+# assert-правила create/cluster.yml (он один на обе формулы).
+expect_render_error: "число хостов roster-а прогона должно быть ровно"

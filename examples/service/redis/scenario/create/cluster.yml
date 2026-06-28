@@ -31,10 +31,19 @@
 # контекст INPUT-ONLY (структурный CEL-барьер). Обязательность самого shards (присутствие
 # в режиме cluster) — отдельный required_when в main.yml, отсекает ДО render (см.
 # cluster-shards-guard-missing); здесь только сверка топологии с уже-присутствующим shards.
+# ★ ЯВНАЯ ТОПОЛОГИЯ (cluster_topology): когда оператор задал список шардов, size-guard
+# сверяет roster с СУММОЙ размеров шардов (число узлов во всей объявленной топологии),
+# а не с формулой shards*(1+replicas) — размеры шардов теперь произвольны (оператор сам
+# их задал). Без cluster_topology — старая формула (авто-раскладка плагина по числу нод).
+# Гейт — has(input.cluster_topology) (поле опционально). СУММА размеров без reduce (StdLib
+# CEL не даёт fold/sum): каждый шард → map{sid:0}, merge всех map-ов сворачивает их в один
+# (templating §2.3 SHALLOW), size = число уникальных SID = сумма размеров шардов (дублей
+# нет — их отвергает плагин fail-fast; при дубле сумма лишь занизится → guard скорее
+# оборвётся, защита не ослабляется).
 - name: Guard cluster roster size matches shards and replicas
   assert:
     that:
-      - "size(soulprint.hosts) == int(input.shards) * (1 + int(input.replicas_per_master))"
-    message: "число хостов roster-а прогона должно быть ровно shards*(1+replicas_per_master) (мастера кластера + реплики на каждый шард) — задай столько же таргетированных souls, сколько узлов в объявленной топологии, иначе плагин вывел бы число шардов из числа нод и проигнорировал declared shards"
+      - "has(input.cluster_topology) ? (size(soulprint.hosts) == size(merge(input.cluster_topology.map(s, merge(s.map(x, {x: 0})))))) : (size(soulprint.hosts) == int(input.shards) * (1 + int(input.replicas_per_master)))"
+    message: "число хостов roster-а прогона должно быть ровно shards*(1+replicas_per_master) — либо, при заданной cluster_topology, ровно сумме размеров объявленных шардов (число узлов во всей топологии); задай столько же таргетированных souls, сколько узлов в объявленной топологии, иначе плагин вывел бы число шардов из числа нод и проигнорировал declared-раскладку"
 
 - include: redis-deploy-cluster.yml

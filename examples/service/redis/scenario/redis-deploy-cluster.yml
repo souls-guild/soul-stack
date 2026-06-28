@@ -162,6 +162,12 @@
     # plugin-param `replicas_per_shard` — КОНТРАКТ community.redis.cluster (не меняем),
     # источник → unified input.replicas_per_master (реплик на каждый шард).
     replicas_per_shard: "${ int(input.replicas_per_master) }"
+    # ★ ЯВНАЯ ТОПОЛОГИЯ (опц.): оператор передаёт список шардов [master_sid, replica_sid, …]
+    # (первый = master), SID == ключи nodes-MAP выше (h.sid). Задан → плагин раскладывает
+    # роли ПО НЕМУ (buildClusterPlanExplicit), игнорируя авто-sort. Не задан → [] (плагин
+    # раскладывает сам по sort SID, backward-compat). replicas_per_shard при заданной
+    # topology служит лишь size-проверкой состава (плагин рвёт при несовпадении размеров).
+    topology: "${ has(input.cluster_topology) ? input.cluster_topology : [] }"
     password:           "${ vault('secret/redis/' + incarnation.name + '#password') }"
     tls:                "${ compute.tls_on }"
     tls_ca:             "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"

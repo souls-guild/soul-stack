@@ -1,0 +1,134 @@
+# L0-испытание create в режиме cluster с ЯВНОЙ ТОПОЛОГИЕЙ (input.cluster_topology):
+# оператор САМ задаёт раскладку шардов вместо авто-формы плагина по sort SID. 4 хоста,
+# replicas_per_master=1 → 2 шарда по 2 ноды (master+replica). Топология намеренно делает
+# мастерами node-2/node-4 (НЕ первые по sort node-1/node-2) — доказывает, что declared-
+# раскладка реально доезжает до плагина параметром topology, а не совпадает со sort.
+#
+# size-guard ВЕТКА (cluster.yml): при заданной cluster_topology сверяет roster с СУММОЙ
+# размеров шардов (2+2=4), а не со старой формулой shards*(1+replicas). Здесь 4 == 4 →
+# render проходит. Парный негативный кейс (несовпадение суммы) — отдельный
+# cluster-explicit-topology-size-mismatch через expect_render_error.
+#
+# Что ассертим (критерий приёмки слайса):
+#   1. size-guard PASS на sum-форме (4 хоста == sum(len шардов)) → cluster-build на месте.
+#   2. cluster-build (community.redis.cluster action create) несёт param `topology` =
+#      ИМЕННО переданный список списков SID (deepEqual, не подмножество) + nodes-MAP всех
+#      4 хостов (детерминирован по SID) + replicas_per_shard=1 (size-проверка состава).
+name: cluster create with explicit topology forwards declared shard layout to the plugin
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-2.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-4.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.4 }
+        os: { arch: amd64 }
+    - sid: node-1.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-3.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    redis_type: cluster
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+  input:
+    redis_type: cluster
+    version: "7.2.4"
+    shards: 2
+    replicas_per_master: 1
+    cluster_node_timeout: 5000
+    # Явная раскладка: мастера node-2/node-4 (первые SID шардов), реплики node-1/node-3.
+    # Намеренно НЕ совпадает с авто-sort (которая дала бы мастерами node-1/node-2).
+    cluster_topology:
+      - [node-2.example.com, node-1.example.com]
+      - [node-4.example.com, node-3.example.com]
+
+assert:
+  # size-guard PASS (sum-форма): 4 == sum(2+2). Провал ловит size-mismatch-кейс.
+  task_present:
+    # cluster-build: топология доезжает param-ом `topology` (deepEqual всего списка),
+    # nodes-MAP всех 4 хостов, replicas_per_shard=1 (size-проверка состава). Единственная
+    # community.redis.cluster в плане → дизамбигуатор не нужен.
+    - module: community.redis.cluster
+      params_subset:
+        action: create
+        replicas_per_shard: 1
+        password: s3cr3t-redis-pass-create
+        topology:
+          - [node-2.example.com, node-1.example.com]
+          - [node-4.example.com, node-3.example.com]
+        nodes:
+          node-1.example.com: { addr: "10.0.0.1:6379" }
+          node-2.example.com: { addr: "10.0.0.2:6379" }
+          node-3.example.com: { addr: "10.0.0.3:6379" }
+          node-4.example.com: { addr: "10.0.0.4:6379" }
+
+  state_changes:
+    redis_type: cluster
+    redis_version: "7.2.4"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+      cluster-enabled:      "yes"
+      cluster-config-file:  "nodes.conf"
+      cluster-node-timeout: "5000"
+    redis_users: []
+    redis_hosts: []
+    shards: 2
+    replicas: 1
+    sentinel_quorum: 0
+    persistence: rdb
+    install:
+      method: package
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    memory_mb: 0
+    maxmemory_policy: ""
+    modules: [bloom, json, search, timeseries]
+    sysctl_settings: {}
