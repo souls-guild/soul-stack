@@ -14,6 +14,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 	"github.com/souls-guild/soul-stack/shared/cel"
+	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 // fakeDispatcher — no-op ApplyDispatcher для lifecycle-тестов.
@@ -123,6 +124,38 @@ func TestShutdown_NoActiveRuns(t *testing.T) {
 	r := newTestRunner(t)
 	if err := r.Shutdown(context.Background()); err != nil {
 		t.Errorf("Shutdown(idle) = %v, want nil", err)
+	}
+}
+
+// TestAllKeeperTasks — условие bypass-а no_hosts-гейта (ADR-0061 §контекст):
+// все задачи keeper-side → true (provision-from-zero), любая host-задача / пустой
+// сценарий → false. keeper-side форма — скаляр `on: keeper`; host-формы — опущен
+// on: (nil) или список ковенов.
+func TestAllKeeperTasks(t *testing.T) {
+	keeper := config.Task{On: "keeper"}
+	hostOmitted := config.Task{}                      // on: опущен → Soul-side (весь incarnation)
+	hostCoven := config.Task{On: []any{"redis-prod"}} // on: список ковенов → Soul-side
+
+	tests := []struct {
+		name  string
+		tasks []config.Task
+		want  bool
+	}{
+		{"пусто", nil, false},
+		{"пустой-срез", []config.Task{}, false},
+		{"один-keeper", []config.Task{keeper}, true},
+		{"все-keeper", []config.Task{keeper, keeper}, true},
+		{"один-host-опущен", []config.Task{hostOmitted}, false},
+		{"один-host-coven", []config.Task{hostCoven}, false},
+		{"keeper-плюс-host", []config.Task{keeper, hostOmitted}, false},
+		{"host-плюс-keeper", []config.Task{hostCoven, keeper}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := allKeeperTasks(tt.tasks); got != tt.want {
+				t.Errorf("allKeeperTasks(%+v) = %v, want %v", tt.tasks, got, tt.want)
+			}
+		})
 	}
 }
 

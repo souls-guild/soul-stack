@@ -4,6 +4,22 @@
 >
 > **Прогресс имплементации.** S1 (пилот `await_online`) реализован: блокирующий poll Redis SID-lease + B1-strict fail + list-SID + потолок `keeper.yml::max_await_timeout`. S2 (Stratify-passage-граница для `refresh_soulprint`) и S3 (фактический re-resolve roster в run.go) **реализованы**: `refresh_soulprint: true` делает шаг passage-определяющим эмиттером, scenario-runner пере-резолвит roster на refresh-границе (live-снимок, см. §S3), `register.<name>.refreshed` эхает значение флага. WB cloud e2e — отдельный слайс.
 
+## Amendment 2026-06-28 — no_hosts пропускается для all-keeper provision-from-zero
+
+**Проблема.** Безусловный no_hosts-гейт (`run.go` шаг 3: `if len(hosts)==0 { abort no_hosts }`) срубал cloud-bootstrap create на пустом roster ДО keeper-dispatch. Целевой провижн-сценарий (`example-cloud-bootstrap/scenario/create`, см. [ADR-017(h)](0017-keeper-side-core.md), [ADR-063](0063-bootstrap-token-delivery.md)) на старте хостов НЕ имеет — он их и создаёт (`core.cloud.created` → `core.bootstrap.delivered`, обе `on: keeper`). Chicken-egg: run требует connected-хостов, run же их и провиженит. Гейт делал provision-from-zero неисполнимым.
+
+**Решение (Вариант A).** Гейт пропускается **ТОЛЬКО когда ВСЕ задачи сценария keeper-side** (`allKeeperTasks` по `scn.Tasks` ПОСЛЕ `ExpandIncludes`, каждая `render.IsKeeperTask`): `if len(hosts)==0 && !allKeeperTasks(...) { abort no_hosts }`.
+
+- **По СОСТАВУ, не по флагу.** Признак provision-from-zero — все-`on:keeper`-состав сценария, а не отдельный декларативный флаг. Лишней DSL-поверхности не вводится.
+- **ALL, не ANY.** Bypass даёт только полностью keeper-сценарий. Смешанный `single-run` provision→роль (keeper-задача создаёт VM + host-задача катит роль в одном прогоне) на пустом P0-roster **остаётся за no_hosts** — корректно: host-задача на пустом roster есть no_hosts. Такой смешанный сценарий обслуживается **staged §S2/§S3** (mid-run re-resolve: host-задачи уезжают в Passage после `refresh_soulprint`-шага, к их Passage roster уже пере-резолвлен на онбордившиеся VM). Объединять provision и роль в один не-staged Passage по-прежнему нельзя.
+- **Пустой сценарий** (`len(tasks)==0`) → `allKeeperTasks` = `false`: «нет задач» не повод bypass-ить гейт.
+
+**Essence keeper-контекст при пустом roster.** Essence-резолв брал OS-family/Covens представителя `hosts[0]` — на пустом roster паникнул бы. При пустом roster essence резолвится в **keeper-контексте** (`keeperEssenceInput`): default-слой + Coven-overlay инкарнации (корневая Coven-метка = `inc.Name`, [ADR-008](0008-coven-stable-tags.md): каждый хост roster-а несёт её, поэтому применима и без хоста) + `spec.essence`-override. OS-family overlay **пропускается** (нет per-host soulprint) — симметрично `renderKeeperTask`, рендерящему keeper-задачи без per-host soulprint. После онбординга созданных VM последующие Passage получают per-host essence обычным путём (§S3).
+
+**Открыто.** standalone-recovery долгого `await_online`-барьера single-keeper-прогона — **не закрыт** (см. §«HA — provision-сценарии через Voyage» ниже): provision-сценарии рекомендуется гнать через Voyage.
+
+**Cross-ref:** [ADR-017(h)](0017-keeper-side-core.md) (cloud-init B-flat + `core.cloud.created` generate_userdata), [ADR-063](0063-bootstrap-token-delivery.md) (`core.bootstrap.delivered`).
+
 **Контекст.** Целевой сценарий — **один create-scenario** разворачивает N-шардовый кластер из «ничего»:
 
 1. `core.cloud.provisioned` (`on: keeper`, [ADR-017](0017-keeper-side-core.md)) создаёт N VM, register-output несёт их `sid` / bootstrap-токены / cloud-метаданные;
@@ -104,4 +120,5 @@ Single-binary провижн-прогон с долгим барьером `awai
 - S1 (этот слайс): `await_online` блокирует на Redis-lease до `await_min_count`/timeout; B1-strict fail; list-SID; потолок `max_await_timeout`; guard-тесты (ждёт→online; B1 timeout→failed; кворум→ok; источник=lease не PG; потолок).
 - S2: стратификатор укладывает потребителей roster после `refresh_soulprint`-шага (новый класс ребра «roster-refresh»).
 - S3: scenario-runner пере-резолвит roster на refresh-границе (live-snapshot текущего online-набора); `register.<name>.refreshed` эхает флаг.
+- no_hosts-bypass (amendment 2026-06-28): all-keeper provision-from-zero (`allKeeperTasks`) исполняется на пустом roster; host-/смешанный сценарий держит no_hosts; Essence keeper-контекст при пустом roster; guard-тесты (keeper-only→исполняет / host→no_hosts / mixed→no_hosts / юнит `allKeeperTasks`).
 - Открытый риск: standalone staged-recovery долгого барьера ([ADR-056 §S4](0056-staged-render-passage.md)) — provision-сценарии рекомендуется гнать через Voyage.

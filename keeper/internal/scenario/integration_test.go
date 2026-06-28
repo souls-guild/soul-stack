@@ -2459,17 +2459,23 @@ tasks:
 `, keeperModule))
 }
 
-// TestIntegration_KeeperOnly_NoHosts_AbortsBeforeKeeper — QA-пробел (d),
-// фиксация S1-ограничения: keeper-only сценарий (0 Soul-side задач) против
-// incarnation БЕЗ connected-хостов падает в no_hosts (run.go шаг 3) ДО
-// keeper-dispatch (шаг 5.5). Keeper-модуль НЕ вызван. Тест защищает согласованное
-// ограничение от молчаливой регрессии: если будущая правка переставит шаги,
-// keeper-only прогон начнёт исполняться при пустом roster — этот ассерт упадёт.
-func TestIntegration_KeeperOnly_NoHosts_AbortsBeforeKeeper(t *testing.T) {
+// TestIntegration_KeeperOnly_NoHosts_RunsKeeperTasks — bypass no_hosts для
+// all-keeper provision-from-zero (ADR-0061 §контекст amend): keeper-only сценарий
+// (0 Soul-side задач, ВСЕ `on: keeper`) против incarnation БЕЗ connected-хостов
+// теперь ИСПОЛНЯЕТ keeper-задачу (chicken-egg: create-сценарий создаёт хосты С
+// НУЛЯ, поэтому пустой roster на старте законен). Гейт пропускается по СОСТАВУ
+// (allKeeperTasks), без флага. Инвертирует прежнюю фиксацию S1-ограничения
+// (...AbortsBeforeKeeper): раньше no_hosts отсекал прогон до keeper-dispatch.
+//
+// Наблюдаемо: keeper-модуль вызван (applyCount==1), прогон НЕ error_locked по
+// no_hosts, доходит до keeper-dispatch (шаг 5.5) и финализируется ready —
+// host-fan-out на пустом roster = no-op-success. Essence резолвится в keeper-
+// контексте (keeperEssenceInput, без host-представителя) — без паники на hosts[0].
+func TestIntegration_KeeperOnly_NoHosts_RunsKeeperTasks(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "noop-prod")
-	// Ни одного connected-хоста.
+	// Ни одного connected-хоста — provision-from-zero стартует на пустом roster.
 
 	mod := &orderedKeeperModule{}
 	keepers := fakeKeeperRegistry{"core.soul": mod}
@@ -2489,11 +2495,136 @@ func TestIntegration_KeeperOnly_NoHosts_AbortsBeforeKeeper(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
+	// Прогон НЕ падает в no_hosts — доходит до keeper-dispatch и завершается
+	// успешно (host-fan-out на пустом roster = no-op).
+	waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
+
+	// Keeper-задача ИСПОЛНЕНА — гейт пропущен по составу (all-keeper).
+	if got := mod.applyCount(); got != 1 {
+		t.Errorf("keeper module Apply вызван %d раз, want 1 (all-keeper bypass no_hosts на пустом roster)", got)
+	}
+	// host-fan-out не стартовал — Soul-задач нет, roster пуст.
+	if disp.calls != 0 {
+		t.Errorf("SendApply calls = %d, want 0 (нет Soul-задач, пустой roster)", disp.calls)
+	}
+
+	// keeper apply_runs(sid="keeper") = success (НЕ sentinel no_hosts).
+	st, err := applyrun.SelectStatusesByApplyID(context.Background(), integrationPool, applyID)
+	if err != nil {
+		t.Fatalf("SelectStatusesByApplyID: %v", err)
+	}
+	var keeperRow *applyrun.HostStatus
+	for i := range st {
+		if st[i].SID == render.RunSentinelSID {
+			t.Errorf("найдена sentinel-строка %q — прогон не должен был упасть в no_hosts", render.RunSentinelSID)
+		}
+		if st[i].SID == render.KeeperTargetSID {
+			keeperRow = &st[i]
+		}
+	}
+	if keeperRow == nil {
+		t.Fatalf("нет apply_runs строки sid=%q (keeper-задача не исполнилась): %+v", render.KeeperTargetSID, st)
+	}
+	if keeperRow.Status != applyrun.StatusSuccess {
+		t.Errorf("keeper apply_run status = %q, want success", keeperRow.Status)
+	}
+}
+
+// mixedKeeperHostServiceRepo создаёт service-репо со scenario create из ОДНОЙ
+// keeper-задачи (`on: keeper`) И ОДНОЙ Soul-side задачи (core.exec.run). Состав
+// смешанный → allKeeperTasks(false) → no_hosts-гейт держится на пустом roster.
+func mixedKeeperHostServiceRepo(t *testing.T, keeperModule string) string {
+	t.Helper()
+	return writeServiceRepo(t, fmt.Sprintf(`name: create
+description: mixed keeper+host scenario
+state_changes: {}
+tasks:
+  - name: Keeper step
+    module: %s
+    on: keeper
+    params:
+      sid: "host-a.example.com"
+      coven: ["tagged"]
+      mode: append
+  - name: Soul echo
+    module: core.exec.run
+    params:
+      cmd: echo
+      args: ["soul"]
+    changed_when: "false"
+`, keeperModule))
+}
+
+// TestIntegration_HostScenario_NoHosts_StillAborts — GUARD bypass-границы:
+// host-сценарий (несёт Soul-side задачу) против пустого roster по-прежнему падает
+// в no_hosts. allKeeperTasks(false) → bypass НЕ применяется. Защищает прежнее
+// поведение host-прогонов от регрессии (bypass не должен «протечь» на host-
+// сценарии).
+func TestIntegration_HostScenario_NoHosts_StillAborts(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	seedIncarnation(t, "noop-prod")
+	// Ни одного connected-хоста.
+	gitURL := noopServiceRepo(t) // несёт Soul-side core.exec.run
+
+	disp := &mockDispatcher{t: t, result: applyrun.StatusSuccess}
+	r := newRunner(t, disp, gitURL)
+
+	applyID := audit.NewULID()
+	if err := r.Start(context.Background(), RunSpec{
+		ApplyID:         applyID,
+		IncarnationName: "noop-prod",
+		ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
+		ScenarioName:    "create",
+		StartedByAID:    "archon-alice",
+	}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
 	inc := waitRunDone(t, "noop-prod", applyID, incarnation.StatusErrorLocked)
 	if inc.StatusDetails["reason"] != "no_hosts" {
-		t.Errorf("reason = %v, want no_hosts (keeper-only без хостов отсекается до keeper-dispatch)", inc.StatusDetails["reason"])
+		t.Errorf("reason = %v, want no_hosts (host-сценарий на пустом roster не bypass-ится)", inc.StatusDetails["reason"])
 	}
-	// Keeper-модуль НЕ исполнен — no_hosts отсёк прогон до шага 5.5.
+	if disp.calls != 0 {
+		t.Errorf("SendApply calls = %d, want 0", disp.calls)
+	}
+}
+
+// TestIntegration_MixedKeeperAndHost_NoHosts_StillAborts — GUARD ALL-not-ANY:
+// смешанный сценарий (keeper-задача + Soul-задача) против пустого roster падает в
+// no_hosts. allKeeperTasks(false), потому что НЕ ВСЕ задачи keeper-side — наличие
+// host-задачи возвращает гейт. Keeper-модуль НЕ исполнен (abort на шаге 3, до
+// keeper-dispatch). Защищает решение «bypass по СОСТАВУ all-keeper, не по наличию
+// keeper-задачи»: смешанный single-run provision→роль остаётся за staged §S2/§S3.
+func TestIntegration_MixedKeeperAndHost_NoHosts_StillAborts(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	seedIncarnation(t, "noop-prod")
+	// Ни одного connected-хоста.
+
+	mod := &orderedKeeperModule{}
+	keepers := fakeKeeperRegistry{"core.soul": mod}
+	gitURL := mixedKeeperHostServiceRepo(t, "core.soul.registered")
+
+	disp := &mockDispatcher{t: t, result: applyrun.StatusSuccess}
+	r := newRunnerWithKeeper(t, disp, keepers)
+
+	applyID := audit.NewULID()
+	if err := r.Start(context.Background(), RunSpec{
+		ApplyID:         applyID,
+		IncarnationName: "noop-prod",
+		ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
+		ScenarioName:    "create",
+		StartedByAID:    "archon-alice",
+	}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	inc := waitRunDone(t, "noop-prod", applyID, incarnation.StatusErrorLocked)
+	if inc.StatusDetails["reason"] != "no_hosts" {
+		t.Errorf("reason = %v, want no_hosts (смешанный keeper+host → !allKeeperTasks)", inc.StatusDetails["reason"])
+	}
+	// Keeper-модуль НЕ исполнен — no_hosts отсёк прогон до keeper-dispatch (шаг 5.5).
 	if got := mod.applyCount(); got != 0 {
 		t.Errorf("keeper module Apply вызван %d раз, want 0 (no_hosts до keeper-dispatch)", got)
 	}

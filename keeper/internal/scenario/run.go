@@ -197,7 +197,17 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		abort("topology_failed", err)
 		return
 	}
-	if len(hosts) == 0 {
+	// no_hosts-гейт — fail-closed по умолчанию (S1-ограничение, ADR-0061): прогон
+	// требует connected-хостов, пустой roster → error_locked. ИСКЛЮЧЕНИЕ —
+	// provision-from-zero (ADR-0061 §контекст): all-keeper сценарий, ВСЕ задачи
+	// которого `on: keeper` (core.cloud.created создаёт VM С НУЛЯ), стартует на
+	// пустом roster законно — chicken-egg «run требует хостов, run их и создаёт».
+	// Гейт пропускается ТОЛЬКО когда КАЖДАЯ задача keeper-side (ALL, не ANY):
+	// смешанный keeper+host прогон на пустом roster держит no_hosts (host-задача
+	// на пустом P0 = no_hosts, корректно — staged provision→роль остаётся за
+	// §S2/§S3 mid-run re-resolve, отдельный эпик). Считаем по scn.Tasks ПОСЛЕ
+	// ExpandIncludes — плоский top-level список, тот же, что видит Render.
+	if len(hosts) == 0 && !allKeeperTasks(scn.Tasks) {
 		abort("no_hosts", fmt.Errorf("incarnation %q не имеет connected-хостов", spec.IncarnationName))
 		return
 	}
@@ -205,7 +215,19 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	// 4. Essence (effective-слой). render.Pipeline пробрасывает её в CEL как
 	//    `essence.<path>` (slice E2). Берём OS-family первого хоста как
 	//    представителя (per-host essence — расширение).
-	essenceMap, err := r.deps.Essence.Resolve(essenceInput(art.LocalDir, inc, hosts[0]))
+	//
+	//    keeper-контекст (пустой roster, provision-from-zero): host-представителя
+	//    нет, hosts[0] паникнул бы. Резолвим essence БЕЗ per-host overlay-я —
+	//    default-слой + Coven-overlay инкарнации (корневая Coven-метка = inc.Name,
+	//    ADR-008) + spec.essence-override. OS-family overlay пропускается (OSFamily
+	//    пуст) — симметрично renderKeeperTask, который рендерит keeper-задачи без
+	//    per-host soulprint. После онбординга созданных VM последующие Passage
+	//    получают per-host essence обычным путём (mid-run re-resolve, ADR-0061 §S3).
+	essenceIn := keeperEssenceInput(art.LocalDir, inc)
+	if len(hosts) > 0 {
+		essenceIn = essenceInput(art.LocalDir, inc, hosts[0])
+	}
+	essenceMap, err := r.deps.Essence.Resolve(essenceIn)
 	if err != nil {
 		abort("essence_failed", err)
 		return
@@ -667,6 +689,28 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 // — поэтому re-resolve видит ровно тех, кого барьер refresh-шага дождался online.
 func (r *Runner) resolveRoster(ctx context.Context, incarnationName string) ([]*topology.HostFacts, error) {
 	return r.deps.Topology.LoadIncarnationHosts(ctx, incarnationName)
+}
+
+// allKeeperTasks сообщает, состоит ли сценарий ЦЕЛИКОМ из keeper-side задач
+// (каждая `on: keeper`, render.IsKeeperTask). Это условие bypass-а no_hosts-гейта
+// для provision-from-zero (ADR-0061 §контекст): all-keeper create-сценарий
+// (core.cloud.created создаёт VM С НУЛЯ) законно стартует на пустом roster.
+//
+// ALL, не ANY: смешанный keeper+host прогон НЕ проходит — его host-задача на
+// пустом roster обязана дать no_hosts (staged provision→роль остаётся за §S2/§S3
+// mid-run re-resolve, отдельный эпик). Пустой сценарий (len==0) → false:
+// «нет задач» не повод bypass-ить гейт. Считаем по tasks ПОСЛЕ ExpandIncludes
+// (плоский top-level список, тот же, что видит Render).
+func allKeeperTasks(tasks []config.Task) bool {
+	if len(tasks) == 0 {
+		return false
+	}
+	for _, t := range tasks {
+		if !render.IsKeeperTask(t) {
+			return false
+		}
+	}
+	return true
 }
 
 // lockRun резолвит incarnation, проверяет статус под FOR UPDATE и переводит её

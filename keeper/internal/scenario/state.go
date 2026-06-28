@@ -147,6 +147,21 @@ func essenceInput(serviceDir string, inc *incarnation.Incarnation, host *topolog
 	}
 }
 
+// keeperEssenceInput собирает [essence.ResolveInput] для keeper-контекста —
+// пустой roster, provision-from-zero (ADR-0061 §контекст): host-представителя
+// нет. OS-family overlay пропускается (OSFamily пуст — нет per-host soulprint),
+// Coven-overlay — корневая Coven-метка инкарнации (inc.Name, ADR-008: каждый
+// хост roster-а несёт её, поэтому она применима и без хоста), spec.essence-
+// override применяется как обычно. Симметрично renderKeeperTask, рендерящему
+// keeper-задачи в keeper-контексте без per-host soulprint.
+func keeperEssenceInput(serviceDir string, inc *incarnation.Incarnation) essence.ResolveInput {
+	return essence.ResolveInput{
+		ServiceDir:      serviceDir,
+		Covens:          []string{inc.Name},
+		IncarnationSpec: specEssence(inc),
+	}
+}
+
 // osFamilyOf извлекает `soulprint.self.os.family` из last-reported фактов хоста.
 // Отсутствие фактов / поля → "" (essence пропускает os-слой).
 func osFamilyOf(host *topology.HostFacts) string {
