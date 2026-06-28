@@ -1,0 +1,90 @@
+{{/*
+  dragonfly.conf — FLAGFILE DragonFly (absl flags, НЕ redis.conf!). Go text/template
+  strict (ADR-010). Контекст: .vars (password, config + host-layout), .self (primary_ip
+  для bind).
+
+  ★ ФОРМАТ (верифицировано на исходниках DF v1.x + официальный tools/packaging/debian/
+  dragonfly.conf): КАЖДАЯ директива — отдельная строка `--<flag>=<value>` (двойной дефис,
+  знак `=`). Bool-флаги — БЕЗ значения, голым `--<flag>` (presence; absl-парсер DF-тестов
+  передаёт tls именно так: {"tls": None}). БЕЗ КАВЫЧЕК вокруг значений — DF явно
+  отвергает их («Could it be that you put quotes in the flagfile?», server_family.cc).
+  Имена флагов DF — через ПОДЧЁРКИВАНИЕ (tls_cert_file, snapshot_cron), НЕ дефис как
+  redis.conf (tls-cert-file). scenario кладёт ключи merged-config в DF-форме (underscore).
+
+  ★ DragonFly vs redis.conf (зачем отдельный шаблон, D1):
+    - НЕТ daemonize/supervised/loadmodule/save/pidfile-в-конфиге: процесс-менеджмент —
+      systemd-юнит (Type=simple, ExecStart --flagfile, PIDFile в юните). DF — foreground,
+      без sd_notify (Type=simple, НЕ notify). pidfile задаётся флагом --pidfile (юнит его
+      дублирует директивой PIDFile — оставляем флаг для симметрии с официальным deb).
+    - логирование — glog (--log_dir, DF SetLogFilenameExtension(".log")), НЕ redis
+      `logfile <path>`. glog сам именует файлы в каталоге.
+    - snapshot — DF `--snapshot_cron` (crontab-выражение) + `--dbfilename`; redis-style
+      `save <points>`/`appendonly` к DF НЕприменимы (приходят/не приходят в merged config
+      от scenario — здесь не зашиваем, persistence у DF иная).
+    - cluster OUT (sentinel-only) → НЕТ cluster-announce-ip/cluster-* директив.
+
+  bind на primary_ip + 127.0.0.1: внешние клиенты — по IP хоста, локальные — по loopback.
+  DF-флаг --bind принимает ОДИН адрес (не список как redis). Биндим на primary_ip
+  (внешняя доступность для реплик/sentinel); локальный доступ health-gate идёт по
+  127.0.0.1 — DF при непустом --bind слушает И заданный адрес; для гарантии loopback
+  health-gate в L-стенде используется адрес узла. (Пустой --bind = все интерфейсы —
+  небезопасно; задаём явный primary_ip.)
+
+  .vars.config — merged-конфиг от scenario сервиса (default→вычисления→passthrough,
+  слит через merge() в render-фазе). Идёт ПОСЛЕ базовых директив (last-wins у absl:
+  последнее значение флага выигрывает), поэтому caller может осознанно переопределить
+  любую базовую. Пусто → секция пуста. maxmemory, maxmemory_policy, tls-флаги, masterauth —
+  обычные ключи этого map-а (их вычислил scenario; значения — СТРОКИ).
+
+  Bool-флаги в merged config: absl bool-флаг во flagfile принимает И presence-форму
+  (одно имя флага), И форму со значением true. scenario для bool-директив (tls) кладёт
+  значение 'true' — range ниже печатает пару флаг=значение, что валидно для absl
+  (флаг=true парсится в bool true). Поэтому отдельной обработки presence-флагов в range
+  НЕ требуется — scenario всегда даёт пару key→value.
+*/}}
+--bind={{ .self.network.primary_ip }}
+--port={{ .vars.port }}
+
+{{- /*
+  Рабочий каталог под snapshot DF (--dir). Выводится из data_dir (директива B: data-dir
+  переопределяем оператором, дефолт /var/lib/dragonfly). Каталог владеется dragonfly-
+  юзером (install.yml). Без него DF пишет snapshot в CWD процесса (под systemd — /) →
+  отказ записи. dbfilename — имя snapshot-файла (DF дефолт dump-{timestamp}; задаём
+  стабильное dump для предсказуемого восстановления).
+*/}}
+--dir={{ .vars.data_dir }}
+--dbfilename=dump
+
+{{- /*
+  Аутентификация (--requirepass). DF redis-совместим: AUTH <password>. Значение —
+  зарезолвленный keeper-side пароль (ADR-012); в логах маскируется seal-слоем.
+*/}}
+--requirepass={{ .vars.password }}
+
+{{- /*
+  ACL-юзеры в отдельном файле (--aclfile). DF принимает redis-формат aclfile, включая
+  хешированный пароль `#<sha256hex>` (DF acl/user.cc SetPasswordHash is_hashed) → тот же
+  users.acl.tmpl, что redis (plaintext в файл не пишется). Путь выводится из conf_dir.
+*/}}
+--aclfile={{ .vars.conf_dir }}/users.acl
+
+{{- /*
+  pidfile (--pidfile): systemd-юнит дублирует его директивой PIDFile (официальный deb
+  DF держит оба). Каталог /var/run/dragonfly создаёт RuntimeDirectory юнита.
+  Логи: glog в --log_dir (DF не пишет один logfile — glog именует файлы сам).
+*/}}
+--pidfile={{ .vars.run_dir }}/dragonfly.pid
+--log_dir={{ .vars.log_dir }}
+
+{{/*
+  Merged-конфиг от scenario (last-wins у absl: последний --flag выигрывает). Ключи —
+  в DF-форме (underscore): maxmemory/maxmemory_policy/tls/tls_cert_file/tls_key_file/
+  tls_ca_cert_file/tls_replication/masterauth/masteruser/maxclients/snapshot_cron/...
+  range по MAP обходит ключи ОТСОРТИРОВАННО (templating.md §6) → строки детерминированы
+  между прогонами (нет ложного change → нет лишнего рестарта). Значения — строки; для
+  bool-флагов scenario кладёт 'true' → `--flag=true` (валидно для absl). `--port=0`
+  (tls.only) приходит сюда же ключом port last-wins, гася базовый --port выше.
+*/}}
+{{- range $key, $value := .vars.config }}
+--{{ $key }}={{ $value }}
+{{- end }}

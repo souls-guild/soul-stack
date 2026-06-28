@@ -1,0 +1,129 @@
+name: dragonfly
+state_schema_version: 1
+description: >-
+  DragonFly по концепции Ansible-роли (PILOT, sentinel-only). Оператор задаёт ПРОСТЫЕ
+  типизированные понятия (память, ACL-юзеры, реплики, TLS), а сценарий create транслирует
+  их в flagfile dragonfly.conf. Per-host install + render делает destiny `dragonfly`
+  (режим-агностичный кирпич, ADR-009 B-гибрид); ЖИВОЙ рантайм (PING/REPLICAOF/SENTINEL
+  MONITOR) идёт через плагин `community.redis` (DragonFly redis-совместим — плагин БЕЗ
+  правок); оркестрация (порядок/таргетинг/health-gate) — в scenario сервиса.
+
+  ★ PILOT-СКОУП (D1, 2026-06-27): ТОЛЬКО sentinel-режим (master-replica + sentinel-демон;
+  replicas_per_master=0 даёт standalone-эквивалент). cluster ВНЕ скоупа (DragonFly cluster —
+  emulated, отдельный слайс). Реализован ТОЛЬКО scenario `create`. Day-2 (restart/add_user/
+  rotate_tls/destroy/update_config) — СЛЕД. слайс ПОСЛЕ review. Без диспетчера по режиму
+  (один режим), без миграций (v1).
+
+# state_schema_version = 1 (PILOT): миграций нет (migrations/ пуст). incarnation.state
+# фиксирует, что развёрнуто, чтобы оператор видел инсталляцию и повторный apply был
+# idempotent. Мини-схема (без cluster/modules/provision/seeded_from — вне PILOT-скоупа).
+#
+# ГРАНИЦА двух представлений конфига (как у redis):
+#   - df_config (opaque, additionalProperties:true) — ВЫЧИСЛЕННЫЙ ИТОГ трансляции простого
+#     ввода в flagfile-map (что реально уйдёт в render). Write-model «как развёрнуто».
+#   - именованные поля (tls/install/memory_mb/...) — НАМЕРЕНИЕ оператора в простых
+#     типизированных понятиях (read-model). День-2-сценарии (СЛЕД. слайс) читают их именованно.
+# ОБА заполняются из ОДНОГО compute-прохода create — рассинхрона нет.
+state_schema:
+  type: object
+  required: [df_config]
+  properties:
+    # Эффективная версия DragonFly (distro-пин при package; upstream-semver при binary).
+    df_version:
+      type: string
+    # Итоговый flagfile-конфиг (merged default→вычисления→passthrough из essence). Уходит
+    # в render destiny `dragonfly`. Ключи — DF-флаги (underscore-форма).
+    df_config:
+      type: object
+      additionalProperties: true
+
+    # ── Именованные поля намерения (read-model) ────────────────────────────────
+    # TLS-намерение: включён ли TLS, закрыт ли plain-порт, TLS-порт, Vault-ПУТИ cert/key/CA
+    # (НЕ сам PEM — секрет в state не лежит, ИБ). Из compute.tls_* (те же значения, что в
+    # TLS-блоке df_config).
+    tls:
+      type: object
+      additionalProperties: false
+      properties:
+        enable:   { type: boolean }
+        only:     { type: boolean }
+        port:     { type: integer }
+        cert_ref: { type: string }
+        key_ref:  { type: string }
+        ca_ref:   { type: string }
+    # Способ установки DragonFly (package — distro-deb; binary — upstream-tarball). base_url/
+    # version материализуются при method=binary. Из compute.install.
+    install:
+      type: object
+      additionalProperties: false
+      properties:
+        method:   { type: string, enum: [package, binary] }
+        base_url: { type: string }
+        version:  { type: string }
+    # Бюджет памяти под DragonFly, МБ. Из input.memory_mb; не задан → 0.
+    memory_mb:
+      type: integer
+      minimum: 64
+    # Host-layout (read-model): базовые каталоги конфигурации и данных DragonFly. Из essence
+    # (conf_dir/data_dir). default = текущий путь (/etc/dragonfly, /var/lib/dragonfly).
+    conf_dir:
+      type: string
+    data_dir:
+      type: string
+    # Применённые kernel-параметры под DragonFly (host-tuning). Из essence.sysctl_settings.
+    sysctl_settings:
+      type: object
+      additionalProperties:
+        type: string
+
+    # ── Топология (counts, sentinel-режим) ─────────────────────────────────────
+    # replicas — реплик master-а (из input.replicas_per_master). sentinel_quorum — ВСЕГДА 0
+    # (auto-quorum size/2+1 вычисляется в apply, в state не материализуется; 0 = «auto»).
+    replicas:        { type: integer }
+    sentinel_quorum: { type: integer }
+
+    # ACL-пользователи DragonFly: ТИПИЗИРОВАННЫЙ массив [{name, perms, state}] (ADR-062
+    # AclUser). Наполняется create из input.users (тоже массив AclUser); пароли — НЕ в state
+    # (keeper-side Vault, ADR-012).
+    df_users:
+      type: array
+      items:
+        type: object
+        required: [name, perms, state]
+        properties:
+          name:  { type: string }
+          perms: { type: string }
+          state: { type: string, enum: [on, off] }
+        additionalProperties: false
+    # Хосты топологии (sid + роль). Наполняется сценарием create (раскладка ролей по
+    # таргетированным souls). Точная роль каждого SID в state — follow-up (как у redis).
+    df_hosts:
+      type: array
+      items:
+        type: object
+        required: [sid, role]
+        properties:
+          sid:  { type: string, format: fqdn }
+          role: { type: string, enum: [primary, replica, sentinel] }
+    # Факты sentinel-режима (master_name + quorum monitored master + тайминги failover).
+    # Наполняется create. master_ip create НЕ пишет (master выбирается из roster-а,
+    # host-вариативен).
+    df_sentinel:
+      type: object
+      additionalProperties: false
+      properties:
+        master_name:         { type: string }
+        master_ip:           { type: string }
+        quorum:              { type: integer }
+        down_after_ms:       { type: integer }
+        failover_timeout_ms: { type: integer }
+
+# Зависимости-destiny (ADR-007: версия зависимости = git ref, не semver-range). `dragonfly` —
+# режим-агностичный кирпич в examples/destiny/dragonfly/.
+destiny:
+  - { name: dragonfly, ref: v1.0.0 }
+
+# Custom-модули сервиса. community.redis — ОСНОВНОЙ интерфейс к живому DragonFly (redis-
+# совместим: PING/REPLICAOF/SENTINEL работают; examples/module/soul-mod-community-redis/).
+modules:
+  - { name: community.redis, ref: v1.0.0 }

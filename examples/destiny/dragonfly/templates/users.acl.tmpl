@@ -1,0 +1,21 @@
+{{/*
+  users.acl — внешний ACL-файл Redis (aclfile в redis.conf). Go text/template strict
+  (ADR-010). .vars.users — MAP имя→{perms, state, password}, собран scenario; password
+  зарезолвлен keeper-side из Vault (ADR-012).
+
+  ДЕТЕРМИНИЗМ ПОРЯДКА (templating.md §6): range по MAP обходит ключи ОТСОРТИРОВАННО →
+  строки стабильны между прогонами (нет ложного change → нет лишнего onchanges-рестарта,
+  на rolling-restart флоте каскадного). Передача list-ом наследовала бы недетерминированный
+  порядок итерации Go-map (это и был tiling-критичный баг).
+
+  Формат строки (конвенция Redis ACL):
+    user <name> <state> #<sha256(password)> <perms>
+  Пароль пишется ХЕШЕМ (#<sha256hex>, sprig sha256sum), НЕ plaintext-ом: даже при утечке
+  файла исходный пароль не восстанавливается, Redis принимает #<hash> наравне с >password.
+
+  Пустой map → файл без юзеров (default-юзер с requirepass объявлен в redis.conf отдельно,
+  здесь НЕ дублируется).
+*/}}
+{{- range $name, $u := .vars.users }}
+user {{ $name }} {{ $u.state }} #{{ $u.password | sha256sum }} {{ $u.perms }}
+{{- end }}

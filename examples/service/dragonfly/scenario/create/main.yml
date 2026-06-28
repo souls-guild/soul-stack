@@ -1,0 +1,530 @@
+name: create
+description: >-
+  Развернуть DragonFly в режиме sentinel (master-replica + sentinel-демон). Оператор задаёт
+  ПРОСТЫЕ типизированные понятия (сколько памяти, eviction-политика, ACL-юзеры, реплики,
+  TLS), а сценарий ТРАНСЛИРУЕТ их во flagfile dragonfly.conf. Граница:
+
+    - простой слой = строго типизированный структурный `input:` ниже (Named Dict);
+    - слой трансляции = тело сценария: данные-таблица (memory_reserve_percent) в essence;
+      вычисление maxmemory — inline-CEL; слияние слоёв — CEL-функция merge() (SHALLOW
+      last-wins, templating §2.3);
+    - итоговый df_config рендерится в ПОЛНЫЙ flagfile at-CREATE (источник истины).
+
+  ★ PILOT (D1, sentinel-only — БЕЗ диспетчера): ОДИН режим (sentinel; replicas_per_master=0
+  даёт standalone-эквивалент: один master + sentinel-демон). cluster ВНЕ скоупа → нет
+  conditional-include по режиму, тело прогона ИНЛАЙН в этом файле (install + render +
+  внутрикластерный REPLICAOF + SENTINEL MONITOR + health-gates). Деплой-тело НЕ вынесено в
+  service-level include (единственный потребитель — этот create; вынос оправдан, когда тело
+  делят ≥2 сценария, как у redis create+migrate_cluster).
+
+  ★ DragonFly vs redis: данные плоскости рендерит destiny `dragonfly` (flagfile вместо
+  redis.conf); ЖИВОЙ рантайм — community.redis (DragonFly redis-совместим: PING/REPLICAOF/
+  SENTINEL MONITOR/INFO replication работают — плагин БЕЗ правок). Без redis-модулей (.so),
+  без cluster-директив, без persistence-пресетов (DF persistence — snapshot_cron, отложена).
+
+  Пароли НЕ во входном контракте: лежат в Vault, резолвятся KEEPER-SIDE через CEL vault() в
+  render-фазе (templating §2.3/§4) — на хост доезжает уже ЗНАЧЕНИЕ (ADR-012). Путь строится
+  из доверенного контекста (incarnation), не из input.
+
+# ── Входной контракт оператора (docs/input.md) ────────────────────────────────
+# Простые типизированные понятия. Трансляция во flagfile — в compute ниже.
+input:
+  version:
+    type: string
+    # ОБЯЗАТЕЛЬНА ТОЛЬКО для install_method=package (required_when, input-only): distro-пин.
+    # При install_method=binary версия бинаря — в essence.binary_version. install_method
+    # имеет default:package → ВСЕГДА присутствует → required_when без has()-обвязки.
+    required_when: "input.install_method == 'package'"
+    pattern: "^([0-9]+:)?[0-9][A-Za-z0-9.~+-]*$"
+    description: >-
+      Версия distro-пакета dragonfly (distro-native пин). ОБЯЗАТЕЛЬНА при
+      install_method=package. При install_method=binary НЕ используется (версия бинаря — в
+      essence.binary_version).
+
+  # ── install_method: способ установки DragonFly (default package) ──────────────
+  # package (default) — distro-deb dragonfly; binary — upstream-tarball. URL/версия бинаря —
+  # author-context (essence.binary_base_url/binary_version, оператор переопределяет в
+  # spec.essence). compute собирает destiny-структуру install {method, base_url, version}.
+  install_method:
+    type: string
+    required: false
+    default: package
+    enum: [package, binary]
+    description: >-
+      Способ установки DragonFly. package (default) — distro-deb dragonfly (=version-пин из
+      input.version); binary — upstream-tarball (URL/версия из essence.binary_base_url/
+      binary_version, имя файла dragonfly-<arch>.tar.gz строит destiny из soulprint.self.os.arch).
+
+  memory_mb:
+    type: integer
+    required: false
+    min: 64
+    description: >-
+      Бюджет памяти под DragonFly на хосте, МБ. maxmemory вычисляется как доля от него
+      (essence.memory_reserve_percent — резерв под ОС) с ЦЕЛОЧИСЛЕННЫМ усечением. Нижний пол
+      min:64 не случаен: при слишком малом memory_mb усечение даёт "0mb" (БЕЗ лимита). Не
+      задан → директива maxmemory берётся из merge-подложки essence.df_config.
+
+  maxmemory_policy:
+    type: string
+    required: false
+    enum:
+      - noeviction
+      - allkeys-lru
+      - allkeys-lfu
+      - allkeys-random
+      - volatile-lru
+      - volatile-lfu
+      - volatile-random
+      - volatile-ttl
+    description: >-
+      Политика вытеснения при достижении maxmemory (DragonFly redis-совместимые политики).
+      Не задана → берётся из merge-подложки essence.df_config (дефолт noeviction).
+
+  # ── Реплики на master (sentinel-режим) ───────────────────────────────────────
+  # replicas_per_master — реплик master-а. roster прогона = 1 master + replicas_per_master
+  # реплик (size-guard ниже). 0 (дефолт) — без реплик (standalone-эквивалент).
+  replicas_per_master:
+    type: integer
+    required: false
+    default: 0
+    min: 0
+    description: >-
+      Реплик master-а. roster прогона = 1+replicas_per_master (один master + реплики master-
+      а; sentinel-демон на каждом хосте). 0 (дефолт) — без реплик (standalone-эквивалент).
+      size-guard сверяет состав roster-а.
+
+  # ── Тайминги failover sentinel ───────────────────────────────────────────────
+  sentinel_down_after_ms:
+    type: integer
+    required: false
+    default: 5000
+    min: 1
+    description: >-
+      Сколько мс master не отвечает, прежде чем sentinel считает его упавшим (директива
+      sentinel down-after-milliseconds). Не задан → 5000.
+
+  sentinel_failover_timeout_ms:
+    type: integer
+    required: false
+    default: 60000
+    min: 1
+    description: >-
+      Таймаут одной попытки failover, мс (директива sentinel failover-timeout). Не задан →
+      60000.
+
+  # ── operator-extra ACL — ТИПИЗИРОВАННЫЙ массив AclUser (types.yml, ADR-062 $type) ──
+  users:
+    type: array
+    required: false
+    items:
+      $type: AclUser
+    description: >-
+      ACL-пользователи DragonFly (массив AclUser: {name, perms, state}). perms — ПОЛНАЯ ACL-
+      строка (Redis ACL-синтаксис, DragonFly его принимает). Рендерятся в users.acl (destiny
+      `dragonfly`); пароль каждого юзера резолвится keeper-side из Vault по конвенции
+      secret/dragonfly/<incarnation>/users/<name>#password.
+
+  # ── df_settings: passthrough-флаги dragonfly.conf (KEY→VALUE) ─────────────────
+  # Произвольные DF-флаги (underscore-форма) поверх дефолтов/вычислений (last-wins). UI
+  # рисует KEY→VALUE-редактор (ADR-045: object + скалярный value-тип → key→value-виджет).
+  # ★ PILOT: имена DF-флагов НЕ валидируются version-каталогом (у redis есть redis_directives
+  # из config.c; для DragonFly version-aware каталог флагов — отдельный слайс). Опечатка
+  # проявится при старте DF на хосте, не на render. Это осознанное упрощение PILOT-а.
+  df_settings:
+    type: object
+    required: false
+    description: >-
+      Passthrough-флаги dragonfly.conf от оператора (key→value, строки, DF-флаги underscore-
+      форма). Перекрывают дефолты в итоговом merge (last-wins). Для флагов, не покрытых
+      простыми полями выше. UI — KEY→VALUE-редактор. PILOT: имена не валидируются.
+    properties: {}
+    additional_properties:
+      type: string
+
+  # ── TLS — 2 булевых галочки ──────────────────────────────────────────────────
+  # tls_enabled — включить TLS (главный гейт); tls_keep_plain — оставить ли plain-порт
+  # (default true). false закрывает plain (`port 0`) — только-TLS. Технические параметры
+  # (порт, Vault-пути) — author-context (essence). compute собирает tls_only = tls_enabled
+  # && !tls_keep_plain.
+  tls_enabled:
+    type: boolean
+    required: false
+    default: false
+    description: >-
+      Включить TLS DragonFly (главный гейт). false (дефолт) → TLS off. Порт и Vault-пути
+      cert/key/ca берутся из essence (tls_port/tls_cert_ref/tls_key_ref/tls_ca_ref).
+
+  tls_keep_plain:
+    type: boolean
+    required: false
+    default: true
+    description: >-
+      Оставить ли открытым plain-порт 6379 при включённом TLS. true (дефолт) — plain и TLS
+      одновременно. false — закрыть plain (`port 0`), только-TLS. Имеет смысл при
+      tls_enabled=true. Нельзя tls_enabled=false И tls_keep_plain=false (см. validate:).
+
+# ── Презентационный слой формы (form:) ────────────────────────────────────────
+form:
+  sections:
+    - key: mode
+      title: "Установка"
+      description: "Способ установки DragonFly"
+      fields:
+        - { name: install_method, label: "Способ установки" }
+        - name: version
+          label: "Версия пакета (distro-пин)"
+          hint: "Distro-native пин (=version). Обязательно при способе установки «package»; для «binary» версия и URL бинаря задаются в essence."
+
+    - key: resources
+      title: "Память"
+      fields:
+        - name: memory_mb
+          label: "Бюджет памяти, МБ"
+          placeholder: "1024"
+          hint: "Бюджет памяти под DragonFly. maxmemory вычисляется как доля от него (минус резерв ОС). Не задан → maxmemory из подложки essence."
+        - { name: maxmemory_policy, label: "Политика вытеснения" }
+
+    - key: topology
+      title: "Топология (sentinel)"
+      description: "Реплики и тайминги Sentinel"
+      collapsed: true
+      fields:
+        - name: replicas_per_master
+          label: "Реплик на master"
+          placeholder: "0"
+          hint: "0 = один master без реплик (standalone-эквивалент)."
+        - name: sentinel_down_after_ms
+          label: "down-after, мс"
+          placeholder: "5000"
+          hint: "Сколько мс master не отвечает, прежде чем sentinel считает его упавшим. Не задан → 5000."
+        - name: sentinel_failover_timeout_ms
+          label: "failover-timeout, мс"
+          placeholder: "60000"
+          hint: "Таймаут одной попытки failover. Не задан → 60000."
+
+    - key: security
+      title: "ACL и TLS"
+      fields:
+        - { name: users, label: "ACL-пользователи" }
+        - { name: tls_enabled, label: "Включить TLS" }
+        - name: tls_keep_plain
+          label: "Оставить открытым plain-порт"
+          show_when: "input.tls_enabled"
+          hint: "Слушать ли plain-порт 6379 одновременно с TLS. Снять → только-TLS. Нельзя выключить и TLS, и эту галочку."
+
+    - key: advanced
+      title: "Дополнительно"
+      collapsed: true
+      fields:
+        - { name: df_settings, label: "Passthrough-флаги dragonfly.conf" }
+
+# ── Декларативные input-инварианты (validate:, INPUT-ONLY) ────────────────────
+validate:
+  # Инвариант «хотя бы один listener»: нельзя tls_enabled=false И tls_keep_plain=false (TLS
+  # выключен И plain закрыт → нет listener-а). Оба поля с default → прямой предикат.
+  - that: "input.tls_enabled || input.tls_keep_plain"
+    message: "нельзя одновременно выключить TLS и закрыть plain-порт: у DragonFly не осталось бы ни одного listener-а — оставь plain-порт открытым (tls_keep_plain) либо включи TLS (tls_enabled)"
+
+  # system-ACL-users guard: operator-extra (input.users) НЕ может занять имя СЛУЖЕБНОГО
+  # юзера (default/replica/monitoring/sentinel/haproxy доливаются из essence last-wins ПОВЕРХ
+  # → operator с тем же именем молча перекрыл бы служебные perms). INPUT-ONLY (essence в
+  # validate недоступен): список зарезервированных захардкожен. .all() над массивом AclUser,
+  # имя — поле u.name.
+  - that: "!has(input.users) || input.users.all(u, !(u.name in ['default', 'replica', 'monitoring', 'sentinel', 'haproxy']))"
+    message: "имя ACL-пользователя зарезервировано за служебным (default/replica/monitoring/sentinel/haproxy): выбери другое имя — служебные юзеры заводятся автоматически из essence"
+
+# ── Вычисляемые scenario-vars (compute:) ──────────────────────────────────────
+# compute: резолвится KEEPER-SIDE ОДИН раз на прогон в рун-уровневом контексте (input/
+# essence/incarnation — БЕЗ soulprint, барьер host-инвариантности) и виден как compute.<name>
+# в apply.input тела И в state_changes. Снимает дублирование merge()-перевода: объявлен ЗДЕСЬ
+# ОДИН раз, тело и state ссылаются ${ compute.df_config }.
+#
+# ★ ГРАНИЦА КОНФИГА: host-layout-флаги --dir (snapshot, → data_dir) и --aclfile (→ conf_dir)
+# задаёт destiny-ШАБЛОН dragonfly.flags.tmpl ИЗ vars, НЕ этот compute. TLS-флаги
+# (tls_cert_file/tls_key_file/tls_ca_cert_file) выводятся из compute.conf_dir (destiny кладёт
+# PEM в ${conf_dir}/tls/ — flagfile обязан смотреть ТУДА ЖЕ).
+compute:
+  # Эффективная версия DragonFly: package → input.version (required_when=package);
+  # binary → essence.binary_version. Объявлена ОДИН раз (state + плагин читают её).
+  df_version: "${ input.install_method == 'binary' ? default(essence.binary_version, '') : (has(input.version) ? input.version : '') }"
+  # Per-master sentinel-директивы (тайминги failover): map `sentinel <opt> <master>` →
+  # значение. Шаблон sentinel.conf.tmpl range-ит, плагин community.redis.sentinel classifyConfig
+  # раскладывает per-master → SENTINEL SET. ОДИН source-of-truth (стартовый конфиг + live).
+  sentinel_directives: >-
+    ${ {
+         'sentinel down-after-milliseconds ' + default(essence.sentinel_master_name, 'master'): string(int(input.sentinel_down_after_ms)),
+         'sentinel failover-timeout '         + default(essence.sentinel_master_name, 'master'): string(int(input.sentinel_failover_timeout_ms))
+       } }
+  # install: destiny-структура {method, base_url, version} из install_method + essence.binary_*.
+  # method всегда; base_url/version при method=binary. Та же структура в destiny (apply.input.
+  # install) и state.
+  install: >-
+    ${ (input.install_method == 'binary')
+         ? {
+             'method':   'binary',
+             'base_url': default(essence.binary_base_url, ''),
+             'version':  default(essence.binary_version, '')
+           }
+         : { 'method': 'package' } }
+  # Эффективный host-layout: conf_dir/data_dir из essence (author-context, host-инвариант).
+  # ★ TLS-флаги flagfile следуют conf_dir: destiny кладёт PEM в ${conf_dir}/tls/.
+  conf_dir: "${ default(essence.conf_dir, '/etc/dragonfly') }"
+  data_dir: "${ default(essence.data_dir, '/var/lib/dragonfly') }"
+  # TLS-флаги: 2 галочки + essence. tls_on = tls_enabled (главный гейт). tls_only_on =
+  # tls_enabled && !tls_keep_plain (закрыть plain). Порт/refs — из essence (default() ловит
+  # отсутствие листа; L0-кейсы без TLS их не задают).
+  tls_on:      "${ input.tls_enabled }"
+  tls_only_on: "${ input.tls_enabled && !input.tls_keep_plain }"
+  tls_port:    "${ int(default(essence.tls_port, 7379)) }"
+  tls_cert_ref: "${ has(essence.tls_cert_ref) ? essence.tls_cert_ref : '' }"
+  tls_key_ref:  "${ has(essence.tls_key_ref)  ? essence.tls_key_ref  : '' }"
+  tls_ca_ref:   "${ has(essence.tls_ca_ref)   ? essence.tls_ca_ref   : '' }"
+  # df_config — ИТОГ трансляции простого ввода во flagfile-map (DF-флаги, underscore-форма).
+  # Слои merge (SHALLOW last-wins, слева направо): essence.df_config (дефолты) → вычисленные
+  # maxmemory/maxmemory_policy (has-guard) → input.df_settings (passthrough) → TLS-блок (после
+  # passthrough — оператор не ломает TLS). БЕЗ persistence-пресета (DF persistence отложена),
+  # БЕЗ cluster-директив (sentinel-only).
+  # ★ TLS-блок — DF-флаги: tls/tls_port/tls_cert_file/tls_key_file/tls_ca_cert_file/
+  # tls_replication (underscore!). Bool-флаги (tls/tls_replication) — значение 'true' (absl
+  # принимает --flag=true). port='0' при tls_only закрывает plain.
+  df_config: >-
+    ${ merge(
+         essence.df_config,
+         merge(
+           has(input.memory_mb)
+             ? { 'maxmemory': string(int(input.memory_mb) * int(essence.memory_reserve_percent) / 100) + 'mb' }
+             : {},
+           has(input.maxmemory_policy) ? { 'maxmemory_policy': input.maxmemory_policy } : {}
+         ),
+         default(input.df_settings, {}),
+         compute.tls_on
+           ? merge(
+               {
+                 'tls':                'true',
+                 'tls_port':           string(compute.tls_port),
+                 'tls_cert_file':      compute.conf_dir + '/tls/dragonfly.crt',
+                 'tls_key_file':       compute.conf_dir + '/tls/dragonfly.key',
+                 'tls_ca_cert_file':   compute.conf_dir + '/tls/ca.crt',
+                 'tls_replication':    'true'
+               },
+               compute.tls_only_on ? { 'port': '0' } : {}
+             )
+           : {}
+       ) }
+
+# ── Мутация incarnation.state ─────────────────────────────────────────────────
+# После успешного apply Keeper фиксирует развёрнутое (ADR-009 §7.1, ADR-057 list-форма).
+# df_config — тот же compute.df_config, что ушёл в render: повторный apply и day-2 видят
+# один источник истины.
+state_changes:
+  - set: df_version
+    value: "${ compute.df_version }"
+  - set: df_config
+    value: "${ compute.df_config }"
+  # tls: тот же compute.tls_* (cert/key/ca — Vault-ПУТИ, не PEM).
+  - set: tls
+    value: >-
+      ${ {
+           'enable':   compute.tls_on,
+           'only':     compute.tls_only_on,
+           'port':     compute.tls_port,
+           'cert_ref': compute.tls_cert_ref,
+           'key_ref':  compute.tls_key_ref,
+           'ca_ref':   compute.tls_ca_ref
+         } }
+  - set: install
+    value: "${ compute.install }"
+  - set: memory_mb
+    value: "${ int(default(input.memory_mb, 0)) }"
+  # conf_dir/data_dir: host-layout (read-model, из essence).
+  - set: conf_dir
+    value: "${ compute.conf_dir }"
+  - set: data_dir
+    value: "${ compute.data_dir }"
+  - set: sysctl_settings
+    value: "${ default(essence.sysctl_settings, {}) }"
+  # Топология: replicas (реплик master-а), sentinel_quorum=0 (auto, не материализуется).
+  - set: replicas
+    value: "${ int(default(input.replicas_per_master, 0)) }"
+  - set: sentinel_quorum
+    value: "${ 0 }"
+  # df_users — массив AclUser как есть (пароли НЕ в state, Vault).
+  - set: df_users
+    value: "${ default(input.users, []) }"
+  # df_hosts пустой: state_changes рендерятся per-host с soulprint.SELF (AllowHosts=false,
+  # orchestration §7.1) — roster soulprint.hosts недоступен. Точные declared-роли — в
+  # apply.input.sentinel, не в state.
+  - set: df_hosts
+    value: "${ [] }"
+  # df_sentinel: факты monitored master. master_name из essence; quorum=0 (auto); master_ip
+  # не пишется (host-вариативен); тайминги failover из input.
+  - set: df_sentinel
+    value: >-
+      ${ {
+           'master_name':         default(essence.sentinel_master_name, 'master'),
+           'quorum':              0,
+           'down_after_ms':       int(input.sentinel_down_after_ms),
+           'failover_timeout_ms': int(input.sentinel_failover_timeout_ms)
+         } }
+
+# ── Тело прогона (ИНЛАЙН, sentinel-only — без диспетчера/include) ──────────────
+tasks:
+  # ── 0. SIZE-GUARD (топология) — keeper-side render-time assert ────────────────
+  # Размер roster-а ОБЯЗАН быть ровно 1+replicas_per_master (один master + реплики; sentinel-
+  # демон на КАЖДОМ хосте). Иначе master-election (run_once по sort soulprint.hosts) и
+  # SENTINEL MONITOR/REPLICAOF разъедутся с declared-топологией. Предикат вычисляется
+  # KEEPER-SIDE на РЕНДЕРЕ (soulprint.hosts доступен). false ОБРЫВАЕТ render с message ДО
+  # установки. ★ assert (не validate): нужен soulprint.hosts (roster), validate INPUT-ONLY.
+  - name: Guard sentinel roster size matches replicas
+    assert:
+      that:
+        - "size(soulprint.hosts) == 1 + int(input.replicas_per_master)"
+      message: "число хостов roster-а прогона должно быть ровно 1+replicas_per_master (один master + реплики master-а; sentinel-демон на каждом хосте) — задай столько же таргетированных souls, сколько узлов в объявленной топологии"
+
+  # ── 1. Per-host install + render flagfile + users.acl + sentinel.conf + units ──
+  # destiny `dragonfly` (режим-агностична) с sentinel_enabled=true. config — базовый merge
+  # (БЕЗ cluster-директив). compute.df_config host-инвариантен → apply.input.
+  - name: Apply dragonfly destiny (install + render dragonfly.conf/users.acl/sentinel.conf + systemd)
+    apply:
+      destiny: dragonfly
+      input:
+        # version: distro-пин (package). При binary версия бинаря — в essence.binary_version
+        # (compute.df_version); destiny не ставит distro-deb → has()-guard ''.
+        version:  "${ has(input.version) ? input.version : '' }"
+        install:  "${ compute.install }"
+        conf_dir: "${ compute.conf_dir }"
+        data_dir: "${ compute.data_dir }"
+        password: "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
+        # Единый compute.df_config (тот же map, что в state_changes.df_config — drift снят
+        # самим compute). Базовый merge (БЕЗ cluster; tls_replication true при TLS, port 0
+        # при tls_only). HOST-ИНВАРИАНТ → apply.input.
+        config: "${ compute.df_config }"
+        # СИСТЕМНЫЕ + operator-extra ACL: служебные replica/monitoring/sentinel/haproxy из
+        # essence.system_acl_users ПЕРВЫМИ, operator-extra (input.users — массив AclUser)
+        # ПОВЕРХ (last-wins). default — в requirepass flagfile, не здесь. Vault-пароль —
+        # secret/dragonfly/<inc>/users/<name>#password. operator-extra: .map(u, {u.name: …}).
+        users: >-
+          ${ merge(
+               merge(default(essence.system_acl_users, {}).map(name, {
+                 name: {
+                   'perms':    essence.system_acl_users[name],
+                   'state':    'on',
+                   'password': vault('secret/dragonfly/' + incarnation.name + '/users/' + name + '#password')
+                 }
+               })),
+               has(input.users)
+                 ? merge(input.users.map(u, {
+                     u.name: {
+                       'perms':    u.perms,
+                       'state':    u.state,
+                       'password': vault('secret/dragonfly/' + incarnation.name + '/users/' + u.name + '#password')
+                     }
+                   }))
+                 : {}
+             ) }
+        # 2-й aclfile sentinel-демона: служебные из essence.system_acl_users_sentinel
+        # (sentinel-команды). ★ Vault-пароль: default-юзер → ГЛАВНЫЙ секрет secret/dragonfly/
+        # <inc>#password (тот же, что requirepass — иначе sentinel-демон не пустил бы default-
+        # клиента общим паролем). Остальные → ветка users/<name>#password.
+        sentinel_users: >-
+          ${ merge(default(essence.system_acl_users_sentinel, {}).map(name, {
+               name: {
+                 'perms':    essence.system_acl_users_sentinel[name],
+                 'state':    'on',
+                 'password': (name == 'default')
+                   ? vault('secret/dragonfly/' + incarnation.name + '#password')
+                   : vault('secret/dragonfly/' + incarnation.name + '/users/' + name + '#password')
+               }
+             })) }
+        # Host-tuning extras (THP/logrotate/sysctl БЕЗУСЛОВНЫ). sysctl_settings — essence,
+        # host-инвариант → apply.input.
+        sysctl_settings:  "${ default(essence.sysctl_settings, {}) }"
+        # TLS — единый dict. enable/only/port — compute-vars (2 галочки + порт из essence).
+        # cert_ref/key_ref/ca_ref — Vault-ПУТИ (destiny читает PEM через vault() в ячейке,
+        # seal-маскинг); refs из essence.tls_*_ref.
+        tls:
+          enable:   "${ compute.tls_on }"
+          only:     "${ compute.tls_only_on }"
+          port:     "${ compute.tls_port }"
+          cert_ref: "${ compute.tls_cert_ref }"
+          key_ref:  "${ compute.tls_key_ref }"
+          ca_ref:   "${ compute.tls_ca_ref }"
+        sentinel_enabled: true
+        sentinel:
+          master_name: "${ default(essence.sentinel_master_name, 'master') }"
+          # master-election: первый по SID хост = master. HOST-ИНВАРИАНТНО → apply.input.
+          master_ip:   "${ soulprint.hosts[0].network.primary_ip }"
+          master_port: 6379
+          # quorum — АВТО (большинство): size(soulprint.hosts)/2+1.
+          quorum:      "${ int(size(soulprint.hosts)) / 2 + 1 }"
+          auth_pass:   "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
+          # стартовые per-master тайминги failover в sentinel.conf. compute.sentinel_directives
+          # — map `sentinel <opt> <master>` → значение; шаблон range-ит .vars.sentinel_config.
+          config:      "${ compute.sentinel_directives }"
+
+  # ── 2. Health-gate per-host: PING живого DragonFly после старта ───────────────
+  # community.redis.command (DragonFly redis-совместим). Каждый узел обязан ответить ДО
+  # привязки реплик/настройки sentinel. ★ ИБ (anti-downgrade): tls/tls_ca/порт гейтятся на
+  # compute.tls_on (TLS ВКЛЮЧЁН) — TLS включён → плагин ОБЯЗАН по TLS (иначе AUTH-пароль
+  # plaintext-ом). PING по compute.tls_port + tls=true + tls_ca (vault(ref) в scenario-проходе).
+  - name: Wait for each dragonfly node to answer PING
+    module: community.redis.command
+    retry: { count: 10, delay: 3s }
+    params:
+      addr:     "${ compute.tls_on ? '127.0.0.1:' + string(compute.tls_port) : '127.0.0.1:6379' }"
+      password: "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
+      tls:      "${ compute.tls_on }"
+      tls_ca:   "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
+      args:     ["PING"]
+
+  # ── 3. REPLICAOF реплик: community.redis.replica ТОЛЬКО на репликах ───────────
+  # addr — локальный инстанс (127.0.0.1:6379); master_addr — HOST-ИНВАРИАНТНЫЙ адрес master-
+  # а (master-election soulprint.hosts[0]). ★ P0-ИНВАРИАНТ (master НЕ реплицирует сам себя):
+  # `where:` исключает выбранного master по SID — задача рендерится ТОЛЬКО на репликах. master
+  # SID — то же выражение master-election (soulprint.hosts[0]), но `.sid`. Предикат — top-level
+  # where-ключ (строка). ★ ИБ (anti-downgrade): tls/tls_ca/порт на compute.tls_on.
+  - name: Make replicas follow the elected master (REPLICAOF)
+    where: "soulprint.self.sid != soulprint.hosts[0].sid"
+    module: community.redis.replica
+    params:
+      addr:        "${ compute.tls_on ? '127.0.0.1:' + string(compute.tls_port) : '127.0.0.1:6379' }"
+      master_addr: "${ soulprint.hosts[0].network.primary_ip + ':' + (compute.tls_on ? string(compute.tls_port) : '6379') }"
+      password:    "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
+      tls:         "${ compute.tls_on }"
+      tls_ca:      "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
+
+  # ── 4. SENTINEL MONITOR reconcile: community.redis.sentinel на КАЖДОМ хосте ────
+  # addr — локальный sentinel (127.0.0.1:26379); monitor.ip — HOST-ИНВАРИАНТНЫЙ адрес master-
+  # а. quorum — большинство size/2+1. auth_pass — keeper-side vault()-резолв. config — те же
+  # per-master тайминги (compute.sentinel_directives). ★ PILOT: на create мониторим master
+  # СРАЗУ (node-1 — настоящий master; контракт-флаг sentinel_monitor_now redis-а нужен лишь
+  # migrate_cluster — здесь его нет, MONITOR безусловен).
+  - name: Configure each sentinel to monitor the elected master (SENTINEL MONITOR)
+    module: community.redis.sentinel
+    params:
+      addr:        "127.0.0.1:26379"
+      master_name: "${ default(essence.sentinel_master_name, 'master') }"
+      auth_pass:   "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
+      redis_version: "${ compute.df_version }"
+      config:      "${ compute.sentinel_directives }"
+      monitor:
+        ip:     "${ soulprint.hosts[0].network.primary_ip }"
+        port:   6379
+        quorum: "${ int(size(soulprint.hosts)) / 2 + 1 }"
+
+  # ── 5. Health-gate per-host: SENTINEL отвечает PONG на :26379 ─────────────────
+  # ★ СТРОГО same-task register.self (НЕ cross-passage flow-control, ADR-056): «дождаться N
+  # sentinel» НЕ выражаем — проверяем ТОЛЬКО свой локальный sentinel. retry/until +
+  # failed_when по register.self.result этой же задачи.
+  - name: Wait until each sentinel answers PONG on :26379
+    module: community.redis.command
+    changed_when: false
+    retry:
+      count: 12
+      delay: 2s
+      until: "register.self.result == 'PONG'"
+    failed_when: "register.self.result != 'PONG'"
+    params:
+      addr: "127.0.0.1:26379"
+      args: ["PING"]

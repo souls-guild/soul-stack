@@ -1,0 +1,82 @@
+# L0-испытание create DragonFly БЕЗ реплик (replicas_per_master=0 → ровно 1 хост, size-
+# guard 1 == 1+0; standalone-эквивалент: один master + sentinel-демон мониторит сам себя).
+# quorum АВТО в apply = size(soulprint.hosts)/2+1 = 1/2+1 = 1. В state quorum=0 (state_changes
+# не видит soulprint.hosts — auto в apply). master_name из essence — дефолт master.
+#
+# Покрывает: replicas_per_master=0 граница size-guard (standalone-эквивалент); auto-quorum;
+# default master_name (essence); single-host roster; DragonFly flagfile-render (vars в
+# render_context dragonfly.conf).
+name: dragonfly create standalone, no replicas, auto quorum
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create, dragonfly]
+      soulprint:
+        network: { primary_ip: 10.0.0.9 }
+        os: { arch: amd64 }
+  vault:
+    secret/dragonfly/create:
+      password: s3cr3t-dragonfly-pass
+    secret/dragonfly/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/dragonfly/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/dragonfly/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/dragonfly/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    sentinel_master_name: master
+    memory_reserve_percent: 75
+    df_config:
+      maxmemory:        "256mb"
+      maxmemory_policy: noeviction
+      maxclients:       10000
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default:    "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    version: "1.39.0"
+    replicas_per_master: 0
+
+assert:
+  task_present:
+    # REPLICAOF: master_addr = единственный хост (он же master) → плагин no-op.
+    - module: community.redis.replica
+      params_subset:
+        addr: "127.0.0.1:6379"
+        master_addr: "10.0.0.9:6379"
+        password: s3cr3t-dragonfly-pass
+
+    # SENTINEL MONITOR: monitor.ip — единственный хост; auto-quorum = 1.
+    - module: community.redis.sentinel
+      params_subset:
+        addr: "127.0.0.1:26379"
+        master_name: master
+        auth_pass: s3cr3t-dragonfly-pass
+        redis_version: "1.39.0"
+        monitor:
+          ip: 10.0.0.9
+          port: 6379
+          quorum: 1
+
+  state_changes:
+    df_version: "1.39.0"
+    df_users: []
+    df_hosts: []
+    df_sentinel:
+      master_name: master
+      quorum: 0
+      down_after_ms: 5000
+      failover_timeout_ms: 60000
+    replicas: 0
+    sentinel_quorum: 0

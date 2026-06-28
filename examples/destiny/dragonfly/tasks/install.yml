@@ -1,0 +1,161 @@
+# tasks/install.yml — установка DragonFly + sentinel-инструментария. Диспетч по
+# install.method (block per method): package (default — distro-deb dragonfly) ИЛИ binary
+# (upstream-tarball dragonfly-<arch>.tar.gz). Гейт method — static (только input.*) →
+# Keeper гасит неактивную ветку placeholder-skip-ом per-потомок (block static-skip,
+# ADR-009): индексы не сдвигаются, register потомков виден снаружи и при погашенной ветке.
+#
+# ★ DragonFly vs redis (D1): DF несёт ТОЛЬКО data-плоскость (один бинарь dragonfly). НИ
+#   sentinel-демона, НИ redis-cli DF НЕ поставляет. Поэтому ОБЕ ветки ДОПОЛНИТЕЛЬНО ставят
+#   distro-пакеты redis-server (sentinel-бинарь redis-sentinel) и redis-tools (redis-cli
+#   для health-gate PING / REPLICAOF плагином). Эти пакеты — sentinel-инструментарий,
+#   ставятся БЕЗУСЛОВНО в обоих режимах (sentinel_only тоже их требует).
+#
+# ★ register'ы binary-ветки (dragonfly_bin/dragonfly_unit) и их рестарт-onchanges живут
+#   В ЭТОМ файле: ЗАГРУЗОЧНЫЙ per-file линтер (validateTaskRefs, shared/config/
+#   destiny_tasks.go) валидирует register-ссылки в onchanges на уровне ОДНОГО файла —
+#   cross-file onchanges отвергается как unknown_register_reference (инвариант node-exporter/
+#   redis). Поэтому binary-ветка несёт СВОЙ рестарт dragonfly здесь.
+
+# ── Sentinel-инструментарий (ОБЕ ветки, БЕЗУСЛОВНО) ─────────────────────────────
+# DF не несёт sentinel-демона и redis-cli → ставим их distro-пакетами в любом режиме.
+# redis-server несёт бинарь redis-sentinel (sentinel.yml ждёт его на /usr/bin при
+# sentinel_enabled); redis-tools несёт redis-cli (health-gate PING / REPLICAOF плагин).
+# version distro-пакета НЕ пинуем (sentinel-инструментарий — служебный; пин версии DF —
+# в binary.version/distro-deb dragonfly, не здесь). retry — против флапающего зеркала.
+- name: Install the redis-sentinel daemon (distribution package — DragonFly does not ship it)
+  module: core.pkg.installed
+  retry: { count: 3, delay: 10s }
+  params:
+    name: redis-server
+
+- name: Install redis-cli for health-gate and replication (distribution package)
+  module: core.pkg.installed
+  retry: { count: 3, delay: 10s }
+  params:
+    name: redis-tools
+
+# ── package-ветка DragonFly (default): distro-deb dragonfly ─────────────────────
+# distro-пакет dragonfly (официальный deb DragonflyDB: бинарь /usr/bin/dragonfly + свой
+# systemd-юнит dragonfly.service + юзер dfly). Один gate install.method==package на всю
+# ветку (block static-skip): не передан install / method=='package' → активна. version
+# читается голым input.version (required_when=package гарантирует присутствие).
+#
+# Предикат — has()-цепочка (НЕ default(input.install.method, …)): сам input.install может
+# отсутствовать ЦЕЛИКОМ (корень) → default() упал бы «no such key: install». «package»
+# истинно: install не передан / method не задан / method == 'package'.
+- name: Install DragonFly from the distribution package
+  when: "!has(input.install) || !has(input.install.method) || input.install.method == 'package'"
+  block:
+    - name: Install the dragonfly package
+      module: core.pkg.installed
+      retry: { count: 3, delay: 10s }
+      params:
+        name: dragonfly
+        version: "${ input.version }"
+
+# ── binary-ветка DragonFly (opt-in, upstream-tarball) ──────────────────────────
+# Способ node-exporter/redis-binary (core.url.fetched → core.archive.extracted →
+# core.file.present src:). binary НЕ несёт distro-deb dragonfly → САМА ставит то, что deb
+# даёт даром: бинарь в /usr/local/bin, distro-юзер/группу dragonfly, свой systemd-юнит
+# dragonfly.service. arch для URL — soulprint.self.os.arch.
+#
+# ★ DF-tarball: dragonfly-<arch>.tar.gz, где arch ∈ {x86_64, aarch64} (официальный
+#   releases-asset; arch-суффикс, БЕЗ версии в имени файла). Soulprint arch — amd64/arm64
+#   (Go GOARCH) → маппим в DF-суффикс x86_64/aarch64 (ниже, в URL). Имя бинаря ВНУТРИ
+#   архива — dragonfly-<arch> (тот же суффикс) → src в core.file.present.
+- name: Install DragonFly from an upstream binary tarball
+  when: "has(input.install) && has(input.install.method) && input.install.method == 'binary'"
+  block:
+    # 1. Скачать tarball во временный путь. URL: base_url + '/dragonfly-' + DF-arch-суффикс
+    #    + '.tar.gz'. checksum НЕ передаётся → core.url.fetched качает по content-
+    #    идемпотентности (скачать temp → сравнить SHA-256 → запись только при diff), без
+    #    integrity-verify (доверяем HTTPS + источнику, как node-exporter).
+    #
+    #    ★ DF-arch-суффикс: soulprint.self.os.arch (amd64/arm64) → x86_64/aarch64 тернаром.
+    #    ★ render-safety: has()-guard на input.install.base_url/version (при method=package
+    #      весь блок static-skip, но CEL ячеек вычисляется до skip-проекции — голый
+    #      input.install.* упал бы no-such-key; guard даёт '' в мёртвом проходе).
+    - name: Fetch the DragonFly tarball
+      module: core.url.fetched
+      params:
+        url: "${ (has(input.install) && has(input.install.base_url) ? input.install.base_url : '') + '/dragonfly-' + (soulprint.self.os.arch == 'arm64' ? 'aarch64' : 'x86_64') + '.tar.gz' }"
+        path: "${ vars.dragonfly_src_dir + '.tar.gz' }"
+        mode: "0644"
+
+    # 2. Распаковать tarball в каталог. format auto-detect по .tar.gz. Идемпотентно:
+    #    core.archive пишет marker и повторно не распаковывает тот же архив.
+    - name: Extract the DragonFly tarball
+      module: core.archive.extracted
+      params:
+        path: "${ vars.dragonfly_src_dir + '.tar.gz' }"
+        dest: "${ vars.dragonfly_src_dir }"
+
+    # 3. distro-юзер/группа dragonfly (binary НЕ создаёт их — это делает distro-deb).
+    #    Группа ПЕРЕД юзером (primary group). system-аккаунт без login-shell: DragonFly —
+    #    сервис. Стабильный uid/gid (stateful snapshot-dir /var/lib/dragonfly требует
+    #    стабильного владельца между рестартами). uid/gid НЕ пинуем (распределяет ОС).
+    - name: Ensure the dragonfly group exists
+      module: core.group.present
+      params:
+        name: "${ vars.dragonfly_group }"
+        system: true
+
+    - name: Ensure the dragonfly user exists
+      module: core.user.present
+      params:
+        name: "${ vars.dragonfly_user }"
+        group: "${ vars.dragonfly_group }"
+        system: true
+        shell: /usr/sbin/nologin
+        home: "${ vars.dragonfly_data_dir_eff }"
+
+    # 4. Разложить ОДИН бинарь dragonfly в /usr/local/bin (mode 0755) из распакованного
+    #    каталога через core.file.present src:. ИДЕМПОТЕНТНОСТЬ нативная: желаемый хэш =
+    #    sha256(содержимое src), changed строго при смене байт. src — dragonfly-<arch>
+    #    ВНУТРИ архива (тот же DF-arch-суффикс, что в URL). register → рестарт (шаг 6).
+    #    DF несёт ТОЛЬКО dragonfly (нет -cli/-sentinel: их даёт distro redis-tools/
+    #    redis-server выше).
+    - name: Install the dragonfly binary into the local bin directory
+      module: core.file.present
+      register: dragonfly_bin
+      params:
+        path: "${ vars.dragonfly_bin_dir + '/dragonfly' }"
+        src: "${ vars.dragonfly_src_dir + '/dragonfly-' + (soulprint.self.os.arch == 'arm64' ? 'aarch64' : 'x86_64') }"
+        mode: "0755"
+        owner: "${ vars.root_owner }"
+        group: "${ vars.root_group }"
+
+    # 5. Свой systemd-юнит dragonfly.service (binary НЕ несёт distro-юнита). Type=simple +
+    #    ExecStart=/usr/local/bin/dragonfly --flagfile + hardening ВНУТРИ юнита (DF несёт
+    #    hardening в самом юните, не drop-in — см. шаблон). register — рестарт при смене.
+    - name: Render the dragonfly systemd unit (binary install)
+      module: core.file.rendered
+      register: dragonfly_unit
+      params:
+        path: "${ vars.systemd_dir + '/' + vars.dragonfly_service_name + '.service' }"
+        template: templates/dragonfly.service.tmpl
+        mode: "${ vars.unit_file_mode }"
+        owner: "${ vars.root_owner }"
+        group: "${ vars.root_group }"
+        vars:
+          bin_dir:         "${ vars.dragonfly_bin_dir }"
+          conf_dir:        "${ vars.dragonfly_conf_dir_eff }"
+          dragonfly_user:  "${ vars.dragonfly_user }"
+          dragonfly_group: "${ vars.dragonfly_group }"
+          run_dir:         "${ vars.run_dir }"
+          data_dir:        "${ vars.dragonfly_data_dir_eff }"
+          log_dir:         "${ vars.log_dir }"
+
+    # 6. Рестарт dragonfly на смену бинаря/юнита (binary-ветка). onchanges на
+    #    [dragonfly_bin, dragonfly_unit]. Все register'ы объявлены В ЭТОМ файле → onchanges
+    #    резолвится per-file. when несёт binary-гейт И deploy_dragonfly (в package-ветке
+    #    register'ы погашены static-skip → onchanges не сработает; вне data-плоскости —
+    #    sentinel_only — рестартить нечего). id: дизамбигуатор от рестарта server.yml.
+    - name: Restart DragonFly because the binary or unit changed
+      module: core.service.restarted
+      id: dragonfly_binary_restart
+      when: "has(input.install) && has(input.install.method) && input.install.method == 'binary' && default(input.deploy_dragonfly, true)"
+      onchanges: [dragonfly_bin, dragonfly_unit]
+      timeout: 30s
+      params:
+        name: "${ vars.dragonfly_service_name }"

@@ -1,0 +1,65 @@
+{{/*
+  systemd-юнит DragonFly (binary-установка — единственный путь к собственному юниту:
+  package-ветка DragonFly ставит distro-deb dragonfly со СВОИМ юнитом, мы его не трогаем;
+  binary-ветка несёт ЭТОТ юнит). Go text/template strict (ADR-010). Контекст:
+  .vars.bin_dir/conf_dir + dragonfly_user/dragonfly_group + run_dir/data_dir/log_dir.
+
+  ★ Type=simple (НЕ notify): DragonFly — foreground-процесс БЕЗ sd_notify-готовности
+  (подтверждено: dfly_main.cc не вызывает sd_notify; официальный deb-юнит DF —
+  Type=simple). Это ОТЛИЧИЕ от redis-server (Type=notify): DF не уведомляет systemd о
+  READY, systemd считает старт успешным сразу после fork+exec. Health-gate сервиса (PING)
+  закрывает «готов ли реально» — на уровне systemd notify для DF нет.
+
+  ★ HARDENING ВНУТРИ юнита (НЕ drop-in, в отличие от redis). У redis hardening доезжает
+  drop-in-ом поверх ДИСТРИБУТИВНОГО юнита (его нельзя заменить целиком). Здесь юнит наш
+  (binary), distro-юнита DF в этом потоке нет → hardening кладём прямо в [Service], как
+  делает ОФИЦИАЛЬНЫЙ deb-юнит DragonFly. Поэтому отдельного hardening.conf.tmpl + drop-in-
+  задачи для DragonFly нет (минус один артефакт против redis-структуры).
+
+  Набор hardening — из официального deb-юнита DragonFly (tools/packaging/debian/
+  dragonfly.service), адаптирован под stateful-сервис:
+    - ProtectSystem=full + ReadWritePaths под фактические каталоги записи (data/log/run);
+    - MemoryDenyWriteExecute=true — у DF официальный юнит ЕГО НЕСЁТ (в отличие от redis,
+      где MDWE снят из-за loadable-модулей: у DF их нет, MDWE безопасен);
+    - CapabilityBoundingSet=CAP_SETGID CAP_SETUID CAP_SYS_RESOURCE — SETGID/SETUID для
+      privilege-drop, SYS_RESOURCE для подъёма memlock/NOFILE (DF mlock-ает память);
+    - LimitNOFILE=262144 — DF держит много соединений (официальный дефолт юнита).
+
+  ExecStart=--flagfile (официальная форма запуска DF): все директивы в flagfile
+  ${conf_dir}/dragonfly.conf, аргументов в командной строке нет (кроме flagfile).
+*/}}
+[Unit]
+Description=DragonflyDB In-Memory Data Store
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart={{ .vars.bin_dir }}/dragonfly --flagfile={{ .vars.conf_dir }}/dragonfly.conf
+PIDFile={{ .vars.run_dir }}/dragonfly.pid
+Restart=always
+TimeoutStopSec=infinity
+User={{ .vars.dragonfly_user }}
+Group={{ .vars.dragonfly_group }}
+RuntimeDirectory=dragonfly
+RuntimeDirectoryMode=0755
+LimitNOFILE=262144
+
+# systemd-hardening (из официального deb-юнита DragonFly, stateful-вариант).
+NoNewPrivileges=yes
+ProtectSystem=full
+ReadWritePaths={{ .vars.data_dir }} {{ .vars.log_dir }} {{ .vars.run_dir }}
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=CAP_SETGID CAP_SETUID CAP_SYS_RESOURCE
+
+[Install]
+WantedBy=multi-user.target

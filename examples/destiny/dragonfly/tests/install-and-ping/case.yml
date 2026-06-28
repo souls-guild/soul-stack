@@ -1,0 +1,75 @@
+# L2 fixture (docker-стенд), harness MVP не исполняет — ADR-023 post-MVP.
+name: install-and-ping
+description: |
+  Базовый сценарий жизни режим-агностичного destiny dragonfly (standalone) на чистом
+  хосте:
+    1. apply destiny dragonfly — установить DragonFly и поднять сервис с отрендеренным
+       dragonfly.conf (FLAGFILE, TCP 6379, requirepass).
+    2. ping                    — убедиться, что отвечает PONG (DragonFly redis-совместим,
+       redis-cli из distro-пакета redis-tools).
+
+  Тест прогоняется на эфемерном стенде (см. блок `stand:`), на котором нет ни DragonFly,
+  ни конфигов. После прохода стенд уничтожается.
+
+# ─── Стенд ────────────────────────────────────────────────────────────────────
+stand:
+  driver: docker
+  image:  ubuntu:24.04
+  mode:   push
+
+# ─── Что применяем ────────────────────────────────────────────────────────────
+# Целевой destiny — ../../destiny.yml (режим-агностичный кирпич). config — ГОТОВЫЙ merged
+# flagfile-map (БЕЗ top-level maxmemory: это обычный ключ внутри config, DF-форма underscore).
+# В реальном прогоне config мержит scenario сервиса; здесь передаём готовый map.
+input:
+  version:  "1.39.0"
+  password: "vault:test/dragonfly/password"
+  config:
+    maxmemory:  256mb
+    maxclients: 10000
+
+# Двойной прогон: фреймворк применит destiny с этим input ещё раз и проверит, что во втором
+# применении не было изменений ни в одном шаге (идемпотентность).
+expect_idempotent: true
+
+# ─── Проверки результата ──────────────────────────────────────────────────────
+verify:
+  - name: dragonfly-binary-installed
+    apply:
+      destiny: core.exec.run
+      input:
+        cmd: dragonfly
+        args: ["--version"]
+    expect:
+      exit_code: 0
+
+  - name: dragonfly-service-active
+    apply:
+      destiny: core.exec.run
+      input:
+        cmd: systemctl
+        args: ["is-active", "dragonfly"]
+    expect:
+      stdout: "active"
+      exit_code: 0
+
+  - name: dragonfly-config-deployed
+    apply:
+      destiny: core.cmd.shell
+      input:
+        cmd: "test -f /etc/dragonfly/dragonfly.conf && stat -c '%a %U:%G' /etc/dragonfly/dragonfly.conf"
+    expect:
+      stdout: "640 dragonfly:dragonfly"
+
+  - name: dragonfly-responds-to-ping
+    # DragonFly redis-совместим: redis-cli PING по TCP (DF слушает 6379). redis-cli — из
+    # distro-пакета redis-tools (install.yml ставит его БЕЗУСЛОВНО, DF своего cli не несёт).
+    apply:
+      destiny: core.cmd.shell
+      input:
+        cmd: "redis-cli -h 127.0.0.1 -p 6379 -a vault:test/dragonfly/password PING"
+    expect:
+      stdout_contains: "PONG"
+
+# ─── Опциональные соседи рядом с этим файлом ─────────────────────────────────
+#   prepare.yml / verify.yml / cleanup.yml — см. docs/destiny/testing.md.

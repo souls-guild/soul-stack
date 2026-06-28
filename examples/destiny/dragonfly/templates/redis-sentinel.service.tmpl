@@ -1,0 +1,40 @@
+{{/*
+  systemd-юнит redis-sentinel (режим sentinel). В отличие от redis-server (его юнит несёт
+  дистрибутивный пакет), sentinel-демон управляется СВОИМ юнитом — пакет не всегда заводит
+  redis-sentinel.service под нужный конфиг. Полный юнит, не drop-in. Go text/template strict
+  (ADR-010). Контекст: .vars.sentinel_bin/cli_bin (/usr/bin при package, /usr/local/bin при
+  binary), conf_dir/sentinel_port, redis_user/redis_group, data_dir/log_dir/run_dir (RW-пути
+  hardening). Так один шаблон обслуживает обе install-ветки.
+
+  Type=notify + supervised systemd (sentinel.conf).
+*/}}
+[Unit]
+Description=Redis Sentinel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart={{ .vars.sentinel_bin }}/redis-sentinel {{ .vars.conf_dir }}/sentinel.conf --supervised systemd
+ExecStop={{ .vars.cli_bin }}/redis-cli -p {{ .vars.sentinel_port }} shutdown nosave
+Restart=always
+User={{ .vars.redis_user }}
+Group={{ .vars.redis_group }}
+RuntimeDirectory=redis
+RuntimeDirectoryMode=0755
+
+# systemd-hardening (симметрично hardening drop-in redis-server).
+ProtectSystem=strict
+ReadWritePaths={{ .vars.data_dir }} {{ .vars.log_dir }} {{ .vars.run_dir }}
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

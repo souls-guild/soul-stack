@@ -1,0 +1,129 @@
+# L0-испытание create DragonFly в режиме sentinel. Multi-host roster из 2 хостов:
+# replicas_per_master=1 → топология 1+1=2 (size-guard проходит). Master-election: первый по
+# SID хост (node-1) = master; node-2 = реплика.
+#
+# Render-only, герметично. Что ассертим (критерий приёмки слайса):
+#   1. size-guard PASS-форма: 2 == 1+1.
+#   2. flagfile dragonfly.conf отрендерен (render_context.vars в DF-форме: config, host-
+#      layout, port). render_context.self = первый по SID хост (node-1, host-инвариант
+#      apply.input).
+#   3. ANTI-TILING: master_addr (REPLICAOF) и monitor.ip (SENTINEL MONITOR) — HOST-
+#      ИНВАРИАНТНЫ, оба = primary_ip первого по SID хоста (node-1 = 10.0.0.1).
+#   4. plugin community.redis.replica: addr=127.0.0.1:6379 (per-host локальный),
+#      master_addr=10.0.0.1:6379 (master-election). where исключает master (только реплика).
+#   5. plugin community.redis.sentinel: monitor.ip=10.0.0.1, quorum=2 (АВТО size(2)/2+1=2).
+name: dragonfly create 1 master + 1 replica with monitor reconcile
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  # Порядок в YAML не отсортирован (2, 1) — harness и master-election сортируют по SID
+  # (node-1 = master).
+  hosts:
+    - sid: node-2.example.com
+      covens: [create, dragonfly]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-1.example.com
+      covens: [create, dragonfly]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  vault:
+    secret/dragonfly/create:
+      password: s3cr3t-dragonfly-pass
+    secret/dragonfly/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/dragonfly/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/dragonfly/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/dragonfly/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    sentinel_master_name: master
+    memory_reserve_percent: 75
+    df_config:
+      maxmemory:        "256mb"
+      maxmemory_policy: noeviction
+      maxclients:       10000
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default:    "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    version: "1.39.0"
+    replicas_per_master: 1
+
+assert:
+  task_present:
+    # ── dragonfly destiny: flagfile dragonfly.conf отрендерен ──
+    # render_context.self = первый по SID хост (node-1, host-инвариант apply.input).
+    # Дизамбигуатор от users.acl/sentinel.conf (тот же core.file.rendered) — path.
+    # template_content presence — факт доставки literal-шаблона Keeper→Soul (точная сверка
+    # flagfile-строк — L2/Real-Linux). render_context целиком сверяется отдельным L1
+    # tmpl-тестом (хрупок к точной форме vars здесь).
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/dragonfly/dragonfly.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: dragonfly
+        group: dragonfly
+
+    # ── REPLICAOF реплик (community.redis.replica) ──
+    # addr=127.0.0.1:6379 (per-host локальный), master_addr — master-election (node-1).
+    # where исключает master → рендерится ТОЛЬКО на node-2.
+    - module: community.redis.replica
+      params_subset:
+        addr: "127.0.0.1:6379"
+        master_addr: "10.0.0.1:6379"
+        password: s3cr3t-dragonfly-pass
+
+    # ── SENTINEL MONITOR reconcile (community.redis.sentinel) ──
+    # monitor.ip — HOST-ИНВАРИАНТНЫЙ адрес master-а (node-1). quorum=2 (АВТО size(2)/2+1).
+    - module: community.redis.sentinel
+      params_subset:
+        addr: "127.0.0.1:26379"
+        master_name: master
+        auth_pass: s3cr3t-dragonfly-pass
+        redis_version: "1.39.0"
+        config:
+          "sentinel down-after-milliseconds master": "5000"
+          "sentinel failover-timeout master": "60000"
+        monitor:
+          ip: 10.0.0.1
+          port: 6379
+          quorum: 2
+
+  state_changes:
+    df_version: "1.39.0"
+    df_config:
+      maxmemory:        "256mb"
+      maxmemory_policy: noeviction
+      maxclients:       10000
+    df_users: []
+    df_hosts: []
+    df_sentinel:
+      master_name: master
+      quorum: 0
+      down_after_ms: 5000
+      failover_timeout_ms: 60000
+    replicas: 1
+    sentinel_quorum: 0
+    install:
+      method: package
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    memory_mb: 0

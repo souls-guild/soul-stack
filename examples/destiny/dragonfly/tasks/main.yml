@@ -1,0 +1,48 @@
+# tasks/main.yml — точка входа destiny dragonfly. Только include-список: логические
+# группы разнесены по соседним файлам, раскрываются inline ДО render (docs/destiny/
+# tasks.md §4 — within-destiny include раскрывается в плоский список). Видит ТОЛЬКО свой
+# input: (изоляция, ADR-009).
+#
+# Режим-агностичный per-host кирпич (standalone/sentinel/sentinel_only): режим выбирает
+# scenario сервиса передачей флагов и sentinel-директив в config; destiny сама режим не
+# знает. Конфиг приходит ГОТОВЫМ merged map-ом через apply: input: config: — destiny
+# ничего не сливает (merge делает scenario).
+#
+# ★ DragonFly vs redis (D1, sentinel-only — cluster OUT): структура копирует redis-main,
+#   НО БЕЗ modules.yml (DragonFly не грузит redis-модули .so — cluster/модули вне скоупа)
+#   и без version-guard Redis 8+. Конвейер из ЧЕТЫРЁХ групп (install/server/sentinel/extras).
+#
+# Обзор конвейера (порядок include = порядок задач). Режим-гейт стоит НА include
+# (conditional-include, ADR-009 amendment): статический input-предикат на include-задаче
+# РЕАЛЬНО исключает группу из плана (render-phase group-drop), а не гасит её placeholder-
+# skip-ом. Поэтому выключенный include (sentinel вне sentinel-режима, server в sentinel_only)
+# ФИЗИЧЕСКИ отсутствует. L0-кейсы ассертят presence-матчером (task_present/task_absent),
+# которому group-drop безопасен (позиционные индексы не важны).
+#
+#   install.yml  — sentinel-инструментарий (redis-server/redis-tools, БЕЗУСЛОВНО) + DragonFly
+#                  (диспетч по install.method: package distro-deb dragonfly / binary
+#                  upstream-tarball). binary-ветка несёт СВОЙ рестарт здесь (per-file линтер
+#                  onchanges запрещает cross-file register);
+#   server.yml   — data-плоскость dragonfly (gated deploy_dragonfly НА include): PEM →
+#                  users.acl → dragonfly.conf (flagfile) → core.service. sentinel_only
+#                  (deploy_dragonfly=false) → group-drop;
+#   sentinel.yml — sentinel-демон redis-sentinel (gated sentinel_enabled НА include). Вне
+#                  sentinel-режима — group-drop;
+#   extras.yml   — host-tuning (THP-юнит / logrotate / sysctl), все БЕЗУСЛОВНЫ;
+#
+# Гейты include — статические input-предикаты (conditional-include требует input./essence./
+# incarnation./vars.; register./soulprint. на include запрещены). has()-guard в каждом —
+# render-safety при absent dict (sentinel в standalone, tls в sentinel_only).
+#
+# Явных daemon-reload-шагов НЕТ: core.service (daemon_reload: auto, default) сам перечитывает
+# конфигурацию systemd при смене unit-файла ПЕРЕД start/restart.
+
+- include: install.yml
+
+- include: server.yml
+  when: "default(input.deploy_dragonfly, true)"
+
+- include: sentinel.yml
+  when: "default(input.sentinel_enabled, false)"
+
+- include: extras.yml

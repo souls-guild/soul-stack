@@ -1,0 +1,59 @@
+# Переиспользуемые именованные input-типы сервиса dragonfly (ADR-062, named input types).
+# Резолв — service-level: `$type: <Имя>` в любом `input:` сценария ЭТОГО сервиса
+# замещается развёрнутой схемой отсюда на input-стадии (cycle-checked). Имя типа —
+# PascalCase (отличает тип-ссылку от snake_case-параметра визуально и в парсере).
+#
+# ★ REUSE из service redis 1:1 (DragonFly redis-совместим: ACL-формат и perms-токены
+# идентичны). В PILOT (sentinel-only, create) AclUser читает ТОЛЬКО create (массив
+# input.users); add_user/update_users — день-2, СЛЕД. слайс.
+types:
+  # AclUser — одна запись ACL-пользователя DragonFly (operator-extra). create читает
+  # массив таких записей (input.users). Единый perms-pattern (token-shape-фильтр re2,
+  # DragonFly принимает redis-ACL-синтаксис).
+  #
+  # ★ Wave 1b (2026-06-26): ТОЛЬКО текущие поля (name/perms/state). keys/channels/
+  # commands — wave 2 (структурный ACL вместо одной perms-строки), здесь НЕ заводятся.
+  AclUser:
+    type: object
+    additional_properties: false
+    required: [name, perms]
+    properties:
+      # Имя ACL-пользователя. Паттерн строже прежнего inline-варианта (lowercase-старт):
+      # Redis ACL имена регистрозависимы, но конвенция роли — lowercase-идентификатор.
+      name:
+        type: string
+        pattern: "^[a-z][a-z0-9_-]*$"
+        description: >-
+          Имя ACL-пользователя DragonFly (уникально в массиве users). Рендерится в
+          users.acl; пароль резолвится keeper-side из Vault по конвенции
+          secret/dragonfly/<incarnation>/users/<name>#password.
+      # ПОЛНАЯ ACL-строка прав (не алиас): директивы Redis ACL как есть.
+      #
+      # pattern — НЕ полный Redis-парсер, а token-shape-фильтр (re2): отшивает
+      # произвольный текст, переводы строк, пробелы-в-токене, shell-инъекции
+      # (`;`/`|`-вне-сабкоманды/`&&`/backticks/`$()`) и неизвестные сигилы;
+      # семантику добивает Redis на `ACL SETUSER`. Перечень допустимых форм токена —
+      # в description ниже. Сам pattern допускает пустую строку, но perms в
+      # object-level required → пустую отсекает required-логика ДО pattern;
+      # бесправный юзер выражается токеном `off`, не пустой строкой.
+      # Пароли в perms-строке маскируются на выходе (логи/UI) общим secret-маскингом.
+      perms:
+        type: string
+        pattern: "^(?:(?:(?:on|off|nopass|resetpass|reset|clearselectors|sanitize-payload|skip-sanitize-payload|nosanitize-payload|allkeys|allchannels|allcommands|nocommands)|(?:%R~|%W~|%RW~|~)[A-Za-z0-9:_.*?\\[\\]{}\\\\-]+|&[A-Za-z0-9:_.*?\\[\\]{}\\\\-]+|[+-](?:@[a-z][a-z0-9-]*|[a-z][a-z0-9-]*(?:\\|[a-z][a-z0-9-]*)?)|[><][A-Za-z0-9:_.@%/+=-]+|[#!][0-9a-fA-F]{64}|\\([^()]*\\))(?: (?:(?:on|off|nopass|resetpass|reset|clearselectors|sanitize-payload|skip-sanitize-payload|nosanitize-payload|allkeys|allchannels|allcommands|nocommands)|(?:%R~|%W~|%RW~|~)[A-Za-z0-9:_.*?\\[\\]{}\\\\-]+|&[A-Za-z0-9:_.*?\\[\\]{}\\\\-]+|[+-](?:@[a-z][a-z0-9-]*|[a-z][a-z0-9-]*(?:\\|[a-z][a-z0-9-]*)?)|[><][A-Za-z0-9:_.@%/+=-]+|[#!][0-9a-fA-F]{64}|\\([^()]*\\)))*)?$"
+        description: >-
+          Redis ACL: права одной строкой, токены через пробел. Пример:
+          `~app:* +@read +@write -@dangerous` (ключи app:* + чтение/запись, минус
+          опасные). Формы токенов: ключи `~<pat>`/`%R~`/`%W~`/`%RW~`/`allkeys`;
+          каналы `&<pat>`/`allchannels`; команды `+<cmd>`/`-<cmd>`/`+@<cat>`/
+          `-@<cat>`/`+<cmd>|<sub>`/`allcommands`/`nocommands`; пароли
+          `><pwd>`/`#<hex64>`; служебные `on`/`off`/`nopass`/`reset`. Пишется в
+          users.acl как есть; синтаксис проверяется (мусор/инъекции отшиваются).
+      # Состояние: on (активен) / off (заблокирован, правило хранится). default on.
+      # Не в object-level required → опционально; default доливается на input-стадии.
+      state:
+        type: string
+        default: "on"
+        enum: [on, off]
+        description: >-
+          Состояние пользователя: on (активен) / off (заблокирован, но правило
+          хранится). По умолчанию on.

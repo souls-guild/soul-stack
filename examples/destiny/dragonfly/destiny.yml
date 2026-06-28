@@ -1,0 +1,290 @@
+name: dragonfly
+description: >-
+  Режим-агностичный per-host кирпич DragonFly (концепция Ansible-роли, B-гибрид ADR-009):
+  установка DragonFly (distro-deb / upstream-tarball) + render dragonfly.conf (FLAGFILE) из
+  merged-конфига + render users.acl + sentinel-демон (redis-sentinel из distro-пакета) +
+  сервис. ВСЯ оркестрация (топология, REPLICAOF, sentinel reconcile, health-gate) живёт в
+  scenario сервиса — здесь только идемпотентный install/render/service одного инстанса.
+
+# Версия destiny — git ref (ADR-007). Поля `version:` верхнего уровня нет. Список задач —
+# в tasks/main.yml. Только core-модули → required_modules: не нужен (community.redis
+# вызывается из scenario сервиса, не из этой destiny).
+#
+# ★ DragonFly vs redis (D1, sentinel-only): отдельный destiny, копия структуры redis с
+# подменой config-формата (FLAGFILE --flag=value вместо redis.conf), unit (Type=simple,
+# binary-юнит несёт hardening сам) и install (один бинарь dragonfly + ОТДЕЛЬНО distro-пакет
+# redis-server для sentinel-демона). БЕЗ redis-модулей (.so), БЕЗ cluster-директив.
+#
+# Режим-агностична: standalone / sentinel / sentinel_only (последний — sentinel_enabled +
+# deploy_dragonfly=false, поднимает только sentinel-демон над внешним master). Режим
+# выбирает scenario сервиса; destiny сама режим не знает. Конфиг приходит ГОТОВЫМ merged
+# map-ом через apply: input: config: (merge делает scenario сервиса) — destiny «глупая».
+
+input:
+  # ── Гейт data-плоскости dragonfly (режим sentinel_only) ──────────────────────
+  # deploy_dragonfly=false (режим sentinel_only) → НЕ разворачиваем DragonFly: всю data-
+  # плоскость гасит include-when (server.yml group-drop). sentinel-инструментарий
+  # (redis-server/redis-tools) при этом ставится ВСЕГДА (install.yml) — sentinel_only
+  # поднимает только sentinel-демон, мониторящий ВНЕШНИЙ master.
+  deploy_dragonfly:
+    type: boolean
+    required: false
+    default: true
+    description: >-
+      Разворачивать ли data-плоскость DragonFly (render dragonfly.conf/users.acl/PEM +
+      systemd-сервис dragonfly). По умолчанию true. false (режим sentinel_only) — поднять
+      только sentinel-демон (sentinel_enabled), master внешний. Distro-пакеты sentinel-
+      инструментария (redis-server/redis-tools) ставятся в любом случае.
+
+  version:
+    type: string
+    # ОБЯЗАТЕЛЬНА ТОЛЬКО для install.method=package (required_when): distro-native пин
+    # читает её голым input.version (install.yml package-ветка). При install.method=binary
+    # distro-deb dragonfly НЕ ставится — версия бинаря в install.version (upstream-semver),
+    # это поле не используется. required_when context — input-only (default() недоступен) →
+    # absent-нормализация has()-цепочкой.
+    required_when: "!has(input.install) || !has(input.install.method) || input.install.method == 'package'"
+    # distro-native: опциональный epoch `N:` + upstream-версия + опциональная ревизия.
+    pattern: "^([0-9]+:)?[0-9][A-Za-z0-9.~+-]*$"
+    description: >-
+      Версия distro-пакета dragonfly (distro-native пин). ОБЯЗАТЕЛЬНА при
+      install.method=package: core.pkg всегда ставит =version-пин. При
+      install.method=binary НЕ используется (версия бинаря — в install.version).
+
+  # ── Пути host-layout, переопределяемые оператором (директива B) ──────────────
+  # conf_dir/data_dir — базовые каталоги конфигурации и данных DragonFly. ОПЕРАТОР-
+  # ПЕРЕОПРЕДЕЛЯЕМЫ (input, не vars). Дефолт = текущий путь (back-compat).
+  conf_dir:
+    type: string
+    required: false
+    default: /etc/dragonfly
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: >-
+      Каталог конфигурации DragonFly (dragonfly.conf, users.acl, sentinel.conf, tls/).
+      По умолчанию /etc/dragonfly. Оператор может переопределить под свой layout.
+
+  data_dir:
+    type: string
+    required: false
+    default: /var/lib/dragonfly
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: >-
+      Рабочий каталог данных DragonFly (snapshot). По умолчанию /var/lib/dragonfly.
+      Оператор может переопределить под свой storage-layout.
+
+  # ── install: способ установки DragonFly (концепция Ansible-роли *_install_*) ──
+  # Гейт install.method static (только input.*) → Keeper гасит неактивную ветку
+  # install.yml placeholder-skip-ом без сдвига индексов (block static-skip).
+  #
+  # ★ binary-ветка САМА несёт всё, что distro-deb даёт даром: systemd-юнит
+  # dragonfly.service (с hardening внутри), distro-юзер/группу dragonfly. base_url/version
+  # нужны лишь при method=binary. tarball — dragonfly-<arch>.tar.gz (arch x86_64/aarch64
+  # из soulprint.self.os.arch); имя файла БЕЗ версии (официальный releases-asset).
+  install:
+    type: object
+    required: false
+    additional_properties: false
+    description: >-
+      Способ установки DragonFly. method: package (default) — distro-deb dragonfly; binary —
+      upstream-tarball (base_url + version + soulprint.self.os.arch → /usr/local/bin + свой
+      systemd-юнит + distro-юзер/группа dragonfly). base_url/version нужны лишь при
+      method=binary. Пустой/не передан → method=package.
+    properties:
+      method:
+        type: string
+        enum: [package, binary]
+      base_url:
+        type: string
+        description: >-
+          Базовый URL источника tarball-а DragonFly (без arch-сегмента). destiny строит
+          полный URL per-host как <base_url>/dragonfly-<arch>.tar.gz, где arch (x86_64/
+          aarch64) выводится из soulprint.self.os.arch. Обязателен при method=binary.
+      version:
+        type: string
+        # upstream-semver (напр. 1.39.0). method=binary → используется в ПУТИ распакованного
+        # каталога /tmp/dragonfly-<version> (имя tarball-а версии НЕ несёт). core.file.present
+        # (src:) разложит бинарь, идемпотентность нативная по sha256 содержимого.
+        pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        description: >-
+          Upstream-версия DragonFly для пути распакованного каталога (semver, напр. 1.39.0).
+          Обязательна при method=binary. Имя tarball-а версии не несёт (dragonfly-<arch>.tar.gz).
+
+  password:
+    type: string
+    required: true
+    secret: true
+    min_length: 16
+    description: >-
+      Пароль DragonFly (--requirepass). Маскируется в логах/трейсах/UI. Destiny получает
+      УЖЕ зарезолвленное значение: caller-сценарий читает секрет из Vault keeper-side через
+      CEL-функцию vault() в render-фазе и прокидывает результат в apply:input. Destiny
+      остаётся «глупой» — кладёт готовый пароль во flagfile, vault-клиент не тянет (ADR-012).
+
+  # Merged-конфиг dragonfly.conf (FLAGFILE): caller (scenario сервиса) сливает default→
+  # вычисления→passthrough через merge() и передаёт ГОТОВЫЙ map. Шаблон range-ит его ПОСЛЕ
+  # базовых директив (last-wins у absl). Пустой/не передан → секция пуста. Ключи — в DF-форме
+  # (underscore): maxmemory/maxmemory_policy/tls/tls_cert_file/...  (scenario их вычислил).
+  config:
+    type: object
+    description: >-
+      Готовые директивы dragonfly.conf flagfile (merged на стороне scenario сервиса). Каждая
+      пара key→value пишется как `--<key>=<value>`. Ключи — DF-флаги (underscore-форма).
+      Destiny НЕ мержит повторно.
+    properties:
+      maxclients:
+        type: integer
+        min: 1
+    additional_properties: true
+
+  # ACL-пользователи DragonFly: MAP имя→{perms, state, password}. scenario строит этот map
+  # из своего typed-array input.users и резолвит password каждого юзера keeper-side из Vault.
+  # Шаблон users.acl.tmpl range-ит MAP (Go сортирует ключи → детерминизм) и хеширует пароль
+  # (#<sha256>) — DF принимает redis-формат aclfile с хешем; plaintext в файл НЕ пишется.
+  users:
+    type: object
+    required: false
+    description: >-
+      ACL-пользователи DragonFly (map имя→{perms, state, password}). Рендерятся в
+      ${conf_dir}/users.acl (--aclfile), порядок строк детерминирован (range по map
+      сортирует ключи). password — зарезолвленный keeper-side секрет (маскируется); в файл
+      пишется его sha256-хеш.
+    properties: {}
+    additional_properties:
+      type: object
+      required: [perms, state, password]
+      additional_properties: false
+      properties:
+        perms:
+          type: string
+        state:
+          type: string
+          enum: [on, off]
+        password:
+          type: string
+          secret: true
+
+  # ── Системные ACL-юзеры sentinel-демона (2-й aclfile) ────────────────────────
+  # ОПЦИОНАЛЬНОЕ additive-поле: служебные юзеры sentinel-демона с sentinel-командами
+  # (ОТЛИЧНЫ от users.acl DragonFly). Рендерится в ОТДЕЛЬНЫЙ ${conf_dir}/sentinel-users.acl.
+  # Пустой/не передан → пустой aclfile (back-compat).
+  sentinel_users:
+    type: object
+    required: false
+    description: >-
+      Системные ACL-пользователи sentinel-демона (map имя→{perms, state, password}).
+      Рендерятся в ${conf_dir}/sentinel-users.acl (aclfile в sentinel.conf). Набор —
+      service-side из essence.system_acl_users_sentinel. password — зарезолвленный keeper-
+      side секрет (маскируется); в файл пишется sha256-хеш. Только sentinel-режим.
+    properties: {}
+    additional_properties:
+      type: object
+      required: [perms, state, password]
+      additional_properties: false
+      properties:
+        perms:
+          type: string
+        state:
+          type: string
+          enum: [on, off]
+        password:
+          type: string
+          secret: true
+
+  # ── TLS (концепция Ansible-роли *_tls_*) ─────────────────────────────────────
+  # TLS-параметры — единый dict `tls`: enable/only/port/cert_ref/key_ref/ca_ref. HOST-
+  # ИНВАРИАНТ (один cert/CA/порт на кластер) → приходят через apply.input. Пустой/absent
+  # dict → TLS off. Гейт tls.enable — per-task when на PEM-задачах (tasks/server.yml). Сами
+  # TLS-флаги (tls/tls_port/tls_cert_file/...) — обычные ключи merged config (scenario кладёт
+  # их в config), destiny range-ит во flagfile. tls.only НЕ читается destiny как задача — он
+  # лишь меняет config (scenario ставит `port 0`).
+  #
+  # ★ PEM-РЕНДЕР ЧЕРЕЗ vault() В САМОЙ ЯЧЕЙКЕ (seal-маскинг, ADR-010 §7.4): destiny получает
+  # Vault-ПУТИ (tls.cert_ref/key_ref/ca_ref), а PEM читает vault() ПРЯМО в ячейке content
+  # задачи core.file.present (НЕ .tmpl, НЕ apply.input с резолвленным PEM). vault() резолвится
+  # KEEPER-SIDE; seal помечает ячейку sealed, маскинг ловит PEM в error_summary/state.
+  tls:
+    type: object
+    required: [cert_ref, key_ref, ca_ref]
+    additional_properties: false
+    description: >-
+      Параметры TLS DragonFly. Пустой/не передан → TLS off (block PEM-задач placeholder-skip,
+      директив TLS нет). enable — главный гейт рендера PEM/директив; only — закрыть plain-
+      порт (scenario ставит `port 0`); port — TLS-порт (флаг tls_port); cert_ref/key_ref/
+      ca_ref — Vault-ПУТИ серверного cert/key и CA (форма "<mount>/<path>#<field>"). destiny
+      читает PEM через vault(ref) В ЯЧЕЙКЕ content (seal-маскинг), vault-клиент на Soul нет.
+    properties:
+      enable:
+        type: boolean
+      only:
+        type: boolean
+      port:
+        type: integer
+        min: 1
+      cert_ref:
+        type: string
+      key_ref:
+        type: string
+      ca_ref:
+        type: string
+
+  # ── Host-tuning extras (концепция Ansible-роли) ──────────────────────────────
+  # Режим-агностичные per-host добавки. THP-отключение / logrotate / sysctl — БЕЗУСЛОВНЫ
+  # (рекомендация in-memory-store / hardening, не выбор оператора): флагов в контракте нет.
+  # sysctl_settings — данные-таблица значений kernel-параметров, host-инвариантна → приходит
+  # через apply.input (scenario сервиса).
+  sysctl_settings:
+    type: object
+    required: false
+    description: >-
+      Kernel-параметры под DragonFly (map имя→значение), рендерятся в
+      /etc/sysctl.d/30-dragonfly.conf. Значения — СТРОКИ (multi-value через пробел).
+      Передаются scenario сервиса (дефолты — essence.sysctl_settings).
+    properties: {}
+    additional_properties: true
+
+  # ── Sentinel (режим sentinel) ────────────────────────────────────────────────
+  # Эти поля задействованы ТОЛЬКО когда sentinel_enabled=true (gated-задачи в tasks/main.yml).
+  # Вне sentinel-режима не передаются → has()-guard в задачах гасит рендер sentinel.conf/unit.
+  # scenario сервиса вычисляет master-election и передаёт ГОТОВЫЕ значения.
+  sentinel_enabled:
+    type: boolean
+    required: false
+    default: false
+    description: >-
+      Включить рендер sentinel.conf + redis-sentinel.service + запуск демона (режим
+      sentinel). По умолчанию false (standalone — без sentinel). sentinel-демон — redis-
+      sentinel из distro-пакета redis-server (DragonFly его не несёт), мониторит DragonFly
+      как redis-совместимый master.
+
+  sentinel:
+    type: object
+    description: >-
+      Параметры monitored master для sentinel.conf. master_ip/master_port — HOST-
+      ИНВАРИАНТНЫЙ адрес master-а кластера (один на кластер, scenario резолвит run_once).
+      announce-ip НЕ здесь: он per-host, рендерится из .self.network.primary_ip. config —
+      стартовые директивы sentinel.conf (файловая форма). auth_pass — зарезолвленный
+      keeper-side секрет (маскируется).
+    # master_ip обязателен: sentinel без monitored master бессмыслен (gated на
+    # sentinel_enabled). Required ловит пропуск адреса понятной schema-ошибкой ДО render.
+    required: [master_ip]
+    additional_properties: false
+    properties:
+      master_name:
+        type: string
+      master_ip:
+        type: string
+      master_port:
+        type: integer
+        min: 1
+      quorum:
+        type: integer
+        min: 1
+      auth_user:
+        type: string
+      auth_pass:
+        type: string
+        secret: true
+      config:
+        type: object
+        properties: {}
+        additional_properties: true

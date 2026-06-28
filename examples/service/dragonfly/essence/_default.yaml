@@ -1,0 +1,123 @@
+# Baseline-essence сервиса dragonfly (подложка автора, концепция defaults роли). Оператор
+# переопределяет в spec инкарнации; на L0-прогоне ключевые значения дублируются в fixtures
+# кейса.
+#
+# Это СЛОЙ ТРАНСЛЯЦИИ простого ввода оператора: данные-таблицы (memory_reserve_percent) и
+# merge-подложка df_config живут здесь, scenario create сливает их с вводом через merge()
+# (templating §2.3). НИЧЕГО из трансляции не уходит в плагин — она нужна только render-у
+# dragonfly.conf at-create (источник истины).
+
+# Логическое имя monitored master в Sentinel (директива sentinel.conf SENTINEL MONITOR +
+# community.redis.sentinel master_name). author-context, оператор переопределяет в
+# spec.essence. Дефолт `master`.
+sentinel_master_name: master
+
+# ── Способ установки binary: источник upstream-tarball ──────────────────────────
+# install_method=binary тянет DragonFly из upstream-tarball. URL и версия бинаря — author-
+# context (оператор переопределяет в spec.essence под свой mirror). destiny строит имя
+# файла per-host из binary_base_url + soulprint.self.os.arch (dragonfly-<arch>.tar.gz);
+# binary_version уходит в путь распакованного каталога. Дефолты "" — заполнить под реальную
+# инсталляцию (при install_method=binary).
+#
+# ★ Реальный upstream DragonFly: github.com/dragonflydb/dragonfly/releases/download/v<ver>
+# (asset dragonfly-x86_64.tar.gz / dragonfly-aarch64.tar.gz). base_url задаёт оператор.
+binary_base_url: ""
+binary_version:  ""
+
+# ── Host-layout: базовые каталоги конфигурации и данных DragonFly ────────────────
+# conf_dir/data_dir — author-context (оператор переопределяет раскладку в spec.essence под
+# свой storage-layout). compute читает их отсюда, гонит в destiny (apply.input) + персистит
+# в state. Дефолт = официальный layout DragonFly.
+conf_dir: /etc/dragonfly
+data_dir: /var/lib/dragonfly
+
+# Доля бюджета памяти (input.memory_mb), отдаваемая DragonFly под maxmemory; остаток —
+# резерв под ОС/накладные. scenario вычисляет maxmemory = memory_mb*pct/100 (МБ).
+memory_reserve_percent: 75
+
+# TLS (defaults). Источник PEM — Vault-ПУТИ (не сам PEM): scenario резолвит их через
+# ${ vault(<ref>) } в render-фазе и передаёт ЦЕЛЫЕ PEM в destiny. Пути — доверенный
+# контекст автора (essence). Форма ref — "<mount>/<path>#<field>". tls_enable/tls_only по
+# умолчанию false (plaintext); tls_port — 7379.
+tls_enable: false
+tls_only:   false
+tls_port:   7379
+# Vault-пути источника PEM (заполнить под реальную инсталляцию). Дефолт — конвенция
+# secret/services/dragonfly/tls.
+tls_cert_ref: "secret/services/dragonfly/tls#cert"
+tls_key_ref:  "secret/services/dragonfly/tls#key"
+tls_ca_ref:   "secret/services/dragonfly/tls#ca"
+
+# ── Тайминги failover sentinel (defaults) ───────────────────────────────────────
+# Транслируются в per-master директивы sentinel.conf `sentinel down-after-milliseconds
+# <master>` и `sentinel failover-timeout <master>` И в community.redis.sentinel config.
+# Оператор может переопределить во входе create (sentinel_down_after_ms/
+# sentinel_failover_timeout_ms).
+sentinel_down_after_ms:       5000
+sentinel_failover_timeout_ms: 60000
+
+# ── Системные ACL-юзеры DragonFly + sentinel-демона ─────────────────────────────
+# Имя→ACL-perms-строка СЛУЖЕБНЫХ юзеров: replica (репликация PSYNC), monitoring (метрики),
+# sentinel (sentinel↔df AUTH), haproxy (health-check балансировщика). DragonFly redis-
+# совместим → те же perms-наборы, что у redis-сервиса (скопированы 1:1 из service redis
+# essence). Два набора (redis-server-команды vs sentinel-команды) → ДВА aclfile: users.acl
+# (DragonFly, system_acl_users) и sentinel-users.acl (sentinel-демон, system_acl_users_sentinel).
+#
+# Пароль КАЖДОГО системного юзера — в Vault: secret/dragonfly/<incarnation>/users/<name>#password
+# (default — главный secret/dragonfly/<incarnation>#password). scenario резолвит keeper-side
+# через vault() и доливает системных в apply.input.users/sentinel_users.
+#
+# ★ default-юзер: в system_acl_users (DragonFly) его НЕТ — он задаётся --requirepass во
+# flagfile (users.acl.tmpl его не дублирует). В system_acl_users_sentinel default ЕСТЬ
+# (у sentinel-демона нет requirepass-эквивалента для aclfile-доступа). Имена системных =
+# default/replica/monitoring/sentinel/haproxy — validate-guard create отвергает operator-
+# extra с любым из этих имён.
+#
+# Набор DragonFly (БЕЗ default — он в requirepass):
+system_acl_users:
+  replica:    "+psync +replconf +ping"
+  monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+  sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+  haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+
+# Набор sentinel-демона (ВКЛЮЧАЕТ default):
+system_acl_users_sentinel:
+  default:    "allchannels allkeys +@all"
+  monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+  sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+
+# ── Merge-подложка dragonfly.conf flagfile (defaults роли) ──────────────────────
+# НИЖНИЙ слой merge(): вычисленные maxmemory/policy и passthrough оператора наслаиваются
+# поверх. Merged итог рендерится во flagfile (destiny `dragonfly`). ★ Ключи — DF-ФЛАГИ
+# (underscore-форма): maxmemory/maxmemory_policy/maxclients (НЕ redis-дефис maxmemory-policy).
+df_config:
+  maxmemory:        "256mb"
+  maxmemory_policy: noeviction
+  maxclients:       10000
+
+# Данные-таблица kernel-параметров под DragonFly (host-tuning). scenario передаёт этот map
+# в destiny `dragonfly` через apply.input.sysctl_settings → core.sysctl.applied строит
+# drop-in /etc/sysctl.d/30-dragonfly.conf. Значения — СТРОКИ. REUSE из service redis
+# (те же in-memory-store kernel-рекомендации: overcommit/swappiness/сетевые буферы/бэклоги).
+sysctl_settings:
+  vm.overcommit_memory:  "1"
+  vm.swappiness:         "1"
+  vm.max_map_count:      "262144"
+  vm.vfs_cache_pressure: "200"
+  net.core.rmem_max:     "134217728"
+  net.core.wmem_max:     "134217728"
+  net.core.rmem_default: "212992"
+  net.core.wmem_default: "212992"
+  net.ipv4.tcp_rmem:     "4096 212992 134217728"
+  net.ipv4.tcp_wmem:     "4096 212992 134217728"
+  net.core.somaxconn:           "65535"
+  net.core.netdev_max_backlog:  "20000"
+  net.ipv4.tcp_max_syn_backlog: "65535"
+  net.ipv4.tcp_sack:           "1"
+  net.ipv4.tcp_timestamps:     "1"
+  net.ipv4.tcp_window_scaling: "1"
+  net.ipv4.tcp_syncookies:     "1"
+  net.ipv4.tcp_tw_reuse:       "1"
+  net.ipv4.tcp_fin_timeout:    "30"
+  net.ipv4.ip_local_port_range: "30000 65535"

@@ -1,0 +1,134 @@
+# tasks/server.yml — data-плоскость DragonFly: TLS PEM + users.acl + dragonfly.conf
+# (FLAGFILE) + сервис dragonfly. ВЕСЬ файл gated на deploy_dragonfly — гейт стоит НА
+# include (main.yml, conditional-include ADR-009 amendment), НЕ внутри файла. sentinel_only
+# (deploy_dragonfly=false) → include дропается целиком (group-drop).
+#
+# ★ register'ы (dragonfly_tls_cert/dragonfly_tls_key/dragonfly_tls_ca/dragonfly_acl/
+#   dragonfly_conf) ОБЯЗАНЫ жить В ЭТОМ файле: ЗАГРУЗОЧНЫЙ per-file линтер (validateTaskRefs,
+#   shared/config/destiny_tasks.go) отвергает cross-file onchanges как
+#   unknown_register_reference. SECURITY: вынеси TLS-PEM в отдельный файл от рестарта —
+#   ротация cert/key/CA молча перестала бы рестартить DragonFly.
+#
+# ★ DragonFly vs redis (D1): НЕТ hardening drop-in (у redis hardening доезжает drop-in-ом
+#   поверх distro-юнита). У DF binary-ветка несёт hardening ВНУТРИ своего юнита (install.yml,
+#   шаблон dragonfly.service.tmpl); package-ветка ставит distro-deb dragonfly со своим
+#   юнитом (его не трогаем). Поэтому НИ hardening-drop-in-задачи, НИ onchanges-рестарта за
+#   ним здесь нет (минус задача против redis-server.yml). На at-create первичный старт
+#   (core.service.running) поднимает с финальным flagfile/ACL/cert — отдельный рестарт не
+#   нужен. dragonfly.conf/users.acl/TLS PEM СОЗНАТЕЛЬНО НЕ рестартят (hot-reload day-2 —
+#   СЛЕД. слайс): рендер кладёт желаемое состояние на диск, оживление — day-2-шаг.
+#
+# ЧАСТИЧНЫЙ inner-гейт tls.enable (только PEM-задачи, не весь файл) ОСТАЁТСЯ in-block
+# (nested TLS-block ниже): include-when дропнул бы файл целиком, не подмножество задач.
+
+# ── TLS PEM-материал ───────────────────────────────────────────────────────────
+# Рендерим cert/key/CA в ${conf_dir}/tls/ ДО dragonfly.conf и старта сервиса: flagfile
+# (флаги --tls_cert_file/--tls_key_file/--tls_ca_cert_file приходят в config от scenario)
+# ссылается на эти файлы — при tls.enable DragonFly обязан их найти на старте. Все четыре
+# gated на tls.enable (when на nested block) + register'ятся. HOST-ИНВАРИАНТ (один
+# cert/CA на кластер): PEM-ПУТИ (tls.cert_ref/key_ref/ca_ref) приходят через apply.input.
+#
+# ★ PEM ЧЕРЕЗ core.file.present + vault() В ЯЧЕЙКЕ content (seal-маскинг, ADR-010 §7.4):
+# НЕ .tmpl, НЕ уже-резолвленный PEM через apply.input. vault(ref) в ячейке content →
+# детектор seal помечает её sealed vault-слоем, маскинг скрывает PEM в error_summary/state.
+# vault() резолвится keeper-side; vault-клиент на Soul не тянется (ADR-012). ref (input.tls.
+# cert_ref) — путь, не секрет. has(input.tls)-guard — render-safety при absent tls dict.
+# Владелец PEM — dragonfly-юзер (DragonFly читает cert/key как сервис).
+- name: Provision DragonFly TLS material
+  when: "has(input.tls) && default(input.tls.enable, false)"
+  block:
+    # Каталог tls/ под conf_dir — idempotent по mode/owner/group, чинит дрейф, dry-run.
+    # mode 0750 owner dragonfly: PEM (вкл. приватный ключ) читает только сервис.
+    - name: Ensure the dragonfly TLS directory exists
+      module: core.file.directory
+      params:
+        path: "${ vars.dragonfly_conf_dir_eff + '/tls' }"
+        owner: "${ vars.dragonfly_user }"
+        group: "${ vars.dragonfly_group }"
+        mode: "0750"
+
+    # Серверный сертификат. mode 0600 owner dragonfly. content = vault(ref) В ЯЧЕЙКЕ →
+    # sealed vault-слоем. register — рестарт при ротации (day-2, СЛЕД. слайс).
+    - name: Render the TLS server certificate
+      module: core.file.present
+      register: dragonfly_tls_cert
+      params:
+        path: "${ vars.dragonfly_conf_dir_eff + '/tls/dragonfly.crt' }"
+        content: "${ vault(input.tls.cert_ref) }"
+        mode: "${ vars.dragonfly_pem_mode }"
+        owner: "${ vars.dragonfly_user }"
+        group: "${ vars.dragonfly_group }"
+
+    # Приватный ключ — СЕКРЕТ. mode 0600 owner dragonfly. content = vault(key_ref) В ЯЧЕЙКЕ
+    # → sealed vault-слоем (приватный PEM-ключ маскируется). register — рестарт.
+    - name: Render the TLS server private key
+      module: core.file.present
+      register: dragonfly_tls_key
+      params:
+        path: "${ vars.dragonfly_conf_dir_eff + '/tls/dragonfly.key' }"
+        content: "${ vault(input.tls.key_ref) }"
+        mode: "${ vars.dragonfly_pem_mode }"
+        owner: "${ vars.dragonfly_user }"
+        group: "${ vars.dragonfly_group }"
+
+    # CA-сертификат кластера (валидация пиров для tls_replication). content =
+    # vault(input.tls.ca_ref) В ЯЧЕЙКЕ → sealed vault-слоем. register — рестарт.
+    - name: Render the TLS CA certificate
+      module: core.file.present
+      register: dragonfly_tls_ca
+      params:
+        path: "${ vars.dragonfly_conf_dir_eff + '/tls/ca.crt' }"
+        content: "${ vault(input.tls.ca_ref) }"
+        mode: "${ vars.dragonfly_pem_mode }"
+        owner: "${ vars.dragonfly_user }"
+        group: "${ vars.dragonfly_group }"
+
+# users.acl из переданного MAP ACL-юзеров имя→{perms,state,password} (--aclfile во
+# flagfile). register для day-2 (рестарт на изменение — СЛЕД. слайс). owner/group
+# dragonfly, mode 0640 — файл содержит password-хеши, читает только сервис. Шаблон
+# range-ит MAP (Go сортирует ключи → детерминизм) и хеширует пароль (sha256). DF
+# принимает redis-формат aclfile с `#<sha256hex>` (acl/user.cc SetPasswordHash is_hashed).
+- name: Render users.acl
+  module: core.file.rendered
+  register: dragonfly_acl
+  params:
+    path: "${ vars.dragonfly_conf_dir_eff + '/users.acl' }"
+    template: templates/users.acl.tmpl
+    mode: "${ vars.dragonfly_secret_file_mode }"
+    owner: "${ vars.dragonfly_user }"
+    group: "${ vars.dragonfly_group }"
+    vars:
+      users: "${ default(input.users, {}) }"
+
+# dragonfly.conf (FLAGFILE) из merged-конфига. register для day-2. owner/group dragonfly,
+# mode 0640 — flagfile несёт requirepass, читает только сервис. Шаблон печатает базовые
+# --флаги + range merged config (см. dragonfly.flags.tmpl).
+- name: Render dragonfly.conf
+  module: core.file.rendered
+  register: dragonfly_conf
+  params:
+    path: "${ vars.dragonfly_conf_dir_eff + '/dragonfly.conf' }"
+    template: templates/dragonfly.flags.tmpl
+    mode: "${ vars.dragonfly_secret_file_mode }"
+    owner: "${ vars.dragonfly_user }"
+    group: "${ vars.dragonfly_group }"
+    vars:
+      password: "${ input.password }"
+      config:   "${ default(input.config, {}) }"
+      # host-layout (директива B): шаблон выводит --dir из data_dir (snapshot) и --aclfile
+      # из conf_dir (туда же, куда «Render users.acl» кладёт файл).
+      conf_dir: "${ vars.dragonfly_conf_dir_eff }"
+      data_dir: "${ vars.dragonfly_data_dir_eff }"
+      port:     "${ vars.dragonfly_port }"
+      run_dir:  "${ vars.run_dir }"
+      log_dir:  "${ vars.log_dir }"
+
+# core.service dragonfly running. На at-create первичный старт поднимает с финальным
+# flagfile/ACL/cert (рендер выше уже на диске) — отдельного рестарта нет (DF hardening в
+# самом юните, нет drop-in-рестарт-кейса; config/acl/tls hot-reload — day-2, СЛЕД. слайс).
+# sentinel_only (deploy_dragonfly=false) сервис НЕ держит — весь файл group-drop.
+- name: Ensure DragonFly is running and enabled at boot
+  module: core.service.running
+  params:
+    name: "${ vars.dragonfly_service_name }"
+    enabled: true
