@@ -6,6 +6,10 @@
 # Покрывает: replicas_per_master=0 граница size-guard (standalone-эквивалент); auto-quorum;
 # default master_name (essence); single-host roster; DragonFly flagfile-render (vars в
 # render_context dragonfly.conf).
+#
+# ★ РЕФАКТОР «sentinel из destiny redis»: sentinel-демон ставит ВТОРОЙ apply:destiny:redis
+#   (sentinel_only). Presence-матчер видит redis-destiny sentinel-плоскость (install
+#   redis-server + sentinel.conf /etc/redis) И НЕ видит dragonfly-sentinel-задач.
 name: dragonfly create standalone, no replicas, auto quorum
 
 fixtures:
@@ -70,6 +74,26 @@ assert:
           ip: 10.0.0.9
           port: 6379
           quorum: 1
+
+    # ── SENTINEL-ПЛОСКОСТЬ через destiny `redis` (sentinel_only, ВТОРОЙ apply) ──
+    # install redis-server (distro-пин R4, несёт redis-sentinel) + sentinel.conf в /etc/redis.
+    - module: core.pkg.installed
+      params_subset:
+        name: redis-server
+        version: "5:7.0.15-1~deb12u7"
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/sentinel.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+
+  task_absent:
+    # ДУБЛИКАТ СНЯТ: dragonfly-destiny больше НЕ рендерит /etc/dragonfly/sentinel.conf.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/dragonfly/sentinel.conf
 
   state_changes:
     df_version: "1.39.0"

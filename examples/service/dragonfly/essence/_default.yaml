@@ -65,9 +65,21 @@ sentinel_failover_timeout_ms: 60000
 # Версия sentinel-ДЕМОНА (distro redis-sentinel — ОТДЕЛЬНЫЙ продукт от DragonFly). Гейтит
 # version-aware sentinel-фичи плагина community.redis.sentinel (param redis_version →
 # versionGE 7.0.0 для глобальных SENTINEL-директив). ★ Это НЕ версия DragonFly: DF —
-# data-плоскость, sentinel-демон — distro redis-server. Дефолт — distro-актуальная серия
-# redis-sentinel; оператор пинит под свой distro в spec.essence.
+# data-плоскость, sentinel-демон — distro redis-server. ★ И НЕ distro-пин пакета: это
+# SEMVER (X.Y.Z) для version-gate плагина, не apt-форма с epoch/ревизией. Дефолт — distro-
+# актуальная серия redis-sentinel; оператор пинит под свой distro в spec.essence.
 sentinel_redis_version: "7.2.4"
+
+# ── Distro-пин ПАКЕТА redis-server (sentinel-демон ставит destiny `redis`) ───────
+# ★ ОТДЕЛЬНО от sentinel_redis_version (выше): это DISTRO-NATIVE ПИН ПАКЕТА (apt-форма с
+# опциональным epoch и ревизией, напр. 5:7.0.15-1~deb12u7), уезжающий в apply.input.version
+# второго apply:destiny:redis (sentinel_only: deploy_redis=false). destiny `redis` ставит
+# distro-пакет redis-server (несущий redis-sentinel) с этим =version-пином (core.pkg всегда
+# пинит при install.method=package). sentinel_redis_version — SEMVER для version-gate плагина
+# (X.Y.Z, без epoch/ревизии); этот ключ — distro-ревизия для apt. Два РАЗНЫХ формата →
+# два РАЗНЫХ ключа. Оператор пинит под свой distro в spec.essence (формат
+# ^([0-9]+:)?[0-9][A-Za-z0-9.~+-]*$ — тот же pattern, что input.version destiny `redis`).
+sentinel_redis_package_version: "5:7.0.15-1~deb12u7"
 
 # ── Системные ACL-юзеры DragonFly + sentinel-демона ─────────────────────────────
 # Имя→ACL-perms-строка СЛУЖЕБНЫХ юзеров: replica (репликация PSYNC), monitoring (метрики),

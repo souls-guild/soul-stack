@@ -27,10 +27,10 @@
     name: disable-thp
     enabled: true
 
-# logrotate: ротация лог-файлов DragonFly + redis-sentinel в /etc/logrotate.d/dragonfly.
-# БЕЗУСЛОВНО (как THP — host-tuning не выбор оператора). mode 0644 owner/group root —
-# стандарт logrotate.d. ★ Шаблон покрывает ДВА log_dir (DragonFly glog + sentinel,
-# разные владельцы) — см. logrotate.tmpl.
+# logrotate: ротация лог-файлов DragonFly в /etc/logrotate.d/dragonfly. БЕЗУСЛОВНО (как
+# THP — host-tuning не выбор оператора). mode 0644 owner/group root — стандарт logrotate.d.
+# ★ Шаблон покрывает ТОЛЬКО DragonFly glog (рефактор «sentinel из destiny redis»: логи
+# sentinel-демона ротирует logrotate destiny `redis`) — см. logrotate.tmpl.
 - name: Render the dragonfly logrotate config
   module: core.file.rendered
   params:
@@ -40,9 +40,8 @@
     owner: "${ vars.root_owner }"
     group: "${ vars.root_group }"
     vars:
-      # glob лог-файлов DragonFly (glog) и sentinel — из системных лог-каталогов.
-      log_dir:          "${ vars.log_dir }"
-      sentinel_log_dir: "${ vars.sentinel_log_dir }"
+      # glob лог-файлов DragonFly (glog) из системного лог-каталога.
+      log_dir: "${ vars.log_dir }"
 
 # sysctl: bulk-набор kernel-параметров под in-memory-store ОДНИМ drop-in
 # /etc/sysctl.d/30-dragonfly.conf. БЕЗУСЛОВНО (как THP/logrotate). core.sysctl.applied сам

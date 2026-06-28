@@ -12,6 +12,10 @@
 #   3. ★ REPLICAOF реплики: свой addr = unix-сокет; master_addr = primary_ip:6379 (ВНЕШНИЙ
 #      линк к master на ОСНОВНОМ порту 6379, НЕ 7379 — отдельного tls-порта нет).
 #   4. state_changes.tls = {enable:true, cert_ref/key_ref/ca_ref} БЕЗ only/port.
+#   5. ★ РЕФАКТОР «sentinel из destiny redis»: sentinel-плоскость через ВТОРОЙ apply:destiny:
+#      redis (sentinel_only) — install redis-server + sentinel.conf /etc/redis присутствуют;
+#      dragonfly-destiny /etc/dragonfly/sentinel.conf отсутствует (дубликат снят). Второй
+#      apply tls НЕ передаёт (sentinel.conf без TLS — sentinel↔DF AUTH по паролю, PILOT).
 name: dragonfly create sentinel over TLS (TLS on main port, local access via unix socket)
 
 fixtures:
@@ -93,6 +97,27 @@ assert:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
         master_addr: "10.0.0.1:6379"
         password: s3cr3t-dragonfly-pass
+
+    # ── 5. SENTINEL-ПЛОСКОСТЬ через destiny `redis` (sentinel_only, ВТОРОЙ apply) ──
+    # install redis-server (distro-пин R4, несёт redis-sentinel) + sentinel.conf в /etc/redis.
+    # Второй apply tls НЕ передаёт → sentinel.conf без TLS-директив (PILOT).
+    - module: core.pkg.installed
+      params_subset:
+        name: redis-server
+        version: "5:7.0.15-1~deb12u7"
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/sentinel.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+
+  task_absent:
+    # ДУБЛИКАТ СНЯТ: dragonfly-destiny больше НЕ рендерит /etc/dragonfly/sentinel.conf.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/dragonfly/sentinel.conf
 
   state_changes:
     df_version: "1.39.0"

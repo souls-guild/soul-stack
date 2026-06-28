@@ -5,8 +5,9 @@
 #   1. Сервисы остановлены (core.service.stopped): dragonfly, redis-sentinel, disable-thp.
 #   2. DragonFly снят ПАКЕТОМ (core.pkg.absent name=dragonfly) — package-ветка активна
 #      (state.install.method=package → static-гейт group-keep).
-#   3. Наши конфиг-артефакты удалены (core.file.absent): users.acl/dragonfly.conf/sentinel.conf/
-#      sentinel-users.acl/TLS PEM в /etc/dragonfly + logrotate/sysctl/disable-thp drop-in.
+#   3. Наши конфиг-артефакты DragonFly удалены (core.file.absent): users.acl/dragonfly.conf/
+#      TLS PEM в /etc/dragonfly + logrotate/sysctl/disable-thp drop-in. (sentinel.conf/
+#      sentinel-users.acl ЗДЕСЬ НЕ удаляются — их кладёт destiny `redis` в /etc/redis, рефактор.)
 #   4. BINARY-ветка дропнута (group-drop): core.file.absent /usr/local/bin/dragonfly И
 #      /etc/systemd/system/dragonfly.service ОТСУТСТВУЮТ в плане (на package-инкарнации не наши).
 name: destroy tears down a package-installed dragonfly (stop services + pkg.absent + remove configs)

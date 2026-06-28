@@ -8,21 +8,22 @@
 # объявления безразличен. Файл закоммичен в git destiny-репо — секретов тут нет (пароли/
 # PEM приходят через input с secret/vault()).
 #
-# ★ DragonFly vs Redis (D1, отдельный destiny — копия структуры redis с подменой
+# ★ DragonFly vs Redis (отдельный destiny — копия структуры redis с подменой
 # config/unit/install). Ключевые отличия зашиты ИМЕННО ЗДЕСЬ (имена/пути), задачи и
 # шаблоны их читают:
 #   - config = FLAGFILE (--flag=value, absl), НЕ redis.conf. Шаблон dragonfly.flags.tmpl.
-#   - бинарь — ОДИН dragonfly (нет dragonfly-cli/-sentinel: DF их не несёт). REPLICAOF/PING
-#     делает redis-cli из distro-пакета redis-tools (см. install.yml), как и sentinel-демон.
-#   - sentinel-демон — redis-sentinel ОТДЕЛЬНЫМ distro-пакетом (DF его НЕ поставляет;
-#     community.redis health-gate на master_link_status DF-совместим → плагин БЕЗ правок).
+#   - бинарь — ОДИН dragonfly (нет dragonfly-cli: DF его не несёт). REPLICAOF/PING
+#     делает redis-cli из distro-пакета redis-tools (см. install.yml).
 #   - модулей НЕТ (cluster OUT, redis-модули .so к DF неприменимы) → таблицы redis_modules
 #     и version-guard Redis 8+ ЗДЕСЬ ОТСУТСТВУЮТ.
+#   - sentinel — НЕ ЗДЕСЬ (рефактор «sentinel из destiny redis»): sentinel-демон полностью
+#     разворачивает destiny `redis` (sentinel_only) отдельным apply сценария → sentinel-vars
+#     (юзер/группа/сервис/порт/каталоги демона) из ЭТОГО destiny УБРАНЫ.
 #
 # ── ГРАНИЦА vars (инвариант) vs input (оператор-переопределяемое) ───────────────
 # vars (ЗДЕСЬ) — то, что ОДИНАКОВО для всех incarnation и менять незачем/нельзя:
-#   - identity сервиса: имена systemd-юнитов (dragonfly_service_name/sentinel_service_name)
-#     — контракт с distro-пакетом sentinel и binary-юнитом DF;
+#   - identity сервиса: имя systemd-юнита dragonfly_service_name — контракт с binary-юнитом
+#     DF (sentinel-юнит здесь больше не объявляется — его несёт destiny `redis`);
 #   - file-mode/owner инварианты; каталоги layout-а, привязанные к systemd/пакету
 #     (systemd_dir, tls-dir выводится из conf_dir).
 # input (destiny.yml input:) — то, что РАЗУМНО переопределить per-incarnation:
@@ -30,34 +31,24 @@
 #     Дефолт input = vars-значение (dragonfly_conf_dir/dragonfly_data_dir) — back-compat.
 
 # system-юзер и группа сервиса dragonfly. binary-ветка install.yml создаёт их явно
-# (core.group.present/core.user.present); distro-пакет sentinel (redis-server) приносит
-# СВОЕГО юзера redis для sentinel-демона — это РАЗНЫЕ юзеры (DF под dragonfly, sentinel
-# под redis), их владение каталогами разводится в задачах. Оба берут имя отсюда.
-# (Официальный deb DF заводит юзера `dfly`; в binary-инсталляции мы используем
-# самоописательное `dragonfly` — у нас нет distro-deb-контракта на имя.)
+# (core.group.present/core.user.present). (Официальный deb DF заводит юзера `dfly`; в
+# binary-инсталляции мы используем самоописательное `dragonfly` — у нас нет distro-deb-
+# контракта на имя.)
 dragonfly_user:  dragonfly
 dragonfly_group: dragonfly
 
-# system-юзер/группа sentinel-демона (его несёт distro-пакет redis-server). sentinel.conf/
-# sentinel-users.acl/redis-sentinel.service владеются ИМЕННО им, не dragonfly-юзером.
-sentinel_user:  redis
-sentinel_group: redis
-
-# ── Имена systemd-сервисов (директива A: имя сервиса в vars, ВЕЗДЕ) ────────────
+# ── Имя systemd-сервиса (директива A: имя сервиса в vars, ВЕЗДЕ) ────────────────
 # ИНВАРИАНТ (vars, не input): имя юнита — контракт между binary-юнитом, core.service
 # running/restart. ВНИМАНИЕ: это имя СЕРВИСА (systemd), НЕ имя пакета и НЕ имя бинаря
-# (/usr/local/bin/dragonfly) — те токены НЕ из этих vars. sentinel_service_name —
-# redis-sentinel (контракт с distro-пакетом redis-server, несущим sentinel-демон).
+# (/usr/local/bin/dragonfly) — те токены НЕ из этих vars.
 dragonfly_service_name: dragonfly
-sentinel_service_name:  redis-sentinel
 
-# ── Дефолтные порты (директива «хардкод порта → var») ───────────────────────────
-# ИНВАРИАНТ (vars, не input): well-known порт DragonFly (6379, redis-совместим) и
-# redis-sentinel (26379). flagfile печатает `--port=6379`; sentinel.conf — `port 26379`.
-# ★ DragonFly vs redis: TLS встаёт на ЭТОТ ЖЕ основной порт (флаг --tls; у DF нет отдельного
-# tls-порта и нет «только-TLS» с `--port=0`). Это дефолт кирпича, не operator-input.
+# ── Дефолтный порт (директива «хардкод порта → var») ────────────────────────────
+# ИНВАРИАНТ (vars, не input): well-known порт DragonFly (6379, redis-совместим). flagfile
+# печатает `--port=6379`. ★ DragonFly vs redis: TLS встаёт на ЭТОТ ЖЕ основной порт (флаг
+# --tls; у DF нет отдельного tls-порта и нет «только-TLS» с `--port=0`). Это дефолт кирпича,
+# не operator-input.
 dragonfly_port: 6379
-sentinel_port:  26379
 
 # ── Базовые пути host-layout (директива B) ──────────────────────────────────────
 # data_dir/conf_dir дополнительно ВЫНЕСЕНЫ в input (destiny.yml) — оператор может
@@ -120,17 +111,6 @@ run_dir: /var/run/dragonfly
 # dragonfly.conf: --log_dir=/var/log/dragonfly). НЕ redis-style `logfile <path>` —
 # glog сам именует файлы. logrotate glob *.log покрывает их.
 log_dir: /var/log/dragonfly
-
-# Run-/log-/data-каталоги sentinel-демона (под distro-юзером redis). DF и sentinel
-# разводятся по РАЗНЫМ каталогам (разные юзеры-владельцы): sentinel пишет pidfile/лог/state
-# в свои /var/run/redis,/var/log/redis,/var/lib/redis (layout пакета redis-server, owned
-# redis:redis). ★ data-каталог ОБЯЗАН быть ОТДЕЛЬНЫМ от DragonFly data_dir (/var/lib/
-# dragonfly, owned dragonfly): sentinel пишет свой state директивой `dir` sentinel.conf и
-# под dragonfly-владением каталога redis-юзер не смог бы туда писать. distro-пакет
-# redis-server заводит /var/lib/redis под redis:redis — туда и пишем sentinel-state.
-sentinel_run_dir:  /var/run/redis
-sentinel_log_dir:  /var/log/redis
-sentinel_data_dir: /var/lib/redis
 
 # ── file-mode/owner инварианты (вынесены: >2 употреблений по задачам) ──────────
 # Точечные mode на ≤2 задачи (0750 tls-dir, 0755 drop-in-dir) ОСТАЮТСЯ литералом:

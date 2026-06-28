@@ -2,6 +2,11 @@
 # replicas_per_master=1 → топология 1+1=2 (size-guard проходит). Master-election: первый по
 # SID хост (node-1) = master; node-2 = реплика.
 #
+# ★ РЕФАКТОР «sentinel из destiny redis»: sentinel-демон ставит ВТОРОЙ apply:destiny:redis
+#   (sentinel_only: deploy_redis=false), НЕ destiny `dragonfly`. Presence-матчер раскрывает
+#   ОБА apply:destiny inline → видит redis-destiny sentinel-задачи (install redis-server +
+#   sentinel.conf в /etc/redis) И НЕ видит dragonfly-sentinel-задач (их в кирпиче больше нет).
+#
 # Render-only, герметично. Что ассертим (критерий приёмки слайса):
 #   1. size-guard PASS-форма: 2 == 1+1.
 #   2. flagfile dragonfly.conf отрендерен (render_context.vars в DF-форме: config, host-
@@ -9,9 +14,13 @@
 #      apply.input).
 #   3. ANTI-TILING: master_addr (REPLICAOF) и monitor.ip (SENTINEL MONITOR) — HOST-
 #      ИНВАРИАНТНЫ, оба = primary_ip первого по SID хоста (node-1 = 10.0.0.1).
-#   4. plugin community.redis.replica: addr=127.0.0.1:6379 (per-host локальный),
+#   4. plugin community.redis.replica: addr=unix-сокет (per-host локальный),
 #      master_addr=10.0.0.1:6379 (master-election). where исключает master (только реплика).
 #   5. plugin community.redis.sentinel: monitor.ip=10.0.0.1, quorum=2 (АВТО size(2)/2+1=2).
+#   6. ★ SENTINEL-ПЛОСКОСТЬ через destiny `redis` (sentinel_only): install redis-server
+#      (distro-пин R4) + sentinel.conf в /etc/redis (owner redis) присутствуют в плане.
+#   7. ★ ДУБЛИКАТ СНЯТ: dragonfly-destiny БОЛЬШЕ НЕ рендерит /etc/dragonfly/sentinel.conf
+#      (task_absent) — sentinel-конфиг теперь только в redis-плоскости (/etc/redis).
 name: dragonfly create 1 master + 1 replica with monitor reconcile
 
 fixtures:
@@ -102,6 +111,32 @@ assert:
           ip: 10.0.0.1
           port: 6379
           quorum: 2
+
+    # ── 6. SENTINEL-ПЛОСКОСТЬ через destiny `redis` (sentinel_only, ВТОРОЙ apply) ──
+    # install redis-server: distro-пин ПАКЕТА (compute.sentinel_redis_package_version,
+    # дефолт 5:7.0.15-1~deb12u7) — R4 distro-пин, пакет несёт redis-sentinel.
+    - module: core.pkg.installed
+      params_subset:
+        name: redis-server
+        version: "5:7.0.15-1~deb12u7"
+
+    # sentinel.conf рендерится в /etc/redis (redis-плоскость, owner redis), НЕ /etc/dragonfly.
+    # template_content presence — факт доставки literal-шаблона redis-destiny Keeper→Soul.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/sentinel.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+
+  task_absent:
+    # ── 7. ДУБЛИКАТ СНЯТ: dragonfly-destiny больше НЕ рендерит sentinel.conf ──
+    # sentinel-конфиг теперь ТОЛЬКО в redis-плоскости (/etc/redis выше). Раньше dragonfly-
+    # destiny рендерил /etc/dragonfly/sentinel.conf — этой задачи в плане быть НЕ должно.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/dragonfly/sentinel.conf
 
   state_changes:
     df_version: "1.39.0"

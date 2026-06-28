@@ -1,40 +1,44 @@
 name: dragonfly
 description: >-
-  Режим-агностичный per-host кирпич DragonFly (концепция Ansible-роли, B-гибрид ADR-009):
+  Per-host кирпич DragonFly data-плоскости (концепция Ansible-роли, B-гибрид ADR-009):
   установка DragonFly (distro-deb / upstream-tarball) + render dragonfly.conf (FLAGFILE) из
-  merged-конфига + render users.acl + sentinel-демон (redis-sentinel из distro-пакета) +
-  сервис. ВСЯ оркестрация (топология, REPLICAOF, sentinel reconcile, health-gate) живёт в
-  scenario сервиса — здесь только идемпотентный install/render/service одного инстанса.
+  merged-конфига + render users.acl + сервис. ВСЯ оркестрация (топология, REPLICAOF,
+  health-gate) живёт в scenario сервиса — здесь только идемпотентный install/render/service
+  одного инстанса.
 
 # Версия destiny — git ref (ADR-007). Поля `version:` верхнего уровня нет. Список задач —
 # в tasks/main.yml. Только core-модули → required_modules: не нужен (community.redis
 # вызывается из scenario сервиса, не из этой destiny).
 #
-# ★ DragonFly vs redis (D1, sentinel-only): отдельный destiny, копия структуры redis с
-# подменой config-формата (FLAGFILE --flag=value вместо redis.conf), unit (Type=simple,
-# binary-юнит несёт hardening сам) и install (один бинарь dragonfly + ОТДЕЛЬНО distro-пакет
-# redis-server для sentinel-демона). БЕЗ redis-модулей (.so), БЕЗ cluster-директив.
+# ★ DragonFly vs redis: отдельный destiny, копия структуры redis с подменой config-формата
+# (FLAGFILE --flag=value вместо redis.conf), unit (Type=simple, binary-юнит несёт hardening
+# сам) и install (один бинарь dragonfly). БЕЗ redis-модулей (.so), БЕЗ cluster-директив.
 #
-# Режим-агностична: standalone / sentinel / sentinel_only (последний — sentinel_enabled +
-# deploy_dragonfly=false, поднимает только sentinel-демон над внешним master). Режим
-# выбирает scenario сервиса; destiny сама режим не знает. Конфиг приходит ГОТОВЫМ merged
-# map-ом через apply: input: config: (merge делает scenario сервиса) — destiny «глупая».
+# ★ SENTINEL — НЕ ЗДЕСЬ (рефактор «sentinel из destiny redis»): DragonFly не несёт
+# redis-sentinel, а sentinel-демон полностью разворачивает destiny `redis` в режиме
+# sentinel_only (deploy_redis=false). scenario сервиса dragonfly делает ВТОРОЙ apply:destiny:
+# redis рядом с apply:destiny:dragonfly (две apply:destiny в одном сценарии, ADR-009).
+# Поэтому sentinel_enabled/sentinel/sentinel_users из этого input УБРАНЫ — кирпич `dragonfly`
+# отвечает строго за data-плоскость DragonFly.
+#
+# Конфиг приходит ГОТОВЫМ merged map-ом через apply: input: config: (merge делает scenario
+# сервиса) — destiny «глупая».
 
 input:
-  # ── Гейт data-плоскости dragonfly (режим sentinel_only) ──────────────────────
-  # deploy_dragonfly=false (режим sentinel_only) → НЕ разворачиваем DragonFly: всю data-
-  # плоскость гасит include-when (server.yml group-drop). sentinel-инструментарий
-  # (redis-server/redis-tools) при этом ставится ВСЕГДА (install.yml) — sentinel_only
-  # поднимает только sentinel-демон, мониторящий ВНЕШНИЙ master.
+  # ── Гейт data-плоскости dragonfly ────────────────────────────────────────────
+  # deploy_dragonfly=false → НЕ разворачиваем data-плоскость DragonFly: её гасит include-when
+  # (server.yml group-drop). Бинарь DragonFly и redis-tools (install.yml) при этом ставятся
+  # ВСЕГДА. В сервисе dragonfly всегда true (scenario не передаёт, default) — флаг оставлен
+  # для гибкости кирпича (симметрия с deploy_redis destiny `redis`).
   deploy_dragonfly:
     type: boolean
     required: false
     default: true
     description: >-
       Разворачивать ли data-плоскость DragonFly (render dragonfly.conf/users.acl/PEM +
-      systemd-сервис dragonfly). По умолчанию true. false (режим sentinel_only) — поднять
-      только sentinel-демон (sentinel_enabled), master внешний. Distro-пакеты sentinel-
-      инструментария (redis-server/redis-tools) ставятся в любом случае.
+      systemd-сервис dragonfly). По умолчанию true. false — не разворачивать data-плоскость
+      (бинарь DragonFly и redis-tools всё равно ставятся). Sentinel этот кирпич не ставит —
+      его разворачивает destiny `redis` (sentinel_only) отдельным apply сценария.
 
   version:
     type: string
@@ -163,33 +167,6 @@ input:
           type: string
           secret: true
 
-  # ── Системные ACL-юзеры sentinel-демона (2-й aclfile) ────────────────────────
-  # ОПЦИОНАЛЬНОЕ additive-поле: служебные юзеры sentinel-демона с sentinel-командами
-  # (ОТЛИЧНЫ от users.acl DragonFly). Рендерится в ОТДЕЛЬНЫЙ ${conf_dir}/sentinel-users.acl.
-  # Пустой/не передан → пустой aclfile (back-compat).
-  sentinel_users:
-    type: object
-    required: false
-    description: >-
-      Системные ACL-пользователи sentinel-демона (map имя→{perms, state, password}).
-      Рендерятся в ${conf_dir}/sentinel-users.acl (aclfile в sentinel.conf). Набор —
-      service-side из essence.system_acl_users_sentinel. password — зарезолвленный keeper-
-      side секрет (маскируется); в файл пишется sha256-хеш. Только sentinel-режим.
-    properties: {}
-    additional_properties:
-      type: object
-      required: [perms, state, password]
-      additional_properties: false
-      properties:
-        perms:
-          type: string
-        state:
-          type: string
-          enum: [on, off]
-        password:
-          type: string
-          secret: true
-
   # ── TLS (концепция Ansible-роли *_tls_*) ─────────────────────────────────────
   # TLS-параметры — единый dict `tls`: enable/cert_ref/key_ref/ca_ref. HOST-ИНВАРИАНТ (один
   # cert/CA на кластер) → приходят через apply.input. Пустой/absent dict → TLS off. Гейт
@@ -240,50 +217,3 @@ input:
       Передаются scenario сервиса (дефолты — essence.sysctl_settings).
     properties: {}
     additional_properties: true
-
-  # ── Sentinel (режим sentinel) ────────────────────────────────────────────────
-  # Эти поля задействованы ТОЛЬКО когда sentinel_enabled=true (gated-задачи в tasks/main.yml).
-  # Вне sentinel-режима не передаются → has()-guard в задачах гасит рендер sentinel.conf/unit.
-  # scenario сервиса вычисляет master-election и передаёт ГОТОВЫЕ значения.
-  sentinel_enabled:
-    type: boolean
-    required: false
-    default: false
-    description: >-
-      Включить рендер sentinel.conf + redis-sentinel.service + запуск демона (режим
-      sentinel). По умолчанию false (standalone — без sentinel). sentinel-демон — redis-
-      sentinel из distro-пакета redis-server (DragonFly его не несёт), мониторит DragonFly
-      как redis-совместимый master.
-
-  sentinel:
-    type: object
-    description: >-
-      Параметры monitored master для sentinel.conf. master_ip/master_port — HOST-
-      ИНВАРИАНТНЫЙ адрес master-а кластера (один на кластер, scenario резолвит run_once).
-      announce-ip НЕ здесь: он per-host, рендерится из .self.network.primary_ip. config —
-      стартовые директивы sentinel.conf (файловая форма). auth_pass — зарезолвленный
-      keeper-side секрет (маскируется).
-    # master_ip обязателен: sentinel без monitored master бессмыслен (gated на
-    # sentinel_enabled). Required ловит пропуск адреса понятной schema-ошибкой ДО render.
-    required: [master_ip]
-    additional_properties: false
-    properties:
-      master_name:
-        type: string
-      master_ip:
-        type: string
-      master_port:
-        type: integer
-        min: 1
-      quorum:
-        type: integer
-        min: 1
-      auth_user:
-        type: string
-      auth_pass:
-        type: string
-        secret: true
-      config:
-        type: object
-        properties: {}
-        additional_properties: true

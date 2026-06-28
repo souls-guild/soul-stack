@@ -3,36 +3,40 @@
 # tasks.md §4 — within-destiny include раскрывается в плоский список). Видит ТОЛЬКО свой
 # input: (изоляция, ADR-009).
 #
-# Режим-агностичный per-host кирпич (standalone/sentinel/sentinel_only): режим выбирает
-# scenario сервиса передачей флагов и sentinel-директив в config; destiny сама режим не
-# знает. Конфиг приходит ГОТОВЫМ merged map-ом через apply: input: config: — destiny
-# ничего не сливает (merge делает scenario).
+# Per-host кирпич DragonFly (data-плоскость одного инстанса): install DragonFly + render
+# flagfile/users.acl/PEM + сервис + host-tuning. Конфиг приходит ГОТОВЫМ merged map-ом через
+# apply: input: config: — destiny ничего не сливает (merge делает scenario).
 #
-# ★ DragonFly vs redis (D1, sentinel-only — cluster OUT): структура копирует redis-main,
-#   НО БЕЗ modules.yml (DragonFly не грузит redis-модули .so — cluster/модули вне скоупа)
-#   и без version-guard Redis 8+. Конвейер из ЧЕТЫРЁХ групп (install/server/sentinel/extras).
+# ★ DragonFly vs redis: структура копирует redis-main БЕЗ data-плоскостных излишеств —
+#   без modules.yml (DragonFly не грузит redis-модули .so) и без version-guard Redis 8+.
+#
+# ★ SENTINEL — НЕ ЗДЕСЬ (рефактор «sentinel из destiny redis»): DragonFly не несёт
+#   redis-sentinel, а распределённый sentinel-демон полностью разворачивает destiny `redis`
+#   в режиме sentinel_only (deploy_redis=false). scenario сервиса dragonfly делает ВТОРОЙ
+#   apply:destiny:redis рядом с этим (две apply:destiny в одном сценарии, ADR-009). Поэтому
+#   sentinel.yml/sentinel-шаблоны/sentinel-input из ЭТОГО destiny УБРАНЫ (дубликат снят) —
+#   кирпич `dragonfly` отвечает строго за data-плоскость DragonFly.
 #
 # Обзор конвейера (порядок include = порядок задач). Режим-гейт стоит НА include
 # (conditional-include, ADR-009 amendment): статический input-предикат на include-задаче
 # РЕАЛЬНО исключает группу из плана (render-phase group-drop), а не гасит её placeholder-
-# skip-ом. Поэтому выключенный include (sentinel вне sentinel-режима, server в sentinel_only)
-# ФИЗИЧЕСКИ отсутствует. L0-кейсы ассертят presence-матчером (task_present/task_absent),
-# которому group-drop безопасен (позиционные индексы не важны).
+# skip-ом. Поэтому выключенный include (server при deploy_dragonfly=false) ФИЗИЧЕСКИ
+# отсутствует. L0-кейсы ассертят presence-матчером (task_present/task_absent), которому
+# group-drop безопасен (позиционные индексы не важны).
 #
-#   install.yml  — sentinel-инструментарий (redis-server/redis-tools, БЕЗУСЛОВНО) + DragonFly
-#                  (диспетч по install.method: package distro-deb dragonfly / binary
-#                  upstream-tarball). binary-ветка несёт СВОЙ рестарт здесь (per-file линтер
-#                  onchanges запрещает cross-file register);
+#   install.yml  — установка DragonFly (диспетч по install.method: package distro-deb
+#                  dragonfly / binary upstream-tarball) + redis-tools (redis-cli для
+#                  health-gate / REPLICAOF плагином, DragonFly его не несёт). binary-ветка
+#                  несёт СВОЙ рестарт здесь (per-file линтер onchanges запрещает cross-file
+#                  register);
 #   server.yml   — data-плоскость dragonfly (gated deploy_dragonfly НА include): PEM →
-#                  users.acl → dragonfly.conf (flagfile) → core.service. sentinel_only
-#                  (deploy_dragonfly=false) → group-drop;
-#   sentinel.yml — sentinel-демон redis-sentinel (gated sentinel_enabled НА include). Вне
-#                  sentinel-режима — group-drop;
+#                  users.acl → dragonfly.conf (flagfile) → core.service. deploy_dragonfly=false
+#                  → group-drop;
 #   extras.yml   — host-tuning (THP-юнит / logrotate / sysctl), все БЕЗУСЛОВНЫ;
 #
 # Гейты include — статические input-предикаты (conditional-include требует input./essence./
 # incarnation./vars.; register./soulprint. на include запрещены). has()-guard в каждом —
-# render-safety при absent dict (sentinel в standalone, tls в sentinel_only).
+# render-safety при absent dict (tls в plaintext-режиме).
 #
 # Явных daemon-reload-шагов НЕТ: core.service (daemon_reload: auto, default) сам перечитывает
 # конфигурацию systemd при смене unit-файла ПЕРЕД start/restart.
@@ -41,8 +45,5 @@
 
 - include: server.yml
   when: "default(input.deploy_dragonfly, true)"
-
-- include: sentinel.yml
-  when: "default(input.sentinel_enabled, false)"
 
 - include: extras.yml

@@ -3,10 +3,12 @@ state_schema_version: 1
 description: >-
   DragonFly по концепции Ansible-роли (PILOT, sentinel-only). Оператор задаёт ПРОСТЫЕ
   типизированные понятия (память, ACL-юзеры, реплики, TLS), а сценарий create транслирует
-  их в flagfile dragonfly.conf. Per-host install + render делает destiny `dragonfly`
-  (режим-агностичный кирпич, ADR-009 B-гибрид); ЖИВОЙ рантайм (PING/REPLICAOF/SENTINEL
-  MONITOR) идёт через плагин `community.redis` (DragonFly redis-совместим — плагин БЕЗ
-  правок); оркестрация (порядок/таргетинг/health-gate) — в scenario сервиса.
+  их в flagfile dragonfly.conf. Per-host install + render data-плоскости делает destiny
+  `dragonfly`; sentinel-демон над DragonFly-master-ом разворачивает destiny `redis` в режиме
+  sentinel_only (DragonFly не несёт redis-sentinel — рефактор «sentinel из destiny redis»;
+  два apply:destiny в create, ADR-009). ЖИВОЙ рантайм (PING/REPLICAOF/SENTINEL MONITOR) идёт
+  через плагин `community.redis` (DragonFly redis-совместим — плагин БЕЗ правок); оркестрация
+  (порядок/таргетинг/health-gate) — в scenario сервиса.
 
   ★ PILOT-СКОУП (D1, 2026-06-27): ТОЛЬКО sentinel-режим (master-replica + sentinel-демон;
   replicas_per_master=0 даёт standalone-эквивалент). cluster ВНЕ скоупа (DragonFly cluster —
@@ -117,10 +119,15 @@ state_schema:
         down_after_ms:       { type: integer }
         failover_timeout_ms: { type: integer }
 
-# Зависимости-destiny (ADR-007: версия зависимости = git ref, не semver-range). `dragonfly` —
-# режим-агностичный кирпич в examples/destiny/dragonfly/.
+# Зависимости-destiny (ADR-007: версия зависимости = git ref, не semver-range).
+#   - `dragonfly` — кирпич data-плоскости DragonFly (examples/destiny/dragonfly/);
+#   - `redis`     — кирпич Redis (examples/destiny/redis/), используется в режиме
+#     sentinel_only (deploy_redis=false) для sentinel-демона над DragonFly-master-ом
+#     (рефактор «sentinel из destiny redis»: DragonFly не несёт redis-sentinel). scenario
+#     create делает ДВА apply:destiny (dragonfly + redis), ADR-009.
 destiny:
   - { name: dragonfly, ref: v1.0.0 }
+  - { name: redis, ref: v1.0.0 }
 
 # Custom-модули сервиса. community.redis — ОСНОВНОЙ интерфейс к живому DragonFly (redis-
 # совместим: PING/REPLICAOF/SENTINEL работают; examples/module/soul-mod-community-redis/).

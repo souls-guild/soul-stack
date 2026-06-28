@@ -1,22 +1,21 @@
 {{/*
-  logrotate-конфиг для лог-файлов DragonFly + redis-sentinel (/etc/logrotate.d/dragonfly).
+  logrotate-конфиг для лог-файлов DragonFly (/etc/logrotate.d/dragonfly).
   Go text/template strict (ADR-010). Контекст: .vars.log_dir (DragonFly, glog → /var/log/
-  dragonfly), .vars.sentinel_log_dir (redis-sentinel-демон → /var/log/redis).
+  dragonfly).
 
-  ★ ДВА glob-каталога (отличие от redis, где оба демона в одном log_dir): DragonFly и
-  sentinel-демон пишут под РАЗНЫМИ юзерами (dragonfly vs redis) в РАЗНЫЕ каталоги. Один
-  logrotate-блок покрывает оба glob-ом по двум каталогам. (DF логирует через glog с
-  собственной ротацией по --max_log_size — logrotate здесь подчищает накопленное; для
-  sentinel это основной механизм ротации.)
+  ★ ТОЛЬКО DragonFly-каталог (рефактор «sentinel из destiny redis»): sentinel-демон теперь
+  разворачивает destiny `redis` (sentinel_only), и ЕГО логи ротирует logrotate destiny
+  `redis` (/var/log/redis). Этот блок покрывает строго DragonFly glog. (DF логирует через
+  glog с собственной ротацией по --max_log_size — logrotate здесь подчищает накопленное.)
 
-  copytruncate: оба демона держат лог-файл открытым и не реагируют на сигнал пере-
-  открытия лога, поэтому ротация копированием+усечением (а не rename+создание) —
-  безопасный вариант без рестарта/HUP. daily + rotate 7: суточная ротация, хранение
-  недели. compress + delaycompress: сжатие со сдвигом на одну ротацию (свежий .1 несжат
-  для оперативного просмотра). missingok + notifempty: лог может отсутствовать (сервис не
-  стартовал) или быть пустым — не ошибка.
+  copytruncate: DF держит лог-файл открытым и не реагирует на сигнал пере-открытия лога,
+  поэтому ротация копированием+усечением (а не rename+создание) — безопасный вариант без
+  рестарта/HUP. daily + rotate 7: суточная ротация, хранение недели. compress +
+  delaycompress: сжатие со сдвигом на одну ротацию (свежий .1 несжат для оперативного
+  просмотра). missingok + notifempty: лог может отсутствовать (сервис не стартовал) или
+  быть пустым — не ошибка.
 */}}
-{{ .vars.log_dir }}/*.log {{ .vars.sentinel_log_dir }}/*.log {
+{{ .vars.log_dir }}/*.log {
   daily
   rotate 7
   size 512M

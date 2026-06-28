@@ -225,9 +225,15 @@ compute:
   # binary → essence.binary_version. Объявлена ОДИН раз (state + плагин читают её).
   df_version: "${ input.install_method == 'binary' ? default(essence.binary_version, '') : (has(input.version) ? input.version : '') }"
   # Версия sentinel-ДЕМОНА (distro redis-sentinel, НЕ DragonFly) для version-гейта плагина
-  # community.redis.sentinel. essence-pinned (sentinel — отдельный продукт, версия не зависит
-  # от df_version). default ловит отсутствие листа.
+  # community.redis.sentinel. SEMVER (X.Y.Z) — versionGE 7.0.0. essence-pinned (sentinel —
+  # отдельный продукт, версия не зависит от df_version). default ловит отсутствие листа.
   sentinel_redis_version: "${ default(essence.sentinel_redis_version, '7.2.4') }"
+  # Distro-пин ПАКЕТА redis-server (несёт redis-sentinel), уходит в apply.input.version
+  # второго apply:destiny:redis (sentinel_only). ★ ОТДЕЛЬНО от sentinel_redis_version выше:
+  # это apt-форма с опциональным epoch/ревизией (5:7.0.15-1~deb12u7), а та — SEMVER для
+  # version-gate плагина. Два РАЗНЫХ формата → два compute-var. essence-pinned; default ловит
+  # отсутствие листа (back-compat essence старого ref).
+  sentinel_redis_package_version: "${ default(essence.sentinel_redis_package_version, '5:7.0.15-1~deb12u7') }"
   # Per-master sentinel-директивы (тайминги failover): map `sentinel <opt> <master>` →
   # значение. Шаблон sentinel.conf.tmpl range-ит, плагин community.redis.sentinel classifyConfig
   # раскладывает per-master → SENTINEL SET. ОДИН source-of-truth (стартовый конфиг + live).
@@ -402,20 +408,6 @@ tasks:
                    }))
                  : {}
              ) }
-        # 2-й aclfile sentinel-демона: служебные из essence.system_acl_users_sentinel
-        # (sentinel-команды). ★ Vault-пароль: default-юзер → ГЛАВНЫЙ секрет secret/dragonfly/
-        # <inc>#password (тот же, что requirepass — иначе sentinel-демон не пустил бы default-
-        # клиента общим паролем). Остальные → ветка users/<name>#password.
-        sentinel_users: >-
-          ${ merge(default(essence.system_acl_users_sentinel, {}).map(name, {
-               name: {
-                 'perms':    essence.system_acl_users_sentinel[name],
-                 'state':    'on',
-                 'password': (name == 'default')
-                   ? vault('secret/dragonfly/' + incarnation.name + '#password')
-                   : vault('secret/dragonfly/' + incarnation.name + '/users/' + name + '#password')
-               }
-             })) }
         # Host-tuning extras (THP/logrotate/sysctl БЕЗУСЛОВНЫ). sysctl_settings — essence,
         # host-инвариант → apply.input.
         sysctl_settings:  "${ default(essence.sysctl_settings, {}) }"
@@ -427,18 +419,10 @@ tasks:
           cert_ref: "${ compute.tls_cert_ref }"
           key_ref:  "${ compute.tls_key_ref }"
           ca_ref:   "${ compute.tls_ca_ref }"
-        sentinel_enabled: true
-        sentinel:
-          master_name: "${ default(essence.sentinel_master_name, 'master') }"
-          # master-election: первый по SID хост = master. HOST-ИНВАРИАНТНО → apply.input.
-          master_ip:   "${ soulprint.hosts[0].network.primary_ip }"
-          master_port: 6379
-          # quorum — АВТО (большинство): size(soulprint.hosts)/2+1.
-          quorum:      "${ int(size(soulprint.hosts)) / 2 + 1 }"
-          auth_pass:   "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
-          # стартовые per-master тайминги failover в sentinel.conf. compute.sentinel_directives
-          # — map `sentinel <opt> <master>` → значение; шаблон range-ит .vars.sentinel_config.
-          config:      "${ compute.sentinel_directives }"
+        # ★ sentinel-демон БОЛЬШЕ НЕ ставит destiny `dragonfly` (sentinel_enabled/sentinel/
+        # sentinel_users УБРАНЫ): DragonFly не несёт redis-sentinel, а distro-демон полностью
+        # разворачивает destiny `redis` (sentinel_only-capability, ОТДЕЛЬНЫЙ apply — шаг 1b
+        # ПОСЛЕ health-gate DF). Этот apply теперь ставит ТОЛЬКО data-плоскость DragonFly.
 
   # ── 2. Health-gate per-host: PING живого DragonFly после старта ───────────────
   # community.redis.command (DragonFly redis-совместим). Каждый узел обязан ответить ДО
@@ -453,6 +437,71 @@ tasks:
       addr:     "${ compute.local_addr }"
       password: "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
       args:     ["PING"]
+
+  # ── 2b. Sentinel-плоскость через destiny `redis` (sentinel_only-capability, REUSE) ─
+  # ★ ПЕРЕИСПОЛЬЗОВАНИЕ destiny `redis` (две apply:destiny в одном сценарии, ADR-009): вместо
+  # ДУБЛИКАТА sentinel-задач в destiny `dragonfly` (sentinel.conf/redis-sentinel.service/
+  # sentinel-users.acl) поднимаем sentinel-демон ТЕМ ЖЕ кирпичом, что redis — destiny `redis`
+  # в режиме sentinel_only (deploy_redis=false → data-плоскость redis-server НЕ разворачивается,
+  # только sentinel-демон над ВНЕШНИМ master-ом, которым здесь служит DragonFly). DragonFly
+  # redis-совместим на проводе → sentinel мониторит его как обычный redis-master.
+  #
+  # ★ ПОРЯДОК: ПОСЛЕ health-gate DF (PING) — DragonFly-master уже жив и отвечает, sentinel-
+  #   демон ставится над работающим master-ом. SENTINEL MONITOR (шаг 4) идёт ещё позже —
+  #   после REPLICAOF реплик.
+  #
+  # ★ КОНТРАКТ sentinel_only destiny `redis`: install.yml ставит пакет redis (несёт redis-
+  #   sentinel) БЕЗУСЛОВНО; server.yml (data-плоскость) gated deploy_redis → group-drop при
+  #   false; sentinel.yml gated sentinel_enabled → активна. Пути sentinel-демона (юзер redis,
+  #   /var/lib/redis state) — дефолт destiny `redis`; data_dir НЕ передаём (R1: дефолт
+  #   /var/lib/redis под redis-юзером — sentinel пишет state туда, не в DragonFly /var/lib/dragonfly).
+  # ★ version (R4): distro-пин ПАКЕТА redis-server (essence.sentinel_redis_package_version,
+  #   apt-форма с epoch). required_when destiny `redis` истинно (install.method=package по
+  #   умолчанию) → version обязателен ДАЖЕ при deploy_redis=false (пакет ставится всегда).
+  # ★ password (R3): requirepass-секрет DragonFly — required-поле destiny `redis` даже при
+  #   deploy_redis=false (sentinel default-юзер аутентифицируется им к DragonFly-master через
+  #   sentinel_users.default → secret/dragonfly/<inc>#password). Тот же главный секрет DF.
+  - name: Apply redis destiny in sentinel_only mode (sentinel daemon monitoring the DragonFly master)
+    apply:
+      destiny: redis
+      input:
+        # sentinel_only: НЕ разворачиваем data-плоскость redis-server (только sentinel-демон).
+        deploy_redis: false
+        sentinel_enabled: true
+        # distro-пин ПАКЕТА redis-server (несёт redis-sentinel). apt-форма с epoch — ОТДЕЛЬНО
+        # от sentinel_redis_version (semver version-gate плагина). required при package-install.
+        version:  "${ compute.sentinel_redis_package_version }"
+        # requirepass DragonFly: sentinel default-юзер общим паролем DF-master. required-поле
+        # destiny `redis` (R3) — тот же главный секрет, что у DragonFly (--requirepass).
+        password: "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
+        sentinel:
+          # master_name — то же логическое имя monitored master, что DF-плоскость.
+          master_name: "${ default(essence.sentinel_master_name, 'master') }"
+          # master-election: первый по SID хост = master (DragonFly-инстанс). HOST-ИНВАРИАНТНО.
+          master_ip:   "${ soulprint.hosts[0].network.primary_ip }"
+          master_port: 6379
+          # quorum — АВТО (большинство): size(soulprint.hosts)/2+1. Считается ИНЛАЙН в apply.input
+          # (НЕ из compute — compute не видит soulprint, барьер host-инвариантности).
+          quorum:      "${ int(size(soulprint.hosts)) / 2 + 1 }"
+          # auth_pass — пароль DragonFly (sentinel↔DF-master AUTH). Тот же главный секрет DF.
+          auth_pass:   "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
+          # стартовые per-master тайминги failover в sentinel.conf. compute.sentinel_directives
+          # — map `sentinel <opt> <master>` → значение; шаблон range-ит .vars.sentinel_config.
+          config:      "${ compute.sentinel_directives }"
+        # 2-й aclfile sentinel-демона: служебные из essence.system_acl_users_sentinel
+        # (sentinel-команды). ★ Vault-пароль: default-юзер → ГЛАВНЫЙ секрет secret/dragonfly/
+        # <inc>#password (тот же, что requirepass DragonFly — иначе sentinel-демон не пустил бы
+        # default-клиента общим паролем DF-master). Остальные → ветка users/<name>#password.
+        sentinel_users: >-
+          ${ merge(default(essence.system_acl_users_sentinel, {}).map(name, {
+               name: {
+                 'perms':    essence.system_acl_users_sentinel[name],
+                 'state':    'on',
+                 'password': (name == 'default')
+                   ? vault('secret/dragonfly/' + incarnation.name + '#password')
+                   : vault('secret/dragonfly/' + incarnation.name + '/users/' + name + '#password')
+               }
+             })) }
 
   # ── 3. REPLICAOF реплик: community.redis.replica ТОЛЬКО на репликах ───────────
   # addr — ЛОКАЛЬНЫЙ инстанс через UNIX-СОКЕТ (compute.local_addr); master_addr — HOST-

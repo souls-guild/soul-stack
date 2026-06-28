@@ -1,7 +1,8 @@
 # tasks/server.yml — data-плоскость DragonFly: TLS PEM + users.acl + dragonfly.conf
 # (FLAGFILE) + сервис dragonfly. ВЕСЬ файл gated на deploy_dragonfly — гейт стоит НА
-# include (main.yml, conditional-include ADR-009 amendment), НЕ внутри файла. sentinel_only
-# (deploy_dragonfly=false) → include дропается целиком (group-drop).
+# include (main.yml, conditional-include ADR-009 amendment), НЕ внутри файла.
+# deploy_dragonfly=false → include дропается целиком (group-drop). В сервисе dragonfly
+# флаг всегда true (data-плоскость нужна); false оставлен для гибкости кирпича.
 #
 # ★ register'ы (dragonfly_tls_cert/dragonfly_tls_key/dragonfly_tls_ca/dragonfly_acl/
 #   dragonfly_conf) ОБЯЗАНЫ жить В ЭТОМ файле: ЗАГРУЗОЧНЫЙ per-file линтер (validateTaskRefs,
@@ -126,7 +127,7 @@
 # core.service dragonfly running. На at-create первичный старт поднимает с финальным
 # flagfile/ACL/cert (рендер выше уже на диске) — отдельного рестарта нет (DF hardening в
 # самом юните, нет drop-in-рестарт-кейса; config/acl/tls hot-reload — day-2, СЛЕД. слайс).
-# sentinel_only (deploy_dragonfly=false) сервис НЕ держит — весь файл group-drop.
+# deploy_dragonfly=false сервис НЕ держит — весь файл group-drop.
 - name: Ensure DragonFly is running and enabled at boot
   module: core.service.running
   params:

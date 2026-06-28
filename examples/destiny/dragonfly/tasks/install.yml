@@ -1,14 +1,18 @@
-# tasks/install.yml — установка DragonFly + sentinel-инструментария. Диспетч по
-# install.method (block per method): package (default — distro-deb dragonfly) ИЛИ binary
-# (upstream-tarball dragonfly-<arch>.tar.gz). Гейт method — static (только input.*) →
-# Keeper гасит неактивную ветку placeholder-skip-ом per-потомок (block static-skip,
-# ADR-009): индексы не сдвигаются, register потомков виден снаружи и при погашенной ветке.
+# tasks/install.yml — установка DragonFly + redis-tools. Диспетч по install.method
+# (block per method): package (default — distro-deb dragonfly) ИЛИ binary (upstream-tarball
+# dragonfly-<arch>.tar.gz). Гейт method — static (только input.*) → Keeper гасит неактивную
+# ветку placeholder-skip-ом per-потомок (block static-skip, ADR-009): индексы не сдвигаются,
+# register потомков виден снаружи и при погашенной ветке.
 #
-# ★ DragonFly vs redis (D1): DF несёт ТОЛЬКО data-плоскость (один бинарь dragonfly). НИ
-#   sentinel-демона, НИ redis-cli DF НЕ поставляет. Поэтому ОБЕ ветки ДОПОЛНИТЕЛЬНО ставят
-#   distro-пакеты redis-server (sentinel-бинарь redis-sentinel) и redis-tools (redis-cli
-#   для health-gate PING / REPLICAOF плагином). Эти пакеты — sentinel-инструментарий,
-#   ставятся БЕЗУСЛОВНО в обоих режимах (sentinel_only тоже их требует).
+# ★ DragonFly vs redis: DF несёт ТОЛЬКО data-плоскость (один бинарь dragonfly). redis-cli
+#   DF НЕ поставляет → ставим distro-пакет redis-tools (redis-cli для health-gate PING /
+#   REPLICAOF плагином community.redis на DragonFly-сокет).
+#
+# ★ SENTINEL-ДЕМОН — НЕ ЗДЕСЬ (рефактор «sentinel из destiny redis»): пакет redis-server
+#   (несущий redis-sentinel) этот destiny БОЛЬШЕ НЕ ставит — sentinel-плоскость целиком
+#   разворачивает destiny `redis` в режиме sentinel_only (её install.yml ставит пакет redis).
+#   scenario сервиса делает ВТОРОЙ apply:destiny:redis. Здесь остаётся ТОЛЬКО redis-tools
+#   (DragonFly-плоскости нужен redis-cli, а его несёт redis-tools, не redis-server).
 #
 # ★ register'ы binary-ветки (dragonfly_bin/dragonfly_unit) и их рестарт-onchanges живут
 #   В ЭТОМ файле: ЗАГРУЗОЧНЫЙ per-file линтер (validateTaskRefs, shared/config/
@@ -16,18 +20,11 @@
 #   cross-file onchanges отвергается как unknown_register_reference (инвариант node-exporter/
 #   redis). Поэтому binary-ветка несёт СВОЙ рестарт dragonfly здесь.
 
-# ── Sentinel-инструментарий (ОБЕ ветки, БЕЗУСЛОВНО) ─────────────────────────────
-# DF не несёт sentinel-демона и redis-cli → ставим их distro-пакетами в любом режиме.
-# redis-server несёт бинарь redis-sentinel (sentinel.yml ждёт его на /usr/bin при
-# sentinel_enabled); redis-tools несёт redis-cli (health-gate PING / REPLICAOF плагин).
-# version distro-пакета НЕ пинуем (sentinel-инструментарий — служебный; пин версии DF —
-# в binary.version/distro-deb dragonfly, не здесь). retry — против флапающего зеркала.
-- name: Install the redis-sentinel daemon (distribution package — DragonFly does not ship it)
-  module: core.pkg.installed
-  retry: { count: 3, delay: 10s }
-  params:
-    name: redis-server
-
+# ── redis-tools (ОБЕ ветки, БЕЗУСЛОВНО) ─────────────────────────────────────────
+# DF не несёт redis-cli → ставим его distro-пакетом redis-tools в любом режиме. redis-cli
+# нужен health-gate PING / REPLICAOF плагину community.redis (коннект к DragonFly-сокету).
+# version distro-пакета НЕ пинуем (служебный инструментарий; пин версии DF — в binary.version/
+# distro-deb dragonfly, не здесь). retry — против флапающего зеркала.
 - name: Install redis-cli for health-gate and replication (distribution package)
   module: core.pkg.installed
   retry: { count: 3, delay: 10s }

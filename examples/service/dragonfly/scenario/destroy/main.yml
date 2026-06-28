@@ -17,19 +17,24 @@ description: >-
   ★ ГРАНИЦА TEARDOWN (консервативный MVP — снять «systemd + файлы», НЕ данные/пакеты-общего-
   назначения):
     - сервисы dragonfly + redis-sentinel + disable-thp ОСТАНАВЛИВАЮТСЯ (core.service.stopped,
-      идемпотентно — нет сервиса → no-op);
+      идемпотентно — нет сервиса → no-op). redis-sentinel поднимает destiny `redis` (sentinel
+      из redis-плоскости, рефактор) — но имя systemd-юнита то же, остановка остаётся валидной;
     - DragonFly УБИРАЕТСЯ по СПОСОБУ установки (state.install.method, static-гейт → group-drop):
       binary-ветка удаляет /usr/local/bin/dragonfly + свой unit-файл; package-ветка снимает
       distro-deb dragonfly (core.pkg.absent — пакет уносит свой systemd-юнит чисто, без отдельного
       daemon-reload);
-    - НАШИ конфиг-артефакты в ${conf_dir} и /etc (users.acl, dragonfly.conf, sentinel.conf,
-      sentinel-users.acl, TLS PEM, logrotate/sysctl drop-in, disable-thp unit) УДАЛЯЮТСЯ —
-      они всегда наши, безопасно в обеих ветках;
-    - data_dir (snapshot-данные DragonFly), пакеты sentinel-инструментария (redis-server/
-      redis-tools — общего назначения, ставятся БЕЗУСЛОВНО), distro-юзер dragonfly — НЕ
-      ТРОГАЮТСЯ (удаление данных деструктивно и необратимо; снос общих пакетов задел бы
-      соседние сервисы). Это осознанная граница MVP — расширить «глубину» (purge данных,
-      снос пакетов) — отдельным решением.
+    - НАШИ конфиг-артефакты DragonFly в ${conf_dir} и /etc (users.acl, dragonfly.conf, TLS PEM,
+      logrotate/sysctl drop-in, disable-thp unit) УДАЛЯЮТСЯ — они всегда наши, безопасно в обеих
+      ветках;
+    - ★ SENTINEL-АРТЕФАКТЫ (sentinel.conf/sentinel-users.acl/redis-sentinel unit, пакет
+      redis-server) НЕ снимаются ЗДЕСЬ — их разворачивает destiny `redis` (sentinel_only) в
+      ЕЁ conf_dir (/etc/redis), не /etc/dragonfly. Полный sentinel-teardown — отдельный слайс
+      (apply destiny `redis` teardown / явные /etc/redis-пути). Для PILOT не критично: redis-
+      sentinel юнит гасится (stop выше), осиротевший конфиг безвреден на удаляемом хосте;
+    - data_dir (snapshot-данные DragonFly), пакет redis-tools (redis-cli — общего назначения,
+      ставится БЕЗУСЛОВНО), distro-юзер dragonfly — НЕ ТРОГАЮТСЯ (удаление данных деструктивно и
+      необратимо; снос общих пакетов задел бы соседние сервисы). Это осознанная граница MVP —
+      расширить «глубину» (purge данных, снос пакетов) — отдельным решением.
 
   ★ state_changes ОТСУТСТВУЮТ намеренно: destroy терминальный — инкарнация удаляется
   (auto_destroy), чистить state бессмысленно (он уходит вместе с инкарнацией). Зеркало create,
@@ -48,8 +53,9 @@ tasks:
   # ── 1. Остановить сервисы DragonFly (идемпотентно) ───────────────────────────
   # core.service.stopped — приводит юнит к «не запущен». Нет сервиса (уже снят / не ставился)
   # → no-op. Останавливаем ДО удаления файлов/пакета: снять конфиг под работающим демоном —
-  # гонка. Три юнита: dragonfly (data-плоскость), redis-sentinel (sentinel-демон), disable-thp
-  # (oneshot THP — RemainAfterExit, stop снимает active-маркер).
+  # гонка. Три юнита: dragonfly (data-плоскость), redis-sentinel (sentinel-демон — его ставит
+  # destiny `redis`, но имя юнита то же), disable-thp (oneshot THP — RemainAfterExit, stop
+  # снимает active-маркер).
   - name: Stop the dragonfly service
     module: core.service.stopped
     params:
@@ -95,11 +101,13 @@ tasks:
     params:
       name: dragonfly
 
-  # ── 3. Удалить НАШИ конфиг-артефакты (обе ветки, всегда наши) ─────────────────
-  # ${conf_dir}-файлы (users.acl, dragonfly.conf, sentinel.conf, sentinel-users.acl, TLS PEM) +
-  # /etc drop-in-ы (logrotate, sysctl, disable-thp unit). conf_dir из state (default /etc/dragonfly).
-  # core.file.absent идемпотентен (нет файла → no-op). TLS-PEM удаляем безусловно: на plaintext-
-  # инкарнации этих файлов нет → no-op (гейтить незачем).
+  # ── 3. Удалить НАШИ конфиг-артефакты DragonFly (обе ветки, всегда наши) ───────
+  # ${conf_dir}-файлы (users.acl, dragonfly.conf, TLS PEM) + /etc drop-in-ы (logrotate, sysctl,
+  # disable-thp unit). conf_dir из state (default /etc/dragonfly). core.file.absent идемпотентен
+  # (нет файла → no-op). TLS-PEM удаляем безусловно: на plaintext-инкарнации этих файлов нет →
+  # no-op (гейтить незачем). ★ sentinel.conf/sentinel-users.acl ЗДЕСЬ НЕ УДАЛЯЮТСЯ — их кладёт
+  # destiny `redis` (sentinel_only) в /etc/redis, не /etc/dragonfly (рефактор «sentinel из redis»);
+  # их teardown — отдельный слайс (см. шапку).
   - name: Remove the dragonfly users.acl
     module: core.file.absent
     params:
@@ -109,16 +117,6 @@ tasks:
     module: core.file.absent
     params:
       path: "${ default(incarnation.state.conf_dir, '/etc/dragonfly') + '/dragonfly.conf' }"
-
-  - name: Remove the sentinel.conf
-    module: core.file.absent
-    params:
-      path: "${ default(incarnation.state.conf_dir, '/etc/dragonfly') + '/sentinel.conf' }"
-
-  - name: Remove the sentinel-users.acl
-    module: core.file.absent
-    params:
-      path: "${ default(incarnation.state.conf_dir, '/etc/dragonfly') + '/sentinel-users.acl' }"
 
   - name: Remove the TLS server certificate
     module: core.file.absent
