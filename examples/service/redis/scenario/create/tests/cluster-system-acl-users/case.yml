@@ -59,7 +59,7 @@ fixtures:
 
   input:
     redis_type: cluster
-    version: "7.2.4"
+    version: "7.4.1"
     shards: 1
     replicas_per_master: 0
     cluster_node_timeout: 5000
@@ -117,7 +117,7 @@ assert:
 
   state_changes:
     redis_type: cluster
-    redis_version: "7.2.4"
+    redis_version: "7.4.1"
     # ★ GUARD «системные НЕ в state»: redis_users несёт ТОЛЬКО operator-extra (app),
     # БЕЗ replica/monitoring/sentinel/haproxy (они доливаются из essence, deep-compare
     # ловит лишний системный элемент как расхождение). wave 1b: МАССИВ AclUser.

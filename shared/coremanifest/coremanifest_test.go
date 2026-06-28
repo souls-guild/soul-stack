@@ -30,7 +30,7 @@ var expectedModules = map[string][]string{
 	"core.noop":     {"run"},                             // no-op/barrier-якорь (ADR-015)
 	"core.soul":     {"registered"},                      // keeper-side (on: keeper)
 	"core.cloud":    {"created", "destroyed", "resized"}, // keeper-side (ADR-017; resized — авто-расширение VM)
-	"core.vault":    {"kv-read"},                         // keeper-side (ADR-017)
+	"core.vault":    {"kv-read", "kv-present"},           // keeper-side (ADR-017): kv-read (явное чтение) + kv-present (generate-if-absent)
 	"core.choir":    {"present", "absent"},               // keeper-side (ADR-044)
 }
 

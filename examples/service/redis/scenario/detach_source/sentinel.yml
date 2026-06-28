@@ -113,6 +113,11 @@
   params:
     addr:        "127.0.0.1:26379"
     master_name: "${ compute.sentinel_master_name }"
+    # ★ CONNECTION-AUTH к sentinel-демону :26379 (отдельно от auth_pass — мониторинг
+    # master-а): sentinel.conf несёт aclfile, default-юзер требует пароль (главный
+    # секрет secret/redis/<inc>#password). password → redis.Options.Password. Без него
+    # коннект к ACL-защищённому демону → NOAUTH (1:1 с шагом 4 деплой-тела).
+    password:    "${ vault('secret/redis/' + incarnation.name + '#password') }"
     auth_pass:   "${ vault('secret/redis/' + incarnation.name + '#password') }"
     redis_version: "${ compute.redis_version }"
     config:      "${ compute.sentinel_directives }"

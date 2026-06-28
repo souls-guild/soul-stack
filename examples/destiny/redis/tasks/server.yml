@@ -130,12 +130,16 @@
       log_dir:  "${ vars.log_dir }"
       # Директивы loadmodule — отдельной секцией шаблона (НЕ ключи config-map: range
       # `{{key}} {{value}}` дал бы хвостовой пробел у loadmodule без значения).
-      # ★ ДИРЕКТИВА «модули ВСЕГДА ВСЕ»: version-guard и путь модулей — в vars.yml; здесь
-      # тернар «Redis 8+ → пусто (встроены), иначе пути ВСЕХ .so». ПОРЯДОК — ЯВНЫЙ
+      # ★ ДИРЕКТИВА «модули ВСЕГДА ВСЕ» = ALL-OR-NOTHING: version-guard и путь модулей —
+      # в vars.yml; здесь тернар «пусто (НИ ОДНОГО loadmodule), иначе пути ВСЕХ .so».
+      # ПУСТО когда: Redis 8+ (модули встроены) ЛИБО modules_base_url пуст (vanilla redis,
+      # без модулей) — vars.redis_modules_enabled инкапсулирует оба условия (единый источник
+      # с include modules.yml, main.yml). Без base_url-гейта loadmodule печатался бы и для
+      # vanilla → redis abort (нет .so для загрузки: их негде скачать). ПОРЯДОК — ЯВНЫЙ
       # отсортированный array-литерал алиасов, а НЕ .map() по map-у (CEL итерация по map
       # недетерминирована → ложный change/рестарт).
       loadmodules: >-
-        ${ vars.redis_is_v8plus
+        ${ !vars.redis_modules_enabled
            ? []
            : ['bloom', 'json', 'search', 'timeseries'].map(alias,
                vars.redis_modules_dir + '/' + vars.redis_modules[alias]) }
@@ -173,11 +177,14 @@
     owner: "${ vars.root_owner }"
     group: "${ vars.root_group }"
     # ReadWritePaths из vars: data_dir следует за override оператора, run_dir/log_dir —
-    # системные каталоги socket/pid/log.
+    # системные каталоги socket/pid/log. conf_dir (тоже override-аемый) — под day-2
+    # CONFIG REWRITE update_config: redis-server переписывает redis.conf, без conf_dir в
+    # RW strict держит /etc только-чтение → REWRITE падает (см. hardening.conf.tmpl).
     vars:
       data_dir: "${ vars.redis_data_dir_eff }"
       run_dir:  "${ vars.run_dir }"
       log_dir:  "${ vars.log_dir }"
+      conf_dir: "${ vars.redis_conf_dir_eff }"
 
 # core.service redis-server running. sentinel_only (deploy_redis=false) сервис НЕ держит
 # — весь файл group-drop (include-when ложно).

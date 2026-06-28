@@ -35,6 +35,10 @@ fixtures:
   essence:
     redis_type: sentinel
     sentinel_master_name: master
+    # ★ Редизайн: подложка per-master sentinel-дефолтов (под input.sentinel_master_settings).
+    sentinel_master_defaults:
+      down-after-milliseconds: "5000"
+      failover-timeout:        "60000"
     modules_base_url: "https://artifacts.example.com/redis/modules"
     memory_reserve_percent: 75
     persistence_presets:
@@ -61,7 +65,8 @@ fixtures:
 
   input:
     redis_type: sentinel
-    version: "7.2.4"
+    version: "7.4.1"
+    install_method: package
     replicas_per_master: 0
 
 assert:
@@ -147,12 +152,14 @@ assert:
 
   state_changes:
     redis_type: sentinel
-    redis_version: "7.2.4"
+    redis_version: "7.4.1"
     # operator-extra нет → системные не в state → redis_users пуст.
     redis_users: []
     redis_hosts: []
     redis_sentinel:
       master_name: master
       quorum: 0
-      down_after_ms: 5000
-      failover_timeout_ms: 60000
+      master_settings:
+        down-after-milliseconds: "5000"
+        failover-timeout: "60000"
+      settings: {}

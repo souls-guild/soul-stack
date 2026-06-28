@@ -71,7 +71,7 @@ core — только `on: keeper`.
 | [`core.soul.registered`](core/soul/README.md) | `registered` | Привязка SID к coven-меткам реестра souls. |
 | [`core.cloud.provisioned`](core/cloud/README.md) | `created` / `destroyed` | Cloud-инстанс через CloudDriver-плагин. |
 | [`core.choir`](core/choir/README.md) | `present` / `absent` | Членство Voice-а (SID) в Choir-е инкарнации (ADR-044). |
-| [`core.vault.kv-read`](core/vault/README.md) | `kv-read` (verb) | Чтение секрета из Vault KV (v1/v2, auto-detect) на keeper-стороне. |
+| [`core.vault`](core/vault/README.md) (author-адреса `core.vault.kv-read` / `core.vault.kv-present`) | `kv-read` (verb) / `kv-present` | `kv-read` — чтение секрета из Vault KV (v1/v2, auto-detect) на keeper-стороне; `kv-present` — generate-if-absent (сгенерировать недостающий секрет по password-policy, [ADR-017 amend 2026-06-28](../adr/0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read)). |
 
 ## core-beacon
 
@@ -95,7 +95,9 @@ Per-beacon справочник — [`core/beacon/README.md`](core/beacon/README
 - **4 Keeper-side core** — `core.soul` / `core.cloud` / `core.vault` по
   [ADR-017](../adr/0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read)
   + `core.choir` по [ADR-044](../adr/0044-choir.md) (регистрируется при наличии
-  `Deps.ChoirStore`). Таблица «Keeper-side core-модули» выше.
+  `Deps.ChoirStore`). `core.vault` — один модуль с двумя state (`kv-read` +
+  `kv-present`, generate-if-absent по [ADR-017 amend 2026-06-28](../adr/0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read)).
+  Таблица «Keeper-side core-модули» выше.
 
 Итого **22 apply-модуля** (18 + 4). В `docs/module/core/` — **23 каталога**: эти
 22 модуля плюс `core-beacon` (тело Vigil, read-only наблюдатель — не apply-модуль,

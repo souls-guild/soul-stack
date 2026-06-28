@@ -60,7 +60,7 @@ fixtures:
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
   input:
     redis_type: cluster
-    version: "7.2.4"
+    version: "7.4.1"
     shards: 2
     replicas_per_master: 1
     cluster_node_timeout: 5000

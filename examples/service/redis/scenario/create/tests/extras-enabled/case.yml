@@ -47,13 +47,13 @@ fixtures:
       off:
         save: ""
         appendonly: "no"
-      aof:
+      aof_1sec:
         save: ""
         appendonly: "yes"
       rdb:
         save: "900 1 300 10 60 10000"
         appendonly: "no"
-      rdb_aof:
+      rdb_aof_1sec:
         save: "900 1 300 10 60 10000"
         appendonly: "yes"
     redis_config:
@@ -86,7 +86,9 @@ fixtures:
     redis_type: sentinel
     # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
     # distro-native пин (мажор < 8 → version-gate модулей не активен).
-    version: "7.2.4"
+    version: "7.4.1"
+    # single-host sentinel roster (1 хост) → реплик нет (size-guard 1+0).
+    replicas_per_master: 0
     # Флагов extras в контракте больше НЕТ: THP/logrotate/sysctl безусловны.
 
 assert:

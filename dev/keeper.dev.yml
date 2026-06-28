@@ -69,8 +69,31 @@ logging:
 # Seed требует уже применённой схемы (миграции 034/035); на свежей БД он
 # отложен до запуска после `keeper init` — повторить `make dev-provision`.
 
+# Sigil — подпись бинарей плагинов + реестр допусков (ADR-026). Без этого блока
+# spawn ЛЮБОГО keeper-side плагина (CloudDriver soul-cloud-wb / SshProvider)
+# fail-closed (no_trust_anchor). signing_key_ref → Vault KV с ed25519-приватником
+# (поле signing_key, PEM PKCS#8). После добавления — рестарт keeper (hot-reload
+# Sigil-блок НЕ поднимает) + допуск бинаря через POST /v1/plugins/sigils.
+sigil:
+  signing_key_ref: vault:secret/keeper/sigil-signing-key
+
 plugins:
   cache_root: /tmp/keeper-dev/plugins
+  # CloudDriver-каталог. FilterByCatalog оставляет в discovery только плагины,
+  # чьё manifest.name упомянуто здесь (поле `name`); без записи `wb` найденный
+  # ручной кеш-слот wb-wb был бы отброшен.
+  #
+  # DEV-shortcut (без публичного git-репо драйвера): кеш-слот
+  # /tmp/keeper-dev/plugins/wb-wb/{manual-0001,current} наполнен ВРУЧНУЮ
+  # (manifest.yaml + бинарь soul-cloud-wb из /home/co-cy/vscode/tools/wb-plugins).
+  # source — file:// без выставленного SOUL_STACK_ALLOW_FILE_REPOS=1: git-резолвер
+  # отбракует схему (validateGitScheme → ErrSourceUnavailable), превратит в warning
+  # и НЕ тронет ручной current-symlink (per-entry fail-closed в ResolveCatalog).
+  # Запись нужна ТОЛЬКО для FilterByCatalog.
+  # ВРЕМЕННО, под удаление: с реальным git-репо заменить на
+  # { name: wb, source: "ssh://...wb-plugins", ref: "<tag>" }.
+  cloud_drivers:
+    - { name: wb, source: "file:///dev/null/soul-cloud-wb-manual-slot", ref: "manual-0001" }
 
 plugin_runtime:
   socket_dir: /tmp/keeper-dev/plugin-sockets

@@ -242,6 +242,14 @@
   params:
     addr:        "127.0.0.1:26379"
     master_name: "${ default(essence.sentinel_master_name, 'master') }"
+    # ★ CONNECTION-AUTH к самому sentinel-демону :26379 (отдельно от auth_pass!):
+    # sentinel.conf несёт aclfile sentinel-users.acl, где default-юзер `on #<hash>` →
+    # ЛЮБОЙ коннект к :26379 требует AUTH (sentinel_users.default = ГЛАВНЫЙ секрет
+    # secret/redis/<inc>#password, шаг 1). password идёт в redis.Options.Password
+    # (parseConnConfig→defaultConnect) — это AUTH соединения. auth_pass НИЖЕ — иное:
+    # это пароль МОНИТОРИНГА master-а (команда SENTINEL SET <master> auth-pass), к
+    # AUTH самого демона отношения не имеет. Без password → NOAUTH на коннекте.
+    password:    "${ vault('secret/redis/' + incarnation.name + '#password') }"
     auth_pass:   "${ vault('secret/redis/' + incarnation.name + '#password') }"
     redis_version: "${ compute.redis_version }"
     config:      "${ compute.sentinel_directives }"
@@ -267,4 +275,8 @@
   failed_when: "register.self.result != 'PONG'"
   params:
     addr: "127.0.0.1:26379"
+    # ★ CONNECTION-AUTH: sentinel-демон защищён aclfile (default-юзер требует пароль,
+    # шаг 1 sentinel_users.default = главный секрет). PING без AUTH → NOAUTH. Тот же
+    # главный секрет, что requirepass redis-server (sentinel default-юзер общим паролем).
+    password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
     args: ["PING"]

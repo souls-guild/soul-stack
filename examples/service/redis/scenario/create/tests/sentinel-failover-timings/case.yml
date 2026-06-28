@@ -51,11 +51,16 @@ fixtures:
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
     redis_type: sentinel
-    version: "7.2.4"
+    version: "7.4.1"
+    install_method: package
     replicas_per_master: 0
-    # ★ #7: нестандартные тайминги failover (≠ дефолты 5000/60000).
-    sentinel_down_after_ms: 12000
-    sentinel_failover_timeout_ms: 70000
+    # ★ #7 (редизайн): нестандартные тайминги failover через per-master dict
+    # sentinel_master_settings (≠ дефолты 5000/60000). Ключи — имена опции SENTINEL SET
+    # без префикса/master-name; значения строки. Поглотили прежние именованные поля
+    # sentinel_down_after_ms / sentinel_failover_timeout_ms.
+    sentinel_master_settings:
+      down-after-milliseconds: "12000"
+      failover-timeout: "70000"
 
 assert:
   task_present:
@@ -65,6 +70,9 @@ assert:
       params_subset:
         addr: "127.0.0.1:26379"
         master_name: master
+        # ★ CONNECTION-AUTH к sentinel-демону :26379 (главный секрет, default-юзер требует
+        # пароль). Guard на NOAUTH — отдельно от auth_pass (мониторинг master).
+        password: s3cr3t-redis-pass-create
         config:
           "sentinel down-after-milliseconds master": "12000"
           "sentinel failover-timeout master": "70000"
@@ -75,12 +83,15 @@ assert:
 
   state_changes:
     redis_type: sentinel
-    redis_version: "7.2.4"
+    redis_version: "7.4.1"
     redis_users: []
     redis_hosts: []
-    # ★ read-model day-2: тайминги оператора в state.redis_sentinel.
+    # ★ read-model day-2 (редизайн): тайминги оператора в master_settings (эффективный
+    # per-master dict = essence-дефолты поверх operator); settings — глобальные (не заданы).
     redis_sentinel:
       master_name: master
       quorum: 0
-      down_after_ms: 12000
-      failover_timeout_ms: 70000
+      master_settings:
+        down-after-milliseconds: "12000"
+        failover-timeout: "70000"
+      settings: {}

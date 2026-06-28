@@ -67,7 +67,9 @@ fixtures:
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
     redis_type: sentinel
-    version: "7.2.4"
+    # version из enum (bump с 7.2.4) — чтобы input-валидация прошла и render ДОШЁЛ до
+    # size-guard assert (ОЖИДАЕМАЯ ошибка кейса), а не упал раньше на version-enum.
+    version: "7.4.1"
     # replicas_per_master=2 → ожидается 1+2=3 хоста, а roster выше = 2 → 2 != 1+2.
     replicas_per_master: 2
 

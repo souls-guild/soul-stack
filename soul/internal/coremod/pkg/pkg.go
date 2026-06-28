@@ -6,6 +6,9 @@
 //   - latest:    пакет установлен и подтянут до новейшей версии репозитория.
 //
 // Backend-ы: apt (Debian/Ubuntu), dnf (RHEL ≥ 8), yum (RHEL ≤ 7), apk (Alpine).
+// apt-вызовы неинтерактивны и conffile-safe (см. aptGet/aptInstall): stdin
+// Soul-агента пуст, любой debconf/dpkg-промпт уронил бы задачу на EOF. rpm-based
+// (.rpmnew/.rpmsave вместо промпта) и apk неинтерактивны по умолчанию.
 // Backend выбирается из soulprint-факта pkg_mgr (primary, ADR-018(b)) — тот же
 // источник, что и CEL `soulprint.self.os.pkg_mgr`; при пустом/unknown факте —
 // fallback на runtime-детект (`command -v` / `which`), см. util.ResolvePkgMgr.
@@ -272,7 +275,7 @@ func (m *Module) runInstall(ctx context.Context, mgr util.PkgMgr, name, version 
 		if version != "" {
 			target = name + "=" + version
 		}
-		return m.must(ctx, "apt-get", "install", "-y", target)
+		return m.aptInstall(ctx, target)
 	case util.PkgMgrDnf:
 		if version != "" {
 			target = name + "-" + version
@@ -322,7 +325,7 @@ func (m *Module) refreshIndex(ctx context.Context, mgr util.PkgMgr) error {
 	var err error
 	switch mgr {
 	case util.PkgMgrApt:
-		err = m.must(ctx, "apt-get", "update")
+		err = m.aptGet(ctx, "update")
 	case util.PkgMgrApk:
 		err = m.must(ctx, "apk", "update")
 	}
@@ -336,7 +339,7 @@ func (m *Module) refreshIndex(ctx context.Context, mgr util.PkgMgr) error {
 func (m *Module) runRemove(ctx context.Context, mgr util.PkgMgr, name string) error {
 	switch mgr {
 	case util.PkgMgrApt:
-		return m.must(ctx, "apt-get", "remove", "-y", name)
+		return m.aptGet(ctx, "remove", "-y", name)
 	case util.PkgMgrDnf:
 		return m.must(ctx, "dnf", "remove", "-y", name)
 	case util.PkgMgrYum:
@@ -356,7 +359,7 @@ func (m *Module) runLatest(ctx context.Context, mgr util.PkgMgr, name string) er
 		// apt-get install --only-upgrade=yes name + install-if-missing семантика
 		// требует двух команд; делаем install-без-версии — apt установит свежую
 		// либо обновит существующую.
-		return m.must(ctx, "apt-get", "install", "-y", name)
+		return m.aptInstall(ctx, name)
 	case util.PkgMgrDnf:
 		return m.must(ctx, "dnf", "install", "-y", name)
 	case util.PkgMgrYum:
@@ -367,6 +370,39 @@ func (m *Module) runLatest(ctx context.Context, mgr util.PkgMgr, name string) er
 		return m.must(ctx, "apk", "add", "--upgrade", name)
 	}
 	return fmt.Errorf("runLatest: unsupported pkg mgr %q", mgr)
+}
+
+// aptGet запускает apt-get в неинтерактивном режиме. Любой apt/dpkg-вызов на
+// управляемом хосте обязан быть batch-safe: stdin Soul-агента пуст, поэтому
+// интерактивный debconf/dpkg-промпт (выбор сервиса, conffile keep/replace и т.п.)
+// упёрся бы в «EOF on stdin» и уронил задачу. `DEBIAN_FRONTEND=noninteractive`
+// переводит debconf в noninteractive-режим (промптов нет, берутся дефолты).
+//
+// env передаётся через обёртку `env KEY=VAL apt-get …`, а НЕ через RunOptions.Env:
+// последнее — full-replace cmd.Env (см. util.OSRunner.RunOpts), что снесло бы
+// PATH/HOME и сломало запуск apt. Обёртка `env` добавляет одну переменную поверх
+// унаследованного окружения, ничего не теряя.
+func (m *Module) aptGet(ctx context.Context, args ...string) error {
+	full := append([]string{"DEBIAN_FRONTEND=noninteractive", "apt-get"}, args...)
+	return m.must(ctx, "env", full...)
+}
+
+// aptInstall — apt-get install конкретного target-а (имя или `name=version`),
+// неинтерактивно и conffile-safe.
+//
+// Dpkg::Options force-confdef + force-confold — ключ к re-apply-робастности:
+// наши сценарии рендерят conffile пакета (напр. redis-sentinel →
+// /etc/redis/sentinel.conf) ДО его установки, и при последующем apply dpkg
+// видит «изменённый оператором conffile» и в интерактиве спросил бы «keep or
+// replace?». force-confold = сохранить уже лежащий (наш отрендеренный) файл;
+// force-confdef = для остальных conffile взять дефолт мейнтейнера без вопроса.
+// Без этих флагов conffile-конфликт роняет install детерминированно при каждом
+// re-apply (файлы переживают destroy).
+func (m *Module) aptInstall(ctx context.Context, target string) error {
+	return m.aptGet(ctx, "install", "-y",
+		"-o", "Dpkg::Options::=--force-confdef",
+		"-o", "Dpkg::Options::=--force-confold",
+		target)
 }
 
 func (m *Module) must(ctx context.Context, name string, args ...string) error {

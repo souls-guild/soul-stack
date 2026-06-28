@@ -36,6 +36,24 @@ func aptInstalled(name, version string) *internaltest.Runner {
 	return r
 }
 
+// Ожидаемые формы apt-команд: install/remove/update теперь неинтерактивны
+// (`env DEBIAN_FRONTEND=noninteractive apt-get …`), а install несёт
+// Dpkg::Options force-confdef/force-confold — conffile-prompt («keep or
+// replace?») при re-apply больше невозможен, поэтому пустой stdin Soul-агента
+// не роняет задачу на EOF (live-баг Debian 12). Строки совпадают с тем, как
+// internaltest.Runner склеивает name+args через пробел.
+const aptNonInteractive = "env DEBIAN_FRONTEND=noninteractive apt-get"
+
+// aptInstallCmd — ожидаемая install-команда (target = имя или `name=version`).
+// confold = сохранить наш отрендеренный conffile, confdef = дефолт для прочих.
+func aptInstallCmd(target string) string {
+	return aptNonInteractive + " install -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold " + target
+}
+
+func aptRemoveCmd(name string) string { return aptNonInteractive + " remove -y " + name }
+
+const aptUpdateCmd = aptNonInteractive + " update"
+
 func TestValidate(t *testing.T) {
 	m := pkg.New()
 	reply, err := m.Validate(context.Background(), &pluginv1.ValidateRequest{
@@ -76,7 +94,7 @@ func TestApply_Installed_AlreadyPresent(t *testing.T) {
 	}
 	// Не должно быть вызова apt-get install.
 	for _, c := range r.Calls {
-		if strings.HasPrefix(c, "apt-get install") {
+		if strings.Contains(c, "apt-get install") {
 			t.Fatalf("unexpected install call: %q", c)
 		}
 	}
@@ -86,12 +104,12 @@ func TestApply_Installed_VersionMismatch_Reinstalls(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
 	r.On("command -v apt-get", util.Result{ExitCode: 0})
-	r.On("apt-get update", util.Result{ExitCode: 0})
+	r.On(aptUpdateCmd, util.Result{ExitCode: 0})
 	r.OnSeq("dpkg-query -W -f=${Status} ${Version} redis-server",
 		util.Result{ExitCode: 0, Stdout: "install ok installed 7:6.0.0-1"},
 		util.Result{ExitCode: 0, Stdout: "install ok installed 7:7.0.0-1"},
 	)
-	r.On("apt-get install -y redis-server=7:7.0.0-1", util.Result{ExitCode: 0})
+	r.On(aptInstallCmd("redis-server=7:7.0.0-1"), util.Result{ExitCode: 0})
 	m := &pkg.Module{Runner: r}
 
 	stream := &internaltest.ApplyStream{}
@@ -112,10 +130,10 @@ func TestApply_Installed_NotPresent_Installs(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
 	r.On("command -v apt-get", util.Result{ExitCode: 0})
-	r.On("apt-get update", util.Result{ExitCode: 0})
+	r.On(aptUpdateCmd, util.Result{ExitCode: 0})
 	// dpkg-query exits 1 — пакет не установлен.
 	r.On("dpkg-query -W -f=${Status} ${Version} redis-server", util.Result{ExitCode: 1})
-	r.On("apt-get install -y redis-server", util.Result{ExitCode: 0})
+	r.On(aptInstallCmd("redis-server"), util.Result{ExitCode: 0})
 	// Post-install: pacackge present.
 	// Перезаписываем dpkg-query результат. Здесь невозможно (map): поэтому
 	// fake-runner повторяет одинаковый ответ на повторные вызовы. Для теста
@@ -166,9 +184,9 @@ func TestApply_Installed_NoVersion_InstallsWithoutPin(t *testing.T) {
 		{
 			name:    "apt",
 			mgrCmd:  "apt-get",
-			refresh: "apt-get update",
+			refresh: aptUpdateCmd,
 			query:   "dpkg-query -W -f=${Status} ${Version} redis-server",
-			want:    "apt-get install -y redis-server",
+			want:    aptInstallCmd("redis-server"),
 			notWant: "redis-server=",
 		},
 		{
@@ -243,9 +261,9 @@ func TestApply_Installed_EmptyVersion_InstallsWithoutPin(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
 	r.On("command -v apt-get", util.Result{ExitCode: 0})
-	r.On("apt-get update", util.Result{ExitCode: 0})
+	r.On(aptUpdateCmd, util.Result{ExitCode: 0})
 	r.On("dpkg-query -W -f=${Status} ${Version} redis-server", util.Result{ExitCode: 1})
-	r.On("apt-get install -y redis-server", util.Result{ExitCode: 0})
+	r.On(aptInstallCmd("redis-server"), util.Result{ExitCode: 0})
 	m := &pkg.Module{Runner: r}
 
 	stream := &internaltest.ApplyStream{}
@@ -255,7 +273,7 @@ func TestApply_Installed_EmptyVersion_InstallsWithoutPin(t *testing.T) {
 	}, stream); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if !hasCall(r, "apt-get install -y redis-server") {
+	if !hasCall(r, aptInstallCmd("redis-server")) {
 		t.Fatalf("ожидался install без пина при version=\"\", calls=%v", r.Calls)
 	}
 	for _, c := range r.Calls {
@@ -274,12 +292,12 @@ func TestApply_Installed_DistroNativeVersion_PinsExact(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
 	r.On("command -v apt-get", util.Result{ExitCode: 0})
-	r.On("apt-get update", util.Result{ExitCode: 0})
+	r.On(aptUpdateCmd, util.Result{ExitCode: 0})
 	r.OnSeq("dpkg-query -W -f=${Status} ${Version} redis-server",
 		util.Result{ExitCode: 1}, // до install — не установлен
 		util.Result{ExitCode: 0, Stdout: "install ok installed " + ver}, // после
 	)
-	r.On("apt-get install -y redis-server="+ver, util.Result{ExitCode: 0})
+	r.On(aptInstallCmd("redis-server="+ver), util.Result{ExitCode: 0})
 	m := &pkg.Module{Runner: r}
 
 	stream := &internaltest.ApplyStream{}
@@ -289,8 +307,101 @@ func TestApply_Installed_DistroNativeVersion_PinsExact(t *testing.T) {
 	}, stream); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if !hasCall(r, "apt-get install -y redis-server="+ver) {
+	if !hasCall(r, aptInstallCmd("redis-server="+ver)) {
 		t.Fatalf("ожидался точный пин distro-native версии, calls=%v", r.Calls)
+	}
+}
+
+// TestApply_Apt_Install_NonInteractive_ConffileSafe — guard на live-баг Debian
+// 12: conffile-prompt («keep or replace?») при re-apply больше структурно
+// невозможен. Apply install обязан нести в одной команде: DEBIAN_FRONTEND=
+// noninteractive (debconf молчит) И оба Dpkg::Options force-confdef/force-confold
+// (dpkg не спрашивает про conffile, сохраняет наш отрендеренный). Без любого из
+// трёх пустой stdin Soul-агента упёрся бы в EOF и уронил install.
+//
+// Проверяем фактический фрагмент захваченной команды (не helper-форму — иначе
+// тавтология): если рефактор уберёт неинтерактивность, тест поймает регресс.
+func TestApply_Apt_Install_NonInteractive_ConffileSafe(t *testing.T) {
+	r := internaltest.NewRunner()
+	r.Fallback = util.Result{ExitCode: 1}
+	r.On("command -v apt-get", util.Result{ExitCode: 0})
+	r.On(aptUpdateCmd, util.Result{ExitCode: 0})
+	r.On("dpkg-query -W -f=${Status} ${Version} redis-sentinel", util.Result{ExitCode: 1})
+	r.On(aptInstallCmd("redis-sentinel"), util.Result{ExitCode: 0})
+	m := &pkg.Module{Runner: r}
+
+	stream := &internaltest.ApplyStream{}
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State:  "installed",
+		Params: mustStruct(t, map[string]any{"name": "redis-sentinel"}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	var install string
+	for _, c := range r.Calls {
+		if strings.Contains(c, "apt-get install") {
+			install = c
+			break
+		}
+	}
+	if install == "" {
+		t.Fatalf("install-команда не вызвана, calls=%v", r.Calls)
+	}
+	for _, frag := range []string{
+		"DEBIAN_FRONTEND=noninteractive",
+		"Dpkg::Options::=--force-confdef",
+		"Dpkg::Options::=--force-confold",
+	} {
+		if !strings.Contains(install, frag) {
+			t.Fatalf("install-команда не несёт %q (conffile-prompt снова возможен): %q", frag, install)
+		}
+	}
+}
+
+// TestApply_Apt_RemoveAndUpdate_NonInteractive — remove и update индекса тоже
+// идут с DEBIAN_FRONTEND=noninteractive (prerm-скрипты пакета и debconf при
+// обновлении не должны интерактивно спрашивать на пустом stdin).
+func TestApply_Apt_RemoveAndUpdate_NonInteractive(t *testing.T) {
+	// remove установленного пакета.
+	r := aptInstalled("redis-server", "7:7.0.0-1")
+	r.On(aptRemoveCmd("redis-server"), util.Result{ExitCode: 0})
+	m := &pkg.Module{Runner: r}
+	stream := &internaltest.ApplyStream{}
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State:  "absent",
+		Params: mustStruct(t, map[string]any{"name": "redis-server"}),
+	}, stream); err != nil {
+		t.Fatalf("Apply absent: %v", err)
+	}
+	assertAptNonInteractive(t, r, "apt-get remove")
+
+	// update индекса (через install на отсутствующем пакете).
+	r2 := internaltest.NewRunner()
+	r2.Fallback = util.Result{ExitCode: 1}
+	r2.On("command -v apt-get", util.Result{ExitCode: 0})
+	r2.On(aptUpdateCmd, util.Result{ExitCode: 0})
+	r2.On("dpkg-query -W -f=${Status} ${Version} nginx", util.Result{ExitCode: 1})
+	r2.On(aptInstallCmd("nginx"), util.Result{ExitCode: 0})
+	m2 := &pkg.Module{Runner: r2}
+	stream2 := &internaltest.ApplyStream{}
+	if err := m2.Apply(&pluginv1.ApplyRequest{
+		State:  "installed",
+		Params: mustStruct(t, map[string]any{"name": "nginx"}),
+	}, stream2); err != nil {
+		t.Fatalf("Apply installed: %v", err)
+	}
+	assertAptNonInteractive(t, r2, "apt-get update")
+}
+
+// assertAptNonInteractive — фейлит, если apt-команда с данной подкомандой
+// вызвана БЕЗ DEBIAN_FRONTEND=noninteractive.
+func assertAptNonInteractive(t *testing.T, r *internaltest.Runner, subcmd string) {
+	t.Helper()
+	for _, c := range r.Calls {
+		if strings.Contains(c, subcmd) && !strings.Contains(c, "DEBIAN_FRONTEND=noninteractive") {
+			t.Fatalf("%q вызван без DEBIAN_FRONTEND=noninteractive: %q", subcmd, c)
+		}
 	}
 }
 
@@ -312,9 +423,9 @@ func TestApply_Apt_RefreshBeforeInstall(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
 	r.On("command -v apt-get", util.Result{ExitCode: 0})
-	r.On("apt-get update", util.Result{ExitCode: 0})
+	r.On(aptUpdateCmd, util.Result{ExitCode: 0})
 	r.On("dpkg-query -W -f=${Status} ${Version} redis-server", util.Result{ExitCode: 1})
-	r.On("apt-get install -y redis-server", util.Result{ExitCode: 0})
+	r.On(aptInstallCmd("redis-server"), util.Result{ExitCode: 0})
 	m := &pkg.Module{Runner: r}
 
 	stream := &internaltest.ApplyStream{}
@@ -324,7 +435,7 @@ func TestApply_Apt_RefreshBeforeInstall(t *testing.T) {
 	}, stream); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	ri, ii := callIndex(r, "apt-get update"), callIndex(r, "apt-get install -y redis-server")
+	ri, ii := callIndex(r, aptUpdateCmd), callIndex(r, aptInstallCmd("redis-server"))
 	if ri < 0 {
 		t.Fatalf("apt-get update не вызван, calls=%v", r.Calls)
 	}
@@ -367,11 +478,11 @@ func TestApply_Apt_RefreshOncePerProcess(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
 	r.On("command -v apt-get", util.Result{ExitCode: 0})
-	r.On("apt-get update", util.Result{ExitCode: 0})
+	r.On(aptUpdateCmd, util.Result{ExitCode: 0})
 	r.On("dpkg-query -W -f=${Status} ${Version} redis-server", util.Result{ExitCode: 1})
 	r.On("dpkg-query -W -f=${Status} ${Version} nginx", util.Result{ExitCode: 1})
-	r.On("apt-get install -y redis-server", util.Result{ExitCode: 0})
-	r.On("apt-get install -y nginx", util.Result{ExitCode: 0})
+	r.On(aptInstallCmd("redis-server"), util.Result{ExitCode: 0})
+	r.On(aptInstallCmd("nginx"), util.Result{ExitCode: 0})
 	m := &pkg.Module{Runner: r}
 
 	for _, name := range []string{"redis-server", "nginx"} {
@@ -383,7 +494,7 @@ func TestApply_Apt_RefreshOncePerProcess(t *testing.T) {
 			t.Fatalf("Apply %s: %v", name, err)
 		}
 	}
-	if n := countCalls(r, "apt-get update"); n != 1 {
+	if n := countCalls(r, aptUpdateCmd); n != 1 {
 		t.Fatalf("apt-get update вызван %d раз, ожидался ровно 1 (refresh-once), calls=%v", n, r.Calls)
 	}
 }
@@ -419,9 +530,9 @@ func TestApply_Apt_RefreshFails_NoInstall(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
 	r.On("command -v apt-get", util.Result{ExitCode: 0})
-	r.On("apt-get update", util.Result{ExitCode: 100, Stderr: "Could not resolve host"})
+	r.On(aptUpdateCmd, util.Result{ExitCode: 100, Stderr: "Could not resolve host"})
 	r.On("dpkg-query -W -f=${Status} ${Version} redis-server", util.Result{ExitCode: 1})
-	r.On("apt-get install -y redis-server", util.Result{ExitCode: 0})
+	r.On(aptInstallCmd("redis-server"), util.Result{ExitCode: 0})
 	m := &pkg.Module{Runner: r}
 
 	stream := &internaltest.ApplyStream{}
@@ -435,7 +546,7 @@ func TestApply_Apt_RefreshFails_NoInstall(t *testing.T) {
 		t.Fatal("failed=false, want true (refresh упал)")
 	}
 	for _, c := range r.Calls {
-		if strings.HasPrefix(c, "apt-get install") {
+		if strings.Contains(c, "apt-get install") {
 			t.Fatalf("install не должен вызываться после провала refresh: %q", c)
 		}
 	}
@@ -459,7 +570,7 @@ func TestApply_Absent_NotPresent_NoOp(t *testing.T) {
 		t.Fatal("changed=true for not-installed absent")
 	}
 	for _, c := range r.Calls {
-		if strings.HasPrefix(c, "apt-get remove") {
+		if strings.Contains(c, "apt-get remove") {
 			t.Fatalf("unexpected remove call: %q", c)
 		}
 	}
@@ -467,7 +578,7 @@ func TestApply_Absent_NotPresent_NoOp(t *testing.T) {
 
 func TestApply_Absent_Present_Removes(t *testing.T) {
 	r := aptInstalled("redis-server", "7:7.0.0-1")
-	r.On("apt-get remove -y redis-server", util.Result{ExitCode: 0})
+	r.On(aptRemoveCmd("redis-server"), util.Result{ExitCode: 0})
 	m := &pkg.Module{Runner: r}
 
 	stream := &internaltest.ApplyStream{}
@@ -658,11 +769,11 @@ func TestApply_Latest_AllBackends(t *testing.T) {
 		{
 			name:       "apt_upgrades",
 			mgrCmd:     "apt-get",
-			refresh:    "apt-get update",
+			refresh:    aptUpdateCmd,
 			queryCmd:   "dpkg-query -W -f=${Status} ${Version} nginx",
 			preQuery:   util.Result{ExitCode: 0, Stdout: "install ok installed 1.0.0"},
 			postQuery:  util.Result{ExitCode: 0, Stdout: "install ok installed 1.2.0"},
-			upgrade:    "apt-get install -y nginx",
+			upgrade:    aptInstallCmd("nginx"),
 			wantChange: true,
 		},
 		{
@@ -796,7 +907,7 @@ func TestApply_Latest_RefreshFails(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
 	r.On("command -v apt-get", util.Result{ExitCode: 0})
-	r.On("apt-get update", util.Result{ExitCode: 100, Stderr: "network down"})
+	r.On(aptUpdateCmd, util.Result{ExitCode: 100, Stderr: "network down"})
 	r.On("dpkg-query -W -f=${Status} ${Version} nginx", util.Result{ExitCode: 1})
 	m := &pkg.Module{Runner: r}
 
@@ -811,7 +922,7 @@ func TestApply_Latest_RefreshFails(t *testing.T) {
 		t.Fatal("failed=false, want true (refresh упал)")
 	}
 	for _, c := range r.Calls {
-		if c == "apt-get install -y nginx" {
+		if c == aptInstallCmd("nginx") {
 			t.Fatalf("upgrade не должен вызываться после провала refresh: %q", c)
 		}
 	}
@@ -975,7 +1086,7 @@ func TestApply_Absent_RpmAndApk(t *testing.T) {
 // TestApply_Absent_RemoveFails — remove вернул non-zero → failed.
 func TestApply_Absent_RemoveFails(t *testing.T) {
 	r := aptInstalled("redis-server", "7:7.0.0-1")
-	r.On("apt-get remove -y redis-server", util.Result{ExitCode: 1, Stderr: "held package"})
+	r.On(aptRemoveCmd("redis-server"), util.Result{ExitCode: 1, Stderr: "held package"})
 	m := &pkg.Module{Runner: r}
 
 	stream := &internaltest.ApplyStream{}
@@ -1040,12 +1151,12 @@ func TestApply_Installed_PostInstallQueryError(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Fallback = util.Result{ExitCode: 1}
 	r.On("command -v apt-get", util.Result{ExitCode: 0})
-	r.On("apt-get update", util.Result{ExitCode: 0})
+	r.On(aptUpdateCmd, util.Result{ExitCode: 0})
 	r.OnSeq("dpkg-query -W -f=${Status} ${Version} redis-server",
 		util.Result{ExitCode: 1},                            // pre: не установлен
 		util.Result{Err: errors.New("dpkg-query vanished")}, // post: упал запуск
 	)
-	r.On("apt-get install -y redis-server", util.Result{ExitCode: 0})
+	r.On(aptInstallCmd("redis-server"), util.Result{ExitCode: 0})
 	m := &pkg.Module{Runner: r}
 
 	stream := &internaltest.ApplyStream{}
@@ -1133,7 +1244,7 @@ func TestApply_DpkgStatus_RemovedButConfigFiles(t *testing.T) {
 		t.Fatal("changed=true, want false (config-files != installed → absent no-op)")
 	}
 	for _, c := range r.Calls {
-		if strings.HasPrefix(c, "apt-get remove") {
+		if strings.Contains(c, "apt-get remove") {
 			t.Fatalf("remove не должен вызываться для config-files-only пакета: %q", c)
 		}
 	}

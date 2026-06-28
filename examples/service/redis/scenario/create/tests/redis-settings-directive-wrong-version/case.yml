@@ -1,14 +1,15 @@
 # L0-испытание version-aware валидатора (assert, #6) — НЕГАТИВ «правильная директива,
 # ЧУЖАЯ версия». Это guard на САМУЮ суть version-awareness: directive bgsave-cpulist —
 # РЕАЛЬНАЯ директива redis.conf, но появилась в Redis 8.x (есть в каталоге[8.2], НЕТ в
-# каталоге[7.2]). Оператор выбрал version 7.2.4 (серия 7.2) → assert обязан отвергнуть
-# bgsave-cpulist: на redis 7.2 такой директивы нет, redis-server упал бы с ошибкой
-# конфига. Проверяет, что валидатор сверяет имя именно с НАБОРОМ ВЫБРАННОЙ серии, а не
-# с «любой версией Redis» (иначе опечатки ловились бы, а version-drift — нет).
+# каталоге[7.4]). Оператор выбрал version 7.4.1 (серия 7.4, enum выкаченных в Nexus
+# сборок) → assert обязан отвергнуть bgsave-cpulist: на redis 7.4 такой директивы нет,
+# redis-server упал бы с ошибкой конфига. Проверяет, что валидатор сверяет имя именно с
+# НАБОРОМ ВЫБРАННОЙ серии, а не с «любой версией Redis» (иначе опечатки ловились бы, а
+# version-drift — нет).
 #
-# В каталоге fixture несём ОБЕ серии (7.2 и 8.2): bgsave-cpulist ∈ 8.2, ∉ 7.2. Версия
-# 7.2.4 матчит только серию 7.2 (regex `^([0-9]+:)?7.2[.]`), членство проверяется
-# против 7.2 → false. Серия 8.2 для этой версии вакуумно-true (тернар) и НЕ спасает.
+# В каталоге fixture несём ОБЕ серии (7.4 и 8.2): bgsave-cpulist ∈ 8.2, ∉ 7.4. Версия
+# 7.4.1 матчит только серию 7.4 (regex `^([0-9]+:)?7.4[.]`), членство проверяется
+# против 7.4 → false. Серия 8.2 для этой версии вакуумно-true (тернар) и НЕ спасает.
 name: redis_settings with a directive from a newer Redis series aborts at render (version mismatch)
 
 fixtures:
@@ -57,7 +58,7 @@ fixtures:
 
     # Каталог с ДВУМЯ сериями: bgsave-cpulist есть только в 8.2 (введена в Redis 8.x).
     redis_directives:
-      "7.2":
+      "7.4":
         - maxmemory
         - maxmemory-policy
         - maxclients
@@ -75,12 +76,12 @@ fixtures:
 
   input:
     redis_type: sentinel
-    version: "7.2.4"
+    version: "7.4.1"
     persistence: rdb
     redis_settings:
-      # Реальная директива, но из Redis 8.x — на серии 7.2 её НЕТ → assert false.
+      # Реальная директива, но из Redis 8.x — на серии 7.4 её НЕТ → assert false.
       bgsave-cpulist: "0-3"
 
 # Прогон обрывается на render: assert «Validate redis_settings directive names…» false
-# (bgsave-cpulist ∉ каталог[7.2]). Подстрока — message assert-правила.
+# (bgsave-cpulist ∉ каталог[7.4]). Подстрока — message assert-правила.
 expect_render_error: "redis_settings содержит неизвестную директиву redis.conf для выбранной версии Redis"

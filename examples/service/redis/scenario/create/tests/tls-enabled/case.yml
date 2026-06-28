@@ -51,6 +51,10 @@ fixtures:
   essence:
     redis_type: sentinel
     sentinel_master_name: master
+    # ★ Редизайн: подложка per-master sentinel-дефолтов (под input.sentinel_master_settings).
+    sentinel_master_defaults:
+      down-after-milliseconds: "5000"
+      failover-timeout:        "60000"
     modules_base_url: "https://artifacts.example.com/redis/modules"
     memory_reserve_percent: 75
     persistence_presets:
@@ -62,8 +66,8 @@ fixtures:
       maxmemory-policy: allkeys-lru
       maxclients:       10000
       timeout:          300
-    # ★ #5: TLS-параметры (порт, Vault-пути PEM) — в essence. Включение/закрытие plain
-    # — операторские галочки input.tls_enabled/tls_keep_plain.
+    # ★ #5: TLS-параметры (порт, Vault-пути PEM) — в essence. Режим канала задаёт
+    # операторский enum input.connection_mode (tls = только-TLS, plain закрыт).
     tls_port:   7379
     tls_cert_ref: "secret/services/redis/tls#cert"
     tls_key_ref:  "secret/services/redis/tls#key"
@@ -85,13 +89,18 @@ fixtures:
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
     redis_type: sentinel
-    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
-    # distro-native пин (мажор < 8 → version-gate модулей не активен).
-    version: "7.2.4"
+    # version ОБЯЗАТЕЛЬНА: enum выкаченных в Nexus сборок (мажор < 8 → version-gate
+    # модулей не активен). 7.4.1 — серия 7.x, как прежний distro-пин 7.2.4.
+    version: "7.4.1"
+    # install_method=package ЯВНО: assert ждёт install.method=package и redis.conf без
+    # binary-бинарей (кейс про TLS, не про способ установки).
+    install_method: package
     persistence: rdb
-    # ★ #5: оператор включает TLS + закрывает plain-порт (only-TLS).
-    tls_enabled: true
-    tls_keep_plain: false
+    # single-host (1 хост) → 0 реплик (default редизайна 2): size-guard sentinel = 1+0.
+    replicas_per_master: 0
+    # ★ Редизайн: connection_mode=tls — только-TLS (plain закрыт, port 0). Заменяет
+    # прежние tls_enabled=true + tls_keep_plain=false.
+    connection_mode: tls
 
 assert:
   task_present:
@@ -197,7 +206,8 @@ assert:
   # (redis.conf выше), включая TLS-директивы + port 0 (host-инвариант → пишутся в state).
   state_changes:
     redis_type: sentinel
-    redis_version: "7.2.4"
+    redis_version: "7.4.1"
+    connection_mode: tls
     redis_config:
       port: "0"
       tls-port: "7379"
@@ -213,11 +223,15 @@ assert:
       appendonly: "no"
     redis_users: []
     redis_hosts: []
+    # ★ Редизайн: тайминги failover в master_settings (essence.sentinel_master_defaults);
+    # settings — глобальные sentinel-директивы (не заданы → {}).
     redis_sentinel:
       master_name: master
       quorum: 0
-      down_after_ms: 5000
-      failover_timeout_ms: 60000
+      master_settings:
+        down-after-milliseconds: "5000"
+        failover-timeout: "60000"
+      settings: {}
     # ── namedfields (read-model, v3): из тех же compute.tls_*, что TLS-блок redis_config.
     # tls включён+only из essence → enable/only true, port 7379, refs из essence.
     tls:

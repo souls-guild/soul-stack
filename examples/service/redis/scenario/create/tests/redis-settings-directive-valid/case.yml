@@ -1,8 +1,9 @@
 # L0-испытание version-aware валидатора имён директив redis_settings (assert, #6) —
-# ПОЗИТИВ. essence несёт каталог redis_directives с серией 7.2 (подмножество реальных
-# директив). input.version = 7.2.4 → серия 7.2. redis_settings содержит ВАЛИДНОЕ имя
-# директивы (appendfsync ∈ каталог[7.2]) → assert проходит, прогон рендерится штатно.
-# Парный к redis-settings-directive-unknown (там неизвестное имя рвёт render).
+# ПОЗИТИВ. essence несёт каталог redis_directives с серией 7.4 (подмножество реальных
+# директив). input.version = 7.4.1 (enum выкаченных в Nexus сборок) → серия 7.4.
+# redis_settings содержит ВАЛИДНОЕ имя директивы (appendfsync ∈ каталог[7.4]) → assert
+# проходит, прогон рендерится штатно. Парный к redis-settings-directive-unknown (там
+# неизвестное имя рвёт render).
 #
 # Каталог в fixture — ПОДМНОЖЕСТВО (не полный essence/_default.yaml): assert проверяет
 # членство ключа, для позитива достаточно, чтобы переданное имя БЫЛО в наборе серии.
@@ -52,9 +53,9 @@ fixtures:
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
 
-    # Каталог директив (подмножество серии 7.2) — активирует assert-валидатор.
+    # Каталог директив (подмножество серии 7.4) — активирует assert-валидатор.
     redis_directives:
-      "7.2":
+      "7.4":
         - maxmemory
         - maxmemory-policy
         - maxclients
@@ -65,10 +66,17 @@ fixtures:
 
   input:
     redis_type: sentinel
-    version: "7.2.4"
+    version: "7.4.1"
+    # install_method=package ЯВНО: кейс про директивы, не про install. default редизайна
+    # binary (качал бы бинари из Nexus) → package-ветка ставит distro-пакет с version-пином,
+    # что и ассертит core.pkg.installed ниже.
+    install_method: package
+    # replicas_per_master=0 ЯВНО (default редизайна 2): single-host (node-solo), size-guard
+    # sentinel = 1+0 = 1 хост.
+    replicas_per_master: 0
     persistence: rdb
     redis_settings:
-      # ВАЛИДНОЕ имя директивы серии 7.2 (∈ каталог). Значение не валидируется (MVP —
+      # ВАЛИДНОЕ имя директивы серии 7.4 (∈ каталог). Значение не валидируется (MVP —
       # только имена). Перекрывает дефолт appendfsync (если бы был) last-wins.
       appendfsync: everysec
 
@@ -77,14 +85,14 @@ assert:
     - module: core.pkg.installed
       params_subset:
         name: redis-server
-        version: "7.2.4"
+        version: "7.4.1"
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
 
   state_changes:
     redis_type: sentinel
-    redis_version: "7.2.4"
+    redis_version: "7.4.1"
     # redis_settings (passthrough) долился в итоговый redis_config last-wins.
     redis_config:
       maxmemory: "256mb"

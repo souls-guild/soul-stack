@@ -52,6 +52,7 @@ type noopVault struct{}
 func (noopVault) ReadKV(_ context.Context, _ string) (map[string]any, error) {
 	return map[string]any{"data": map[string]any{}}, nil
 }
+func (noopVault) WriteKV(_ context.Context, _ string, _ map[string]any) error { return nil }
 
 type noopAudit struct{}
 

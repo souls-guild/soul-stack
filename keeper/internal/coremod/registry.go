@@ -4,7 +4,7 @@
 // Модули (ключ Registry = base-имя, author-форма = base + state в адресе):
 // `core.soul` (`core.soul.registered`, docs/keeper/modules.md), `core.cloud`
 // (`core.cloud.created`/`core.cloud.destroyed`, ADR-017(a), Plugin.d-pending),
-// `core.vault` (`core.vault.kv-read`, ADR-017(b)) и `core.choir`
+// `core.vault` (`core.vault.kv-read`/`core.vault.kv-present`, ADR-017(b)) и `core.choir`
 // (`core.choir.present`/`core.choir.absent`, ADR-044 — правка членства Voice в
 // Choir-е инкарнации, регистрируется при наличии Deps.ChoirStore). Все
 // исполняются на keeper-инстансе, диспетчер scenario-runner-а — `on: keeper`.
@@ -84,8 +84,10 @@ type Deps struct {
 	// явный `userdata:` продолжает работать без изменений.
 	CloudUserdata cloud.UserdataProvider
 
-	// Vault — read-only vault-client для `core.vault.kv-read`.
-	Vault vault.VaultReader
+	// Vault — vault-client для `core.vault` (kv-read читает; kv-present
+	// generate-if-absent читает+пишет). *vault.Client удовлетворяет обе операции;
+	// kv-read write-путь не вызывает (read-state).
+	Vault vault.VaultWriter
 
 	// ChoirStore — choir-CRUD adapter (ADR-044) для `core.choir`:
 	// AddVoice/RemoveVoice над incarnation_choir_voices + проверка

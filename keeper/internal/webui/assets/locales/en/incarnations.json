@@ -210,5 +210,18 @@
   "unlockTitleShort": "Remove lock",
   "upgradeAccepted": "Upgrade accepted. apply_id:",
   "upgradeDesc": "Runs a state migration + switches service_version in a single PG transaction. Current binding:",
-  "yesShort": "yes"
+  "yesShort": "yes",
+  "traitsLabel": "Traits (incarnation labels)",
+  "traitsHint": "key → scalar value or list of values. Projected into souls.traits of member hosts.",
+  "traitsAddRow": "Add trait",
+  "traitsKeyAria": "trait key",
+  "traitsKeyPlaceholder": "key",
+  "traitsValueAria": "trait value",
+  "traitsValuePlaceholder": "value",
+  "traitsListAria": "trait value list",
+  "traitsListPlaceholder": "value (Enter / comma)",
+  "traitsSwitchToList": "Switch to list mode",
+  "traitsSwitchToString": "Switch to string mode",
+  "traitsRemoveRow": "Remove trait",
+  "traitsChipRemove": "Remove value {{chip}}"
 }

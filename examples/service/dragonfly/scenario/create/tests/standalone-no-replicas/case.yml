@@ -68,6 +68,9 @@ assert:
       params_subset:
         addr: "127.0.0.1:26379"
         master_name: master
+        # ★ CONNECTION-AUTH к sentinel-демону :26379 (главный секрет DF, default-юзер
+        # требует пароль). Отдельно от auth_pass (мониторинг master). Guard на NOAUTH.
+        password: s3cr3t-dragonfly-pass
         auth_pass: s3cr3t-dragonfly-pass
         redis_version: "7.2.4"
         monitor:

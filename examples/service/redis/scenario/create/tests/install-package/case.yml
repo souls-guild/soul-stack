@@ -30,6 +30,10 @@ fixtures:
   essence:
     redis_type: sentinel
     sentinel_master_name: master
+    # ★ Редизайн: подложка per-master sentinel-дефолтов (под input.sentinel_master_settings).
+    sentinel_master_defaults:
+      down-after-milliseconds: "5000"
+      failover-timeout:        "60000"
     modules_base_url: "https://artifacts.example.com/redis/modules"
     memory_reserve_percent: 75
     persistence_presets:
@@ -55,9 +59,11 @@ fixtures:
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
     redis_type: sentinel
-    version: "5:7.0.15-1~deb12u7"
+    version: "7.4.1"
     persistence: rdb
     install_method: package
+    # single-host sentinel roster (1 хост) → реплик нет (size-guard 1+0).
+    replicas_per_master: 0
 
 assert:
   task_present:
@@ -65,7 +71,18 @@ assert:
     - module: core.pkg.installed
       params_subset:
         name: redis-server
-        version: "5:7.0.15-1~deb12u7"
+        version: "7.4.1"
+
+    # ★ redis-sentinel — ОТДЕЛЬНЫЙ distro-пакет (redis-server его НЕ тянет), нужен
+    # на хосте для sentinel-демона (иначе redis-sentinel.service → 203/EXEC, дефект
+    # пойман live на Debian 12). Режим sentinel → sentinel_enabled=true → пакет в плане.
+    # version — ТОТ ЖЕ distro-пин, что у redis-server (версионируются вместе). Guard
+    # против регресса «package-ветка ставит только redis-server». Парный негатив —
+    # cluster-create-3shards (cluster + package → redis-sentinel ОТСУТСТВУЕТ).
+    - module: core.pkg.installed
+      params_subset:
+        name: redis-sentinel
+        version: "7.4.1"
 
     # redis.conf на месте. Полную сверку merged config даёт full-stack; здесь — что
     # data-плоскость поведение-сохранна (тот же модуль/путь, что в default-режиме).
@@ -86,15 +103,19 @@ assert:
 
   state_changes:
     redis_type: sentinel
-    redis_version: "5:7.0.15-1~deb12u7"
+    redis_version: "7.4.1"
     redis_config:
       maxmemory: "256mb"
       save: "900 1 300 10 60 10000"
       appendonly: "no"
     redis_users: []
     redis_hosts: []
+    # ★ Редизайн: тайминги failover в master_settings (дефолты essence.sentinel_master_defaults;
+    # operator dict не задан). settings — глобальные sentinel-директивы (не заданы → {}).
     redis_sentinel:
       master_name: master
       quorum: 0
-      down_after_ms: 5000
-      failover_timeout_ms: 60000
+      master_settings:
+        down-after-milliseconds: "5000"
+        failover-timeout: "60000"
+      settings: {}

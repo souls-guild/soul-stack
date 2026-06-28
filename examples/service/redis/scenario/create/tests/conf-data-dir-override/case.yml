@@ -76,8 +76,10 @@ fixtures:
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
     redis_type: sentinel
-    version: "5:6.2.7"
+    version: "7.4.1"
     persistence: rdb
+    # single-host sentinel roster (1 хост) → реплик нет (size-guard 1+0).
+    replicas_per_master: 0
 
 assert:
   task_present:
@@ -163,7 +165,7 @@ assert:
 
   state_changes:
     redis_type: sentinel
-    redis_version: "5:6.2.7"
+    redis_version: "7.4.1"
     modules: [bloom, json, search, timeseries]
     # ★ override персистит в state → day-2 add_node читает его (тот же layout у новой ноды).
     conf_dir: /opt/redis

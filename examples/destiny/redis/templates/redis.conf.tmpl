@@ -76,10 +76,11 @@ cluster-announce-ip {{ .self.network.primary_ip }}
 {{- end }}
 
 {{/*
-  Redis-модули (Redis < 8): директивы loadmodule идут ОТДЕЛЬНОЙ секцией, а НЕ ключами
+  Redis-модули: директивы loadmodule идут ОТДЕЛЬНОЙ секцией, а НЕ ключами
   .vars.config — у loadmodule нет значения, а range config-а печатает `{{key}} {{value}}`
   (с пустым value → хвостовой пробел). .vars.loadmodules — готовый список путей .so,
-  вычислен в server.yml (тернар по vars.redis_is_v8plus; на Redis 8+ пуст — встроены).
+  вычислен в server.yml (тернар по vars.redis_modules_enabled; пуст на Redis 8+ —
+  встроены — ИЛИ при пустом modules_base_url — vanilla redis без модулей; ALL-OR-NOTHING).
   `index .vars "loadmodules"` (built-in, как cluster-enabled выше): на отсутствующем
   ключе возвращает nil без ошибки в strict-mode (в отличие от `.vars.loadmodules`).
 */}}

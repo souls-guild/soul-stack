@@ -88,11 +88,12 @@ fixtures:
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
     redis_type: sentinel
-    version: "5:6.2.7"
+    version: "7.4.1"
     persistence: rdb
-    # ★ #5: TLS включён + plain закрыт (only-TLS).
-    tls_enabled: true
-    tls_keep_plain: false
+    # single-host sentinel roster (1 хост) → реплик нет (size-guard 1+0).
+    replicas_per_master: 0
+    # ★ #5: TLS включён + plain закрыт (only-TLS) — connection_mode tls.
+    connection_mode: tls
 
 assert:
   task_present:
@@ -205,7 +206,7 @@ assert:
 
   state_changes:
     redis_type: sentinel
-    redis_version: "5:6.2.7"
+    redis_version: "7.4.1"
     # redis_config DRIFT-GUARD: TLS-директивы в state бит-в-бит = config redis.conf,
     # включая override-пути /opt/redis/tls/* (host-инвариант → пишутся в state).
     redis_config:

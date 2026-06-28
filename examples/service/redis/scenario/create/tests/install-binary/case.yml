@@ -1,32 +1,29 @@
-# L0-испытание (Trial, ADR-023): install.method=binary (upstream-tarball). Guard:
-# binary-ветка install.yml активна (url.fetched → archive.extracted → group → user →
-# три core.file.present с src: → свой redis-server.service + СВОЙ рестарт), а
-# package-ветка (core.pkg.installed) — placeholder-skip (params пусты). Прецедент
-# binary-install — node-exporter. URL собирается per-host из base_url +
-# install.version + soulprint.self.os.arch. version (top-level distro-пин) НЕ передан
-# — required_when=package, при method=binary не обязателен; redis_version в state
-# берётся из install.version (compute.redis_version).
+# L0-испытание (Trial, ADR-023): install.method=binary (Nexus, ОТДЕЛЬНЫЕ бинари).
+# Guard: binary-ветка install.yml активна (group → user → ЧЕТЫРЕ core.url.fetched
+# (redis-server/redis-cli/redis-benchmark/redis-sentinel) → symlink-shell check-aof/rdb →
+# свой redis-server.service + СВОЙ рестарт), а package-ветка (core.pkg.installed) —
+# placeholder-skip (params пусты). Прецедент binary-install — node-exporter/modules. URL
+# собирается per-host из base_url (essence) + arch/Debian/distro_ver (soulprint.self.os) +
+# version (input.version, enum).
 #
-# Бинари раскладываются тремя core.file.present с src: (а не одним core.cmd.shell с
-# install -m0755): src копирует содержимое regular-файла из распакованного /tmp →
-# идемпотентность нативная по sha256 (честный changed строго при смене байт бинаря),
-# version-aware unless-guard больше не нужен.
+# ★ Редизайн install-модели: вместо tarball+extract — ЧЕТЫРЕ отдельных core.url.fetched
+# прямо в bin_dir (схема ansible redis installation.yml). Идемпотентность нативная по
+# SHA-256 содержимого (аналог If-None-Match). redis-sentinel — ПОЛНОЦЕННЫЙ бинарь (НЕ
+# симлинк); redis-check-aof/redis-check-rdb — симлинки на redis-server (maintenance-тулзы).
 #
-# ★ Cross-file register guard: register'ы redis_server_bin/redis_cli_bin/
-# redis_sentinel_bin/redis_server_unit (install.yml) читает onchanges рестарт-задачи
-# В ТОМ ЖЕ install.yml (НЕ server.yml) — этот кейс рендерится без
+# ★ Cross-file register guard: register'ы redis_server_bin/redis_cli_bin/redis_benchmark_bin/
+# redis_sentinel_bin/redis_server_links/redis_server_unit (install.yml) читает onchanges
+# рестарт-задачи В ТОМ ЖЕ install.yml (НЕ server.yml) — этот кейс рендерится без
 # unknown_register_reference, фиксируя «register + его onchanges-потребитель живут в
 # одном файле» как инвариант (per-file линтер validateTaskRefs).
 #
 # PRESENCE-форма (миграция с позиционной 2026-06-24): задачи идентифицируются
-# module + params_subset; индексы не сверяются (хрупки — три file.present вместо
-# одного cmd.shell съезжали план на +2). Три бинаря (redis-server/redis-cli/
-# redis-sentinel) — один и тот же core.file.present, дизамбигуируются по path +
-# своим src (guard на правильный бинарь в правильном файле). GUARD «package-ветка
-# НЕ активна при method=binary» — task_absent ниже: package-шаг при binary —
-# static-skip (Params==nil), его core.pkg.installed несёт пустые params → name
-# не матчится; регресс «package протёк в binary» = задача с реальным name.
-name: install method binary fetches upstream tarball and lays out binaries with own unit
+# module + params_subset; индексы не сверяются. Четыре бинаря (redis-server/redis-cli/
+# redis-benchmark/redis-sentinel) — один и тот же core.url.fetched, дизамбигуируются по
+# url/path. GUARD «package-ветка НЕ активна при method=binary» — task_absent ниже: package-
+# шаг при binary — static-skip (Params==nil), его core.pkg.installed несёт пустые params →
+# name не матчится.
+name: install method binary fetches redis binaries from nexus and lays out binaries with own unit
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
@@ -35,7 +32,8 @@ fixtures:
       covens: [create]
       soulprint:
         network: { primary_ip: 10.0.0.5 }
-        os: { arch: amd64 }
+        # os.version нужен binary-URL (.../Debian/<distro_ver>/...) — Debian 12.
+        os: { arch: amd64, version: "12" }
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
@@ -52,6 +50,10 @@ fixtures:
   essence:
     redis_type: sentinel
     sentinel_master_name: master
+    # ★ Редизайн: подложка per-master sentinel-дефолтов (под input.sentinel_master_settings).
+    sentinel_master_defaults:
+      down-after-milliseconds: "5000"
+      failover-timeout:        "60000"
     modules_base_url: "https://artifacts.example.com/redis/modules"
     memory_reserve_percent: 75
     persistence_presets:
@@ -61,12 +63,10 @@ fixtures:
     redis_config:
       maxmemory: "256mb"
 
-    # ★ #1: URL/версия бинаря — в essence (binary_base_url/binary_version), не в input.
+    # ★ Редизайн: base_url бинарей — в essence (author-context, Nexus-mirror). Версия —
+    # операторский input.version (enum выкаченных сборок), НЕ essence.binary_version.
     binary_base_url: "https://downloads.example.com/redis"
-    binary_version:  "7.2.4"
 
-  # version (top-level distro-пин) НЕ передан: install_method=binary → required_when=
-  # package не срабатывает. essence.binary_version несёт версию tarball-а.
     # Системные ACL-юзеры redis-server + sentinel-демона (1:1 из essence/_default.yaml).
     # ОБА ОБЯЗАТЕЛЬНЫ: guard create/sentinel.yml (assert 1b) рвёт render при пустом
     # любом из наборов (тихий fail-open недопустим — без них репликация/sentinel↔redis
@@ -85,24 +85,14 @@ fixtures:
     redis_type: sentinel
     persistence: rdb
     install_method: binary
+    # version — enum выкаченных в Nexus сборок; определяет путь к бинарю (.../<version>/).
+    version: "7.4.1"
+    # replicas_per_master=0 ЯВНО (default редизайна — 2): single-host install-кейс,
+    # size-guard sentinel = 1+0 = 1 хост.
+    replicas_per_master: 0
 
 assert:
   task_present:
-    # Fetch redis tarball: URL из base_url + version + arch (amd64). checksum НЕ
-    # передаётся (content-идемпотентность по SHA-256 содержимого). path во /tmp.
-    # Единственный core.url.fetched в плане.
-    - module: core.url.fetched
-      params_subset:
-        url: "https://downloads.example.com/redis/redis-7.2.4-amd64.tar.gz"
-        path: "/tmp/redis-7.2.4.tar.gz"
-        mode: "0644"
-
-    # Extract redis tarball во /tmp/redis-7.2.4. Единственный core.archive.extracted.
-    - module: core.archive.extracted
-      params_subset:
-        path: "/tmp/redis-7.2.4.tar.gz"
-        dest: "/tmp/redis-7.2.4"
-
     # distro-группа redis (system). Единственный core.group.present.
     - module: core.group.present
       params_subset:
@@ -118,34 +108,51 @@ assert:
         shell: /usr/sbin/nologin
         home: /var/lib/redis
 
-    # Три core.file.present с src: раскладывают redis-server/redis-cli/redis-sentinel
-    # из распакованного /tmp/redis-7.2.4 в /usr/local/bin (mode 0755, owner/group root).
-    # register redis_server_bin/redis_cli_bin/redis_sentinel_bin. Идемпотентность
-    # нативная — sha256(src) сверяется с целью, changed строго при смене байт.
-    # src/content взаимоисключены (content в задаче нет). Дизамбигуатор тройки — path.
-    - module: core.file.present
+    # ★ Редизайн: ЧЕТЫРЕ core.url.fetched качают redis-server/redis-cli/redis-benchmark/
+    # redis-sentinel ОТДЕЛЬНЫМИ файлами в /usr/local/bin (mode 0755, owner/group root).
+    # URL per-host: <base_url>/<arch>/Debian/<distro_ver>/<version>/redis-* (amd64/Debian/12/
+    # 7.4.1). checksum НЕ передаётся (content-идемпотентность SHA-256). register
+    # redis_server_bin/redis_cli_bin/redis_benchmark_bin/redis_sentinel_bin. Дизамбигуатор —
+    # url/path. redis-sentinel — ПОЛНОЦЕННЫЙ бинарь (НЕ симлинк).
+    - module: core.url.fetched
       params_subset:
+        url: "https://downloads.example.com/redis/amd64/Debian/12/7.4.1/redis-server"
         path: /usr/local/bin/redis-server
-        src: /tmp/redis-7.2.4/redis-server
         mode: "0755"
         owner: root
         group: root
 
-    - module: core.file.present
+    - module: core.url.fetched
       params_subset:
+        url: "https://downloads.example.com/redis/amd64/Debian/12/7.4.1/redis-cli"
         path: /usr/local/bin/redis-cli
-        src: /tmp/redis-7.2.4/redis-cli
         mode: "0755"
         owner: root
         group: root
 
-    - module: core.file.present
+    - module: core.url.fetched
       params_subset:
-        path: /usr/local/bin/redis-sentinel
-        src: /tmp/redis-7.2.4/redis-sentinel
+        url: "https://downloads.example.com/redis/amd64/Debian/12/7.4.1/redis-benchmark"
+        path: /usr/local/bin/redis-benchmark
         mode: "0755"
         owner: root
         group: root
+
+    - module: core.url.fetched
+      params_subset:
+        url: "https://downloads.example.com/redis/amd64/Debian/12/7.4.1/redis-sentinel"
+        path: /usr/local/bin/redis-sentinel
+        mode: "0755"
+        owner: root
+        group: root
+
+    # ★ Симлинки redis-check-aof/redis-check-rdb → redis-server (maintenance-тулзы).
+    # ВРЕМЕННО (PILOT) через core.cmd.shell `ln -sfn` (у core.file нет symlink-state —
+    # core.file.symlink в backlog). redis-sentinel — НЕ здесь (отдельный fetch выше).
+    # Единственный core.cmd.shell в binary-плане; матчим по полной cmd-строке.
+    - module: core.cmd.shell
+      params_subset:
+        cmd: "ln -sfn /usr/local/bin/redis-server /usr/local/bin/redis-check-aof && ln -sfn /usr/local/bin/redis-server /usr/local/bin/redis-check-rdb"
 
     # Свой systemd-юнит redis-server.service (binary install). register
     # redis_server_unit. Имя юнита redis-server → hardening drop-in/core.service в обеих
@@ -190,25 +197,29 @@ assert:
 
   state_changes:
     redis_type: sentinel
-    # redis_version из essence.binary_version (compute.redis_version: binary → upstream-semver).
-    redis_version: "7.2.4"
+    # redis_version = input.version (enum выкаченных в Nexus сборок).
+    redis_version: "7.4.1"
     redis_config:
       maxmemory: "256mb"
       save: "900 1 300 10 60 10000"
       appendonly: "no"
     redis_users: []
     redis_hosts: []
+    # ★ Редизайн: тайминги failover в master_settings (дефолты essence.sentinel_master_defaults;
+    # operator dict не задан). settings — глобальные sentinel-директивы (не заданы → {}).
     redis_sentinel:
       master_name: master
       quorum: 0
-      down_after_ms: 5000
-      failover_timeout_ms: 60000
+      master_settings:
+        down-after-milliseconds: "5000"
+        failover-timeout: "60000"
+      settings: {}
     # ── namedfields (read-model): install=binary (тот же compute.install, что ушёл в
-    # destiny apply.input). base_url/version из essence.binary_* (#1).
+    # destiny apply.input). base_url из essence, version из input.version.
     install:
       method:   binary
       base_url: "https://downloads.example.com/redis"
-      version:  "7.2.4"
+      version:  "7.4.1"
     # TLS off (essence без tls_*): enable/only false, port 7379 (essence-дефолт),
     # refs пусты (essence.tls_*_ref не заданы → has()-цепочка даёт '').
     tls:

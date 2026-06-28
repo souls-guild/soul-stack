@@ -15,15 +15,29 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
+type writeCall struct {
+	path string
+	data map[string]any
+}
+
 type fakeVault struct {
-	resp map[string]any
-	err  error
-	last string
+	resp  map[string]any
+	err   error
+	last  string
+	wrote []writeCall
 }
 
 func (f *fakeVault) ReadKV(_ context.Context, path string) (map[string]any, error) {
 	f.last = path
 	return f.resp, f.err
+}
+
+// WriteKV — kv-read его не вызывает (read-state), но Module.Vault теперь требует
+// полный VaultWriter (общий с kv-present). Заглушка фиксирует факт вызова, чтобы
+// read-тесты ловили регресс, если read-ветка случайно начнёт писать.
+func (f *fakeVault) WriteKV(_ context.Context, path string, data map[string]any) error {
+	f.wrote = append(f.wrote, writeCall{path: path, data: data})
+	return nil
 }
 
 type fakeAudit struct {
@@ -55,17 +69,30 @@ func flatSecret(data map[string]any) map[string]any {
 	return data
 }
 
-func TestValidate_RequiresPathAndState(t *testing.T) {
+// TestValidate_UnknownState — неизвестный state маршрутизируется в default-ветку
+// диспетчера и даёт ровно одну ошибку (паттерн cloud/choir: state проверяется
+// первым, до параметров конкретного state).
+func TestValidate_UnknownState(t *testing.T) {
 	m := coremodvault.New(&fakeVault{}, &fakeAudit{})
 	rep, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
 		State:  "fetch",
 		Params: mustStruct(t, map[string]any{}),
 	})
 	if rep.Ok {
-		t.Fatal("expected errors")
+		t.Fatal("expected error for unknown state")
 	}
-	if len(rep.Errors) < 2 {
-		t.Fatalf("expected ≥2 errors, got %v", rep.Errors)
+}
+
+// TestValidate_ReadRequiresPath — на валидном kv-read state отсутствие
+// обязательного `path` даёт ошибку.
+func TestValidate_ReadRequiresPath(t *testing.T) {
+	m := coremodvault.New(&fakeVault{}, &fakeAudit{})
+	rep, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
+		State:  "kv-read",
+		Params: mustStruct(t, map[string]any{}),
+	})
+	if rep.Ok {
+		t.Fatal("expected error: kv-read requires path")
 	}
 }
 

@@ -56,7 +56,13 @@ fixtures:
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
     redis_type: sentinel
-    version: "7.2.4"
+    version: "7.4.1"
+    # install_method=package ЯВНО: кейс про provision-gate, не про install. default
+    # редизайна binary → package-ветка (assert не сверяет install — важна provision-ветка).
+    install_method: package
+    # replicas_per_master=0 ЯВНО (default редизайна 2): single-host (node-solo), size-guard
+    # sentinel = 1+0 = 1 хост.
+    replicas_per_master: 0
     persistence: rdb
     # provision НЕ задан → include provision.yml group-drop.
 
@@ -78,7 +84,7 @@ assert:
 
   state_changes:
     redis_type: sentinel
-    redis_version: "7.2.4"
+    redis_version: "7.4.1"
     # read-model: VM никем не провижены этим прогоном → консервативный default.
     # provisioned_sids=[] покрывает non-provision-ветку guard-а (register.provision
     # не существует на group-drop → тернар короткозамыкает, sids не читаются).

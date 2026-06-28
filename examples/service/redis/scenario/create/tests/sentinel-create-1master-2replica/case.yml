@@ -65,6 +65,10 @@ fixtures:
   essence:
     redis_type: sentinel
     sentinel_master_name: master
+    # ★ Редизайн: подложка per-master sentinel-дефолтов (под input.sentinel_master_settings).
+    sentinel_master_defaults:
+      down-after-milliseconds: "5000"
+      failover-timeout:        "60000"
     modules_base_url: "https://artifacts.example.com/redis/modules"
     memory_reserve_percent: 75
     persistence_presets:
@@ -93,9 +97,11 @@ fixtures:
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
     redis_type: sentinel
-    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
-    # distro-native пин (мажор < 8 → version-gate модулей не активен).
-    version: "7.2.4"
+    # version ОБЯЗАТЕЛЬНА: enum выкаченных в Nexus сборок (мажор < 8 → version-gate
+    # модулей не активен). 7.4.1 — серия 7.x, как прежний distro-пин 7.2.4.
+    version: "7.4.1"
+    # install_method=package ЯВНО: state ждёт install.method=package.
+    install_method: package
     replicas_per_master: 2
 
 assert:
@@ -173,8 +179,11 @@ assert:
       params_subset:
         addr: "127.0.0.1:26379"
         master_name: master
+        # ★ CONNECTION-AUTH к sentinel-демону :26379 (главный секрет, sentinel default-
+        # юзер требует пароль). Отдельно от auth_pass (мониторинг master). Guard на NOAUTH.
+        password: s3cr3t-redis-pass-create
         auth_pass: s3cr3t-redis-pass-create
-        redis_version: "7.2.4"
+        redis_version: "7.4.1"
         config:
           "sentinel down-after-milliseconds master": "5000"
           "sentinel failover-timeout master": "60000"
@@ -188,7 +197,7 @@ assert:
   # не в state — соответствует cluster-precedent).
   state_changes:
     redis_type: sentinel
-    redis_version: "7.2.4"
+    redis_version: "7.4.1"
     redis_config:
       maxmemory:        "256mb"
       maxmemory-policy: allkeys-lru
@@ -201,8 +210,10 @@ assert:
     redis_sentinel:
       master_name: master
       quorum: 0
-      down_after_ms: 5000
-      failover_timeout_ms: 60000
+      master_settings:
+        down-after-milliseconds: "5000"
+        failover-timeout: "60000"
+      settings: {}
     # ── namedfields (read-model, v3): топология sentinel. replicas=2 (UNIFIED
     # replicas_per_master, реплик master-а), sentinel_quorum=0 (АВТО, не материализуется
     # в state). shards=0 (не cluster).

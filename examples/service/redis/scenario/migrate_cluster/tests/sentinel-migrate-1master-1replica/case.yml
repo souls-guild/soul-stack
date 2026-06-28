@@ -66,6 +66,12 @@ fixtures:
     sentinel_master_name: master
     modules_base_url: "https://artifacts.example.com/redis/modules"
     memory_reserve_percent: 75
+    # ★ Редизайн: подложка per-master sentinel-директив (compute.sentinel_directives /
+    # state.redis_sentinel.master_settings). Сюда переехали дефолты удалённых полей
+    # sentinel_down_after_ms=5000 / sentinel_failover_timeout_ms=60000.
+    sentinel_master_defaults:
+      down-after-milliseconds: "5000"
+      failover-timeout: "60000"
     persistence_presets:
       rdb:
         save: "900 1 300 10 60 10000"
@@ -87,8 +93,15 @@ fixtures:
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
     redis_type: sentinel
-    version: "7.2.4"
+    # ★ version — enum выкаченных в Nexus сборок (редизайн). 7.4.1 (мажор 7 < 8 →
+    # version-gate модулей не активен, .so грузятся). install_method=package явно
+    # (дефолт теперь binary) — distro-пин =version, как проверял кейс до редизайна.
+    version: "7.4.1"
+    install_method: package
     replicas_per_master: 1
+    # connection_mode опущен → plain (дефолт): TLS off, plain-порт. sentinel_settings/
+    # sentinel_master_settings опущены → compute.sentinel_directives = essence-дефолты
+    # (down-after-milliseconds=5000/failover-timeout=60000).
     # ★ Внешний источник: координаты + Vault-ПУТЬ к паролю (под pattern-guard).
     source:
       hosts:
@@ -193,7 +206,7 @@ assert:
   # (источник ещё жив — отцепит day-2 detach_source). БЕЗ timestamp (детерминизм L0).
   state_changes:
     redis_type: sentinel
-    redis_version: "7.2.4"
+    redis_version: "7.4.1"
     redis_config:
       maxmemory:        "256mb"
       maxmemory-policy: allkeys-lru
@@ -203,16 +216,25 @@ assert:
       appendonly:       "no"
     redis_users: []
     redis_hosts: []
+    # ★ Редизайн: redis_sentinel несёт ОБОБЩЁННЫЕ map-ы (master_settings/settings) вместо
+    # именованных down_after_ms/failover_timeout_ms. master_settings = essence-дефолты
+    # (input.sentinel_master_settings не задан) → down-after-milliseconds=5000/
+    # failover-timeout=60000; settings={} (sentinel_settings не задан). quorum=0 (АВТО).
     redis_sentinel:
       master_name: master
       quorum: 0
-      down_after_ms: 5000
-      failover_timeout_ms: 60000
+      master_settings:
+        down-after-milliseconds: "5000"
+        failover-timeout: "60000"
+      settings: {}
     replicas: 1
     sentinel_quorum: 0
     shards: 0
     persistence: rdb
     maxmemory_policy: ""
+    # connection_mode=plain (default, TLS off); io_threads=0 (default, директива не пишется).
+    connection_mode: plain
+    io_threads: 0
     install:
       method: package
     tls:

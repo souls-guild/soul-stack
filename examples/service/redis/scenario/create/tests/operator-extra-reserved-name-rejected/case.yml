@@ -38,7 +38,7 @@ fixtures:
   # Оператор пытается завести юзера с зарезервированным именем replica.
   input:
     redis_type: sentinel
-    version: "7.2.4"
+    version: "7.4.1"
     persistence: rdb
     users:
       - { name: replica, perms: "~* +@all", state: "on" }

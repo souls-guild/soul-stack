@@ -82,7 +82,11 @@ fixtures:
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
   input:
     redis_type: cluster
-    version: "7.2.4"
+    # ★ version — enum выкаченных в Nexus сборок (редизайн); валидный enum нужен, чтобы
+    # прогон прошёл input-валидацию и дошёл до replica-guard (render-assert), а не упал
+    # раньше на enum. install_method=package явно (дефолт теперь binary).
+    version: "7.4.1"
+    install_method: package
     shards: 2
     # ★ replicas_per_master=1 — топология с репликами. size-guard (0.) PASS (4==2*(1+1)),
     # но replica-guard (0b.) обрывает render: пилот переносит только мастера.

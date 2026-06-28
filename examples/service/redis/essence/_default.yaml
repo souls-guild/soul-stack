@@ -25,14 +25,28 @@ sentinel_master_name: master
 # 8+ — модули встроены, источник не нужен; на Redis < 8 оператор обязан переопределить).
 modules_base_url: ""
 
-# ── Способ установки binary: источник upstream-tarball (#1, 2026-06-26) ──────────
-# install_method=binary тянет redis из upstream-tarball. URL и версия бинаря — НЕ
-# операторский Run-ввод, а author-context (переехали из object-input install в essence,
-# симметрично modules_base_url): оператор переопределяет в spec.essence под свой mirror.
-# destiny строит имя файла per-host из binary_base_url + binary_version + soulprint.self.
-# os.arch. Дефолты "" — заполнить под реальную инсталляцию (при install_method=binary).
-binary_base_url: ""
+# ── Способ установки binary: источник бинарей Redis из Nexus (редизайн) ──────────
+# install_method=binary (DEFAULT) тянет ОТДЕЛЬНЫЕ бинари redis-server/redis-cli/
+# redis-benchmark из Nexus. base_url — author-context (оператор переопределяет в
+# spec.essence под свой mirror). destiny строит путь per-host как
+# <binary_base_url>/<arch>/Debian/<distro_ver>/<version>/redis-{server,cli,benchmark}
+# из soulprint.self.os (arch, version) + input.version (cluster.yml/sentinel.yml binary-ветка).
+# ★ binary_version в СЦЕНАРИИ create НЕ читается (версия — операторский input.version,
+# enum выкаченных в Nexus сборок). НО он ЖИВ для других сценариев сервиса: migrate_cluster
+# (df_version-каскад binary → essence.binary_version) — поэтому НЕ удалён, оставлен "" как
+# author-context-подложка (оператор переопределяет в spec.essence под binary-инсталляцию).
+binary_base_url: "https://nexus-hosted.wb.ru/repository/raw/devops/dba/prod/redis"
 binary_version:  ""
+
+# ── Дефолты per-master директив Sentinel (подложка sentinel_master_settings) ─────
+# Нижний слой merge() для input.sentinel_master_settings (compute.sentinel_directives):
+# ключ — имя опции SENTINEL SET без префикса/master-name, значение — строка. Сюда
+# переехали дефолты удалённых именованных полей sentinel_down_after_ms (=5000) и
+# sentinel_failover_timeout_ms (=60000). Оператор перекрывает их в Run-форме
+# (input.sentinel_master_settings, last-wins) или в spec.essence.
+sentinel_master_defaults:
+  down-after-milliseconds: "5000"
+  failover-timeout:        "60000"
 
 # ── Host-layout: базовые каталоги конфигурации и данных Redis (#2, 2026-06-26) ───
 # conf_dir/data_dir переехали из operator-input в essence (author-context): оператор
@@ -46,34 +60,50 @@ data_dir: /var/lib/redis
 # резерв под ОС/накладные. scenario вычисляет maxmemory = memory_mb*pct/100 (МБ).
 memory_reserve_percent: 75
 
-# Данные-таблица persistence: enum оператора (off/aof/rdb/rdb_aof) → директивы
-# redis.conf. scenario берёт presets[input.persistence] и мержит в redis_config.
-# Значения — строки (range-ятся в redis.conf как `<key> <value>`):
-#   - save: "" отключает RDB-снапшоты; непустая — política save точек.
+# Данные-таблица persistence: enum оператора (off/aof_1sec/aof_always/rdb/
+# rdb_aof_1sec/rdb_aof_always) → директивы redis.conf. scenario берёт
+# presets[input.persistence] и мержит ЦЕЛИКОМ в redis_config (appendfsync доезжает
+# автоматически). Значения — строки (range-ятся в redis.conf как `<key> <value>`):
+#   - save: "" отключает RDB-снапшоты; непустая — politica save точек.
 #   - appendonly: yes/no включает AOF.
-# rdb_aof = и снапшоты, и AOF (двойная durability).
+#   - appendfsync: everysec/always — частота fsync AOF (для AOF-режимов).
+# rdb_aof_* = и снапшоты, и AOF (двойная durability). aof_1sec/rdb_aof_1sec — fsync
+# раз в секунду (баланс durability/throughput); aof_always/rdb_aof_always — fsync на
+# каждую запись (максимальная durability, дороже).
 persistence_presets:
   off:
     save:       ""
     appendonly: "no"
-  aof:
-    save:       ""
-    appendonly: "yes"
+  aof_1sec:
+    save:        ""
+    appendonly:  "yes"
+    appendfsync: "everysec"
+  aof_always:
+    save:        ""
+    appendonly:  "yes"
+    appendfsync: "always"
   rdb:
     save:       "900 1 300 10 60 10000"
     appendonly: "no"
-  rdb_aof:
-    save:       "900 1 300 10 60 10000"
-    appendonly: "yes"
+  rdb_aof_1sec:
+    save:        "900 1 300 10 60 10000"
+    appendonly:  "yes"
+    appendfsync: "everysec"
+  rdb_aof_always:
+    save:        "900 1 300 10 60 10000"
+    appendonly:  "yes"
+    appendfsync: "always"
 
 # TLS (концепция Ansible-роли redis: defaults redis_tls_*). Источник PEM —
 # Vault-ПУТИ (не сам PEM): scenario резолвит их через ${ vault(<ref>) } в render-
 # фазе и передаёт ЦЕЛЫЕ PEM в destiny/плагин. Пути — доверенный контекст автора
 # (essence), не operator-input → vault() принимает их динамическим аргументом
 # (templating.md §2.3). Форма ref — "<mount>/<path>#<field>" (как requirepass).
-# tls_enable/tls_only по умолчанию false (plaintext); tls_port — 7379 (как роль).
-tls_enable: false
-tls_only:   false
+# ★ Редизайн (connection_mode): TLS-НАМЕРЕНИЕ переехало в operator-input
+# input.connection_mode (enum tls/tls_plain/plain) — прежние essence-флаги
+# tls_enable/tls_only УДАЛЕНЫ (compute.tls_on/tls_only_on выводятся из enum, не из
+# essence). В essence остаются лишь ТЕХНИЧЕСКИЕ параметры: tls_port (7379, как роль)
+# и Vault-пути PEM ниже.
 tls_port:   7379
 # Vault-пути источника PEM (заполнить под реальную инсталляцию). Дефолт —
 # конвенция secret/services/redis/tls (симметрия с secret/redis/<inc> паролей).

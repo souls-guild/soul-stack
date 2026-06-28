@@ -36,19 +36,23 @@ fixtures:
   essence:
     redis_type: sentinel
     sentinel_master_name: master
+    # ★ Редизайн: подложка per-master sentinel-дефолтов (под input.sentinel_master_settings).
+    sentinel_master_defaults:
+      down-after-milliseconds: "5000"
+      failover-timeout:        "60000"
     modules_base_url: "https://artifacts.example.com/redis/modules/6.2"
     memory_reserve_percent: 75
     persistence_presets:
       off:
         save: ""
         appendonly: "no"
-      aof:
+      aof_1sec:
         save: ""
         appendonly: "yes"
       rdb:
         save: "900 1 300 10 60 10000"
         appendonly: "no"
-      rdb_aof:
+      rdb_aof_1sec:
         save: "900 1 300 10 60 10000"
         appendonly: "yes"
     redis_config:
@@ -73,7 +77,12 @@ fixtures:
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
     redis_type: sentinel
-    version: "5:6.2.7"
+    version: "7.4.1"
+    # install_method=package ЯВНО (default редизайна — binary): кейс про модули
+    # (фетч .so), а не про install-модель.
+    install_method: package
+    # single-host sentinel roster (1 хост) → реплик нет (size-guard 1+0).
+    replicas_per_master: 0
     # input.modules НЕ задаётся (набор-инвариант). ВСЕ четыре модуля fetch-ятся по
     # content-идемпотентности (без checksum).
 
@@ -176,7 +185,7 @@ assert:
 
   state_changes:
     redis_type: sentinel
-    redis_version: "5:6.2.7"
+    redis_version: "7.4.1"
     redis_config:
       maxmemory: "256mb"
       maxmemory-policy: allkeys-lru
@@ -186,10 +195,14 @@ assert:
       appendonly: "no"
     redis_users: []
     redis_hosts: []
+    # ★ Редизайн: тайминги failover в master_settings (дефолты essence.sentinel_master_defaults;
+    # operator dict не задан). settings — глобальные sentinel-директивы (не заданы → {}).
     redis_sentinel:
       master_name: master
       quorum: 0
-      down_after_ms: 5000
-      failover_timeout_ms: 60000
+      master_settings:
+        down-after-milliseconds: "5000"
+        failover-timeout: "60000"
+      settings: {}
     # Redis 6 (< 8) → полный набор развёрнут (модули всегда все).
     modules: [bloom, json, search, timeseries]

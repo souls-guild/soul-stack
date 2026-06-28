@@ -269,5 +269,10 @@
   "provMethodLdap": "auto-provisioning from LDAP",
   "provMethodOidc": "auto-provisioning via OIDC",
 
-  "archonCreatedVia": "Created via"
+  "archonCreatedVia": "Created via",
+
+  "settingsTitle": "Settings",
+  "settingsCrumbs": "Keeper configuration",
+  "settingsNavAria": "Settings sections",
+  "settingsTabProvPolicy": "Provisioning Policy"
 }

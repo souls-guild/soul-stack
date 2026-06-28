@@ -255,6 +255,16 @@ const (
 	// (sensitive, audit-trail фиксирует факт чтения, не содержимое).
 	EventVaultKVRead EventType = "vault.kv-read"
 
+	// EventVaultKVPresent — keeper-side core-модуль `core.vault.kv-present`
+	// (ADR-017) сгенерировал недостающие секреты в Vault KV (generate-if-absent).
+	// `source: keeper_internal`, `archon_aid: NULL`. Пишется ТОЛЬКО когда что-то
+	// реально сгенерировано (changed=true); no-op (все секреты уже были) audit-
+	// event не порождает. Payload: `{paths}` — `paths` = map `<vault-path>` →
+	// список сгенерированных ПОЛЕЙ; сами сгенерированные ЗНАЧЕНИЯ в payload
+	// **никогда** не кладутся (security-инвариант ADR-010: новый секрет не
+	// светится в audit-trail/логах/OTel, фиксируется только факт генерации).
+	EventVaultKVPresent EventType = "vault.kv-present"
+
 	// EventSoulCovenChanged — изменён набор Coven-меток Soul-а. Два write-path-а
 	// различаются полем `source`:
 	//   - scenario-путь: keeper-side core-модуль `core.soul.registered`

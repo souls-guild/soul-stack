@@ -89,7 +89,10 @@ fixtures:
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
   input:
     redis_type: cluster
-    version: "7.2.4"
+    # ★ version — enum выкаченных в Nexus сборок (редизайн). install_method=package явно
+    # (дефолт теперь binary). connection_mode опущен → plain (TLS off).
+    version: "7.4.1"
+    install_method: package
     shards: 2
     replicas_per_master: 0
     cluster_node_timeout: 5000
@@ -199,7 +202,7 @@ assert:
   # true, в отличие от sentinel detached:false). БЕЗ timestamp (детерминизм L0).
   state_changes:
     redis_type: cluster
-    redis_version: "7.2.4"
+    redis_version: "7.4.1"
     redis_config:
       maxmemory:        "256mb"
       maxmemory-policy: allkeys-lru
@@ -218,6 +221,9 @@ assert:
     shards: 2
     persistence: rdb
     maxmemory_policy: ""
+    # connection_mode=plain (default); io_threads=0 (default).
+    connection_mode: plain
+    io_threads: 0
     install:
       method: package
     tls:

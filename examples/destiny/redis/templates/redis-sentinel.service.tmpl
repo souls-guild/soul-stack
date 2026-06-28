@@ -23,9 +23,11 @@ Group={{ .vars.redis_group }}
 RuntimeDirectory=redis
 RuntimeDirectoryMode=0755
 
-# systemd-hardening (симметрично hardening drop-in redis-server).
+# systemd-hardening (симметрично hardening drop-in redis-server). conf_dir в RW-путях
+# ОБЯЗАТЕЛЕН: redis-sentinel переписывает sentinel.conf в рантайме (персист топологии:
+# master/replicas/epoch/known-sentinels), в отличие от redis-server на create.
 ProtectSystem=strict
-ReadWritePaths={{ .vars.data_dir }} {{ .vars.log_dir }} {{ .vars.run_dir }}
+ReadWritePaths={{ .vars.data_dir }} {{ .vars.log_dir }} {{ .vars.run_dir }} {{ .vars.conf_dir }}
 ProtectHome=yes
 PrivateTmp=yes
 ProtectKernelTunables=yes

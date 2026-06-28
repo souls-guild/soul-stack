@@ -70,9 +70,15 @@ fixtures:
 
   input:
     redis_type: sentinel
-    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
-    # distro-native пин (мажор < 8 → version-gate модулей не активен).
-    version: "7.2.4"
+    # version ОБЯЗАТЕЛЬНА (enum выкаченных в Nexus сборок): 7.4.1 — мажор < 8 →
+    # version-gate модулей не активен (модули .so грузятся).
+    version: "7.4.1"
+    # install_method=package ЯВНО: кейс про persistence/memory-fallback, не про install.
+    # default редизайна binary → package-ветка ставит distro-пакет (assert core.pkg.installed).
+    install_method: package
+    # replicas_per_master=0 ЯВНО (default редизайна 2): single-host (node-solo), size-guard
+    # sentinel = 1+0 = 1 хост.
+    replicas_per_master: 0
     persistence: off
     # memory_mb и maxmemory_policy НЕ заданы → оба из essence.
     # users НЕ задан.
@@ -82,7 +88,7 @@ assert:
     - module: core.pkg.installed
       params_subset:
         name: redis-server
-        version: "7.2.4"
+        version: "7.4.1"
 
     # users.acl: operator-extra пуст (input.users не задан), но системные ОБЯЗАТЕЛЬНЫ
     # → в users.acl ровно 4 системных redis-server юзера (replica/monitoring/sentinel/
@@ -176,7 +182,7 @@ assert:
 
   state_changes:
     redis_type: sentinel
-    redis_version: "7.2.4"
+    redis_version: "7.4.1"
     redis_config:
       maxmemory: "256mb"
       maxmemory-policy: allkeys-lru

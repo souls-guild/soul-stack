@@ -66,7 +66,10 @@ fixtures:
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
   input:
     redis_type: cluster
-    version: "7.2.4"
+    version: "7.4.1"
+    # install_method=package ЯВНО: кейс про provision-поток (count из cluster-топологии),
+    # не про install. default редизайна binary → package-ветка (assert сверяет cloud/cluster).
+    install_method: package
     shards: 2
     replicas_per_master: 1
     provision:
@@ -134,7 +137,7 @@ assert:
 
   state_changes:
     redis_type: cluster
-    redis_version: "7.2.4"
+    redis_version: "7.4.1"
     provisioned_vm_ids: [i-aaa111, i-bbb222, i-ccc333, i-ddd444]
     # provisioned_sids: SID каждой созданной VM (register.provision.hosts[].sid) — для
     # cascade-destroy day-2 teardown (souls→destroyed/seeds→orphaned/tokens→burned).

@@ -33,6 +33,10 @@ fixtures:
   essence:
     redis_type: sentinel
     sentinel_master_name: master
+    # ★ Редизайн: подложка per-master sentinel-дефолтов (под input.sentinel_master_settings).
+    sentinel_master_defaults:
+      down-after-milliseconds: "5000"
+      failover-timeout:        "60000"
     modules_base_url: "https://artifacts.example.com/redis/modules"
     memory_reserve_percent: 75
     persistence_presets:
@@ -61,9 +65,11 @@ fixtures:
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
     redis_type: sentinel
-    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
-    # distro-native пин (мажор < 8 → version-gate модулей не активен).
-    version: "7.2.4"
+    # version — фикс-enum выкаченных в Nexus сборок (мажор < 8 → version-gate модулей
+    # не активен). install_method=package ЯВНО (default редизайна — binary): кейс
+    # изолирует sentinel-логику (auto-quorum/master-election) от install-модели.
+    version: "7.4.1"
+    install_method: package
     replicas_per_master: 0
 
 assert:
@@ -85,8 +91,11 @@ assert:
       params_subset:
         addr: "127.0.0.1:26379"
         master_name: master
+        # ★ CONNECTION-AUTH к sentinel-демону :26379 (главный секрет, default-юзер требует
+        # пароль). Guard на NOAUTH — отдельно от auth_pass (мониторинг master).
+        password: s3cr3t-redis-pass-create
         auth_pass: s3cr3t-redis-pass-create
-        redis_version: "7.2.4"
+        redis_version: "7.4.1"
         monitor:
           ip: 10.0.0.9
           port: 6379
@@ -94,12 +103,18 @@ assert:
 
   state_changes:
     redis_type: sentinel
-    redis_version: "7.2.4"
+    redis_version: "7.4.1"
     redis_users: []
     redis_hosts: []
     # auto-quorum НЕ материализуется в state → 0; master_name из essence (master).
+    # ★ Редизайн: тайминги failover теперь в master_settings (эффективный per-master map
+    # essence.sentinel_master_defaults поверх input.sentinel_master_settings; здесь
+    # operator dict не задан → дефолты down-after 5000/failover-timeout 60000). settings —
+    # глобальные sentinel-директивы оператора (не заданы → {}).
     redis_sentinel:
       master_name: master
       quorum: 0
-      down_after_ms: 5000
-      failover_timeout_ms: 60000
+      master_settings:
+        down-after-milliseconds: "5000"
+        failover-timeout: "60000"
+      settings: {}

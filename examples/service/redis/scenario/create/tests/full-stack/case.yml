@@ -56,19 +56,23 @@ fixtures:
   essence:
     redis_type: sentinel
     sentinel_master_name: master
+    # ★ Редизайн: подложка per-master sentinel-дефолтов (под input.sentinel_master_settings).
+    sentinel_master_defaults:
+      down-after-milliseconds: "5000"
+      failover-timeout:        "60000"
     modules_base_url: "https://artifacts.example.com/redis/modules"
     memory_reserve_percent: 75
     persistence_presets:
       off:
         save: ""
         appendonly: "no"
-      aof:
+      aof_1sec:
         save: ""
         appendonly: "yes"
       rdb:
         save: "900 1 300 10 60 10000"
         appendonly: "no"
-      rdb_aof:
+      rdb_aof_1sec:
         save: "900 1 300 10 60 10000"
         appendonly: "yes"
     redis_config:
@@ -96,7 +100,10 @@ fixtures:
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
     redis_type: sentinel
-    version: "5:7.0.15-1~deb12u7"
+    version: "7.4.1"
+    install_method: package
+    # single-host sentinel roster (1 хост) → реплик нет (size-guard 1+0).
+    replicas_per_master: 0
     memory_mb: 1024
     persistence: rdb
     maxmemory_policy: volatile-lru
@@ -123,7 +130,7 @@ assert:
     - module: core.pkg.installed
       params_subset:
         name: redis-server
-        version: "5:7.0.15-1~deb12u7"
+        version: "7.4.1"
 
     # users.acl: MAP имя→{perms,state,password} с ПОЛНОЙ ACL-строкой +
     # keeper-side vault()-пароль. ПОЧЕМУ map, а не список: range по map в шаблоне
@@ -264,7 +271,7 @@ assert:
   # это и есть guard на синхронность двух inline-merge.
   state_changes:
     redis_type: sentinel
-    redis_version: "5:7.0.15-1~deb12u7"
+    redis_version: "7.4.1"
     redis_config:
       maxmemory: "768mb"
       maxmemory-policy: volatile-lru
@@ -276,12 +283,17 @@ assert:
     redis_users:
       - { name: app, perms: "~app:* +@read +@write -@dangerous", state: "on" }
     redis_hosts: []
-    # standalone — не sentinel → redis_sentinel пуст.
+    # sentinel single-host (standalone-эквивалент). ★ Редизайн: тайминги failover в
+    # master_settings (эффективный per-master map essence.sentinel_master_defaults поверх
+    # input.sentinel_master_settings; operator dict не задан → дефолты 5000/60000). settings —
+    # глобальные sentinel-директивы (не заданы → {}).
     redis_sentinel:
       master_name: master
       quorum: 0
-      down_after_ms: 5000
-      failover_timeout_ms: 60000
+      master_settings:
+        down-after-milliseconds: "5000"
+        failover-timeout: "60000"
+      settings: {}
     # ── namedfields (read-model, v3): NON-ZERO/NON-EMPTY guard. memory_mb=1024 и
     # maxmemory_policy=volatile-lru заданы оператором → ровно эти значения (read-model
     # хранит НАМЕРЕНИЕ, не вычисленный maxmemory "768mb"). persistence=rdb.

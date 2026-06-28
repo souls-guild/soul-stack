@@ -1,5 +1,5 @@
 name: redis
-state_schema_version: 10
+state_schema_version: 11
 description: >-
   Redis по концепции Ansible-роли: ОДИН сервис на режимы развёртывания
   (redis_type ∈ sentinel/cluster). Per-host install + render redis.conf делает
@@ -83,6 +83,19 @@ description: >-
 #     v9 уже ЕСТЬ (008_to_009 его гарантировал), здесь добавляются ПОЛЯ в него —
 #     перезатереть объект целиком означало бы стереть source_endpoints/detached. Зеркало
 #     листового паттерна 006_to_007 (has() на каждое новое поле). Остальной state не трогается.
+#   - 010_to_011 (migrations/010_to_011.yml): редизайн input-контракта (connection_mode
+#     enum + io-threads + расширение persistence + restruct sentinel-таймингов). state:
+#     (1) persistence remap старых значений aof→aof_1sec / rdb_aof→rdb_aof_1sec (off/rdb
+#     и новые aof_always/rdb_aof_always — тождество); (2) НОВОЕ connection_mode (enum
+#     tls/tls_plain/plain) — выведено из существующего tls.enable/only (обратная свёртка,
+#     best-effort как 002_to_003 namedfields); (3) НОВОЕ io_threads — best-effort default
+#     0 (исходное значение в state не лежало — симметрия memory_mb в 002_to_003); (4)
+#     redis_sentinel RESTRUCT (только для sentinel-инкарнаций, has-guard): именованные
+#     down_after_ms/failover_timeout_ms СВЁРНУТЫ в master_settings (map<string,string>
+#     эффективных per-master директив down-after-milliseconds/failover-timeout) +
+#     settings={} (глобальные sentinel) — зеркало input.sentinel_master_settings; старые
+#     листы удаляются (delete). cluster (redis_sentinel {}) — sentinel-ветка no-op.
+#     Forward-only (down: нет; восстановление — state_history).
 # incarnation.state фиксирует, что развёрнуто, чтобы оператор видел инсталляцию и
 # повторный apply был idempotent.
 #
@@ -133,6 +146,21 @@ state_schema:
         cert_ref: { type: string }
         key_ref:  { type: string }
         ca_ref:   { type: string }
+    # Режим сетевого канала Redis (enum, read-model v11). Явный выбор оператора
+    # (input.connection_mode): plain — только plain-порт; tls_plain — TLS+plain;
+    # tls — только TLS. tls-namedfield выше несёт ПРОИЗВОДНЫЕ enable/only/port
+    # (compute.tls_on/tls_only_on), connection_mode дублирует ИСХОДНЫЙ выбор enum.
+    # Для v≤10-инкарнаций выводится из tls.enable/only обратной свёрткой (010_to_011).
+    connection_mode:
+      type: string
+      enum: [tls, tls_plain, plain]
+    # Число I/O-потоков Redis (директива io-threads, read-model v11). Из
+    # input.io_threads (default 0 = однопоточный I/O). 0 → директива io-threads в
+    # redis_config НЕ пишется (compute has-guard >0). Для v≤10 — best-effort 0
+    # (исходное значение в state не лежало; 010_to_011, симметрия memory_mb).
+    io_threads:
+      type: integer
+      minimum: 0
     # Способ установки redis (package — distro-пакет; binary — upstream-tarball).
     # base_url/version материализуются при method=binary. Из default(input.install,
     # {method:package}). day-2 update_config читает state.install.method.
@@ -144,9 +172,12 @@ state_schema:
         base_url: { type: string }
         version:  { type: string }
     # Режим persistence (концепция роли). Из input.persistence (default rdb).
+    # ★ v11: enum РАСШИРЕН до 6 значений (aof/rdb_aof разбиты на _1sec/_always по
+    # частоте fsync AOF; off/rdb без изменений). Старые aof/rdb_aof ремапятся в
+    # _1sec миграцией 010_to_011 (back-compat fsync everysec).
     persistence:
       type: string
-      enum: [off, aof, rdb, rdb_aof]
+      enum: [off, aof_1sec, aof_always, rdb, rdb_aof_1sec, rdb_aof_always]
     # Бюджет памяти под Redis, МБ. Из input.memory_mb; не задан → отсутствует/0.
     memory_mb:
       type: integer
@@ -282,22 +313,33 @@ state_schema:
         properties:
           sid:  { type: string, format: fqdn }
           role: { type: string, enum: [primary, replica, sentinel] }
-    # Факты sentinel-режима (master_name + quorum monitored master + тайминги
-    # failover). Наполняется create при redis_type=sentinel; для cluster пуст.
+    # Факты sentinel-режима (master_name + quorum monitored master + эффективные
+    # директивы sentinel). Наполняется create при redis_type=sentinel; для cluster пуст.
     # master_ip create НЕ пишет (master выбирается из roster-а, host-вариативен) —
     # поле остаётся в схеме лишь для back-compat с legacy-state (ремап sentinel_only,
     # 003_to_004); current-режимы его не материализуют.
-    # ★ #7 (v5): down_after_ms/failover_timeout_ms — тайминги failover (read-model
-    # day-2). Из input.sentinel_down_after_ms/sentinel_failover_timeout_ms (оба default).
+    # ★ v11: именованные down_after_ms/failover_timeout_ms ЗАМЕНЕНЫ обобщёнными map-ами
+    # (редизайн input — input.sentinel_master_settings/sentinel_settings):
+    #   - master_settings — эффективные PER-MASTER sentinel-директивы (key→value, строки;
+    #     имя опции SENTINEL SET без префикса/master-name, напр. down-after-milliseconds/
+    #     failover-timeout/parallel-syncs). Замещает 2 именованных поля (их значения
+    #     переезжают в down-after-milliseconds/failover-timeout этого map-а, 010_to_011);
+    #   - settings — глобальные (НЕ per-master) sentinel.conf-директивы (key→value, строки).
     redis_sentinel:
       type: object
       additionalProperties: false
       properties:
-        master_name:         { type: string }
-        master_ip:           { type: string }
-        quorum:              { type: integer }
-        down_after_ms:       { type: integer }
-        failover_timeout_ms: { type: integer }
+        master_name: { type: string }
+        master_ip:   { type: string }
+        quorum:      { type: integer }
+        master_settings:
+          type: object
+          additionalProperties:
+            type: string
+        settings:
+          type: object
+          additionalProperties:
+            type: string
 
 # Зависимости-destiny (ADR-007: версия зависимости = git ref, не semver-range).
 # Резолв git-URL — гибрид (docs/keeper/config.md::default_destiny_source):

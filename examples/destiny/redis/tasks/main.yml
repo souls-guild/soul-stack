@@ -50,9 +50,12 @@
 
 - include: extras.yml
 
-# Модули ВСЕГДА ВСЕ (директива C), но ТОЛЬКО где есть data-плоскость (sentinel_only —
-# redis-server нет, модулям негде грузиться) И Redis < 8 (на 8+ встроены). version-guard
-# вынесен в vars (vars.redis_is_v8plus, единый источник с loadmodules server.yml).
-# conditional-include допускает vars. в предикате → группа РЕАЛЬНО исключается из плана.
+# Модули ALL-OR-NOTHING (директива C): качаем ВЕСЬ набор, но ТОЛЬКО где есть data-плоскость
+# (sentinel_only — redis-server нет, модулям негде грузиться), Redis < 8 (на 8+ встроены) И
+# задан modules_base_url (источник .so; пуст → vanilla redis без модулей). Двусоставный
+# version+base_url-гейт инкапсулирован в vars.redis_modules_enabled — ЕДИНЫЙ источник с
+# loadmodules (server.yml): иначе loadmodule в redis.conf ссылался бы на не скачанный .so.
+# conditional-include допускает vars. в предикате → группа РЕАЛЬНО исключается из плана
+# (group-drop), fetch-задачи .so при пустом base_url физически не включаются.
 - include: modules.yml
-  when: "default(input.deploy_redis, true) && !vars.redis_is_v8plus"
+  when: "default(input.deploy_redis, true) && vars.redis_modules_enabled"

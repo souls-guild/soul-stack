@@ -76,20 +76,28 @@ redis_data_dir: /var/lib/redis
 # ${ vars.redis_bin_dir }/redis-server (и -cli/-sentinel).
 redis_bin_dir: /usr/local/bin
 
-# ── Пути binary-install tarball-а (директива «путь в одном месте») ──────────────
-# Пути временного tarball-а и распакованного каталога upstream-install собираются из
-# upstream-версии (input.install.version) в ОДНОМ месте, а не дублируются inline по
-# install.yml-задачам.
+# ── URL-база бинарей Redis из Nexus (редизайн install-модели) ───────────────────
+# Базовый URL КАТАЛОГА бинарей конкретной (version, arch, distro_ver) сборки —
+# собирается в ОДНОМ месте, install.yll-задачи дописывают лишь имя файла
+# (/redis-server, /redis-cli, /redis-benchmark). Форма ansible redis_url_file_path:
+# <base_url>/<arch>/<distribution>/<distro_major>/<version>. Distribution захардкожен
+# Debian (целевой парк); arch/distro_ver — per-host из soulprint.self.os.arch/version.
 #
 # ★ render-safety в МЁРТВОМ package-проходе: при install.method=package binary-блок
 # static-skip, НО file-vars резолвятся per-host ДО skip-проекции (eager, до задач) —
-# голый input.install.version упал бы «no such key: install». Поэтому версия нормализуется
-# has()-цепочкой к '' (значение не используется в package-проходе — задачи skip; в
-# binary-проходе validate гарантирует присутствие install.version). redis_install_tarball/
-# redis_src_dir ссылаются на этот нормализованный redis_install_ver (var→var, тот же слой).
-redis_install_ver:     "${ has(input.install) && has(input.install.version) ? input.install.version : '' }"
-redis_install_tarball: "${ '/tmp/redis-' + vars.redis_install_ver + '.tar.gz' }"
-redis_src_dir:         "${ '/tmp/redis-' + vars.redis_install_ver }"
+# голый input.install.base_url/version упал бы «no such key: install». Поэтому base_url
+# и version нормализуются has()-цепочкой к '' (значение не используется в package-проходе —
+# задачи skip; в binary-проходе validate/required гарантируют присутствие). arch/version
+# дистрибутива — soulprint.self.os (есть в destiny-CEL, прецедент node-exporter/modules).
+# ★ soulprint.self.os.arch/version — has()-guard render-safe: в МЁРТВОМ package-проходе
+# (binary-блок static-skip) var всё равно резолвится, а fixtures package-кейсов могут не
+# нести os.version → голый soulprint.self.os.version упал бы «no such key». В binary-проходе
+# soulprint несёт оба поля (ADR-018 typed). Значение в мёртвом проходе не используется (skip).
+redis_binary_url_base: >-
+  ${ (has(input.install) && has(input.install.base_url) ? input.install.base_url : '')
+       + '/' + (has(soulprint.self.os.arch) ? soulprint.self.os.arch : '')
+       + '/Debian/' + (has(soulprint.self.os.version) ? soulprint.self.os.version : '')
+       + '/' + (has(input.install) && has(input.install.version) ? input.install.version : '') }
 
 # Каталог systemd drop-in-ов redis-server (override поверх distro-юнита). ИНВАРИАНТ
 # (привязан к имени сервиса + layout systemd): /etc/systemd/system/<unit>.d. Задачи
@@ -146,6 +154,16 @@ redis_effective_version: "${ (has(input.version) && input.version != '') ? input
 # версия (обе absent — невозможно при валидном вводе) regex не матчит → false (< 8).
 redis_is_v8plus: >-
   ${ vars.redis_effective_version.matches('^([0-9]+:)?(8|9|[1-9][0-9])\\.') }
+
+# ── Гейт загрузки Redis-модулей (ALL-OR-NOTHING) ───────────────────────────────
+# Модули («директива C: модули ВСЕГДА ВСЕ» на Redis < 8) грузятся ТОЛЬКО когда задан
+# непустой modules_base_url. Пустой base_url → vanilla redis (НЕ рендерится loadmodule,
+# НЕ качаются .so) — иначе redis.conf нёс бы loadmodule на .so, которые fetch-группа
+# (group-drop при пустом base_url) не скачала, и redis-server падал бы на старте.
+# modules_base_url — input-поле destiny (default '' через has()-цепочку: absent → vanilla).
+redis_modules_enabled: >-
+  ${ !vars.redis_is_v8plus
+     && (has(input.modules_base_url) ? input.modules_base_url : '') != '' }
 
 # ── file-mode/owner инварианты (вынесены: >2 употреблений по задачам) ──────────
 # Точечные mode на ≤2 задачи (0750 tls-dir/modules-dir, 0755 socket-/drop-in-dir)

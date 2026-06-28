@@ -1,14 +1,17 @@
 # tasks/modules.yml — Redis-модули (концепция Ansible-роли redis: загрузка .so
 # RediSearch/RedisJSON/RedisTimeSeries/RedisBloom на Redis < 8). ВЕСЬ файл gated на
-# include (main.yml): включён при data-плоскости (deploy_redis) И Redis < 8; иначе
-# group-drop (sentinel_only — модулям негде грузиться; Redis 8+ — модули встроены).
+# include (main.yml) предикатом vars.redis_modules_enabled: включён при data-плоскости
+# (deploy_redis) И Redis < 8 И НЕПУСТОМ modules_base_url; иначе group-drop (sentinel_only —
+# модулям негде грузиться; Redis 8+ — модули встроены; пустой base_url — vanilla redis).
 #
-# ★ ДИРЕКТИВА «модули ВСЕГДА ВСЕ» (2026-06-25): набор — ИНВАРИАНТ vars.redis_modules,
-# не operator-выбор; качается ВЕСЬ набор. input.modules / input.modules_dir удалены;
-# modules-dir выводится из input.data_dir. В input остаётся только modules_base_url
-# (deployment-артефакт под (version, arch)). .so качаются по content-идемпотентности.
-# version-gate Redis 8+ и его нормализация '' — в vars/main.yml (см. redis_is_v8plus);
-# fail-closed на самом Redis (несовместимый .so → сервер не стартует), без version-matrix.
+# ★ ДИРЕКТИВА «модули ВСЕГДА ВСЕ» (2026-06-25) = ALL-OR-NOTHING: набор — ИНВАРИАНТ
+# vars.redis_modules, не operator-выбор; при заданном base_url качается ВЕСЬ набор, при
+# пустом — НИ ОДНОГО (vanilla). input.modules / input.modules_dir удалены; modules-dir
+# выводится из input.data_dir. В input остаётся только modules_base_url (deployment-
+# артефакт под (version, arch); пуст → группа не включается). .so качаются по content-
+# идемпотентности. Двусоставный version+base_url-гейт — в vars (vars.redis_modules_enabled,
+# единый источник с loadmodules server.yml); fail-closed на самом Redis (несовместимый
+# .so → сервер не стартует), без version-matrix.
 
 # Каталог .so-модулей <data_dir>/modules. core.file.rendered/url.fetched создают только
 # файл, не родительский каталог. Создаём явно декларативным core.file.directory.

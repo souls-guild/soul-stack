@@ -43,9 +43,11 @@ fixtures:
 
   input:
     redis_type: cluster
-    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
-    # distro-native пин (мажор < 8 → version-gate модулей не активен).
-    version: "7.2.4"
+    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23) и теперь ENUM выкаченных
+    # в Nexus сборок — 7.4.1 ∈ enum (мажор < 8 → version-gate модулей не активен).
+    # Берём валидный enum намеренно: required_when shards проверяется requireInputValues
+    # ДО enum-валидации, поэтому невалидный version замаскировал бы shards-ошибку.
+    version: "7.4.1"
     # shards НЕ задан намеренно — required_when (input.redis_type == 'cluster')
     # делает его обязательным в режиме cluster → input-валидация рвёт прогон ДО render.
 

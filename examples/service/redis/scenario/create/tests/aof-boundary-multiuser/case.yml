@@ -45,13 +45,13 @@ fixtures:
       off:
         save: ""
         appendonly: "no"
-      aof:
+      aof_1sec:
         save: ""
         appendonly: "yes"
       rdb:
         save: "900 1 300 10 60 10000"
         appendonly: "no"
-      rdb_aof:
+      rdb_aof_1sec:
         save: "900 1 300 10 60 10000"
         appendonly: "yes"
     redis_config:
@@ -78,9 +78,12 @@ fixtures:
     redis_type: sentinel
     # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
     # distro-native пин (мажор < 8 → version-gate модулей не активен).
-    version: "7.2.4"
+    version: "7.4.1"
+    install_method: package
+    # single-host roster (1 хост) → реплик нет (sentinel size-guard = 1+0 = 1).
+    replicas_per_master: 0
     memory_mb: 64
-    persistence: aof
+    persistence: aof_1sec
     # maxmemory_policy НЕ задан — должен прийти из essence (allkeys-lru).
     users:
       - { name: zeta, perms: "~* +@all", state: "on" }
@@ -92,7 +95,7 @@ assert:
     - module: core.pkg.installed
       params_subset:
         name: redis-server
-        version: "7.2.4"
+        version: "7.4.1"
 
     # users.acl: MAP трёх юзеров. Порядок строк гарантирует range по map (шаблон);
     # здесь ассертим лишь СОСТАВ map-а (значения order-independent). Дизамбигуатор от
@@ -199,7 +202,7 @@ assert:
 
   state_changes:
     redis_type: sentinel
-    redis_version: "7.2.4"
+    redis_version: "7.4.1"
     # DRIFT-GUARD: идентичен apply.input.config (index 3).
     redis_config:
       maxmemory: "48mb"

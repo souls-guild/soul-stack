@@ -129,6 +129,7 @@
   "sidPickerRemove": "remove",
   "patternError": "does not match pattern: {{pattern}}",
   "advancedLabel": "Advanced",
+  "arrayObjAddItem": "add",
   "listAddItem": "add",
   "listRemoveItem": "−",
   "listIntError": "not an integer",

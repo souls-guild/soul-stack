@@ -531,6 +531,11 @@ tasks:
     params:
       addr:        "127.0.0.1:26379"
       master_name: "${ default(essence.sentinel_master_name, 'master') }"
+      # ★ CONNECTION-AUTH к sentinel-демону :26379 (отдельно от auth_pass — мониторинг
+      # master-а): sentinel.conf несёт aclfile sentinel-users.acl, default-юзер требует
+      # пароль (sentinel_users.default = главный секрет DF secret/dragonfly/<inc>#password,
+      # шаг 1). password → redis.Options.Password (AUTH соединения). Без него → NOAUTH.
+      password:    "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
       auth_pass:   "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
       # ★ Версия sentinel-ДЕМОНА (distro redis-sentinel), НЕ DragonFly: этот param гейтит
       # version-aware sentinel-фичи плагина (versionGE 7.0.0). df_version сюда тащить НЕЛЬЗЯ —
@@ -556,4 +561,8 @@ tasks:
     failed_when: "register.self.result != 'PONG'"
     params:
       addr: "127.0.0.1:26379"
+      # ★ CONNECTION-AUTH: sentinel-демон защищён aclfile (default-юзер требует пароль,
+      # шаг 1 sentinel_users.default = главный секрет DF). PING без AUTH → NOAUTH. Тот
+      # же главный секрет, что --requirepass DragonFly.
+      password: "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
       args: ["PING"]

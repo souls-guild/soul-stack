@@ -35,44 +35,32 @@
         name: redis-server
         version: "${ input.version }"
 
-# ── binary-ветка (opt-in, upstream-tarball) ────────────────────────────────────
-# Способ node-exporter (install.yml: core.url.fetched → core.archive.extracted →
-# core.file.present src:). Один gate install.method==binary на всю ветку (block static-skip).
-# binary НЕ несёт distro-пакета → САМА ставит то, что пакет даёт даром: бинари в
-# /usr/local/bin, distro-юзер/группу redis, свой systemd-юнит redis-server.service
-# (+ sentinel-юнит рендерится в sentinel.yml с тем же sentinel_bin путём). arch для
-# URL — soulprint.self.os.arch (soulprint доступен в destiny-CEL, прецедент node-exporter).
-- name: Install redis from an upstream binary tarball
+# ── binary-ветка (default, Nexus — ОТДЕЛЬНЫЕ бинари, НЕ tarball) ────────────────
+# ★ Редизайн install-модели: вместо tarball+extract качаем ЧЕТЫРЕ отдельных бинаря
+# (redis-server/redis-cli/redis-benchmark/redis-sentinel) прямо в bin_dir (схема ansible-
+# роли redis installation.yml). Один gate install.method==binary на всю ветку (block
+# static-skip). binary НЕ несёт distro-пакета → САМА ставит то, что пакет даёт даром:
+# бинари в /usr/local/bin, distro-юзер/группу redis, свой systemd-юнит redis-server.service,
+# симлинки redis-check-aof/redis-check-rdb → redis-server (maintenance-тулзы). redis-sentinel —
+# ПОЛНОЦЕННЫЙ fetch-бинарь (НЕ симлинк). arch И версия дистрибутива для URL —
+# soulprint.self.os.arch / soulprint.self.os.version (soulprint в destiny-CEL, прецедент
+# node-exporter).
+#
+# URL per-host: <base_url>/<arch>/Debian/<distro_ver>/<version>/redis-{server,cli,benchmark,sentinel}
+# (форма ansible redis_url_file_path: base/arch/distribution/distro_major/version/file).
+# Distribution захардкожен Debian (целевой парк); distro_ver — soulprint.self.os.version.
+# checksum НЕ передаётся → core.url.fetched качает по content-идемпотентности (SHA-256
+# содержимого), без integrity-verify — доверяем HTTPS + источнику (директива «попроще»).
+#
+# ★ render-safety: задачи binary-блока несут has()-guard на input.install.version/base_url,
+#   хотя при method=binary эти поля присутствуют. Причина: при method=package весь блок
+#   static-skip, но CEL ячеек binary-задач Keeper ВСЁ РАВНО вычисляет (vars/params
+#   рендерятся до skip-проекции) — голый input.install.version упал бы «no such key:
+#   install». Guard даёт пустую строку в мёртвом проходе (значение не используется — skip).
+- name: Install redis from upstream Nexus binaries
   when: "has(input.install) && has(input.install.method) && input.install.method == 'binary'"
   block:
-    # 1. Скачать tarball во временный путь. URL: base_url + version + arch. checksum
-    #    НЕ передаётся → core.url.fetched качает по content-идемпотентности (скачать во
-    #    temp → сравнить SHA-256 с существующим → запись только при diff), без integrity-
-    #    verify — доверяем HTTPS + источнику, как node-exporter (директива «попроще»).
-    # ★ render-safety: задачи binary-блока несут has()-guard на input.install.version/
-    #   base_url, хотя при method=binary эти поля присутствуют (validate сценария их
-    #   требует). Причина: при method=package весь блок static-skip, но CEL ячеек binary-
-    #   задач Keeper ВСЁ РАВНО вычисляет (vars/params рендерятся до skip-проекции) —
-    #   голый input.install.version упал бы «no such key: install». Guard даёт пустую
-    #   строку в этом мёртвом проходе (значение не используется — задача skip).
-    - name: Fetch redis tarball
-      module: core.url.fetched
-      params:
-        # base_url has()-guard render-safe в мёртвом package-проходе (см. блок выше);
-        # версия и путь tarball-а — из file-vars (vars.redis_install_ver/_tarball).
-        url: "${ (has(input.install) && has(input.install.base_url) ? input.install.base_url : '') + '/redis-' + vars.redis_install_ver + '-' + soulprint.self.os.arch + '.tar.gz' }"
-        path: "${ vars.redis_install_tarball }"
-        mode: "0644"
-
-    # 2. Распаковать tarball в каталог. format auto-detect по .tar.gz. Идемпотентно:
-    #    core.archive пишет marker и повторно не распаковывает тот же архив.
-    - name: Extract redis tarball
-      module: core.archive.extracted
-      params:
-        path: "${ vars.redis_install_tarball }"
-        dest: "${ vars.redis_src_dir }"
-
-    # 3. distro-юзер/группа redis (binary НЕ создаёт их — это делает distro-пакет).
+    # 1. distro-юзер/группа redis (binary НЕ создаёт их — это делает distro-пакет).
     #    Группа ПЕРЕД юзером (primary group юзера). system-аккаунт без login-shell:
     #    redis — сервис, не интерактивный логин. Стабильный uid/gid (stateful data-dir
     #    /var/lib/redis требует стабильного владельца между рестартами — см. hardening.
@@ -92,49 +80,75 @@
         shell: /usr/sbin/nologin
         home: "${ vars.redis_data_dir_eff }"
 
-    # 4. Разложить redis-server/redis-cli/redis-sentinel в /usr/local/bin (mode 0755)
-    #    из распакованного каталога через core.file.present src: (копия содержимого
-    #    regular-файла с хоста; docs/module/core/file).
-    #
-    #    ИДЕМПОТЕНТНОСТЬ нативная: желаемый хэш = sha256(содержимое src), changed строго
-    #    при смене байт бинаря (или дрейфе mode/owner) — version-aware unless-guard
-    #    прежнего core.cmd.shell не нужен, и это строже его (ловит ЛЮБУЮ смену байт).
-    #
-    #    register'ы redis_server_bin/redis_cli_bin/redis_sentinel_bin → рестарт redis-
-    #    server (шаг 6, В ЭТОМ файле) реагирует на смену любого; cross-file onchanges
-    #    отверг бы per-file линтер. redis-sentinel ставится во ВСЕХ режимах (sentinel.yml
-    #    ждёт бинарь на месте при sentinel_enabled).
-    - name: Install the redis-server binary into the local bin directory
-      module: core.file.present
+    # 2. Скачать ТРИ бинаря (redis-server/redis-cli/redis-benchmark) per-host из Nexus в
+    #    bin_dir. Идемпотентность нативная по SHA-256 содержимого (аналог If-None-Match
+    #    ansible-роли): скачать во temp → сравнить хэш → запись только при diff. mode 0755
+    #    owner/group root. register'ы → рестарт redis-server (шаг ниже, В ЭТОМ файле)
+    #    реагирует на смену любого; cross-file onchanges отверг бы per-file линтер.
+    #    URL-база (vars.redis_binary_url_base) — has()-guard render-safe в мёртвом
+    #    package-проходе (см. шапку); собирается в vars.yml из install.base_url/version +
+    #    soulprint.self.os.arch/version.
+    - name: Fetch the redis-server binary into the local bin directory
+      module: core.url.fetched
       register: redis_server_bin
       params:
+        url: "${ vars.redis_binary_url_base + '/redis-server' }"
         path: "${ vars.redis_bin_dir + '/redis-server' }"
-        src: "${ vars.redis_src_dir + '/redis-server' }"
         mode: "0755"
         owner: "${ vars.root_owner }"
         group: "${ vars.root_group }"
 
-    - name: Install the redis-cli binary into the local bin directory
-      module: core.file.present
+    - name: Fetch the redis-cli binary into the local bin directory
+      module: core.url.fetched
       register: redis_cli_bin
       params:
+        url: "${ vars.redis_binary_url_base + '/redis-cli' }"
         path: "${ vars.redis_bin_dir + '/redis-cli' }"
-        src: "${ vars.redis_src_dir + '/redis-cli' }"
         mode: "0755"
         owner: "${ vars.root_owner }"
         group: "${ vars.root_group }"
 
-    - name: Install the redis-sentinel binary into the local bin directory
-      module: core.file.present
+    - name: Fetch the redis-benchmark binary into the local bin directory
+      module: core.url.fetched
+      register: redis_benchmark_bin
+      params:
+        url: "${ vars.redis_binary_url_base + '/redis-benchmark' }"
+        path: "${ vars.redis_bin_dir + '/redis-benchmark' }"
+        mode: "0755"
+        owner: "${ vars.root_owner }"
+        group: "${ vars.root_group }"
+
+    # redis-sentinel — ОТДЕЛЬНЫЙ бинарь Nexus (НЕ симлинк): sentinel.yml ждёт его на
+    # месте при sentinel_enabled, и это полноценный бинарь, не maintenance-тулза.
+    # register → рестарт redis-server на смену (см. ниже).
+    - name: Fetch the redis-sentinel binary into the local bin directory
+      module: core.url.fetched
       register: redis_sentinel_bin
       params:
+        url: "${ vars.redis_binary_url_base + '/redis-sentinel' }"
         path: "${ vars.redis_bin_dir + '/redis-sentinel' }"
-        src: "${ vars.redis_src_dir + '/redis-sentinel' }"
         mode: "0755"
         owner: "${ vars.root_owner }"
         group: "${ vars.root_group }"
 
-    # 5. Свой systemd-юнит redis-server.service (binary НЕ несёт distro-юнита).
+    # 3. Симлинки redis-check-aof/redis-check-rdb → redis-server (maintenance-тулзы =
+    #    тот же multi-call бинарь по argv[0], не runtime-критично; ансибл-роль тоже
+    #    симлинит их императивно). redis-sentinel — НЕ здесь (отдельный fetch выше,
+    #    полноценный бинарь).
+    #
+    #    ★★ ВРЕМЕННО (PILOT): симлинк через core.cmd.shell `ln -sfn` — у core.file НЕТ
+    #    декларативного symlink-state (только present/absent/rendered/directory).
+    #    Декларативный core.file.symlink — в backlog (architect отдельно). `ln -sfn`
+    #    атомарно переписывает симлинк (force + no-deref → не залезает В каталог-цель при
+    #    повторном прогоне); идемпотентность не строгая (всегда changed), но безопасна.
+    #    register общий → рестарт redis-server на смену (check-тулзы — на переустановке).
+    - name: Symlink redis-check-aof and redis-check-rdb to redis-server
+      module: core.cmd.shell
+      register: redis_server_links
+      params:
+        cmd: "${ 'ln -sfn ' + vars.redis_bin_dir + '/redis-server ' + vars.redis_bin_dir + '/redis-check-aof && ln -sfn ' + vars.redis_bin_dir + '/redis-server ' + vars.redis_bin_dir + '/redis-check-rdb' }"
+
+    # 4. Свой systemd-юнит redis-server.service (binary НЕ несёт distro-юнита).
     #    ★ Имя юнита redis-server — чтобы server.yml hardening drop-in
     #    (/etc/systemd/system/redis-server.service.d/) и core.service redis-server
     #    рестарт работали В ОБЕИХ ветках без ветвления. ExecStart=/usr/local/bin/
@@ -156,7 +170,7 @@
           redis_user:  "${ vars.redis_user }"
           redis_group: "${ vars.redis_group }"
 
-    # 6. Рестарт redis-server на смену бинаря/юнита вынесен НИЖЕ top-level: он обязан
+    # 5. Рестарт redis-server на смену бинаря/юнита вынесен НИЖЕ top-level: он обязан
     #    идти ПОСЛЕ создания каталога unix-сокета (нужен сервису при старте), а сокет —
     #    top-level (обе ветки). Внутри binary-блока рестарт оказался бы ВЫШЕ сокета.
 
@@ -180,20 +194,22 @@
     group: "${ vars.redis_group }"
     mode: "0755"
 
-# ── Рестарт redis-server на смену бинаря/юнита (binary-ветка) ────────────────────
-# onchanges на [redis_server_bin, redis_sentinel_bin, redis_server_unit]. redis_cli_bin
-# СОЗНАТЕЛЬНО НЕ входит: замена cli-бинаря не меняет рантайм redis-server. redis_sentinel_bin
-# добавлен для полноты (смена sentinel-бинаря = повод рестартить сервис). Все register'ы
-# объявлены В ЭТОМ файле → onchanges резолвится per-file. Задача top-level ПОСЛЕ каталога
-# сокета: рестартующийся сервис должен застать сокет-каталог. when несёт binary-гейт И
-# deploy_redis (в package-ветке register'ы погашены static-skip → onchanges не сработает).
-# id: дизамбигуатор от config/hardening-restart server.yml (оба name=redis-server);
-# register у задачи нет (onchanges-only), поэтому id допустим (id ⊕ register запрещены).
+# ── Рестарт redis-server на смену бинаря/юнита/симлинков (binary-ветка) ──────────
+# onchanges на [redis_server_bin, redis_sentinel_bin, redis_server_links, redis_server_unit].
+# redis_cli_bin и redis_benchmark_bin СОЗНАТЕЛЬНО НЕ входят: замена cli/benchmark-бинаря не
+# меняет рантайм redis-server. redis_sentinel_bin входит (смена sentinel-бинаря = повод
+# рестартить сервис, как до редизайна). redis_server_links — симлинки check-aof/check-rdb
+# (для полноты). Все register'ы объявлены
+# В ЭТОМ файле → onchanges резолвится per-file. Задача top-level ПОСЛЕ каталога сокета:
+# рестартующийся сервис должен застать сокет-каталог. when несёт binary-гейт И deploy_redis
+# (в package-ветке register'ы погашены static-skip → onchanges не сработает). id:
+# дизамбигуатор от config/hardening-restart server.yml (оба name=redis-server); register у
+# задачи нет (onchanges-only), поэтому id допустим (id ⊕ register запрещены).
 - name: Restart redis-server because the binary or unit changed
   module: core.service.restarted
   id: redis_binary_restart
   when: "has(input.install) && has(input.install.method) && input.install.method == 'binary' && default(input.deploy_redis, true)"
-  onchanges: [redis_server_bin, redis_sentinel_bin, redis_server_unit]
+  onchanges: [redis_server_bin, redis_sentinel_bin, redis_server_links, redis_server_unit]
   timeout: 30s
   params:
     name: "${ vars.redis_service_name }"

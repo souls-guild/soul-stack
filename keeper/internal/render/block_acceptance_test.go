@@ -231,7 +231,7 @@ func TestAcceptance_SentinelReplicaExcludesMaster(t *testing.T) {
 	// убраны (quorum АВТО size/2+1, master_name — essence) — больше не задаём.
 	effectiveInput, err := config.ResolveInputValues(m.Input, map[string]any{
 		"redis_type":          "sentinel",
-		"version":             "5:7.0.15-1~deb12u7",
+		"version":             "7.4.1",
 		"replicas_per_master": 2,
 	})
 	if err != nil {
@@ -402,7 +402,7 @@ func TestAcceptance_SentinelOnlySkipsRedisServer(t *testing.T) {
 	applyInput := map[string]any{
 		"deploy_redis":     false,
 		"sentinel_enabled": true,
-		"version":          "5:7.0.15-1~deb12u7",
+		"version":          "7.4.1",
 		"password":         "fixture-redis-pass-16+",
 		"sentinel": map[string]any{
 			"master_name": "master",

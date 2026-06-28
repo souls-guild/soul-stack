@@ -1112,9 +1112,6 @@ TLS- и install-кейсы под [`scenario/create/tests/`](scenario/create/tes
   из essence (нестандартный `tls_port` 7400, refs `secret/ops/redis/tls`).
 - [`tls-disabled`](scenario/create/tests/tls-disabled/case.yml)
   — `tls` не передан: TLS off, PEM-задачи placeholder-skip, директив TLS нет.
-- [`tls-only-without-enable`](scenario/create/tests/tls-only-without-enable/case.yml)
-  — `tls.only: true` без `tls.enable`: отказ на **input-валидации** (`validate:`
-  «tls.only требует tls.enable») ДО рендера.
 - [`tls-cluster`](scenario/create/tests/tls-cluster/case.yml) — TLS + cluster:
   `tls-replication`/`tls-cluster yes` в merged config.
 - [`install-package`](scenario/create/tests/install-package/case.yml) — default-ветка

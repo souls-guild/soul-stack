@@ -107,9 +107,11 @@ fixtures:
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
   input:
     redis_type: cluster
-    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
-    # distro-native пин (мажор < 8 → version-gate модулей не активен).
-    version: "7.2.4"
+    # version — фикс-enum выкаченных в Nexus сборок (мажор < 8 → version-gate модулей
+    # не активен). install_method=package ЯВНО (default редизайна — binary): кейс
+    # изолирует cluster-раскладку от install-модели, асерт остаётся на core.pkg.installed.
+    version: "7.4.1"
+    install_method: package
     shards: 3
     replicas_per_master: 0
     cluster_node_timeout: 5000
@@ -123,7 +125,7 @@ assert:
     - module: core.pkg.installed
       params_subset:
         name: redis-server
-        version: "7.2.4"
+        version: "7.4.1"
 
     # ── cluster destiny: redis.conf с cluster-директивами ───────────────────
     # config-map несёт базовый merge + HOST-ИНВАРИАНТНЫЕ cluster-директивы
@@ -190,12 +192,23 @@ assert:
           node-b.example.com: { addr: "10.0.0.2:6379" }
           node-c.example.com: { addr: "10.0.0.3:6379" }
 
+  task_absent:
+    # ★ redis-sentinel package ОТСУТСТВУЕТ в cluster-режиме: cluster sentinel не
+    # использует → sentinel_enabled НЕ установлен (default false) → inner-гейт
+    # package-ветки install.yml гасит задачу (conditional-include НЕ при чём — это
+    # per-task when внутри блока → placeholder-skip без params). Парный позитив —
+    # install-package (sentinel-режим → пакет ПРИСУТСТВУЕТ). Guard против регресса
+    # «package-ветка тащит redis-sentinel во всех режимах» (лишний пакет в cluster).
+    - module: core.pkg.installed
+      params_subset:
+        name: redis-sentinel
+
   # cluster-факты в state: redis_type cluster + redis_config с cluster-директивами
   # (без announce-ip — host-вариативен, в state не пишется) + пустые users + пустой
   # redis_hosts (точные роли раскладывает плагин, в state не фиксируем).
   state_changes:
     redis_type: cluster
-    redis_version: "7.2.4"
+    redis_version: "7.4.1"
     redis_config:
       maxmemory:        "256mb"
       maxmemory-policy: allkeys-lru

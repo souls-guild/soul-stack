@@ -1,23 +1,24 @@
-# L0-испытание create (standalone) — VERSION-GUARD Redis 8+ через install.version
-# (метод binary). РЕГРЕСС-КЕЙС к BLOCKER-у redis8-гейта: scenario передаёт ключ
-# `version` в destiny ВСЕГДА (как '' при install.method=binary, has()-guard в ветках),
-# поэтому destiny-гейт redis8 НЕ ДОЛЖЕН тупо брать `version` голым has() — иначе он
-# взял бы пустую строку, 8.x-regex не сматчился бы, и Redis 8 binary-install качал бы
-# 4 НЕСОВМЕСТИМЫХ .so + писал loadmodule → redis-server 8 не стартовал бы (а state
-# писал modules:[] — рассинхрон с фактом). Фикс: ЭФФЕКТИВНАЯ версия = version (когда
-# непуст) ИНАЧЕ install.version; 8.x-regex применяется к ней.
+# L0-испытание create (standalone) — VERSION-GUARD Redis 8+ на binary-install.
+# РЕГРЕСС-КЕЙС к BLOCKER-у redis8-гейта: на Redis 8 модули ВСТРОЕНЫ в сервер, поэтому
+# .so качать и loadmodule писать НЕЛЬЗЯ — иначе redis-server 8 получил бы 4 НЕСОВМЕСТИМЫХ
+# .so + loadmodule → не стартовал бы (а state писал бы modules:[] — рассинхрон с фактом).
+# Гейт по ЭФФЕКТИВНОЙ версии: vars.redis_effective_version = input.version (когда непуст)
+# ИНАЧЕ input.install.version; 8.x-regex (redis_is_v8plus) применяется к ней.
 #
-# Контр-кейс к install-binary (install.version 7.2.4 → модули ВКЛЮЧЕНЫ). Здесь
-# install.version=8.0.0 → version-guard ГАСИТ модули (встроены в Redis 8):
+# ★ Редизайн input-контракта: version теперь REQUIRED enum выкаченных в Nexus сборок
+# (передаётся ВСЕГДА, не '') — эффективная версия = input.version напрямую. URL/версия
+# бинаря: base_url из essence (author-context), версия из input.version 8.0.3.
+#
+# Контр-кейс к install-binary (version 7.4.1 → модули ВКЛЮЧЕНЫ). Здесь version=8.0.3
+# (мажор 8 → redis8) → version-guard ГАСИТ модули (встроены в Redis 8):
 #   - include modules.yml gated на deploy_redis && !redis8 → redis8 истинно по
-#     ЭФФЕКТИВНОЙ версии (install.version 8.0.0) → group-drop: modules-dir + fetch-loop
+#     эффективной версии (input.version 8.0.3) → group-drop: modules-dir + fetch-loop
 #     ФИЗИЧЕСКИ отсутствуют в плане;
 #   - loadmodules-ячейка redis.conf: redis8 → [] → секции loadmodule нет;
 #   - state.modules = [] (compute.redis_modules_deployed: redis8 → []).
-# Top-level version НЕ передан (required_when=package, при binary не обязателен) →
-# эффективная версия берётся из install.version. Регресс «гейт взял пустой version» =
-# модули протекли бы (modules-dir + .so + непустой loadmodules + state.modules≠[]).
-name: redis 8 version guard via install.version skips modules on binary install
+# Регресс «version-guard не сработал на 8.x» = модули протекли бы (modules-dir + .so +
+# непустой loadmodules + state.modules≠[]).
+name: redis 8 version guard skips modules on binary install
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
@@ -26,7 +27,8 @@ fixtures:
       covens: [create]
       soulprint:
         network: { primary_ip: 10.0.0.5 }
-        os: { arch: amd64 }
+        # os.version нужен binary-URL (.../Debian/<distro_ver>/...) — Debian 12.
+        os: { arch: amd64, version: "12" }
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
@@ -43,6 +45,10 @@ fixtures:
   essence:
     redis_type: sentinel
     sentinel_master_name: master
+    # ★ Редизайн: подложка per-master sentinel-дефолтов (под input.sentinel_master_settings).
+    sentinel_master_defaults:
+      down-after-milliseconds: "5000"
+      failover-timeout:        "60000"
     memory_reserve_percent: 75
     persistence_presets:
       rdb:
@@ -51,13 +57,11 @@ fixtures:
     redis_config:
       maxmemory: "256mb"
 
-    # ★ #1: URL/версия бинаря — в essence (binary_base_url/binary_version). version 8.0.0
-    # (мажор 8 → redis8) → version-guard гасит модули.
+    # ★ Редизайн (#1): URL бинаря — в essence (author-context, Nexus-mirror). Версия —
+    # операторский input.version (enum выкаченных сборок 8.0.3), НЕ essence.binary_version.
+    # version=8.0.3 (мажор 8 → redis8) → version-guard гасит модули (встроены в Redis 8).
     binary_base_url: "https://downloads.example.com/redis"
-    binary_version:  "8.0.0"
 
-  # version (top-level distro-пин) НЕ передан: install_method=binary → required_when=
-  # package не срабатывает; эффективная версия — essence.binary_version 8.0.0 (redis8).
     # Системные ACL-юзеры redis-server + sentinel-демона (1:1 из essence/_default.yaml).
     # ОБА ОБЯЗАТЕЛЬНЫ: guard create/sentinel.yml (assert 1b) рвёт render при пустом
     # любом из наборов (тихий fail-open недопустим — без них репликация/sentinel↔redis
@@ -76,18 +80,28 @@ fixtures:
     redis_type: sentinel
     persistence: rdb
     install_method: binary
+    # version — REQUIRED enum выкаченных в Nexus сборок; 8.0.3 ∈ enum (мажор 8 → redis8
+    # version-guard ГАСИТ модули: встроены в сервер). binary качает бинари этой версии.
+    version: "8.0.3"
+    # single-host sentinel (1 хост) → 0 реплик (default редизайна 2): size-guard 1+0.
+    replicas_per_master: 0
 
 assert:
   task_present:
-    # Fetch redis tarball: URL из base_url + install.version + arch. Сам tarball
-    # качается (бинари ставятся ВСЕГДА) — модулей это не касается, гасятся только .so.
+    # ★ Редизайн install-модели: бинари качаются ЧЕТЫРЬМЯ отдельными core.url.fetched
+    # прямо в /usr/local/bin (НЕ tarball). URL per-host: <base_url>/<arch>/Debian/
+    # <distro_ver>/<version>/redis-* (amd64/Debian/12/8.0.3). Бинари ставятся ВСЕГДА —
+    # version-guard гасит только .so модулей, не сам redis. Дизамбигуатор — url/path.
     - module: core.url.fetched
       params_subset:
-        url: "https://downloads.example.com/redis/redis-8.0.0-amd64.tar.gz"
-        path: "/tmp/redis-8.0.0.tar.gz"
+        url: "https://downloads.example.com/redis/amd64/Debian/12/8.0.3/redis-server"
+        path: /usr/local/bin/redis-server
+        mode: "0755"
+        owner: root
+        group: root
 
-    # redis.conf БЕЗ loadmodules (version-gate по install.version → пустой список):
-    # vars.loadmodules: []. Регресс «гейт взял пустой version» = непустой loadmodules.
+    # redis.conf БЕЗ loadmodules (version-gate Redis 8+ → пустой список): vars.loadmodules:
+    # []. Регресс «version-guard не сработал» = непустой loadmodules + .so в плане.
     # Дизамбигуатор от users.acl/hardening/unit — path.
     - module: core.file.rendered
       params_subset:
@@ -120,6 +134,7 @@ assert:
               primary_ip: 10.0.0.5
             os:
               arch: amd64
+              version: "12"
           role: ""
           essence: {}
 
@@ -131,14 +146,14 @@ assert:
         args: ["PING"]
 
   task_absent:
-    # VERSION-GATE Redis 8+ по install.version: include modules.yml gated на
-    # deploy_redis && !redis8 → group-drop (modules-dir отсутствует в плане).
-    # Регресс «гейт взял пустой version вместо install.version» = modules-dir протёк.
+    # VERSION-GATE Redis 8+ (по эффективной версии = input.version 8.0.3): include
+    # modules.yml gated на deploy_redis && !redis8 → group-drop (modules-dir отсутствует
+    # в плане). Регресс «version-guard не сработал на 8.x» = modules-dir протёк.
     - module: core.file.directory
       params_subset:
         path: /var/lib/redis/modules
     # .so fetch: include modules.yml group-dropped → fetch-loop отсутствует.
-    # Дизамбигуатор от tarball-fetch (есть в плане) — path .so.
+    # Дизамбигуатор от binary-fetch (redis-* в плане) — path .so.
     - module: core.url.fetched
       params_subset:
         path: /var/lib/redis/modules/redisearch.so
@@ -149,11 +164,11 @@ assert:
 
   state_changes:
     redis_type: sentinel
-    # redis_version из essence.binary_version (compute.redis_version: binary → upstream-semver).
-    redis_version: "8.0.0"
+    # redis_version = input.version (enum выкаченных в Nexus сборок; binary качает её бинари).
+    redis_version: "8.0.3"
     # Redis 8+ → модули встроены, .so не качаются → развёрнутый набор пуст.
     modules: []
     install:
       method:   binary
       base_url: "https://downloads.example.com/redis"
-      version:  "8.0.0"
+      version:  "8.0.3"

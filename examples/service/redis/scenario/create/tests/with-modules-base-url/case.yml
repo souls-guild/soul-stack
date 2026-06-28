@@ -1,0 +1,210 @@
+# L0-испытание create (sentinel, Redis < 8) — НЕПУСТОЙ modules_base_url = ВЕСЬ НАБОР.
+# Позитивный контроль к empty-modules-base-url (vanilla): при заданном modules_base_url на
+# Redis < 8 разворачивается ПОЛНЫЙ набор модулей — .so всех четырёх качаются, loadmodule
+# всех четырёх приходят в redis.conf, modules-dir создаётся. Закрепляет, что base_url-гейт
+# (фикс 2026-06-28) НЕ сломал нормальный модульный путь.
+#
+# Директива ALL-OR-NOTHING: base_url задан → ВЕСЬ набор (этот кейс), пуст → НИ ОДНОГО.
+# version 7.4.1 < 8 → version-guard не активен; base_url непуст → модули включены.
+#
+# Корень гейта (DESTINY): vars.redis_modules_enabled = !redis8 && modules_base_url != ''
+#   - include modules.yml → deploy_redis && redis_modules_enabled → ОБА истинны → группа в
+#     плане (modules-dir + 4 fetch присутствуют);
+#   - loadmodules-ячейка redis.conf: redis_modules_enabled → пути ВСЕХ четырёх .so.
+# URL арх-специфичен per-host (soulprint.self.os.arch; L0 несёт self первого по SID хоста).
+name: non-empty modules_base_url deploys all modules with loadmodule and .so fetch
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-3.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+    - sid: node-1.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-2.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    redis_type: sentinel
+    sentinel_master_name: master
+    # ★ Редизайн: подложка per-master sentinel-дефолтов (под input.sentinel_master_settings).
+    sentinel_master_defaults:
+      down-after-milliseconds: "5000"
+      failover-timeout:        "60000"
+    # ★ base_url ЗАДАН → ВЕСЬ набор модулей (контр-точка к empty-modules-base-url).
+    modules_base_url: "https://artifacts.example.com/redis/modules/7.2"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default:    "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    redis_type: sentinel
+    # version — ENUM выкаченных в Nexus сборок; 7.4.1 ∈ enum (мажор < 8 → version-gate
+    # модулей не активен → гасит/включает модули ИМЕННО base_url).
+    version: "7.4.1"
+    # install_method=package ЯВНО (default редизайна — binary): кейс про modules-gate,
+    # не про install — package-ветка даёт state.install.method=package.
+    install_method: package
+    replicas_per_master: 2
+
+assert:
+  task_present:
+    # ── redis.conf С loadmodules (base_url задан, Redis < 8 → пути всех четырёх .so) ──
+    # render_context.self = первый по SID хост (node-1).
+    # Дизамбигуатор от users.acl/hardening (тот же core.file.rendered) — path.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            password: s3cr3t-redis-pass-create
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
+            # ★ ВЕСЬ набор loadmodule (Go-сорт алиасов: bloom, json, search, timeseries).
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
+            config:
+              maxmemory:        "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients:       10000
+              timeout:          300
+              save:             "900 1 300 10 60 10000"
+              appendonly:       "no"
+          self:
+            sid: node-1.example.com
+            covens: [create, redis]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # ── modules-dir создаётся (include modules.yml активен) ──
+    # Дизамбигуатор от systemd-dropin-dir (тот же core.file.directory) — path.
+    - module: core.file.directory
+      params_subset:
+        path: /var/lib/redis/modules
+        owner: redis
+        group: redis
+        mode: "0750"
+
+    # ── .so качаются — ВСЕ четыре (Go-сорт: bloom, json, search, timeseries). URL арх-
+    # специфичен (amd64 из soulprint первого хоста). checksum НЕ передаётся (content-идемп.).
+    - module: core.url.fetched
+      params_subset:
+        url: "https://artifacts.example.com/redis/modules/7.2/amd64/redisbloom.so"
+        path: /var/lib/redis/modules/redisbloom.so
+        mode: "0750"
+        owner: redis
+        group: redis
+    - module: core.url.fetched
+      params_subset:
+        url: "https://artifacts.example.com/redis/modules/7.2/amd64/rejson.so"
+        path: /var/lib/redis/modules/rejson.so
+        mode: "0750"
+        owner: redis
+        group: redis
+    - module: core.url.fetched
+      params_subset:
+        url: "https://artifacts.example.com/redis/modules/7.2/amd64/redisearch.so"
+        path: /var/lib/redis/modules/redisearch.so
+        mode: "0750"
+        owner: redis
+        group: redis
+    - module: core.url.fetched
+      params_subset:
+        url: "https://artifacts.example.com/redis/modules/7.2/amd64/redistimeseries.so"
+        path: /var/lib/redis/modules/redistimeseries.so
+        mode: "0750"
+        owner: redis
+        group: redis
+
+  state_changes:
+    redis_type: sentinel
+    redis_version: "7.4.1"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+    redis_users: []
+    redis_hosts: []
+    # ★ read-model day-2 (редизайн): тайминги в master_settings (эффективный per-master
+    # dict = essence.sentinel_master_defaults поверх operator-dict, не задан → дефолты);
+    # settings — глобальные sentinel-директивы (не заданы → {}).
+    redis_sentinel:
+      master_name: master
+      quorum: 0
+      master_settings:
+        down-after-milliseconds: "5000"
+        failover-timeout: "60000"
+      settings: {}
+    replicas: 2
+    sentinel_quorum: 0
+    shards: 0
+    persistence: rdb
+    maxmemory_policy: ""
+    install:
+      method: package
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    memory_mb: 0
+    modules: [bloom, json, search, timeseries]
+    sysctl_settings: {}

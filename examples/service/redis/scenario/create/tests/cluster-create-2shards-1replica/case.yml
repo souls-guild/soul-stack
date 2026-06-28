@@ -73,7 +73,10 @@ fixtures:
     redis_type: cluster
     # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
     # distro-native пин (мажор < 8 → version-gate модулей не активен).
-    version: "7.2.4"
+    version: "7.4.1"
+    # install_method=package ЯВНО (default редизайна — binary): state.install
+    # ассертит method=package; кейс изолирует cluster-replicas от install-модели.
+    install_method: package
     shards: 2
     replicas_per_master: 1
     cluster_node_timeout: 8000
@@ -145,7 +148,7 @@ assert:
 
   state_changes:
     redis_type: cluster
-    redis_version: "7.2.4"
+    redis_version: "7.4.1"
     redis_config:
       maxmemory:        "256mb"
       maxmemory-policy: allkeys-lru

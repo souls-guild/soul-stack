@@ -30,7 +30,7 @@ Keeper-side core-модули регистрируются в keeper-side Regist
 | `core.cloud.created` / `core.cloud.destroyed` | `core.cloud` | `created` / `destroyed` |
 | `core.bootstrap.delivered` | `core.bootstrap` | `delivered` |
 | `core.choir.present` / `core.choir.absent` | `core.choir` | `present` / `absent` |
-| `core.vault.kv-read` | `core.vault` | `kv-read` |
+| `core.vault.kv-read` / `core.vault.kv-present` | `core.vault` | `kv-read` / `kv-present` |
 
 Бракованный адрес (`SplitModuleAddr` вернул `ok=false`: пустой, `.state`, `core.`) или `base`, которого нет в Registry, — keeper-задача падает (`failed`-событие «unknown keeper-side module»), как Soul-side на неизвестный модуль. Регистрация модуля в Registry условна по наличию его зависимости в `coremod.Deps`: `core.choir` подключается только при заданном `ChoirStore`, `core.bootstrap` — только при полном наборе SSH-deps (provider-карта + host-CA + dialer), иначе сборка их не несёт, и шаг с этим модулем упадёт «unknown».
 
@@ -269,6 +269,12 @@ cloud-init (B-flat, [ADR-017(h)](../adr/0017-keeper-side-core.md)) уже пос
 ## `core.vault.kv-read`
 
 Явное чтение секрета из Vault KV (v1/v2, версия mount-а определяется автоматически) на keeper-стороне с обязательной записью audit-event-а `vault.kv-read` (ADR-017(b)). **Keeper-side**, диспетчер `on: keeper`. Registry-ключ — base `core.vault`; state `kv-read` (verb) приходит из суффикса адреса. Существует параллельно с implicit `${ vault(...) }` в CEL: implicit-форма дёшева для рендера, но не оставляет audit-записи; этот модуль — explicit-форма для compliance-аккуратного чтения. Read-only (`changed=false` всегда). Полный per-module справочник с params/output/security — [docs/module/core/vault/README.md](../module/core/vault/README.md).
+
+## `core.vault.kv-present`
+
+Generate-if-absent для Vault KV-секретов на keeper-стороне ([ADR-017 amendment 2026-06-28](../adr/0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read)). **Keeper-side**, диспетчер `on: keeper`. Тот же модуль, что `kv-read`: Registry-ключ — base `core.vault`; state `kv-present` приходит из суффикса адреса. Для каждого target гарантирует существование непустого поля секрета: отсутствующее (нет поля / `null` / пустая строка) генерит криптослучайным значением (`crypto/rand`, bias-free) по описанной автором **password-policy** (длина в символах + алфавит `charset`/`allowed_chars`), присутствующее — no-op (не перезатирает). `changed=true` только при реальной генерации; идемпотентно (rerun/re-create безопасны). `destroy` секреты не чистит → re-create переиспользует те же пароли. Назначение — сервис сам генерит недостающие пароли при `create`, оператору не нужно пред-сеять секреты ручным `vault kv put`.
+
+**Security-инвариант (ADR-010):** сгенерированное **значение** никогда не уходит в register-output / audit-payload / лог / OTel / текст ошибки — наружу только `path` + имена сгенерированных полей. register-output — `generated` (map путь → \[поля]); audit-event `vault.kv-present` (`source: keeper_internal`) пишется только при `changed=true`, payload `{paths}` — без значений. Полный per-module справочник с params (`targets` / `policy`) / output / security — [docs/module/core/vault/README.md](../module/core/vault/README.md#corevaultkv-present).
 
 ## См. также
 

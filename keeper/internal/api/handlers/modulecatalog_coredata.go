@@ -155,7 +155,7 @@ var coreModuleDocs = []coreModuleDoc{
 	},
 	{
 		Name:        "core.vault",
-		Description: "Явное чтение Vault KV на keeper-стороне (state kv-read, keeper-side, on: keeper).",
-		States:      []string{"kv-read"},
+		Description: "Работа с Vault KV на keeper-стороне: kv-read (явное чтение с audit-event) и kv-present (generate-if-absent — гарантирует существование секрета, генерит недостающее crypto/rand). keeper-side, on: keeper.",
+		States:      []string{"kv-read", "kv-present"},
 	},
 }

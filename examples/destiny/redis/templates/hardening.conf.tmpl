@@ -1,6 +1,14 @@
 {{/*
   systemd drop-in hardening для redis-server (Go text/template strict, ADR-010). Контекст:
-  .vars.data_dir/run_dir/log_dir — фактические каталоги записи redis под ReadWritePaths.
+  .vars.data_dir/run_dir/log_dir/conf_dir — фактические каталоги записи redis под
+  ReadWritePaths.
+
+  conf_dir В RW-путях ОБЯЗАТЕЛЕН (day-2): сценарий update_config делает CONFIG REWRITE
+  (community.redis.config с rewrite:true) — redis-server переписывает redis.conf, чтобы
+  персистить применённые директивы. Без conf_dir ProtectSystem=strict держит /etc только-
+  чтение → CONFIG REWRITE падает («Read-only file system») при первой же реально
+  изменившейся директиве. На create redis-server конфиг не переписывает (старт с готового
+  файла), но drop-in один на весь жизненный цикл — conf_dir нужен под day-2.
 
   ПОЧЕМУ drop-in, а не свой unit. Redis ставится дистрибутивным пакетом вместе с его
   systemd-юнитом redis-server.service. Дистрибутивный unit заменять целиком нельзя — он
@@ -18,8 +26,9 @@
 
   HARDENING (прод-конвенция §3, «безопасность на первом месте», requirements.md).
   Stateful-вариант: ProtectSystem=strict + ReadWritePaths под фактические каталоги записи
-  redis (data-dir/log/pidfile/socket). БЕЗ ReadWritePaths strict делает весь / только-
-  чтение и redis не сможет писать RDB/AOF/socket/pid/log — прод-инцидент.
+  redis (data-dir/log/pidfile/socket + conf-dir для day-2 CONFIG REWRITE, см. выше). БЕЗ
+  ReadWritePaths strict делает весь / только-чтение и redis не сможет писать
+  RDB/AOF/socket/pid/log/redis.conf — прод-инцидент.
 
   MemoryDenyWriteExecute НЕ ставим намеренно (в отличие от Go-бинарей exporter-ов).
   redis — на C, использует jemalloc и поддерживает loadable-модули; MDWE запрещает
@@ -33,7 +42,7 @@
 [Service]
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths={{ .vars.data_dir }} {{ .vars.run_dir }} {{ .vars.log_dir }}
+ReadWritePaths={{ .vars.data_dir }} {{ .vars.run_dir }} {{ .vars.log_dir }} {{ .vars.conf_dir }}
 ProtectHome=yes
 PrivateTmp=yes
 ProtectKernelTunables=yes

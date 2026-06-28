@@ -10,3 +10,8 @@ spec:
       input:
         path:   { type: string, required: true, description: "Путь Vault KV (mount-относительный)." }
         fields: { type: list,   items: { type: string }, description: "Какие ключи извлечь; пусто → весь секрет." }
+    kv-present:
+      description: Keeper-side (on:keeper). Generate-if-absent — гарантирует существование секрета (генерит недостающее crypto/rand по policy, есть — no-op, значений наружу не отдаёт).
+      input:
+        policy:  { type: map,  description: "Step-level дефолт policy для всех targets: length (8..1024, default 32), charset (alphanumeric|hex|base64url|ascii-printable-safe) ЛИБО allowed_chars (взаимоисключимы)." }
+        targets: { type: list, required: true, items: { type: map }, description: "Непустой список целей {path: <Vault KV-путь без #field>, field?: <имя поля, default password>, policy?: <per-target override>}." }

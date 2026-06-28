@@ -1,8 +1,9 @@
 # L0-испытание version-aware валидатора имён директив redis_settings (assert, #6) —
-# НЕГАТИВ. essence несёт каталог redis_directives с серией 7.2. input.version = 7.2.4 →
-# серия 7.2. redis_settings содержит НЕИЗВЕСТНОЕ имя (опечатка `maxmemoyr` — нет в
-# каталоге) → assert false → render рвётся на KEEPER-SIDE (422 assert-failed) ДО любого
-# dispatch, понятным сообщением. Парный к redis-settings-directive-valid.
+# НЕГАТИВ. essence несёт каталог redis_directives с серией 7.4. input.version = 7.4.1
+# (enum выкаченных в Nexus сборок) → серия 7.4. redis_settings содержит НЕИЗВЕСТНОЕ имя
+# (опечатка `maxmemoyr` — нет в каталоге) → assert false → render рвётся на KEEPER-SIDE
+# (422 assert-failed) ДО любого dispatch, понятным сообщением. Парный к
+# redis-settings-directive-valid.
 #
 # Проверяет ГЛАВНЫЙ замысел фичи: passthrough-map redis_settings (additional_properties)
 # больше не протаскивает мусорное имя молча — опечатка ловится на render, а не поздним
@@ -53,9 +54,9 @@ fixtures:
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
 
-    # Каталог директив (подмножество серии 7.2) — активирует assert-валидатор.
+    # Каталог директив (подмножество серии 7.4) — активирует assert-валидатор.
     redis_directives:
-      "7.2":
+      "7.4":
         - maxmemory
         - maxmemory-policy
         - maxclients
@@ -66,7 +67,7 @@ fixtures:
 
   input:
     redis_type: sentinel
-    version: "7.2.4"
+    version: "7.4.1"
     persistence: rdb
     redis_settings:
       # ОПЕЧАТКА: должно быть maxmemory. Имя НЕТ в каталоге серии 7.2 → assert false.

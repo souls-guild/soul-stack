@@ -36,6 +36,10 @@ fixtures:
   essence:
     redis_type: sentinel
     sentinel_master_name: master
+    # ★ Редизайн: подложка per-master sentinel-дефолтов (под input.sentinel_master_settings).
+    sentinel_master_defaults:
+      down-after-milliseconds: "5000"
+      failover-timeout:        "60000"
     modules_base_url: "https://artifacts.example.com/redis/modules"
     memory_reserve_percent: 75
     persistence_presets:
@@ -47,7 +51,7 @@ fixtures:
       maxmemory-policy: allkeys-lru
       maxclients:       10000
       timeout:          300
-    # ★ #5: порт/refs — в essence; включение — input.tls_enabled (plain открыт по дефолту).
+    # ★ #5: порт/refs — в essence; режим канала — input.connection_mode (tls_plain открыт).
     tls_port:   7379
     tls_cert_ref: "secret/services/redis/tls#cert"
     tls_key_ref:  "secret/services/redis/tls#key"
@@ -69,12 +73,17 @@ fixtures:
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
     redis_type: sentinel
-    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
-    # distro-native пин (мажор < 8 → version-gate модулей не активен).
-    version: "7.2.4"
+    # version ОБЯЗАТЕЛЬНА: enum выкаченных в Nexus сборок (мажор < 8 → version-gate
+    # модулей не активен). 7.4.1 — серия 7.x, как прежний distro-пин 7.2.4.
+    version: "7.4.1"
+    # install_method=package ЯВНО: кейс про TLS-режим, не про способ установки.
+    install_method: package
     persistence: rdb
-    # ★ #5: TLS включён, plain-порт оставлен открытым (tls_keep_plain дефолт true → не only).
-    tls_enabled: true
+    # single-host (1 хост) → 0 реплик (default редизайна 2): size-guard sentinel = 1+0.
+    replicas_per_master: 0
+    # ★ Редизайн: connection_mode=tls_plain — TLS И plain открыты (нет port 0). Заменяет
+    # прежнюю tls_enabled=true без tls_keep_plain (anti-downgrade: PING всё равно по TLS).
+    connection_mode: tls_plain
 
 assert:
   task_present:
@@ -138,7 +147,8 @@ assert:
 
   state_changes:
     redis_type: sentinel
-    redis_version: "7.2.4"
+    redis_version: "7.4.1"
+    connection_mode: tls_plain
     redis_config:
       tls-port: "7379"
       tls-cert-file: /etc/redis/tls/redis.crt
@@ -156,5 +166,7 @@ assert:
     redis_sentinel:
       master_name: master
       quorum: 0
-      down_after_ms: 5000
-      failover_timeout_ms: 60000
+      master_settings:
+        down-after-milliseconds: "5000"
+        failover-timeout: "60000"
+      settings: {}

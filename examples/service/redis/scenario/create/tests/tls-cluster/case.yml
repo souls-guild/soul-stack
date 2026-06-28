@@ -53,7 +53,7 @@ fixtures:
       maxmemory-policy: allkeys-lru
       maxclients:       10000
       timeout:          300
-    # ★ #5: порт/refs — в essence; включение/закрытие plain — input.tls_enabled/keep_plain.
+    # ★ #5: порт/refs — в essence; режим канала — input.connection_mode (tls = only-TLS).
     tls_port:   7379
     tls_cert_ref: "secret/services/redis/tls#cert"
     tls_key_ref:  "secret/services/redis/tls#key"
@@ -69,15 +69,16 @@ fixtures:
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
   input:
     redis_type: cluster
-    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
-    # distro-native пин (мажор < 8 → version-gate модулей не активен).
-    version: "7.2.4"
+    # version ОБЯЗАТЕЛЬНА: enum выкаченных в Nexus сборок (мажор < 8 → version-gate
+    # модулей не активен). 7.4.1 — серия 7.x, как прежний distro-пин 7.2.4.
+    version: "7.4.1"
+    # install_method=package ЯВНО: assert redis.conf без binary-бинарей (кейс про TLS).
+    install_method: package
     shards: 3
     replicas_per_master: 0
     cluster_node_timeout: 5000
-    # ★ #5: TLS включён + plain закрыт (only-TLS).
-    tls_enabled: true
-    tls_keep_plain: false
+    # ★ Редизайн: connection_mode=tls — только-TLS (plain закрыт, port 0, tls-cluster yes).
+    connection_mode: tls
 
 assert:
   # size-guard PASS — assert: (ADR-009 amendment), в план не эмитится.
@@ -150,7 +151,8 @@ assert:
 
   state_changes:
     redis_type: cluster
-    redis_version: "7.2.4"
+    redis_version: "7.4.1"
+    connection_mode: tls
     redis_config:
       port: "0"
       tls-port: "7379"

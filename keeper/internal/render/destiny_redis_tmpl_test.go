@@ -275,6 +275,79 @@ func TestSentinelConf_AnnounceIP_PerHost(t *testing.T) {
 	}
 }
 
+// TestSentinelUnit_ConfDirInReadWritePaths — ПРЯМОЙ regress-guard на дефект
+// «redis-sentinel не стартует под systemd-хардерингом» (LIVE 2026-06-28).
+// Корень: redis-sentinel ПЕРЕПИСЫВАЕТ свой sentinel.conf в рантайме (персист
+// топологии — master/replicas/epoch/known-sentinels), но юнит имел
+// ProtectSystem=strict + ReadWritePaths БЕЗ conf_dir → /etc только-чтение →
+// sentinel падал на старте («sentinel.conf is not writable: Read-only file
+// system», exit 1, рестарт-луп). Фикс: conf_dir добавлен в ReadWritePaths
+// redis-sentinel.service.tmpl. Тест рендерит РЕАЛЬНЫЙ юнит и доказывает, что
+// строка ReadWritePaths СОДЕРЖИТ conf_dir (фактический, а не хардкод /etc/redis —
+// проверяем под нестандартным conf_dir). Возврат шаблона к ReadWritePaths без
+// conf_dir завалит тест.
+func TestSentinelUnit_ConfDirInReadWritePaths(t *testing.T) {
+	const confDir = "/opt/redis-conf" // нестандартный conf_dir — должен попасть в RW дословно
+	root := map[string]any{
+		"vars": map[string]any{
+			"sentinel_bin":  "/usr/bin",
+			"cli_bin":       "/usr/bin",
+			"conf_dir":      confDir,
+			"sentinel_port": 26379,
+			"redis_user":    "redis",
+			"redis_group":   "redis",
+			"data_dir":      "/var/lib/redis",
+			"log_dir":       "/var/log/redis",
+			"run_dir":       "/var/run/redis",
+		},
+	}
+	out := renderRedisTmpl(t, "redis-sentinel.service.tmpl", root)
+
+	rwLine := readWritePathsLine(t, out)
+	if !strings.Contains(rwLine, confDir) {
+		t.Fatalf("ReadWritePaths sentinel-юнита не содержит conf_dir %q (sentinel не сможет переписать sentinel.conf):\n%s", confDir, rwLine)
+	}
+	// Остальные обязательные каталоги записи на месте (не вытеснили друг друга).
+	for _, want := range []string{"/var/lib/redis", "/var/log/redis", "/var/run/redis"} {
+		if !strings.Contains(rwLine, want) {
+			t.Fatalf("ReadWritePaths sentinel-юнита не содержит %q:\n%s", want, rwLine)
+		}
+	}
+}
+
+// TestRedisServerHardening_ConfDirInReadWritePaths — ПРЯМОЙ regress-guard того же
+// класса для redis-server (аудит дефекта sentinel, 2026-06-28). day-2 сценарий
+// update_config делает CONFIG REWRITE (community.redis.config rewrite:true) —
+// redis-server переписывает redis.conf, чтобы персистить применённые директивы.
+// Hardening drop-in имел ProtectSystem=strict + ReadWritePaths БЕЗ conf_dir → при
+// первой реально изменившейся директиве CONFIG REWRITE упёрся бы в read-only /etc
+// (та же ошибка, что у sentinel, но проявляется на day-2, не на create). Фикс:
+// conf_dir добавлен в ReadWritePaths hardening.conf.tmpl (и провязан var-ом в
+// tasks/server.yml). Тест рендерит РЕАЛЬНЫЙ drop-in и доказывает наличие conf_dir в
+// ReadWritePaths. Возврат шаблона без conf_dir завалит тест.
+func TestRedisServerHardening_ConfDirInReadWritePaths(t *testing.T) {
+	const confDir = "/opt/redis-conf" // нестандартный conf_dir — должен попасть в RW дословно
+	root := map[string]any{
+		"vars": map[string]any{
+			"data_dir": "/var/lib/redis",
+			"run_dir":  "/var/run/redis",
+			"log_dir":  "/var/log/redis",
+			"conf_dir": confDir,
+		},
+	}
+	out := renderRedisTmpl(t, "hardening.conf.tmpl", root)
+
+	rwLine := readWritePathsLine(t, out)
+	if !strings.Contains(rwLine, confDir) {
+		t.Fatalf("ReadWritePaths hardening drop-in не содержит conf_dir %q (CONFIG REWRITE на update_config упрётся в read-only /etc):\n%s", confDir, rwLine)
+	}
+	for _, want := range []string{"/var/lib/redis", "/var/run/redis", "/var/log/redis"} {
+		if !strings.Contains(rwLine, want) {
+			t.Fatalf("ReadWritePaths hardening drop-in не содержит %q:\n%s", want, rwLine)
+		}
+	}
+}
+
 // TestSentinelConf_DirectivesDeterministicOrder — стартовые директивы
 // sentinel_config range-ятся по MAP в ОТСОРТИРОВАННОМ порядке (детерминизм — нет
 // ложного change/рестарта), а при пустом auth_pass строки auth-pass нет (gate).
@@ -581,6 +654,20 @@ func nonEmptyLines(s string) []string {
 		}
 	}
 	return out
+}
+
+// readWritePathsLine — строка `ReadWritePaths=...` из отрендеренного systemd-юнита/
+// drop-in. Падает, если строки нет (ProtectSystem=strict без ReadWritePaths = весь /
+// только-чтение, прод-инцидент).
+func readWritePathsLine(t *testing.T, out string) string {
+	t.Helper()
+	for _, ln := range strings.Split(out, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(ln), "ReadWritePaths=") {
+			return ln
+		}
+	}
+	t.Fatalf("в рендере нет строки ReadWritePaths=:\n%s", out)
+	return ""
 }
 
 // userName — имя юзера из строки `user <name> <state> #<hash> <perms>`.

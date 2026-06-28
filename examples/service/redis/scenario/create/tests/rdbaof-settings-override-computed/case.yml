@@ -1,10 +1,10 @@
 # L0-испытание create (standalone) — guard на пробелы покрытия QA 2026-06-22:
-#   - persistence: rdb_aof → save непустой + appendonly yes (пресет rdb_aof);
+#   - persistence: rdb_aof_1sec → save непустой + appendonly yes (пресет rdb_aof_1sec);
 #   - memory_mb=512 → computed maxmemory 512*75/100=384 → "384mb";
 #   - redis_settings.maxmemory="1gb" ПЕРЕКРЫВАЕТ computed "384mb" (last-wins на
 #     COMPUTED-слое, не только на essence-дефолте): redis_settings — самый правый
 #     слой merge, бьёт и вычисленные ключи. Это и есть guard.
-name: rdb_aof + redis_settings overrides COMPUTED maxmemory (last-wins)
+name: rdb_aof_1sec + redis_settings overrides COMPUTED maxmemory (last-wins)
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
@@ -42,7 +42,7 @@ fixtures:
       rdb:
         save: "900 1 300 10 60 10000"
         appendonly: "no"
-      rdb_aof:
+      rdb_aof_1sec:
         save: "900 1 300 10 60 10000"
         appendonly: "yes"
     redis_config:
@@ -67,11 +67,19 @@ fixtures:
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
     redis_type: sentinel
-    # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
-    # distro-native пин (мажор < 8 → version-gate модулей не активен).
-    version: "7.2.4"
+    # version ОБЯЗАТЕЛЬНА и теперь ENUM выкаченных в Nexus сборок (7.4.1 ∈ enum;
+    # мажор < 8 → version-gate модулей не активен).
+    version: "7.4.1"
+    # single-host sentinel (1 хост в roster) → 0 реплик (default редизайна 2):
+    # size-guard sentinel = 1+0 = 1.
+    replicas_per_master: 0
+    # install_method=package ЯВНО (default редизайна — binary): кейс про last-wins
+    # maxmemory, не про install — package-ветка даёт core.pkg.installed redis-server.
+    install_method: package
     memory_mb: 512
-    persistence: rdb_aof
+    # persistence rdb_aof_1sec (enum [off, aof_1sec, aof_always, rdb, rdb_aof_1sec,
+    # rdb_aof_always]): RDB-снапшоты + AOF c fsync everysec. Пресет несёт save+appendonly.
+    persistence: rdb_aof_1sec
     redis_settings:
       # Перекрывает COMPUTED maxmemory (384mb), не только essence-дефолт.
       maxmemory: "1gb"
@@ -81,7 +89,7 @@ assert:
     - module: core.pkg.installed
       params_subset:
         name: redis-server
-        version: "7.2.4"
+        version: "7.4.1"
 
     # redis.conf — единственная core.file.rendered с этим path (дизамбигуатор от
     # users.acl/hardening).
@@ -112,7 +120,7 @@ assert:
               maxmemory-policy: allkeys-lru
               maxclients: 10000
               timeout: 300
-              # persistence-пресет rdb_aof.
+              # persistence-пресет rdb_aof_1sec.
               save: "900 1 300 10 60 10000"
               appendonly: "yes"
           self:
@@ -131,7 +139,7 @@ assert:
 
   state_changes:
     redis_type: sentinel
-    redis_version: "7.2.4"
+    redis_version: "7.4.1"
     # DRIFT-GUARD: идентичен apply.input.config (index 3).
     redis_config:
       maxmemory: "1gb"

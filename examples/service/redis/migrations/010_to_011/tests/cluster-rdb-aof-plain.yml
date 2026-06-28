@@ -1,0 +1,100 @@
+name: cluster-rdb-aof-plain
+description: >
+  cluster-инкарнация (v10): старый persistence:rdb_aof + tls выключен (enable:false)
+  + redis_sentinel == {} (sentinel-фактов нет). После миграции:
+    - persistence → rdb_aof_1sec (remap снапшоты+AOF everysec);
+    - connection_mode → plain (tls.enable false → обратная свёртка);
+    - io_threads → 0 (best-effort default);
+    - redis_sentinel → {} НЕ ТРОГАЕТСЯ (size==0 ветка тернара — no-op, master_settings/
+      settings НЕ добавляются: у cluster sentinel-фактов нет).
+  Cluster-директивы в redis_config и топология shards/replicas — бит-в-бит.
+
+state_before:
+  redis_type: cluster
+  redis_version: "7.4.1"
+  redis_config:
+    maxmemory: "512mb"
+    maxmemory-policy: allkeys-lru
+    save: "900 1 300 10 60 10000"
+    appendonly: "yes"
+    appendfsync: "everysec"
+    cluster-enabled: "yes"
+    cluster-config-file: "nodes.conf"
+    cluster-node-timeout: "5000"
+  redis_users: []
+  redis_hosts: []
+  redis_sentinel: {}
+  tls:
+    enable: false
+    only: false
+    port: 7379
+    cert_ref: ""
+    key_ref: ""
+    ca_ref: ""
+  install:
+    method: package
+  persistence: rdb_aof
+  maxmemory_policy: allkeys-lru
+  memory_mb: 0
+  modules: []
+  modules_base_url: ""
+  conf_dir: /etc/redis
+  data_dir: /var/lib/redis
+  sysctl_settings: {}
+  shards: 3
+  replicas: 1
+  sentinel_quorum: 0
+  provisioned_vm_ids: []
+  provisioned_provider: ""
+  provisioned_sids: []
+  seeded_from:
+    source_endpoints: []
+    detached: false
+    source_password_ref: ""
+    source_tls_ca_ref: ""
+
+state_after:
+  redis_type: cluster
+  redis_version: "7.4.1"
+  redis_config:
+    maxmemory: "512mb"
+    maxmemory-policy: allkeys-lru
+    save: "900 1 300 10 60 10000"
+    appendonly: "yes"
+    appendfsync: "everysec"
+    cluster-enabled: "yes"
+    cluster-config-file: "nodes.conf"
+    cluster-node-timeout: "5000"
+  redis_users: []
+  redis_hosts: []
+  redis_sentinel: {}
+  tls:
+    enable: false
+    only: false
+    port: 7379
+    cert_ref: ""
+    key_ref: ""
+    ca_ref: ""
+  install:
+    method: package
+  persistence: rdb_aof_1sec
+  connection_mode: plain
+  io_threads: 0
+  maxmemory_policy: allkeys-lru
+  memory_mb: 0
+  modules: []
+  modules_base_url: ""
+  conf_dir: /etc/redis
+  data_dir: /var/lib/redis
+  sysctl_settings: {}
+  shards: 3
+  replicas: 1
+  sentinel_quorum: 0
+  provisioned_vm_ids: []
+  provisioned_provider: ""
+  provisioned_sids: []
+  seeded_from:
+    source_endpoints: []
+    detached: false
+    source_password_ref: ""
+    source_tls_ca_ref: ""
