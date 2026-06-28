@@ -33,11 +33,11 @@ Destiny получает значения уже зарезолвленными 
 
 | Файл | Задачи | Используемые модули |
 |---|---|---|
-| [`install.yml`](tasks/install.yml) | установка бинарей redis — диспетчер по `install.method`: **package** (default, distro-пакет) **или** **binary** (opt-in upstream-tarball: fetch → extract → distro-юзер/группа → три `core.file.present` (`src:`) разложение redis-server/redis-cli/redis-sentinel в `/usr/local/bin` → свой systemd-юнит + СВОЙ рестарт) + каталог unix-сокета (обе ветки) | [`core.pkg`](../../../docs/module/core/pkg/README.md), [`core.url`](../../../docs/module/core/url/README.md), [`core.archive`](../../../docs/module/core/archive/README.md), [`core.group`](../../../docs/module/core/group/README.md), [`core.user`](../../../docs/module/core/user/README.md), [`core.file`](../../../docs/module/core/file/README.md), [`core.service`](../../../docs/module/core/service/README.md) |
+| [`install.yml`](tasks/install.yml) | установка бинарей redis — диспетчер по `install.method`: **package** (default-пакет distro) **или** **binary** (default — отдельные бинари из Nexus: distro-юзер/группа → **четыре** `core.url.fetched` качают `redis-server`/`redis-cli`/`redis-benchmark`/`redis-sentinel` в `/usr/local/bin` (URL `<base_url>/<arch>/Debian/<distro_ver>/<version>/…`) → симлинки `redis-check-aof`/`redis-check-rdb` → свой systemd-юнит + СВОЙ рестарт) + каталог unix-сокета (обе ветки) | [`core.pkg`](../../../docs/module/core/pkg/README.md), [`core.url`](../../../docs/module/core/url/README.md), [`core.cmd`](../../../docs/module/core/cmd/README.md), [`core.group`](../../../docs/module/core/group/README.md), [`core.user`](../../../docs/module/core/user/README.md), [`core.file`](../../../docs/module/core/file/README.md), [`core.service`](../../../docs/module/core/service/README.md) |
 | [`server.yml`](tasks/server.yml) | data-плоскость `redis-server` (gated `deploy_redis`): TLS-PEM (cert/key/ca) → `users.acl` → `redis.conf` → systemd-hardening drop-in → `core.service running/restarted` | [`core.file`](../../../docs/module/core/file/README.md), [`core.service`](../../../docs/module/core/service/README.md) |
 | [`sentinel.yml`](tasks/sentinel.yml) | sentinel-демон (gated `sentinel_enabled`): `sentinel-users.acl` (2-й aclfile) → `sentinel.conf` → systemd-юнит → `core.service running/restarted` | [`core.file`](../../../docs/module/core/file/README.md), [`core.service`](../../../docs/module/core/service/README.md) |
 | [`extras.yml`](tasks/extras.yml) | host-tuning, **безусловно** (рекомендация Redis / hardening, не выбор оператора): отключение THP (oneshot-юнит) / logrotate / sysctl kernel-параметры | [`core.file`](../../../docs/module/core/file/README.md), [`core.service`](../../../docs/module/core/service/README.md), [`core.sysctl`](../../../docs/module/core/sysctl/README.md) |
-| [`modules.yml`](tasks/modules.yml) | каталог `.so` + loop-fetch Redis-модулей (RediSearch/RedisJSON/RedisTimeSeries/RedisBloom) на Redis < 8 | [`core.file`](../../../docs/module/core/file/README.md), [`core.url`](../../../docs/module/core/url/README.md) |
+| [`modules.yml`](tasks/modules.yml) | каталог `.so` + fetch Redis-модулей (RediSearch/RedisJSON/RedisTimeSeries/RedisBloom). Весь файл gated (`vars.redis_modules_enabled`): включён при data-плоскости **И** Redis < 8 **И** НЕПУСТОМ `modules_base_url`; иначе group-drop — пустой `modules_base_url` даёт **vanilla** redis (без `loadmodule`/fetch) | [`core.file`](../../../docs/module/core/file/README.md), [`core.url`](../../../docs/module/core/url/README.md) |
 
 Все core-модули — никакого `required_modules:` ([`community.redis`](../../../docs/module/community/redis/README.md)
 вызывается из scenario сервиса, не из этой destiny).
@@ -62,10 +62,15 @@ destiny видит **только свой** `input:` (изоляция, [ADR-00
   ([`server.yml`](tasks/server.yml)), пакет redis при этом ставится всё равно (он же
   несёт sentinel-демон).
 - **`install`** — способ доставки бинарей: `{method, base_url, version}`.
-  `method=package` (default) — distro-пакет; `binary` — upstream-tarball (качается по
-  content-идемпотентности по SHA-256 содержимого, без integrity-verify). `version`
-  верхнего уровня (distro-epoch-пин, напр. `5:7.0.15-1~deb12u7`) — для package-ветки;
-  `install.version` (upstream-semver) — для binary-ветки.
+  `method=package` — distro-пакет; `method=binary` — **отдельные бинари из Nexus**
+  (`redis-server`/`redis-cli`/`redis-benchmark`/`redis-sentinel` качаются per-host из
+  `<base_url>/<arch>/Debian/<distro_ver>/<version>/…` по content-идемпотентности
+  SHA-256, без integrity-verify — `redis-sentinel` отдельный бинарь, `redis-check-aof`/
+  `redis-check-rdb` симлинки на `redis-server`). `version` верхнего уровня (distro-пин) —
+  для package-ветки; `install.version` — для binary-ветки. **Способ установки на уровне
+  сервиса задаёт `install_method` (default `binary`), а `base_url`/`version` бинаря —
+  `essence`** (см. [service-README](../../service/redis/README.md)); destiny собирает из
+  них структуру `install`.
 - **TLS.** `tls: {enable, only, port, cert_ref, key_ref, ca_ref}` — единый dict
   (host-инвариант). PEM-материал рендерится **через `core.file.present` + `${ vault(ref) }`
   в ячейке `content`** (seal-маскинг, [templating.md §7.4](../../../docs/templating.md)),
@@ -86,10 +91,13 @@ destiny видит **только свой** `input:` (изоляция, [ADR-00
   destiny повторно **не мержит**.
 - **Host-tuning.** `sysctl_settings` (map kernel-параметр → значение, строки) → drop-in
   `/etc/sysctl.d/30-redis.conf` через [`core.sysctl.applied`](../../../docs/module/core/sysctl/README.md).
-- **Redis-модули.** `modules` (алиасы `search`/`json`/`timeseries`/`bloom`),
-  `modules_dir`, `modules_base_url` — для Redis < 8; `.so` качаются по
-  content-идемпотентности (SHA-256 содержимого), URL арх-специфичен (строится из
-  `soulprint.self.os.arch` per-host).
+- **Redis-модули.** `modules_base_url` — единственное поле модулей (поля `modules`/
+  `modules_dir` удалены: набор — инвариант кирпича `vars.redis_modules`, `modules_dir`
+  выводится из `data_dir`). Директива «модули **всегда все**» = all-or-nothing: непустой
+  `modules_base_url` на Redis < 8 → качается **весь** набор (RediSearch/RedisJSON/
+  RedisTimeSeries/RedisBloom); **пустой** `modules_base_url` → **vanilla** redis (группа
+  `modules.yml` group-drop, ни одного `.so`). `.so` качаются по content-идемпотентности
+  (SHA-256), URL арх-специфичен (`soulprint.self.os.arch` per-host).
 - **Sentinel.** `sentinel_enabled` (bool) + `sentinel: {master_name, master_ip,
   master_port, quorum, auth_user, auth_pass, config}` — задействованы только в
   sentinel-режимах; `master_ip` обязателен, когда dict передан.

@@ -1,0 +1,88 @@
+# L0-испытание create — input.sentinel_settings (ГЛОБАЛЬНЫЕ директивы sentinel.conf,
+# НЕ per-master). default(input.sentinel_settings, {}) сливается в read-model
+# redis_sentinel.settings (state) И в sentinel_directives (plugin config: plain-ключ →
+# globals у classifyConfig). Кейс держит инвариант «sentinel_settings:{resolve-hostnames}
+# → settings в state.redis_sentinel несёт эти директивы» (контр-точка — кейсы без поля,
+# settings:{}). per-master тайминги (sentinel_master_settings → master_settings) — другой
+# data-path, тут не задействован. Режим sentinel single-host (1 master + 0 реплик).
+name: sentinel_settings global directives land in state redis_sentinel.settings
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    redis_type: sentinel
+    sentinel_master_name: master
+    sentinel_master_defaults:
+      down-after-milliseconds: "5000"
+      failover-timeout:        "60000"
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory: "256mb"
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default:    "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    redis_type: sentinel
+    version: "7.4.1"
+    install_method: package
+    replicas_per_master: 0
+    persistence: rdb
+    # ГЛОБАЛЬНЫЕ sentinel-директивы (НЕ per-master): plain-ключи sentinel.conf.
+    sentinel_settings:
+      resolve-hostnames: "yes"
+      announce-hostnames: "yes"
+
+assert:
+  task_present:
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+
+  state_changes:
+    redis_type: sentinel
+    redis_version: "7.4.1"
+    redis_config:
+      maxmemory: "256mb"
+      save: "900 1 300 10 60 10000"
+      appendonly: "no"
+    redis_users: []
+    redis_hosts: []
+    redis_sentinel:
+      master_name: master
+      quorum: 0
+      master_settings:
+        down-after-milliseconds: "5000"
+        failover-timeout: "60000"
+      # ГЛОБАЛЬНЫЕ директивы материализованы в read-model — day-2 читает их именованно.
+      settings:
+        resolve-hostnames: "yes"
+        announce-hostnames: "yes"

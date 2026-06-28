@@ -91,7 +91,7 @@ Fallback-литерал выбирается по `type` параметра (`''
 
 ### Условная обязательность: `required_when`
 
-`required: true` делает параметр обязательным **всегда**. Часто нужно иное: параметр обязателен **только в одном режиме**. Пример из сервиса `redis`: число шардов `shards` имеет смысл только при `redis_type == 'cluster'`, адрес внешнего мастера `master_ip` — только при `redis_type == 'sentinel_only'`. Безусловный `required: true` тут неверен (отверг бы валидный standalone-прогон без `shards`), а схема не умеет выразить «обязателен при условии».
+`required: true` делает параметр обязательным **всегда**. Часто нужно иное: параметр обязателен **только в одном режиме**. Пример из сервиса `redis`: число шардов `shards` имеет смысл только при `redis_type == 'cluster'` — в режиме `sentinel` его задавать незачем. Безусловный `required: true` тут неверен (отверг бы валидный `sentinel`-прогон без `shards`), а схема не умеет выразить «обязателен при условии».
 
 Для этого — `required_when: "<CEL-предикат>"`:
 
@@ -99,15 +99,12 @@ Fallback-литерал выбирается по `type` параметра (`''
 input:
   redis_type:
     type: string
-    enum: [standalone, sentinel, cluster, sentinel_only]
-    default: standalone
+    enum: [sentinel, cluster]
+    default: sentinel
   shards:
     type: integer
-    min: 1
+    min: 3
     required_when: "input.redis_type == 'cluster'"      # обязателен только в cluster
-  master_ip:
-    type: string
-    required_when: "input.redis_type == 'sentinel_only'" # обязателен только в sentinel_only
 ```
 
 **Семантика.** На input-стадии (после merge дефолтов, ДО render-фазы) предикат вычисляется над **эффективным input**. Если предикат истинен И параметр отсутствует (не передан и без `default`) — ошибка резолва, как у `required: true`, но условная. Если предикат ложен — отсутствие параметра допустимо.

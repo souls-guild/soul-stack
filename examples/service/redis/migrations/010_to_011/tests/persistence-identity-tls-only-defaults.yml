@@ -1,13 +1,14 @@
 name: persistence-identity-tls-only-defaults
 description: >
   Три инварианта в одном кейсе (sentinel, v10):
-    - persistence:rdb → ТОЖДЕСТВО (rdb сохранился в новом enum, remap не трогает; off
-      проверяется аналогично — обе значения в тождественной ветке тернара);
+    - persistence:off → ТОЖДЕСТВО (off сохранился в новом enum, remap его НЕ трогает:
+      ветка тернара возвращает state.persistence как есть). redis_config off-консистентен
+      (save:"" appendonly:"no") — миграция его не меняет, но фикстура честна к режиму;
     - tls.enable:true + tls.only:true → connection_mode → tls (только TLS, plain закрыт);
     - redis_sentinel БЕЗ старых down_after_ms/failover_timeout_ms (теоретический v10 до
       004_to_005-таймингов либо ремап) → master_settings собирается из РОЛЬ-ДЕФОЛТОВ
       5000/60000 (has-guard на отсутствующие листы), master_name/quorum сохранены.
-  Доказывает: remap идемпотентен для уже-валидных значений, обратная свёртка tls→tls,
+  Доказывает: remap идемпотентен для off (тождественная ветка), обратная свёртка tls→tls,
   default-ветка таймингов master_settings.
 
 state_before:
@@ -15,7 +16,7 @@ state_before:
   redis_version: "7.4.1"
   redis_config:
     maxmemory: "256mb"
-    save: "900 1 300 10 60 10000"
+    save: ""
     appendonly: "no"
   redis_users: []
   redis_hosts: []
@@ -31,7 +32,7 @@ state_before:
     ca_ref: "secret/services/redis/tls#ca"
   install:
     method: package
-  persistence: rdb
+  persistence: off
   maxmemory_policy: ""
   memory_mb: 0
   modules: []
@@ -48,7 +49,7 @@ state_after:
   redis_version: "7.4.1"
   redis_config:
     maxmemory: "256mb"
-    save: "900 1 300 10 60 10000"
+    save: ""
     appendonly: "no"
   redis_users: []
   redis_hosts: []
@@ -68,7 +69,7 @@ state_after:
     ca_ref: "secret/services/redis/tls#ca"
   install:
     method: package
-  persistence: rdb
+  persistence: off
   connection_mode: tls
   io_threads: 0
   maxmemory_policy: ""
