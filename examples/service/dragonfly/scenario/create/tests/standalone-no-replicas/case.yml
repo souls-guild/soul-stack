@@ -32,7 +32,6 @@ fixtures:
     memory_reserve_percent: 75
     df_config:
       maxmemory:        "256mb"
-      maxmemory_policy: noeviction
       maxclients:       10000
     system_acl_users:
       replica:    "+psync +replconf +ping"
@@ -58,12 +57,14 @@ assert:
         password: s3cr3t-dragonfly-pass
 
     # SENTINEL MONITOR: monitor.ip — единственный хост; auto-quorum = 1.
+    # redis_version — версия sentinel-ДЕМОНА (essence.sentinel_redis_version, дефолт 7.2.4),
+    # НЕ df_version (1.39.0). Гейтит version-aware sentinel-фичи плагина.
     - module: community.redis.sentinel
       params_subset:
         addr: "127.0.0.1:26379"
         master_name: master
         auth_pass: s3cr3t-dragonfly-pass
-        redis_version: "1.39.0"
+        redis_version: "7.2.4"
         monitor:
           ip: 10.0.0.9
           port: 6379

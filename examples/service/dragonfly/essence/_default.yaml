@@ -56,6 +56,13 @@ tls_ca_ref:   "secret/services/dragonfly/tls#ca"
 sentinel_down_after_ms:       5000
 sentinel_failover_timeout_ms: 60000
 
+# Версия sentinel-ДЕМОНА (distro redis-sentinel — ОТДЕЛЬНЫЙ продукт от DragonFly). Гейтит
+# version-aware sentinel-фичи плагина community.redis.sentinel (param redis_version →
+# versionGE 7.0.0 для глобальных SENTINEL-директив). ★ Это НЕ версия DragonFly: DF —
+# data-плоскость, sentinel-демон — distro redis-server. Дефолт — distro-актуальная серия
+# redis-sentinel; оператор пинит под свой distro в spec.essence.
+sentinel_redis_version: "7.2.4"
+
 # ── Системные ACL-юзеры DragonFly + sentinel-демона ─────────────────────────────
 # Имя→ACL-perms-строка СЛУЖЕБНЫХ юзеров: replica (репликация PSYNC), monitoring (метрики),
 # sentinel (sentinel↔df AUTH), haproxy (health-check балансировщика). DragonFly redis-
@@ -88,12 +95,15 @@ system_acl_users_sentinel:
   haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
 
 # ── Merge-подложка dragonfly.conf flagfile (defaults роли) ──────────────────────
-# НИЖНИЙ слой merge(): вычисленные maxmemory/policy и passthrough оператора наслаиваются
-# поверх. Merged итог рендерится во flagfile (destiny `dragonfly`). ★ Ключи — DF-ФЛАГИ
-# (underscore-форма): maxmemory/maxmemory_policy/maxclients (НЕ redis-дефис maxmemory-policy).
+# НИЖНИЙ слой merge(): вычисленный maxmemory и passthrough оператора наслаиваются поверх.
+# Merged итог рендерится во flagfile (destiny `dragonfly`). ★ Ключи — РЕАЛЬНЫЕ DF-ФЛАГИ
+# (underscore-форма, парсятся absl без --undefok; неизвестный флаг = FATAL при старте DF).
+# maxmemory — флаг main_service.cc; maxclients — флаг. ★ maxmemory_policy НЕ кладём: у DF
+# НЕТ такого флага (нет ABSL_FLAG; имя живёт только в INFO/CONFIG GET как производное от
+# cache_mode). Eviction-рычаг DF — bool --cache_mode; per-policy выбор (redis-имена lru/lfu/
+# …) DF не понимает → eviction вне скоупа PILOT, флаг во flagfile не транслируется.
 df_config:
   maxmemory:        "256mb"
-  maxmemory_policy: noeviction
   maxclients:       10000
 
 # Данные-таблица kernel-параметров под DragonFly (host-tuning). scenario передаёт этот map

@@ -1,0 +1,145 @@
+name: update_users
+description: >-
+  Day-2: МАССОВОЕ редактирование ВСЕХ operator-добавленных ACL-пользователей на УЖЕ
+  работающем DragonFly БЕЗ рестарта процесса (bulk-replace). Производственная конвенция
+  «hot-reload > рестарт» (docs/destiny/production-conventions.md §3a/§6): ACL применяется на
+  лету командой ACL LOAD, рестарт демона не нужен. REUSE из redis/update_users (DragonFly
+  несёт полный Redis-совместимый ACL).
+
+  ★ Семантика «правим всех»: оператор задаёт ПОЛНЫЙ НОВЫЙ набор operator-extra юзеров
+  (input.users — массив AclUser). Этот набор ЦЕЛИКОМ заменяет incarnation.state.df_users
+  (bulk-replace, НЕ upsert): юзер, которого нет в новом наборе, УДАЛЯЕТСЯ из ACL. Граница с
+  add_user: add_user добавляет/переопределяет ОДНОГО (точечный upsert, набор растёт);
+  update_users задаёт ВЕСЬ набор разом (юзера можно убрать, исключив из массива).
+
+  ★ Системные служебные юзеры (replica/monitoring/sentinel/haproxy) этим сценарием НЕ трогаются:
+  они НЕ в state.df_users (state хранит только operator-extra), а доливаются в users.acl из
+  essence.system_acl_users на КАЖДОМ рендере (как create/add_user). Удалить системного через
+  input.users нельзя — его имя зарезервировано (validate-guard ниже), а долив из essence
+  перекрыл бы любую попытку. Поэтому bulk-replace operator-extra НЕ ломает репликацию/sentinel.
+
+  Пароль каждого юзера НЕ во входном контракте: лежит в Vault по конвенции
+  secret/dragonfly/<incarnation>/users/<name>#password (как create/add_user), резолвится
+  keeper-side через vault() в render-фазе. Сценарий рендерит ПОЛНЫЙ users.acl на диск
+  (системные + новый operator-extra набор) и ОЖИВЛЯЕТ через community.redis.acl (ACL LOAD).
+
+  Идемпотентность: ACL LOAD идемпотентен ПО КОНСТРУКЦИИ; плагин делает честный diff ACL LIST
+  до/после (changed=false при совпадении). Рендер users.acl детерминирован. Day-2: инстанс УЖЕ
+  работает (auth через vault()-пароль + TLS-дискриминатор из incarnation.state.tls).
+
+  Таргетинг — на весь incarnation (on опущен, ADR-008/009): новый users.acl + ACL LOAD идут на
+  КАЖДЫЙ dragonfly-хост. ACL host-инвариантен (один набор юзеров на кластер).
+
+# ── Входной контракт оператора (docs/input.md) ────────────────────────────────
+# ПОЛНЫЙ НОВЫЙ набор operator-extra ACL-юзеров (массив AclUser, types.yml/ADR-062 $type) —
+# тот же тип, что элемент create input.users. Массив целиком заменяет state.df_users (bulk-
+# replace). Пустой/опущенный массив = удалить ВСЕХ operator-extra (системные остаются,
+# доливаются из essence). Пароль — НЕ во входе (Vault-конвенция, см. description).
+input:
+  users:
+    type: array
+    required: true
+    # day-2 form-prefill (docs/input.md → «Pre-fill из state»): «правим ВСЕХ» = форма
+    # открывается с УЖЕ показанным текущим набором operator-extra (оператор правит дельту, не
+    # вводит набор с нуля и не стирает его молча). Источник — incarnation.state.df_users (тот
+    # же массив AclUser, что state_changes пишет ниже: set df_users <- input.users), поэтому
+    # имя поля (users) и state-ключ (df_users) расходятся — prefill идёт явным аксессором.
+    # df_users НЕ secret (пароля в нём нет — он keeper-side Vault). Это лишь UI-подсказка: в
+    # эффективный input state НЕ течёт (bulk-replace применяет ровно то, что оператор оставил).
+    prefill_from_state: state.df_users
+    items:
+      $type: AclUser
+    description: >-
+      ПОЛНЫЙ новый набор operator-extra ACL-юзеров (массив AclUser: {name, perms, state}).
+      ЦЕЛИКОМ заменяет incarnation.state.df_users (bulk-replace): юзера, которого нет в массиве,
+      удаляет из ACL. perms — ПОЛНАЯ ACL-строка (Redis ACL-синтаксис, DragonFly его принимает),
+      валидируется паттерном AclUser. Системные служебные юзеры сюда НЕ входят (доливаются из
+      essence). Пустой массив = убрать всех operator-extra. Форма открывается преднаполненной
+      текущим набором (prefill_from_state: state.df_users).
+
+# ── Декларативные input-инварианты (validate:) ───────────────────────────────────
+# system-ACL-users guard (как create/add_user): ни один элемент input.users НЕ может занять
+# имя СЛУЖЕБНОГО (default/replica/monitoring/sentinel/haproxy). Системные доливаются в users.acl
+# из essence ПОВЕРХ operator-extra (last-wins) — operator `replica` молча перекрыл бы replica-
+# perms репликации. Ловим на INPUT-валидации (422 ДО applying). INPUT-ONLY (essence недоступен):
+# список имён захардкожен. .all() над МАССИВОМ итерирует элементы AclUser; имя — поле u.name.
+# input.users required → has()-обвязка не нужна.
+validate:
+  - that: "input.users.all(u, !(u.name in ['default', 'replica', 'monitoring', 'sentinel', 'haproxy']))"
+    message: "имя ACL-пользователя зарезервировано за служебным (default/replica/monitoring/sentinel/haproxy): выбери другое имя — служебные юзеры заводятся автоматически из essence"
+
+# ── Вычисляемые scenario-vars (compute:) ─────────────────────────────────────────
+# Рун-уровневый контекст (input/essence/incarnation — без soulprint). tls_* — дискриминатор
+# коннекта плагина из state.tls: ACL LOAD идёт через TLS-коннект, если DragonFly на TLS.
+compute:
+  tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
+  tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
+  # tls_ca — PEM CA-СОДЕРЖИМОЕ коннекта из ИМЕНОВАННОГО state.tls.ca_ref (vault() резолвит
+  # Vault-ПУТЬ в PEM). После rotate_tls (меняет state.tls.ca_ref) day-2 коннект берёт
+  # АКТУАЛЬНЫЙ CA — не устаревший essence-дефолт.
+  tls_ca:   "${ compute.tls_on ? vault(incarnation.state.tls.ca_ref) : '' }"
+
+# ── Мутация incarnation.state ─────────────────────────────────────────────────
+# ★ BULK-REPLACE: state.df_users ЗАМЕНЯЕТСЯ input.users ЦЕЛИКОМ (массив AclUser
+# [{name,perms,state}], БЕЗ пароля — он keeper-side vault, ADR-012). НЕ upsert, НЕ merge: то,
+# чего нет в input.users, выпадает из state (= удаление юзера). Тот же набор, что ушёл в render
+# users.acl operator-extra-слоем. required → input.users всегда присутствует; пустой массив
+# фиксирует «operator-extra нет» (системные остаются вне state).
+state_changes:
+  - set: df_users
+    value: "${ input.users }"
+
+tasks:
+  # 1. Перерендерить users.acl на диск с НОВЫМ набором юзеров (тот же режим-агностичный destiny
+  #    `dragonfly`, что create/add_user). vars.users — merged набор с per-user паролями из Vault
+  #    (keeper-side vault(), .tmpl хеширует sha256). dragonfly.conf/TLS НЕ оживляем — update_users
+  #    меняет ТОЛЬКО ACL (flagfile на диске не изменится при тех же config — idempotent рендер).
+  #    version/install/conf_dir/data_dir — из state. sentinel-блок в apply.input НЕ передаём.
+  - name: Re-render users.acl with the new ACL user set (full file on disk)
+    apply:
+      destiny: dragonfly
+      input:
+        version:  "${ has(incarnation.state.df_version) ? incarnation.state.df_version : '' }"
+        install:  "${ default(incarnation.state.install, {'method': 'package'}) }"
+        conf_dir: "${ default(incarnation.state.conf_dir, '/etc/dragonfly') }"
+        data_dir: "${ default(incarnation.state.data_dir, '/var/lib/dragonfly') }"
+        password: "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
+        config:   "${ incarnation.state.df_config }"
+        # ★★ КРИТИЧНО (system-ACL-users): ПОЛНЫЙ users.acl = СИСТЕМНЫЕ (из essence, ПЕРВЫМИ) +
+        # operator-extra (НОВЫЙ input.users — МАССИВ AclUser, ПОВЕРХ). update_users перерендеривает
+        # ВЕСЬ файл (не append) → БЕЗ долива системных этот рендер СТЁР БЫ replica/monitoring/
+        # sentinel/haproxy → сломал бы репликацию/sentinel/health-check на day-2. Системные
+        # доливаются на КАЖДОМ рендере из essence.system_acl_users. last-wins: operator-extra
+        # перекрывает одноимённого системного (имена системных закрыты validate-guard — коллизии
+        # нет). Vault-пароль каждого — secret/dragonfly/<inc>/users/<name>#password. ★ bulk-replace:
+        # operator-extra-слой = input.users ЦЕЛИКОМ (то, чего в нём нет, в файл не попадёт = удаление
+        # юзера). Идентичен render-у create (там operator-extra = input.users), отличие лишь в источнике.
+        users: >-
+          ${ merge(
+               merge(default(essence.system_acl_users, {}).map(name, {
+                 name: {
+                   'perms':    essence.system_acl_users[name],
+                   'state':    'on',
+                   'password': vault('secret/dragonfly/' + incarnation.name + '/users/' + name + '#password')
+                 }
+               })),
+               merge(input.users.map(u, {
+                 u.name: {
+                   'perms':    u.perms,
+                   'state':    u.state,
+                   'password': vault('secret/dragonfly/' + incarnation.name + '/users/' + u.name + '#password')
+                 }
+               }))
+             ) }
+
+  # 2. HOT-RELOAD ACL: community.redis.acl шлёт ACL LOAD — живой инстанс перечитывает aclfile
+  #    (отрендеренный шагом 1) целиком. Удалённые из набора юзеры исчезают из ACL LIST при
+  #    перезагрузке файла (ACL LOAD приводит инстанс к файлу). Идемпотентно по конструкции;
+  #    плагин делает diff ACL LIST до/после. addr/TLS-дискриминатор — из state.tls (compute.tls_*).
+  - name: Hot-reload ACL on the live instance (ACL LOAD)
+    module: community.redis.acl
+    params:
+      addr:     "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
+      password: "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
+      tls:      "${ compute.tls_on }"
+      tls_ca:   "${ compute.tls_ca }"

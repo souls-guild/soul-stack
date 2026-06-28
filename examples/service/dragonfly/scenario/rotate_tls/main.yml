@@ -1,0 +1,199 @@
+name: rotate_tls
+description: >-
+  Day-2: ротация TLS-материала DragonFly (серверный cert/key + CA) БЕЗ рестарта процесса.
+  DragonFly перечитывает cert/key/CA на лету по CONFIG SET tls_*_file — рестарт демона не
+  нужен (производственная конвенция «hot-reload > рестарт», docs/destiny/production-
+  conventions.md §3a/§6). REUSE из redis/rotate_tls.
+
+  ★★ DragonFly vs redis (КРИТИЧНАЯ АДАПТАЦИЯ): имена TLS-флагов DragonFly — UNDERSCORE-форма
+  (tls_cert_file / tls_key_file / tls_ca_cert_file), НЕ дефис как у redis (tls-cert-file).
+  Подтверждено разведкой исходников DragonFly (src/server/tls/tls_helpers.cc:
+  ABSL_FLAG(std::string, tls_cert_file ...), tls_key_file, tls_ca_cert_file; все три
+  config_registry.RegisterMutable → мутабельны через CONFIG SET, server_family.cc:1229-1231).
+  Три CONFIG SET-команды ниже несут эти underscore-имена.
+
+  Отдельный сценарий РАДИ ЯВНОЙ АУДИТ-СЕМАНТИКИ ротации: «сменился TLS-материал» — отдельное
+  событие в state_history, с собственным input (новые Vault-refs cert/key/ca) и собственной
+  мутацией state.tls.*_ref.
+
+  Оператор задаёт НОВЫЕ Vault-ПУТИ серверного cert/key/CA (не сам PEM — секрет идёт через
+  vault() в ячейке content destiny, seal-маскинг). Сценарий: (1) destiny `dragonfly`
+  перерендеривает PEM в ${conf_dir}/tls/{dragonfly.crt,dragonfly.key,ca.crt} из НОВЫХ refs
+  (apply: register: tls_certs — агрегат changed по дочерним core.file.present); (2) три
+  community.redis.command CONFIG SET tls_cert_file / tls_key_file / tls_ca_cert_file ПОД
+  onchanges:[tls_certs] — DragonFly ПЕРЕСОЗДАЁТ SSL_CTX и перечитывает PEM live, но ТОЛЬКО
+  когда PEM реально сменился (один command = одна команда → три шага, все на одном onchanges-гейте).
+
+  ★ ПРЕДУСЛОВИЕ: TLS уже ВКЛЮЧЁН на инстансе (state.tls.enable=true). Ротация на plaintext-
+  инстансе бессмысленна — assert-шаг рвёт прогон ДО applying. Включение TLS на работающем
+  plaintext-DragonFly — отдельная операция (требует рестарта для открытия TLS-listener-а:
+  tls_port startup-only), не rotate_tls.
+
+  ★ ИДЕМПОТЕНТНОСТЬ ПО onchanges: три CONFIG SET гейтятся onchanges:[tls_certs] (НЕ force
+  changed:true), где tls_certs — applier-register apply-шага 2. Движок эмитит синтетическую
+  core.noop.run с register_data = OR(changed) по дочерним destiny-задачам (orchestration.md
+  §2.1.1). re-read SSL_CTX срабатывает ТОЛЬКО когда PEM реально сменился; повторный прогон с
+  тем же материалом → файлы не меняются → агрегат changed=false → три CONFIG SET skipped →
+  весь сценарий no-op.
+
+  Таргетинг — на весь incarnation (on опущен, ADR-008/009): новый PEM + reload идут на КАЖДЫЙ
+  dragonfly-хост. TLS-материал host-инвариантен (один cert/CA на кластер).
+
+# ── Входной контракт оператора (docs/input.md) ────────────────────────────────
+# НОВЫЕ Vault-ПУТИ серверного cert/key/CA (форма "<mount>/<path>#<field>"), НЕ сам PEM. Каждый
+# опционален — оператор ротирует лишь часть (напр. только cert+key, CA тот же); не заданный ref
+# берёт ТЕКУЩИЙ из incarnation.state.tls (подложка).
+input:
+  cert_ref:
+    type: string
+    required: false
+    description: >-
+      Новый Vault-путь серверного TLS-сертификата (dragonfly.crt). Не задан → текущий
+      state.tls.cert_ref (CA/key ротируются независимо).
+
+  key_ref:
+    type: string
+    required: false
+    description: >-
+      Новый Vault-путь серверного приватного ключа (dragonfly.key). Не задан → текущий
+      state.tls.key_ref.
+
+  ca_ref:
+    type: string
+    required: false
+    description: >-
+      Новый Vault-путь CA-сертификата кластера (ca.crt). Не задан → текущий state.tls.ca_ref.
+
+# ── Декларативные input-инварианты (validate:) ───────────────────────────────────
+# (1) хотя бы один ref задан (иначе нечего ротировать). TLS-предусловие (state.tls.enable=true)
+# НЕ выразимо через input (state недоступен в validate-контексте) — оно вынесено в первый
+# assert-шаг ниже (полный scenario-контекст с incarnation.state). Здесь — только «хотя бы один ref».
+validate:
+  - that: "has(input.cert_ref) || has(input.key_ref) || has(input.ca_ref)"
+    message: "rotate_tls требует хотя бы один новый ref (cert_ref/key_ref/ca_ref)"
+
+# ── Вычисляемые scenario-vars (compute:) ─────────────────────────────────────────
+# Рун-уровневый контекст (input/essence/incarnation — без soulprint). tls_* — дискриминатор
+# коннекта плагина из state.tls. Здесь TLS заведомо включён (assert-guard ниже), но дискриминатор
+# оставлен симметричным остальным day-2-сценариям (единый паттерн).
+compute:
+  tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
+  tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
+  # tls_ca — CA коннекта (PEM из vault(state.tls.ca_ref)). incarnation.state — PRE-RUN снимок
+  # (мутация state.tls.ca_ref → compute.ca_ref применяется ПОСЛЕ успешного apply), поэтому ЗДЕСЬ
+  # это ТЕКУЩЕЕ доверие: на ЭТОМ rotate-прогоне сервер ещё со СТАРЫМ cert, CONFIG SET коннектится
+  # старым CA и сам же подменяет материал. На СЛЕДУЮЩИХ day-2 state.tls.ca_ref уже новый → коннект
+  # новым CA.
+  tls_ca:   "${ compute.tls_on ? vault(incarnation.state.tls.ca_ref) : '' }"
+  conf_dir: "${ default(incarnation.state.conf_dir, '/etc/dragonfly') }"
+
+  # Эффективные refs: новый из input бьёт текущий из state (подложка — частичная ротация).
+  # has()-цепочка (default(input, state) упал бы no-such-key, если input.*_ref отсутствует
+  # целиком — default ловит лист, не корень аргумента).
+  cert_ref: "${ has(input.cert_ref) ? input.cert_ref : incarnation.state.tls.cert_ref }"
+  key_ref:  "${ has(input.key_ref)  ? input.key_ref  : incarnation.state.tls.key_ref }"
+  ca_ref:   "${ has(input.ca_ref)   ? input.ca_ref   : incarnation.state.tls.ca_ref }"
+
+# ── Мутация incarnation.state ─────────────────────────────────────────────────
+# day-2 фиксирует НОВЫЕ Vault-refs cert/key/ca (read-model state.tls.*_ref). enable/only/port НЕ
+# меняются (rotate только материал). Тот же compute.*_ref, что ушёл в render PEM destiny.
+state_changes:
+  - set: tls
+    value: >-
+      ${ {
+           'enable':   incarnation.state.tls.enable,
+           'only':     incarnation.state.tls.only,
+           'port':     incarnation.state.tls.port,
+           'cert_ref': compute.cert_ref,
+           'key_ref':  compute.key_ref,
+           'ca_ref':   compute.ca_ref
+         } }
+
+tasks:
+  # 1. GUARD — TLS обязан быть включён (state.tls.enable=true). Предикат вычисляется KEEPER-SIDE
+  #    на рендере (incarnation.state доступен). false ОБРЫВАЕТ render с message ДО dispatch —
+  #    раньше и понятнее, чем падение коннекта на хосте. assert НЕ emit RenderedTask.
+  - name: Guard TLS is enabled on the instance before rotating its material
+    assert:
+      that:
+        - "has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false)"
+      message: "rotate_tls guard: TLS must be enabled (state.tls.enable=true); rotating material on a plaintext instance is meaningless"
+
+  # 2. Перерендерить PEM в ${conf_dir}/tls/ из НОВЫХ refs (тот же destiny `dragonfly`, что create).
+  #    apply.input.tls несёт enable + НОВЫЕ cert_ref/key_ref/ca_ref → destiny server.yml кладёт
+  #    cert/key/ca через core.file.present + vault(ref) в ячейке (seal-маскинг). config — текущий
+  #    state.df_config (dragonfly.conf не меняется при ротации; tls_*_file пути те же).
+  #    version/install/conf_dir/data_dir/users — из state. register: tls_certs — applier-register,
+  #    гейтящий reload ниже. ★ users: state.df_users — МАССИВ AclUser → MAP имя→{perms,state,password}
+  #    (.map), per-user пароль из Vault. Без долива системных тут не страшно: rotate перерендеривает
+  #    users.acl как побочный эффект полного destiny-прохода, но ОЖИВЛЯЕМ мы лишь TLS (ACL LOAD здесь
+  #    нет) — users.acl на диске останется консистентен только если несёт ВСЕХ. Для безопасности
+  #    operator-extra достаточно (системные доезжают через create/add_user/update_users); на этом
+  #    rotate-прогоне ACL не оживляется, файл лишь переписывается тем же содержимым (idempotent).
+  - name: Re-render TLS PEM material from the new Vault refs
+    register: tls_certs
+    apply:
+      destiny: dragonfly
+      input:
+        version:  "${ has(incarnation.state.df_version) ? incarnation.state.df_version : '' }"
+        install:  "${ default(incarnation.state.install, {'method': 'package'}) }"
+        conf_dir: "${ compute.conf_dir }"
+        data_dir: "${ default(incarnation.state.data_dir, '/var/lib/dragonfly') }"
+        password: "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
+        config:   "${ incarnation.state.df_config }"
+        tls:
+          enable:   "${ incarnation.state.tls.enable }"
+          only:     "${ incarnation.state.tls.only }"
+          port:     "${ incarnation.state.tls.port }"
+          cert_ref: "${ compute.cert_ref }"
+          key_ref:  "${ compute.key_ref }"
+          ca_ref:   "${ compute.ca_ref }"
+        users: >-
+          ${ has(incarnation.state.df_users)
+             ? merge(incarnation.state.df_users.map(u, {
+                 u.name: {
+                   'perms':    u.perms,
+                   'state':    u.state,
+                   'password': vault('secret/dragonfly/' + incarnation.name + '/users/' + u.name + '#password')
+                 }
+               }))
+             : {} }
+
+  # 3. HOT-RELOAD CERT: три community.redis.command (CONFIG SET tls_cert_file / tls_key_file /
+  #    tls_ca_cert_file — UNDERSCORE, DragonFly-форма) пересоздают SSL_CTX на live-инстансе.
+  #    DragonFly ПЕРЕСОЗДАЁТ SSL_CTX по CONFIG SET tls_*_file (RegisterMutable) → читает свежий
+  #    PEM с диска. command (raw verb-state) бьёт МИМО diff-skip community.redis.config (тот сравнил
+  #    бы значения CONFIG GET, счёл no-op при том же пути и не дёрнул бы CONFIG SET) — нужен raw
+  #    CONFIG SET, чтобы re-read сработал. Гейт — onchanges:[tls_certs] (идемпотентность): один
+  #    command = один verb → три шага на одном гейте. Пути PEM — из conf_dir (туда destiny положил
+  #    материал: dragonfly.crt/dragonfly.key/ca.crt). addr/TLS-дискриминатор/пароль — из state.tls
+  #    (compute.tls_*) + vault(), коннект по TLS (rotate только на TLS-инстансе).
+  - name: Re-read the rotated TLS cert when it changed (CONFIG SET tls_cert_file)
+    module: community.redis.command
+    onchanges: [tls_certs]
+    params:
+      addr:     "127.0.0.1:${ compute.tls_port }"
+      password: "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
+      tls:      "${ compute.tls_on }"
+      tls_ca:   "${ compute.tls_ca }"
+      args:     ["CONFIG", "SET", "tls_cert_file", "${ compute.conf_dir + '/tls/dragonfly.crt' }"]
+
+  - name: Re-read the rotated TLS key when it changed (CONFIG SET tls_key_file)
+    module: community.redis.command
+    onchanges: [tls_certs]
+    params:
+      addr:     "127.0.0.1:${ compute.tls_port }"
+      password: "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
+      tls:      "${ compute.tls_on }"
+      tls_ca:   "${ compute.tls_ca }"
+      args:     ["CONFIG", "SET", "tls_key_file", "${ compute.conf_dir + '/tls/dragonfly.key' }"]
+
+  - name: Re-read the rotated TLS CA cert when it changed (CONFIG SET tls_ca_cert_file)
+    module: community.redis.command
+    onchanges: [tls_certs]
+    params:
+      addr:     "127.0.0.1:${ compute.tls_port }"
+      password: "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
+      tls:      "${ compute.tls_on }"
+      tls_ca:   "${ compute.tls_ca }"
+      args:     ["CONFIG", "SET", "tls_ca_cert_file", "${ compute.conf_dir + '/tls/ca.crt' }"]

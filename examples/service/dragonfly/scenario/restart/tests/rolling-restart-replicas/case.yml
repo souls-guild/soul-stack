@@ -1,0 +1,74 @@
+# L0-испытание restart: rolling-restart реплик (probe→where slave, serial:1, plaintext).
+# Roster — 2 хоста; mocks.register.df_role.role = slave → block-потомки (where slave)
+# рендерятся, master-restart (where master, run_once) — placeholder-skip. Render-only,
+# герметично.
+#
+# ★ Probe — community.redis.role (go-redis INFO replication, DragonFly redis-совместим),
+# НЕ raw redis-cli: поле register.df_role.role, НЕ .stdout.
+#
+# Что ассертим:
+#   1. probe (community.redis.role) рендерит params коннекта (addr localhost, пароль из
+#      vault, plaintext-ветка tls=false).
+#   2. block-потомок (community.redis.replica-synced health-gate) рендерится с теми же
+#      plaintext-params — доказывает fan-out slave-block-а. Bare core.service.restarted
+#      (block-рестарт) presence-неотличим от master-рестарта → отдельно НЕ ассертим.
+#
+# ВНИМАНИЕ L0-ограничение: mocks.register — ЕДИНЫЙ payload на весь roster. df_role.role =
+# slave → block-потомки (where slave) рендерятся, master-restart (where master) skip.
+name: rolling-restart replicas one at a time (plaintext)
+
+fixtures:
+  hosts:
+    - sid: node-1.example.com
+      covens: [restart]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-2.example.com
+      covens: [restart]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+
+  input:
+    reason: "rolling restart for L0"
+
+  # Развёрнутый incarnation.state без TLS (plaintext-ветка дискриминатора). state.tls.enable
+  # false → probe/health-gate коннектятся plaintext на 6379.
+  state:
+    df_version: "1.39.0"
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    df_config:
+      maxmemory:        "256mb"
+
+  vault:
+    secret/dragonfly/restart:
+      password: fixture-df-pass-16chars
+
+mocks:
+  register:
+    df_role:
+      role: slave
+
+assert:
+  task_present:
+    # probe community.redis.role: plaintext-ветка (addr 6379, tls=false).
+    - module: community.redis.role
+      params_subset:
+        addr: "127.0.0.1:6379"
+        password: fixture-df-pass-16chars
+        tls: false
+
+    # slave-health-gate community.redis.replica-synced (block-потомок, where slave): тот же
+    # plaintext-коннект. Наличие гейта внутри slave-block-а доказывает рендер block fan-out.
+    - module: community.redis.replica-synced
+      params_subset:
+        addr: "127.0.0.1:6379"
+        password: fixture-df-pass-16chars
+        tls: false

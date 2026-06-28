@@ -1,0 +1,75 @@
+# L0-испытание destroy: teardown инкарнации, развёрнутой PACKAGE-способом (distro-deb dragonfly).
+# Render-only, герметично. Lifecycle terminal-флоу (destroy — фаза ЖЦ).
+#
+# Что ассертим:
+#   1. Сервисы остановлены (core.service.stopped): dragonfly, redis-sentinel, disable-thp.
+#   2. DragonFly снят ПАКЕТОМ (core.pkg.absent name=dragonfly) — package-ветка активна
+#      (state.install.method=package → static-гейт group-keep).
+#   3. Наши конфиг-артефакты удалены (core.file.absent): users.acl/dragonfly.conf/sentinel.conf/
+#      sentinel-users.acl/TLS PEM в /etc/dragonfly + logrotate/sysctl/disable-thp drop-in.
+#   4. BINARY-ветка дропнута (group-drop): core.file.absent /usr/local/bin/dragonfly И
+#      /etc/systemd/system/dragonfly.service ОТСУТСТВУЮТ в плане (на package-инкарнации не наши).
+name: destroy tears down a package-installed dragonfly (stop services + pkg.absent + remove configs)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [destroy]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
+
+  # incarnation.state package-инкарнации (install.method=package, conf_dir дефолтный).
+  state:
+    df_version: "1.39.0"
+    conf_dir: /etc/dragonfly
+    data_dir: /var/lib/dragonfly
+    install:
+      method: package
+    df_config:
+      maxmemory: "256mb"
+
+assert:
+  task_present:
+    # 1. Стоп трёх сервисов.
+    - module: core.service.stopped
+      params_subset:
+        name: dragonfly
+    - module: core.service.stopped
+      params_subset:
+        name: redis-sentinel
+    - module: core.service.stopped
+      params_subset:
+        name: disable-thp
+
+    # 2. DragonFly снят пакетом (package-ветка).
+    - module: core.pkg.absent
+      params_subset:
+        name: dragonfly
+
+    # 3. Наши конфиг-артефакты удалены (выборка ключевых).
+    - module: core.file.absent
+      params_subset:
+        path: /etc/dragonfly/users.acl
+    - module: core.file.absent
+      params_subset:
+        path: /etc/dragonfly/dragonfly.conf
+    - module: core.file.absent
+      params_subset:
+        path: /etc/dragonfly/tls/dragonfly.key
+    - module: core.file.absent
+      params_subset:
+        path: /etc/logrotate.d/dragonfly
+    - module: core.file.absent
+      params_subset:
+        path: /etc/sysctl.d/30-dragonfly.conf
+
+  task_absent:
+    # 4. BINARY-ветка group-drop на package-инкарнации: бинарь и binary-unit НЕ трогаются.
+    - module: core.file.absent
+      params_subset:
+        path: /usr/local/bin/dragonfly
+    - module: core.file.absent
+      params_subset:
+        path: /etc/systemd/system/dragonfly.service

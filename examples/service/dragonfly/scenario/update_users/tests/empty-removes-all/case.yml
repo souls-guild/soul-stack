@@ -1,0 +1,76 @@
+# L0-испытание update_users: ПУСТОЙ input.users убирает ВСЕХ operator-extra. Развёрнутый
+# state.df_users = {alice, bob}; оператор задаёт input.users = [] (пустой массив). bulk-replace
+# заменяет state.df_users ЦЕЛИКОМ пустым набором:
+#   1. users.acl рендерится БЕЗ operator-extra (системные доливались бы из essence — здесь
+#      essence.system_acl_users не задан → vars.users = {} пустой);
+#   2. state_changes.df_users = [] (operator-extra стёрт).
+# Доказывает, что bulk-replace позволяет убрать всех operator-extra пустым массивом (системные
+# вне state — остаются через долив из essence на каждом рендере, см. main.yml).
+name: update_users with empty input removes all operator-extra users
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.5 }
+    os: { arch: amd64 }
+
+  state:
+    df_version: "1.39.0"
+    conf_dir: /etc/dragonfly
+    data_dir: /var/lib/dragonfly
+    install:
+      method: package
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    df_config:
+      maxmemory:        "256mb"
+    df_users:
+      - { name: alice, perms: "~* +@all", state: "on" }
+      - { name: bob, perms: "~app:* +@read", state: "on" }
+
+  # Пустой набор: убрать всех operator-extra.
+  input:
+    users: []
+
+  vault:
+    secret/dragonfly/update_users:
+      password: updusr-df-pass-16chars
+
+assert:
+  task_present:
+    # users.acl рендерится с ПУСТЫМ набором (operator-extra стёрты; системных нет — essence
+    # без system_acl_users → vars.users = {}).
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/dragonfly/users.acl
+        render_context:
+          vars:
+            users: {}
+          self:
+            sid: trial-host
+            covens: [update_users]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # HOT-RELOAD ACL: community.redis.acl (ACL LOAD приводит инстанс к пустому operator-набору).
+    - module: community.redis.acl
+      params_subset:
+        addr: "127.0.0.1:6379"
+        password: updusr-df-pass-16chars
+        tls: false
+
+  # state_changes: df_users = [] (operator-extra стёрт целиком).
+  state_changes:
+    df_users: []

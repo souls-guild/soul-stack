@@ -65,21 +65,11 @@ input:
       min:64 не случаен: при слишком малом memory_mb усечение даёт "0mb" (БЕЗ лимита). Не
       задан → директива maxmemory берётся из merge-подложки essence.df_config.
 
-  maxmemory_policy:
-    type: string
-    required: false
-    enum:
-      - noeviction
-      - allkeys-lru
-      - allkeys-lfu
-      - allkeys-random
-      - volatile-lru
-      - volatile-lfu
-      - volatile-random
-      - volatile-ttl
-    description: >-
-      Политика вытеснения при достижении maxmemory (DragonFly redis-совместимые политики).
-      Не задана → берётся из merge-подложки essence.df_config (дефолт noeviction).
+  # ★ maxmemory_policy ОТСУТСТВУЕТ во входе: у DragonFly НЕТ такого флага (нет ABSL_FLAG;
+  # имя — производное INFO/CONFIG-поле от bool --cache_mode). Per-policy выбор (redis-имена
+  # lru/lfu/…) DF не транслирует — eviction вне скоупа PILOT. Если потребуется eviction —
+  # вводить boolean-вход поверх реального рычага --cache_mode отдельным слайсом, НЕ enum
+  # redis-политик (их 7 из 8 схлопнулись бы в один cache_mode=true с потерей выбора).
 
   # ── Реплики на master (sentinel-режим) ───────────────────────────────────────
   # replicas_per_master — реплик master-а. roster прогона = 1 master + replicas_per_master
@@ -183,7 +173,6 @@ form:
           label: "Бюджет памяти, МБ"
           placeholder: "1024"
           hint: "Бюджет памяти под DragonFly. maxmemory вычисляется как доля от него (минус резерв ОС). Не задан → maxmemory из подложки essence."
-        - { name: maxmemory_policy, label: "Политика вытеснения" }
 
     - key: topology
       title: "Топология (sentinel)"
@@ -248,6 +237,10 @@ compute:
   # Эффективная версия DragonFly: package → input.version (required_when=package);
   # binary → essence.binary_version. Объявлена ОДИН раз (state + плагин читают её).
   df_version: "${ input.install_method == 'binary' ? default(essence.binary_version, '') : (has(input.version) ? input.version : '') }"
+  # Версия sentinel-ДЕМОНА (distro redis-sentinel, НЕ DragonFly) для version-гейта плагина
+  # community.redis.sentinel. essence-pinned (sentinel — отдельный продукт, версия не зависит
+  # от df_version). default ловит отсутствие листа.
+  sentinel_redis_version: "${ default(essence.sentinel_redis_version, '7.2.4') }"
   # Per-master sentinel-директивы (тайминги failover): map `sentinel <opt> <master>` →
   # значение. Шаблон sentinel.conf.tmpl range-ит, плагин community.redis.sentinel classifyConfig
   # раскладывает per-master → SENTINEL SET. ОДИН source-of-truth (стартовый конфиг + live).
@@ -281,22 +274,20 @@ compute:
   tls_key_ref:  "${ has(essence.tls_key_ref)  ? essence.tls_key_ref  : '' }"
   tls_ca_ref:   "${ has(essence.tls_ca_ref)   ? essence.tls_ca_ref   : '' }"
   # df_config — ИТОГ трансляции простого ввода во flagfile-map (DF-флаги, underscore-форма).
-  # Слои merge (SHALLOW last-wins, слева направо): essence.df_config (дефолты) → вычисленные
-  # maxmemory/maxmemory_policy (has-guard) → input.df_settings (passthrough) → TLS-блок (после
-  # passthrough — оператор не ломает TLS). БЕЗ persistence-пресета (DF persistence отложена),
-  # БЕЗ cluster-директив (sentinel-only).
+  # Слои merge (SHALLOW last-wins, слева направо): essence.df_config (дефолты) → вычисленный
+  # maxmemory (has-guard) → input.df_settings (passthrough) → TLS-блок (после passthrough —
+  # оператор не ломает TLS). БЕЗ persistence-пресета (DF persistence отложена), БЕЗ cluster-
+  # директив (sentinel-only). ★ maxmemory_policy НЕ в merge: у DF нет такого флага (absl
+  # FATAL на неизвестном) — eviction вне скоупа PILOT.
   # ★ TLS-блок — DF-флаги: tls/tls_port/tls_cert_file/tls_key_file/tls_ca_cert_file/
   # tls_replication (underscore!). Bool-флаги (tls/tls_replication) — значение 'true' (absl
   # принимает --flag=true). port='0' при tls_only закрывает plain.
   df_config: >-
     ${ merge(
          essence.df_config,
-         merge(
-           has(input.memory_mb)
-             ? { 'maxmemory': string(int(input.memory_mb) * int(essence.memory_reserve_percent) / 100) + 'mb' }
-             : {},
-           has(input.maxmemory_policy) ? { 'maxmemory_policy': input.maxmemory_policy } : {}
-         ),
+         has(input.memory_mb)
+           ? { 'maxmemory': string(int(input.memory_mb) * int(essence.memory_reserve_percent) / 100) + 'mb' }
+           : {},
          default(input.df_settings, {}),
          compute.tls_on
            ? merge(
@@ -506,7 +497,10 @@ tasks:
       addr:        "127.0.0.1:26379"
       master_name: "${ default(essence.sentinel_master_name, 'master') }"
       auth_pass:   "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
-      redis_version: "${ compute.df_version }"
+      # ★ Версия sentinel-ДЕМОНА (distro redis-sentinel), НЕ DragonFly: этот param гейтит
+      # version-aware sentinel-фичи плагина (versionGE 7.0.0). df_version сюда тащить НЕЛЬЗЯ —
+      # DF и sentinel-демон разные продукты с разными версиями.
+      redis_version: "${ compute.sentinel_redis_version }"
       config:      "${ compute.sentinel_directives }"
       monitor:
         ip:     "${ soulprint.hosts[0].network.primary_ip }"

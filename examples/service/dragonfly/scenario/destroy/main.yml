@@ -1,0 +1,151 @@
+name: destroy
+description: >-
+  Teardown DragonFly: снять с КАЖДОГО хоста инкарнации то, что поставил create — systemd-
+  сервисы + конфиг-артефакты — ПЕРЕД удалением инкарнации. Lifecycle-сценарий (НЕ runnable из
+  Run-формы — terminal-флоу DELETE /v1/incarnations/{name}, как create — bootstrap): keeper
+  трактует имя `destroy` как фазу жизненного цикла (scenario.LifecycleScenarioNames),
+  запускается в режиме TerminalDestroy.
+
+  ★ DragonFly vs redis/destroy (КЛЮЧЕВОЕ ОТЛИЧИЕ ПРОФИЛЯ): redis/destroy снимает облачные VM
+  (core.cloud.destroyed, on: keeper) + cascade keeper-реестров — потому что redis-create их
+  ПРОВИЖИТ (provisioned_vm_ids/sids в state). DragonFly create НЕ провижит VM (деплой на
+  существующие хосты, provisioned_* в state нет) → cloud-teardown СНИМАТЬ НЕЧЕГО, cascade не
+  нужен (хосты не наши, остаются Souls). Поэтому здесь teardown — Soul-side: остановить сервисы
+  + удалить наши /etc-артефакты. Это REUSE lifecycle-каркаса redis/destroy (input: {}, terminal,
+  state_changes отсутствуют), но БЕЗ cloud-provision частей (как просит ТЗ).
+
+  ★ ГРАНИЦА TEARDOWN (консервативный MVP — снять «systemd + файлы», НЕ данные/пакеты-общего-
+  назначения):
+    - сервисы dragonfly + redis-sentinel + disable-thp ОСТАНАВЛИВАЮТСЯ (core.service.stopped,
+      идемпотентно — нет сервиса → no-op);
+    - DragonFly УБИРАЕТСЯ по СПОСОБУ установки (state.install.method, static-гейт → group-drop):
+      binary-ветка удаляет /usr/local/bin/dragonfly + свой unit-файл; package-ветка снимает
+      distro-deb dragonfly (core.pkg.absent — пакет уносит свой systemd-юнит чисто, без отдельного
+      daemon-reload);
+    - НАШИ конфиг-артефакты в ${conf_dir} и /etc (users.acl, dragonfly.conf, sentinel.conf,
+      sentinel-users.acl, TLS PEM, logrotate/sysctl drop-in, disable-thp unit) УДАЛЯЮТСЯ —
+      они всегда наши, безопасно в обеих ветках;
+    - data_dir (snapshot-данные DragonFly), пакеты sentinel-инструментария (redis-server/
+      redis-tools — общего назначения, ставятся БЕЗУСЛОВНО), distro-юзер dragonfly — НЕ
+      ТРОГАЮТСЯ (удаление данных деструктивно и необратимо; снос общих пакетов задел бы
+      соседние сервисы). Это осознанная граница MVP — расширить «глубину» (purge данных,
+      снос пакетов) — отдельным решением.
+
+  ★ state_changes ОТСУТСТВУЮТ намеренно: destroy терминальный — инкарнация удаляется
+  (auto_destroy), чистить state бессмысленно (он уходит вместе с инкарнацией). Зеркало create,
+  где state НАПОЛНЯЕТСЯ; здесь не трогаем.
+
+  Таргетинг — на весь incarnation (on опущен, ADR-008/009): teardown идёт на КАЖДЫЙ хост
+  инкарнации (Soul-side, не keeper — host-операции над systemd/файлами).
+
+# ── Входной контракт оператора ────────────────────────────────────────────────
+# Пуст: destroy не принимает операторского ввода. Что снимать — ФАКТ из incarnation.state,
+# записанный create-прогоном (install.method, conf_dir), а не выбор оператора в момент teardown.
+# Operator только инициирует удаление (DELETE /v1/incarnations/{name}).
+input: {}
+
+tasks:
+  # ── 1. Остановить сервисы DragonFly (идемпотентно) ───────────────────────────
+  # core.service.stopped — приводит юнит к «не запущен». Нет сервиса (уже снят / не ставился)
+  # → no-op. Останавливаем ДО удаления файлов/пакета: снять конфиг под работающим демоном —
+  # гонка. Три юнита: dragonfly (data-плоскость), redis-sentinel (sentinel-демон), disable-thp
+  # (oneshot THP — RemainAfterExit, stop снимает active-маркер).
+  - name: Stop the dragonfly service
+    module: core.service.stopped
+    params:
+      name: dragonfly
+
+  - name: Stop the redis-sentinel service
+    module: core.service.stopped
+    params:
+      name: redis-sentinel
+
+  - name: Stop the disable-thp service
+    module: core.service.stopped
+    params:
+      name: disable-thp
+
+  # ── 2a. Убрать DragonFly — BINARY-ветка (upstream-tarball install) ────────────
+  # Гейт static (incarnation.state.install.method только → isStaticWhen) → render-phase
+  # GROUP-DROP: на package-инкарнации эти задачи физически исключены из плана. binary-create
+  # положил бинарь в /usr/local/bin и СВОЙ unit в /etc/systemd/system — оба наши, удаляем.
+  # has()-цепочка: install может отсутствовать целиком (back-compat) → default() не годится
+  # для корня, has() даёт безопасный false.
+  - name: Remove the dragonfly binary (binary install)
+    module: core.file.absent
+    when: "has(incarnation.state) && has(incarnation.state.install) && has(incarnation.state.install.method) && incarnation.state.install.method == 'binary'"
+    params:
+      path: /usr/local/bin/dragonfly
+
+  - name: Remove the dragonfly systemd unit (binary install)
+    module: core.file.absent
+    when: "has(incarnation.state) && has(incarnation.state.install) && has(incarnation.state.install.method) && incarnation.state.install.method == 'binary'"
+    params:
+      path: /etc/systemd/system/dragonfly.service
+
+  # ── 2b. Убрать DragonFly — PACKAGE-ветка (distro-deb dragonfly) ───────────────
+  # Гейт static (group-drop на binary-инкарнации). package-create поставил distro-deb dragonfly
+  # с его собственным systemd-юнитом — снимаем ПАКЕТОМ (core.pkg.absent), пакет уносит свой
+  # юнит чисто (отдельный daemon-reload не нужен — apt/dpkg сам реконсилит systemd). Предикат —
+  # «install отсутствует ИЛИ method не задан ИЛИ method == package» (симметрия install.yml
+  # package-гейту: package — дефолт).
+  - name: Remove the dragonfly distribution package (package install)
+    module: core.pkg.absent
+    when: "!has(incarnation.state) || !has(incarnation.state.install) || !has(incarnation.state.install.method) || incarnation.state.install.method == 'package'"
+    params:
+      name: dragonfly
+
+  # ── 3. Удалить НАШИ конфиг-артефакты (обе ветки, всегда наши) ─────────────────
+  # ${conf_dir}-файлы (users.acl, dragonfly.conf, sentinel.conf, sentinel-users.acl, TLS PEM) +
+  # /etc drop-in-ы (logrotate, sysctl, disable-thp unit). conf_dir из state (default /etc/dragonfly).
+  # core.file.absent идемпотентен (нет файла → no-op). TLS-PEM удаляем безусловно: на plaintext-
+  # инкарнации этих файлов нет → no-op (гейтить незачем).
+  - name: Remove the dragonfly users.acl
+    module: core.file.absent
+    params:
+      path: "${ default(incarnation.state.conf_dir, '/etc/dragonfly') + '/users.acl' }"
+
+  - name: Remove the dragonfly.conf flagfile
+    module: core.file.absent
+    params:
+      path: "${ default(incarnation.state.conf_dir, '/etc/dragonfly') + '/dragonfly.conf' }"
+
+  - name: Remove the sentinel.conf
+    module: core.file.absent
+    params:
+      path: "${ default(incarnation.state.conf_dir, '/etc/dragonfly') + '/sentinel.conf' }"
+
+  - name: Remove the sentinel-users.acl
+    module: core.file.absent
+    params:
+      path: "${ default(incarnation.state.conf_dir, '/etc/dragonfly') + '/sentinel-users.acl' }"
+
+  - name: Remove the TLS server certificate
+    module: core.file.absent
+    params:
+      path: "${ default(incarnation.state.conf_dir, '/etc/dragonfly') + '/tls/dragonfly.crt' }"
+
+  - name: Remove the TLS server private key
+    module: core.file.absent
+    params:
+      path: "${ default(incarnation.state.conf_dir, '/etc/dragonfly') + '/tls/dragonfly.key' }"
+
+  - name: Remove the TLS CA certificate
+    module: core.file.absent
+    params:
+      path: "${ default(incarnation.state.conf_dir, '/etc/dragonfly') + '/tls/ca.crt' }"
+
+  - name: Remove the dragonfly logrotate config
+    module: core.file.absent
+    params:
+      path: /etc/logrotate.d/dragonfly
+
+  - name: Remove the dragonfly sysctl drop-in
+    module: core.file.absent
+    params:
+      path: /etc/sysctl.d/30-dragonfly.conf
+
+  - name: Remove the disable-thp systemd unit
+    module: core.file.absent
+    params:
+      path: /etc/systemd/system/disable-thp.service

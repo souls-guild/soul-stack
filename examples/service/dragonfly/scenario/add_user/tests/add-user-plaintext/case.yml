@@ -1,0 +1,100 @@
+# L0-испытание add_user: day-2 добавление ACL-пользователя БЕЗ рестарта (ACL LOAD).
+# Оператор добавляет юзера alice; сценарий мержит его в РАЗВЁРНУТЫЙ state.df_users, рендерит
+# ПОЛНЫЙ users.acl (alice + ранее развёрнутый bob) через destiny `dragonfly` и ОЖИВЛЯЕТ через
+# community.redis.acl (ACL LOAD). Render-only, герметично. Plaintext (addr 6379).
+#
+# essence.system_acl_users НЕ задаётся → долив системных = default({}) → vars.users несёт
+# ТОЛЬКО operator-extra (alice+bob) — чистый ассерт операторского слоя. (Долив системных
+# проверяется отдельным кейсом по образцу redis/add_user, здесь фокус на merge alice+bob.)
+#
+# Что ассертим:
+#   1. users.acl (core.file.rendered, path /etc/dragonfly/users.acl): vars.users несёт ОБА
+#      юзера (alice новый + bob сохранённый) с per-user паролями из Vault (конвенция
+#      secret/dragonfly/<inc>/users/<name>#password). Пароль в .tmpl хешируется (вне L0).
+#   2. hot-reload (community.redis.acl): addr 127.0.0.1:6379 (plain), tls=false, пароль из vault.
+#   3. state_changes: df_users несёт bob+alice (массив AclUser, БЕЗ пароля — write-model).
+name: add_user merges new ACL user and hot-reloads via ACL LOAD (plaintext)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.5 }
+    os: { arch: amd64 }
+
+  # Развёрнутый incarnation.state: уже есть юзер bob; add_user добавляет alice.
+  state:
+    df_version: "1.39.0"
+    conf_dir: /etc/dragonfly
+    data_dir: /var/lib/dragonfly
+    install:
+      method: package
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    df_config:
+      maxmemory:        "256mb"
+    df_users:
+      - { name: bob, perms: "~app:* +@read", state: "on" }
+
+  input:
+    user:
+      name: alice
+      perms: "~* +@all"
+      state: "on"
+
+  vault:
+    secret/dragonfly/add_user:
+      password: addusr-df-pass-16chars
+    secret/dragonfly/add_user/users/alice:
+      password: alice-user-secret-pass
+    secret/dragonfly/add_user/users/bob:
+      password: bob-user-secret-pass
+
+assert:
+  task_present:
+    # 1. users.acl перерендерен с ОБОИМИ юзерами (alice новый + bob сохранённый), каждый со
+    #    СВОИМ vault-паролем (нет cross-leak). vars.users — deep-compare.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/dragonfly/users.acl
+        render_context:
+          vars:
+            users:
+              alice:
+                perms: "~* +@all"
+                state: "on"
+                password: alice-user-secret-pass
+              bob:
+                perms: "~app:* +@read"
+                state: "on"
+                password: bob-user-secret-pass
+          self:
+            sid: trial-host
+            covens: [add_user]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # 2. HOT-RELOAD ACL: community.redis.acl к живому plain-инстансу (addr/password/tls).
+    - module: community.redis.acl
+      params_subset:
+        addr: "127.0.0.1:6379"
+        password: addusr-df-pass-16chars
+        tls: false
+
+  # state_changes: df_users несёт bob+alice БЕЗ пароля (массив AclUser). Порядок = array-upsert:
+  # сохранённый bob ПЕРВЫМ (filter оставил), новый alice ДОПИСАН в конец.
+  state_changes:
+    df_users:
+      - { name: bob, perms: "~app:* +@read", state: "on" }
+      - { name: alice, perms: "~* +@all", state: "on" }

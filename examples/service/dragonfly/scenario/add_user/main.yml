@@ -1,0 +1,139 @@
+name: add_user
+description: >-
+  Day-2: добавить (или переопределить) ОДНОГО ACL-пользователя на УЖЕ работающем DragonFly
+  БЕЗ рестарта процесса. Производственная конвенция «hot-reload > рестарт»
+  (docs/destiny/production-conventions.md §3a/§6): ACL применяется на лету командой ACL LOAD
+  (перечитать aclfile), рестарт демона не нужен. REUSE из redis/add_user (DragonFly несёт
+  полный Redis-совместимый ACL: SETUSER/LOAD/aclfile с #<sha256> — acl/user.cc).
+
+  Оператор задаёт ОДНУ запись AclUser (name + perms + state) — тот же тип, что элемент
+  массива create input.users (types.yml, ADR-062). perms валидируется тем же re2-паттерном
+  AclUser, что в create. Пароль НЕ во входном контракте: лежит в Vault по конвенции
+  secret/dragonfly/<incarnation>/users/<name>#password (как create), резолвится keeper-side
+  через vault() в render-фазе. Сценарий мержит нового юзера в РАЗВЁРНУТЫЙ
+  incarnation.state.df_users, рендерит ПОЛНЫЙ users.acl на диск (destiny `dragonfly`, тот же
+  кирпич, что create) и ОЖИВЛЯЕТ через community.redis.acl (ACL LOAD).
+
+  ★ Граница с rotate_tls: add_user трогает ТОЛЬКО ACL (users.acl + ACL LOAD), dragonfly.conf
+  и TLS-материал не перерендеривает осмысленно (destiny рендерит весь кирпич, но оживляем мы
+  лишь ACL шагом 2; flagfile/sentinel.conf на диске не меняются при тех же config — idempotent
+  рендер) — отдельная аудит-семантика «изменился список пользователей».
+
+  Идемпотентность: ACL LOAD идемпотентен ПО КОНСТРУКЦИИ (приводит живой инстанс к файлу
+  независимо от текущего состояния); плагин делает честный diff ACL LIST до/после (changed=false
+  при совпадении). Рендер users.acl детерминирован (range по отсортированному map). Day-2:
+  инстанс УЖЕ работает (auth через vault()-пароль + TLS-дискриминатор из incarnation.state.tls).
+
+  Таргетинг — на весь incarnation (on опущен, ADR-008/009): новый users.acl + ACL LOAD идут на
+  КАЖДЫЙ dragonfly-хост. ACL host-инвариантен (один набор юзеров на кластер).
+
+# ── Входной контракт оператора (docs/input.md) ────────────────────────────────
+# ОДНА запись AclUser (types.yml, ADR-062 $type): имя юзера, его ACL-права, on/off. Тот же
+# тип, что элемент массива create input.users — единый источник правды формы и валидации
+# (perms-pattern). Пароль — НЕ во входе (Vault-конвенция, см. description). Один юзер за
+# прогон — атомарная day-2 операция «добавить пользователя» (массовое редактирование набора
+# → update_users, bulk-replace).
+input:
+  user:
+    $type: AclUser
+    required: true
+    description: >-
+      ACL-пользователь DragonFly (AclUser: name + perms + state). Добавляется в users.acl
+      (или переопределяет существующего с тем же name — idempotent upsert). perms — ПОЛНАЯ
+      ACL-строка (Redis ACL-синтаксис, DragonFly его принимает), валидируется паттерном AclUser.
+      default-юзер этим сценарием не задаётся (он объявлен через requirepass flagfile отдельно).
+
+# ── Декларативные input-инварианты (validate:) ───────────────────────────────────
+# system-ACL-users guard (как create/redis-add_user): operator НЕ может добавить юзера с
+# именем СЛУЖЕБНОГО (default/replica/monitoring/sentinel/haproxy). Системные доливаются в
+# users.acl из essence ПОВЕРХ operator-extra (last-wins) — operator `replica` молча перекрыл
+# бы replica-perms репликации. Ловим на INPUT-валидации (422 ДО applying). INPUT-ONLY (essence
+# недоступен): список имён захардкожен (= create).
+validate:
+  - that: "!(input.user.name in ['default', 'replica', 'monitoring', 'sentinel', 'haproxy'])"
+    message: "имя ACL-пользователя зарезервировано за служебным (default/replica/monitoring/sentinel/haproxy): выбери другое имя — служебные юзеры заводятся автоматически из essence"
+
+# ── Вычисляемые scenario-vars (compute:) ─────────────────────────────────────────
+# Рун-уровневый контекст (input/essence/incarnation — без soulprint). tls_* — дискриминатор
+# коннекта плагина из state.tls: ACL LOAD идёт через TLS-коннект, если DragonFly на TLS.
+compute:
+  tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
+  tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
+  # tls_ca — PEM CA-СОДЕРЖИМОЕ коннекта (плагин ждёт PEM, не путь). Берётся из ИМЕНОВАННОГО
+  # state.tls.ca_ref (Vault-ПУТЬ в state, vault() резолвит в PEM). После rotate_tls (меняет
+  # state.tls.ca_ref) day-2 коннект использует АКТУАЛЬНЫЙ CA — не устаревший essence-дефолт.
+  tls_ca:   "${ compute.tls_on ? vault(incarnation.state.tls.ca_ref) : '' }"
+
+  # ── Новый набор ACL-юзеров: РАЗВЁРНУТЫЙ state.df_users + добавляемый юзер ──
+  # state.df_users — МАССИВ AclUser [{name,perms,state}]. Array-upsert: ОТФИЛЬТРОВАТЬ из
+  # текущего массива одноимённого (filter u.name != new) + ДОПИСАТЬ нового элементом. filter+
+  # конкатенация даёт upsert-семантику last-wins (новый перекрывает существующего с тем же
+  # именем). Пароль add НЕ хранит в state — он keeper-side vault. has()-guard на df_users —
+  # back-compat для инкарнаций без operator-extra ACL (пустой массив). default(user.state,'on')
+  # — $type доливает default на input-стадии, но default() безопасен и для сырого input.
+  users_new: >-
+    ${ (has(incarnation.state.df_users)
+          ? incarnation.state.df_users.filter(u, u.name != input.user.name)
+          : [])
+       + [{ 'name': input.user.name, 'perms': input.user.perms, 'state': default(input.user.state, 'on') }] }
+
+# ── Мутация incarnation.state ─────────────────────────────────────────────────
+# day-2 фиксирует НОВЫЙ набор ACL-юзеров (массив AclUser [{name,perms,state}], БЕЗ пароля —
+# он keeper-side vault, ADR-012). Тот же compute.users_new (массив), что ушёл в render users.acl.
+state_changes:
+  - set: df_users
+    value: "${ compute.users_new }"
+
+tasks:
+  # 1. Перерендерить users.acl на диск с НОВЫМ набором юзеров (тот же режим-агностичный destiny
+  #    `dragonfly`, что create). vars.users — merged набор с per-user паролями из Vault (keeper-
+  #    side vault(), .tmpl хеширует sha256, plaintext не пишет). dragonfly.conf/TLS НЕ оживляем —
+  #    add_user меняет ТОЛЬКО ACL (destiny рендерит весь кирпич, но ACL оживляем шагом 2; flagfile
+  #    на диске не изменится при тех же config — idempotent рендер). version/install/conf_dir/
+  #    data_dir — из state. sentinel-блок в apply.input НЕ передаём (sentinel.conf на диске
+  #    остаётся как есть — рендер sentinel-задач погашен has()-guard, файл не трогается).
+  - name: Re-render users.acl with the new ACL user set (full file on disk)
+    apply:
+      destiny: dragonfly
+      input:
+        version:  "${ has(incarnation.state.df_version) ? incarnation.state.df_version : '' }"
+        install:  "${ default(incarnation.state.install, {'method': 'package'}) }"
+        conf_dir: "${ default(incarnation.state.conf_dir, '/etc/dragonfly') }"
+        data_dir: "${ default(incarnation.state.data_dir, '/var/lib/dragonfly') }"
+        password: "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
+        config:   "${ incarnation.state.df_config }"
+        # ★★ КРИТИЧНО (system-ACL-users): ПОЛНЫЙ users.acl = СИСТЕМНЫЕ (из essence, ПЕРВЫМИ) +
+        # operator-extra (state.df_users + новый, compute.users_new — МАССИВ AclUser, ПОВЕРХ).
+        # add_user перерендеривает ВЕСЬ файл (не append) → БЕЗ долива системных этот рендер СТЁР
+        # БЫ replica/monitoring/sentinel/haproxy → сломал бы репликацию/sentinel/health-check на
+        # day-2. Системные доливаются на КАЖДОМ рендере из essence.system_acl_users. last-wins:
+        # operator-extra перекрывает одноимённого системного (имена системных закрыты validate-
+        # guard — коллизии нет). Vault-пароль каждого — secret/dragonfly/<inc>/users/<name>#password.
+        users: >-
+          ${ merge(
+               merge(default(essence.system_acl_users, {}).map(name, {
+                 name: {
+                   'perms':    essence.system_acl_users[name],
+                   'state':    'on',
+                   'password': vault('secret/dragonfly/' + incarnation.name + '/users/' + name + '#password')
+                 }
+               })),
+               merge(compute.users_new.map(u, {
+                 u.name: {
+                   'perms':    u.perms,
+                   'state':    u.state,
+                   'password': vault('secret/dragonfly/' + incarnation.name + '/users/' + u.name + '#password')
+                 }
+               }))
+             ) }
+
+  # 2. HOT-RELOAD ACL: community.redis.acl шлёт ACL LOAD — живой инстанс перечитывает aclfile
+  #    (отрендеренный шагом 1) целиком. Идемпотентно по конструкции; плагин делает diff ACL LIST
+  #    до/после (changed=false при совпадении). addr/TLS-дискриминатор — из state.tls (compute.tls_*).
+  - name: Hot-reload ACL on the live instance (ACL LOAD)
+    module: community.redis.acl
+    params:
+      addr:     "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
+      password: "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
+      tls:      "${ compute.tls_on }"
+      tls_ca:   "${ compute.tls_ca }"

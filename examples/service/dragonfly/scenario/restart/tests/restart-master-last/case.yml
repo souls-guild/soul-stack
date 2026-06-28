@@ -1,0 +1,74 @@
+# L0-испытание restart: рестарт master-а (probe→where master, run_once). Парный к
+# rolling-restart-replicas — покрывает master-ветку where probe→role. Roster — 2 хоста;
+# mocks.register.df_role.role = master → block-потомки (where slave) placeholder-skip,
+# master-restart (where master, run_once) рендерится. Render-only, герметично.
+#
+# Что ассертим:
+#   1. probe (community.redis.role) рендерит params коннекта (plaintext-ветка).
+#   2. master-restart (core.service.restarted name=dragonfly, where master, run_once)
+#      рендерится. ★ имя юнита — dragonfly (DF data-плоскость), НЕ redis-server.
+#
+# ВНИМАНИЕ L0-ограничение: mocks.register — ЕДИНЫЙ payload на весь roster. На master-
+# payload-е оба хоста «master» → master-restart run_once таргетит ОДИН детерминированный.
+# block-потомки (where slave) на master-payload-е — placeholder-skip (Params==nil), но в
+# плане ПРИСУТСТВУЮТ как placeholder → presence-матчер task_absent их «нашёл бы» (placeholder
+# в плане ≠ отсутствие узла), поэтому slave-block в task_absent НЕ ассертим (как redis-аналог).
+name: restart the current master last (run_once, dragonfly unit)
+
+fixtures:
+  hosts:
+    - sid: node-1.example.com
+      covens: [restart]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-2.example.com
+      covens: [restart]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+
+  input:
+    reason: "restart master last for L0"
+
+  state:
+    df_version: "1.39.0"
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    df_config:
+      maxmemory:        "256mb"
+
+  vault:
+    secret/dragonfly/restart:
+      password: fixture-df-pass-16chars
+
+mocks:
+  register:
+    df_role:
+      role: master
+
+assert:
+  task_present:
+    # probe community.redis.role (plaintext). Единственная community.redis.role в плане.
+    - module: community.redis.role
+      params_subset:
+        addr: "127.0.0.1:6379"
+        password: fixture-df-pass-16chars
+        tls: false
+
+  # ── master-restart НЕВЫРАЗИМ в presence (как redis-аналог) ──────────────────
+  # В плане ДВЕ идентичных core.service.restarted name=dragonfly (block-рестарт реплики +
+  # master-рестарт), обе с пустым when/id и теми же params; дискриминатор — block/task-`where`
+  # (TargetSIDs), который presence-матчер task_present НЕ видит → сматчил бы ОБЕ (collision).
+  # Поэтому master-restart ассертим позиционно: index 3 (probe[0] + block Restart[1] +
+  # replica-synced[2] + master-restart[3]).
+  rendered_tasks:
+    - index: 3
+      module: core.service.restarted
+      params:
+        name: dragonfly

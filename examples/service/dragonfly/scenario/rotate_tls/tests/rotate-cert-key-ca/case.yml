@@ -1,0 +1,152 @@
+# L0-испытание rotate_tls: day-2 ротация TLS-материала БЕЗ рестарта. Оператор задаёт НОВЫЕ
+# Vault-refs cert/key/ca; сценарий перерендеривает PEM в ${conf_dir}/tls/ из новых refs и шлёт
+# три CONFIG SET tls_*_file (UNDERSCORE — DragonFly-форма!) через community.redis.command под
+# onchanges-гейтом (DragonFly пересоздаёт SSL_CTX и перечитывает live). Render-only, герметично.
+# Инстанс УЖЕ на TLS (state.tls.enable=true; rotate только для TLS).
+#
+# ★★ КРИТИЧНЫЙ guard underscore-флагов: args = CONFIG SET tls_cert_file / tls_key_file /
+# tls_ca_cert_file (НЕ дефис как у redis). Регресс на дефис (tls-cert-file) → DragonFly
+# отвергнет CONFIG SET → ассерт красный. Подтверждено разведкой src DragonFly.
+#
+# Что ассертим:
+#   1. PEM перерендерены (core.file.present): dragonfly.crt/dragonfly.key/ca.crt в
+#      /etc/dragonfly/tls/, content = vault(НОВЫЙ ref), mode 0600 owner dragonfly.
+#   2. applier-register tls_certs МАТЕРИАЛИЗОВАН (core.noop.run id:tls_certs) — якорь onchanges.
+#   3. reload re-read (три community.redis.command): addr 127.0.0.1:7379, tls=true, tls_ca = PEM CA,
+#      args = CONFIG SET tls_cert_file/tls_key_file/tls_ca_cert_file (UNDERSCORE).
+#   4. state_changes: state.tls несёт НОВЫЕ refs; enable/only/port сохранены.
+#
+# ★ Guard идемпотентности: force changed:true с reload-задач УБРАН (task_absent ловит регресс).
+name: rotate_tls re-renders PEM from new refs and re-reads via onchanges-gated CONFIG SET (underscore flags)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.5 }
+    os: { arch: amd64 }
+
+  # Развёрнутый incarnation.state с ВКЛЮЧЁННЫМ TLS (rotate-предусловие). Текущие refs — СТАРЫЕ;
+  # input даёт новые. CA коннекта (compute.tls_ca) резолвится из state.tls.ca_ref (PRE-RUN снимок)
+  # — на ЭТОМ прогоне коннект идёт СТАРЫМ CA, три CONFIG SET сами подменяют материал.
+  state:
+    df_version: "1.39.0"
+    conf_dir: /etc/dragonfly
+    data_dir: /var/lib/dragonfly
+    install:
+      method: package
+    tls:
+      enable:   true
+      only:     false
+      port:     7379
+      cert_ref: "secret/services/dragonfly/tls#cert"
+      key_ref:  "secret/services/dragonfly/tls#key"
+      ca_ref:   "secret/services/dragonfly/tls#ca"
+    df_config:
+      maxmemory:        "256mb"
+      tls:              "true"
+      tls_port:         "7379"
+      tls_cert_file:    /etc/dragonfly/tls/dragonfly.crt
+      tls_key_file:     /etc/dragonfly/tls/dragonfly.key
+      tls_ca_cert_file: /etc/dragonfly/tls/ca.crt
+      tls_replication:  "true"
+    df_users: []
+
+  input:
+    # Новые refs (ротация всех трёх).
+    cert_ref: "secret/services/dragonfly/tls-v2#cert"
+    key_ref:  "secret/services/dragonfly/tls-v2#key"
+    ca_ref:   "secret/services/dragonfly/tls-v2#ca"
+
+  vault:
+    secret/dragonfly/rotate_tls:
+      password: rot-df-pass-16charsxx
+    # CA коннекта (state.tls.ca_ref pre-run) — текущее доверие на этом прогоне.
+    secret/services/dragonfly/tls:
+      ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+    # НОВЫЙ TLS-материал (по input refs) — рендерится в файлы для DragonFly.
+    secret/services/dragonfly/tls-v2:
+      cert: "-----BEGIN CERTIFICATE-----\nNEWCERT\n-----END CERTIFICATE-----"
+      key:  "-----BEGIN PRIVATE KEY-----\nNEWKEY\n-----END PRIVATE KEY-----"
+      ca:   "-----BEGIN CERTIFICATE-----\nNEWCA\n-----END CERTIFICATE-----"
+
+assert:
+  task_present:
+    # 1. PEM перерендерены из НОВЫХ refs (content = новый PEM). owner dragonfly (НЕ redis).
+    - module: core.file.present
+      params_subset:
+        path: /etc/dragonfly/tls/dragonfly.crt
+        content: "-----BEGIN CERTIFICATE-----\nNEWCERT\n-----END CERTIFICATE-----"
+        mode: "0600"
+        owner: dragonfly
+        group: dragonfly
+    - module: core.file.present
+      params_subset:
+        path: /etc/dragonfly/tls/dragonfly.key
+        content: "-----BEGIN PRIVATE KEY-----\nNEWKEY\n-----END PRIVATE KEY-----"
+        mode: "0600"
+        owner: dragonfly
+        group: dragonfly
+    - module: core.file.present
+      params_subset:
+        path: /etc/dragonfly/tls/ca.crt
+        content: "-----BEGIN CERTIFICATE-----\nNEWCA\n-----END CERTIFICATE-----"
+        mode: "0600"
+        owner: dragonfly
+        group: dragonfly
+
+    # 2. APPLIER-REGISTER МАТЕРИАЛИЗОВАН: терминальная core.noop.run(register=tls_certs) — якорь
+    #    onchanges-гейта (id-дизамбигуатор). Без него onchanges:[tls_certs] не резолвился бы.
+    - module: core.noop.run
+      id: tls_certs
+
+    # 3. RE-READ ПОД onchanges-ГЕЙТОМ: три community.redis.command (CONFIG SET tls_*_file —
+    #    UNDERSCORE), addr на tls-порт, tls=true, tls_ca = CA коннекта, args на пути в
+    #    /etc/dragonfly/tls/. Args — дизамбигуатор трёх вызовов И guard underscore-имён.
+    - module: community.redis.command
+      params_subset:
+        addr: "127.0.0.1:7379"
+        password: rot-df-pass-16charsxx
+        tls: true
+        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+        args: ["CONFIG", "SET", "tls_cert_file", "/etc/dragonfly/tls/dragonfly.crt"]
+    - module: community.redis.command
+      params_subset:
+        addr: "127.0.0.1:7379"
+        password: rot-df-pass-16charsxx
+        tls: true
+        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+        args: ["CONFIG", "SET", "tls_key_file", "/etc/dragonfly/tls/dragonfly.key"]
+    - module: community.redis.command
+      params_subset:
+        addr: "127.0.0.1:7379"
+        password: rot-df-pass-16charsxx
+        tls: true
+        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+        args: ["CONFIG", "SET", "tls_ca_cert_file", "/etc/dragonfly/tls/ca.crt"]
+
+  # ★ GUARD идемпотентности (render-уровень): force changed:true с reload-задач УБРАН. Любая
+  #   community.redis.command CONFIG SET-tls с changed:true → регресс обратно на неидемпотентный
+  #   force-путь. task_absent ловит его (≥1 совпадение → fail). Покрыты ВСЕ ТРИ reload-задачи.
+  task_absent:
+    - module: community.redis.command
+      params_subset:
+        changed: true
+        args: ["CONFIG", "SET", "tls_cert_file", "/etc/dragonfly/tls/dragonfly.crt"]
+    - module: community.redis.command
+      params_subset:
+        changed: true
+        args: ["CONFIG", "SET", "tls_key_file", "/etc/dragonfly/tls/dragonfly.key"]
+    - module: community.redis.command
+      params_subset:
+        changed: true
+        args: ["CONFIG", "SET", "tls_ca_cert_file", "/etc/dragonfly/tls/ca.crt"]
+
+  # state_changes: state.tls несёт НОВЫЕ refs; enable/only/port сохранены.
+  state_changes:
+    tls:
+      enable:   true
+      only:     false
+      port:     7379
+      cert_ref: "secret/services/dragonfly/tls-v2#cert"
+      key_ref:  "secret/services/dragonfly/tls-v2#key"
+      ca_ref:   "secret/services/dragonfly/tls-v2#ca"
