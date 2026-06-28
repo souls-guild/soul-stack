@@ -19,6 +19,10 @@ coverage.html
 # Каталог собранных бинарей внутри каждого модуля с `main` (см. Makefile, BIN_DIR).
 */bin/
 
+# Каталог временных бинарей soul-trial / soul-lint (keeper/.bin, soul-lint/.bin) —
+# `*/bin/` его не покрывает (.bin != bin).
+*/.bin/
+
 # Каталог release-артефактов (SBOM, deb/rpm) — см. Makefile, DIST_DIR (make sbom/pkg).
 dist/
 

@@ -186,14 +186,16 @@ func TestAcceptance_SentinelReplicaExcludesMaster(t *testing.T) {
 		}
 	}
 
-	// include: standalone.yml / cluster.yml / sentinel.yml — раскрытие в плоский
-	// список ДО render (как прод/трайл). Резолвер читает ветки из каталога create.
-	scenarioDir := filepath.Dir(path)
-	expanded, idiags := config.ExpandIncludes(m.Tasks, func(name string) ([]byte, string, error) {
-		full := filepath.Join(scenarioDir, name)
-		data, rerr := os.ReadFile(full)
-		return data, full, rerr
-	})
+	// include: cluster.yml / sentinel.yml (локальные create/) + redis-provision.yml /
+	// redis-deploy-{sentinel,cluster}.yml (хоистнуты на service-level scenario/, S2) —
+	// раскрытие в плоский список ДО render (как прод/трайл). Резолвер ДВУХУРОВНЕВЫЙ
+	// (зеркало scenario.scenarioIncludeResolver, orchestration.md §6): сначала локально
+	// scenario/create/<file>, при отсутствии — service-level fallback scenario/<file>.
+	// Узкий локальный резолвер скрывал бы хоисты (trial зелёный из-за fallback, go-test
+	// красный) — поэтому повторяем прод-семантику.
+	scenarioDir := filepath.Dir(path)               // .../scenario/create
+	serviceScenarioDir := filepath.Dir(scenarioDir) // .../scenario
+	expanded, idiags := config.ExpandIncludes(m.Tasks, twoLevelIncludeResolver(scenarioDir, serviceScenarioDir))
 	for _, d := range idiags {
 		if d.Level == diag.LevelError {
 			t.Fatalf("ExpandIncludes diagnostic (%s): %s", d.Code, d.Message)
@@ -453,6 +455,31 @@ func TestAcceptance_SentinelOnlySkipsRedisServer(t *testing.T) {
 	}
 	if pkgInstall.Params == nil {
 		t.Errorf("пакет redis НЕ ставится в sentinel_only (Params == nil) — пакет обязан ставиться всегда (несёт sentinel-демон)")
+	}
+}
+
+// twoLevelIncludeResolver — дисковый IncludeResolver с двухуровневым резолвом,
+// зеркало прод-семантики scenario.scenarioIncludeResolver (orchestration.md §6):
+// сначала локально localDir/<file>, при fs.ErrNotExist — service-level serviceDir/<file>.
+// I/O-ошибку (не «нет файла») не маскируем — наружу. Нужен в acceptance-тестах, где
+// часть веток create-сценария хоистнута на service-level scenario/ (S2): без fallback
+// include redis-provision.yml / redis-deploy-*.yml не резолвится.
+func twoLevelIncludeResolver(localDir, serviceDir string) config.IncludeResolver {
+	return func(name string) ([]byte, string, error) {
+		local := filepath.Join(localDir, name)
+		data, err := os.ReadFile(local)
+		if err == nil {
+			return data, local, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, "", err
+		}
+		service := filepath.Join(serviceDir, name)
+		data, serr := os.ReadFile(service)
+		if serr != nil {
+			return nil, "", serr
+		}
+		return data, service, nil
 	}
 }
 
