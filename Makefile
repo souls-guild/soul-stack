@@ -81,15 +81,17 @@ PKG_DIR  := $(DIST_DIR)/pkg
 # окружения для ${ARCH}-подстановки в deploy/nfpm/*.yaml.
 PKG_ARCH ?= amd64
 
-# Имя прод-образа keeper (таргет docker-keeper). Локальный тег по умолчанию —
-# `soul-stack/keeper`; оператор перетегирует под свой registry перед push
-# (`docker tag soul-stack/keeper:$(VERSION) <registry>/keeper:$(VERSION)`) либо
-# собирает сразу под него: `make docker-keeper KEEPER_IMAGE=<registry>/keeper`.
-# Тег версии — общий $(VERSION) (git describe / release-override), он же уходит в
-# ldflags бинаря и OCI-метку образа.
+# Имена прод-образов (таргеты docker-keeper / docker-soul). Локальные теги по
+# умолчанию — `soul-stack/keeper` и `soul-stack/soul`; оператор перетегирует под
+# свой registry перед push (`docker tag soul-stack/keeper:$(VERSION)
+# <registry>/keeper:$(VERSION)`) либо собирает сразу под него:
+# `make docker-keeper KEEPER_IMAGE=<registry>/keeper`. Тег версии — общий
+# $(VERSION) (git describe / release-override), он же уходит в ldflags бинаря и
+# OCI-метку образа. soul-lint прод-образа НЕ имеет (офлайн-линтер, не прод-рантайм).
 KEEPER_IMAGE ?= soul-stack/keeper
+SOUL_IMAGE   ?= soul-stack/soul
 
-.PHONY: gen build build-soulctl build-linux test test-plugins test-race test-integration e2e e2e-live e2e-k8s docker-build-keeper docker-build-soul docker-keeper tidy check check-fmt vet check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand gen-openapi check-openapi check-template sync-webui check-webui sbom pkg sign stress load-test help
+.PHONY: gen build build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-k8s docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand gen-openapi check-openapi check-template sync-webui check-webui sbom pkg pkg-keeper pkg-soul pkg-soul-lint sign stress load-test help
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -248,16 +250,33 @@ e2e:
 		(cd tests/e2e && go test -tags=e2e -timeout=10m ./...) || exit 1; \
 	fi
 
-# Cross-compile keeper+soul под Linux amd64 для real-soul-container (L3b, ADR-039).
-# В отличие от `make pkg` (deb/rpm-build), здесь только два бинаря, в свои `bin/`
-# с явным суффиксом `-linux-amd64`. CGO_ENABLED=0 — статическая сборка, без
-# зависимости на libc внутри контейнера (Debian-12 совместим, но статика проще).
-# Нативный `make build` не задеваем (macOS-разработчик собирает host-arch).
-build-linux:
-	@echo "GOOS=linux GOARCH=amd64 go build -o keeper/$(BIN_DIR)/keeper-linux-amd64 ./cmd/keeper in keeper (VERSION=$(VERSION))"
-	@cd keeper && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags '$(KEEPER_LDFLAGS)' -o $(BIN_DIR)/keeper-linux-amd64 ./cmd/keeper
-	@echo "GOOS=linux GOARCH=amd64 go build -o soul/$(BIN_DIR)/soul-linux-amd64 ./cmd/soul in soul (VERSION=$(VERSION))"
-	@cd soul && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags '$(SOUL_LDFLAGS)' -o $(BIN_DIR)/soul-linux-amd64 ./cmd/soul
+# Cross-compile одного бинаря под Linux amd64 в его `bin/` с суффиксом
+# `-linux-amd64`. Общий рецепт per-компонент bin-целей и агрегата build-linux.
+# $(1) — модуль/каталог (keeper|soul|soul-lint), $(2) — имя cmd-пакета (=имя
+# бинаря: keeper|soul|soul-lint), $(3) — ldflags (у soul-lint пусто — нет
+# version-переменной). CGO_ENABLED=0 — статика, без зависимости на libc внутри
+# контейнера (Debian-12 совместим, но статика проще). Нативный `make build` не
+# задеваем (macOS-разработчик собирает host-arch).
+define bin-one
+	@echo "GOOS=linux GOARCH=amd64 go build -o $(1)/$(BIN_DIR)/$(2)-linux-amd64 ./cmd/$(2) in $(1) (VERSION=$(VERSION))"
+	@cd $(1) && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags '$(3)' -o $(BIN_DIR)/$(2)-linux-amd64 ./cmd/$(2)
+endef
+
+# Per-компонент cross-compile (linux-amd64). bin-keeper / bin-soul — артефакты для
+# L3b real-soul-container и ad-hoc прогонов; build-linux — агрегат всех трёх.
+bin-keeper:
+	$(call bin-one,keeper,keeper,$(KEEPER_LDFLAGS))
+
+bin-soul:
+	$(call bin-one,soul,soul,$(SOUL_LDFLAGS))
+
+bin-soul-lint:
+	$(call bin-one,soul-lint,soul-lint,)
+
+# build-linux — агрегат: keeper+soul под Linux amd64 (для L3b real-soul-container,
+# ADR-039). Состав не меняем (soul-lint в L3b не нужен) — для соло-сборок есть
+# bin-keeper / bin-soul / bin-soul-lint.
+build-linux: bin-keeper bin-soul
 
 # L3b smoke-loop E2E (ADR-039): real-soul-binary в privileged Debian-12
 # контейнере + Keeper-процесс на хосте. Требует docker и `make build-linux`
@@ -303,6 +322,22 @@ docker-keeper:
 	@echo "docker build -t $(KEEPER_IMAGE):$(VERSION) --build-arg VERSION=$(VERSION) -f deploy/docker/keeper.Dockerfile ."
 	@docker build -t $(KEEPER_IMAGE):$(VERSION) --build-arg VERSION='$(VERSION)' -f deploy/docker/keeper.Dockerfile .
 	@echo "built $(KEEPER_IMAGE):$(VERSION) — перетегируйте под свой registry и push (см. deploy/README.md)"
+
+# docker-soul — ПРОД-образ soul (демон-агент) для публикации в registry оператора.
+# Симметрия с docker-keeper: multi-stage самодостаточный билд из
+# deploy/docker/soul.Dockerfile (distroless static-nonroot), версия инжектится в
+# бинарь (ldflags main.soulVersion) и в OCI-метку (--build-arg VERSION). Тег —
+# $(SOUL_IMAGE):$(VERSION). Контекст сборки — корень репо.
+#
+# В отличие от docker-build-soul (одноразовый privileged systemd-образ для L3c
+# kind, от артефакта build-linux) — этот образ самодостаточен и предназначен для
+# registry. soul-lint прод-образа не имеет (офлайн-линтер).
+#
+# Требует docker в PATH (как docker-keeper). НЕ входит в `check`.
+docker-soul:
+	@echo "docker build -t $(SOUL_IMAGE):$(VERSION) --build-arg VERSION=$(VERSION) -f deploy/docker/soul.Dockerfile ."
+	@docker build -t $(SOUL_IMAGE):$(VERSION) --build-arg VERSION='$(VERSION)' -f deploy/docker/soul.Dockerfile .
+	@echo "built $(SOUL_IMAGE):$(VERSION) — перетегируйте под свой registry и push (см. deploy/README.md)"
 
 # docker-build-soul — собирает образ `soul:e2e-k8s` для L3c kind-cluster
 # (L3c-3+). Privileged systemd-PID-1 Debian-12 base (parity с L3b), bake-ит
@@ -569,29 +604,73 @@ sbom:
 
 # Нативные пакеты deb + rpm через nfpm. Бинари пересобираются под Linux/$(PKG_ARCH)
 # (deb/rpm всегда Linux, а dev-машина может быть darwin) с теми же ldflags, что в
-# `build`. Конфиги nfpm — deploy/nfpm/*.yaml; ${VERSION}/${ARCH} подставляются из
-# окружения. Инструмент в PATH не входит автоматически; если не найден — печатаем
-# go install-подсказку и выходим с ошибкой (не silently).
-pkg:
+# `build` (+ `-s -w -trimpath` для урезанного прод-бинаря). Конфиги nfpm —
+# deploy/nfpm/*.yaml; ${VERSION}/${ARCH} подставляются из окружения. Инструмент в
+# PATH не входит автоматически; если не найден — печатаем go install-подсказку и
+# выходим с ошибкой (не silently).
+#
+# Три canned-recipe переиспользуются per-компонент pkg-целями и агрегатом pkg:
+#   ensure-nfpm    — guard на наличие nfpm в PATH.
+#   pkg-build-one  — cross-build одного бинаря под linux/$(PKG_ARCH) (прод-ldflags).
+#                    $(1) модуль, $(2) cmd-пакет/имя, $(3) version-ldflags (soul-lint пусто).
+#   pkg-nfpm-one   — deb+rpm одного nfpm-конфига. $(1) — имя конфига (=deploy/nfpm/$(1).yaml).
+define ensure-nfpm
 	@if ! command -v nfpm >/dev/null 2>&1; then \
 		echo "nfpm не найден в PATH."; \
 		echo "установить: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest"; \
 		exit 1; \
 	fi
-	@mkdir -p $(PKG_DIR)
-	@echo "build linux/$(PKG_ARCH) бинарей под упаковку (VERSION=$(VERSION))"
-	@cd keeper    && CGO_ENABLED=0 GOOS=linux GOARCH=$(PKG_ARCH) go build -trimpath -ldflags '-s -w $(KEEPER_LDFLAGS)' -o $(BIN_DIR)/keeper ./cmd/keeper
-	@cd soul      && CGO_ENABLED=0 GOOS=linux GOARCH=$(PKG_ARCH) go build -trimpath -ldflags '-s -w $(SOUL_LDFLAGS)' -o $(BIN_DIR)/soul ./cmd/soul
-	@cd soul-lint && CGO_ENABLED=0 GOOS=linux GOARCH=$(PKG_ARCH) go build -trimpath -ldflags '-s -w' -o $(BIN_DIR)/soul-lint   ./cmd/soul-lint
-	@for cfg in keeper soul soul-lint; do \
-		for fmt in deb rpm; do \
-			echo "nfpm package $$cfg ($$fmt)"; \
-			VERSION='$(VERSION)' ARCH='$(PKG_ARCH)' nfpm package \
-				--config deploy/nfpm/$$cfg.yaml \
-				--packager $$fmt \
-				--target $(PKG_DIR)/ || exit 1; \
-		done; \
+endef
+
+define pkg-build-one
+	@echo "build linux/$(PKG_ARCH) $(2) под упаковку (VERSION=$(VERSION))"
+	@cd $(1) && CGO_ENABLED=0 GOOS=linux GOARCH=$(PKG_ARCH) go build -trimpath -ldflags '-s -w $(3)' -o $(BIN_DIR)/$(2) ./cmd/$(2)
+endef
+
+define pkg-nfpm-one
+	@for fmt in deb rpm; do \
+		echo "nfpm package $(1) ($$fmt)"; \
+		VERSION='$(VERSION)' ARCH='$(PKG_ARCH)' nfpm package \
+			--config deploy/nfpm/$(1).yaml \
+			--packager $$fmt \
+			--target $(PKG_DIR)/ || exit 1; \
 	done
+endef
+
+# Per-компонент нативные пакеты: собрать ТОЛЬКО свой бинарь и упаковать его deb+rpm.
+# pkg-keeper / pkg-soul / pkg-soul-lint. Агрегат всех трёх — pkg.
+pkg-keeper:
+	$(call ensure-nfpm)
+	@mkdir -p $(PKG_DIR)
+	$(call pkg-build-one,keeper,keeper,$(KEEPER_LDFLAGS))
+	$(call pkg-nfpm-one,keeper)
+	@echo "pkg-keeper: deb+rpm записаны в $(PKG_DIR)/"
+
+pkg-soul:
+	$(call ensure-nfpm)
+	@mkdir -p $(PKG_DIR)
+	$(call pkg-build-one,soul,soul,$(SOUL_LDFLAGS))
+	$(call pkg-nfpm-one,soul)
+	@echo "pkg-soul: deb+rpm записаны в $(PKG_DIR)/"
+
+pkg-soul-lint:
+	$(call ensure-nfpm)
+	@mkdir -p $(PKG_DIR)
+	$(call pkg-build-one,soul-lint,soul-lint,)
+	$(call pkg-nfpm-one,soul-lint)
+	@echo "pkg-soul-lint: deb+rpm записаны в $(PKG_DIR)/"
+
+# pkg — агрегат: deb+rpm всех трёх компонентов скопом. Переиспользует те же
+# canned-recipe, что и per-компонент цели (логика не дублируется).
+pkg:
+	$(call ensure-nfpm)
+	@mkdir -p $(PKG_DIR)
+	$(call pkg-build-one,keeper,keeper,$(KEEPER_LDFLAGS))
+	$(call pkg-build-one,soul,soul,$(SOUL_LDFLAGS))
+	$(call pkg-build-one,soul-lint,soul-lint,)
+	$(call pkg-nfpm-one,keeper)
+	$(call pkg-nfpm-one,soul)
+	$(call pkg-nfpm-one,soul-lint)
 	@echo "pkg: deb+rpm записаны в $(PKG_DIR)/"
 
 # Подпись образов (cosign) — DOCUMENTED STUB. Реальная подпись требует registry +
@@ -883,7 +962,10 @@ help:
 	@echo "  test-race         go test -race ./..."
 	@echo "  test-integration  go test -tags=integration (testcontainers, нужен docker)"
 	@echo "  e2e               L3a E2E pilot (tests/e2e, -tags=e2e, нужен docker для имп-slice)"
-	@echo "  build-linux       cross-compile keeper+soul под Linux amd64 (для L3b real-soul-container)"
+	@echo "  build-linux       cross-compile keeper+soul под Linux amd64 (агрегат bin-keeper+bin-soul)"
+	@echo "  bin-keeper        cross-compile только keeper (linux-amd64) → keeper/bin/keeper-linux-amd64"
+	@echo "  bin-soul          cross-compile только soul (linux-amd64) → soul/bin/soul-linux-amd64"
+	@echo "  bin-soul-lint     cross-compile только soul-lint (linux-amd64) → soul-lint/bin/soul-lint-linux-amd64"
 	@echo "  e2e-live          L3b smoke-loop (tests/e2e-live, -tags=e2e_live, privileged docker, nightly)"
 	@echo "  e2e-k8s           L3c k8s-loop (tests/e2e-k8s, -tags=e2e_k8s, kind + bitnami Helm, weekly)"
 	@echo "  docker-build-keeper  собрать образ keeper:e2e-k8s (для L3c kind load docker-image)"
@@ -926,6 +1008,10 @@ help:
 	@echo ""
 	@echo "Release/packaging (аддитивно, НЕ входят в check):"
 	@echo "  docker-keeper     ПРОД-образ keeper (multi-stage distroless) → \$$(KEEPER_IMAGE):\$$(VERSION); push в свой registry"
+	@echo "  docker-soul       ПРОД-образ soul (multi-stage distroless) → \$$(SOUL_IMAGE):\$$(VERSION); push в свой registry"
 	@echo "  sbom              CycloneDX SBOM по go-модулям (cyclonedx-gomod) → dist/sbom/"
-	@echo "  pkg               нативные пакеты deb+rpm (nfpm) → dist/pkg/"
+	@echo "  pkg               нативные пакеты deb+rpm всех трёх компонентов (nfpm) → dist/pkg/"
+	@echo "  pkg-keeper        deb+rpm только keeper (nfpm) → dist/pkg/"
+	@echo "  pkg-soul          deb+rpm только soul (nfpm) → dist/pkg/"
+	@echo "  pkg-soul-lint     deb+rpm только soul-lint (nfpm) → dist/pkg/"
 	@echo "  sign              подпись образов (cosign) — отложено, documented-stub"
