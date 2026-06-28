@@ -30,6 +30,75 @@ version-переменной ещё нет — `--build-arg VERSION` для не
 `.dockerignore` в корне репо отсекает `.git`, локальные `bin/`, `dev/`, `docs/`,
 `.pm/` из контекста.
 
+## Keeper в проде — образ + конфиг
+
+Прод-сценарий: собрать образ `keeper`, переложить в **свой** registry, катать
+**своим** Helm-чартом (k8s-манифесты Soul Stack не поставляет — нужен образ/бинарь).
+
+### Собрать и опубликовать образ
+
+`make docker-keeper` собирает прод-образ из `deploy/docker/keeper.Dockerfile`
+(multi-stage, distroless-nonroot, версия в бинаре и OCI-метке) с тегом
+`$(KEEPER_IMAGE):$(VERSION)`. `VERSION` — `git describe` (или release-override),
+`KEEPER_IMAGE` — имя образа (по умолчанию `soul-stack/keeper`):
+
+```sh
+make docker-keeper                                   # soul-stack/keeper:<git-describe>
+make docker-keeper VERSION=v0.2.0                    # фиксированный тег релиза
+make docker-keeper KEEPER_IMAGE=registry.example.com/soul-stack/keeper VERSION=v0.2.0
+```
+
+Образ самодостаточен (тулчейн пинится в builder-стадии) — `make build-linux`
+заранее не нужен. Перетегировать под свой registry и запушить:
+
+```sh
+docker tag  soul-stack/keeper:v0.2.0 registry.example.com/soul-stack/keeper:v0.2.0
+docker push registry.example.com/soul-stack/keeper:v0.2.0
+```
+
+ENTRYPOINT — `keeper`, CMD — `run` (демон, **без** `--initialize`). Версионный
+тег вместо `latest` — воспроизводимый откат и точный аудит в `keeper version`.
+
+### Что keeper ждёт в проде
+
+Образ несёт только бинарь. Всё остальное — оператор подаёт через mount/env;
+пример полного конфига — `examples/keeper/keeper.yml`.
+
+- **Конфиг** — `keeper.yml`, смонтированный в `/etc/keeper/keeper.yml`
+  (дефолтный путь бинаря; CMD не передаёт `--config`). В k8s — ConfigMap →
+  volumeMount. Несекретные настройки: `kid`, `listen`, `pool`, `otel`, `logging`,
+  `reaper`, `acolytes`.
+- **Vault — hard-required** (без него keeper не стартует): `vault.addr` + auth
+  (approle `role_id` + `secret_id_file`, либо token). Из Vault keeper резолвит
+  PKI (SoulSeed), JWT signing key, Essence-секреты, SSH CA, cloud-credential-ы.
+  `secret_id` подавать через k8s Secret → файл, путь — в `vault.auth.secret_id_file`.
+- **Postgres** — `postgres.dsn_ref` (vault-ref, напр. `vault:secret/keeper/postgres`,
+  чтобы DSN с паролем не лежал в ConfigMap). Холодное хранилище кластера.
+- **Redis** — `redis.addr` + `redis.password_ref` (vault-ref). Heartbeat/lease/
+  pub-sub/лидер Reaper; для HA-кластера (`acolytes > 0`) обязателен.
+- **JWT** — `auth.jwt.signing_key_ref` (vault-ref) + `issuer` + TTL. Без блока
+  `auth.jwt` падает и `keeper init`, и `keeper run`.
+- **Порты** (`listen`): gRPC bootstrap (`9442`, server-only TLS, отдельный
+  listener), gRPC event_stream (`9443`, mTLS), OpenAPI (`8080`), MCP (`8081`),
+  metrics (`9090`). TLS-материал (`server.crt/key`, `ca.crt`) — mount в
+  `/etc/keeper/tls/` из Secret.
+
+### Первый bootstrap (ОДИН раз на кластер)
+
+`keeper run` при пустом реестре `operators` и **без** `--initialize` сознательно
+отказывается стартовать (ADR-013) — защита от тихого авто-bootstrap. Первого
+Архонта заводят отдельной командой с тем же образом и конфигом (one-shot
+Job / `kubectl run` / `docker run --rm`):
+
+```sh
+keeper init --archon=archon-ops-01 --config /etc/keeper/keeper.yml
+```
+
+Команда под PG advisory-lock проверяет, что реестр пуст, создаёт первого Архонта
+(`cluster-admin`, `permissions: ["*"]`), выпускает bootstrap-JWT (TTL из
+`auth.jwt.ttl_bootstrap`) и пишет его файлом `mode 0400`. Дальше Deployment с
+`keeper run` стартует штатно (реестр уже не пуст).
+
 ## systemd/
 
 Юниты для `keeper` и `soul` (у `soul-lint` юнита нет — это CLI). Запускаются от

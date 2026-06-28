@@ -81,7 +81,15 @@ PKG_DIR  := $(DIST_DIR)/pkg
 # окружения для ${ARCH}-подстановки в deploy/nfpm/*.yaml.
 PKG_ARCH ?= amd64
 
-.PHONY: gen build build-soulctl build-linux test test-plugins test-race test-integration e2e e2e-live e2e-k8s docker-build-keeper docker-build-soul tidy check check-fmt vet check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand gen-openapi check-openapi check-template sync-webui check-webui sbom pkg sign stress load-test help
+# Имя прод-образа keeper (таргет docker-keeper). Локальный тег по умолчанию —
+# `soul-stack/keeper`; оператор перетегирует под свой registry перед push
+# (`docker tag soul-stack/keeper:$(VERSION) <registry>/keeper:$(VERSION)`) либо
+# собирает сразу под него: `make docker-keeper KEEPER_IMAGE=<registry>/keeper`.
+# Тег версии — общий $(VERSION) (git describe / release-override), он же уходит в
+# ldflags бинаря и OCI-метку образа.
+KEEPER_IMAGE ?= soul-stack/keeper
+
+.PHONY: gen build build-soulctl build-linux test test-plugins test-race test-integration e2e e2e-live e2e-k8s docker-build-keeper docker-build-soul docker-keeper tidy check check-fmt vet check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand gen-openapi check-openapi check-template sync-webui check-webui sbom pkg sign stress load-test help
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -277,6 +285,24 @@ e2e-live: build-linux
 docker-build-keeper: build-linux
 	@echo "docker build -t keeper:e2e-k8s -f tests/e2e-k8s/dockerfiles/keeper.Dockerfile ."
 	@docker build -t keeper:e2e-k8s -f tests/e2e-k8s/dockerfiles/keeper.Dockerfile .
+
+# docker-keeper — ПРОД-образ keeper для публикации в registry оператора. В
+# отличие от docker-build-keeper (одноразовый kind-образ, single-stage от
+# артефакта build-linux) — multi-stage самодостаточный билд из
+# deploy/docker/keeper.Dockerfile: пинит golang-тулчейн, не зависит от состояния
+# keeper/bin/, версия инжектится в бинарь (ldflags) и в OCI-метку
+# (--build-arg VERSION). Тег — $(KEEPER_IMAGE):$(VERSION) (versioned, не latest:
+# воспроизводимый rollback). Контекст сборки — корень репо.
+#
+# Дальше оператор сам: `docker tag $(KEEPER_IMAGE):$(VERSION) <registry>/keeper:$(VERSION)`
+# → `docker push <registry>/keeper:$(VERSION)`. Bootstrap первого Архонта и
+# прод-конфиг — deploy/README.md → «Keeper в проде».
+#
+# Требует docker в PATH (в отличие от build-linux/pkg). НЕ входит в `check`.
+docker-keeper:
+	@echo "docker build -t $(KEEPER_IMAGE):$(VERSION) --build-arg VERSION=$(VERSION) -f deploy/docker/keeper.Dockerfile ."
+	@docker build -t $(KEEPER_IMAGE):$(VERSION) --build-arg VERSION='$(VERSION)' -f deploy/docker/keeper.Dockerfile .
+	@echo "built $(KEEPER_IMAGE):$(VERSION) — перетегируйте под свой registry и push (см. deploy/README.md)"
 
 # docker-build-soul — собирает образ `soul:e2e-k8s` для L3c kind-cluster
 # (L3c-3+). Privileged systemd-PID-1 Debian-12 base (parity с L3b), bake-ит
@@ -899,6 +925,7 @@ help:
 	@echo "  check-webui       CI-guard на drift embedded UI (skip без companion)"
 	@echo ""
 	@echo "Release/packaging (аддитивно, НЕ входят в check):"
+	@echo "  docker-keeper     ПРОД-образ keeper (multi-stage distroless) → \$$(KEEPER_IMAGE):\$$(VERSION); push в свой registry"
 	@echo "  sbom              CycloneDX SBOM по go-модулям (cyclonedx-gomod) → dist/sbom/"
 	@echo "  pkg               нативные пакеты deb+rpm (nfpm) → dist/pkg/"
 	@echo "  sign              подпись образов (cosign) — отложено, documented-stub"
