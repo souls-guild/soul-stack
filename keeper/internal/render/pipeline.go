@@ -769,12 +769,15 @@ func (p *Pipeline) staticSkipPlaceholder(task config.Task, idx int, skip *struct
 // [evalAssertTask]), без диалекта.
 //
 // Контракт совпадает с assert-веткой Render бит-в-бит: проходит scenario.Tasks по
-// порядку, для каждой [IsAssertTask]-задачи зовёт общий [evalAssertTask] (тот же
-// when:-гейт, тот же run-level CEL-контекст с soulprint.hosts). Первый false →
-// [ErrAssertFailed] (обрыв, текст = message + индекс/текст предиката). Не-assert
-// задачи пропускаются (pre-flight не рендерит их — это делает Render на старте
-// прогона). Все assert true / scenario без assert → nil (большинство сценариев —
-// no-op, как и требует пилот).
+// порядку, применяет conditional-include group-drop (Task.IncludeGroupID/IncludeWhen,
+// проставлены config.ExpandIncludes) ДО assert-проверки — как [Render]: assert из
+// дропнутой include-группы НЕ вычисляется (cluster.yml-assert на sentinel-прогоне
+// исключён из плана, а не падает CEL no-such-key). Для каждой оставшейся
+// [IsAssertTask]-задачи зовёт общий [evalAssertTask] (тот же when:-гейт, тот же
+// run-level CEL-контекст с soulprint.hosts). Первый false → [ErrAssertFailed]
+// (обрыв, текст = message + индекс/текст предиката). Не-assert задачи пропускаются
+// (pre-flight не рендерит их — это делает Render на старте прогона). Все assert true
+// / scenario без assert → nil (большинство сценариев — no-op, как и требует пилот).
 //
 // NOT staged: pre-flight всегда не-staged (один проход, TaskPassage=nil), assert —
 // run-level «один раз на прогон» по построению; passage-фильтр Render-а здесь не
@@ -793,8 +796,35 @@ func (p *Pipeline) EvalAsserts(ctx context.Context, in RenderInput) error {
 		return cerr
 	}
 	in.Compute = computed
+
+	// includeGroupKeep — кеш решения по условному include (group-drop), ЗЕРКАЛО
+	// [Render]: id группы (Task.IncludeGroupID, проставлен ExpandIncludes) → keep/drop,
+	// вычисляется один раз на группу. Без него assert из conditionally-included файла
+	// (cluster.yml под `when: input.redis_type=='cluster'`) вычислялся бы и на
+	// несовпадающем режиме (sentinel-прогон → CEL no-such-key: shards), тогда как
+	// Render/Trial эту группу дропают ДО assert. Single-source-of-truth восстановлен:
+	// pre-flight применяет include-when к asserts так же, как run-render.
+	includeGroupKeep := map[int]bool{}
 	for i := range in.Scenario.Tasks {
 		task := in.Scenario.Tasks[i]
+
+		// Conditional-include group-drop — ДО IsAssertTask, как в [Render]: include-when
+		// группы false → задача физически исключена из плана, её assert НЕ вычисляется.
+		if task.IncludeGroupID != 0 {
+			keep, ok := includeGroupKeep[task.IncludeGroupID]
+			if !ok {
+				k, derr := p.evalIncludeWhen(in, task.IncludeWhen)
+				if derr != nil {
+					return derr
+				}
+				keep = k
+				includeGroupKeep[task.IncludeGroupID] = keep
+			}
+			if !keep {
+				continue
+			}
+		}
+
 		if !IsAssertTask(task) {
 			continue
 		}

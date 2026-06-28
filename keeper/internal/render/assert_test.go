@@ -251,3 +251,72 @@ func TestEvalAsserts_StaticWhenFalseSkips(t *testing.T) {
 		t.Fatalf("EvalAsserts: static-when:false должен пропустить assert, got %v", err)
 	}
 }
+
+// assertInIncludeGroup строит assert-задачу, какой её оставляет config.ExpandIncludes
+// для conditionally-included файла: IncludeWhen/IncludeGroupID проставлены (group-drop-
+// несущая форма), собственного when у assert нет. Предикат намеренно ссылается на ключ,
+// которого нет на несовпадающем режиме (input.shards отсутствует у sentinel) — чтобы
+// отличить «assert дропнут группой» (ожидаемо) от «assert вычислен и упал CEL
+// no-such-key» (баг live-vs-trial).
+func assertInIncludeGroup(includeWhen, pred string) config.Task {
+	return config.Task{
+		Name:           "cluster roster guard",
+		IncludeWhen:    includeWhen,
+		IncludeGroupID: 1,
+		Assert:         &config.AssertSpec{That: []string{pred}, Message: "cluster roster mismatch"},
+	}
+}
+
+// TestEvalAsserts_IncludeGroupDropSkipsAssert — ГАРД на live-vs-trial расхождение:
+// assert из conditionally-included файла (redis cluster.yml, `include: cluster.yml
+// when: input.redis_type=='cluster'`) НЕ должен вычисляться pre-flight-ом на
+// несовпадающем режиме. До фикса EvalAsserts игнорировал group-drop и звал
+// evalAssertTask для cluster-assert на sentinel-прогоне → CEL «no such key: shards».
+// Render/Trial эту группу дропают; pre-flight обязан вести себя так же.
+func TestEvalAsserts_IncludeGroupDropSkipsAssert(t *testing.T) {
+	manifest := &config.ScenarioManifest{Name: "redis", Tasks: []config.Task{
+		assertInIncludeGroup(
+			"input.redis_type == 'cluster'",
+			// Зеркало cluster.yml size-guard: ссылается на input.shards, которого нет
+			// у sentinel-input → если бы assert вычислялся, упал бы no-such-key.
+			"size(soulprint.hosts) == input.shards * (input.replicas + 1)",
+		),
+	}}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario:    manifest,
+		Input:       map[string]any{"redis_type": "sentinel"}, // НЕТ shards/replicas.
+		Incarnation: IncarnationMeta{Name: "redis"},
+		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"redis"}, nil)},
+	}
+	if err := p.EvalAsserts(context.Background(), in); err != nil {
+		t.Fatalf("EvalAsserts: sentinel-прогон не должен вычислять cluster-assert (group-drop), got %v", err)
+	}
+}
+
+// TestEvalAsserts_IncludeGroupKeepEvaluatesAssert — обратный контроль: на СОВПАДАЮЩЕМ
+// режиме (cluster) include-группа НЕ дропается, cluster-assert вычисляется. Roster (1
+// хост) не сходится с топологией (shards=3, replicas=1 → ожидается 6) → assert падает
+// ErrAssertFailed. Доказывает, что group-drop не «проглатывает» assert на активном режиме.
+func TestEvalAsserts_IncludeGroupKeepEvaluatesAssert(t *testing.T) {
+	manifest := &config.ScenarioManifest{Name: "redis", Tasks: []config.Task{
+		assertInIncludeGroup(
+			"input.redis_type == 'cluster'",
+			"size(soulprint.hosts) == input.shards * (input.replicas + 1)",
+		),
+	}}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario:    manifest,
+		Input:       map[string]any{"redis_type": "cluster", "shards": 3, "replicas": 1},
+		Incarnation: IncarnationMeta{Name: "redis"},
+		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"redis"}, nil)}, // 1 != 6.
+	}
+	err := p.EvalAsserts(context.Background(), in)
+	if err == nil {
+		t.Fatal("EvalAsserts: cluster-прогон должен вычислить cluster-assert и упасть (roster не сходится)")
+	}
+	if !errors.Is(err, ErrAssertFailed) {
+		t.Errorf("err не ErrAssertFailed (значит упал не на предикате, а на eval): %v", err)
+	}
+}
