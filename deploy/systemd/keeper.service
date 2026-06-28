@@ -1,9 +1,16 @@
 # systemd-юнит Keeper (ADR-004) — центральный узел Soul Stack.
 #
-# Установка:
+# Установка из пакета soul-stack-keeper (deb/rpm) — пользователь soul-stack,
+# /etc/keeper и /var/lib/soul-stack-keeper создаёт postinstall. Ручные шаги
+# оператора после установки:
+#   install -m0640 keeper.yml /etc/keeper/keeper.yml
+#   keeper init --archon=<aid>            # bootstrap первого Архонта (ADR-013)
+#   systemctl enable --now keeper
+#
+# Ручная установка без пакета (для справки):
 #   useradd --system --no-create-home --shell /usr/sbin/nologin soul-stack   # один раз на хост
 #   install -m0755 keeper/bin/keeper /usr/local/bin/keeper
-#   install -d -o soul-stack -g soul-stack /etc/keeper /var/lib/keeper
+#   install -d -o soul-stack -g soul-stack /etc/keeper /var/lib/soul-stack-keeper
 #   install -m0640 keeper.yml /etc/keeper/keeper.yml
 #   install -m0644 deploy/systemd/keeper.service /etc/systemd/system/keeper.service
 #   install -m0644 deploy/systemd/keeper.env     /etc/keeper/keeper.env
@@ -44,8 +51,11 @@ RestrictSUIDSGID=true
 RestrictNamespaces=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
-# Единственный writable-путь — стейт-каталог (TLS-материал, кеши, bootstrap-токены).
-ReadWritePaths=/var/lib/keeper
+# Единственный writable-путь — рантайм-корень keeper (кеши plugins/services/
+# destiny/plugin-src; см. keeper main.go defaults). Должен совпадать с каталогом,
+# который создаёт postinstall с владельцем soul-stack, иначе strict-hardening
+# заблокирует запись и демон упадёт.
+ReadWritePaths=/var/lib/soul-stack-keeper
 
 [Install]
 WantedBy=multi-user.target

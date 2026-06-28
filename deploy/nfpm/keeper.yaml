@@ -45,10 +45,22 @@ contents:
     file_info:
       mode: 0640
 
+# Maintainer-scripts (deb: postinst/prerm/postrm, rpm: %post/%preun/%postun).
+# Создают системного пользователя soul-stack и рабочие каталоги keeper с
+# правильным владельцем — без этого clean-install не работает (демон под
+# soul-stack не пишет в root-owned /var/lib/soul-stack-keeper). Bootstrap
+# первого Архонта (keeper init) остаётся ручным.
+scripts:
+  postinstall: ./deploy/nfpm/scripts/keeper.postinstall.sh
+  preremove:   ./deploy/nfpm/scripts/keeper.preremove.sh
+  postremove:  ./deploy/nfpm/scripts/keeper.postremove.sh
+
 overrides:
   deb:
+    # passwd — пакет с useradd (Essential/base в Debian и Ubuntu); postinst его
+    # вызывает напрямую. Был adduser — он лишь обёртка над тем же passwd.
     depends:
-      - adduser
+      - passwd
   rpm:
     depends:
       - shadow-utils

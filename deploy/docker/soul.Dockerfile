@@ -9,7 +9,7 @@
 # `-X` с полным import-path (бинарь остался бы 0.0.0-dev → неверная версия в
 # Hello/BootstrapRequest → искажённый аудит).
 
-FROM golang:1.26.3 AS builder
+FROM golang:1.26.4 AS builder
 
 WORKDIR /src
 

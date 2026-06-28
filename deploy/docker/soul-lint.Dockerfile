@@ -8,7 +8,7 @@
 # Типовое использование в CI — смонтировать репо и линтить конфиги:
 #   docker run --rm -v "$PWD:/work" -w /work soul-stack/soul-lint validate-destiny destiny.yml
 
-FROM golang:1.26.3 AS builder
+FROM golang:1.26.4 AS builder
 
 WORKDIR /src
 

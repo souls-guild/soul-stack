@@ -1,6 +1,13 @@
 # systemd-юнит Soul (ADR-004) — управляемый агент-демон.
 #
-# Установка (на каждом управляемом хосте):
+# Установка из пакета soul-stack-soul (deb/rpm) — пользователь soul-stack,
+# /etc/soul и /var/lib/soul-stack/{,seed,modules} создаёт postinstall. Ручные
+# шаги оператора после установки:
+#   install -m0640 soul.yml /etc/soul/soul.yml
+#   soul init --token=<one-time-token>   # онбординг: CSR + CA на диск (ручной)
+#   systemctl enable --now soul
+#
+# Ручная установка без пакета (для справки):
 #   useradd --system --no-create-home --shell /usr/sbin/nologin soul-stack
 #   install -m0755 soul/bin/soul /usr/local/bin/soul
 #   install -d -o soul-stack -g soul-stack /etc/soul /var/lib/soul-stack
