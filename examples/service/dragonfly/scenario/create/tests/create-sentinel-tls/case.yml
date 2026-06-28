@@ -1,0 +1,125 @@
+# L0-испытание create DragonFly в режиме sentinel С ВКЛЮЧЁННЫМ TLS (tls_enabled=true). Парный
+# к create-sentinel-1master-1replica (plaintext) — покрывает TLS-ON ветку compute (df_config
+# несёт --tls/--tls_cert_file/.../--tls_replication, state.tls.enable=true). Multi-host roster
+# из 2 хостов: replicas_per_master=1 → топология 1+1=2. Master-election: node-1 = master.
+#
+# Render-only, герметично. Что ассертим (БЛОКЕР-фикс TLS + unix-socket):
+#   1. ★ БЛОКЕР #1: state.df_config НЕ несёт tls_port (у DragonFly нет такого флага — absl
+#      FATAL); TLS встаёт на ОСНОВНОЙ --port. df_config несёт tls/tls_cert_file/tls_key_file/
+#      tls_ca_cert_file/tls_replication (underscore, пути из conf_dir).
+#   2. ★ БЛОКЕР #2: health-gate PING addr = ЛОКАЛЬНЫЙ UNIX-сокет (НЕ 127.0.0.1:7379) — DF при
+#      --bind=primary_ip НЕ слушает loopback; локальный коннект идёт на сокет (БЕЗ tls/tls_ca).
+#   3. ★ REPLICAOF реплики: свой addr = unix-сокет; master_addr = primary_ip:6379 (ВНЕШНИЙ
+#      линк к master на ОСНОВНОМ порту 6379, НЕ 7379 — отдельного tls-порта нет).
+#   4. state_changes.tls = {enable:true, cert_ref/key_ref/ca_ref} БЕЗ only/port.
+name: dragonfly create sentinel over TLS (TLS on main port, local access via unix socket)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-2.example.com
+      covens: [create, dragonfly]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-1.example.com
+      covens: [create, dragonfly]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  vault:
+    secret/dragonfly/create:
+      password: s3cr3t-dragonfly-pass
+    secret/dragonfly/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/dragonfly/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/dragonfly/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/dragonfly/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+    # TLS PEM-материал (по essence.tls_*_ref) — destiny читает его vault()-ом в ячейке content.
+    secret/services/dragonfly/tls:
+      cert: "-----BEGIN CERTIFICATE-----\nDFCERT\n-----END CERTIFICATE-----"
+      key:  "-----BEGIN PRIVATE KEY-----\nDFKEY\n-----END PRIVATE KEY-----"
+      ca:   "-----BEGIN CERTIFICATE-----\nDFCA\n-----END CERTIFICATE-----"
+  essence:
+    sentinel_master_name: master
+    memory_reserve_percent: 75
+    # TLS включён (галочка input.tls_enabled), Vault-refs — author-context essence.
+    tls_cert_ref: "secret/services/dragonfly/tls#cert"
+    tls_key_ref:  "secret/services/dragonfly/tls#key"
+    tls_ca_ref:   "secret/services/dragonfly/tls#ca"
+    df_config:
+      maxmemory:        "256mb"
+      maxclients:       10000
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default:    "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    version: "1.39.0"
+    replicas_per_master: 1
+    tls_enabled: true
+
+assert:
+  task_present:
+    # ── dragonfly destiny: flagfile dragonfly.conf отрендерен (render_context.self = node-1) ──
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/dragonfly/dragonfly.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: dragonfly
+        group: dragonfly
+
+    # ── 2 (БЛОКЕР #2): health-gate PING — addr ЛОКАЛЬНЫЙ UNIX-сокет (НЕ 127.0.0.1:7379) ──
+    - module: community.redis.command
+      params_subset:
+        addr: "unix:/var/run/dragonfly/dragonfly.sock"
+        password: s3cr3t-dragonfly-pass
+        args: ["PING"]
+
+    # ── 3 (БЛОКЕР #1+#2): REPLICAOF реплик — свой addr unix-сокет; master_addr на ОСНОВНОЙ
+    #    порт 6379 (НЕ tls-порт 7379, его нет). where исключает master → node-2. ──
+    - module: community.redis.replica
+      params_subset:
+        addr: "unix:/var/run/dragonfly/dragonfly.sock"
+        master_addr: "10.0.0.1:6379"
+        password: s3cr3t-dragonfly-pass
+
+  state_changes:
+    df_version: "1.39.0"
+    # ★ БЛОКЕР #1: df_config несёт TLS-флаги БЕЗ tls_port; TLS на основном --port.
+    df_config:
+      maxmemory:        "256mb"
+      maxclients:       10000
+      tls:              "true"
+      tls_cert_file:    /etc/dragonfly/tls/dragonfly.crt
+      tls_key_file:     /etc/dragonfly/tls/dragonfly.key
+      tls_ca_cert_file: /etc/dragonfly/tls/ca.crt
+      tls_replication:  "true"
+    df_users: []
+    df_hosts: []
+    df_sentinel:
+      master_name: master
+      quorum: 0
+      down_after_ms: 5000
+      failover_timeout_ms: 60000
+    replicas: 1
+    sentinel_quorum: 0
+    install:
+      method: package
+    # ★ state.tls: enable + refs, БЕЗ only/port (у DragonFly TLS на основном порту).
+    tls:
+      enable:   true
+      cert_ref: "secret/services/dragonfly/tls#cert"
+      key_ref:  "secret/services/dragonfly/tls#key"
+      ca_ref:   "secret/services/dragonfly/tls#ca"
+    memory_mb: 0

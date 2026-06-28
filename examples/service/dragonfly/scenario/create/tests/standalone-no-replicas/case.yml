@@ -49,10 +49,11 @@ fixtures:
 
 assert:
   task_present:
-    # REPLICAOF: master_addr = единственный хост (он же master) → плагин no-op.
+    # REPLICAOF: addr — ЛОКАЛЬНЫЙ UNIX-сокет; master_addr = единственный хост (он же master,
+    # primary_ip:6379). На реальном standalone INFO role=master → плагин no-op.
     - module: community.redis.replica
       params_subset:
-        addr: "127.0.0.1:6379"
+        addr: "unix:/var/run/dragonfly/dragonfly.sock"
         master_addr: "10.0.0.9:6379"
         password: s3cr3t-dragonfly-pass
 

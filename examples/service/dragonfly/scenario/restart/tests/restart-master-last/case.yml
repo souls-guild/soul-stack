@@ -35,8 +35,6 @@ fixtures:
     df_version: "1.39.0"
     tls:
       enable:   false
-      only:     false
-      port:     7379
       cert_ref: ""
       key_ref:  ""
       ca_ref:   ""
@@ -54,12 +52,11 @@ mocks:
 
 assert:
   task_present:
-    # probe community.redis.role (plaintext). Единственная community.redis.role в плане.
+    # probe community.redis.role (ЛОКАЛЬНЫЙ UNIX-сокет, БЕЗ tls/tls_ca). Единственная в плане.
     - module: community.redis.role
       params_subset:
-        addr: "127.0.0.1:6379"
+        addr: "unix:/var/run/dragonfly/dragonfly.sock"
         password: fixture-df-pass-16chars
-        tls: false
 
   # ── master-restart НЕВЫРАЗИМ в presence (как redis-аналог) ──────────────────
   # В плане ДВЕ идентичных core.service.restarted name=dragonfly (block-рестарт реплики +

@@ -53,9 +53,9 @@ sentinel_service_name:  redis-sentinel
 
 # ── Дефолтные порты (директива «хардкод порта → var») ───────────────────────────
 # ИНВАРИАНТ (vars, не input): well-known порт DragonFly (6379, redis-совместим) и
-# redis-sentinel (26379). flagfile печатает `--port=6379` (merged config от scenario
-# может переопределить last-wins — напр. `--port=0` при tls.only); sentinel.conf —
-# `port 26379`. Это дефолт кирпича, не operator-input (TLS-порт — отдельно в input.tls.port).
+# redis-sentinel (26379). flagfile печатает `--port=6379`; sentinel.conf — `port 26379`.
+# ★ DragonFly vs redis: TLS встаёт на ЭТОТ ЖЕ основной порт (флаг --tls; у DF нет отдельного
+# tls-порта и нет «только-TLS» с `--port=0`). Это дефолт кирпича, не operator-input.
 dragonfly_port: 6379
 sentinel_port:  26379
 

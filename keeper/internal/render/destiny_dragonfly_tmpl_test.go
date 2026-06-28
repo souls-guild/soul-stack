@@ -58,13 +58,14 @@ func TestDragonflyFlagfile_AbslFlagForm(t *testing.T) {
 			"log_dir":  "/var/log/dragonfly",
 			// merged config от scenario — DF-флаги (underscore-форма). TLS-блок здесь:
 			// доказывает, что bool-флаг tls рендерится как --tls=true (валидно для absl).
+			// ★ maxmemory_policy НЕ кладём: у DF нет такого флага (absl FATAL на неизвестном).
+			// ★ tls_port НЕ кладём: у DF нет tls_port — TLS встаёт на основной --port
+			// (TestDragonflyFlagfile_TLSOnMainPort гейтит отсутствие --tls_port).
 			"config": map[string]any{
-				"maxmemory":        "256mb",
-				"maxmemory_policy": "noeviction",
-				"maxclients":       10000,
-				"tls":              "true",
-				"tls_port":         "7379",
-				"tls_cert_file":    "/etc/dragonfly/tls/dragonfly.crt",
+				"maxmemory":     "256mb",
+				"maxclients":    10000,
+				"tls":           "true",
+				"tls_cert_file": "/etc/dragonfly/tls/dragonfly.crt",
 			},
 		},
 		"self": map[string]any{
@@ -77,6 +78,9 @@ func TestDragonflyFlagfile_AbslFlagForm(t *testing.T) {
 	// (а) базовые директивы — absl-форма --<flag>=<value>, host-layout из каталогов.
 	mustContainLine(t, out, "--bind=10.0.0.1")
 	mustContainLine(t, out, "--port=6379")
+	// unixsocket — локальный listener (DF при --bind=primary_ip НЕ слушает 127.0.0.1;
+	// локальные вызовы плагина идут через сокет). Путь выводится из run_dir.
+	mustContainLine(t, out, "--unixsocket=/var/run/dragonfly/dragonfly.sock")
 	mustContainLine(t, out, "--dir=/var/lib/dragonfly")
 	mustContainLine(t, out, "--dbfilename=dump")
 	mustContainLine(t, out, "--requirepass=s3cr3t-dragonfly-pass")
@@ -86,10 +90,8 @@ func TestDragonflyFlagfile_AbslFlagForm(t *testing.T) {
 
 	// (в) merged config — --<key>=<value> с DF-флагами (underscore). bool tls=true.
 	mustContainLine(t, out, "--maxmemory=256mb")
-	mustContainLine(t, out, "--maxmemory_policy=noeviction")
 	mustContainLine(t, out, "--maxclients=10000")
 	mustContainLine(t, out, "--tls=true")
-	mustContainLine(t, out, "--tls_port=7379")
 	mustContainLine(t, out, "--tls_cert_file=/etc/dragonfly/tls/dragonfly.crt")
 
 	// НЕ redis.conf: ни одной строки без ведущего `--` (кроме пустых) — каждая
@@ -102,6 +104,51 @@ func TestDragonflyFlagfile_AbslFlagForm(t *testing.T) {
 		if !strings.HasPrefix(ln, "--") {
 			t.Fatalf("flagfile содержит не-absl строку (ожидался --flag=value): %q", ln)
 		}
+	}
+}
+
+// TestDragonflyFlagfile_TLSOnMainPort — guard: TLS DragonFly встаёт на ОСНОВНОЙ --port,
+// БЕЗ отдельного tls_port. Корень риска: у DragonFly НЕТ флага tls_port (разведка src:
+// facade/dragonfly_listener.cc ABSL_FLAG(bool, tls, ...) переводит ОСНОВНОЙ listener в TLS,
+// tls_helpers.cc несёт tls_cert_file/tls_key_file/tls_ca_cert_file; tls_port отсутствует).
+// Регресс «вернули tls_port в config» → absl FATAL на неизвестном флаге → DF не стартует,
+// невидимо на L0. Тест рендерит TLS-блок БЕЗ tls_port и доказывает: --tls=true +
+// --tls_cert_file присутствуют, --unixsocket присутствует, а строки --tls_port НЕТ.
+func TestDragonflyFlagfile_TLSOnMainPort(t *testing.T) {
+	root := map[string]any{
+		"vars": map[string]any{
+			"password": "s3cr3t-dragonfly-pass",
+			"conf_dir": "/etc/dragonfly",
+			"data_dir": "/var/lib/dragonfly",
+			"port":     6379,
+			"run_dir":  "/var/run/dragonfly",
+			"log_dir":  "/var/log/dragonfly",
+			// TLS-блок в DF-форме БЕЗ tls_port (TLS на основном --port).
+			"config": map[string]any{
+				"tls":              "true",
+				"tls_cert_file":    "/etc/dragonfly/tls/dragonfly.crt",
+				"tls_key_file":     "/etc/dragonfly/tls/dragonfly.key",
+				"tls_ca_cert_file": "/etc/dragonfly/tls/ca.crt",
+				"tls_replication":  "true",
+			},
+		},
+		"self": map[string]any{
+			"network": map[string]any{"primary_ip": "10.0.0.1"},
+		},
+	}
+
+	out := renderDragonflyFlagfileNormalized(t, root)
+
+	mustContainLine(t, out, "--tls=true")
+	mustContainLine(t, out, "--tls_cert_file=/etc/dragonfly/tls/dragonfly.crt")
+	mustContainLine(t, out, "--tls_key_file=/etc/dragonfly/tls/dragonfly.key")
+	mustContainLine(t, out, "--tls_ca_cert_file=/etc/dragonfly/tls/ca.crt")
+	mustContainLine(t, out, "--unixsocket=/var/run/dragonfly/dragonfly.sock")
+
+	// ★ АНТИ-GUARD: ни одной строки с --tls_port. У DragonFly нет такого флага — его
+	// присутствие = absl FATAL на старте. Ловит регресс возврата tls_port в df_config.
+	if strings.Contains(out, "--tls_port") {
+		t.Fatalf("flagfile содержит --tls_port: у DragonFly нет такого флага (TLS встаёт на основной --port). Рендер:\n%s", out)
 	}
 }
 

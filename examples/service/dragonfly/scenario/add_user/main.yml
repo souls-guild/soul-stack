@@ -54,15 +54,14 @@ validate:
     message: "имя ACL-пользователя зарезервировано за служебным (default/replica/monitoring/sentinel/haproxy): выбери другое имя — служебные юзеры заводятся автоматически из essence"
 
 # ── Вычисляемые scenario-vars (compute:) ─────────────────────────────────────────
-# Рун-уровневый контекст (input/essence/incarnation — без soulprint). tls_* — дискриминатор
-# коннекта плагина из state.tls: ACL LOAD идёт через TLS-коннект, если DragonFly на TLS.
+# Рун-уровневый контекст (input/essence/incarnation — без soulprint).
+#
+# ★ DragonFly vs redis (БЛОКЕР-фикс): ACL LOAD идёт к ЛОКАЛЬНОМУ инстансу через UNIX-СОКЕТ
+# (compute.local_addr), НЕ 127.0.0.1:port. DF при --bind=primary_ip НЕ слушает loopback;
+# сокет — отдельный UDS-listener. UDS не сетевой путь → TLS-дискриминатор не нужен (tls/tls_ca
+# у ACL LOAD убраны даже на TLS-инстансе). run_dir host-инвариант; default дублирует дефолт.
 compute:
-  tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
-  tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
-  # tls_ca — PEM CA-СОДЕРЖИМОЕ коннекта (плагин ждёт PEM, не путь). Берётся из ИМЕНОВАННОГО
-  # state.tls.ca_ref (Vault-ПУТЬ в state, vault() резолвит в PEM). После rotate_tls (меняет
-  # state.tls.ca_ref) day-2 коннект использует АКТУАЛЬНЫЙ CA — не устаревший essence-дефолт.
-  tls_ca:   "${ compute.tls_on ? vault(incarnation.state.tls.ca_ref) : '' }"
+  local_addr: "${ 'unix:' + default(essence.run_dir, '/var/run/dragonfly') + '/dragonfly.sock' }"
 
   # ── Новый набор ACL-юзеров: РАЗВЁРНУТЫЙ state.df_users + добавляемый юзер ──
   # state.df_users — МАССИВ AclUser [{name,perms,state}]. Array-upsert: ОТФИЛЬТРОВАТЬ из
@@ -133,7 +132,5 @@ tasks:
   - name: Hot-reload ACL on the live instance (ACL LOAD)
     module: community.redis.acl
     params:
-      addr:     "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
+      addr:     "${ compute.local_addr }"
       password: "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
-      tls:      "${ compute.tls_on }"
-      tls_ca:   "${ compute.tls_ca }"

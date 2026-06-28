@@ -1,17 +1,17 @@
-# L0-испытание restart: rolling-restart реплик НА TLS-инстансе. Парный guard к
-# rolling-restart-replicas (plaintext) — покрывает TLS-ветку дискриминатора day-2-гейта.
-# Render-only, герметично. Roster — 2 хоста, probe-роль = slave.
+# L0-испытание restart: rolling-restart реплик НА TLS-инстансе. Парный к
+# rolling-restart-replicas (plaintext). Render-only, герметично. Roster — 2 хоста, probe-роль = slave.
 #
-# ★ Инвариант: дискриминатор TLS берётся из ИМЕНОВАННОГО поля РАЗВЁРНУТОГО
-# incarnation.state.tls, НЕ из essence. create записал в state.tls операторское TLS-намерение
-# (enable/port); day-2 restart обязан коннектиться плагином ПО TLS, иначе plaintext-коннект на
-# TLS-инстанс провалит health-gate. state.tls.port — INTEGER (7379) → addr через string(...).
-# tls_ca — PEM CA из vault(state.tls.ca_ref) (плагин ждёт PEM, не путь).
+# ★ DragonFly vs redis: локальные probe/health-gate коннектятся к СВОЕМУ инстансу через
+# UNIX-СОКЕТ независимо от того, на TLS инстанс или нет (DF при --bind=primary_ip НЕ слушает
+# loopback; сокет — отдельный UDS-listener; UDS не сетевой путь → TLS на нём не нужен). Поэтому
+# на TLS-инстансе локальные params коннекта ТЕ ЖЕ, что в plaintext-кейсе (addr=сокет, БЕЗ
+# tls/tls_ca). state.tls.enable=true тут лишь read-model (TLS на ОСНОВНОМ порту для внешних
+# клиентов). ★ state.tls БЕЗ only/port, df_config БЕЗ tls_port (у DragonFly нет такого флага).
 #
 # Что ассертим:
-#   1. probe (community.redis.role): tls=true, addr 127.0.0.1:7379 (НЕ plain 6379), tls_ca = PEM CA.
-#   2. block-потомок health-gate (community.redis.replica-synced) с теми же TLS-params.
-name: rolling-restart replicas over TLS reads tls-port from incarnation.state
+#   1. probe (community.redis.role): addr = ЛОКАЛЬНЫЙ UNIX-сокет (НЕ 127.0.0.1:port), БЕЗ tls/tls_ca.
+#   2. block-потомок health-gate (community.redis.replica-synced) с теми же socket-params.
+name: rolling-restart replicas over TLS connects locally via unix socket
 
 fixtures:
   hosts:
@@ -29,31 +29,28 @@ fixtures:
   input:
     reason: "rolling restart over TLS for L0"
 
-  # Развёрнутый incarnation.state с включённым TLS: state.tls несёт enable=true + port=7379.
+  # Развёрнутый incarnation.state с включённым TLS: state.tls несёт enable=true (TLS на основном
+  # порту 6379). ★ БЕЗ only/port; df_config БЕЗ tls_port (у DragonFly нет такого флага).
   state:
     df_version: "1.39.0"
     tls:
       enable:   true
-      only:     false
-      port:     7379
       cert_ref: "secret/services/dragonfly/tls#cert"
       key_ref:  "secret/services/dragonfly/tls#key"
       ca_ref:   "secret/services/dragonfly/tls#ca"
     df_config:
       maxmemory:        "256mb"
       tls:              "true"
-      tls_port:         "7379"
       tls_cert_file:    /etc/dragonfly/tls/dragonfly.crt
       tls_key_file:     /etc/dragonfly/tls/dragonfly.key
       tls_ca_cert_file: /etc/dragonfly/tls/ca.crt
       tls_replication:  "true"
 
-  # Пароль (secret/dragonfly/restart#password) + PEM CA (по state.tls.ca_ref — day-2 резолвит vault()).
+  # Пароль (secret/dragonfly/restart#password). ★ PEM CA локальному коннекту НЕ нужен —
+  # probe/health-gate идут по UNIX-сокету (UDS без TLS), vault(ca_ref) не вызывается.
   vault:
     secret/dragonfly/restart:
       password: fixture-df-pass-16chars
-    secret/services/dragonfly/tls:
-      ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
 
 mocks:
   register:
@@ -62,18 +59,14 @@ mocks:
 
 assert:
   task_present:
-    # probe (community.redis.role): ПО TLS (tls-порт из state.tls.port).
+    # probe (community.redis.role): ЛОКАЛЬНЫЙ UNIX-сокет (БЕЗ tls/tls_ca, даже на TLS-инстансе).
     - module: community.redis.role
       params_subset:
-        addr: "127.0.0.1:7379"
+        addr: "unix:/var/run/dragonfly/dragonfly.sock"
         password: fixture-df-pass-16chars
-        tls: true
-        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
 
-    # slave-health-gate (community.redis.replica-synced) ПО TLS.
+    # slave-health-gate (community.redis.replica-synced): тот же socket-коннект.
     - module: community.redis.replica-synced
       params_subset:
-        addr: "127.0.0.1:7379"
+        addr: "unix:/var/run/dragonfly/dragonfly.sock"
         password: fixture-df-pass-16chars
-        tls: true
-        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"

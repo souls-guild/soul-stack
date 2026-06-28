@@ -132,27 +132,20 @@ input:
     additional_properties:
       type: string
 
-  # ── TLS — 2 булевых галочки ──────────────────────────────────────────────────
-  # tls_enabled — включить TLS (главный гейт); tls_keep_plain — оставить ли plain-порт
-  # (default true). false закрывает plain (`port 0`) — только-TLS. Технические параметры
-  # (порт, Vault-пути) — author-context (essence). compute собирает tls_only = tls_enabled
-  # && !tls_keep_plain.
+  # ── TLS — одна булева галочка ────────────────────────────────────────────────
+  # tls_enabled — включить TLS (главный гейт). ★ DragonFly vs redis: TLS встаёт на ОСНОВНОЙ
+  # --port (флаг --tls; tls_port у DF НЕТ — absl FATAL на неизвестном). Поэтому «оставить
+  # plain отдельным портом» к DF неприменимо: TLS не открывает второй listener, а переводит
+  # основной в TLS. Галки tls_keep_plain/«только-TLS» НЕТ (нет двух портов). Vault-пути PEM —
+  # author-context (essence.tls_cert_ref/tls_key_ref/tls_ca_ref).
   tls_enabled:
     type: boolean
     required: false
     default: false
     description: >-
-      Включить TLS DragonFly (главный гейт). false (дефолт) → TLS off. Порт и Vault-пути
-      cert/key/ca берутся из essence (tls_port/tls_cert_ref/tls_key_ref/tls_ca_ref).
-
-  tls_keep_plain:
-    type: boolean
-    required: false
-    default: true
-    description: >-
-      Оставить ли открытым plain-порт 6379 при включённом TLS. true (дефолт) — plain и TLS
-      одновременно. false — закрыть plain (`port 0`), только-TLS. Имеет смысл при
-      tls_enabled=true. Нельзя tls_enabled=false И tls_keep_plain=false (см. validate:).
+      Включить TLS DragonFly (главный гейт). false (дефолт) → TLS off. TLS встаёт на основной
+      порт 6379 (у DragonFly нет отдельного tls-порта). Vault-пути cert/key/ca берутся из
+      essence (tls_cert_ref/tls_key_ref/tls_ca_ref).
 
 # ── Презентационный слой формы (form:) ────────────────────────────────────────
 form:
@@ -197,10 +190,6 @@ form:
       fields:
         - { name: users, label: "ACL-пользователи" }
         - { name: tls_enabled, label: "Включить TLS" }
-        - name: tls_keep_plain
-          label: "Оставить открытым plain-порт"
-          show_when: "input.tls_enabled"
-          hint: "Слушать ли plain-порт 6379 одновременно с TLS. Снять → только-TLS. Нельзя выключить и TLS, и эту галочку."
 
     - key: advanced
       title: "Дополнительно"
@@ -209,12 +198,10 @@ form:
         - { name: df_settings, label: "Passthrough-флаги dragonfly.conf" }
 
 # ── Декларативные input-инварианты (validate:, INPUT-ONLY) ────────────────────
+# ★ Инварианта «хотя бы один listener» НЕТ: у DragonFly TLS встаёт на ОСНОВНОЙ --port (не
+# открывает второй порт), поэтому «выключить TLS и закрыть plain» невыразимо — основной порт
+# слушает всегда (plain при tls_enabled=false, TLS при tls_enabled=true). См. tls_enabled выше.
 validate:
-  # Инвариант «хотя бы один listener»: нельзя tls_enabled=false И tls_keep_plain=false (TLS
-  # выключен И plain закрыт → нет listener-а). Оба поля с default → прямой предикат.
-  - that: "input.tls_enabled || input.tls_keep_plain"
-    message: "нельзя одновременно выключить TLS и закрыть plain-порт: у DragonFly не осталось бы ни одного listener-а — оставь plain-порт открытым (tls_keep_plain) либо включи TLS (tls_enabled)"
-
   # system-ACL-users guard: operator-extra (input.users) НЕ может занять имя СЛУЖЕБНОГО
   # юзера (default/replica/monitoring/sentinel/haproxy доливаются из essence last-wins ПОВЕРХ
   # → operator с тем же именем молча перекрыл бы служебные perms). INPUT-ONLY (essence в
@@ -264,12 +251,17 @@ compute:
   # ★ TLS-флаги flagfile следуют conf_dir: destiny кладёт PEM в ${conf_dir}/tls/.
   conf_dir: "${ default(essence.conf_dir, '/etc/dragonfly') }"
   data_dir: "${ default(essence.data_dir, '/var/lib/dragonfly') }"
-  # TLS-флаги: 2 галочки + essence. tls_on = tls_enabled (главный гейт). tls_only_on =
-  # tls_enabled && !tls_keep_plain (закрыть plain). Порт/refs — из essence (default() ловит
-  # отсутствие листа; L0-кейсы без TLS их не задают).
+  # ★ ЛОКАЛЬНЫЙ адрес инстанса — UNIX-СОКЕТ (НЕ 127.0.0.1:port). DF при --bind=primary_ip НЕ
+  # слушает loopback, локальные вызовы плагина (health-gate, REPLICAOF свой addr, ACL LOAD)
+  # идут на сокет ${run_dir}/dragonfly.sock (тот же путь, что флаг --unixsocket в шаблоне).
+  # Плагин community.redis понимает unix:-префикс адреса. run_dir host-инвариант (vars destiny;
+  # default дублирует дефолт /var/run/dragonfly — scenario не видит destiny-vars). Сокет БЕЗ
+  # TLS (локальный UDS) → у локальных вызовов tls/tls_ca НЕ ставим даже на TLS-инстансе.
+  local_addr:  "${ 'unix:' + default(essence.run_dir, '/var/run/dragonfly') + '/dragonfly.sock' }"
+  # TLS: одна галочка + essence. tls_on = tls_enabled (главный гейт). ★ У DragonFly TLS встаёт
+  # на основной --port (нет tls_port, нет «только-TLS» — основной порт слушает всегда). Vault-
+  # refs — из essence (default() ловит отсутствие листа; L0-кейсы без TLS их не задают).
   tls_on:      "${ input.tls_enabled }"
-  tls_only_on: "${ input.tls_enabled && !input.tls_keep_plain }"
-  tls_port:    "${ int(default(essence.tls_port, 7379)) }"
   tls_cert_ref: "${ has(essence.tls_cert_ref) ? essence.tls_cert_ref : '' }"
   tls_key_ref:  "${ has(essence.tls_key_ref)  ? essence.tls_key_ref  : '' }"
   tls_ca_ref:   "${ has(essence.tls_ca_ref)   ? essence.tls_ca_ref   : '' }"
@@ -279,9 +271,10 @@ compute:
   # оператор не ломает TLS). БЕЗ persistence-пресета (DF persistence отложена), БЕЗ cluster-
   # директив (sentinel-only). ★ maxmemory_policy НЕ в merge: у DF нет такого флага (absl
   # FATAL на неизвестном) — eviction вне скоупа PILOT.
-  # ★ TLS-блок — DF-флаги: tls/tls_port/tls_cert_file/tls_key_file/tls_ca_cert_file/
-  # tls_replication (underscore!). Bool-флаги (tls/tls_replication) — значение 'true' (absl
-  # принимает --flag=true). port='0' при tls_only закрывает plain.
+  # ★ TLS-блок — DF-флаги: tls/tls_cert_file/tls_key_file/tls_ca_cert_file/tls_replication
+  # (underscore!). Bool-флаги (tls/tls_replication) — значение 'true' (absl принимает --flag=
+  # true). ★ tls_port НЕТ (у DragonFly нет такого флага — absl FATAL); TLS встаёт на основной
+  # --port, второй порт не открывается → ни tls_port, ни `--port=0`.
   df_config: >-
     ${ merge(
          essence.df_config,
@@ -290,17 +283,13 @@ compute:
            : {},
          default(input.df_settings, {}),
          compute.tls_on
-           ? merge(
-               {
-                 'tls':                'true',
-                 'tls_port':           string(compute.tls_port),
-                 'tls_cert_file':      compute.conf_dir + '/tls/dragonfly.crt',
-                 'tls_key_file':       compute.conf_dir + '/tls/dragonfly.key',
-                 'tls_ca_cert_file':   compute.conf_dir + '/tls/ca.crt',
-                 'tls_replication':    'true'
-               },
-               compute.tls_only_on ? { 'port': '0' } : {}
-             )
+           ? {
+               'tls':                'true',
+               'tls_cert_file':      compute.conf_dir + '/tls/dragonfly.crt',
+               'tls_key_file':       compute.conf_dir + '/tls/dragonfly.key',
+               'tls_ca_cert_file':   compute.conf_dir + '/tls/ca.crt',
+               'tls_replication':    'true'
+             }
            : {}
        ) }
 
@@ -313,13 +302,12 @@ state_changes:
     value: "${ compute.df_version }"
   - set: df_config
     value: "${ compute.df_config }"
-  # tls: тот же compute.tls_* (cert/key/ca — Vault-ПУТИ, не PEM).
+  # tls: тот же compute.tls_* (cert/key/ca — Vault-ПУТИ, не PEM). ★ БЕЗ only/port: у DragonFly
+  # TLS на основном порту (нет tls_port, нет «только-TLS») — day-2 коннектится по сокету.
   - set: tls
     value: >-
       ${ {
            'enable':   compute.tls_on,
-           'only':     compute.tls_only_on,
-           'port':     compute.tls_port,
            'cert_ref': compute.tls_cert_ref,
            'key_ref':  compute.tls_key_ref,
            'ca_ref':   compute.tls_ca_ref
@@ -388,8 +376,8 @@ tasks:
         data_dir: "${ compute.data_dir }"
         password: "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
         # Единый compute.df_config (тот же map, что в state_changes.df_config — drift снят
-        # самим compute). Базовый merge (БЕЗ cluster; tls_replication true при TLS, port 0
-        # при tls_only). HOST-ИНВАРИАНТ → apply.input.
+        # самим compute). Базовый merge (БЕЗ cluster; tls/tls_replication true при TLS — TLS
+        # на основном порту, БЕЗ tls_port). HOST-ИНВАРИАНТ → apply.input.
         config: "${ compute.df_config }"
         # СИСТЕМНЫЕ + operator-extra ACL: служебные replica/monitoring/sentinel/haproxy из
         # essence.system_acl_users ПЕРВЫМИ, operator-extra (input.users — массив AclUser)
@@ -431,13 +419,11 @@ tasks:
         # Host-tuning extras (THP/logrotate/sysctl БЕЗУСЛОВНЫ). sysctl_settings — essence,
         # host-инвариант → apply.input.
         sysctl_settings:  "${ default(essence.sysctl_settings, {}) }"
-        # TLS — единый dict. enable/only/port — compute-vars (2 галочки + порт из essence).
-        # cert_ref/key_ref/ca_ref — Vault-ПУТИ (destiny читает PEM через vault() в ячейке,
-        # seal-маскинг); refs из essence.tls_*_ref.
+        # TLS — единый dict. enable — compute-var (галочка). ★ БЕЗ only/port: у DragonFly TLS
+        # на основном порту (нет tls_port, нет «только-TLS»). cert_ref/key_ref/ca_ref — Vault-
+        # ПУТИ (destiny читает PEM через vault() в ячейке, seal-маскинг); refs из essence.tls_*_ref.
         tls:
           enable:   "${ compute.tls_on }"
-          only:     "${ compute.tls_only_on }"
-          port:     "${ compute.tls_port }"
           cert_ref: "${ compute.tls_cert_ref }"
           key_ref:  "${ compute.tls_key_ref }"
           ca_ref:   "${ compute.tls_ca_ref }"
@@ -456,34 +442,34 @@ tasks:
 
   # ── 2. Health-gate per-host: PING живого DragonFly после старта ───────────────
   # community.redis.command (DragonFly redis-совместим). Каждый узел обязан ответить ДО
-  # привязки реплик/настройки sentinel. ★ ИБ (anti-downgrade): tls/tls_ca/порт гейтятся на
-  # compute.tls_on (TLS ВКЛЮЧЁН) — TLS включён → плагин ОБЯЗАН по TLS (иначе AUTH-пароль
-  # plaintext-ом). PING по compute.tls_port + tls=true + tls_ca (vault(ref) в scenario-проходе).
+  # привязки реплик/настройки sentinel. ★ ЛОКАЛЬНЫЙ коннект — через UNIX-СОКЕТ
+  # (compute.local_addr): DF при --bind=primary_ip НЕ слушает 127.0.0.1, а сокет — отдельный
+  # UDS-listener (всегда доступен локально). UDS без TLS (anti-downgrade неприменим — это не
+  # сетевой путь, AUTH-пароль не уходит в сеть): tls/tls_ca НЕ ставим даже на TLS-инстансе.
   - name: Wait for each dragonfly node to answer PING
     module: community.redis.command
     retry: { count: 10, delay: 3s }
     params:
-      addr:     "${ compute.tls_on ? '127.0.0.1:' + string(compute.tls_port) : '127.0.0.1:6379' }"
+      addr:     "${ compute.local_addr }"
       password: "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
-      tls:      "${ compute.tls_on }"
-      tls_ca:   "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
       args:     ["PING"]
 
   # ── 3. REPLICAOF реплик: community.redis.replica ТОЛЬКО на репликах ───────────
-  # addr — локальный инстанс (127.0.0.1:6379); master_addr — HOST-ИНВАРИАНТНЫЙ адрес master-
-  # а (master-election soulprint.hosts[0]). ★ P0-ИНВАРИАНТ (master НЕ реплицирует сам себя):
-  # `where:` исключает выбранного master по SID — задача рендерится ТОЛЬКО на репликах. master
-  # SID — то же выражение master-election (soulprint.hosts[0]), но `.sid`. Предикат — top-level
-  # where-ключ (строка). ★ ИБ (anti-downgrade): tls/tls_ca/порт на compute.tls_on.
+  # addr — ЛОКАЛЬНЫЙ инстанс через UNIX-СОКЕТ (compute.local_addr); master_addr — HOST-
+  # ИНВАРИАНТНЫЙ ВНЕШНИЙ адрес master-а (master-election soulprint.hosts[0]). ★ master_addr
+  # остаётся TCP primary_ip:6379 (внешний линк реплика→master): у DragonFly TLS на ОСНОВНОМ
+  # порту 6379 (нет отдельного tls-порта), репликационный линк по TLS включает директива
+  # tls_replication во flagfile (df_config), НЕ params плагина. ★ P0-ИНВАРИАНТ (master НЕ
+  # реплицирует сам себя): `where:` исключает выбранного master по SID — задача рендерится
+  # ТОЛЬКО на репликах. ★ Локальный addr (UDS) без tls/tls_ca: коннект плагина к своему
+  # инстансу идёт по сокету (не сетевой путь), TLS там не нужен.
   - name: Make replicas follow the elected master (REPLICAOF)
     where: "soulprint.self.sid != soulprint.hosts[0].sid"
     module: community.redis.replica
     params:
-      addr:        "${ compute.tls_on ? '127.0.0.1:' + string(compute.tls_port) : '127.0.0.1:6379' }"
-      master_addr: "${ soulprint.hosts[0].network.primary_ip + ':' + (compute.tls_on ? string(compute.tls_port) : '6379') }"
+      addr:        "${ compute.local_addr }"
+      master_addr: "${ soulprint.hosts[0].network.primary_ip + ':6379' }"
       password:    "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
-      tls:         "${ compute.tls_on }"
-      tls_ca:      "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
 
   # ── 4. SENTINEL MONITOR reconcile: community.redis.sentinel на КАЖДОМ хосте ────
   # addr — локальный sentinel (127.0.0.1:26379); monitor.ip — HOST-ИНВАРИАНТНЫЙ адрес master-

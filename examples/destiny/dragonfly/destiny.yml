@@ -191,12 +191,16 @@ input:
           secret: true
 
   # ── TLS (концепция Ansible-роли *_tls_*) ─────────────────────────────────────
-  # TLS-параметры — единый dict `tls`: enable/only/port/cert_ref/key_ref/ca_ref. HOST-
-  # ИНВАРИАНТ (один cert/CA/порт на кластер) → приходят через apply.input. Пустой/absent
-  # dict → TLS off. Гейт tls.enable — per-task when на PEM-задачах (tasks/server.yml). Сами
-  # TLS-флаги (tls/tls_port/tls_cert_file/...) — обычные ключи merged config (scenario кладёт
-  # их в config), destiny range-ит во flagfile. tls.only НЕ читается destiny как задача — он
-  # лишь меняет config (scenario ставит `port 0`).
+  # TLS-параметры — единый dict `tls`: enable/cert_ref/key_ref/ca_ref. HOST-ИНВАРИАНТ (один
+  # cert/CA на кластер) → приходят через apply.input. Пустой/absent dict → TLS off. Гейт
+  # tls.enable — per-task when на PEM-задачах (tasks/server.yml). Сами TLS-флаги (tls/
+  # tls_cert_file/...) — обычные ключи merged config (scenario кладёт их в config), destiny
+  # range-ит во flagfile.
+  #
+  # ★ DragonFly vs redis: tls.only/tls.port ОТСУТСТВУЮТ — у DragonFly TLS встаёт на ОСНОВНОЙ
+  # --port (флаг --tls; tls_port у DF НЕТ — absl FATAL на неизвестном). Нет второго порта →
+  # нет «только-TLS» (`port 0`) и нет отдельного tls-порта. destiny эти поля и не читал как
+  # задачу (server.yml гейтит PEM только на tls.enable) — их удаление согласовано со scenario.
   #
   # ★ PEM-РЕНДЕР ЧЕРЕЗ vault() В САМОЙ ЯЧЕЙКЕ (seal-маскинг, ADR-010 §7.4): destiny получает
   # Vault-ПУТИ (tls.cert_ref/key_ref/ca_ref), а PEM читает vault() ПРЯМО в ячейке content
@@ -208,18 +212,13 @@ input:
     additional_properties: false
     description: >-
       Параметры TLS DragonFly. Пустой/не передан → TLS off (block PEM-задач placeholder-skip,
-      директив TLS нет). enable — главный гейт рендера PEM/директив; only — закрыть plain-
-      порт (scenario ставит `port 0`); port — TLS-порт (флаг tls_port); cert_ref/key_ref/
-      ca_ref — Vault-ПУТИ серверного cert/key и CA (форма "<mount>/<path>#<field>"). destiny
-      читает PEM через vault(ref) В ЯЧЕЙКЕ content (seal-маскинг), vault-клиент на Soul нет.
+      директив TLS нет). enable — главный гейт рендера PEM/директив (TLS встаёт на ОСНОВНОЙ порт
+      6379 — у DragonFly нет отдельного tls-порта); cert_ref/key_ref/ca_ref — Vault-ПУТИ
+      серверного cert/key и CA (форма "<mount>/<path>#<field>"). destiny читает PEM через
+      vault(ref) В ЯЧЕЙКЕ content (seal-маскинг), vault-клиент на Soul нет.
     properties:
       enable:
         type: boolean
-      only:
-        type: boolean
-      port:
-        type: integer
-        min: 1
       cert_ref:
         type: string
       key_ref:

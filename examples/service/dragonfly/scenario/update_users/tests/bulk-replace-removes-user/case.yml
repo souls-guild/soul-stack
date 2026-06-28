@@ -4,8 +4,9 @@
 #   1. users.acl рендерится с alice (новые perms) — БЕЗ bob (удалён из ACL);
 #   2. state_changes.df_users = [alice] (bob выпал — bulk-replace, не upsert).
 # Регресс «update_users мержит/апсертит вместо replace» = bob остался бы → ассерт красный.
-# Render-only, герметично. Plaintext (addr 6379). essence.system_acl_users НЕ задаётся → долив
-# системных default({}) → vars.users несёт ТОЛЬКО operator-extra (чистый ассерт bulk-replace).
+# Render-only, герметично. ACL LOAD идёт через ЛОКАЛЬНЫЙ UNIX-сокет. essence.system_acl_users
+# НЕ задаётся → долив системных default({}) → vars.users несёт ТОЛЬКО operator-extra (чистый
+# ассерт bulk-replace).
 name: update_users bulk-replaces the set and drops a user absent from input (plaintext)
 
 fixtures:
@@ -23,8 +24,6 @@ fixtures:
       method: package
     tls:
       enable:   false
-      only:     false
-      port:     7379
       cert_ref: ""
       key_ref:  ""
       ca_ref:   ""
@@ -71,12 +70,11 @@ assert:
           role: ""
           essence: {}
 
-    # 2. HOT-RELOAD ACL: community.redis.acl к живому plain-инстансу.
+    # 2. HOT-RELOAD ACL: community.redis.acl к живому инстансу через ЛОКАЛЬНЫЙ UNIX-сокет.
     - module: community.redis.acl
       params_subset:
-        addr: "127.0.0.1:6379"
+        addr: "unix:/var/run/dragonfly/dragonfly.sock"
         password: updusr-df-pass-16chars
-        tls: false
 
   # state_changes: df_users = НОВЫЙ набор ЦЕЛИКОМ (только alice, bob выпал — bulk-replace).
   state_changes:

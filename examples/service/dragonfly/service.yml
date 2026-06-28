@@ -38,16 +38,15 @@ state_schema:
       additionalProperties: true
 
     # ── Именованные поля намерения (read-model) ────────────────────────────────
-    # TLS-намерение: включён ли TLS, закрыт ли plain-порт, TLS-порт, Vault-ПУТИ cert/key/CA
-    # (НЕ сам PEM — секрет в state не лежит, ИБ). Из compute.tls_* (те же значения, что в
-    # TLS-блоке df_config).
+    # TLS-намерение: включён ли TLS + Vault-ПУТИ cert/key/CA (НЕ сам PEM — секрет в state не
+    # лежит, ИБ). Из compute.tls_* (те же значения, что в TLS-блоке df_config). ★ БЕЗ only/port:
+    # у DragonFly TLS на ОСНОВНОМ порту (нет tls_port, нет «только-TLS») — day-2-сценарии
+    # коннектятся к локальному инстансу по UNIX-сокету, TLS-порт им не нужен.
     tls:
       type: object
       additionalProperties: false
       properties:
         enable:   { type: boolean }
-        only:     { type: boolean }
-        port:     { type: integer }
         cert_ref: { type: string }
         key_ref:  { type: string }
         ca_ref:   { type: string }

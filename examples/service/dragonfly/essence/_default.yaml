@@ -31,17 +31,23 @@ binary_version:  ""
 conf_dir: /etc/dragonfly
 data_dir: /var/lib/dragonfly
 
+# Run-каталог DragonFly: pidfile + UNIX-СОКЕТ локального доступа (${run_dir}/dragonfly.sock).
+# Должен совпадать с destiny-vars run_dir (там флаг --unixsocket в flagfile). compute строит
+# из него compute.local_addr (unix:<run_dir>/dragonfly.sock) для локальных вызовов плагина.
+# Дефолт = официальный layout DF (RuntimeDirectory=dragonfly юнита создаёт /var/run/dragonfly).
+run_dir: /var/run/dragonfly
+
 # Доля бюджета памяти (input.memory_mb), отдаваемая DragonFly под maxmemory; остаток —
 # резерв под ОС/накладные. scenario вычисляет maxmemory = memory_mb*pct/100 (МБ).
 memory_reserve_percent: 75
 
 # TLS (defaults). Источник PEM — Vault-ПУТИ (не сам PEM): scenario резолвит их через
 # ${ vault(<ref>) } в render-фазе и передаёт ЦЕЛЫЕ PEM в destiny. Пути — доверенный
-# контекст автора (essence). Форма ref — "<mount>/<path>#<field>". tls_enable/tls_only по
-# умолчанию false (plaintext); tls_port — 7379.
+# контекст автора (essence). Форма ref — "<mount>/<path>#<field>". ★ DragonFly vs redis: TLS
+# встаёт на ОСНОВНОЙ порт 6379 (флаг --tls; tls_port у DF НЕТ — absl FATAL на неизвестном),
+# поэтому tls_port/tls_only ОТСУТСТВУЮТ (нет второго порта, нет «только-TLS»). tls_enable по
+# умолчанию false (plaintext).
 tls_enable: false
-tls_only:   false
-tls_port:   7379
 # Vault-пути источника PEM (заполнить под реальную инсталляцию). Дефолт — конвенция
 # secret/services/dragonfly/tls.
 tls_cert_ref: "secret/services/dragonfly/tls#cert"

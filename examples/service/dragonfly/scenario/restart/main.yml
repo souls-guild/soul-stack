@@ -44,20 +44,19 @@ state_changes: {}
 
 # ── Вычисляемые scenario-vars (compute:, ADR-009 amendment) ───────────────────────
 # Рун-уровневый контекст (input/essence/incarnation — БЕЗ soulprint). Снимает дублирование
-# TLS-дискриминатора коннекта плагина (повторялся бы на probe + health-gate). Источник
-# истины — incarnation.state.tls (ИМЕНОВАННОЕ поле, write-model create транслирует
-# operator-ввод TLS → state.tls). На day-2 essence НЕПОЛНА (не видит operator-override).
-# Цепочка has(...) защищает от no-such-key, когда State отсутствует (push/trial без State).
+# локального адреса коннекта плагина (повторялся бы на probe + health-gate).
+#
+# ★ DragonFly vs redis (БЛОКЕР-фикс): локальные вызовы плагина идут к СВОЕМУ инстансу через
+# UNIX-СОКЕТ (compute.local_addr), НЕ 127.0.0.1:port. DF при --bind=primary_ip НЕ слушает
+# loopback (dfly_main.cc) — TCP-коннект на 127.0.0.1 не подключился бы; сокет — отдельный
+# UDS-listener (всегда локально доступен). UDS не сетевой путь → TLS на нём не нужен (даже на
+# TLS-инстансе): tls/tls_ca у локальных probe/health-gate УБРАНЫ. Поэтому TLS-дискриминатор
+# (tls_on/tls_port/tls_ca) для restart БОЛЬШЕ НЕ НУЖЕН — он применялся только к локальным
+# коннектам, которые теперь UDS. run_dir host-инвариант (vars destiny); default дублирует
+# дефолт (scenario не видит destiny-vars); essence на day-2 неполна, но run_dir — не operator-
+# override, дефолт верен.
 compute:
-  # TLS включён по факту развёрнутого state.tls.enable. default() ловит отсутствие листа
-  # enable; has()-цепочка — отсутствие корня state/state.tls. tls_port — ИМЕНОВАННОЕ поле
-  # state.tls.port (INTEGER), в addr конкатенируется через string(...). tls_ca — PEM CA-
-  # СОДЕРЖИМОЕ (плагин ждёт PEM, не путь), резолвится vault(incarnation.state.tls.ca_ref) —
-  # секрет в state не лежит (ИБ), там Vault-ПУТЬ. После rotate_tls (меняет state.tls.ca_ref)
-  # restart коннектится АКТУАЛЬНЫМ CA; essence.tls_ca_ref устарел бы (rotate его не трогает).
-  tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
-  tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
-  tls_ca:   "${ compute.tls_on ? vault(incarnation.state.tls.ca_ref) : '' }"
+  local_addr: "${ 'unix:' + default(essence.run_dir, '/var/run/dragonfly') + '/dragonfly.sock' }"
 
 tasks:
   # Probe: фактическая роль каждого хоста через плагин community.redis.role (go-redis INFO
@@ -65,16 +64,14 @@ tasks:
   # перед таргетингом (concept.md, ADR-008). Полнота probe гарантируется fail-stop барьером
   # (ADR-056 §5): упавший probe на любом хосте → barrier → error_locked, where-Passage не
   # стартует. register.self.role — фактическая роль ("master"/"slave"), where сравнивает
-  # БЕЗ ручного trim (плагин отдаёт типизированную строку). addr — localhost (плагин на DF-хосте).
+  # БЕЗ ручного trim (плагин отдаёт типизированную строку). addr — локальный UNIX-сокет.
   - name: Detect actual dragonfly role per host
     module: community.redis.role
     register: df_role
     changed_when: false
     params:
-      addr:     "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
+      addr:     "${ compute.local_addr }"
       password: "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
-      tls:      "${ compute.tls_on }"
-      tls_ca:   "${ compute.tls_ca }"
 
   # Rolling-restart реплик по одному хосту (serial: 1). serial: на block: катит весь блок
   # целиком по одному набору хостов перед следующей волной (orchestration.md §2, Вариант A:
@@ -104,10 +101,8 @@ tasks:
           until: "register.self.synced == true"
         failed_when: "register.self.synced != true"
         params:
-          addr:     "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
+          addr:     "${ compute.local_addr }"
           password: "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
-          tls:      "${ compute.tls_on }"
-          tls_ca:   "${ compute.tls_ca }"
 
   # Рестарт master-а ПОСЛЕ всех реплик (rolling-инвариант «master последним»). run_once: —
   # ровно один хост (первый по SID) из резолва on:+where: (orchestration.md §2). >1 «текущих
