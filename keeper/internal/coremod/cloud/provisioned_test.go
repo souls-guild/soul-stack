@@ -383,6 +383,35 @@ func TestApply_Created_PluginError_FailsTask(t *testing.T) {
 	}
 }
 
+// TestApply_Created_DriverFailure_NotFalseOperational — guard на основной баг:
+// драйвер сообщил сбой (cluster read-only / quota), адаптер пропагирует его
+// ошибкой → core.cloud.created ОБЯЗАН отдать failed-event (шаг failed →
+// incarnation error_locked), а НЕ ложный success (0 VM, operational).
+// Driver-message должен дойти до failed-event для диагностики оператором.
+func TestApply_Created_DriverFailure_NotFalseOperational(t *testing.T) {
+	fp := &fakePlugins{createErr: errors.New("driver create failed: cluster is read-only")}
+	m := coremodcloud.New(fp, &fakeResolver{}, &fakeSouls{}, newFakeTokens(), nil, &fakeAudit{})
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State: "created",
+		Params: mustStruct(t, map[string]any{
+			"provider": "aws",
+		}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	ev := stream.Last()
+	if !ev.Failed {
+		t.Fatal("expected failed=true on driver failure (must NOT be false operational with 0 VM)")
+	}
+	if ev.Changed {
+		t.Error("expected changed=false on driver failure")
+	}
+	if !strings.Contains(ev.Message, "cluster is read-only") {
+		t.Errorf("failed-event message = %q, want driver message surfaced", ev.Message)
+	}
+}
+
 func TestApply_Created_VmWithoutFqdn(t *testing.T) {
 	fp := &fakePlugins{createResp: []*pluginv1.VmInfo{
 		{VmId: "i-aaa"}, // нет fqdn

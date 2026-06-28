@@ -113,6 +113,34 @@ func (a *PluginAdapter) Create(ctx context.Context, driver string, profile, cred
 		return nil, fmt.Errorf("cloud adapter: create rpc %s: %w", d.Manifest.Address(), err)
 	}
 
+	vms, err := collectCreateVMs(stream)
+	if err != nil {
+		return nil, fmt.Errorf("cloud adapter: create stream %s: %w (stderr-tail: %s)",
+			d.Manifest.Address(), err, plugin.StderrTail())
+	}
+	return vms, nil
+}
+
+// createEventStream — узкое подмножество grpc.ServerStreamingClient[CreateEvent]
+// (только Recv), достаточное для агрегации Create-стрима. Узкий интерфейс
+// позволяет покрыть [collectCreateVMs] unit-тестом без живого gRPC-плагина.
+type createEventStream interface {
+	Recv() (*pluginv1.CreateEvent, error)
+}
+
+// collectCreateVMs читает Create-стрим драйвера до EOF и агрегирует созданные
+// VM. Driver-failure ОБЯЗАН пропагироваться ошибкой (а не молча терять VM):
+// CreateEvent.failed=true — это сбой всей операции (cluster read-only, quota,
+// и т.п.), драйвер закрывает стрим после первого такого события (контракт
+// proto/plugin/v1/clouddriver.proto → CreateEvent). Симметрично stream-level
+// обработке failed в [PluginAdapter.Resize].
+//
+// Возврат ошибки здесь → applyCreated отдаёт failed-event → шаг
+// `core.cloud.created` падает → incarnation error_locked (НЕ ложный
+// operational с 0 VM). Если драйвер прислал failed=true, частично собранные
+// vms НЕ возвращаются: провижн как целое провалился, нельзя онбордить
+// подмножество как успех.
+func collectCreateVMs(stream createEventStream) ([]*pluginv1.VmInfo, error) {
 	var vms []*pluginv1.VmInfo
 	for {
 		ev, recvErr := stream.Recv()
@@ -120,8 +148,14 @@ func (a *PluginAdapter) Create(ctx context.Context, driver string, profile, cred
 			break
 		}
 		if recvErr != nil {
-			return nil, fmt.Errorf("cloud adapter: create stream %s: %w (stderr-tail: %s)",
-				d.Manifest.Address(), recvErr, plugin.StderrTail())
+			return nil, recvErr
+		}
+		if ev.GetFailed() {
+			msg := ev.GetMessage()
+			if msg == "" {
+				msg = "driver reported create failure without message"
+			}
+			return nil, fmt.Errorf("driver create failed: %s", msg)
 		}
 		if len(ev.GetVms()) > 0 {
 			vms = append(vms, ev.GetVms()...)
