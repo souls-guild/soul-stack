@@ -956,7 +956,7 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 		// CloudResolver — A-flow: Provider-реестр (PG) + Vault → driver-имя +
 		// plain-credentials. d.vc всегда не-nil после setupVault (тот валит
 		// старт при ошибке), как и для core.vault.kv-read ниже.
-		CloudResolver: cloud.NewCredentialsResolverPG(cloud.NewProviderReaderPG(d.pool), d.vc),
+		CloudResolver: cloud.NewCredentialsResolverPG(cloud.NewProviderReaderPG(d.pool), cloud.NewProfileReaderPG(d.pool), d.vc),
 		CloudSouls:    cloud.NewSoulPG(d.pool),
 		CloudTokens:   cloud.NewTokenPG(d.pool, cloud.DefaultBootstrapTokenTTL),
 		CloudCascade:  cloud.NewCascadePG(d.pool),
@@ -972,6 +972,12 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 		// (providers/host-CA) тут не заполнен, модуль не регистрируется.
 		BootstrapTransport: bootstrapTransport,
 		BootstrapDial:      bootstrapDial,
+		// BootstrapInstall — install-режим `core.bootstrap.delivered` (param
+		// `install: true`, только teleport, ADR-063 amendment «full-install over
+		// SSH»). Тот же userdataProvider (один cloudinit.Resolver-инстанс) — отдаёт
+		// резолвленный Config для install-blueprint. nil-блок keeper.yml::cloud_init
+		// → Resolve вернёт явную ошибку при install=true (как generate_userdata).
+		BootstrapInstall: userdataProvider,
 	})
 	logger.Info("keeper run: core modules registered",
 		slog.Int("count", len(coreReg.Names())),
@@ -1003,6 +1009,20 @@ func (p *cloudInitProvider) GenerateUserdata(ctx context.Context) (string, error
 		return "", err
 	}
 	return cloudinit.GenerateUserdata(resolved)
+}
+
+// Resolve реализует coremodbootstrap.InstallResolver — install-режим
+// `core.bootstrap.delivered` (ADR-063 amendment): тот же snapshot+Vault-резолв,
+// что GenerateUserdata, но отдаёт резолвленный cloudinit.Config (не рендеренный
+// YAML) — bootstrap-модуль маппит его в soulinstall.Blueprint и сам рендерит
+// install-шаги. Один cloudinit.Resolver-инстанс на оба пути (cloud-init userdata
+// + full-install по SSH), config-reuse без второго резолвера.
+func (p *cloudInitProvider) Resolve(ctx context.Context) (cloudinit.Config, error) {
+	cfg := p.store.Get()
+	if cfg == nil {
+		return cloudinit.Config{}, fmt.Errorf("cloud_init: keeper config snapshot is nil")
+	}
+	return p.resolver.Resolve(ctx, cfg.CloudInit)
 }
 
 // buildBootstrapTeleportDialer собирает push.Dialer для teleport-режима

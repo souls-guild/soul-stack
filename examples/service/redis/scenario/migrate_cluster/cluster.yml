@@ -45,7 +45,22 @@
 # нужен soulprint.hosts (roster), а validate-контекст INPUT-ONLY (структурный CEL-барьер).
 # ★ Второй инвариант — size(input.source.hosts) >= 1 (источник непуст) — уже в validate:
 # main.yml (наследуется cluster-прогоном, дубль не нужен). Здесь только топология.
+# ★ PROVISION-ГЕЙТ (ADR-061 amendment 2026-06-29): migrate_cluster инклудит ТО ЖЕ
+# provision-тело service-level (redis-provision.yml, gated has(input.provision) &&
+# input.provision.enabled), что create — при cloud-provision roster нового кластера ЕЩЁ
+# пуст на pre-flight EvalAsserts (VM создаются позже core.cloud.created→await_online→
+# refresh_soulprint), поэтому size(soulprint.hosts)==N упал бы ДО того, как ноды
+# существуют. Гейт `when: !provision.enabled` снимает размерную проверку для provision-
+# пути — roster-инвариант ТАМ гарантируется count-формулой redis-provision.yml
+# (shards*(1+replicas)) + await_online-барьером, НЕ pre-flight-ом (симметрично
+# no_hosts-bypass amendment 2026-06-28 и create/cluster.yml). Предикат STATIC (чистый
+# input → isStaticWhen): pre-flight placeholder-skip-нёт assert при provision (НЕ
+# ErrAssertFailed). На существующем roster-е (provision опущен/false, штатный S1-пилот)
+# when=true → size-guard активен (НЕ ослаблен). ★ Replica-guard ниже (replicas==0) гейта
+# НЕ несёт: это input-инвариант пилота, от roster НЕ зависит — он корректно отсекает
+# replicas>0 и при provision (поднялись бы лишние ноды под неподдержанные реплики).
 - name: Guard cluster roster size matches shards and replicas
+  when: "!(has(input.provision) && input.provision.enabled)"
   assert:
     that:
       - "size(soulprint.hosts) == int(input.shards) * (1 + int(input.replicas_per_master))"

@@ -2531,8 +2531,11 @@ func TestIntegration_KeeperOnly_NoHosts_RunsKeeperTasks(t *testing.T) {
 }
 
 // mixedKeeperHostServiceRepo создаёт service-репо со scenario create из ОДНОЙ
-// keeper-задачи (`on: keeper`) И ОДНОЙ Soul-side задачи (core.exec.run). Состав
-// смешанный → allKeeperTasks(false) → no_hosts-гейт держится на пустом roster.
+// keeper-задачи (`on: keeper`, БЕЗ refresh_soulprint) И ОДНОЙ Soul-side задачи
+// (core.exec.run). Состав смешанный → allKeeperTasks(false); refresh-эмиттера НЕТ
+// → HasRefreshEmitter(false). Ни один класс bypass не применяется → no_hosts-гейт
+// держится на пустом roster (РЕВЕРС-фикстура: ловит расширение bypass на mixed-
+// без-refresh).
 func mixedKeeperHostServiceRepo(t *testing.T, keeperModule string) string {
 	t.Helper()
 	return writeServiceRepo(t, fmt.Sprintf(`name: create
@@ -2590,12 +2593,13 @@ func TestIntegration_HostScenario_NoHosts_StillAborts(t *testing.T) {
 	}
 }
 
-// TestIntegration_MixedKeeperAndHost_NoHosts_StillAborts — GUARD ALL-not-ANY:
-// смешанный сценарий (keeper-задача + Soul-задача) против пустого roster падает в
-// no_hosts. allKeeperTasks(false), потому что НЕ ВСЕ задачи keeper-side — наличие
-// host-задачи возвращает гейт. Keeper-модуль НЕ исполнен (abort на шаге 3, до
-// keeper-dispatch). Защищает решение «bypass по СОСТАВУ all-keeper, не по наличию
-// keeper-задачи»: смешанный single-run provision→роль остаётся за staged §S2/§S3.
+// TestIntegration_MixedKeeperAndHost_NoHosts_StillAborts — ★ РЕВЕРС-GUARD (security,
+// нерасширенное поведение СОХРАНЕНО): смешанный сценарий (keeper-задача + Soul-задача)
+// БЕЗ refresh-эмиттера против пустого roster падает в no_hosts. allKeeperTasks(false)
+// (есть host-задача) И HasRefreshEmitter(false) (нет refresh_soulprint) → НИ ОДИН
+// класс bypass не применяется → гейт держится. Keeper-модуль НЕ исполнен (abort на
+// шаге 3, до keeper-dispatch). Защищает границу: bypass mixed-плана требует ИМЕННО
+// refresh-эмиттера; mixed без него остаётся за no_hosts (host-задача на пустом P0).
 func TestIntegration_MixedKeeperAndHost_NoHosts_StillAborts(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -2630,6 +2634,94 @@ func TestIntegration_MixedKeeperAndHost_NoHosts_StillAborts(t *testing.T) {
 	}
 	if disp.calls != 0 {
 		t.Errorf("SendApply calls = %d, want 0", disp.calls)
+	}
+}
+
+// mixedKeeperHostRefreshServiceRepo — mixed-план provision→роль с REFRESH-эмиттером:
+// keeper-задача core.soul.registered c `refresh_soulprint: true` (provision-passage)
+// + Soul-side host-задача (deploy-passage). HasRefreshEmitter(true) → план провиженит
+// roster mid-run → стартует на ПУСТОМ roster законно (host-задача стратифицируется в
+// Passage ПОСЛЕ refresh-границы, §S2/§S3). Целевая фикстура bypass-класса (б).
+func mixedKeeperHostRefreshServiceRepo(t *testing.T) string {
+	t.Helper()
+	return writeServiceRepo(t, `name: create
+description: mixed provision (refresh) + host deploy
+state_changes: {}
+tasks:
+  - name: Register provisioned hosts and refresh roster
+    module: core.soul.registered
+    on: keeper
+    register: provision
+    params:
+      refresh_soulprint: true
+      sid: "host-new.example.com"
+      coven: ["${ incarnation.name }"]
+  - name: Deploy role to grown roster
+    module: core.exec.run
+    on: ["${ incarnation.name }"]
+    changed_when: "false"
+    params:
+      cmd: echo
+      args: ["role"]
+`)
+}
+
+// TestIntegration_MixedKeeperAndHost_Refresh_RunsToDispatch — ★ GUARD bypass-класса
+// (б) (ADR-0061 amendment): смешанный provision→роль план С refresh-эмиттером
+// (core.soul.registered refresh_soulprint: true) против ПУСТОГО roster НЕ падает в
+// no_hosts — доходит до keeper-dispatch и исполняет provision-шаг. allKeeperTasks
+// false (есть host-задача), но HasRefreshEmitter true → пустой стартовый roster
+// законен (host-задача уезжает в Passage после refresh-границы, на re-resolved
+// roster). Инвертирует прежнюю фиксацию «mixed остаётся за no_hosts».
+//
+// Наблюдаемо: keeper provision-модуль вызван (applyCount==1), НЕТ sentinel-строки
+// no_hosts, прогон финализируется ready (host-fan-out на пустом re-resolved roster
+// = no-op-success — VM в unit реально не онбордятся, live-снимок остаётся пустым).
+func TestIntegration_MixedKeeperAndHost_Refresh_RunsToDispatch(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	seedIncarnation(t, "noop-prod")
+	// Ни одного connected-хоста — provision-from-zero стартует на пустом roster.
+
+	mod := &orderedKeeperModule{}
+	keepers := fakeKeeperRegistry{"core.soul": mod}
+	gitURL := mixedKeeperHostRefreshServiceRepo(t)
+
+	disp := &mockDispatcher{t: t, result: applyrun.StatusSuccess}
+	// staged-Runner: refresh-граница даёт Count=2 → нужен passage-capability-чекер
+	// (stubPassageCap, ADR-056 §S5). Пустой стартовый roster → presence-гейт на
+	// пустом наборе SID = no-op (никто не lacking), staged-механика проходит.
+	r := newRunnerKeeperStaged(t, disp, keepers)
+
+	applyID := audit.NewULID()
+	if err := r.Start(context.Background(), RunSpec{
+		ApplyID:         applyID,
+		IncarnationName: "noop-prod",
+		ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
+		ScenarioName:    "create",
+		StartedByAID:    "archon-alice",
+	}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// НЕ no_hosts: прогон доходит до keeper-dispatch и завершается (host-deploy на
+	// пустом re-resolved roster = no-op).
+	waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
+
+	// Provision keeper-задача ИСПОЛНЕНА — bypass пропустил пустой roster по refresh.
+	if got := mod.applyCount(); got != 1 {
+		t.Errorf("keeper module Apply вызван %d раз, want 1 (mixed+refresh bypass no_hosts на пустом roster)", got)
+	}
+
+	// Нет sentinel-строки no_hosts — стартовый гейт пропущен.
+	st, err := applyrun.SelectStatusesByApplyID(context.Background(), integrationPool, applyID)
+	if err != nil {
+		t.Fatalf("SelectStatusesByApplyID: %v", err)
+	}
+	for i := range st {
+		if st[i].SID == render.RunSentinelSID {
+			t.Errorf("найдена sentinel-строка %q — mixed+refresh не должен был упасть в no_hosts", render.RunSentinelSID)
+		}
 	}
 }
 

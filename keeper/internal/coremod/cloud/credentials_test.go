@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	coremodcloud "github.com/souls-guild/soul-stack/keeper/internal/coremod/cloud"
+	"github.com/souls-guild/soul-stack/keeper/internal/profile"
 	"github.com/souls-guild/soul-stack/keeper/internal/provider"
 )
 
@@ -19,6 +20,23 @@ type fakeProviderReader struct {
 }
 
 func (r *fakeProviderReader) SelectByName(_ context.Context, name string) (*provider.Provider, error) {
+	r.lastName = name
+	if r.err != nil {
+		return nil, r.err
+	}
+	return r.p, nil
+}
+
+// fakeProfileReader — стаб ProfileReader: возвращает заранее заданный Profile
+// или ошибку. Симметрично fakeProviderReader.
+type fakeProfileReader struct {
+	p   *profile.Profile
+	err error
+
+	lastName string
+}
+
+func (r *fakeProfileReader) SelectByName(_ context.Context, name string) (*profile.Profile, error) {
 	r.lastName = name
 	if r.err != nil {
 		return nil, r.err
@@ -55,7 +73,7 @@ func TestCredentialsResolver_Resolve_OK(t *testing.T) {
 			"secret_access_key": "wJalr...",
 		},
 	}}
-	r := coremodcloud.NewCredentialsResolverPG(pr, vlt)
+	r := coremodcloud.NewCredentialsResolverPG(pr, &fakeProfileReader{}, vlt)
 
 	got, err := r.Resolve(context.Background(), "aws-prod")
 	if err != nil {
@@ -85,7 +103,7 @@ func TestCredentialsResolver_RegionOverridesSecret(t *testing.T) {
 	vlt := &fakeVault{byPath: map[string]map[string]any{
 		"secret/p": {"region": "wrong-from-secret", "k": "v"},
 	}}
-	r := coremodcloud.NewCredentialsResolverPG(pr, vlt)
+	r := coremodcloud.NewCredentialsResolverPG(pr, &fakeProfileReader{}, vlt)
 
 	got, err := r.Resolve(context.Background(), "p")
 	if err != nil {
@@ -98,7 +116,7 @@ func TestCredentialsResolver_RegionOverridesSecret(t *testing.T) {
 
 func TestCredentialsResolver_ProviderNotFound(t *testing.T) {
 	pr := &fakeProviderReader{err: provider.ErrProviderNotFound}
-	r := coremodcloud.NewCredentialsResolverPG(pr, &fakeVault{})
+	r := coremodcloud.NewCredentialsResolverPG(pr, &fakeProfileReader{}, &fakeVault{})
 	if _, err := r.Resolve(context.Background(), "ghost"); err == nil {
 		t.Fatal("expected error when provider not found")
 	}
@@ -109,7 +127,7 @@ func TestCredentialsResolver_BadCredentialsRef(t *testing.T) {
 		Name: "p", Type: "aws", Region: "r",
 		CredentialsRef: "not-a-vault-ref",
 	}}
-	r := coremodcloud.NewCredentialsResolverPG(pr, &fakeVault{})
+	r := coremodcloud.NewCredentialsResolverPG(pr, &fakeProfileReader{}, &fakeVault{})
 	if _, err := r.Resolve(context.Background(), "p"); err == nil {
 		t.Fatal("expected error on malformed credentials_ref")
 	}
@@ -121,8 +139,40 @@ func TestCredentialsResolver_VaultError(t *testing.T) {
 		CredentialsRef: "vault:secret/p",
 	}}
 	vlt := &fakeVault{err: errors.New("vault down")}
-	r := coremodcloud.NewCredentialsResolverPG(pr, vlt)
+	r := coremodcloud.NewCredentialsResolverPG(pr, &fakeProfileReader{}, vlt)
 	if _, err := r.Resolve(context.Background(), "p"); err == nil {
 		t.Fatal("expected error when vault read fails")
+	}
+}
+
+// TestCredentialsResolver_ResolveProfile_OK — Вариант A: ResolveProfile читает
+// Profile по имени и возвращает его params (VM-spec для драйвера).
+func TestCredentialsResolver_ResolveProfile_OK(t *testing.T) {
+	prof := &fakeProfileReader{p: &profile.Profile{
+		Name:     "redis-small",
+		Provider: "wb-dev",
+		Params:   map[string]any{"image_id": "ami-0001", "flavor": "s2.medium"},
+	}}
+	r := coremodcloud.NewCredentialsResolverPG(&fakeProviderReader{}, prof, &fakeVault{})
+
+	params, err := r.ResolveProfile(context.Background(), "redis-small")
+	if err != nil {
+		t.Fatalf("ResolveProfile: %v", err)
+	}
+	if prof.lastName != "redis-small" {
+		t.Errorf("SelectByName got %q, want redis-small", prof.lastName)
+	}
+	if params["image_id"] != "ami-0001" || params["flavor"] != "s2.medium" {
+		t.Errorf("profile params not returned: %v", params)
+	}
+}
+
+// TestCredentialsResolver_ResolveProfile_NotFound — имя не в реестре → ошибка
+// (caller отдаёт SendFailed, не nil-panic).
+func TestCredentialsResolver_ResolveProfile_NotFound(t *testing.T) {
+	prof := &fakeProfileReader{err: profile.ErrProfileNotFound}
+	r := coremodcloud.NewCredentialsResolverPG(&fakeProviderReader{}, prof, &fakeVault{})
+	if _, err := r.ResolveProfile(context.Background(), "ghost"); err == nil {
+		t.Fatal("expected error when profile not found")
 	}
 }

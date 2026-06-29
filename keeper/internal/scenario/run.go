@@ -198,16 +198,25 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		return
 	}
 	// no_hosts-гейт — fail-closed по умолчанию (S1-ограничение, ADR-0061): прогон
-	// требует connected-хостов, пустой roster → error_locked. ИСКЛЮЧЕНИЕ —
-	// provision-from-zero (ADR-0061 §контекст): all-keeper сценарий, ВСЕ задачи
-	// которого `on: keeper` (core.cloud.created создаёт VM С НУЛЯ), стартует на
-	// пустом roster законно — chicken-egg «run требует хостов, run их и создаёт».
-	// Гейт пропускается ТОЛЬКО когда КАЖДАЯ задача keeper-side (ALL, не ANY):
-	// смешанный keeper+host прогон на пустом roster держит no_hosts (host-задача
-	// на пустом P0 = no_hosts, корректно — staged provision→роль остаётся за
-	// §S2/§S3 mid-run re-resolve, отдельный эпик). Считаем по scn.Tasks ПОСЛЕ
-	// ExpandIncludes — плоский top-level список, тот же, что видит Render.
-	if len(hosts) == 0 && !allKeeperTasks(scn.Tasks) {
+	// требует connected-хостов, пустой roster → error_locked. ДВА КЛАССА bypass для
+	// provision-from-zero (ADR-0061 amendments):
+	//
+	//   (а) all-keeper (allKeeperTasks): ВСЕ задачи `on: keeper` — keeper-only
+	//       сценарий (core.cloud.created создаёт VM С НУЛЯ), хостов на старте нет
+	//       по определению.
+	//   (б) mixed с refresh-эмиттером (HasRefreshEmitter): план несёт refresh-
+	//       эмиттер (core.soul.registered с refresh_soulprint: true) → roster пере-
+	//       резолвится mid-run (ADR-0061 §S2/§S3). Пустой стартовый roster законен:
+	//       host-задачи деплоя стратифицируются в Passage ПОСЛЕ refresh-границы и
+	//       видят уже пере-резолвленный live-снимок (онбордившиеся VM), а не пустой
+	//       P0. Это и есть staged provision→роль одним прогоном.
+	//
+	// chicken-egg обоих классов: «run требует хостов, run их и создаёт». БЕЗ обоих
+	// признаков — пустой roster есть no_hosts БИТ-В-БИТ (нерасширенное поведение).
+	// Считаем по scn.Tasks ПОСЛЕ ExpandIncludes — плоский top-level список, тот же,
+	// что видит Render и Stratify.
+	provisionsRoster := config.HasRefreshEmitter(scn.Tasks)
+	if len(hosts) == 0 && !allKeeperTasks(scn.Tasks) && !provisionsRoster {
 		abort("no_hosts", fmt.Errorf("incarnation %q не имеет connected-хостов", spec.IncarnationName))
 		return
 	}
@@ -692,15 +701,18 @@ func (r *Runner) resolveRoster(ctx context.Context, incarnationName string) ([]*
 }
 
 // allKeeperTasks сообщает, состоит ли сценарий ЦЕЛИКОМ из keeper-side задач
-// (каждая `on: keeper`, render.IsKeeperTask). Это условие bypass-а no_hosts-гейта
-// для provision-from-zero (ADR-0061 §контекст): all-keeper create-сценарий
+// (каждая `on: keeper`, render.IsKeeperTask). Это ПЕРВЫЙ класс bypass-а no_hosts-
+// гейта для provision-from-zero (ADR-0061 amendment): all-keeper create-сценарий
 // (core.cloud.created создаёт VM С НУЛЯ) законно стартует на пустом roster.
 //
-// ALL, не ANY: смешанный keeper+host прогон НЕ проходит — его host-задача на
-// пустом roster обязана дать no_hosts (staged provision→роль остаётся за §S2/§S3
-// mid-run re-resolve, отдельный эпик). Пустой сценарий (len==0) → false:
-// «нет задач» не повод bypass-ить гейт. Считаем по tasks ПОСЛЕ ExpandIncludes
-// (плоский top-level список, тот же, что видит Render).
+// ALL, не ANY: смешанный keeper+host прогон ЭТОТ предикат НЕ проходит. Но bypass
+// смешанного provision→роль обеспечивает ВТОРОЙ класс — config.HasRefreshEmitter
+// (план с refresh-эмиттером, см. no_hosts-гейт выше): host-задача стратифицируется
+// в Passage после refresh-границы и видит пере-резолвленный roster, а не пустой P0.
+// Смешанный план БЕЗ refresh-эмиттера по-прежнему держит no_hosts (host-задача на
+// пустом P0 корректна как no_hosts). Пустой сценарий (len==0) → false: «нет задач»
+// не повод bypass-ить гейт. Считаем по tasks ПОСЛЕ ExpandIncludes (плоский top-
+// level список, тот же, что видит Render).
 func allKeeperTasks(tasks []config.Task) bool {
 	if len(tasks) == 0 {
 		return false

@@ -209,6 +209,89 @@ func TestResolver_MissingCAField(t *testing.T) {
 	}
 }
 
+// Guard (a): soul_binary_ca=keeper / пусто → binary-curl пинится на keeper-CA.
+func TestGenerateUserdata_BinaryCA_Keeper_Pinned(t *testing.T) {
+	for _, ca := range []string{"", "keeper"} {
+		t.Run("ca="+ca, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.SoulBinaryCA = ca
+			out, err := cloudinit.GenerateUserdata(cfg)
+			if err != nil {
+				t.Fatalf("GenerateUserdata: %v", err)
+			}
+			// curl для бинаря несёт --cacert на keeper-ca.pem.
+			binaryCurl := curlLineForBinary(t, out)
+			if !strings.Contains(binaryCurl, "--cacert /etc/soul/tls/keeper-ca.pem") {
+				t.Errorf("binary curl must pin keeper-CA in keeper mode, got: %q", binaryCurl)
+			}
+		})
+	}
+}
+
+// Guard (b): soul_binary_ca=system → binary-curl БЕЗ --cacert, но keeper-ca.pem /
+// soul.yml write_files остаются (Bootstrap-канал пинится на keeper-CA всегда).
+func TestGenerateUserdata_BinaryCA_System_NoCacert(t *testing.T) {
+	cfg := validConfig()
+	cfg.SoulBinaryCA = "system"
+	out, err := cloudinit.GenerateUserdata(cfg)
+	if err != nil {
+		t.Fatalf("GenerateUserdata: %v", err)
+	}
+	binaryCurl := curlLineForBinary(t, out)
+	if strings.Contains(binaryCurl, "--cacert") {
+		t.Errorf("binary curl must NOT use --cacert in system mode, got: %q", binaryCurl)
+	}
+	// Bootstrap-канал пинится независимо от soul_binary_ca: CA + soul.yml на месте.
+	for _, want := range []string{
+		"/etc/soul/tls/keeper-ca.pem",
+		"-----BEGIN CERTIFICATE-----",
+		"/etc/soul/soul.yml",
+		"ca: /etc/soul/tls/keeper-ca.pem",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("system mode dropped Bootstrap-channel material: missing %q", want)
+		}
+	}
+}
+
+// Guard (c): невалидное значение soul_binary_ca → Validate error.
+func TestGenerateUserdata_BinaryCA_Invalid(t *testing.T) {
+	cfg := validConfig()
+	cfg.SoulBinaryCA = "insecure"
+	_, err := cloudinit.GenerateUserdata(cfg)
+	if err == nil || !strings.Contains(err.Error(), "soul_binary_ca") {
+		t.Fatalf("expected 'soul_binary_ca' validation error, got %v", err)
+	}
+}
+
+// Guard (d): plain http:// URL отвергается при ЛЮБОМ ca-режиме (security floor).
+func TestGenerateUserdata_BinaryCA_HTTPRejectedAnyMode(t *testing.T) {
+	for _, ca := range []string{"", "keeper", "system"} {
+		t.Run("ca="+ca, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.SoulBinaryCA = ca
+			cfg.SoulBinaryURL = "http://artifacts.example/soul"
+			_, err := cloudinit.GenerateUserdata(cfg)
+			if err == nil || !strings.Contains(err.Error(), "https") {
+				t.Fatalf("plain http must be rejected in ca=%q mode, got %v", ca, err)
+			}
+		})
+	}
+}
+
+// curlLineForBinary возвращает строку runcmd с curl, скачивающим soul-бинарь
+// (содержит SoulBinaryURL). Изолирует assert от curl-строк других шагов.
+func curlLineForBinary(t *testing.T, out string) string {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "curl") && strings.Contains(line, "/usr/local/bin/soul") {
+			return line
+		}
+	}
+	t.Fatalf("no binary-download curl line found in output:\n%s", out)
+	return ""
+}
+
 // Идемпотентность: тот же config → тот же байт-выход.
 func TestGenerateUserdata_Deterministic(t *testing.T) {
 	cfg := validConfig()

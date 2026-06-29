@@ -42,10 +42,12 @@
 # ★ teardown (destroy) — НЕ здесь (отдельный сценарий).
 
 # (а) Создание VM через CloudDriver (on: keeper, ADR-017). count выводится из топологии
-#     по input.redis_type. generate_userdata: true (ADR-017(h) B-flat): Keeper рендерит
-#     cloud-init из keeper.yml::cloud_init (CA + soul-binary URL); userdata НЕ несёт
-#     токены. Per-VM bootstrap-токен попадает в register.provision.hosts[].bootstrap_token
-#     (plain one-time, маскируется audit.MaskSecrets на всех выходах).
+#     по input.redis_type. generate_userdata: false: VM создаётся БЕЗ cloud-init userdata
+#     (часть cloud-провайдеров отвергает ci_user_data) → VM auto-join Teleport, а весь
+#     setup (soul-бинарь + CA + soul.yml + systemd-unit) ставит шаг (б) по Teleport SSH
+#     (install: true, см. ниже). Per-VM bootstrap-токен попадает в
+#     register.provision.hosts[].bootstrap_token (plain one-time, маскируется
+#     audit.MaskSecrets на всех выходах).
 - name: Provision VMs for the redis topology (cloud-init bootstrap)
   on: keeper
   module: core.cloud.created
@@ -59,23 +61,25 @@
     # CEL-wrapped-skip param-type-check (module_params.go) ловит только StringNode → int-
     # param `count` ложно реджектился бы как param_type_mismatch на folded-форме.
     count: "${ (input.redis_type == 'cluster') ? int(input.shards) * (1 + int(input.replicas_per_master)) : 1 + int(input.replicas_per_master) }"
-    generate_userdata: true
+    generate_userdata: false
 
-# (б) Доставка per-VM bootstrap-токена по SSH (on: keeper, core.bootstrap.delivered,
-#     ADR-063). Берёт hosts из register предыдущего шага (каждый — {sid, primary_ip,
-#     bootstrap_token}); кладёт ТОЛЬКО токен (cloud-init B-flat уже поставил soul-бинарь+
-#     CA+unit) в /etc/soul/token (umask 077, 0400, ★токен в STDIN не в argv) и запускает
-#     soul (start_soul default true). ssh_provider — имя SshProvider-плагина для
-#     SSH-аутентификации. Ошибка любого хоста → шаг failed (B1-strict) → state не
-#     коммитится → error_locked. require: provision — токены приходят из его register.
-#     ★ C1 (required-для-live, след. слайс): cloud-init должен класть CA-signed host-key,
-#     иначе Dial реджектит host-cert свежей VM.
-- name: Deliver per-VM bootstrap token over SSH
+# (б) Установка soul + доставка per-VM bootstrap-токена по SSH (on: keeper,
+#     core.bootstrap.delivered, ADR-063). Берёт hosts из register предыдущего шага
+#     (каждый — {sid, primary_ip, bootstrap_token}). install: true → VM пришла БЕЗ
+#     cloud-init (шаг (а) generate_userdata:false), поэтому весь setup ставится ЗДЕСЬ
+#     по Teleport SSH: soul-бинарь (pinned-CA HTTPS) + keeper-CA + soul.yml + systemd-
+#     unit (тот же install-blueprint, что cloud-init B-flat). Затем кладёт токен в
+#     /etc/soul/token (umask 077, 0400, ★токен в STDIN не в argv) и запускает soul
+#     (start_soul default true). ssh_provider — имя SshProvider-плагина (Teleport).
+#     Ошибка любого хоста → шаг failed (B1-strict) → state не коммитится → error_locked.
+#     require: provision — токены приходят из его register.
+- name: Install soul and deliver per-VM bootstrap token over SSH
   on: keeper
   module: core.bootstrap.delivered
   params:
     hosts:        "${ register.provision.hosts }"
     ssh_provider: "${ input.provision.ssh_provider }"
+    install:      true
   require:
     - provision
 

@@ -103,14 +103,15 @@ mocks:
 
 assert:
   task_present:
-    # (а) core.cloud.created: count = 1 + replicas_per_master = 3, generate_userdata.
-    # Единственная core.cloud.created в плане → дизамбигуатор не нужен.
+    # (а) core.cloud.created: count = 1 + replicas_per_master = 3, generate_userdata: false
+    # (VM без cloud-init, setup ставит шаг (б) install: true). Единственная
+    # core.cloud.created в плане → дизамбигуатор не нужен.
     - module: core.cloud.created
       params_subset:
         provider: wb-dev
         profile: redis-small
         count: 3
-        generate_userdata: true
+        generate_userdata: false
 
     # (в) core.soul.registered: sid — список SID созданных VM (register.provision.hosts
     # .map(h, h.sid)); coven — корневой incarnation.name (create); барьер онбординга

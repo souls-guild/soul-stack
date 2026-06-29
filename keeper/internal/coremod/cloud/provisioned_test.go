@@ -81,13 +81,20 @@ func (f *fakePlugins) Resize(_ context.Context, driver string, credentials map[s
 }
 
 // fakeResolver — стаб ProviderResolver: маппит param `provider` (= имя Provider)
-// в driver-имя + credentials. По умолчанию driver == имя provider-а (как было
-// до A-flow, чтобы существующие проверки lastDriver не ломались).
+// в driver-имя + credentials и param `profile` (= имя Profile) в VM-spec params.
+// По умолчанию driver == имя provider-а (как было до A-flow, чтобы существующие
+// проверки lastDriver не ломались).
 type fakeResolver struct {
 	driver       string // если "" — Resolve вернёт providerName как driver
 	creds        map[string]any
 	err          error
 	lastProvider string
+
+	// profile-резолв (Вариант A): имя Profile → params. profileErr заставляет
+	// ResolveProfile вернуть ошибку (имя не в реестре).
+	profileParams map[string]any
+	profileErr    error
+	lastProfile   string
 }
 
 func (r *fakeResolver) Resolve(_ context.Context, providerName string) (*coremodcloud.ResolvedProvider, error) {
@@ -100,6 +107,14 @@ func (r *fakeResolver) Resolve(_ context.Context, providerName string) (*coremod
 		driver = providerName
 	}
 	return &coremodcloud.ResolvedProvider{Driver: driver, Credentials: r.creds}, nil
+}
+
+func (r *fakeResolver) ResolveProfile(_ context.Context, profileName string) (map[string]any, error) {
+	r.lastProfile = profileName
+	if r.profileErr != nil {
+		return nil, r.profileErr
+	}
+	return r.profileParams, nil
 }
 
 type fakeSouls struct {
@@ -245,13 +260,16 @@ func TestApply_Created_InsertsSoulsAndTokens(t *testing.T) {
 	ft := newFakeTokens()
 	fa := &fakeAudit{}
 
-	m := coremodcloud.New(fp, &fakeResolver{}, fs, ft, nil, fa)
+	// profile = ИМЯ Profile-я (Вариант A); резолвер отдаёт его params, которые
+	// должны дойти до драйвера.
+	fr := &fakeResolver{profileParams: map[string]any{"image_id": "ami-0001"}}
+	m := coremodcloud.New(fp, fr, fs, ft, nil, fa)
 	stream := internaltest.NewApplyStream()
 	if err := m.Apply(&pluginv1.ApplyRequest{
 		State: "created",
 		Params: mustStruct(t, map[string]any{
 			"provider": "aws",
-			"profile":  map[string]any{"image_id": "ami-0001"},
+			"profile":  "redis-small",
 			"count":    float64(2),
 		}),
 	}, stream); err != nil {
@@ -260,6 +278,12 @@ func TestApply_Created_InsertsSoulsAndTokens(t *testing.T) {
 	ev := stream.Last()
 	if ev.Failed || !ev.Changed {
 		t.Fatalf("unexpected: %+v", ev)
+	}
+	if fr.lastProfile != "redis-small" {
+		t.Errorf("ResolveProfile got %q, want redis-small", fr.lastProfile)
+	}
+	if fp.lastProfile["image_id"] != "ami-0001" {
+		t.Errorf("resolved profile params not forwarded to driver: %v", fp.lastProfile)
 	}
 	if fp.lastDriver != "aws" || fp.lastCount != 2 {
 		t.Errorf("driver=%q count=%d", fp.lastDriver, fp.lastCount)
@@ -288,6 +312,70 @@ func TestApply_Created_InsertsSoulsAndTokens(t *testing.T) {
 	}
 	if _, has := h0["bootstrap_token"]; !has {
 		t.Error("bootstrap_token missing from output hosts[0]")
+	}
+}
+
+// TestApply_Created_NoProfile_NilSpec — profile не задан (Вариант A optional-
+// семантика): ResolveProfile НЕ вызывается, драйвер получает nil profile-spec,
+// шаг НЕ падает.
+func TestApply_Created_NoProfile_NilSpec(t *testing.T) {
+	fp := &fakePlugins{createResp: []*pluginv1.VmInfo{
+		{VmId: "i-aaa", Fqdn: "h1.example.com", PrimaryIp: "10.0.0.1"},
+	}}
+	// profileErr выставлен, чтобы доказать: при пустом profile ResolveProfile
+	// НЕ зовётся (иначе тест упал бы этой ошибкой).
+	fr := &fakeResolver{profileErr: errors.New("must not be called")}
+	m := coremodcloud.New(fp, fr, &fakeSouls{}, newFakeTokens(), nil, &fakeAudit{})
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State:  "created",
+		Params: mustStruct(t, map[string]any{"provider": "aws"}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if stream.Last().Failed {
+		t.Fatalf("unexpected failed (no profile must be ok): %+v", stream.Last())
+	}
+	if fr.lastProfile != "" {
+		t.Errorf("ResolveProfile called with %q; must not be called when profile omitted", fr.lastProfile)
+	}
+	if fp.lastProfile != nil {
+		t.Errorf("driver got non-nil profile-spec %v; want nil", fp.lastProfile)
+	}
+}
+
+// TestApply_Created_ProfileNotFound_Fails — ★ имя Profile-я не в реестре:
+// ResolveProfile вернул ошибку → понятный SendFailed (failed-event), не
+// nil-panic и не ложный success.
+func TestApply_Created_ProfileNotFound_Fails(t *testing.T) {
+	fp := &fakePlugins{createResp: []*pluginv1.VmInfo{
+		{VmId: "i-aaa", Fqdn: "h1.example.com"},
+	}}
+	fr := &fakeResolver{profileErr: errors.New("resolve profile \"ghost\": profile: name not found")}
+	m := coremodcloud.New(fp, fr, &fakeSouls{}, newFakeTokens(), nil, &fakeAudit{})
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State: "created",
+		Params: mustStruct(t, map[string]any{
+			"provider": "aws",
+			"profile":  "ghost",
+		}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	ev := stream.Last()
+	if !ev.Failed {
+		t.Fatal("expected failed=true when profile name not in registry")
+	}
+	if ev.Changed {
+		t.Error("expected changed=false on profile-resolve failure")
+	}
+	if !strings.Contains(ev.Message, "ghost") {
+		t.Errorf("failed-event must name the missing profile; got %q", ev.Message)
+	}
+	// Драйвер не должен вызываться, если profile не зарезолвился.
+	if fp.lastDriver != "" {
+		t.Errorf("driver Create called despite profile-resolve failure (driver=%q)", fp.lastDriver)
 	}
 }
 

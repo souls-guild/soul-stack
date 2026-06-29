@@ -372,3 +372,129 @@ tasks:
 		t.Fatalf("passages = %v, want [0 1] (roster-потребитель строго после refresh)", p.TaskPassage)
 	}
 }
+
+// TestHasRefreshEmitter — детектор «план провиженит roster mid-run» (ADR-0061
+// amendment, no_hosts-bypass класс (б)). true ТОЛЬКО при core.soul.registered с
+// литеральным refresh_soulprint: true; смежные формы (без флага / false / другой
+// keeper-модуль / пустой план) → false. Чистая функция над плоским планом.
+func TestHasRefreshEmitter(t *testing.T) {
+	tasks := func(t *testing.T, src string) []Task {
+		t.Helper()
+		m, _, _, err := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+		if err != nil {
+			t.Fatalf("LoadScenarioManifestFromBytes: %v", err)
+		}
+		return m.Tasks
+	}
+
+	// Эталон: refresh-эмиттер + host-задача деплоя (целевой mixed-план bypass-а).
+	const mixedWithRefresh = `
+name: create
+state_changes: {}
+tasks:
+  - name: Provision and refresh
+    module: core.soul.registered
+    on: keeper
+    params:
+      refresh_soulprint: true
+      sid: "${ register.provision.hosts }"
+      coven: ["${ incarnation.name }"]
+  - name: Deploy role
+    module: core.exec.run
+    on: ["${ incarnation.name }"]
+    changed_when: false
+    params:
+      cmd: "redis-server"
+`
+	const noFlag = `
+name: create
+state_changes: {}
+tasks:
+  - name: Register without refresh
+    module: core.soul.registered
+    on: keeper
+    params:
+      sid: "host-a.example.com"
+      coven: ["${ incarnation.name }"]
+`
+	const refreshFalse = `
+name: create
+state_changes: {}
+tasks:
+  - name: Register with refresh disabled
+    module: core.soul.registered
+    on: keeper
+    params:
+      refresh_soulprint: false
+      sid: "host-a.example.com"
+      coven: ["${ incarnation.name }"]
+`
+	// Другой keeper-модуль с одноимённым param — НЕ эмиттер (модуль-носитель только
+	// core.soul.registered).
+	const otherKeeperModule = `
+name: create
+state_changes: {}
+tasks:
+  - name: Cloud provision
+    module: core.cloud.created
+    on: keeper
+    params:
+      refresh_soulprint: true
+      profile: prod
+`
+	const hostOnly = `
+name: create
+state_changes: {}
+tasks:
+  - name: Deploy role
+    module: core.exec.run
+    on: ["${ incarnation.name }"]
+    changed_when: false
+    params:
+      cmd: "redis-server"
+`
+	// refresh-эмиттер, вложенный в block: — рекурсивно распознаётся.
+	const refreshInBlock = `
+name: create
+state_changes: {}
+tasks:
+  - name: Provision group
+    block:
+      - name: Register and refresh
+        module: core.soul.registered
+        on: keeper
+        params:
+          refresh_soulprint: true
+          sid: "host-a.example.com"
+          coven: ["${ incarnation.name }"]
+`
+
+	tests := []struct {
+		name string
+		src  string
+		want bool
+	}{
+		{"mixed-with-refresh", mixedWithRefresh, true},
+		{"refresh-in-block", refreshInBlock, true},
+		{"no-flag", noFlag, false},
+		{"refresh-false", refreshFalse, false},
+		{"other-keeper-module", otherKeeperModule, false},
+		{"host-only", hostOnly, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := HasRefreshEmitter(tasks(t, tt.src)); got != tt.want {
+				t.Errorf("HasRefreshEmitter = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	// Пустой план — отдельно (LoadScenarioManifestFromBytes требует tasks непустым,
+	// поэтому строим срез напрямую).
+	if HasRefreshEmitter(nil) {
+		t.Error("HasRefreshEmitter(nil) = true, want false")
+	}
+	if HasRefreshEmitter([]Task{}) {
+		t.Error("HasRefreshEmitter([]) = true, want false")
+	}
+}

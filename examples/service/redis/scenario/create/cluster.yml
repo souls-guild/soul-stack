@@ -40,7 +40,21 @@
 # (templating §2.3 SHALLOW), size = число уникальных SID = сумма размеров шардов (дублей
 # нет — их отвергает плагин fail-fast; при дубле сумма лишь занизится → guard скорее
 # оборвётся, защита не ослабляется).
+# ★ PROVISION-ГЕЙТ (ADR-061 amendment 2026-06-29): при cloud-provision (input.provision
+# .enabled) roster ЕЩЁ пуст на pre-flight EvalAsserts (souls создаются позже шагами
+# redis-provision.yml: core.cloud.created→VM→await_online→refresh_soulprint), поэтому
+# size(soulprint.hosts)==N упал бы на pre-flight ДО того, как кластер вообще существует.
+# Гейт `when: !provision.enabled` снимает размерную проверку для provision-пути —
+# roster-инвариант ТАМ гарантируется count-формулой redis-provision.yml (число VM = той
+# же shards*(1+replicas)) + блокирующим await_online-барьером, НЕ pre-flight-ом
+# (симметрично no_hosts-bypass amendment 2026-06-28). Предикат STATIC (чистый input,
+# без register.*/soulprint.self → isStaticWhen): pre-flight вычислит его и при provision
+# placeholder-skip-нёт assert (НЕ ErrAssertFailed). На существующем roster-е (provision
+# опущен/false) has(input.provision) даёт false → when=true → size-guard активен (НЕ
+# ослаблен). Форма — инверсия include-when redis-provision.yml (has(input.provision) &&
+# input.provision.enabled).
 - name: Guard cluster roster size matches shards and replicas
+  when: "!(has(input.provision) && input.provision.enabled)"
   assert:
     that:
       - "has(input.cluster_topology) ? (size(soulprint.hosts) == size(merge(input.cluster_topology.map(s, merge(s.map(x, {x: 0})))))) : (size(soulprint.hosts) == int(input.shards) * (1 + int(input.replicas_per_master)))"

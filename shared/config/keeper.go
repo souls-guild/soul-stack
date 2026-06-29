@@ -1718,9 +1718,19 @@ type KeeperPushTarget struct {
 // нужен для ротации без правок keeper.yml.
 //
 // `SoulBinaryURL` — HTTPS URL, с которого VM скачивает `soul`-бинарь (curl
-// в runcmd). Должен использовать сертификат, верифицируемый pinned-CA из
-// `TLSCARef` (или системного store-а — но для self-hosted Keeper-CA это и есть
-// тот же ref). Plain http отвергается на этапе GenerateUserdata.
+// в runcmd). Plain http отвергается на этапе GenerateUserdata (только TLS).
+//
+// `SoulBinaryCA` — какой trust-store использует curl при скачивании бинаря:
+//   - `keeper` (default, пустое значение — back-compat secure-default) — pin на
+//     PEM-CA Keeper-а (`--cacert /etc/soul/tls/keeper-ca.pem`); подходит для
+//     self-hosted artifact-хоста с тем же CA, что у Keeper-а.
+//   - `system` — OS-trust bundle (curl без `--cacert`); для artifact-хостов с
+//     публичным CA (например, бинарь на Nexus за GlobalSign-сертификатом).
+//
+// `soul_binary_ca: system` ослабляет ТОЛЬКО верификацию сертификата artifact-
+// хоста при curl-скачивании бинаря. Bootstrap-канал (souls↔keeper mTLS) пинится
+// на keeper-CA ВСЕГДА, независимо от этого поля, и SHA256-verify бинаря не
+// затрагивается. `system` — это всё ещё system-CA-over-TLS, не plain-http.
 //
 // `SoulVersion` — опц. строка, попадающая в userdata как комментарий (для
 // диагностики); fingerprint-сверка отложена (см. ADR-017(h) amendment, soul-binary
@@ -1729,6 +1739,7 @@ type KeeperCloudInit struct {
 	BootstrapEndpoint string `yaml:"bootstrap_endpoint"`
 	TLSCARef          string `yaml:"tls_ca_ref"`
 	SoulBinaryURL     string `yaml:"soul_binary_url"`
+	SoulBinaryCA      string `yaml:"soul_binary_ca,omitempty"`
 	SoulVersion       string `yaml:"soul_version,omitempty"`
 }
 

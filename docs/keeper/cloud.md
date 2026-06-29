@@ -120,7 +120,7 @@ State `destroyed` симметричен: Keeper резолвит тот же Pr
    - После Create — Keeper выписывает per-VM bootstrap-токен под FQDN VM, кладёт в `register.<step>.hosts[i].bootstrap_token` (plaintext, маскируется на всех выходах audit/SSE/OTel substring-фильтром `audit.MaskSecrets`).
 2. **На VM работает cloud-init:**
    - Устанавливает CA: `/etc/soul/tls/keeper-ca.pem` (PEM, embedded в userdata).
-   - Скачивает `soul`-бинарь: `curl --cacert /etc/soul/tls/keeper-ca.pem $SOUL_BINARY_URL` → `/usr/local/bin/soul` (pinned-CA, TOFU-mitigation).
+   - Скачивает `soul`-бинарь: `curl --cacert /etc/soul/tls/keeper-ca.pem $SOUL_BINARY_URL` → `/usr/local/bin/soul` (pinned-CA, TOFU-mitigation). При `soul_binary_ca: system` curl идёт без `--cacert` (системный trust-store, для публичных CA artifact-хостов); см. поле в разделе «Конфиг».
    - Пишет минимальный `/etc/soul/soul.yml` с `keeper.endpoints[0] = {host, bootstrap_port, event_stream_port}`.
    - `systemctl enable + start soul.service`. Soul без bootstrap-токена пока ничего не делает (звонит на Keeper-Bootstrap-RPC — отвергается без токена).
 3. **Шаг 2 сценария — доставка токена** (типично `module: keeper.push`):
@@ -137,8 +137,20 @@ cloud_init:
   bootstrap_endpoint: lb.keeper.example:9442      # LB host:port (Bootstrap-RPC listener)
   tls_ca_ref:         vault:secret/keeper/ca      # PEM CA, поле `ca` в KV
   soul_binary_url:    https://artifacts.example/soul/v1.0.0/soul
+  soul_binary_ca:     keeper                       # опц.: keeper (default) | system
   soul_version:       v1.0.0                       # опц. метка для диагностики
 ```
+
+Поля:
+
+- `bootstrap_endpoint` — `host:port` LB (Bootstrap-RPC listener).
+- `tls_ca_ref` — vault-ref (`vault:<mount>/<path>`) на PEM-CA Keeper-а (поле `ca` в KV).
+- `soul_binary_url` — HTTPS URL для скачивания `soul`-бинаря (plain http отвергается).
+- `soul_binary_ca` — какой trust-store использует curl при скачивании бинаря:
+  - `keeper` (default, пустое значение) — pin на keeper-CA (`curl --cacert keeper-ca.pem`); для self-hosted artifact-хоста с тем же CA, что у Keeper-а;
+  - `system` — системный trust-store (`curl` без `--cacert`); для artifact-хостов с публичным CA (например, бинарь на Nexus за GlobalSign).
+  - `soul_binary_ca: system` ослабляет **только** верификацию сертификата artifact-хоста при curl-скачивании бинаря. Bootstrap-канал (souls↔keeper mTLS) пинится на keeper-CA **всегда**, независимо от этого поля; `system` — это всё ещё system-CA-over-TLS, не plain-http.
+- `soul_version` — опц. метка для диагностики.
 
 Hot-reload работает: правка `keeper.yml` через `keeper-reload` → следующий cloud-create-шаг рендерит userdata с новым snapshot-ом (без рестарта Keeper-а).
 
@@ -163,7 +175,7 @@ Hot-reload работает: правка `keeper.yml` через `keeper-reload
 ### Безопасность
 
 - **Userdata НЕ несёт токены** (cloud-provider plaintext metadata).
-- **Pinned-CA для curl** — атакующий не может подменить `soul`-бинарь man-in-the-middle-ом (требует владения приватником CA Keeper-а).
+- **Pinned-CA для curl** (`soul_binary_ca: keeper`, default) — атакующий не может подменить `soul`-бинарь man-in-the-middle-ом (требует владения приватником CA Keeper-а). При `soul_binary_ca: system` верификация cert artifact-хоста идёт по системному trust-store (для публичных CA); ослабляется **только** этот шаг — Bootstrap-канал (souls↔keeper mTLS) пинится на keeper-CA всегда, plain-http по-прежнему отвергается.
 - **TLS CA из Vault** — единый источник правды, ротация без правок keeper.yml.
 - **Per-VM-токен доставляется отдельным шагом по SSH** — атакующая поверхность ограничена SSH-доступом, а не cloud metadata.
 

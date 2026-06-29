@@ -14,6 +14,18 @@
 // Ошибка любого хоста прерывает шаг (B1-strict): state не коммитится, прогон
 // уходит в error_locked.
 //
+// install-режим (опц. param `install: true`, только transport=teleport, ADR-063
+// amendment «full-install over SSH»): платформа без cloud-init userdata (напр. WB
+// namespace без `ci_user_data`) не получает setch до доставки — модуль сам ставит
+// ВЕСЬ install-blueprint по той же Teleport-сессии ПЕРЕД токеном. Шаги install-а —
+// единый источник soulinstall.RenderInstallScript (каталоги → keeper-ca.pem(STDIN)
+// → soul.yml(STDIN) → soul.service(STDIN) → curl-бинарь); blueprint-параметры
+// резолвятся из того же keeper.yml::cloud_init + Vault, что и cloud-init userdata
+// (config-reuse). token-write и `systemctl start` в RenderInstallScript НЕ входят —
+// их добавляет этот модуль после install-шагов. Любой ненулевой exit install-шага
+// валит хост (B1-strict, как остальной поток). install=true в direct-режиме —
+// Validate-ошибка (там setch ставит cloud-init, install не нужен).
+//
 // Транспортные режимы (ADR-063 amendment «Teleport by-name transport»):
 //   - direct (default): generic push.Dial по primary_ip — Authorize/Sign/
 //     ephemeral + CA-signed host-cert verify (host-CA из Vault), C1.
@@ -40,8 +52,10 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/cloudinit"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/util"
 	"github.com/souls-guild/soul-stack/keeper/internal/push"
+	"github.com/souls-guild/soul-stack/keeper/internal/soulinstall"
 	"github.com/souls-guild/soul-stack/shared/audit"
 
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
@@ -118,6 +132,19 @@ type AuditWriter interface {
 	Write(ctx context.Context, event *audit.Event) error
 }
 
+// InstallResolver резолвит cloud_init-блок keeper.yml в [cloudinit.Config] —
+// источник [soulinstall.Blueprint] для install-режима. Узкая поверхность (а не
+// сам *cloudinit.Resolver) держит bootstrap-пакет независимым от config.Store:
+// прод-обёртка в daemon-е читает текущий KeeperConfig snapshot (hot-reload) и
+// зовёт Resolver.Resolve — тот же паттерн, что cloudInitProvider для cloud-create.
+//
+// Возвращаемый Config несёт уже резолвленный CA-PEM (из Vault) + endpoint/URL.
+// nil-резолвер на Module означает сборку без install-поддержки: install=true
+// тогда вернёт явную ошибку «install-режим не сконфигурирован».
+type InstallResolver interface {
+	Resolve(ctx context.Context) (cloudinit.Config, error)
+}
+
 // Module — реализация sdk/module.SoulModule.
 //
 // Обязательность зависит от транспорта (поле Transport):
@@ -156,6 +183,12 @@ type Module struct {
 	// их не задаёт.
 	RetryBase   time.Duration
 	RetryJitter time.Duration
+
+	// Install — резолвер blueprint-параметров для install-режима (param
+	// `install: true`, только teleport). nil → install-режим не сконфигурирован:
+	// задача с `install: true` вернёт явную ошибку. Прод-обёртка читает
+	// keeper.yml::cloud_init snapshot + Vault (cloudinit.Resolver), wire-up в daemon-е.
+	Install InstallResolver
 
 	// Audit — audit-writer (`bootstrap.delivered`). nil → запись пропускается.
 	Audit AuditWriter
@@ -233,6 +266,14 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 	if _, _, err := util.OptBoolParam(req.Params, "start_soul"); err != nil {
 		errs = append(errs, err.Error())
 	}
+	// install: full-install по SSH (ADR-063 amendment). Валиден ТОЛЬКО в
+	// transport=teleport (MVP): в direct setch ставит cloud-init userdata, install
+	// не нужен. install=true+direct — явная ошибка (а не тихий no-op).
+	if install, ok, err := util.OptBoolParam(req.Params, "install"); err != nil {
+		errs = append(errs, err.Error())
+	} else if ok && install && !m.teleport() {
+		errs = append(errs, "param \"install\": install режим только для teleport-транспорта (в direct setch ставит cloud-init)")
+	}
 	return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
 
@@ -295,10 +336,32 @@ func (m *Module) applyDelivered(req *pluginv1.ApplyRequest, stream grpc.ServerSt
 	if hasJoinWait {
 		joinWait = time.Duration(joinWaitSec) * time.Second
 	}
+	install, _, err := util.OptBoolParam(req.Params, "install")
+	if err != nil {
+		return util.SendFailed(stream, err.Error())
+	}
+	if install && !m.teleport() {
+		// Дублирует Validate-гейт: defense-in-depth, если Apply вызван в обход
+		// Validate (прямая сборка ApplyRequest в тестах/инструментах).
+		return util.SendFailed(stream, "bootstrap delivered: install режим только для teleport-транспорта")
+	}
 
 	// Конфигурационные предусловия — явная ошибка вместо невнятного nil-panic.
 	if m.Dial == nil {
 		return util.SendFailed(stream, "bootstrap delivered: dialer not configured (wire push.Dial / push.NewTeleportDialer in main)")
+	}
+
+	// install-шаги резолвятся ОДИН раз на весь шаг (blueprint общий для всех VM:
+	// endpoint/CA/URL берутся из keeper.yml::cloud_init, не per-host). Resolve
+	// читает Vault (CA-PEM) — дёргать на каждый хост незачем. Пустой срез при
+	// install=false → deliverHost не выполняет ни одного install-шага (token-only).
+	var installSteps []soulinstall.InstallStep
+	if install {
+		steps, ierr := m.resolveInstallSteps(ctx)
+		if ierr != nil {
+			return util.SendFailed(stream, fmt.Sprintf("bootstrap delivered: install blueprint: %s", maskErr(ierr)))
+		}
+		installSteps = steps
 	}
 
 	// prov резолвится только для direct-режима: teleport не вызывает Authorize/Sign
@@ -320,7 +383,7 @@ func (m *Module) applyDelivered(req *pluginv1.ApplyRequest, stream grpc.ServerSt
 	results := make([]any, 0, len(hosts))
 	sids := make([]any, 0, len(hosts))
 	for _, h := range hosts {
-		started, err := m.deliverHost(ctx, prov, h, sshUser, int(sshPort), script, startSoul, joinWait)
+		started, err := m.deliverHost(ctx, prov, h, sshUser, int(sshPort), script, installSteps, startSoul, joinWait)
 		if err != nil {
 			// B1-strict: ошибка любого хоста валит весь шаг. maskErr страхует
 			// от утечки vault-ref/токена в текст ошибки (failed-event уходит в
@@ -364,7 +427,8 @@ func (m *Module) applyDelivered(req *pluginv1.ApplyRequest, stream grpc.ServerSt
 }
 
 // deliverHost обрабатывает один хост: открытие SSH-сессии (transport-зависимо) →
-// запись токена (STDIN) → опц. start soul. Возвращает (started, error).
+// опц. install-blueprint → запись токена (STDIN) → опц. start soul. Возвращает
+// (started, error).
 //
 // Открытие сессии расходится по transport:
 //   - direct: Authorize (fail-closed) → ephemeral keypair + Sign → Dial по
@@ -374,8 +438,12 @@ func (m *Module) applyDelivered(req *pluginv1.ApplyRequest, stream grpc.ServerSt
 //   - teleport: retry-Dial по SID (node-name) — без Authorize/Sign/ephemeral;
 //     транспорт+auth+host-verify внутри Teleport-Dialer через identity-file.
 //
+// installSteps (непустой только в install-режиме, teleport) выполняются по той же
+// сессии ПЕРЕД токеном — VM без cloud-init получает setch (бинарь/CA/soul.yml/unit)
+// прямо здесь. Любой ненулевой exit install-шага валит хост (B1-strict).
+//
 // Хвост (запись токена + start soul) общий для обоих режимов.
-func (m *Module) deliverHost(ctx context.Context, prov SshProviderHost, h hostInput, user string, port int, script string, startSoul bool, joinWait time.Duration) (started bool, err error) {
+func (m *Module) deliverHost(ctx context.Context, prov SshProviderHost, h hostInput, user string, port int, script string, installSteps []soulinstall.InstallStep, startSoul bool, joinWait time.Duration) (started bool, err error) {
 	var sess push.Session
 	if m.teleport() {
 		sess, err = m.dialTeleport(ctx, h, user, port, joinWait)
@@ -386,6 +454,16 @@ func (m *Module) deliverHost(ctx context.Context, prov SshProviderHost, h hostIn
 		return false, err
 	}
 	defer func() { _ = sess.Close() }()
+
+	// install ПЕРЕД токеном: VM без cloud-init userdata не имеет setch до этого
+	// момента. ★ Секреты install-шагов (CA-PEM) идут через step.Stdin, не argv
+	// (RenderInstallScript — единый источник, secret-write floor). Ненулевой
+	// exit/err любого шага → fail (B1-strict): полу-настроенная VM не получает токен.
+	for i, step := range installSteps {
+		if _, rerr := sess.Run(ctx, step.Cmd, step.Stdin); rerr != nil {
+			return false, fmt.Errorf("install step %d: %w", i+1, rerr)
+		}
+	}
 
 	// ★ Токен — в STDIN (script делает `cat > token_path`), НЕ в argv.
 	if _, rerr := sess.Run(ctx, script, []byte(h.token)); rerr != nil {
@@ -499,6 +577,25 @@ func (m *Module) dialWithJoinRetry(ctx context.Context, cfg push.DialConfig, joi
 		case <-t.C:
 		}
 	}
+}
+
+// resolveInstallSteps собирает install-blueprint один раз на шаг: резолвит
+// cloud_init-блок keeper.yml в Config (Vault для CA-PEM) → маппит через
+// cloudinit.Config.Blueprint() (единый маппер, общий с cloud-init userdata) →
+// рендерит install-последовательность. RenderInstallScript внутри валидирует
+// blueprint (endpoint host:port / PEM CA / https-URL).
+func (m *Module) resolveInstallSteps(ctx context.Context) ([]soulinstall.InstallStep, error) {
+	if m.Install == nil {
+		return nil, fmt.Errorf("install resolver not configured (wire keeper.yml::cloud_init resolver in main)")
+	}
+	cfg, err := m.Install.Resolve(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Маппинг Config→Blueprint — через cloudinit.Config.Blueprint() (тот же
+	// единственный маппер, что и cloud-init userdata): новое Blueprint-поле
+	// подхватится здесь автоматически, без рассинхрона install-пути.
+	return soulinstall.RenderInstallScript(cfg.Blueprint())
 }
 
 func (m *Module) providerNames() []string {

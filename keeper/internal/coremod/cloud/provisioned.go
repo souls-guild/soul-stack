@@ -128,7 +128,10 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 		if _, err := util.StringParam(req.Params, "provider"); err != nil {
 			errs = append(errs, err.Error())
 		}
-		if _, err := util.OptStructParam(req.Params, "profile"); err != nil {
+		// profile = ИМЯ Profile-я в реестре profiles (Вариант A, ADR-017
+		// amendment 2026-06-29). Опциональный; пустое/отсутствует → VM без
+		// реестрового spec. Резолв имени → params — в applyCreated.
+		if _, err := util.OptStringParam(req.Params, "profile"); err != nil {
 			errs = append(errs, err.Error())
 		}
 		if n, ok, err := util.OptIntParam(req.Params, "count"); err != nil {
@@ -218,7 +221,11 @@ func (m *Module) applyCreated(req *pluginv1.ApplyRequest, stream grpc.ServerStre
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
-	profile, err := util.OptStructParam(req.Params, "profile")
+	// profile — ИМЯ Profile-я в реестре profiles (Вариант A, ADR-017 amendment
+	// 2026-06-29): keeper резолвит его в VM-spec params через
+	// Resolver.ResolveProfile, симметрично provider→credentials. Опциональный:
+	// пустое/отсутствует → VM создаётся без реестрового spec.
+	profileName, err := util.OptStringParam(req.Params, "profile")
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
@@ -258,16 +265,24 @@ func (m *Module) applyCreated(req *pluginv1.ApplyRequest, stream grpc.ServerStre
 		userdata = rendered
 	}
 
-	var profileMap map[string]any
-	if profile != nil {
-		profileMap = profile.AsMap()
-	}
-
 	// A-flow: Keeper резолвит Provider-реестр в driver-имя + plain-credentials
-	// (секрет из Vault по credentials_ref + region). Драйвер в Vault не ходит.
+	// (секрет из Vault по credentials_ref + region) и Profile-реестр (param
+	// `profile` = ИМЯ) в VM-spec params. Драйвер в Vault/реестр не ходит.
 	if m.Resolver == nil {
 		return util.SendFailed(stream, "cloud created: provider resolver not configured (wire CredentialsResolverPG in main)")
 	}
+
+	// profile опционален: имя задано → резолвим в params; пусто → nil (VM без
+	// реестрового spec, прежняя optional-семантика). Имя не в реестре →
+	// SendFailed (не nil-panic).
+	var profileMap map[string]any
+	if profileName != "" {
+		profileMap, err = m.Resolver.ResolveProfile(ctx, profileName)
+		if err != nil {
+			return util.SendFailed(stream, fmt.Sprintf("resolve profile %q: %s", profileName, maskErr(err)))
+		}
+	}
+
 	resolved, err := m.Resolver.Resolve(ctx, provider)
 	if err != nil {
 		// Сообщение резолвера может нести vault-ref — маскируем перед выдачей.

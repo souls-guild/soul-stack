@@ -122,6 +122,14 @@ type Deps struct {
 	BootstrapHostCAs   []push.NamedHostKeyAuthority
 	BootstrapDial      push.Dialer
 
+	// BootstrapInstall — резолвер install-blueprint для install-режима
+	// `core.bootstrap.delivered` (param `install: true`, только teleport, ADR-063
+	// amendment «full-install over SSH»). Прод-обёртка читает keeper.yml::cloud_init
+	// snapshot + Vault (тот же cloudinit.Resolver, что cloud-init userdata). nil
+	// допустим: задача с `install: true` тогда вернёт явную ошибку, token-only
+	// доставка не затронута.
+	BootstrapInstall bootstrap.InstallResolver
+
 	// Audit — единый audit-writer для keeper-side модулей (cloud/vault
 	// пишут audit-event-ы; soul/choir — нет). nil допустим (модули пропустят
 	// запись и продолжат), но в проде wire-up из main должен подсовывать
@@ -176,6 +184,7 @@ func Default(d Deps) *Registry {
 			Providers: d.BootstrapProviders,
 			HostCAs:   d.BootstrapHostCAs,
 			Dial:      d.BootstrapDial,
+			Install:   d.BootstrapInstall,
 			Audit:     d.Audit,
 		}
 	}

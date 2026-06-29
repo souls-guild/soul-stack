@@ -33,7 +33,20 @@
 # ★ ПОЧЕМУ assert, а не validate: size-guard нужен soulprint.hosts (roster), а validate-
 # контекст INPUT-ONLY (структурный CEL-барьер). replicas_per_master имеет default:0 →
 # int(input.replicas_per_master) без has()-обвязки (см. main.yml).
+# ★ PROVISION-ГЕЙТ (ADR-061 amendment 2026-06-29): при cloud-provision (input.provision
+# .enabled) roster ЕЩЁ пуст на pre-flight EvalAsserts (souls создаются позже шагами
+# redis-provision.yml: core.cloud.created→VM→await_online→refresh_soulprint), поэтому
+# size(soulprint.hosts)==N упал бы на pre-flight ДО того, как кластер вообще существует.
+# Гейт `when: !provision.enabled` снимает размерную проверку для provision-пути —
+# roster-инвариант ТАМ гарантируется count-формулой redis-provision.yml (число VM =
+# 1+replicas) + блокирующим await_online-барьером, НЕ pre-flight-ом (симметрично
+# no_hosts-bypass amendment 2026-06-28). Предикат STATIC (чистый input, без register.*/
+# soulprint.self → isStaticWhen): pre-flight вычислит его и при provision placeholder-
+# skip-нёт assert (НЕ ErrAssertFailed). На существующем roster-е (provision опущен/false)
+# has(input.provision) даёт false → when=true → size-guard активен (НЕ ослаблен). Форма —
+# инверсия include-when redis-provision.yml (has(input.provision) && input.provision.enabled).
 - name: Guard sentinel roster size matches replicas
+  when: "!(has(input.provision) && input.provision.enabled)"
   assert:
     that:
       - "size(soulprint.hosts) == 1 + int(input.replicas_per_master)"

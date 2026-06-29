@@ -86,6 +86,45 @@ func RefreshBoundaries(tasks []Task, passage Passage) []bool {
 // сущность). Author-форма адреса задачи — base+state.
 const refreshModuleAddr = "core.soul.registered"
 
+// HasRefreshEmitter — план содержит хотя бы один refresh-эмиттер (задача
+// `core.soul.registered` с `refresh_soulprint: true`, рекурсивно через block:).
+//
+// Зачем отдельно от [RefreshBoundaries]: предикат «план провиженит roster mid-run»
+// нужен ДО стратификации — для no_hosts-гейта run.go (ADR-0061 amendment): прогон
+// со refresh-эмиттером законно стартует на ПУСТОМ roster, даже если несёт host-
+// задачи деплоя (они стратифицируются в Passage ПОСЛЕ refresh-границы и видят
+// пере-резолвленный live-снимок). RefreshBoundaries отвечает на другой вопрос —
+// «перед каким Passage пере-резолвить» — и требует уже посчитанный [Passage];
+// здесь же — чистая проверка наличия эмиттера в плоском плане задач.
+//
+// Чистая функция, no-I/O. Без эмиттера — false, поведение no_hosts БИТ-В-БИТ.
+func HasRefreshEmitter(tasks []Task) bool {
+	for i := range tasks {
+		if taskHasRefreshEmitter(&tasks[i]) {
+			return true
+		}
+	}
+	return false
+}
+
+// taskHasRefreshEmitter — задача (или любой её потомок block:) — refresh-эмиттер.
+// Block рекурсивно: block — атомарная единица Passage, эмиттер внутри него тоже
+// провиженит roster прогона (over-approximation в безопасную сторону, симметрично
+// taskReadsRoster).
+func taskHasRefreshEmitter(t *Task) bool {
+	if taskIsRefreshEmitter(t) {
+		return true
+	}
+	if t.Block != nil {
+		for i := range t.Block.Block {
+			if taskHasRefreshEmitter(&t.Block.Block[i]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // taskIsRefreshEmitter — задача эмитит сигнал «roster-refreshed»: это
 // `core.soul.registered` с params.refresh_soulprint == true (литерал bool).
 //

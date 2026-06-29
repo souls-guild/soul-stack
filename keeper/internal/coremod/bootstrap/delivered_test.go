@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/cloudinit"
 	coremodbootstrap "github.com/souls-guild/soul-stack/keeper/internal/coremod/bootstrap"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/internaltest"
 	"github.com/souls-guild/soul-stack/keeper/internal/push"
@@ -96,6 +97,39 @@ type fakeAudit struct {
 func (a *fakeAudit) Write(_ context.Context, e *audit.Event) error {
 	a.events = append(a.events, e)
 	return nil
+}
+
+// fakeInstallResolver — мок coremodbootstrap.InstallResolver: отдаёт
+// заранее заданный cloudinit.Config (или ошибку) для install-режима. Записывает
+// число вызовов: install-blueprint резолвится ОДИН раз на шаг, не per-host.
+type fakeInstallResolver struct {
+	cfg   cloudinit.Config
+	err   error
+	calls int
+}
+
+func (r *fakeInstallResolver) Resolve(_ context.Context) (cloudinit.Config, error) {
+	r.calls++
+	if r.err != nil {
+		return cloudinit.Config{}, r.err
+	}
+	return r.cfg, nil
+}
+
+// testCAPem — минимальный PEM-маркер, удовлетворяющий soulinstall.Blueprint.Validate
+// (проверяет наличие подстроки "BEGIN CERTIFICATE", не парсит cert). Содержимое
+// неважно: install-шаги мокаются, реального TLS-handshake нет.
+const testCAPem = "-----BEGIN CERTIFICATE-----\nMIIBfake\n-----END CERTIFICATE-----\n"
+
+// validInstallConfig — cloudinit.Config, проходящий blueprint-валидацию
+// (host:port endpoint, PEM-CA, https-URL). База для install-guard-тестов.
+func validInstallConfig() cloudinit.Config {
+	return cloudinit.Config{
+		BootstrapEndpoint: "keeper.example.com:8443",
+		TLSCAPem:          testCAPem,
+		SoulBinaryURL:     "https://nexus.example.com/soul",
+		SoulVersion:       "v1.2.3",
+	}
 }
 
 // testPrivateKeyPEM — фиксированный ed25519 private key (OpenSSH PEM) для
@@ -533,6 +567,44 @@ func TestValidate(t *testing.T) {
 	if !rep.Ok {
 		t.Errorf("join_wait_timeout=0 rejected: %v", rep.Errors)
 	}
+	// ★ install=true в direct-режиме (m.Transport=="") — отвергается: setch ставит
+	// cloud-init, install не нужен (ADR-063 amendment, MVP только teleport).
+	rep, _ = m.Validate(context.Background(), &pluginv1.ValidateRequest{
+		State: coremodbootstrap.StateDelivered,
+		Params: mustStruct(t, map[string]any{
+			"ssh_provider": "ssh-static",
+			"hosts":        hostsParam("vm1", "1.2.3.4", "t"),
+			"install":      true,
+		}),
+	})
+	if rep.Ok {
+		t.Errorf("install=true accepted in direct transport")
+	}
+	// install=false в direct — принимается (token-only, backward-compat).
+	rep, _ = m.Validate(context.Background(), &pluginv1.ValidateRequest{
+		State: coremodbootstrap.StateDelivered,
+		Params: mustStruct(t, map[string]any{
+			"ssh_provider": "ssh-static",
+			"hosts":        hostsParam("vm1", "1.2.3.4", "t"),
+			"install":      false,
+		}),
+	})
+	if !rep.Ok {
+		t.Errorf("install=false rejected in direct: %v", rep.Errors)
+	}
+	// ★ install=true в teleport-режиме — принимается.
+	tm := &coremodbootstrap.Module{Transport: coremodbootstrap.TransportTeleport}
+	rep, _ = tm.Validate(context.Background(), &pluginv1.ValidateRequest{
+		State: coremodbootstrap.StateDelivered,
+		Params: mustStruct(t, map[string]any{
+			"ssh_provider": "ssh-static",
+			"hosts":        hostsParam("vm1", "1.2.3.4", "t"),
+			"install":      true,
+		}),
+	})
+	if !rep.Ok {
+		t.Errorf("install=true rejected in teleport transport: %v", rep.Errors)
+	}
 }
 
 // --- teleport-transport guard tests (ADR-063 amendment) ---
@@ -780,6 +852,204 @@ func TestApply_Teleport_MultiHost_PerHostDeadline(t *testing.T) {
 	// На провале шага audit НЕ пишется (B1-strict: failed до audit-секции).
 	if len(aud.events) != 0 {
 		t.Errorf("audit written despite step failure: %+v", aud.events)
+	}
+}
+
+// --- install-mode guard tests (ADR-063 amendment «full-install over SSH») ---
+
+// newTeleportInstallModule — teleport-режим + install-резолвер (full-install).
+func newTeleportInstallModule(dialer push.Dialer, inst coremodbootstrap.InstallResolver, a coremodbootstrap.AuditWriter) *coremodbootstrap.Module {
+	return &coremodbootstrap.Module{
+		Transport: coremodbootstrap.TransportTeleport,
+		Dial:      dialer,
+		Install:   inst,
+		Audit:     a,
+	}
+}
+
+// TestApply_InstallOmitted_TokenOnly_BitForBit — guard (a), реверс-guard: без
+// param `install` (опущен) поведение БИТ-В-БИТ token-only — НИ ОДНОГО install-шага,
+// install-резолвер НЕ дёргается. Ловит регресс, если install выполнился бы
+// безусловно. teleport-режим (install-режим только там), Install-резолвер задан,
+// но при отсутствии param `install` он обязан остаться нетронутым.
+func TestApply_InstallOmitted_TokenOnly_BitForBit(t *testing.T) {
+	sess := &fakeSession{}
+	dialer := &dialRecorder{sess: sess}
+	inst := &fakeInstallResolver{cfg: validInstallConfig()}
+	m := newTeleportInstallModule(dialer.dial, inst, &fakeAudit{})
+
+	const token = "tok-aaa"
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(deliverReq(t, map[string]any{
+		"ssh_provider": "ssh-static",
+		"hosts":        hostsParam("vm1.example.com", "10.0.0.1", token),
+		"start_soul":   false,
+		// install НЕ задан → token-only.
+	}), stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if last := stream.Last(); last == nil || last.GetFailed() {
+		t.Fatalf("expected success, got %+v", last)
+	}
+	// ★ install-резолвер НЕ вызван.
+	if inst.calls != 0 {
+		t.Errorf("install resolver called %d times despite install omitted — must be 0", inst.calls)
+	}
+	// ★ Ровно один Run — запись токена (start_soul:false). Ни одного install-шага.
+	if len(sess.calls) != 1 {
+		t.Fatalf("Session.Run calls = %d, want 1 (token only, no install); cmds=%v", len(sess.calls), cmds(sess))
+	}
+	if string(sess.calls[0].stdin) != token {
+		t.Errorf("token-only: expected token in stdin, got %q", sess.calls[0].stdin)
+	}
+	if !strings.Contains(sess.calls[0].cmd, "cat >") || !strings.Contains(sess.calls[0].cmd, "/etc/soul/token") {
+		t.Errorf("token-only: single Run must be token-write, got %q", sess.calls[0].cmd)
+	}
+}
+
+// TestApply_Install_FullSequenceBeforeToken — guard (b): install=true+teleport →
+// последовательность install-шагов (каталоги → keeper-ca.pem → soul.yml →
+// soul.service → curl-бинарь) ПЕРЕД токеном, токен ПЕРЕД `systemctl start`.
+func TestApply_Install_FullSequenceBeforeToken(t *testing.T) {
+	sess := &fakeSession{}
+	dialer := &dialRecorder{sess: sess}
+	inst := &fakeInstallResolver{cfg: validInstallConfig()}
+	m := newTeleportInstallModule(dialer.dial, inst, &fakeAudit{})
+
+	const token = "tok-secret"
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(deliverReq(t, map[string]any{
+		"ssh_provider": "ssh-static",
+		"hosts":        hostsParam("vm1.example.com", "10.0.0.1", token),
+		"install":      true,
+		// start_soul по умолчанию true.
+	}), stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if last := stream.Last(); last == nil || last.GetFailed() {
+		t.Fatalf("expected success, got %+v", last)
+	}
+	// install-резолвер вызван РОВНО раз (один blueprint на шаг, не per-host).
+	if inst.calls != 1 {
+		t.Errorf("install resolver calls = %d, want 1 (resolved once per step)", inst.calls)
+	}
+
+	// install (6 шагов: каталоги/CA/soul.yml/unit/curl/chmod) + токен + start = 8.
+	if len(sess.calls) != 8 {
+		t.Fatalf("Session.Run calls = %d, want 8 (6 install + token + start); cmds=%v", len(sess.calls), cmds(sess))
+	}
+
+	// ★ Порядок install-шагов до токена (по характерным подстрокам команд).
+	wantSubstr := []string{
+		"install -d",                  // каталоги
+		"/etc/soul/tls/keeper-ca.pem", // CA
+		"/etc/soul/soul.yml",          // soul.yml
+		"soul.service",                // systemd-unit
+		"curl",                        // скачивание бинаря
+		"chmod 0755",                  // права бинаря
+	}
+	for i, want := range wantSubstr {
+		if !strings.Contains(sess.calls[i].cmd, want) {
+			t.Errorf("install step %d cmd = %q, want substring %q", i, sess.calls[i].cmd, want)
+		}
+	}
+
+	// ★ Токен — ПОСЛЕ install-шагов (индекс 6), затем start soul (индекс 7).
+	tokenCall := sess.calls[6]
+	if !strings.Contains(tokenCall.cmd, "/etc/soul/token") || !strings.Contains(tokenCall.cmd, "cat >") {
+		t.Errorf("call[6] must be token-write, got %q", tokenCall.cmd)
+	}
+	if string(tokenCall.stdin) != token {
+		t.Errorf("token not in stdin at call[6]: got %q, want %q", tokenCall.stdin, token)
+	}
+	if sess.calls[7].cmd != "systemctl start soul" {
+		t.Errorf("call[7] = %q, want 'systemctl start soul'", sess.calls[7].cmd)
+	}
+}
+
+// TestApply_Install_SecretsInStdinNotArgv — guard (c), argv-leak: CA-PEM (install)
+// и токен идут в Run.stdin, НЕ в cmd-argv. argv виден в `ps`/journald на самой VM.
+func TestApply_Install_SecretsInStdinNotArgv(t *testing.T) {
+	sess := &fakeSession{}
+	dialer := &dialRecorder{sess: sess}
+	inst := &fakeInstallResolver{cfg: validInstallConfig()}
+	m := newTeleportInstallModule(dialer.dial, inst, &fakeAudit{})
+
+	const token = "tok-zzz-secret"
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(deliverReq(t, map[string]any{
+		"ssh_provider": "ssh-static",
+		"hosts":        hostsParam("vm1.example.com", "10.0.0.1", token),
+		"install":      true,
+		"start_soul":   false,
+	}), stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if last := stream.Last(); last == nil || last.GetFailed() {
+		t.Fatalf("expected success, got %+v", last)
+	}
+
+	// ★ CA-PEM (testCAPem) — ровно в одном шаге через stdin, и НИ В ОДНОЙ команде.
+	caInStdin := false
+	for _, c := range sess.calls {
+		if strings.Contains(c.cmd, testCAPem) {
+			t.Fatalf("SECURITY: CA-PEM leaked into argv: cmd=%q", c.cmd)
+		}
+		if strings.Contains(string(c.stdin), "BEGIN CERTIFICATE") {
+			caInStdin = true
+		}
+	}
+	if !caInStdin {
+		t.Errorf("CA-PEM never delivered via stdin")
+	}
+
+	// ★ Токен — в stdin последнего (token) шага, НЕ в argv ни одной команды.
+	for _, c := range sess.calls {
+		if strings.Contains(c.cmd, token) {
+			t.Fatalf("SECURITY: token leaked into argv: cmd=%q", c.cmd)
+		}
+	}
+	tokenCall := sess.calls[len(sess.calls)-1] // start_soul:false → токен последний
+	if string(tokenCall.stdin) != token {
+		t.Errorf("token not in stdin of final step: got %q", tokenCall.stdin)
+	}
+}
+
+// TestApply_Install_StepError_FailsStep_B1Strict — guard (d): ненулевой exit
+// install-шага → deliverHost fail (B1-strict). Токен НЕ записывается (полу-
+// настроенная VM не онбордится), audit НЕ пишется.
+func TestApply_Install_StepError_FailsStep_B1Strict(t *testing.T) {
+	// 2-й Run (запись keeper-ca.pem) падает.
+	sess := &fakeSession{failAtN: 2, runError: errors.New("permission denied")}
+	dialer := &dialRecorder{sess: sess}
+	inst := &fakeInstallResolver{cfg: validInstallConfig()}
+	aud := &fakeAudit{}
+	m := newTeleportInstallModule(dialer.dial, inst, aud)
+
+	const token = "tok-never-written"
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(deliverReq(t, map[string]any{
+		"ssh_provider": "ssh-static",
+		"hosts":        hostsParam("vm1.example.com", "10.0.0.1", token),
+		"install":      true,
+		"start_soul":   false,
+	}), stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	last := stream.Last()
+	if last == nil || !last.GetFailed() {
+		t.Fatalf("expected failed event on install step error (B1-strict), got %+v", last)
+	}
+	// ★ Токен НЕ записан: до token-шага не дошли (упали на install-шаге 2),
+	// и ни в одном выполненном Run токен не фигурирует (ни stdin, ни argv).
+	for _, c := range sess.calls {
+		if string(c.stdin) == token || strings.Contains(c.cmd, token) {
+			t.Fatalf("token written despite install failure: cmd=%q stdin=%q", c.cmd, c.stdin)
+		}
+	}
+	// На провале install-шага audit НЕ пишется (B1-strict: failed до audit-секции).
+	if len(aud.events) != 0 {
+		t.Errorf("audit written despite install failure: %+v", aud.events)
 	}
 }
 

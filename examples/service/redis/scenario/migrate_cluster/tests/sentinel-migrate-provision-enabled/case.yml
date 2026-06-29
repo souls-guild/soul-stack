@@ -128,20 +128,23 @@ assert:
   task_present:
     # ── provision-тело (redis-provision.yml), ПЕРЕД деплоем ──────────────────────
     # (а) core.cloud.created: count = 1 + replicas_per_master = 2 (sentinel-топология,
-    # НЕ shards*(1+replicas)), generate_userdata. Единственная core.cloud.created в плане.
+    # НЕ shards*(1+replicas)), generate_userdata: false (VM без cloud-init, setup ставит
+    # шаг (б) install: true). Единственная core.cloud.created в плане.
     - module: core.cloud.created
       params_subset:
         provider: wb-dev
         profile: redis-small
         count: 2
-        generate_userdata: true
+        generate_userdata: false
 
-    # (б) core.bootstrap.delivered: доставка per-VM bootstrap-токена по SSH (ADR-063).
-    # hosts = ${ register.provision.hosts } (весь payload, 2 VM с bootstrap_token);
-    # ssh_provider из input.provision. Единственная core.bootstrap.delivered в плане.
+    # (б) core.bootstrap.delivered: install + доставка per-VM bootstrap-токена по SSH
+    # (ADR-063). install: true (VM без cloud-init, setup ставится по SSH); hosts =
+    # ${ register.provision.hosts } (весь payload, 2 VM с bootstrap_token); ssh_provider
+    # из input.provision. Единственная core.bootstrap.delivered в плане.
     - module: core.bootstrap.delivered
       params_subset:
         ssh_provider: ssh-wb
+        install: true
         hosts:
           - { sid: vm-1.example.com, vm_id: i-aaa111, primary_ip: 10.0.0.1, bootstrap_token: tok-vm1 }
           - { sid: vm-2.example.com, vm_id: i-bbb222, primary_ip: 10.0.0.2, bootstrap_token: tok-vm2 }

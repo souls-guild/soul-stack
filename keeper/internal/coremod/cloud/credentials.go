@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/profile"
 	"github.com/souls-guild/soul-stack/keeper/internal/provider"
 	"github.com/souls-guild/soul-stack/keeper/internal/vault"
 )
@@ -30,18 +31,37 @@ type ResolvedProvider struct {
 // обычное credentials-поле.
 const regionKey = "region"
 
-// ProviderResolver резолвит имя Provider-а (param `provider` шага
-// `core.cloud.provisioned`) в [ResolvedProvider]: driver-имя + plain-credentials.
-// Внедряется в [Module]; прод-реализация — [CredentialsResolverPG]. Для unit-
-// тестов модуля — fake (см. provisioned_test.go).
+// ProviderResolver резолвит реестровые ссылки шага `core.cloud.provisioned` в
+// данные для CloudDriver-вызова:
+//
+//   - Resolve(provider-имя) → [ResolvedProvider]: driver-имя + plain-credentials
+//     (param `provider`, симметрия с credentials A-flow).
+//   - ResolveProfile(profile-имя) → VM-spec params из реестра `profiles`
+//     (param `profile`, Вариант A: `profile` = ИМЯ строки реестра /v1/profiles,
+//     не inline-object). Profile обязан быть пред-зарегистрирован.
+//
+// Оба метода держит один [CredentialsResolverPG] (Provider+Vault+Profile —
+// один резолв-слой реестровых ссылок), внедряется в [Module] одним полем. Для
+// unit-тестов модуля — fake (см. provisioned_test.go).
 type ProviderResolver interface {
 	Resolve(ctx context.Context, providerName string) (*ResolvedProvider, error)
+	// ResolveProfile резолвит имя Profile-я в его VM-spec params. Имя не найдено
+	// в реестре → ошибка (caller отдаёт SendFailed; маскировать не требуется —
+	// Profile.Params секретов не несёт, но caller всё равно прогоняет через
+	// maskErr единообразно).
+	ResolveProfile(ctx context.Context, profileName string) (map[string]any, error)
 }
 
 // ProviderReader — узкое подмножество provider-CRUD (SelectByName), нужное
 // резолверу. Сужение упрощает unit-тест без поднятия PG.
 type ProviderReader interface {
 	SelectByName(ctx context.Context, name string) (*provider.Provider, error)
+}
+
+// ProfileReader — узкое подмножество profile-CRUD (SelectByName), симметрично
+// [ProviderReader]. Сужение упрощает unit-тест без поднятия PG.
+type ProfileReader interface {
+	SelectByName(ctx context.Context, name string) (*profile.Profile, error)
 }
 
 // VaultReader — узкое подмножество keeper/internal/vault.Client (ReadKV),
@@ -54,15 +74,18 @@ type VaultReader interface {
 // CredentialsResolverPG — прод-реализация [ProviderResolver]: читает Provider
 // из Postgres, резолвит `credentials_ref` (vault:<mount>/<path>) через Vault KV,
 // возвращает driver-имя (Provider.Type) + plain-credentials с добавленным
-// `region`.
+// `region`. Profile-реестр резолвится через [ResolveProfile] (тот же слой
+// реестровых ссылок).
 type CredentialsResolverPG struct {
 	Providers ProviderReader
+	Profiles  ProfileReader
 	Vault     VaultReader
 }
 
-// NewCredentialsResolverPG — wire-helper.
-func NewCredentialsResolverPG(p ProviderReader, v VaultReader) *CredentialsResolverPG {
-	return &CredentialsResolverPG{Providers: p, Vault: v}
+// NewCredentialsResolverPG — wire-helper. profiles обязателен: param `profile`
+// шага `core.cloud.created` резолвится через ResolveProfile (Вариант A).
+func NewCredentialsResolverPG(p ProviderReader, profiles ProfileReader, v VaultReader) *CredentialsResolverPG {
+	return &CredentialsResolverPG{Providers: p, Profiles: profiles, Vault: v}
 }
 
 // providerReaderFunc адаптирует пакетную функцию provider.SelectByName
@@ -79,6 +102,22 @@ func NewProviderReaderPG(db provider.ExecQueryRower) ProviderReader {
 
 func (r providerReaderFunc) SelectByName(ctx context.Context, name string) (*provider.Provider, error) {
 	return provider.SelectByName(ctx, r.db, name)
+}
+
+// profileReaderFunc адаптирует пакетную функцию profile.SelectByName к
+// [ProfileReader], симметрично [providerReaderFunc].
+type profileReaderFunc struct {
+	db profile.ExecQueryRower
+}
+
+// NewProfileReaderPG оборачивает pgxpool.Pool (или Conn/Tx) в [ProfileReader]
+// поверх свободной функции profile.SelectByName.
+func NewProfileReaderPG(db profile.ExecQueryRower) ProfileReader {
+	return profileReaderFunc{db: db}
+}
+
+func (r profileReaderFunc) SelectByName(ctx context.Context, name string) (*profile.Profile, error) {
+	return profile.SelectByName(ctx, r.db, name)
 }
 
 // Resolve читает Provider по имени, резолвит credentials_ref через Vault и
@@ -111,4 +150,16 @@ func (r *CredentialsResolverPG) Resolve(ctx context.Context, providerName string
 	creds[regionKey] = p.Region
 
 	return &ResolvedProvider{Driver: p.Type, Credentials: creds}, nil
+}
+
+// ResolveProfile читает Profile по имени и возвращает его VM-spec params
+// (Вариант A: param `profile` шага `core.cloud.created` = ИМЯ строки реестра
+// /v1/profiles). Имя не найдено → [profile.ErrProfileNotFound] (caller отдаёт
+// SendFailed). Params могут быть nil (профиль без VM-spec — валидно).
+func (r *CredentialsResolverPG) ResolveProfile(ctx context.Context, profileName string) (map[string]any, error) {
+	p, err := r.Profiles.SelectByName(ctx, profileName)
+	if err != nil {
+		return nil, fmt.Errorf("resolve profile %q: %w", profileName, err)
+	}
+	return p.Params, nil
 }

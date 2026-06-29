@@ -5,6 +5,8 @@
 > **Прогресс имплементации.** Слайс-пилот реализован: модуль + условная регистрация + Deps + scenario-swap (`keeper.push.applied`-заглушка → `core.bootstrap.delivered`) + unit-тесты. **C1 (cloud-init CA-signed host-key) и live-e2e — следующий слайс, НЕ в этом** (см. §Границы MVP). До C1 live-прогон direct-режима оборвётся: `push.Dial` реджектит host-cert свежей VM, у которой cloud-init поставил голый (не CA-signed) host-key.
 >
 > **Amendment (Teleport by-name transport) — реализован (пилот).** Второй транспортный режим `transport: teleport` (by-name через Teleport Proxy, host-verify через Teleport identity-file, C1 неприменим) + keeper-side Teleport-Dialer + retry-до-join + wire-up daemon (teleport-режим) + guard-тесты. См. §Amendment ниже. direct-режим bootstrap-модуля в daemon-е пока не подключён (BootstrapDial=nil → не регистрируется) — это generic-live-слайс.
+>
+> **Amendment (full-install режим для платформ без cloud-init userdata) — Слайс 1/3 реализован.** `core.bootstrap.delivered` получает второй режим работы — **full-install** по Teleport SSH (ставит ВЕСЬ setup, а не только токен) для платформ без cloud-init userdata (напр. WB namespace без `ci_user_data`). Install-blueprint вынесен в shared [keeper/internal/soulinstall](../../keeper/internal/soulinstall) — единый источник правды (canonical `Blueprint`), переиспользуемый обоими путями онбординга. Слайс 1 (blueprint-вынос: `Blueprint`/`RenderCloudInitYAML`/`RenderInstallScript`/`InstallStep` + переключение `cloudinit`-пакета на shared + тесты) **готов**; Слайс 2 (install-режим в самом модуле delivered) и Слайс 3 (scenario `generate_userdata:false`+`install:true`+live) — следующие. См. §Amendment (full-install режим) ниже.
 
 **Контекст.** [ADR-061](0061-onboarding-await-and-midrun-reresolve.md) ввёл единый create-прогон provision→онбординг→роль: `core.cloud.created` создаёт N VM, register-output несёт их `sid` + plain bootstrap-токены, затем `core.soul.registered` с `await_online` блокирующе ждёт онбординга. Между «VM создана» и «`soul`-агент online» VM должна получить свой bootstrap-токен — без него CSR-онбординг ([docs/soul/onboarding.md](../soul/onboarding.md)) не стартует.
 
@@ -79,6 +81,37 @@ cloud-init (B-flat, [ADR-017(h)](0017-keeper-side-core.md)) ставит на VM
 Модуль получает второй транспортный режим `transport: teleport` (vs default `direct`=generic push.Dial). В teleport-режиме доставка через Teleport proxy by-name (target=SID/FQDN, НЕ primary_ip): keeper-side Teleport-Dialer ([keeper/internal/push/dial_teleport.go](../../keeper/internal/push/dial_teleport.go)) делает транспорт+user-auth+host-verify целиком через Teleport identity-file (`creds.SSHClientConfig()`). Отклонения от A1: (1) Authorize/Sign/ephemeral-keypair НЕ вызываются; (2) Vault host-CA для teleport НЕ требуется — host-verify через Teleport CA (C1 неприменим к teleport-режиму); (3) добавлен retry-with-backoff до Teleport-join (~3-5мин). direct-режим (Vault/static, CA-signed host-cert, C1) без изменений. Teleport-creds — keeper.yml push-блок (`push.transport` + `push.teleport.{proxy_addr,identity_file,cluster}`), плагин soul-ssh-teleport в этом флоу не участвует.
 
 Новый scenario-параметр `join_wait_timeout` (int, секунды; default 360) — потолок ожидания Teleport-join, релевантен только в teleport-режиме; по истечении шаг `failed` (B1-strict, `error_locked`). Регистрация модуля в teleport-режиме требует только dialer (`BootstrapDial`), providers/host-CA не нужны (см. гейт в `coremod.Default`).
+
+## Amendment 2026-06-30 — full-install режим (платформы без cloud-init userdata)
+
+**Проблема.** Дизайн A1 предполагает, что cloud-init (B-flat, [ADR-017(h)](0017-keeper-side-core.md)) уже поставил на VM soul-бинарь + CA + systemd-unit, а `core.bootstrap.delivered` кладёт ТОЛЬКО per-VM токен. Это требует, чтобы провайдер принимал userdata при Create (`generate_userdata: true`). Часть платформ userdata **не принимает** — например WB namespace без `ci_user_data`: VM поднимается «голой», cloud-init на ней не отрабатывает, и доставка одного токена бессмысленна (нет ни бинаря, ни конфига, ни unit-а, которые токен должен дополнить). Для таких платформ `generate_userdata` — **не единственный** путь онбординга ([ADR-017(h) amendment](0017-keeper-side-core.md)): весь setup обязан поставиться другим каналом.
+
+**Решение — два режима `core.bootstrap.delivered`:**
+
+- **token-only** (текущее поведение, A1): cloud-init поставил setup, модуль доставляет только токен. Без изменений.
+- **full-install**: модуль ставит **ВЕСЬ** setup по Teleport SSH — те же файлы по тем же путям с теми же правами, что положил бы cloud-init (keeper-ca.pem → soul.yml → soul.service → curl soul-бинарь), затем токен и опц. `systemctl start soul`. Для платформ без userdata.
+
+**Единый источник install-blueprint (DRY).** Чтобы оба пути онбординга (cloud-init userdata и full-install по SSH) ставили **идентичный** результат — те же пути, права, soul.yml и systemd-unit — install-blueprint вынесен в shared-пакет [`keeper/internal/soulinstall`](../../keeper/internal/soulinstall):
+
+- `Blueprint` — canonical резолвленные параметры install-результата (пути/права — константы пакета: `KeeperCAPath`/`SoulConfigPath`/`SoulServicePath`/`SoulBinaryPath` + режимы).
+- `RenderCloudInitYAML(Blueprint) (string, error)` — cloud-config YAML для userdata-пути (его теперь вызывает `cloudinit.GenerateUserdata` тонкой обёрткой).
+- `RenderInstallScript(Blueprint) ([]InstallStep, error)` — последовательность SSH-шагов для full-install-пути (`InstallStep{Cmd, Stdin}`). ПОКА фундамент: вызовется install-режимом в Слайсе 2.
+
+Drift между двумя рендерерами невозможен конструктивно: тело soul.yml и systemd-unit задают функции `SoulConfigYAML`/`SystemdUnit`, а cloud-init-шаблон рендерит их через `{{ .SoulConfigYAMLIndented }}`/`{{ .SystemdUnitIndented }}` (с YAML-indent под `content: |`) — текстовой копии этого материала в шаблоне нет, оба пути физически берут один источник.
+
+**Единственное намеренное расхождение прав между путями** — `keeper-ca.pem`: `0600` при full-install по SSH (floor построже) vs `0644` в cloud-init userdata (CA публичен). Остальной setup идентичен — те же пути, soul.yml и systemd-unit из одного источника.
+
+**Источник blueprint = `keeper.yml::cloud_init` (config-reuse).** Full-install читает тот же config-блок `keeper.yml::cloud_init`, что и userdata-путь (`bootstrap_endpoint`/`tls_ca_ref`/`soul_binary_url`/`soul_binary_ca`). Имя блока остаётся `cloud_init` несмотря на не-cloud-init-режим: это единый источник install-параметров для обоих путей, дублировать его под вторым именем — drift. Уточнение в bin-doc, не новый ADR.
+
+**Security-инвариант сохранён в обоих режимах.** Secret-write идёт через SSH **stdin, не argv** (§A1 шаг 4 для токена; в full-install так же пишутся CA-PEM и soul.yml — `cat > path` со stdin, не `echo` в argv). `RenderInstallScript` гарантирует это конструктивно (PEM-тело в `InstallStep.Stdin`, `.Cmd` несёт только путь записи); покрыто ARGV-LEAK-GUARD-тестом. Per-VM токен по-прежнему не попадает ни в userdata, ни в blueprint — отдельный шаг (token-only часть).
+
+**Слайсы реализации:**
+
+1. **blueprint-вынос (готов)** — `soulinstall.Blueprint`/`RenderCloudInitYAML`/`RenderInstallScript`/`InstallStep`, переключение `keeper/internal/cloudinit` на shared-рендерер (внешний контракт `Config`/`Resolver`/`GenerateUserdata` сохранён), тесты обоих рендереров + anti-drift + ARGV-LEAK-GUARD.
+2. install-режим в `core.bootstrap.delivered` — выполнение `RenderInstallScript`-шагов по Teleport SSH перед token-write, под scenario-флагом.
+3. scenario-интеграция — `core.cloud.created` с `generate_userdata: false` + `core.bootstrap.delivered` с `install: true`; live-валидация на платформе без userdata.
+
+**Cross-ref:** [ADR-017(h)](0017-keeper-side-core.md) — `generate_userdata` НЕ единственный путь онбординга (full-install по SSH — альтернатива для платформ без userdata).
 
 ## Что закрывает / отвергнуто
 

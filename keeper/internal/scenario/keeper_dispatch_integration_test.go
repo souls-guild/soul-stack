@@ -48,6 +48,10 @@ func (fakeResolver) Resolve(_ context.Context, _ string) (*cloud.ResolvedProvide
 	return &cloud.ResolvedProvider{Driver: "fake-driver", Credentials: map[string]any{}}, nil
 }
 
+func (fakeResolver) ResolveProfile(_ context.Context, _ string) (map[string]any, error) {
+	return nil, nil
+}
+
 type fakeHost struct{ cloud.StubHost }
 
 func (fakeHost) Create(_ context.Context, _ string, _, _ map[string]any, count int32, _ string) ([]*pluginv1.VmInfo, error) {

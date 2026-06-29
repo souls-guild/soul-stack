@@ -12,30 +12,32 @@
 // CA Keeper-а резолвится из Vault по `tls_ca_ref` (вызов `ReadKV` поля `ca`).
 // CA — публичный материал, но единый источник правды в Vault нужен для
 // ротации без правок keeper.yml.
+//
+// Сам install-blueprint (write_files + runcmd, пути/права) вынесен в shared
+// [keeper/internal/soulinstall] (ADR-063 amendment 2026-06-30): этот пакет —
+// config-резолвер (Vault) + тонкая обёртка над `soulinstall.RenderCloudInitYAML`.
+// Внешний контракт (Config/Resolver/GenerateUserdata) сохранён.
 package cloudinit
 
 import (
 	"context"
-	"embed"
 	"errors"
 	"fmt"
-	"net"
-	"strconv"
-	"strings"
-	"text/template"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/soulinstall"
 	keepervault "github.com/souls-guild/soul-stack/keeper/internal/vault"
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-//go:embed templates/cloud-init.tmpl
-var templatesFS embed.FS
-
-// parsedTemplate — один раз распарсенный template из embed.FS. parse-time
-// проверяется тестом TestGenerateUserdata_HappyPath; ошибка тут — bug в коде
-// (template byte-compiled из go:embed), а не runtime-issue.
-var parsedTemplate = template.Must(
-	template.New("cloud-init.tmpl").ParseFS(templatesFS, "templates/cloud-init.tmpl"),
+// Значения SoulBinaryCA — какой trust-store использует curl при скачивании
+// soul-бинаря. Re-export из soulinstall (единый словарь для обоих рендереров);
+// сохраняются как публичный API пакета для существующих вызовов/тестов.
+const (
+	// SoulBinaryCAKeeper — pin на PEM-CA Keeper-а (`curl --cacert keeper-ca.pem`).
+	SoulBinaryCAKeeper = soulinstall.SoulBinaryCAKeeper
+	// SoulBinaryCASystem — OS-trust bundle (`curl` без `--cacert`); для artifact-
+	// хостов с публичным CA (например, Nexus за GlobalSign).
+	SoulBinaryCASystem = soulinstall.SoulBinaryCASystem
 )
 
 // Config — резолвленные параметры рендера userdata. Создаётся из
@@ -56,93 +58,49 @@ type Config struct {
 	TLSCAPem string
 
 	// SoulBinaryURL — HTTPS URL для скачивания `soul`-бинаря. Plain http
-	// отвергается (security: pinned-CA только над TLS).
+	// отвергается (security: только над TLS, независимо от SoulBinaryCA).
 	SoulBinaryURL string
+
+	// SoulBinaryCA — trust-store для curl при скачивании бинаря:
+	// SoulBinaryCAKeeper (default/пусто) → `--cacert keeper-ca.pem`;
+	// SoulBinaryCASystem → системный bundle (без `--cacert`, для публичных CA).
+	// Ослабляет ТОЛЬКО верификацию cert artifact-хоста; Bootstrap-канал и
+	// SHA256-verify бинаря не затрагиваются.
+	SoulBinaryCA string
 
 	// SoulVersion — опц. строка, попадает в userdata как комментарий-метка
 	// (для диагностики). Sig-verify бинаря отложен (ADR-017(h) amendment).
 	SoulVersion string
 }
 
-// Validate проверяет, что Config заполнен достаточно для рендера. Возвращает
-// первую найденную ошибку с понятным сообщением (несколько ошибок поднимать
-// не нужно: config-фаза уже отловила format-issues, тут — runtime-precondition).
-func (c Config) Validate() error {
-	if c.BootstrapEndpoint == "" {
-		return errors.New("cloud_init.bootstrap_endpoint is empty")
+// Blueprint собирает [soulinstall.Blueprint] из Config — ЕДИНСТВЕННАЯ точка
+// маппинга cloudinit.Config → shared blueprint. Экспортирована, чтобы install-
+// путь (core.bootstrap.delivered) собирал blueprint тем же маппером, а не
+// дублировал список полей: новое поле Blueprint не потеряется молча в install.
+func (c Config) Blueprint() soulinstall.Blueprint {
+	return soulinstall.Blueprint{
+		BootstrapEndpoint: c.BootstrapEndpoint,
+		KeeperCAPem:       c.TLSCAPem,
+		SoulBinaryURL:     c.SoulBinaryURL,
+		SoulBinaryCA:      c.SoulBinaryCA,
+		SoulVersion:       c.SoulVersion,
 	}
-	if _, _, err := net.SplitHostPort(c.BootstrapEndpoint); err != nil {
-		return fmt.Errorf("cloud_init.bootstrap_endpoint %q is not host:port: %w", c.BootstrapEndpoint, err)
-	}
-	if !strings.Contains(c.TLSCAPem, "BEGIN CERTIFICATE") {
-		return errors.New("cloud_init.tls_ca is not a PEM-encoded certificate")
-	}
-	if c.SoulBinaryURL == "" {
-		return errors.New("cloud_init.soul_binary_url is empty")
-	}
-	if !strings.HasPrefix(c.SoulBinaryURL, "https://") {
-		return fmt.Errorf("cloud_init.soul_binary_url %q must be https (pinned-CA over TLS only)", c.SoulBinaryURL)
-	}
-	return nil
 }
 
-// GenerateUserdata рендерит cloud-config YAML по template. Идемпотентна: на
-// тех же входах даёт байт-идентичный вывод.
+// Validate проверяет, что Config заполнен достаточно для рендера. Делегирует
+// в [soulinstall.Blueprint.Validate] (единый набор проверок для обоих путей).
+func (c Config) Validate() error {
+	return c.Blueprint().Validate()
+}
+
+// GenerateUserdata рендерит cloud-config YAML. Идемпотентна: на тех же входах
+// даёт байт-идентичный вывод. Тонкая обёртка над
+// [soulinstall.RenderCloudInitYAML] (install-blueprint вынесен в shared).
 //
 // Безопасность: вывод проверяется на отсутствие подстроки `bootstrap_token` /
-// `vault:` — защита от случайной утечки секретов из template-а (например, если
-// в Config попадёт строка с такой подстрокой). Это инвариант для всех каналов,
-// куда уходит userdata (cloud-provider metadata, audit-payload, OTel-attrs).
+// `vault:` (security floor) — внутри soulinstall-рендера.
 func GenerateUserdata(cfg Config) (string, error) {
-	if err := cfg.Validate(); err != nil {
-		return "", err
-	}
-	host, portStr, _ := net.SplitHostPort(cfg.BootstrapEndpoint)
-	port, err := strconv.Atoi(portStr)
-	if err != nil || port <= 0 || port > 65535 {
-		return "", fmt.Errorf("cloud_init.bootstrap_endpoint %q: port not valid: %v", cfg.BootstrapEndpoint, err)
-	}
-
-	view := struct {
-		BootstrapHost    string
-		BootstrapPort    int
-		TLSCAPemIndented string
-		SoulBinaryURL    string
-		SoulVersion      string
-	}{
-		BootstrapHost:    host,
-		BootstrapPort:    port,
-		TLSCAPemIndented: indentPEM(cfg.TLSCAPem, "      "),
-		SoulBinaryURL:    cfg.SoulBinaryURL,
-		SoulVersion:      cfg.SoulVersion,
-	}
-
-	var sb strings.Builder
-	if err := parsedTemplate.Execute(&sb, view); err != nil {
-		return "", fmt.Errorf("cloud-init render: %w", err)
-	}
-	out := sb.String()
-
-	// Security floor: userdata НЕ должен нести bootstrap-токен или vault-ref.
-	// Token — отдельный шаг scenario (B-flat), vault-ref — резолвится тут.
-	if strings.Contains(out, "bootstrap_token") {
-		return "", errors.New("cloud-init render: output contains 'bootstrap_token' substring — userdata must not carry per-VM tokens (B-flat invariant)")
-	}
-	if strings.Contains(out, "vault:") {
-		return "", errors.New("cloud-init render: output contains 'vault:' substring — vault-refs must be resolved before render")
-	}
-	return out, nil
-}
-
-// indentPEM сдвигает каждую строку PEM-блока на `prefix`, чтобы он лёг под
-// YAML-ключ с heredoc-style `|` (cloud-config). Trailing newline сохраняется,
-// чтобы между PEM и следующим YAML-ключом был корректный break.
-func indentPEM(pem, prefix string) string {
-	lines := strings.Split(strings.TrimRight(pem, "\n"), "\n")
-	for i, l := range lines {
-		lines[i] = prefix + l
-	}
-	return strings.Join(lines, "\n")
+	return soulinstall.RenderCloudInitYAML(cfg.Blueprint())
 }
 
 // Resolver резолвит [config.KeeperCloudInit] в [Config] с подгрузкой PEM CA
@@ -210,6 +168,7 @@ func (r *Resolver) Resolve(ctx context.Context, cfg *config.KeeperCloudInit) (Co
 		BootstrapEndpoint: cfg.BootstrapEndpoint,
 		TLSCAPem:          caPem,
 		SoulBinaryURL:     cfg.SoulBinaryURL,
+		SoulBinaryCA:      cfg.SoulBinaryCA,
 		SoulVersion:       cfg.SoulVersion,
 	}, nil
 }

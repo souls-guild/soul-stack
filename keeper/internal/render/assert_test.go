@@ -320,3 +320,72 @@ func TestEvalAsserts_IncludeGroupKeepEvaluatesAssert(t *testing.T) {
 		t.Errorf("err не ErrAssertFailed (значит упал не на предикате, а на eval): %v", err)
 	}
 }
+
+// clusterSizeGuardWhen — провижн-гейт size-asserts деплой-веток redis (ADR-061
+// amendment 2026-06-29, create/cluster.yml + sentinel.yml + migrate_cluster/cluster.yml):
+// инверсия include-when provision-тела. STATIC (чистый input, без register.*/
+// soulprint.self → isStaticWhen) → pre-flight вычислит его сам.
+const clusterSizeGuardWhen = "!(has(input.provision) && input.provision.enabled)"
+
+// clusterSizeGuardPred — зеркало cluster size-guard create/cluster.yml (без
+// cluster_topology-ветки, она для предиката-гейта неважна): roster обязан быть ровно
+// shards*(1+replicas).
+const clusterSizeGuardPred = "size(soulprint.hosts) == int(input.shards) * (1 + int(input.replicas_per_master))"
+
+// TestEvalAsserts_ProvisionGateSkipsSizeGuard — ПРЯМОЙ РЕПРО разблокированного блокера
+// (ADR-061 amendment 2026-06-29): create redis cluster С provision.enabled=true при
+// ПУСТОМ roster-е (souls ещё не созданы — VM поднимутся позже шагами redis-provision.yml:
+// core.cloud.created→await_online→refresh_soulprint) НЕ должен падать pre-flight size-
+// guard-ом. Гейт `when: !provision.enabled` СТАТИЧЕН и при provision вычисляется в false
+// → assert placeholder-skip (НЕ ErrAssertFailed). До фикса size(soulprint.hosts)==N
+// падал на пустом roster-е ДО того, как кластер вообще существует (422 на create).
+func TestEvalAsserts_ProvisionGateSkipsSizeGuard(t *testing.T) {
+	manifest := &config.ScenarioManifest{Name: "redis", Tasks: []config.Task{
+		assertTask(clusterSizeGuardWhen, clusterSizeGuardPred, "roster size mismatch"),
+	}}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario: manifest,
+		Input: map[string]any{
+			"redis_type":          "cluster",
+			"shards":              3,
+			"replicas_per_master": 1,
+			"provision":           map[string]any{"enabled": true},
+		},
+		Incarnation: IncarnationMeta{Name: "redis"},
+		Hosts:       nil, // ПУСТОЙ roster — VM ещё не созданы (provision поднимет их позже).
+	}
+	if err := p.EvalAsserts(context.Background(), in); err != nil {
+		t.Fatalf("EvalAsserts: при provision.enabled size-guard должен быть пропущен (when:false), got %v", err)
+	}
+}
+
+// TestEvalAsserts_NoProvisionStillEnforcesSizeGuard — РЕВЕРС-КОНТРОЛЬ: provision опущен
+// (штатный путь по существующему roster-у) + roster не сходится с топологией
+// (shards=3,replicas=1 → ожидается 6, дан 1 хост) → size-guard АКТИВЕН и падает
+// ErrAssertFailed. Доказывает, что провижн-гейт НЕ ослабил проверку для НЕ-provision
+// прогонов (when=!(has(provision)&&...)=true → assert вычисляется как раньше).
+func TestEvalAsserts_NoProvisionStillEnforcesSizeGuard(t *testing.T) {
+	manifest := &config.ScenarioManifest{Name: "redis", Tasks: []config.Task{
+		assertTask(clusterSizeGuardWhen, clusterSizeGuardPred, "roster size mismatch"),
+	}}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario: manifest,
+		Input: map[string]any{
+			"redis_type":          "cluster",
+			"shards":              3,
+			"replicas_per_master": 1,
+			// provision НЕ задан → has(input.provision) false → when=true → assert активен.
+		},
+		Incarnation: IncarnationMeta{Name: "redis"},
+		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"redis"}, nil)}, // 1 != 6.
+	}
+	err := p.EvalAsserts(context.Background(), in)
+	if err == nil {
+		t.Fatal("EvalAsserts: без provision size-guard должен оставаться активным и упасть (roster 1 != 6)")
+	}
+	if !errors.Is(err, ErrAssertFailed) {
+		t.Errorf("err не ErrAssertFailed (значит упал не на предикате, а на eval): %v", err)
+	}
+}
