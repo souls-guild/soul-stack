@@ -106,6 +106,10 @@ assert:
         group: redis
         render_context:
           vars:
+            # password — главный секрет (requirepass): шаблон рендерит из него default-юзера
+            # в users.acl (без default в aclfile Redis игнорит requirepass → built-in default
+            # без пароля → protected-mode рвёт внешние коннекты).
+            password: s3cr3t-redis-pass-create
             users:
               replica:
                 perms: "+psync +replconf +ping"

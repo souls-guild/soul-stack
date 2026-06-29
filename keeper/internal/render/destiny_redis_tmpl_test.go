@@ -51,9 +51,11 @@ func renderRedisTmpl(t *testing.T, name string, root map[string]any) string {
 func TestRedisUsersAcl_DeterministicOrder(t *testing.T) {
 	// vars.users — MAP имя→{perms,state,password}, как его собирает scenario
 	// (merge(list(map)) над .map(...)). Имена специально не отсортированы и не в
-	// порядке, в котором Go-map их вернул бы итерацией.
+	// порядке, в котором Go-map их вернул бы итерацией. vars.password — главный
+	// секрет (requirepass): шаблон рендерит из него default-юзера ПЕРВОЙ строкой.
 	root := map[string]any{
 		"vars": map[string]any{
+			"password": "main-requirepass",
 			"users": map[string]any{
 				"zeta":  map[string]any{"perms": "~* +@all", "state": "on", "password": "zeta-pass"},
 				"alpha": map[string]any{"perms": "~app:* +@read", "state": "on", "password": "alpha-pass"},
@@ -67,16 +69,17 @@ func TestRedisUsersAcl_DeterministicOrder(t *testing.T) {
 	for i := 0; i < runs; i++ {
 		out := renderRedisTmpl(t, "users.acl.tmpl", root)
 
-		// Имена юзеров идут в ОТСОРТИРОВАННОМ порядке: alpha < mike < zeta.
+		// default-юзер ПЕРВОЙ строкой (литерал ДО range), затем юзеры map в
+		// ОТСОРТИРОВАННОМ порядке: alpha < mike < zeta.
 		lines := nonEmptyLines(out)
-		if len(lines) != 3 {
-			t.Fatalf("ожидалось 3 строки user, получено %d:\n%s", len(lines), out)
+		if len(lines) != 4 {
+			t.Fatalf("ожидалось 4 строки user (default + 3 map), получено %d:\n%s", len(lines), out)
 		}
-		gotNames := []string{userName(lines[0]), userName(lines[1]), userName(lines[2])}
-		wantNames := []string{"alpha", "mike", "zeta"}
+		gotNames := []string{userName(lines[0]), userName(lines[1]), userName(lines[2]), userName(lines[3])}
+		wantNames := []string{"default", "alpha", "mike", "zeta"}
 		for j := range wantNames {
 			if gotNames[j] != wantNames[j] {
-				t.Fatalf("порядок юзеров = %v, want %v (range по map → сортировка ключей)\n%s", gotNames, wantNames, out)
+				t.Fatalf("порядок юзеров = %v, want %v (default-литерал + range по map → сортировка ключей)\n%s", gotNames, wantNames, out)
 			}
 		}
 
@@ -88,12 +91,21 @@ func TestRedisUsersAcl_DeterministicOrder(t *testing.T) {
 		}
 	}
 
-	// Пароль пишется ХЕШЕМ (#<sha256>), plaintext в файл НЕ попадает.
+	// Пароль пишется ХЕШЕМ (#<sha256>), plaintext в файл НЕ попадает — ни per-user,
+	// ни главный секрет default-юзера (requirepass).
 	if strings.Contains(first, "zeta-pass") || strings.Contains(first, "alpha-pass") || strings.Contains(first, "mike-pass") {
 		t.Fatalf("plaintext-пароль протёк в users.acl:\n%s", first)
 	}
+	if strings.Contains(first, "main-requirepass") {
+		t.Fatalf("plaintext главного секрета (requirepass) протёк в default-строку users.acl:\n%s", first)
+	}
 	if !strings.Contains(first, "#") {
 		t.Fatalf("в users.acl нет хеша пароля (#<sha256>):\n%s", first)
+	}
+	// default-юзер несёт ХЕШ главного секрета и полный доступ (~* &* +@all) —
+	// аутентифицируется под protected-mode, иначе внешние коннекты DENIED.
+	if !strings.Contains(first, "user default on #") || !strings.Contains(first, "~* &* +@all") {
+		t.Fatalf("default-юзер должен нести #<hash> главного секрета и полный доступ ~* &* +@all:\n%s", first)
 	}
 }
 
@@ -199,15 +211,24 @@ func TestRedisConf_ClusterAnnounceIP_StandaloneOmitsLine(t *testing.T) {
 	}
 }
 
-// TestRedisUsersAcl_Empty — пустой map юзеров → валидный users.acl без строк
-// user (default-юзер объявлен в redis.conf отдельно).
-func TestRedisUsersAcl_Empty(t *testing.T) {
+// TestRedisUsersAcl_EmptyMapKeepsDefault — пустой map юзеров → users.acl содержит
+// РОВНО default-строку (а не пустой файл): default рендерится из vars.password вне
+// map. Пустой aclfile означал бы built-in default БЕЗ пароля → protected-mode рвёт
+// внешние коннекты (cluster-init/REPLICAOF) — guard ловит возврат к пустому файлу.
+func TestRedisUsersAcl_EmptyMapKeepsDefault(t *testing.T) {
 	root := map[string]any{
-		"vars": map[string]any{"users": map[string]any{}},
+		"vars": map[string]any{"password": "main-requirepass", "users": map[string]any{}},
 	}
 	out := renderRedisTmpl(t, "users.acl.tmpl", root)
-	if lines := nonEmptyLines(out); len(lines) != 0 {
-		t.Fatalf("пустой users → ожидалось 0 строк user, получено %d:\n%s", len(lines), out)
+	lines := nonEmptyLines(out)
+	if len(lines) != 1 {
+		t.Fatalf("пустой users → ожидалась 1 строка (default), получено %d:\n%s", len(lines), out)
+	}
+	if userName(lines[0]) != "default" {
+		t.Fatalf("единственная строка должна быть default-юзером, получено %q", lines[0])
+	}
+	if strings.Contains(out, "main-requirepass") {
+		t.Fatalf("plaintext главного секрета протёк в default-строку:\n%s", out)
 	}
 }
 

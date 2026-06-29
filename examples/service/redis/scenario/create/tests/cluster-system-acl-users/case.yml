@@ -6,7 +6,8 @@
 #   2. operator-extra (app) сосуществует со системными в том же файле;
 #   3. КАЖДЫЙ системный — со СВОИМ vault-паролем secret/redis/<inc>/users/<name>#password
 #      (та же ветка, что operator-extra) — нет cross-leak;
-#   4. default-юзер в users.acl ОТСУТСТВУЕТ (он в requirepass redis.conf, не в aclfile);
+#   4. default-юзер в users.acl ЕСТЬ (рендерится шаблоном из render_context.vars.password =
+#      requirepass), но НЕ в map .vars.users (его там нет — он не system-/operator-extra);
 #   5. state_changes.redis_users несёт ТОЛЬКО operator-extra (app) — системные НЕ в
 #      state (пункт 7 d2: доливаются из essence на каждом рендере).
 #
@@ -69,8 +70,9 @@ fixtures:
 assert:
   task_present:
     # users.acl: системные (replica/monitoring/sentinel/haproxy) с perms из essence +
-    # operator-extra (app). КАЖДЫЙ со СВОИМ vault-паролем. default ОТСУТСТВУЕТ (см.
-    # task_absent — здесь deep-compare всего map ловит и лишний default).
+    # operator-extra (app). КАЖДЫЙ со СВОИМ vault-паролем. default в map .vars.users
+    # ОТСУТСТВУЕТ (deep-compare всего map ловит лишний default) — он рендерится шаблоном
+    # из render_context.vars.password, вне map.
     - module: core.file.rendered
       id: redis_acl
       params_subset:
@@ -81,6 +83,10 @@ assert:
         group: redis
         render_context:
           vars:
+            # password — главный секрет (requirepass): шаблон рендерит из него default-юзера
+            # в users.acl (без default в aclfile Redis игнорит requirepass → built-in default
+            # без пароля → protected-mode рвёт внешние коннекты cluster-init плагина).
+            password: s3cr3t-redis-pass-create
             users:
               replica:
                 perms: "+psync +replconf +ping"

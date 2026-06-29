@@ -150,6 +150,10 @@ assert:
         group: redis
         render_context:
           vars:
+            # password — главный секрет (requirepass): шаблон рендерит из него default-юзера
+            # в users.acl (без default в aclfile Redis игнорит requirepass → built-in default
+            # без пароля → protected-mode рвёт внешние коннекты).
+            password: s3cr3t-redis-pass-create
             # СИСТЕМНЫЕ (4, из essence.system_acl_users, доливаются ОБЯЗАТЕЛЬНО — guard 1b)
             # + operator-extra app (last-wins). app не пересекается с системными именами.
             users:

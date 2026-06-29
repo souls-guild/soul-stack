@@ -13,9 +13,23 @@
   Пароль пишется ХЕШЕМ (#<sha256hex>, sprig sha256sum), НЕ plaintext-ом: даже при утечке
   файла исходный пароль не восстанавливается, Redis принимает #<hash> наравне с >password.
 
-  Пустой map → файл без юзеров (default-юзер с requirepass объявлен в redis.conf отдельно,
-  здесь НЕ дублируется).
+  ★ default-юзер РЕНДЕРИТСЯ ЗДЕСЬ (первой строкой), с паролем .vars.password (тот же
+  секрет, что requirepass redis.conf). ПРИЧИНА: при заданном `aclfile` Redis ИГНОРИРУЕТ
+  requirepass для default-юзера — авторитет берётся из aclfile. Если default в aclfile
+  нет, Redis ставит built-in `user default on nopass ~* &* +@all` → при `protected-mode
+  yes` внешние коннекты (cluster-init / REPLICAOF плагины коннектятся к ноде по
+  primary_ip:6379, НЕ loopback) DENIED → «write: broken pipe» на CLUSTER MEET/REPLICAOF.
+  Хеш пароля скрывает секрет в файле (mode 0640, owner redis), как у остальных юзеров.
+  perms = полный доступ built-in default (`~* &* +@all`), state on, флаг sanitize-payload
+  (1:1 с эталонной ansible-ролью redis, vars/main.yml redis_system_users.default).
+  ★ default объявлен ОТДЕЛЬНО от map .vars.users (НЕ долит в него scenario-ем): держит
+  state_changes.redis_users чистым (только operator-extra) и render_context.vars.users
+  без служебной строки.
+
+  Прочие юзеры — из MAP .vars.users (системные + operator-extra, собран scenario). Пустой
+  map → в файле остаётся ТОЛЬКО default-строка (валидный aclfile с авторизованным default).
 */}}
+user default on #{{ .vars.password | sha256sum }} sanitize-payload ~* &* +@all
 {{- range $name, $u := .vars.users }}
 user {{ $name }} {{ $u.state }} #{{ $u.password | sha256sum }} {{ $u.perms }}
 {{- end }}

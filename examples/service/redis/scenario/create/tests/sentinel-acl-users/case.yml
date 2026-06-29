@@ -109,8 +109,9 @@ assert:
   task_present:
     # redis-server users.acl: MAP имя→{perms,state,password} с per-user vault-
     # паролями. СИСТЕМНЫЕ из system_acl_users (replica/monitoring/sentinel/haproxy —
-    # redis-server-набор, БЕЗ default: он объявлен в redis.conf через requirepass,
-    # в users.acl не дублируется) + operator-extra zeta/alpha. sentinel-набор
+    # redis-server-набор) + operator-extra zeta/alpha. default-юзер рендерится шаблоном
+    # из render_context.vars.password (главный секрет = requirepass), НЕ из этого map —
+    # в map его нет (он не operator-/system-extra). sentinel-набор
     # (system_acl_users_sentinel) идёт в ОТДЕЛЬНЫЙ sentinel-users.acl, не сюда.
     - module: core.file.rendered
       id: redis_acl
@@ -122,6 +123,10 @@ assert:
         group: redis
         render_context:
           vars:
+            # password — главный секрет (requirepass): шаблон рендерит из него default-юзера
+            # в users.acl (без default в aclfile Redis игнорит requirepass → built-in default
+            # без пароля → protected-mode рвёт внешние коннекты REPLICAOF/sentinel плагинов).
+            password: s3cr3t-redis-pass-create
             users:
               replica:
                 perms: "+psync +replconf +ping"

@@ -94,7 +94,12 @@
 # redis, mode 0640 — файл содержит password-хеши, читает только сервис. Шаблон
 # range-ит MAP (Go сортирует ключи → строки ACL детерминированы между прогонами,
 # нет ложного change → нет лишнего рестарта) и хеширует пароль (sha256), plaintext
-# не пишет; пустой map → файл без юзеров (валидный aclfile).
+# не пишет; пустой map → в файле остаётся только default-строка (валидный aclfile).
+#
+# ★ password — главный секрет (input.password, тот же requirepass redis.conf): шаблон
+# рендерит из него default-юзера `on #<hash> ~* &* +@all`. БЕЗ default-строки в aclfile
+# Redis игнорирует requirepass и ставит built-in default БЕЗ пароля → protected-mode yes
+# рвёт внешние коннекты cluster-init/REPLICAOF плагинов (см. шапку users.acl.tmpl).
 - name: Render users.acl
   module: core.file.rendered
   register: redis_acl
@@ -105,6 +110,7 @@
     owner: "${ vars.redis_user }"
     group: "${ vars.redis_group }"
     vars:
+      password: "${ input.password }"
       users: "${ default(input.users, {}) }"
 
 # redis.conf из merged-конфига. register, чтобы рестартить redis только при

@@ -80,6 +80,10 @@ assert:
         path: /etc/redis/users.acl
         render_context:
           vars:
+            # password — главный секрет (requirepass): шаблон рендерит из него default-юзера
+            # `on #<hash> ~* &* +@all` (без default в aclfile Redis игнорит requirepass и
+            # ставит built-in default БЕЗ пароля → protected-mode рвёт внешние коннекты).
+            password: s3cr3t-redis-pass-create
             users:
               replica:
                 perms: "+psync +replconf +ping"
