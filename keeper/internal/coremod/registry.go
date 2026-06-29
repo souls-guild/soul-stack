@@ -95,14 +95,29 @@ type Deps struct {
 	// в тестовых сборках без choir-сценариев (модуль тогда не регистрируется).
 	ChoirStore choir.Store
 
+	// BootstrapTransport — режим доставки токена `core.bootstrap.delivered`
+	// (ADR-063 amendment): bootstrap.TransportDirect ("" → direct) или
+	// bootstrap.TransportTeleport. Источник — keeper.yml::push.transport.
+	// Определяет, какие из остальных Bootstrap*-полей обязательны для регистрации
+	// модуля (см. гейт в Default).
+	BootstrapTransport string
+
 	// BootstrapProviders / BootstrapHostCAs / BootstrapDial — зависимости
 	// keeper-side core-модуля `core.bootstrap.delivered` (ADR-063, доставка
-	// per-VM bootstrap-токена по SSH). Все три собираются wire-up-ом из той же
-	// push-инфраструктуры, что и SshDispatcher (дискаверенные SshProvider-плагины
-	// по manifest.Name + host-CA из Vault + push.Dial). Модуль регистрируется
-	// только при непустых BootstrapProviders И непустых BootstrapHostCAs И
-	// заданном BootstrapDial — иначе сборка без SSH-доступа (pull-only / нет
-	// host-CA), и шаг с этим адресом упадёт «unknown keeper-side module».
+	// per-VM bootstrap-токена по SSH).
+	//
+	// direct-режим: все три собираются wire-up-ом из той же push-инфраструктуры,
+	// что и SshDispatcher (дискаверенные SshProvider-плагины по manifest.Name +
+	// host-CA из Vault + push.Dial). Модуль регистрируется только при непустых
+	// BootstrapProviders И непустых BootstrapHostCAs И заданном BootstrapDial.
+	//
+	// teleport-режим (ADR-063 amendment): достаточно BootstrapDial
+	// (push.NewTeleportDialer из keeper.yml::push.teleport); BootstrapProviders/
+	// BootstrapHostCAs не требуются (Authorize/Sign не вызываются, host-verify
+	// через Teleport identity-file).
+	//
+	// Любой непокрытый пробел → модуль не регистрируется, шаг с этим адресом
+	// упадёт «unknown keeper-side module» (понятный «не сконфигурирован»).
 	BootstrapProviders map[string]bootstrap.SshProviderHost
 	BootstrapHostCAs   []push.NamedHostKeyAuthority
 	BootstrapDial      push.Dialer
@@ -147,13 +162,17 @@ func Default(d Deps) *Registry {
 	if d.ChoirStore != nil {
 		mods[choir.Name] = choir.New(d.ChoirStore)
 	}
-	// `core.bootstrap.delivered` (ADR-063) — регистрируется только при полном
-	// наборе SSH-зависимостей (провайдеры + host-CA + dialer). Любой пробел
-	// означает сборку без push-доступа (pull-only / нет host-CA): шаг с этим
+	// `core.bootstrap.delivered` (ADR-063) — регистрируется при наличии нужного
+	// набора зависимостей; набор зависит от transport (ADR-063 amendment):
+	//   - teleport: достаточно BootstrapDial (Teleport-Dialer); providers/host-CA
+	//     не нужны (Authorize/Sign не вызываются, host-verify через Teleport);
+	//   - direct (default): провайдеры + host-CA + dialer (полный SSH-набор).
+	// Любой непокрытый пробел означает сборку без push-доступа: шаг с этим
 	// адресом тогда упадёт «unknown keeper-side module» (как любой не
 	// подключённый). Симметрично условной регистрации `core.choir`.
-	if len(d.BootstrapProviders) > 0 && len(d.BootstrapHostCAs) > 0 && d.BootstrapDial != nil {
+	if bootstrapModuleConfigured(d) {
 		mods[bootstrap.Name] = &bootstrap.Module{
+			Transport: d.BootstrapTransport,
 			Providers: d.BootstrapProviders,
 			HostCAs:   d.BootstrapHostCAs,
 			Dial:      d.BootstrapDial,
@@ -161,6 +180,19 @@ func Default(d Deps) *Registry {
 		}
 	}
 	return NewRegistry(mods)
+}
+
+// bootstrapModuleConfigured решает, регистрировать ли `core.bootstrap.delivered`
+// (ADR-063 + amendment). teleport-режим требует только dialer; direct — полный
+// SSH-набор (провайдеры + host-CA + dialer).
+func bootstrapModuleConfigured(d Deps) bool {
+	if d.BootstrapDial == nil {
+		return false
+	}
+	if d.BootstrapTransport == bootstrap.TransportTeleport {
+		return true
+	}
+	return len(d.BootstrapProviders) > 0 && len(d.BootstrapHostCAs) > 0
 }
 
 // NewRegistry собирает Registry из произвольного набора реализаций.

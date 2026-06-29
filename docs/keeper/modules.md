@@ -247,7 +247,7 @@ cloud-init (B-flat, [ADR-017(h)](../adr/0017-keeper-side-core.md)) уже пос
 | Параметр | Тип | Обязательность | Default | Описание |
 |---|---|---|---|---|
 | `hosts` | array of object `{sid, primary_ip, bootstrap_token}` | required | — | Список VM. На практике приходит CEL-выражением `${ register.<provision>.hosts }` (выход `core.cloud.created`). Пустой список → `failed`. |
-| `ssh_provider` | string | required | — | Имя SshProvider-плагина (`keeper.yml::plugins.ssh_providers[].name`). |
+| `ssh_provider` | string | required | — | Имя SshProvider-плагина (`keeper.yml::plugins.ssh_providers[].name`). **★ В `transport: teleport` НЕ определяет транспорт** (Authorize/Sign не зовутся) — имя уходит ТОЛЬКО в audit-payload. |
 | `token_path` | string | optional | `/etc/soul/token` | Путь файла токена на VM. |
 | `ssh_user` | string | optional | `root` | SSH-пользователь. |
 | `ssh_port` | int (1..65535) | optional | `22` | TCP-порт sshd. |

@@ -1619,6 +1619,52 @@ type KeeperPush struct {
 	//
 	// Hot-reload поддерживается (см. CovenDefaultProviders).
 	ClusterDefaultProvider string `yaml:"cluster_default_provider,omitempty" json:"cluster_default_provider,omitempty"`
+
+	// Transport — режим bootstrap-доставки токена `core.bootstrap.delivered`
+	// (ADR-063 amendment «Teleport by-name transport»): `direct` (default) или
+	// `teleport`. Влияет ТОЛЬКО на keeper-side core-модуль доставки токена, не
+	// на push-прогон Destiny (тот всегда generic).
+	//
+	//   - direct: generic push.Dial по primary_ip — Authorize/Sign плагина +
+	//     CA-signed host-cert verify (host-CA из `host_ca_refs[]`).
+	//   - teleport: by-name через Teleport Proxy (target = SID/FQDN, НЕ IP).
+	//     Транспорт+auth+host-verify целиком через Teleport identity-file
+	//     (`teleport.*` ниже); Authorize/Sign плагина и Vault host-CA НЕ
+	//     используются. Свежая VM появляется в Teleport через ~3-5мин →
+	//     модуль ретраит connect (scenario-param `join_wait_timeout`).
+	//
+	// Пусто трактуется как `direct` (backward-compat). При `teleport` блок
+	// `teleport.*` обязателен (валидация schema-фазы).
+	Transport string `yaml:"transport,omitempty" json:"transport,omitempty"`
+
+	// Teleport — Teleport-creds для `transport: teleport` (ADR-063 amendment).
+	// Обязателен при `transport: teleport`, игнорируется при `direct`. Creds
+	// живут в keeper.yml push-блоке (НЕ в плагине): в teleport-режиме плагин
+	// soul-ssh-teleport в флоу доставки не участвует.
+	Teleport *KeeperPushTeleport `yaml:"teleport,omitempty" json:"teleport,omitempty"`
+}
+
+// Допустимые значения `push.transport` (ADR-063 amendment). Пустая строка =
+// PushTransportDirect (backward-compat).
+const (
+	PushTransportDirect   = "direct"
+	PushTransportTeleport = "teleport"
+)
+
+// KeeperPushTeleport — Teleport identity-creds для by-name bootstrap-транспорта
+// (`push.transport: teleport`, ADR-063 amendment). Все три поля обязательны при
+// teleport-режиме (валидация schema-фазы): identity-file несёт TLS-cert+key для
+// mTLS к Proxy И SSH user-cert + host-CA (known_hosts) для target-handshake —
+// transport+auth+host-verify целиком из него.
+type KeeperPushTeleport struct {
+	// ProxyAddr — `host:port` Teleport Proxy (gRPC sshgrpc-listener, обычно
+	// `<proxy>:443`).
+	ProxyAddr string `yaml:"proxy_addr" json:"proxy_addr"`
+	// IdentityFile — путь к Teleport identity-file (`tctl auth sign` для
+	// bot/role с доступом к целевым нодам). Файл-секрет на диске keeper-а.
+	IdentityFile string `yaml:"identity_file" json:"identity_file"`
+	// Cluster — имя Teleport-кластера, в котором резолвятся node-name-ы.
+	Cluster string `yaml:"cluster" json:"cluster"`
 }
 
 // KeeperPushCARef — один элемент multi-CA `push.host_ca_refs[]` (S7-3).

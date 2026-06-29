@@ -918,6 +918,27 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 	// понятную ошибку «не сконфигурирован».
 	userdataProvider := &cloudInitProvider{store: d.store, resolver: cloudinit.NewResolver(d.vc)}
 
+	// Bootstrap-доставка токена `core.bootstrap.delivered` в teleport-режиме
+	// (ADR-063 amendment): Teleport-Dialer строится ПРЯМО здесь из keeper.yml::
+	// push.teleport — creds (identity-file/proxy/cluster) не требуют spawn-плагинов
+	// и Vault-host-CA, поэтому собираются до setupPushDispatchers (которая идёт
+	// позже и поднимает generic-direct-инфраструктуру). direct-режим bootstrap-
+	// модуля в daemon-е пока не подключается (BootstrapDial=nil → не регистрируется).
+	var bootstrapTransport string
+	var bootstrapDial push.Dialer
+	if cfg.Push != nil && cfg.Push.Transport == config.PushTransportTeleport {
+		td, terr := buildBootstrapTeleportDialer(cfg.Push)
+		if terr != nil {
+			fmt.Fprintf(os.Stderr, "keeper run: build bootstrap teleport dialer: %v\n", terr)
+			return errSetupFailed
+		}
+		bootstrapTransport = config.PushTransportTeleport
+		bootstrapDial = td
+		logger.Info("keeper run: bootstrap token delivery transport = teleport (by-name)",
+			slog.String("proxy_addr", cfg.Push.Teleport.ProxyAddr),
+			slog.String("cluster", cfg.Push.Teleport.Cluster))
+	}
+
 	coreReg := coremod.Default(coremod.Deps{
 		SoulStore: coremodsoul.NewPGStore(d.pool),
 		// SoulPresence / MaxAwaitTimeout — барьер онбординга `core.soul.registered`
@@ -946,6 +967,11 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 		// incarnation_choir_voices через choir-CRUD (S-T2) + проверка
 		// существования инкарнации. Тот же d.pool, что у остальных PG-adapter-ов.
 		ChoirStore: coremodchoir.NewPGStore(d.pool),
+		// `core.bootstrap.delivered` teleport-режим (ADR-063 amendment): dialer
+		// из keeper.yml::push.teleport. nil/"" → direct, и т.к. direct-набор
+		// (providers/host-CA) тут не заполнен, модуль не регистрируется.
+		BootstrapTransport: bootstrapTransport,
+		BootstrapDial:      bootstrapDial,
 	})
 	logger.Info("keeper run: core modules registered",
 		slog.Int("count", len(coreReg.Names())),
@@ -977,6 +1003,22 @@ func (p *cloudInitProvider) GenerateUserdata(ctx context.Context) (string, error
 		return "", err
 	}
 	return cloudinit.GenerateUserdata(resolved)
+}
+
+// buildBootstrapTeleportDialer собирает push.Dialer для teleport-режима
+// `core.bootstrap.delivered` (ADR-063 amendment) из keeper.yml::push.teleport.
+// Creds валидированы schema-фазой (proxy_addr/identity_file/cluster непусты при
+// transport: teleport), но push.NewTeleportDialer повторно проверяет на nil/пусто
+// — defense-in-depth на случай прямой сборки Deps в обход конфиг-валидации.
+func buildBootstrapTeleportDialer(p *config.KeeperPush) (push.Dialer, error) {
+	if p.Teleport == nil {
+		return nil, fmt.Errorf("push.transport=teleport requires push.teleport block")
+	}
+	return push.NewTeleportDialer(push.TeleportDialerConfig{
+		ProxyAddr:    p.Teleport.ProxyAddr,
+		IdentityFile: p.Teleport.IdentityFile,
+		Cluster:      p.Teleport.Cluster,
+	})
 }
 
 // sigilRecordLister проецирует реестр plugin_sigils (sigil.Store.ListActive)

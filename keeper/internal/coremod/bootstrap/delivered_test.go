@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	coremodbootstrap "github.com/souls-guild/soul-stack/keeper/internal/coremod/bootstrap"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/internaltest"
@@ -130,13 +131,18 @@ func mustStruct(t *testing.T, m map[string]any) *structpb.Struct {
 	return s
 }
 
-// hostsParam — один хост в форме register.<provision>.hosts.
-func hostsParam(sid, ip, token string) []any {
-	return []any{map[string]any{
+// hostEntry — один элемент списка hosts в форме register.<provision>.hosts.
+func hostEntry(sid, ip, token string) map[string]any {
+	return map[string]any{
 		"sid":             sid,
 		"primary_ip":      ip,
 		"bootstrap_token": token,
-	}}
+	}
+}
+
+// hostsParam — один хост в форме register.<provision>.hosts.
+func hostsParam(sid, ip, token string) []any {
+	return []any{hostEntry(sid, ip, token)}
 }
 
 // newModule собирает Module с одним провайдером "ssh-static" и мок-Dialer.
@@ -503,6 +509,334 @@ func TestValidate(t *testing.T) {
 	if rep.Ok {
 		t.Errorf("ssh_port=70000 accepted")
 	}
+	// join_wait_timeout < 0 — отвергается (потолок ожидания не может быть отрицательным).
+	rep, _ = m.Validate(context.Background(), &pluginv1.ValidateRequest{
+		State: coremodbootstrap.StateDelivered,
+		Params: mustStruct(t, map[string]any{
+			"ssh_provider":      "ssh-static",
+			"hosts":             hostsParam("vm1", "1.2.3.4", "t"),
+			"join_wait_timeout": float64(-1),
+		}),
+	})
+	if rep.Ok {
+		t.Errorf("join_wait_timeout=-1 accepted")
+	}
+	// join_wait_timeout == 0 — принимается (немедленный deadline: одна попытка без ожидания).
+	rep, _ = m.Validate(context.Background(), &pluginv1.ValidateRequest{
+		State: coremodbootstrap.StateDelivered,
+		Params: mustStruct(t, map[string]any{
+			"ssh_provider":      "ssh-static",
+			"hosts":             hostsParam("vm1", "1.2.3.4", "t"),
+			"join_wait_timeout": float64(0),
+		}),
+	})
+	if !rep.Ok {
+		t.Errorf("join_wait_timeout=0 rejected: %v", rep.Errors)
+	}
+}
+
+// --- teleport-transport guard tests (ADR-063 amendment) ---
+
+// newTeleportModule собирает Module в teleport-режиме: пустые Providers/HostCAs
+// (в teleport не используются), только Dial.
+func newTeleportModule(dialer push.Dialer, a coremodbootstrap.AuditWriter) *coremodbootstrap.Module {
+	return &coremodbootstrap.Module{
+		Transport: coremodbootstrap.TransportTeleport,
+		Dial:      dialer,
+		Audit:     a,
+	}
+}
+
+// TestApply_Teleport_DialsBySID — guard #1 (sid-адресация): в teleport-режиме
+// DialConfig.Host == h.sid (node-name), НЕ primary_ip; Authorize/Sign не зовутся.
+func TestApply_Teleport_DialsBySID(t *testing.T) {
+	prov := &fakeProvider{allow: true}
+	sess := &fakeSession{}
+	dialer := &dialRecorder{sess: sess}
+	m := newTeleportModule(dialer.dial, &fakeAudit{})
+	// Provider всё равно объявлен (Validate требует ssh_provider в params), но
+	// в teleport-режиме он не должен дёргаться.
+	m.Providers = map[string]coremodbootstrap.SshProviderHost{"ssh-static": prov}
+
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(deliverReq(t, map[string]any{
+		"ssh_provider": "ssh-static",
+		"hosts":        hostsParam("vm1.example.com", "10.0.0.1", "tok-aaa"),
+		"start_soul":   false,
+	}), stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if last := stream.Last(); last == nil || last.GetFailed() {
+		t.Fatalf("expected success, got %+v", last)
+	}
+	// ★ target = SID, НЕ primary_ip.
+	if dialer.lastCfg.Host != "vm1.example.com" {
+		t.Errorf("teleport Dial Host = %q, want SID vm1.example.com (NOT primary_ip)", dialer.lastCfg.Host)
+	}
+	// ★ В teleport-режиме DialConfig не несёт Auth/HostAuthorities/ProxyJump.
+	if dialer.lastCfg.Auth != nil {
+		t.Errorf("teleport DialConfig.Auth must be nil, got %v", dialer.lastCfg.Auth)
+	}
+	if len(dialer.lastCfg.HostAuthorities) != 0 {
+		t.Errorf("teleport DialConfig.HostAuthorities must be empty, got %v", dialer.lastCfg.HostAuthorities)
+	}
+	if dialer.lastCfg.ProxyJump != "" {
+		t.Errorf("teleport DialConfig.ProxyJump must be empty, got %q", dialer.lastCfg.ProxyJump)
+	}
+	// ★ Authorize/Sign НЕ вызывались.
+	if len(prov.authCalls) != 0 || len(prov.signCalls) != 0 {
+		t.Errorf("teleport must not call Authorize/Sign: authorize=%d sign=%d", len(prov.authCalls), len(prov.signCalls))
+	}
+}
+
+// TestApply_Direct_DialsByIPAndAuthorizes — guard #2 (transport-selection,
+// direct-half): direct-режим адресует по primary_ip, зовёт Authorize/Sign и
+// передаёт host-CA. (teleport-half покрыт TestApply_Teleport_DialsBySID.)
+func TestApply_Direct_DialsByIPAndAuthorizes(t *testing.T) {
+	prov := &fakeProvider{allow: true}
+	sess := &fakeSession{}
+	dialer := &dialRecorder{sess: sess}
+	// Дефолт Transport ("") => direct.
+	m := newModule(t, prov, dialer.dial, &fakeAudit{})
+
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(deliverReq(t, map[string]any{
+		"ssh_provider": "ssh-static",
+		"hosts":        hostsParam("vm1.example.com", "10.0.0.1", "tok"),
+		"start_soul":   false,
+	}), stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if last := stream.Last(); last == nil || last.GetFailed() {
+		t.Fatalf("expected success, got %+v", last)
+	}
+	if dialer.lastCfg.Host != "10.0.0.1" {
+		t.Errorf("direct Dial Host = %q, want primary_ip 10.0.0.1", dialer.lastCfg.Host)
+	}
+	if len(prov.authCalls) != 1 || len(prov.signCalls) != 1 {
+		t.Errorf("direct must call Authorize+Sign once each: authorize=%d sign=%d", len(prov.authCalls), len(prov.signCalls))
+	}
+	if len(dialer.lastCfg.HostAuthorities) == 0 {
+		t.Errorf("direct must pass host-CA in DialConfig.HostAuthorities")
+	}
+}
+
+// TestApply_Teleport_RetriesUntilJoin — guard #3 (retry-до-join): первые N
+// Dial-ов падают (VM ещё не в Teleport), затем успех — шаг НЕ валится на 1й
+// ошибке, доходит до success.
+func TestApply_Teleport_RetriesUntilJoin(t *testing.T) {
+	sess := &fakeSession{}
+	dialer := &flakyDialer{sess: sess, failFirst: 3, err: errors.New("node offline or does not exist")}
+	m := newTeleportModule(dialer.dial, &fakeAudit{})
+	// Короткий backoff, чтобы 3 ретрая не спали реальные ~12с (поле существует
+	// ровно ради этого, см. Module.RetryBase).
+	m.RetryBase = 1 * time.Millisecond
+	m.RetryJitter = 1 * time.Millisecond
+
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(deliverReq(t, map[string]any{
+		"ssh_provider":      "ssh-static",
+		"hosts":             hostsParam("vm1.example.com", "10.0.0.1", "tok"),
+		"start_soul":        false,
+		"join_wait_timeout": float64(60),
+	}), stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	last := stream.Last()
+	if last == nil || last.GetFailed() {
+		t.Fatalf("expected success after retries, got %+v", last)
+	}
+	// ★ Шаг НЕ упал на 1й ошибке — было >=4 попытки (3 fail + успех).
+	if dialer.calls < 4 {
+		t.Errorf("expected >=4 Dial attempts (3 fail + success), got %d", dialer.calls)
+	}
+}
+
+// TestApply_Teleport_FailsAfterDeadline — guard #3 (deadline-half): если VM так
+// и не появилась в Teleport до join_wait_timeout — шаг failed (B1-strict,
+// error_locked), не висит вечно.
+func TestApply_Teleport_FailsAfterDeadline(t *testing.T) {
+	sess := &fakeSession{}
+	// Всегда падает.
+	dialer := &flakyDialer{sess: sess, failFirst: 1 << 30, err: errors.New("node offline or does not exist")}
+	m := newTeleportModule(dialer.dial, &fakeAudit{})
+
+	stream := internaltest.NewApplyStream()
+	// join_wait_timeout=0 → дедлайн сразу: первая попытка падает, второй
+	// интервал не помещается в бюджет → failed без долгого ожидания.
+	if err := m.Apply(deliverReq(t, map[string]any{
+		"ssh_provider":      "ssh-static",
+		"hosts":             hostsParam("vm1.example.com", "10.0.0.1", "tok"),
+		"start_soul":        false,
+		"join_wait_timeout": float64(0),
+	}), stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	last := stream.Last()
+	if last == nil || !last.GetFailed() {
+		t.Fatalf("expected failed event after join deadline, got %+v", last)
+	}
+}
+
+// TestApply_Teleport_CtxCancel_NoHang — guard: если прогон прерван (ctx
+// отменён) ПОСРЕДИ retry-до-join, шаг выходит быстро с ctx-ошибкой, НЕ висит до
+// join_wait_timeout. Dialer всегда fail; ctx отменяется коротким timeout-ом,
+// бюджет join_wait выставлен большим (60с) — выход обязан случиться по ctx, а не
+// по deadline.
+func TestApply_Teleport_CtxCancel_NoHang(t *testing.T) {
+	dialer := &alwaysFailDialer{err: errors.New("node offline or does not exist")}
+	m := newTeleportModule(dialer.dial, &fakeAudit{})
+	// Мелкий backoff → несколько итераций до отмены (ловим cancel в середине, а
+	// не на самой первой попытке).
+	m.RetryBase = 2 * time.Millisecond
+	m.RetryJitter = 1 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	stream := internaltest.NewApplyStreamCtx(ctx)
+
+	start := time.Now()
+	if err := m.Apply(deliverReq(t, map[string]any{
+		"ssh_provider":      "ssh-static",
+		"hosts":             hostsParam("vm1.example.com", "10.0.0.1", "tok"),
+		"start_soul":        false,
+		"join_wait_timeout": float64(60), // большой бюджет: выход обязан быть по ctx, не по deadline
+	}), stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	elapsed := time.Since(start)
+
+	last := stream.Last()
+	if last == nil || !last.GetFailed() {
+		t.Fatalf("expected failed event on ctx cancel, got %+v", last)
+	}
+	// ★ Не зависание: вышли близко к timeout-у (40мс), далеко от join_wait (60с).
+	if elapsed > 5*time.Second {
+		t.Fatalf("ctx cancel did not short-circuit retry: elapsed=%s (join_wait was 60s)", elapsed)
+	}
+	// Ретраи реально шли (cancel поймали в середине, а не до первой попытки).
+	if dialer.calls < 1 {
+		t.Errorf("expected at least 1 Dial attempt before cancel, got %d", dialer.calls)
+	}
+}
+
+// TestApply_Teleport_MultiHost_PerHostDeadline — guard #5 (multi-host, B1-strict):
+// ≥2 хоста в одном deliver, transport=teleport. Один (vm1) join-ится сразу,
+// второй (vm2) всегда fail → весь шаг failed ПОСЛЕ исчерпания join_wait именно
+// второго хоста.
+//
+// ★ Фактическое поведение (зафиксировано КАК ЕСТЬ): дедлайн per-host
+// independent, НЕ общий бюджет. dialWithJoinRetry вычисляет
+// `deadline = time.Now().Add(joinWait)` при КАЖДОМ вызове (на каждый хост),
+// поэтому хосты обрабатываются последовательно и каждый получает свой полный
+// join_wait. Первый хост доставляется (1 Run — запись токена, start_soul:false),
+// затем шаг валится на втором. join_wait=0 → дедлайн второго истекает сразу
+// (одна fail-попытка), тест не платит реальные минуты.
+func TestApply_Teleport_MultiHost_PerHostDeadline(t *testing.T) {
+	const okSID, failSID = "vm1.example.com", "vm2.example.com"
+	dialer := &perHostDialer{okSID: okSID, err: errors.New("node offline or does not exist")}
+	aud := &fakeAudit{}
+	m := newTeleportModule(dialer.dial, aud)
+
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(deliverReq(t, map[string]any{
+		"ssh_provider": "ssh-static",
+		"hosts": []any{
+			hostEntry(okSID, "10.0.0.1", "tok-1"),
+			hostEntry(failSID, "10.0.0.2", "tok-2"),
+		},
+		"start_soul":        false,
+		"join_wait_timeout": float64(0), // дедлайн второго истекает сразу
+	}), stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	// ★ Весь шаг failed (B1-strict): второй хост не доехал.
+	last := stream.Last()
+	if last == nil || !last.GetFailed() {
+		t.Fatalf("expected failed event when one of N hosts never joins, got %+v", last)
+	}
+	// failed-event указывает на провалившийся хост (vm2), не на первый.
+	if det := last.GetMessage(); det != "" && !strings.Contains(det, failSID) {
+		t.Errorf("failed message does not name the failing host %q: %q", failSID, det)
+	}
+
+	// ★ Первый хост был доставлен ДО провала второго: ровно один Dial вернул
+	// сессию (okSID), на ней прошла запись токена (1 Run, start_soul:false).
+	okSess, ok := dialer.byHost[okSID]
+	if !ok || okSess == nil {
+		t.Fatalf("first host %q was never dialed successfully (per-host independent deadline expected)", okSID)
+	}
+	if len(okSess.calls) != 1 {
+		t.Errorf("first host: Session.Run calls = %d, want 1 (token write, start_soul=false); cmds=%v", len(okSess.calls), cmds(okSess))
+	}
+	if string(okSess.calls[0].stdin) != "tok-1" {
+		t.Errorf("first host token not delivered via stdin: got %q, want tok-1", okSess.calls[0].stdin)
+	}
+	if !okSess.closed {
+		t.Errorf("first host session not closed")
+	}
+
+	// На провале шага audit НЕ пишется (B1-strict: failed до audit-секции).
+	if len(aud.events) != 0 {
+		t.Errorf("audit written despite step failure: %+v", aud.events)
+	}
+}
+
+// flakyDialer — мок push.Dialer: первые failFirst вызовов возвращают err, далее
+// — заданную сессию. Для retry-до-join guard-теста.
+type flakyDialer struct {
+	sess      *fakeSession
+	failFirst int
+	err       error
+	calls     int
+	lastCfg   push.DialConfig
+}
+
+func (d *flakyDialer) dial(_ context.Context, cfg push.DialConfig) (push.Session, error) {
+	d.calls++
+	d.lastCfg = cfg
+	if d.calls <= d.failFirst {
+		return nil, d.err
+	}
+	return d.sess, nil
+}
+
+// alwaysFailDialer — мок push.Dialer, который ВСЕГДА возвращает err и считает
+// попытки. Для ctx-cancel guard-теста (retry не должен зависнуть).
+type alwaysFailDialer struct {
+	err   error
+	calls int
+}
+
+func (d *alwaysFailDialer) dial(_ context.Context, _ push.DialConfig) (push.Session, error) {
+	d.calls++
+	return nil, d.err
+}
+
+// perHostDialer — мок push.Dialer, дающий новую сессию для одного SID и всегда
+// ошибку для остальных. Для multi-host guard-теста (teleport-режим адресует по
+// SID = cfg.Host). Каждый успешный Dial — отдельная *fakeSession (один Run на
+// хост в teleport-режиме при start_soul:false), чтобы проверять доставку
+// независимо.
+type perHostDialer struct {
+	okSID  string
+	err    error
+	calls  int
+	byHost map[string]*fakeSession
+}
+
+func (d *perHostDialer) dial(_ context.Context, cfg push.DialConfig) (push.Session, error) {
+	d.calls++
+	if cfg.Host != d.okSID {
+		return nil, d.err
+	}
+	if d.byHost == nil {
+		d.byHost = make(map[string]*fakeSession)
+	}
+	s := &fakeSession{}
+	d.byHost[cfg.Host] = s
+	return s, nil
 }
 
 // --- helpers ---

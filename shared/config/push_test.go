@@ -275,3 +275,113 @@ func TestPush_HostCARefs_MissingRef(t *testing.T) {
 		t.Fatalf("expected missing_required_field for host_ca_refs[0].ref")
 	}
 }
+
+// TestPush_Transport — табличный guard для validatePushTransport (ADR-063
+// amendment «Teleport by-name transport»). Покрывает enum-валидацию `transport`
+// и обязательность непустых полей блока `teleport` при `transport: teleport`.
+// Каждый кейс задаёт лишь критерий приёмки (нет ошибок / конкретный diag по
+// коду+пути), остальной keeper.yml — минимально-валидная база.
+func TestPush_Transport(t *testing.T) {
+	const validTeleport = `
+  teleport:
+    proxy_addr: proxy.example.com:443
+    identity_file: /etc/soul/teleport-identity
+    cluster: prod`
+
+	cases := []struct {
+		name      string
+		pushBlock string
+		// wantCode/wantPath — ожидаемый diag; пустой wantCode → ошибок быть не должно.
+		wantCode string
+		wantPath string
+	}{
+		{
+			name:      "empty transport defaults to direct (ok)",
+			pushBlock: "push: {}\n",
+		},
+		{
+			name: "transport direct (ok)",
+			pushBlock: `push:
+  transport: direct
+`,
+		},
+		{
+			name: "transport teleport with all three creds (ok)",
+			pushBlock: `push:
+  transport: teleport` + validTeleport + "\n",
+		},
+		{
+			name: "invalid transport enum",
+			pushBlock: `push:
+  transport: bastion
+`,
+			wantCode: "invalid_enum_value",
+			wantPath: "$.push.transport",
+		},
+		{
+			name: "teleport without teleport block",
+			pushBlock: `push:
+  transport: teleport
+`,
+			wantCode: "missing_required_field",
+			wantPath: "$.push.teleport",
+		},
+		{
+			name: "teleport with empty proxy_addr",
+			pushBlock: `push:
+  transport: teleport
+  teleport:
+    identity_file: /etc/soul/teleport-identity
+    cluster: prod
+`,
+			wantCode: "missing_required_field",
+			wantPath: "$.push.teleport.proxy_addr",
+		},
+		{
+			name: "teleport with empty identity_file",
+			pushBlock: `push:
+  transport: teleport
+  teleport:
+    proxy_addr: proxy.example.com:443
+    cluster: prod
+`,
+			wantCode: "missing_required_field",
+			wantPath: "$.push.teleport.identity_file",
+		},
+		{
+			name: "teleport with empty cluster",
+			pushBlock: `push:
+  transport: teleport
+  teleport:
+    proxy_addr: proxy.example.com:443
+    identity_file: /etc/soul/teleport-identity
+`,
+			wantCode: "missing_required_field",
+			wantPath: "$.push.teleport.cluster",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			src := keeperBaseWithPush(tc.pushBlock)
+			cfg, _, diags, err := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
+			if err != nil {
+				t.Fatalf("io error: %v", err)
+			}
+			if tc.wantCode == "" {
+				if diag.HasErrors(diags) {
+					dump(t, diags)
+					t.Fatalf("expected 0 errors")
+				}
+				if cfg.Push == nil {
+					t.Fatal("cfg.Push is nil after parsing valid push block")
+				}
+				return
+			}
+			if !hasCodeAt(diags, tc.wantCode, tc.wantPath) {
+				dump(t, diags)
+				t.Fatalf("expected %s at %s", tc.wantCode, tc.wantPath)
+			}
+		})
+	}
+}

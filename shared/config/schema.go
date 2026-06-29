@@ -750,6 +750,7 @@ func validatePush(root *ast.MappingNode, p *KeeperPush) []diag.Diagnostic {
 		}))
 	}
 	out = append(out, validatePushHostCARefs(root, p.HostCARefs)...)
+	out = append(out, validatePushTransport(root, p)...)
 	seenSIDs := make(map[string]int, len(p.Targets))
 	for i, t := range p.Targets {
 		yp := fmt.Sprintf("$.push.targets[%d]", i)
@@ -792,6 +793,67 @@ func validatePush(root *ast.MappingNode, p *KeeperPush) []diag.Diagnostic {
 		} else {
 			seenProviders[pr.Name] = i
 		}
+	}
+	return out
+}
+
+// validatePushTransport проверяет `push.transport` + блок `push.teleport`
+// (ADR-063 amendment «Teleport by-name transport»):
+//
+//   - `transport` (если задан) — один из `direct` / `teleport`; пусто = `direct`.
+//   - при `transport: teleport` блок `teleport` обязателен, и все три поля
+//     (`proxy_addr` / `identity_file` / `cluster`) непусты — transport+auth+
+//     host-verify целиком идут через identity-file, без них коннект невозможен.
+//   - `teleport.*` при `transport != teleport` — не ошибка (можно держать creds
+//     заранее), но не используется.
+func validatePushTransport(root *ast.MappingNode, p *KeeperPush) []diag.Diagnostic {
+	var out []diag.Diagnostic
+	switch p.Transport {
+	case "", PushTransportDirect, PushTransportTeleport:
+		// ok
+	default:
+		out = append(out, atPath(root, "$.push.transport", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    "invalid_enum_value",
+			Message: fmt.Sprintf("push.transport must be one of [%s, %s], got %q", PushTransportDirect, PushTransportTeleport, p.Transport),
+			Hint:    "omit for default 'direct' (generic SSH by IP); 'teleport' delivers by node-name via Teleport Proxy",
+		}))
+	}
+	if p.Transport != PushTransportTeleport {
+		return out
+	}
+	if p.Teleport == nil {
+		out = append(out, atPath(root, "$.push.teleport", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    "missing_required_field",
+			Message: "push.teleport is required when push.transport: teleport",
+			Hint:    "set push.teleport.{proxy_addr, identity_file, cluster}",
+		}))
+		return out
+	}
+	if p.Teleport.ProxyAddr == "" {
+		out = append(out, atPath(root, "$.push.teleport.proxy_addr", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    "missing_required_field",
+			Message: "push.teleport.proxy_addr is required when push.transport: teleport",
+			Hint:    "host:port of the Teleport Proxy gRPC listener, e.g. proxy.example.com:443",
+		}))
+	}
+	if p.Teleport.IdentityFile == "" {
+		out = append(out, atPath(root, "$.push.teleport.identity_file", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    "missing_required_field",
+			Message: "push.teleport.identity_file is required when push.transport: teleport",
+			Hint:    "path to a Teleport identity file (tctl auth sign) with access to target nodes",
+		}))
+	}
+	if p.Teleport.Cluster == "" {
+		out = append(out, atPath(root, "$.push.teleport.cluster", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    "missing_required_field",
+			Message: "push.teleport.cluster is required when push.transport: teleport",
+			Hint:    "Teleport cluster name in which node-names (SIDs) are resolved",
+		}))
 	}
 	return out
 }

@@ -192,3 +192,23 @@ cadence_scheduler:
 
 # RBAC-каталог — в Postgres (ADR-028), управление через role.* API/MCP;
 # ключ `rbac:` в keeper.yml больше не принимается.
+
+# push — bootstrap-доставка токена `core.bootstrap.delivered` (ADR-063) и
+# push-прогон Destiny (ADR-032). Блок целиком опционален.
+#
+# transport (ADR-063 amendment) — режим bootstrap-доставки токена:
+#   direct (default): generic SSH по primary_ip (Authorize/Sign плагина +
+#     CA-signed host-cert verify через host_ca_refs[]).
+#   teleport: by-name через Teleport Proxy (target = SID/FQDN, НЕ IP).
+#     Транспорт+auth+host-verify целиком через Teleport identity-file;
+#     Authorize/Sign плагина и Vault host-CA НЕ используются. Свежая VM
+#     появляется в Teleport через ~3-5мин → модуль ретраит connect
+#     (scenario-param join_wait_timeout, default 360s).
+#
+# Пример teleport-режима (закомментирован — dev-стенд без Teleport):
+# push:
+#   transport: teleport
+#   teleport:
+#     proxy_addr: proxy.example.com:443     # gRPC sshgrpc-listener Teleport Proxy
+#     identity_file: /etc/soul/teleport-identity   # tctl auth sign, доступ к нодам
+#     cluster: example.com                  # имя кластера, где резолвятся node-name (SID)

@@ -2,7 +2,9 @@
 
 > **Статус: active.** Дизайн architect-а (A1 «тонкая доставка»), имя `core.bootstrap.delivered` через propose-and-wait (подтверждено пользователем). Канон фиксируется docs-first ДО кода; этот ADR **amends [ADR-017](0017-keeper-side-core.md), [ADR-061](0061-onboarding-await-and-midrun-reresolve.md), [ADR-015](0015-core-modules-mvp.md)**.
 >
-> **Прогресс имплементации.** Слайс-пилот реализован: модуль + условная регистрация + Deps + scenario-swap (`keeper.push.applied`-заглушка → `core.bootstrap.delivered`) + unit-тесты. **C1 (cloud-init CA-signed host-key) и live-e2e — следующий слайс, НЕ в этом** (см. §Границы MVP). До C1 live-прогон оборвётся: `push.Dial` реджектит host-cert свежей VM, у которой cloud-init поставил голый (не CA-signed) host-key.
+> **Прогресс имплементации.** Слайс-пилот реализован: модуль + условная регистрация + Deps + scenario-swap (`keeper.push.applied`-заглушка → `core.bootstrap.delivered`) + unit-тесты. **C1 (cloud-init CA-signed host-key) и live-e2e — следующий слайс, НЕ в этом** (см. §Границы MVP). До C1 live-прогон direct-режима оборвётся: `push.Dial` реджектит host-cert свежей VM, у которой cloud-init поставил голый (не CA-signed) host-key.
+>
+> **Amendment (Teleport by-name transport) — реализован (пилот).** Второй транспортный режим `transport: teleport` (by-name через Teleport Proxy, host-verify через Teleport identity-file, C1 неприменим) + keeper-side Teleport-Dialer + retry-до-join + wire-up daemon (teleport-режим) + guard-тесты. См. §Amendment ниже. direct-режим bootstrap-модуля в daemon-е пока не подключён (BootstrapDial=nil → не регистрируется) — это generic-live-слайс.
 
 **Контекст.** [ADR-061](0061-onboarding-await-and-midrun-reresolve.md) ввёл единый create-прогон provision→онбординг→роль: `core.cloud.created` создаёт N VM, register-output несёт их `sid` + plain bootstrap-токены, затем `core.soul.registered` с `await_online` блокирующе ждёт онбординга. Между «VM создана» и «`soul`-агент online» VM должна получить свой bootstrap-токен — без него CSR-онбординг ([docs/soul/onboarding.md](../soul/onboarding.md)) не стартует.
 
@@ -35,7 +37,7 @@ cloud-init (B-flat, [ADR-017(h)](0017-keeper-side-core.md)) ставит на VM
 | Параметр | Тип | Обяз. | Default | Семантика |
 |---|---|---|---|---|
 | `hosts` | array of object `{sid, primary_ip, bootstrap_token}` | required | — | Список VM. На практике приходит CEL-выражением `${ register.<provision>.hosts }` (выход `core.cloud.created`). Пустой список → `failed`. |
-| `ssh_provider` | string | required | — | Имя SshProvider-плагина (`keeper.yml::plugins.ssh_providers[].name`) для SSH-аутентификации. |
+| `ssh_provider` | string | required | — | Имя SshProvider-плагина (`keeper.yml::plugins.ssh_providers[].name`) для SSH-аутентификации. **★ В `transport: teleport` НЕ определяет транспорт** (Authorize/Sign не вызываются) — оператор передаёт имя, но оно идёт ТОЛЬКО в audit-payload. Снятие required-статуса по транспорту — пост-MVP опционально. |
 | `token_path` | string | — | `/etc/soul/token` | Путь файла токена на VM. |
 | `ssh_user` | string | — | `root` | SSH-пользователь. |
 | `ssh_port` | int (1..65535) | — | `22` | TCP-порт sshd. |
@@ -71,6 +73,12 @@ cloud-init (B-flat, [ADR-017(h)](0017-keeper-side-core.md)) ставит на VM
 - **Только токен.** Модуль не доставляет бинарь/модули/конфиг (это cloud-init B-flat). Не путать с `SshDispatcher`/push-прогоном Destiny.
 - **Хосты последовательно.** Параллельная доставка по N VM — возможное расширение без breaking change (per-host операции независимы).
 - **★ C1 — cloud-init CA-signed host-key (required-для-live, СЛЕДУЮЩИЙ слайс).** `push.Dial` доверяет только host-cert, подписанному host-CA (`HostAuthorities`), а не голому host-key (отказ от TOFU). Свежая VM после cloud-init имеет свой host-key — он **обязан** быть CA-signed тем же host-CA, иначе handshake реджектится и доставка падает на connect-е. cloud-init (B-flat userdata) должен генерировать host-key и подписывать его host-CA из `keeper.yml::cloud_init` (или класть pre-signed host-cert). Без C1 модуль валиден на render (L0 Trial) и проходит unit-тесты, но live-e2e не пройдёт. C1 + live-валидация WB cloud — отдельный слайс.
+
+## Amendment (Teleport by-name transport)
+
+Модуль получает второй транспортный режим `transport: teleport` (vs default `direct`=generic push.Dial). В teleport-режиме доставка через Teleport proxy by-name (target=SID/FQDN, НЕ primary_ip): keeper-side Teleport-Dialer ([keeper/internal/push/dial_teleport.go](../../keeper/internal/push/dial_teleport.go)) делает транспорт+user-auth+host-verify целиком через Teleport identity-file (`creds.SSHClientConfig()`). Отклонения от A1: (1) Authorize/Sign/ephemeral-keypair НЕ вызываются; (2) Vault host-CA для teleport НЕ требуется — host-verify через Teleport CA (C1 неприменим к teleport-режиму); (3) добавлен retry-with-backoff до Teleport-join (~3-5мин). direct-режим (Vault/static, CA-signed host-cert, C1) без изменений. Teleport-creds — keeper.yml push-блок (`push.transport` + `push.teleport.{proxy_addr,identity_file,cluster}`), плагин soul-ssh-teleport в этом флоу не участвует.
+
+Новый scenario-параметр `join_wait_timeout` (int, секунды; default 360) — потолок ожидания Teleport-join, релевантен только в teleport-режиме; по истечении шаг `failed` (B1-strict, `error_locked`). Регистрация модуля в teleport-режиме требует только dialer (`BootstrapDial`), providers/host-CA не нужны (см. гейт в `coremod.Default`).
 
 ## Что закрывает / отвергнуто
 
