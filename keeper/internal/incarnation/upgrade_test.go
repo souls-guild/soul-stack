@@ -639,10 +639,11 @@ func TestUnlockForRerun_FromErrorLocked(t *testing.T) {
 	const applyID = "01HRERUN00000000000000000A"
 	tx := &fakeTx{
 		execErrAt: -1,
-		// QueryRow #1 — FOR UPDATE (state, status, created_scenario); #2 — last-scenario
-		// probe (scope=created-scenario: последний упавший = создавший `create` → допуск).
+		// QueryRow #1 — FOR UPDATE (state, status, created_scenario, spec); #2 —
+		// last-scenario probe (scope=created-scenario: последний упавший = создавший
+		// `create` → допуск). spec несёт оператор-input (B1: проброс в RunSpec.Input).
 		queryRows: []scriptedRow{
-			{values: []any{[]byte(`{"primary":"redis-01"}`), "error_locked", "create"}},
+			{values: []any{[]byte(`{"primary":"redis-01"}`), "error_locked", "create", []byte(`{"input":{"version":"8.6.1"}}`)}},
 			{values: []any{"create"}},
 		},
 	}
@@ -657,6 +658,14 @@ func TestUnlockForRerun_FromErrorLocked(t *testing.T) {
 	}
 	if res.CreatedScenario != "create" {
 		t.Errorf("CreatedScenario = %q, want create", res.CreatedScenario)
+	}
+	// B1: stored spec.input возвращён в UnlockResult.Input (caller пробрасывает в
+	// RunSpec.Input перезапускаемого bootstrap-прогона).
+	if res.Input == nil {
+		t.Fatal("UnlockResult.Input = nil — spec.input НЕ прочитан под FOR UPDATE (B1 регресс)")
+	}
+	if res.Input["version"] != "8.6.1" {
+		t.Errorf("UnlockResult.Input[version] = %v, want 8.6.1 (stored spec.input)", res.Input["version"])
 	}
 	if !tx.committed {
 		t.Error("rerun-create tx not committed")
@@ -691,7 +700,7 @@ func TestUnlockForRerun_RejectNonErrorLocked(t *testing.T) {
 		t.Run(status, func(t *testing.T) {
 			tx := &fakeTx{
 				execErrAt: -1,
-				selectRow: scriptedRow{values: []any{[]byte(`{}`), status, "create"}},
+				selectRow: scriptedRow{values: []any{[]byte(`{}`), status, "create", []byte("{}")}},
 			}
 			pool := &fakePool{txs: []*fakeTx{tx}}
 
@@ -716,7 +725,7 @@ func TestUnlockForRerun_RejectNonCreateScenario(t *testing.T) {
 	tx := &fakeTx{
 		execErrAt: -1,
 		queryRows: []scriptedRow{
-			{values: []any{[]byte(`{"primary":"redis-01"}`), "error_locked", "create"}},
+			{values: []any{[]byte(`{"primary":"redis-01"}`), "error_locked", "create", []byte("{}")}},
 			{values: []any{"add_user"}},
 		},
 	}
@@ -743,7 +752,7 @@ func TestUnlockForRerun_CustomCreateScenario(t *testing.T) {
 	tx := &fakeTx{
 		execErrAt: -1,
 		queryRows: []scriptedRow{
-			{values: []any{[]byte(`{"shards":3}`), "error_locked", "create_cluster"}},
+			{values: []any{[]byte(`{"shards":3}`), "error_locked", "create_cluster", []byte(`{"input":{"shards":3,"version":"8.6.1"}}`)}},
 			{values: []any{"create_cluster"}},
 		},
 	}
@@ -755,6 +764,13 @@ func TestUnlockForRerun_CustomCreateScenario(t *testing.T) {
 	}
 	if res.CreatedScenario != "create_cluster" {
 		t.Errorf("CreatedScenario = %q, want create_cluster (рестарт СОЗДАВШЕГО сценария)", res.CreatedScenario)
+	}
+	// B1: stored spec.input cluster-сценария проброшен (shards/version), а не дефолты.
+	if res.Input == nil {
+		t.Fatal("UnlockResult.Input = nil — spec.input cluster НЕ прочитан (B1 регресс)")
+	}
+	if shards, ok := res.Input["shards"].(float64); !ok || shards != 3 {
+		t.Errorf("UnlockResult.Input[shards] = %v (%T), want 3", res.Input["shards"], res.Input["shards"])
 	}
 	if !tx.committed {
 		t.Error("rerun-create tx not committed для валидного custom create-сценария")
@@ -769,7 +785,7 @@ func TestUnlockForRerun_LastScenarioNotCreatedOne(t *testing.T) {
 	tx := &fakeTx{
 		execErrAt: -1,
 		queryRows: []scriptedRow{
-			{values: []any{[]byte(`{"shards":3}`), "error_locked", "create_cluster"}},
+			{values: []any{[]byte(`{"shards":3}`), "error_locked", "create_cluster", []byte("{}")}},
 			{values: []any{"add_user"}},
 		},
 	}

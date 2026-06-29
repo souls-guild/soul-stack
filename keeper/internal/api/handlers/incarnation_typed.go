@@ -126,9 +126,9 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	// Дефолт CreateScenarioName (`create`) удерживает legacy-поведение БЕЗ loader-а
 	// (stub-режим: набор не резолвится, bare не определить → запускаем `create` как
 	// раньше). При наличии loader-а перезаписывается выбором оператора либо bare-
-	// признаком. Используется во всех фазах bootstrap-прогона (ValidateInput /
-	// PreflightAssert / runner.Start); created_scenario пишется через createScenarioCol
-	// (NULL при bareNoScenario).
+	// признаком. Используется во всех фазах bootstrap-прогона (через createScenario
+	// в runner.Start); created_scenario пишется через createScenarioCol (NULL при
+	// bareNoScenario).
 	createScenario := scenario.CreateScenarioName
 	if runScenario {
 		ref, ok := h.services.Resolve(req.Service)
@@ -139,84 +139,18 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 		serviceRef = ref
 		serviceVersion = ref.Ref
 
-		if h.loader != nil {
-			// Резолв+валидация выбора стартового сценария ДО ValidateInput: input
-			// валидируется против `input:`-схемы ИМЕННО выбранного сценария.
-			//   - chosen непустой + в наборе → запускаем его;
-			//   - chosen пустой + набор непуст → 422 create_scenario_required;
-			//   - chosen пустой + набор пуст → bare-инкарнация (без прогона).
-			chosen, isBare, cerr := scenario.ValidateCreateScenarioChoice(ctx, h.loader, serviceRef, req.CreateScenario)
-			if cerr != nil {
-				switch {
-				case errors.Is(cerr, scenario.ErrCreateScenarioRequired):
-					return zero, incProblem(problem.TypeValidationFailed, "create_scenario_required: "+cerr.Error())
-				case errors.Is(cerr, scenario.ErrCreateScenarioNotEligible):
-					return zero, incProblem(problem.TypeValidationFailed, "create_scenario_invalid: "+cerr.Error())
-				}
-				h.logger.Error("incarnation.create: resolve create scenario failed",
-					slog.String("name", req.Name), slog.String("service", req.Service), slog.Any("error", cerr))
-				return zero, incProblem(problem.TypeInternalError, "resolve create scenario failed")
-			}
-			createScenario = chosen
-			bareNoScenario = isBare
-
-			// bare (нет create-сценария): ValidateInput / lifecycle-резолв пропускаем —
-			// прогона не будет, валидировать input против несуществующего сценария
-			// нечем. Инкарнация ниже создаётся StatusReady с created_scenario=NULL.
-			if !bareNoScenario {
-				if err := scenario.ValidateInput(ctx, h.loader, serviceRef, createScenario, input); err != nil {
-					if errors.Is(err, scenario.ErrInputInvalid) {
-						return zero, incProblem(problem.TypeValidationFailed, "input_invalid: "+err.Error())
-					}
-					if errors.Is(err, scenario.ErrValidateFailed) {
-						return zero, incProblem(problem.TypeValidationFailed, "validation_failed: "+err.Error())
-					}
-					h.logger.Error("incarnation.create: input validation failed",
-						slog.String("name", req.Name), slog.String("service", req.Service), slog.Any("error", err))
-					return zero, incProblem(problem.TypeInternalError, "validate scenario create input failed")
-				}
-				art, err := h.loader.Load(ctx, serviceRef)
-				if err != nil {
-					h.logger.Error("incarnation.create: load snapshot for lifecycle failed",
-						slog.String("name", req.Name), slog.String("service", req.Service), slog.Any("error", err))
-					return zero, incProblem(problem.TypeInternalError, "load service snapshot failed")
-				}
-				if art != nil && art.Manifest != nil {
-					autoCreate = art.Manifest.Lifecycle.AutoCreateEnabled()
-				}
-			}
+		// Общий резолв стартового сценария + input-валидация + pre-flight-assert
+		// (R2: единый scenario.ResolveCreatePlan с MCP callIncarnationCreate). h.loader
+		// nil → stub-план (`create`, не bare, auto_create=true). preflighter — h.runner
+		// (type-assertion на scenario.AssertPreflighter внутри; ScenarioStarter-фейк →
+		// no-op).
+		plan, perr := scenario.ResolveCreatePlan(ctx, h.loader, h.runner, req.Name, serviceRef, req.CreateScenario, input, claims.Subject)
+		if perr != nil {
+			return zero, h.mapCreatePlanError(req.Name, req.Service, perr)
 		}
-
-		// Pre-flight assert-гейт (ADR-009/ADR-027 amendment 2026-06-23, форма A):
-		// ПОСЛЕ ValidateInput (input материализован) и ДО incarnation.Create/Start —
-		// синхронно вычисляем assert-предикаты сценария create в scenario-CEL-
-		// контексте (roster connected-souls по covens incarnation = soulprint.hosts).
-		// Любой false → 422 assert_failed БЕЗ записи incarnation и БЕЗ fail-статуса
-		// (отказ на этапе модели, не postfactum error_locked через async render).
-		// Гейтится !bareNoScenario && autoCreate: при bare (нет create-сценария)
-		// или autoCreate=false прогон не стартует — проверять инвариант прогона
-		// незачем (для bare и сценария-то нет). pre-flight опционален (type-assertion
-		// над runner-ом): runner без PreflightAssert / сценарий без assert-задач →
-		// no-op. render-assert остаётся fail-safe для TOCTOU (roster изменился между
-		// pre-flight и стартом goroutine).
-		if !bareNoScenario && autoCreate {
-			if pf, ok := h.runner.(AssertPreflighter); ok {
-				if err := pf.PreflightAssert(ctx, scenario.RunSpec{
-					IncarnationName: req.Name,
-					ServiceRef:      serviceRef,
-					ScenarioName:    createScenario,
-					Input:           input,
-					StartedByAID:    claims.Subject,
-				}); err != nil {
-					if errors.Is(err, scenario.ErrAssertFailed) {
-						return zero, incProblem(problem.TypeAssertFailed, err.Error())
-					}
-					h.logger.Error("incarnation.create: pre-flight assert failed",
-						slog.String("name", req.Name), slog.String("service", req.Service), slog.Any("error", err))
-					return zero, incProblem(problem.TypeInternalError, "pre-flight assert evaluation failed")
-				}
-			}
-		}
+		createScenario = plan.CreateScenario
+		bareNoScenario = plan.BareNoScenario
+		autoCreate = plan.AutoCreate
 	}
 
 	spec := map[string]any{}
@@ -662,11 +596,15 @@ func (h *IncarnationHandler) RerunCreateTyped(ctx context.Context, claims *jwt.C
 
 	// rerun-create перезапускает СОЗДАВШИЙ стартовый сценарий (механизм нескольких
 	// create): UnlockForRerun вернул incarnation.created_scenario под FOR UPDATE.
+	// Input — сохранённый при создании оператор-input (spec.input, прочитан тем же
+	// FOR UPDATE): без него перезапуск bootstrap-а с required-полями (redis cluster:
+	// version/shards) упал бы на input-валидации / применил дефолты (B1).
 	if err := h.runner.Start(ctx, scenario.RunSpec{
 		ApplyID:         applyID,
 		IncarnationName: name,
 		ServiceRef:      serviceRef,
 		ScenarioName:    res.CreatedScenario,
+		Input:           res.Input,
 		StartedByAID:    claims.Subject,
 		FromLocked:      true,
 	}); err != nil {
@@ -1202,6 +1140,31 @@ func (h *IncarnationHandler) HistoryTyped(ctx context.Context, name, applyID str
 		entries = append(entries, toStateHistoryView(e, schema))
 	}
 	return IncarnationHistoryReply{Items: entries, Offset: offset, Limit: limit, Total: total}, nil
+}
+
+// mapCreatePlanError маппит ошибку [scenario.ResolveCreatePlan] в доменный
+// *problemError для CreateTyped (R2: общий резолв create-плана с MCP, но
+// HTTP-маппинг свой). Сохраняет дословные 422-детали исходного inline-кода
+// (create_scenario_required / create_scenario_invalid / input_invalid /
+// validation_failed / assert_failed); прочие (load/parse снапшота, eval-сбой
+// pre-flight) → 500 с логом (стадия-specific текст исходного кода сведён к одному
+// generic-сообщению — HTTP-код 500 не меняется, оператор видит generic).
+func (h *IncarnationHandler) mapCreatePlanError(name, service string, err error) error {
+	switch {
+	case errors.Is(err, scenario.ErrCreateScenarioRequired):
+		return incProblem(problem.TypeValidationFailed, "create_scenario_required: "+err.Error())
+	case errors.Is(err, scenario.ErrCreateScenarioNotEligible):
+		return incProblem(problem.TypeValidationFailed, "create_scenario_invalid: "+err.Error())
+	case errors.Is(err, scenario.ErrInputInvalid):
+		return incProblem(problem.TypeValidationFailed, "input_invalid: "+err.Error())
+	case errors.Is(err, scenario.ErrValidateFailed):
+		return incProblem(problem.TypeValidationFailed, "validation_failed: "+err.Error())
+	case errors.Is(err, scenario.ErrAssertFailed):
+		return incProblem(problem.TypeAssertFailed, err.Error())
+	}
+	h.logger.Error("incarnation.create: resolve create plan failed",
+		slog.String("name", name), slog.String("service", service), slog.Any("error", err))
+	return incProblem(problem.TypeInternalError, "resolve create plan failed")
 }
 
 // incProblem — конструктор доменного *problemError для incarnation *Typed-функций

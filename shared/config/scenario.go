@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/goccy/go-yaml"
@@ -442,6 +443,21 @@ var reCovenName = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
 // 100% эквивалентно дефолту «вся ширина» и не имеет смысла как явная форма,
 // но grammar-wise валидно).
 var reSerialPercent = regexp.MustCompile(`^[1-9][0-9]*%$`)
+
+// ParseSerialPercent разбирает процентную форму `serial: "<N>%"` (§2.4) —
+// единый источник правды о форме percent-string serial для обеих сторон:
+// config-валидатора (validateSerialField, проверяет форму) и рантайм-диспатчера
+// (render: percent → ширина волны). Возвращает целую часть N и ok=true только
+// для строк, точно совпадающих с reSerialPercent (1..99 без leading zeros);
+// иначе (0, false) — невалидная/не-percent форма.
+func ParseSerialPercent(s string) (pct int, ok bool) {
+	if !reSerialPercent.MatchString(s) {
+		return 0, false
+	}
+	// Регекс гарантировал `[1-9][0-9]*` перед `%` — Atoi не может упасть.
+	n, _ := strconv.Atoi(s[:len(s)-1])
+	return n, true
+}
 
 // deprecatedScenarioKeys — устаревшие top-level ключи `main.yml` сценария.
 // `wait:` и `filter:` явно изъяты orchestration.md §2/§4 — поднимаем

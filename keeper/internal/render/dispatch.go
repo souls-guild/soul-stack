@@ -3,7 +3,6 @@ package render
 import (
 	"fmt"
 	"sort"
-	"strconv"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 	"github.com/souls-guild/soul-stack/shared/cel"
@@ -293,13 +292,12 @@ func serialWidth(serial any, n int) int {
 }
 
 // percentWidth переводит percent-форму "<N>%" в число хостов волны: ceil(n*N/100),
-// минимум 1. Невалидная форма (не должна доходить после config-валидатора) → 0.
+// минимум 1. Разбор формы — единый config.ParseSerialPercent (тот же источник
+// правды, что и config-валидатор). Невалидная форма (не должна доходить после
+// config-валидатора) → 0.
 func percentWidth(s string, n int) int {
-	if len(s) < 2 || s[len(s)-1] != '%' {
-		return 0
-	}
-	pct, err := strconv.Atoi(s[:len(s)-1])
-	if err != nil || pct <= 0 {
+	pct, ok := config.ParseSerialPercent(s)
+	if !ok {
 		return 0
 	}
 	w := (n*pct + 99) / 100 // ceil(n*pct/100)

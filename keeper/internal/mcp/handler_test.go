@@ -402,13 +402,13 @@ func (r forUpdateIncRow) Scan(dest ...any) error {
 }
 
 // rerunForUpdateRow — pgx.Row для UnlockForRerun FOR UPDATE-select-а
-// `SELECT state, status, created_scenario`. Scan(state []byte, status string,
-// created_scenario *string — NULL=bare).
+// `SELECT state, status, created_scenario, spec`. Scan(state []byte, status string,
+// created_scenario *string — NULL=bare, spec []byte для проброса spec.input, B1).
 type rerunForUpdateRow struct{ inc *incarnation.Incarnation }
 
 func (r rerunForUpdateRow) Scan(dest ...any) error {
-	if len(dest) != 3 {
-		return fmt.Errorf("rerunForUpdateRow.Scan: want 3 dest, got %d", len(dest))
+	if len(dest) != 4 {
+		return fmt.Errorf("rerunForUpdateRow.Scan: want 4 dest, got %d", len(dest))
 	}
 	state := []byte("null")
 	if r.inc.State != nil {
@@ -419,6 +419,14 @@ func (r rerunForUpdateRow) Scan(dest ...any) error {
 	*dest[1].(*string) = string(r.inc.Status)
 	// created_scenario NULLABLE → **string (NULL=bare-инкарнация).
 	*dest[2].(**string) = r.inc.CreatedScenario
+	// spec jsonb (B1): сериализуем inc.Spec; nil → `{}` (incarnation.InputFromSpec
+	// извлечёт spec.input при наличии).
+	spec := []byte("{}")
+	if r.inc.Spec != nil {
+		b, _ := json.Marshal(r.inc.Spec)
+		spec = b
+	}
+	*dest[3].(*[]byte) = spec
 	return nil
 }
 

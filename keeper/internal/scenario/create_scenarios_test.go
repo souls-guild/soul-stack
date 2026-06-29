@@ -25,6 +25,13 @@ func (f *fakeCreateLoader) Load(_ context.Context, ref artifact.ServiceRef) (*ar
 	return &artifact.ServiceArtifact{Ref: ref, LocalDir: f.localDir}, nil
 }
 
+// ReadFile — для удовлетворения [CreatePlanLoader] (ResolveCreatePlan через
+// ValidateInput). В bare/required/nil-loader-кейсах НЕ вызывается; читает
+// scenario-main с диска снапшота, если до него дошло.
+func (f *fakeCreateLoader) ReadFile(_ *artifact.ServiceArtifact, file string) ([]byte, error) {
+	return os.ReadFile(filepath.Join(f.localDir, file))
+}
+
 // writeScenarioFile подкладывает scenario/<name>/main.yml в снапшот-каталог.
 func writeScenarioFile(t *testing.T, root, name, body string) {
 	t.Helper()
@@ -202,5 +209,128 @@ func TestValidateCreateScenarioChoice_BadName(t *testing.T) {
 	_, _, err := ValidateCreateScenarioChoice(context.Background(), &fakeCreateLoader{localDir: root}, artifact.ServiceRef{Name: "svc"}, "../etc")
 	if !errors.Is(err, ErrCreateScenarioNotEligible) {
 		t.Fatalf("err = %v, want ErrCreateScenarioNotEligible for bad name", err)
+	}
+}
+
+// --- ResolveCreatePlan (R2: общий резолв REST CreateTyped + MCP create) -----
+
+// recordingPreflighter — стаб AssertPreflighter: учитывает факт вызова (gotSpec) и
+// опц. возвращает preErr. Для проверки гейта PreflightAssert в ResolveCreatePlan.
+type recordingPreflighter struct {
+	called  bool
+	gotSpec RunSpec
+	preErr  error
+}
+
+func (p *recordingPreflighter) PreflightAssert(_ context.Context, spec RunSpec) error {
+	p.called = true
+	p.gotSpec = spec
+	return p.preErr
+}
+
+// noPreflighter — НЕ реализует AssertPreflighter (нет метода PreflightAssert):
+// зеркало ScenarioStarter-фейка, при котором гейт no-op.
+type noPreflighter struct{}
+
+// TestResolveCreatePlan_NilLoader_StubPlan — loader==nil (stub-режим REST): план =
+// `create` / не bare / auto_create=true (legacy-поведение без резолва набора),
+// PreflightAssert ВСЁ РАВНО зовётся (вне loader-ветки, как в исходных handler-ах) с
+// именем инкарнации и дефолтным `create`.
+func TestResolveCreatePlan_NilLoader_StubPlan(t *testing.T) {
+	pf := &recordingPreflighter{}
+	plan, err := ResolveCreatePlan(context.Background(), nil, pf, "redis-prod",
+		artifact.ServiceRef{Name: "redis", Ref: "v1"}, "", map[string]any{"x": 1}, "archon-alice")
+	if err != nil {
+		t.Fatalf("ResolveCreatePlan(nil loader): %v", err)
+	}
+	if plan.CreateScenario != CreateScenarioName {
+		t.Errorf("CreateScenario = %q, want %q (stub-дефолт)", plan.CreateScenario, CreateScenarioName)
+	}
+	if plan.BareNoScenario {
+		t.Error("BareNoScenario = true, want false (stub-план не bare)")
+	}
+	if !plan.AutoCreate {
+		t.Error("AutoCreate = false, want true (stub-дефолт)")
+	}
+	// PreflightAssert вызван с именем инкарнации и stub-сценарием `create`.
+	if !pf.called {
+		t.Fatal("PreflightAssert НЕ вызван при nil-loader (регресс: исходный handler звал его вне loader-ветки)")
+	}
+	if pf.gotSpec.IncarnationName != "redis-prod" {
+		t.Errorf("preflight IncarnationName = %q, want redis-prod", pf.gotSpec.IncarnationName)
+	}
+	if pf.gotSpec.ScenarioName != CreateScenarioName {
+		t.Errorf("preflight ScenarioName = %q, want %q", pf.gotSpec.ScenarioName, CreateScenarioName)
+	}
+}
+
+// TestResolveCreatePlan_AssertFails_Propagated — preflighter возвращает
+// ErrAssertFailed → ResolveCreatePlan пробрасывает её (caller маппит в 422), план
+// НЕ возвращается. nil-loader-путь (createScenario=`create`, autoCreate=true → гейт
+// активен), без ValidateInput-стека.
+func TestResolveCreatePlan_AssertFails_Propagated(t *testing.T) {
+	pf := &recordingPreflighter{preErr: ErrAssertFailed}
+	_, err := ResolveCreatePlan(context.Background(), nil, pf, "redis-prod",
+		artifact.ServiceRef{Name: "redis", Ref: "v1"}, "", nil, "archon-alice")
+	if !errors.Is(err, ErrAssertFailed) {
+		t.Fatalf("err = %v, want ErrAssertFailed (проброс из preflighter)", err)
+	}
+}
+
+// TestResolveCreatePlan_NoPreflighter_NoOp — preflighter НЕ реализует
+// AssertPreflighter (ScenarioStarter-фейк) → гейт no-op, план возвращается без
+// ошибки. Регресс = type-assertion упал бы / panic.
+func TestResolveCreatePlan_NoPreflighter_NoOp(t *testing.T) {
+	plan, err := ResolveCreatePlan(context.Background(), nil, noPreflighter{}, "redis-prod",
+		artifact.ServiceRef{Name: "redis", Ref: "v1"}, "", nil, "archon-alice")
+	if err != nil {
+		t.Fatalf("ResolveCreatePlan(no preflighter): %v", err)
+	}
+	if plan.CreateScenario != CreateScenarioName || plan.BareNoScenario || !plan.AutoCreate {
+		t.Errorf("plan = %+v, want {create, false, true}", plan)
+	}
+}
+
+// TestResolveCreatePlan_Bare_NoPreflight — пустой набор (нет create:true) + пустой
+// выбор → bare-план (BareNoScenario=true), PreflightAssert НЕ зовётся (гейт
+// !bare). ValidateInput тоже пропущен (нет ReadFile-вызова — fakeCreateLoader без
+// ReadFile это подтверждает).
+func TestResolveCreatePlan_Bare_NoPreflight(t *testing.T) {
+	root := t.TempDir()
+	writeScenarioFile(t, root, "restart", "name: restart\ntasks: []\n") // нет create:true
+
+	pf := &recordingPreflighter{}
+	plan, err := ResolveCreatePlan(context.Background(), &fakeCreateLoader{localDir: root}, pf,
+		"redis-bare", artifact.ServiceRef{Name: "redis", Ref: "v1"}, "", nil, "archon-alice")
+	if err != nil {
+		t.Fatalf("ResolveCreatePlan(bare): %v", err)
+	}
+	if !plan.BareNoScenario {
+		t.Error("BareNoScenario = false, want true (пустой набор)")
+	}
+	if plan.CreateScenario != "" {
+		t.Errorf("CreateScenario = %q, want \"\" (bare)", plan.CreateScenario)
+	}
+	if pf.called {
+		t.Error("PreflightAssert вызван для bare-плана (гейт !bare нарушен)")
+	}
+}
+
+// TestResolveCreatePlan_Required_Error — непустой набор (create:true) + пустой
+// выбор → ErrCreateScenarioRequired (паритет ValidateCreateScenarioChoice),
+// PreflightAssert НЕ зовётся (ошибка ДО гейта).
+func TestResolveCreatePlan_Required_Error(t *testing.T) {
+	root := t.TempDir()
+	writeScenarioFile(t, root, "create", "name: create\ncreate: true\ntasks: []\n")
+	writeScenarioFile(t, root, "create_cluster", "name: create_cluster\ncreate: true\ntasks: []\n")
+
+	pf := &recordingPreflighter{}
+	_, err := ResolveCreatePlan(context.Background(), &fakeCreateLoader{localDir: root}, pf,
+		"redis-prod", artifact.ServiceRef{Name: "redis", Ref: "v1"}, "", nil, "archon-alice")
+	if !errors.Is(err, ErrCreateScenarioRequired) {
+		t.Fatalf("err = %v, want ErrCreateScenarioRequired", err)
+	}
+	if pf.called {
+		t.Error("PreflightAssert вызван при required-ошибке (должен быть отказ ДО гейта)")
 	}
 }

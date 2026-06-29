@@ -88,6 +88,70 @@ func TestRerunCreate_202_FromErrorLocked(t *testing.T) {
 	}
 }
 
+// TestRerunCreate_ReusesStoredInput_202 — B1 GUARD: rerun-create инкарнации с
+// сохранённым в spec.input оператор-input (redis cluster: version + shards) →
+// этот input проброшен в RunSpec.Input перезапускаемого bootstrap-прогона
+// (НЕ nil, НЕ дефолты). Регресс (исходный баг): RunSpec без Input → nil →
+// перезапуск bootstrap падает на required-валидации (version/shards) либо
+// применяет дефолты — recovery провалившегося provision-create невозможен.
+func TestRerunCreate_ReusesStoredInput_202(t *testing.T) {
+	specJSON := []byte(`{"input":{"version":"8.6.1","shards":3,"connection_mode":"cluster"}}`)
+	db := &fakeIncDB{
+		selectByNameRow: func(n string) pgx.Row { return makeIncStatusRow(n, "error_locked") },
+		unlockSelectRow: func(_ string) pgx.Row { return makeUnlockSelectRowSpec("error_locked", specJSON) },
+	}
+	starter := &fakeStarter{}
+	h := newRerunHandler(db, starter, &fakeAuditWriter{})
+
+	out, err := h.RerunCreateTyped(context.Background(), claims("archon-alice"), "redis-cluster-prod", "rerun cluster bootstrap")
+	if err != nil {
+		t.Fatalf("RerunCreateTyped err = %v", err)
+	}
+	if !audit.IsValidULID(out.ApplyID) {
+		t.Errorf("apply_id not ULID: %q", out.ApplyID)
+	}
+	if starter.calls != 1 {
+		t.Fatalf("scenario start calls = %d, want 1", starter.calls)
+	}
+	// Stored spec.input проброшен в RunSpec.Input — с теми же значениями, что при
+	// первом create (не nil, не дефолты).
+	gotInput := starter.gotSpec.Input
+	if gotInput == nil {
+		t.Fatal("RunSpec.Input = nil — stored spec.input НЕ проброшен (B1 регресс)")
+	}
+	if gotInput["version"] != "8.6.1" {
+		t.Errorf("RunSpec.Input[version] = %v, want 8.6.1 (stored)", gotInput["version"])
+	}
+	// jsonb-числа десериализуются как float64 — сверяем по значению.
+	if shards, ok := gotInput["shards"].(float64); !ok || shards != 3 {
+		t.Errorf("RunSpec.Input[shards] = %v (%T), want 3", gotInput["shards"], gotInput["shards"])
+	}
+	if gotInput["connection_mode"] != "cluster" {
+		t.Errorf("RunSpec.Input[connection_mode] = %v, want cluster (stored)", gotInput["connection_mode"])
+	}
+}
+
+// TestRerunCreate_NoStoredInput_NilInput_202 — B1 контраст: инкарнация БЕЗ
+// сохранённого input (spec.input отсутствует) → RunSpec.Input nil (input не
+// задавался), прогон стартует штатно. Регресс = пустой spec даёт `{}`-input или
+// панику на извлечении.
+func TestRerunCreate_NoStoredInput_NilInput_202(t *testing.T) {
+	db := rerunDB("error_locked") // makeUnlockSelectRow → spec=`{}` (нет input)
+	starter := &fakeStarter{}
+	h := newRerunHandler(db, starter, &fakeAuditWriter{})
+
+	_, err := h.RerunCreateTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun no-input bootstrap")
+	if err != nil {
+		t.Fatalf("RerunCreateTyped err = %v", err)
+	}
+	if starter.calls != 1 {
+		t.Fatalf("scenario start calls = %d, want 1", starter.calls)
+	}
+	if starter.gotSpec.Input != nil {
+		t.Errorf("RunSpec.Input = %v, want nil (spec без input)", starter.gotSpec.Input)
+	}
+}
+
 // TestRerunCreate_RejectNonErrorLocked — из ready/applying/migration_failed
 // rerun отклонён (409 incarnation-locked), прогон НЕ стартует.
 func TestRerunCreate_RejectNonErrorLocked(t *testing.T) {

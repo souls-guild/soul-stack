@@ -113,11 +113,16 @@ func (h *Handler) callIncarnationRerunCreate(ctx context.Context, claims *jwt.Cl
 	// (UnlockForRerun). FromLocked — lockRun не транзитит статус повторно, обязан
 	// увидеть applying. ScenarioName — incarnation.created_scenario из UnlockResult
 	// (механизм нескольких create: рестарт СОЗДАВШЕГО сценария, не хардкод `create`).
+	// Input — сохранённый при создании оператор-input (spec.input из UnlockResult,
+	// прочитан тем же FOR UPDATE): без него перезапуск bootstrap-а с required-полями
+	// (redis cluster: version/shards) упал бы на input-валидации / применил дефолты
+	// (B1, паритет REST RerunCreateTyped).
 	if err := h.deps.ScenarioRunner.Start(ctx, scenario.RunSpec{
 		ApplyID:         applyID,
 		IncarnationName: a.Name,
 		ServiceRef:      serviceRef,
 		ScenarioName:    res.CreatedScenario,
+		Input:           res.Input,
 		StartedByAID:    claims.Subject,
 		FromLocked:      true,
 	}); err != nil {

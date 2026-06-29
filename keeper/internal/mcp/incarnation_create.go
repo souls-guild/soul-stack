@@ -126,113 +126,23 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 			"service "+a.Service+" is not registered (manage via service.* API, ADR-029)")
 	}
 
-	// Sync-валидация input против выбранного create-сценария `input:`-схемы — ДО
-	// insert-а (паритет REST Create: закрытие дыры с required-полями, проверявшимися
-	// лишь async). nil loader → деградация без проверки (как в REST). Невалидный
-	// input → validation-failed; сбой загрузки снапшота → internal-error.
+	// Общий резолв стартового сценария + sync-валидация input + pre-flight-assert
+	// (R2: единый scenario.ResolveCreatePlan с REST CreateTyped). nil loader →
+	// stub-план (`create`, не bare, auto_create=true; в проде MCP loader всегда есть).
+	// preflighter — h.deps.ScenarioRunner (type-assertion на scenario.AssertPreflighter
+	// внутри; ScenarioStarter-фейк без метода → no-op).
 	//
-	// createScenario — стартовый сценарий (механизм нескольких create). Дефолт
-	// CreateScenarioName (`create`) удерживает legacy-поведение БЕЗ loader-а (набор
-	// не резолвится → запускаем `create`). Контракт пустого выбора (Фаза 2, паритет
-	// REST): сервис предлагает create-сценарии + пусто → create_scenario_required;
-	// сервис без них + пусто → bare-инкарнация (ready без прогона, created_scenario=NULL).
-	// bareNoScenario — bare-флаг. autoCreate — политика lifecycle.auto_create (default
-	// true): false → ready без прогона (но created_scenario непустое).
-	createScenario := scenario.CreateScenarioName
-	bareNoScenario := false
-	autoCreate := true
-	if h.deps.ServiceLoader != nil {
-		chosen, isBare, cerr := scenario.ValidateCreateScenarioChoice(ctx, h.deps.ServiceLoader, serviceRef, a.CreateScenario)
-		if cerr != nil {
-			switch {
-			case errors.Is(cerr, scenario.ErrCreateScenarioRequired):
-				return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
-					"create_scenario_required: "+cerr.Error())
-			case errors.Is(cerr, scenario.ErrCreateScenarioNotEligible):
-				return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
-					"create_scenario_invalid: "+cerr.Error())
-			}
-			h.deps.Logger.Error("mcp: incarnation.create resolve create scenario failed",
-				slog.String("name", a.Name),
-				slog.String("service", a.Service),
-				slog.Any("error", cerr),
-			)
-			return h.toolError(req.ID, toolName, mcpCodeInternalError,
-				"resolve create scenario failed")
-		}
-		createScenario = chosen
-		bareNoScenario = isBare
-
-		// bare (нет create-сценария): ValidateInput / lifecycle-резолв пропускаем —
-		// прогона не будет, валидировать input против несуществующего сценария нечем.
-		if !bareNoScenario {
-			if err := scenario.ValidateInput(ctx, h.deps.ServiceLoader, serviceRef, createScenario, a.Input); err != nil {
-				if errors.Is(err, scenario.ErrInputInvalid) {
-					return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
-						"input_invalid: "+err.Error())
-				}
-				if errors.Is(err, scenario.ErrValidateFailed) {
-					return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
-						"validation_failed: "+err.Error())
-				}
-				h.deps.Logger.Error("mcp: incarnation.create input validation failed",
-					slog.String("name", a.Name),
-					slog.String("service", a.Service),
-					slog.Any("error", err),
-				)
-				return h.toolError(req.ID, toolName, mcpCodeInternalError,
-					"validate scenario create input failed")
-			}
-
-			// lifecycle.auto_create из снапшота (тот же ref, loader кеширует слот).
-			art, err := h.deps.ServiceLoader.Load(ctx, serviceRef)
-			if err != nil {
-				h.deps.Logger.Error("mcp: incarnation.create load snapshot for lifecycle failed",
-					slog.String("name", a.Name),
-					slog.String("service", a.Service),
-					slog.Any("error", err),
-				)
-				return h.toolError(req.ID, toolName, mcpCodeInternalError,
-					"load service snapshot failed")
-			}
-			if art != nil && art.Manifest != nil {
-				autoCreate = art.Manifest.Lifecycle.AutoCreateEnabled()
-			}
-		}
+	// createScenario — стартовый сценарий (механизм нескольких create); bareNoScenario
+	// — сервис без `create: true` (ready без прогона, created_scenario=NULL); autoCreate
+	// — политика lifecycle.auto_create (default true): false → ready без прогона, но
+	// created_scenario непустое.
+	plan, perr := scenario.ResolveCreatePlan(ctx, h.deps.ServiceLoader, h.deps.ScenarioRunner, a.Name, serviceRef, a.CreateScenario, a.Input, claims.Subject)
+	if perr != nil {
+		return h.createPlanToolError(req, toolName, a.Name, a.Service, perr)
 	}
-
-	// Pre-flight assert-гейт (ADR-009/ADR-027 amendment 2026-06-23, форма A,
-	// паритет REST CreateTyped): ПОСЛЕ ValidateInput (input материализован) и ДО
-	// incarnation.Create/Start — синхронно вычисляем assert-предикаты сценария
-	// create. Любой false → validation-failed БЕЗ записи incarnation и БЕЗ
-	// fail-статуса (отказ на этапе модели, не postfactum error_locked через async
-	// render). Гейтится !bareNoScenario && autoCreate (при bare нет сценария, при
-	// autoCreate=false прогон не стартует). pre-flight опционален (type-assertion над
-	// runner-ом): runner без PreflightAssert / сценарий без assert-задач → no-op.
-	// render-assert остаётся fail-safe для TOCTOU.
-	if !bareNoScenario && autoCreate {
-		if pf, ok := h.deps.ScenarioRunner.(assertPreflighter); ok {
-			if err := pf.PreflightAssert(ctx, scenario.RunSpec{
-				IncarnationName: a.Name,
-				ServiceRef:      serviceRef,
-				ScenarioName:    createScenario,
-				Input:           a.Input,
-				StartedByAID:    claims.Subject,
-			}); err != nil {
-				if errors.Is(err, scenario.ErrAssertFailed) {
-					return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
-						"assert_failed: "+err.Error())
-				}
-				h.deps.Logger.Error("mcp: incarnation.create pre-flight assert failed",
-					slog.String("name", a.Name),
-					slog.String("service", a.Service),
-					slog.Any("error", err),
-				)
-				return h.toolError(req.ID, toolName, mcpCodeInternalError,
-					"pre-flight assert evaluation failed")
-			}
-		}
-	}
+	createScenario := plan.CreateScenario
+	bareNoScenario := plan.BareNoScenario
+	autoCreate := plan.AutoCreate
 
 	// spec.input пишем только при непустом input — иначе scenario-runner
 	// увидел бы `"input": null` (присутствующий ключ) вместо «оператор не
@@ -350,4 +260,33 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 	})
 
 	return h.toolResult(req.ID, out)
+}
+
+// createPlanToolError маппит ошибку [scenario.ResolveCreatePlan] в jsonRPCResponse
+// keeper.incarnation.create (R2: общий резолв create-плана с REST CreateTyped, но
+// MCP-маппинг свой). Сохраняет дословные detail-префиксы исходного inline-кода
+// (create_scenario_required / create_scenario_invalid / input_invalid /
+// validation_failed / assert_failed → все validation-failed; assert НЕ имеет
+// отдельного MCP-кода — паритет прежнего поведения, в отличие от REST
+// TypeAssertFailed); прочие (load/parse снапшота, eval-сбой) → internal-error с
+// логом.
+func (h *Handler) createPlanToolError(req jsonRPCRequest, toolName, name, service string, err error) jsonRPCResponse {
+	switch {
+	case errors.Is(err, scenario.ErrCreateScenarioRequired):
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "create_scenario_required: "+err.Error())
+	case errors.Is(err, scenario.ErrCreateScenarioNotEligible):
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "create_scenario_invalid: "+err.Error())
+	case errors.Is(err, scenario.ErrInputInvalid):
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "input_invalid: "+err.Error())
+	case errors.Is(err, scenario.ErrValidateFailed):
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "validation_failed: "+err.Error())
+	case errors.Is(err, scenario.ErrAssertFailed):
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "assert_failed: "+err.Error())
+	}
+	h.deps.Logger.Error("mcp: incarnation.create resolve create plan failed",
+		slog.String("name", name),
+		slog.String("service", service),
+		slog.Any("error", err),
+	)
+	return h.toolError(req.ID, toolName, mcpCodeInternalError, "resolve create plan failed")
 }

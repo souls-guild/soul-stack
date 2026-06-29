@@ -116,6 +116,81 @@ func TestToolsCall_IncarnationRerunCreate_Success(t *testing.T) {
 	}
 }
 
+// incLockedSpec — incFn error_locked-инкарнации с заданным spec (для проверки
+// проброса spec.input в RunSpec.Input, B1). created_scenario="create", service=redis.
+func incLockedSpec(spec map[string]any) func(string) (*incarnation.Incarnation, error) {
+	return func(name string) (*incarnation.Incarnation, error) {
+		now := time.Now().UTC()
+		cs := "create"
+		return &incarnation.Incarnation{
+			Name: name, Service: "redis", ServiceVersion: "v1",
+			StateSchemaVersion: 1, Status: incarnation.StatusErrorLocked,
+			State: map[string]any{}, Spec: spec,
+			CreatedScenario: &cs,
+			CreatedAt:       now, UpdatedAt: now,
+		}, nil
+	}
+}
+
+// TestToolsCall_IncarnationRerunCreate_ReusesStoredInput — B1 GUARD (паритет REST
+// TestRerunCreate_ReusesStoredInput_202): rerun-create инкарнации с сохранённым в
+// spec.input оператор-input (redis cluster: version + shards) → input проброшен в
+// RunSpec.Input перезапускаемого bootstrap-прогона (НЕ nil, НЕ дефолты). Регресс:
+// RunSpec без Input → nil → перезапуск падает на required-валидации / дефолтах.
+func TestToolsCall_IncarnationRerunCreate_ReusesStoredInput(t *testing.T) {
+	spec := map[string]any{"input": map[string]any{
+		"version":         "8.6.1",
+		"shards":          float64(3), // jsonb-число
+		"connection_mode": "cluster",
+	}}
+	pool := &fakePool{incFn: incLockedSpec(spec)}
+	starter := &mcpStarter{}
+	h, _ := newTestHandlerFull(t, pool, rerunRBAC(), starter, &mcpResolver{ok: true}, nil)
+
+	resp := callTool(t, h, "archon-alice", "keeper.incarnation.rerun-create",
+		`{"name":"redis-cluster-prod","reason":"rerun cluster bootstrap"}`)
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+	if starter.calls != 1 {
+		t.Fatalf("scenario start calls = %d, want 1", starter.calls)
+	}
+	gotInput := starter.gotSpec.Input
+	if gotInput == nil {
+		t.Fatal("RunSpec.Input = nil — stored spec.input НЕ проброшен (B1 регресс)")
+	}
+	if gotInput["version"] != "8.6.1" {
+		t.Errorf("RunSpec.Input[version] = %v, want 8.6.1 (stored)", gotInput["version"])
+	}
+	if shards, ok := gotInput["shards"].(float64); !ok || shards != 3 {
+		t.Errorf("RunSpec.Input[shards] = %v (%T), want 3", gotInput["shards"], gotInput["shards"])
+	}
+	if gotInput["connection_mode"] != "cluster" {
+		t.Errorf("RunSpec.Input[connection_mode] = %v, want cluster (stored)", gotInput["connection_mode"])
+	}
+}
+
+// TestToolsCall_IncarnationRerunCreate_NoStoredInput_NilInput — B1 контраст:
+// инкарнация без spec.input → RunSpec.Input nil, прогон стартует штатно. Регресс =
+// `{}`-input или паника на извлечении.
+func TestToolsCall_IncarnationRerunCreate_NoStoredInput_NilInput(t *testing.T) {
+	pool := &fakePool{incFn: incLocked(nil, "create")} // Spec=nil → spec=`{}`
+	starter := &mcpStarter{}
+	h, _ := newTestHandlerFull(t, pool, rerunRBAC(), starter, &mcpResolver{ok: true}, nil)
+
+	resp := callTool(t, h, "archon-alice", "keeper.incarnation.rerun-create",
+		`{"name":"redis-prod","reason":"rerun no-input bootstrap"}`)
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+	if starter.calls != 1 {
+		t.Fatalf("scenario start calls = %d, want 1", starter.calls)
+	}
+	if starter.gotSpec.Input != nil {
+		t.Errorf("RunSpec.Input = %v, want nil (spec без input)", starter.gotSpec.Input)
+	}
+}
+
 // TestToolsCall_IncarnationRerunCreate_ScopeDeniesForeignCoven — оператор со scope
 // `incarnation.create-rerun on coven=dev` НЕ может rerun-нуть prod-инкарнацию
 // (covens=[prod]) через MCP. Зеркало REST scope-защиты: без OR-Check по covens ∪

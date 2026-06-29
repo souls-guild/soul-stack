@@ -1010,7 +1010,7 @@ func validateSerialField(kv *ast.MappingValueNode, pathPrefix string) []diag.Dia
 		}
 		return nil
 	case *ast.StringNode:
-		if !reSerialPercent.MatchString(v.Value) {
+		if _, ok := ParseSerialPercent(v.Value); !ok {
 			tok := v.GetToken()
 			return []diag.Diagnostic{diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,

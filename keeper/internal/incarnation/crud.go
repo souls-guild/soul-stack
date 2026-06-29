@@ -888,10 +888,40 @@ var _ TxBeginner = (*pgxpool.Pool)(nil)
 // `create_cluster`. Для bare-инкарнации (created_scenario IS NULL) [UnlockForRerun]
 // отказывает раньше ([ErrRerunScenarioNotCreate]) — это поле непустое всегда,
 // когда rerun дошёл до результата.
+//
+// Input заполняется ТОЛЬКО [UnlockForRerun] (для [Unlock] — nil): сохранённый
+// при создании оператор-input (incarnation.spec.input), прочитанный под тем же
+// FOR UPDATE. Caller пробрасывает его в RunSpec.Input перезапускаемого
+// bootstrap-прогона — rerun-create восстанавливает падение с ТЕМИ ЖЕ входными
+// значениями (version/shards/…), а не с дефолтами. nil = инкарнация создана без
+// input.
 type UnlockResult struct {
 	PreviousStatus  Status
 	HistoryID       string
 	CreatedScenario string
+	Input           map[string]any
+}
+
+// InputFromSpec извлекает сохранённый оператор-input из freeform jsonb-spec
+// инкарнации (`incarnation.spec.input`, кладётся на create-пути:
+// CreateTyped/callIncarnationCreate пишут spec["input"]). Симметрично
+// [readSpecHosts] / [TraitsFromSpec]: отсутствие ключа / не-object форма → nil
+// («input не задавался»), без ошибки (spec freeform, тип не гарантируется).
+// Используется [UnlockForRerun] для проброса stored-input в перезапускаемый
+// bootstrap-прогон (rerun-create восстанавливает падение с теми же значениями).
+func InputFromSpec(spec map[string]any) map[string]any {
+	if spec == nil {
+		return nil
+	}
+	raw, ok := spec["input"]
+	if !ok {
+		return nil
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	return m
 }
 
 // unlockScenarioLabel — значение `state_history.scenario` для unlock-перехода.
@@ -1245,8 +1275,13 @@ func UnlockForRerun(ctx context.Context, pool TxBeginner, name, reason, rerunByA
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	// spec читаем тем же FOR UPDATE-снимком (колонка в конце — порядок state,
+	// status, created_scenario НЕ сдвигается, plain Unlock/Destroy сканируют первые
+	// две, как раньше): из spec.input достаём сохранённый оператор-input для
+	// проброса в перезапускаемый bootstrap-прогон (B1: rerun-create восстанавливает
+	// падение с теми же version/shards/…, а не с дефолтами).
 	const selectForUpdateSQL = `
-SELECT state, status, created_scenario
+SELECT state, status, created_scenario, spec
 FROM incarnation
 WHERE name = $1
 FOR UPDATE
@@ -1255,8 +1290,9 @@ FOR UPDATE
 		stateBytes      []byte
 		statusStr       string
 		createdScenario *string
+		specBytes       []byte
 	)
-	if err := tx.QueryRow(ctx, selectForUpdateSQL, name).Scan(&stateBytes, &statusStr, &createdScenario); err != nil {
+	if err := tx.QueryRow(ctx, selectForUpdateSQL, name).Scan(&stateBytes, &statusStr, &createdScenario, &specBytes); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrIncarnationNotFound
 		}
@@ -1339,7 +1375,18 @@ WHERE name = $1
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("incarnation: commit rerun-create tx: %w", err)
 	}
-	return &UnlockResult{PreviousStatus: previous, HistoryID: historyID, CreatedScenario: *createdScenario}, nil
+
+	// Stored оператор-input из spec.input (B1): null/битый jsonb spec-а — не
+	// ошибка консистентности (spec freeform; unmarshal вернёт nil-map / спарсит
+	// что есть), input — nil при отсутствии ключа. Проброс делает caller через
+	// RunSpec.Input.
+	spec, _ := unmarshalJSONB(specBytes)
+	return &UnlockResult{
+		PreviousStatus:  previous,
+		HistoryID:       historyID,
+		CreatedScenario: *createdScenario,
+		Input:           InputFromSpec(spec),
+	}, nil
 }
 
 // migrationScenarioLabel — значение `state_history.scenario` для шага

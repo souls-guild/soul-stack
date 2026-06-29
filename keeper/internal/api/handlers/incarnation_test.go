@@ -1702,17 +1702,25 @@ func makeIncStatusRow(name, status string) pgx.Row {
 }
 
 // makeUnlockSelectRow конструирует staticRow под FOR UPDATE-select unlock-семейства.
-// Несёт 3 колонки в порядке rerun-select-а (state, status, created_scenario): plain
-// Unlock / Destroy сканируют только первые две (staticRow.Scan читает ровно len(dest)),
-// UnlockForRerun — все три (created_scenario *string, миграции 089+090; "create").
+// Несёт 4 колонки в порядке rerun-select-а (state, status, created_scenario, spec):
+// plain Unlock / Destroy сканируют только первые две (staticRow.Scan читает ровно
+// len(dest)), UnlockForRerun — все четыре (created_scenario *string, миграции
+// 089+090, "create"; spec []byte для проброса spec.input, B1 — пустой `{}`).
 func makeUnlockSelectRow(status string) pgx.Row {
-	return staticRow{values: []any{[]byte("{}"), status, "create"}}
+	return staticRow{values: []any{[]byte("{}"), status, "create", []byte("{}")}}
+}
+
+// makeUnlockSelectRowSpec — как makeUnlockSelectRow, но 4-я колонка spec несёт
+// заданный jsonb (B1 guard: проверка проброса spec.input в RunSpec.Input
+// перезапускаемого bootstrap-прогона).
+func makeUnlockSelectRowSpec(status string, specJSON []byte) pgx.Row {
+	return staticRow{values: []any{[]byte("{}"), status, "create", specJSON}}
 }
 
 // makeUnlockSelectRowBare — как makeUnlockSelectRow, но created_scenario = NULL
 // (bare-инкарнация): 3-й scan-dest **string получит nil. Для rerun-create bare→409.
 func makeUnlockSelectRowBare(status string) pgx.Row {
-	return staticRow{values: []any{[]byte("{}"), status, any(nil)}}
+	return staticRow{values: []any{[]byte("{}"), status, any(nil), []byte("{}")}}
 }
 
 func newRunHandler(db *fakeIncDB, starter *fakeStarter, resolver *fakeResolver) *IncarnationHandler {

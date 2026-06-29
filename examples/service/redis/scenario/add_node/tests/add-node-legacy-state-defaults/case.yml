@@ -53,11 +53,18 @@ assert:
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
-    # modules-dir под ДЕФОЛТНЫМ data_dir (state без data_dir → default /var/lib/redis):
-    # модули активны (version эффективно < 8), путь дефолтный. Дизамбигуатор — path.
+    # data-dir под ДЕФОЛТНЫМ data_dir (state без data_dir → default /var/lib/redis):
+    # доказывает, что default(incarnation.state.data_dir, '/var/lib/redis') сработал
+    # has()-safe на старом state. Дизамбигуатор — path. БЕЗУСЛОВНАЯ задача install.yml
+    # (data-dir создаётся в обеих install-ветках, не gated) — присутствует всегда.
+    # ★ НЕ modules-dir (/var/lib/redis/modules): после редизайна «модули ВСЕГДА ВСЕ»
+    # (2026-06-25) modules-группа gated на vars.redis_modules_enabled, требующий
+    # НЕПУСТОЙ modules_base_url; legacy-state его не несёт → default(...,'') = '' →
+    # vanilla redis → modules.yml group-drop (modules-dir в плане НЕТ — корректно).
+    # data_dir-дефолт доказываем безусловной data-dir задачей.
     - module: core.file.directory
       params_subset:
-        path: /var/lib/redis/modules
+        path: /var/lib/redis
     # ADD-NODE плагин: пустой master_sid → master.addr пуст (role=master). Endpoint-ы
     # из roster. Доказывает, что day-2-проход дошёл до конца (render не сорвался).
     - module: community.redis.cluster

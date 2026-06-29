@@ -1128,10 +1128,11 @@ func staticRow2(a, b time.Time) pgx.Row          { return incStaticRow{values: [
 func staticRow2Bytes(b []byte, s string) pgx.Row { return incStaticRow{values: []any{b, s}} }
 
 // rerunSelectRow — FOR UPDATE-select под UnlockForRerun (state, status,
-// created_scenario; миграция 089). Отдельно от staticRow2Bytes: rerun-путь
-// сканирует ТРИ колонки, plain Unlock/Destroy — две.
+// created_scenario, spec; миграция 089 + B1). Отдельно от staticRow2Bytes:
+// rerun-путь сканирует ЧЕТЫРЕ колонки (4-я spec для проброса spec.input), plain
+// Unlock/Destroy — две.
 func rerunSelectRow(state []byte, status string) pgx.Row {
-	return incStaticRow{values: []any{state, status, "create"}}
+	return incStaticRow{values: []any{state, status, "create", []byte("{}")}}
 }
 
 type errRow2 struct{ err error }

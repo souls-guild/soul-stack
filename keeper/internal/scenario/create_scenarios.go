@@ -109,6 +109,130 @@ func ValidateCreateScenarioChoice(ctx context.Context, loader CreateScenarioLoad
 	return chosen, false, nil
 }
 
+// CreatePlanLoader — узкая поверхность [artifact.ServiceLoader], нужная
+// [ResolveCreatePlan]: объединяет требования [CreateScenarioLoader] (резолв
+// create-набора + lifecycle-снапшот) и [InputScenarioLoader] (чтение
+// scenario/<name>/main.yml для input-валидации). *artifact.ServiceLoader
+// удовлетворяет; unit-тесты подставляют fake без git-стека.
+type CreatePlanLoader interface {
+	Load(ctx context.Context, ref artifact.ServiceRef) (*artifact.ServiceArtifact, error)
+	ReadFile(art *artifact.ServiceArtifact, file string) ([]byte, error)
+}
+
+// AssertPreflighter — узкая поверхность scenario.Runner для pre-flight-гейта
+// `assert:` ([Runner.PreflightAssert], ADR-009/ADR-027 amendment 2026-06-23,
+// форма A). *Runner удовлетворяет; ScenarioStarter-фейки без метода → type-
+// assertion в [ResolveCreatePlan] не проходит, assert-гейт no-op (как раньше в
+// обоих handler-ах). Дублирует локальные интерфейсы handlers.AssertPreflighter /
+// mcp.assertPreflighter — оставлены ради изоляции пакетов (handlers/mcp не тянут
+// scenario-internal-интерфейс в свою сигнатуру), но фактический гейт сведён сюда.
+type AssertPreflighter interface {
+	PreflightAssert(ctx context.Context, spec RunSpec) error
+}
+
+// CreatePlan — результат [ResolveCreatePlan]: разрешённый стартовый сценарий
+// create + флаги ветвления, общие для REST CreateTyped и MCP callIncarnationCreate.
+//
+//   - CreateScenario — фактический bootstrap-сценарий (выбор оператора либо
+//     дефолт [CreateScenarioName] в stub-режиме без loader-а). Пишется в
+//     incarnation.created_scenario (NULL при BareNoScenario, см. handler).
+//   - BareNoScenario — сервис НЕ предлагает ни одного `create: true`: инкарнация
+//     создаётся StatusReady БЕЗ прогона (created_scenario=NULL).
+//   - AutoCreate — политика lifecycle.auto_create целевого сервиса (default true):
+//     false → инкарнация ready без прогона, но created_scenario непустое (прогон
+//     отложен, не bare).
+type CreatePlan struct {
+	CreateScenario string
+	BareNoScenario bool
+	AutoCreate     bool
+}
+
+// ResolveCreatePlan — общий резолв стартового сценария create, входной валидации
+// и pre-flight-assert-гейта для POST /v1/incarnations (REST CreateTyped) и
+// keeper.incarnation.create (MCP). Извлечено ДОСЛОВНО из обоих handler-ов (R2,
+// поведение НЕ меняется — те же sentinel-ошибки в том же порядке): дублирование
+// ~ветвления убрано, caller-ы маппят возвращённые ошибки в свой транспорт
+// (*problemError / toolError) через errors.Is.
+//
+// Последовательность (как в исходных handler-ах):
+//
+//  1. loader == nil (stub-режим REST: runner есть, loader нет) → план без резолва
+//     набора: {CreateScenarioName, bare=false, autoCreate=true} — legacy-поведение
+//     «запускаем `create`». MCP в проде сюда не попадает (loader всегда вместе с
+//     runner-ом), но контракт симметричен.
+//  2. loader != nil → [ValidateCreateScenarioChoice] (chosen в наборе / required /
+//     bare). При bare возврат сразу (без ValidateInput/lifecycle — прогона нет).
+//  3. не-bare → [ValidateInput] (required/type/validate против `input:`-схемы
+//     ВЫБРАННОГО сценария) + lifecycle.auto_create из снапшота.
+//  4. !bare && autoCreate → [AssertPreflighter.PreflightAssert] (если preflighter
+//     реализует интерфейс — иначе no-op, как при ScenarioStarter-фейке).
+//
+// Ошибки (для errors.Is на стороне caller-а): [ErrCreateScenarioRequired] /
+// [ErrCreateScenarioNotEligible] / [ErrInputInvalid] / [ErrValidateFailed] /
+// [ErrAssertFailed] — доменные (422); прочие (load/parse снапшота, eval-сбой) —
+// обёрнутые fmt.Errorf (handler → 500).
+func ResolveCreatePlan(
+	ctx context.Context,
+	loader CreatePlanLoader,
+	preflighter any,
+	incarnationName string,
+	serviceRef artifact.ServiceRef,
+	chosenScenario string,
+	input map[string]any,
+	startedByAID string,
+) (CreatePlan, error) {
+	// Дефолт: stub-режим / loader не сконфигурирован — legacy `create`, не bare,
+	// auto_create=true (как было в обоих handler-ах при nil-loader).
+	plan := CreatePlan{CreateScenario: CreateScenarioName, AutoCreate: true}
+
+	if loader != nil {
+		// Резолв+валидация выбора стартового сценария ДО ValidateInput: input
+		// валидируется против `input:`-схемы ИМЕННО выбранного сценария.
+		chosen, isBare, err := ValidateCreateScenarioChoice(ctx, loader, serviceRef, chosenScenario)
+		if err != nil {
+			return CreatePlan{}, err
+		}
+		plan.CreateScenario = chosen
+		plan.BareNoScenario = isBare
+
+		// bare (нет create-сценария): ValidateInput / lifecycle-резолв пропускаем —
+		// прогона не будет, валидировать input против несуществующего сценария нечем.
+		if !isBare {
+			if err := ValidateInput(ctx, loader, serviceRef, chosen, input); err != nil {
+				return CreatePlan{}, err
+			}
+			art, err := loader.Load(ctx, serviceRef)
+			if err != nil {
+				return CreatePlan{}, fmt.Errorf("scenario: resolve create plan: load service snapshot: %w", err)
+			}
+			if art != nil && art.Manifest != nil {
+				plan.AutoCreate = art.Manifest.Lifecycle.AutoCreateEnabled()
+			}
+		}
+	}
+
+	// Pre-flight assert-гейт (ADR-009/ADR-027 amendment 2026-06-23, форма A): ПОСЛЕ
+	// ValidateInput (input материализован) и ДО incarnation.Create/Start. Гейтится
+	// !bare && autoCreate (при bare нет сценария, при autoCreate=false прогон не
+	// стартует). Опционален: preflighter без PreflightAssert / сценарий без assert-
+	// задач → no-op. render-assert остаётся fail-safe для TOCTOU.
+	if !plan.BareNoScenario && plan.AutoCreate {
+		if pf, ok := preflighter.(AssertPreflighter); ok {
+			if err := pf.PreflightAssert(ctx, RunSpec{
+				IncarnationName: incarnationName,
+				ServiceRef:      serviceRef,
+				ScenarioName:    plan.CreateScenario,
+				Input:           input,
+				StartedByAID:    startedByAID,
+			}); err != nil {
+				return CreatePlan{}, err
+			}
+		}
+	}
+
+	return plan, nil
+}
+
 // sortedNames — детерминированный отсортированный список имён set-а для
 // сообщения [ErrCreateScenarioRequired] (стабильный текст 422, тестируемый).
 func sortedNames(set map[string]struct{}) []string {
