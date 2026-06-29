@@ -35,26 +35,42 @@ func resolveTargets(engine *cel.Engine, in RenderInput, task config.Task) ([]*to
 
 	targeted := filterByCovens(in.Hosts, covens)
 
-	if task.Where == "" {
-		return targeted, nil
+	if task.Where != "" {
+		out := make([]*topology.HostFacts, 0, len(targeted))
+		for _, h := range targeted {
+			vars := hostVars(in, h, len(targeted))
+			vars, err = resolveTaskVars(engine, fileVarsForHost(in, h), task.Vars, vars)
+			if err != nil {
+				return nil, fmt.Errorf("render: task %q (host %s): %w", task.Name, h.SID, err)
+			}
+			ok, err := evalWhere(engine, task.Where, vars)
+			if err != nil {
+				return nil, fmt.Errorf("render: task %q (host %s): %w", task.Name, h.SID, err)
+			}
+			if ok {
+				out = append(out, h)
+			}
+		}
+		targeted = out
 	}
 
-	out := make([]*topology.HostFacts, 0, len(targeted))
-	for _, h := range targeted {
-		vars := hostVars(in, h, len(targeted))
-		vars, err = resolveTaskVars(engine, fileVarsForHost(in, h), task.Vars, vars)
-		if err != nil {
-			return nil, fmt.Errorf("render: task %q (host %s): %w", task.Name, h.SID, err)
-		}
-		ok, err := evalWhere(engine, task.Where, vars)
-		if err != nil {
-			return nil, fmt.Errorf("render: task %q (host %s): %w", task.Name, h.SID, err)
-		}
-		if ok {
-			out = append(out, h)
-		}
-	}
-	return out, nil
+	// Сортировка по SID — контракт «первый по SID» (golden-path), на который
+	// опираются: renderTaskIter (hi==0 кладёт render_context/flow_context первого
+	// по SID в rt.Params), compute apply.input (резолв на targeted[0]), run_once:
+	// (applyRunOnce берёт первого по SID). filterByCovens/where сохраняют порядок
+	// roster-а (in.Hosts) — без этой сортировки targeted[0] был бы первым в roster,
+	// а не первым по SID, и per-host материализация render_context (RenderContextBySID
+	// ключуется SID) расходилась бы с тем, что уезжает в rt.Params. sidsOf/
+	// DispatchPlan.TargetSIDs уже сортируют независимо — порядок плана не меняется.
+	sortBySID(targeted)
+	return targeted, nil
+}
+
+// sortBySID упорядочивает хосты лексикографически по SID на месте (детерминизм
+// «первого по SID» — golden-path resolveTargets/renderTaskIter). Идемпотентна на
+// уже отсортированном и на пустом/одиночном срезе.
+func sortBySID(hosts []*topology.HostFacts) {
+	sort.Slice(hosts, func(i, j int) bool { return hosts[i].SID < hosts[j].SID })
 }
 
 // keeperOnLiteral — скалярная форма `on:`, помечающая keeper-side задачу

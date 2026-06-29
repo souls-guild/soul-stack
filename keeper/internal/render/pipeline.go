@@ -494,12 +494,28 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		// удаляем — Soul читает корень ТОЛЬКО из render_context (§3.2/§6).
 		// render_context host-вариативен (self per-host) — исключён из
 		// host-инвариантной сверки ниже; rt.Params несёт значение первого хоста.
+		//
+		// ★ Частичное закрытие open Q №25 (ТОЛЬКО render_context.self): собранный
+		// render_context КАЖДОГО хоста материализуем в rt.RenderContextBySID[SID].
+		// Без этого все хосты получили бы render_context первого по SID (один
+		// *RenderedTask диспатчится всем — groupByHost/claim), и self-вариативный
+		// шаблон (`{{ .self.network.primary_ip }}`) тихо рендерился бы фактами
+		// первого хоста. ToProtoTasksForHost подставит per-host вариант поверх
+		// Params при сборке ApplyRequest конкретного SID. Карту заполняем только при
+		// multi-host (N=1: render_context первого == единственного, overlay не нужен,
+		// поведение бит-в-бит). Полный per-host dispatch (Вариант B) — отдельный ADR.
 		if isRendered {
 			paramsVars := extractParamsVars(st)
 			delete(st.Fields, paramVars)
 			fileVars := referencedFileVars(fileVarsForHost(in, h), fileVarKeys)
 			if err := setRenderContext(st, buildRenderContext(in, h, fileVars, paramsVars, injectInput)); err != nil {
 				return nil, fmt.Errorf("render: task %q (host %s): %w", task.Name, h.SID, err)
+			}
+			if len(renderHosts) > 1 {
+				if rt.RenderContextBySID == nil {
+					rt.RenderContextBySID = make(map[string]*structpb.Struct, len(renderHosts))
+				}
+				rt.RenderContextBySID[h.SID] = st.Fields[paramRenderContext].GetStructValue()
 			}
 		}
 		// flow_context (ADR-012(d)): per-host снапшот {input,vars,essence,
@@ -1131,7 +1147,8 @@ func guardFlowControlHostInvariant(task config.Task, targeted []*topology.HostFa
 // per-host по построению — несёт self конкретного хоста, templating.md §3.2).
 // Для прочих ключей — точная proto-сверка (pilot-ограничение «один RenderedTask
 // на task», см. Render): self-зависимый ШАБЛОН легитимен (его контекст уезжает
-// в per-host render_context), self-зависимые ПРОЧИЕ params — нет.
+// в per-host render_context — материализован в RenderedTask.RenderContextBySID,
+// подставляется ToProtoTasksForHost per-SID), self-зависимые ПРОЧИЕ params — нет.
 func paramsHostInvariant(a, b *structpb.Struct) bool {
 	return proto.Equal(stripPerHostKeys(a), stripPerHostKeys(b))
 }

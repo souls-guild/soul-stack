@@ -202,7 +202,11 @@ func (c *ClaimRunner) execute(ctx context.Context, run *applyrun.ApplyRun) {
 	// fencing-эпоха работают тем же путём без особых веток.
 	req := &keeperv1.ApplyRequest{
 		ApplyId: run.ApplyID,
-		Tasks:   render.ToProtoTasks(hostTasks),
+		// ToProtoTasksForHost(run.SID): per-host render_context ЭТОГО хоста для
+		// self-вариативной core.file.rendered (open Q №25, render_context.self).
+		// Acolyte рендерит полный roster (RenderForHost) — RenderContextBySID
+		// заполнен теми же per-host вариантами, что и в run-goroutine-пути.
+		Tasks:   render.ToProtoTasksForHost(hostTasks, run.SID),
 		Attempt: int32(run.Attempt),
 		DryRun:  run.Recipe.DryRun,
 	}

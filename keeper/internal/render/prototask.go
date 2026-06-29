@@ -1,6 +1,8 @@
 package render
 
 import (
+	"google.golang.org/protobuf/types/known/structpb"
+
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
@@ -35,14 +37,36 @@ import (
 // запускался бы. remapRequisites переводит каждый global-Index в локальную позицию
 // по ВХОДНОМУ срезу `tasks` (позиция = локальный индекс, ровно как Soul). N=1 без
 // where (Index==localPos для всех) → remap=identity, поведение БИТ-В-БИТ.
+//
+// Тонкая обёртка над [ToProtoTasksForHost] с пустым sid (golden-path: params едут
+// как есть, render_context первого по SID хоста). Вызывается там, где per-host
+// материализация render_context не нужна или невозможна (trial L2 single-host,
+// push fan-out одним протосрезом, тесты конвертера).
 func ToProtoTasks(tasks []*RenderedTask) []*keeperv1.RenderedTask {
+	return ToProtoTasksForHost(tasks, "")
+}
+
+// ToProtoTasksForHost — основной конвертер render→proto для конкретного хоста.
+// Идентичен golden-path, но для self-вариативной core.file.rendered подставляет
+// per-host render_context (RenderedTask.RenderContextBySID[sid]) поверх Params:
+// иначе все хосты получили бы render_context первого по SID, и self-вариативный
+// шаблон (`{{ .self.network.primary_ip }}`) рендерился бы фактами первого хоста
+// (CORE-баг, частичное закрытие open Q №25). sid=="" ИЛИ отсутствие SID-ключа ИЛИ
+// host-инвариантный render_context (карта nil — заполняется лишь при multi-host) →
+// overlay не делается, Params едут как есть (бит-в-бит со старым поведением).
+//
+// Overlay безопасен по данным: t.Params НЕ мутируется — собирается новый
+// *structpb.Struct с теми же Fields, заменяется ровно ключ render_context
+// (см. paramsForHost). Один и тот же *RenderedTask остаётся переиспользуем для
+// других SID (groupByHost кладёт один указатель в perHost каждого хоста).
+func ToProtoTasksForHost(tasks []*RenderedTask, sid string) []*keeperv1.RenderedTask {
 	globalToLocal := localIndexMap(tasks)
 	out := make([]*keeperv1.RenderedTask, 0, len(tasks))
 	for _, t := range tasks {
 		out = append(out, &keeperv1.RenderedTask{
 			Name:         t.Name,
 			Module:       t.Module,
-			Params:       t.Params,
+			Params:       paramsForHost(t, sid),
 			NoLog:        t.NoLog,
 			Timeout:      t.Timeout,
 			OnchangesIdx: remapRequisites(t.OnChangesIdx, globalToLocal),
@@ -70,6 +94,29 @@ func ToProtoTasks(tasks []*RenderedTask) []*keeperv1.RenderedTask {
 		})
 	}
 	return out
+}
+
+// paramsForHost отдаёт wire-params задачи для конкретного sid. Golden-path
+// (sid=="" / нет per-host render_context для этого SID) → t.Params как есть.
+// Иначе — НОВЫЙ *structpb.Struct с теми же Fields, где ключ render_context заменён
+// на per-host вариант t.RenderContextBySID[sid] (overlay одного ключа). t.Params
+// не мутируется: один и тот же *RenderedTask диспатчится нескольким SID, общая
+// Params обязана остаться неизменной (значения прочих Fields шарятся read-only —
+// для wire-маршалинга достаточно).
+func paramsForHost(t *RenderedTask, sid string) *structpb.Struct {
+	if sid == "" || t.RenderContextBySID == nil {
+		return t.Params
+	}
+	rc, ok := t.RenderContextBySID[sid]
+	if !ok || rc == nil {
+		return t.Params
+	}
+	fields := make(map[string]*structpb.Value, len(t.Params.GetFields()))
+	for k, v := range t.Params.GetFields() {
+		fields[k] = v
+	}
+	fields[paramRenderContext] = structpb.NewStructValue(rc)
+	return &structpb.Struct{Fields: fields}
 }
 
 // localIndexMap строит карту глобальный RenderedTask.Index → локальная позиция в

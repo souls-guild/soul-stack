@@ -351,6 +351,29 @@ type RenderedTask struct {
 	// keeperv1.RenderedTask.AggregateOf. Хранятся как []int (global Index, зеркало
 	// OnChangesIdx) — remapRequisites переводит в []int32-local при сборке proto.
 	AggregateOf []int
+
+	// RenderContextBySID — per-host вариант params.render_context для self-
+	// вариативной задачи core.file.rendered: SID хоста → его собранный
+	// render_context (buildRenderContext, templating.md §3.2). Заполняется ТОЛЬКО
+	// для core.file.rendered и ТОЛЬКО когда render_context реально различается
+	// между таргет-хостами (self per-host, например `{{ .self.network.primary_ip }}`).
+	//
+	// Зачем поле, а не один render_context в Params: per-host цикл renderTaskIter
+	// собирает корректный render_context каждого хоста, но в Params едет лишь
+	// первый по SID (golden-path / N=1 бит-в-бит). Один `*RenderedTask` (указатель)
+	// диспатчится КАЖДОМУ хосту (groupByHost/dispatchWave, claim Acolyte), поэтому
+	// без per-host материализации все хосты получили бы render_context первого —
+	// self-вариативный шаблон тихо рендерился бы фактами первого хоста (CORE-баг).
+	//
+	// ToProtoTasksForHost(tasks, sid) при сборке ApplyRequest для конкретного SID
+	// подставляет его вариант поверх Params (overlay одного ключа render_context).
+	// nil / пустой map / отсутствие SID-ключа → берётся render_context из Params
+	// (golden-path). ПРОЧИЕ params остаются под host-инвариантной сверкой
+	// (paramsHostInvariant) — fail-closed для обычных host-вариативных params цел.
+	//
+	// Частичное закрытие open Q №25 (ТОЛЬКО render_context.self); полный per-host
+	// dispatch произвольных params (Вариант B) отложен под отдельный ADR.
+	RenderContextBySID map[string]*structpb.Struct
 }
 
 // RenderedOp — одна операция `state_changes` после Keeper-side CEL-рендера

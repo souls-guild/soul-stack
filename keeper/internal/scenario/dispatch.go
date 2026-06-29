@@ -234,7 +234,10 @@ func (r *Runner) dispatchWave(ctx context.Context, spec RunSpec, log *slog.Logge
 		// отсекает.
 		req := &keeperv1.ApplyRequest{
 			ApplyId: spec.ApplyID,
-			Tasks:   render.ToProtoTasks(perHost[sid]),
+			// ToProtoTasksForHost(sid): для self-вариативной core.file.rendered
+			// подставляет per-host render_context ЭТОГО хоста (а не первого по SID)
+			// — частичное закрытие open Q №25 (render_context.self).
+			Tasks: render.ToProtoTasksForHost(perHost[sid], sid),
 			// passage (ADR-056): Soul эхает его в TaskEvent/RunResult — Keeper
 			// коррелирует терминал и копит register per-(apply_id, sid, passage).
 			Passage: int32(passage),
