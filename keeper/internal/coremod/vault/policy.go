@@ -59,7 +59,7 @@ const (
 //   - base64url: url-safe base64-алфавит (`-`/`_` вместо `+`/`/`, без `=`).
 //   - ascii-printable-safe: ПЕЧАТНЫЙ ASCII МИНУС символы, ломающие redis.conf /
 //     users.acl / shell-подстановку: пробел, `"`, `'`, `#`, `\`, а также
-//     обратный апостроф `` ` `` и `$` (защита от случайной интерполяции в
+//     обратный апостроф “ ` “ и `$` (защита от случайной интерполяции в
 //     конфигах). Дефолт шага — пароль не должен ломать целевой конфиг.
 var charsetAlphabets = map[string]string{
 	charsetAlphanumeric: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
@@ -72,7 +72,7 @@ var charsetAlphabets = map[string]string{
 
 // excludedFromSafe — символы, исключаемые из ascii-printable-safe-пресета:
 // ломают redis.conf/users.acl (пробел/кавычки/`#`/`\`) или провоцируют
-// интерполяцию (`` ` ``/`$`).
+// интерполяцию (“ ` “/`$`).
 const excludedFromSafe = " \"'#\\`$"
 
 // safeAlphabet строит ascii-printable-safe-алфавит: печатный ASCII 0x21..0x7E
