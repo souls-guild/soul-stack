@@ -6,6 +6,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/shared/audit"
+	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
 // secret-схема read-path-маскинга ([ADR-010] §7.4, декларативный слой 1).
@@ -156,8 +157,19 @@ func collectCreateInputSecrets(loader ServiceSnapshotLoader, art *artifact.Servi
 	if err != nil || len(data) == 0 {
 		return
 	}
-	scn, _, _, perr := artifact.LoadScenarioManifestResolved(art, "scenario/create/main.yml", data)
+	scn, _, sdiags, perr := artifact.LoadScenarioManifestResolved(art, "scenario/create/main.yml", data)
 	if perr != nil || scn == nil {
+		return
+	}
+	// fail-closed ТОЛЬКО на covenant-merge-ошибке (симметрично scenario.run/
+	// validate_input): при сбое слияния covenant смерженный scn.Input ЧАСТИЧЕН
+	// (covenant-поля могли не влиться) — строить secret-маскировку по нему нельзя,
+	// иначе secret-поле из covenant молча не замаскируется. Прочие schema-ошибки
+	// create-сценария (например `tasks is required` на неполной фикстуре) input НЕ
+	// обрезают — best-effort secret-схема по тому, что распарсилось (GET — не
+	// контракт-валидатор, см. doc-комментарий пакета). Деградация к vault+regex
+	// (caller получит nil-вклад в set) остаётся только для covenant-частичности.
+	if hasCovenantMergeError(sdiags) {
 		return
 	}
 	for name, s := range scn.Input {
@@ -165,6 +177,33 @@ func collectCreateInputSecrets(loader ServiceSnapshotLoader, art *artifact.Servi
 			set["input."+name] = true
 		}
 	}
+}
+
+// covenantMergeErrorCodes — коды диагностик config.ResolveScenarioCovenant/
+// MergeCovenant, означающие, что слияние covenant НЕ состоялось → смерженный input
+// частичен (covenant-поля не влились). ТОЛЬКО на них secret-схема fail-close-ится
+// (covenant-secret-поле иначе молча утекло бы немаскированным). Прочие schema-ошибки
+// сценария input не обрезают. Источник кодов — shared/config/covenant_resolve.go и
+// covenant.go (держать синхронно: новый covenant-merge-код добавлять и сюда).
+var covenantMergeErrorCodes = map[string]bool{
+	"covenant_extends_invalid":          true,
+	"covenant_extends_target_not_found": true,
+	"state_changes_form_mismatch":       true,
+	"section_key_conflict":              true,
+	"covenant_merge_failed":             true,
+	"covenant_unexpected_key":           true,
+}
+
+// hasCovenantMergeError — среди diags есть error-уровня covenant-merge-код (см.
+// covenantMergeErrorCodes). True → смерженный input частичен, secret-схему по нему
+// строить нельзя.
+func hasCovenantMergeError(diags []diag.Diagnostic) bool {
+	for _, d := range diags {
+		if d.Level == diag.LevelError && covenantMergeErrorCodes[d.Code] {
+			return true
+		}
+	}
+	return false
 }
 
 // joinSchemaPath — конкатенация dot-пути state_schema (БИТ-В-БИТ как audit.joinPath

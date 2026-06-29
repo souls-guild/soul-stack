@@ -45,6 +45,8 @@ func schemaValidate(path string, root *ast.MappingNode, cfg any) []diag.Diagnost
 		return schemaValidateService(path, root, c)
 	case *ScenarioManifest:
 		return schemaValidateScenario(path, root, c)
+	case *ScenarioFragment:
+		return schemaValidateCovenant(path, root, c)
 	}
 	return nil
 }

@@ -64,6 +64,34 @@ type renderedCase struct {
 	sink     *coverageSink
 }
 
+// loadResolvedScenario загружает scenario/<name>/main.yml по пути case.yml и
+// выполняет covenant-резолв ЗЕРКАЛОМ прода (keeper LoadScenarioManifestResolved):
+// сливает covenant.yml (по scn.Extends, сиблинг service.yml в корне тестового
+// дерева, serviceRootFor) и валидирует form пост-merge. Без этого covenant-сценарий
+// падал бы ложным form_field_unknown в semantic-фазе (form гейтнут до merge,
+// scenario.go), а CEL compute/input на covenant-полях («${ compute.install }» и др.)
+// не резолвился бы. $type-резолв в L0 не гоняется (нет каталога-обёртки) —
+// covenant-merge достаточно.
+//
+// ЕДИНЫЙ источник covenant-резолва для ВСЕХ render-хелперов trial (renderCase из
+// harness.go И renderCreateReadSet из redis_create_secrets_coverage_test.go): любой
+// новый render-helper обязан звать ЕГО, иначе снова забудет covenant и упадёт на
+// «no such key: compute.install». Guard-тесты на уровне плана (loadCreatePlan/
+// loadScenarioPlan) covenant НЕ резолвят намеренно — они сверяют []Task до render,
+// covenant-поля там не вычисляются.
+func loadResolvedScenario(caseFile string) (*config.ScenarioManifest, *config.Document, error) {
+	scnPath := scenarioPathFor(caseFile)
+	scn, doc, diags, err := config.LoadScenarioManifest(scnPath, config.ValidateOptions{})
+	if err != nil {
+		return nil, nil, fmt.Errorf("trial: загрузка scenario %s: %w", scnPath, err)
+	}
+	diags = append(diags, config.ResolveScenarioCovenant(scn, doc, serviceRootFor(caseFile))...)
+	if hasErrors(diags) {
+		return nil, nil, fmt.Errorf("trial: scenario %s невалиден: %s", scnPath, formatDiags(diags))
+	}
+	return scn, doc, nil
+}
+
 // renderCase прогоняет Keeper-side render-пайплайн кейса герметично: загружает
 // scenario рядом с case.yml, раскрывает include, строит RenderInput из fixtures,
 // рендерит план с fixture-vault и coverage-sink-ом. Возвращает renderedCase —
@@ -74,14 +102,11 @@ type renderedCase struct {
 func renderCase(ctx context.Context, c *Case, caseFile string) (renderedCase, error) {
 	var rc renderedCase
 
-	scnPath := scenarioPathFor(caseFile)
-	scn, _, diags, err := config.LoadScenarioManifest(scnPath, config.ValidateOptions{})
+	scn, _, err := loadResolvedScenario(caseFile)
 	if err != nil {
-		return rc, fmt.Errorf("trial: загрузка scenario %s: %w", scnPath, err)
+		return rc, err
 	}
-	if hasErrors(diags) {
-		return rc, fmt.Errorf("trial: scenario %s невалиден: %s", scnPath, formatDiags(diags))
-	}
+	scnPath := scenarioPathFor(caseFile)
 
 	// Раскрытие scenario-include в плоский список до render (orchestration.md §6),
 	// так же как в проде scenario.run. Двухуровневый резолв scenario-локально →

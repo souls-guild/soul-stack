@@ -54,6 +54,10 @@ fixtures:
     secret/redis/migrate/oldcluster:
       password: old-cluster-source-pass
   essence:
+    # install_method — в essence (author-context): способ установки НЕ operator-input
+    # (covenant.compute.install читает default(essence.install_method, 'binary')). package
+    # явно (поле переехало input→essence вместе с migrate, тираж covenant).
+    install_method: package
     redis_type: sentinel
     sentinel_master_name: master
     modules_base_url: "https://artifacts.example.com/redis/modules"
@@ -85,10 +89,10 @@ fixtures:
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
     redis_type: sentinel
-    # ★ version — enum выкаченных в Nexus сборок (редизайн). install_method=package явно
-    # (дефолт теперь binary). connection_mode/sentinel_settings опущены → дефолты.
+    # ★ version — enum выкаченных в Nexus сборок (редизайн). install_method переехал в
+    # essence (выше) — НЕ operator-input после тиража covenant. connection_mode/
+    # sentinel_settings опущены → дефолты.
     version: "7.4.1"
-    install_method: package
     replicas_per_master: 1
     # ★ provision ВКЛЮЧЁН: поднять VM под топологию sentinel (count = 1 + replicas = 2)
     # ПЕРЕД деплоем+миграцией. await_timeout=5m перекрывает essence-дефолт (10m).

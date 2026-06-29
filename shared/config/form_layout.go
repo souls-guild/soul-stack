@@ -78,22 +78,43 @@ type FormField struct {
 // covens/секций — пригоден как persistent UI-key без экранирования.
 var reFormSectionKey = regexp.MustCompile(`^[a-z][a-z0-9]*([_-][a-z0-9]+)*$`)
 
-// validateFormLayout — структурная + cross-инвариантная проверка `form:`-блока.
-// Активна ТОЛЬКО при наличии ключа (caller вызывает по topKeys["form"]). Все
-// инварианты — ERROR, КРОМЕ form_field_uncovered и пустого label (WARNING):
+// validateFormLayout — структурная + cross-инвариантная проверка `form:`-блока в
+// SEMANTIC-фазе (non-extends сценарий): inputKeys берутся из уже декодированного
+// `m.Input`. Тонкая обёртка над [validateFormAgainstInputKeys] — единственная
+// разница с пост-merge-путём — источник множества input-ключей.
+//
+// Caller вызывает по topKeys["form"] И только когда extends НЕ задан: у covenant-
+// сценария эффективный input существует лишь ПОСЛЕ merge фрагмента (keeper-side,
+// нужен ФС), поэтому form там проверяется пост-merge тем же ядром на смерженном
+// `m.Input` (см. ResolveScenarioCovenant). Гейт — scenario.go schemaValidateScenario.
+func validateFormLayout(root *ast.MappingNode, m *ScenarioManifest, pathPrefix string) []diag.Diagnostic {
+	inputKeys := make(map[string]bool, len(m.Input))
+	for name := range m.Input {
+		inputKeys[name] = true
+	}
+	return validateFormAgainstInputKeys(root, inputKeys, pathPrefix)
+}
+
+// validateFormAgainstInputKeys — ЯДРО form-проверки с ПАРАМЕТРИЗОВАННЫМ источником
+// inputKeys: множество имён эффективного `input:` передаётся снаружи (из AST/типи-
+// зированного `m.Input` non-extends-сценария ИЛИ из СМЕРЖЕННОГО `m.Input` covenant-
+// сценария пост-merge). Все инварианты — ERROR, КРОМЕ form_field_uncovered и пустого
+// label/placeholder/hint (WARNING):
 //
 //   - блок — mapping с единственным значимым ключом `sections:` (sequence);
 //   - section.key — обязателен, формат reFormSectionKey, УНИКАЛЕН (ERROR при дубле);
-//   - field.name — обязателен, существует ключом в `input:` (ERROR form_field_unknown);
+//   - field.name — обязателен, существует ключом в input (ERROR form_field_unknown);
 //   - имя поля не встречается в >1 секции суммарно (ERROR form_field_duplicate);
 //   - field.label/placeholder/hint — пустая строка → WARNING (fallback / drop ключ);
 //   - section/field.show_when — если есть, компилируемый CEL над input.* (иначе
 //     ERROR form_show_when_invalid; input-only sandbox, как required_when);
-//   - поле `input:`, не попавшее ни в одну секцию → WARNING form_field_uncovered.
+//   - поле input, не попавшее ни в одну секцию → WARNING form_field_uncovered.
 //
-// inputKeys — множество имён из `input:` (nil-безопасно: nil → form_field_unknown
-// на каждом поле, uncovered не эмитится — нечего покрывать).
-func validateFormLayout(root *ast.MappingNode, m *ScenarioManifest, pathPrefix string) []diag.Diagnostic {
+// inputKeys — множество имён эффективного input (nil-безопасно: nil → form_field_
+// unknown на каждом поле, uncovered не эмитится — нечего покрывать). root — AST
+// корня манифеста/документа (узел `form:` находится по нему; позиции/якоря — из
+// него же, чтобы диагностики указывали на реальные строки исходника).
+func validateFormAgainstInputKeys(root *ast.MappingNode, inputKeys map[string]bool, pathPrefix string) []diag.Diagnostic {
 	node := findValueNode(root, "form")
 	mm, ok := node.(*ast.MappingNode)
 	if !ok {
@@ -113,11 +134,6 @@ func validateFormLayout(root *ast.MappingNode, m *ScenarioManifest, pathPrefix s
 	sectionsNode, out := formSectionsNode(mm, pathPrefix)
 	if sectionsNode == nil {
 		return out
-	}
-
-	inputKeys := make(map[string]bool, len(m.Input))
-	for name := range m.Input {
-		inputKeys[name] = true
 	}
 
 	seenKeys := make(map[string]bool, len(sectionsNode.Values))

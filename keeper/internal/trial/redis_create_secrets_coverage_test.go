@@ -78,14 +78,15 @@ func renderCreateReadSet(t *testing.T, caseFile string) (readSet, generatedSet m
 		t.Fatalf("LoadCase(%s): %v", caseFile, err)
 	}
 
-	scnPath := scenarioPathFor(file)
-	scn, _, diags, err := config.LoadScenarioManifest(scnPath, config.ValidateOptions{})
+	// Единый load+covenant-резолв (harness.go::loadResolvedScenario) — тот же, что
+	// renderCase: redis create — covenant-сценарий (compute.install/data_dir/
+	// sentinel_directives в covenant.yml), без резолва CEL падает «no such key:
+	// compute.install».
+	scn, _, err := loadResolvedScenario(file)
 	if err != nil {
-		t.Fatalf("LoadScenarioManifest(%s): %v", scnPath, err)
+		t.Fatalf("%v", err)
 	}
-	if hasErrors(diags) {
-		t.Fatalf("scenario invalid: %s", formatDiags(diags))
-	}
+	scnPath := scenarioPathFor(file)
 	expanded, iDiags := config.ExpandIncludes(scn.Tasks, fixtureScenarioIncludeResolver(scnPath))
 	if hasErrors(iDiags) {
 		t.Fatalf("expand includes: %s", formatDiags(iDiags))

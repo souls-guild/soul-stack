@@ -33,6 +33,15 @@ type ScenarioManifest struct {
 	Vars         map[string]any `yaml:"vars,omitempty"`
 	Tasks        []Task         `yaml:"tasks"`
 
+	// Extends — имя covenant-фрагмента в корне service-репо (`covenant.yml` —
+	// без расширения, только базовое имя `^[a-z][a-z0-9-]*$`), общий контракт
+	// секций input/compute/state_changes/validate которого сценарий наследует
+	// (covenant.go). Пустая строка / отсутствие ключа = нет наследования
+	// (forward-compat: существующие сценарии без extends не затронуты). Сам
+	// резолв фрагмента по ФС снапшота — keeper-side (S2 LoadScenarioManifest
+	// Resolved): config-слой даёт типы, mergeSections и валидацию формы.
+	Extends string `yaml:"extends,omitempty"`
+
 	// Create — опциональный флаг «сценарий годен как стартовый (bootstrap новой
 	// incarnation)». `*bool` ради различения «не задано» (nil → НЕ стартовый,
 	// обычный operational-сценарий) от явного `create: true|false`. Сервис может
@@ -602,7 +611,17 @@ func schemaValidateScenario(path string, root *ast.MappingNode, m *ScenarioManif
 	// 5b) `form:` — презентационный слой формы + cross-инварианты против input:
 	// (form_field_unknown/duplicate/uncovered, section.key уникальность). Активен
 	// только при наличии ключа.
-	if topKeys["form"] {
+	//
+	// COVENANT-ГЕЙТ: form-проверка cross-полей (`form` ⊆ эффективный `input`) корректна
+	// лишь когда `m.Input` уже содержит эффективный набор полей. У non-extends-сценария
+	// это так уже в semantic-фазе — валидируем здесь как раньше (бит-в-бит). У covenant-
+	// сценария (extends != "") эффективный input существует ТОЛЬКО ПОСЛЕ merge фрагмента
+	// (keeper-side, нужен ФС снапшота): здесь `m.Input` несёт лишь локальную дельту, и
+	// form-поле, объявленное в covenant, дало бы ЛОЖНЫЙ form_field_unknown. Поэтому при
+	// extends form пропускается тут и проверяется пост-merge тем же ядром на смерженном
+	// input (config.ResolveScenarioCovenant). Структуру блока (sections/key/show_when)
+	// пост-merge проверяет то же ядро — отдельной structure-only ветки не нужно.
+	if topKeys["form"] && m.Extends == "" {
 		out = append(out, validateFormLayout(root, m, "$.form")...)
 	}
 
@@ -1344,6 +1363,29 @@ func findSequenceValue(m *ast.MappingNode, name string) *ast.SequenceNode {
 // по списку `tasks[]` (включая вложенные block:), см. validateTaskRefs.
 // CEL-syntax и cross-ref внутри CEL-предикатов (`when:`/`changed_when:`/
 // `until:`) — отложены (M1.3/M1.5).
-func semanticValidateScenario(_ *ScenarioManifest, root *ast.MappingNode) []diag.Diagnostic {
-	return validateTaskRefs(findSequenceValue(root, "tasks"), "$.tasks")
+func semanticValidateScenario(m *ScenarioManifest, root *ast.MappingNode) []diag.Diagnostic {
+	out := validateTaskRefs(findSequenceValue(root, "tasks"), "$.tasks")
+	out = append(out, validateExtendsField(m, root)...)
+	return out
+}
+
+// validateExtendsField — semantic-проверка формы `extends:` (covenant.go).
+// Пустой/отсутствующий extends = нет наследования (валидно, ничего не проверяем
+// — forward-compat). Непустое имя обязано быть валидной covenant-ссылкой
+// (ValidExtendsName: одноуровневый kebab, traversal-кламп грамматикой имени):
+// иначе covenant_extends_invalid. Сам резолв фрагмента по ФС — S2 (keeper-side);
+// здесь только форма имени.
+func validateExtendsField(m *ScenarioManifest, root *ast.MappingNode) []diag.Diagnostic {
+	if m.Extends == "" {
+		return nil
+	}
+	if ValidExtendsName(m.Extends) {
+		return nil
+	}
+	return []diag.Diagnostic{atPath(root, "$.extends", diag.Diagnostic{
+		Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+		Code:    "covenant_extends_invalid",
+		Message: fmt.Sprintf("extends %q is not a valid covenant name", m.Extends),
+		Hint:    "single-segment kebab-case (^[a-z][a-z0-9-]*$); names the root covenant.yml-family fragment, must not contain path separators",
+	})}
 }

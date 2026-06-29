@@ -62,6 +62,11 @@ fixtures:
     secret/redis/migrate/oldcluster:
       password: old-cluster-source-pass
   essence:
+    # install_method — в essence (author-context): способ установки НЕ operator-input
+    # (covenant.compute.install читает default(essence.install_method, 'binary')). package
+    # явно — distro-пин =version, как проверял кейс до тиража covenant (поле переехало
+    # input→essence вместе с migrate, догоняя редизайн create 2026-06-28).
+    install_method: package
     redis_type: sentinel
     sentinel_master_name: master
     modules_base_url: "https://artifacts.example.com/redis/modules"
@@ -94,10 +99,9 @@ fixtures:
   input:
     redis_type: sentinel
     # ★ version — enum выкаченных в Nexus сборок (редизайн). 7.4.1 (мажор 7 < 8 →
-    # version-gate модулей не активен, .so грузятся). install_method=package явно
-    # (дефолт теперь binary) — distro-пин =version, как проверял кейс до редизайна.
+    # version-gate модулей не активен, .so грузятся). install_method переехал в essence
+    # (выше) — НЕ operator-input после тиража covenant.
     version: "7.4.1"
-    install_method: package
     replicas_per_master: 1
     # connection_mode опущен → plain (дефолт): TLS off, plain-порт. sentinel_settings/
     # sentinel_master_settings опущены → compute.sentinel_directives = essence-дефолты

@@ -38,7 +38,7 @@ scenario/<name>/
 | `serial:` | int (1..M) ИЛИ string `"<N>%"` | module/apply/`block:`-задаче | опционально (опущен = вся ширина таргета) *Гранулярность — per-Passage min-width (в N=1 = per-RUN), см. подраздел §2.2.1 ниже* |
 | `run_once:` | bool, default `false` | module/apply/`block:`-задаче | опционально |
 
-Сверх per-задачных ключей у scenario есть **top-level** блоки: `compute:` — вычисляемые vars прогона (§2.4); `validate:` — декларативные input-инварианты (§2.5).
+Сверх per-задачных ключей у scenario есть **top-level** блоки: `compute:` — вычисляемые vars прогона (§2.4); `validate:` — декларативные input-инварианты (§2.5); `extends:` — наследование общего service-level контракта секций из `covenant.yml` (§6.1).
 
 Всё остальное в scenario-задаче — ровно то же, что в destiny-задаче, с той же семантикой ([destiny/tasks.md §3–§10](../destiny/tasks.md#3-полный-список-блоков-задачи)). Расхождения с destiny явно перечислены в §6 (резолв ресурсов) и §10 (шаблонный контекст).
 
@@ -732,6 +732,63 @@ requisites / `on:` / `where:`) **не раскрывается** — это ош
 - **L3-dispatch остаётся stub.** Docker `stand:` на топологии кластера, ассерты «кто реально master исполняет» (`assert.dispatch`) и committed cross-host `incarnation.state` после барьера (§7) — отложены. Точный формат блока multi-host `stand:` наследует open Q sandbox из [destiny/testing.md](../destiny/testing.md) (см. §8 ниже).
 
 > Это **расширение open Q про sandbox** из [destiny/testing.md](../destiny/testing.md): **L0 render-multi-host (`fixtures.hosts`) — закрыт** и исполняется штатным harness-ом (герметичный render-уровень). **L3-dispatch** (multi-host docker-стенд, `assert.dispatch`, committed cross-host `state`) — не закрытое решение, явно отмеченное расширение незакрытого вопроса. Не закрывается молча; до решения L3-dispatch — declarative-stub `stand:`, как в destiny-molecule.
+
+## 6.1. `extends:` — наследование общего контракта секций из `covenant.yml`
+
+`extends: <covenant-name>` — **top-level** ключ сценария: сценарий **наследует** общий service-level контракт секций `input:` / `compute:` / `state_changes:` / `validate:` из fragment-файла covenant-а в **корне service-репо** ([ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) amendment 2026-06-29). Covenant — **service-level shared catalog**, изоморфно `types.yml` ([ADR-062](../adr/0062-input-types.md), именованные input-схемы) и service-level `include:` (§6, наборы задач): три механизма шарят между сценариями разную природу (тип / задачи / контракт-секции), все резолвятся ДО потребителей и не вводят wire-сущность.
+
+**`extends:` НАЗЫВАЕТ covenant-файл.** Значение `extends:` — **имя covenant-файла без расширения**: `extends: <name>` резолвится в файл **`<name>.yml`** в корне service-репо (механизм поддерживает произвольное имя, симметрично тому, как `apply: { destiny: <name> }` адресует destiny по имени). **Конвенция:** общий контракт-секций сервиса называют **`covenant`** → файл **`covenant.yml`**, ссылка **`extends: covenant`**. Эта конвенция используется во всех примерах ниже.
+
+```yaml
+# covenant.yml (корень service-репо) — ОБЩИЙ минимум
+input:
+  redis_type: { type: string, default: standalone, enum: [standalone, sentinel, cluster] }
+  password:   { type: string, vault_scope: secret }
+compute:
+  redis_config: "${ merge(essence.redis_config, default(input.redis_settings, {})) }"
+state_changes:
+  - set: redis_type
+    value: "${ input.redis_type }"
+validate:
+  - that: "input.redis_type != 'cluster' || has(input.shards)"
+    message: "cluster требует shards"
+```
+
+```yaml
+# scenario/create_from_souls/main.yml — нулевая дельта (всё из covenant)
+name: create_from_souls
+create: true
+extends: covenant
+tasks: [ ... ]
+
+# scenario/create/main.yml — дельта +provision поверх covenant
+name: create
+create: true
+extends: covenant
+input:
+  vm_count: { type: integer, min: 1 }   # ← добавочное поле, в covenant его НЕТ
+tasks: [ ... ]
+```
+
+**Add-only merge, fail-closed.** Covenant — **минимум** (общая база); сценарий **ДОБАВЛЯЕТ** свою дельту. Слияние — **shallow по верхнему ключу** секции (input-поле / compute-имя / элемент списка `state_changes`/`validate`): объединяются верх-ключи, рекурсивного слияния значений нет. Дубль верх-ключа (одно input-поле и в covenant, и в сценарии; одно compute-имя; пересечение `set`-полей `state_changes`) → ошибка `section_key_conflict` (**НЕ last-wins, НЕ override**). Намерение «база = общее, сценарий = только добавочное» делается явным; коллизия = ошибка автора, не молчаливое затирание. **Deep merge отвергнут** (скрывал бы, какая часть схемы из covenant — тот же принцип «либо ссылка, либо inline» из [ADR-062](../adr/0062-input-types.md)).
+
+**`form:` НЕ мержится.** UI-`form:`-блок ([ADR-045](../adr/0045-param-dsl.md)) из covenant **не наследуется** — это раскладка формы под конкретную операцию, local-only. Covenant несёт контракт данных, не презентацию.
+
+**Append-порядок — covenant ПЕРВЫМ.** В упорядоченных секциях (`compute:` §2.4, `state_changes:` §7.1, `validate:` §2.5) элементы covenant идут **перед** локальными: локальный `compute[i]` вправе ссылаться на covenant-`compute[j]` (`compute` резолвится слева направо, §2.4), локальные `state_changes`/`validate` — опираться на уже-применённое из covenant. Обратный порядок сломал бы forward-reference covenant→local.
+
+**Точка резолва — ДО потребителей.** Слияние выполняется в единой точке резолва манифеста (изоморфно `$type`-резолву [ADR-062](../adr/0062-input-types.md) и `include`-раскрытию §6): загрузить `covenant.yml` → смержить 4 секции add-only (fail-closed на конфликте) → дальше **обычный** конвейер на УЖЕ-смерженном манифесте (input-merge → required → render → dispatch). Все потребители (`ValidateInput`, render, `assert:`/`validate:`-eval, soul-lint) видят целостный манифест — **fragment-aware кода вне точки резолва нет**.
+
+**MVP-ограничения.**
+
+- **Один `extends:` на сценарий** (не список covenant-ов).
+- **covenant НЕ extends-ит covenant** (плоский лист, без рекурсии/цепочки → cycle-detection на этом слое не нужен, в отличие от `$type`).
+- **covenant несёт ТОЛЬКО 4 секции** — `input:` / `compute:` / `state_changes:` / `validate:`. **НЕ** `tasks:` / `name:` / `create:` / `form:` / `extends:` (иной верх-ключ в covenant-файле → ошибка валидации). Задачи (`tasks:`) делятся через service-level `include:` (§6), не через covenant.
+
+> **Конвенция: один `covenant.yml` на сервис (рекомендация).** Механизм поддерживает несколько covenant-файлов (`extends: <name>` → `<name>.yml`), но **рекомендуется** держать один общий контракт-секций сервиса в файле `covenant.yml` (`extends: covenant`). Несколько covenant-файлов оправданы лишь когда у сервиса несколько несвязанных семейств сценариев с разными общими контрактами — для типового сервиса это лишняя фрагментация.
+
+**Forward-compat.** Ключ `extends:` **опционален**; сценарий без `extends:` — манифест **бит-в-бит как сейчас** (точка резолва на отсутствии `extends:` — no-op). Сервис без `covenant.yml` не ломается.
+
+> **Граница `extends:` (covenant) ↔ service-level `include:` (§6) ↔ `types.yml` (`$type`).** Три service-level shared-механизма, три разные ниши: `covenant.yml` (+`extends:`) шарит **контракт секций** прогона (`input`/`compute`/`state_changes`/`validate`); service-level `include:` (двухуровневый резолв, §6) шарит **наборы задач** (`tasks`-фрагменты); `types.yml` (+`$type`) шарит **именованные input-схемы**. Не путать: общий **набор шагов** деплоя (`cluster.yml`/`sentinel.yml`) — это `include:`, общий **контракт ввода/state** между сценариями — это `extends:`.
 
 ## 7. Инвариант barrier / state-commit
 

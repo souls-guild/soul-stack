@@ -176,10 +176,19 @@ func (redisSentinelResolver) Resolve(_ context.Context, name string) (*ResolvedD
 // ОТСУТСТВУЕТ — DispatchPlan.TargetSIDs её не содержит.
 func TestAcceptance_SentinelReplicaExcludesMaster(t *testing.T) {
 	path := filepath.FromSlash("../../../examples/service/redis/scenario/create/main.yml")
-	m, _, diags, err := config.LoadScenarioManifest(path, config.ValidateOptions{})
+	m, doc, diags, err := config.LoadScenarioManifest(path, config.ValidateOptions{})
 	if err != nil {
 		t.Fatalf("LoadScenarioManifest: %v", err)
 	}
+	// create/main.yml несёт `extends: covenant` (R3): секции input/compute/state_changes/
+	// validate уехали в examples/service/redis/covenant.yml. Без covenant-merge CEL
+	// apply.input.install падает «no such key: install» (compute.install объявлен в
+	// covenant). Резолвим ЗЕРКАЛОМ прода (artifact.LoadScenarioManifestResolved) / trial
+	// (harness.loadResolvedScenario) / soul-lint — единым config.ResolveScenarioCovenant.
+	// serviceRoot — корень снапшота сервиса (сиблинг covenant.yml/scenario/), для пути
+	// .../redis/scenario/create/main.yml это .../redis.
+	serviceRoot := filepath.Dir(filepath.Dir(filepath.Dir(path)))
+	diags = append(diags, config.ResolveScenarioCovenant(m, doc, serviceRoot)...)
 	for _, d := range diags {
 		if d.Level == diag.LevelError {
 			t.Fatalf("scenario diagnostic (%s): %s", d.Code, d.Message)

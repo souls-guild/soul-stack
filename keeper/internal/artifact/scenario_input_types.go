@@ -37,10 +37,23 @@ func LoadScenarioManifestResolved(art *ServiceArtifact, rel string, data []byte)
 	if err != nil {
 		return scn, doc, diags, err
 	}
-	if scn == nil || len(scn.Input) == 0 {
+	if scn == nil {
 		return scn, doc, diags, nil
 	}
 
+	// covenant-merge ПЕРВЫМ: config.ResolveScenarioCovenant сливает covenant.yml
+	// (по scn.Extends, ридер securejoin от art.LocalDir) в этот СВЕЖИЙ manifest по
+	// месту И валидирует form пост-merge на смерженном input. Смерженный input
+	// (covenant-поля включительно) обязан попасть под $type-резолв ниже — потому
+	// covenant идёт до него, а не после. Свежий fragment грузится внутри резолвера
+	// на каждый вызов: один covenant.yml в разных сценариях резолвится независимо,
+	// cross-scenario aliasing невозможен (read-only fragment-контракт). Единый
+	// резолвер shared/config: keeper-runtime, trial и soul-lint зовут его же.
+	diags = append(diags, config.ResolveScenarioCovenant(scn, doc, art.LocalDir)...)
+
+	if len(scn.Input) == 0 {
+		return scn, doc, diags, nil
+	}
 	resolved, rdiags := resolveScenarioInputTypeRefs(art, scn.Input, rel)
 	if resolved != nil {
 		scn.Input = resolved

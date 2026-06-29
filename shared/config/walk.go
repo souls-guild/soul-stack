@@ -32,6 +32,14 @@ var (
 	scenarioManifestType = reflect.TypeOf(ScenarioManifest{})
 )
 
+// covenantFragmentType — covenant.yml. Generic-walker по reflect-полям
+// ScenarioFragment (только 4 секции) пометил бы любой чужой top-level ключ
+// (name/tasks/create/form/extends) как `unknown_key`; covenant-валидатор
+// validateCovenantFragment поднимает по ним точный `covenant_unexpected_key`
+// с hint-ом. Чтобы не было дубля на ту же line/col — walker для covenant молчит
+// про unknown на верхнем уровне (suppressAll), отдавая разбор валидатору.
+var covenantFragmentType = reflect.TypeOf(ScenarioFragment{})
+
 // taskType — точка остановки reflect-walker-а. У Task свой UnmarshalYAML с
 // дискриминатором и собственной валидацией (validateTaskNode); generic-обход
 // по reflect-полям ловил бы `module:`/`include:` как unknown_key (они
@@ -103,6 +111,7 @@ func walkMappingAgainstStruct(m *ast.MappingNode, t reflect.Type, path string) [
 	// Не выпускаем по ним вторую `unknown_key` отсюда — set-сравнение в
 	// тестах прячет факт дубля, в JSON-выводе он виден строкой-двойником.
 	var suppress map[string]bool
+	var suppressAllUnknown bool
 	switch t {
 	case destinyManifestType:
 		suppress = make(map[string]bool, len(deprecatedDestinyKeys))
@@ -119,6 +128,8 @@ func walkMappingAgainstStruct(m *ast.MappingNode, t reflect.Type, path string) [
 		for k := range deprecatedScenarioKeys {
 			suppress[k] = true
 		}
+	case covenantFragmentType:
+		suppressAllUnknown = true
 	}
 	var out []diag.Diagnostic
 	for _, kv := range m.Values {
@@ -129,7 +140,7 @@ func walkMappingAgainstStruct(m *ast.MappingNode, t reflect.Type, path string) [
 		keyName := key.Value
 		fieldType, ok := known[keyName]
 		if !ok {
-			if suppress[keyName] {
+			if suppressAllUnknown || suppress[keyName] {
 				continue
 			}
 			out = append(out, diag.Diagnostic{

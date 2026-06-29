@@ -93,7 +93,15 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 		_, _, diags, _ = config.LoadServiceManifestFromBytes(opts.Path, src, config.ValidateOptions{})
 	case KindScenario:
 		var scn *config.ScenarioManifest
-		scn, _, diags, _ = config.LoadScenarioManifestFromBytes(opts.Path, src, config.ValidateOptions{})
+		var scnDoc *config.Document
+		scn, scnDoc, diags, _ = config.LoadScenarioManifestFromBytes(opts.Path, src, config.ValidateOptions{})
+		// covenant-резолв ПЕРЕД semantic/cross-ref: сливает covenant.yml (по
+		// scn.Extends, корень линтуемого репо = `<service>/scenario/<name>/main.yml`
+		// → `<service>/`) и валидирует form пост-merge. ОБЯЗАТЕЛЬНО до typeRef/stage:
+		// без него линт covenant-сценария давал бы ЛОЖНЫЕ form_field_unknown (form
+		// гейтнут до merge в semantic-фазе) и пропускал бы $type covenant-полей.
+		// No-op для non-extends (без ФС-обращения) — бит-в-бит как до фичи.
+		diags = append(diags, config.ResolveScenarioCovenant(scn, scnDoc, scenarioServiceRoot(opts.Path))...)
 		// Stage-валидация (ADR-056 §S5): офлайн Passage-стратификация той же
 		// функцией config.Stratify, что рантайм делает перед dispatch. Ловит
 		// register-цикл и serial+staged ДО apply (config-валидатор уже поднял
@@ -103,6 +111,7 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 		// Резолв $type-ссылок против каталога типов сервиса (`../../types.yml`):
 		// ловит input_type_unknown/cycle/duplicate ДО keeper. Структурный
 		// $type-ref-conflict config-валидатор уже поднял на парсе сценария.
+		// Резолвит и covenant-поля (merge выше уже влил их в scn.Input).
 		diags = append(diags, typeRefDiagnostics(opts.Path, scn)...)
 	case KindManifest:
 		_, diags = sharedplugin.LoadFromBytes(opts.Path, src)
@@ -116,6 +125,14 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 		return ExitHasErrors
 	}
 	return ExitOK
+}
+
+// scenarioServiceRoot выводит корень линтуемого service-репо из пути main.yml
+// сценария. Раскладка `<service>/scenario/<name>/main.yml` → `<service>` (три Dir
+// вверх; та же база, что typeRefDiagnostics строит для types.yml). Корень несёт
+// covenant.yml-семейство (сиблинг service.yml/types.yml), который резолвит extends.
+func scenarioServiceRoot(scenarioPath string) string {
+	return filepath.Dir(filepath.Dir(filepath.Dir(scenarioPath)))
 }
 
 // destinyVarsCollisionDiags поднимает warn на каждое имя, объявленное И в

@@ -1,0 +1,105 @@
+# L0-испытание migrate_cluster в режиме cluster — FAIL-ветка cluster_topology-reject
+# (migrate НЕ применяет явную раскладку шардов). Зеркало cluster-migrate-2shards (тот же
+# happy-path вход cluster + внешний источник из 2 seed-нод, replicas_per_master=0 →
+# топология 2*(1+0)=2, roster из 2 хостов), НО оператор ДОПОЛНИТЕЛЬНО задал
+# cluster_topology → прогон обрывается на input-валидации (422) ДО рендера.
+#
+# ★ ПОЧЕМУ это нужно (контракт-дрейф, major): covenant.input несёт cluster_topology
+# (нужен create/create_from_souls для явной раскладки шардов оператором). migrate_cluster
+# наследует его через `extends: covenant` → эффективный input migrate ПРИНИМАЕТ поле по
+# схеме. НО cluster-ветка миграции (cluster.yml инклудит redis-deploy-cluster-joinable.yml +
+# плагин community.redis.cluster action join-external) cluster_topology НЕ читает: B3-пилот
+# переносит ТОЛЬКО мастера на готовый roster (replica-guard replicas_per_master==0),
+# join-external вливает ровно одну новую ноду на старый мастер 1:1. Прежний inline-migrate
+# НАМЕРЕННО исключал это поле; тираж covenant вернул его по наследованию → заданное поле
+# прошло бы input-валидацию и МОЛЧА не применилось (silent green no-op). validate-правило
+# main.yml (`!has(input.cluster_topology)`) превращает молчаливый no-op в ранний 422.
+#
+# ОТЛИЧИЕ от cluster-migrate-replicas-rejected: тот обрывается на render-assert (replica-
+# guard cluster.yml, replicas>0). Здесь обрыв РАНЬШЕ — на input-валидации (validate-фаза
+# идёт ДО render-пайплайна): cluster_topology задан, replicas=0 (replica-guard прошёл бы),
+# roster валиден (size-guard прошёл бы) — кейс изолирует ИМЕННО cluster_topology-reject.
+#
+# Render-only, герметично. validate-фаза harness обрывает кейс ошибкой с message правила
+# ДО render (joinable-деплой/join/failover/forget шаги не стартуют, диспетчер не раскрывается).
+name: cluster migrate with explicit cluster_topology aborts on input validation (topology-reject)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  # Roster из 2 хостов = ровно shards*(1+replicas)=2*(1+0)=2 → size-guard ПРОШЁЛ бы,
+  # replicas=0 → replica-guard ПРОШЁЛ бы. Обрыв РАНЬШЕ обоих — на input-валидации
+  # cluster_topology-reject. Порядок намеренно не отсортирован.
+  hosts:
+    - sid: node-2.example.com
+      covens: [migrate_cluster, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-1.example.com
+      covens: [migrate_cluster, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/migrate_cluster:
+      password: s3cr3t-redis-pass-migrate
+    secret/redis/migrate_cluster/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/migrate_cluster/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/migrate_cluster/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/migrate_cluster/users/haproxy:
+      password: haproxy-sys-secret-pass
+    secret/redis/migrate/oldcluster:
+      password: old-cluster-source-pass
+  essence:
+    # install_method — в essence (author-context): способ установки НЕ operator-input
+    # (covenant.compute.install читает default(essence.install_method, 'binary')).
+    install_method: package
+    redis_type: cluster
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+  input:
+    redis_type: cluster
+    # ★ version — enum выкаченных в Nexus сборок; валидный enum нужен, чтобы прогон прошёл
+    # input-схему и дошёл до validate-правила cluster_topology-reject, а не упал раньше на enum.
+    version: "7.4.1"
+    shards: 2
+    # replicas_per_master=0 → replica-guard ПРОШЁЛ бы (изолируем cluster_topology-reject, а
+    # не replica-guard). size-guard ПРОШЁЛ бы (2 == 2*(1+0)). Обрыв — раньше, на validate.
+    replicas_per_master: 0
+    cluster_node_timeout: 5000
+    # ★★ cluster_topology ЗАДАН оператором — поле наследовано covenant (валидно для create),
+    # но в migrate НЕ применяется (B3-пилот переносит только мастера на готовый roster).
+    # validate-правило main.yml `!has(input.cluster_topology)` реджектит это 422 ДО рендера.
+    # Раскладка валидна по схеме (2 шарда, каждый = [master_sid] без реплик при replicas=0).
+    cluster_topology:
+      - ["node-1.example.com"]
+      - ["node-2.example.com"]
+    source:
+      hosts:
+        - "10.9.0.1:6379"
+        - "10.9.0.2:6379"
+      password_ref: "secret/redis/migrate/oldcluster#password"
+      tls: false
+
+# Прогон обрывается на input-валидации (validate-фаза harness ДО render): правило
+# cluster_topology-reject `!has(input.cluster_topology)` false (поле задано). Подстрока —
+# message validate-правила main.yml.
+expect_render_error: "cluster_topology в migrate_cluster не применяется"

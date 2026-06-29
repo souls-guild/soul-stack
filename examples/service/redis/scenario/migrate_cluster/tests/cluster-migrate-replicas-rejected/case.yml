@@ -62,6 +62,10 @@ fixtures:
     secret/redis/migrate/oldcluster:
       password: old-cluster-source-pass
   essence:
+    # install_method — в essence (author-context): способ установки НЕ operator-input
+    # (covenant.compute.install читает default(essence.install_method, 'binary')). package
+    # явно (поле переехало input→essence вместе с migrate, тираж covenant).
+    install_method: package
     redis_type: cluster
     sentinel_master_name: master
     modules_base_url: "https://artifacts.example.com/redis/modules"
@@ -84,9 +88,8 @@ fixtures:
     redis_type: cluster
     # ★ version — enum выкаченных в Nexus сборок (редизайн); валидный enum нужен, чтобы
     # прогон прошёл input-валидацию и дошёл до replica-guard (render-assert), а не упал
-    # раньше на enum. install_method=package явно (дефолт теперь binary).
+    # раньше на enum. install_method переехал в essence (выше) — НЕ operator-input.
     version: "7.4.1"
-    install_method: package
     shards: 2
     # ★ replicas_per_master=1 — топология с репликами. size-guard (0.) PASS (4==2*(1+1)),
     # но replica-guard (0b.) обрывает render: пилот переносит только мастера.
