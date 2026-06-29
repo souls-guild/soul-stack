@@ -58,7 +58,7 @@ input:
 
   # ── version: фикс-enum БИНАРНЫХ версий Redis (Nexus) ──────────────────────────
   # ★ Редизайн input-контракта: version — теперь ENUM фиксированных upstream-версий
-  # из Nexus (install_method=binary по умолчанию качает ИМЕННО эти бинари —
+  # из Nexus (essence.install_method=binary по умолчанию качает ИМЕННО эти бинари —
   # см. install.yml binary-ветку). Прежний свободный pattern distro-пина заменён
   # закрытым списком: оператор выбирает версию из выкаченных в Nexus, а не пишет
   # произвольную строку. required (нужна ВСЕГДА: binary — дефолтный способ установки,
@@ -69,36 +69,23 @@ input:
     enum: ["8.6.1", "8.4.0", "8.2.2", "8.0.3", "7.4.1", "6.2.21"]
     description: >-
       Версия Redis (фиксированный набор бинарей из Nexus). Выбери одну из выкаченных
-      версий: install_method=binary (default) качает бинари redis-server/redis-cli/
-      redis-benchmark этой версии из Nexus; install_method=package ставит =version-пин.
-      Список закрыт — произвольная версия не принимается (доступны только выкаченные в
-      Nexus сборки).
+      версий: способ установки binary (essence.install_method, default) качает бинари
+      redis-server/redis-cli/redis-benchmark этой версии из Nexus; способ package ставит
+      =version-пин. Список закрыт — произвольная версия не принимается (доступны только
+      выкаченные в Nexus сборки).
 
-  # ── install_method: способ установки redis (default package, #1) ─────────────
-  # package (default, поведение-сохраняющее) — distro-пакет; binary — upstream-tarball.
-  # ★ #1 (2026-06-26): прежний object-input `install` (method/base_url/version) сведён
-  # к ОДНОМУ enum-полю install_method. URL/версия бинаря — НЕ операторский ввод: они
-  # переехали в essence (binary_base_url/binary_version, author-context, оператор
-  # переопределяет в spec.essence), симметрично modules_base_url/sysctl_settings. compute
-  # собирает destiny-структуру install {method, base_url, version} из install_method +
-  # essence.binary_*. tarball качается по content-идемпотентности (SHA-256), без verify.
+  # ── install_method УБРАН из operator-input (2026-06-28) ──────────────────────
+  # Способ установки redis — НЕ операторский выбор в Run-форме: он зафиксирован в
+  # essence.install_method (дефолт binary, author-context). compute.install читает
+  # default(essence.install_method, 'binary') — оператор больше не видит/не задаёт это
+  # поле. Внутренний оператор переопределяет способ в spec.essence (install_method:
+  # package), обычный — нет. Симметрия с modules_base_url/binary_base_url (тоже essence).
   #
-  # ★ Раскладка conf_dir/data_dir больше НЕ операторский input (#2): дефолты переехали
+  # ★ Раскладка conf_dir/data_dir тоже НЕ операторский input (#2): дефолты переехали
   # в essence (conf_dir/data_dir), compute читает их оттуда. Override — в spec.essence
   # инкарнации, не в Run-форме. В state conf_dir/data_dir ОСТАЮТСЯ (day-2 add_node читает
   # layout из incarnation.state) — источник правки лишь сместился input→essence, форма
   # state не меняется.
-  install_method:
-    type: string
-    required: false
-    default: binary
-    enum: [package, binary]
-    description: >-
-      Способ установки redis. binary (DEFAULT) — отдельные бинари redis-server/redis-cli/
-      redis-benchmark из Nexus (essence.binary_base_url + arch/Debian/distro_ver/version
-      per-host из soulprint.self.os; качаются по content-идемпотентности SHA-256, без
-      integrity-verify). package — distro-пакет redis-server (=version-пин из input.version).
-      Оператор обычно НЕ трогает: binary — штатный способ установки в инфраструктуре.
 
   memory_mb:
     type: integer
@@ -416,17 +403,16 @@ input:
 # без секции — WARNING (UI дорисует в дефолтную секцию в конце), не error.
 form:
   sections:
-    # 1. Параметры Redis — режим, сетевой канал, версия, способ установки.
+    # 1. Параметры Redis — режим, сетевой канал, версия.
+    # install_method убран из формы (2026-06-28): способ установки зафиксирован в
+    # essence (binary), оператор его не задаёт.
     - key: redis
       title: "Параметры Redis"
-      description: "Режим развёртывания, сетевой канал, версия и способ установки"
+      description: "Режим развёртывания, сетевой канал и версия"
       fields:
         - { name: redis_type, label: "Режим развёртывания" }
         - { name: connection_mode, label: "Сетевой канал" }
         - { name: version, label: "Версия Redis" }
-        - name: install_method
-          label: "Способ установки"
-          hint: "binary (по умолчанию) — бинари из Nexus; package — distro-пакет. Обычно не меняется."
 
     # 2. Топология — реплики (оба режима) + cluster-специфика.
     - key: topology
@@ -528,8 +514,9 @@ validate:
   # URL и версия бинаря переехали из operator-input в essence (binary_base_url/
   # binary_version, author-context), а validate-контекст INPUT-ONLY — essence в нём
   # недоступен (структурный CEL-барьер). Подложка essence задаёт источник; пустой
-  # binary_base_url при install_method=binary проявится при render-е destiny (URL
-  # tarball-а), а не на input-валидации. install_method — простой enum (схема ловит).
+  # binary_base_url при essence.install_method=binary проявится при render-е destiny
+  # (URL бинаря), а не на input-валидации. Сам install_method тоже в essence (2026-06-28)
+  # — НЕ operator-input → отдельного input-правила под него нет.
 
   # ★ system-ACL-users guard (дизайн d2): operator-extra (input.users) НЕ может занять
   # имя СЛУЖЕБНОГО юзера. Системные (default/replica/monitoring/sentinel/haproxy)
@@ -671,14 +658,16 @@ compute:
   # в detach_source. См. шапку redis-deploy-sentinel.yml.)
   sentinel_monitor_now: "${ true }"
   # ── install: destiny-структура {method, base_url, version} (редизайн) ─────────
-  # Собирается из install_method (enum, дефолт binary) + essence.binary_base_url (URL —
-  # author-context) + input.version (версия — операторский enum выкаченных в Nexus сборок).
-  # method всегда присутствует; base_url/version материализуются ТОЛЬКО при method=binary.
-  # destiny строит per-host путь как <base_url>/<arch>/Debian/<distro_ver>/<version>/redis-*
-  # (arch/distro_ver — soulprint.self.os; см. install.yml binary-ветку). Та же структура
-  # уходит в destiny `redis` (apply.input.install) и в state_changes.install.
+  # Собирается из essence.install_method (дефолт binary, author-context — НЕ operator-
+  # input, 2026-06-28) + essence.binary_base_url (URL) + input.version (версия —
+  # операторский enum выкаченных в Nexus сборок). method всегда присутствует; base_url/
+  # version материализуются ТОЛЬКО при method=binary. destiny строит per-host путь как
+  # <base_url>/<arch>/Debian/<distro_ver>/<version>/redis-* (arch/distro_ver —
+  # soulprint.self.os; см. install.yml binary-ветку). Та же структура уходит в destiny
+  # `redis` (apply.input.install) и в state_changes.install. default(essence.install_method,
+  # 'binary') ловит отсутствие листа на existing essence-map (симметрия modules_base_url).
   install: >-
-    ${ (input.install_method == 'binary')
+    ${ (default(essence.install_method, 'binary') == 'binary')
          ? {
              'method':   'binary',
              'base_url': default(essence.binary_base_url, ''),
@@ -1000,7 +989,7 @@ tasks:
   # но доступен.
   #
   # ВЕРСИЯ — compute.redis_version (= input.version, enum выкаченных в Nexus сборок;
-  # ★ редизайн: ОДНА на оба install_method — binary качает бинари этой версии, package
+  # ★ редизайн: ОДНА на оба способа установки — binary качает бинари этой версии, package
   # ставит =version-пин; прежний каскад «binary → essence.binary_version» убран).
   # Версия несёт серию major.minor → assert матчит её против ключей каталога.
   #

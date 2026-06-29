@@ -37,6 +37,9 @@ fixtures:
     secret/redis/create/users/mike:
       password: mike-secret-pass
   essence:
+    # install_method — в essence (author-context, 2026-06-28): способ установки
+    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    install_method: package
     redis_type: sentinel
     sentinel_master_name: master
     modules_base_url: "https://artifacts.example.com/redis/modules"
@@ -79,7 +82,6 @@ fixtures:
     # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
     # distro-native пин (мажор < 8 → version-gate модулей не активен).
     version: "7.4.1"
-    install_method: package
     # single-host roster (1 хост) → реплик нет (sentinel size-guard = 1+0 = 1).
     replicas_per_master: 0
     memory_mb: 64

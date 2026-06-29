@@ -64,6 +64,9 @@ fixtures:
     secret/redis/create/users/alpha:
       password: alpha-user-secret-pass
   essence:
+    # install_method — в essence (author-context, 2026-06-28): способ установки
+    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    install_method: package
     redis_type: sentinel
     sentinel_master_name: master
     # ★ Редизайн: подложка per-master sentinel-дефолтов (под input.sentinel_master_settings).
@@ -97,7 +100,6 @@ fixtures:
   input:
     redis_type: sentinel
     version: "7.4.1"
-    install_method: package
     replicas_per_master: 2
     users:
       - { name: zeta, perms: "~* +@all", state: "on" }

@@ -32,6 +32,9 @@ fixtures:
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
   essence:
+    # install_method — в essence (author-context, 2026-06-28): способ установки
+    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    install_method: package
     redis_type: sentinel
     sentinel_master_name: master
     # Системные ACL-юзеры (1:1 из essence/_default.yaml) — ОБЯЗАТЕЛЬНЫ: guard
@@ -75,7 +78,6 @@ fixtures:
     version: "7.4.1"
     # install_method=package ЯВНО: кейс про persistence/memory-fallback, не про install.
     # default редизайна binary → package-ветка ставит distro-пакет (assert core.pkg.installed).
-    install_method: package
     # replicas_per_master=0 ЯВНО (default редизайна 2): single-host (node-solo), size-guard
     # sentinel = 1+0 = 1 хост.
     replicas_per_master: 0

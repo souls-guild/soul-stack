@@ -35,6 +35,9 @@ fixtures:
       key:  "-----BEGIN PRIVATE KEY-----\nOPKEY\n-----END PRIVATE KEY-----"
       ca:   "-----BEGIN CERTIFICATE-----\nOPCA\n-----END CERTIFICATE-----"
   essence:
+    # install_method — в essence (author-context, 2026-06-28): способ установки
+    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    install_method: package
     redis_type: sentinel
     sentinel_master_name: master
     # ★ Редизайн: подложка per-master sentinel-дефолтов (под input.sentinel_master_settings).
@@ -76,7 +79,6 @@ fixtures:
   input:
     redis_type: sentinel
     version: "7.4.1"
-    install_method: package
     persistence: rdb
     # single-host (1 хост) → 0 реплик (default редизайна 2): size-guard sentinel = 1+0.
     replicas_per_master: 0

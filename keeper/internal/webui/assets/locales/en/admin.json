@@ -274,5 +274,26 @@
   "settingsTitle": "Settings",
   "settingsCrumbs": "Keeper configuration",
   "settingsNavAria": "Settings sections",
-  "settingsTabProvPolicy": "Provisioning Policy"
+  "settingsTabProvPolicy": "Provisioning Policy",
+  "settingsTabAppearance": "Appearance",
+
+  "appearanceThemeTitle": "Theme",
+  "appearanceThemeDesc": "Choose a color theme. Your choice is saved across sessions.",
+  "appearanceLangTitle": "Language",
+  "appearanceLangDesc": "Choose the UI language. Your choice is saved across sessions.",
+
+  "themeAriaGroup": "Color theme",
+  "langAriaGroup": "Interface language",
+
+  "themeLight": "Light",
+  "themeDark": "Dark",
+  "themeSystem": "System",
+  "themeWarm": "Warm",
+  "themeDeep": "Deep",
+
+  "themeLightDesc": "Light",
+  "themeDarkDesc": "Dark",
+  "themeSystemDesc": "Follow system",
+  "themeWarmDesc": "Warm tones",
+  "themeDeepDesc": "Deep dark"
 }

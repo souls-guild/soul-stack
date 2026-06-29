@@ -54,6 +54,9 @@ fixtures:
   # essence — слой трансляции: persistence_presets (данные-таблица),
   # memory_reserve_percent (резерв ОС), redis_config (merge-подложка дефолтов).
   essence:
+    # install_method — в essence (author-context, 2026-06-28): способ установки
+    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    install_method: package
     redis_type: sentinel
     sentinel_master_name: master
     # ★ Редизайн: подложка per-master sentinel-дефолтов (под input.sentinel_master_settings).
@@ -101,7 +104,6 @@ fixtures:
   input:
     redis_type: sentinel
     version: "7.4.1"
-    install_method: package
     # single-host sentinel roster (1 хост) → реплик нет (size-guard 1+0).
     replicas_per_master: 0
     memory_mb: 1024

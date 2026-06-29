@@ -51,6 +51,9 @@ fixtures:
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
   essence:
+    # install_method — в essence (author-context, 2026-06-28): способ установки
+    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    install_method: package
     redis_type: cluster
     modules_base_url: "https://artifacts.example.com/redis/modules"
     memory_reserve_percent: 75
@@ -71,7 +74,6 @@ fixtures:
   input:
     redis_type: cluster
     version: "7.4.1"
-    install_method: package
     shards: 2
     replicas_per_master: 1
     cluster_node_timeout: 5000

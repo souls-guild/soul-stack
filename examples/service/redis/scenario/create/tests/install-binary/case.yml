@@ -63,6 +63,10 @@ fixtures:
     redis_config:
       maxmemory: "256mb"
 
+    # ★ install_method — в essence (author-context, 2026-06-28): способ установки НЕ
+    # operator-input. binary — дефолт; compute.install читает default(essence.install_method,
+    # 'binary'). Кейс — guard binary-ветки, поэтому install_method: binary задан ЯВНО.
+    install_method: binary
     # ★ Редизайн: base_url бинарей — в essence (author-context, Nexus-mirror). Версия —
     # операторский input.version (enum выкаченных сборок), НЕ essence.binary_version.
     binary_base_url: "https://downloads.example.com/redis"
@@ -84,7 +88,6 @@ fixtures:
   input:
     redis_type: sentinel
     persistence: rdb
-    install_method: binary
     # version — enum выкаченных в Nexus сборок; определяет путь к бинарю (.../<version>/).
     version: "7.4.1"
     # replicas_per_master=0 ЯВНО (default редизайна — 2): single-host install-кейс,

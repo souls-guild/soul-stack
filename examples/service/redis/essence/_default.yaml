@@ -25,6 +25,15 @@ sentinel_master_name: master
 # 8+ — модули встроены, источник не нужен; на Redis < 8 оператор обязан переопределить).
 modules_base_url: ""
 
+# ── Способ установки redis: ФИКСИРОВАН в essence, НЕ operator-input (2026-06-28) ──
+# install_method убран из операторского контракта create: способ установки — НЕ
+# операторский выбор в Run-форме, а author-context. Дефолт binary (штатный способ:
+# отдельные бинари из Nexus). compute.install читает это значение
+# (default(essence.install_method, 'binary')), симметрично modules_base_url/binary_base_url.
+# Ветка package остаётся vars-driven: внутренний оператор переопределяет в spec.essence
+# (install_method: package) под distro-инсталляцию, обычный оператор её не видит.
+install_method: binary
+
 # ── Способ установки binary: источник бинарей Redis из Nexus (редизайн) ──────────
 # install_method=binary (DEFAULT) тянет ОТДЕЛЬНЫЕ бинари redis-server/redis-cli/
 # redis-benchmark из Nexus. base_url — author-context (оператор переопределяет в

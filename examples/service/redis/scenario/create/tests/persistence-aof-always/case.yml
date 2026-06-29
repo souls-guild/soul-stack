@@ -26,6 +26,9 @@ fixtures:
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
   essence:
+    # install_method — в essence (author-context, 2026-06-28): способ установки
+    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    install_method: package
     redis_type: sentinel
     sentinel_master_name: master
     sentinel_master_defaults:
@@ -53,7 +56,6 @@ fixtures:
   input:
     redis_type: sentinel
     version: "7.4.1"
-    install_method: package
     replicas_per_master: 0
     # aof_always: пресет доливает appendfsync:always (fsync на каждую запись).
     persistence: aof_always

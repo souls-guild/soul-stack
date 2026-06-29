@@ -28,6 +28,9 @@ fixtures:
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
   essence:
+    # install_method — в essence (author-context, 2026-06-28): способ установки
+    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    install_method: package
     redis_type: sentinel
     sentinel_master_name: master
     modules_base_url: "https://artifacts.example.com/redis/modules"
@@ -75,7 +78,6 @@ fixtures:
     replicas_per_master: 0
     # install_method=package ЯВНО (default редизайна — binary): кейс про last-wins
     # maxmemory, не про install — package-ветка даёт core.pkg.installed redis-server.
-    install_method: package
     memory_mb: 512
     # persistence rdb_aof_1sec (enum [off, aof_1sec, aof_always, rdb, rdb_aof_1sec,
     # rdb_aof_always]): RDB-снапшоты + AOF c fsync everysec. Пресет несёт save+appendonly.

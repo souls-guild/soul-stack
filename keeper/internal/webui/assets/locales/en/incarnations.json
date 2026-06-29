@@ -223,5 +223,12 @@
   "traitsSwitchToList": "Switch to list mode",
   "traitsSwitchToString": "Switch to string mode",
   "traitsRemoveRow": "Remove trait",
-  "traitsChipRemove": "Remove value {{chip}}"
+  "traitsChipRemove": "Remove value {{chip}}",
+  "editTraitsTitle": "Edit incarnation traits",
+  "editTraitsBtn": "Edit Traits",
+  "editTraitsIntro": "Full replacement of incarnation.traits (source of truth). Member hosts' traits will be overwritten.",
+  "editTraitsNoCurrentNote": "Current trait values are unavailable without a backend update (no GET /traits). To update selectively — check current traits via API first.",
+  "editTraitsSaving": "Saving…",
+  "editTraitsSave": "Save",
+  "editTraitsSuccess": "Incarnation traits updated"
 }

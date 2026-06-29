@@ -41,6 +41,9 @@ fixtures:
       key:  "-----BEGIN PRIVATE KEY-----\nSERVERKEY\n-----END PRIVATE KEY-----"
       ca:   "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
   essence:
+    # install_method — в essence (author-context, 2026-06-28): способ установки
+    # НЕ operator-input. compute.install читает default(essence.install_method, 'binary').
+    install_method: package
     redis_type: cluster
     modules_base_url: "https://artifacts.example.com/redis/modules"
     memory_reserve_percent: 75
@@ -72,8 +75,6 @@ fixtures:
     # version ОБЯЗАТЕЛЬНА: enum выкаченных в Nexus сборок (мажор < 8 → version-gate
     # модулей не активен). 7.4.1 — серия 7.x, как прежний distro-пин 7.2.4.
     version: "7.4.1"
-    # install_method=package ЯВНО: assert redis.conf без binary-бинарей (кейс про TLS).
-    install_method: package
     shards: 3
     replicas_per_master: 0
     cluster_node_timeout: 5000

@@ -33,6 +33,10 @@ fixtures:
       down-after-milliseconds: "5000"
       failover-timeout:        "60000"
     modules_base_url: "https://artifacts.example.com/redis/modules"
+    # install_method — в essence (author-context, 2026-06-28): способ установки НЕ
+    # operator-input. Кейс про TLS-директивы, не про install → package задан ЯВНО
+    # (distro redis-server, без binary-URL; короче redis.conf-план).
+    install_method: package
     memory_reserve_percent: 75
     persistence_presets:
       rdb:
@@ -64,9 +68,6 @@ fixtures:
     # version ОБЯЗАТЕЛЬНА: enum выкаченных в Nexus сборок (мажор < 8 → version-gate
     # модулей не активен). 7.4.1 — серия 7.x, как прежний distro-пин 7.2.4.
     version: "7.4.1"
-    # install_method=package ЯВНО: кейс про TLS-директивы, не про способ установки;
-    # package-ветка сохраняет прежнее поведение (distro redis-server, без binary-URL).
-    install_method: package
     persistence: rdb
     # single-host (1 хост) → 0 реплик (default редизайна 2): size-guard sentinel = 1+0.
     replicas_per_master: 0
