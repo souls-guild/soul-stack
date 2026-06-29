@@ -143,11 +143,11 @@ assert:
         mode: "0750"
 
     # fetch .so — ВСЕ четыре (Go-сорт: bloom, json, search, timeseries). URL арх-
-    # специфичен (amd64 из soulprint первого хоста в L0). checksum НЕ передаётся —
+    # специфичен (x86_64 — uname-m-маппинг soulprint amd64 первого хоста в L0). checksum НЕ передаётся —
     # content-идемпотентность. tarball-fetch (binary install) — placeholder.
     - module: core.url.fetched
       params_subset:
-        url: "https://artifacts.example.com/redis/modules/6.2/amd64/redisbloom.so"
+        url: "https://artifacts.example.com/redis/modules/6.2/x86_64/redisbloom.so"
         path: /var/lib/redis/modules/redisbloom.so
         mode: "0750"
         owner: redis
@@ -155,7 +155,7 @@ assert:
 
     - module: core.url.fetched
       params_subset:
-        url: "https://artifacts.example.com/redis/modules/6.2/amd64/rejson.so"
+        url: "https://artifacts.example.com/redis/modules/6.2/x86_64/rejson.so"
         path: /var/lib/redis/modules/rejson.so
         mode: "0750"
         owner: redis
@@ -163,7 +163,7 @@ assert:
 
     - module: core.url.fetched
       params_subset:
-        url: "https://artifacts.example.com/redis/modules/6.2/amd64/redisearch.so"
+        url: "https://artifacts.example.com/redis/modules/6.2/x86_64/redisearch.so"
         path: /var/lib/redis/modules/redisearch.so
         mode: "0750"
         owner: redis
@@ -171,7 +171,7 @@ assert:
 
     - module: core.url.fetched
       params_subset:
-        url: "https://artifacts.example.com/redis/modules/6.2/amd64/redistimeseries.so"
+        url: "https://artifacts.example.com/redis/modules/6.2/x86_64/redistimeseries.so"
         path: /var/lib/redis/modules/redistimeseries.so
         mode: "0750"
         owner: redis

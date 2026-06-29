@@ -156,3 +156,29 @@
       timeout: 30s
       params:
         name: "${ vars.dragonfly_service_name }"
+
+# ── data-dir и log-dir (обе ветки, БЕЗУСЛОВНО) ──────────────────────────────────
+# Каталоги данных (/var/lib/dragonfly: snapshot-dir DF) и логов (/var/log/dragonfly:
+# glog-файлы DF) ОБЯЗАНЫ существовать ДО первого старта dragonfly. binary-ветка пакета
+# НЕ несёт → создать НЕКОМУ (systemd RuntimeDirectory покрывает только run-dir, не
+# stateful data/log); package-ветка (distro-deb) их обычно заводит — idempotent
+# core.file.directory = no-op/чинит дрейф. Потому БЕЗУСЛОВНО (НЕ gated на install.method
+# и НЕ на deploy_dragonfly). owner/group dragonfly (deb или binary-ветка их завели —
+# задачи top-level ПОСЛЕ обоих установочных блоков). mode 0750: владелец читает/пишет.
+- name: Ensure the dragonfly data directory exists
+  module: core.file.directory
+  params:
+    path: "${ vars.dragonfly_data_dir_eff }"
+    owner: "${ vars.dragonfly_user }"
+    group: "${ vars.dragonfly_group }"
+    mode: "0750"
+    parents: true
+
+- name: Ensure the dragonfly log directory exists
+  module: core.file.directory
+  params:
+    path: "${ vars.log_dir }"
+    owner: "${ vars.dragonfly_user }"
+    group: "${ vars.dragonfly_group }"
+    mode: "0750"
+    parents: true

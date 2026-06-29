@@ -92,15 +92,33 @@ assert:
   task_present:
     # ★ Редизайн install-модели: бинари качаются ЧЕТЫРЬМЯ отдельными core.url.fetched
     # прямо в /usr/local/bin (НЕ tarball). URL per-host: <base_url>/<arch>/Debian/
-    # <distro_ver>/<version>/redis-* (amd64/Debian/12/8.0.3). Бинари ставятся ВСЕГДА —
+    # <distro_ver>/<version>/redis-* (x86_64/Debian/12/8.0.3). Бинари ставятся ВСЕГДА —
     # version-guard гасит только .so модулей, не сам redis. Дизамбигуатор — url/path.
     - module: core.url.fetched
       params_subset:
-        url: "https://downloads.example.com/redis/amd64/Debian/12/8.0.3/redis-server"
+        url: "https://downloads.example.com/redis/x86_64/Debian/12/8.0.3/redis-server"
         path: /usr/local/bin/redis-server
         mode: "0755"
         owner: root
         group: root
+
+    # data/log-dir (обе ветки, БЕЗУСЛОВНО): binary-ветка пакета не несёт → создаём явно
+    # ДО старта redis-server (иначе redis-server на binary-инсталляции не находит data-dir).
+    # owner redis, parents:true. Дизамбигуатор от socket/modules/tls-dir — path.
+    - module: core.file.directory
+      params_subset:
+        path: /var/lib/redis
+        owner: redis
+        group: redis
+        mode: "0750"
+        parents: true
+    - module: core.file.directory
+      params_subset:
+        path: /var/log/redis
+        owner: redis
+        group: redis
+        mode: "0750"
+        parents: true
 
     # redis.conf БЕЗ loadmodules (version-gate Redis 8+ → пустой список): vars.loadmodules:
     # []. Регресс «version-guard не сработал» = непустой loadmodules + .so в плане.
@@ -171,6 +189,9 @@ assert:
     # Redis 8+ → модули встроены, .so не качаются → развёрнутый набор пуст.
     modules: []
     install:
-      method:   binary
-      base_url: "https://downloads.example.com/redis"
-      version:  "8.0.3"
+      method:        binary
+      base_url:      "https://downloads.example.com/redis"
+      version:       "8.0.3"
+      # allow_private — compute.install несёт его (SSRF-guard fetch бинарей с internal
+      # Nexus; default essence.binary_allow_private=true).
+      allow_private: true

@@ -76,12 +76,28 @@ redis_data_dir: /var/lib/redis
 # ${ vars.redis_bin_dir }/redis-server (и -cli/-sentinel).
 redis_bin_dir: /usr/local/bin
 
+# ── arch Nexus-пути: GOARCH-конвенция → uname-m-конвенция ───────────────────────
+# soulprint.self.os.arch несёт GOARCH-имя (amd64/arm64 — Go-конвенция, читается
+# core.pkg/core.service напрямую). Nexus же раскладывает бинари/.so по uname-m-пути
+# (x86_64/aarch64 — ansible_architecture/`uname -m` ансибл-роли-источника): путь
+# .../redis/amd64/... → 404, .../redis/x86_64/... → 200. Маппим ТОЛЬКО для URL Nexus
+# (бинари install.yml + .so modules.yml); soulprint не трогаем. amd64→x86_64,
+# arm64→aarch64, прочее (в т.ч. синтетический arch фикстур) — как есть.
+# ★ has()-guard render-safe в МЁРТВОМ package-проходе (file-var резолвится до skip-
+# проекции): absent soulprint.self.os.arch → '' (значение не используется — задачи skip).
+redis_arch: >-
+  ${ has(soulprint.self.os.arch)
+       ? (soulprint.self.os.arch == 'amd64' ? 'x86_64'
+          : (soulprint.self.os.arch == 'arm64' ? 'aarch64' : soulprint.self.os.arch))
+       : '' }
+
 # ── URL-база бинарей Redis из Nexus (редизайн install-модели) ───────────────────
 # Базовый URL КАТАЛОГА бинарей конкретной (version, arch, distro_ver) сборки —
 # собирается в ОДНОМ месте, install.yll-задачи дописывают лишь имя файла
 # (/redis-server, /redis-cli, /redis-benchmark). Форма ansible redis_url_file_path:
 # <base_url>/<arch>/<distribution>/<distro_major>/<version>. Distribution захардкожен
-# Debian (целевой парк); arch/distro_ver — per-host из soulprint.self.os.arch/version.
+# Debian (целевой парк); arch — vars.redis_arch (uname-m-маппинг soulprint.self.os.arch,
+# x86_64/aarch64 — Nexus-путь), distro_ver — per-host из soulprint.self.os.version.
 #
 # ★ render-safety в МЁРТВОМ package-проходе: при install.method=package binary-блок
 # static-skip, НО file-vars резолвятся per-host ДО skip-проекции (eager, до задач) —
@@ -95,7 +111,7 @@ redis_bin_dir: /usr/local/bin
 # soulprint несёт оба поля (ADR-018 typed). Значение в мёртвом проходе не используется (skip).
 redis_binary_url_base: >-
   ${ (has(input.install) && has(input.install.base_url) ? input.install.base_url : '')
-       + '/' + (has(soulprint.self.os.arch) ? soulprint.self.os.arch : '')
+       + '/' + vars.redis_arch
        + '/Debian/' + (has(soulprint.self.os.version) ? soulprint.self.os.version : '')
        + '/' + (has(input.install) && has(input.install.version) ? input.install.version : '') }
 

@@ -145,10 +145,10 @@ assert:
         group: redis
         mode: "0750"
 
-    # .so fetch под data_dir override; URL арх-специфичен (amd64). Дизамбигуатор — path.
+    # .so fetch под data_dir override; URL арх-специфичен (x86_64 — uname-m-маппинг soulprint amd64). Дизамбигуатор — path.
     - module: core.url.fetched
       params_subset:
-        url: "https://artifacts.example.com/redis/modules/6.2/amd64/redisearch.so"
+        url: "https://artifacts.example.com/redis/modules/6.2/x86_64/redisearch.so"
         path: /srv/redis-data/modules/redisearch.so
         mode: "0750"
         owner: redis

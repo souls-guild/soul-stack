@@ -11,7 +11,7 @@
 #   - include modules.yml → deploy_redis && redis_modules_enabled → ОБА истинны → группа в
 #     плане (modules-dir + 4 fetch присутствуют);
 #   - loadmodules-ячейка redis.conf: redis_modules_enabled → пути ВСЕХ четырёх .so.
-# URL арх-специфичен per-host (soulprint.self.os.arch; L0 несёт self первого по SID хоста).
+# URL арх-специфичен per-host (x86_64 — uname-m-маппинг soulprint.self.os.arch=amd64; L0 несёт self первого по SID хоста).
 name: non-empty modules_base_url deploys all modules with loadmodule and .so fetch
 
 fixtures:
@@ -141,31 +141,31 @@ assert:
         mode: "0750"
 
     # ── .so качаются — ВСЕ четыре (Go-сорт: bloom, json, search, timeseries). URL арх-
-    # специфичен (amd64 из soulprint первого хоста). checksum НЕ передаётся (content-идемп.).
+    # специфичен (x86_64 — uname-m-маппинг soulprint amd64 первого хоста). checksum НЕ передаётся (content-идемп.).
     - module: core.url.fetched
       params_subset:
-        url: "https://artifacts.example.com/redis/modules/7.2/amd64/redisbloom.so"
+        url: "https://artifacts.example.com/redis/modules/7.2/x86_64/redisbloom.so"
         path: /var/lib/redis/modules/redisbloom.so
         mode: "0750"
         owner: redis
         group: redis
     - module: core.url.fetched
       params_subset:
-        url: "https://artifacts.example.com/redis/modules/7.2/amd64/rejson.so"
+        url: "https://artifacts.example.com/redis/modules/7.2/x86_64/rejson.so"
         path: /var/lib/redis/modules/rejson.so
         mode: "0750"
         owner: redis
         group: redis
     - module: core.url.fetched
       params_subset:
-        url: "https://artifacts.example.com/redis/modules/7.2/amd64/redisearch.so"
+        url: "https://artifacts.example.com/redis/modules/7.2/x86_64/redisearch.so"
         path: /var/lib/redis/modules/redisearch.so
         mode: "0750"
         owner: redis
         group: redis
     - module: core.url.fetched
       params_subset:
-        url: "https://artifacts.example.com/redis/modules/7.2/amd64/redistimeseries.so"
+        url: "https://artifacts.example.com/redis/modules/7.2/x86_64/redistimeseries.so"
         path: /var/lib/redis/modules/redistimeseries.so
         mode: "0750"
         owner: redis

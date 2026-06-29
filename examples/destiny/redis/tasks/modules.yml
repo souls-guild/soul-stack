@@ -35,7 +35,9 @@
 # дешевле расширения loop-движка. Порядок задач — по алиасу (как Go-сорт ключей в
 # loadmodules) → план детерминирован.
 #
-# URL АРХ-СПЕЦИФИЧЕН per-host: modules_base_url + soulprint.self.os.arch + имя .so из vars.
+# URL АРХ-СПЕЦИФИЧЕН per-host: modules_base_url + vars.redis_arch + имя .so из vars.
+# vars.redis_arch — uname-m-маппинг soulprint.self.os.arch (amd64→x86_64/arm64→aarch64)
+# для Nexus-пути, симметрично binary-URL install.yml (vars.redis_binary_url_base).
 # mode 0750 owner redis. register не нужен — loadmodule в redis.conf уже триггерит рестарт
 # через redis_conf-register. checksum НЕ передаётся → content-идемпотентность (SHA-256),
 # без integrity-verify (как node-exporter).
@@ -49,7 +51,7 @@
 - name: Fetch the redisbloom module shared object
   module: core.url.fetched
   params:
-    url:   "${ input.modules_base_url + '/' + soulprint.self.os.arch + '/' + vars.redis_modules.bloom }"
+    url:   "${ input.modules_base_url + '/' + vars.redis_arch + '/' + vars.redis_modules.bloom }"
     path:  "${ vars.redis_modules_dir + '/' + vars.redis_modules.bloom }"
     mode:  "0750"
     owner: "${ vars.redis_user }"
@@ -59,7 +61,7 @@
 - name: Fetch the rejson module shared object
   module: core.url.fetched
   params:
-    url:   "${ input.modules_base_url + '/' + soulprint.self.os.arch + '/' + vars.redis_modules.json }"
+    url:   "${ input.modules_base_url + '/' + vars.redis_arch + '/' + vars.redis_modules.json }"
     path:  "${ vars.redis_modules_dir + '/' + vars.redis_modules.json }"
     mode:  "0750"
     owner: "${ vars.redis_user }"
@@ -69,7 +71,7 @@
 - name: Fetch the redisearch module shared object
   module: core.url.fetched
   params:
-    url:   "${ input.modules_base_url + '/' + soulprint.self.os.arch + '/' + vars.redis_modules.search }"
+    url:   "${ input.modules_base_url + '/' + vars.redis_arch + '/' + vars.redis_modules.search }"
     path:  "${ vars.redis_modules_dir + '/' + vars.redis_modules.search }"
     mode:  "0750"
     owner: "${ vars.redis_user }"
@@ -79,7 +81,7 @@
 - name: Fetch the redistimeseries module shared object
   module: core.url.fetched
   params:
-    url:   "${ input.modules_base_url + '/' + soulprint.self.os.arch + '/' + vars.redis_modules.timeseries }"
+    url:   "${ input.modules_base_url + '/' + vars.redis_arch + '/' + vars.redis_modules.timeseries }"
     path:  "${ vars.redis_modules_dir + '/' + vars.redis_modules.timeseries }"
     mode:  "0750"
     owner: "${ vars.redis_user }"
