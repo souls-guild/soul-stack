@@ -119,6 +119,21 @@ input:
           Upstream-версия redis для tarball-а (semver, напр. 7.2.4). Обязательна при
           method=binary. ОТДЕЛЬНА от top-level version (distro-epoch) — разные
           форматы (#4 version-pattern).
+      # ── allow_private: снять SSRF-guard core.url для fetch бинарей (2026-06-28) ──
+      # Дефолтный binary_base_url сервиса — ВНУТРЕННИЙ Nexus (resolve в RFC1918-адрес,
+      # напр. 10.16.2.130). core.url.fetched по умолчанию (allow_private:false) блокит
+      # dial в private-IP SSRF-guard-ом (shared/netguard) → fetch бинарей падает. Это
+      # поле пробрасывается в каждую core.url.fetched-задачу binary-ветки install.yml.
+      # Опциональное (only-add, forward-compat): не передан → has()-guard в vars даёт
+      # false (строгий дефолт destiny — guard держится). scenario create выставляет его
+      # из essence.binary_allow_private (дефолт true: дефолтный base = internal Nexus).
+      # Публичный-mirror-деплой (внешний resolvable base) задаёт false.
+      allow_private:
+        type: boolean
+        description: >-
+          Снять SSRF-guard core.url для fetch бинарей binary-ветки (разрешить dial в
+          RFC1918/loopback — легитимный internal Nexus). Нужен, когда base_url
+          резолвится в private-адрес. Не передан → guard держится (строгий дефолт).
 
   password:
     type: string
@@ -278,6 +293,19 @@ input:
       полный URL каждого модуля как modules_base_url/<arch>/<имя.so>, где arch —
       soulprint.self.os.arch ЭТОГО хоста, а имя файла — из vars.redis_modules.
       Обязателен на Redis < 8 (модули разворачиваются всегда все).
+
+  # ── modules_allow_private: SSRF-guard для fetch .so модулей (2026-06-28) ────────
+  # Симметрично install.allow_private: modules_base_url тоже может быть ВНУТРЕННИМ
+  # Nexus (resolve в RFC1918) → fetch .so падал бы на SSRF-guard core.url. Поле
+  # пробрасывается в каждую core.url.fetched-задачу modules.yml. Опциональное (only-add):
+  # не передан → has()-guard в vars даёт false (строгий дефолт). scenario create
+  # выставляет его из essence.modules_allow_private (дефолт true).
+  modules_allow_private:
+    type: boolean
+    description: >-
+      Снять SSRF-guard core.url для fetch .so модулей (разрешить dial в RFC1918/loopback —
+      легитимный internal Nexus). Нужен, когда modules_base_url резолвится в private-адрес.
+      Не передан → guard держится (строгий дефолт).
 
   # ── Host-tuning extras (концепция Ansible-роли) ──────────────────────────────
   # Режим-агностичные per-host добавки. THP-отключение / logrotate / sysctl —

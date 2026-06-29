@@ -52,6 +52,15 @@
 # checksum НЕ передаётся → core.url.fetched качает по content-идемпотентности (SHA-256
 # содержимого), без integrity-verify — доверяем HTTPS + источнику (директива «попроще»).
 #
+# ★ SSRF-guard (allow_private): дефолтный binary_base_url сервиса — ВНУТРЕННИЙ Nexus,
+# который резолвится в RFC1918-адрес (напр. 10.16.2.130). core.url.fetched по умолчанию
+# (allow_private:false) блокит dial в private-IP SSRF-guard-ом (shared/netguard) → fetch
+# бинарей падал бы. allow_private: ${ vars.redis_binary_allow_private } снимает guard для
+# этих fetch — ИМЕННО для доверенного internal Nexus (vars нормализует флаг из
+# apply.input.install.allow_private ← essence.binary_allow_private, дефолт true; публичный-
+# mirror-деплой с external-resolvable base ставит false). Это ослабление ОГРАНИЧЕНО binary-
+# веткой и взводится осознанно (essence), не глобальный opt-out.
+#
 # ★ render-safety: задачи binary-блока несут has()-guard на input.install.version/base_url,
 #   хотя при method=binary эти поля присутствуют. Причина: при method=package весь блок
 #   static-skip, но CEL ячеек binary-задач Keeper ВСЁ РАВНО вычисляет (vars/params
@@ -97,6 +106,7 @@
         mode: "0755"
         owner: "${ vars.root_owner }"
         group: "${ vars.root_group }"
+        allow_private: "${ vars.redis_binary_allow_private }"
 
     - name: Fetch the redis-cli binary into the local bin directory
       module: core.url.fetched
@@ -107,6 +117,7 @@
         mode: "0755"
         owner: "${ vars.root_owner }"
         group: "${ vars.root_group }"
+        allow_private: "${ vars.redis_binary_allow_private }"
 
     - name: Fetch the redis-benchmark binary into the local bin directory
       module: core.url.fetched
@@ -117,6 +128,7 @@
         mode: "0755"
         owner: "${ vars.root_owner }"
         group: "${ vars.root_group }"
+        allow_private: "${ vars.redis_binary_allow_private }"
 
     # redis-sentinel — ОТДЕЛЬНЫЙ бинарь Nexus (НЕ симлинк): sentinel.yml ждёт его на
     # месте при sentinel_enabled, и это полноценный бинарь, не maintenance-тулза.
@@ -130,6 +142,7 @@
         mode: "0755"
         owner: "${ vars.root_owner }"
         group: "${ vars.root_group }"
+        allow_private: "${ vars.redis_binary_allow_private }"
 
     # 3. Симлинки redis-check-aof/redis-check-rdb → redis-server (maintenance-тулзы =
     #    тот же multi-call бинарь по argv[0], не runtime-критично; ансибл-роль тоже

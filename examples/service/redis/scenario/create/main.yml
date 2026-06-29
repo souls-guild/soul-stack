@@ -615,6 +615,12 @@ compute:
   # default() ловит отсутствие листа на существующем essence-map; дефолт "" симметричен
   # прежнему default(input.modules_base_url, '').
   modules_base_url: "${ default(essence.modules_base_url, '') }"
+  # ── SSRF-guard для fetch .so модулей (essence-плейсхолдер, 2026-06-28) ────────
+  # Симметрично install.allow_private: modules_base_url тоже может быть внутренним Nexus
+  # (resolve в RFC1918) → 4 .so-fetch destiny упали бы на SSRF-guard core.url. Берётся из
+  # essence.modules_allow_private (дефолт true). Объявлен ОДНИМ compute-var, ветки гонят его
+  # в apply.input.modules_allow_private. default() ловит отсутствие листа на existing essence.
+  modules_allow_private: "${ default(essence.modules_allow_private, true) }"
   # ── Per-master sentinel-директивы (обобщённый dict, редизайн) ────────────────
   # ★ Прежде хардкодило ровно 2 директивы (down-after-milliseconds/failover-timeout) из
   # именованных полей. Теперь ОБОБЩЕНО: per-master опции — dict input.sentinel_master_settings
@@ -657,21 +663,28 @@ compute:
   # role:slave, ранний MONITOR инициировал бы failover → split-brain; там MONITOR переносится
   # в detach_source. См. шапку redis-deploy-sentinel.yml.)
   sentinel_monitor_now: "${ true }"
-  # ── install: destiny-структура {method, base_url, version} (редизайн) ─────────
+  # ── install: destiny-структура {method, base_url, version, allow_private} (редизайн) ─
   # Собирается из essence.install_method (дефолт binary, author-context — НЕ operator-
   # input, 2026-06-28) + essence.binary_base_url (URL) + input.version (версия —
   # операторский enum выкаченных в Nexus сборок). method всегда присутствует; base_url/
-  # version материализуются ТОЛЬКО при method=binary. destiny строит per-host путь как
-  # <base_url>/<arch>/Debian/<distro_ver>/<version>/redis-* (arch/distro_ver —
+  # version/allow_private материализуются ТОЛЬКО при method=binary. destiny строит per-host
+  # путь как <base_url>/<arch>/Debian/<distro_ver>/<version>/redis-* (arch/distro_ver —
   # soulprint.self.os; см. install.yml binary-ветку). Та же структура уходит в destiny
   # `redis` (apply.input.install) и в state_changes.install. default(essence.install_method,
   # 'binary') ловит отсутствие листа на existing essence-map (симметрия modules_base_url).
+  #
+  # ★ allow_private (2026-06-28): SSRF-guard core.url для fetch бинарей. Дефолтный
+  # binary_base_url — ВНУТРЕННИЙ Nexus (resolve в RFC1918) → core.url.fetched по умолчанию
+  # блокит dial в private-IP. Берётся из essence.binary_allow_private (дефолт true: дефолтный
+  # base = internal Nexus → legit). Публичный-mirror-деплой (external-resolvable base) задаёт
+  # false в spec.essence. default() ловит отсутствие листа на existing essence-map.
   install: >-
     ${ (default(essence.install_method, 'binary') == 'binary')
          ? {
-             'method':   'binary',
-             'base_url': default(essence.binary_base_url, ''),
-             'version':  input.version
+             'method':        'binary',
+             'base_url':      default(essence.binary_base_url, ''),
+             'version':       input.version,
+             'allow_private': default(essence.binary_allow_private, true)
            }
          : { 'method': 'package' } }
   # ── Эффективный host-layout: conf_dir/data_dir из essence (#2) ───────────────

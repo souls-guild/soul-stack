@@ -111,6 +111,10 @@
       # host-инвариант → apply.input; арх-URL строит destiny per-host, .so качаются по
       # content-идемпотентности (без verify).
       modules_base_url: "${ compute.modules_base_url }"
+      # ★ SSRF-guard для fetch .so модулей: modules_base_url может быть внутренним Nexus
+      # (resolve в RFC1918) → core.url.fetched блокит private-IP. compute.modules_allow_private
+      # (из essence.modules_allow_private, дефолт true). as-is в destiny modules.yml.
+      modules_allow_private: "${ compute.modules_allow_private }"
       # Host-tuning extras (концепция роли), режим-агностичны. THP/logrotate/sysctl
       # БЕЗУСЛОВНЫ (рекомендация Redis / hardening) — операторских флагов нет, задачи
       # destiny `redis` всегда активны. sysctl_settings — essence, host-инвариант → apply.input.

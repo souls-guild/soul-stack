@@ -423,6 +423,12 @@ compute:
          ? []
          : ['bloom', 'json', 'search', 'timeseries'] }
   modules_base_url: "${ default(essence.modules_base_url, '') }"
+  # ★ SSRF-guard для fetch .so модулей (синхрон с create): modules_base_url может быть
+  # внутренним Nexus (resolve в RFC1918) → .so-fetch destiny упал бы на SSRF-guard core.url.
+  # Из essence.modules_allow_private (дефолт true). Общее деплой-тело redis-deploy-*.yml
+  # читает его в apply.input.modules_allow_private — ИНВАРИАНТ инклудящего (этот compute
+  # ОБЯЗАН его объявить, иначе render деплой-тела падает no-such-key).
+  modules_allow_private: "${ default(essence.modules_allow_private, true) }"
   # ── Per-master + глобальные sentinel-директивы (обобщённый dict, синхрон с create) ──
   # ★ Прежде хардкодило ровно 2 директивы (down-after-milliseconds/failover-timeout) из
   # удалённых именованных полей. Теперь ОБОБЩЕНО ТОЧНО как create/main.yml::compute.
@@ -458,17 +464,21 @@ compute:
   # sentinel.yml ПОСЛЕ REPLICAOF NO ONE, когда новый master снова автономен. На create этот
   # флаг=true (node-1 остаётся настоящим master). См. шапку redis-deploy-sentinel.yml.
   sentinel_monitor_now: "${ false }"
-  # ── install: destiny-структура {method, base_url, version} (синхрон с create) ──
+  # ── install: destiny-структура {method, base_url, version, allow_private} (синхрон с create) ─
   # ★ Собирается из install_method (enum, дефолт binary) + essence.binary_base_url (URL —
   # author-context) + input.version (версия — операторский enum выкаченных в Nexus сборок).
   # Прежний legacy `version: essence.binary_version` УБРАН — версия всегда input.version.
   # destiny строит per-host путь <base_url>/<arch>/Debian/<distro_ver>/<version>/redis-*.
+  # ★ allow_private (синхрон с create): SSRF-guard core.url для fetch бинарей — дефолтный
+  # binary_base_url внутренний Nexus (resolve в RFC1918). Из essence.binary_allow_private
+  # (дефолт true). Публичный-mirror-деплой ставит false в spec.essence.
   install: >-
     ${ (input.install_method == 'binary')
          ? {
-             'method':   'binary',
-             'base_url': default(essence.binary_base_url, ''),
-             'version':  input.version
+             'method':        'binary',
+             'base_url':      default(essence.binary_base_url, ''),
+             'version':       input.version,
+             'allow_private': default(essence.binary_allow_private, true)
            }
          : { 'method': 'package' } }
   conf_dir: "${ default(essence.conf_dir, '/etc/redis') }"

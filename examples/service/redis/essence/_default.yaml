@@ -25,6 +25,13 @@ sentinel_master_name: master
 # 8+ — модули встроены, источник не нужен; на Redis < 8 оператор обязан переопределить).
 modules_base_url: ""
 
+# ── SSRF-guard для fetch .so модулей (allow_private, 2026-06-28) ─────────────────
+# Симметрично binary_allow_private: modules_base_url тоже может быть внутренним Nexus
+# (resolve в RFC1918) → 4 .so-fetch destiny упали бы на SSRF-guard core.url. Дефолт TRUE
+# (доверенный internal Nexus). compute.modules_allow_private прокидывает его в
+# apply.input.modules_allow_private → destiny modules.yml. Публичный-mirror — false в spec.essence.
+modules_allow_private: true
+
 # ── Способ установки redis: ФИКСИРОВАН в essence, НЕ operator-input (2026-06-28) ──
 # install_method убран из операторского контракта create: способ установки — НЕ
 # операторский выбор в Run-форме, а author-context. Дефолт binary (штатный способ:
@@ -46,6 +53,16 @@ install_method: binary
 # author-context-подложка (оператор переопределяет в spec.essence под binary-инсталляцию).
 binary_base_url: "https://nexus-hosted.wb.ru/repository/raw/devops/dba/prod/redis"
 binary_version:  ""
+
+# ── SSRF-guard для fetch бинарей Nexus (allow_private, 2026-06-28) ───────────────
+# Дефолтный binary_base_url выше — ВНУТРЕННИЙ Nexus, который резолвится в RFC1918-адрес
+# (напр. 10.16.2.130). core.url.fetched по умолчанию (allow_private:false) блокит dial в
+# private-IP SSRF-guard-ом (shared/netguard) → fetch redis-бинарей падает на реальном
+# хосте. Дефолт TRUE: дефолтный base = доверенный internal Nexus → ослабление легитимно.
+# compute.install (create/main.yml) прокидывает значение в apply.input.install.allow_private
+# → destiny install.yml 4 fetch-задачи. Публичный-mirror-деплой (binary_base_url с external-
+# resolvable хостом) ставит false в spec.essence инкарнации — guard восстанавливается.
+binary_allow_private: true
 
 # ── Дефолты per-master директив Sentinel (подложка sentinel_master_settings) ─────
 # Нижний слой merge() для input.sentinel_master_settings (compute.sentinel_directives):

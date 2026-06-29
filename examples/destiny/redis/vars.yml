@@ -99,6 +99,27 @@ redis_binary_url_base: >-
        + '/Debian/' + (has(soulprint.self.os.version) ? soulprint.self.os.version : '')
        + '/' + (has(input.install) && has(input.install.version) ? input.install.version : '') }
 
+# ── SSRF-guard для fetch бинарей Nexus (core.url.fetched allow_private) ─────────
+# Дефолтный binary_base_url сервиса — ВНУТРЕННИЙ Nexus (resolve в RFC1918, напр.
+# 10.16.2.130) → core.url.fetched по умолчанию (allow_private:false) блокит dial
+# SSRF-guard-ом (shared/netguard). Значение приходит из scenario через
+# apply.input.install.allow_private (compute.install ← essence.binary_allow_private,
+# дефолт true: дефолтный base = internal Nexus). 4 fetch-задачи binary-ветки берут
+# готовое ${ vars.redis_binary_allow_private }. has()-цепочка render-safe в МЁРТВОМ
+# package-проходе (binary-блок static-skip, но file-var всё равно резолвится до задач):
+# absent install/allow_private → false (строгий дефолт; значение в package-проходе не
+# используется — задачи binary-ветки skip).
+redis_binary_allow_private: >-
+  ${ has(input.install) && has(input.install.allow_private) && input.install.allow_private }
+
+# ── SSRF-guard для fetch .so модулей (core.url.fetched allow_private) ────────────
+# Симметрично redis_binary_allow_private: modules_base_url тоже может быть внутренним
+# Nexus (resolve в RFC1918) → 4 .so-fetch (modules.yml) упали бы на SSRF-guard.
+# Значение — из scenario apply.input.modules_allow_private (compute.modules_allow_private
+# ← essence.modules_allow_private, дефолт true). has()-guard render-safe: absent → false.
+redis_modules_allow_private: >-
+  ${ has(input.modules_allow_private) && input.modules_allow_private }
+
 # Каталог systemd drop-in-ов redis-server (override поверх distro-юнита). ИНВАРИАНТ
 # (привязан к имени сервиса + layout systemd): /etc/systemd/system/<unit>.d. Задачи
 # строят путь из vars.redis_service_name.

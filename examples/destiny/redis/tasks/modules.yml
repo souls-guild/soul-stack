@@ -39,6 +39,13 @@
 # mode 0750 owner redis. register не нужен — loadmodule в redis.conf уже триггерит рестарт
 # через redis_conf-register. checksum НЕ передаётся → content-идемпотентность (SHA-256),
 # без integrity-verify (как node-exporter).
+#
+# ★ SSRF-guard (allow_private): modules_base_url может быть ВНУТРЕННИМ Nexus (resolve в
+# RFC1918) — как и binary_base_url install.yml. core.url.fetched по умолчанию блокит dial
+# в private-IP → .so-fetch падал бы. allow_private: ${ vars.redis_modules_allow_private }
+# снимает guard (vars нормализует флаг из apply.input.modules_allow_private ←
+# essence.modules_allow_private, дефолт true). Ослабление ОГРАНИЧЕНО .so-fetch, осознанно
+# (essence), не глобальный opt-out.
 - name: Fetch the redisbloom module shared object
   module: core.url.fetched
   params:
@@ -47,6 +54,7 @@
     mode:  "0750"
     owner: "${ vars.redis_user }"
     group: "${ vars.redis_group }"
+    allow_private: "${ vars.redis_modules_allow_private }"
 
 - name: Fetch the rejson module shared object
   module: core.url.fetched
@@ -56,6 +64,7 @@
     mode:  "0750"
     owner: "${ vars.redis_user }"
     group: "${ vars.redis_group }"
+    allow_private: "${ vars.redis_modules_allow_private }"
 
 - name: Fetch the redisearch module shared object
   module: core.url.fetched
@@ -65,6 +74,7 @@
     mode:  "0750"
     owner: "${ vars.redis_user }"
     group: "${ vars.redis_group }"
+    allow_private: "${ vars.redis_modules_allow_private }"
 
 - name: Fetch the redistimeseries module shared object
   module: core.url.fetched
@@ -74,3 +84,4 @@
     mode:  "0750"
     owner: "${ vars.redis_user }"
     group: "${ vars.redis_group }"
+    allow_private: "${ vars.redis_modules_allow_private }"

@@ -117,6 +117,9 @@ assert:
     # 7.4.1). checksum НЕ передаётся (content-идемпотентность SHA-256). register
     # redis_server_bin/redis_cli_bin/redis_benchmark_bin/redis_sentinel_bin. Дизамбигуатор —
     # url/path. redis-sentinel — ПОЛНОЦЕННЫЙ бинарь (НЕ симлинк).
+    # allow_private: true — GUARD на снятый SSRF-guard core.url (essence.binary_allow_private
+    # дефолт true: дефолтный binary_base_url = внутренний Nexus в RFC1918). Регресс «guard
+    # не снят» (флаг false/отсутствует) → fetch падает на реальном хосте (SSRF-block private-IP).
     - module: core.url.fetched
       params_subset:
         url: "https://downloads.example.com/redis/amd64/Debian/12/7.4.1/redis-server"
@@ -124,6 +127,7 @@ assert:
         mode: "0755"
         owner: root
         group: root
+        allow_private: true
 
     - module: core.url.fetched
       params_subset:
@@ -132,6 +136,7 @@ assert:
         mode: "0755"
         owner: root
         group: root
+        allow_private: true
 
     - module: core.url.fetched
       params_subset:
@@ -140,6 +145,7 @@ assert:
         mode: "0755"
         owner: root
         group: root
+        allow_private: true
 
     - module: core.url.fetched
       params_subset:
@@ -148,6 +154,7 @@ assert:
         mode: "0755"
         owner: root
         group: root
+        allow_private: true
 
     # ★ Симлинки redis-check-aof/redis-check-rdb → redis-server (maintenance-тулзы).
     # ВРЕМЕННО (PILOT) через core.cmd.shell `ln -sfn` (у core.file нет symlink-state —
