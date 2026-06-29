@@ -74,6 +74,19 @@ fixtures:
 
 assert:
   task_present:
+    # ── dragonfly destiny: conf-dir создаётся ДО рендера dragonfly.conf/users.acl (обе ветки,
+    #    БЕЗУСЛОВНО). owner dragonfly, mode 0750, parents:true. Регресс «binary/package не
+    #    создаёт conf-dir» = рендер dragonfly.conf падает «open .../.dragonfly.conf.tmp-…: no
+    #    such file or directory» (тот же класс, что redis conf-dir, caught live 2026-06-29).
+    #    Дизамбигуатор от redis sentinel_only conf-dir (/etc/redis, owner redis) — path /etc/dragonfly. ──
+    - module: core.file.directory
+      params_subset:
+        path: /etc/dragonfly
+        owner: dragonfly
+        group: dragonfly
+        mode: "0750"
+        parents: true
+
     # ── dragonfly destiny: flagfile dragonfly.conf отрендерен (render_context.self = node-1) ──
     - module: core.file.rendered
       params_subset:

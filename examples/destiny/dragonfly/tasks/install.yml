@@ -157,7 +157,27 @@
       params:
         name: "${ vars.dragonfly_service_name }"
 
-# ── data-dir и log-dir (обе ветки, БЕЗУСЛОВНО) ──────────────────────────────────
+# ── conf-dir, data-dir и log-dir (обе ветки, БЕЗУСЛОВНО) ────────────────────────
+# Каталог конфигурации (/etc/dragonfly: dragonfly.conf, users.acl, tls/) ОБЯЗАН
+# существовать ДО первого рендера любого из этих файлов (server.yml идёт ПОСЛЕ этого
+# include). package-ветка (distro-deb) заводит /etc/dragonfly сам — idempotent
+# core.file.directory = no-op/чинит дрейф. binary-ветка: deb НЕТ, создать НЕКОМУ →
+# рендер users.acl/dragonfly.conf падал бы «open .../.users.acl.tmp-…: no such file or
+# directory» (тот же класс бага, что у redis conf-dir, caught live 2026-06-29). Потому
+# БЕЗУСЛОВНО (НЕ gated на install.method и НЕ на deploy_dragonfly). owner/group dragonfly
+# (deb или binary-ветка их завели — задача top-level ПОСЛЕ обоих установочных блоков).
+# mode 0750: владелец читает конфиг (secret-файлы 0640/0600), остальные не входят.
+# parents:true — conf_dir переопределяем оператором (input.conf_dir, может быть глубоким
+# путём с несуществующим родителем; default parents:false упал бы на нём).
+- name: Ensure the dragonfly configuration directory exists
+  module: core.file.directory
+  params:
+    path: "${ vars.dragonfly_conf_dir_eff }"
+    owner: "${ vars.dragonfly_user }"
+    group: "${ vars.dragonfly_group }"
+    mode: "0750"
+    parents: true
+
 # Каталоги данных (/var/lib/dragonfly: snapshot-dir DF) и логов (/var/log/dragonfly:
 # glog-файлы DF) ОБЯЗАНЫ существовать ДО первого старта dragonfly. binary-ветка пакета
 # НЕ несёт → создать НЕКОМУ (systemd RuntimeDirectory покрывает только run-dir, не

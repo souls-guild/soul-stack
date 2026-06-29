@@ -137,6 +137,18 @@ assert:
         owner: redis
         group: redis
 
+    # conf-dir под conf_dir override (/opt/redis): создаётся ДО рендера redis.conf/
+    # users.acl. Регресс «conf-dir захардкожен /etc/redis или override мёртв» = задача с
+    # path /etc/redis (см. task_absent) ИЛИ её отсутствие. Дизамбигуатор от modules-dir/
+    # tls-dir/socket-dir — path /opt/redis.
+    - module: core.file.directory
+      params_subset:
+        path: /opt/redis
+        owner: redis
+        group: redis
+        mode: "0750"
+        parents: true
+
     # modules-dir под data_dir override. Дизамбигуатор от systemd-dropin-dir — path.
     - module: core.file.directory
       params_subset:
@@ -162,6 +174,11 @@ assert:
     - module: core.url.fetched
       params_subset:
         path: /var/lib/redis/modules/redisearch.so
+    # conf-dir-задача под ДЕФОЛТНЫМ путём НЕ должна появиться (conf_dir override → задача
+    # на /opt/redis, не /etc/redis). Регресс «conf-dir захардкожен /etc/redis мимо override».
+    - module: core.file.directory
+      params_subset:
+        path: /etc/redis
 
   state_changes:
     redis_type: sentinel

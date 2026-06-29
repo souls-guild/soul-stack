@@ -193,7 +193,29 @@
     #    идти ПОСЛЕ создания каталога unix-сокета (нужен сервису при старте), а сокет —
     #    top-level (обе ветки). Внутри binary-блока рестарт оказался бы ВЫШЕ сокета.
 
-# ── data-dir и log-dir (обе ветки, БЕЗУСЛОВНО) ──────────────────────────────────
+# ── conf-dir, data-dir и log-dir (обе ветки, БЕЗУСЛОВНО) ────────────────────────
+# Каталог конфигурации (/etc/redis: redis.conf, users.acl, sentinel.conf, sentinel-
+# users.acl, tls/) ОБЯЗАН существовать ДО первого рендера любого из этих файлов
+# (server.yml/sentinel.yml идут ПОСЛЕ этого include). package-ветка: distro-пакет
+# заводит /etc/redis сам — idempotent core.file.directory = no-op/чинит дрейф. binary-
+# ветка: пакета НЕТ, создать НЕКОМУ → рендер users.acl/redis.conf падал бы «open
+# .../.users.acl.tmp-…: no such file or directory» (caught live 2026-06-29). Потому
+# БЕЗУСЛОВНО (НЕ gated на install.method и НЕ на deploy_redis): conf-dir нужен ОБЕИМ
+# плоскостям — и redis-server (redis.conf/users.acl/tls), и sentinel-демону (sentinel.conf/
+# sentinel-users.acl в том же conf_dir, sentinel_only без deploy_redis тоже сюда пишет).
+# owner/group redis (пакет или binary-ветка их завели — задача ПОСЛЕ обоих установочных
+# блоков). mode 0750: владелец redis читает конфиг (secret-файлы 0640/0600), остальные не
+# входят. parents:true — conf_dir переопределяем оператором (input.conf_dir, может быть
+# глубоким путём с несуществующим родителем; default parents:false упал бы на нём).
+- name: Ensure the redis configuration directory exists
+  module: core.file.directory
+  params:
+    path: "${ vars.redis_conf_dir_eff }"
+    owner: "${ vars.redis_user }"
+    group: "${ vars.redis_group }"
+    mode: "0750"
+    parents: true
+
 # Каталоги данных (/var/lib/redis: RDB/AOF, modules) и логов (/var/log/redis:
 # redis-server.log/redis-sentinel.log) ОБЯЗАНЫ существовать ДО первого старта
 # redis-server (server.yml) И sentinel-демона. package-ветка: distro-пакет обычно

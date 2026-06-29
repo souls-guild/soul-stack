@@ -181,6 +181,19 @@ assert:
       params_subset:
         path: /etc/redis/redis.conf
 
+    # conf-dir (обе ветки, БЕЗУСЛОВНО): binary-ветка пакета не несёт → создаём явно ДО
+    # рендера redis.conf/users.acl (server.yml). owner redis, mode 0750, parents:true.
+    # Регресс «binary не создаёт conf-dir» = рендер users.acl/redis.conf падает «open
+    # .../.users.acl.tmp-…: no such file or directory» (caught live 2026-06-29).
+    # Дизамбигуатор от data/log/socket/tls/modules-dir — path /etc/redis (conf-каталог).
+    - module: core.file.directory
+      params_subset:
+        path: /etc/redis
+        owner: redis
+        group: redis
+        mode: "0750"
+        parents: true
+
     # data/log-dir (обе ветки, БЕЗУСЛОВНО): binary-ветка пакета не несёт → создаём явно
     # ДО первого старта redis-server (server.yml). owner redis, mode 0750, parents:true.
     # Регресс «binary не создаёт data/log-dir» = redis-server на binary-инсталляции
