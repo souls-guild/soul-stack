@@ -29,15 +29,20 @@ func rerunRBAC() *rbactest.Config {
 
 // incLocked — incFn, отдающий error_locked-инкарнацию с заданными covens и
 // создавшим сценарием (для FOR UPDATE-select UnlockForRerun: status=error_locked,
-// created_scenario). service=redis.
+// created_scenario). createdScenario "" → NULL (bare-инкарнация); иначе указатель
+// на имя. service=redis.
 func incLocked(covens []string, createdScenario string) func(string) (*incarnation.Incarnation, error) {
 	return func(name string) (*incarnation.Incarnation, error) {
 		now := time.Now().UTC()
+		var cs *string
+		if createdScenario != "" {
+			cs = &createdScenario
+		}
 		return &incarnation.Incarnation{
 			Name: name, Service: "redis", ServiceVersion: "v1",
 			StateSchemaVersion: 1, Status: incarnation.StatusErrorLocked,
 			State: map[string]any{}, Covens: covens,
-			CreatedScenario: createdScenario,
+			CreatedScenario: cs,
 			CreatedAt:       now, UpdatedAt: now,
 		}, nil
 	}
@@ -163,10 +168,11 @@ func TestToolsCall_IncarnationRerunCreate_NotErrorLocked(t *testing.T) {
 		t.Run(string(status), func(t *testing.T) {
 			pool := &fakePool{incFn: func(name string) (*incarnation.Incarnation, error) {
 				now := time.Now().UTC()
+				cs := "create"
 				return &incarnation.Incarnation{
 					Name: name, Service: "redis", ServiceVersion: "v1",
 					StateSchemaVersion: 1, Status: status,
-					State: map[string]any{}, CreatedScenario: "create",
+					State: map[string]any{}, CreatedScenario: &cs,
 					CreatedAt: now, UpdatedAt: now,
 				}, nil
 			}}
@@ -216,6 +222,34 @@ func TestToolsCall_IncarnationRerunCreate_ScenarioNotCreate(t *testing.T) {
 	}
 	if len(rec.events) != 0 {
 		t.Error("scenario-not-create must not write audit")
+	}
+}
+
+// TestToolsCall_IncarnationRerunCreate_BareIncarnation_409 — GUARD Фаза 2 (паритет
+// REST TestRerunCreate_BareIncarnation_409): bare-инкарнация (created_scenario IS
+// NULL — создана БЕЗ bootstrap-сценария) в error_locked → incarnation-locked
+// (ErrRerunScenarioNotCreate), прогон НЕ стартует. rerun-create неприменим:
+// перезапускать нечего. Регресс = NULL коалесцируется в `create` и rerun запускает
+// несуществующий bootstrap. incLocked(nil, "") даёт CreatedScenario=nil →
+// rerunForUpdateRow проецирует NULL → UnlockForRerun отказывает ДО lastScenario-проверки.
+func TestToolsCall_IncarnationRerunCreate_BareIncarnation_409(t *testing.T) {
+	pool := &fakePool{incFn: incLocked(nil, "")}
+	starter := &mcpStarter{}
+	h, rec := newTestHandlerFull(t, pool, rerunRBAC(), starter, &mcpResolver{ok: true}, nil)
+
+	resp := callTool(t, h, "archon-alice", "keeper.incarnation.rerun-create",
+		`{"name":"redis-bare","reason":"rerun bare"}`)
+	if resp.Error == nil {
+		t.Fatal("expected incarnation-locked (bare-инкарнация: created_scenario IS NULL)")
+	}
+	if data := mustToolErrorData(t, resp.Error.Data); data.Code != mcpCodeIncarnationLocked {
+		t.Errorf("data.code = %q, want incarnation-locked", data.Code)
+	}
+	if starter.calls != 0 {
+		t.Errorf("scenario start calls = %d, want 0 (bare → rerun неприменим)", starter.calls)
+	}
+	if len(rec.events) != 0 {
+		t.Error("bare rerun must not write audit")
 	}
 }
 

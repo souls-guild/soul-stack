@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 )
@@ -16,6 +17,14 @@ import (
 // validation_failed: incarnation НЕ создаётся (отказ на этапе модели).
 var ErrCreateScenarioNotEligible = errors.New("scenario: chosen create_scenario is not an eligible bootstrap scenario for this service")
 
+// ErrCreateScenarioRequired — сервис ИМЕЕТ create-сценарии (≥1 с `create: true`),
+// но оператор НЕ выбрал ни одного (`create_scenario` пуст). Выбор обязателен:
+// input валидируется против `input:`-схемы КОНКРЕТНОГО сценария, без выбора запрос
+// некорректен (нечего применять). Handler маппит в 422 validation_failed с
+// перечислением годных сценариев. Отличается от [ErrCreateScenarioNotEligible]
+// (там выбор СДЕЛАН, но не годен) — здесь выбор ОТСУТСТВУЕТ при непустом наборе.
+var ErrCreateScenarioRequired = errors.New("scenario: create_scenario is required (service offers create scenarios)")
+
 // CreateScenarioLoader — узкая поверхность [artifact.ServiceLoader], нужная
 // резолву create-набора: материализовать снапшот service-ref-а (его LocalDir
 // сканируется через [artifact.ListScenarios]). *artifact.ServiceLoader
@@ -25,15 +34,14 @@ type CreateScenarioLoader interface {
 }
 
 // ResolveCreateScenarios возвращает множество имён сценариев сервиса `ref`,
-// годных как стартовые (bootstrap новой incarnation): сценарии с top-level
+// годных как стартовые (bootstrap новой incarnation): РОВНО сценарии с top-level
 // `create: true` в `scenario/<name>/main.yml` (механизм нескольких create-
-// сценариев) ∪ {default [CreateScenarioName]}.
+// сценариев). Имя `create` НЕ привилегировано — оно попадает в набор только если
+// сам `scenario/create/main.yml` несёт `create: true`, как любой другой.
 //
-// Default `create` включается В НАБОР ВСЕГДА (back-compat): сервис без явных
-// флагов с единственным `scenario/create/` продолжает работать без правок, а
-// дефолтный create-запрос не отбивается 422 на старом сервисе. Реальное наличие
-// файла `scenario/create/main.yml` проверяется уже прогоном (ValidateInput /
-// render), не этим резолвом — здесь только membership-гейт выбора.
+// Сервис без единого `create: true` даёт ПУСТОЙ набор — это валидный случай:
+// caller трактует его как bare-инкарнацию (создаётся StatusReady без прогона,
+// [ValidateCreateScenarioChoice]), а непустой выбор для такого сервиса → 422.
 //
 // Снапшот грузится через loader (кешируется loader-ом — повторная загрузка в том
 // же запросе = cache hit). Сканирование scenario-каталога переиспользует
@@ -48,7 +56,7 @@ func ResolveCreateScenarios(ctx context.Context, loader CreateScenarioLoader, re
 		return nil, fmt.Errorf("scenario: resolve create scenarios: load service: %w", err)
 	}
 
-	set := map[string]struct{}{CreateScenarioName: {}}
+	set := map[string]struct{}{}
 	if art == nil {
 		return set, nil
 	}
@@ -65,32 +73,49 @@ func ResolveCreateScenarios(ctx context.Context, loader CreateScenarioLoader, re
 }
 
 // ValidateCreateScenarioChoice резолвит и валидирует выбранный оператором
-// стартовый сценарий: пустой `chosen` → default [CreateScenarioName] (back-
-// compat); непустой обязан входить в create-набор сервиса ([ResolveCreateScenarios]),
-// иначе [ErrCreateScenarioNotEligible]. Возвращает фактическое имя сценария для
-// прогона (то, что уйдёт в RunSpec.ScenarioName) — заменяет хардкод
-// [CreateScenarioName] в create-handler-ах.
+// стартовый сценарий по трём ветвям контракта (решение пользователя 2026-06-29):
+//
+//   - chosen НЕПУСТОЙ + в create-наборе → запустить его (возврат имени, bare=false);
+//     не в наборе / невалидное имя → [ErrCreateScenarioNotEligible].
+//   - chosen ПУСТОЙ + набор НЕпуст (сервис предлагает create-сценарии) →
+//     [ErrCreateScenarioRequired]: выбор обязателен (input зависит от сценария).
+//   - chosen ПУСТОЙ + набор ПУСТ (нет ни одного `create: true`) → bare-инкарнация
+//     (возврат "", bare=true): caller создаёт StatusReady без прогона.
+//
+// Возврат `(name, bare, err)`: при bare=true name="" — ОДНОЗНАЧНЫЙ контракт (имя
+// сценария отсутствует, прогона нет), caller обязан ветвиться на bare ДО трактовки
+// name. Заменяет прежний back-compat-шорткат (пустой → дефолтный `create`).
 //
 // Невалидное имя (traversal/мусор по [ScenarioNamePattern]) отбивается ДО резолва
 // набора как [ErrCreateScenarioNotEligible] — не подставляем мусор в путь.
-func ValidateCreateScenarioChoice(ctx context.Context, loader CreateScenarioLoader, ref artifact.ServiceRef, chosen string) (string, error) {
-	if chosen == "" {
-		return CreateScenarioName, nil
-	}
-	if !ValidScenarioName(chosen) {
-		return "", fmt.Errorf("%w: name %q does not match %s", ErrCreateScenarioNotEligible, chosen, ScenarioNamePattern)
-	}
-	// Дефолтный `create` валиден без загрузки снапшота (всегда в наборе) — частый
-	// путь, экономим резолв.
-	if chosen == CreateScenarioName {
-		return CreateScenarioName, nil
+func ValidateCreateScenarioChoice(ctx context.Context, loader CreateScenarioLoader, ref artifact.ServiceRef, chosen string) (string, bool, error) {
+	if chosen != "" && !ValidScenarioName(chosen) {
+		return "", false, fmt.Errorf("%w: name %q does not match %s", ErrCreateScenarioNotEligible, chosen, ScenarioNamePattern)
 	}
 	set, err := ResolveCreateScenarios(ctx, loader, ref)
 	if err != nil {
-		return "", err
+		return "", false, err
+	}
+	if chosen == "" {
+		if len(set) == 0 {
+			// Нет create-сценариев → bare-инкарнация (без прогона).
+			return "", true, nil
+		}
+		return "", false, fmt.Errorf("%w: choose one of %s", ErrCreateScenarioRequired, sortedNames(set))
 	}
 	if _, ok := set[chosen]; !ok {
-		return "", fmt.Errorf("%w: %q", ErrCreateScenarioNotEligible, chosen)
+		return "", false, fmt.Errorf("%w: %q", ErrCreateScenarioNotEligible, chosen)
 	}
-	return chosen, nil
+	return chosen, false, nil
+}
+
+// sortedNames — детерминированный отсортированный список имён set-а для
+// сообщения [ErrCreateScenarioRequired] (стабильный текст 422, тестируемый).
+func sortedNames(set map[string]struct{}) []string {
+	names := make([]string, 0, len(set))
+	for n := range set {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }

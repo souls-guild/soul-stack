@@ -37,12 +37,12 @@ func writeScenarioFile(t *testing.T, root, name, body string) {
 	}
 }
 
-// TestResolveCreateScenarios_FlaggedPlusDefault — набор = сценарии с `create: true`
-// ∪ {default `create`} (back-compat: имя `create` всегда годно как стартовое, даже
-// без явного флага).
-func TestResolveCreateScenarios_FlaggedPlusDefault(t *testing.T) {
+// TestResolveCreateScenarios_OnlyFlagged — набор = РОВНО сценарии с `create: true`
+// (Фаза 2: union с дефолтным `create` убран). Имя `create` без флага НЕ годно;
+// `create` с флагом — годно как любой другой.
+func TestResolveCreateScenarios_OnlyFlagged(t *testing.T) {
 	root := t.TempDir()
-	writeScenarioFile(t, root, "create", "name: create\ntasks: []\n") // без флага — но default-конвенция
+	writeScenarioFile(t, root, "create", "name: create\ncreate: true\ntasks: []\n")
 	writeScenarioFile(t, root, "create_cluster", "name: create_cluster\ncreate: true\ntasks: []\n")
 	writeScenarioFile(t, root, "add_user", "name: add_user\ncreate: false\ntasks: []\n")
 	writeScenarioFile(t, root, "restart", "name: restart\ntasks: []\n")
@@ -63,20 +63,39 @@ func TestResolveCreateScenarios_FlaggedPlusDefault(t *testing.T) {
 	}
 }
 
-// TestResolveCreateScenarios_DefaultAlwaysPresent — даже если сценария `create` нет
-// в снапшоте, default-имя включается в набор (back-compat: handler не должен 422-ить
-// дефолтный create-запрос на старом сервисе без флагов; реальная проверка наличия
-// файла остаётся за прогоном).
-func TestResolveCreateScenarios_DefaultAlwaysPresent(t *testing.T) {
+// TestResolveCreateScenarios_CreateNotPrivileged — сценарий `create` БЕЗ
+// `create: true` НЕ попадает в набор (Фаза 2: имя `create` не привилегировано,
+// union убран). Регресс = back-compat-union вернулся.
+func TestResolveCreateScenarios_CreateNotPrivileged(t *testing.T) {
 	root := t.TempDir()
+	writeScenarioFile(t, root, "create", "name: create\ntasks: []\n") // без флага
 	writeScenarioFile(t, root, "restart", "name: restart\ntasks: []\n")
 
 	set, err := ResolveCreateScenarios(context.Background(), &fakeCreateLoader{localDir: root}, artifact.ServiceRef{Name: "svc"})
 	if err != nil {
 		t.Fatalf("ResolveCreateScenarios: %v", err)
 	}
-	if _, ok := set[CreateScenarioName]; !ok {
-		t.Errorf("default %q должен быть в наборе всегда; set=%v", CreateScenarioName, set)
+	if _, ok := set[CreateScenarioName]; ok {
+		t.Errorf("`create` без флага create:true НЕ должен быть в наборе; set=%v", set)
+	}
+	if len(set) != 0 {
+		t.Errorf("набор должен быть пуст (нет create:true); set=%v", set)
+	}
+}
+
+// TestResolveCreateScenarios_EmptyWhenNoFlags — сервис без единого `create: true`
+// → ПУСТОЙ набор (валидно: caller трактует как bare-инкарнацию).
+func TestResolveCreateScenarios_EmptyWhenNoFlags(t *testing.T) {
+	root := t.TempDir()
+	writeScenarioFile(t, root, "restart", "name: restart\ntasks: []\n")
+	writeScenarioFile(t, root, "add_user", "name: add_user\ntasks: []\n")
+
+	set, err := ResolveCreateScenarios(context.Background(), &fakeCreateLoader{localDir: root}, artifact.ServiceRef{Name: "svc"})
+	if err != nil {
+		t.Fatalf("ResolveCreateScenarios: %v", err)
+	}
+	if len(set) != 0 {
+		t.Errorf("набор должен быть пуст (нет create-сценариев); set=%v", set)
 	}
 }
 
@@ -90,29 +109,56 @@ func TestResolveCreateScenarios_LoadError(t *testing.T) {
 	}
 }
 
-// TestValidateCreateScenarioChoice_DefaultEmpty — пустой выбор резолвится в default
-// `create` (back-compat).
-func TestValidateCreateScenarioChoice_DefaultEmpty(t *testing.T) {
+// TestValidateCreateScenarioChoice_EmptyHasScenarios_Required — пустой выбор при
+// НЕПУСТОМ наборе → ErrCreateScenarioRequired (handler → 422): выбор обязателен.
+func TestValidateCreateScenarioChoice_EmptyHasScenarios_Required(t *testing.T) {
 	root := t.TempDir()
-	writeScenarioFile(t, root, "create", "name: create\ntasks: []\n")
-	name, err := ValidateCreateScenarioChoice(context.Background(), &fakeCreateLoader{localDir: root}, artifact.ServiceRef{Name: "svc"}, "")
-	if err != nil {
-		t.Fatalf("ValidateCreateScenarioChoice(\"\"): %v", err)
+	writeScenarioFile(t, root, "create", "name: create\ncreate: true\ntasks: []\n")
+	writeScenarioFile(t, root, "create_cluster", "name: create_cluster\ncreate: true\ntasks: []\n")
+
+	name, bare, err := ValidateCreateScenarioChoice(context.Background(), &fakeCreateLoader{localDir: root}, artifact.ServiceRef{Name: "svc"}, "")
+	if !errors.Is(err, ErrCreateScenarioRequired) {
+		t.Fatalf("err = %v, want ErrCreateScenarioRequired", err)
 	}
-	if name != CreateScenarioName {
-		t.Fatalf("resolved name = %q, want %q", name, CreateScenarioName)
+	if bare {
+		t.Errorf("bare = true, want false (набор непуст)")
+	}
+	if name != "" {
+		t.Errorf("name = %q, want \"\"", name)
+	}
+}
+
+// TestValidateCreateScenarioChoice_EmptyNoScenarios_Bare — пустой выбор при
+// ПУСТОМ наборе → bare=true, name="" (caller создаёт bare-инкарнацию).
+func TestValidateCreateScenarioChoice_EmptyNoScenarios_Bare(t *testing.T) {
+	root := t.TempDir()
+	writeScenarioFile(t, root, "restart", "name: restart\ntasks: []\n")
+
+	name, bare, err := ValidateCreateScenarioChoice(context.Background(), &fakeCreateLoader{localDir: root}, artifact.ServiceRef{Name: "svc"}, "")
+	if err != nil {
+		t.Fatalf("ValidateCreateScenarioChoice(\"\", no-scenarios): %v", err)
+	}
+	if !bare {
+		t.Errorf("bare = false, want true (нет create-сценариев)")
+	}
+	if name != "" {
+		t.Errorf("name = %q, want \"\" (bare)", name)
 	}
 }
 
 // TestValidateCreateScenarioChoice_FlaggedOK — явный выбор сценария с `create: true`
-// проходит и возвращается как есть.
+// проходит и возвращается как есть (bare=false).
 func TestValidateCreateScenarioChoice_FlaggedOK(t *testing.T) {
 	root := t.TempDir()
-	writeScenarioFile(t, root, "create", "name: create\ntasks: []\n")
+	writeScenarioFile(t, root, "create", "name: create\ncreate: true\ntasks: []\n")
 	writeScenarioFile(t, root, "create_cluster", "name: create_cluster\ncreate: true\ntasks: []\n")
-	name, err := ValidateCreateScenarioChoice(context.Background(), &fakeCreateLoader{localDir: root}, artifact.ServiceRef{Name: "svc"}, "create_cluster")
+
+	name, bare, err := ValidateCreateScenarioChoice(context.Background(), &fakeCreateLoader{localDir: root}, artifact.ServiceRef{Name: "svc"}, "create_cluster")
 	if err != nil {
 		t.Fatalf("ValidateCreateScenarioChoice(create_cluster): %v", err)
+	}
+	if bare {
+		t.Errorf("bare = true, want false (явный выбор)")
 	}
 	if name != "create_cluster" {
 		t.Fatalf("resolved name = %q, want create_cluster", name)
@@ -123,11 +169,27 @@ func TestValidateCreateScenarioChoice_FlaggedOK(t *testing.T) {
 // (operational add_user) → ErrCreateScenarioNotEligible (handler → 422).
 func TestValidateCreateScenarioChoice_NotInSet(t *testing.T) {
 	root := t.TempDir()
-	writeScenarioFile(t, root, "create", "name: create\ntasks: []\n")
+	writeScenarioFile(t, root, "create", "name: create\ncreate: true\ntasks: []\n")
 	writeScenarioFile(t, root, "add_user", "name: add_user\ncreate: false\ntasks: []\n")
-	_, err := ValidateCreateScenarioChoice(context.Background(), &fakeCreateLoader{localDir: root}, artifact.ServiceRef{Name: "svc"}, "add_user")
+
+	_, _, err := ValidateCreateScenarioChoice(context.Background(), &fakeCreateLoader{localDir: root}, artifact.ServiceRef{Name: "svc"}, "add_user")
 	if !errors.Is(err, ErrCreateScenarioNotEligible) {
 		t.Fatalf("err = %v, want ErrCreateScenarioNotEligible", err)
+	}
+}
+
+// TestValidateCreateScenarioChoice_CreateWithoutFlag_NotEligible — явный выбор
+// `create`, который НЕ несёт `create: true` → ErrCreateScenarioNotEligible
+// (Фаза 2: имя `create` больше не привилегировано). Регресс = шорткат `chosen ==
+// CreateScenarioName → return` вернулся.
+func TestValidateCreateScenarioChoice_CreateWithoutFlag_NotEligible(t *testing.T) {
+	root := t.TempDir()
+	writeScenarioFile(t, root, "create", "name: create\ntasks: []\n") // без флага
+	writeScenarioFile(t, root, "create_cluster", "name: create_cluster\ncreate: true\ntasks: []\n")
+
+	_, _, err := ValidateCreateScenarioChoice(context.Background(), &fakeCreateLoader{localDir: root}, artifact.ServiceRef{Name: "svc"}, "create")
+	if !errors.Is(err, ErrCreateScenarioNotEligible) {
+		t.Fatalf("err = %v, want ErrCreateScenarioNotEligible (create без флага не привилегирован)", err)
 	}
 }
 
@@ -135,8 +197,9 @@ func TestValidateCreateScenarioChoice_NotInSet(t *testing.T) {
 // ErrCreateScenarioNotEligible (не лезем в резолв с traversal-именем).
 func TestValidateCreateScenarioChoice_BadName(t *testing.T) {
 	root := t.TempDir()
-	writeScenarioFile(t, root, "create", "name: create\ntasks: []\n")
-	_, err := ValidateCreateScenarioChoice(context.Background(), &fakeCreateLoader{localDir: root}, artifact.ServiceRef{Name: "svc"}, "../etc")
+	writeScenarioFile(t, root, "create", "name: create\ncreate: true\ntasks: []\n")
+
+	_, _, err := ValidateCreateScenarioChoice(context.Background(), &fakeCreateLoader{localDir: root}, artifact.ServiceRef{Name: "svc"}, "../etc")
 	if !errors.Is(err, ErrCreateScenarioNotEligible) {
 		t.Fatalf("err = %v, want ErrCreateScenarioNotEligible for bad name", err)
 	}

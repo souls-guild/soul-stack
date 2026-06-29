@@ -40,12 +40,8 @@ func newIncRow(inc *incarnation.Incarnation) incRow {
 	if inc.LastDriftSummary != nil {
 		driftSummary, _ = json.Marshal(inc.LastDriftSummary)
 	}
-	// created_scenario — NOT NULL DEFAULT 'create' (миграция 089): реальная БД
-	// никогда не вернёт пусто, поэтому unset-фикстуры коалесцируем в 'create'.
-	createdScenario := inc.CreatedScenario
-	if createdScenario == "" {
-		createdScenario = "create"
-	}
+	// created_scenario — NULLABLE *string (миграции 089+090): nil = bare-инкарнация
+	// (NULL). Передаём указатель как есть — scan вернёт nil при NULL.
 	return incRow{vals: []any{
 		inc.Name,
 		inc.Service,
@@ -62,7 +58,7 @@ func newIncRow(inc *incarnation.Incarnation) incRow {
 		mustJSON(inc.Traits),
 		inc.LastDriftCheckAt,
 		driftSummary,
-		createdScenario,
+		inc.CreatedScenario,
 	}}
 }
 

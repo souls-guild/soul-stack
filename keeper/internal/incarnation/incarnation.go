@@ -92,11 +92,15 @@ type Incarnation struct {
 
 	// CreatedScenario — имя стартового сценария, которым создана incarnation
 	// (механизм нескольких create-сценариев, Вариант A; колонка
-	// incarnation.created_scenario, миграция 089). Runtime-факт: оператор
-	// выбирает его при POST /v1/incarnations (поле `create_scenario`, default
-	// `create`). rerun-create перезапускает ИМЕННО этот сценарий (а не хардкод
-	// `create`). DEFAULT 'create' — back-compat для строк до миграции.
-	CreatedScenario string `json:"created_scenario"`
+	// incarnation.created_scenario NULLABLE, миграции 089+090). Runtime-факт:
+	// оператор выбирает его при POST /v1/incarnations (поле `create_scenario`).
+	// rerun-create перезапускает ИМЕННО этот сценарий.
+	//
+	// nil = bare-инкарнация (NULL в БД): сервис без create-сценариев создаётся
+	// StatusReady БЕЗ прогона (миграция 090 сняла NOT NULL/DEFAULT). Непустой
+	// указатель — имя bootstrap-сценария. Pointer (не string) — чтобы НЕ путать
+	// «bare» с пустой строкой и не нормализовать молча в `create`.
+	CreatedScenario *string `json:"created_scenario,omitempty"`
 
 	// Traits — operator-set key-value метки incarnation (ADR-060 amend, R1,
 	// колонка incarnation.traits jsonb). Источник истины Trait-ов: задаётся

@@ -6,7 +6,7 @@
 
 #### `keeper.incarnation.create`
 
-Создание instance — запуск scenario `create`. Permission: `incarnation.create`. Endpoint: [`POST /v1/incarnations`](../operator-api/incarnations.md#post-v1incarnations--создать-instance). Async: **да**.
+Создание instance — запуск выбранного стартового сценария (либо bare-инкарнация, если сервис без create-сценариев). Permission: `incarnation.create`. Endpoint: [`POST /v1/incarnations`](../operator-api/incarnations.md#post-v1incarnations--создать-instance). Async: **да** (для bare — sync, без прогона).
 
 **Input:**
 
@@ -16,7 +16,8 @@
 | `service` | `string` | yes | Имя сервиса. |
 | `covens` | `array<string>` | optional | Declared env-Coven-метки ([ADR-008](../../adr/0008-coven-stable-tags.md#adr-008-coven--только-стабильные-логические-теги) amendment a). |
 | `traits` | `object` | optional | Operator-set trait-метки инкарнации (ключ → `scalar`\|`list of scalars`, [ADR-060](../../adr/0060-traits.md)). Кладутся в `incarnation.traits` + проекция в `souls.traits` хостов-членов. Day-2 замена — `keeper.incarnation.traits-set`. |
-| `input` | `object` | optional | Input scenario `create`. |
+| `create_scenario` | `string` | conditional | Имя стартового сценария (scenario с `create: true`). Required, если сервис предлагает ≥1 create-сценарий (пусто → `validation-failed` со списком годных); значение вне набора → `validation-failed`. Сервис без create-сценариев → пусто даёт bare-инкарнацию. Подробности — [operator-api/incarnations.md → Выбор стартового сценария](../operator-api/incarnations.md#выбор-стартового-сценария-и-bare-инкарнация). |
+| `input` | `object` | optional | Input выбранного стартового сценария (валидируется против его `input:`-схемы). |
 
 **Output:**
 
@@ -27,9 +28,9 @@
 
 #### `keeper.incarnation.rerun-create`
 
-Перезапуск scenario `create` из `error_locked`: зеркало REST [`POST /v1/incarnations/{name}/rerun-create`](../operator-api/incarnations.md#post-v1incarnationsnamererun-create--перезапустить-create-из-error_locked). Permission: `incarnation.create-rerun`. Async: **да**.
+Перезапуск создавшего стартового сценария из `error_locked`: зеркало REST [`POST /v1/incarnations/{name}/rerun-create`](../operator-api/incarnations.md#post-v1incarnationsnamererun-create--перезапустить-стартовый-сценарий-из-error_locked). Permission: `incarnation.create-rerun`. Async: **да**.
 
-Под одним `FOR UPDATE` снимает блок (`state` НЕ трогается — last known-good, snapshot в `state_history`) и тем же действием перезапускает scenario `create` (`error_locked → applying` минуя `ready`). Отличие от `keeper.incarnation.unlock`: тот лишь снимает блок, rerun снимает и перезапускает bootstrap одним действием. Scope ЖЁСТКО ограничен сценарием `create` — если последний упавший сценарий не `create`, tool возвращает `incarnation-locked`. Опрос статуса — `keeper.incarnation.get`. Audit-событие — `incarnation.create_rerun` (НЕ `incarnation.unlocked`).
+Под одним `FOR UPDATE` снимает блок (`state` НЕ трогается — last known-good, snapshot в `state_history`) и тем же действием перезапускает СОЗДАВШИЙ стартовый сценарий — `incarnation.created_scenario`, а не хардкод `create` (`error_locked → applying` минуя `ready`). Отличие от `keeper.incarnation.unlock`: тот лишь снимает блок, rerun снимает и перезапускает bootstrap одним действием. Scope ЖЁСТКО ограничен создавшим стартовым сценарием — если последний упавший сценарий не создавал инкарнацию ЛИБО инкарнация bare (`created_scenario IS NULL`, перезапускать нечего), tool возвращает `incarnation-locked`. Опрос статуса — `keeper.incarnation.get`. Audit-событие — `incarnation.create_rerun` (НЕ `incarnation.unlocked`).
 
 **Input:**
 
@@ -45,7 +46,7 @@
 | `_apply_id` | `string` (ULID) | ID перезапущенного прогона. |
 | `incarnation` | `string` | Имя instance. |
 
-Ошибки: `not-found` (incarnation не существует), `incarnation-locked` (статус не `error_locked` ИЛИ последний упавший сценарий не `create`), `validation-failed` (пустой `reason` / битый `name`), `internal-error` (runner не сконфигурирован / транзакция / запуск).
+Ошибки: `not-found` (incarnation не существует), `incarnation-locked` (статус не `error_locked`; ИЛИ последний упавший сценарий — не создавший стартовый; ИЛИ инкарнация bare — `created_scenario IS NULL`), `validation-failed` (пустой `reason` / битый `name`), `internal-error` (runner не сконфигурирован / транзакция / запуск).
 
 #### `keeper.incarnation.run`
 

@@ -47,10 +47,13 @@ type IncarnationCreateRequest struct {
 	// .../traits.
 	Traits map[string]any `json:"traits,omitempty" doc:"operator-set trait-метки (ключ → scalar|list of scalars), ADR-060"`
 	// CreateScenario — выбор стартового сценария (механизм нескольких create-
-	// сценариев). Опц.; пусто → default `create` (back-compat). Непустое имя обязано
-	// входить в create-набор сервиса (scenario с `create: true`), иначе 422; выбор
+	// сценариев). Опц. Контракт пустого выбора (Фаза 2, union убран): сервис
+	// предлагает create-сценарии (scenario с `create: true`) + пусто → 422
+	// create_scenario_required; сервис без них + пусто → bare-инкарнация (ready без
+	// прогона, created_scenario=NULL). Авто-create по дефолтному `create` больше
+	// нет. Непустое имя обязано входить в create-набор сервиса, иначе 422; выбор
 	// сохраняется в incarnation.created_scenario и rerun-create перезапускает его.
-	CreateScenario string `json:"create_scenario,omitempty" pattern:"^[a-z][a-z0-9_]*$" doc:"имя стартового сценария (механизм нескольких create); пусто → create"`
+	CreateScenario string `json:"create_scenario,omitempty" pattern:"^[a-z][a-z0-9_]*$" doc:"имя стартового сценария (механизм нескольких create, scenario с create:true). Пусто: сервис предлагает create-сценарии → 422 create_scenario_required; сервис без них → bare-инкарнация (ready без прогона)"`
 }
 
 // incCreateOutput — huma-output POST /v1/incarnations (FULL-TYPED). Status=202;

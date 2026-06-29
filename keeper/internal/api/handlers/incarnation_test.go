@@ -458,10 +458,11 @@ func TestToDTO_MasksSecretsInStateAndSpec(t *testing.T) {
 // create) из доменной incarnation-строки. Источник bug-а: оба поля не отдавались в
 // GET → UI traits-modal открывался без prefill, оператор не видел стартовый сценарий.
 func TestToIncarnationGetView_ProjectsTraitsAndCreatedScenario(t *testing.T) {
+	cs := "create_cluster"
 	inc := &incarnation.Incarnation{
 		Name:            "redis-prod",
 		Status:          incarnation.StatusReady,
-		CreatedScenario: "create_cluster",
+		CreatedScenario: &cs,
 		Traits:          map[string]any{"env": "prod", "az": []any{"a", "b"}},
 	}
 	view := toIncarnationGetView(inc, nil)
@@ -1096,6 +1097,57 @@ func TestIncarnation_List_NoClaims_FailClosed(t *testing.T) {
 	}
 }
 
+// incListRowBare — как incListRow, но created_scenario = NULL (bare-инкарнация,
+// миграция 090). scanIncarnation проецирует 16-ю колонку в **string → nil.
+func incListRowBare(name string) staticRow {
+	now := time.Now()
+	return staticRow{values: []any{
+		name, "redis", "v1", int(1),
+		[]byte("{}"), []byte("{}"), "ready",
+		[]byte(nil), any(nil),
+		now, now, []string(nil),
+		[]byte("{}"), // traits
+		any(nil), []byte(nil),
+		any(nil), // created_scenario = NULL (bare, миграция 090)
+	}}
+}
+
+// TestIncarnation_List_BareIncarnation_NoPanic — GUARD Фаза 2 (handler-level,
+// реальная NULL-проекция scanIncarnation в list-пути): list со строкой bare-
+// инкарнации (created_scenario IS NULL) → 200, без паники, элемент доезжает.
+// scanIncarnation читает 16-ю колонку в **string → nil; регресс = NULL ломает
+// list-проекцию (паника/ошибка scan). omitempty-семантику created_scenario на
+// реальной NULL-строке проверяет TestHumaIncarnation_Get_BareIncarnation_OmitsCreatedScenario
+// (huma-reply несёт это поле; тест-шим list его не проецирует — на нём omitempty
+// тривиально и неинформативно).
+func TestIncarnation_List_BareIncarnation_NoPanic(t *testing.T) {
+	db := &fakeIncDB{
+		countRow: func(_ string) pgx.Row { return staticRow{values: []any{int(1)}} },
+		listRows: func() (pgx.Rows, error) {
+			return &incRows{rows: []staticRow{incListRowBare("redis-bare")}}, nil
+		},
+	}
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
+
+	rec := doIncList(t, h, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Code = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Items []map[string]any `json:"items"`
+		Total int              `json:"total"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Total != 1 || len(out.Items) != 1 {
+		t.Fatalf("total/len = %d/%d, want 1/1", out.Total, len(out.Items))
+	}
+	if out.Items[0]["name"] != "redis-bare" {
+		t.Errorf("item name = %v, want redis-bare", out.Items[0]["name"])
+	}
+}
+
 // TestIncarnation_List_NilScoper_FailClosed — scoper не сконфигурирован → пустой
 // список (защита от мис-wire-up-а, не раскрывать все incarnation).
 func TestIncarnation_List_NilScoper_FailClosed(t *testing.T) {
@@ -1652,9 +1704,15 @@ func makeIncStatusRow(name, status string) pgx.Row {
 // makeUnlockSelectRow конструирует staticRow под FOR UPDATE-select unlock-семейства.
 // Несёт 3 колонки в порядке rerun-select-а (state, status, created_scenario): plain
 // Unlock / Destroy сканируют только первые две (staticRow.Scan читает ровно len(dest)),
-// UnlockForRerun — все три (created_scenario, миграция 089; дефолт 'create').
+// UnlockForRerun — все три (created_scenario *string, миграции 089+090; "create").
 func makeUnlockSelectRow(status string) pgx.Row {
 	return staticRow{values: []any{[]byte("{}"), status, "create"}}
+}
+
+// makeUnlockSelectRowBare — как makeUnlockSelectRow, но created_scenario = NULL
+// (bare-инкарнация): 3-й scan-dest **string получит nil. Для rerun-create bare→409.
+func makeUnlockSelectRowBare(status string) pgx.Row {
+	return staticRow{values: []any{[]byte("{}"), status, any(nil)}}
 }
 
 func newRunHandler(db *fakeIncDB, starter *fakeStarter, resolver *fakeResolver) *IncarnationHandler {
@@ -1791,6 +1849,52 @@ func TestIncarnation_Run_NoRunner_500(t *testing.T) {
 	rec := incRun(h, req)
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("Code = %d, want 500 (runner not configured)", rec.Code)
+	}
+}
+
+// makeIncStatusRowBare — как makeIncStatusRow, но created_scenario = NULL (bare-
+// инкарнация, миграция 090: создана без bootstrap-сценария). scanIncarnation читает
+// 16-ю колонку в **string → nil.
+func makeIncStatusRowBare(name, status string) pgx.Row {
+	now := time.Now()
+	return staticRow{values: []any{
+		name, "redis", "v1", int(1),
+		[]byte("{}"), []byte("{}"), status,
+		[]byte(nil), any(nil),
+		now, now, []string(nil),
+		[]byte("{}"),          // traits
+		any(nil), []byte(nil), // ADR-031 Slice C
+		any(nil), // created_scenario = NULL (bare, миграция 090)
+	}}
+}
+
+// TestIncarnation_Run_BareIncarnation_Day2_202 — GUARD Фаза 2: bare-инкарнация
+// (created_scenario IS NULL) запускает ОБЫЧНЫЙ operational-сценарий (day-2) через
+// RunTyped штатно — 202, прогон стартует. RunTyped резолвит инкарнацию по
+// SelectByName и НЕ читает created_scenario для day-2-запуска (он нужен только
+// rerun-create). Регресс = day-2-путь начинает требовать created_scenario не-NULL
+// (или паникует на NULL-проекции) → bare-инкарнации лишаются day-2-операций.
+func TestIncarnation_Run_BareIncarnation_Day2_202(t *testing.T) {
+	db := &fakeIncDB{
+		selectByNameRow: func(name string) pgx.Row { return makeIncStatusRowBare(name, "ready") },
+	}
+	starter := &fakeStarter{}
+	h := newRunHandler(db, starter, &fakeResolver{ok: true})
+	req := newChiRequestScenario(http.MethodPost,
+		"/v1/incarnations/redis-bare/scenarios/add_user",
+		bytes.NewReader([]byte(`{"input":{"user":"bob"}}`)),
+		"redis-bare", "add_user")
+	req = withClaims(req, "archon-alice")
+	rec := incRun(h, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("Code = %d, want 202 (bare day-2 run), body=%s", rec.Code, rec.Body.String())
+	}
+	if starter.calls != 1 {
+		t.Fatalf("starter.calls = %d, want 1 (bare инкарнация допускает day-2 operational-сценарий)", starter.calls)
+	}
+	if starter.gotSpec.ScenarioName != "add_user" {
+		t.Errorf("RunSpec.ScenarioName = %q, want add_user", starter.gotSpec.ScenarioName)
 	}
 }
 
@@ -2945,6 +3049,7 @@ func (a *recordingAuditWriter) Write(_ context.Context, e *audit.Event) error {
 // scenarioCreateRequiredInput — scenario `create` с required-полем `name`
 // (string, без default) и опциональным `replicas` (integer, default 1).
 const scenarioCreateRequiredInput = `name: create
+create: true
 state_changes: {}
 input:
   name:
@@ -2961,11 +3066,34 @@ tasks:
     changed_when: "false"
 `
 
+// writeCreateScenarioDir пишет scenario/create/main.yml (yaml) в новый temp-корень
+// и возвращает его. Фаза 2: ResolveCreateScenarios сканирует localDir, поэтому
+// create-сценарий обязан лежать на диске. Если yaml не несёт `create: true` —
+// префиксуем флагом (чтобы он попал в create-набор), сохраняя имя строки `create`.
+func writeCreateScenarioDir(t *testing.T, yaml string) string {
+	t.Helper()
+	root := t.TempDir()
+	dir := filepath.Join(root, "scenario", "create")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	if !strings.Contains(yaml, "create: true") {
+		yaml = "create: true\n" + yaml
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.yml"), []byte(yaml), 0o644); err != nil {
+		t.Fatalf("write create/main.yml: %v", err)
+	}
+	return root
+}
+
 // newCreateHandlerWithSchema — Create-handler с runner+services+loader
-// (production-конфигурация), где loader отдаёт scenario с required-input.
-func newCreateHandlerWithSchema(db *fakeIncDB, yaml string) (*IncarnationHandler, *fakeStarter) {
+// (production-конфигурация), где loader отдаёт scenario `create` (yaml) с диска.
+// Фаза 2: тесты-callers передают create_scenario=create (выбор обязателен при
+// наличии create-сценариев).
+func newCreateHandlerWithSchema(t *testing.T, db *fakeIncDB, yaml string) (*IncarnationHandler, *fakeStarter) {
+	t.Helper()
 	starter := &fakeStarter{}
-	loader := &fakeLoader{scenarioYAML: yaml}
+	loader := &fakeLoader{localDir: writeCreateScenarioDir(t, yaml)}
 	h := NewIncarnationHandler(db, starter, nil, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
 	return h, starter
 }
@@ -2975,9 +3103,9 @@ func newCreateHandlerWithSchema(db *fakeIncDB, yaml string) (*IncarnationHandler
 // строка НЕ создаётся, scenario НЕ запускается.
 func TestIncarnation_Create_RequiredInputMissing_422(t *testing.T) {
 	db := &fakeIncDB{}
-	h, starter := newCreateHandlerWithSchema(db, scenarioCreateRequiredInput)
+	h, starter := newCreateHandlerWithSchema(t, db, scenarioCreateRequiredInput)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"ba","service":"redis","input":{}}`)))
+		bytes.NewReader([]byte(`{"name":"ba","service":"redis","create_scenario":"create","input":{}}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 
@@ -2996,9 +3124,9 @@ func TestIncarnation_Create_RequiredInputMissing_422(t *testing.T) {
 // `input` вовсе (nil) даёт тот же 422, что и пустой `{}`.
 func TestIncarnation_Create_RequiredInputMissing_NilInput_422(t *testing.T) {
 	db := &fakeIncDB{}
-	h, starter := newCreateHandlerWithSchema(db, scenarioCreateRequiredInput)
+	h, starter := newCreateHandlerWithSchema(t, db, scenarioCreateRequiredInput)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"ba","service":"redis"}`)))
+		bytes.NewReader([]byte(`{"name":"ba","service":"redis","create_scenario":"create"}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 
@@ -3014,9 +3142,9 @@ func TestIncarnation_Create_RequiredInputMissing_NilInput_422(t *testing.T) {
 // проходит, incarnation создаётся, scenario запускается.
 func TestIncarnation_Create_RequiredInputProvided_202(t *testing.T) {
 	db := &fakeIncDB{}
-	h, starter := newCreateHandlerWithSchema(db, scenarioCreateRequiredInput)
+	h, starter := newCreateHandlerWithSchema(t, db, scenarioCreateRequiredInput)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"ba","service":"redis","input":{"name":"alice"}}`)))
+		bytes.NewReader([]byte(`{"name":"ba","service":"redis","create_scenario":"create","input":{"name":"alice"}}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 
@@ -3035,9 +3163,9 @@ func TestIncarnation_Create_RequiredInputProvided_202(t *testing.T) {
 // поле неверного типа → 422 до мутации.
 func TestIncarnation_Create_TypeMismatch_422(t *testing.T) {
 	db := &fakeIncDB{}
-	h, _ := newCreateHandlerWithSchema(db, scenarioCreateRequiredInput)
+	h, _ := newCreateHandlerWithSchema(t, db, scenarioCreateRequiredInput)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"ba","service":"redis","input":{"name":"alice","replicas":"x"}}`)))
+		bytes.NewReader([]byte(`{"name":"ba","service":"redis","create_scenario":"create","input":{"name":"alice","replicas":"x"}}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 
@@ -3053,9 +3181,9 @@ func TestIncarnation_Create_TypeMismatch_422(t *testing.T) {
 // любой input проходит (как у сервиса без обязательных полей).
 func TestIncarnation_Create_NoSchema_202(t *testing.T) {
 	db := &fakeIncDB{}
-	h, _ := newCreateHandlerWithSchema(db, "name: create\nstate_changes: {}\ntasks: []\n")
+	h, _ := newCreateHandlerWithSchema(t, db, "name: create\nstate_changes: {}\ntasks: []\n")
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"ba","service":"redis"}`)))
+		bytes.NewReader([]byte(`{"name":"ba","service":"redis","create_scenario":"create"}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 
@@ -3077,13 +3205,13 @@ func TestIncarnation_Create_AutoCreateFalse_NoRun(t *testing.T) {
 	db := &fakeIncDB{}
 	starter := &fakeStarter{}
 	loader := &fakeLoader{
-		scenarioYAML: "name: create\nstate_changes: {}\ntasks: []\n",
-		lifecycle:    &config.LifecycleConfig{AutoCreate: boolPtr(false)},
+		localDir:  writeCreateScenarioDir(t, "name: create\nstate_changes: {}\ntasks: []\n"),
+		lifecycle: &config.LifecycleConfig{AutoCreate: boolPtr(false)},
 	}
 	h := NewIncarnationHandler(db, starter, nil, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
 
 	req := withClaims(httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"ba","service":"redis"}`))), "archon-alice")
+		bytes.NewReader([]byte(`{"name":"ba","service":"redis","create_scenario":"create"}`))), "archon-alice")
 	rec := incCreate(h, req)
 
 	if rec.Code != http.StatusAccepted {
@@ -3094,6 +3222,11 @@ func TestIncarnation_Create_AutoCreateFalse_NoRun(t *testing.T) {
 	}
 	if starter.calls != 0 {
 		t.Errorf("starter.calls = %d, want 0 (auto_create=false → прогона нет)", starter.calls)
+	}
+	// created_scenario при auto_create=false НЕ NULL: bootstrap-сценарий есть (create),
+	// прогон лишь отложен (отличие от bare). $12 = create.
+	if got, _ := db.insertArgs[11].(string); got != "create" {
+		t.Errorf("INSERT created_scenario ($12) = %q, want create (auto_create=false ≠ bare)", got)
 	}
 	// apply_id отсутствует в JSON (nullable, omitempty).
 	var raw map[string]any
@@ -3114,13 +3247,13 @@ func TestIncarnation_Create_AutoCreateTrueExplicit_Run(t *testing.T) {
 	db := &fakeIncDB{}
 	starter := &fakeStarter{}
 	loader := &fakeLoader{
-		scenarioYAML: "name: create\nstate_changes: {}\ntasks: []\n",
-		lifecycle:    &config.LifecycleConfig{AutoCreate: boolPtr(true)},
+		localDir:  writeCreateScenarioDir(t, "name: create\nstate_changes: {}\ntasks: []\n"),
+		lifecycle: &config.LifecycleConfig{AutoCreate: boolPtr(true)},
 	}
 	h := NewIncarnationHandler(db, starter, nil, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
 
 	req := withClaims(httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"ba","service":"redis"}`))), "archon-alice")
+		bytes.NewReader([]byte(`{"name":"ba","service":"redis","create_scenario":"create"}`))), "archon-alice")
 	rec := incCreate(h, req)
 
 	if rec.Code != http.StatusAccepted {
@@ -3140,10 +3273,10 @@ func TestIncarnation_Create_AutoCreateTrueExplicit_Run(t *testing.T) {
 // (nil) → backcompat: прогон стартует (auto_create дефолтно true).
 func TestIncarnation_Create_NoLifecycleBlock_Run(t *testing.T) {
 	db := &fakeIncDB{}
-	// scenarioCreateRequiredInput имеет lifecycle=nil в fakeLoader.
-	h, starter := newCreateHandlerWithSchema(db, "name: create\nstate_changes: {}\ntasks: []\n")
+	// lifecycle=nil в fakeLoader (манифест без блока) → auto_create дефолтно true.
+	h, starter := newCreateHandlerWithSchema(t, db, "name: create\nstate_changes: {}\ntasks: []\n")
 	req := withClaims(httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"ba","service":"redis"}`))), "archon-alice")
+		bytes.NewReader([]byte(`{"name":"ba","service":"redis","create_scenario":"create"}`))), "archon-alice")
 	rec := incCreate(h, req)
 
 	if rec.Code != http.StatusAccepted {

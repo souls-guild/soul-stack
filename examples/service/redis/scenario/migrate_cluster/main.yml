@@ -1,4 +1,11 @@
 name: migrate_cluster
+# create: true — migrate_cluster ТОЖЕ стартовый (bootstrap новой incarnation): он
+# поднимает инфраструктуру с нуля, как create, плюс заливает данные с внешнего
+# источника. Прежде `create: true` был лишь в тексте описания — реального YAML-ключа
+# не было, и migrate_cluster не попадал в create-набор (scenario.ResolveCreateScenarios
+# читает именно ключ scenario.go::Create, не описание). Теперь ключ реален — сценарий
+# доступен оператору в выборе при POST /v1/incarnations.
+create: true
 description: >-
   S1-пилот: РАЗВЕРНУТЬ новый Redis-кластер И ЗАЛИТЬ в него данные с ВНЕШНЕГО
   (старого) кластера через нативную репликацию Redis (REPLICAOF на внешний

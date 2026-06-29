@@ -174,11 +174,11 @@ func TestToolsCall_IncarnationCreate_ValidateRuleFails_422(t *testing.T) {
 		return nil
 	}}
 	starter := &mcpStarter{}
-	loader := &mcpLoader{scenarioYAML: scenarioMCPValidateRule}
+	loader := &mcpLoader{localDir: mcpCreateSnapshot(t, scenarioMCPValidateRule)}
 	h, rec := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, loader)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
-		`{"name":"redis-prod","service":"redis","input":{"replicas":3}}`)
+		`{"name":"redis-prod","service":"redis","create_scenario":"create","input":{"replicas":3}}`)
 	if resp.Error == nil {
 		t.Fatal("expected validation_failed for failing validate rule")
 	}
@@ -309,19 +309,17 @@ func TestToolsCall_IncarnationCreate_CreateScenarioNotEligible(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationCreate_CreateScenarioDefault — опущенный create_scenario
-// → дефолт `create` (back-compat): валидируется без загрузки снапшота, прогон
-// стартует ИМЕННО `create`, имя сохраняется в incarnation.created_scenario ($12).
-func TestToolsCall_IncarnationCreate_CreateScenarioDefault(t *testing.T) {
+// TestToolsCall_IncarnationCreate_ExplicitCreate — явный create_scenario=create
+// (помечен create:true на диске) → прогон стартует ИМЕННО `create`, имя
+// сохраняется в incarnation.created_scenario ($12). Контраст к bare/required.
+func TestToolsCall_IncarnationCreate_ExplicitCreate(t *testing.T) {
 	pool := &fakePool{incInsertFn: func(_, _ string) error { return nil }}
 	starter := &mcpStarter{}
-	// Минимальный валидный scenario `create` (без required-input / validate),
-	// чтобы ValidateInput прошёл и проявилась дефолт-ветвь выбора create_scenario.
-	loader := &mcpLoader{scenarioYAML: "name: create\nstate_changes: {}\ntasks: []\n"}
+	loader := &mcpLoader{localDir: mcpCreateSnapshot(t, "name: create\nstate_changes: {}\ntasks: []\n")}
 	h, _ := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, loader)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
-		`{"name":"redis-prod","service":"redis"}`)
+		`{"name":"redis-prod","service":"redis","create_scenario":"create"}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -334,6 +332,74 @@ func TestToolsCall_IncarnationCreate_CreateScenarioDefault(t *testing.T) {
 	}
 	if cs, _ := pool.insertIncArgs[11].(string); cs != "create" {
 		t.Errorf("created_scenario col = %q, want create", cs)
+	}
+}
+
+// TestToolsCall_IncarnationCreate_EmptyChoice_HasScenarios_Required — опущенный
+// create_scenario при НЕПУСТОМ create-наборе → validation-failed
+// (create_scenario_required, Фаза 2): incarnation НЕ создаётся, прогон НЕ
+// стартует. Регресс = вернулся back-compat-дефолт `create`.
+func TestToolsCall_IncarnationCreate_EmptyChoice_HasScenarios_Required(t *testing.T) {
+	pool := &fakePool{incInsertFn: func(_, _ string) error {
+		t.Error("Create must NOT insert when create_scenario required")
+		return nil
+	}}
+	starter := &mcpStarter{}
+	loader := &mcpLoader{localDir: mcpCreateSnapshot(t, "name: create\nstate_changes: {}\ntasks: []\n")}
+	h, rec := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, loader)
+
+	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
+		`{"name":"redis-prod","service":"redis"}`)
+	if resp.Error == nil {
+		t.Fatal("expected create_scenario_required (набор непуст, выбор пуст)")
+	}
+	if data := mustToolErrorData(t, resp.Error.Data); data.Code != mcpCodeValidationFailed {
+		t.Errorf("data.code = %q, want validation-failed", data.Code)
+	}
+	if starter.calls != 0 {
+		t.Error("required-422 must not start scenario")
+	}
+	if len(rec.events) != 0 {
+		t.Error("required-422 must not write audit")
+	}
+}
+
+// TestToolsCall_IncarnationCreate_BareNoScenario — сервис БЕЗ create-сценариев
+// (пустой снапшот) + опущенный create_scenario → bare-инкарнация: создаётся
+// (insert), прогон НЕ стартует, apply_id отсутствует, created_scenario col = NULL.
+func TestToolsCall_IncarnationCreate_BareNoScenario(t *testing.T) {
+	inserted := 0
+	pool := &fakePool{incInsertFn: func(_, _ string) error { inserted++; return nil }}
+	starter := &mcpStarter{}
+	loader := &mcpLoader{localDir: mcpEmptyCreateSnapshot(t)}
+	h, _ := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, loader)
+
+	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
+		`{"name":"redis-bare","service":"redis"}`)
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+	// Инкарнация создана БЕЗ прогона.
+	if inserted != 1 {
+		t.Errorf("insert calls = %d, want 1 (bare создаётся)", inserted)
+	}
+	if starter.calls != 0 {
+		t.Errorf("scenario start calls = %d, want 0 (bare без прогона)", starter.calls)
+	}
+	// created_scenario col ($12) = NULL (nil).
+	if len(pool.insertIncArgs) < 12 {
+		t.Fatalf("insertIncArgs len = %d, want ≥12", len(pool.insertIncArgs))
+	}
+	if pool.insertIncArgs[11] != nil {
+		t.Errorf("created_scenario col = %v, want nil (NULL для bare)", pool.insertIncArgs[11])
+	}
+	// apply_id отсутствует в выводе (omitempty).
+	var res toolsCallResult
+	_ = json.Unmarshal(resp.Result, &res)
+	var out incarnationCreateOutput
+	_ = json.Unmarshal(res.StructuredContent, &out)
+	if out.ApplyID != nil {
+		t.Errorf("_apply_id = %v, want nil (bare без прогона)", *out.ApplyID)
 	}
 }
 
@@ -573,11 +639,11 @@ func TestToolsCall_IncarnationCreate_RequiredInputMissing(t *testing.T) {
 		return nil
 	}}
 	starter := &mcpStarter{}
-	loader := &mcpLoader{scenarioYAML: scenarioMCPRequiredInput}
+	loader := &mcpLoader{localDir: mcpCreateSnapshot(t, scenarioMCPRequiredInput)}
 	h, rec := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, loader)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
-		`{"name":"ba","service":"redis","input":{}}`)
+		`{"name":"ba","service":"redis","create_scenario":"create","input":{}}`)
 	if resp.Error == nil {
 		t.Fatal("expected validation error for missing required input")
 	}
@@ -597,11 +663,11 @@ func TestToolsCall_IncarnationCreate_RequiredInputMissing(t *testing.T) {
 func TestToolsCall_IncarnationCreate_RequiredInputProvided(t *testing.T) {
 	pool := &fakePool{incInsertFn: func(_, _ string) error { return nil }}
 	starter := &mcpStarter{}
-	loader := &mcpLoader{scenarioYAML: scenarioMCPRequiredInput}
+	loader := &mcpLoader{localDir: mcpCreateSnapshot(t, scenarioMCPRequiredInput)}
 	h, _ := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, loader)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
-		`{"name":"ba","service":"redis","input":{"name":"alice"}}`)
+		`{"name":"ba","service":"redis","create_scenario":"create","input":{"name":"alice"}}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}

@@ -52,7 +52,7 @@
 ```json
 {
   "name": "keeper.incarnation.create",
-  "description": "Создать новый Incarnation: запустить scenario 'create' указанного Service, создать запись в Postgres. Асинхронная операция — возвращает _apply_id; статус опрашивать через keeper.incarnation.get / keeper.incarnation.history.",
+  "description": "Создать новый Incarnation: запустить выбранный стартовый сценарий указанного Service, создать запись в Postgres. Асинхронная операция — возвращает _apply_id; статус опрашивать через keeper.incarnation.get / keeper.incarnation.history.",
   "inputSchema": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
@@ -68,9 +68,14 @@
         "type": "string",
         "description": "Имя сервиса из keeper.yml → services[].name."
       },
+      "create_scenario": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_]*$",
+        "description": "Имя стартового сценария (scenario с create: true). Пусто: сервис предлагает create-сценарии → выбор обязателен (validation-failed с их списком); сервис без create-сценариев → bare-инкарнация (ready без прогона)."
+      },
       "input": {
         "type": "object",
-        "description": "Input для scenario 'create', валидируется против input-схемы сервиса.",
+        "description": "Input для выбранного стартового сценария, валидируется против его input-схемы.",
         "default": {}
       }
     }
@@ -126,7 +131,7 @@ RFC 7807 ProblemDetails Operator API ([operator-api.md → Error format](operato
 | `not-found` | Ресурс не существует. |
 | `validation-failed` | Семантическая ошибка валидации input. |
 | `malformed-request` | Неверный JSON/неверные query params. |
-| `incarnation-locked` | Incarnation в `error_locked` — вызвать `keeper.incarnation.unlock` перед новым прогоном. В `keeper.incarnation.rerun-create` — статус не `error_locked` ИЛИ последний упавший сценарий не `create` (rerun перезапускает только `create`). |
+| `incarnation-locked` | Incarnation в `error_locked` — вызвать `keeper.incarnation.unlock` перед новым прогоном. В `keeper.incarnation.rerun-create` — статус не `error_locked`; ИЛИ последний упавший сценарий не создавал инкарнацию; ИЛИ инкарнация bare (`created_scenario IS NULL`, перезапускать нечего) — rerun перезапускает только СОЗДАВШИЙ стартовый сценарий. |
 | `migration-failed` | Incarnation в `migration_failed` — нужен ручной разбор state_history. |
 | `would-lock-out-cluster` | Операция оставила бы кластер без активного Архонта с эффективным `*`-permission. Возникает в `keeper.operator.revoke` (отзыв последнего `*`-Архонта), в role-операциях `keeper.role.delete` / `keeper.role.update` / `keeper.role.revoke-operator` (см. [§ Role](#role-6)) и в synod-операциях `keeper.synod.delete` / `keeper.synod.remove-operator` / `keeper.synod.revoke-role` (эффективный `*` может приходить через Synod, см. [§ Synod](#synod-8)). |
 | `role-not-found` | Роль с указанным `name` отсутствует в `rbac_roles` (`keeper.role.delete` / `keeper.role.update` / `keeper.role.grant-operator` / `keeper.role.revoke-operator`; `keeper.synod.grant-role` над несуществующей ролью). |

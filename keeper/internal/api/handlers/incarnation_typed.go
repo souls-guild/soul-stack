@@ -67,10 +67,11 @@ type IncarnationCreateRequestInput struct {
 	// хостов-членов. nil = «не задано» (parity legacy omitempty-декода).
 	Traits map[string]any
 	// CreateScenario — выбор стартового сценария (механизм нескольких create,
-	// Вариант A). Пустая строка → default `create` (back-compat). Непустое имя
-	// обязано входить в create-набор сервиса (scenario с `create: true`), иначе
-	// 422; выбор сохраняется в incarnation.created_scenario и rerun-create
-	// перезапускает именно его.
+	// Вариант A). Контракт пустого выбора (Фаза 2): сервис ПРЕДЛАГАЕТ create-
+	// сценарии (≥1 `create: true`) + пусто → 422 create_scenario_required; сервис
+	// БЕЗ create-сценариев + пусто → bare-инкарнация (StatusReady без прогона).
+	// Непустое имя обязано входить в create-набор, иначе 422; выбор сохраняется в
+	// incarnation.created_scenario (NULL для bare) и rerun-create перезапускает его.
 	CreateScenario string
 }
 
@@ -82,9 +83,12 @@ type IncarnationCreateReply struct {
 }
 
 // CreateTyped — извлечённая доменная функция POST /v1/incarnations (MIDDLEWARE-AUDIT).
-// Parity (w,r)-Create: валидация name/service/covens → resolve service-ref + sync
-// input-validation + lifecycle.auto_create → insert row → опц. запуск scenario create →
-// 202 + apply_id. audit НЕ пишет (middleware-вариант B): возвращает payload в reply.
+// Parity (w,r)-Create: валидация name/service/covens → resolve service-ref + выбор
+// create-сценария (Фаза 2: required при наличии / bare при отсутствии) + sync
+// input-validation + lifecycle.auto_create → insert row → опц. запуск bootstrap →
+// 202 + apply_id. Bare-инкарнация (сервис без create-сценариев) создаётся StatusReady
+// БЕЗ прогона, без apply_id, created_scenario=NULL. audit НЕ пишет (middleware-
+// вариант B): возвращает payload в reply.
 func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, req IncarnationCreateRequestInput) (IncarnationCreateReply, error) {
 	var zero IncarnationCreateReply
 
@@ -112,11 +116,19 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	var serviceRef artifact.ServiceRef
 	runScenario := h.runner != nil && h.services != nil
 	autoCreate := true
+	// bareNoScenario — сервис не предлагает ни одного create-сценария (нет
+	// `create: true`): инкарнация создаётся StatusReady БЕЗ прогона (готова к
+	// day-2). created_scenario пишется NULL (см. createScenarioCol). Отлично от
+	// autoCreate=false: там bootstrap-сценарий ЕСТЬ (chosen), но прогон отложен —
+	// created_scenario непустое. Оба не запускают runner.Start → bare (ниже).
+	bareNoScenario := false
 	// createScenario — фактический стартовый сценарий (механизм нескольких create).
-	// Дефолт `create` (back-compat); при наличии loader-а валидируется выбор оператора
-	// (req.CreateScenario) на членство в create-наборе сервиса. Используется во всех
-	// фазах bootstrap-прогона (ValidateInput / PreflightAssert / runner.Start) и
-	// сохраняется в incarnation.created_scenario.
+	// Дефолт CreateScenarioName (`create`) удерживает legacy-поведение БЕЗ loader-а
+	// (stub-режим: набор не резолвится, bare не определить → запускаем `create` как
+	// раньше). При наличии loader-а перезаписывается выбором оператора либо bare-
+	// признаком. Используется во всех фазах bootstrap-прогона (ValidateInput /
+	// PreflightAssert / runner.Start); created_scenario пишется через createScenarioCol
+	// (NULL при bareNoScenario).
 	createScenario := scenario.CreateScenarioName
 	if runScenario {
 		ref, ok := h.services.Resolve(req.Service)
@@ -130,9 +142,15 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 		if h.loader != nil {
 			// Резолв+валидация выбора стартового сценария ДО ValidateInput: input
 			// валидируется против `input:`-схемы ИМЕННО выбранного сценария.
-			chosen, cerr := scenario.ValidateCreateScenarioChoice(ctx, h.loader, serviceRef, req.CreateScenario)
+			//   - chosen непустой + в наборе → запускаем его;
+			//   - chosen пустой + набор непуст → 422 create_scenario_required;
+			//   - chosen пустой + набор пуст → bare-инкарнация (без прогона).
+			chosen, isBare, cerr := scenario.ValidateCreateScenarioChoice(ctx, h.loader, serviceRef, req.CreateScenario)
 			if cerr != nil {
-				if errors.Is(cerr, scenario.ErrCreateScenarioNotEligible) {
+				switch {
+				case errors.Is(cerr, scenario.ErrCreateScenarioRequired):
+					return zero, incProblem(problem.TypeValidationFailed, "create_scenario_required: "+cerr.Error())
+				case errors.Is(cerr, scenario.ErrCreateScenarioNotEligible):
 					return zero, incProblem(problem.TypeValidationFailed, "create_scenario_invalid: "+cerr.Error())
 				}
 				h.logger.Error("incarnation.create: resolve create scenario failed",
@@ -140,26 +158,32 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 				return zero, incProblem(problem.TypeInternalError, "resolve create scenario failed")
 			}
 			createScenario = chosen
+			bareNoScenario = isBare
 
-			if err := scenario.ValidateInput(ctx, h.loader, serviceRef, createScenario, input); err != nil {
-				if errors.Is(err, scenario.ErrInputInvalid) {
-					return zero, incProblem(problem.TypeValidationFailed, "input_invalid: "+err.Error())
+			// bare (нет create-сценария): ValidateInput / lifecycle-резолв пропускаем —
+			// прогона не будет, валидировать input против несуществующего сценария
+			// нечем. Инкарнация ниже создаётся StatusReady с created_scenario=NULL.
+			if !bareNoScenario {
+				if err := scenario.ValidateInput(ctx, h.loader, serviceRef, createScenario, input); err != nil {
+					if errors.Is(err, scenario.ErrInputInvalid) {
+						return zero, incProblem(problem.TypeValidationFailed, "input_invalid: "+err.Error())
+					}
+					if errors.Is(err, scenario.ErrValidateFailed) {
+						return zero, incProblem(problem.TypeValidationFailed, "validation_failed: "+err.Error())
+					}
+					h.logger.Error("incarnation.create: input validation failed",
+						slog.String("name", req.Name), slog.String("service", req.Service), slog.Any("error", err))
+					return zero, incProblem(problem.TypeInternalError, "validate scenario create input failed")
 				}
-				if errors.Is(err, scenario.ErrValidateFailed) {
-					return zero, incProblem(problem.TypeValidationFailed, "validation_failed: "+err.Error())
+				art, err := h.loader.Load(ctx, serviceRef)
+				if err != nil {
+					h.logger.Error("incarnation.create: load snapshot for lifecycle failed",
+						slog.String("name", req.Name), slog.String("service", req.Service), slog.Any("error", err))
+					return zero, incProblem(problem.TypeInternalError, "load service snapshot failed")
 				}
-				h.logger.Error("incarnation.create: input validation failed",
-					slog.String("name", req.Name), slog.String("service", req.Service), slog.Any("error", err))
-				return zero, incProblem(problem.TypeInternalError, "validate scenario create input failed")
-			}
-			art, err := h.loader.Load(ctx, serviceRef)
-			if err != nil {
-				h.logger.Error("incarnation.create: load snapshot for lifecycle failed",
-					slog.String("name", req.Name), slog.String("service", req.Service), slog.Any("error", err))
-				return zero, incProblem(problem.TypeInternalError, "load service snapshot failed")
-			}
-			if art != nil && art.Manifest != nil {
-				autoCreate = art.Manifest.Lifecycle.AutoCreateEnabled()
+				if art != nil && art.Manifest != nil {
+					autoCreate = art.Manifest.Lifecycle.AutoCreateEnabled()
+				}
 			}
 		}
 
@@ -169,12 +193,13 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 		// контексте (roster connected-souls по covens incarnation = soulprint.hosts).
 		// Любой false → 422 assert_failed БЕЗ записи incarnation и БЕЗ fail-статуса
 		// (отказ на этапе модели, не postfactum error_locked через async render).
-		// Гейтится autoCreate: при autoCreate=false прогон create не стартует —
-		// проверять инвариант прогона незачем. pre-flight опционален (type-assertion
+		// Гейтится !bareNoScenario && autoCreate: при bare (нет create-сценария)
+		// или autoCreate=false прогон не стартует — проверять инвариант прогона
+		// незачем (для bare и сценария-то нет). pre-flight опционален (type-assertion
 		// над runner-ом): runner без PreflightAssert / сценарий без assert-задач →
 		// no-op. render-assert остаётся fail-safe для TOCTOU (roster изменился между
 		// pre-flight и стартом goroutine).
-		if autoCreate {
+		if !bareNoScenario && autoCreate {
 			if pf, ok := h.runner.(AssertPreflighter); ok {
 				if err := pf.PreflightAssert(ctx, scenario.RunSpec{
 					IncarnationName: req.Name,
@@ -212,6 +237,15 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 		return zero, incProblem(problem.TypeValidationFailed, err.Error())
 	}
 
+	// createScenarioCol — значение колонки created_scenario: NULL для bare-
+	// инкарнации (нет bootstrap-сценария), иначе указатель на выбранное имя.
+	// autoCreate=false НЕ делает её NULL — bootstrap-сценарий есть (chosen),
+	// просто прогон отложен; rerun-create должен знать, что перезапускать.
+	var createScenarioCol *string
+	if !bareNoScenario {
+		createScenarioCol = &createScenario
+	}
+
 	creator := claims.Subject
 	inc := &incarnation.Incarnation{
 		Name:               req.Name,
@@ -224,7 +258,7 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 		CreatedByAID:       &creator,
 		Covens:             covens,
 		Traits:             traits,
-		CreatedScenario:    createScenario,
+		CreatedScenario:    createScenarioCol,
 	}
 	if err := incarnation.Create(ctx, h.db, inc); err != nil {
 		if errors.Is(err, incarnation.ErrIncarnationAlreadyExists) {
@@ -250,12 +284,21 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 		}
 	}
 
+	// bareReady — живой runner-стек, но прогон сознательно НЕ стартует: bare-
+	// инкарнация (нет create-сценария) ИЛИ autoCreate=false (прогон отложен). Тогда
+	// инкарнация остаётся StatusReady без прогона, apply_id опущен. В stub-режиме
+	// (!runScenario, M0.6c-1 insert-only) apply_id выдаётся как прежде — это НЕ bare.
+	bareReady := runScenario && (bareNoScenario || !autoCreate)
+	// runCreate — стартует ли bootstrap-прогон (нужен живой стек, сценарий и
+	// autoCreate). Отдельно от bareReady: stub-режим тоже не запускает Start.
+	runCreate := runScenario && !bareNoScenario && autoCreate
+
 	var applyID string
-	if !(runScenario && !autoCreate) {
+	if !bareReady {
 		applyID = audit.NewULID()
 	}
 
-	if runScenario && autoCreate {
+	if runCreate {
 		if err := h.runner.Start(ctx, scenario.RunSpec{
 			ApplyID:         applyID,
 			IncarnationName: req.Name,
@@ -608,7 +651,8 @@ func (h *IncarnationHandler) RerunCreateTyped(ctx context.Context, claims *jwt.C
 				"incarnation "+name+" is not error_locked — rerun-create requires error_locked")
 		case errors.Is(err, incarnation.ErrRerunScenarioNotCreate):
 			return zero, incProblem(problem.TypeIncarnationLocked,
-				"incarnation "+name+" last failed scenario is not `create` — rerun-create restarts `create` only")
+				"incarnation "+name+" rerun-create неприменим: создана без bootstrap-сценария (bare) "+
+					"либо последний упавший сценарий — не создавший. rerun-create перезапускает только создавший bootstrap")
 		default:
 			h.logger.Error("incarnation.rerun-create: unlock failed",
 				slog.String("name", name), slog.String("by_aid", claims.Subject), slog.Any("error", err))

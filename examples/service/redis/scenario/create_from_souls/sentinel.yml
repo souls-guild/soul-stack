@@ -1,0 +1,37 @@
+# Ветка диспетчера create_from_souls — режим sentinel (master-replica + sentinel-демон).
+# Подключается из main.yml через CONDITIONAL-INCLUDE: `when: input.redis_type ==
+# 'sentinel'` стоит НА include — на cluster-прогоне весь файл group-drop (задачи
+# физически не рендерятся), на sentinel-прогоне раскрывается в плоский список ДО render.
+#
+# ★ sentinel — БАЗОВАЯ ветка деплоя: replicas_per_master=0 даёт standalone-эквивалент
+# (один master + sentinel-демон).
+#
+# ★ ТОНКИЙ ДИСПЕТЧЕР: тело деплоя service-level. size-guard ниже + include общего
+# scenario/redis-deploy-sentinel.yml. Этот файл — КОПИЯ create/sentinel.yml (без provision
+# size-guard не отличается): scenario.include резолвит `scenario/<name>/<file>`, поэтому
+# create_from_souls нужна СВОЯ локальная ветка. Реальное деплой-тело (redis-deploy-sentinel.yml)
+# — service-level, делится без дубликата. drift-risk копии — отмечен в main.yml::description.
+#
+# ★ ИНВАРИАНТ (см. шапку redis-deploy-sentinel.yml): инклудящий ОБЯЗАН объявить в своём
+# compute: набор, который тело читает (redis_config/conf_dir/data_dir/install/
+# modules_base_url/sentinel_directives/redis_version/tls_*). Все они объявлены в
+# create_from_souls/main.yml::compute (инлайн-копия create). cross-file дрейф soul-lint НЕ ловит.
+
+# ── 0. SIZE-GUARD (топология) — keeper-side render-time assert ─────────────────────
+# Размер roster-а ОБЯЗАН быть ровно 1+replicas_per_master (один master + реплики master-а;
+# sentinel-демон на КАЖДОМ хосте) — иначе master-election (run_once по sort soulprint.hosts)
+# и SENTINEL MONITOR/REPLICAOF разъедутся с declared-топологией. Предикат вычисляется
+# KEEPER-SIDE на РЕНДЕРЕ — там доступен soulprint.hosts. false ОБРЫВАЕТ render с message ДО
+# любого dispatch. assert НЕ emit RenderedTask. Стоит ПЕРЕД include деплой-тела — mismatch
+# рвёт прогон fail-fast. replicas_per_master имеет default:0 → int(input.replicas_per_master)
+# без has()-обвязки.
+# ★ ПОЧЕМУ assert, а не validate: size-guard нужен soulprint.hosts (roster), а validate-
+# контекст INPUT-ONLY (структурный CEL-барьер) — число узлов прогона на input-валидации
+# неизвестно. Идентично create/sentinel.yml:30-33 (см. там же про ПОЧЕМУ assert).
+- name: Guard sentinel roster size matches replicas
+  assert:
+    that:
+      - "size(soulprint.hosts) == 1 + int(input.replicas_per_master)"
+    message: "число хостов roster-а прогона должно быть ровно 1+replicas_per_master (один master + реплики master-а; sentinel-демон на каждом хосте) — задай столько же таргетированных souls, сколько узлов в объявленной топологии, иначе лишние хосты стали бы незаявленными репликами, а нехватка — недобором реплик"
+
+- include: redis-deploy-sentinel.yml

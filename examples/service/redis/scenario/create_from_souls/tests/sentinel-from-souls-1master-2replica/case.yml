@@ -1,0 +1,201 @@
+# L0-испытание create_from_souls в режиме sentinel — деплой на ГОТОВЫЙ roster (без
+# provision). Multi-host roster (fixtures.hosts) из 3 хостов: replicas_per_master=2 →
+# топология 1+2=3 (size-guard проходит). Master-election: первый по SID хост (node-1) =
+# master; node-2/node-3 = реплики.
+#
+# ★ КРИТЕРИЙ ПРИЁМКИ (отличие от create): прогон катится по существующему roster-у БЕЗ
+# provision-шагов. task_absent ассертит, что core.cloud.created (создание VM) и
+# core.soul.registered (барьер онбординга) в плане ОТСУТСТВУЮТ — у create_from_souls
+# нет ни include redis-provision.yml, ни секции provision. state-read-model
+# provisioned_vm_ids/sids/provider — константные дефолты ([] / '').
+#
+# Render-only, герметично. Диспетчер инклудит cluster.yml + sentinel.yml через
+# CONDITIONAL-INCLUDE (when: на include, orchestration.md §6 Вариант B): на sentinel-
+# прогоне cluster-ветка DROP-ается (group-drop), sentinel-ветка раскрывается. Деплой-тело
+# (redis-deploy-sentinel.yml) — service-level, то же, что у create.
+name: sentinel deploy on existing roster without provision
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  # Порядок в YAML намеренно не отсортирован (3, 1, 2) — master-election сортирует по SID.
+  hosts:
+    - sid: node-3.example.com
+      covens: [create_from_souls, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+    - sid: node-1.example.com
+      covens: [create_from_souls, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-2.example.com
+      covens: [create_from_souls, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create_from_souls:
+      password: s3cr3t-redis-pass-create-from-souls
+    secret/redis/create_from_souls/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create_from_souls/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create_from_souls/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create_from_souls/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    install_method: package
+    redis_type: sentinel
+    sentinel_master_name: master
+    sentinel_master_defaults:
+      down-after-milliseconds: "5000"
+      failover-timeout:        "60000"
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default:    "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    redis_type: sentinel
+    version: "7.4.1"
+    replicas_per_master: 2
+
+assert:
+  task_present:
+    # ── sentinel destiny: redis.conf (sentinel-режим: НЕТ cluster-директив) ──
+    # render_context.self = первый по SID хост (node-1, host-инвариант apply.input).
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            password: s3cr3t-redis-pass-create-from-souls
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
+            config:
+              maxmemory:        "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients:       10000
+              timeout:          300
+              save:             "900 1 300 10 60 10000"
+              appendonly:       "no"
+          self:
+            sid: node-1.example.com
+            covens: [create_from_souls, redis]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # ── REPLICAOF реплик (community.redis.replica) ──────────────────────────
+    # addr=127.0.0.1:6379 (per-host локальный инвариант), master_addr — master-election
+    # (первый по SID = node-1 = 10.0.0.1). Задача несёт where (рендерится только на
+    # репликах, master её НЕ несёт).
+    - module: community.redis.replica
+      params_subset:
+        addr: "127.0.0.1:6379"
+        master_addr: "10.0.0.1:6379"
+        password: s3cr3t-redis-pass-create-from-souls
+
+    # ── SENTINEL MONITOR reconcile (community.redis.sentinel) ───────────────
+    # monitor.ip — HOST-ИНВАРИАНТНЫЙ адрес master-а (master-election node-1). quorum=2
+    # (АВТО: size(3)/2+1). master_name=master (essence-дефолт).
+    - module: community.redis.sentinel
+      params_subset:
+        addr: "127.0.0.1:26379"
+        master_name: master
+        password: s3cr3t-redis-pass-create-from-souls
+        auth_pass: s3cr3t-redis-pass-create-from-souls
+        redis_version: "7.4.1"
+        config:
+          "sentinel down-after-milliseconds master": "5000"
+          "sentinel failover-timeout master": "60000"
+        monitor:
+          ip: 10.0.0.1
+          port: 6379
+          quorum: 2
+
+  task_absent:
+    # ★ КРИТЕРИЙ create_from_souls: provision-шаги ОТСУТСТВУЮТ в плане. create_from_souls
+    # не инклудит redis-provision.yml и не несёт секции provision → ни создание VM
+    # (core.cloud.created), ни барьер онбординга (core.soul.registered) не эмитятся.
+    # Прогон катится по существующему roster-у. Это и есть отличие от create.
+    - module: core.cloud.created
+    - module: core.soul.registered
+
+  state_changes:
+    redis_type: sentinel
+    redis_version: "7.4.1"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+    redis_users: []
+    redis_hosts: []
+    redis_sentinel:
+      master_name: master
+      quorum: 0
+      master_settings:
+        down-after-milliseconds: "5000"
+        failover-timeout: "60000"
+      settings: {}
+    replicas: 2
+    sentinel_quorum: 0
+    shards: 0
+    persistence: rdb
+    maxmemory_policy: ""
+    install:
+      method: package
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    memory_mb: 0
+    modules: [bloom, json, search, timeseries]
+    sysctl_settings: {}
+    # ★ provision read-model: ВСЕГДА консервативный дефолт — create_from_souls не
+    # поднимает VM (отличие от create, где при enabled читается register.provision).
+    provisioned_vm_ids: []
+    provisioned_sids: []
+    provisioned_provider: ""

@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -205,8 +206,8 @@ func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row 
 		// строки берём из incFn (если задан), иначе канонический `create`.
 		last := "create"
 		if f.incFn != nil {
-			if inc, err := f.incFn(name); err == nil && inc.CreatedScenario != "" {
-				last = inc.CreatedScenario
+			if inc, err := f.incFn(name); err == nil && inc.CreatedScenario != nil {
+				last = *inc.CreatedScenario
 			}
 		}
 		return staticRow{values: []any{last}}
@@ -402,7 +403,7 @@ func (r forUpdateIncRow) Scan(dest ...any) error {
 
 // rerunForUpdateRow — pgx.Row для UnlockForRerun FOR UPDATE-select-а
 // `SELECT state, status, created_scenario`. Scan(state []byte, status string,
-// created_scenario string).
+// created_scenario *string — NULL=bare).
 type rerunForUpdateRow struct{ inc *incarnation.Incarnation }
 
 func (r rerunForUpdateRow) Scan(dest ...any) error {
@@ -416,7 +417,8 @@ func (r rerunForUpdateRow) Scan(dest ...any) error {
 	}
 	*dest[0].(*[]byte) = state
 	*dest[1].(*string) = string(r.inc.Status)
-	*dest[2].(*string) = r.inc.CreatedScenario
+	// created_scenario NULLABLE → **string (NULL=bare-инкарнация).
+	*dest[2].(**string) = r.inc.CreatedScenario
 	return nil
 }
 
@@ -670,6 +672,13 @@ type mcpLoader struct {
 	// scenarioYAML — для sync input-валидации (scenario.ValidateInput):
 	// непустое → ReadFile отдаёт этот YAML как scenario/<name>/main.yml.
 	scenarioYAML string
+
+	// localDir — корень снапшота на диске (Фаза 2). Непустое → Load проставляет
+	// LocalDir (ResolveCreateScenarios сканирует его), ReadFile читает с диска
+	// (path-aware), перекрывая scenarioYAML/hasDestroyScenario. Нужно механизму
+	// нескольких create-сценариев: create-сценарий обязан лежать на диске с
+	// `create: true`, иначе набор пуст → bare-инкарнация.
+	localDir string
 }
 
 func (f *mcpLoader) Load(_ context.Context, ref artifact.ServiceRef) (*artifact.ServiceArtifact, error) {
@@ -678,6 +687,7 @@ func (f *mcpLoader) Load(_ context.Context, ref artifact.ServiceRef) (*artifact.
 	}
 	return &artifact.ServiceArtifact{
 		Ref:      ref,
+		LocalDir: f.localDir,
 		Manifest: &config.ServiceManifest{StateSchemaVersion: f.targetSchema},
 	}, nil
 }
@@ -689,10 +699,14 @@ func (f *mcpLoader) LoadMigrationChain(_ *artifact.ServiceArtifact, _, _ int) (s
 	return f.chain, nil
 }
 
-// ReadFile — для destroy PrepareDestroy pre-check (наличие scenario `destroy`).
-func (f *mcpLoader) ReadFile(_ *artifact.ServiceArtifact, _ string) ([]byte, error) {
+// ReadFile — для destroy PrepareDestroy pre-check (наличие scenario `destroy`) и
+// sync input-валидации. localDir (если задан) — path-aware чтение с диска.
+func (f *mcpLoader) ReadFile(_ *artifact.ServiceArtifact, file string) ([]byte, error) {
 	if f.readErr != nil {
 		return nil, f.readErr
+	}
+	if f.localDir != "" {
+		return os.ReadFile(filepath.Join(f.localDir, filepath.FromSlash(file)))
 	}
 	if f.scenarioYAML != "" {
 		return []byte(f.scenarioYAML), nil
@@ -701,6 +715,43 @@ func (f *mcpLoader) ReadFile(_ *artifact.ServiceArtifact, _ string) ([]byte, err
 		return []byte("tasks: []\n"), nil
 	}
 	return nil, os.ErrNotExist
+}
+
+// mcpCreateSnapshot пишет scenario/create/main.yml (yaml) в temp-корень и
+// возвращает его (для mcpLoader.localDir). Фаза 2: ResolveCreateScenarios сканирует
+// localDir, поэтому create-сценарий обязан лежать на диске. Если yaml не несёт
+// `create: true` — префиксуем флагом (попадание в create-набор), сохраняя имя
+// строки `create`. t.TempDir авто-чистится.
+func mcpCreateSnapshot(t *testing.T, yaml string) string {
+	t.Helper()
+	root := t.TempDir()
+	dir := filepath.Join(root, "scenario", "create")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	if !contains(yaml, "create: true") {
+		yaml = "create: true\n" + yaml
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.yml"), []byte(yaml), 0o644); err != nil {
+		t.Fatalf("write create/main.yml: %v", err)
+	}
+	return root
+}
+
+// mcpEmptyCreateSnapshot пишет снапшот БЕЗ единого create-сценария (только
+// operational restart) и возвращает корень. Для bare-инкарнации: набор
+// create-сценариев пуст → создание без прогона.
+func mcpEmptyCreateSnapshot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	dir := filepath.Join(root, "scenario", "restart")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.yml"), []byte("name: restart\ntasks: []\n"), 0o644); err != nil {
+		t.Fatalf("write restart/main.yml: %v", err)
+	}
+	return root
 }
 
 // newTestHandlerFull — как newTestHandler, но прокидывает incarnation-deps

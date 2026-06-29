@@ -1,4 +1,11 @@
 name: create
+# create: true — сценарий годен как СТАРТОВЫЙ (bootstrap новой incarnation), т.е.
+# выбираем при POST /v1/incarnations (scenario.ResolveCreateScenarios читает флаг,
+# scenario.go::Create). Принадлежность к create-набору — ДЕКЛАРАТИВНАЯ и data-driven:
+# набор стартовых сценариев = РОВНО {scenario с `create: true`}. Прежний хардкод-union
+# в keeper (имя `create` всегда в наборе как default) убран (Фаза 2 принята) — `create`
+# годен как bootstrap не из-за имени, а потому что несёт этот флаг.
+create: true
 description: >-
   Развернуть Redis (концепция Ansible-роли, redis-консолидация). Оператор задаёт
   ПРОСТЫЕ типизированные понятия (режим, сколько памяти, какая persistence, какая

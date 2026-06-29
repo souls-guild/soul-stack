@@ -76,6 +76,10 @@
 
 `redis.addr` принимает один TCP-адрес. Redis Sentinel с автоматическим master-discovery нативно не поддержан — раскатка через TCP-прокси на динамический master ([operations/infra.md → HA Redis](operations/infra.md#ha-redis)). Single-instance и Redis Cluster поддержаны. Для малой беты — single-instance + AOF.
 
+### Semantic-breaking: `create_scenario` (пустое значение БОЛЬШЕ не значит авто-`create`)
+
+Семантика поля `create_scenario` (`POST /v1/incarnations`, MCP `keeper.incarnation.create`) **изменилась**: пустой `create_scenario` **БОЛЬШЕ НЕ означает** авто-запуск зарезервированного сценария `create` ([ADR-009 amendment 2026-06-29](adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация)). Теперь при пустом значении: если сервис предлагает create-сценарии (хотя бы один `create: true`) → **422 `create_scenario_required`** (выбор обязателен, перечислены годные имена); если ни одного `create: true` → **bare-инкарнация** (`StatusReady` без прогона, `created_scenario = NULL`). Wire-схема additive (поле существовало и раньше), breaking только смысл. **Затронуты** внешние API/MCP-клиенты, славшие `create` без `create_scenario` в расчёте на авто-`create` — им нужно явно передать `create_scenario`.
+
 ## См. также
 
 - [getting-started.md](getting-started.md) — quickstart, путь онбординга существующего хоста.

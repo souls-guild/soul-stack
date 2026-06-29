@@ -1018,7 +1018,7 @@ components:
             - array
             - "null"
         create_scenario:
-          description: имя стартового сценария (механизм нескольких create); пусто → create
+          description: "имя стартового сценария (механизм нескольких create, scenario с create:true). Пусто: сервис предлагает create-сценарии → 422 create_scenario_required; сервис без них → bare-инкарнация (ready без прогона)"
           pattern: ^[a-z][a-z0-9_]*$
           type: string
         input:

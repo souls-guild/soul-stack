@@ -1,0 +1,179 @@
+# L0-испытание create_from_souls в режиме cluster — деплой honest hash-slot Redis Cluster
+# на ГОТОВЫЙ roster (без provision). Multi-host roster (fixtures.hosts) из 3 хостов:
+# shards=3, replicas_per_master=0 → топология ровно 3*(1+0)=3 (size-guard проходит).
+#
+# ★ КРИТЕРИЙ ПРИЁМКИ (отличие от create): прогон катится по существующему roster-у БЕЗ
+# provision-шагов. task_absent ассертит, что core.cloud.created (создание VM) и
+# core.soul.registered (барьер онбординга) в плане ОТСУТСТВУЮТ — у create_from_souls нет
+# ни include redis-provision.yml, ни секции provision.
+#
+# Render-only, герметично. На cluster-прогоне sentinel-ветка group-drop, cluster-ветка
+# рендерится. size-guard — assert: (keeper-side render-time precondition, ADR-009),
+# не emit RenderedTask. Деплой-тело (redis-deploy-cluster.yml) — service-level, то же,
+# что у create. Раскладку ролей master/replica и слотов делает ПЛАГИН
+# (community.redis.cluster action create) детерминированно по sort SID; scenario строит
+# топологию-MAP (SID→addr).
+name: cluster deploy on existing roster without provision
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  # Multi-host roster: 3 хоста, порядок в YAML намеренно не отсортирован (b, c, a).
+  hosts:
+    - sid: node-b.example.com
+      covens: [create_from_souls, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-c.example.com
+      covens: [create_from_souls, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+    - sid: node-a.example.com
+      covens: [create_from_souls, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create_from_souls:
+      password: s3cr3t-redis-pass-create-from-souls
+    secret/redis/create_from_souls/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/create_from_souls/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create_from_souls/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create_from_souls/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    install_method: package
+    redis_type: cluster
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      off:
+        save: ""
+        appendonly: "no"
+      aof:
+        save: ""
+        appendonly: "yes"
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+      rdb_aof:
+        save: "900 1 300 10 60 10000"
+        appendonly: "yes"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    system_acl_users:
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+  input:
+    redis_type: cluster
+    version: "7.4.1"
+    shards: 3
+    replicas_per_master: 0
+    cluster_node_timeout: 5000
+
+assert:
+  task_present:
+    # ── cluster destiny: пакет (mode-агностичный install ДО ветвления) ──────
+    - module: core.pkg.installed
+      params_subset:
+        name: redis-server
+        version: "7.4.1"
+
+    # ── cluster destiny: redis.conf с cluster-директивами ───────────────────
+    # config-map несёт базовый merge + HOST-ИНВАРИАНТНЫЕ cluster-директивы. cluster-announce-ip
+    # в config НЕТ — per-host директива, её рендерит redis.conf.tmpl из .self. render_context.self
+    # = первый по SID хост (node-a, host-инвариант apply.input).
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            password: s3cr3t-redis-pass-create-from-souls
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
+            config:
+              maxmemory:        "256mb"
+              maxmemory-policy: allkeys-lru
+              maxclients:       10000
+              timeout:          300
+              save:             "900 1 300 10 60 10000"
+              appendonly:       "no"
+              cluster-enabled:      "yes"
+              cluster-config-file:  "nodes.conf"
+              cluster-node-timeout: "5000"
+          self:
+            sid: node-a.example.com
+            covens: [create_from_souls, redis]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # ── cluster-build (community.redis.cluster) ─────────────────────────────
+    # nodes-MAP: ключ=SID, addr=primary_ip+":6379". Детерминирован по SID.
+    - module: community.redis.cluster
+      params_subset:
+        action: create
+        replicas_per_shard: 0
+        password: s3cr3t-redis-pass-create-from-souls
+        nodes:
+          node-a.example.com: { addr: "10.0.0.1:6379" }
+          node-b.example.com: { addr: "10.0.0.2:6379" }
+          node-c.example.com: { addr: "10.0.0.3:6379" }
+
+  task_absent:
+    # ★ КРИТЕРИЙ create_from_souls: provision-шаги ОТСУТСТВУЮТ (нет include redis-provision.yml,
+    # нет секции provision). Прогон катится по существующему roster-у.
+    - module: core.cloud.created
+    - module: core.soul.registered
+    # redis-sentinel package ОТСУТСТВУЕТ в cluster-режиме (sentinel_enabled default false).
+    - module: core.pkg.installed
+      params_subset:
+        name: redis-sentinel
+
+  state_changes:
+    redis_type: cluster
+    redis_version: "7.4.1"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+      cluster-enabled:      "yes"
+      cluster-config-file:  "nodes.conf"
+      cluster-node-timeout: "5000"
+    redis_users: []
+    redis_hosts: []
+    # ★ provision read-model: ВСЕГДА консервативный дефолт — create_from_souls не
+    # поднимает VM (отличие от create).
+    provisioned_vm_ids: []
+    provisioned_sids: []
+    provisioned_provider: ""

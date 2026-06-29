@@ -32,10 +32,13 @@ import (
 // createScenarioSnapshot пишет temp-снапшот сервиса с тремя сценариями и
 // возвращает его корень (для fakeLoader.localDir):
 //
-//   - scenario/create/main.yml   — дефолтный create, input БЕЗ required-полей;
+//   - scenario/create/main.yml   — create: true, input БЕЗ required-полей;
 //   - scenario/restore/main.yml  — create: true, input с required `backup_id`
 //     (без default) — выбираемый стартовый сценарий с ОТЛИЧНОЙ от create схемой;
 //   - scenario/add_user/main.yml — operational (нет create:) — НЕ eligible.
+//
+// Фаза 2: `create` тоже помечен `create: true` — имя больше не привилегировано,
+// в набор попадают РОВНО `create: true`-сценарии (здесь {create, restore}).
 //
 // t.TempDir авто-чистится. Файлы минимальны (input + tasks: []), чтобы
 // config.LoadScenarioManifestFromBytes парсил без diag-ошибок.
@@ -52,6 +55,7 @@ func createScenarioSnapshot(t *testing.T) string {
 		}
 	}
 	write("create", `name: create
+create: true
 input:
   replicas:
     type: integer
@@ -82,6 +86,60 @@ func newCreateScenarioHandler(t *testing.T, db *fakeIncDB, starter *fakeStarter)
 	t.Helper()
 	loader := &fakeLoader{localDir: createScenarioSnapshot(t)}
 	return NewIncarnationHandler(db, starter, nil, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
+}
+
+// bareScenarioSnapshot пишет снапшот сервиса БЕЗ единого create-сценария (только
+// operational restart) и возвращает корень. Набор create-сценариев пуст →
+// bare-инкарнация.
+func bareScenarioSnapshot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	dir := filepath.Join(root, "scenario", "restart")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.yml"), []byte("name: restart\ntasks: []\n"), 0o644); err != nil {
+		t.Fatalf("write restart/main.yml: %v", err)
+	}
+	return root
+}
+
+// TestIncarnation_Create_BareNoScenario_ReadyNoRun — GUARD Фаза 2: сервис БЕЗ
+// create-сценариев + пустой create_scenario → bare-инкарнация: 202, incarnation
+// создана (insert), прогон НЕ стартует, apply_id ОТСУТСТВУЕТ, created_scenario col
+// ($12) = NULL. Главный инвариант bare-ветки.
+func TestIncarnation_Create_BareNoScenario_ReadyNoRun(t *testing.T) {
+	db := &fakeIncDB{}
+	starter := &fakeStarter{}
+	loader := &fakeLoader{localDir: bareScenarioSnapshot(t)}
+	h := NewIncarnationHandler(db, starter, nil, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
+		bytes.NewReader([]byte(`{"name":"redis-bare","service":"redis"}`)))
+	req = withClaims(req, "archon-alice")
+	rec := incCreate(h, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("Code = %d, want 202, body=%s", rec.Code, rec.Body.String())
+	}
+	if db.insertCalls != 1 {
+		t.Errorf("insertCalls = %d, want 1 (bare создаётся)", db.insertCalls)
+	}
+	if starter.calls != 0 {
+		t.Errorf("starter.calls = %d, want 0 (bare без прогона)", starter.calls)
+	}
+	// created_scenario col ($12) = NULL (nil) — bare несёт NULL, не 'create'.
+	if db.insertArgs[11] != nil {
+		t.Errorf("INSERT created_scenario ($12) = %v, want nil (NULL для bare)", db.insertArgs[11])
+	}
+	// apply_id отсутствует в JSON (bare без прогона).
+	var raw map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, has := raw["apply_id"]; has {
+		t.Errorf("apply_id присутствует для bare-инкарнации: %v", raw)
+	}
 }
 
 // (a) валидный выбор не-дефолтного create-сценария --------------------------
@@ -118,9 +176,11 @@ func TestIncarnation_Create_ChosenScenario_Starts_AndPersisted(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Create_DefaultScenario_WhenEmpty — пустой create_scenario →
-// дефолтный create (back-compat): стартует create, created_scenario=create.
-func TestIncarnation_Create_DefaultScenario_WhenEmpty(t *testing.T) {
+// TestIncarnation_Create_EmptyChoice_HasScenarios_422 — Фаза 2: сервис ПРЕДЛАГАЕТ
+// create-сценарии ({create, restore}), но выбор пуст → 422 create_scenario_required
+// с перечислением годных; incarnation НЕ создаётся, прогон НЕ стартует. Регресс =
+// вернулся back-compat-дефолт `create` при пустом выборе.
+func TestIncarnation_Create_EmptyChoice_HasScenarios_422(t *testing.T) {
 	db := &fakeIncDB{}
 	starter := &fakeStarter{}
 	h := newCreateScenarioHandler(t, db, starter)
@@ -130,11 +190,44 @@ func TestIncarnation_Create_DefaultScenario_WhenEmpty(t *testing.T) {
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("Code = %d, want 422, body=%s", rec.Code, rec.Body.String())
+	}
+	var p problem.Details
+	_ = json.NewDecoder(rec.Body).Decode(&p)
+	if p.Type != problem.TypeValidationFailed {
+		t.Errorf("Type = %q, want %q", p.Type, problem.TypeValidationFailed)
+	}
+	if !bytes.Contains([]byte(p.Detail), []byte("create_scenario_required")) {
+		t.Errorf("detail = %q, want содержит create_scenario_required", p.Detail)
+	}
+	// Перечисление годных сценариев — оператору видно, что выбрать.
+	if !bytes.Contains([]byte(p.Detail), []byte("create")) || !bytes.Contains([]byte(p.Detail), []byte("restore")) {
+		t.Errorf("detail = %q, want список {create, restore}", p.Detail)
+	}
+	if db.insertCalls != 0 || starter.calls != 0 {
+		t.Errorf("insertCalls/starter.calls = %d/%d, want 0/0", db.insertCalls, starter.calls)
+	}
+}
+
+// TestIncarnation_Create_ExplicitCreate_Starts — явный create_scenario=create
+// (помечен create:true) → стартует create, created_scenario=create. Контраст к
+// _EmptyChoice_HasScenarios_422: имя `create` валидно как ЯВНЫЙ выбор.
+func TestIncarnation_Create_ExplicitCreate_Starts(t *testing.T) {
+	db := &fakeIncDB{}
+	starter := &fakeStarter{}
+	h := newCreateScenarioHandler(t, db, starter)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
+		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis","create_scenario":"create"}`)))
+	req = withClaims(req, "archon-alice")
+	rec := incCreate(h, req)
+
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("Code = %d, want 202, body=%s", rec.Code, rec.Body.String())
 	}
 	if starter.gotSpec.ScenarioName != "create" {
-		t.Errorf("RunSpec.ScenarioName = %q, want create (default при пустом create_scenario)", starter.gotSpec.ScenarioName)
+		t.Errorf("RunSpec.ScenarioName = %q, want create", starter.gotSpec.ScenarioName)
 	}
 	if got, _ := db.insertArgs[11].(string); got != "create" {
 		t.Errorf("INSERT created_scenario ($12) = %q, want create", got)
@@ -245,16 +338,17 @@ func TestIncarnation_Create_InputValidatedAgainstChosen_Missing_422(t *testing.T
 	}
 }
 
-// TestIncarnation_Create_DefaultScenario_EmptyInputOK — КОНТРАСТ к предыдущему:
-// тот же пустой input, но дефолтный create (его схема НЕ требует backup_id) → 202.
-// Пара тестов фиксирует: схема резолвится по ВЫБРАННОМУ сценарию, не по статике.
-func TestIncarnation_Create_DefaultScenario_EmptyInputOK(t *testing.T) {
+// TestIncarnation_Create_ChosenCreate_EmptyInputOK — КОНТРАСТ к
+// _InputValidatedAgainstChosen_Missing_422: тот же пустой input, но выбран create
+// (его схема НЕ требует backup_id) → 202. Пара тестов фиксирует: схема резолвится
+// по ВЫБРАННОМУ сценарию, не по статике.
+func TestIncarnation_Create_ChosenCreate_EmptyInputOK(t *testing.T) {
 	db := &fakeIncDB{}
 	starter := &fakeStarter{}
 	h := newCreateScenarioHandler(t, db, starter)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis"}`)))
+		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis","create_scenario":"create"}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 

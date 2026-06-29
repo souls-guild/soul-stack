@@ -1,0 +1,37 @@
+# Ветка диспетчера create_from_souls — режим cluster (honest hash-slot Redis Cluster,
+# 16384 слота). Подключается из main.yml через CONDITIONAL-INCLUDE: `when: input.redis_type
+# == 'cluster'` стоит НА include — на sentinel-прогоне весь файл group-drop (задачи
+# физически не рендерятся), на cluster-прогоне раскрывается в плоский список ДО render.
+#
+# ★ ТОНКИЙ ДИСПЕТЧЕР: тело деплоя service-level. size-guard ниже + include общего
+# scenario/redis-deploy-cluster.yml. Этот файл — КОПИЯ create/cluster.yml (без provision
+# size-guard не отличается): scenario.include резолвит `scenario/<name>/<file>`, поэтому
+# create_from_souls нужна СВОЯ локальная ветка (create/cluster.yml перекрыл бы только
+# create). Реальное деплой-тело (redis-deploy-cluster.yml) — service-level, делится без
+# дубликата. drift-risk копии — отмечен в main.yml::description.
+#
+# ★ ИНВАРИАНТ (см. шапку redis-deploy-cluster.yml): инклудящий ОБЯЗАН объявить в своём
+# compute: набор, который тело читает (redis_config/conf_dir/data_dir/install/
+# modules_base_url/redis_version/tls_*). Все они объявлены в create_from_souls/main.yml::compute
+# (инлайн-копия create). cross-file дрейф soul-lint НЕ ловит.
+
+# ── 0. SIZE-GUARD (топология) — keeper-side render-time assert ─────────────────────
+# Размер roster-а ОБЯЗАН быть ровно shards*(1+replicas_per_master) — иначе плагин
+# community.redis.cluster (action create) выведет число шардов ИЗ числа нод и МОЛЧА
+# проигнорирует declared input.shards. Предикат вычисляется KEEPER-SIDE на РЕНДЕРЕ — там
+# доступен soulprint.hosts. false ОБРЫВАЕТ render с message ДО любого dispatch. assert НЕ
+# emit RenderedTask. Стоит ПЕРЕД include деплой-тела — mismatch рвёт прогон fail-fast.
+# ★ ЯВНАЯ ТОПОЛОГИЯ (cluster_topology): когда оператор задал список шардов, size-guard
+# сверяет roster с СУММОЙ размеров шардов (число узлов во всей объявленной топологии).
+# Без cluster_topology — старая формула. Гейт — has(input.cluster_topology).
+# ★ ПОЧЕМУ assert, а не validate: size-guard нужен soulprint.hosts (roster), а validate-
+# контекст INPUT-ONLY (структурный CEL-барьер). Обязательность самого shards (присутствие
+# в режиме cluster) — отдельный required_when в main.yml, отсекает ДО render; здесь только
+# сверка топологии с уже-присутствующим shards. Идентично create/cluster.yml:30-33.
+- name: Guard cluster roster size matches shards and replicas
+  assert:
+    that:
+      - "has(input.cluster_topology) ? (size(soulprint.hosts) == size(merge(input.cluster_topology.map(s, merge(s.map(x, {x: 0})))))) : (size(soulprint.hosts) == int(input.shards) * (1 + int(input.replicas_per_master)))"
+    message: "число хостов roster-а прогона должно быть ровно shards*(1+replicas_per_master) — либо, при заданной cluster_topology, ровно сумме размеров объявленных шардов (число узлов во всей топологии); задай столько же таргетированных souls, сколько узлов в объявленной топологии, иначе плагин вывел бы число шардов из числа нод и проигнорировал declared-раскладку"
+
+- include: redis-deploy-cluster.yml

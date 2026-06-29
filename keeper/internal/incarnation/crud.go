@@ -42,13 +42,16 @@ var (
 	// Отдельный sentinel от [ErrIncarnationNotLocked] (тот шире — покрывает три
 	// блокирующих статуса): rerun сужает допуск до одного.
 	ErrIncarnationNotErrorLocked = errors.New("incarnation: not in error_locked status (rerun-create requires error_locked)")
-	// ErrRerunScenarioNotCreate — последний прогон, упавший в error_locked, был
-	// НЕ create-сценарием (например add_user). rerun-create по контракту
-	// (architecture.md → «Атомарность и error_locked») перезапускает строго
-	// bootstrap `create`; для произвольного упавшего сценария — обычный unlock +
-	// ручной run нужного сценария, иначе rerun исполнил бы create вместо
-	// фактически провалившейся операции. Handler маппит в 409 incarnation-locked.
-	ErrRerunScenarioNotCreate = errors.New("incarnation: last failed scenario is not `create` — rerun-create restarts `create` only")
+	// ErrRerunScenarioNotCreate — rerun-create неприменим. Две причины:
+	//   - последний прогон, упавший в error_locked, был НЕ создавшим сценарием
+	//     (например day-2 add_user): rerun перезапустил бы bootstrap вместо
+	//     фактически провалившейся операции — нужен обычный unlock + ручной run;
+	//   - bare-инкарнация (created_scenario IS NULL, миграция 090): создана без
+	//     bootstrap-сценария, перезапускать нечего.
+	// rerun-create по контракту (architecture.md → «Атомарность и error_locked»)
+	// перезапускает строго СОЗДАВШИЙ bootstrap-сценарий. Handler маппит в 409
+	// incarnation-locked.
+	ErrRerunScenarioNotCreate = errors.New("incarnation: rerun-create not applicable (last failed scenario is not the creating one, or incarnation is bare)")
 	ErrIncarnationBusy        = errors.New("incarnation: run in progress (applying)")
 	ErrIncarnationLocked      = errors.New("incarnation: locked — unlock required before upgrade")
 	ErrDowngradeUnsupported   = errors.New("incarnation: schema downgrade unsupported (forward-only, ADR-019)")
@@ -340,11 +343,12 @@ func Create(ctx context.Context, db ExecQueryRower, inc *Incarnation) error {
 	}
 
 	// created_scenario — имя стартового сценария (механизм нескольких create,
-	// миграция 089). Пустое значение caller-а нормализуем к дефолту `create`
-	// (back-compat: старый код / тесты без явного поля создают через `create`).
-	createdScenario := inc.CreatedScenario
-	if createdScenario == "" {
-		createdScenario = createScenarioLabel
+	// миграции 089+090). NULLABLE: nil-указатель caller-а = bare-инкарнация
+	// (создана без bootstrap-сценария) → NULL в БД. Нормализации ""→'create'
+	// больше нет — bare и явный 'create' различаются на уровне типа (*string).
+	var createdScenario any
+	if inc.CreatedScenario != nil {
+		createdScenario = *inc.CreatedScenario
 	}
 
 	row := db.QueryRow(ctx, insertSQL,
@@ -881,7 +885,9 @@ var _ TxBeginner = (*pgxpool.Pool)(nil)
 // имя стартового сценария инкарнации (incarnation.created_scenario), которое
 // caller перезапускает через runner.Start. Заменяет хардкод `create` в rerun-
 // create-handler-ах — инкарнация, созданная `create_cluster`, перезапускает
-// `create_cluster`.
+// `create_cluster`. Для bare-инкарнации (created_scenario IS NULL) [UnlockForRerun]
+// отказывает раньше ([ErrRerunScenarioNotCreate]) — это поле непустое всегда,
+// когда rerun дошёл до результата.
 type UnlockResult struct {
 	PreviousStatus  Status
 	HistoryID       string
@@ -1174,14 +1180,6 @@ WHERE name = $1 AND status = 'applying'
 // в истории отличается от обычного ручного unlock.
 const rerunCreateScenarioLabel = "rerun-create"
 
-// createScenarioLabel — имя дефолтного bootstrap-сценария `create`. Должна
-// совпадать с scenario.CreateScenarioName (пакет incarnation НЕ импортирует
-// scenario — он нижний слой; держим локальную константу). [UnlockForRerun]
-// использует её как back-compat-дефолт, когда incarnation.created_scenario пуст
-// (строка до миграции 089): scope rerun-create сверяется с created_scenario, а не
-// с жёстким `create`.
-const createScenarioLabel = "create"
-
 // UnlockForRerun — unlock-часть rerun-create (architecture.md → «Атомарность и
 // error_locked»). Атомарно снимает error_locked и переводит incarnation
 // error_locked → applying МИНУЯ ready: окна, в котором конкурентный прогон
@@ -1196,11 +1194,15 @@ const createScenarioLabel = "create"
 //
 // Scope=created-scenario: дополнительно сужает допуск — последний прогон, упавший
 // в error_locked (последний snapshot state_history), обязан быть СОЗДАВШИМ
-// сценарием инкарнации (incarnation.created_scenario, миграция 089 — может быть
-// `create` ИЛИ `create_cluster`/`create_standalone`/… при нескольких bootstrap-
-// сценариях). Иной сценарий (например day-2 add_user, тоже залочивший инкарнацию)
-// → [ErrRerunScenarioNotCreate]: rerun-create перезапускает строго создавший
-// bootstrap, не произвольную упавшую операцию.
+// сценарием инкарнации (incarnation.created_scenario, миграции 089+090 — может
+// быть `create` ИЛИ `create_cluster`/`create_standalone`/… при нескольких
+// bootstrap-сценариях). Иной сценарий (например day-2 add_user, тоже залочивший
+// инкарнацию) → [ErrRerunScenarioNotCreate]: rerun-create перезапускает строго
+// создавший bootstrap, не произвольную упавшую операцию.
+//
+// Bare-инкарнация (created_scenario IS NULL — создана без bootstrap-сценария,
+// миграция 090): rerun-create неприменим → [ErrRerunScenarioNotCreate] сразу
+// после gate (перезапускать нечего; чинить day-2-провал — обычным unlock + run).
 //
 // Caller (handler / MCP-tool) ПОСЛЕ успешного коммита запускает создавший
 // сценарий (incarnation.created_scenario) через runner.Start с тем же applyID,
@@ -1218,7 +1220,8 @@ const createScenarioLabel = "create"
 //   - [ErrIncarnationNotFound]       — name не существует (404).
 //   - [ErrIncarnationNotErrorLocked] — статус не error_locked (409).
 //   - [ErrRerunScenarioNotCreate]    — последний упавший сценарий не совпал с
-//     создавшим (incarnation.created_scenario) (409).
+//     создавшим (incarnation.created_scenario) ЛИБО bare-инкарнация
+//     (created_scenario IS NULL) (409).
 //
 // reason пишется в audit-payload caller-ом (state_history-схема MVP не несёт
 // metadata-колонки); previous_status возвращается в [UnlockResult].
@@ -1251,7 +1254,7 @@ FOR UPDATE
 	var (
 		stateBytes      []byte
 		statusStr       string
-		createdScenario string
+		createdScenario *string
 	)
 	if err := tx.QueryRow(ctx, selectForUpdateSQL, name).Scan(&stateBytes, &statusStr, &createdScenario); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -1263,11 +1266,13 @@ FOR UPDATE
 	if previous != StatusErrorLocked {
 		return nil, ErrIncarnationNotErrorLocked
 	}
-	// created_scenario — стартовый сценарий, которым создавали инкарнацию (механизм
-	// нескольких create, миграция 089). Пустое (теоретически у строки до миграции,
-	// перекрытой DEFAULT) → дефолт `create` (back-compat).
-	if createdScenario == "" {
-		createdScenario = createScenarioLabel
+	// created_scenario NULL = bare-инкарнация (создана без bootstrap-сценария,
+	// миграции 089+090): rerun-create неприменим — перезапускать нечего. Отказ
+	// [ErrRerunScenarioNotCreate] (handler → 409 с пояснением). bare попадает в
+	// error_locked лишь через day-2-сценарий, который и надо чинить обычным
+	// unlock + ручным run, а не rerun-create bootstrap-а.
+	if createdScenario == nil {
+		return nil, ErrRerunScenarioNotCreate
 	}
 
 	// Scope=created-scenario: rerun-create перезапускает строго СОЗДАВШИЙ bootstrap-
@@ -1295,7 +1300,7 @@ LIMIT 1
 		}
 		return nil, fmt.Errorf("incarnation: rerun-create last scenario probe: %w", err)
 	}
-	if lastScenario != createdScenario {
+	if lastScenario != *createdScenario {
 		return nil, ErrRerunScenarioNotCreate
 	}
 
@@ -1334,7 +1339,7 @@ WHERE name = $1
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("incarnation: commit rerun-create tx: %w", err)
 	}
-	return &UnlockResult{PreviousStatus: previous, HistoryID: historyID, CreatedScenario: createdScenario}, nil
+	return &UnlockResult{PreviousStatus: previous, HistoryID: historyID, CreatedScenario: *createdScenario}, nil
 }
 
 // migrationScenarioLabel — значение `state_history.scenario` для шага

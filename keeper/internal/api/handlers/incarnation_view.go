@@ -96,7 +96,7 @@ func toIncarnationGetView(inc *incarnation.Incarnation, schema audit.SecretSchem
 		Covens:             coalesceCoven(inc.Covens),
 		CreatedAt:          inc.CreatedAt.UTC(),
 		CreatedByAID:       inc.CreatedByAID,
-		CreatedScenario:    inc.CreatedScenario,
+		CreatedScenario:    derefString(inc.CreatedScenario),
 		Name:               inc.Name,
 		Service:            inc.Service,
 		ServiceVersion:     inc.ServiceVersion,

@@ -122,6 +122,26 @@ func TestRerunCreate_RejectNonCreateScenario_409(t *testing.T) {
 	}
 }
 
+// TestRerunCreate_BareIncarnation_409 — GUARD Фаза 2: bare-инкарнация
+// (created_scenario IS NULL — создана без bootstrap-сценария) в error_locked →
+// 409 incarnation-locked (ErrRerunScenarioNotCreate), прогон НЕ стартует.
+// rerun-create неприменим: перезапускать нечего. Регресс = NULL коалесцируется в
+// `create` и rerun запускает несуществующий bootstrap.
+func TestRerunCreate_BareIncarnation_409(t *testing.T) {
+	db := &fakeIncDB{
+		selectByNameRow: func(n string) pgx.Row { return makeIncStatusRow(n, "error_locked") },
+		unlockSelectRow: func(_ string) pgx.Row { return makeUnlockSelectRowBare("error_locked") },
+	}
+	starter := &fakeStarter{}
+	h := newRerunHandler(db, starter, &fakeAuditWriter{})
+
+	_, err := h.RerunCreateTyped(context.Background(), claims("archon-alice"), "redis-bare", "rerun bare")
+	wantProblem(t, err, problem.TypeIncarnationLocked)
+	if starter.calls != 0 {
+		t.Errorf("scenario start calls = %d, want 0 (bare → rerun неприменим)", starter.calls)
+	}
+}
+
 // TestRerunCreate_NotFound_404 — несуществующая incarnation → 404.
 func TestRerunCreate_NotFound_404(t *testing.T) {
 	db := &fakeIncDB{

@@ -163,6 +163,31 @@ modules:
 
 Полная нормативная спека scenario-DSL — [`docs/scenario/`](../scenario/README.md).
 
+### Стартовый сценарий — `create: true`
+
+Стартовый (bootstrap) сценарий — тот, которым оператор создаёт новую incarnation (`POST /v1/incarnations`, поле `create_scenario`). Сценарий объявляет эту способность top-level ключом `create: true` в своём `scenario/<name>/main.yml`:
+
+```yaml
+# scenario/create/main.yml
+name: create
+create: true          # сценарий годен как стартовый (bootstrap новой incarnation)
+input:
+  # ...
+state_changes:
+  # ...
+tasks:
+  # ...
+```
+
+Правила:
+
+- **Декларация — в сценарии, не в манифесте.** Стартовый набор сервиса keeper выводит **auto-discover-ом**: сканирует `scenario/`, в набор попадают **ровно** сценарии с `create: true`. В `service.yml` стартовые сценарии не перечисляются (как и любые другие — keeper находит их по каталогу `scenario/`, см. [«Раскладка репозитория»](#раскладка-репозитория)).
+- **Имя `create` НЕ привилегировано.** Сценарий с именем `create` попадает в набор, только если сам несёт `create: true` — ровно как любой другой. Магического дефолтного `create` больше нет.
+- **Несколько create-сценариев — норма.** Сервис может предлагать несколько стартовых путей (например redis: `create` — с нуля, `create_from_souls` — на готовых хостах, `migrate_cluster` — с заливкой данных из внешнего источника). Оператор выбирает один полем `create_scenario`; если у сервиса ≥1 create-сценарий, выбор **обязателен** (пустой → `422`, input валидируется против схемы конкретного сценария).
+- **Сервис без `create: true`-сценариев → bare-инкарнация.** Если ни один сценарий не несёт `create: true`, `POST /v1/incarnations` создаёт **bare-инкарнацию**: запись в `ready` без прогона и без `apply_id` (`incarnation.created_scenario` = `null`). Дальше работа — через day-2-операции (`POST /v1/incarnations/{name}/scenarios/{scenario}`). Такой сервис состоит только из day-2-сценариев и не умеет «поднимать себя с нуля» одним вызовом — это валидный паттерн.
+
+Семантика выбора, три ветви контракта и bare-инкарнация со стороны API — [`docs/keeper/operator-api/incarnations.md → Выбор стартового сценария и bare-инкарнация`](../keeper/operator-api/incarnations.md#выбор-стартового-сценария-и-bare-инкарнация).
+
 ### Когда нужны соседи `main.yml`
 
 Один `main.yml` справляется, пока сценарий остаётся обозримым (~150 строк). Если внутри явно выделяются логические подразделы — выносим их в `scenario/<name>/<sub>.yml` и подключаем через `include:`. Аналогично [`docs/destiny/manifest.md → Когда нужны соседи tasks/main.yml`](../destiny/manifest.md#когда-нужны-соседи-tasksmainyml).

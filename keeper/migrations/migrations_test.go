@@ -207,6 +207,8 @@ func TestEmbed_ContainsExpectedMigrations(t *testing.T) {
 		"088_add_incarnation_traits.up.sql",
 		"089_add_incarnation_created_scenario.down.sql",
 		"089_add_incarnation_created_scenario.up.sql",
+		"090_incarnation_created_scenario_nullable.down.sql",
+		"090_incarnation_created_scenario_nullable.up.sql",
 	}
 	if len(names) != len(want) {
 		t.Fatalf("got %d files, want %d: %v", len(names), len(want), names)
@@ -851,6 +853,60 @@ func TestEmbed_IncarnationCreatedScenario(t *testing.T) {
 	}
 	if !strings.Contains(string(d), "DROP COLUMN IF EXISTS created_scenario") {
 		t.Errorf("089 down.sql does not drop created_scenario; content: %.200s", d)
+	}
+}
+
+// TestEmbed_IncarnationCreatedScenarioNullable — sanity на 090 (Фаза 2 create-
+// вариантов): bare-инкарнация через NULL. up снимает NOT NULL + DEFAULT с
+// created_scenario (NULL = создана без bootstrap-сценария, StatusReady без прогона).
+// down возвращает к форме 089 (NOT NULL DEFAULT 'create'), но обязан СНАЧАЛА
+// прогнать backfill NULL → 'create' и ЛИШЬ ПОТОМ SET NOT NULL — иначе ALTER ...
+// SET NOT NULL упадёт на bare-строках. Порядок (backfill ПЕРЕД SET NOT NULL) —
+// самое опасное место отката; фиксируем его явно по позициям в тексте.
+func TestEmbed_IncarnationCreatedScenarioNullable(t *testing.T) {
+	b, err := FS.ReadFile("090_incarnation_created_scenario_nullable.up.sql")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	body := string(b)
+	for _, frag := range []string{
+		"ALTER TABLE incarnation",
+		"ALTER COLUMN created_scenario DROP NOT NULL",
+		"ALTER COLUMN created_scenario DROP DEFAULT",
+	} {
+		if !strings.Contains(body, frag) {
+			t.Errorf("090 up.sql missing %q; content head: %.300s", frag, body)
+		}
+	}
+	d, err := FS.ReadFile("090_incarnation_created_scenario_nullable.down.sql")
+	if err != nil {
+		t.Fatalf("read down: %v", err)
+	}
+	dbody := string(d)
+	// down восстанавливает NOT NULL + DEFAULT (откат к 089).
+	for _, frag := range []string{
+		"SET DEFAULT 'create'",
+		"SET NOT NULL",
+	} {
+		if !strings.Contains(dbody, frag) {
+			t.Errorf("090 down.sql missing %q; content: %.300s", frag, dbody)
+		}
+	}
+	// Backfill NULL → 'create' обязан стоять ПЕРЕД (реальным) SET NOT NULL — иначе
+	// откат рвётся на bare-строках. Сверяем порядок по позициям в тексте. `SET NOT
+	// NULL` упоминается ещё и в шапке-комментарии (выше backfill), поэтому реальный
+	// ALTER берём LastIndex-ом (DDL-стейтмент идёт последним в файле).
+	backfillPos := strings.Index(dbody, "SET created_scenario = 'create'")
+	notNullPos := strings.LastIndex(dbody, "SET NOT NULL")
+	if backfillPos < 0 {
+		t.Fatalf("090 down.sql missing backfill UPDATE ... SET created_scenario = 'create'; content: %.300s", dbody)
+	}
+	if backfillPos > notNullPos {
+		t.Errorf("090 down.sql: backfill NULL→'create' (pos %d) обязан предшествовать SET NOT NULL (pos %d) — иначе ALTER упадёт на bare-строках", backfillPos, notNullPos)
+	}
+	// Backfill таргетит ИМЕННО NULL-строки (bare), не затирает существующие выборы.
+	if !strings.Contains(dbody, "WHERE created_scenario IS NULL") {
+		t.Errorf("090 down.sql backfill must target only NULL rows (WHERE created_scenario IS NULL); content: %.300s", dbody)
 	}
 }
 

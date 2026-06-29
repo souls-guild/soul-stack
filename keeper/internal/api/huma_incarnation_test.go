@@ -18,6 +18,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -277,22 +279,40 @@ func TestHumaIncarnation_Create_RBACDeny_403_NoAudit(t *testing.T) {
 // ловится здесь при сборке, а не молчаливым no-op pre-flight в проде.
 var _ handlers.AssertPreflighter = (*scenario.Runner)(nil)
 
-// incPreflightLoader — ServiceSnapshotLoader-стаб, отдающий МИНИМАЛЬНЫЙ валидный
-// scenario create/main.yml (без input-схемы → ValidateInput проходит). Нужен,
-// потому что create при не-nil runner+loader делает sync ValidateInput ДО
-// pre-flight; incTestLoader.ReadFile возвращает пустые байты (невалидный
-// scenario → 500 на парсе). pre-flight же тут — стаб incPreflightStarter, не
-// читает scenario через этот loader.
-type incPreflightLoader struct{}
+// incCreateSnapshot пишет temp-снапшот сервиса с единственным сценарием
+// `scenario/create/main.yml` (тело — body), помеченным `create: true`, и
+// возвращает корень. Нужен механизму нескольких create-сценариев (Фаза 2):
+// ResolveCreateScenarios сканирует art.LocalDir, поэтому create-сценарий обязан
+// лежать на диске с флагом, иначе набор пуст → bare-инкарнация (прогон не
+// стартует). body должен сам нести `create: true` (caller контролирует input/
+// validate). t.TempDir авто-чистится.
+func incCreateSnapshot(t *testing.T, body string) string {
+	t.Helper()
+	root := t.TempDir()
+	dir := filepath.Join(root, "scenario", "create")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.yml"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write create/main.yml: %v", err)
+	}
+	return root
+}
 
-func (incPreflightLoader) Load(_ context.Context, ref artifact.ServiceRef) (*artifact.ServiceArtifact, error) {
-	return &artifact.ServiceArtifact{Ref: ref}, nil
+// incPreflightLoader — disk-aware ServiceSnapshotLoader-стаб: Load возвращает
+// LocalDir (для ResolveCreateScenarios), ReadFile читает scenario с диска (для
+// ValidateInput). localDir — снапшот из incCreateSnapshot с create:true. pre-flight
+// — стаб incPreflightStarter, scenario через этот loader не читает.
+type incPreflightLoader struct{ localDir string }
+
+func (l incPreflightLoader) Load(_ context.Context, ref artifact.ServiceRef) (*artifact.ServiceArtifact, error) {
+	return &artifact.ServiceArtifact{Ref: ref, LocalDir: l.localDir}, nil
 }
 func (incPreflightLoader) LoadMigrationChain(_ *artifact.ServiceArtifact, _, _ int) (statemigrate.Chain, error) {
 	return statemigrate.Chain{}, nil
 }
-func (incPreflightLoader) ReadFile(_ *artifact.ServiceArtifact, _ string) ([]byte, error) {
-	return []byte("name: create\ntasks:\n  - name: noop\n    module: core.exec.run\n    params: { cmd: \"true\" }\n"), nil
+func (l incPreflightLoader) ReadFile(_ *artifact.ServiceArtifact, file string) ([]byte, error) {
+	return os.ReadFile(filepath.Join(l.localDir, filepath.FromSlash(file)))
 }
 
 // incPreflightStarter — ScenarioStarter + AssertPreflighter-стаб: pre-flight
@@ -329,11 +349,12 @@ func TestHumaIncarnation_Create_PreflightAssertFail_422(t *testing.T) {
 		preflightErr: scenario.ErrAssertFailed, // топология не сходится
 		started:      &started,
 	}
-	incH := handlers.NewIncarnationHandler(db, starter, nil, nil, &incTestResolver{ok: true}, incPreflightLoader{}, auditCap, nil, nil)
+	loader := incPreflightLoader{localDir: incCreateSnapshot(t, incPreflightScenarioBody)}
+	incH := handlers.NewIncarnationHandler(db, starter, nil, nil, &incTestResolver{ok: true}, loader, auditCap, nil, nil)
 	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations", strings.NewReader(`{"name":"redis-cluster","service":"redis"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations", strings.NewReader(`{"name":"redis-cluster","service":"redis","create_scenario":"create"}`))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -353,20 +374,26 @@ func TestHumaIncarnation_Create_PreflightAssertFail_422(t *testing.T) {
 	}
 }
 
-// incValidateLoader — ServiceSnapshotLoader-стаб с scenario create/main.yml,
-// несущим top-level validate:-правило (кросс-полевой инвариант «port обязателен,
-// если tls выключен»). ValidateInput на create-пути читает этот scenario и
-// прогоняет validate-правила над смерженным input (input-only eval).
-type incValidateLoader struct{}
+// incValidateLoader — disk-aware ServiceSnapshotLoader-стаб с scenario create/
+// main.yml, несущим top-level validate:-правило (кросс-полевой инвариант «port
+// обязателен, если tls выключен») + `create: true`. Load возвращает LocalDir (для
+// ResolveCreateScenarios), ReadFile читает с диска (для ValidateInput). localDir —
+// снапшот из incCreateSnapshot.
+type incValidateLoader struct{ localDir string }
 
-func (incValidateLoader) Load(_ context.Context, ref artifact.ServiceRef) (*artifact.ServiceArtifact, error) {
-	return &artifact.ServiceArtifact{Ref: ref}, nil
+func (l incValidateLoader) Load(_ context.Context, ref artifact.ServiceRef) (*artifact.ServiceArtifact, error) {
+	return &artifact.ServiceArtifact{Ref: ref, LocalDir: l.localDir}, nil
 }
 func (incValidateLoader) LoadMigrationChain(_ *artifact.ServiceArtifact, _, _ int) (statemigrate.Chain, error) {
 	return statemigrate.Chain{}, nil
 }
-func (incValidateLoader) ReadFile(_ *artifact.ServiceArtifact, _ string) ([]byte, error) {
-	return []byte(`name: create
+func (l incValidateLoader) ReadFile(_ *artifact.ServiceArtifact, file string) ([]byte, error) {
+	return os.ReadFile(filepath.Join(l.localDir, filepath.FromSlash(file)))
+}
+
+// incValidateScenarioBody — тело scenario/create/main.yml для incValidateLoader.
+const incValidateScenarioBody = `name: create
+create: true
 input:
   tls: { type: boolean, default: false }
   port: { type: integer, default: 0 }
@@ -377,8 +404,11 @@ tasks:
   - name: noop
     module: core.exec.run
     params: { cmd: "true" }
-`), nil
-}
+`
+
+// incPreflightScenarioBody — минимальный create-сценарий с create:true (без
+// input-схемы → ValidateInput проходит) для incPreflightLoader.
+const incPreflightScenarioBody = "name: create\ncreate: true\ntasks:\n  - name: noop\n    module: core.exec.run\n    params: { cmd: \"true\" }\n"
 
 // TestHumaIncarnation_Create_ValidateRuleFail_422 — top-level validate:-правило
 // не прошло на request-пути → 422 validation-failed ДО коммита, incarnation НЕ
@@ -393,12 +423,13 @@ func TestHumaIncarnation_Create_ValidateRuleFail_422(t *testing.T) {
 		return staticRow2(time.Now(), time.Now())
 	}}
 	starter := &incPreflightStarter{preflightErr: nil, started: &started}
-	incH := handlers.NewIncarnationHandler(db, starter, nil, nil, &incTestResolver{ok: true}, incValidateLoader{}, auditCap, nil, nil)
+	loader := incValidateLoader{localDir: incCreateSnapshot(t, incValidateScenarioBody)}
+	incH := handlers.NewIncarnationHandler(db, starter, nil, nil, &incTestResolver{ok: true}, loader, auditCap, nil, nil)
 	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
 
 	rec := httptest.NewRecorder()
 	// input БЕЗ port и БЕЗ tls → defaults (tls=false, port=0) → правило false.
-	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations", strings.NewReader(`{"name":"redis-prod","service":"redis"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations", strings.NewReader(`{"name":"redis-prod","service":"redis","create_scenario":"create"}`))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -432,11 +463,12 @@ func TestHumaIncarnation_Create_ValidateRulePass_202(t *testing.T) {
 		return staticRow2(time.Now(), time.Now())
 	}}
 	starter := &incPreflightStarter{preflightErr: nil, started: &started}
-	incH := handlers.NewIncarnationHandler(db, starter, nil, nil, &incTestResolver{ok: true}, incValidateLoader{}, auditCap, nil, nil)
+	loader := incValidateLoader{localDir: incCreateSnapshot(t, incValidateScenarioBody)}
+	incH := handlers.NewIncarnationHandler(db, starter, nil, nil, &incTestResolver{ok: true}, loader, auditCap, nil, nil)
 	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations", strings.NewReader(`{"name":"redis-prod","service":"redis","input":{"port":6379}}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations", strings.NewReader(`{"name":"redis-prod","service":"redis","create_scenario":"create","input":{"port":6379}}`))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusAccepted {
@@ -458,11 +490,12 @@ func TestHumaIncarnation_Create_PreflightAssertPass_202(t *testing.T) {
 	started := false
 	db := &incTestDB{insertRow: func() pgx.Row { return staticRow2(time.Now(), time.Now()) }}
 	starter := &incPreflightStarter{preflightErr: nil, started: &started}
-	incH := handlers.NewIncarnationHandler(db, starter, nil, nil, &incTestResolver{ok: true}, incPreflightLoader{}, auditCap, nil, nil)
+	loader := incPreflightLoader{localDir: incCreateSnapshot(t, incPreflightScenarioBody)}
+	incH := handlers.NewIncarnationHandler(db, starter, nil, nil, &incTestResolver{ok: true}, loader, auditCap, nil, nil)
 	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations", strings.NewReader(`{"name":"redis-prod","service":"redis"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations", strings.NewReader(`{"name":"redis-prod","service":"redis","create_scenario":"create"}`))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusAccepted {
@@ -798,6 +831,37 @@ func TestHumaIncarnation_Get_NoAudit(t *testing.T) {
 	}
 }
 
+// TestHumaIncarnation_Get_BareIncarnation_OmitsCreatedScenario — GUARD Фаза 2
+// (handler-level, реальная NULL-проекция scanIncarnation через huma-reply): GET
+// bare-инкарнации (created_scenario IS NULL) → 200, без паники, ключ
+// created_scenario в JSON-теле ОПУЩЕН (omitempty при пустом значении). Регресс =
+// NULL ломает scanIncarnation (паника на **string) ИЛИ created_scenario
+// материализуется как "" в wire (а не опускается).
+func TestHumaIncarnation_Get_BareIncarnation_OmitsCreatedScenario(t *testing.T) {
+	db := &incTestDB{
+		selectByName: func(name string) pgx.Row { return incRowBare(name, "ready", "{}") },
+	}
+	incH := handlers.NewIncarnationHandler(db, &incTestStarter{}, &incTestStarter{}, &incTestDrift{}, &incTestResolver{ok: true}, &incTestLoader{}, nil, incTestScoper{unrestricted: true}, nil)
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, nil, incH)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/incarnations/redis-bare", http.NoBody)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
+	}
+	if body["name"] != "redis-bare" {
+		t.Errorf("name = %v, want redis-bare", body["name"])
+	}
+	if v, ok := body["created_scenario"]; ok {
+		t.Errorf("bare-инкарнация: created_scenario присутствует в wire (=%v), want опущено (omitempty)", v)
+	}
+}
+
 func TestHumaIncarnation_History_NoAudit(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incScopeAllow())
@@ -997,6 +1061,22 @@ func incRow(name, status, state string) pgx.Row {
 		[]byte("{}"), // traits
 		any(nil), []byte(nil),
 		"create", // created_scenario (миграция 089, NOT NULL DEFAULT)
+	}}
+}
+
+// incRowBare — как incRow, но created_scenario = NULL (bare-инкарнация, миграция
+// 090: создана без bootstrap-сценария). scanIncarnation читает 16-ю колонку в
+// **string → nil.
+func incRowBare(name, status, state string) pgx.Row {
+	now := time.Now()
+	return incStaticRow{values: []any{
+		name, "redis", "v1", int(1),
+		[]byte("{}"), []byte(state), status,
+		[]byte(nil), any(nil),
+		now, now, []string(nil),
+		[]byte("{}"), // traits
+		any(nil), []byte(nil),
+		any(nil), // created_scenario = NULL (bare, миграция 090)
 	}}
 }
 

@@ -86,7 +86,9 @@ func (r enqIncRow) Scan(dest ...any) error {
 	*dest[12].(*[]byte) = []byte("{}") // traits (ADR-060 amend R1)
 	*dest[13].(**time.Time) = nil
 	*dest[14].(*[]byte) = nil
-	*dest[15].(*string) = "create" // created_scenario (миграция 089, NOT NULL DEFAULT)
+	// created_scenario NULLABLE (миграция 090): scanIncarnation читает в **string.
+	// nil-указатель инкарнации = bare (NULL); иначе указатель на имя стартового сценария.
+	*dest[15].(**string) = r.inc.CreatedScenario
 	return nil
 }
 
