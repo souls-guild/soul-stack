@@ -1035,9 +1035,11 @@ func buildBootstrapTeleportDialer(p *config.KeeperPush) (push.Dialer, error) {
 		return nil, fmt.Errorf("push.transport=teleport requires push.teleport block")
 	}
 	return push.NewTeleportDialer(push.TeleportDialerConfig{
-		ProxyAddr:    p.Teleport.ProxyAddr,
-		IdentityFile: p.Teleport.IdentityFile,
-		Cluster:      p.Teleport.Cluster,
+		ProxyAddr:      p.Teleport.ProxyAddr,
+		IdentityFile:   p.Teleport.IdentityFile,
+		Cluster:        p.Teleport.Cluster,
+		UseSystemTrust: p.Teleport.UseSystemTrust,
+		AlpnUpgrade:    p.Teleport.AlpnUpgrade,
 	})
 }
 
@@ -2723,6 +2725,16 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 		Summons:        summons,
 		LeaseOwner:     leaseOwner,
 		PassageCap:     passageCap,
+		// MaxAwaitTimeoutFn — ceiling барьера онбординга `await_online` (ADR-0061),
+		// база provision-aware effective run-timeout. Тот же hot-reload snapshot
+		// keeper.yml::max_await_timeout (d.store.Get), что видит барьер в coremod —
+		// effective timeout provision-прогона согласован с реальным ceiling-ом.
+		MaxAwaitTimeoutFn: func() time.Duration {
+			if cfg := d.store.Get(); cfg != nil {
+				return cfg.ResolvedMaxAwaitTimeout()
+			}
+			return config.DefaultMaxAwaitTimeout
+		},
 	})
 	d.scenarioRunner = scenarioRunner
 	d.cleanups.push(func() {

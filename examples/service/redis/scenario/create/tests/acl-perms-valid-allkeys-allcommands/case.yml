@@ -28,6 +28,10 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
+    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер внутрикластерного
+    # AUTH; masteruser/masterauth cluster-деплоя читают его пароль ветки users/default_admin.
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
     secret/redis/create/users/replica:
       password: replica-sys-secret-pass
     secret/redis/create/users/monitoring:
@@ -80,10 +84,6 @@ assert:
         path: /etc/redis/users.acl
         render_context:
           vars:
-            # password — главный секрет (requirepass): шаблон рендерит из него default-юзера
-            # `on #<hash> ~* &* +@all` (без default в aclfile Redis игнорит requirepass и
-            # ставит built-in default БЕЗ пароля → protected-mode рвёт внешние коннекты).
-            password: s3cr3t-redis-pass-create
             users:
               replica:
                 perms: "+psync +replconf +ping"

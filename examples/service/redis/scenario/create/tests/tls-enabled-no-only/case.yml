@@ -21,6 +21,10 @@ fixtures:
       password: s3cr3t-redis-pass-create
     # Per-user секреты системных юзеров (secret/redis/<inc>/users/<name>#password) —
     # их резолвит keeper-side vault() при доливе system_acl_users в apply.input.users.
+    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
+    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
     secret/redis/create/users/replica:
       password: replica-sys-secret-pass
     secret/redis/create/users/monitoring:
@@ -65,12 +69,13 @@ fixtures:
     # любом из наборов (тихий fail-open недопустим — без них репликация/sentinel↔redis
     # AUTH сломались бы).
     system_acl_users:
+      default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
       monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
       sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
     system_acl_users_sentinel:
-      default:    "allchannels allkeys +@all"
+      default_admin: "allchannels allkeys +@all"
       monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
@@ -96,7 +101,6 @@ assert:
         path: /etc/redis/redis.conf
         render_context:
           vars:
-            password: s3cr3t-redis-pass-create
             conf_dir: /etc/redis
             data_dir: /var/lib/redis
             port: 6379
@@ -108,6 +112,12 @@ assert:
               - /var/lib/redis/modules/redisearch.so
               - /var/lib/redis/modules/redistimeseries.so
             config:
+              # ★ РЕДИЗАЙН default_admin: replica→master AUTH (masteruser/
+              # masterauth) приходит ОБЫЧНЫМИ директивами config (sentinel
+              # deploy-body доливает их vault()-в-ячейке) → redis.conf range-ит
+              # их как любую директиву → статически переживают рестарт.
+              masteruser:       "default_admin"
+              masterauth:       "default-admin-secret-pass"
               # НЕТ ключа `port` (plain открыт) — anti-проверка downgrade-режима.
               tls-port: "7379"
               tls-cert-file: /etc/redis/tls/redis.crt
@@ -141,7 +151,8 @@ assert:
     - module: community.redis.command
       params_subset:
         addr: "127.0.0.1:7379"
-        password: s3cr3t-redis-pass-create
+        username: default_admin
+        password: default-admin-secret-pass
         tls: true
         tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
         args: ["PING"]

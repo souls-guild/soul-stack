@@ -11,6 +11,8 @@ import (
 
 	securejoin "github.com/cyphar/filepath-securejoin"
 	yaml "gopkg.in/yaml.v3"
+
+	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 // scenarioDir — каноническая раскладка scenario в Service-репозитории
@@ -130,6 +132,16 @@ type scenarioYAML struct {
 	Input       map[string]any `yaml:"input"`
 	InputSchema map[string]any `yaml:"input_schema"`
 	Tags        []string       `yaml:"tags"`
+	// Extends — имя covenant-фрагмента (`extends:`), общий контракт секций
+	// которого сценарий наследует (ScenarioManifest.Extends). Для UI-listing-а
+	// значим ТОЛЬКО ради input: covenant.yml.input сливается в InputSchema
+	// (mergeCovenantInputRaw) — иначе сценарий с нулевой input-дельтой (вся схема
+	// в covenant, как create_from_souls) отдал бы пустую форму. Пустая строка /
+	// нет ключа = нет наследования (forward-compat). Резолв — на raw-уровне
+	// (см. ListScenarios): listing держит InputSchema сырым map-ом под UI, а
+	// типизированный covenant-merge (config.ResolveScenarioCovenant) даёт другую
+	// форму (InputSchemaMap без json-тегов) — она бы сломала фронт.
+	Extends string `yaml:"extends"`
 	// Create — top-level `create:` флаг стартового сценария. `*bool` ради
 	// различения «не задано» (nil → не стартовый) от явного `create: false`;
 	// listing проецирует в Scenario.Create через !=nil && *Create (см.
@@ -262,6 +274,16 @@ func loadScenario(serviceRoot, name string, logger *slog.Logger) (Scenario, bool
 	if schema == nil {
 		schema = raw.Input
 	}
+	// covenant-merge ПЕРЕД отдачей input_schema: сценарий с `extends:` наследует
+	// covenant.yml.input (тот же add-only merge, что runtime LoadScenarioManifest
+	// Resolved → config.ResolveScenarioCovenant). Без него сценарий с нулевой
+	// input-дельтой (вся схема в covenant — create_from_souls) отдал бы UI пустую
+	// форму. Резолв raw-уровневый (covenant-input остаётся сырым map-ом под UI),
+	// $type-ссылки covenant-полей резолвятся ПОСЛЕ — в ListScenarios, вместе с
+	// локальными (одним проходом resolveScenarioTypeRefs).
+	if raw.Extends != "" {
+		schema = mergeCovenantInputRaw(serviceRoot, raw.Extends, schema, logger)
+	}
 	return Scenario{
 		Name:        name,
 		Path:        relPath,
@@ -271,6 +293,68 @@ func loadScenario(serviceRoot, name string, logger *slog.Logger) (Scenario, bool
 		Tags:        raw.Tags,
 		Form:        scenarioFormProjection(raw.Form),
 	}, true
+}
+
+// mergeCovenantInputRaw читает covenant.yml по имени из `extends:` и сливает его
+// `input:`-секцию (raw-map) в `local` ADD-ONLY: covenant — БАЗА, дельта сценария
+// дополняет (поля local НЕ перезаписываются — параллель config.mergeInputSections,
+// но на raw-уровне под UI). Это listing-проекция того же covenant-резолва, что
+// делает runtime (LoadScenarioManifestResolved → config.ResolveScenarioCovenant) —
+// без неё сценарий с нулевой input-дельтой (вся схема в covenant) отдаёт пустую форму.
+//
+// Имя covenant валидируется тем же [config.ValidExtendsName] (единый источник
+// правды формы), путь — securejoin от serviceRoot (traversal-кламп поверх грамматики
+// имени). Partial-success как у всего listing-а: невалидное имя / отсутствующий /
+// битый covenant.yml → warning + local как есть (UI получит хотя бы локальную дельту,
+// а не 500; полную ошибку covenant_extends_* поднимет runtime-load и soul-lint).
+//
+// Конфликт ключа (поле и в covenant, и в local) на runtime — section_key_conflict;
+// здесь listing НЕ валит набор: local-схема побеждает (covenant не перезаписывает),
+// форма всё равно отрисуется. Возвращает map для отдачи в InputSchema (может быть
+// nil, если ни covenant, ни local не дали полей).
+func mergeCovenantInputRaw(serviceRoot, extends string, local map[string]any, logger *slog.Logger) map[string]any {
+	if !config.ValidExtendsName(extends) {
+		logger.Warn("artifact: covenant-input пропущен — недопустимое имя extends",
+			slog.String("extends", extends))
+		return local
+	}
+	covenantFile := extends + ".yml"
+	data, err := readSnapshotFile(serviceRoot, covenantFile)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			logger.Warn("artifact: covenant-input пропущен — ошибка чтения covenant.yml",
+				slog.String("extends", extends), slog.Any("error", err))
+		}
+		// Отсутствие covenant.yml при заявленном extends — ошибка репо
+		// (covenant_extends_target_not_found на runtime); listing не валит форму,
+		// отдаёт локальную дельту как есть.
+		return local
+	}
+
+	var frag struct {
+		Input map[string]any `yaml:"input"`
+	}
+	if err := yaml.Unmarshal(data, &frag); err != nil {
+		logger.Warn("artifact: covenant-input пропущен — невалидный YAML covenant.yml",
+			slog.String("extends", extends), slog.Any("error", err))
+		return local
+	}
+	if len(frag.Input) == 0 {
+		return local
+	}
+
+	if local == nil {
+		local = make(map[string]any, len(frag.Input))
+	}
+	for name, schema := range frag.Input {
+		if _, dup := local[name]; dup {
+			// Конфликт ключа — local побеждает (covenant add-only НЕ override).
+			// runtime поднимет section_key_conflict; listing не валит форму.
+			continue
+		}
+		local[name] = schema
+	}
+	return local
 }
 
 // scenarioFormProjection переводит YAML-форму `form:` в JSON-проекцию [ScenarioForm]

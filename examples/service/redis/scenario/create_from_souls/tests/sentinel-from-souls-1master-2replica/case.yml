@@ -37,6 +37,10 @@ fixtures:
   vault:
     secret/redis/create_from_souls:
       password: s3cr3t-redis-pass-create-from-souls
+    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
+    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    secret/redis/create_from_souls/users/default_admin:
+      password: default-admin-secret-pass
     secret/redis/create_from_souls/users/replica:
       password: replica-sys-secret-pass
     secret/redis/create_from_souls/users/monitoring:
@@ -64,12 +68,13 @@ fixtures:
       maxclients:       10000
       timeout:          300
     system_acl_users:
+      default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
       monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
       sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
     system_acl_users_sentinel:
-      default:    "allchannels allkeys +@all"
+      default_admin: "allchannels allkeys +@all"
       monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
@@ -91,7 +96,6 @@ assert:
         group: redis
         render_context:
           vars:
-            password: s3cr3t-redis-pass-create-from-souls
             conf_dir: /etc/redis
             data_dir: /var/lib/redis
             port: 6379
@@ -103,6 +107,12 @@ assert:
               - /var/lib/redis/modules/redisearch.so
               - /var/lib/redis/modules/redistimeseries.so
             config:
+              # ★ РЕДИЗАЙН default_admin: replica→master AUTH (masteruser/
+              # masterauth) приходит ОБЫЧНЫМИ директивами config (sentinel
+              # deploy-body доливает их vault()-в-ячейке) → redis.conf range-ит
+              # их как любую директиву → статически переживают рестарт.
+              masteruser:       "default_admin"
+              masterauth:       "default-admin-secret-pass"
               maxmemory:        "256mb"
               maxmemory-policy: allkeys-lru
               maxclients:       10000
@@ -130,7 +140,9 @@ assert:
       params_subset:
         addr: "127.0.0.1:6379"
         master_addr: "10.0.0.1:6379"
-        password: s3cr3t-redis-pass-create-from-souls
+        # ★ РЕДИЗАЙН default_admin: replica→master AUTH под default_admin.
+        username: default_admin
+        password: default-admin-secret-pass
 
     # ── SENTINEL MONITOR reconcile (community.redis.sentinel) ───────────────
     # monitor.ip — HOST-ИНВАРИАНТНЫЙ адрес master-а (master-election node-1). quorum=2
@@ -139,8 +151,12 @@ assert:
       params_subset:
         addr: "127.0.0.1:26379"
         master_name: master
-        password: s3cr3t-redis-pass-create-from-souls
-        auth_pass: s3cr3t-redis-pass-create-from-souls
+        # ★ РЕДИЗАЙН default_admin: CONNECTION-AUTH (username/password) + мониторинг
+        # master (auth_user/auth_pass) под default_admin.
+        username: default_admin
+        password: default-admin-secret-pass
+        auth_user: default_admin
+        auth_pass: default-admin-secret-pass
         redis_version: "7.4.1"
         config:
           "sentinel down-after-milliseconds master": "5000"

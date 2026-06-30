@@ -65,7 +65,6 @@ assert:
         group: redis
         render_context:
           vars:
-            password: s3cr3t-redis-pass-addnode
             # host-layout (директива B): новая нода берёт layout из incarnation.state
             # (default /etc/redis ÷ /var/lib/redis; legacy-state без ключей → дефолт),
             # шаблон выводит dir/aclfile из них — тот же layout, что у создавшей кластер ноды.

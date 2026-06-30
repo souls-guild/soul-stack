@@ -124,6 +124,43 @@ func TestGolden_ScenarioSerialStaged(t *testing.T) {
 	}
 }
 
+// TestGolden_ScenarioVaultStaged — vault-secrets-generated passage-ось (ADR-056
+// amendment, Вариант A) ВИДНА офлайн-линтером. Эмиттер core.vault.kv-present уводит
+// vault()-читающую задачу в следующий Passage; сценарий self-contained (эмиттер и
+// потребитель в одном файле — иначе read-задача за include-границей офлайн не видна).
+// Контракт: линт проходит ExitOK и эмитит passage_plan со staged-структурой (>1
+// Passage). Реверс-смысл (симметрия с serial-staged): если vault-ось сломают —
+// kv-present перестанет расщеплять vault()-read — план схлопнется в single-passage,
+// сообщение passage_plan станет "single-passage", и проверка на "staged-прогон"
+// покраснеет. Это офлайн-аналог guard-тестов trial (redis_create_from_souls_secrets_
+// passage_test.go), которые ловят тот же регресс на keeper-side плане.
+func TestGolden_ScenarioVaultStaged(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := Run(Options{Path: "../../testdata/scenario-golden/vault-staged.yml", JSON: true, Kind: KindScenario}, &out, &errOut)
+	if code != ExitOK {
+		t.Fatalf("exit code: got %d, want %d (vault-staged должен проходить линт)\nstdout: %s\nstderr: %s", code, ExitOK, out.String(), errOut.String())
+	}
+	staged := false
+	dec := json.NewDecoder(&out)
+	for {
+		var d diag.Diagnostic
+		if err := dec.Decode(&d); err != nil {
+			if err == io.EOF {
+				break
+			}
+			t.Fatalf("json decode: %v", err)
+		}
+		// passage_plan со staged-структурой подтверждает, что vault-ось расщепила план
+		// на >1 Passage. single-passage-сообщение (план схлопнулся) staged НЕ выставит.
+		if d.Code == "passage_plan" && strings.Contains(d.Message, "staged-прогон") {
+			staged = true
+		}
+	}
+	if !staged {
+		t.Fatalf("★ vault-ось НЕ расщепила план: ожидался passage_plan со staged-прогон (>1 Passage), но его нет — kv-present-эмиттер перестал уводить vault()-read в следующий Passage (ADR-056 amendment нарушен)")
+	}
+}
+
 func TestGolden_ManifestSoulModule(t *testing.T) {
 	runExpect(t, "../../testdata/manifest-golden/soul-module.yaml", KindManifest, false, ExitOK, nil)
 }

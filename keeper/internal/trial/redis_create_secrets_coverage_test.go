@@ -256,15 +256,23 @@ func TestRedisCreate_GeneratedSecretsCoverVaultReads_SentinelOperatorExtra(t *te
 }
 
 // TestRedisCreate_ReadSetContainsExpectedPaths — sanity на сам перехват: в
-// sentinel+operator-режиме read-set ОБЯЗАН содержать главный пароль и per-user путь
-// (включая operator-extra). Без этого guard мог бы «проходить» на пустом read-set
-// при сломанном перехвате (ложно-зелёный). Проверяем нижнюю границу множества.
+// sentinel+operator-режиме read-set ОБЯЗАН содержать auth-путь default_admin и per-user
+// путь operator-extra. Без этого guard мог бы «проходить» на пустом read-set при
+// сломанном перехвате (ложно-зелёный). Проверяем нижнюю границу множества.
+//
+// ★ РЕДИЗАЙН default_admin (2026-06-30): прежний главный путь redis/create (requirepass/
+// replica-auth/sentinel auth_pass) в sentinel-ветке БОЛЬШЕ НЕ ЧИТАЕТСЯ — вся внутрикластерная
+// AUTH (REPLICAOF masterauth+masteruser, SENTINEL MONITOR/connection-AUTH, health-PING)
+// ушла на secret/redis/<inc>/users/default_admin#password. Главный путь остаётся auth-путём
+// ТОЛЬКО в cluster-ветке (redis-deploy-cluster.yml ещё на нём — отдельный незавершённый
+// редизайн), поэтому sanity на главный путь переехал бы в cluster-кейс; здесь sentinel —
+// ждём default_admin.
 func TestRedisCreate_ReadSetContainsExpectedPaths(t *testing.T) {
 	readSet, _ := renderCreateReadSet(t, createSentinelAclCase)
 	for _, want := range []string{
-		"redis/create",             // главный пароль (requirepass / replica-auth / sentinel auth_pass)
-		"redis/create/users/zeta",  // operator-extra
-		"redis/create/users/alpha", // operator-extra
+		"redis/create/users/default_admin", // внутрикластерная AUTH (replica/sentinel/health)
+		"redis/create/users/zeta",          // operator-extra
+		"redis/create/users/alpha",         // operator-extra
 	} {
 		if _, ok := readSet[want]; !ok {
 			t.Errorf("ожидался читаемый путь %q в read-set, есть только: %v", want, sortedSetKeys(readSet))

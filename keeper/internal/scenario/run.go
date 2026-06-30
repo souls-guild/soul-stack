@@ -188,6 +188,19 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	}
 	scn.Tasks = expanded
 
+	// 2.5. Provision-aware effective run-timeout (ADR-0061). Deadline переехал сюда из
+	//      Start (runner.go) — план распарсен, видно, provision-ли это. Обычный прогон
+	//      держит defaultRunTimeout (5m) — защита от вечного barrier ЦЕЛА. Прогон с
+	//      refresh-эмиттером (provision-from-zero: cloud-create + онбординг `await_online`
+	//      до ceiling-а + деплой роли) легитимно длится дольше: base = ceiling барьера
+	//      онбординга (ResolvedMaxAwaitTimeout) + deployBudget. БЕЗ этого defaultRunTimeout
+	//      обрывал бы provision-прогон на 5-й минуте — раньше joinWait (6m) и await_timeout
+	//      (до 30m). WithTimeout навешивается ПОВЕРХ runCtx (WithCancel из Start): под-
+	//      контекст наследует отмену из active-map, поэтому Cancel/Shutdown по-прежнему
+	//      рвут прогон. defer cancel — на любом return run() (включая ранний abort ниже).
+	ctx, cancel := context.WithTimeout(ctx, r.effectiveRunTimeout(scn.Tasks))
+	defer cancel()
+
 	// 3. Резолв хостов прогона (roster по Coven-метке incarnation). Вынесен в
 	//    resolveRoster — он вызывается ПОВТОРНО в stage-loop на refresh-границах
 	//    (mid-run re-resolve, ADR-0061 §S3): после успешного `refresh_soulprint:
@@ -446,20 +459,19 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		return
 	}
 
-	// 5.5. Keeper-side задачи (`on: keeper`, docs/keeper/modules.md) исполняются
-	//      ЛОКАЛЬНО на этом инстансе через keeper-side core-Registry — до host-
-	//      fan-out-а (keeper-шаги в реальных сценариях идут первыми:
-	//      provision/coven-bind → apply на хостах). Они пишут свою apply_runs-
-	//      строку (sid=render.KeeperTargetSID) + register, которые финальный
-	//      barrier и loadRegisterByHost видят наравне с host-строками. Первая
-	//      упавшая keeper-задача → abort (host-dispatch не стартует). Прогон без
-	//      keeper-задач → no-op.
-	if err := r.dispatchKeeperTasks(ctx, spec, log, tasks, plans); err != nil {
-		abort("keeper_dispatch_failed", err)
-		return
-	}
-
 	// 6. Dispatch: ветвление пути (ADR-027, Phase 1.4.2) × staged-render (ADR-056).
+	//
+	// Keeper-side задачи (`on: keeper`, docs/keeper/modules.md) исполняются ЛОКАЛЬНО
+	// на этом инстансе через keeper-side core-Registry — СТРОГО ДО host-dispatch-а
+	// СВОЕГО Passage (keeper-шаги идут первыми: provision/coven-bind → apply на
+	// хостах). Они пишут свою apply_runs-строку (sid=render.KeeperTargetSID, passage)
+	// + register, которые barrier и loadRegisterByHost видят наравне с host-строками.
+	// Первая упавшая keeper-задача → abort (host-dispatch этого Passage не стартует).
+	// dispatchKeeperTasks теперь зовётся PER-Passage (Слайс 2): для staged-пути —
+	// внутри stage-loop на ПЕРЕ-рендеренных при ActivePassage=p tasks (keeper-задача
+	// Passage>0 на render шага 5 — placeholder без Params, диспатчить её можно только
+	// после её Passage стал активным); для Acolyte-пути — единственный Passage 0
+	// (Acolyte исключает staged).
 	//
 	//   - staged (Passage.Count>1): СТАРЫЙ путь (inline) — stage-loop ниже. Acolyte
 	//     рендерит per-host при claim ОДИН раз (не per-Passage) — staged на Acolyte
@@ -478,6 +490,14 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	// коммитится строго ПОСЛЕ барьера ПОСЛЕДНЕГО Passage — единый commit, не
 	// по-волново и не по-Passage (§7 / ADR-056 §г).
 	if r.acolyteEnabled && !hasSerialTask(scn) && !staged {
+		// Acolyte-путь — non-staged (Acolyte исключает staged): keeper-задачи все в
+		// Passage 0, render шага 5 (ActivePassage=0) уже отрендерил их полноценно.
+		// Исполняем их ДО planned-fan-out-а host-задач — keeper-fail → abort, planned
+		// не пишется. КeeperRegister здесь пуст (P0, цепочки нет): host-fallback цел.
+		if err := r.dispatchKeeperTasks(ctx, spec, log, 0, tasks, plans); err != nil {
+			abort("keeper_dispatch_failed", err)
+			return
+		}
 		if err := r.dispatchPlanned(ctx, spec, log, hosts, tasks); err != nil {
 			abort("dispatch_failed", err)
 			return
@@ -533,6 +553,20 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 					return
 				}
 				renderIn.RegisterByHost = reg
+				// keeper→keeper register-chaining (staged-render): keeper-задачи копят
+				// register под синтетическим хостом KeeperTargetSID, а keeperVars
+				// (render/dispatch.go) читает его из ИЗОЛИРОВАННОГО канала
+				// renderIn.KeeperRegister (per-host карта keeper-контексту недоступна — у
+				// keeper-задачи нет хоста). Переливаем keeper-bucket предыдущих Passage из
+				// RegisterByHost в KeeperRegister, чтобы keeper-задача активного Passage
+				// видела `register.<prev>.*` keeper-задач прошлых Passage (например
+				// core.bootstrap.delivered читает register от core.cloud.created). Канал
+				// ОТДЕЛЁН от плоской renderIn.Register намеренно (host-fallback guard,
+				// hostRegister остаётся на Register): host-задача смешанного Passage с пустым
+				// per-host bucket НЕ прочитает keeper-register. Потребляется per-passage
+				// keeper-dispatch (этот же Passage, ниже). nil-bucket → KeeperRegister
+				// сбрасываем (host-only Passage: keeper-контекст пуст, БИТ-В-БИТ).
+				renderIn.KeeperRegister = keeperRegisterBucket(reg)
 				renderIn.TaskPassage = passage.TaskPassage
 				renderIn.ActivePassage = p
 				pt, pp, rerr := r.deps.Render.Render(ctx, renderIn)
@@ -544,6 +578,24 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 				// Держим резолвнутые tasks/plans для register-резолва следующего Passage
 				// и финальной свёртки changed_tasks (Index стабилен между Passage).
 				tasks, plans = pt, pp
+			}
+
+			// Keeper-side задачи ЭТОГО Passage (Слайс 2): исполняются на ПЕРЕ-
+			// рендеренных при ActivePassage=p tasks (passageTasks), СТРОГО ДО host-
+			// dispatch-а этого Passage. На render шага 5 / p>0-re-render keeper-задача
+			// Passage p несёт полноценные Params (placeholder-gate pipeline.go её на
+			// СВОЁМ активном Passage НЕ глушит) — keeperTasksOf отфильтрует ровно
+			// keeper-задачи passage p. keeper→keeper register-chaining: keeper-задача
+			// Passage p видит register keeper-задач Passage<p через renderIn.KeeperRegister
+			// (перелив выше). keeper-FAIL → abort (return) ДО dispatchPassage p: host-
+			// dispatch этого Passage не стартует. Ordering ↔ refresh-границы: keeper-
+			// dispatch p отрабатывает ДО начала итерации p+1, где re-resolve читает его
+			// эффект (core.soul.registered{refresh_soulprint} пишет souls+coven). Passage
+			// без keeper-задач → no-op (host-only Passage). N=1 → один вызов passage 0,
+			// поведение как pre-loop вызов до Слайса 2 (БИТ-В-БИТ).
+			if err := r.dispatchKeeperTasks(ctx, spec, log, p, passageTasks, passagePlans); err != nil {
+				abort("keeper_dispatch_failed", err)
+				return
 			}
 
 			pTasks, pPlans := tasksForPassage(passageTasks, passagePlans, p)
@@ -723,6 +775,34 @@ func allKeeperTasks(tasks []config.Task) bool {
 		}
 	}
 	return true
+}
+
+// effectiveRunTimeout возвращает потолок длительности прогона по плану задач
+// (ADR-0061, provision-aware). База — runTimeout (Deps.RunTimeout / defaultRunTimeout,
+// 5m). Если план несёт refresh-эмиттер ([config.HasRefreshEmitter] — provision-from-
+// zero: create VM + онбординг `await_online` + деплой роли), потолок поднимается до
+// ceiling-а барьера онбординга (ResolvedMaxAwaitTimeout) + deployBudget, но только
+// если он БОЛЬШЕ базы (max, не replace): оператор, поднявший RunTimeout выше eff для
+// своих нужд, не урезается. Без refresh-эмиттера — ровно база (вечный barrier
+// обрывается как раньше).
+//
+// ceiling берётся через hot-reload-aware maxAwaitTimeoutFn (тот же snapshot keeper.yml::
+// max_await_timeout, что видит барьер онбординга в coremod) — eff согласован с реальным
+// ceiling-ом `await_online`. nil-fn (unit/L0 без config.Store) → [config.DefaultMaxAwaitTimeout]
+// (30m): provision-прогон всё равно получает расширенный потолок, просто без override-а.
+func (r *Runner) effectiveRunTimeout(tasks []config.Task) time.Duration {
+	base := r.runTimeout
+	if !config.HasRefreshEmitter(tasks) {
+		return base
+	}
+	ceiling := config.DefaultMaxAwaitTimeout
+	if r.maxAwaitTimeoutFn != nil {
+		ceiling = r.maxAwaitTimeoutFn()
+	}
+	if eff := ceiling + deployBudget; eff > base {
+		return eff
+	}
+	return base
 }
 
 // lockRun резолвит incarnation, проверяет статус под FOR UPDATE и переводит её
@@ -941,15 +1021,19 @@ func (r *Runner) lockIncarnation(ctx context.Context, spec RunSpec, stateBefore 
 // одна ТЕРМИНАЛЬНАЯ строка apply_runs после abort (BAG-1). Два случая:
 //
 //   - строки УЖЕ есть (поздний abort: dispatch успел вставить planned/claimed/
-//     dispatched) — терминалим КАЖДУЮ недотерминальную в `terminal` через
-//     [applyrun.UpdateStatus] (он single-winner: уже-терминальные строки не
-//     трогаются, ADR-027(j)). running-строки НЕ трогаем: apply уже ушёл на хост,
-//     честный терминал придёт с него (RunResult). Не вставляем sentinel —
-//     реальные хосты есть;
+//     dispatched, ЛИБО keeper-dispatch Passage>0 упал ПОСЛЕ успешного host-dispatch
+//     раннего Passage — Слайс 2: keeper-dispatch теперь ВНУТРИ stage-loop) —
+//     терминалим КАЖДУЮ недотерминальную в `terminal` через [applyrun.UpdateStatus]
+//     (он single-winner: уже-терминальные строки не трогаются, ADR-027(j)). running-
+//     строки НЕ трогаем: apply уже ушёл на хост, честный терминал придёт с него
+//     (RunResult). keeper-строка упавшего Passage уже в failed (dispatchKeeperTasks
+//     записал её ДО возврата ошибки), host-строки раннего Passage остаются success.
+//     Не вставляем sentinel — реальные строки есть;
 //   - строк НЕТ (ранний abort: no_hosts / scenario_load_failed / topology_failed
-//     / essence_failed / input_invalid / render_failed / keeper_dispatch_failed —
-//     всё ДО dispatch) — вставляем ОДНУ sentinel-строку [render.RunSentinelSID]
-//     со status=`terminal` и error_summary=reason.
+//     / essence_failed / input_invalid / render_failed, а также keeper_dispatch_failed
+//     на Passage 0 — keeper-задачи первого Passage идут ДО любого host-dispatch) —
+//     вставляем ОДНУ sentinel-строку [render.RunSentinelSID] со status=`terminal` и
+//     error_summary=reason.
 //
 // `terminal` — терминальный статус провала (см. [failureTerminalStatus]):
 // cancelled при операторском Cancel, иначе failed.

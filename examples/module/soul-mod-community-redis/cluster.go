@@ -377,15 +377,28 @@ func (m *RedisModule) applyClusterCreate(ctx context.Context, stream grpc.Server
 	}
 
 	// Идемпотентность: спросим первый мастер о текущем состоянии кластера.
-	formed, err := clusterAlreadyFormed(ctx, connect, plan, password)
-	if err != nil {
-		return sendFailure(stream, "cluster probe: "+redactError(err, password))
-	}
-	if formed {
+	state, liveTable := clusterFormStatus(ctx, connect, plan)
+	switch state {
+	case clusterFormed:
 		return sendOutcome(stream, false, "cluster already formed (no-op)", map[string]any{
 			"shards":   int64(len(plan.masters)),
 			"replicas": int64(len(plan.replicas)),
 			"slots":    int64(totalSlots),
+		})
+	case clusterPartial:
+		// MEET+ADDSLOTS прошли, но реплики настроены не полностью (след упавшего на
+		// gossip-timing REPLICATE). Доделываем ТОЛЬКО недостающие реплики, не трогая
+		// slots (повторный ADDSLOTS уже назначенного слота → «Slot is already busy»).
+		done, err := completeReplication(ctx, connect, plan, liveTable, password)
+		if err != nil {
+			return sendFailure(stream, redactError(err, password))
+		}
+		return sendOutcome(stream, done > 0, fmt.Sprintf("cluster replication completed: %d replicas attached", done), map[string]any{
+			"shards":         int64(len(plan.masters)),
+			"replicas":       int64(len(plan.replicas)),
+			"slots":          int64(totalSlots),
+			"replicas_fixed": int64(done),
+			"layout":         layoutSummary(plan),
 		})
 	}
 
@@ -1238,33 +1251,79 @@ func allocateSlots(shards int) []slotRange {
 	return ranges
 }
 
-// clusterAlreadyFormed проверяет идемпотентность: коннект к первому мастеру,
-// CLUSTER INFO (cluster_state:ok + cluster_known_nodes совпал) и CLUSTER NODES
-// (все 16384 слота покрыты). Любой коннект-фейл к первому мастеру трактуем как
-// «ещё не сформирован» (ноды могут только подниматься) — НЕ ошибка.
-func clusterAlreadyFormed(ctx context.Context, connect func(clusterNode) (redisConn, error), plan clusterPlan, password string) (bool, error) {
+// clusterFormState — итог проверки идемпотентности create против ЖИВОГО кластера.
+type clusterFormState int
+
+const (
+	// clusterNotFormed — кластера ещё нет (или не сошёлся): надо собирать с нуля
+	// (MEET → ADDSLOTS → REPLICATE). Коннект-фейл к первому мастеру тоже сюда.
+	clusterNotFormed clusterFormState = iota
+	// clusterPartial — MEET+ADDSLOTS прошли (cluster_state:ok, все ноды, 16384
+	// слота), но РЕПЛИКИ настроены не полностью: часть нод, которым по плану быть
+	// репликами, осталась мастерами без слотов (типичный след упавшего на gossip-
+	// timing первого REPLICATE). Надо ДОДЕЛАТЬ только репликацию, не трогая slots.
+	clusterPartial
+	// clusterFormed — кластер полностью собран (slots + все реплики на местах) →
+	// no-op.
+	clusterFormed
+)
+
+// clusterFormStatus определяет состояние формирования кластера по ЖИВОЙ топологии
+// первого мастера. Коннект-фейл / нештатный INFO трактуем как clusterNotFormed
+// (ноды могут только подниматься) — НЕ ошибка.
+//
+// Полнота реплик (clusterPartial vs clusterFormed) проверяется по CLUSTER NODES:
+// число slave-нод в живой топологии обязано совпасть с len(plan.replicas). Если
+// INFO рапортует state:ok + все ноды + 16384 слота, но реплик МЕНЬШЕ ожидаемого —
+// это partial-топология (упавший REPLICATE заморозил кластер как N master), и
+// старый гейт ошибочно считал её сформированной. Возвращаем также живую топологию
+// (table) — её переиспользует completeReplication (node-id мастеров по ip:port).
+func clusterFormStatus(ctx context.Context, connect func(clusterNode) (redisConn, error), plan clusterPlan) (clusterFormState, []clusterNodeRow) {
 	first := plan.masters[0]
 	conn, err := connect(first)
 	if err != nil {
-		return false, nil //nolint:nilerr // ноды поднимаются; не сформирован
+		return clusterNotFormed, nil // ноды поднимаются; не сформирован
 	}
 	defer func() { _ = conn.Close() }()
 
 	info, err := conn.Do(ctx, "CLUSTER", "INFO")
 	if err != nil {
-		return false, nil //nolint:nilerr
+		return clusterNotFormed, nil
 	}
 	fields := parseClusterInfo(info)
 	if fields["cluster_state"] != "ok" {
-		return false, nil
+		return clusterNotFormed, nil
 	}
 	if known, _ := strconv.Atoi(fields["cluster_known_nodes"]); known != len(plan.masters)+len(plan.replicas) {
-		return false, nil
+		return clusterNotFormed, nil
 	}
 	if assigned, _ := strconv.Atoi(fields["cluster_slots_assigned"]); assigned != totalSlots {
-		return false, nil
+		return clusterNotFormed, nil
 	}
-	return true, nil
+
+	// state:ok + все ноды + полные слоты. Различаем partial/formed по числу реплик
+	// в живой топологии. Любой фейл чтения NODES → считаем НЕ formed (пересоберём
+	// репликацию безопасно: completeReplication идемпотентен).
+	nodesOut, err := conn.Do(ctx, "CLUSTER", "NODES")
+	if err != nil {
+		return clusterPartial, nil //nolint:nilerr
+	}
+	table := parseClusterNodesTable(nodesOut)
+	if countReplicas(table) >= len(plan.replicas) {
+		return clusterFormed, table
+	}
+	return clusterPartial, table
+}
+
+// countReplicas — число slave-нод (реплик) в живой топологии.
+func countReplicas(table []clusterNodeRow) int {
+	n := 0
+	for _, row := range table {
+		if !row.isMaster {
+			n++
+		}
+	}
+	return n
 }
 
 // formCluster исполняет сборку: MEET всех нод в gossip с первого мастера,
@@ -1320,7 +1379,10 @@ func formCluster(ctx context.Context, connect func(clusterNode) (redisConn, erro
 		}
 	}
 
-	// REPLICATE репликам — id их мастера.
+	// REPLICATE репликам — id их мастера. ПЕРЕД каждым REPLICATE ждём, пока узел-
+	// реплика увидит node-id мастера в СВОЁМ CLUSTER NODES (gossip-gate): иначе на
+	// неустоявшемся gossip REPLICATE падает с «ERR Unknown node» (живой баг —
+	// первый REPLICATE замораживал кластер как N master без реплик).
 	for j, replica := range plan.replicas {
 		master := plan.masters[plan.replicaOf[j]]
 		masterID := idByKey[master.key]
@@ -1328,12 +1390,143 @@ func formCluster(ctx context.Context, connect func(clusterNode) (redisConn, erro
 			return fmt.Errorf("replica %s: unknown master id for %s", replica.addr, master.key)
 		}
 		ci := len(plan.masters) + j
+		if err := waitMasterVisible(ctx, conns[ci], masterID); err != nil {
+			return fmt.Errorf("replica %s: %w", replica.addr, err)
+		}
 		if _, err := conns[ci].Do(ctx, "CLUSTER", "REPLICATE", masterID); err != nil {
 			return fmt.Errorf("CLUSTER REPLICATE %s -> %s: %w", replica.addr, master.addr, err)
 		}
 	}
 
 	return nil
+}
+
+// completeReplication доделывает РЕПЛИКАЦИЮ на частично собранном кластере
+// (clusterPartial): MEET и ADDSLOTS уже прошли, но часть нод, которым по плану
+// быть репликами, осталась мастерами без слотов (упавший на gossip-timing первый
+// REPLICATE). Шлёт CLUSTER REPLICATE только тем узлам, которые ещё НЕ реплики
+// своего мастера; node-id мастеров берёт из ЖИВОЙ топологии (liveTable) по ip:port
+// (узлы уже в кластере — CLUSTER MYID не нужен). Идемпотентна: узел, уже
+// привязанный к нужному мастеру, пропускается. Возвращает число доделанных реплик.
+//
+// ПЕРЕД REPLICATE — тот же gossip-gate, что в formCluster (узел-реплика обязан
+// видеть master node-id в своём CLUSTER NODES). Slots НЕ трогаются (повторный
+// ADDSLOTS уже назначенного слота → «Slot is already busy»).
+func completeReplication(ctx context.Context, connect func(clusterNode) (redisConn, error), plan clusterPlan, liveTable []clusterNodeRow, password string) (int, error) {
+	// node-id плановых мастеров — из живой топологии по их ip:port. Если живой
+	// топологии нет (фейл чтения NODES в probe), читаем CLUSTER MYID каждого мастера.
+	masterID, err := resolvePlanMasterIDs(ctx, connect, plan, liveTable)
+	if err != nil {
+		return 0, err
+	}
+
+	done := 0
+	for j, replica := range plan.replicas {
+		master := plan.masters[plan.replicaOf[j]]
+		wantMasterID := masterID[master.key]
+		if wantMasterID == "" {
+			return done, fmt.Errorf("replica %s: unknown master id for %s", replica.addr, master.key)
+		}
+		// Идемпотентность: узел уже реплика нужного мастера в живой топологии → skip.
+		if replicaAlreadyAttached(liveTable, replica, wantMasterID) {
+			continue
+		}
+
+		conn, err := connect(replica)
+		if err != nil {
+			return done, fmt.Errorf("connect replica %s: %w", replica.addr, err)
+		}
+		if err := waitMasterVisible(ctx, conn, wantMasterID); err != nil {
+			_ = conn.Close()
+			return done, fmt.Errorf("replica %s: %w", replica.addr, err)
+		}
+		_, err = conn.Do(ctx, "CLUSTER", "REPLICATE", wantMasterID)
+		_ = conn.Close()
+		if err != nil {
+			return done, fmt.Errorf("CLUSTER REPLICATE %s -> %s: %w", replica.addr, master.addr, err)
+		}
+		done++
+	}
+	return done, nil
+}
+
+// resolvePlanMasterIDs сопоставляет каждый плановый мастер (plan.masters) с его
+// node-id. Сперва пытается по ЖИВОЙ топологии (liveTable) — мастер уже в кластере,
+// его id известен по ip:port. Для не найденных (или при пустой liveTable) — спросить
+// CLUSTER MYID напрямую (fallback, напр. probe не смог прочитать NODES).
+func resolvePlanMasterIDs(ctx context.Context, connect func(clusterNode) (redisConn, error), plan clusterPlan, liveTable []clusterNodeRow) (map[string]string, error) {
+	out := make(map[string]string, len(plan.masters))
+	for _, master := range plan.masters {
+		if id := nodeIDFromTable(liveTable, master); id != "" {
+			out[master.key] = id
+			continue
+		}
+		conn, err := connect(master)
+		if err != nil {
+			return nil, fmt.Errorf("connect master %s: %w", master.addr, err)
+		}
+		id, err := conn.Do(ctx, "CLUSTER", "MYID")
+		_ = conn.Close()
+		if err != nil {
+			return nil, fmt.Errorf("CLUSTER MYID %s: %w", master.addr, err)
+		}
+		out[master.key] = strings.TrimSpace(id)
+	}
+	return out, nil
+}
+
+// nodeIDFromTable — node-id узла (по ip:port) из живой топологии или "".
+func nodeIDFromTable(table []clusterNodeRow, node clusterNode) string {
+	want := net.JoinHostPort(node.ip, strconv.Itoa(node.port))
+	for _, row := range table {
+		if row.ipPort == want {
+			return row.id
+		}
+	}
+	return ""
+}
+
+// replicaAlreadyAttached — узел node уже реплика мастера masterID в живой топологии.
+func replicaAlreadyAttached(table []clusterNodeRow, node clusterNode, masterID string) bool {
+	want := net.JoinHostPort(node.ip, strconv.Itoa(node.port))
+	for _, row := range table {
+		if row.ipPort == want {
+			return !row.isMaster && row.masterID == masterID
+		}
+	}
+	return false
+}
+
+// waitMasterVisible ждёт (bounded retry, переиспользует gossip-лимиты MEET), пока
+// узел-реплика увидит node-id своего мастера в СВОЁМ CLUSTER NODES. Без этого
+// REPLICATE на неустоявшемся gossip падает «ERR Unknown node». Возвращает ошибку,
+// если master-id не появился за лимит (лучше явный фейл, чем «Unknown node»).
+func waitMasterVisible(ctx context.Context, conn redisConn, masterID string) error {
+	for attempt := 0; attempt < gossipPollAttempts; attempt++ {
+		nodesOut, err := conn.Do(ctx, "CLUSTER", "NODES")
+		if err != nil {
+			return fmt.Errorf("CLUSTER NODES: %w", err)
+		}
+		if nodeIDInTable(parseClusterNodesTable(nodesOut), masterID) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(gossipPollInterval):
+		}
+	}
+	return fmt.Errorf("master node %s not visible in local topology after %d attempts (gossip did not converge)", masterID, gossipPollAttempts)
+}
+
+// nodeIDInTable — присутствует ли узел с данным node-id в топологии.
+func nodeIDInTable(table []clusterNodeRow, id string) bool {
+	for _, row := range table {
+		if row.id == id {
+			return true
+		}
+	}
+	return false
 }
 
 // waitGossipConverged ждёт (ограниченный retry, НЕ бесконечно), пока hub увидит

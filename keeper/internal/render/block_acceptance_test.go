@@ -225,9 +225,16 @@ func TestAcceptance_SentinelReplicaExcludesMaster(t *testing.T) {
 		node("node-3.example.com", "10.0.0.3"),
 	}
 
-	// apply:input sentinel-ветки тянет vault('secret/redis/redis#password') —
-	// движок собираем с фикстурным KVReader-ом (паттерн trial.fixtureVault).
-	engine, err := cel.New(cel.WithVault(stubKV{"secret/redis/redis": {"password": "fixture-redis-pass-16+"}}))
+	// apply:input sentinel-ветки тянет vault-секреты — движок собираем с фикстурным
+	// KVReader-ом (паттерн trial.fixtureVault). ★ РЕДИЗАЙН default_admin (2026-06-30):
+	// шаг 1 (auth_pass) и шаг 2 (PING) читают secret/redis/redis/users/default_admin
+	// (внутрикластерный AUTH под системным default_admin, requirepass убран); шаги 3-5
+	// (REPLICAOF/SENTINEL MONITOR/PONG) пока читают главный secret/redis/redis. Оба пути
+	// должны разрешиться, иначе render деплой-тела упадёт на vault_resolve.
+	engine, err := cel.New(cel.WithVault(stubKV{
+		"secret/redis/redis":                     {"password": "fixture-redis-pass-16+"},
+		"secret/redis/redis/users/default_admin": {"password": "fixture-admin-pass-16+"},
+	}))
 	if err != nil {
 		t.Fatalf("cel.New(WithVault): %v", err)
 	}

@@ -42,6 +42,7 @@ fixtures:
     # Системные ACL redis-server (perms 1:1 из роли, БЕЗ default). add_user ОБЯЗАН их
     # долить, иначе rerender стирает служебных.
     system_acl_users:
+      default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
       monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
       sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
@@ -60,6 +61,8 @@ fixtures:
       password: alice-user-secret-pass
     secret/redis/add_user/users/bob:
       password: bob-user-secret-pass
+    secret/redis/add_user/users/default_admin:
+      password: default-admin-secret-pass
     secret/redis/add_user/users/replica:
       password: replica-sys-secret-pass
     secret/redis/add_user/users/monitoring:
@@ -78,10 +81,11 @@ assert:
         path: /etc/redis/users.acl
         render_context:
           vars:
-            # password — главный секрет (requirepass): шаблон рендерит из него default-юзера
-            # в users.acl. day-2 re-render full acl сохраняет default (ACL LOAD не сбросит).
-            password: addusr-redis-pass-16ch
             users:
+              default_admin:
+                perms: "~* &* +@all"
+                state: "on"
+                password: default-admin-secret-pass
               replica:
                 perms: "+psync +replconf +ping"
                 state: "on"

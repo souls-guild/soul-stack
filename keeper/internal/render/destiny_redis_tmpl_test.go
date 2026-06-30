@@ -48,18 +48,26 @@ func renderRedisTmpl(t *testing.T, name string, root map[string]any) string {
 // РЕАЛЬНЫЙ шаблон с именами, НАРУШАЮЩИМИ порядок вставки (zeta/alpha/mike), и
 // доказывает, что (а) строки идут в ОТСОРТИРОВАННОМ порядке имён, (б) результат
 // стабилен на N прогонах подряд. Возврат к list-рендеру завалит оба ассерта.
+//
+// ★ РЕДИЗАЙН default_admin (2026-06-30): шаблон больше НЕ рендерит литеральную
+// строку default из .vars.password (requirepass убран) — он печатает `user default
+// off`, КОГДА оператор не объявил default в .vars.users (безопасный дефолт: при
+// заданном aclfile без default-строки Redis иначе поставил бы built-in default on
+// nopass). .vars.password больше не передаётся. Здесь .vars.users НЕ содержит
+// default → ждём `user default off` ПЕРВОЙ строкой, затем range по map.
 func TestRedisUsersAcl_DeterministicOrder(t *testing.T) {
 	// vars.users — MAP имя→{perms,state,password}, как его собирает scenario
 	// (merge(list(map)) над .map(...)). Имена специально не отсортированы и не в
-	// порядке, в котором Go-map их вернул бы итерацией. vars.password — главный
-	// секрет (requirepass): шаблон рендерит из него default-юзера ПЕРВОЙ строкой.
+	// порядке, в котором Go-map их вернул бы итерацией. Системный default_admin
+	// приходит ТЕМ ЖЕ map-ом (range-ом, как остальные) — здесь моделируем его в
+	// наборе наряду с operator-extra zeta/alpha/mike.
 	root := map[string]any{
 		"vars": map[string]any{
-			"password": "main-requirepass",
 			"users": map[string]any{
-				"zeta":  map[string]any{"perms": "~* +@all", "state": "on", "password": "zeta-pass"},
-				"alpha": map[string]any{"perms": "~app:* +@read", "state": "on", "password": "alpha-pass"},
-				"mike":  map[string]any{"perms": "~m:* +@write", "state": "off", "password": "mike-pass"},
+				"zeta":          map[string]any{"perms": "~* +@all", "state": "on", "password": "zeta-pass"},
+				"alpha":         map[string]any{"perms": "~app:* +@read", "state": "on", "password": "alpha-pass"},
+				"mike":          map[string]any{"perms": "~m:* +@write", "state": "off", "password": "mike-pass"},
+				"default_admin": map[string]any{"perms": "~* &* +@all", "state": "on", "password": "admin-pass"},
 			},
 		},
 	}
@@ -69,17 +77,17 @@ func TestRedisUsersAcl_DeterministicOrder(t *testing.T) {
 	for i := 0; i < runs; i++ {
 		out := renderRedisTmpl(t, "users.acl.tmpl", root)
 
-		// default-юзер ПЕРВОЙ строкой (литерал ДО range), затем юзеры map в
-		// ОТСОРТИРОВАННОМ порядке: alpha < mike < zeta.
+		// default off ПЕРВОЙ строкой (литерал ДО range — default НЕ в map), затем
+		// юзеры map в ОТСОРТИРОВАННОМ порядке: alpha < default_admin < mike < zeta.
 		lines := nonEmptyLines(out)
-		if len(lines) != 4 {
-			t.Fatalf("ожидалось 4 строки user (default + 3 map), получено %d:\n%s", len(lines), out)
+		if len(lines) != 5 {
+			t.Fatalf("ожидалось 5 строк user (default off + 4 map), получено %d:\n%s", len(lines), out)
 		}
-		gotNames := []string{userName(lines[0]), userName(lines[1]), userName(lines[2]), userName(lines[3])}
-		wantNames := []string{"default", "alpha", "mike", "zeta"}
+		gotNames := []string{userName(lines[0]), userName(lines[1]), userName(lines[2]), userName(lines[3]), userName(lines[4])}
+		wantNames := []string{"default", "alpha", "default_admin", "mike", "zeta"}
 		for j := range wantNames {
 			if gotNames[j] != wantNames[j] {
-				t.Fatalf("порядок юзеров = %v, want %v (default-литерал + range по map → сортировка ключей)\n%s", gotNames, wantNames, out)
+				t.Fatalf("порядок юзеров = %v, want %v (default off-литерал + range по map → сортировка ключей)\n%s", gotNames, wantNames, out)
 			}
 		}
 
@@ -91,21 +99,23 @@ func TestRedisUsersAcl_DeterministicOrder(t *testing.T) {
 		}
 	}
 
-	// Пароль пишется ХЕШЕМ (#<sha256>), plaintext в файл НЕ попадает — ни per-user,
-	// ни главный секрет default-юзера (requirepass).
-	if strings.Contains(first, "zeta-pass") || strings.Contains(first, "alpha-pass") || strings.Contains(first, "mike-pass") {
+	// Пароль пишется ХЕШЕМ (#<sha256>), plaintext в файл НЕ попадает.
+	if strings.Contains(first, "zeta-pass") || strings.Contains(first, "alpha-pass") ||
+		strings.Contains(first, "mike-pass") || strings.Contains(first, "admin-pass") {
 		t.Fatalf("plaintext-пароль протёк в users.acl:\n%s", first)
-	}
-	if strings.Contains(first, "main-requirepass") {
-		t.Fatalf("plaintext главного секрета (requirepass) протёк в default-строку users.acl:\n%s", first)
 	}
 	if !strings.Contains(first, "#") {
 		t.Fatalf("в users.acl нет хеша пароля (#<sha256>):\n%s", first)
 	}
-	// default-юзер несёт ХЕШ главного секрета и полный доступ (~* &* +@all) —
-	// аутентифицируется под protected-mode, иначе внешние коннекты DENIED.
-	if !strings.Contains(first, "user default on #") || !strings.Contains(first, "~* &* +@all") {
-		t.Fatalf("default-юзер должен нести #<hash> главного секрета и полный доступ ~* &* +@all:\n%s", first)
+	// Встроенный default — ВЫКЛЮЧЕН (`user default off`): redis больше не использует
+	// его (роль занял default_admin), но без явной off-строки при заданном aclfile он
+	// остался бы built-in `on nopass` → открытый безпарольный доступ под protected-mode.
+	if !strings.Contains(first, "user default off") {
+		t.Fatalf("встроенный default должен рендериться `user default off` (его в .vars.users нет):\n%s", first)
+	}
+	// default_admin — системный юзер полного доступа (~* &* +@all), несёт #<hash>.
+	if !strings.Contains(first, "user default_admin on #") || !strings.Contains(first, "~* &* +@all") {
+		t.Fatalf("default_admin должен нести #<hash> и полный доступ ~* &* +@all:\n%s", first)
 	}
 }
 
@@ -460,6 +470,55 @@ func TestSentinelConf_AuthRendered(t *testing.T) {
 	}
 }
 
+// TestRedisConf_MasterAuthPersisted — ПРЯМОЙ regress-guard на live-дефект «sentinel
+// restart падает: replica master_link_status:DOWN, masterauth пустой» (2026-06-30).
+// Корень: после default_admin-редизайна (requirepass убран → ACL default_admin)
+// репликация replica→master идёт под ACL-юзером (masterauth+masteruser). Плагин
+// community.redis.replica ставит их CONFIG SET-ом в рантайме, но CONFIG SET НЕ
+// персистится в redis.conf без CONFIG REWRITE → при рестарте (sentinel restart wave 2)
+// redis-server поднимается БЕЗ masterauth → replica не авторизуется у master → link
+// DOWN → replica-synced timeout. Фикс: sentinel deploy-body кладёт masteruser/masterauth
+// ОБЫЧНЫМИ директивами в config-map apply.input → redis.conf.tmpl печатает их range-ом
+// config (как любую директиву) → СТАТИЧЕСКИ в файле → переживают рестарт. Директивы
+// безвредны на текущем master (Redis применяет их, лишь когда узел становится репликой —
+// failover-safe: старый master, ставший репликой, уже несёт креды).
+//
+// Тест рендерит РЕАЛЬНЫЙ redis.conf.tmpl с masteruser/masterauth КЛЮЧАМИ config и
+// доказывает: (а) обе директивы присутствуют с переданными значениями; (б) пароль НЕ
+// хешируется (masterauth — plaintext в redis.conf, как auth_pass в sentinel.conf:
+// AUTH требует исходный секрет, файл защищён mode 0640). Возврат scenario к рендеру без
+// masterauth в config завалит парный L0-guard (sentinel-create-1master-2replica).
+func TestRedisConf_MasterAuthPersisted(t *testing.T) {
+	root := map[string]any{
+		"self": map[string]any{"network": map[string]any{"primary_ip": "10.0.0.2"}},
+		"vars": map[string]any{
+			// masteruser/masterauth — ОБЫЧНЫЕ директивы config (sentinel deploy-body кладёт
+			// их сюда vault()-в-ячейке). Шаблон range-ит config → печатает их как есть.
+			"config": map[string]any{
+				"maxmemory":  "256mb",
+				"masteruser": "default_admin",
+				"masterauth": "default-admin-secret-pass",
+			},
+			"data_dir": "/var/lib/redis",
+			"conf_dir": "/etc/redis",
+			"port":     6379,
+			"run_dir":  "/var/run/redis",
+			"log_dir":  "/var/log/redis",
+		},
+	}
+	out := renderRedisTmpl(t, "redis.conf.tmpl", root)
+
+	// (а) masteruser default_admin + masterauth <pass> присутствуют ДИРЕКТИВАМИ (строка
+	// начинается с имени директивы — не подстрока в комментарии шаблона, где слово
+	// masterauth тоже встречается).
+	if !hasDirectiveLine(out, "masteruser default_admin") {
+		t.Fatalf("нет директивы masteruser default_admin (replica не выберет ACL-юзера у master при рестарте):\n%s", out)
+	}
+	if !hasDirectiveLine(out, "masterauth default-admin-secret-pass") {
+		t.Fatalf("нет директивы masterauth <pass> (replica не авторизуется у master при рестарте → link DOWN):\n%s", out)
+	}
+}
+
 // sysctl drop-in /etc/sysctl.d/30-redis.conf больше НЕ рендерится шаблоном:
 // host-tuning extras перешли на core.sysctl.applied (модуль сам строит
 // детерминированный drop-in из map с sorted keys, ADR-015 amend). Шаблон
@@ -655,13 +714,18 @@ func TestSentinelUsersAcl_DeterministicOrder(t *testing.T) {
 	}
 }
 
-// TestSentinelUsersAcl_EmptyMapValid — пустой map → валидный aclfile без юзеров
-// (back-compat: destiny без input.sentinel_users рендерит пустой файл).
+// TestSentinelUsersAcl_EmptyMapValid — пустой map даёт валидный aclfile.
+// ★ РЕДИЗАЙН default_admin (2026-06-30): шаблон рендерит `user default off`, когда
+// в .vars.users нет ключа default (безопасный дефолт: при заданном aclfile без
+// default-строки sentinel-демон оставил бы built-in `default on nopass` → безпарольный
+// доступ к :26379). На пустом map default тем более отсутствует → ровно одна строка
+// `user default off`, прочих user-строк нет (системные приходят в непустой map).
 func TestSentinelUsersAcl_EmptyMapValid(t *testing.T) {
 	root := map[string]any{"vars": map[string]any{"users": map[string]any{}}}
 	out := renderRedisTmpl(t, "sentinel-users.acl.tmpl", root)
-	if len(nonEmptyLines(out)) != 0 {
-		t.Fatalf("пустой map должен дать файл без user-строк:\n%s", out)
+	lines := nonEmptyLines(out)
+	if len(lines) != 1 || lines[0] != "user default off" {
+		t.Fatalf("пустой map должен дать ровно `user default off` (безопасный дефолт), получено:\n%s", out)
 	}
 }
 
@@ -689,6 +753,19 @@ func readWritePathsLine(t *testing.T, out string) string {
 	}
 	t.Fatalf("в рендере нет строки ReadWritePaths=:\n%s", out)
 	return ""
+}
+
+// hasDirectiveLine — есть ли в рендере СТРОКА-директива redis.conf с заданным
+// префиксом (после TrimSpace начинается с него). Отличает реальную директиву
+// (`masterauth <pass>`) от вхождения того же слова в комментарий шаблона (`# …
+// репликация masterauth …`), которое strings.Contains поймал бы ложно.
+func hasDirectiveLine(out, prefix string) bool {
+	for _, ln := range strings.Split(out, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(ln), prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // userName — имя юзера из строки `user <name> <state> #<hash> <perms>`.

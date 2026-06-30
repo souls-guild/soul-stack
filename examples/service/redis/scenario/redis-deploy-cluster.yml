@@ -62,21 +62,45 @@
       # (default = текущий путь, back-compat). HOST-ИНВАРИАНТ → apply.input.
       conf_dir: "${ compute.conf_dir }"
       data_dir: "${ compute.data_dir }"
-      password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+      # ★ РЕДИЗАЙН default_admin (2026-06-30): input.password УДАЛЁН (requirepass убран).
+      # Аутентификация — под системным default_admin, его пароль приходит в users ниже.
       # Единый compute.redis_config (объявлен ОДИН раз в main.yml инклудящего, ADR-009):
       # тот же map, что уйдёт в state_changes.redis_config — drift «state ≡ live config»
       # снят самим compute. Для cluster = базовый merge + cluster-директивы (cluster-
       # enabled/config-file/node-timeout) + tls-cluster yes при TLS. HOST-ИНВАРИАНТ →
       # apply.input на targeted[0] корректен.
-      config: "${ compute.redis_config }"
+      #
+      # ★ РЕДИЗАЙН default_admin: СТАТИЧЕСКАЯ replica→master AUTH в redis.conf — masteruser/
+      # masterauth ДОЛИВАЮТСЯ в config ОБЫЧНЫМИ директивами (поверх compute.redis_config).
+      # КРИТИЧНО для cluster-РЕПЛИК: плагин community.redis.cluster (CLUSTER REPLICATE,
+      # formCluster) НЕ выставляет masterauth — он лишь шлёт REPLICATE master-id. Cluster-
+      # реплика при FULLSYNC с master-нодой проходит AUTH ТОЛЬКО по статической masterauth в
+      # redis.conf; без неё PSYNC упёрся бы в NOAUTH → master_link_status:DOWN (тот же live-
+      # дефект, что у sentinel-реплик). Директива переживает рестарт (CONFIG SET не
+      # сохраняется без REWRITE). Доливается на ВСЕХ узлах host-инвариантно (один default_admin
+      # на кластер) → apply.input. Failover-safe: Redis применяет masteruser/masterauth, лишь
+      # когда узел становится репликой — на master-нодах инертны; при replicas=0 (нет реплик)
+      # директива тоже инертна (никто не реплика), но рендерится симметрично — без
+      # per-replicas-ветвления. ★ ОТЛИЧНО от state_changes.redis_config (covenant.yml): там
+      # ЧИСТЫЙ compute.redis_config БЕЗ masterauth — пароль НЕ уезжает в incarnation.state
+      # (секрет живёт в Vault). masterauth — vault()-В-ЯЧЕЙКЕ (seal-маскинг, ADR-010 §7.4).
+      # admin_user = default_admin (compute.admin_user); путь — secret/redis/<inc>/users/
+      # default_admin#password.
+      config: >-
+        ${ merge(compute.redis_config, {
+             'masteruser': compute.admin_user,
+             'masterauth': vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password')
+           }) }
       # ★ СИСТЕМНЫЕ + operator-extra (system-ACL-users, дизайн d2 Вариант A): служебные
-      # replica/monitoring/sentinel/haproxy из essence.system_acl_users ПЕРВЫМИ,
-      # operator-extra (input.users — МАССИВ AclUser, wave 1b) ПОВЕРХ (last-wins).
-      # default — в requirepass redis.conf, не здесь. Без системных репликация (replica) и
-      # health-check сломаются. Vault-пароль — secret/redis/<inc>/users/<name>#password.
-      # operator-extra: .map(u, {u.name: …}) (имя из поля u.name). Обе .map дают СПИСОК
-      # одноключевых map-ов, merge(list-of-maps) сворачивает их в один map (templating
-      # §2.3); порядок аргументов = приоритет.
+      # default_admin/replica/monitoring/sentinel/haproxy из essence.system_acl_users
+      # ПЕРВЫМИ, operator-extra (input.users — МАССИВ AclUser, wave 1b) ПОВЕРХ (last-wins).
+      # ★ default_admin (редизайн) — СИСТЕМНЫЙ юзер полного доступа (~* &* +@all), приходит
+      # из essence.system_acl_users как все: под ним идёт внутрикластерный AUTH (заменил
+      # requirepass-default — он убран из redis.conf). Без системных репликация (replica),
+      # cluster MEET/REPLICATE (default_admin) и health-check сломаются. Vault-пароль —
+      # secret/redis/<inc>/users/<name>#password. operator-extra: .map(u, {u.name: …}) (имя
+      # из поля u.name). Обе .map дают СПИСОК одноключевых map-ов, merge(list-of-maps)
+      # сворачивает их в один map (templating §2.3); порядок аргументов = приоритет.
       users: >-
         ${ merge(
              merge(default(essence.system_acl_users, {}).map(name, {
@@ -134,7 +158,10 @@
   retry: { count: 10, delay: 3s }
   params:
     addr:     "${ compute.tls_on ? '127.0.0.1:' + string(compute.tls_port) : '127.0.0.1:6379' }"
-    password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    # ★ РЕДИЗАЙН default_admin: AUTH под default_admin (requirepass убран). username +
+    # его пароль из новой Vault-ветки. Плагин community.redis передаёт username в AUTH.
+    username: "${ compute.admin_user }"
+    password: "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
     tls:      "${ compute.tls_on }"
     tls_ca:   "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
     args:     ["PING"]
@@ -146,8 +173,9 @@
 #    одноключевых map-ов SID→{addr}, merge сворачивает в один map (templating §2.3).
 #    Плагин community.redis.cluster (action create) сам шлёт CLUSTER MEET/ADDSLOTS/
 #    REPLICATE по go-redis и делит 16384 слота — scenario топологию НЕ транслирует,
-#    передаёт готовую. Пароль — keeper-side vault()-резолв (плагин коннектится к каждой
-#    ноде; password маскируется, в логи не течёт).
+#    передаёт готовую. ★ РЕДИЗАЙН default_admin: коннект к каждой ноде — под ACL-юзером
+#    default_admin (requirepass убран). username (→ AUTH) + password из новой Vault-ветки;
+#    плагин коннектится к каждой ноде под этой парой (password маскируется, в логи не течёт).
 #    ★ ИБ (anti-downgrade): tls/tls_ca/порт nodes гейтятся на compute.tls_on (TLS
 #    ВКЛЮЧЁН), НЕ tls_only — TLS включён → плагин ОБЯЗАН коннектиться к нодам по TLS
 #    (иначе AUTH-пароль к каждой ноде ушёл бы plaintext-ом). addr-ы строятся на
@@ -172,7 +200,8 @@
     # раскладывает сам по sort SID, backward-compat). replicas_per_shard при заданной
     # topology служит лишь size-проверкой состава (плагин рвёт при несовпадении размеров).
     topology: "${ has(input.cluster_topology) ? input.cluster_topology : [] }"
-    password:           "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    username:           "${ compute.admin_user }"
+    password:           "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
     tls:                "${ compute.tls_on }"
     tls_ca:             "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
     tls_cert:           "${ compute.tls_on ? vault(compute.tls_cert_ref) : '' }"

@@ -27,21 +27,27 @@ import (
 //   - apply_task_register — register-результат задачи (loadRegisterByHost его читает);
 //   - error_summary — причина падения (RecordTaskFailure), как у Soul-side задач.
 //
-// Все keeper-задачи прогона делят ОДНУ apply_runs-строку sid=keeper (модель
-// «один row на (apply_id, sid)»): по task_idx они различаются в
-// apply_task_register, а строка прогона keeper-target-а success ⇔ все keeper-
-// задачи прошли. Первая упавшая keeper-задача → строка failed + возврат ошибки
-// (run() уходит в abort, host-fan-out не стартует).
+// keeper-задачи каждого Passage делят ОДНУ apply_runs-строку (apply_id, sid=keeper,
+// passage): по task_idx они различаются в apply_task_register, а строка success ⇔ все
+// keeper-задачи ЭТОГО Passage прошли. Первая упавшая keeper-задача → строка failed +
+// возврат ошибки (run() уходит в abort). staged-прогон с keeper-задачами в нескольких
+// Passage пишет N keeper-строк — по одной на (apply_id, keeper, passage) (PK тройной,
+// миграция 078). N=1 (или все keeper-задачи в Passage 0) → одна строка passage 0,
+// БИТ-В-БИТ как до Слайса 2.
 //
-// Исполняется ДО host-dispatch-а (run.go): keeper-шаги в реальных сценариях идут
-// первыми (provision/coven-bind → затем apply на хостах, см.
-// redis/create). Cross-task chaining keeper-register → host-render
-// в пилоте недоступен (in.Register пуст — future), поэтому порядок «keeper, потом
-// hosts» функционально достаточен.
+// Исполняется per-Passage ВНУТРИ stage-loop (run.go), на ПЕРЕ-рендеренных при
+// ActivePassage=passage tasks, СТРОГО ДО host-dispatch-а ЭТОГО Passage: keeper-fail
+// Passage>0 → abort ДО host-fan-out-а этого Passage (host-dispatch не стартует), как и
+// на Passage 0. keeper→keeper register-chaining: keeper-задача Passage N видит
+// `register.<prev>.*` keeper-задач прошлых Passage через renderIn.KeeperRegister (перелив
+// stage-loop, см. keeperRegisterBucket). Ordering критичен для refresh-границы: keeper-
+// dispatch Passage P исполняется ДО того, как re-resolve P+1 прочитает его эффект
+// (например core.soul.registered{refresh_soulprint} пишет souls+coven).
 //
-// keeperPlans пуст → no-op (прогон без keeper-side задач — обычный Soul-side путь).
-func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, log *slog.Logger, tasks []*render.RenderedTask, plans []render.DispatchPlan) error {
-	keeperTasks := keeperTasksOf(tasks, plans)
+// keeperTasks ЭТОГО Passage пуст → no-op (Passage без keeper-задач: host-only Passage
+// или прогон вовсе без keeper-side задач — обычный Soul-side путь).
+func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, log *slog.Logger, passage int, tasks []*render.RenderedTask, plans []render.DispatchPlan) error {
+	keeperTasks := keeperTasksOf(tasks, plans, passage)
 	if len(keeperTasks) == 0 {
 		return nil
 	}
@@ -49,8 +55,10 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, log *slo
 		return ErrKeeperModulesNotConfigured
 	}
 
-	// Одна строка apply_runs на keeper-target прогона: вставляем running до первого
-	// исполнения. Терминал (success/failed) — после прохода по всем keeper-задачам.
+	// Одна строка apply_runs на keeper-target ЭТОГО Passage: вставляем running до
+	// первого исполнения. Терминал (success/failed) — после прохода по всем keeper-
+	// задачам Passage. Passage в PK (apply_id, sid, passage) — N keeper-строк на
+	// staged-прогоне с keeper-задачами в разных Passage.
 	if err := applyrun.Insert(ctx, r.deps.DB, &applyrun.ApplyRun{
 		ApplyID:         spec.ApplyID,
 		SID:             render.KeeperTargetSID,
@@ -58,8 +66,9 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, log *slo
 		Scenario:        spec.ScenarioName,
 		Status:          applyrun.StatusRunning,
 		StartedByAID:    startedByPtr(spec.StartedByAID),
+		Passage:         passage,
 	}); err != nil {
-		return fmt.Errorf("scenario: insert keeper apply_run: %w", err)
+		return fmt.Errorf("scenario: insert keeper apply_run (passage %d): %w", passage, err)
 	}
 
 	for _, rt := range keeperTasks {
@@ -75,22 +84,23 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, log *slo
 		// попадают в свёртку changed_tasks (auditpg) и task:-подписка Tiding на них
 		// молча мёртвая (ADR-052 §k). Эмитим ДО failed-return, чтобы упавшая
 		// keeper-задача тоже отметилась в журнале (status FAILED, не CHANGED).
-		r.emitKeeperTaskExecuted(ctx, spec.ApplyID, rt, changed, failed, msg, log)
+		r.emitKeeperTaskExecuted(ctx, spec.ApplyID, passage, rt, changed, failed, msg, log)
 
 		if failed {
 			summary := composeKeeperFailure(rt, msg)
-			// keeper-target — single-passage (passage 0): keeper-side задачи
-			// исполняются ДО host-fan-out-а одной строкой apply_runs (ADR-056 не
-			// дробит keeper-target по Passage). rt.Index — глобальный сквозной
-			// индекс по плану; для keeper-target локальный==глобальный (нет
-			// per-host where:), поэтому task_idx и plan_index совпадают (=rt.Index).
-			if rerr := applyrun.RecordTaskFailure(ctx, r.deps.DB, spec.ApplyID, render.KeeperTargetSID, 0, rt.Index, rt.Index, summary); rerr != nil {
+			// keeper-target адресуется тройкой (apply_id, keeper, passage) — Passage
+			// этой keeper-задачи (Слайс 2: keeper-задачи стратифицируются по Passage,
+			// строка failed пишется в строку ИМЕННО этого Passage). rt.Index —
+			// глобальный сквозной индекс по плану; для keeper-target локальный==
+			// глобальный (нет per-host where:), поэтому task_idx и plan_index совпадают
+			// (=rt.Index).
+			if rerr := applyrun.RecordTaskFailure(ctx, r.deps.DB, spec.ApplyID, render.KeeperTargetSID, passage, rt.Index, rt.Index, summary); rerr != nil {
 				log.Warn("scenario: запись причины падения keeper-задачи провалена",
-					slog.Int("task_idx", rt.Index), slog.Any("error", rerr))
+					slog.Int("passage", passage), slog.Int("task_idx", rt.Index), slog.Any("error", rerr))
 			}
-			if uerr := applyrun.UpdateStatus(ctx, r.deps.DB, spec.ApplyID, render.KeeperTargetSID, 0, applyrun.StatusFailed, &summary); uerr != nil {
+			if uerr := applyrun.UpdateStatus(ctx, r.deps.DB, spec.ApplyID, render.KeeperTargetSID, passage, applyrun.StatusFailed, &summary); uerr != nil {
 				log.Warn("scenario: перевод keeper apply_run в failed провален",
-					slog.Any("error", uerr))
+					slog.Int("passage", passage), slog.Any("error", uerr))
 			}
 			return fmt.Errorf("scenario: keeper-side задача %q (%s) провалена: %s", rt.Name, rt.Module, msg)
 		}
@@ -98,7 +108,12 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, log *slo
 		// register: keeper-задачи аккумулируется под KeeperTargetSID — симметрично
 		// Soul-side accumulateRegister. Без register: (rt.Register=="") / no_log
 		// задача в накопитель не пишется (loadRegisterByHost их и так не резолвит).
-		r.accumulateKeeperRegister(ctx, spec.ApplyID, rt, changed, failed, output, log)
+		// passage ОБЯЗАТЕЛЕН (Слайс 2): FK apply_task_register→apply_runs идёт по
+		// тройке (apply_id, sid, passage) (миграция 078) — register keeper-задачи
+		// Passage P обязан ссылаться на keeper apply_runs-строку ИМЕННО passage P
+		// (она вставлена выше), иначе FK на (apply_id, keeper, 0) промахнётся (для
+		// P>0 строки passage 0 у keeper-target-а нет) и register потеряется.
+		r.accumulateKeeperRegister(ctx, spec.ApplyID, passage, rt, changed, failed, output, log)
 
 		// Sync-hook bind-пути (ADR-060 amend, R1): после успешного
 		// core.soul.registered хост(ы) привязан(ы) к coven инкарнации — проецируем
@@ -108,8 +123,8 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, log *slo
 		r.syncTraitsOnRegistered(ctx, spec.IncarnationName, rt, log)
 	}
 
-	if err := applyrun.UpdateStatus(ctx, r.deps.DB, spec.ApplyID, render.KeeperTargetSID, 0, applyrun.StatusSuccess, nil); err != nil {
-		return fmt.Errorf("scenario: перевод keeper apply_run в success: %w", err)
+	if err := applyrun.UpdateStatus(ctx, r.deps.DB, spec.ApplyID, render.KeeperTargetSID, passage, applyrun.StatusSuccess, nil); err != nil {
+		return fmt.Errorf("scenario: перевод keeper apply_run (passage %d) в success: %w", passage, err)
 	}
 	return nil
 }
@@ -132,7 +147,7 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, log *slo
 //
 // Audit=nil (unit-сборка без аудита) → no-op. Ошибка записи только логируется:
 // потеря события = деградация наблюдаемости, прогон не валим.
-func (r *Runner) emitKeeperTaskExecuted(ctx context.Context, applyID string, rt *render.RenderedTask, changed, failed bool, message string, log *slog.Logger) {
+func (r *Runner) emitKeeperTaskExecuted(ctx context.Context, applyID string, passage int, rt *render.RenderedTask, changed, failed bool, message string, log *slog.Logger) {
 	if r.deps.Audit == nil {
 		return
 	}
@@ -140,12 +155,17 @@ func (r *Runner) emitKeeperTaskExecuted(ctx context.Context, applyID string, rt 
 		SID:     render.KeeperTargetSID,
 		ApplyID: applyID,
 		TaskIdx: rt.Index,
-		// keeper-side задачи (`on: keeper`) исполняются до host-fan-out (один
-		// KeeperTargetSID, passage=0) — локальная позиция всегда совпадает с
-		// глобальным RenderedTask.Index. plan_index == task_idx == rt.Index.
+		// keeper-side задачи (`on: keeper`) исполняются ОДНОЙ строкой на (apply_id,
+		// keeper, passage) — нет per-host where:, локальная позиция всегда совпадает с
+		// глобальным RenderedTask.Index. plan_index == task_idx == rt.Index (сквозной
+		// по всему плану, всем Passage → ключ корреляции уникален между Passage).
 		PlanIndex: rt.Index,
 		Status:    keeperTaskStatus(changed, failed).String(),
 		NoLog:     rt.NoLog,
+		// passage этой keeper-задачи (Слайс 2: keeper-задачи стратифицируются по
+		// Passage). В payload для триажа per-Passage; корреляцию changed_tasks НЕ
+		// меняет (та идёт по sid/plan_index). 0 на N=1 / keeper-задачах Passage 0.
+		Passage: passage,
 	}
 	if failed {
 		in.Error = &audit.TaskExecutedError{
@@ -229,10 +249,16 @@ func (r *Runner) applyKeeperTask(ctx context.Context, rt *render.RenderedTask) (
 // accumulateRegister (events_taskevent.go). Payload — {changed, failed,
 // timed_out, skipped} + output-поля модуля (симметрия selfRegisterData
 // applyrunner.go). Задача без register: либо no_log → no-op (loadRegisterByHost
-// их не резолвит в state_changes). FK на apply_runs(apply_id, sid=keeper) уже
-// удовлетворён вставленной строкой. Ошибка только логируется (best-effort, как у
+// их не резолвит в state_changes). Ошибка только логируется (best-effort, как у
 // Soul-side accumulateRegister).
-func (r *Runner) accumulateKeeperRegister(ctx context.Context, applyID string, rt *render.RenderedTask, changed, failed bool, output map[string]any, log *slog.Logger) {
+//
+// passage (Слайс 2): FK apply_task_register→apply_runs идёт по тройке (apply_id,
+// sid, passage) (миграция 078). register keeper-задачи Passage P ОБЯЗАН ссылаться
+// на keeper apply_runs-строку ИМЕННО passage P (вставлена в dispatchKeeperTasks
+// перед циклом по keeper-задачам этого Passage). Иначе FK на (apply_id, keeper, 0)
+// промахнётся для P>0 (строки passage 0 у keeper-target-а нет) → register потеряется
+// и keeper→keeper цепочка Passage P→P+1 оборвётся.
+func (r *Runner) accumulateKeeperRegister(ctx context.Context, applyID string, passage int, rt *render.RenderedTask, changed, failed bool, output map[string]any, log *slog.Logger) {
 	if rt.Register == "" || rt.NoLog {
 		return
 	}
@@ -255,9 +281,12 @@ func (r *Runner) accumulateKeeperRegister(ctx context.Context, applyID string, r
 		PlanIndex:    rt.Index,
 		TaskIdx:      rt.Index,
 		RegisterData: data,
+		// passage keeper-задачи — компонент FK на apply_runs(apply_id, sid, passage)
+		// + накопительный фильтр loadRegisterByHostUpToPassage (register Passage<P).
+		Passage: passage,
 	}); err != nil {
 		log.Warn("scenario: аккумуляция register keeper-задачи провалена",
-			slog.Int("task_idx", rt.Index), slog.Any("error", err))
+			slog.Int("passage", passage), slog.Int("task_idx", rt.Index), slog.Any("error", err))
 	}
 }
 
@@ -303,9 +332,43 @@ func (r *Runner) syncTraitsOnRegistered(ctx context.Context, incName string, rt 
 	}
 }
 
+// keeperRegisterBucket извлекает плоский register-bucket keeper-задач из per-host
+// register-таблицы прогона: записи под синтетическим хостом KeeperTargetSID
+// ("keeper"), куда accumulateKeeperRegister складывает register-результаты
+// keeper-side задач. Возвращает register-name → payload (та же форма, что плоская
+// RenderInput.Register), либо nil, если keeper-bucket пуст / отсутствует.
+//
+// Назначение (staged-render, keeper→keeper register-chaining): stage-loop run.go
+// кладёт результат в ИЗОЛИРОВАННЫЙ renderIn.KeeperRegister перед per-passage render-ом
+// keeper-задач активного Passage. keeperVars (render/dispatch.go) читает именно
+// KeeperRegister — так keeper-задача Passage N видит `register.<prev>.*` от keeper-
+// задач предыдущих Passage, а host-fallback (hostRegister) при этом keeper-register НЕ
+// получает (канал отделён от плоской Register). registerByHost — то, что вернул
+// loadRegisterByHostUpToPassage (register Passage < активного), поэтому bucket
+// несёт только УЖЕ завершённые keeper-задачи (forward-only).
+func keeperRegisterBucket(registerByHost map[string]map[string]any) map[string]any {
+	bucket := registerByHost[render.KeeperTargetSID]
+	if len(bucket) == 0 {
+		return nil
+	}
+	return bucket
+}
+
 // keeperTasksOf отбирает RenderedTask-и, чей DispatchPlan помечен Keeper=true
-// (render.IsKeeperTask), в порядке Index (= порядок scenario.tasks[]).
-func keeperTasksOf(tasks []*render.RenderedTask, plans []render.DispatchPlan) []*render.RenderedTask {
+// (render.IsKeeperTask) И чей RenderedTask.Passage == passage, в порядке Index
+// (= порядок scenario.tasks[]).
+//
+// Фильтр по Passage (staged-render, ADR-056, Слайс 2): keeper-задачи стратифицируются
+// по register-зависимости как host-задачи (core.bootstrap.delivered читает
+// register.provision.* → Passage строго ПОСЛЕ core.cloud.created). dispatchKeeperTasks
+// зовётся per-Passage на ПЕРЕ-рендеренных при ActivePassage=p tasks; здесь отбираются
+// только keeper-задачи ИМЕННО этого Passage. keeper-задача будущего Passage (>p) на
+// этом render — placeholder без Params (pipeline.go placeholder-gate) И без Keeper=true
+// в плане, поэтому фильтр по Keeper её и так отсекает; фильтр по Passage — вторая
+// граница (на свежем render Passage p staged keeper-задача p несёт Keeper=true).
+// N=1-прогон: единственный Passage 0, все keeper-задачи passage==0 → отбираются как до
+// эпика (БИТ-В-БИТ).
+func keeperTasksOf(tasks []*render.RenderedTask, plans []render.DispatchPlan, passage int) []*render.RenderedTask {
 	byIndex := make(map[int]*render.RenderedTask, len(tasks))
 	for _, t := range tasks {
 		byIndex[t.Index] = t
@@ -315,9 +378,11 @@ func keeperTasksOf(tasks []*render.RenderedTask, plans []render.DispatchPlan) []
 		if !p.Keeper {
 			continue
 		}
-		if t := byIndex[p.TaskIndex]; t != nil {
-			out = append(out, t)
+		t := byIndex[p.TaskIndex]
+		if t == nil || t.Passage != passage {
+			continue
 		}
+		out = append(out, t)
 	}
 	return out
 }

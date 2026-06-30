@@ -72,7 +72,11 @@
   params:
     addr:            "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
     source_addr:     "${ compute.source_master }"
-    password:        "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    # ★ РЕДИЗАЙН default_admin: LOCAL-коннект под default_admin (requirepass убран). day-2-тело
+    # ВНЕ covenant → имя admin-юзера хардкодим 'default_admin' (нет compute.admin_user).
+    # source_password — учётка ВНЕШНЕГО источника (из state-ссылок).
+    username:        "${ 'default_admin' }"
+    password:        "${ vault('secret/redis/' + incarnation.name + '/users/default_admin#password') }"
     source_password: "${ compute.source_password }"
     source_tls:      "${ compute.source_tls_ca != '' }"
     source_tls_ca:   "${ compute.source_tls_ca }"
@@ -89,7 +93,9 @@
   module: community.redis.detached
   params:
     addr:     "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
-    password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    # ★ РЕДИЗАЙН default_admin: LOCAL-коннект под default_admin (хардкод имени — вне covenant).
+    username: "${ 'default_admin' }"
+    password: "${ vault('secret/redis/' + incarnation.name + '/users/default_admin#password') }"
     tls:      "${ compute.tls_on }"
     tls_ca:   "${ compute.tls_ca }"
 
@@ -113,12 +119,14 @@
   params:
     addr:        "127.0.0.1:26379"
     master_name: "${ compute.sentinel_master_name }"
-    # ★ CONNECTION-AUTH к sentinel-демону :26379 (отдельно от auth_pass — мониторинг
-    # master-а): sentinel.conf несёт aclfile, default-юзер требует пароль (главный
-    # секрет secret/redis/<inc>#password). password → redis.Options.Password. Без него
-    # коннект к ACL-защищённому демону → NOAUTH (1:1 с шагом 4 деплой-тела).
-    password:    "${ vault('secret/redis/' + incarnation.name + '#password') }"
-    auth_pass:   "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    # ★ РЕДИЗАЙН default_admin: CONNECTION-AUTH к :26379 под default_admin (built-in default →
+    # off, коннект под системным default_admin sentinel-набора). username/password — пара
+    # коннекта; auth_user/auth_pass — реквизиты мониторинга master. day-2-тело ВНЕ covenant →
+    # имя admin-юзера хардкодим 'default_admin'. Без них коннект к ACL-демону → NOAUTH.
+    username:    "${ 'default_admin' }"
+    password:    "${ vault('secret/redis/' + incarnation.name + '/users/default_admin#password') }"
+    auth_user:   "${ 'default_admin' }"
+    auth_pass:   "${ vault('secret/redis/' + incarnation.name + '/users/default_admin#password') }"
     redis_version: "${ compute.redis_version }"
     config:      "${ compute.sentinel_directives }"
     monitor:

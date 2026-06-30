@@ -391,20 +391,23 @@ func classify(statuses []applyrun.HostStatus, passage, wantHosts int, noLogByInd
 	for _, hs := range statuses {
 		// Staged-render (ADR-056): barrier ЭТОГО Passage считает терминалы строк
 		// только своего среза. Строки предыдущих Passage (уже success) и keeper-
-		// target-а (passage 0, исполнен ДО host-fan-out-а) сюда не относятся —
-		// иначе terminal раздулся бы и barrier объявил бы done преждевременно.
-		// N=1-прогон: единственный Passage 0 → фильтр пропускает все host-строки,
-		// БИТ-В-БИТ как до staged-render.
+		// target-а ЧУЖИХ Passage сюда не относятся — иначе terminal раздулся бы и
+		// barrier объявил бы done преждевременно. N=1-прогон: единственный Passage 0
+		// → фильтр пропускает все host-строки, БИТ-В-БИТ как до staged-render.
 		if hs.Passage != passage {
 			continue
 		}
-		// keeper-target (`on: keeper`) — НЕ хост: его apply_runs-строку пишет
-		// dispatchKeeperTasks ДО host-barrier-а, а wantHosts считает только
-		// реальные хосты. Без этого исключения keeper-success раздувал бы
-		// terminal на единицу и barrier объявлял бы done на один хост раньше
-		// (silent success при падении последнего хоста). keeper-failed сюда не
-		// доходит — dispatchKeeperTasks abort-ит прогон ДО host-fan-out-а, так
-		// что фильтрация failed-ветку не ослабляет.
+		// keeper-target (`on: keeper`) — НЕ хост-терминал, СВОЕГО Passage в том числе
+		// (Слайс 2: keeper-задачи стратифицируются по Passage, строка пишется с
+		// реальным passage, не всегда 0). Его apply_runs-строку пишет
+		// dispatchKeeperTasks ИМЕННО ЭТОГО Passage СТРОГО ДО host-dispatch-а этого
+		// Passage, а wantHosts считает только реальные хосты. Без этого исключения
+		// keeper-success раздувал бы terminal на единицу → barrier объявил бы done на
+		// один хост раньше (silent success при падении последнего хоста). keeper-FAILED
+		// сюда не доходит: dispatchKeeperTasks ЭТОГО Passage abort-ит прогон ДО
+		// host-fan-out-а (return err → run.go abort), host-dispatch не стартует, barrier
+		// этого Passage НЕ вызывается. Поэтому skip keeper-target-а failed-ветку не
+		// ослабляет ни на одном Passage.
 		if hs.SID == render.KeeperTargetSID {
 			continue
 		}

@@ -54,6 +54,10 @@ fixtures:
       password: s3cr3t-redis-pass-create
     # Per-user секреты системных юзеров (secret/redis/<inc>/users/<name>#password) —
     # их резолвит keeper-side vault() при доливе system_acl_users в apply.input.users.
+    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер внутрикластерного
+    # AUTH (auth_pass/PING шаги деплоя читают его пароль той же ветки users/<name>).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
     secret/redis/create/users/replica:
       password: replica-sys-secret-pass
     secret/redis/create/users/monitoring:
@@ -88,13 +92,16 @@ fixtures:
     # ОБА ОБЯЗАТЕЛЬНЫ: guard create/sentinel.yml (assert 1b) рвёт render при пустом
     # любом из наборов (тихий fail-open недопустим — без них репликация/sentinel↔redis
     # AUTH сломались бы).
+    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер полного
+    # доступа (~* &* +@all) в ОБА набора (заменил прежний requirepass-default).
     system_acl_users:
+      default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
       monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
       sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
     system_acl_users_sentinel:
-      default:    "allchannels allkeys +@all"
+      default_admin: "allchannels allkeys +@all"
       monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
@@ -121,7 +128,9 @@ assert:
         group: redis
         render_context:
           vars:
-            password: s3cr3t-redis-pass-create
+            # ★ РЕДИЗАЙН default_admin: .vars.password БОЛЬШЕ НЕ передаётся в redis.conf
+            # шаблон (requirepass убран из server.yml). Аутентификация — под default_admin
+            # (users.acl), redis.conf несёт лишь aclfile + protected-mode.
             conf_dir: /etc/redis
             data_dir: /var/lib/redis
             port: 6379
@@ -133,6 +142,12 @@ assert:
               - /var/lib/redis/modules/redisearch.so
               - /var/lib/redis/modules/redistimeseries.so
             config:
+              # ★ РЕДИЗАЙН default_admin: replica→master AUTH (masteruser/
+              # masterauth) приходит ОБЫЧНЫМИ директивами config (sentinel
+              # deploy-body доливает их vault()-в-ячейке) → redis.conf range-ит
+              # их как любую директиву → статически переживают рестарт.
+              masteruser:       "default_admin"
+              masterauth:       "default-admin-secret-pass"
               maxmemory:        "256mb"
               maxmemory-policy: allkeys-lru
               maxclients:       10000
@@ -164,11 +179,15 @@ assert:
     # master доказано render-ассертом TargetSIDs (TestAcceptance_SentinelReplicaExcludesMaster).
     # Params host-инвариантны → presence сверяет одни и те же params реплик.
     # Единственная community.redis.replica в плане → дизамбигуатор не нужен.
+    # ★ РЕДИЗАЙН default_admin: replica→master AUTH под ACL-юзером default_admin
+    # (username → CONFIG SET masteruser, password → masterauth). Прежний главный
+    # секрет ДРОПНУТ — пароль из ветки secret/redis/<inc>/users/default_admin.
     - module: community.redis.replica
       params_subset:
         addr: "127.0.0.1:6379"
         master_addr: "10.0.0.1:6379"
-        password: s3cr3t-redis-pass-create
+        username: default_admin
+        password: default-admin-secret-pass
 
     # ── SENTINEL MONITOR reconcile (community.redis.sentinel) ───────────────
     # monitor.ip — HOST-ИНВАРИАНТНЫЙ адрес master-а (master-election node-1).
@@ -180,10 +199,15 @@ assert:
       params_subset:
         addr: "127.0.0.1:26379"
         master_name: master
-        # ★ CONNECTION-AUTH к sentinel-демону :26379 (главный секрет, sentinel default-
-        # юзер требует пароль). Отдельно от auth_pass (мониторинг master). Guard на NOAUTH.
-        password: s3cr3t-redis-pass-create
-        auth_pass: s3cr3t-redis-pass-create
+        # ★ РЕДИЗАЙН default_admin: CONNECTION-AUTH к sentinel-демону :26379 под
+        # default_admin (built-in default → off, коннект под системным default_admin
+        # sentinel-набора). username/password — пара коннекта; auth_user/auth_pass —
+        # реквизиты МОНИТОРИНГА master-а (SENTINEL SET <master> auth-user/auth-pass).
+        # Прежний главный секрет ДРОПНУТ — всё на users/default_admin. Guard на NOAUTH.
+        username: default_admin
+        password: default-admin-secret-pass
+        auth_user: default_admin
+        auth_pass: default-admin-secret-pass
         redis_version: "7.4.1"
         config:
           "sentinel down-after-milliseconds master": "5000"

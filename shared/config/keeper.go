@@ -1665,6 +1665,28 @@ type KeeperPushTeleport struct {
 	IdentityFile string `yaml:"identity_file" json:"identity_file"`
 	// Cluster — имя Teleport-кластера, в котором резолвятся node-name-ы.
 	Cluster string `yaml:"cluster" json:"cluster"`
+	// UseSystemTrust — Teleport Proxy стоит ЗА публичным L7-TLS-балансировщиком
+	// (ADR-063 amendment). Опционально, default false (back-compat).
+	//
+	// false: proxy-server-cert верифицируется через identity-CA + sentinel-
+	// ServerName `teleport.cluster.local` (валидно для Teleport-issued proxy-cert).
+	//
+	// true: балансировщик презентует собственный публичный cert (напр.
+	// `*.tp.rwb.ru`, без SAN `teleport.cluster.local`) — верификация смещается на
+	// системный trust store по host из `proxy_addr`. mTLS client-cert (auth на
+	// proxy) и SSH host-CA из identity сохраняются: server-cert proxy не граница
+	// доверия Soul Stack.
+	UseSystemTrust bool `yaml:"use_system_trust,omitempty" json:"use_system_trust,omitempty"`
+	// AlpnUpgrade — L7-TLS-балансировщик перед Proxy терминирует TLS и НЕ
+	// проксирует raw gRPC/SSH-stream (ADR-063 amendment). Опционально, default
+	// false (back-compat).
+	//
+	// true: коннект к Proxy оборачивается в ALPN-conn-upgrade (WebSocket-туннель
+	// на `/webapi/connectionupgrade`), который L7-LB пропускает — без него
+	// DialHost падает на `403 / content-type "text/plain"`. Чинит ВНЕШНИЙ
+	// TLS-туннель к LB; ВНУТРЕННИЙ gRPC-mTLS чинит `use_system_trust` — для
+	// proxy-за-L7-LB оба включаются ПАРОЙ.
+	AlpnUpgrade bool `yaml:"alpn_upgrade,omitempty" json:"alpn_upgrade,omitempty"`
 }
 
 // KeeperPushCARef — один элемент multi-CA `push.host_ca_refs[]` (S7-3).

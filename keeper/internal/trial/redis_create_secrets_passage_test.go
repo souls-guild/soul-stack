@@ -14,15 +14,19 @@ package trial
 // именно отношение passage(generate) < passage(каждой vault()-read). Образец загрузки —
 // repro_staged_test.go (тот же helper-набор trial).
 //
+// Порядок generate→read в create/ держат ДВЕ независимые passage-оси (ADR-056 +
+// amendment Вариант A): roster-ось (provision-refresh уводит read-задачи в поздний
+// passage) И vault-ось (kv-present-эмиттер → vault()-read). Обе указывают одинаково
+// (generate→passage 0, read→passage ≥1), объединяются через level=max — поэтому create/
+// Count от vault-оси НЕ вырос (см. TestRedisCreate_TwoAxesSamePassageCount).
+//
 // Что ловит регресс (ровно сценарии, от которых предостерёг review):
 //   1. generate-шаг удалён / переименован → fail «generate-шаг отсутствует»;
-//   2. read-задача стала host-инвариантной (перестала читать roster) — она села бы в
-//      passage 0 К generate → fail «generate не раньше read»;
-//   3. refresh-эмиттер (provision core.soul.registered refresh_soulprint:true) исчез из
-//      плана → roster-ребро пропадает, generate и read схлопываются в passage 0 → fail.
-// Под-тест TestRedisCreate_NoRefreshEmitter_CollapsesPassage документирует механизм (3)
-// явно: без refresh-эмиттера план вырождается в один passage — это и есть хрупкость, ради
-// которой guard и существует.
+//   2. ОБЕ оси сломаны (read-задача перестала читать и roster, и vault) — она села бы в
+//      passage 0 К generate → fail «generate не раньше read».
+// Под-тест TestRedisCreate_NoRefreshEmitter_HeldByVaultAxis изолирует vault-ось: вырезает
+// provision-тело (roster-ось заведомо неактивна) и фиксирует, что vault-ось ОДНА держит
+// порядок — это и есть фикс live-бага create_from_souls (там roster-оси нет в принципе).
 
 import (
 	"strings"
@@ -171,13 +175,16 @@ func TestRedisCreate_SecretGeneratePrecedesVaultReads_Cluster(t *testing.T) {
 	assertGeneratePrecedesVaultReads(t, createClusterCase)
 }
 
-// TestRedisCreate_NoRefreshEmitter_CollapsesPassage документирует ФАКТИЧЕСКИЙ механизм
-// порядка: ребро generate→read держит roster-ось (refresh-эмиттер provision +
-// roster-потребление деплоя), а НЕ register. Убираем provision-задачи из плана (имитируем
-// исчезновение refresh-эмиттера) и фиксируем, что generate и vault()-read СХЛОПЫВАЮТСЯ в
-// один passage. Это контроль-точка хрупкости: если кто-то решит, что provision можно убрать
-// «безопасно», основной guard выше упадёт — а этот тест объясняет ПОЧЕМУ.
-func TestRedisCreate_NoRefreshEmitter_CollapsesPassage(t *testing.T) {
+// TestRedisCreate_NoRefreshEmitter_HeldByVaultAxis — реверс-guard на vault-ось
+// (ADR-056 amendment, Вариант A). ДО amendment ребро generate→read в create/ держала
+// ТОЛЬКО roster-ось (refresh-эмиттер provision): без provision-тела план схлопывался в
+// один passage (этот тест исторически фиксировал ИМЕННО вырождение). После amendment
+// порядок держит НЕЗАВИСИМАЯ vault-ось (kv-present-эмиттер → vault()-read), поэтому
+// удаление provision БОЛЬШЕ НЕ схлопывает generate→read. Тест инвертирован: теперь он
+// фиксирует, что даже без refresh-эмиттера (provision-тело вырезано) generate ОСТАЁТСЯ
+// строго раньше каждой vault()-read. Если vault-ось сломают — этот тест покраснеет
+// (read уедет обратно в passage generate), симметрично основному guard create_from_souls.
+func TestRedisCreate_NoRefreshEmitter_HeldByVaultAxis(t *testing.T) {
 	tasks, _ := loadCreatePlan(t, createSentinelCase)
 
 	var filtered []config.Task
@@ -187,7 +194,8 @@ func TestRedisCreate_NoRefreshEmitter_CollapsesPassage(t *testing.T) {
 			addr = tasks[i].Module.Module
 		}
 		// Provision-тело (cloud-create + bootstrap + soul.registered refresh) — единственный
-		// носитель refresh-эмиттера в плане. Убираем его целиком.
+		// носитель refresh-эмиттера в плане. Убираем его целиком, чтобы roster-ось
+		// заведомо НЕ участвовала и порядок проверялся ИСКЛЮЧИТЕЛЬНО vault-осью.
 		if strings.HasPrefix(addr, "core.cloud") || strings.HasPrefix(addr, "core.bootstrap") || strings.HasPrefix(addr, "core.soul") {
 			continue
 		}
@@ -211,21 +219,64 @@ func TestRedisCreate_NoRefreshEmitter_CollapsesPassage(t *testing.T) {
 	}
 	genPassage := passage.TaskPassage[genIdx]
 
-	// БЕЗ refresh-эмиттера ребро roster-оси пропадает → generate и read в одном passage.
-	// Документируем это как ожидаемое вырождение (НЕ как корректное поведение прогона):
-	// именно поэтому provision-include обязан оставаться в плане, а основной guard следит,
-	// что в реальном (полном) плане порядок соблюдён.
-	collapsed := true
+	// БЕЗ refresh-эмиттера roster-оси нет — порядок держит vault-ось. Каждая vault()-read
+	// ОБЯЗАНА быть в passage СТРОГО ПОЗЖЕ generate (иначе vault-ось сломана и прод-прогон
+	// create_from_souls — где roster-оси нет в принципе — упал бы render_failed).
+	readers := 0
 	for i := range filtered {
 		if i == genIdx || !taskReadsVaultSecret(&filtered[i]) {
 			continue
 		}
-		if passage.TaskPassage[i] > genPassage {
-			collapsed = false
+		readers++
+		if passage.TaskPassage[i] <= genPassage {
+			t.Fatalf("vault()-read задача %q в passage %d, generate в passage %d — vault-ось ДОЛЖНА держать порядок без roster-оси (ADR-056 amendment), но read схлопнулась с generate", filtered[i].Name, passage.TaskPassage[i], genPassage)
 		}
 	}
-	if !collapsed {
-		t.Fatalf("ожидалось вырождение в один passage без refresh-эмиттера, но read-задача уехала позже generate (passage %d) — механизм порядка изменился, обнови комментарий main.yml и этот guard", genPassage)
+	if readers == 0 {
+		t.Fatalf("ни одной vault()-read задачи после фильтрации provision — реверс-guard потерял предмет проверки")
 	}
-	t.Logf("без refresh-эмиттера: generate и vault()-read схлопнулись в passage %d (хрупкость задокументирована — provision несёт ребро)", genPassage)
+	t.Logf("без refresh-эмиттера: vault-ось держит generate (passage %d) строго раньше %d vault()-read задач", genPassage, readers)
+}
+
+// TestRedisCreate_TwoAxesSamePassageCount — vault-ось (ADR-056 amendment, Вариант A)
+// НЕ раздувает Passage-план create/. В create/ provision-тело даёт roster-ось, а
+// generate-шаг — vault-ось; ОБЕ уводят read-задачи в один и тот же поздний Passage
+// (generate→0, read→≥1). Объединение через level=max схлопывает совпадающие оси,
+// поэтому добавление vault-оси НЕ увеличивает Count относительно плана, где работает
+// только roster-ось. Контракт: Count(обе оси) == Count(только roster). Если vault-ось
+// начнёт расщеплять план сверх roster-оси (лишний Passage = лишний dispatch-round) —
+// тест покраснеет. На него ссылаются комментарии guard-ов (этот файл и
+// redis_create_from_souls_secrets_passage_test.go) — он закрывает «Count НЕ вырос».
+func TestRedisCreate_TwoAxesSamePassageCount(t *testing.T) {
+	tasks, both := loadCreatePlan(t, createSentinelCase)
+
+	// Roster-only: переименовываем generate-шаг в нейтральный модуль — vault-эмиттер
+	// исчезает (taskIsVaultEmitter сверяет адрес core.vault.kv-present), vault-ось
+	// мертва, roster-ось (provision-refresh) остаётся. Сам план задач тот же, меняется
+	// только класс одной задачи — чистое A/B на ось.
+	var rosterOnly []config.Task
+	renamed := false
+	for i := range tasks {
+		cp := tasks[i]
+		if taskIsSecretGenerate(&cp) {
+			m := *cp.Module
+			m.Module = "core.noop.run"
+			cp.Module = &m
+			renamed = true
+		}
+		rosterOnly = append(rosterOnly, cp)
+	}
+	if !renamed {
+		t.Fatalf("generate-шаг не найден в плане — A/B на vault-ось невозможно (предмет проверки исчез)")
+	}
+
+	rosterPlan, err := config.Stratify(rosterOnly)
+	if err != nil {
+		t.Fatalf("Stratify (roster-only): %v", err)
+	}
+
+	if both.Count != rosterPlan.Count {
+		t.Fatalf("vault-ось раздула план create/: Count(обе оси)=%d != Count(только roster)=%d — vault-ось должна совпадать с roster-осью (level=max), а не добавлять Passage", both.Count, rosterPlan.Count)
+	}
+	t.Logf("create/ Count=%d одинаков с обеими осями и только с roster — vault-ось план не раздула", both.Count)
 }

@@ -145,16 +145,33 @@ func Stratify(tasks []Task) (Passage, error) {
 	// refreshEmitters пуст → граница не активна, Count БИТ-В-БИТ как до ADR-0061.
 	var refreshEmitters []int
 	readsRoster := make([]bool, n)
+	// vault-secrets-generated граница (ADR-056 amendment, ОТДЕЛЬНАЯ ОСЬ): эмиттеры
+	// `core.vault.kv-present` (пишут секреты по targets) и vault-потребители (читают
+	// `${ vault(...) }` в passage-определяющем поле). Любой vault-потребитель ПОСЛЕ
+	// vault-эмиттера (program-order) едет в следующий Passage — иначе render деплоя
+	// (vault_resolve) прочитал бы секрет ДО его записи → render_failed (live-баг
+	// create_from_souls, где roster-оси нет). vaultEmitters пуст → граница не активна,
+	// Count БИТ-В-БИТ как до amendment. См. passage_vault.go.
+	var vaultEmitters []int
+	readsVault := make([]bool, n)
 	for i := range tasks {
 		reads[i] = taskRegisterReads(&tasks[i])
 		emits[i] = taskEmitsRegister(&tasks[i])
 		if taskIsRefreshEmitter(&tasks[i]) {
 			refreshEmitters = append(refreshEmitters, i)
 		}
+		if taskIsVaultEmitter(&tasks[i]) {
+			vaultEmitters = append(vaultEmitters, i)
+		}
 	}
 	if len(refreshEmitters) > 0 {
 		for i := range tasks {
 			readsRoster[i] = taskReadsRoster(&tasks[i])
+		}
+	}
+	if len(vaultEmitters) > 0 {
+		for i := range tasks {
+			readsVault[i] = taskReadsVaultSecret(&tasks[i])
 		}
 	}
 
@@ -229,6 +246,28 @@ func Stratify(tasks []Task) (Passage, error) {
 			for _, j := range refreshEmitters {
 				if j >= i {
 					break // refreshEmitters отсортированы по возрастанию (append в порядке обхода).
+				}
+				p, err := visit(j)
+				if err != nil {
+					return 0, err
+				}
+				if p+1 > level {
+					level = p + 1
+				}
+			}
+		}
+
+		// vault-secrets-generated ребро (ADR-056 amendment, ТРЕТЬЯ ось): задача-vault-
+		// потребитель (читает `${ vault(...) }`) едет в Passage СТРОГО ПОСЛЕ любого
+		// ПРЕДШЕСТВУЮЩЕГО (program-order) vault-эмиттера (`core.vault.kv-present`).
+		// Симметрично roster-ребру: эмиттер сигналит «секреты записаны», потребитель
+		// обязан рендериться (vault_resolve) уже после записи. Цикла быть не может —
+		// ребро строго направлено по program-order (j < i), и kv-present сам vault() не
+		// читает (он vault-эмиттер, не потребитель).
+		if readsVault[i] {
+			for _, j := range vaultEmitters {
+				if j >= i {
+					break // vaultEmitters отсортированы по возрастанию (append в порядке обхода).
 				}
 				p, err := visit(j)
 				if err != nil {

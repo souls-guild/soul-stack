@@ -3,13 +3,16 @@ package push
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
 	"strconv"
+	"time"
 
 	apiclient "github.com/gravitational/teleport/api/client"
 	"github.com/gravitational/teleport/api/client/proxy"
+	"github.com/gravitational/teleport/api/identityfile"
 	apissh "github.com/gravitational/teleport/api/ssh"
 	"golang.org/x/crypto/ssh"
 )
@@ -31,6 +34,45 @@ type TeleportDialerConfig struct {
 	// Cluster — имя Teleport-кластера, в котором резолвятся node-name-ы.
 	// Обязателен (передаётся в DialHost как `cluster`).
 	Cluster string
+	// UseSystemTrust меняет верификацию proxy-server-cert на mTLS-gRPC к Proxy
+	// (ADR-063 amendment «Teleport-proxy за L7-TLS-балансировщиком»). Опционально,
+	// default false = текущее поведение бит-в-бит.
+	//
+	// false: proxy-cert верифицируется через identity-CA-pool из creds.TLSConfig()
+	// + sentinel-ServerName `teleport.cluster.local` (Teleport API client). Валидно,
+	// когда proxy презентует Teleport-issued cert.
+	//
+	// true: proxy стоит ЗА публичным L7-TLS-балансировщиком, который презентует
+	// собственный публичный cert (напр. `*.tp.rwb.ru`, без SAN `teleport.cluster.local`).
+	// RootCAs обнуляется → Go берёт системный trust store, ServerName ставится в host
+	// из ProxyAddr → публичный cert балансировщика верифицируется штатно. Client-cert
+	// (mTLS-auth на proxy) СОХРАНЯЕТСЯ. Это НЕ InsecureSkipVerify: верификация cert не
+	// отключается, лишь смещается на системный trust + реальный host — server-cert
+	// proxy не граница доверия Soul Stack (auth = client-mTLS + SSH host-CA из identity).
+	UseSystemTrust bool
+	// AlpnUpgrade оборачивает gRPC-коннект к Proxy в ALPN-conn-upgrade
+	// (WebSocket-туннель на `/webapi/connectionupgrade`), ADR-063 amendment
+	// «Teleport-proxy за L7-TLS-балансировщиком». Опционально, default false =
+	// текущее поведение бит-в-бит.
+	//
+	// Нужен, когда Proxy стоит ЗА L7-TLS-балансировщиком, который терминирует TLS
+	// и НЕ проксирует raw gRPC/SSH-stream (отдаёт HTTP вместо gRPC → DialHost
+	// падает на `403 / content-type "text/plain"`). ALPN-обёртка туннелирует
+	// stream поверх HTTP, который L7-LB пропускает.
+	//
+	// При alpn-upgrade соединение = ДВА независимых TLS-слоя:
+	//   - ВНЕШНИЙ TLS к LB (websocket-upgrade) — захардкожен в вендоре на
+	//     системный trust + ServerName=host(proxy_addr); наш TLSConfigFunc сюда
+	//     не доходит, публичный cert балансировщика верифицируется системным trust.
+	//   - ВНУТРЕННИЙ gRPC-mTLS к Teleport-proxy поверх туннеля — строится из
+	//     нашего TLSConfigFunc. Proxy предъявляет Teleport-CA-issued cert (SAN
+	//     `teleport.cluster.local`), поэтому внутренний слой получает ОБЪЕДИНЁННЫЙ
+	//     trust: identity-CA-pool ∪ системный (применяется applyProxyTLSTrustALPN).
+	//
+	// alpn-режим САМ задаёт внутренний trust → UseSystemTrust при AlpnUpgrade=true
+	// игнорируется (alpn-ветка приоритетна). Teleport сам добавляет
+	// WithALPNConnUpgradePing внутри newDialerForGRPCClient.
+	AlpnUpgrade bool
 }
 
 // NewTeleportDialer строит [Dialer], который открывает SSH-сессию к target
@@ -93,6 +135,18 @@ func NewTeleportDialer(cfg TeleportDialerConfig) (Dialer, error) {
 		return nil, fmt.Errorf("push: NewTeleportDialer: identity %q: SSH-client-config: %w", cfg.IdentityFile, err)
 	}
 
+	// При UseSystemTrust ServerName proxy-cert = host из ProxyAddr (без порта).
+	// Резолвим один раз на старте: битый proxy_addr (нет `:port`) — конструктор-
+	// ошибка через buildBootstrapTeleportDialer → errSetupFailed, не поздний Dial.
+	var proxyHost string
+	if cfg.UseSystemTrust {
+		h, _, err := net.SplitHostPort(cfg.ProxyAddr)
+		if err != nil {
+			return nil, fmt.Errorf("push: NewTeleportDialer: proxy_addr %q: %w", cfg.ProxyAddr, err)
+		}
+		proxyHost = h
+	}
+
 	return func(ctx context.Context, dialCfg DialConfig) (Session, error) {
 		creds := apiclient.LoadIdentityFile(cfg.IdentityFile)
 
@@ -100,19 +154,29 @@ func NewTeleportDialer(cfg TeleportDialerConfig) (Dialer, error) {
 		if err != nil {
 			return nil, fmt.Errorf("push: teleport identity %q: TLS-config: %w", cfg.IdentityFile, err)
 		}
+		if cfg.AlpnUpgrade {
+			// alpn-режим: внутренний gRPC-mTLS идёт к настоящему Teleport-proxy
+			// (Teleport-CA cert, SAN `teleport.cluster.local`) — нужен объединённый
+			// trust. RootCAs из creds.TLSConfig() непрозрачен (сертификаты обратно
+			// не достать), поэтому RAW identity-CA берём из identity-file напрямую:
+			// CACerts.TLS — те же PEM-блоки, что apiclient.LoadIdentityFile кладёт в
+			// RootCAs под капотом (identityfile.ReadFile → idFile.TLSConfig()).
+			idFile, ierr := identityfile.ReadFile(cfg.IdentityFile)
+			if ierr != nil {
+				return nil, fmt.Errorf("push: teleport identity %q: read identity-CA: %w", cfg.IdentityFile, ierr)
+			}
+			if terr := applyProxyTLSTrustALPN(tlsConfig, idFile.CACerts.TLS); terr != nil {
+				return nil, fmt.Errorf("push: teleport identity %q: %w", cfg.IdentityFile, terr)
+			}
+		} else {
+			applyProxyTLSTrust(tlsConfig, cfg.UseSystemTrust, proxyHost)
+		}
 		sshConfig, err := creds.SSHClientConfig()
 		if err != nil {
 			return nil, fmt.Errorf("push: teleport identity %q: SSH-client-config: %w", cfg.IdentityFile, err)
 		}
 
-		proxyClient, err := proxy.NewClient(ctx, proxy.ClientConfig{
-			ProxyAddress: cfg.ProxyAddr,
-			SSHConfig:    sshConfig,
-			TLSConfigFunc: func(string) (*tls.Config, error) {
-				return tlsConfig, nil
-			},
-			DialTimeout: dialCfg.Timeout,
-		})
+		proxyClient, err := proxy.NewClient(ctx, buildProxyClientConfig(cfg, tlsConfig, sshConfig, dialCfg.Timeout))
 		if err != nil {
 			return nil, fmt.Errorf("push: teleport proxy-client %s: %w", cfg.ProxyAddr, err)
 		}
@@ -140,6 +204,91 @@ func NewTeleportDialer(cfg TeleportDialerConfig) (Dialer, error) {
 		_ = proxyClient.Close()
 		return &sshSession{client: client}, nil
 	}, nil
+}
+
+// buildProxyClientConfig собирает proxy.ClientConfig для одного Dial-а. Выделено
+// чистой функцией (без сети) ради guard-теста: proxy.NewClient требует живой
+// Teleport-сети, а здесь проверяется лишь маппинг полей TeleportDialerConfig в
+// proxy.ClientConfig — в частности ALPNConnUpgradeRequired (ADR-063 amendment
+// «Teleport-proxy за L7-TLS-балансировщиком»).
+//
+// AlpnUpgrade=true → ALPNConnUpgradeRequired:true (ALPN-conn-upgrade WebSocket-
+// туннель для L7-LB перед Proxy). WithALPNConnUpgradePing Teleport включает сам
+// внутри newDialerForGRPCClient — здесь не дублируется. Прочие поля
+// (TLSRoutingEnabled / InsecureSkipVerify) НЕ трогаются: первое влияет только на
+// путь к Auth, не на DialHost; второе отключило бы верификацию публичного cert
+// (MITM-дыра).
+func buildProxyClientConfig(cfg TeleportDialerConfig, tlsConfig *tls.Config, sshConfig apissh.ClientConfig, dialTimeout time.Duration) proxy.ClientConfig {
+	return proxy.ClientConfig{
+		ProxyAddress: cfg.ProxyAddr,
+		SSHConfig:    sshConfig,
+		TLSConfigFunc: func(string) (*tls.Config, error) {
+			return tlsConfig, nil
+		},
+		DialTimeout:             dialTimeout,
+		ALPNConnUpgradeRequired: cfg.AlpnUpgrade,
+	}
+}
+
+// applyProxyTLSTrust настраивает верификацию proxy-server-cert на mTLS-gRPC к
+// Teleport Proxy (ADR-063 amendment «Teleport-proxy за L7-TLS-балансировщиком»).
+//
+// useSystemTrust=false (дефолт): tls.Config не трогается — proxy-cert
+// верифицируется через identity-CA-pool (RootCAs из creds.TLSConfig()) + sentinel-
+// ServerName `teleport.cluster.local`, проставленные самим Teleport API client.
+//
+// useSystemTrust=true: proxy за публичным L7-TLS-балансировщиком. RootCAs=nil → Go
+// берёт системный trust store (верифицирует публичный балансировщик-cert);
+// ServerName=proxyHost снимает sentinel `teleport.cluster.local` (его в SAN
+// балансировщика нет). Certificates/GetClientCertificate (mTLS client-cert для
+// auth на proxy) НЕ трогаются — без них коннект отвергается. Это НЕ
+// InsecureSkipVerify: верификация cert сохранена, лишь смещена на системный trust
+// + реальный host.
+//
+// Выделено отдельной чистой функцией ради guard-теста: applyProxyTLSTrust
+// тестируется напрямую (живая Teleport-сеть для proxy.NewClient в тесте недоступна).
+func applyProxyTLSTrust(tlsConfig *tls.Config, useSystemTrust bool, proxyHost string) {
+	if !useSystemTrust {
+		return
+	}
+	tlsConfig.RootCAs = nil
+	tlsConfig.ServerName = proxyHost
+}
+
+// applyProxyTLSTrustALPN настраивает ВНУТРЕННИЙ gRPC-mTLS-слой при alpn-conn-
+// upgrade (ADR-063 amendment «Teleport-proxy за L7-TLS-балансировщиком», решение
+// «a» — объединённый trust).
+//
+// При alpn внутренний слой упирается в настоящий Teleport-proxy, который
+// предъявляет Teleport-CA-issued cert (SAN `teleport.cluster.local`). Чтобы
+// внутренний trust знал И Teleport-CA (из identity), И публичные CA (на случай,
+// если за туннелем встретится публичный cert), RootCAs = системный пул ∪
+// identity-CA:
+//   - системный пул берётся клоном x509.SystemCertPool() (если nil — пустой);
+//   - identity-CA добавляются из RAW PEM-блоков identityCAPEM (CACerts.TLS
+//     identity-file — те же CA, что creds.TLSConfig() кладёт в RootCAs, но в
+//     прозрачном виде, пригодном для объединения).
+//
+// ServerName НЕ трогается — остаётся sentinel `teleport.cluster.local` от
+// creds.TLSConfig() (внутренний идёт к настоящему Teleport-proxy с этим SAN).
+// Certificates/GetClientCertificate (mTLS client-cert) НЕ трогаются. Это НЕ
+// InsecureSkipVerify: верификация cert сохранена, лишь trust расширен.
+//
+// Выделено отдельной чистой функцией ради guard-теста (живая Teleport-сеть для
+// proxy.NewClient в тесте недоступна); identity-CA передаются параметром, а не
+// читаются из FS, чтобы тест не зависел от файла.
+func applyProxyTLSTrustALPN(tlsConfig *tls.Config, identityCAPEM [][]byte) error {
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	for _, caPEM := range identityCAPEM {
+		if !pool.AppendCertsFromPEM(caPEM) {
+			return fmt.Errorf("alpn-trust: невалидный identity-CA PEM")
+		}
+	}
+	tlsConfig.RootCAs = pool
+	return nil
 }
 
 // newTeleportSSHClient проводит SSH-handshake к target поверх уже открытого

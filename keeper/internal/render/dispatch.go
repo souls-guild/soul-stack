@@ -136,6 +136,15 @@ func resolveOn(engine *cel.Engine, in RenderInput, on any) ([]string, error) {
 // не кладётся: `incarnation.state.<x>` даёт штатный no-such-key (push/trial без State,
 // backward-compat). Граница keeper↔soul соблюдена: state — operator-факты (не секреты),
 // soulprint.self/.hosts по-прежнему недоступны (хостов нет).
+//
+// register: keeper→keeper chaining (staged-render, ADR-056) — keeper-задача активного
+// Passage видит `register.<prev>.*` keeper-задач прошлых Passage через ИЗОЛИРОВАННЫЙ
+// канал [RenderInput.KeeperRegister] (stage-loop переливает туда keeperRegisterBucket).
+// Канал отделён от плоской Register СОЗНАТЕЛЬНО: host-fallback ([hostRegister]) остаётся
+// на Register, поэтому host-задача смешанного Passage НЕ читает keeper-register при
+// пустом per-host bucket. Пусто (P0, N=1, не-staged, host-only Passage) → fallback на
+// плоскую Register (backward-compat: trial/push/прочие caller-ы, выставляющие только
+// Register, видят register тем же путём БИТ-В-БИТ).
 func keeperVars(in RenderInput) cel.Vars {
 	inc := map[string]any{
 		"name":            in.Incarnation.Name,
@@ -146,9 +155,13 @@ func keeperVars(in RenderInput) cel.Vars {
 	if in.State != nil {
 		inc["state"] = in.State
 	}
+	reg := in.Register
+	if len(in.KeeperRegister) > 0 {
+		reg = in.KeeperRegister
+	}
 	return cel.Vars{
 		Input:       in.Input,
-		Register:    in.Register,
+		Register:    reg,
 		Incarnation: inc,
 		Essence:     in.Essence,
 		Ctx:         in.Ctx,

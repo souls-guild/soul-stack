@@ -88,6 +88,8 @@
   "createScenarioLabel": "Start scenario",
   "createScenarioRequired": "Select a start scenario",
   "createBareInfo": "This service offers no start scenarios — a bare incarnation will be created; operations run via day-2 scenarios.",
+  "createFromSoulsHint": "This scenario requires already onboarded souls in coven «{{coven}}». Add them via the Hosts tab on the incarnation before running.",
+  "createFromSoulsHostsLink": "→ Go to Souls",
   "dataSummaryDesc": "Where to find incarnation parameters:",
   "dataSummaryHostsTail": "— declared + connected + per-host runtime data.",
   "dataSummarySchemaTail": "— state structure version",
@@ -117,6 +119,10 @@
   "forceAddWarningTitle": "Dangerous operation.",
   "historyEmpty": "History is empty.",
   "hostsCardHint": "+ connected souls by coven",
+  "hostsCardOnline": "{{n}} online",
+  "hostsCardDeclared": "{{n}} declared",
+  "hostsCardLoading": "…",
+  "historyApplyIdLink": "Open run",
   "hostsLoadFailed": "Failed to load souls: {{detail}}",
   "incarnationNotFound": "Incarnation not found.",
   "inputComplexJson": "The scenario schema contains complex types — JSON mode.",
@@ -233,5 +239,9 @@
   "editTraitsNoCurrentNote": "Current trait values are unavailable without a backend update (no GET /traits). To update selectively — check current traits via API first.",
   "editTraitsSaving": "Saving…",
   "editTraitsSave": "Save",
-  "editTraitsSuccess": "Incarnation traits updated"
+  "editTraitsSuccess": "Incarnation traits updated",
+  "provisionToggleLabel": "Create VMs automatically (cloud provision)",
+  "provisionDisabledHint": "The run will use already-onboarded souls in coven «{{coven}}». Add them via the Hosts tab on the incarnation before running.",
+  "provisionHostWarningTitle": "Warning: roster is empty",
+  "provisionHostWarningBody": "This run needs {{n}} host(s). Enable cloud provision (creates VMs automatically) OR onboard the required number of souls to coven «{{coven}}» via Hosts before running."
 }

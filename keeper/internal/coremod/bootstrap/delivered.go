@@ -96,6 +96,13 @@ const (
 	// defaultJoinWaitTimeout — потолок ожидания Teleport-join по умолчанию
 	// (опц. param `join_wait_timeout`). 6 мин с запасом над типовыми 3-5мин.
 	defaultJoinWaitTimeout = 6 * time.Minute
+	// DefaultJoinWaitTimeout — экспортированное зеркало defaultJoinWaitTimeout:
+	// делает дефолтный тайм-бюджет Teleport-join частью наблюдаемого контракта,
+	// чтобы статический guard-инвариант (provision-aware effective run-timeout
+	// scenario обязан превышать joinWait — иначе настройка «мертва»: барьер
+	// онбординга упрётся в обрыв прогона) проверял РЕАЛЬНОЕ значение, а не его
+	// дубль. Значение и поведение delivered.go не меняются.
+	DefaultJoinWaitTimeout = defaultJoinWaitTimeout
 	// joinRetryBase — базовый интервал между попытками connect-а.
 	joinRetryBase = 12 * time.Second
 	// joinRetryJitter — верхняя граница случайной добавки к интервалу (anti-

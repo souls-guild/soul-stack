@@ -348,19 +348,22 @@ validate:
   # (URL бинаря), а не на input-валидации. Сам install_method тоже в essence (2026-06-28)
   # — НЕ operator-input → отдельного input-правила под него нет.
 
-  # ★ system-ACL-users guard (дизайн d2): operator-extra (input.users) НЕ может занять
-  # имя СЛУЖЕБНОГО юзера. Системные (default/replica/monitoring/sentinel/haproxy)
-  # доливаются в users.acl из essence.system_acl_users[_sentinel] с last-wins ПОВЕРХ
-  # системных — операторский юзер с тем же именем МОЛЧА перекрыл бы служебные perms
-  # (напр. operator `replica` с `~* +@all` сломал бы replica-perms репликации, дав
-  # лишние права). Ловим коллизию на INPUT-валидации (422 ДО applying) понятным
-  # отказом, а не молчаливым переопределением. INPUT-ONLY (essence в validate
-  # недоступен — структурный CEL-барьер): список зарезервированных имён захардкожен
-  # здесь (он же essence.system_acl_users[_sentinel] keys + default из requirepass).
+  # ★ system-ACL-users guard (дизайн d2 + редизайн default_admin 2026-06-30): operator-extra
+  # (input.users) НЕ может занять имя СЛУЖЕБНОГО юзера. Системные (default_admin/replica/
+  # monitoring/sentinel/haproxy) доливаются в users.acl из essence.system_acl_users[_sentinel]
+  # с last-wins ПОВЕРХ системных — операторский юзер с тем же именем МОЛЧА перекрыл бы
+  # служебные perms (напр. operator `replica` с `~* +@all` сломал бы replica-perms
+  # репликации; operator `default_admin` подменил бы admin-учётку внутрикластерного AUTH).
+  # Ловим коллизию на INPUT-валидации (422 ДО applying) понятным отказом, а не молчаливым
+  # переопределением. INPUT-ONLY (essence в validate недоступен — структурный CEL-барьер):
+  # список зарезервированных имён захардкожен здесь (= essence.system_acl_users[_sentinel]
+  # keys). ★ `default` из reserved УБРАН (редизайн): встроенный Redis-юзер default больше НЕ
+  # системный (его роль занял default_admin) — оператор может объявить default в input.users
+  # (тогда он рендерится range-ом, иначе шаблон ставит `user default off`). +default_admin.
   # has()-guard — input.users опционален; .all() над МАССИВОМ итерирует элементы
   # AclUser (wave 1b), имя — поле u.name (раньше map-ключ name).
-  - that: "!has(input.users) || input.users.all(u, !(u.name in ['default', 'replica', 'monitoring', 'sentinel', 'haproxy']))"
-    message: "имя ACL-пользователя зарезервировано за служебным (default/replica/monitoring/sentinel/haproxy): выбери другое имя — служебные юзеры заводятся автоматически из essence"
+  - that: "!has(input.users) || input.users.all(u, !(u.name in ['default_admin', 'replica', 'monitoring', 'sentinel', 'haproxy']))"
+    message: "имя ACL-пользователя зарезервировано за служебным (default_admin/replica/monitoring/sentinel/haproxy): выбери другое имя — служебные юзеры заводятся автоматически из essence"
 
   # ★ Правило «modules_base_url обязателен на Redis < 8» УБРАНО (2026-06-25): источник
   # .so переехал из operator-input в essence.modules_base_url (author-context, дефолт ""),
@@ -412,6 +415,17 @@ validate:
 # системные каталоги вне input-схемы conf_dir/data_dir; unixsocket/dbfilename в шаблоне
 # не задаются.
 compute:
+  # ── admin_user: имя СИСТЕМНОГО ACL-юзера внутрикластерного AUTH (default_admin) ──
+  # ★ РЕДИЗАЙН default_admin (2026-06-30): ЕДИНЫЙ источник имени admin-юзера, под которым
+  # идёт ВСЯ внутрикластерная аутентификация (репликация masterauth, cluster MEET, sentinel
+  # monitor/auth, health-PING) — заменил прежний requirepass-юзер default. Все деплой-тела
+  # (redis-deploy-{sentinel,cluster,cluster-joinable}.yml) читают compute.admin_user в
+  # плагин-вызовах community.redis.* (params.username/master_username/auth_user) и в Vault-
+  # пути его пароля — НЕ хардкодят 'default_admin' в десятках мест. Литерал (не из input/
+  # essence): имя системного юзера — инвариант сервиса, не операторский выбор. Пароль
+  # default_admin — secret/redis/<inc>/users/<admin_user>#password. ★ day-2-тела
+  # (вне covenant) хардкодят 'default_admin' напрямую (у них нет extends: covenant compute).
+  admin_user: "${ 'default_admin' }"
   # ── TLS-флаги: enum connection_mode + essence-параметры (редизайн) ────────────
   # TLS-намерение — connection_mode (input enum с default → всегда есть); порт/refs —
   # из essence (см. tls_on/tls_only_on/tls_port/tls_*_ref ниже). Объявлены ОТДЕЛЬНЫМИ

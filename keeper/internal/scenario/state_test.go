@@ -1134,3 +1134,79 @@ func TestStartedByPtr(t *testing.T) {
 		t.Errorf("startedByPtr = %v", p)
 	}
 }
+
+// TestKeeperRegisterBucket_FromRegisterByHost — ★ GUARD Слайса 1 (keeper→keeper
+// register-chaining, staged-render). Дыра, которую закрывает Слайс 1: keeper-задачи
+// копят register под синтетическим хостом KeeperTargetSID ("keeper") в per-host
+// таблицу прогона (accumulateKeeperRegister), buildRegisterByHost кладёт его в
+// RegisterByHost["keeper"], но keeperVars (render/dispatch.go) читает register
+// ТОЛЬКО из ПЛОСКОЙ in.Register. keeperRegisterBucket — мост: достаёт keeper-bucket
+// предыдущих Passage в плоскую форму, чтобы stage-loop run.go положил его в
+// renderIn.Register перед per-passage render-ом keeper-задач активного Passage.
+//
+// Сценарий guard-а воспроизводит вход stage-loop на P>0: register двух Passage в
+// per-host таблице — keeper-задача (под KeeperTargetSID) + host-задача (под обычным
+// SID). buildRegisterByHost резолвит обе по PlanIndex (как loadRegisterByHostUpToPassage),
+// keeperRegisterBucket выделяет ровно keeper-bucket. Это unit-форма guard-а Слайса 1;
+// end-to-end 2-passage цепочку (bootstrap.delivered видит register.provision.*)
+// проверяет guard Слайса 2 (per-passage keeper-dispatch).
+func TestKeeperRegisterBucket_FromRegisterByHost(t *testing.T) {
+	// План: Passage 0 — keeper-задача (on: keeper, register: provision), Passage 1 —
+	// host-задача (register: probe). Index стабилен между Passage (тот же план).
+	tasks := []*render.RenderedTask{
+		{Index: 0, Register: "provision"}, // keeper-задача — копит под KeeperTargetSID
+		{Index: 1, Register: "probe"},     // host-задача — копит под обычным SID
+	}
+	// Register-строки прогона (как их вернёт SelectTaskRegistersByApplyIDUpToPassage):
+	// keeper-register под KeeperTargetSID + host-register под host-1, корреляция по
+	// глобальному PlanIndex.
+	rows := []applyrun.TaskRegister{
+		{ApplyID: "a", SID: render.KeeperTargetSID, PlanIndex: 0, TaskIdx: 0, RegisterData: map[string]any{"ip": "10.0.0.5"}},
+		{ApplyID: "a", SID: "host-1", PlanIndex: 1, TaskIdx: 1, RegisterData: map[string]any{"stdout": "master"}},
+	}
+
+	reg := buildRegisterByHost(rows, tasks)
+
+	bucket := keeperRegisterBucket(reg)
+	if bucket == nil {
+		t.Fatal("keeperRegisterBucket вернул nil — keeper-register предыдущего Passage потерян (дыра Слайса 1)")
+	}
+	// keeper-register доступен в плоской форме под именем provision → keeperVars
+	// увидит register.provision.* у keeper-задачи активного Passage.
+	prov, ok := bucket["provision"].(map[string]any)
+	if !ok {
+		t.Fatalf("bucket[provision] = %T, want map (register keeper-задачи)", bucket["provision"])
+	}
+	if prov["ip"] != "10.0.0.5" {
+		t.Errorf("bucket[provision].ip = %v, want 10.0.0.5", prov["ip"])
+	}
+	// host-register (probe под host-1) в keeper-bucket НЕ попадает: проброс в плоскую
+	// Register несёт ТОЛЬКО keeper-задачи, host-bucket остаётся в RegisterByHost[sid]
+	// (host-путь читает его per-host, не из плоской Register).
+	if _, leaked := bucket["probe"]; leaked {
+		t.Error("bucket[probe] присутствует — host-register протёк в keeper-bucket")
+	}
+}
+
+// TestKeeperRegisterBucket_NoKeeperRegister_Nil — host-only Passage (нет keeper-
+// register): keeperRegisterBucket → nil, stage-loop плоскую Register НЕ трогает
+// (БИТ-В-БИТ: на P>0 без keeper-задач плоская Register остаётся пустой, как до
+// Слайса 1). Это гарантирует, что проброс не расширяет видимость host-задач, у
+// которых per-host карта пуста (fallback hostRegister остаётся прежним пустым).
+func TestKeeperRegisterBucket_NoKeeperRegister_Nil(t *testing.T) {
+	tasks := []*render.RenderedTask{{Index: 0, Register: "probe"}}
+	rows := []applyrun.TaskRegister{
+		{ApplyID: "a", SID: "host-1", PlanIndex: 0, TaskIdx: 0, RegisterData: map[string]any{"stdout": "x"}},
+	}
+	reg := buildRegisterByHost(rows, tasks)
+	if bucket := keeperRegisterBucket(reg); bucket != nil {
+		t.Errorf("keeperRegisterBucket = %v, want nil (нет register под KeeperTargetSID)", bucket)
+	}
+	// Пустая/nil карта → nil.
+	if bucket := keeperRegisterBucket(nil); bucket != nil {
+		t.Errorf("keeperRegisterBucket(nil) = %v, want nil", bucket)
+	}
+	if bucket := keeperRegisterBucket(map[string]map[string]any{}); bucket != nil {
+		t.Errorf("keeperRegisterBucket(empty) = %v, want nil", bucket)
+	}
+}

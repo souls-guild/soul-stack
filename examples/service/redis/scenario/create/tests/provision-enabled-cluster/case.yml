@@ -37,6 +37,11 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
+    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер внутрикластерного
+    # AUTH; cluster-build (community.redis.cluster) и masteruser/masterauth деплоя читают его
+    # пароль ветки users/default_admin (главный секрет ДРОПНУТ из деплой-тел).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
     secret/redis/create/users/replica:
       password: replica-sys-secret-pass
     secret/redis/create/users/monitoring:

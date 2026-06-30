@@ -74,18 +74,40 @@
       # (default = текущий путь, back-compat). HOST-ИНВАРИАНТ → apply.input.
       conf_dir: "${ compute.conf_dir }"
       data_dir: "${ compute.data_dir }"
-      password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+      # ★ РЕДИЗАЙН default_admin (2026-06-30): input.password УДАЛЁН (requirepass убран).
+      # Аутентификация — под системным default_admin, его пароль приходит в users ниже.
       # Единый compute.redis_config (объявлен ОДИН раз в main.yml инклудящего, ADR-009):
       # тот же map, что уйдёт в state_changes.redis_config — drift «state ≡ live config»
       # снят самим compute. Для sentinel = базовый merge (БЕЗ cluster-директив;
       # tls-replication yes при TLS, port 0 при tls_only). HOST-ИНВАРИАНТ → apply.input.
-      config: "${ compute.redis_config }"
+      #
+      # ★ РЕДИЗАЙН default_admin: СТАТИЧЕСКАЯ replica→master AUTH в redis.conf — masteruser/
+      # masterauth ДОЛИВАЮТСЯ в config ОБЫЧНЫМИ директивами (поверх compute.redis_config).
+      # КРИТИЧНО для ПЕРСИСТЕНТНОСТИ через рестарт: плагин community.redis.replica (шаг 3)
+      # ставит их CONFIG SET-ом в рантайме, но CONFIG SET НЕ сохраняется без CONFIG REWRITE →
+      # при sentinel restart redis-server поднялся бы без masterauth → replica
+      # master_link_status:DOWN → replica-synced timeout (live-дефект). Статическая директива
+      # в redis.conf переживает рестарт. Директивы host-ИНВАРИАНТНЫ (один default_admin на
+      # кластер) → apply.input. Failover-safe: Redis применяет masteruser/masterauth, лишь
+      # когда узел становится репликой — на текущем master инертны, старый master после
+      # failover уже несёт креды. ★ ОТЛИЧНО от state_changes.redis_config (covenant.yml):
+      # там остаётся ЧИСТЫЙ compute.redis_config БЕЗ masterauth — пароль НЕ уезжает в
+      # incarnation.state (секрет живёт в Vault). masterauth — vault()-В-ЯЧЕЙКЕ (seal-маскинг,
+      # ADR-010 §7.4): пароль маскируется в логах/OTel/state. admin_user = default_admin
+      # (compute.admin_user); путь — secret/redis/<inc>/users/default_admin#password.
+      config: >-
+        ${ merge(compute.redis_config, {
+             'masteruser': compute.admin_user,
+             'masterauth': vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password')
+           }) }
       # ★ СИСТЕМНЫЕ + operator-extra (system-ACL-users, дизайн d2 Вариант A): служебные
-      # replica/monitoring/sentinel/haproxy из essence.system_acl_users ПЕРВЫМИ,
-      # operator-extra (input.users — МАССИВ AclUser, wave 1b) ПОВЕРХ (last-wins).
-      # default — в requirepass redis.conf, не здесь. Без системных репликация (replica) и
-      # sentinel↔redis AUTH (sentinel) сломаются. Vault-пароль — secret/redis/<inc>/users/
-      # <name>#password. operator-extra: .map(u, {u.name: …}) (имя из поля u.name).
+      # default_admin/replica/monitoring/sentinel/haproxy из essence.system_acl_users
+      # ПЕРВЫМИ, operator-extra (input.users — МАССИВ AclUser, wave 1b) ПОВЕРХ (last-wins).
+      # ★ default_admin (редизайн) — СИСТЕМНЫЙ юзер полного доступа (~* &* +@all), приходит
+      # из essence.system_acl_users как все: под ним идёт внутрикластерный AUTH (заменил
+      # requirepass-default). Без системных репликация (replica), sentinel↔redis AUTH
+      # (sentinel) и admin-коннект (default_admin) сломаются. Vault-пароль — НОВЫЙ путь
+      # secret/redis/<inc>/users/<name>#password. operator-extra: .map(u, {u.name: …}).
       users: >-
         ${ merge(
              merge(default(essence.system_acl_users, {}).map(name, {
@@ -106,21 +128,20 @@
                : {}
            ) }
       # ★ 2-й aclfile sentinel-демона (system-ACL-users, дизайн d2): sentinel использует
-      # ОТДЕЛЬНЫЙ perms-набор essence.system_acl_users_sentinel (default/monitoring/
+      # ОТДЕЛЬНЫЙ perms-набор essence.system_acl_users_sentinel (default_admin/monitoring/
       # sentinel/haproxy — sentinel-команды, не redis-команды). Опциональное поле destiny
       # `redis` input.sentinel_users → задача рендера sentinel-users.acl + sentinel.conf.tmpl
       # aclfile. Только системные (operator-extra в sentinel-aclfile не доливается).
-      # ★ Vault-пароль: default-юзер → ГЛАВНЫЙ секрет secret/redis/<inc>#password (тот же,
-      # что requirepass redis-server — иначе sentinel-демон не пустил бы default-клиента
-      # общим паролем). Остальные (monitoring/sentinel/haproxy) → ветка users/<name>#password.
+      # ★ РЕДИЗАЙН default_admin: прежний тернар «default → ГЛАВНЫЙ секрет, остальные →
+      # users/<name>» УБРАН — все системные (вкл. default_admin) по ЕДИНОЙ ветке
+      # secret/redis/<inc>/users/<name>#password. sentinel-демон коннектится к
+      # :26379 под default_admin (его пароль из этой ветки), к master — auth_user default_admin.
       sentinel_users: >-
         ${ merge(default(essence.system_acl_users_sentinel, {}).map(name, {
              name: {
                'perms':    essence.system_acl_users_sentinel[name],
                'state':    'on',
-               'password': (name == 'default')
-                 ? vault('secret/redis/' + incarnation.name + '#password')
-                 : vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+               'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
              }
            })) }
       # Redis-модули — НАБОР больше НЕ передаётся (директива «модули ВСЕГДА ВСЕ»): destiny
@@ -159,7 +180,12 @@
         # quorum — АВТО (большинство): size(soulprint.hosts)/2+1. Операторского поля
         # sentinel_quorum больше нет (убрано 2026-06-25).
         quorum:      "${ int(size(soulprint.hosts)) / 2 + 1 }"
-        auth_pass:   "${ vault('secret/redis/' + incarnation.name + '#password') }"
+        # ★ РЕДИЗАЙН default_admin: sentinel AUTH на master — под ACL-юзером default_admin
+        # (requirepass убран). auth_user + auth_pass рендерятся в sentinel.conf
+        # (sentinel auth-user/auth-pass <master>). Без auth_user sentinel пошёл бы под
+        # built-in default (теперь off) → NOAUTH на мониторинге master-а.
+        auth_user:   "${ compute.admin_user }"
+        auth_pass:   "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
         # ★ #7: стартовые per-master тайминги failover в sentinel.conf (down-after/
         # failover-timeout). compute.sentinel_directives — map `sentinel <opt> <master>`
         # → значение; шаблон sentinel.conf.tmpl range-ит .vars.sentinel_config.
@@ -176,7 +202,10 @@
   retry: { count: 10, delay: 3s }
   params:
     addr:     "${ compute.tls_on ? '127.0.0.1:' + string(compute.tls_port) : '127.0.0.1:6379' }"
-    password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    # ★ РЕДИЗАЙН default_admin: AUTH под default_admin (requirepass убран). username +
+    # его пароль из новой Vault-ветки. Плагин community.redis передаёт username в AUTH.
+    username: "${ compute.admin_user }"
+    password: "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
     tls:      "${ compute.tls_on }"
     tls_ca:   "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
     args:     ["PING"]
@@ -198,13 +227,21 @@
 #    tls_only — TLS включён → плагин коннектится к локальному redis И к master-у по TLS
 #    (иначе masterauth/REPLICAOF и репликация ушли бы plaintext-ом). addr/master_addr на
 #    compute.tls_port; tls_ca — CA-PEM (vault(ref), verify master).
+#
+#    ★ РЕДИЗАЙН default_admin (2026-06-30): replica→master AUTH под ACL-юзером default_admin
+#    (requirepass убран). username (→ CONFIG SET masteruser) + password (→ CONFIG SET
+#    masterauth) — плагин выставляет их В РАНТАЙМЕ для первичного REPLICAOF. ПЕРСИСТ через
+#    рестарт обеспечивает statiq masteruser/masterauth в redis.conf (apply redis шаг 1,
+#    master_user/master_auth) — CONFIG SET плагина не сохраняется без CONFIG REWRITE. Пароль —
+#    secret/redis/<inc>/users/default_admin#password (та же ветка, что auth_pass/health-PING).
 - name: Make replicas follow the elected master (REPLICAOF)
   where: "soulprint.self.sid != soulprint.hosts[0].sid"
   module: community.redis.replica
   params:
     addr:        "${ compute.tls_on ? '127.0.0.1:' + string(compute.tls_port) : '127.0.0.1:6379' }"
     master_addr: "${ soulprint.hosts[0].network.primary_ip + ':' + (compute.tls_on ? string(compute.tls_port) : '6379') }"
-    password:    "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    username:    "${ compute.admin_user }"
+    password:    "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
     tls:         "${ compute.tls_on }"
     tls_ca:      "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
 
@@ -247,14 +284,18 @@
     addr:        "127.0.0.1:26379"
     master_name: "${ default(essence.sentinel_master_name, 'master') }"
     # ★ CONNECTION-AUTH к самому sentinel-демону :26379 (отдельно от auth_pass!):
-    # sentinel.conf несёт aclfile sentinel-users.acl, где default-юзер `on #<hash>` →
-    # ЛЮБОЙ коннект к :26379 требует AUTH (sentinel_users.default = ГЛАВНЫЙ секрет
-    # secret/redis/<inc>#password, шаг 1). password идёт в redis.Options.Password
-    # (parseConnConfig→defaultConnect) — это AUTH соединения. auth_pass НИЖЕ — иное:
-    # это пароль МОНИТОРИНГА master-а (команда SENTINEL SET <master> auth-pass), к
-    # AUTH самого демона отношения не имеет. Без password → NOAUTH на коннекте.
-    password:    "${ vault('secret/redis/' + incarnation.name + '#password') }"
-    auth_pass:   "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    # sentinel.conf несёт aclfile sentinel-users.acl, где default рендерится `off`, а
+    # коннект идёт под СИСТЕМНЫМ default_admin (sentinel-набор) → ЛЮБОЙ коннект к :26379
+    # требует AUTH под ним. ★ РЕДИЗАЙН default_admin (2026-06-30): username +
+    # secret/redis/<inc>/users/default_admin#password (прежний ГЛАВНЫЙ секрет ДРОПНУТ).
+    # password+username идут в redis.Options (parseConnConfig→defaultConnect) — это AUTH
+    # соединения. auth_pass/auth_user НИЖЕ — иное: реквизиты МОНИТОРИНГА master-а (команда
+    # SENTINEL SET/MONITOR <master> auth-user/auth-pass), к AUTH самого демона отношения не
+    # имеют. Без password/username → NOAUTH на коннекте к :26379.
+    username:    "${ compute.admin_user }"
+    password:    "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+    auth_user:   "${ compute.admin_user }"
+    auth_pass:   "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
     redis_version: "${ compute.redis_version }"
     config:      "${ compute.sentinel_directives }"
     monitor:
@@ -279,8 +320,11 @@
   failed_when: "register.self.result != 'PONG'"
   params:
     addr: "127.0.0.1:26379"
-    # ★ CONNECTION-AUTH: sentinel-демон защищён aclfile (default-юзер требует пароль,
-    # шаг 1 sentinel_users.default = главный секрет). PING без AUTH → NOAUTH. Тот же
-    # главный секрет, что requirepass redis-server (sentinel default-юзер общим паролем).
-    password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    # ★ CONNECTION-AUTH: sentinel-демон защищён aclfile (built-in default рендерится `off`,
+    # коннект под СИСТЕМНЫМ default_admin sentinel-набора). PING без AUTH → NOAUTH.
+    # ★ РЕДИЗАЙН default_admin (2026-06-30): username + secret/redis/<inc>/users/
+    # default_admin#password (прежний главный секрет ДРОПНУТ). Та же пара, что коннект-AUTH
+    # шага 4 (SENTINEL MONITOR к :26379).
+    username: "${ compute.admin_user }"
+    password: "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
     args: ["PING"]

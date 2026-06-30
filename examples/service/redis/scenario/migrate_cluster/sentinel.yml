@@ -54,7 +54,12 @@
     addr:            "${ compute.tls_on ? '127.0.0.1:' + string(compute.tls_port) : '127.0.0.1:6379' }"
     master_addr:     "${ compute.source_master }"
     source_external: true
-    password:        "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    # ★ РЕДИЗАЙН default_admin: коннект к ЛОКАЛЬНОМУ инстансу под ACL-юзером default_admin
+    # (requirepass убран, локальный инстанс защищён ACL). username/password — наша учётка
+    # secret/redis/<inc>/users/default_admin. master_username/master_password — учётка
+    # ВНЕШНЕГО источника (его requirepass — без ACL-юзера, source_external).
+    username:        "${ compute.admin_user }"
+    password:        "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
     tls:             "${ compute.tls_on }"
     tls_ca:          "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
     master_password: "${ compute.source_password }"
@@ -85,7 +90,10 @@
   params:
     addr:            "${ compute.tls_on ? '127.0.0.1:' + string(compute.tls_port) : '127.0.0.1:6379' }"
     source_addr:     "${ compute.source_master }"
-    password:        "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    # ★ РЕДИЗАЙН default_admin: коннект к ЛОКАЛЬНОМУ инстансу под default_admin (как шаг 2).
+    # username/password — наша учётка users/default_admin; source_password — учётка источника.
+    username:        "${ compute.admin_user }"
+    password:        "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
     source_password: "${ compute.source_password }"
     lag_threshold:   "${ has(input.verify) ? int(default(input.verify.lag_threshold, 0)) : 0 }"
     skip_checksum:   "${ has(input.verify) ? default(input.verify.skip_checksum, false) : false }"

@@ -806,6 +806,9 @@ func validatePush(root *ast.MappingNode, p *KeeperPush) []diag.Diagnostic {
 //     host-verify целиком идут через identity-file, без них коннект невозможен.
 //   - `teleport.*` при `transport != teleport` — не ошибка (можно держать creds
 //     заранее), но не используется.
+//
+// `teleport.use_system_trust` / `teleport.alpn_upgrade` — опциональные bool
+// (default false), валидации не требуют (proxy-за-L7-LB, ADR-063 amendment).
 func validatePushTransport(root *ast.MappingNode, p *KeeperPush) []diag.Diagnostic {
 	var out []diag.Diagnostic
 	switch p.Transport {

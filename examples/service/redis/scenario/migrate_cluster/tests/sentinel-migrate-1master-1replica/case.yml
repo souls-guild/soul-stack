@@ -49,6 +49,10 @@ fixtures:
   vault:
     secret/redis/migrate_cluster:
       password: s3cr3t-redis-pass-migrate
+    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
+    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    secret/redis/migrate_cluster/users/default_admin:
+      password: default-admin-secret-pass
     secret/redis/migrate_cluster/users/replica:
       password: replica-sys-secret-pass
     secret/redis/migrate_cluster/users/monitoring:
@@ -87,12 +91,13 @@ fixtures:
       maxclients:       10000
       timeout:          300
     system_acl_users:
+      default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
       monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
       sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
     system_acl_users_sentinel:
-      default:    "allchannels allkeys +@all"
+      default_admin: "allchannels allkeys +@all"
       monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
@@ -129,7 +134,6 @@ assert:
         group: redis
         render_context:
           vars:
-            password: s3cr3t-redis-pass-migrate
             conf_dir: /etc/redis
             data_dir: /var/lib/redis
             port: 6379
@@ -141,6 +145,12 @@ assert:
               - /var/lib/redis/modules/redisearch.so
               - /var/lib/redis/modules/redistimeseries.so
             config:
+              # ★ РЕДИЗАЙН default_admin: replica→master AUTH (masteruser/
+              # masterauth) приходит ОБЫЧНЫМИ директивами config (sentinel
+              # deploy-body доливает их vault()-в-ячейке) → redis.conf range-ит
+              # их как любую директиву → статически переживают рестарт.
+              masteruser:       "default_admin"
+              masterauth:       "default-admin-secret-pass"
               maxmemory:        "256mb"
               maxmemory-policy: allkeys-lru
               maxclients:       10000
@@ -169,7 +179,9 @@ assert:
       params_subset:
         addr: "127.0.0.1:6379"
         master_addr: "10.0.0.1:6379"
-        password: s3cr3t-redis-pass-migrate
+        # ★ РЕДИЗАЙН default_admin: внутрикластерная replica→master AUTH под default_admin.
+        username: default_admin
+        password: default-admin-secret-pass
 
     # ── МИГРАЦИЯ: REPLICAOF на ВНЕШНИЙ источник (community.redis.replica, source_external) ──
     # run_once на node-1 (master нового кластера). master_addr=10.9.0.1:6379 (source.hosts[0]),
@@ -180,7 +192,10 @@ assert:
         addr: "127.0.0.1:6379"
         master_addr: "10.9.0.1:6379"
         source_external: true
-        password: s3cr3t-redis-pass-migrate
+        # ★ РЕДИЗАЙН default_admin: LOCAL-коннект под default_admin (username/password);
+        # master_username/master_password — учётка ВНЕШНЕГО источника (его requirepass).
+        username: default_admin
+        password: default-admin-secret-pass
         master_password: old-cluster-source-pass
         master_tls: false
 
@@ -191,7 +206,9 @@ assert:
       params_subset:
         addr: "127.0.0.1:6379"
         source_addr: "10.9.0.1:6379"
-        password: s3cr3t-redis-pass-migrate
+        # ★ РЕДИЗАЙН default_admin: LOCAL-коннект под default_admin; source_password — источник.
+        username: default_admin
+        password: default-admin-secret-pass
         source_password: old-cluster-source-pass
         lag_threshold: 0
         skip_checksum: false

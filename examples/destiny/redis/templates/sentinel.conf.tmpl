@@ -35,7 +35,10 @@ aclfile {{ .vars.conf_dir }}/sentinel-users.acl
 sentinel announce-ip {{ .self.network.primary_ip }}
 
 # Monitored master (HOST-ИНВАРИАНТНЫЙ адрес: один master на кластер).
-# auth-user/auth-pass — для AUTH sentinel-а на master (требуется при requirepass).
+# auth-user/auth-pass — для AUTH sentinel-а на master. ★ РЕДИЗАЙН default_admin (2026-06-30):
+# requirepass убран, master защищён ACL → sentinel ОБЯЗАН ходить под ACL-юзером. Деплой-тело
+# передаёт auth_user = default_admin (compute.admin_user) + auth_pass — пароль default_admin.
+# Без auth_user sentinel пошёл бы под built-in default (теперь off в users.acl) → NOAUTH.
 sentinel monitor {{ .vars.master_name }} {{ .vars.master_ip }} {{ .vars.master_port }} {{ .vars.quorum }}
 {{- if .vars.auth_user }}
 sentinel auth-user {{ .vars.master_name }} {{ .vars.auth_user }}

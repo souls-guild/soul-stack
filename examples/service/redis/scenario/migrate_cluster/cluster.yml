@@ -27,9 +27,14 @@
 #       MEET/REPLICATE/FAILOVER не сойдутся. Открыть оба направления — на операторе
 #       (Soul Stack не управляет сетью между чужим источником и новыми VM).
 #   (2) Пароль/TLS НОВОГО кластера ВЫРОВНЕН == СТАРОМУ (один кластер на время join):
-#       после join-external новые ноды коннектятся к старому тем же AUTH-секретом —
-#       compute читает ОБЩИЙ secret/redis/<incarnation>#password для всех шагов. Если
-#       оператор не выровнял — join отвалится на AUTH (вне ответственности сценария).
+#       ★ РЕДИЗАЙН default_admin (2026-06-30): AUTH идёт под системным ACL-юзером
+#       default_admin (requirepass убран). После join-external новые ноды коннектятся к
+#       старому кластеру тем же username=default_admin + паролем — все cluster-шаги читают
+#       secret/redis/<inc>/users/default_admin#password (migrate.go держит ЕДИНЫЙ
+#       username/password на новые ноды И source-seed). B3-пилот мигрирует на кластер той же
+#       essence (источник == новый кластер, тот же default_admin), поэтому выравнивание
+#       естественно. Если оператор не выровнял — join отвалится на AUTH (вне ответственности
+#       сценария).
 #   (3) Graceful failover НЕ теряет хвост данных, ПОКА старый мастер ЖИВ: CLUSTER
 #       FAILOVER (takeover) синхронизирует реплику-кандидата с мастером ДО смены ролей.
 #       Оператор НЕ гасит источник до завершения FAILOVER — иначе хвост, не успевший
@@ -103,8 +108,10 @@
 # мастер), addr = primary_ip + порт (TLS-порт при tls_on, иначе 6379). source_nodes —
 # seed-ноды СТАРОГО кластера (input.source.hosts, host:port). shards_dest — число шардов
 # назначения (int(input.shards)); плагин runtime-assert-ит shards_source==shards_dest
-# (число старых мастеров render-фазе не видно — живая топология). password/tls/tls_ca —
-# ОБЩИЙ кластер: secret/redis/<inc>#password (precondition: == старому), tls по compute.tls_on.
+# (число старых мастеров render-фазе не видно — живая топология). ★ РЕДИЗАЙН default_admin:
+# username=default_admin + password из secret/redis/<inc>/users/default_admin#password
+# (precondition: == паролю того же юзера в старом кластере); единый username/password плагин
+# держит на новые ноды И на source-seed (migrate.go). tls по compute.tls_on.
 # ★ ИБ (anti-downgrade): tls/tls_ca/порт гейтятся на compute.tls_on (TLS ВКЛЮЧЁН), НЕ
 # tls_only — TLS включён → плагин ОБЯЗАН по TLS к каждой ноде И к source-seed (иначе AUTH
 # к старому кластеру ушёл бы plaintext-ом). nodes-addr-ы на compute.tls_port + tls_ca.
@@ -117,7 +124,8 @@
     nodes:        "${ merge(soulprint.hosts.map(h, { h.sid: { 'addr': h.network.primary_ip + ':' + (compute.tls_on ? string(compute.tls_port) : '6379') } })) }"
     shards_dest:  "${ int(input.shards) }"
     source_nodes: "${ input.source.hosts }"
-    password:     "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    username:     "${ compute.admin_user }"
+    password:     "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
     tls:          "${ compute.tls_on }"
     tls_ca:       "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
 
@@ -137,7 +145,8 @@
   params:
     action:   failover-takeover
     nodes:    "${ merge(soulprint.hosts.map(h, { h.sid: { 'addr': h.network.primary_ip + ':' + (compute.tls_on ? string(compute.tls_port) : '6379') } })) }"
-    password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    username: "${ compute.admin_user }"
+    password: "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
     tls:      "${ compute.tls_on }"
     tls_ca:   "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
 
@@ -158,6 +167,7 @@
     action:       forget-external
     nodes:        "${ merge(soulprint.hosts.map(h, { h.sid: { 'addr': h.network.primary_ip + ':' + (compute.tls_on ? string(compute.tls_port) : '6379') } })) }"
     source_nodes: "${ input.source.hosts }"
-    password:     "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    username:     "${ compute.admin_user }"
+    password:     "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
     tls:          "${ compute.tls_on }"
     tls_ca:       "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"

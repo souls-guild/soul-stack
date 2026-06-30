@@ -14,8 +14,9 @@ import (
 // прогон переживает возврат HTTP-ответа 202, НО наследует values родителя —
 // прежде всего OTel SpanContext/baggage, чтобы span `scenario.run` сшивался
 // с request-span-ом (ADR-024). Отмена возможна через [Runner.Cancel] (по
-// applyID) или [Runner.Shutdown] (все активные). Per-scenario timeout
-// (runTimeout) навешивается на runCtx.
+// applyID) или [Runner.Shutdown] (все активные). Per-scenario timeout здесь НЕ
+// навешивается — план ещё не распарсен; provision-aware effective run-timeout
+// ставит run() отдельным WithTimeout поверх runCtx (наследует cancel из active-map).
 //
 // Возврат:
 //   - [ErrShuttingDown] — Runner останавливается.
@@ -44,8 +45,12 @@ func (r *Runner) Start(parent context.Context, spec RunSpec) error {
 	// runCtx живёт независимо от request-ctx — прогон не должен умирать с
 	// возвратом 202. WithoutCancel: сохраняем trace-baggage (SpanContext
 	// родителя для сшивки трассы), не наследуем cancel/deadline request-а.
-	// Timeout — защита от вечного barrier.
-	runCtx, cancel := context.WithTimeout(context.WithoutCancel(parent), r.runTimeout)
+	// cancel идёт в active-map — основа Cancel/Shutdown (рвёт родительский runCtx).
+	// Deadline (provision-aware effective run-timeout) НЕ навешивается здесь: план
+	// ещё не распарсен (provision-ли — неизвестно). Он переезжает в run() ПОСЛЕ
+	// ExpandIncludes отдельным WithTimeout поверх этого runCtx (под-контекст
+	// наследует отмену из active-map — Cancel/Shutdown продолжают работать).
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(parent))
 	r.active[spec.ApplyID] = cancel
 	r.wg.Add(1)
 	r.mu.Unlock()

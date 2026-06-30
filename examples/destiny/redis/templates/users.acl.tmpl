@@ -13,23 +13,33 @@
   Пароль пишется ХЕШЕМ (#<sha256hex>, sprig sha256sum), НЕ plaintext-ом: даже при утечке
   файла исходный пароль не восстанавливается, Redis принимает #<hash> наравне с >password.
 
-  ★ default-юзер РЕНДЕРИТСЯ ЗДЕСЬ (первой строкой), с паролем .vars.password (тот же
-  секрет, что requirepass redis.conf). ПРИЧИНА: при заданном `aclfile` Redis ИГНОРИРУЕТ
-  requirepass для default-юзера — авторитет берётся из aclfile. Если default в aclfile
-  нет, Redis ставит built-in `user default on nopass ~* &* +@all` → при `protected-mode
-  yes` внешние коннекты (cluster-init / REPLICAOF плагины коннектятся к ноде по
-  primary_ip:6379, НЕ loopback) DENIED → «write: broken pipe» на CLUSTER MEET/REPLICAOF.
-  Хеш пароля скрывает секрет в файле (mode 0640, owner redis), как у остальных юзеров.
-  perms = полный доступ built-in default (`~* &* +@all`), state on, флаг sanitize-payload
-  (1:1 с эталонной ansible-ролью redis, vars/main.yml redis_system_users.default).
-  ★ default объявлен ОТДЕЛЬНО от map .vars.users (НЕ долит в него scenario-ем): держит
-  state_changes.redis_users чистым (только operator-extra) и render_context.vars.users
-  без служебной строки.
+  ★ РЕДИЗАЙН default_admin (2026-06-30): requirepass УСТАРЕЛ и убран из redis.conf — вся
+  аутентификация (вкл. внутреннюю: репликация/cluster/sentinel/health-PING) идёт под
+  СИСТЕМНЫМ юзером default_admin (`~* &* +@all`). default_admin приходит из MAP .vars.users
+  range-ом, как остальные системные (replica/monitoring/sentinel/haproxy) — он добавлен в
+  essence.system_acl_users, scenario доливает его в users со СВОИМ Vault-паролем. Прежняя
+  безусловная строка `user default on #<requirepass-hash> ~* &* +@all` УДАЛЕНА (вместе с
+  .vars.password, который её питал — он больше не передаётся).
 
-  Прочие юзеры — из MAP .vars.users (системные + operator-extra, собран scenario). Пустой
-  map → в файле остаётся ТОЛЬКО default-строка (валидный aclfile с авторизованным default).
+  ★ default (встроенный Redis-юзер) → `off`, ЕСЛИ оператор НЕ объявил его в input.users:
+  встроенный default нам больше не нужен (его роль занял default_admin), но при заданном
+  `aclfile` Redis иначе поставил бы built-in `user default on nopass ~* &* +@all` (когда в
+  aclfile default-строки нет) → при `protected-mode yes` это открытый безпарольный доступ.
+  Поэтому если `default` НЕ пришёл в .vars.users (оператор его не объявил) — рендерим ЯВНУЮ
+  `user default off` (выключенный default, безопасный дефолт). Если оператор ОБЪЯВИЛ default
+  в input.users — он попал в .vars.users (operator-extra) и рендерится range-ом ниже как
+  обычный юзер (его state/perms), а явная off-строка НЕ добавляется (`index`-гейт: `index
+  .vars.users "default"` на отсутствующем ключе MAP даёт nil без ошибки в strict-mode,
+  built-in text/template, как `index .vars.config "cluster-enabled"` в redis.conf.tmpl;
+  hasKey в sprig-allowlist НЕ входит — shared/tmpl/sprig.go).
+
+  Прочие юзеры — из MAP .vars.users (системные default_admin/replica/monitoring/sentinel/
+  haproxy + operator-extra, собран scenario). Минимальный валидный файл — default_admin
+  (системный, всегда) + `user default off`.
 */}}
-user default on #{{ .vars.password | sha256sum }} sanitize-payload ~* &* +@all
+{{- if not (index .vars.users "default") }}
+user default off
+{{- end }}
 {{- range $name, $u := .vars.users }}
 user {{ $name }} {{ $u.state }} #{{ $u.password | sha256sum }} {{ $u.perms }}
 {{- end }}

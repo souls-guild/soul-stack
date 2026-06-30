@@ -221,6 +221,20 @@ type RenderInput struct {
 	// CheckDrift — seal не нужен, поведение БИТ-В-БИТ). Указатель шарится между
 	// passages staged-render-а: пути накапливаются по всем Passage одного прогона.
 	Sealed *SealedSet
+
+	// KeeperRegister — плоский register-bucket keeper-side задач ПРЕДЫДУЩИХ Passage
+	// (keeper→keeper register-chaining staged-render, ADR-056). Канал ИЗОЛИРОВАН от
+	// host-register намеренно: keeper-задача активного Passage видит `register.<prev>.*`
+	// keeper-задач прошлых Passage (например core.bootstrap.delivered читает register
+	// от core.cloud.created) — его читает ТОЛЬКО [keeperVars]. Host-задачи через него
+	// register НЕ получают: host-fallback ([hostRegister]) остаётся на плоской
+	// [RenderInput.Register], чтобы host случайно не прочитал keeper-register при
+	// пустом per-host bucket в смешанном Passage. stage-loop (run.go) переливает сюда
+	// keeperRegisterBucket(RegisterByHost) перед per-passage render-ом активного Passage.
+	// nil/пусто (P0, N=1, не-staged, host-only Passage) → keeperVars деградирует к
+	// плоской Register (backward-compat: trial/push/прочие, выставляющие только
+	// Register, видят register тем же путём, БИТ-В-БИТ).
+	KeeperRegister map[string]any
 }
 
 // RenderedTask — задача после Keeper-side CEL-рендера, промежуточное

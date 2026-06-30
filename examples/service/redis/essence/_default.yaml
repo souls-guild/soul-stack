@@ -132,45 +132,59 @@ persistence_presets:
 # и Vault-пути PEM ниже.
 tls_port:   7379
 # Vault-пути источника PEM (заполнить под реальную инсталляцию). Дефолт —
-# конвенция secret/services/redis/tls (симметрия с secret/redis/<inc> паролей).
+# конвенция secret/services/redis/tls (отдельная ветка TLS-материала, не путается с
+# secret/redis/<inc>/users/* паролями ACL-юзеров).
 tls_cert_ref: "secret/services/redis/tls#cert"
 tls_key_ref:  "secret/services/redis/tls#key"
 tls_ca_ref:   "secret/services/redis/tls#ca"
 
 # ── Системные ACL-юзеры Redis (концепция Ansible-роли redis: redis_system_users /
 #    redis_sentinel_system_users) ────────────────────────────────────────────────
-# Имя→ACL-perms-строка СЛУЖЕБНЫХ юзеров, без которых кластер не работает: replica
-# (репликация PSYNC), monitoring (экспортёр метрик), sentinel (sentinel↔redis AUTH),
-# haproxy (health-check балансировщика). perms скопированы 1:1 из vars/main.yml роли
-# (redis_system_users / redis_sentinel_system_users) — НЕ выдумывать, источник истины.
+# Имя→ACL-perms-строка СЛУЖЕБНЫХ юзеров, без которых кластер не работает: default_admin
+# (полные права — внутрикластерный AUTH: репликация masterauth, cluster MEET, sentinel
+# monitor, health-PING; заменил requirepass-юзера default), replica (репликация PSYNC),
+# monitoring (экспортёр метрик), sentinel (sentinel↔redis AUTH), haproxy (health-check
+# балансировщика). perms replica/monitoring/sentinel/haproxy скопированы 1:1 из
+# vars/main.yml роли (redis_system_users / redis_sentinel_system_users) — НЕ выдумывать,
+# источник истины.
 #
 # Два набора, потому что у redis-server и sentinel-демона РАЗНЫЕ требования к командам
 # (sentinel-команды vs обычные redis-команды) → ДВА aclfile: users.acl (redis-server,
 # system_acl_users) и sentinel-users.acl (sentinel-демон, system_acl_users_sentinel).
 #
 # Пароль КАЖДОГО системного юзера — в Vault по той же ветке, что operator-extra:
-# secret/redis/<incarnation>/users/<name>#password. scenario резолвит keeper-side
-# через vault() в render-фазе и доливает системных в apply.input.users ПОВЕРХ
-# operator-extra (last-wins; см. create/cluster.yml/sentinel.yml, add_user).
+# secret/redis/<incarnation>/users/<name>#password. scenario резолвит keeper-
+# side через vault() в render-фазе и доливает системных в apply.input.users ПОВЕРХ
+# operator-extra (last-wins; см. redis-deploy-*.yml, add_user).
 #
-# ★ default-юзер: в system_acl_users (redis-server) его НЕТ — он задаётся requirepass
-# в redis.conf (модель кирпича: redis.conf.tmpl «requirepass {{.vars.password}}»,
-# users.acl.tmpl его не дублирует). В system_acl_users_sentinel default ЕСТЬ — у
-# sentinel-демона нет requirepass-эквивалента для aclfile-доступа, поэтому default
-# объявляется в sentinel-users.acl с тем же секретом secret/redis/<inc>#password
-# (как роль). Имена системных = default/replica/monitoring/sentinel/haproxy —
-# validate-guard create отвергает operator-extra с любым из этих имён (коллизия).
+# ★ default_admin (РЕДИЗАЙН 2026-06-30): СИСТЕМНЫЙ юзер с полными правами `~* &* +@all`,
+# доливается ВСЕГДА (как replica/monitoring) — в ОБА набора. Заменил прежнюю модель
+# «default в requirepass»: requirepass УСТАРЕЛ и убран из redis.conf, вся аутентификация
+# (вкл. внутреннюю: репликация/cluster/sentinel/health-PING) идёт под default_admin.
+# Плагин community.redis коннектится username=default_admin (см. деплой-тела). Пароль
+# default_admin — secret/redis/<inc>/users/default_admin#password (общая ветка
+# системных, НЕ прежний главный secret/redis/<inc>#password — тот ДРОПНУТ).
 #
-# Набор redis-server (redis_system_users роли, БЕЗ default — он в requirepass):
+# ★ default (встроенный Redis-юзер): в system_acl_users[_sentinel] его НЕТ — он
+# рендерится `off` (выключен) в users.acl/sentinel-users.acl, ЕСЛИ оператор не объявил
+# его в operator-input input.users (тогда on с его perms). compute.admin_user
+# (covenant.yml) — единый источник имени системного admin-юзера (default_admin), его
+# читают все деплой-тела. Имена системных = default_admin/replica/monitoring/sentinel/
+# haproxy — validate-guard отвергает operator-extra с любым из них (коллизия). `default`
+# из reserved УБРАН: оператор может объявить встроенного default в input.users.
+#
+# Набор redis-server (redis_system_users роли + default_admin):
 system_acl_users:
+  default_admin: "~* &* +@all"
   replica:    "+psync +replconf +ping"
   monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
   sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
   haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
 
-# Набор sentinel-демона (redis_sentinel_system_users роли; ВКЛЮЧАЕТ default):
+# Набор sentinel-демона (redis_sentinel_system_users роли; default→default_admin для
+# sentinel-демон auth — auth_user default_admin в sentinel.conf, full-perms на :26379):
 system_acl_users_sentinel:
-  default:    "allchannels allkeys +@all"
+  default_admin: "allchannels allkeys +@all"
   monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
   sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"

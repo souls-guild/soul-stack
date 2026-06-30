@@ -144,11 +144,13 @@ func newFleet(addrs ...string) *clusterFleet {
 }
 
 // nodesView — общий для всех нод вывод CLUSTER NODES (gossip сошёлся): по строке
-// на ноду. countClusterNodes считает строки, нам важно только их число.
+// на ноду. Строка несёт РЕАЛЬНЫЙ node-id ноды (тот, что отдаёт её CLUSTER MYID) —
+// это нужно gossip-gate перед REPLICATE (узел-реплика обязан увидеть node-id
+// своего мастера в локальном CLUSTER NODES). countClusterNodes считает строки.
 func (fl *clusterFleet) setConvergedNodesView() {
 	lines := make([]string, 0, len(fl.byAddr))
-	for addr := range fl.byAddr {
-		lines = append(lines, "id "+addr+" myself,master - 0 0 connected")
+	for addr, c := range fl.byAddr {
+		lines = append(lines, c.id+" "+addr+"@16379 master - 0 0 0 connected")
 	}
 	view := strings.Join(lines, "\n")
 	for _, c := range fl.byAddr {
@@ -365,6 +367,213 @@ func TestApplyClusterCreate_AlreadyFormedNoOp(t *testing.T) {
 				t.Errorf("нода %s: no-op нарушен, вызвана %v", addr, call)
 			}
 		}
+	}
+}
+
+// convergedNodesViewMastersOnly строит CLUSTER NODES, где ВСЕ ноды fleet-а —
+// master (gossip сошёлся, slots могут быть назначены, но реплики НЕ настроены).
+// rows: addr -> диапазон слотов (nil → master без слотов). node-id берётся из
+// fake-ноды (её CLUSTER MYID), что нужно gossip-gate перед REPLICATE.
+func (fl *clusterFleet) convergedNodesViewMastersOnly(slotsByAddr map[string][2]int) string {
+	lines := make([]string, 0, len(fl.byAddr))
+	for addr, c := range fl.byAddr {
+		line := c.id + " " + addr + "@16379 master - 0 0 0 connected"
+		if r, ok := slotsByAddr[addr]; ok {
+			line += fmt.Sprintf(" %d-%d", r[0], r[1])
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// --- Apply create: PARTIAL topology (6 master, реплики не настроены) → доделать REPLICATE ---
+//
+// LIVE-БАГ (доказан на стенде): первый REPLICATE упал на gossip-timing («Unknown
+// node»), кластер застыл как N master (slots полны, cluster_state:ok), а idempotent-
+// гейт clusterAlreadyFormed смотрел ТОЛЬКО cluster_state/known_nodes/slots_assigned
+// → рапортовал «уже сформирован» → no-op → реплики НИКОГДА не доделывались. Здесь
+// 4 ноды (план: 2 master + 2 replica), live-кластер сошёлся как 4 master без реплик:
+// плагин ОБЯЗАН доделать REPLICATE недостающих реплик (changed=true), НЕ трогая
+// MEET/ADDSLOTS (slots уже на месте).
+func TestApplyClusterCreate_PartialTopologyCompletesReplicas(t *testing.T) {
+	addrs := []string{"10.0.0.1:6379", "10.0.0.2:6379", "10.0.0.3:6379", "10.0.0.4:6379"}
+	fl := newFleet(addrs...)
+	// План (sort ключей node-0..node-3): master node-0/node-1, replica node-2/node-3.
+	// Реплики round-robin: node-2 (j=0) -> master0, node-3 (j=1) -> master1.
+	master0 := fl.byAddr[addrs[0]]
+	master1 := fl.byAddr[addrs[1]]
+	replica2 := fl.byAddr[addrs[2]]
+	replica3 := fl.byAddr[addrs[3]]
+
+	// Live-топология: ВСЕ 4 ноды — master (реплики не настроены). slots раскиданы
+	// между первыми двумя (как если бы ADDSLOTS прошёл, а REPLICATE — нет).
+	view := fl.convergedNodesViewMastersOnly(map[string][2]int{
+		addrs[0]: {0, 8191},
+		addrs[1]: {8192, 16383},
+	})
+	for _, c := range fl.byAddr {
+		c.nodes = view
+	}
+	// CLUSTER INFO первого мастера: state ok, все ноды, все слоты — ровно те три
+	// условия, на которых старый гейт ошибочно говорил «сформирован».
+	master0.info = "cluster_state:ok\ncluster_slots_assigned:16384\ncluster_known_nodes:4\n"
+
+	m := fl.module()
+	stream := &applyStream{}
+
+	err := m.Apply(&pluginv1.ApplyRequest{
+		State: "cluster",
+		Params: mustStruct(t, map[string]any{
+			"action":             "create",
+			"password":           secretPass,
+			"replicas_per_shard": 1,
+			"nodes":              clusterNodesParam(addrs...),
+		}),
+	}, stream)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	fin := stream.final()
+	if fin == nil || fin.Failed {
+		t.Fatalf("ждали успех, got %+v", fin)
+	}
+	if !fin.Changed {
+		t.Fatal("ждали changed=true: partial-topology обязана доделать REPLICATE")
+	}
+
+	// REPLICATE доделан на ОБОИХ узлах-репликах к их мастерам (по live node-id).
+	assertReplicateTo(t, replica2, master0.id)
+	assertReplicateTo(t, replica3, master1.id)
+
+	// ADDSLOTS НЕ переназначаются (slots уже на месте — иначе «Slot is already busy»).
+	assertNoAddSlots(t, master0)
+	assertNoAddSlots(t, master1)
+	// REPLICATE НЕ вызывается на мастерах.
+	for _, c := range []*clusterConn{master0, master1} {
+		for _, call := range c.calls {
+			if isClusterSub(call, "REPLICATE") {
+				t.Errorf("мастер не должен получать REPLICATE: %v", call)
+			}
+		}
+	}
+
+	assertEventsNoSecret(t, stream)
+	for addr, c := range fl.byAddr {
+		assertNoClusterSecret(t, addr, c)
+	}
+}
+
+// --- Apply create: ПОЛНАЯ topology (master+replica настроены) → no-op ---
+//
+// Guard против over-fix: если live-кластер уже полон (реплики на месте) — гейт
+// обязан остаться идемпотентным (changed=false, никаких REPLICATE/ADDSLOTS).
+func TestApplyClusterCreate_FullyFormedWithReplicasNoOp(t *testing.T) {
+	addrs := []string{"10.0.0.1:6379", "10.0.0.2:6379", "10.0.0.3:6379", "10.0.0.4:6379"}
+	fl := newFleet(addrs...)
+	master0 := fl.byAddr[addrs[0]]
+	master1 := fl.byAddr[addrs[1]]
+	replica2 := fl.byAddr[addrs[2]]
+	replica3 := fl.byAddr[addrs[3]]
+
+	// Live-топология ПОЛНАЯ: node-2 — реплика master0, node-3 — реплика master1.
+	view := strings.Join([]string{
+		master0.id + " " + addrs[0] + "@16379 master - 0 0 0 connected 0-8191",
+		master1.id + " " + addrs[1] + "@16379 master - 0 0 0 connected 8192-16383",
+		replica2.id + " " + addrs[2] + "@16379 slave " + master0.id + " 0 0 0 connected",
+		replica3.id + " " + addrs[3] + "@16379 slave " + master1.id + " 0 0 0 connected",
+	}, "\n")
+	for _, c := range fl.byAddr {
+		c.nodes = view
+	}
+	master0.info = "cluster_state:ok\ncluster_slots_assigned:16384\ncluster_known_nodes:4\n"
+
+	m := fl.module()
+	stream := &applyStream{}
+
+	err := m.Apply(&pluginv1.ApplyRequest{
+		State: "cluster",
+		Params: mustStruct(t, map[string]any{
+			"action":             "create",
+			"replicas_per_shard": 1,
+			"nodes":              clusterNodesParam(addrs...),
+		}),
+	}, stream)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	fin := stream.final()
+	if fin == nil || fin.Failed {
+		t.Fatalf("ждали успех, got %+v", fin)
+	}
+	if fin.Changed {
+		t.Error("ждали changed=false: кластер уже полностью сформирован (no-op)")
+	}
+	// No-op: ни MEET, ни ADDSLOTS, ни REPLICATE.
+	for addr, c := range fl.byAddr {
+		for _, call := range c.calls {
+			if isClusterSub(call, "MEET") || isClusterSub(call, "ADDSLOTS") || isClusterSub(call, "REPLICATE") {
+				t.Errorf("нода %s: no-op нарушен, вызвана %v", addr, call)
+			}
+		}
+	}
+}
+
+// --- Apply create: gossip-gate перед REPLICATE (master-id ещё не виден реплике) ---
+//
+// Корень live-«Unknown node»: формирование с нуля шлёт REPLICATE на узле-реплике
+// сразу после ADDSLOTS, но узел мог ещё не получить gossip о мастере → его
+// локальный CLUSTER NODES не содержит master node-id → REPLICATE падает. Фикс
+// ждёт (bounded retry), пока узел-реплика увидит master-id. Здесь узел-реплика
+// первые вызовы CLUSTER NODES отдаёт БЕЗ строки мастера, затем — со строкой:
+// плагин обязан дождаться и не упасть.
+func TestApplyClusterCreate_GossipGateBeforeReplicate(t *testing.T) {
+	addrs := []string{"10.0.0.1:6379", "10.0.0.2:6379"}
+	fl := newFleet(addrs...)
+	fl.setConvergedNodesView() // hub видит обе ноды (число) — MEET-gate проходит
+
+	master0 := fl.byAddr[addrs[0]]
+	replica1 := fl.byAddr[addrs[1]]
+
+	// Узел-реплика (node-1) сперва НЕ видит мастера в локальной топологии (только
+	// себя), затем gossip доносит мастера. master0.id — то, что вернёт CLUSTER MYID
+	// мастера и что обязано появиться в NODES реплики до REPLICATE.
+	selfOnly := replica1.id + " " + addrs[1] + "@16379 myself,master - 0 0 0 connected"
+	withMaster := selfOnly + "\n" + master0.id + " " + addrs[0] + "@16379 master - 0 0 0 connected 0-16383"
+	// Первые 2 ответа NODES реплики — без мастера, 3-й и далее — с мастером. hub
+	// (master0) свою converged-view уже имеет (setConvergedNodesView выше).
+	replica1.nodesSeq = []string{selfOnly, selfOnly, withMaster}
+
+	m := fl.module()
+	stream := &applyStream{}
+
+	err := m.Apply(&pluginv1.ApplyRequest{
+		State: "cluster",
+		Params: mustStruct(t, map[string]any{
+			"action":             "create",
+			"password":           secretPass,
+			"replicas_per_shard": 1,
+			"nodes":              clusterNodesParam(addrs...),
+		}),
+	}, stream)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	fin := stream.final()
+	if fin == nil || fin.Failed {
+		t.Fatalf("ждали успех (gossip-gate дождался мастера), got %+v", fin)
+	}
+	if !fin.Changed {
+		t.Fatal("ждали changed=true")
+	}
+	// REPLICATE состоялся к master0 ПОСЛЕ того, как master-id стал виден реплике.
+	assertReplicateTo(t, replica1, master0.id)
+	// Узел-реплика опросил локальный CLUSTER NODES минимум трижды (2 пустых + 1 с
+	// мастером) — gossip-gate реально ждал, а не выстрелил вслепую.
+	if replica1.nodesCalls < 3 {
+		t.Errorf("ждали >=3 опросов CLUSTER NODES реплики (gossip-gate), got %d", replica1.nodesCalls)
 	}
 }
 

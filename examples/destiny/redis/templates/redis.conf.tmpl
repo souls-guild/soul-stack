@@ -65,11 +65,30 @@ logfile {{ .vars.log_dir }}/redis-server.log
 # зависание рестарта).
 dir {{ .vars.data_dir }}
 
-requirepass {{ .vars.password }}
+# ★ РЕДИЗАЙН default_admin (2026-06-30): requirepass УСТАРЕЛ и УБРАН. Аутентификация
+# (вкл. внутреннюю: репликация masterauth, cluster MEET, sentinel monitor, health-PING)
+# идёт под СИСТЕМНЫМ ACL-юзером default_admin (users.acl, ~* &* +@all). protected-mode yes
+# ВЫШЕ остаётся: при заданном aclfile встроенный default рендерится `off` (users.acl.tmpl),
+# поэтому безпарольного built-in default-доступа нет — внешние коннекты идут под
+# default_admin (плагин community.redis передаёт username=default_admin). requirepass +
+# aclfile одновременно избыточны (Redis при aclfile берёт авторитет default из файла); под
+# выключенным default requirepass-строка не несла бы смысла. Стартовать redis-server без
+# requirepass + с aclfile (default off + default_admin on) — валидно.
 
 # ACL-юзеры в отдельном файле (см. шапку про aclfile/conf_dir).
 aclfile {{ .vars.conf_dir }}/users.acl
 
+{{/*
+  ★ РЕДИЗАЙН default_admin (2026-06-30): replica→master AUTH (masteruser/masterauth) —
+  ОБЫЧНЫЕ директивы redis.conf, приходят КЛЮЧАМИ .vars.config (sentinel deploy-body кладёт
+  их в config-map через vault()-в-ячейке, seal-маскинг) и печатаются range-ом config ниже,
+  как любая директива. ОТДЕЛЬНОЙ секции под них тут НЕТ намеренно (destiny «глупая» — один
+  config-канал). КРИТИЧНО для персистентности через рестарт: статическая masterauth в
+  redis.conf переживает рестарт, в отличие от CONFIG SET плагина community.redis.replica
+  (без CONFIG REWRITE он не сохраняется → sentinel restart поднял бы replica без masterauth →
+  master_link_status:DOWN). Передаётся на всех узлах (failover-safe: Redis применяет
+  masteruser/masterauth, лишь когда узел становится репликой — на текущем master инертны).
+*/}}
 {{- if (index .vars.config "cluster-enabled") }}
 # Режим cluster: эта нода анонсирует СВОЙ primary_ip в gossip (per-host, см. шапку).
 cluster-announce-ip {{ .self.network.primary_ip }}

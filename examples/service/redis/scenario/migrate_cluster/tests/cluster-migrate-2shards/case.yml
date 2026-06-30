@@ -54,6 +54,12 @@ fixtures:
   vault:
     secret/redis/migrate_cluster:
       password: s3cr3t-redis-pass-migrate
+    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер внутрикластерного
+    # AUTH; join/failover/forget плагина (community.redis.cluster username/password) и
+    # masteruser/masterauth joinable-деплоя читают его пароль ветки users/default_admin.
+    # migrate.go держит ЕДИНЫЙ username/password (== паролю того же юзера в source-кластере).
+    secret/redis/migrate_cluster/users/default_admin:
+      password: default-admin-secret-pass
     secret/redis/migrate_cluster/users/replica:
       password: replica-sys-secret-pass
     secret/redis/migrate_cluster/users/monitoring:
@@ -124,7 +130,6 @@ assert:
         group: redis
         render_context:
           vars:
-            password: s3cr3t-redis-pass-migrate
             conf_dir: /etc/redis
             data_dir: /var/lib/redis
             port: 6379
@@ -136,6 +141,11 @@ assert:
               - /var/lib/redis/modules/redisearch.so
               - /var/lib/redis/modules/redistimeseries.so
             config:
+              # ★ РЕДИЗАЙН default_admin: replica→master AUTH (masteruser/masterauth) приходит
+              # ОБЫЧНЫМИ директивами config (joinable deploy-body доливает их vault()-в-ячейке).
+              # Пароль — ветка users/default_admin; в state_changes.redis_config его НЕТ.
+              masteruser:       "default_admin"
+              masterauth:       "default-admin-secret-pass"
               maxmemory:        "256mb"
               maxmemory-policy: allkeys-lru
               maxclients:       10000
@@ -166,7 +176,10 @@ assert:
       params_subset:
         action: join-external
         shards_dest: 2
-        password: s3cr3t-redis-pass-migrate
+        # ★ РЕДИЗАЙН default_admin: единый username/password на новые ноды И source-seed
+        # (migrate.go). Прежний главный секрет ДРОПНУТ — пароль из ветки users/default_admin.
+        username: default_admin
+        password: default-admin-secret-pass
         source_nodes:
           - "10.9.0.1:6379"
           - "10.9.0.2:6379"
@@ -180,7 +193,8 @@ assert:
     - module: community.redis.cluster
       params_subset:
         action: failover-takeover
-        password: s3cr3t-redis-pass-migrate
+        username: default_admin
+        password: default-admin-secret-pass
         nodes:
           node-1.example.com: { addr: "10.0.0.1:6379" }
           node-2.example.com: { addr: "10.0.0.2:6379" }
@@ -191,7 +205,8 @@ assert:
     - module: community.redis.cluster
       params_subset:
         action: forget-external
-        password: s3cr3t-redis-pass-migrate
+        username: default_admin
+        password: default-admin-secret-pass
         source_nodes:
           - "10.9.0.1:6379"
           - "10.9.0.2:6379"

@@ -226,6 +226,8 @@
   "auditPrev": "← Prev",
   "auditNext": "Next →",
   "auditPageInfo": "Page {{page}} / {{pages}} · {{from}}–{{to}} of {{total}}",
+  "auditCopyLinkTitle": "Copy link to event",
+  "auditCopyLinkAria": "Copy link to event by correlation_id",
 
   "loginSubtitle": "Keeper UI · Archon login",
   "loginTokenLabel": "JWT token",

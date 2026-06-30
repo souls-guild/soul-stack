@@ -56,22 +56,39 @@ func mustStruct(t *testing.T, m map[string]any) *structpb.Struct {
 }
 
 func TestKeeperTasksOf(t *testing.T) {
+	// Passage 0: две keeper-задачи (idx 0,2) + одна host (idx 1). Passage 1: одна
+	// keeper-задача (idx 3) — стратифицирована позже (например core.bootstrap.delivered
+	// читает register core.cloud.created). keeperTasksOf(passage) отбирает keeper-
+	// задачи ИМЕННО запрошенного Passage.
 	tasks := []*render.RenderedTask{
-		{Index: 0, Module: "core.soul.registered"},
-		{Index: 1, Module: "core.exec.run"},
-		{Index: 2, Module: "core.vault.kv-read"},
+		{Index: 0, Module: "core.cloud.created", Passage: 0},
+		{Index: 1, Module: "core.exec.run", Passage: 0},
+		{Index: 2, Module: "core.vault.kv-read", Passage: 0},
+		{Index: 3, Module: "core.bootstrap.delivered", Passage: 1},
 	}
 	plans := []render.DispatchPlan{
 		{TaskIndex: 0, Keeper: true, TargetSIDs: []string{render.KeeperTargetSID}},
 		{TaskIndex: 1, TargetSIDs: []string{"host-a"}},
 		{TaskIndex: 2, Keeper: true, TargetSIDs: []string{render.KeeperTargetSID}},
+		{TaskIndex: 3, Keeper: true, TargetSIDs: []string{render.KeeperTargetSID}},
 	}
-	got := keeperTasksOf(tasks, plans)
-	if len(got) != 2 {
-		t.Fatalf("keeperTasksOf: len=%d, want 2", len(got))
+
+	got0 := keeperTasksOf(tasks, plans, 0)
+	if len(got0) != 2 {
+		t.Fatalf("keeperTasksOf(0): len=%d, want 2 (keeper-задачи Passage 0)", len(got0))
 	}
-	if got[0].Index != 0 || got[1].Index != 2 {
-		t.Fatalf("keeperTasksOf order = [%d %d], want [0 2]", got[0].Index, got[1].Index)
+	if got0[0].Index != 0 || got0[1].Index != 2 {
+		t.Fatalf("keeperTasksOf(0) order = [%d %d], want [0 2]", got0[0].Index, got0[1].Index)
+	}
+
+	got1 := keeperTasksOf(tasks, plans, 1)
+	if len(got1) != 1 || got1[0].Index != 3 {
+		t.Fatalf("keeperTasksOf(1) = %v, want ровно [idx 3] (keeper-задача Passage 1)", got1)
+	}
+
+	// Passage без keeper-задач → пусто (host-only Passage / вне диапазона).
+	if got := keeperTasksOf(tasks, plans, 2); len(got) != 0 {
+		t.Fatalf("keeperTasksOf(2) = %v, want пусто", got)
 	}
 }
 
@@ -217,7 +234,9 @@ func TestEmitKeeperTaskExecuted_ChangedEmits(t *testing.T) {
 	r := &Runner{deps: Deps{Audit: aw}}
 	rt := &render.RenderedTask{Index: 2, Name: "provision", Register: "vm", Module: "core.cloud.created"}
 
-	r.emitKeeperTaskExecuted(context.Background(), "apply-k1", rt, true /*changed*/, false /*failed*/, "", slog.New(slog.DiscardHandler))
+	// passage 1 — keeper-задача стратифицирована (Слайс 2): payload эхает passage
+	// для триажа per-Passage; корреляция changed_tasks НЕ меняется (по sid/plan_index).
+	r.emitKeeperTaskExecuted(context.Background(), "apply-k1", 1 /*passage*/, rt, true /*changed*/, false /*failed*/, "", slog.New(slog.DiscardHandler))
 
 	if len(aw.events) != 1 {
 		t.Fatalf("emitted %d events, want 1", len(aw.events))
@@ -241,6 +260,9 @@ func TestEmitKeeperTaskExecuted_ChangedEmits(t *testing.T) {
 	if ev.Payload["task_idx"] != 2 {
 		t.Errorf("payload task_idx = %v, want 2", ev.Payload["task_idx"])
 	}
+	if ev.Payload["passage"] != 1 {
+		t.Errorf("payload passage = %v, want 1 (эхо Passage keeper-задачи, Слайс 2)", ev.Payload["passage"])
+	}
 }
 
 // TestEmitKeeperTaskExecuted_FailedStatus — failed keeper-задача → task.executed
@@ -251,7 +273,7 @@ func TestEmitKeeperTaskExecuted_FailedStatus(t *testing.T) {
 	r := &Runner{deps: Deps{Audit: aw}}
 	rt := &render.RenderedTask{Index: 0, Module: "core.cloud.created"}
 
-	r.emitKeeperTaskExecuted(context.Background(), "apply-k2", rt, false, true /*failed*/, "boom from driver", slog.New(slog.DiscardHandler))
+	r.emitKeeperTaskExecuted(context.Background(), "apply-k2", 0 /*passage*/, rt, false, true /*failed*/, "boom from driver", slog.New(slog.DiscardHandler))
 
 	if len(aw.events) != 1 {
 		t.Fatalf("emitted %d events, want 1", len(aw.events))
@@ -282,11 +304,11 @@ func TestEmitKeeperTaskExecuted_SecretHygiene(t *testing.T) {
 
 	// changed keeper-задача с register: — register_data всё равно НЕ в payload.
 	rtChanged := &render.RenderedTask{Index: 0, Register: "secret_out", Module: "core.vault.kv-read"}
-	r.emitKeeperTaskExecuted(context.Background(), "apply-k3", rtChanged, true, false, "", slog.New(slog.DiscardHandler))
+	r.emitKeeperTaskExecuted(context.Background(), "apply-k3", 0 /*passage*/, rtChanged, true, false, "", slog.New(slog.DiscardHandler))
 
 	// no_log failed keeper-задача — message подавлен.
 	rtNoLog := &render.RenderedTask{Index: 1, Module: "core.vault.kv-read", NoLog: true}
-	r.emitKeeperTaskExecuted(context.Background(), "apply-k3", rtNoLog, false, true, "vault:secret/db plaintext", slog.New(slog.DiscardHandler))
+	r.emitKeeperTaskExecuted(context.Background(), "apply-k3", 0 /*passage*/, rtNoLog, false, true, "vault:secret/db plaintext", slog.New(slog.DiscardHandler))
 
 	if len(aw.events) != 2 {
 		t.Fatalf("emitted %d events, want 2", len(aw.events))
@@ -315,7 +337,7 @@ func TestEmitKeeperTaskExecuted_SecretHygiene(t *testing.T) {
 // эмиссия no-op, не паникует.
 func TestEmitKeeperTaskExecuted_NilAuditNoOp(t *testing.T) {
 	r := &Runner{deps: Deps{Audit: nil}}
-	r.emitKeeperTaskExecuted(context.Background(), "apply-k4",
+	r.emitKeeperTaskExecuted(context.Background(), "apply-k4", 0, /*passage*/
 		&render.RenderedTask{Index: 0, Module: "core.cloud.created"}, true, false, "", slog.New(slog.DiscardHandler))
 }
 
@@ -329,7 +351,7 @@ func TestKeeperTaskExecuted_NoRegisterButIDFoldsToChangedTask(t *testing.T) {
 	r := &Runner{deps: Deps{Audit: aw}}
 	rt := &render.RenderedTask{Index: 0, Name: "provision_vm", ID: "vm-web", Module: "core.cloud.created"}
 
-	r.emitKeeperTaskExecuted(context.Background(), "apply-k5", rt, true /*changed*/, false, "", slog.New(slog.DiscardHandler))
+	r.emitKeeperTaskExecuted(context.Background(), "apply-k5", 0 /*passage*/, rt, true /*changed*/, false, "", slog.New(slog.DiscardHandler))
 
 	if len(aw.events) != 1 {
 		t.Fatalf("emitted %d events, want 1 (задача без register, но с id адресуется)", len(aw.events))

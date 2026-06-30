@@ -20,11 +20,15 @@
 #       (на render-корпус не влияет — мёртвый service-level include).
 #
 # ★★ PRECONDITION ПАРОЛЯ (B3, оператор выравнивает руками) ★★
-#   Пароль НОВОГО кластера ДОЛЖЕН быть выровнен == паролю СТАРОГО (precondition оператора).
-#   Это обычный пароль нового incarnation (secret/redis/<inc>#password) — спец-параметризация
-#   пароля НЕ требуется: после join-external ноды коннектятся к старому кластеру тем же
-#   AUTH-секретом. Если оператор НЕ выровнял пароли — join-external (шаг плагина) отвалится
-#   на AUTH; это вне ответственности данного тела (оно лишь поднимает ноды cluster-mode).
+#   ★ РЕДИЗАЙН default_admin (2026-06-30): внутрикластерный AUTH идёт под системным ACL-юзером
+#   default_admin (requirepass убран). Пароль default_admin НОВОГО кластера
+#   (secret/redis/<inc>/users/default_admin#password) ДОЛЖЕН быть выровнен == паролю того же
+#   юзера в СТАРОМ кластере (precondition оператора): после join-external ноды коннектятся к
+#   старому кластеру тем же username=default_admin + паролем (migrate.go держит единый
+#   username/password на новые ноды И source-seed). B3-пилот мигрирует на кластер той же
+#   essence (источник == новый кластер, тот же default_admin-набор), поэтому выравнивание
+#   естественно. Если оператор НЕ выровнял — join-external (шаг плагина) отвалится на AUTH;
+#   это вне ответственности данного тела (оно лишь поднимает ноды cluster-mode).
 #
 # ★★ ИНВАРИАНТ ИНКЛУДЯЩЕГО (drift-guard руками — soul-lint cross-file НЕ ловит) ★★
 #   Этот файл ССЫЛАЕТСЯ на compute.<name>, но НЕ объявляет их (compute: — top-level
@@ -71,21 +75,41 @@
       # (default = текущий путь, back-compat). HOST-ИНВАРИАНТ → apply.input.
       conf_dir: "${ compute.conf_dir }"
       data_dir: "${ compute.data_dir }"
-      password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+      # ★ РЕДИЗАЙН default_admin (2026-06-30): input.password УДАЛЁН (requirepass убран).
+      # Аутентификация — под системным default_admin, его пароль приходит в users ниже.
       # Единый compute.redis_config (объявлен ОДИН раз в main.yml инклудящего, ADR-009):
       # тот же map, что уйдёт в state_changes.redis_config — drift «state ≡ live config»
       # снят самим compute. Для cluster = базовый merge + cluster-директивы (cluster-
       # enabled/config-file/node-timeout) + tls-cluster yes при TLS. HOST-ИНВАРИАНТ →
       # apply.input на targeted[0] корректен.
-      config: "${ compute.redis_config }"
+      #
+      # ★ РЕДИЗАЙН default_admin: СТАТИЧЕСКАЯ replica→master AUTH в redis.conf — masteruser/
+      # masterauth ДОЛИВАЮТСЯ в config ОБЫЧНЫМИ директивами (поверх compute.redis_config).
+      # КРИТИЧНО для join-external: эти ноды ВСТУПАЮТ в старый кластер РЕПЛИКАМИ его мастеров
+      # (migrate.go: MEET → CLUSTER REPLICATE) — плагин masterauth НЕ выставляет, реплика при
+      # FULLSYNC со старым мастером проходит AUTH ТОЛЬКО по статической masterauth в redis.conf;
+      # без неё PSYNC упёрся бы в NOAUTH → join не догонит данные. Директива переживает рестарт
+      # (CONFIG SET не сохраняется без REWRITE), host-инвариантна (один default_admin на
+      # кластер) → apply.input. Failover-safe (на не-репликах инертна). ★ ОТЛИЧНО от
+      # state_changes.redis_config: там ЧИСТЫЙ compute.redis_config БЕЗ masterauth (секрет в
+      # Vault, не в state). masterauth — vault()-В-ЯЧЕЙКЕ (seal-маскинг, ADR-010 §7.4).
+      # admin_user = default_admin (compute.admin_user); путь — secret/redis/<inc>/users/
+      # default_admin#password (precondition: == паролю того же юзера в СТАРОМ кластере).
+      config: >-
+        ${ merge(compute.redis_config, {
+             'masteruser': compute.admin_user,
+             'masterauth': vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password')
+           }) }
       # ★ СИСТЕМНЫЕ + operator-extra (system-ACL-users, дизайн d2 Вариант A): служебные
-      # replica/monitoring/sentinel/haproxy из essence.system_acl_users ПЕРВЫМИ,
-      # operator-extra (input.users — МАССИВ AclUser, wave 1b) ПОВЕРХ (last-wins).
-      # default — в requirepass redis.conf, не здесь. Без системных репликация (replica) и
-      # health-check сломаются. Vault-пароль — secret/redis/<inc>/users/<name>#password.
-      # operator-extra: .map(u, {u.name: …}) (имя из поля u.name). Обе .map дают СПИСОК
-      # одноключевых map-ов, merge(list-of-maps) сворачивает их в один map (templating
-      # §2.3); порядок аргументов = приоритет.
+      # default_admin/replica/monitoring/sentinel/haproxy из essence.system_acl_users
+      # ПЕРВЫМИ, operator-extra (input.users — МАССИВ AclUser, wave 1b) ПОВЕРХ (last-wins).
+      # ★ default_admin (редизайн) — СИСТЕМНЫЙ юзер полного доступа (~* &* +@all), приходит
+      # из essence.system_acl_users как все: под ним идёт внутрикластерный AUTH (заменил
+      # requirepass-default — он убран из redis.conf). Без системных репликация (replica),
+      # join-external к старому кластеру (default_admin) и health-check сломаются. Vault-
+      # пароль — secret/redis/<inc>/users/<name>#password. operator-extra: .map(u, {u.name:
+      # …}) (имя из поля u.name). Обе .map дают СПИСОК одноключевых map-ов, merge(list-of-
+      # maps) сворачивает их в один map (templating §2.3); порядок аргументов = приоритет.
       users: >-
         ${ merge(
              merge(default(essence.system_acl_users, {}).map(name, {
@@ -143,7 +167,10 @@
   retry: { count: 10, delay: 3s }
   params:
     addr:     "${ compute.tls_on ? '127.0.0.1:' + string(compute.tls_port) : '127.0.0.1:6379' }"
-    password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    # ★ РЕДИЗАЙН default_admin: AUTH под default_admin (requirepass убран). username +
+    # его пароль из новой Vault-ветки. Плагин community.redis передаёт username в AUTH.
+    username: "${ compute.admin_user }"
+    password: "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
     tls:      "${ compute.tls_on }"
     tls_ca:   "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
     args:     ["PING"]

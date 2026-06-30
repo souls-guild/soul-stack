@@ -60,15 +60,23 @@ func TestLoadDestinyManifest_Golden(t *testing.T) {
 	if version == nil || version.Pattern == "" {
 		t.Errorf("input.version.pattern must be present")
 	}
-	password := cfg.Input["password"]
-	if password == nil {
-		t.Fatal("input.password missing")
+
+	// РЕДИЗАЙН default_admin (2026-06-30): top-level input.password УДАЛЁН
+	// (requirepass убран из redis.conf, главного пароля больше нет). Стережём,
+	// что он не вернулся: пароль теперь живёт per-user в map users (поле password
+	// каждого ACL-юзера, secret:true), а не отдельным top-level secret-параметром.
+	if cfg.Input["password"] != nil {
+		t.Errorf("input.password must be absent after default_admin redesign (per-user password lives in input.users.*.password), got %#v", cfg.Input["password"])
 	}
-	if !password.Secret {
-		t.Errorf("input.password.secret must be true")
+	// Носитель пароля — users → additional_properties → properties["password"]
+	// (secret:true). Это новый контракт: default_admin/replica/monitoring приходят
+	// в map users как все, каждый со своим зарезолвленным секретом.
+	userPassword := ap.Properties["password"]
+	if userPassword == nil {
+		t.Fatal("input.users.additional_properties.properties.password missing")
 	}
-	if password.MinLength == nil || *password.MinLength != 16 {
-		t.Errorf("input.password.min_length: got %v want 16", password.MinLength)
+	if !userPassword.Secret {
+		t.Errorf("input.users.…password.secret must be true (per-user secret replaces top-level password)")
 	}
 	conf := cfg.Input["config"]
 	if conf == nil {

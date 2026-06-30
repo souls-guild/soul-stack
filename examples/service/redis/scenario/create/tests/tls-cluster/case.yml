@@ -28,6 +28,10 @@ fixtures:
       password: s3cr3t-redis-pass-create
     # Per-user секреты системных юзеров (secret/redis/<inc>/users/<name>#password) —
     # их резолвит keeper-side vault() при доливе system_acl_users в apply.input.users.
+    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер внутрикластерного
+    # AUTH (PING/cluster-build/masterauth деплоя читают его пароль той же ветки users/<name>).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
     secret/redis/create/users/replica:
       password: replica-sys-secret-pass
     secret/redis/create/users/monitoring:
@@ -65,7 +69,10 @@ fixtures:
     # Системные ACL-юзеры redis-server (1:1 из essence/_default.yaml). ОБЯЗАТЕЛЬНЫ:
     # guard create/cluster.yml (assert 1b) рвёт render при пустом system_acl_users
     # (тихий fail-open недопустим — без них репликация/health-check сломались бы).
+    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер полного доступа
+    # (~* &* +@all), под ним внутрикластерный AUTH cluster (заменил requirepass-default).
     system_acl_users:
+      default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
       monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
       sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
@@ -91,7 +98,6 @@ assert:
         path: /etc/redis/redis.conf
         render_context:
           vars:
-            password: s3cr3t-redis-pass-create
             conf_dir: /etc/redis
             data_dir: /var/lib/redis
             port: 6379
@@ -103,6 +109,12 @@ assert:
               - /var/lib/redis/modules/redisearch.so
               - /var/lib/redis/modules/redistimeseries.so
             config:
+              # ★ РЕДИЗАЙН default_admin: replica→master AUTH (masteruser/masterauth)
+              # приходит ОБЫЧНЫМИ директивами config (cluster deploy-body доливает их
+              # vault()-в-ячейке). В only-TLS репликация идёт по TLS (tls-replication yes
+              # выше), masterauth маскируется seal-слоем.
+              masteruser:       "default_admin"
+              masterauth:       "default-admin-secret-pass"
               port: "0"
               tls-port: "7379"
               tls-cert-file: /etc/redis/tls/redis.crt
@@ -140,7 +152,10 @@ assert:
       params_subset:
         action: create
         replicas_per_shard: 0
-        password: s3cr3t-redis-pass-create
+        # ★ РЕДИЗАЙН default_admin: коннект под default_admin (username → AUTH). Прежний
+        # главный секрет ДРОПНУТ — пароль из ветки users/default_admin.
+        username: default_admin
+        password: default-admin-secret-pass
         tls: true
         tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
         tls_cert: "-----BEGIN CERTIFICATE-----\nSERVERCERT\n-----END CERTIFICATE-----"

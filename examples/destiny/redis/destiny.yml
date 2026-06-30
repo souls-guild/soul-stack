@@ -135,17 +135,20 @@ input:
           RFC1918/loopback — легитимный internal Nexus). Нужен, когда base_url
           резолвится в private-адрес. Не передан → guard держится (строгий дефолт).
 
-  password:
-    type: string
-    required: true
-    secret: true
-    min_length: 16
-    description: >-
-      Пароль Redis (requirepass). Маскируется в логах/трейсах/UI. Destiny
-      получает УЖЕ зарезолвленное значение: caller-сценарий читает секрет из Vault
-      keeper-side через CEL-функцию vault() в render-фазе (templating.md §2.3/§4)
-      и прокидывает результат в apply:input. Destiny остаётся «глупой» — кладёт
-      готовый пароль в redis.conf, vault-клиент не тянет (ADR-012).
+  # ★ input.password УДАЛЁН (РЕДИЗАЙН default_admin 2026-06-30): requirepass убран из
+  # redis.conf, главного пароля больше нет. Аутентификация идёт под СИСТЕМНЫМ ACL-юзером
+  # default_admin (приходит в `users` ниже с per-user паролем, как replica/monitoring).
+  # Шаблоны redis.conf.tmpl/users.acl.tmpl больше НЕ читают .vars.password — destiny его
+  # не принимает и не передаёт в render_context. Пароли ВСЕХ юзеров (вкл. default_admin) —
+  # в map `users`/`sentinel_users` (поле password каждого, зарезолвлено keeper-side).
+  #
+  # ★ РЕДИЗАЙН default_admin (2026-06-30): replica→master AUTH (masteruser/masterauth) НЕ
+  # отдельные input-поля destiny — это ОБЫЧНЫЕ директивы redis.conf, которые scenario кладёт
+  # прямо в `config`-map (sentinel deploy-body), и destiny range-ит их в redis.conf как любую
+  # другую директиву. Так destiny остаётся «глупой» (один config-канал, без спец-полей под
+  # репликацию), а пароль маскируется vault()-в-ячейке config на стороне scenario. КРИТИЧНО
+  # для персистентности через рестарт: статическая masterauth в redis.conf переживает рестарт
+  # (CONFIG SET плагина community.redis.replica — нет, без CONFIG REWRITE).
 
   # Merged-конфиг redis.conf: caller (scenario сервиса) сливает default→preset→
   # вычисления→passthrough через merge() и передаёт ГОТОВЫЙ map. Шаблон range-ит

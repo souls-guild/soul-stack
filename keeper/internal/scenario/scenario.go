@@ -126,6 +126,16 @@ const defaultPollInterval = 200 * time.Millisecond
 // abort + error_locked (PM-decision: 5min).
 const defaultRunTimeout = 5 * time.Minute
 
+// deployBudget — добавка к ceiling-у онбординга для provision-from-zero-прогона
+// (ADR-0061): effective run-timeout такого прогона = ResolvedMaxAwaitTimeout (потолок
+// барьера `await_online`) + deployBudget. Покрывает стадию ПОСЛЕ онбординга — деплой
+// роли на онбордившиеся хосты (apply redis и т.п.) в Passage за refresh-границей.
+// Внутренняя const, НЕ config-ключ: ручка `run_timeout` отложена отдельно, здесь
+// фиксируем щедрый запас (deploy редко превышает единицы минут). Effective timeout
+// применяется ТОЛЬКО к плану с refresh-эмиттером ([config.HasRefreshEmitter]); обычный
+// прогон держит defaultRunTimeout (вечный barrier по-прежнему обрывается).
+const deployBudget = 10 * time.Minute
+
 // Sentinel-ошибки [Runner.Start].
 var (
 	// ErrAlreadyRunning — для applyID уже зарегистрирован активный прогон,
@@ -413,6 +423,16 @@ type Deps struct {
 	// Нулевое значение → дефолт.
 	PollInterval time.Duration
 	RunTimeout   time.Duration
+
+	// MaxAwaitTimeoutFn — hot-reload-aware источник ceiling-а барьера онбординга
+	// `await_online` ([config.KeeperConfig.ResolvedMaxAwaitTimeout], ADR-0061): база
+	// provision-aware effective run-timeout (ceiling + deployBudget) для прогона с
+	// refresh-эмиттером. Замыкание (а не значение) — чтобы оператор-override keeper.yml::
+	// max_await_timeout подхватывался следующим прогоном без рестарта, тем же приёмом,
+	// что MaxAwaitTimeout у coremod (daemon.go). nil → effective timeout считается от
+	// [config.DefaultMaxAwaitTimeout] (30m) — unit-тест/L0 без config.Store; provision-
+	// прогон всё равно получает расширенный потолок, просто без hot-reload-override-а.
+	MaxAwaitTimeoutFn func() time.Duration
 }
 
 // Runner — singleton-orchestrator прогонов scenario. Инжектится в API-handler
@@ -426,6 +446,11 @@ type Runner struct {
 	logger       *slog.Logger
 	pollInterval time.Duration
 	runTimeout   time.Duration
+
+	// maxAwaitTimeoutFn — hot-reload-aware ceiling барьера онбординга (копия
+	// Deps.MaxAwaitTimeoutFn), база provision-aware effective run-timeout (run.go::
+	// effectiveRunTimeout). nil → fallback на [config.DefaultMaxAwaitTimeout].
+	maxAwaitTimeoutFn func() time.Duration
 
 	// acolyteEnabled / kid — cutover-флаг и origin-KID нового пути dispatch-а
 	// (ADR-027, Phase 1.4.2): копии Deps.AcolyteEnabled / Deps.KID, читаются в
@@ -474,15 +499,16 @@ func NewRunner(deps Deps) *Runner {
 		runTimeout = defaultRunTimeout
 	}
 	return &Runner{
-		deps:           deps,
-		logger:         logger,
-		pollInterval:   pollInterval,
-		runTimeout:     runTimeout,
-		acolyteEnabled: deps.AcolyteEnabled,
-		kid:            deps.KID,
-		leaseOwner:     deps.LeaseOwner,
-		passageCap:     deps.PassageCap,
-		keeperModules:  deps.KeeperModules,
-		active:         make(map[string]context.CancelFunc),
+		deps:              deps,
+		logger:            logger,
+		pollInterval:      pollInterval,
+		runTimeout:        runTimeout,
+		maxAwaitTimeoutFn: deps.MaxAwaitTimeoutFn,
+		acolyteEnabled:    deps.AcolyteEnabled,
+		kid:               deps.KID,
+		leaseOwner:        deps.LeaseOwner,
+		passageCap:        deps.PassageCap,
+		keeperModules:     deps.KeeperModules,
+		active:            make(map[string]context.CancelFunc),
 	}
 }

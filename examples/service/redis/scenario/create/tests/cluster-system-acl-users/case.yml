@@ -1,13 +1,16 @@
 # L0-испытание create cluster: СИСТЕМНЫЕ ACL-юзеры (system-ACL-users d2) доливаются
 # в users.acl ПОВЕРХ нижнего слоя из essence.system_acl_users, operator-extra (app)
 # наслаивается сверху. Доказываем:
-#   1. users.acl несёт ВСЕ системные redis-server (replica/monitoring/sentinel/haproxy)
-#      из essence.system_acl_users с perms 1:1 из essence + state:'on';
+#   1. users.acl несёт ВСЕ системные redis-server (default_admin/replica/monitoring/
+#      sentinel/haproxy) из essence.system_acl_users с perms 1:1 из essence + state:'on';
 #   2. operator-extra (app) сосуществует со системными в том же файле;
 #   3. КАЖДЫЙ системный — со СВОИМ vault-паролем secret/redis/<inc>/users/<name>#password
 #      (та же ветка, что operator-extra) — нет cross-leak;
-#   4. default-юзер в users.acl ЕСТЬ (рендерится шаблоном из render_context.vars.password =
-#      requirepass), но НЕ в map .vars.users (его там нет — он не system-/operator-extra);
+#   4. ★ РЕДИЗАЙН default_admin (2026-06-30): встроенный default рендерится `off` (его в map
+#      .vars.users НЕТ), а внутрикластерный AUTH идёт под системным default_admin — он ЕСТЬ
+#      в map .vars.users как остальные системные (~* &* +@all, пароль users/default_admin).
+#      Прежняя модель «default из render_context.vars.password = requirepass» убрана
+#      (requirepass дропнут из server.yml);
 #   5. state_changes.redis_users несёт ТОЛЬКО operator-extra (app) — системные НЕ в
 #      state (пункт 7 d2: доливаются из essence на каждом рендере).
 #
@@ -27,6 +30,10 @@ fixtures:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
     # Per-user секреты системных — РАЗНЫЕ значения (cross-leak детектируется ассертом).
+    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер внутрикластерного
+    # AUTH (его пароль по той же ветке users/<name>).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
     secret/redis/create/users/replica:
       password: replica-sys-secret-pass
     secret/redis/create/users/monitoring:
@@ -50,9 +57,12 @@ fixtures:
       maxmemory-policy: allkeys-lru
       maxclients:       10000
       timeout:          300
-    # Системные ACL-юзеры redis-server (perms 1:1 из vars/main.yml роли redis_system_users,
-    # БЕЗ default — он в requirepass). Источник истины долива системных в users.acl.
+    # Системные ACL-юзеры redis-server (perms 1:1 из vars/main.yml роли redis_system_users).
+    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin (~* &* +@all) — системный юзер
+    # внутрикластерного AUTH (заменил прежний requirepass-default). Источник истины долива
+    # системных в users.acl.
     system_acl_users:
+      default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
       monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
       sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
@@ -69,10 +79,10 @@ fixtures:
 
 assert:
   task_present:
-    # users.acl: системные (replica/monitoring/sentinel/haproxy) с perms из essence +
-    # operator-extra (app). КАЖДЫЙ со СВОИМ vault-паролем. default в map .vars.users
-    # ОТСУТСТВУЕТ (deep-compare всего map ловит лишний default) — он рендерится шаблоном
-    # из render_context.vars.password, вне map.
+    # users.acl: системные (default_admin/replica/monitoring/sentinel/haproxy) с perms из
+    # essence + operator-extra (app). КАЖДЫЙ со СВОИМ vault-паролем. ★ РЕДИЗАЙН default_admin:
+    # default_admin В map .vars.users (системный, ~* &* +@all); встроенный default рендерится
+    # `off` шаблоном и в map ОТСУТСТВУЕТ (deep-compare всего map ловит его как лишний).
     - module: core.file.rendered
       id: redis_acl
       params_subset:
@@ -83,11 +93,11 @@ assert:
         group: redis
         render_context:
           vars:
-            # password — главный секрет (requirepass): шаблон рендерит из него default-юзера
-            # в users.acl (без default в aclfile Redis игнорит requirepass → built-in default
-            # без пароля → protected-mode рвёт внешние коннекты cluster-init плагина).
-            password: s3cr3t-redis-pass-create
             users:
+              default_admin:
+                perms: "~* &* +@all"
+                state: "on"
+                password: default-admin-secret-pass
               replica:
                 perms: "+psync +replconf +ping"
                 state: "on"

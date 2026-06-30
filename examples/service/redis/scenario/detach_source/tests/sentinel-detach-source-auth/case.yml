@@ -69,6 +69,9 @@ fixtures:
   vault:
     secret/redis/detach_source:
       password: detach-redis-pass-16ch
+    # ★ РЕДИЗАЙН default_admin: локальные коннекты detach под ACL-юзером default_admin.
+    secret/redis/detach_source/users/default_admin:
+      password: default-admin-secret-pass
     # ★ Учётка ВНЕШНЕГО источника: значения за ref'ами из state.seeded_from.
     secret/redis/migrate/oldcluster:
       password: old-cluster-source-pass
@@ -86,7 +89,9 @@ assert:
       params_subset:
         addr: "127.0.0.1:6379"
         source_addr: "10.9.0.1:6379"
-        password: detach-redis-pass-16ch
+        # ★ РЕДИЗАЙН default_admin: LOCAL-коннект под default_admin; source_password — источник.
+        username: default_admin
+        password: default-admin-secret-pass
         source_password: old-cluster-source-pass
         source_tls: true
         source_tls_ca: |
@@ -100,7 +105,9 @@ assert:
     - module: community.redis.detached
       params_subset:
         addr: "127.0.0.1:6379"
-        password: detach-redis-pass-16ch
+        # ★ РЕДИЗАЙН default_admin: LOCAL-коннект под default_admin.
+        username: default_admin
+        password: default-admin-secret-pass
         tls: false
 
     # ── SENTINEL MONITOR (community.redis.sentinel) ПОСЛЕ detach (split-brain-фикс) ──
@@ -108,7 +115,12 @@ assert:
       params_subset:
         addr: "127.0.0.1:26379"
         master_name: master
-        auth_pass: detach-redis-pass-16ch
+        # ★ РЕДИЗАЙН default_admin: CONNECTION-AUTH (username/password) + мониторинг master
+        # (auth_user/auth_pass) под default_admin.
+        username: default_admin
+        password: default-admin-secret-pass
+        auth_user: default_admin
+        auth_pass: default-admin-secret-pass
         redis_version: "7.2.4"
         config:
           "sentinel down-after-milliseconds master": "5000"

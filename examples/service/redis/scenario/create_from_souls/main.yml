@@ -158,12 +158,14 @@ tasks:
   # задач, читающих те же секреты через ${ vault(...) }. Модель staged-render (ADR-056).
   # ОТЛИЧИЕ ОТ create в обеспечении порядка: у create roster-refresh-ребро от provision-
   # тела (core.soul.registered refresh_soulprint) уводит read-задачи деплоя в более
-  # поздний passage. ЗДЕСЬ provision-тела НЕТ → этого ребра нет; порядок держится тем,
-  # что generate (`on: keeper` БЕЗ roster-зависимости → passage 0) идёт раньше любой
-  # read-задачи деплоя (она читает roster через soulprint.* → roster-потребитель,
-  # passage_refresh.go::taskReadsRoster уводит её в passage > 0). Несущий инвариант
-  # (generate СТРОГО раньше любой vault()-read) — тот же, что закреплён guard-тестом для
-  # create (redis_create_secrets_passage_test.go).
+  # поздний passage. ЗДЕСЬ provision-тела НЕТ → roster-оси НЕТ (ребро passage.go строится
+  # ТОЛЬКО при наличии refresh-эмиттера). Порядок держит НЕЗАВИСИМАЯ vault-secrets-
+  # generated ось (ADR-056 amendment, Вариант A): сам этот шаг `core.vault.kv-present` —
+  # vault-эмиттер, и passage.go уводит ЛЮБУЮ vault()-читающую задачу (тот же реестр
+  # passage-определяющих полей: where/vars/params/apply.input/output/loop) в passage
+  # СТРОГО ПОСЛЕ него, БЕЗ участия roster-оси (см. shared/config/passage_vault.go).
+  # Несущий инвариант (generate СТРОГО раньше любой vault()-read) закреплён guard-тестом
+  # redis_create_from_souls_secrets_passage_test.go (порядок целиком на vault-оси).
   #
   # targets ВЫЧИСЛЯЮТСЯ из ТОГО ЖЕ essence/input, что и read-задачи (drift «что генерим ≡
   # что читаем» = баг): главный secret/redis/<inc>#password + per-user union(system_acl_users,

@@ -42,6 +42,10 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
+    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер внутрикластерного
+    # AUTH (cluster-build деплоя читает его пароль той же ветки users/<name>).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
     secret/redis/create/users/replica:
       password: replica-sys-secret-pass
     secret/redis/create/users/monitoring:
@@ -66,7 +70,10 @@ fixtures:
       maxmemory-policy: allkeys-lru
       maxclients:       10000
       timeout:          300
+    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер полного доступа
+    # (~* &* +@all), под ним внутрикластерный AUTH cluster (заменил requirepass-default).
     system_acl_users:
+      default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
       monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
       sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
@@ -93,7 +100,10 @@ assert:
       params_subset:
         action: create
         replicas_per_shard: 1
-        password: s3cr3t-redis-pass-create
+        # ★ РЕДИЗАЙН default_admin: коннект под default_admin (username → AUTH). Прежний
+        # главный секрет ДРОПНУТ — пароль из ветки users/default_admin.
+        username: default_admin
+        password: default-admin-secret-pass
         topology:
           - [node-2.example.com, node-1.example.com]
           - [node-4.example.com, node-3.example.com]

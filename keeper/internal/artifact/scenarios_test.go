@@ -118,6 +118,116 @@ input:
 	}
 }
 
+// TestListScenarios_ResolvesCovenantInput — ★guard на UI-баг: сценарий наследует
+// input через `extends: covenant`, своя input-дельта нулевая. ListScenarios обязан
+// СЛИТЬ covenant.yml.input в InputSchema (тот же add-only merge, что runtime), иначе
+// UI-форма create приходит пустой (covenant-поля отсутствуют). Красный до фикса:
+// loadScenario парсил сырой main.yml без covenant-резолва → InputSchema пустой.
+func TestListScenarios_ResolvesCovenantInput(t *testing.T) {
+	root := t.TempDir()
+	// covenant.yml несёт ВЕСЬ input-контракт (как redis covenant.yml).
+	writeCovenant(t, root, "covenant", `input:
+  version:
+    type: string
+    required: true
+    enum: ["8.6.1", "6.2.21"]
+  redis_type:
+    type: string
+    default: sentinel
+    enum: [sentinel, cluster]
+  memory_mb:
+    type: integer
+    min: 64
+`)
+	// Дельта сценария — НУЛЕВОЙ input (всё наследуется из covenant), как
+	// create_from_souls/main.yml.
+	writeScenario(t, root, "create_from_souls", `name: create_from_souls
+create: true
+extends: covenant
+tasks: []
+`)
+
+	got, err := ListScenarios(root, discardLogger())
+	if err != nil {
+		t.Fatalf("ListScenarios: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1; got = %+v", len(got), got)
+	}
+	sc := got[0]
+	// covenant-поля обязаны попасть в InputSchema (иначе UI-форма пустая).
+	for _, field := range []string{"version", "redis_type", "memory_mb"} {
+		if _, ok := sc.InputSchema[field]; !ok {
+			t.Errorf("covenant-поле %q не подмержено в InputSchema: %#v", field, sc.InputSchema)
+		}
+	}
+	// Форма поля сохранена raw (UI читает type/enum/required напрямую).
+	ver, ok := sc.InputSchema["version"].(map[string]any)
+	if !ok {
+		t.Fatalf("version не raw-map: %T", sc.InputSchema["version"])
+	}
+	if ver["type"] != "string" {
+		t.Errorf("version.type = %v, want string", ver["type"])
+	}
+	if _, ok := ver["enum"]; !ok {
+		t.Errorf("version.enum потерян после merge: %#v", ver)
+	}
+}
+
+// TestListScenarios_CovenantMergeAddOnly — covenant-input и СОБСТВЕННЫЙ input
+// сценария оба попадают в InputSchema (add-only union, дельта дополняет covenant).
+func TestListScenarios_CovenantMergeAddOnly(t *testing.T) {
+	root := t.TempDir()
+	writeCovenant(t, root, "covenant", `input:
+  shared_field:
+    type: string
+`)
+	writeScenario(t, root, "create", `name: create
+extends: covenant
+tasks: []
+input:
+  local_field:
+    type: integer
+`)
+
+	got, err := ListScenarios(root, discardLogger())
+	if err != nil {
+		t.Fatalf("ListScenarios: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d", len(got))
+	}
+	sc := got[0]
+	if _, ok := sc.InputSchema["shared_field"]; !ok {
+		t.Errorf("covenant-поле shared_field потеряно: %#v", sc.InputSchema)
+	}
+	if _, ok := sc.InputSchema["local_field"]; !ok {
+		t.Errorf("local-поле local_field потеряно: %#v", sc.InputSchema)
+	}
+}
+
+// TestListScenarios_NoExtendsUnaffected — сценарий БЕЗ extends резолвится как
+// прежде (covenant-резолв no-op, forward-compat бит-в-бит).
+func TestListScenarios_NoExtendsUnaffected(t *testing.T) {
+	root := t.TempDir()
+	writeScenario(t, root, "create", `name: create
+tasks: []
+input:
+  only_field:
+    type: string
+`)
+	got, err := ListScenarios(root, discardLogger())
+	if err != nil {
+		t.Fatalf("ListScenarios: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d", len(got))
+	}
+	if len(got[0].InputSchema) != 1 {
+		t.Errorf("без extends InputSchema должен нести только своё поле, got %#v", got[0].InputSchema)
+	}
+}
+
 // TestListScenarios_MissingScenarioDir — каталога scenario/ нет; должен
 // вернуться пустой список без ошибки (сервис без сценариев — валидный).
 func TestListScenarios_MissingScenarioDir(t *testing.T) {

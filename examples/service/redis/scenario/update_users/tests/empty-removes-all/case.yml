@@ -36,6 +36,7 @@ fixtures:
 
   essence:
     system_acl_users:
+      default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
       monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
 
@@ -46,6 +47,8 @@ fixtures:
   vault:
     secret/redis/update_users:
       password: updusr-redis-pass-16ch
+    secret/redis/update_users/users/default_admin:
+      password: default-admin-secret-pass
     secret/redis/update_users/users/replica:
       password: replica-sys-secret-pass
     secret/redis/update_users/users/monitoring:
@@ -60,10 +63,11 @@ assert:
         path: /etc/redis/users.acl
         render_context:
           vars:
-            # password — главный секрет (requirepass): шаблон рендерит из него default-юзера
-            # в users.acl. day-2 bulk-replace acl сохраняет default (ACL LOAD не сбросит).
-            password: updusr-redis-pass-16ch
             users:
+              default_admin:
+                perms: "~* &* +@all"
+                state: "on"
+                password: default-admin-secret-pass
               replica:
                 perms: "+psync +replconf +ping"
                 state: "on"

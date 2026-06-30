@@ -356,3 +356,74 @@ func TestIntegration_MidRunReResolve_OfflineHostExcludedNextPassage(t *testing.T
 		t.Fatalf("★ Passage 1 targets = %v, want [host-a] — live-снимок re-resolve обязан ИСКЛЮЧИТЬ ушедший offline host-b (ADR-0061 §S3: re-resolve = live-snapshot, не монотонный рост)", p1)
 	}
 }
+
+// newRunnerKeeperStagedTimeout — как [newRunnerKeeperStaged], но с управляемыми
+// RunTimeout (микро-база) и MaxAwaitTimeoutFn (управляемый ceiling). Нужен
+// timeout-guard-у ниже: микро-база делает обрыв детерминированным за секунды,
+// ceilingFn задаёт provision-eff так, чтобы он надёжно превышал блокировку
+// keeper-мока (без 30m-дефолта prod-ceiling-а тест был бы либо медленным, либо
+// недетерминированным).
+func newRunnerKeeperStagedTimeout(t *testing.T, disp ApplyDispatcher, keepers KeeperModuleRegistry, base time.Duration, ceiling time.Duration) *Runner {
+	t.Helper()
+	engine, err := cel.New()
+	if err != nil {
+		t.Fatalf("cel.New: %v", err)
+	}
+	return NewRunner(Deps{
+		Loader:            artifact.NewServiceLoader(t.TempDir(), nil),
+		Topology:          topology.NewResolver(integrationPool, nil, nil),
+		Essence:           essence.NewResolver(nil),
+		Render:            render.NewPipeline(nil, engine, nil, nil),
+		Outbound:          disp,
+		KeeperModules:     keepers,
+		DB:                integrationPool,
+		PassageCap:        stubPassageCap{},
+		PollInterval:      20 * time.Millisecond,
+		RunTimeout:        base,
+		MaxAwaitTimeoutFn: func() time.Duration { return ceiling },
+	})
+}
+
+// TestIntegration_ProvisionRun_NotCutByBaseTimeout — ★ MAIN GUARD этого бага
+// (provision-aware run-timeout, ADR-0061). РЕГРЕСС-ЛОВУШКА: refresh-эмиттер-прогон
+// (provision-from-zero) с МИКРО-базой run-timeout (100ms) НЕ обрывается, когда
+// keeper-шаг блокирует дольше базы (250ms). Доказывает, что run() навешивает на
+// прогон provision-aware effectiveRunTimeout (ceiling+deployBudget), а НЕ сырой
+// runTimeout. ДО фикса defaultRunTimeout навешивался в Start на весь прогон → этот
+// keeper-шаг превысил бы базу → abort (error_locked) на середине онбординга — ровно
+// live-баг (joinWait/await_online недостижимы под 5m-runCtx).
+//
+// ceilingFn=()→1s → eff = 1s + deployBudget(10m) ≫ блокировки 250ms: прогон доживает
+// и доходит до Ready. Negative-half («non-provision режется по base») покрыт
+// существующими TestIntegration_NoClaim_BarrierTimeout / TestIntegration_FromLocked_*
+// (короткий RunTimeout, план без refresh-эмиттера → eff=base → честный timeout).
+func TestIntegration_ProvisionRun_NotCutByBaseTimeout(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	seedIncarnation(t, "redis-prod")
+	seedConnectedSoul(t, "host-a.example.com", []string{"redis-prod"})
+
+	// keeper-шаг (refresh-эмиттер) блокирует 250ms — дольше микро-базы 100ms. Под
+	// сырым runTimeout прогон оборвался бы здесь; под provision-eff (1s+10m) доживёт.
+	mod := &seedingKeeperModule{onApply: func() {
+		time.Sleep(250 * time.Millisecond)
+	}}
+	keepers := fakeKeeperRegistry{"core.soul": mod}
+
+	disp := newRosterTargetDispatcher(t)
+	r := newRunnerKeeperStagedTimeout(t, disp, keepers, 100*time.Millisecond, 1*time.Second)
+
+	applyID := audit.NewULID()
+	if err := r.Start(context.Background(), RunSpec{
+		ApplyID:         applyID,
+		IncarnationName: "redis-prod",
+		ServiceRef:      artifact.ServiceRef{Name: "noop", Git: refreshServiceRepo(t), Ref: "master"},
+		ScenarioName:    "create",
+		StartedByAID:    "archon-alice",
+	}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// Доходит до Ready (не оборвался по микро-базе) — provision-eff применён.
+	waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
+}

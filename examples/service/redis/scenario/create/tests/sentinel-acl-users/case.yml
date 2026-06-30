@@ -2,22 +2,22 @@
 # cluster-acl-users (qa 2026-06-28, drift-guard «генерим ≡ читаем»). Закрывает
 # постоянным кейсом комбинацию sentinel-режим + input.users: targets шага
 # core.vault.kv-present (generate) собираются из union
-# system_acl_users ∪ system_acl_users_sentinel (БЕЗ default) ∪ input.users; те же
-# пути читаются keeper-side vault() в redis-deploy-sentinel.yml. Drift sentinel +
+# system_acl_users ∪ system_acl_users_sentinel (БЕЗ встроенного default) ∪ input.users;
+# те же пути читаются keeper-side vault() в redis-deploy-sentinel.yml. Drift sentinel +
 # operator-extra (Go-guard TestRedisCreate_GeneratedSecretsCoverVaultReads_*)
 # опирается на этот кейс как на источник fixtures/плана.
 #
 # Что доказываем (зеркало cluster-acl-users, режим sentinel):
 #   1. users.acl рендерится из MAP имя→{perms,state,password}: СИСТЕМНЫЕ
-#      (system_acl_users ∪ system_acl_users_sentinel, last-wins) + operator-extra
+#      (system_acl_users default_admin/replica/monitoring/sentinel/haproxy) + operator-extra
 #      zeta/alpha. Имена operator-extra не пересекаются с системными.
 #   2. sentinel-режим: НЕТ cluster-директив в redis.conf; sentinel-демон и
 #      sentinel.conf ПРИСУТСТВУЮТ (в отличие от cluster, где они отсутствуют).
 #   3. per-user пароль резолвится keeper-side vault() по конвенции
-#      secret/redis/<inc>/users/<name>#password; default-юзер sentinel-набора
-#      берёт ГЛАВНЫЙ секрет secret/redis/<inc>#password (НЕ /users/default).
-#      Два operator-юзера (zeta/alpha) с РАЗНЫМИ паролями: ассерт ловит резолв и
-#      отсутствие cross-leak.
+#      secret/redis/<inc>/users/<name>#password. ★ РЕДИЗАЙН default_admin: системный
+#      default_admin — внутрикластерный AUTH (~* &* +@all), его пароль по той же ветке
+#      users/default_admin (прежняя модель «default → главный секрет» убрана). Два
+#      operator-юзера (zeta/alpha) с РАЗНЫМИ паролями: ассерт ловит резолв и cross-leak.
 #
 # PRESENCE-форма: задачи идентифицируются module + params_subset (path-
 # дизамбигуатор users.acl↔redis.conf); индексы не сверяются. render_context.vars.users
@@ -49,7 +49,11 @@ fixtures:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
     # Per-user секреты системных юзеров (union system_acl_users ∪
-    # system_acl_users_sentinel, БЕЗ default — default берёт главный секрет).
+    # system_acl_users_sentinel, БЕЗ встроенного default).
+    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
+    # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
     secret/redis/create/users/replica:
       password: replica-sys-secret-pass
     secret/redis/create/users/monitoring:
@@ -87,13 +91,16 @@ fixtures:
 
     # Системные ACL-юзеры redis-server + sentinel-демона (1:1 из essence/_default.yaml).
     # ОБА ОБЯЗАТЕЛЬНЫ: guard create/sentinel.yml рвёт render при пустом любом наборе.
+    # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер полного
+    # доступа (~* &* +@all) в ОБА набора (заменил прежний requirepass-default).
     system_acl_users:
+      default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
       monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
       sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
     system_acl_users_sentinel:
-      default:    "allchannels allkeys +@all"
+      default_admin: "allchannels allkeys +@all"
       monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
@@ -108,11 +115,13 @@ fixtures:
 assert:
   task_present:
     # redis-server users.acl: MAP имя→{perms,state,password} с per-user vault-
-    # паролями. СИСТЕМНЫЕ из system_acl_users (replica/monitoring/sentinel/haproxy —
-    # redis-server-набор) + operator-extra zeta/alpha. default-юзер рендерится шаблоном
-    # из render_context.vars.password (главный секрет = requirepass), НЕ из этого map —
-    # в map его нет (он не operator-/system-extra). sentinel-набор
-    # (system_acl_users_sentinel) идёт в ОТДЕЛЬНЫЙ sentinel-users.acl, не сюда.
+    # паролями. СИСТЕМНЫЕ из system_acl_users (default_admin/replica/monitoring/sentinel/
+    # haproxy — redis-server-набор) + operator-extra zeta/alpha.
+    # ★ РЕДИЗАЙН default_admin (2026-06-30): .vars.password БОЛЬШЕ НЕ передаётся (requirepass
+    # убран из server.yml). default_admin — системный юзер полного доступа (~* &* +@all),
+    # приходит в map `users` range-ом, как остальные системные (Vault-пароль по ветке
+    # users/default_admin). Встроенный default рендерится `off` шаблоном (его в map нет).
+    # sentinel-набор (system_acl_users_sentinel) идёт в ОТДЕЛЬНЫЙ sentinel-users.acl, не сюда.
     - module: core.file.rendered
       id: redis_acl
       params_subset:
@@ -123,11 +132,11 @@ assert:
         group: redis
         render_context:
           vars:
-            # password — главный секрет (requirepass): шаблон рендерит из него default-юзера
-            # в users.acl (без default в aclfile Redis игнорит requirepass → built-in default
-            # без пароля → protected-mode рвёт внешние коннекты REPLICAOF/sentinel плагинов).
-            password: s3cr3t-redis-pass-create
             users:
+              default_admin:
+                perms: "~* &* +@all"
+                state: "on"
+                password: default-admin-secret-pass
               replica:
                 perms: "+psync +replconf +ping"
                 state: "on"
