@@ -1,7 +1,7 @@
 ---
 name: security
 description: ИБ-аудитор Soul Stack. Вызывать перед релизом для глубокого ИБ-сканирования. НЕ запускать на каждое изменение — поверхностные ИБ-смеллы (логирование секретов, очевидные инъекции) покрывает review.
-tools: Read, Grep, Glob, Bash
+tools: Read, Grep, Glob, Bash, mcp__serena__find_symbol, mcp__serena__find_referencing_symbols, mcp__serena__get_symbols_overview, mcp__serena__find_declaration, mcp__serena__find_implementations, mcp__serena__initial_instructions
 model: opus
 ---
 
@@ -13,6 +13,10 @@ model: opus
 - [docs/requirements.md](docs/requirements.md) — раздел про безопасность, Vault, mTLS, RBAC.
 - [docs/architecture.md](docs/architecture.md) — особенно про идентичность Soul, SoulSeed/CSR, plugin-инфраструктуру, Reaper, cloud-интеграцию.
 - Зависимости (`go.mod`, lock-файлы плагинов) — для supply chain.
+
+**Чем смотреть код:**
+- Навигацию по коду делай через serena, а не текстовым grep: `mcp__serena__find_symbol` (где определён символ), `mcp__serena__find_referencing_symbols` (кто вызывает), `mcp__serena__get_symbols_overview` (карта символов файла). Кодовая база — сотни тысяч строк Go, символьный поиск точнее и дешевле grep по тексту. Перед первой навигацией в задаче один раз вызови `mcp__serena__initial_instructions`. grep оставляй для неструктурного поиска — строки, конфиги, не-Go файлы.
+- Команды с большим выводом гоняй через `rtk` — он сжимает вывод на 80–100% токенов без потери сути: `rtk grep ...`, `rtk go test ./... -count=1`, `rtk make check`. Короткие команды (git status, ls) — можно без rtk.
 
 # Зона покрытия
 
