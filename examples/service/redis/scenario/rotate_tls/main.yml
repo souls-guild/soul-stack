@@ -156,7 +156,17 @@ tasks:
         # из essence.conf_dir, см. vars-шапку), data_dir/modules_base_url прямо из essence.
         conf_dir: "${ compute.conf_dir }"
         data_dir: "${ default(essence.data_dir, '/var/lib/redis') }"
-        config:   "${ incarnation.state.redis_config }"
+        # ★ РЕДИЗАЙН default_admin: rotate_tls перерендеривает ВЕСЬ кирпич destiny redis
+        # (вкл. redis.conf), поэтому статическая replica→master AUTH обязана доливаться и
+        # здесь — иначе redis.conf на диске потерял бы masteruser/masterauth и cluster/
+        # sentinel-реплики после рестарта упёрлись бы в NOAUTH при PSYNC (симметрично
+        # add_user/update_users). На master-нодах директива инертна (failover-safe).
+        # masterauth — vault()-в-ячейке (seal-маскинг); admin_user = compute.admin_user.
+        config: >-
+          ${ merge(incarnation.state.redis_config, {
+               'masteruser': compute.admin_user,
+               'masterauth': vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password')
+             }) }
         modules_base_url: "${ default(essence.modules_base_url, '') }"
         tls:
           enable:   "${ incarnation.state.tls.enable }"

@@ -194,6 +194,54 @@ assert:
           role: ""
           essence: {}
 
+    # 1c. ★ GUARD replica→master AUTH: rotate_tls перерендеривает ВЕСЬ кирпич destiny redis
+    #     (вкл. redis.conf), поэтому config-map ОБЯЗАН нести masteruser/masterauth — иначе
+    #     redis.conf на диске потерял бы статическую replica→master AUTH и после рестарта
+    #     реплики PSYNC упёрся бы в NOAUTH (master_link_status:DOWN). Долив симметричен
+    #     add_user/update_users (merge(state.redis_config, {masteruser, masterauth})).
+    #     БЕЗ долива этот assert РВЁТСЯ (config-map не содержал бы masteruser/masterauth) —
+    #     ловит регресс «rotate теряет masterauth». render_context сверяется целиком
+    #     (reflect.DeepEqual): config = state.redis_config + долитая AUTH-пара.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+        render_context:
+          vars:
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
+            config:
+              maxmemory: "256mb"
+              maxmemory-policy: allkeys-lru
+              save: "900 1 300 10 60 10000"
+              appendonly: "no"
+              tls-port: "7379"
+              tls-cert-file: /etc/redis/tls/redis.crt
+              tls-key-file: /etc/redis/tls/redis.key
+              tls-ca-cert-file: /etc/redis/tls/ca.crt
+              tls-replication: "yes"
+              masteruser: default_admin
+              masterauth: default-admin-secret-pass
+          self:
+            sid: trial-host
+            covens: [rotate_tls]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
     # 2. APPLIER-REGISTER МАТЕРИАЛИЗОВАН: терминальная core.noop.run(register=tls_certs)
     #    — якорь onchanges-гейта (id-дизамбигуатор; register∪id, см. ExpectedTask.ID).
     #    Эмитится движком ПОСЛЕ дочерних destiny-задач apply-шага, агрегирует OR(changed).
