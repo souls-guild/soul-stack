@@ -1,0 +1,40 @@
+name: preserves-unrelated
+description: >
+  Миграция трогает ТОЛЬКО provisioned_sids — остальной state (df_config/df_users/
+  топология/tls/provisioned_vm_ids/provisioned_provider) сохраняется дословно.
+  Зеркало redis 007_to_008 preserves-unrelated.
+
+state_before:
+  df_version: "1.39.0"
+  df_config:
+    maxmemory: "512mb"
+    maxclients: 10000
+  df_users:
+    - { name: app, perms: "~app:* +@read +@write", state: "on" }
+  replicas: 2
+  sentinel_quorum: 0
+  df_sentinel:
+    master_name: master
+    quorum: 0
+    down_after_ms: 5000
+    failover_timeout_ms: 60000
+  provisioned_vm_ids: ["i-aaa111", "i-bbb222"]
+  provisioned_provider: "wb-prod"
+
+state_after:
+  df_version: "1.39.0"
+  df_config:
+    maxmemory: "512mb"
+    maxclients: 10000
+  df_users:
+    - { name: app, perms: "~app:* +@read +@write", state: "on" }
+  replicas: 2
+  sentinel_quorum: 0
+  df_sentinel:
+    master_name: master
+    quorum: 0
+    down_after_ms: 5000
+    failover_timeout_ms: 60000
+  provisioned_vm_ids: ["i-aaa111", "i-bbb222"]
+  provisioned_provider: "wb-prod"
+  provisioned_sids: []

@@ -1,0 +1,18 @@
+name: provisioned-defaults-back-compat
+description: >
+  Инкарнация без provision-полей (развёрнута до v3, БЕЗ cloud-create) →
+  консервативный default: provisioned_vm_ids=[] и provisioned_provider=''.
+  has()-guard back-compat для отсутствующих ключей. Зеркало redis
+  006_to_007 provisioned-defaults-back-compat.
+
+state_before:
+  df_version: "1.39.0"
+  df_config:
+    maxmemory: "256mb"
+
+state_after:
+  df_version: "1.39.0"
+  df_config:
+    maxmemory: "256mb"
+  provisioned_vm_ids: []
+  provisioned_provider: ""

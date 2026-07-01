@@ -1,0 +1,61 @@
+# L0-испытание destroy (teardown, ADR-061) — инкарнация БЫЛА провижена облаком (default-on
+# путь create). fixtures.state несёт provisioned_* (как их записал create с provision):
+# provider/vm_ids/sids. destroy читает их обратно (keeper-задача видит pre-run снимок
+# incarnation.state.<path>) и эмитит ОДИН keeper-side шаг core.cloud.destroyed с params из state.
+#
+# Guard `when: size(provisioned_vm_ids) > 0` на задаче destroyed: state несёт 4 vm_id → 4 > 0 →
+# задача В ПЛАНЕ (НЕ group-drop). assert парности sids↔vm_ids (4 == 4) проходит run-level ДО
+# dispatch. Soul-side teardown (stop-сервисы + удаление артефактов) ТОЖЕ эмитится — он
+# безусловен (на провиженной инкарнации безвредно отработает на VM, которые снимает cloud-destroy).
+#
+# Парный к teardown-package/teardown-binary (не-провиженные: cloud-destroy group-drop). Этот
+# кейс доказывает cloud-cascade-флоу DragonFly (образец redis destroy-provisioned, решение
+# 2026-07-01): адрес РОВНО core.cloud.destroyed, params взяты из incarnation.state.
+name: destroy of a provisioned dragonfly emits core.cloud.destroyed with params from state
+
+fixtures:
+  # destroy не несёт apply:destiny (keeper-only cloud-cascade + Soul-side file/service) —
+  # источник не дёргается, но харнесс держит ключ ради единообразия roster-резолва.
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: vm-1.example.com
+      covens: [destroy]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+
+  # ★ Soul-side teardown читает essence (install_method/conf_dir, v1→v2 вынесены из state).
+  essence:
+    install_method: package
+    conf_dir: /etc/dragonfly
+
+  # incarnation.state ДО прогона: ФАКТ провижена, записанный create-прогоном
+  # (provisioned_vm_ids — provider-side id; provisioned_sids — Keeper-side SID;
+  # provisioned_provider — имя Provider). destroy читает их в params destroyed.
+  # Длины sids и vm_ids совпадают (4 == 4) — assert парности проходит.
+  state:
+    df_version: "1.39.0"
+    df_config:
+      maxmemory: "256mb"
+    provisioned_vm_ids: [i-aaa111, i-bbb222, i-ccc333, i-ddd444]
+    provisioned_sids: [vm-1.example.com, vm-2.example.com, vm-3.example.com, vm-4.example.com]
+    provisioned_provider: wb-dev
+
+assert:
+  task_present:
+    # core.cloud.destroyed (on: keeper): provider/vm_ids/sids взяты из incarnation.state.
+    # Адрес РОВНО destroyed (base core.cloud + state destroyed).
+    - module: core.cloud.destroyed
+      params_subset:
+        provider: wb-dev
+        vm_ids: [i-aaa111, i-bbb222, i-ccc333, i-ddd444]
+        sids: [vm-1.example.com, vm-2.example.com, vm-3.example.com, vm-4.example.com]
+
+    # Soul-side teardown ТОЖЕ активен (безусловен): стоп сервиса + снятие пакета +
+    # удаление наших конфиг-артефактов.
+    - module: core.service.stopped
+      params_subset:
+        name: dragonfly
+    - module: core.pkg.absent
+      params_subset:
+        name: dragonfly

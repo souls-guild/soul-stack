@@ -12,6 +12,29 @@
 # spec.essence. Дефолт `master`.
 sentinel_master_name: master
 
+# ── cloud-provision defaults (ADR-061, Вариант A) ───────────────────────────────
+# Фоллбэки для input.provision.* — provision-тело (dragonfly-provision.yml) читает их как
+# default(input.provision.X, essence.provision_X). provision ВКЛЮЧЁН по умолчанию (default-on,
+# решение пользователя 2026-07-01: DragonFly cloud-provision по образцу redis) — оператор
+# обычно НЕ задаёт provider/profile в Run-форме (секция provision скрыта), берутся эти дефолты.
+# ★ TODO: prod/dev provider switch (ENV keeper / Coven-overlay) — отдельный ADR. Пока ОДНА
+# статичная пара provider/profile (прод), переключение окружения НЕ реализовано (заглушка под
+# будущую развилку, симметрия redis essence).
+#
+# ★ profile = redis-debian-12 (ПЕРЕИСПОЛЬЗОВАН из redis, НЕ отдельный dragonfly-профиль):
+# VM-профиль — это ресурсы/образ/сеть VM в реестре profiles (managed в Postgres), НЕ
+# сервис-специфичный конфиг. DragonFly — тот же класс in-memory-store на том же Debian 12,
+# что redis → generic debian-12-профиль подходит без адаптации. Заведение отдельной
+# dragonfly-debian-12-записи в реестре не оправдано (дубль профиля без отличий). Оператор
+# переопределяет profile в spec.essence, если под DragonFly нужен иной sizing/образ.
+provision_provider: wb-prod
+provision_profile:  redis-debian-12
+# Верхняя граница ожидания онбординга созданных VM (барьер await_online, core.soul.registered
+# refresh_soulprint; форма <N>{s|m|h}). Фоллбэк для input.provision.await_timeout.
+provision_await_timeout: "10m"
+# Имя SshProvider-плагина для доставки per-VM bootstrap-токена по SSH (core.bootstrap.delivered).
+provision_ssh_provider: teleport
+
 # ── Способ установки binary: источник upstream-tarball ──────────────────────────
 # install_method=binary тянет DragonFly из upstream-tarball. URL и версия бинаря — author-
 # context (оператор переопределяет в spec.essence под свой mirror). destiny строит имя

@@ -1,0 +1,100 @@
+# Baseline-essence сервиса mongo (подложка автора, концепция defaults роли). Оператор
+# переопределяет в spec инкарнации; на L0-прогоне ключевые значения дублируются в fixtures
+# кейса.
+#
+# Это СЛОЙ ТРАНСЛЯЦИИ простого ввода оператора: данные-таблицы (memory_reserve_percent) и
+# merge-подложка mongo_config живут здесь, scenario create сливает их с вводом через merge()
+# (templating §2.3). НИЧЕГО из трансляции не уходит в плагин — она нужна только render-у
+# mongod.conf at-create (источник истины).
+
+# ── Способ установки MongoDB: ФИКСИРОВАН в essence, НЕ operator-input ──────────────
+# install_method — author-context (оператор переопределяет в spec.essence). Дефолт binary
+# (штатный способ: отдельный бинарь mongod из Nexus, симметрия redis). compute.install читает
+# default(essence.install_method, 'binary'). Ветка package ставит distro-пакет mongodb-org с
+# =version-пином (внутренний оператор переопределяет install_method: package).
+install_method: binary
+
+# ── Способ установки binary: источник бинаря mongod из Nexus (симметрия redis) ────
+# install_method=binary (DEFAULT) тянет бинарь mongod этой версии из Nexus. base_url —
+# author-context (оператор переопределяет в spec.essence под свой mirror). destiny/scenario
+# строит путь per-host из binary_base_url + soulprint.self.os (arch, distro-версия) + версии.
+# ★ Реальный upstream MongoDB: fastdl.mongodb.org/linux/mongodb-linux-<arch>-<distro>-<ver>.tgz
+# (asset — tarball с bin/mongod). base_url задаёт оператор (внутренний Nexus-mirror).
+binary_base_url: "https://nexus-hosted.wb.ru/repository/raw/devops/dba/prod/mongodb"
+binary_version:  ""
+
+# ── SSRF-guard для fetch бинаря Nexus (allow_private, симметрия redis) ─────────────
+# Дефолтный binary_base_url — ВНУТРЕННИЙ Nexus (резолвится в RFC1918). core.url.fetched по
+# умолчанию (allow_private:false) блокит dial в private-IP SSRF-guard-ом → fetch mongod-бинаря
+# падает. Дефолт TRUE (доверенный internal Nexus). compute.install прокидывает значение в
+# apply/params install.allow_private. Публичный-mirror-деплой — false в spec.essence.
+binary_allow_private: true
+
+# ── Host-layout: базовые каталоги конфигурации и данных MongoDB ───────────────────
+# conf_dir/data_dir — author-context (оператор переопределяет раскладку в spec.essence под
+# свой storage-layout). compute читает их отсюда, гонит в render. В state НЕ персистятся —
+# day-2 читает layout из essence.conf_dir/data_dir (has()-safe default). Дефолт = официальный
+# layout MongoDB (mongod.conf в /etc, данные в /var/lib/mongodb).
+conf_dir: /etc/mongodb
+data_dir: /var/lib/mongodb
+# Каталог логов mongod (systemLog.path = <log_dir>/mongod.log).
+log_dir:  /var/log/mongodb
+
+# Порт mongod (директива net.port). Дефолт 27017 (well-known MongoDB). Один порт под
+# plain и TLS (у mongo TLS на ТОМ ЖЕ порту через net.tls.mode — в отличие от redis
+# 6379+7379). PILOT — plain.
+net_port: 27017
+
+# Доля бюджета памяти (input.memory_mb), отдаваемая MongoDB под WiredTiger-кэш; остаток —
+# резерв под ОС/накладные и остальные потребители mongod. scenario вычисляет cacheSizeGB =
+# memory_mb*pct/100 / 1024 (ГБ). Дефолт 50% — консервативная рекомендация MongoDB (WiredTiger
+# по умолчанию берёт max(0.5*(RAM-1GB), 256MB); задаём явно от бюджета оператора).
+memory_reserve_percent: 50
+
+# ── Системные MongoDB-юзеры (концепция Ansible-роли mongodb: mongodb_root_admin) ──
+# Имя→РОЛИ служебных юзеров, под которыми идёт администрирование кластера. ★ MongoDB vs
+# redis: НЕ perms-строка, а МАССИВ ролей {role, db} (mongo-модель). default_admin — админ
+# полного доступа (роль root в admin), под которым идёт весь admin-коннект (createUser
+# остальных юзеров, health-runCommand). Заводится ПЕРВЫМ через localhost-exception (плагин
+# community.mongo.user, no-auth loopback-коннект пока admin-БД пуста — mongo-механика, аналог
+# redis default_admin bootstrap).
+#
+# Пароль default_admin — в Vault по конвенции secret/mongo/<incarnation>/users/default_admin
+# #password (симметрия redis/dragonfly users/<name>). scenario резолвит keeper-side через
+# vault() и передаёт плагину.
+#
+# ★ PILOT: ОДИН системный юзер default_admin (root). replica/monitoring/backup/oplog юзеры
+# (у Ansible-роли mongodb_root_backup/mongodb_exporter/mongodb_oplog_users) — СЛЕД. слайсы
+# (replica-set/monitoring). Имена системных — validate-guard отвергает operator-extra с ними.
+system_users:
+  default_admin:
+    - { role: root, db: admin }
+
+# ── Merge-подложка mongod.conf (defaults роли) ──────────────────────────────────
+# НИЖНИЙ слой merge(): вычисленный wiredTiger-кэш и passthrough оператора наслаиваются
+# поверх. Merged итог рендерится в mongod.conf (scenario render). ★ Структура — вложенный
+# YAML mongod (net/storage/systemLog/security — поддеревья), НЕ плоский key-value как redis.
+# maxIncomingConnections — типичный прод-дефолт; остальное (bindIp/port/dbPath/authorization)
+# задаёт ШАБЛОН из host-layout/net_port (не дублируем тут — один источник, как redis dir/aclfile).
+mongo_config:
+  net:
+    maxIncomingConnections: 65536
+  operationProfiling:
+    mode: "off"
+    slowOpThresholdMs: 100
+
+# Данные-таблица kernel-параметров под MongoDB (host-tuning). scenario передаёт этот map в
+# render core.sysctl.applied → drop-in /etc/sysctl.d/30-mongodb.conf. Значения — СТРОКИ.
+# ИСТОЧНИК — MongoDB production notes + Ansible-роль mongodb (defaults: max_map_count 262144).
+# Сетевые буферы/бэклоги — те же in-memory-store рекомендации, что redis/dragonfly (общий
+# kernel-network-stack tuning под высоконагруженный сетевой сервис).
+sysctl_settings:
+  # >>> Память и процессы (MongoDB production notes) <<<
+  vm.max_map_count:      "262144"
+  vm.swappiness:         "1"
+  # >>> Сетевые буферы (высоконагруженный сетевой сервис) <<<
+  net.core.somaxconn:           "65535"
+  net.core.netdev_max_backlog:  "20000"
+  net.ipv4.tcp_max_syn_backlog: "65535"
+  net.ipv4.tcp_fin_timeout:    "30"
+  net.ipv4.tcp_keepalive_time: "120"

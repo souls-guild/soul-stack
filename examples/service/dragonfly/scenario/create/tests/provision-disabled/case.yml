@@ -1,0 +1,79 @@
+# L0-испытание provision (ADR-061, Вариант A) — provision ЯВНО ВЫКЛЮЧЕН
+# (input.provision.enabled=false). ★ С default-on (решение 2026-07-01) ОПУЩЕННАЯ секция
+# означает ВКЛЮЧЕНО (top-level default {enabled: true}) — выключение ТОЛЬКО явным enabled:
+# false. Guard: include dragonfly-provision.yml gated на `has(input.provision) &&
+# input.provision.enabled` (main.yml tasks). enabled=false → весь provision-файл НЕ таргетит
+# никого; его keeper-side шаги (core.cloud.created + core.soul.registered) в плане ОТСУТСТВУЮТ
+# (group-drop по include-when), а read-model provisioned_vm_ids/sids/provider — консервативный
+# default ([] / '') по тернару state_changes (гейт input.provision.enabled).
+#
+# Парный к provision-enabled-sentinel (там enabled: true → cloud-шаги присутствуют). Этот кейс
+# доказывает, что явный enabled: false катит прогон DragonFly по существующему roster-у (прежний
+# профиль deploy-on-existing), лишних cloud-шагов не эмитится (образец redis provision-disabled).
+name: provision explicitly disabled drops cloud-create and onboarding tasks
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create, dragonfly]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
+  vault:
+    secret/dragonfly/create/users/default_admin:
+      password: dfadmin-create-pass
+    secret/dragonfly/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/dragonfly/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/dragonfly/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/dragonfly/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    sentinel_master_name: master
+    memory_reserve_percent: 75
+    df_config:
+      maxmemory:        "256mb"
+      maxclients:       10000
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    version: "1.39.0"
+    # replicas_per_master=0 ЯВНО: single-host (node-solo), size-guard sentinel = 1+0 = 1 хост.
+    replicas_per_master: 0
+    # ★ provision ЯВНО выключен (default-on: опущенная секция = ВКЛЮЧЕНО, выключение
+    # только явным enabled: false) → include dragonfly-provision.yml group-drop.
+    provision:
+      enabled: false
+
+assert:
+  task_present:
+    # Прогон катит обычную sentinel-ветку по существующему roster-у: dragonfly.conf
+    # рендерится. Доказывает, что отсутствие provision не ломает основной деплой.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/dragonfly/dragonfly.conf
+
+  task_absent:
+    # provision-файл шаги ОТСУТСТВУЮТ (include-when input.provision.enabled false → group-drop).
+    # core.cloud.created — создание VM; core.soul.registered — барьер онбординга.
+    - module: core.cloud.created
+    - module: core.soul.registered
+
+  state_changes:
+    df_version: "1.39.0"
+    # read-model: VM никем не провижены этим прогоном → консервативный default.
+    provisioned_vm_ids: []
+    provisioned_sids: []
+    provisioned_provider: ""

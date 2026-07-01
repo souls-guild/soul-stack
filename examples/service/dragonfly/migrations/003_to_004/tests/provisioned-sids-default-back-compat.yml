@@ -1,0 +1,21 @@
+name: provisioned-sids-default-back-compat
+description: >
+  Инкарнация без provisioned_sids (развёрнута до v3) → консервативный default:
+  provisioned_sids=[]. has()-guard back-compat для отсутствующего ключа (копия
+  паттерна 002_to_003 provisioned_vm_ids). Зеркало redis 007_to_008
+  provisioned-sids-default-back-compat.
+
+state_before:
+  df_version: "1.39.0"
+  df_config:
+    maxmemory: "256mb"
+  provisioned_vm_ids: ["i-aaa111"]
+  provisioned_provider: "wb-prod"
+
+state_after:
+  df_version: "1.39.0"
+  df_config:
+    maxmemory: "256mb"
+  provisioned_vm_ids: ["i-aaa111"]
+  provisioned_provider: "wb-prod"
+  provisioned_sids: []

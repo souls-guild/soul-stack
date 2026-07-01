@@ -1,0 +1,117 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║ ОБЩЕЕ PROVISION-ТЕЛО (service-level include, переиспользуемое) — ADR-061         ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+# Cloud-provision новых VM под DragonFly-топологию ПЕРЕД деплоем: (а) core.cloud.created
+# создаёт VM, (б) core.bootstrap.delivered доставляет per-VM bootstrap-токен по SSH,
+# (в) core.soul.registered регистрирует созданные SID + БЛОКИРУЮЩЕ ждёт онбординга
+# (await_online) + refresh_soulprint → scenario-runner пере-резолвит roster ПЕРЕД
+# деплой-веткой (live-снимок online-набора). Образец 1:1 — redis-provision.yml (решение
+# пользователя 2026-07-01: DragonFly cloud-provision ПО ОБРАЗЦУ redis; provision обязателен
+# в базовом create). Лежит на service-level (scenario/<file>), а не внутри одного сценария,
+# и инклудится потребителем по имени файла: scenario-include резолвит `scenario/<name>/<file>`,
+# затем фоллбэкает на `scenario/<file>` (orchestration.md §6, include.go).
+#
+#   Потребитель (на 2026-07-01):
+#     - scenario/create/main.yml — cloud-create + онбординг ПЕРЕД деплоем.
+#   (redis делит это тело create+migrate_cluster; у DragonFly migrate_cluster нет — PILOT
+#   sentinel-only, — но тело всё равно service-level ради симметрии с redis и на случай
+#   второго потребителя. Единственный потребитель сейчас — create.)
+#
+#   Include gated на `has(input.provision) && input.provision.enabled` у ИНКЛУДЯЩЕГО
+#   (placeholder-skip-форма include-when — object-input не статичен, не group-drop): при
+#   enabled=false / опущенной секции шаги тела не таргетят никого.
+#
+# ★★ ИНВАРИАНТ ИНКЛУДЯЩЕГО (drift-guard руками — soul-lint cross-file НЕ ловит) ★★
+#   Этот файл ССЫЛАЕТСЯ на input.*/incarnation.*/essence.*/register.*, но НЕ объявляет
+#   их. Сценарий, инклудящий это тело, ОБЯЗАН нести в своём контракте ВЕСЬ набор,
+#   который тело читает, С ТОЙ ЖЕ СЕМАНТИКОЙ:
+#       input.provision.{enabled, provider, profile, await_timeout, ssh_provider}
+#       input.replicas_per_master
+#       incarnation.name
+#       essence.provision_{provider, profile, await_timeout, ssh_provider}
+#   provider/profile/await_timeout/ssh_provider читаются как default(input.provision.X,
+#   essence.provision_X) — оператор может опустить их (форма provision скрыта, default-on),
+#   тогда берётся essence-дефолт. Инклудящий ОБЯЗАН нести соответствующие essence.provision_*.
+#   Шаги (б)/(в) читают register.provision.hosts — register ПЕРВОГО шага (а)
+#   core.cloud.created (он создаётся ЗДЕСЬ). Пропуск/переименование любого input-поля в
+#   инклудящем НЕ ловится статически (cross-file дрейф невидим soul-lint) — проявится
+#   падением render. Источник истины набора и схемы input.provision —
+#   create/main.yml::input.provision.
+#
+# ★ ЧИСЛО VM — ИЗ ТОПОЛОГИИ (единственный источник истины размера кластера):
+#   sentinel-only (PILOT): 1+replicas_per_master (один master + реплики master-а).
+# Отдельного node_count в input.provision НЕТ намеренно — он рассинхронился бы с
+# size-guard деплой-ветки (assert size(soulprint.hosts) == та же формула, create/main.yml).
+# ★ У DragonFly НЕТ redis_type/shards (redis cluster-ветка вне PILOT-скоупа) → формула
+#   count проще redis: всегда 1+replicas_per_master (без тернара по режиму).
+#
+# ★ teardown (destroy) — НЕ здесь (отдельный сценарий, cascade core.cloud.destroyed).
+
+# (а) Создание VM через CloudDriver (on: keeper, ADR-017). count = 1+replicas_per_master
+#     (топология sentinel). generate_userdata: false: VM создаётся БЕЗ cloud-init userdata
+#     (часть cloud-провайдеров отвергает ci_user_data) → VM auto-join Teleport, а весь
+#     setup (soul-бинарь + CA + soul.yml + systemd-unit) ставит шаг (б) по Teleport SSH
+#     (install: true, см. ниже). Per-VM bootstrap-токен попадает в
+#     register.provision.hosts[].bootstrap_token (plain one-time, маскируется
+#     audit.MaskSecrets на всех выходах).
+- name: Provision VMs for the dragonfly topology (cloud-init bootstrap)
+  on: keeper
+  module: core.cloud.created
+  register: provision
+  params:
+    # provider/profile — input.provision.X с фоллбэком на essence.provision_X (default-on:
+    # форма provision скрыта, оператор обычно НЕ задаёт provider/profile → essence-дефолт).
+    # ★ TODO: prod/dev provider switch (ENV keeper / Coven-overlay) — отдельный ADR. Сейчас
+    # одна статичная essence-пара (прод); переключение окружения НЕ реализовано.
+    provider: "${ default(input.provision.provider, essence.provision_provider) }"
+    profile:  "${ default(input.provision.profile, essence.provision_profile) }"
+    # count = размер кластера по топологии sentinel: 1+replicas_per_master. int() унифицирует
+    # числовой тип (YAML→uint64 в L0, JSON→double в проде). ОДНОСТРОЧНЫЙ quoted-string (НЕ
+    # block-scalar `>-`): goccy парсит block-scalar как LiteralNode, а CEL-wrapped-skip
+    # param-type-check (module_params.go) ловит только StringNode → int-param `count` ложно
+    # реджектился бы как param_type_mismatch на folded-форме.
+    count: "${ 1 + int(input.replicas_per_master) }"
+    generate_userdata: false
+
+# (б) Установка soul + доставка per-VM bootstrap-токена по SSH (on: keeper,
+#     core.bootstrap.delivered, ADR-063). Берёт hosts из register предыдущего шага
+#     (каждый — {sid, primary_ip, bootstrap_token}). install: true → VM пришла БЕЗ
+#     cloud-init (шаг (а) generate_userdata:false), поэтому весь setup ставится ЗДЕСЬ
+#     по Teleport SSH: soul-бинарь (pinned-CA HTTPS) + keeper-CA + soul.yml + systemd-
+#     unit (тот же install-blueprint, что cloud-init B-flat). Затем кладёт токен в
+#     /etc/soul/token (umask 077, 0400, ★токен в STDIN не в argv) и запускает soul
+#     (start_soul default true). ssh_provider — имя SshProvider-плагина (Teleport).
+#     Ошибка любого хоста → шаг failed (B1-strict) → state не коммитится → error_locked.
+#     require: provision — токены приходят из его register.
+- name: Install soul and deliver per-VM bootstrap token over SSH
+  on: keeper
+  module: core.bootstrap.delivered
+  params:
+    hosts:        "${ register.provision.hosts }"
+    # ssh_provider — input.provision.ssh_provider с фоллбэком на essence.provision_ssh_provider
+    # (default-on: форма скрыта, оператор обычно НЕ задаёт → essence-дефолт teleport).
+    ssh_provider: "${ default(input.provision.ssh_provider, essence.provision_ssh_provider) }"
+    install:      true
+  require:
+    - provision
+
+# (в) Регистрация созданных SID + БЛОКИРУЮЩИЙ барьер онбординга + refresh_soulprint
+#     (on: keeper, core.soul.registered, ADR-061). sid — СПИСОК из register.provision.hosts
+#     (h.sid каждой созданной VM; список приходит CEL-выражением, list-SID ADR-061). coven —
+#     корневой incarnation.name (роль таргетится по нему). await_online:true → шаг ждёт,
+#     пока созданные Souls станут online (Redis SID-lease), под await_timeout; B1-strict:
+#     недобор кворума → шаг failed → state не коммитится → error_locked. refresh_soulprint:
+#     true → после успеха roster пере-резолвится, деплой-ветка видит online-набор.
+#     await_timeout: input.provision.await_timeout → essence.provision_await_timeout → '10m'.
+- name: Register provisioned VMs and await their onboarding
+  on: keeper
+  module: core.soul.registered
+  register: onboarded
+  require:
+    - provision
+  params:
+    sid:               "${ register.provision.hosts.map(h, h.sid) }"
+    coven:             ["${ incarnation.name }"]
+    await_online:      true
+    await_timeout:     "${ default(input.provision.await_timeout, default(essence.provision_await_timeout, '10m')) }"
+    refresh_soulprint: true

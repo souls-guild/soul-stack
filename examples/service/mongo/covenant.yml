@@ -1,0 +1,219 @@
+# covenant.yml — переиспользуемый общий контракт секций сценариев mongo (PILOT).
+#
+# Несёт ТОЛЬКО общий контракт ЧЕТЫРЁХ секций: input / compute / state_changes /
+# validate (shared/config ScenarioFragment). name/tasks/create/form/extends —
+# НЕ здесь (covenant — контракт, а не исполняемый сценарий). Сценарий подключает
+# фрагмент через `extends: covenant` и ДОБАВЛЯЕТ свою дельту add-only (covenant —
+# БАЗА, дельта НЕ переопределяет ключи covenant, иначе section_key_conflict).
+# keeper-side резолвер сливает covenant ПЕРВЫМ.
+#
+# ★ PILOT (standalone): БЕЗ provision-секции (deploy на существующие хосты, симметрия
+# dragonfly PILOT). destroy — Soul-side teardown, cloud-cascade и provisioned_*-поля
+# state НЕ вводятся (provision default-on + dragonfly-style cascade — СЛЕД. слайс).
+
+# ── Входной контракт оператора (docs/input.md) ────────────────────────────────
+# Простые типизированные понятия. Трансляция в mongod.conf — в compute ниже.
+input:
+  # ── version: фикс-enum БИНАРНЫХ версий MongoDB (Nexus) ────────────────────────
+  # ★ Симметрия redis: version — ENUM фиксированных upstream-версий из Nexus
+  # (essence.install_method=binary по умолчанию качает ИМЕННО эти бинари). required
+  # (нужна ВСЕГДА: binary — дефолтный способ, версия определяет путь к бинарю; package-
+  # ветка ставит =version-пин distro-пакета той же серии). Набор — актуальные MongoDB-серии.
+  version:
+    type: string
+    required: true
+    enum: ["8.0.4", "7.0.15", "6.0.19"]
+    description: >-
+      Версия MongoDB (фиксированный набор бинарей из Nexus). Способ установки binary
+      (essence.install_method, default) качает бинарь mongod этой версии из Nexus; способ
+      package ставит =version-пин distro-пакета mongodb-org. Список закрыт — произвольная
+      версия не принимается.
+
+  # memory_mb: бюджет памяти под MongoDB. WiredTiger cacheSizeGB вычисляется как доля от
+  # него (essence.memory_reserve_percent). min:256 — mongod с крошечным кэшем нестабилен.
+  # Не задан → cacheSizeGB не пишется (mongod берёт свой дефолт max(0.5*(RAM-1GB), 256MB)).
+  memory_mb:
+    type: integer
+    required: false
+    min: 256
+    description: >-
+      Бюджет памяти под MongoDB на хосте, МБ. WiredTiger cacheSizeGB вычисляется как доля от
+      него (essence.memory_reserve_percent — остаток резервируется под ОС/mongod). Не задан →
+      cacheSizeGB не задаётся (mongod применяет свой дефолт).
+
+  # wiredtiger_cache_gb: ЯВНЫЙ размер кэша WiredTiger, ГБ (перекрывает вычисленный из
+  # memory_mb, last-wins). Для операторов, точно знающих нужный кэш. Не задан → из memory_mb
+  # или дефолт mongod.
+  wiredtiger_cache_gb:
+    type: number
+    required: false
+    min: 0.25
+    description: >-
+      Явный размер кэша WiredTiger, ГБ (директива storage.wiredTiger.engineConfig.cacheSizeGB).
+      Перекрывает вычисленный из memory_mb (last-wins). Не задан → из memory_mb (если задан) или
+      дефолт mongod.
+
+  # ── operator-extra MongoDB-юзеры — ТИПИЗИРОВАННЫЙ массив MongoUser (types.yml) ──
+  users:
+    type: array
+    required: false
+    items:
+      $type: MongoUser
+    description: >-
+      MongoDB-пользователи (массив MongoUser: {name, database, roles, state}). roles — массив
+      {role, db} (точная mongo-модель). Заводятся через плагин community.mongo.user (createUser);
+      пароль каждого резолвится keeper-side из Vault по конвенции secret/mongo/<incarnation>/
+      users/<name>#password.
+
+  # ── mongo_settings: passthrough-поддеревья mongod.conf ────────────────────────
+  # Произвольные mongod.conf-секции (net/storage/systemLog/setParameter/…) поверх дефолтов/
+  # вычислений (last-wins на верхнем уровне поддеревьев). Для директив, не покрытых простыми
+  # полями выше. ★ PILOT: имена/структура НЕ валидируются каталогом (у mongo нет config.c-
+  # аналога как у redis); опечатка проявится при старте mongod, не на render. Осознанное
+  # упрощение PILOT (симметрия dragonfly df_settings).
+  mongo_settings:
+    type: object
+    required: false
+    description: >-
+      Passthrough-поддеревья mongod.conf от оператора (net/storage/systemLog/setParameter/…).
+      Перекрывают дефолты в итоговом merge (last-wins). Для директив, не покрытых простыми
+      полями. PILOT: структура не валидируется.
+    properties: {}
+    additional_properties: true
+
+# ── Декларативные input-инварианты (validate:, INPUT-ONLY) ────────────────────
+# validate: — кросс-полевые предусловия ВВОДА (только input.*; essence/soulprint недоступны —
+# структурный CEL-барьер). Первый провал → 422 validation_failed ДО коммита incarnation.
+validate:
+  # system-users guard (симметрия redis/dragonfly default_admin): operator-extra (input.users)
+  # НЕ может занять имя СЛУЖЕБНОГО юзера (default_admin доливается из essence.system_users —
+  # operator с тем же именем подменил бы admin-учётку внутрикластерного доступа). INPUT-ONLY
+  # (essence в validate недоступен): список зарезервированных захардкожен здесь (= essence.
+  # system_users keys). ★ PILOT: только default_admin (replica/monitoring/backup — след. слайсы).
+  - that: "!has(input.users) || input.users.all(u, u.name != 'default_admin')"
+    message: "имя MongoDB-пользователя 'default_admin' зарезервировано за служебным admin-юзером: выбери другое имя — default_admin заводится автоматически из essence"
+
+# ── Вычисляемые scenario-vars (compute:) ──────────────────────────────────────
+# compute: резолвится KEEPER-SIDE ОДИН раз на прогон в рун-уровневом контексте (input/essence/
+# incarnation — БЕЗ soulprint, барьер host-инвариантности) и виден как compute.<name> в
+# tasks/apply.input И в state_changes. Снимает дублирование merge()-перевода: объявлен ЗДЕСЬ
+# ОДИН раз, тело и state ссылаются ${ compute.mongo_config }.
+#
+# ★ ГРАНИЦА КОНФИГА: host-layout (dbPath → data_dir, path → log_dir, port → net_port),
+# authorization enabled и bindIp задаёт ШАБЛОН mongod.conf.tmpl ИЗ vars, НЕ этот compute
+# (один источник, симметрия redis dir/aclfile в шаблоне). compute несёт только merged
+# ПРИКЛАДНОЙ конфиг (net.maxIncomingConnections/storage.wiredTiger/passthrough).
+compute:
+  # ── admin_user: имя СИСТЕМНОГО юзера полного доступа (default_admin) ──────────
+  # ★ РЕДИЗАЙН default_admin (симметрия redis/dragonfly 2026-06-30): ЕДИНЫЙ источник имени
+  # admin-юзера, под которым идёт ВЕСЬ admin-коннект (createUser остальных, health-runCommand,
+  # bootstrap первого admin через localhost-exception). Тело read-ит compute.admin_user в
+  # плагин-вызовах community.mongo.user/pinged (username/name) и в Vault-пути его пароля.
+  # Литерал (не из input/essence): имя системного юзера — инвариант сервиса. Пароль
+  # default_admin — secret/mongo/<inc>/users/default_admin#password.
+  admin_user: "${ 'default_admin' }"
+  # Эффективная версия MongoDB: required enum, ОДИН для обоих способов установки (binary
+  # качает бинарь этой версии из Nexus; package ставит =version-пин). Объявлена ОДИН раз
+  # (state + плагин + install-URL читают её). required гарантирует присутствие → голый input.version.
+  mongo_version: "${ input.version }"
+  # install: структура {method, base_url, version, allow_private} из essence.install_method +
+  # essence.binary_base_url + input.version. method всегда; base_url/version/allow_private при
+  # method=binary. Симметрия redis compute.install.
+  install: >-
+    ${ (default(essence.install_method, 'binary') == 'binary')
+         ? {
+             'method':        'binary',
+             'base_url':      default(essence.binary_base_url, ''),
+             'version':       input.version,
+             'allow_private': default(essence.binary_allow_private, true)
+           }
+         : { 'method': 'package' } }
+  # Эффективный host-layout: conf_dir/data_dir/log_dir/net_port из essence (author-context,
+  # host-инвариант). Шаблон mongod.conf.tmpl выводит dbPath/path/port из них.
+  conf_dir: "${ default(essence.conf_dir, '/etc/mongodb') }"
+  data_dir: "${ default(essence.data_dir, '/var/lib/mongodb') }"
+  log_dir:  "${ default(essence.log_dir, '/var/log/mongodb') }"
+  net_port: "${ int(default(essence.net_port, 27017)) }"
+  # wiredtiger_cache_gb: эффективный размер кэша WiredTiger, ГБ. Явный
+  # input.wiredtiger_cache_gb ПЕРЕКРЫВАЕТ вычисленный из memory_mb (тернар — явный
+  # приоритетнее); иначе memory_mb*reserve/100 / 1024. Оба отсутствуют → 0.0 (секции
+  # storage.wiredTiger нет → mongod-дефолт max(0.5*(RAM-1GB), 256MB)).
+  wiredtiger_cache_gb: >-
+    ${ has(input.wiredtiger_cache_gb)
+         ? double(input.wiredtiger_cache_gb)
+         : (has(input.memory_mb)
+              ? double(int(input.memory_mb) * int(default(essence.memory_reserve_percent, 50)) / 100) / 1024.0
+              : 0.0) }
+  # ── mongo_config: ПОЛНЫЙ mongod.conf-объект (host-инвариантен, рендерится toYaml) ─
+  # ★ MongoDB vs redis: mongod.conf — вложенный YAML (net/storage/security/systemLog —
+  # поддеревья), рендерится ЦЕЛИКОМ через toYaml (собственная tmpl-функция Soul Stack). Поэтому
+  # host-layout (dbPath/port/authorization/systemLog.path) ВЛИТ СЮДА (не задаётся отдельно в
+  # шаблоне — у mongo нельзя два `net:`/`storage:` в YAML). bindIp=0.0.0.0 host-инвариантен
+  # (Ansible-роль mongodb дефолт mongodb_net_bindip=0.0.0.0) → весь mongo_config host-инвариантен,
+  # per-host логики в рендере нет (в отличие от redis bind primary_ip). Слои DEEP-merge (вручную
+  # по секциям, т.к. CEL merge() SHALLOW last-wins затёр бы всё поддерево net/storage целиком):
+  #   - net    = essence.mongo_config.net + {bindIp, port} (maxIncomingConnections из essence сохраняется);
+  #   - storage= essence.mongo_config.storage + {dbPath, engine} + wiredTiger-кэш (has-guard);
+  #   - security = {authorization: enabled} (PILOT: authorization ВСЕГДА enabled — доступ под
+  #                default_admin, bootstrap через localhost-exception);
+  #   - systemLog = {destination file, path, logAppend} (host-layout log_dir);
+  #   - остальные поддеревья essence.mongo_config (operationProfiling/…) — как есть;
+  #   - input.mongo_settings — passthrough ПОВЕРХ (last-wins на верхнем уровне поддеревьев;
+  #     оператор, задавший целую секцию passthrough-ом, берёт её на себя — типовой путь
+  #     memory_mb/wiredtiger_cache_gb, не сырой storage/net).
+  mongo_config: >-
+    ${ merge(
+         default(essence.mongo_config, {}),
+         {
+           'net': merge(
+             default(default(essence.mongo_config, {}).net, {}),
+             { 'bindIp': '0.0.0.0', 'port': compute.net_port }
+           ),
+           'storage': merge(
+             default(default(essence.mongo_config, {}).storage, {}),
+             { 'dbPath': compute.data_dir, 'engine': 'wiredTiger' },
+             compute.wiredtiger_cache_gb > 0.0
+               ? { 'wiredTiger': { 'engineConfig': { 'cacheSizeGB': compute.wiredtiger_cache_gb } } }
+               : {}
+           ),
+           'security': { 'authorization': 'enabled' },
+           'systemLog': {
+             'destination': 'file',
+             'path':        compute.log_dir + '/mongod.log',
+             'logAppend':   true
+           }
+         },
+         default(input.mongo_settings, {})
+       ) }
+
+# ── Мутация incarnation.state ─────────────────────────────────────────────────
+# После успешного apply Keeper фиксирует развёрнутое (ADR-009 §7.1, ADR-057 list-форма).
+# mongo_config — тот же compute.mongo_config, что ушёл в render mongod.conf: повторный apply
+# и day-2 видят один источник истины.
+state_changes:
+  - set: mongo_version
+    value: "${ compute.mongo_version }"
+  - set: mongo_config
+    value: "${ compute.mongo_config }"
+  # memory_mb: бюджет памяти оператора (int). Не задан → 0.
+  - set: memory_mb
+    value: "${ int(default(input.memory_mb, 0)) }"
+  # wiredtiger_cache_gb: эффективный размер кэша (тот же compute, что ушёл в mongo_config).
+  - set: wiredtiger_cache_gb
+    value: "${ compute.wiredtiger_cache_gb }"
+  # sysctl_settings: применённый host-tuning (тот же essence.sysctl_settings, что уходит в render).
+  - set: sysctl_settings
+    value: "${ default(essence.sysctl_settings, {}) }"
+  # mongo_users — массив MongoUser (пароли НЕ в state, Vault). ★ database/state доливаются
+  # ВРУЧНУЮ через .map: $type-defaults (types.yml MongoUser) доливаются лишь на top-level input,
+  # НЕ во вложенные поля элементов массива — а state_schema.mongo_users требует state (required).
+  # roles as-is (state_schema требует только role в элементе; db опционален — плагин долит
+  # userDB при пустом). name — MongoUser required → голый u.name.
+  - set: mongo_users
+    value: >-
+      ${ default(input.users, []).map(u, {
+           'name':     u.name,
+           'database': default(u.database, 'admin'),
+           'state':    default(u.state, 'present'),
+           'roles':    u.roles
+         }) }

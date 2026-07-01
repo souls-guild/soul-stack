@@ -1,0 +1,28 @@
+from_version: 2
+to_version: 3
+
+description: >-
+  state_schema v2 → v3: cloud-provision read-model (ADR-061, Вариант A — create
+  поднимает VM в том же прогоне). state ДОПОЛНЯЕТСЯ двумя независимыми полями:
+    - provisioned_vm_ids (array string) — provider-vm-id VM, поднятых нашим
+      create-прогоном (day-2 teardown читает их для core.cloud.destroyed);
+    - provisioned_provider (string) — имя cloud-Provider в реестре (тот же
+      destroy-вызов).
+
+  Зеркало redis 006_to_007 (DragonFly cloud-provision по образцу redis, решение
+  пользователя 2026-07-01: provision обязателен в базовом create). Forward-only
+  (down: не поддерживается; восстановление — через state_history). Существующие
+  инкарнации развёрнуты БЕЗ provision (deploy на существующие хосты, provisioned_*
+  в state нет) → консервативный default: provisioned_vm_ids=[] и
+  provisioned_provider=''. ДВА плоских set (поля независимы); has()-guard —
+  back-compat для инкарнаций без этих ключей (идемпотентность повторного прогона:
+  ключ уже есть → сохраняется как есть, иначе ставится default). Остальной state
+  (df_config/df_users/namedfields/топология) НЕ трогается.
+
+transform:
+  - set:
+      path:  state.provisioned_vm_ids
+      value: "${ has(state.provisioned_vm_ids) ? state.provisioned_vm_ids : [] }"
+  - set:
+      path:  state.provisioned_provider
+      value: "${ has(state.provisioned_provider) ? state.provisioned_provider : '' }"

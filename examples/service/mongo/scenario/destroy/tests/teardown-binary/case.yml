@@ -1,0 +1,61 @@
+# L0-испытание destroy: teardown инкарнации, развёрнутой BINARY-способом (Nexus tarball).
+# Render-only, герметично. Lifecycle terminal-флоу (destroy — фаза ЖЦ).
+#
+# Что ассертим:
+#   1. mongod остановлен (core.service.stopped).
+#   2. mongod снят BINARY-веткой (core.file.absent /usr/local/bin/mongod + binary-юнит) —
+#      binary-ветка активна (essence.install_method=binary → static-гейт group-keep).
+#   3. Наши конфиг-артефакты удалены (core.file.absent mongod.conf + sysctl drop-in).
+#   4. PACKAGE-ветка дропнута (group-drop): core.pkg.absent ОТСУТСТВУЕТ (на binary-инкарнации).
+#   5. data_dir/log_dir НЕ трогаются (данные необратимы — граница MVP).
+name: destroy tears down a binary-installed mongo (stop + remove binary/unit + remove configs)
+
+fixtures:
+  hosts:
+    - sid: node-solo.example.com
+      covens: [destroy]
+      soulprint:
+        network: { primary_ip: 10.0.0.5 }
+        os: { arch: amd64 }
+
+  essence:
+    install_method: binary
+    conf_dir: /etc/mongodb
+
+  # incarnation.state (install/conf_dir в essence, не в state).
+  state:
+    mongo_version: "8.0.4"
+    mongo_config:
+      net: { bindIp: "0.0.0.0", port: 27017 }
+      security: { authorization: enabled }
+
+assert:
+  task_present:
+    # 1. Стоп mongod.
+    - module: core.service.stopped
+      params_subset:
+        name: mongod
+    # 2. BINARY-ветка: бинарь + свой unit удалены.
+    - module: core.file.absent
+      params_subset:
+        path: /usr/local/bin/mongod
+    - module: core.file.absent
+      params_subset:
+        path: /etc/systemd/system/mongod.service
+    # 3. Наши конфиг-артефакты удалены.
+    - module: core.file.absent
+      params_subset:
+        path: /etc/mongodb/mongod.conf
+    - module: core.file.absent
+      params_subset:
+        path: /etc/sysctl.d/30-mongodb.conf
+
+  task_absent:
+    # 4. PACKAGE-ветка group-drop на binary-инкарнации.
+    - module: core.pkg.absent
+      params_subset:
+        name: mongodb-org
+    # 5. data_dir/log_dir НЕ удаляются (данные необратимы).
+    - module: core.file.absent
+      params_subset:
+        path: /var/lib/mongodb

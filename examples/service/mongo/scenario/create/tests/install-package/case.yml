@@ -1,0 +1,66 @@
+# L0-испытание create MongoDB standalone — PACKAGE-способ (distro-пакет mongodb-org).
+# Покрывает: package-ветку (core.pkg.installed mongodb-org =version-пин) + group-drop binary-
+# ветки (нет url.fetched/mongod-бинаря/binary-юнита). Пакет несёт свой systemd-юнит.
+name: mongo create standalone via distribution package (mongodb-org)
+
+fixtures:
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create, mongo]
+      soulprint:
+        network: { primary_ip: 10.0.0.7 }
+        os: { arch: amd64, version: "12" }
+
+  vault:
+    secret/mongo/create/users/default_admin:
+      password: mongoadmin-create-pass
+
+  essence:
+    install_method: package
+    conf_dir: /etc/mongodb
+    data_dir: /var/lib/mongodb
+    log_dir:  /var/log/mongodb
+    net_port: 27017
+    memory_reserve_percent: 50
+    system_users:
+      default_admin:
+        - { role: root, db: admin }
+    mongo_config:
+      net:
+        maxIncomingConnections: 65536
+
+  input:
+    version: "6.0.19"
+
+assert:
+  task_present:
+    # PACKAGE-ветка: distro-пакет mongodb-org с =version-пином.
+    - module: core.pkg.installed
+      params_subset:
+        name: mongodb-org
+        version: "6.0.19"
+    # render mongod.conf + старт + bootstrap — общие для обеих веток.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/mongodb/mongod.conf
+    - module: community.mongo.user
+      params_subset:
+        name: default_admin
+        state: present
+
+  task_absent:
+    # BINARY-ветка group-drop на package-инкарнации: бинарь/tarball/binary-юнит НЕ трогаются.
+    - module: core.url.fetched
+    - module: core.file.present
+      params_subset:
+        path: /usr/local/bin/mongod
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/systemd/system/mongod.service
+    # ★ Рестарт mongod (binary-only onchanges) на package-инкарнации отсутствует.
+    - module: core.service.restarted
+      params_subset:
+        name: mongod
+
+  state_changes:
+    mongo_version: "6.0.19"

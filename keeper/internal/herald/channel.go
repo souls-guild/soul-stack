@@ -270,23 +270,30 @@ func fieldsFor(t HeraldType) ([]HeraldFieldSpec, bool) {
 }
 
 // HeraldTypeDescriptor — публичный дескриптор одного типа канала для каталог-
-// эндпоинта GET /v1/herald-types: тип + его config-поля. ЕДИНЫЙ источник с
-// валидацией (те же [HeraldFieldSpec], что валидирует CRUD) — каталог и
-// валидация не разъезжаются.
+// эндпоинта GET /v1/herald-types: тип + его config-поля + признак top-level
+// secret_ref. ЕДИНЫЙ источник с валидацией (те же [HeraldFieldSpec], что
+// валидирует CRUD; SecretRequired — тот же [channelDriver.secretRequired], что
+// сверяет [ValidateSecretRef]) — каталог и валидация не разъезжаются.
+// SecretRequired=true ⟹ у типа есть top-level secret_ref (HMAC signing-token,
+// только webhook); UI показывает поле secret_ref по этому признаку, не по
+// хардкоду типа.
 type HeraldTypeDescriptor struct {
-	Type   HeraldType
-	Fields []HeraldFieldSpec
+	Type           HeraldType
+	Fields         []HeraldFieldSpec
+	SecretRequired bool
 }
 
 // TypeCatalog собирает дескрипторы ВСЕХ известных типов канала (отсортированы как
 // [AllHeraldTypes]) для каталог-эндпоинта. Источник полей — драйверы (HTTP-класс)
-// и [emailFields] (SMTP); тот же набор, что валидирует CRUD.
+// и [emailFields] (SMTP); тот же набор, что валидирует CRUD. SecretRequired берётся
+// из драйвера (email — не channelDriver, top-level secret_ref не использует → false).
 func TypeCatalog() []HeraldTypeDescriptor {
 	types := AllHeraldTypes()
 	out := make([]HeraldTypeDescriptor, 0, len(types))
 	for _, t := range types {
 		fields, _ := fieldsFor(t) // t ∈ AllHeraldTypes ⟹ дескриптор всегда есть
-		out = append(out, HeraldTypeDescriptor{Type: t, Fields: fields})
+		d, ok := driverFor(t)      // email не HTTP-класс ⟹ ok=false ⟹ secret_ref не для него
+		out = append(out, HeraldTypeDescriptor{Type: t, Fields: fields, SecretRequired: ok && d.secretRequired()})
 	}
 	return out
 }

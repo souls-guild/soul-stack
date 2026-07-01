@@ -98,3 +98,80 @@ func TestHeraldTypeCatalog_KnownFields(t *testing.T) {
 	assertField("email", "to", true, false)
 	assertField("email", "password_ref", false, true)
 }
+
+// TestHeraldTypeCatalog_EnumValues — enum-поля несут набор допустимых значений
+// (kind=enum ⟹ EnumValues непуст), не-enum — пуст. UI рендерит enum как select
+// вместо text-input, поэтому набор обязан доезжать до каталога из домена.
+func TestHeraldTypeCatalog_EnumValues(t *testing.T) {
+	resp := buildHeraldTypeCatalog()
+	byType := map[string]map[string]HeraldFieldView{}
+	for _, ty := range resp.Types {
+		fields := map[string]HeraldFieldView{}
+		for _, f := range ty.Fields {
+			fields[f.Name] = f
+		}
+		byType[ty.Type] = fields
+	}
+
+	assertEnum := func(typ, name string, want []string) {
+		t.Helper()
+		f, ok := byType[typ][name]
+		if !ok {
+			t.Fatalf("type %q missing field %q", typ, name)
+		}
+		if f.Kind != string(herald.KindEnum) {
+			t.Errorf("type %q field %q kind=%q, want enum", typ, name, f.Kind)
+		}
+		if len(f.EnumValues) != len(want) {
+			t.Fatalf("type %q field %q enum_values=%v, want %v", typ, name, f.EnumValues, want)
+		}
+		for i := range want {
+			if f.EnumValues[i] != want[i] {
+				t.Errorf("type %q field %q enum_values[%d]=%q, want %q", typ, name, i, f.EnumValues[i], want[i])
+			}
+		}
+	}
+
+	assertEnum("telegram", "parse_mode", []string{"", "MarkdownV2", "HTML"})
+	assertEnum("custom", "method", []string{"", "POST", "PUT", "PATCH"})
+	assertEnum("email", "tls_mode", []string{"", "starttls", "tls", "none"})
+
+	// Не-enum-поля не несут набор (иначе UI отрендерит select там, где нужен input).
+	if got := byType["webhook"]["url"].EnumValues; len(got) != 0 {
+		t.Errorf("webhook.url (kind=url) enum_values=%v, want empty", got)
+	}
+	if got := byType["telegram"]["bot_token_ref"].EnumValues; len(got) != 0 {
+		t.Errorf("telegram.bot_token_ref (kind=vault_ref) enum_values=%v, want empty", got)
+	}
+}
+
+// TestHeraldTypeCatalog_SecretRequired — признак top-level secret_ref доезжает до
+// каталога из [herald.channelDriver.secretRequired]: true только у webhook, false
+// у мессенджеров/custom/email. UI показывает поле secret_ref по этому признаку, а
+// не по хардкоду type==='webhook' (иначе 2-й secret-тип молча не покажет поле).
+func TestHeraldTypeCatalog_SecretRequired(t *testing.T) {
+	resp := buildHeraldTypeCatalog()
+	byType := map[string]bool{}
+	for _, ty := range resp.Types {
+		byType[ty.Type] = ty.SecretRequired
+	}
+
+	cases := map[string]bool{
+		"webhook":    true,
+		"telegram":   false,
+		"slack":      false,
+		"mattermost": false,
+		"discord":    false,
+		"custom":     false,
+		"email":      false,
+	}
+	for typ, want := range cases {
+		got, ok := byType[typ]
+		if !ok {
+			t.Fatalf("catalog missing type %q", typ)
+		}
+		if got != want {
+			t.Errorf("type %q secret_required=%v, want %v", typ, got, want)
+		}
+	}
+}

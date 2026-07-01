@@ -1,0 +1,16 @@
+name: preserves-existing-provision
+description: >
+  Идемпотентность: инкарнация, у которой provision-поля УЖЕ есть (повторный
+  прогон миграции / inline-seed), сохраняет их значения как есть (has()-guard
+  возвращает текущее значение, не перезатирает default-ом). Зеркало redis
+  006_to_007 preserves-existing-provision.
+
+state_before:
+  df_version: "1.39.0"
+  provisioned_vm_ids: ["vm-aaa", "vm-bbb", "vm-ccc"]
+  provisioned_provider: "wb-prod"
+
+state_after:
+  df_version: "1.39.0"
+  provisioned_vm_ids: ["vm-aaa", "vm-bbb", "vm-ccc"]
+  provisioned_provider: "wb-prod"

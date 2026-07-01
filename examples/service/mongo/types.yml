@@ -1,0 +1,70 @@
+# Переиспользуемые именованные input-типы сервиса mongo (ADR-062, named input types).
+# Резолв — service-level: `$type: <Имя>` в любом `input:` сценария ЭТОГО сервиса
+# замещается развёрнутой схемой отсюда на input-стадии (cycle-checked). Имя типа —
+# PascalCase (отличает тип-ссылку от snake_case-параметра визуально и в парсере).
+types:
+  # MongoUser — одна запись MongoDB-пользователя (operator-extra). create читает массив
+  # таких записей (input.users). ★ MongoDB vs redis AclUser: у mongo НЕ одна perms-строка,
+  # а МАССИВ ролей {role, db} (точная mongo-модель — юзер получает набор именованных ролей,
+  # каждая в конкретной БД). Пароль резолвится keeper-side из Vault по конвенции
+  # secret/mongo/<incarnation>/users/<name>#password (симметрия redis/dragonfly).
+  MongoUser:
+    type: object
+    additional_properties: false
+    required: [name, roles]
+    properties:
+      # Имя MongoDB-юзера. lowercase-идентификатор (конвенция; mongo имена регистро-
+      # зависимы, но lowercase — простое консистентное правило, как redis AclUser).
+      name:
+        type: string
+        pattern: "^[a-z][a-z0-9_-]*$"
+        description: >-
+          Имя MongoDB-пользователя (уникально в массиве users). Заводится через
+          createUser; пароль резолвится keeper-side из Vault по конвенции
+          secret/mongo/<incarnation>/users/<name>#password.
+      # database — БД, в контексте которой заводится юзер (login-БД). Роли без явного
+      # db наследуют её. Default admin (системные юзеры). Пользовательские обычно в
+      # своей прикладной БД.
+      database:
+        type: string
+        default: admin
+        pattern: "^[A-Za-z0-9_$-]+$"
+        description: >-
+          БД, в которой заводится юзер (login/roles-контекст). Роли без явного db
+          наследуют эту БД. По умолчанию admin.
+      # roles — МАССИВ ролей {role, db}. Точная mongo-модель (юзер = набор именованных
+      # ролей, каждая в конкретной БД). enum-подсказка НЕ хардкодится (mongo-ролей много:
+      # встроенные root/readWrite/dbAdmin/clusterAdmin/backup/… + кастомные) — валидируем
+      # только shape (непустой role-идентификатор), семантику добивает mongod на createUser.
+      roles:
+        type: array
+        items:
+          type: object
+          additional_properties: false
+          required: [role]
+          properties:
+            role:
+              type: string
+              pattern: "^[A-Za-z][A-Za-z0-9_]*$"
+              description: >-
+                Имя роли MongoDB (встроенная: read/readWrite/dbAdmin/clusterAdmin/
+                backup/root/… либо кастомная). Проверяется shape; семантику добивает
+                mongod на createUser.
+            db:
+              type: string
+              pattern: "^[A-Za-z0-9_$-]+$"
+              description: >-
+                БД роли. Не задан → наследует database юзера. Для cluster-wide ролей
+                (clusterAdmin/root/backup) — admin.
+        description: >-
+          Роли пользователя (массив {role, db}). Точная mongo-модель: юзер получает
+          набор именованных ролей, каждая в конкретной БД. db без значения наследует
+          database юзера.
+      # Состояние: present (создать) / absent (удалить). default present.
+      state:
+        type: string
+        default: present
+        enum: [present, absent]
+        description: >-
+          Состояние пользователя: present (создать, если нет) / absent (удалить, если
+          есть). По умолчанию present.

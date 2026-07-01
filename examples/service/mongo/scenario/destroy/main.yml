@@ -1,0 +1,87 @@
+name: destroy
+description: >-
+  Teardown MongoDB: снять с хоста инкарнации то, что поставил create — systemd-сервис +
+  конфиг-артефакты — ПЕРЕД удалением инкарнации. Lifecycle-сценарий (НЕ runnable из Run-
+  формы — terminal-флоу DELETE /v1/incarnations/{name}, как create — bootstrap): keeper
+  трактует имя `destroy` как фазу ЖЦ (scenario.LifecycleScenarioNames), запускается в режиме
+  TerminalDestroy.
+
+  ★ PILOT (симметрия dragonfly/destroy): create НЕ провижит VM (deploy на существующие хосты,
+  provisioned_* в state нет) → cloud-teardown снимать НЕЧЕГО, cascade keeper-реестров не нужен
+  (хосты не наши, остаются Souls). Поэтому teardown — Soul-side: остановить mongod + удалить
+  наши /etc-артефакты. cloud-provision (default-on + cascade по образцу redis) — СЛЕД. слайс.
+
+  ★ ГРАНИЦА TEARDOWN (консервативный MVP — снять «systemd + файлы», НЕ данные/пакеты-общего-
+  назначения):
+    - сервис mongod ОСТАНАВЛИВАЕТСЯ (core.service.stopped, идемпотентно — нет сервиса → no-op);
+    - MongoDB УБИРАЕТСЯ по СПОСОБУ установки (essence.install_method, static-гейт → group-drop):
+      binary-ветка удаляет /usr/local/bin/mongod + свой unit-файл; package-ветка снимает distro-
+      пакет mongodb-org (core.pkg.absent — пакет уносит свой systemd-юнит чисто);
+    - НАШИ конфиг-артефакты MongoDB в ${conf_dir} и /etc (mongod.conf, sysctl drop-in)
+      УДАЛЯЮТСЯ — они всегда наши, безопасно в обеих ветках;
+    - ★ data_dir (данные mongod — БД, коллекции!) и log_dir НЕ ТРОГАЮТСЯ (удаление данных
+      деструктивно и необратимо; снос общих пакетов задел бы соседние сервисы). distro-юзер
+      mongodb НЕ удаляется. Это осознанная граница MVP — расширить «глубину» (purge данных) —
+      отдельным решением.
+
+  ★ state_changes ОТСУТСТВУЮТ намеренно: destroy терминальный — инкарнация удаляется
+  (auto_destroy), чистить state бессмысленно (он уходит вместе с инкарнацией). Зеркало create,
+  где state НАПОЛНЯЕТСЯ; здесь не трогаем.
+
+  Таргетинг — на весь incarnation (on опущен, ADR-008/009): teardown идёт на КАЖДЫЙ хост
+  инкарнации (Soul-side, не keeper — host-операции над systemd/файлами).
+
+# ── Входной контракт оператора ────────────────────────────────────────────────
+# Пуст: destroy не принимает операторского ввода. Что снимать — способ установки и conf_dir
+# из essence (install_method/conf_dir), а не выбор оператора в момент teardown. Operator
+# только инициирует удаление (DELETE /v1/incarnations/{name}).
+input: {}
+
+tasks:
+  # ── 1. Остановить mongod (идемпотентно) ──────────────────────────────────────
+  # core.service.stopped — приводит юнит к «не запущен». Нет сервиса (уже снят / не ставился)
+  # → no-op. Останавливаем ДО удаления файлов/пакета: снять конфиг под работающим демоном — гонка.
+  - name: Stop the mongod service
+    module: core.service.stopped
+    params:
+      name: mongod
+
+  # ── 2a. Убрать MongoDB — BINARY-ветка (Nexus tarball install) ────────────────
+  # Гейт static (essence.install_method только → isStaticWhen) → render-phase GROUP-DROP: на
+  # package-инкарнации эти задачи физически исключены из плана. binary-create положил бинарь в
+  # /usr/local/bin и СВОЙ unit в /etc/systemd/system — оба наши, удаляем.
+  - name: Remove the mongod binary (binary install)
+    module: core.file.absent
+    when: "default(essence.install_method, 'binary') == 'binary'"
+    params:
+      path: /usr/local/bin/mongod
+
+  - name: Remove the mongod systemd unit (binary install)
+    module: core.file.absent
+    when: "default(essence.install_method, 'binary') == 'binary'"
+    params:
+      path: /etc/systemd/system/mongod.service
+
+  # ── 2b. Убрать MongoDB — PACKAGE-ветка (distro-пакет mongodb-org) ─────────────
+  # Гейт static (group-drop на binary-инкарнации). package-create поставил distro-пакет
+  # mongodb-org с его собственным systemd-юнитом — снимаем ПАКЕТОМ (core.pkg.absent), пакет
+  # уносит свой юнит чисто (отдельный daemon-reload не нужен — apt/dpkg сам реконсилит systemd).
+  - name: Remove the mongodb distribution package (package install)
+    module: core.pkg.absent
+    when: "default(essence.install_method, 'binary') != 'binary'"
+    params:
+      name: mongodb-org
+
+  # ── 3. Удалить НАШИ конфиг-артефакты MongoDB (обе ветки, всегда наши) ─────────
+  # ${conf_dir}/mongod.conf + /etc sysctl drop-in. conf_dir из essence (default /etc/mongodb).
+  # core.file.absent идемпотентен (нет файла → no-op). ★ data_dir/log_dir НЕ трогаем (данные +
+  # логи; удаление данных необратимо — граница MVP, см. шапку).
+  - name: Remove the mongod.conf
+    module: core.file.absent
+    params:
+      path: "${ default(essence.conf_dir, '/etc/mongodb') + '/mongod.conf' }"
+
+  - name: Remove the mongo sysctl drop-in
+    module: core.file.absent
+    params:
+      path: /etc/sysctl.d/30-mongodb.conf

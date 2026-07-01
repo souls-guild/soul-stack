@@ -1,0 +1,47 @@
+{{/*
+  systemd-юнит mongod для binary-установки (essence.install_method=binary). Distro-пакет
+  mongodb-org несёт свой mongod.service; при upstream-tarball-е его нет → create рендерит
+  ЭТОТ полный юнит. Go text/template strict (ADR-010). Контекст: .vars.bin_dir/conf_dir +
+  mongo_user/mongo_group.
+
+  Type=simple + foreground (mongod без processManagement.fork под управлением systemd —
+  не форкается, systemd следит за PID напрямую). ExecStart с --config указывает на
+  отрендеренный mongod.conf (conf_dir/mongod.conf).
+
+  HARDENING (базовый, PILOT): NoNewPrivileges + ProtectSystem=strict + ReadWritePaths под
+  фактические каталоги записи mongod (data_dir/log_dir) + ограничения home/tmp. LimitNOFILE/
+  LimitNPROC — MongoDB production notes (64000, Ansible-роль mongodb_systemd_unit_limit_*).
+  Расширенный hardening (SystemCallFilter/MemoryDenyWriteExecute) — след. слайс (mongod —
+  сложнее статического Go-бинаря, нужна аккуратная сверка сисколлов).
+*/}}
+[Unit]
+Description=MongoDB Database Server
+Documentation=https://docs.mongodb.org/manual
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart={{ .vars.bin_dir }}/mongod --config {{ .vars.conf_dir }}/mongod.conf
+User={{ .vars.mongo_user }}
+Group={{ .vars.mongo_group }}
+Restart=on-failure
+RestartSec=5
+
+# Лимиты ресурсов (MongoDB production notes).
+LimitNOFILE=64000
+LimitNPROC=64000
+LimitMEMLOCK=infinity
+
+# systemd-hardening (базовый, PILOT).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths={{ .vars.data_dir }} {{ .vars.log_dir }}
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

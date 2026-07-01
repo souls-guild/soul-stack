@@ -1,0 +1,71 @@
+# L0-испытание create DragonFly в режиме sentinel — FAIL-ветка size-guard (топология != roster).
+# Зеркало create-sentinel-1master-1replica по форме, но replicas_per_master=2 (топология 1+2=3),
+# а roster СПЕЦИАЛЬНО несёт 2 хоста: 2 != 1+2. size-guard main.yml («Guard sentinel roster size
+# matches replicas», assert, keeper-side render-time, ADR-009 amendment) обязан ОБОРВАТЬ render ДО
+# любого dispatch — иначе master-election (первый по SID) и SENTINEL MONITOR/REPLICAOF разъехались
+# бы с declared-топологией: один хост МОЛЧА стал бы незаявленной репликой.
+#
+# Парный с create-sentinel-1master-1replica (там roster==топология → render проходит, size-guard
+# PASS) и зеркало redis create/tests/sentinel-size-guard-mismatch.
+#
+# Render-only, герметично. Диспетчер create инклудит provision (group-drop на enabled=false),
+# первой изменяющей задачей — size-guard assert (НЕ emit RenderedTask), который здесь падает.
+name: sentinel create with roster size not matching replicas aborts at render (size-guard)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  # Roster из 2 хостов — НА ОДИН МЕНЬШЕ объявленной топологии (replicas=2 → 1+2=3).
+  # Порядок намеренно не отсортирован: size-guard оперирует size(), не позицией.
+  hosts:
+    - sid: node-2.example.com
+      covens: [create, dragonfly]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: node-1.example.com
+      covens: [create, dragonfly]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  # Vault: default_admin (внутрикластерный AUTH + masterauth) + системные. Пред-сеются фикстурой
+  # (generate-шаг core.vault.kv-present — keeper-side write, в L0 не исполняется).
+  vault:
+    secret/dragonfly/create/users/default_admin:
+      password: dfadmin-create-pass
+    secret/dragonfly/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/dragonfly/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/dragonfly/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/dragonfly/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    sentinel_master_name: master
+    memory_reserve_percent: 75
+    df_config:
+      maxmemory:        "256mb"
+      maxclients:       10000
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
+    # ГОТОВЫЙ roster, cloud-create не нужен) → include dragonfly-provision.yml group-drop.
+    provision:
+      enabled: false
+    version: "1.39.0"
+    # replicas_per_master=2 → ожидается 1+2=3 хоста, а roster выше = 2 → 2 != 1+2.
+    replicas_per_master: 2
+
+# Прогон обрывается на render: size-guard assert «Guard sentinel roster size matches replicas»
+# false (2 != 1+2). Подстрока — message assert-правила main.yml.
+expect_render_error: "число хостов roster-а прогона должно быть ровно 1+replicas_per_master"

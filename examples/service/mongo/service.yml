@@ -1,0 +1,99 @@
+name: mongo
+state_schema_version: 1
+description: >-
+  MongoDB по концепции Ansible-роли (PILOT, standalone). Оператор задаёт ПРОСТЫЕ
+  типизированные понятия (версия, память, WiredTiger-кэш, пользователи), а сценарий
+  create транслирует их в mongod.conf. Per-host install + render + bootstrap делает
+  scenario ИНЛАЙН через core-модули (install: version-enum + Nexus binary / distro-
+  пакет; render mongod.conf из scenario-local шаблона; ADR-009 B-гибрид). ЖИВОЙ mongod
+  (health-ping, createUser/dropUser, raw runCommand) идёт через плагин `community.mongo`
+  (go-mongo-driver — НЕ core.exec+mongosh); оркестрация (порядок/health-gate) — в scenario.
+
+  ★ PILOT-СКОУП (2026-06-30): ТОЛЬКО standalone (один mongod, security.authorization
+  enabled, admin через localhost-exception). Реализованы scenario `create` + `destroy`.
+  ВНЕ pilot: replica-set (replSetInitiate/add_node/remove_node), sharded (mongos/config/
+  shard + Choir), keyFile (внутрикластерная SCRAM-аутентификация), rotate_tls, отдельные
+  add_user/remove_user-сценарии (юзеры заводятся ТОЛЬКО плагин-state user из create).
+  TLS — pilot=plain (mongo TLS на порту 27017 через net.tls.mode — отдельный слайс).
+
+# state_schema_version = 1 → каталог migrations/ не обязателен (ADR-019): нет предыдущей
+# версии, миграции появятся при первом breaking-изменении схемы. incarnation.state
+# фиксирует, что развёрнуто, чтобы оператор видел инсталляцию и повторный apply был
+# idempotent. Мини-схема standalone (без replica-set/sharding/keyfile — вне PILOT-скоупа).
+#
+# ГРАНИЦА двух представлений конфига (как у redis/dragonfly):
+#   - mongo_config (opaque, additionalProperties:true) — ВЫЧИСЛЕННЫЙ ИТОГ трансляции
+#     простого ввода в mongod.conf-структуру (что реально уйдёт в render). Write-model
+#     «как развёрнуто».
+#   - именованные поля (memory_mb/wiredtiger_cache_gb/...) — НАМЕРЕНИЕ оператора в простых
+#     типизированных понятиях (read-model). install и host-layout (conf_dir/data_dir)
+#     вынесены в essence (author-context, day-2 читают essence напрямую).
+# ОБА заполняются из ОДНОГО compute-прохода create — рассинхрона нет.
+state_schema:
+  type: object
+  required: [mongo_config]
+  properties:
+    # Эффективная версия MongoDB (upstream-серия при binary; distro-пин при package).
+    mongo_version:
+      type: string
+    # Итоговый mongod.conf (merged default→вычисления→passthrough из essence). Уходит в
+    # render scenario-local mongod.conf.tmpl. Структура — вложенный YAML mongod (net/
+    # storage/security/systemLog как поддеревья).
+    mongo_config:
+      type: object
+      additionalProperties: true
+
+    # ── Именованные поля намерения (read-model) ────────────────────────────────
+    # Бюджет памяти под MongoDB, МБ. Из input.memory_mb; не задан → 0. У mongo maxmemory-
+    # аналога нет (WiredTiger сам управляет кэшем), но бюджет памяти определяет
+    # wiredTiger cacheSizeGB (доля от memory_mb) — read-model намерения оператора.
+    memory_mb:
+      type: integer
+      minimum: 256
+    # Явный размер кэша WiredTiger, ГБ (директива storage.wiredTiger.engineConfig.
+    # cacheSizeGB). Из input.wiredtiger_cache_gb; не задан → 0 (вычисляется из memory_mb
+    # или дефолт mongod). read-model.
+    wiredtiger_cache_gb:
+      type: number
+      minimum: 0
+    # Применённые kernel-параметры под MongoDB (host-tuning). Из essence.sysctl_settings.
+    sysctl_settings:
+      type: object
+      additionalProperties:
+        type: string
+
+    # MongoDB-пользователи: ТИПИЗИРОВАННЫЙ массив MongoUser (types.yml, ADR-062).
+    # Наполняется create из input.users (тоже массив MongoUser); пароли — НЕ в state
+    # (keeper-side Vault, ADR-012). ★ MongoDB vs redis: roles — массив {role, db}, не
+    # одна perms-строка.
+    mongo_users:
+      type: array
+      items:
+        type: object
+        required: [name, roles, state]
+        additionalProperties: false
+        properties:
+          name:     { type: string }
+          database: { type: string }
+          state:    { type: string, enum: [present, absent] }
+          roles:
+            type: array
+            items:
+              type: object
+              required: [role]
+              additionalProperties: false
+              properties:
+                role: { type: string }
+                db:   { type: string }
+
+# ★ Зависимостей-destiny НЕТ: install + render mongod.conf делает scenario ИНЛАЙН через
+# core-модули (core.pkg/core.url/core.file.rendered из scenario-local templates). Для
+# standalone-PILOT (единственный потребитель — create) вынос в отдельный destiny-кирпич не
+# оправдан (ADR-009: граница destiny↔scenario — рекомендация; инлайн допустим). Прецедент —
+# monitoring/scenario/create (redis-exporter рендерит из scenario-local templates без destiny).
+destiny: []
+
+# Custom-модули сервиса. Двухуровневая форма <namespace>.<module>. community.mongo —
+# ОСНОВНОЙ интерфейс к живому MongoDB (examples/module/soul-mod-community-mongo/).
+modules:
+  - { name: community.mongo, ref: v1.0.0 }

@@ -53,6 +53,11 @@ fixtures:
   input:
     version: "1.39.0"
     replicas_per_master: 0
+    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
+    # ГОТОВЫЙ roster, cloud-create не нужен) → include dragonfly-provision.yml не таргетит
+    # никого. Симметрия redis non-provision create-тестов.
+    provision:
+      enabled: false
 
 assert:
   task_present:
@@ -103,6 +108,10 @@ assert:
     - module: core.file.rendered
       params_subset:
         path: /etc/dragonfly/sentinel.conf
+    # provision выключен (enabled: false) → dragonfly-provision.yml group-drop: cloud-create
+    # и барьер онбординга ОТСУТСТВУЮТ в плане.
+    - module: core.cloud.created
+    - module: core.soul.registered
 
   state_changes:
     df_version: "1.39.0"
@@ -115,3 +124,7 @@ assert:
       failover_timeout_ms: 60000
     replicas: 0
     sentinel_quorum: 0
+    # read-model: VM никем не провижены этим прогоном → консервативный default.
+    provisioned_vm_ids: []
+    provisioned_sids: []
+    provisioned_provider: ""

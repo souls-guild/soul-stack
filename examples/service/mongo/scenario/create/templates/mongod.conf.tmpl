@@ -1,0 +1,23 @@
+{{/*
+  mongod.conf для standalone MongoDB (Go text/template strict, ADR-010). Контекст:
+  .vars.config — ПОЛНЫЙ merged mongod-объект (net/storage/security/systemLog + вычисления/
+  passthrough), собран в scenario compute.mongo_config. Рендерится ЦЕЛИКОМ через toYaml
+  (собственная функция Soul Stack, docs/templating.md §3.3 «Собственные функции»).
+
+  ★ MongoDB vs redis: mongod.conf — вложенный YAML (поддеревья), а не плоский key-value.
+  Поэтому весь объект сериализуется toYaml одним блоком, а не range по ключам. Host-layout
+  (dbPath/port/authorization/systemLog.path) уже ВЛИТ в .vars.config (scenario), bindIp=0.0.0.0
+  host-инвариантен (Ansible-роль mongodb дефолт) — поэтому per-host логики в шаблоне нет (в
+  отличие от redis.conf.tmpl bind .self.network.primary_ip).
+
+  КРИТИЧНЫЕ директивы, задаваемые compute.mongo_config (см. covenant.yml):
+    - net.bindIp/port          — слушатель (0.0.0.0 + net_port);
+    - storage.dbPath/engine    — рабочий каталог данных WiredTiger (data_dir);
+    - storage.wiredTiger…cacheSizeGB — размер кэша (из memory_mb/wiredtiger_cache_gb);
+    - security.authorization: enabled — ВКЛЮЧЕНА аутентификация (доступ под default_admin;
+      первый admin через localhost-exception, плагин community.mongo.user);
+    - systemLog.destination/path/logAppend — лог в log_dir/mongod.log.
+  processManagement.fork НЕ задаём: mongod под systemd (Type=forking с --config без fork —
+  systemd-юнит несёт fork/pidfile при необходимости; для PILOT foreground под systemd).
+*/}}
+{{ toYaml .vars.config }}

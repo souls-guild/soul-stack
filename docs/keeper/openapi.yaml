@@ -959,11 +959,14 @@ components:
           type:
             - array
             - "null"
+        secret_required:
+          type: boolean
         type:
           type: string
       required:
         - type
         - fields
+        - secret_required
       type: object
     HeraldTypeCatalogReply:
       additionalProperties: false
@@ -980,6 +983,12 @@ components:
     HeraldTypeFieldSpec:
       additionalProperties: false
       properties:
+        enum_values:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
         kind:
           type: string
         label:

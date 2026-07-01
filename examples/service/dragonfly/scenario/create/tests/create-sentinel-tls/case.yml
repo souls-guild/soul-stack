@@ -74,6 +74,10 @@ fixtures:
     version: "1.39.0"
     replicas_per_master: 1
     tls_enabled: true
+    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс про TLS на
+    # ГОТОВОМ roster из 2 хостов) → include dragonfly-provision.yml не таргетит никого.
+    provision:
+      enabled: false
 
 assert:
   task_present:
@@ -137,6 +141,9 @@ assert:
     - module: core.file.rendered
       params_subset:
         path: /etc/dragonfly/sentinel.conf
+    # provision выключен → cloud-create и барьер онбординга ОТСУТСТВУЮТ (group-drop).
+    - module: core.cloud.created
+    - module: core.soul.registered
 
   state_changes:
     df_version: "1.39.0"
@@ -165,3 +172,7 @@ assert:
       key_ref:  "secret/services/dragonfly/tls#key"
       ca_ref:   "secret/services/dragonfly/tls#ca"
     memory_mb: 0
+    # read-model: VM не провижены этим прогоном → консервативный default.
+    provisioned_vm_ids: []
+    provisioned_sids: []
+    provisioned_provider: ""

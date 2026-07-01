@@ -1,0 +1,112 @@
+# L0-испытание create MongoDB standalone (базовый, БЕЗ operator-юзеров). Render-only,
+# герметично. Покрывает: binary-install (Nexus tarball + mongod + свой systemd-юнит),
+# render mongod.conf (toYaml — security.authorization enabled + dbPath/port), sysctl drop-in,
+# health-gate (community.mongo.pinged без auth), bootstrap default_admin через localhost-
+# exception (community.mongo.user под default_admin из essence.system_users).
+name: mongo create standalone (binary install + mongod.conf + bootstrap default_admin)
+
+fixtures:
+  hosts:
+    - sid: node-solo.example.com
+      covens: [create, mongo]
+      soulprint:
+        network: { primary_ip: 10.0.0.7 }
+        os: { arch: amd64, version: "12" }
+
+  # Vault: default_admin (bootstrap первого admin через localhost-exception). Главного
+  # secret/mongo/create#password нет (аутентификация под default_admin — редизайн симметрия redis).
+  vault:
+    secret/mongo/create/users/default_admin:
+      password: mongoadmin-create-pass
+
+  essence:
+    install_method: binary
+    binary_base_url: "https://nexus.example/mongodb"
+    binary_allow_private: true
+    conf_dir: /etc/mongodb
+    data_dir: /var/lib/mongodb
+    log_dir:  /var/log/mongodb
+    net_port: 27017
+    memory_reserve_percent: 50
+    system_users:
+      default_admin:
+        - { role: root, db: admin }
+    mongo_config:
+      net:
+        maxIncomingConnections: 65536
+      operationProfiling:
+        mode: "off"
+        slowOpThresholdMs: 100
+    sysctl_settings:
+      vm.max_map_count: "262144"
+      vm.swappiness:    "1"
+
+  input:
+    version: "8.0.4"
+    memory_mb: 2048
+
+assert:
+  task_present:
+    # 1. gen паролей в Vault (keeper-side) — default_admin.
+    - module: core.vault.kv-present
+
+    # 2. binary-install: юзер/группа mongodb + fetch tarball + mongod + systemd-юнит.
+    - module: core.group.present
+      params_subset:
+        name: mongodb
+    - module: core.user.present
+      params_subset:
+        name: mongodb
+    - module: core.url.fetched
+      params_subset:
+        url: "https://nexus.example/mongodb/x86_64/mongodb-linux-x86_64-8.0.4.tgz"
+    - module: core.file.present
+      params_subset:
+        path: /usr/local/bin/mongod
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/systemd/system/mongod.service
+
+    # 3. Каталоги + render mongod.conf + sysctl.
+    - module: core.file.directory
+      params_subset:
+        path: /var/lib/mongodb
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/mongodb/mongod.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: mongodb
+        group: mongodb
+    - module: core.sysctl.applied
+      params_subset:
+        filename: 30-mongodb
+
+    # 4. Старт + health-gate + bootstrap default_admin.
+    - module: core.service.running
+      params_subset:
+        name: mongod
+    - module: community.mongo.pinged
+      params_subset:
+        addr: "127.0.0.1:27017"
+    # ★★ BOOTSTRAP default_admin: localhost-exception. username/name = default_admin,
+    # пароль из Vault-ветки, роли root@admin из essence.system_users.
+    - module: community.mongo.user
+      params_subset:
+        addr: "127.0.0.1:27017"
+        username: default_admin
+        password: mongoadmin-create-pass
+        name: default_admin
+        database: admin
+        state: present
+
+  task_absent:
+    # package-ветка group-drop на binary-инкарнации.
+    - module: core.pkg.installed
+      params_subset:
+        name: mongodb-org
+
+  state_changes:
+    mongo_version: "8.0.4"
+    memory_mb: 2048
+    mongo_users: []

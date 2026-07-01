@@ -35,19 +35,25 @@ func NewHeraldTypeCatalogHandler(logger *slog.Logger) *HeraldTypeCatalogHandler 
 }
 
 // HeraldFieldView — ПЛОСКАЯ доменная запись одного config-поля типа (name/label/
-// required/secret/kind). kind — строка ([herald.FieldKind]) для form-рендера UI.
+// required/secret/kind/enum_values). kind — строка ([herald.FieldKind]) для form-
+// рендера UI. EnumValues непуст только у kind=enum (набор допустимых строк, вкл.
+// "" = «поле опущено/plain») — UI рендерит такое поле как select, не text-input.
 type HeraldFieldView struct {
-	Name     string
-	Label    string
-	Required bool
-	Secret   bool
-	Kind     string
+	Name       string
+	Label      string
+	Required   bool
+	Secret     bool
+	Kind       string
+	EnumValues []string
 }
 
-// HeraldTypeView — ПЛОСКИЙ доменный дескриптор одного типа канала (type + fields).
+// HeraldTypeView — ПЛОСКИЙ доменный дескриптор одного типа канала (type + fields +
+// secret_required). SecretRequired=true ⟹ у типа есть top-level secret_ref
+// (webhook) — UI показывает поле по этому признаку, не по хардкоду типа.
 type HeraldTypeView struct {
-	Type   string
-	Fields []HeraldFieldView
+	Type           string
+	Fields         []HeraldFieldView
+	SecretRequired bool
 }
 
 // HeraldTypeCatalog — ПЛОСКОЕ доменное тело `GET /v1/herald-types` (handler-native).
@@ -71,14 +77,15 @@ func buildHeraldTypeCatalog() HeraldTypeCatalog {
 		fields := make([]HeraldFieldView, 0, len(d.Fields))
 		for _, f := range d.Fields {
 			fields = append(fields, HeraldFieldView{
-				Name:     f.Name,
-				Label:    f.Label,
-				Required: f.Required,
-				Secret:   f.Secret,
-				Kind:     string(f.Kind),
+				Name:       f.Name,
+				Label:      f.Label,
+				Required:   f.Required,
+				Secret:     f.Secret,
+				Kind:       string(f.Kind),
+				EnumValues: f.EnumValues,
 			})
 		}
-		types = append(types, HeraldTypeView{Type: string(d.Type), Fields: fields})
+		types = append(types, HeraldTypeView{Type: string(d.Type), Fields: fields, SecretRequired: d.SecretRequired})
 	}
 	return HeraldTypeCatalog{Types: types}
 }

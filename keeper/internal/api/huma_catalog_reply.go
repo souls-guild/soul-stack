@@ -62,20 +62,26 @@ type EventTypeCatalogReply struct {
 
 // HeraldTypeFieldSpec — native описание одного config-поля типа канала (форма 1:1
 // с доменным HeraldFieldView): name/label — строки; required/secret — bool БЕЗ
-// omitempty; kind — строка (herald.FieldKind).
+// omitempty; kind — строка (herald.FieldKind); enum_values — []string С omitempty
+// (присутствует только у kind=enum; UI рендерит поле как select). Пустой элемент
+// "" в наборе = «поле опущено/plain» разрешён.
 type HeraldTypeFieldSpec struct {
-	Name     string `json:"name"`
-	Label    string `json:"label"`
-	Required bool   `json:"required"`
-	Secret   bool   `json:"secret"`
-	Kind     string `json:"kind"`
+	Name       string   `json:"name"`
+	Label      string   `json:"label"`
+	Required   bool     `json:"required"`
+	Secret     bool     `json:"secret"`
+	Kind       string   `json:"kind"`
+	EnumValues []string `json:"enum_values,omitempty"`
 }
 
 // HeraldTypeCatalogEntry — native дескриптор одного типа канала: type + fields
-// (оба non-nil; fields []HeraldTypeFieldSpec БЕЗ omitempty).
+// (оба non-nil; fields []HeraldTypeFieldSpec БЕЗ omitempty) + secret_required
+// (bool БЕЗ omitempty: признак top-level secret_ref уровня типа, у webhook true,
+// у прочих false; UI показывает поле secret_ref по нему, не по хардкоду типа).
 type HeraldTypeCatalogEntry struct {
-	Type   string                `json:"type"`
-	Fields []HeraldTypeFieldSpec `json:"fields"`
+	Type           string                `json:"type"`
+	Fields         []HeraldTypeFieldSpec `json:"fields"`
+	SecretRequired bool                  `json:"secret_required"`
 }
 
 // HeraldTypeCatalogReply — native 200-тело GET /v1/herald-types: types
@@ -151,14 +157,15 @@ func newHeraldTypeCatalogReply(c handlers.HeraldTypeCatalog) HeraldTypeCatalogRe
 		fields := make([]HeraldTypeFieldSpec, 0, len(ty.Fields))
 		for _, f := range ty.Fields {
 			fields = append(fields, HeraldTypeFieldSpec{
-				Name:     f.Name,
-				Label:    f.Label,
-				Required: f.Required,
-				Secret:   f.Secret,
-				Kind:     f.Kind,
+				Name:       f.Name,
+				Label:      f.Label,
+				Required:   f.Required,
+				Secret:     f.Secret,
+				Kind:       f.Kind,
+				EnumValues: f.EnumValues,
 			})
 		}
-		types = append(types, HeraldTypeCatalogEntry{Type: ty.Type, Fields: fields})
+		types = append(types, HeraldTypeCatalogEntry{Type: ty.Type, Fields: fields, SecretRequired: ty.SecretRequired})
 	}
 	return HeraldTypeCatalogReply{Types: types}
 }

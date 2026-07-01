@@ -6,13 +6,20 @@ description: >-
   трактует имя `destroy` как фазу жизненного цикла (scenario.LifecycleScenarioNames),
   запускается в режиме TerminalDestroy.
 
-  ★ DragonFly vs redis/destroy (КЛЮЧЕВОЕ ОТЛИЧИЕ ПРОФИЛЯ): redis/destroy снимает облачные VM
-  (core.cloud.destroyed, on: keeper) + cascade keeper-реестров — потому что redis-create их
-  ПРОВИЖИТ (provisioned_vm_ids/sids в state). DragonFly create НЕ провижит VM (деплой на
-  существующие хосты, provisioned_* в state нет) → cloud-teardown СНИМАТЬ НЕЧЕГО, cascade не
-  нужен (хосты не наши, остаются Souls). Поэтому здесь teardown — Soul-side: остановить сервисы
-  + удалить наши /etc-артефакты. Это REUSE lifecycle-каркаса redis/destroy (input: {}, terminal,
-  state_changes отсутствуют), но БЕЗ cloud-provision частей (как просит ТЗ).
+  ★ DragonFly ДВУХРЕЖИМНЫЙ teardown (решение пользователя 2026-07-01: DragonFly cloud-provision
+  ПО ОБРАЗЦУ redis; provision обязателен в базовом create — default-on): destroy несёт ОБЕ ветки.
+    (1) CLOUD-CASCADE (симметрия redis/destroy): когда create ПРОВИЖИЛ VM (provisioned_vm_ids/
+        sids в state — default-on путь), destroy снимает облачные VM (core.cloud.destroyed,
+        on: keeper) + cascade keeper-реестров (souls→destroyed/seeds→orphaned/tokens→burned).
+        Гейт `when: size(provisioned_vm_ids) > 0` (static → group-drop) держит эту задачу ТОЛЬКО
+        на провиженных инкарнациях. assert парности sids↔vm_ids ДО destroy (как redis).
+    (2) SOUL-SIDE teardown (прежний профиль DragonFly): когда create катился на СУЩЕСТВУЮЩИЕ
+        хосты (provision: {enabled: false} — не провижен) — VM не наши, снимать облачно нечего,
+        поэтому чистим Soul-side: остановить сервисы + удалить наши /etc-артефакты. Эти шаги
+        идемпотентны и БЕЗУСЛОВНЫ: на провиженной инкарнации они безвредно отработают на VM
+        (которые тут же снимает cloud-destroy), на не-провиженной — единственный teardown.
+  Обе ветки в одном сценарии: cloud-cascade group-drop-ается на не-провиженных, Soul-side
+  всегда активен. REUSE lifecycle-каркаса redis/destroy (input: {}, terminal, state_changes нет).
 
   ★ ГРАНИЦА TEARDOWN (консервативный MVP — снять «systemd + файлы», НЕ данные/пакеты-общего-
   назначения):
@@ -44,12 +51,47 @@ description: >-
   инкарнации (Soul-side, не keeper — host-операции над systemd/файлами).
 
 # ── Входной контракт оператора ────────────────────────────────────────────────
-# Пуст: destroy не принимает операторского ввода. Что снимать — способ установки и conf_dir
-# из essence (install_method/conf_dir, v1→v2 вынесены из state), а не выбор оператора в момент
-# teardown. Operator только инициирует удаление (DELETE /v1/incarnations/{name}).
+# Пуст: destroy не принимает операторского ввода. Что снимать — ФАКТ из incarnation.state
+# (provisioned_provider/vm_ids/sids для cloud-cascade) + способ установки и conf_dir из essence
+# (install_method/conf_dir для Soul-side teardown), а не выбор оператора в момент teardown.
+# Operator только инициирует удаление (DELETE /v1/incarnations/{name}).
 input: {}
 
 tasks:
+  # ── CLOUD-CASCADE ветка (провиженные VM, симметрия redis/destroy, ADR-061) ────
+  # ★ Инвариант парности sids↔vm_ids ДО destroy (architect): provisioned_sids и
+  # provisioned_vm_ids читаются ПАРОЙ — cascade без sids оставил бы осиротевшие
+  # souls/seeds/tokens (vm_ids снимают VM у провайдера, sids чистят реестры;
+  # рассогласование длин = orphan). create пишет оба ОДНИМ guard-ом из
+  # register.provision.hosts (один источник истины размера), поэтому в норме длины
+  # равны; assert ловит порчу state (ручная правка / частичная миграция / баг) ДО
+  # необратимого destroy. RUN-LEVEL precondition (вычисляется keeper-side в render-фазе
+  # ОДИН раз, ДО dispatch destroyed). На не-провиженной инкарнации обе стороны default
+  # [] → 0 == 0 → вакуумно true (assert не мешает Soul-side teardown без provision).
+  # default(...) — поля back-compat-опциональны (инкарнации до v3/v4 без них).
+  - name: Assert provisioned sids and vm_ids were captured as a pair before teardown
+    assert:
+      that:
+        - "size(default(incarnation.state.provisioned_sids, [])) == size(default(incarnation.state.provisioned_vm_ids, []))"
+      message: "рассогласование provisioned_sids и provisioned_vm_ids в incarnation.state: cascade-destroy без полного набора SID оставил бы осиротевшие записи souls/seeds/bootstrap_tokens (нарушение anti-replay) — длины обязаны совпадать (оба набора пишет create одним guard-ом из register.provision.hosts)"
+
+  # Снятие VM + cascade keeper-реестров (core.cloud.destroyed, on: keeper). ★ Адрес
+  # РОВНО core.cloud.destroyed (base core.cloud + state destroyed): applyDestroyed →
+  # PluginHost.Destroy(vm_ids) ПОТОМ cascade(sids). params из incarnation.state (keeper-
+  # задача видит pre-run снимок). GROUP-DROP на не-провиженных: when статичен
+  # (incarnation.* только, isStaticWhen) → пустой provisioned_vm_ids исключает задачу из
+  # плана (render-phase, не placeholder-skip). Инкарнации без provision проходят teardown
+  # без cloud-вызова (только Soul-side ниже).
+  - name: Destroy provisioned VMs and cascade their keeper registry records
+    on: keeper
+    module: core.cloud.destroyed
+    when: "size(default(incarnation.state.provisioned_vm_ids, [])) > 0"
+    params:
+      provider: "${ incarnation.state.provisioned_provider }"
+      vm_ids:   "${ incarnation.state.provisioned_vm_ids }"
+      sids:     "${ incarnation.state.provisioned_sids }"
+
+  # ── SOUL-SIDE teardown (прежний профиль DragonFly, всегда активен) ────────────
   # ── 1. Остановить сервисы DragonFly (идемпотентно) ───────────────────────────
   # core.service.stopped — приводит юнит к «не запущен». Нет сервиса (уже снят / не ставился)
   # → no-op. Останавливаем ДО удаления файлов/пакета: снять конфиг под работающим демоном —
@@ -102,7 +144,7 @@ tasks:
 
   # ── 3. Удалить НАШИ конфиг-артефакты DragonFly (обе ветки, всегда наши) ───────
   # ${conf_dir}-файлы (users.acl, dragonfly.conf, TLS PEM) + /etc drop-in-ы (logrotate, sysctl,
-  # disable-thp unit). conf_dir из state (default /etc/dragonfly). core.file.absent идемпотентен
+  # disable-thp unit). conf_dir из essence (default /etc/dragonfly). core.file.absent идемпотентен
   # (нет файла → no-op). TLS-PEM удаляем безусловно: на plaintext-инкарнации этих файлов нет →
   # no-op (гейтить незачем). ★ sentinel.conf/sentinel-users.acl ЗДЕСЬ НЕ УДАЛЯЮТСЯ — их кладёт
   # destiny `redis` (sentinel_only) в /etc/redis, не /etc/dragonfly (рефактор «sentinel из redis»);

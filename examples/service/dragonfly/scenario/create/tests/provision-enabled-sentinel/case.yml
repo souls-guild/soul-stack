@@ -1,0 +1,125 @@
+# L0-испытание provision (ADR-061, Вариант A) — DragonFly sentinel, provision ВКЛЮЧЁН.
+# input.provision.enabled=true → include dragonfly-provision.yml раскрывается (placeholder-
+# skip-форма include-when снимается: when has(input.provision) && input.provision.enabled
+# истинно → шаги таргетят roster). Поток: (а) core.cloud.created поднимает VM, (в)
+# core.soul.registered регистрирует созданные SID + барьер await_online + refresh_soulprint.
+#
+# ★ register.provision в L0 — из mocks.register (probe/cloud не исполняются, ADR-023): шаги
+# provision.yml (б)/(в) и state_changes читают register.provision.{vm_ids,hosts} отсюда. Это
+# L0-проброс готового register-payload-а core.cloud.created.
+#
+# ЧИСЛО VM из топологии sentinel = 1 + replicas_per_master. replicas_per_master=2 → count=3
+# (один master + 2 реплики). Roster прогона — 3 хоста (в проде их даёт refresh_soulprint после
+# онбординга; в L0 mid-run re-resolve — stub, roster = статичный fixture → задаём 3 хоста руками).
+#
+# Парный к provision-disabled (там enabled:false → cloud-шаги group-drop). Доказывает основной
+# provision-флоу DragonFly (образец redis provision-enabled-sentinel, решение 2026-07-01).
+name: provision enabled in sentinel mode emits cloud-create and onboarding (count = 1 + replicas)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: vm-1.example.com
+      covens: [create, dragonfly]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: vm-2.example.com
+      covens: [create, dragonfly]
+      soulprint:
+        network: { primary_ip: 10.0.0.2 }
+        os: { arch: amd64 }
+    - sid: vm-3.example.com
+      covens: [create, dragonfly]
+      soulprint:
+        network: { primary_ip: 10.0.0.3 }
+        os: { arch: amd64 }
+  # Vault: default_admin (внутрикластерный AUTH) + системные (редизайн default_admin).
+  vault:
+    secret/dragonfly/create/users/default_admin:
+      password: dfadmin-create-pass
+    secret/dragonfly/create/users/replica:
+      password: replica-sys-secret-pass
+    secret/dragonfly/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/dragonfly/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/dragonfly/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    sentinel_master_name: master
+    provision_await_timeout: "10m"
+    memory_reserve_percent: 75
+    df_config:
+      maxmemory:        "256mb"
+      maxclients:       10000
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+  input:
+    version: "1.39.0"
+    replicas_per_master: 2
+    provision:
+      enabled: true
+      provider: wb-dev
+      profile: dragonfly-small
+      ssh_provider: ssh-wb
+
+# register.provision — готовый payload core.cloud.created (L0-проброс, шаг (а) не
+# исполняется): vm_ids созданных VM + hosts[{sid,...,bootstrap_token}]. Шаги (б)/(в) и
+# state_changes читают его. sid-ы созданных VM = SID-ы roster-а (в проде refresh_soulprint
+# их и добавил бы; здесь roster уже несёт их).
+mocks:
+  register:
+    provision:
+      vm_ids: [i-aaa111, i-bbb222, i-ccc333]
+      hosts:
+        - { sid: vm-1.example.com, vm_id: i-aaa111, primary_ip: 10.0.0.1, bootstrap_token: tok-vm1 }
+        - { sid: vm-2.example.com, vm_id: i-bbb222, primary_ip: 10.0.0.2, bootstrap_token: tok-vm2 }
+        - { sid: vm-3.example.com, vm_id: i-ccc333, primary_ip: 10.0.0.3, bootstrap_token: tok-vm3 }
+
+assert:
+  task_present:
+    # (а) core.cloud.created: count = 1 + replicas_per_master = 3, generate_userdata: false
+    # (VM без cloud-init, setup ставит шаг (б) install: true). Единственная в плане.
+    - module: core.cloud.created
+      params_subset:
+        provider: wb-dev
+        profile: dragonfly-small
+        count: 3
+        generate_userdata: false
+
+    # (в) core.soul.registered: sid — список SID созданных VM (register.provision.hosts
+    # .map(h, h.sid)); coven — корневой incarnation.name (create); барьер онбординга
+    # await_online + refresh_soulprint; await_timeout из essence (10m, input.provision
+    # .await_timeout не задан). Единственная в плане.
+    - module: core.soul.registered
+      params_subset:
+        sid: [vm-1.example.com, vm-2.example.com, vm-3.example.com]
+        coven: [create]
+        await_online: true
+        refresh_soulprint: true
+        await_timeout: "10m"
+
+    # Основной деплой sentinel-тела катится после provision (dragonfly.conf рендерится).
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/dragonfly/dragonfly.conf
+
+  state_changes:
+    df_version: "1.39.0"
+    # read-model: ФАКТ «эти VM подняты этим прогоном» — vm_ids из register.provision,
+    # provider из input.provision (гейт input.provision.enabled, тернар state_changes).
+    provisioned_vm_ids: [i-aaa111, i-bbb222, i-ccc333]
+    # provisioned_sids: SID каждой созданной VM (register.provision.hosts[].sid) — для
+    # cascade-destroy day-2 teardown. Тот же guard+форма, что provisioned_vm_ids.
+    provisioned_sids: [vm-1.example.com, vm-2.example.com, vm-3.example.com]
+    provisioned_provider: wb-dev

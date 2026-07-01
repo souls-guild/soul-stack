@@ -1,0 +1,328 @@
+name: create
+# create: true — сценарий годен как СТАРТОВЫЙ (bootstrap новой incarnation): выбирается
+# при POST /v1/incarnations (scenario.ResolveCreateScenarios читает флаг). Принадлежность к
+# create-набору — ДЕКЛАРАТИВНАЯ (набор стартовых = РОВНО {scenario с `create: true`}).
+create: true
+description: >-
+  Развернуть MongoDB в режиме standalone (PILOT). Оператор задаёт ПРОСТЫЕ типизированные
+  понятия (версия, память, пользователи), а сценарий ТРАНСЛИРУЕТ их в mongod.conf. Тело
+  прогона ИНЛАЙН (standalone = единственный потребитель, вынос в destiny не оправдан —
+  ADR-009 B-гибрид; прецедент monitoring/scenario/create): install (version-enum + Nexus
+  binary / distro-пакет) → render mongod.conf (scenario-local шаблон, toYaml) → sysctl →
+  systemd → старт → bootstrap default_admin через localhost-exception → operator-юзеры.
+
+  ★★ LOCALHOST-EXCEPTION BOOTSTRAP (mongo-специфика, аналог redis default_admin bootstrap):
+  mongod поднимается с security.authorization: enabled. Первый admin (default_admin) создать
+  с auth ЕЩЁ нельзя (юзера нет) — mongo разрешает НО-auth коннект через loopback, пока admin-БД
+  пуста (localhost-exception). Плагин community.mongo.user детектит auth-fail и делает fallback
+  на no-auth localhost-коннект для первого createUser (механика ВНУТРИ плагина — render передаёт
+  addr+username+password, плагин решает auth-путь ПО ФАКТУ live-состояния, параллель redis-
+  плагину, решающему по INFO/CONFIG GET). После создания default_admin exception закрывается —
+  operator-юзеры создаются УЖЕ под default_admin.
+
+  Пароли НЕ во входном контракте: лежат в Vault, резолвятся KEEPER-SIDE через CEL vault() в
+  render-фазе (templating §2.3/§4) — на хост доезжает уже ЗНАЧЕНИЕ (ADR-012). Путь строится из
+  доверенного контекста (incarnation), не из input.
+
+  ★ PILOT: standalone (один mongod). БЕЗ replica-set/sharded/keyFile/TLS/cloud-provision.
+  destroy — Soul-side teardown (отдельный сценарий).
+
+# ── extends: covenant — общий контракт секций ───────────────────────────────────
+# Секции input / compute / state_changes / validate вынесены в covenant.yml и наследуются
+# add-only. create несёт ТОЛЬКО свою дельту: form (презентация, не мержится) и tasks (тело).
+extends: covenant
+
+# ── Презентационный слой формы (form:) ──────────────────────────────────────────
+form:
+  sections:
+    - key: mongo
+      title: "Параметры MongoDB"
+      description: "Версия и память"
+      fields:
+        - { name: version, label: "Версия MongoDB" }
+        - name: memory_mb
+          label: "Бюджет памяти, МБ"
+          placeholder: "2048"
+          hint: "Бюджет памяти под MongoDB. WiredTiger cacheSizeGB вычисляется как доля от него (минус резерв ОС). Не задан → дефолт mongod."
+        - name: wiredtiger_cache_gb
+          label: "Кэш WiredTiger, ГБ (явно)"
+          hint: "Явный размер кэша WiredTiger. Перекрывает вычисленный из памяти. Не задан → из бюджета памяти или дефолт mongod."
+
+    - key: users
+      title: "Пользователи"
+      fields:
+        - { name: users, label: "MongoDB-пользователи" }
+
+    - key: advanced
+      title: "Дополнительно"
+      collapsed: true
+      fields:
+        - { name: mongo_settings, label: "Passthrough-поддеревья mongod.conf" }
+
+# ── Тело прогона (ИНЛАЙН, standalone — без диспетчера/include) ────────────────────
+tasks:
+  # ── Генерация паролей в Vault ПЕРЕД любым чтением секретов (core.vault.kv-present) ──
+  # ★ ГЕНЕРАЦИЯ СЕКРЕТОВ СЕРВИСОМ (симметрия redis/dragonfly): оператор НЕ пред-сеет пароли —
+  # create САМ генерит недостающие крипто-случайно (generate-if-absent). Шаг keeper-side
+  # (on: keeper, core.vault.kv-present): для каждого target читает путь и, если поля нет —
+  # пишет crypto/rand-значение по policy; есть — no-op (НЕ перезатирает). changed=true только
+  # при реальной генерации.
+  #
+  # ★★ PASSAGE-ИНВАРИАНТ: этот шаг ОБЯЗАН исполниться (запись в Vault) ДО render-фазы задач,
+  # читающих те же секреты через ${ vault(...) } (bootstrap default_admin + operator-юзеры).
+  # Модель staged-render (ADR-056): passage N applies ДО render passage N+1. Шаг — `on: keeper`
+  # БЕЗ roster-зависимости → Stratify держит его в passage 0; плагин-задачи читают roster
+  # (soulprint.self) → passage > 0.
+  #
+  # targets ВЫЧИСЛЯЮТСЯ из ТОГО ЖЕ essence/input, что и read-задачи (drift «что генерим ≡ что
+  # читаем» = баг, список юзеров НЕ хардкодится): системные (essence.system_users keys —
+  # default_admin) + operator-extra input.users. policy alphanumeric/32 (mongo-пароль-safe).
+  - name: Ensure mongo passwords exist in Vault (generate if absent)
+    on: keeper
+    module: core.vault.kv-present
+    params:
+      policy:
+        length: 32
+        charset: alphanumeric
+      targets: "${ default(essence.system_users, {}).map(name, { 'path': 'secret/mongo/' + incarnation.name + '/users/' + name, 'field': 'password' }) + (has(input.users) ? input.users.map(u, { 'path': 'secret/mongo/' + incarnation.name + '/users/' + u.name, 'field': 'password' }) : []) }"
+
+  # ── 1a. Установка MongoDB — BINARY-ветка (Nexus tarball) ─────────────────────────
+  # Гейт static (essence.install_method только → isStaticWhen) → render-phase GROUP-DROP: на
+  # package-инкарнации весь блок физически исключён из плана. binary НЕ несёт distro-пакета →
+  # САМА заводит distro-юзер/группу mongodb + качает tarball + раскладывает mongod + свой
+  # systemd-юнит. arch: soulprint.self.os.arch (GOARCH) → uname-m для Nexus-URL (amd64→x86_64,
+  # arm64→aarch64, прочее как есть — маппинг redis vars.redis_arch).
+  - name: Install MongoDB from the Nexus binary tarball
+    when: "default(essence.install_method, 'binary') == 'binary'"
+    block:
+      # distro-юзер/группа mongodb (binary НЕ создаёт их — это делает distro-пакет). Группа
+      # ПЕРЕД юзером. system-аккаунт без login-shell (mongodb — сервис). home = data_dir
+      # (stateful, стабильный владелец между рестартами).
+      - name: Ensure the mongodb group exists
+        module: core.group.present
+        params:
+          name: mongodb
+          system: true
+
+      - name: Ensure the mongodb user exists
+        module: core.user.present
+        params:
+          name: mongodb
+          group: mongodb
+          system: true
+          shell: /usr/sbin/nologin
+          home: "${ compute.data_dir }"
+
+      # Скачать tarball mongod per-host из Nexus. Идемпотентность нативная по SHA-256
+      # содержимого (core.url.fetched, аналог If-None-Match). allow_private снимает SSRF-guard
+      # для внутреннего Nexus (essence.binary_allow_private, дефолт true). URL:
+      # <base_url>/<arch>/mongodb-linux-<arch>-<version>.tgz (arch — uname-m-маппинг).
+      - name: Fetch the MongoDB binary tarball
+        module: core.url.fetched
+        register: mongo_tarball
+        params:
+          url: "${ compute.install.base_url + '/' + (soulprint.self.os.arch == 'amd64' ? 'x86_64' : (soulprint.self.os.arch == 'arm64' ? 'aarch64' : soulprint.self.os.arch)) + '/mongodb-linux-' + (soulprint.self.os.arch == 'amd64' ? 'x86_64' : (soulprint.self.os.arch == 'arm64' ? 'aarch64' : soulprint.self.os.arch)) + '-' + compute.mongo_version + '.tgz' }"
+          path: "${ '/tmp/mongodb-' + compute.mongo_version + '.tgz' }"
+          mode: "0644"
+          allow_private: "${ compute.install.allow_private }"
+
+      # Распаковать tarball (zip-bomb guards дефолтные). Внутри — каталог
+      # mongodb-linux-<arch>-<version>/bin/mongod.
+      - name: Extract the MongoDB binary tarball
+        module: core.archive.extracted
+        params:
+          path: "${ '/tmp/mongodb-' + compute.mongo_version + '.tgz' }"
+          dest: "${ '/tmp/mongodb-' + compute.mongo_version }"
+
+      # Разложить бинарь mongod из распакованного каталога в /usr/local/bin через
+      # core.file.present с src: (копия содержимого regular-файла, идемпотентность по sha256).
+      # register — рестарт на смену бинаря (ниже). src несёт полный путь распакованного
+      # каталога mongodb-linux-<arch>-<version>/bin/mongod.
+      - name: Install the mongod binary
+        module: core.file.present
+        register: mongod_bin
+        params:
+          path: /usr/local/bin/mongod
+          src: "${ '/tmp/mongodb-' + compute.mongo_version + '/mongodb-linux-' + (soulprint.self.os.arch == 'amd64' ? 'x86_64' : (soulprint.self.os.arch == 'arm64' ? 'aarch64' : soulprint.self.os.arch)) + '-' + compute.mongo_version + '/bin/mongod' }"
+          mode: "0755"
+          owner: root
+          group: root
+
+      # Свой systemd-юнит mongod.service (binary НЕ несёт distro-юнита). register — рестарт при
+      # смене юнита. ExecStart=/usr/local/bin/mongod --config <conf_dir>/mongod.conf.
+      - name: Render the mongod systemd unit (binary install)
+        module: core.file.rendered
+        register: mongod_unit
+        params:
+          path: /etc/systemd/system/mongod.service
+          template: templates/mongod.service.tmpl
+          mode: "0644"
+          owner: root
+          group: root
+          vars:
+            bin_dir:     /usr/local/bin
+            conf_dir:    "${ compute.conf_dir }"
+            data_dir:    "${ compute.data_dir }"
+            log_dir:     "${ compute.log_dir }"
+            mongo_user:  mongodb
+            mongo_group: mongodb
+
+  # ── 1b. Установка MongoDB — PACKAGE-ветка (distro-пакет mongodb-org) ─────────────
+  # Гейт static (group-drop на binary-инкарнации). distro-пакет несёт mongod + свой systemd-
+  # юнит + заводит юзер/группу mongodb. core.pkg всегда ставит =version-пин.
+  - name: Install MongoDB from the distribution package
+    module: core.pkg.installed
+    when: "default(essence.install_method, 'binary') != 'binary'"
+    retry: { count: 3, delay: 10s }
+    params:
+      name: mongodb-org
+      version: "${ compute.mongo_version }"
+
+  # ── 2. Каталоги конфигурации/данных/логов (обе ветки, БЕЗУСЛОВНО) ────────────────
+  # ОБЯЗАНЫ существовать ДО рендера mongod.conf и старта. owner/group mongodb (пакет или
+  # binary-ветка их завели — задачи ПОСЛЕ обоих установочных блоков). mode 0750: владелец
+  # mongodb читает/пишет. parents:true — conf_dir/data_dir переопределяемы оператором (глубокий
+  # путь с несуществующим родителем).
+  - name: Ensure the mongo configuration directory exists
+    module: core.file.directory
+    params:
+      path: "${ compute.conf_dir }"
+      owner: mongodb
+      group: mongodb
+      mode: "0750"
+      parents: true
+
+  - name: Ensure the mongo data directory exists
+    module: core.file.directory
+    params:
+      path: "${ compute.data_dir }"
+      owner: mongodb
+      group: mongodb
+      mode: "0750"
+      parents: true
+
+  - name: Ensure the mongo log directory exists
+    module: core.file.directory
+    params:
+      path: "${ compute.log_dir }"
+      owner: mongodb
+      group: mongodb
+      mode: "0750"
+      parents: true
+
+  # ── 3. Render mongod.conf (scenario-local шаблон, toYaml) ────────────────────────
+  # ПОЛНЫЙ merged mongod-объект (compute.mongo_config) рендерится ЦЕЛИКОМ через toYaml (mongod.
+  # conf — вложенный YAML, не плоский key-value как redis). owner/group mongodb, mode 0640 —
+  # конфиг читает только сервис. register — рестарт при изменении конфига. ★ security.
+  # authorization: enabled ВЛИТ в compute.mongo_config → mongod стартует с auth (доступ под
+  # default_admin, bootstrap через localhost-exception).
+  - name: Render mongod.conf
+    module: core.file.rendered
+    register: mongod_conf
+    params:
+      path: "${ compute.conf_dir + '/mongod.conf' }"
+      template: templates/mongod.conf.tmpl
+      mode: "0640"
+      owner: mongodb
+      group: mongodb
+      vars:
+        config: "${ compute.mongo_config }"
+
+  # ── 4. Host-tuning: sysctl (БЕЗУСЛОВНО, MongoDB production notes) ─────────────────
+  # core.sysctl.applied строит drop-in /etc/sysctl.d/30-mongodb.conf (sorted keys) и применяет
+  # sysctl -p при изменении. settings — essence.sysctl_settings (host-инвариант, не выбор
+  # оператора: tuning под MongoDB — рекомендация, флага нет).
+  - name: Apply mongo kernel tuning
+    module: core.sysctl.applied
+    params:
+      settings: "${ default(essence.sysctl_settings, {}) }"
+      filename: 30-mongodb
+
+  # ── 5. Старт mongod (обе ветки) ─────────────────────────────────────────────────
+  # core.service.running: поднимает mongod ПОСЛЕ рендера mongod.conf + каталогов.
+  # daemon_reload:auto подхватывает свежий binary-юнит. enabled:true — автостарт при boot.
+  - name: Ensure mongod is running and enabled at boot
+    module: core.service.running
+    params:
+      name: mongod
+      enabled: true
+
+  # ── 6. Рестарт mongod на смену бинаря/юнита/конфига (binary-ветка) ───────────────
+  # Смена systemd-юнита / бинаря / mongod.conf вступает в силу через рестарт процесса. onchanges
+  # реагирует на register'ы шага 1a + рендера конфига. ★ ТОЛЬКО binary-ветка несёт mongod_bin/
+  # mongod_unit register'ы; mongod_conf — обе ветки. has()-guard в onchanges НЕ нужен (register
+  # объявлены в ЭТОМ файле — per-file линтер видит их; в package-проходе binary-register'ы
+  # placeholder-skip, flat-register-scope инвариантен). daemon-reload core.service делает сам.
+  - name: Restart mongod because the binary, unit or config changed
+    module: core.service.restarted
+    when: "default(essence.install_method, 'binary') == 'binary'"
+    onchanges: [mongod_bin, mongod_unit, mongod_conf]
+    timeout: 30s
+    params:
+      name: mongod
+
+  # ── 7. Health-gate: mongod отвечает на ping ДО bootstrap admin ───────────────────
+  # community.mongo.pinged к локальному mongod. ★ БЕЗ auth: admin-БД ещё пуста (default_admin
+  # не создан) — ping без auth проходит по localhost-exception (сам ping авторизации не
+  # требует). retry/until — ждём подъёма mongod (старт может занять секунды). addr — loopback
+  # (плагин на mongo-хосте).
+  - name: Wait for mongod to answer ping
+    module: community.mongo.pinged
+    retry:
+      count: 15
+      delay: 3s
+      until: "register.self.ok == true"
+    failed_when: "register.self.ok != true"
+    params:
+      addr: "${ '127.0.0.1:' + string(compute.net_port) }"
+
+  # ── 8. BOOTSTRAP default_admin через localhost-exception ─────────────────────────
+  # ★★ ПЕРВЫЙ admin: community.mongo.user создаёт default_admin. Плагин пробует коннект с auth
+  # (username=default_admin + пароль), но admin-БД пуста → auth-проба падает Unauthorized →
+  # плагин делает FALLBACK на no-auth localhost-коннект (localhost-exception) и создаёт первого
+  # admin по нему. Роли default_admin — из essence.system_users (root в admin). Пароль —
+  # secret/mongo/<inc>/users/default_admin#password (vault()-в-ячейке, seal-маскинг).
+  # Идемпотентен: повторный create → default_admin уже есть → no-op (плагин usersInfo).
+  #
+  # roles: essence.system_users[compute.admin_user] — массив {role, db} (mongo-модель). run_once
+  # НЕ нужен (standalone — один хост); на multi-host replica-set это был бы run_once на primary
+  # (СЛЕД. слайс).
+  - name: Bootstrap the default_admin user (localhost-exception)
+    module: community.mongo.user
+    params:
+      addr:     "${ '127.0.0.1:' + string(compute.net_port) }"
+      username: "${ compute.admin_user }"
+      password: "${ vault('secret/mongo/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+      name:     "${ compute.admin_user }"
+      database: admin
+      state:    present
+      roles:    "${ essence.system_users[compute.admin_user] }"
+
+  # ── 9. Operator-юзеры (после bootstrap default_admin) ────────────────────────────
+  # community.mongo.user на КАЖДЫЙ input.users. Коннект УЖЕ под default_admin (auth работает —
+  # admin создан шагом 8, localhost-exception закрыт). loop по массиву MongoUser: name/database/
+  # roles/state из элемента. Пароль каждого — secret/mongo/<inc>/users/<name>#password. ★ Гейт
+  # has(input.users) — секция опциональна: без operator-юзеров задача не таргетит (loop по []).
+  # Идемпотентен (плагин usersInfo: present+есть → no-op, absent+нет → no-op).
+  - name: Create operator MongoDB users
+    module: community.mongo.user
+    when: "has(input.users)"
+    loop:
+      items: "${ default(input.users, []) }"
+      as: item
+    params:
+      addr:     "${ '127.0.0.1:' + string(compute.net_port) }"
+      username: "${ compute.admin_user }"
+      password: "${ vault('secret/mongo/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+      name:     "${ item.name }"
+      # ★ default() вручную: $type-defaults (types.yml MongoUser database/state) доливаются
+      # только на top-level input-поля (mergeInputDefaults), НЕ во вложенные поля элементов
+      # массива — поэтому database/state берём через default() (паттерн dragonfly add_user
+      # default(input.user.state, ...)). roles обязателен (MongoUser required) → голый item.roles.
+      database: "${ default(item.database, 'admin') }"
+      state:    "${ default(item.state, 'present') }"
+      roles:    "${ item.roles }"
+      # Пароль создаваемого юзера — из его Vault-ветки (vault()-в-ячейке, seal-маскинг).
+      # На state=absent пароль не используется (dropUser), но vault() резолвится безопасно
+      # (секрет сгенерирован шагом gen для КАЖДОГО operator-юзера).
+      user_password: "${ vault('secret/mongo/' + incarnation.name + '/users/' + item.name + '#password') }"

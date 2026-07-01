@@ -1,5 +1,5 @@
 name: dragonfly
-state_schema_version: 2
+state_schema_version: 4
 description: >-
   DragonFly по концепции Ansible-роли (PILOT, sentinel-only). Оператор задаёт ПРОСТЫЕ
   типизированные понятия (память, ACL-юзеры, реплики, TLS), а сценарий create транслирует
@@ -16,15 +16,28 @@ description: >-
   rotate_tls/destroy/update_config) — СЛЕД. слайс ПОСЛЕ review. Без диспетчера по режиму
   (один режим), без миграций (v1).
 
-# state_schema_version = 2: цепочка миграций forward-only (ADR-019).
+# state_schema_version = 4: цепочка миграций forward-only (ADR-019).
 #   - 001_to_002 (migrations/001_to_002.yml): вынос install + host-layout
 #     (conf_dir/data_dir) из state в essence — install read-model без читателей,
 #     layout day-2 читают essence напрямую (default(essence.<x>, '<деф>')). Симметрия
 #     redis 011_to_012 (Вариант A). У DragonFly НЕТ modules_base_url (redis-модули к DF
 #     неприменимы) → вырезаются три поля, не четыре. sysctl_settings ОСТАЁТСЯ (read-model).
+#   - 002_to_003 (migrations/002_to_003.yml): cloud-provision read-model (ADR-061,
+#     Вариант A — create поднимает VM в том же прогоне; решение пользователя 2026-07-01,
+#     DragonFly cloud-provision по образцу redis). Добавляет provisioned_vm_ids (array
+#     string — provider-vm-id созданных VM, day-2 teardown читает их для core.cloud.destroyed)
+#     и provisioned_provider (string — имя cloud-Provider). Зеркало redis 006_to_007. Default
+#     для инкарнаций без provision (deploy на существующие хосты): provisioned_vm_ids=[] и
+#     provisioned_provider='' (не провиженные нашим сервисом).
+#   - 003_to_004 (migrations/003_to_004.yml): cascade-destroy read-model (дополнение к v3).
+#     Добавляет provisioned_sids (array string — SID/FQDN созданных нашим прогоном VM; day-2
+#     cascade-teardown добивает осиротевшие souls/seeds/tokens — Reaper НЕ снимает pending-VM-
+#     souls, без sids они повисли бы, anti-replay нарушен). Рядом с provisioned_vm_ids: vm_ids —
+#     provider-id (для core.cloud.destroyed), sids — Keeper-side идентичность Soul (для cascade).
+#     Зеркало redis 007_to_008.
 # incarnation.state фиксирует, что развёрнуто, чтобы оператор видел инсталляцию и
-# повторный apply был idempotent. Мини-схема (без cluster/modules/provision/seeded_from —
-# вне PILOT-скоупа).
+# повторный apply был idempotent. Мини-схема (без cluster/modules/seeded_from — вне
+# PILOT-скоупа; provision-read-model добавлен v2→v4 по образцу redis).
 #
 # ГРАНИЦА двух представлений конфига (как у redis):
 #   - df_config (opaque, additionalProperties:true) — ВЫЧИСЛЕННЫЙ ИТОГ трансляции простого
@@ -115,6 +128,32 @@ state_schema:
         quorum:              { type: integer }
         down_after_ms:       { type: integer }
         failover_timeout_ms: { type: integer }
+
+    # ── cloud-provision read-model (v2→v4, ADR-061, Вариант A) ──────────────────
+    # ФАКТ «эти хосты подняты нашим create-прогоном через cloud-create». Заполняется
+    # create ТОЛЬКО когда input.provision.enabled (provider/vm_ids/sids из register
+    # core.cloud.created); иначе [] / '' (хосты не провиженные сервисом — declared
+    # roster). day-2 teardown читает provisioned_vm_ids для core.cloud.destroyed.
+    # provider — имя cloud-Provider в реестре (для того же destroy-вызова). Зеркало
+    # redis service.yml provisioned_* (решение пользователя 2026-07-01).
+    provisioned_vm_ids:
+      type: array
+      items:
+        type: string
+    provisioned_provider:
+      type: string
+    # provisioned_sids (v4): SID (FQDN) каждой VM, поднятой этим create-прогоном. ОТЛИЧНО
+    # от provisioned_vm_ids: vm_ids — provider-side id (для core.cloud.destroyed), sids —
+    # Keeper-side идентичность Soul. day-2 teardown (cascade destroy) читает sids, чтобы
+    # добить осиротевшие souls (→destroyed) / seeds (→orphaned) / bootstrap-токены
+    # (→burned): Reaper НЕ снимает pending-VM-souls сам (mark_disconnected только
+    # connected→disconnected), без sids записи повисли бы (нарушение anti-replay).
+    # Заполняется тем же guard+формой, что provisioned_vm_ids (input.provision.enabled →
+    # register.provision.hosts.map(h, h.sid)); иначе [].
+    provisioned_sids:
+      type: array
+      items:
+        type: string
 
 # Зависимости-destiny (ADR-007: версия зависимости = git ref, не semver-range).
 #   - `dragonfly` — кирпич data-плоскости DragonFly (examples/destiny/dragonfly/);
