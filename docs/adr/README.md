@@ -48,7 +48,7 @@
 | [0041](0041-errandrun.md) | ErrandRun — multi-target обвязка над Errand | superseded | Поглощён [ADR-043 (Voyage)](0043-voyage.md#adr-043-voyage--унифицированный-батчевый-прогон) режимом `kind=command`. **Вынесен в отдельный файл.** |
 | [0042](0042-backend-driven-ui.md) | Backend-driven dynamic data в UI | amended | UI не хардкодит динамические каталоги — фетчит из backend. **Вынесен в отдельный файл.** Amend: инстанс `GET /v1/event-types` (Tiding-каталог, ADR-052). |
 | [0043](0043-voyage.md) | Voyage — унифицированный батчевый прогон | active | Унифицированный батчевый прогон; поглощает Tide (ADR-040) и ErrandRun (ADR-041). **Вынесен в отдельный файл.** |
-| [0044](0044-choir.md) | Choir — именованная топология хостов | active | Именованная позиция хоста внутри инкарнации; стабильный declared-факт. **Вынесен в отдельный файл.** |
+| [0044](0044-choir.md) | Choir — именованная топология хостов | amended | Именованная позиция хоста внутри инкарнации; стабильный declared-факт. **Вынесен в отдельный файл.** Amend: precedence-role + multi-Choir-конфликт (S-T6 part(1a)); scenario-driven раскладка + NULL-vs-default semantics (не задан → NULL, не дефолтная группа; per-shard раскладка deferred до mongo). |
 | [0045](0045-param-dsl.md) | Param-DSL модулей | active | Типизированные input-поля модулей для UI-формы Run Command. **Вынесен в отдельный файл.** |
 | [0046](0046-cadence.md) | Cadence — регулярные запуски | active | Scheduled/recurring Voyage (interval + cron). **Вынесен в отдельный файл.** |
 | [0047](0047-purview.md) | Purview — scoped RBAC-видимость узлов | active | Role default_scope + расширенный селектор видимости узлов. **Вынесен в отдельный файл.** |

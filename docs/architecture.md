@@ -212,7 +212,7 @@ Soul Stack — система управления конфигурациями 
 
 ### [ADR-044. Choir — именованная топология хостов внутри инкарнации](adr/0044-choir.md)
 
-Вынесен в [`docs/adr/0044-choir.md`](adr/0044-choir.md). Choir — first-class именованная группа хостов внутри одной инкарнации (топологическая «партия»), Voice — членство SID в Choir (тройка `(incarnation_name, choir_name, sid)`): три РАЗНЫХ слоя (membership/coven/Choir не дублируются), Choir поглощает `spec.hosts[].role` (`voice.role` precedence), отдельные PG-таблицы `incarnation_choirs`/`incarnation_choir_voices` (НЕ `incarnation.state`), E1-таргетинг через `where:` + аксессоры `soulprint.*.choirs`, keeper-side core-модуль `core.choir`; реализовано (S-T2…S-T6 part(1a)), включает amendment precedence-role + multi-Choir-конфликт.
+Вынесен в [`docs/adr/0044-choir.md`](adr/0044-choir.md). Choir — first-class именованная группа хостов внутри одной инкарнации (топологическая «партия»), Voice — членство SID в Choir (тройка `(incarnation_name, choir_name, sid)`): три РАЗНЫХ слоя (membership/coven/Choir не дублируются), Choir поглощает `spec.hosts[].role` (`voice.role` precedence), отдельные PG-таблицы `incarnation_choirs`/`incarnation_choir_voices` (НЕ `incarnation.state`), E1-таргетинг через `where:` + аксессоры `soulprint.*.choirs`, keeper-side core-модуль `core.choir`; реализовано (S-T2…S-T6 part(1a)). Amendments: precedence-role + multi-Choir-конфликт; scenario-driven раскладка хостов по партиям + NULL-vs-default semantics (Choir не задан → `NULL` в БД / пустой `choirs[]`, НЕ дефолтная группа — пустое состояние честнее дефолта; per-shard раскладка в сценарии deferred до mongo, redis cluster живёт в одном coven `incarnation.name`).
 
 ## Топология
 
