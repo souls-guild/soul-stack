@@ -103,6 +103,8 @@ func metaRouter(t *testing.T, verifier *keeperjwt.Verifier) http.Handler {
 		nil,                                  // oidcAuth (OIDC не сконфигурирован в тесте)
 		nil,                                  // loginGuard (anti-bruteforce off в тесте)
 		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
+		nil, // soulStatsStaleFn (дефолт 90s в тесте)
+		nil, // clusterH (cluster-view не монтируется в тесте)
 		nil,                                  // logger
 	)
 }

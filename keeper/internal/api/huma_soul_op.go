@@ -312,6 +312,34 @@ func soulListOperation() huma.Operation {
 	}
 }
 
+// === GET /v1/souls/stats (stats) — READ-агрегат (БЕЗ audit) ===
+
+// soulStatsInput — huma-input GET /v1/souls/stats. Параметров нет: агрегат
+// считается по всему видимому scope-у оператора (границу даёт Purview, НЕ query).
+type soulStatsInput struct{}
+
+// soulStatsOutput — huma-output GET /v1/souls/stats (FULL-TYPED). Body — native
+// агрегат-DTO (soulStatsReply: by_status/by_transport/by_coven/total/stale_count).
+type soulStatsOutput struct {
+	Body soulStatsReply
+}
+
+// soulStatsOperation — метаданные GET /v1/souls/stats. Path = "/stats" относительно
+// chi-группы /v1/souls. DefaultStatus=200. READ-роут: audit НЕ навешан. Permission
+// soul.list (то же право чтения реестра, что list/get). Errors: 403 RBAC, 500.
+func soulStatsOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "getSoulsStats",
+		Method:        http.MethodGet,
+		Path:          "/stats",
+		Summary:       "Агрегат реестра Souls (Overview)",
+		Description:   "Сводка по status/transport/coven + total + stale_count для Souls Overview со scoped-видимостью (ADR-047). transport — agent/ssh (UI маппит на pull/push). stale_count — по mark_disconnected.stale_after. Permission soul.list. Read-only, без audit.",
+		Tags:          []string{"soul"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusForbidden, http.StatusInternalServerError},
+	}
+}
+
 // === GET /v1/souls/{sid} (get) — READ-with-path (БЕЗ audit) ===
 
 // soulGetInput — huma-input GET /v1/souls/{sid}. SID — path.

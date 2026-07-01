@@ -208,6 +208,13 @@ input:
           Верхняя граница ожидания онбординга созданных VM (барьер await_online,
           ADR-061; форма <N>{s|m|h}). Не задан → essence.provision_await_timeout (дефолт
           10m). Ограничен сверху keeper.yml::max_await_timeout.
+      join_wait_timeout:
+        type: string
+        pattern: "^[0-9]+[smh]$"
+        description: >-
+          Потолок ожидания появления свежесозданной VM в Teleport перед доставкой
+          токена (core.bootstrap.delivered, retry-до-join; форма <N>{s|m|h}). Не задан →
+          essence.provision_join_wait_timeout (дефолт 15m).
       ssh_provider:
         type: string
         description: >-

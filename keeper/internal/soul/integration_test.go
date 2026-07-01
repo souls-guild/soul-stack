@@ -567,3 +567,91 @@ func TestIntegration_FKToOperators_SetNullOnDelete(t *testing.T) {
 		t.Errorf("CreatedByAID = %v, want nil after operator delete", got.CreatedByAID)
 	}
 }
+
+// TestIntegration_SelectStats_Scope — ГЛАВНЫЙ guard агрегата GET /v1/souls/stats:
+// SelectStats считает by_status/by_transport/by_coven/total/stale_count ТОЛЬКО по
+// хостам в границах Purview-scope оператора. Хост вне scope в агрегат НЕ попадает
+// (иначе цифры дашборда разошлись бы со scoped-списком). Проверяет и stale_count
+// по last_seen_at, и unnest(coven)-ось, и fail-closed пустой scope.
+func TestIntegration_SelectStats_Scope(t *testing.T) {
+	resetAll(t)
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	old := now.Add(-10 * time.Minute) // заведомо за 90s-порогом
+	fresh := now.Add(-5 * time.Second)
+
+	seed := []struct {
+		sid       string
+		status    Status
+		transport Transport
+		coven     []string
+		lastSeen  *time.Time
+	}{
+		// prod-scope хосты:
+		{"prod-1.example.com", StatusConnected, TransportAgent, []string{"prod", "dc-eu"}, &fresh},
+		{"prod-2.example.com", StatusDisconnected, TransportAgent, []string{"prod"}, &old}, // stale
+		{"prod-3.example.com", StatusPending, TransportSSH, []string{"prod"}, nil},         // без last_seen — НЕ stale
+		// вне prod-scope (не должны попасть в prod-агрегат):
+		{"stg-1.example.com", StatusConnected, TransportAgent, []string{"staging"}, &old}, // stale, но вне scope
+		{"dev-1.example.com", StatusConnected, TransportSSH, []string{"dev"}, &old},       // stale, но вне scope
+	}
+	for _, s := range seed {
+		row := &Soul{SID: s.sid, Status: s.status, Transport: s.transport, Coven: s.coven, LastSeenAt: s.lastSeen}
+		if err := Insert(ctx, integrationPool, row); err != nil {
+			t.Fatalf("Insert(%s): %v", s.sid, err)
+		}
+	}
+
+	stale := 90 * time.Second
+
+	// scope=[prod] → только 3 prod-хоста, ни один staging/dev не в агрегате.
+	prod, err := SelectStats(ctx, integrationPool, ListScope{Covens: []string{"prod"}}, stale)
+	if err != nil {
+		t.Fatalf("SelectStats(scope=prod): %v", err)
+	}
+	if prod.Total != 3 {
+		t.Errorf("scope=prod Total = %d, want 3 (хосты вне scope НЕ в агрегате)", prod.Total)
+	}
+	if prod.ByStatus[StatusConnected] != 1 || prod.ByStatus[StatusDisconnected] != 1 || prod.ByStatus[StatusPending] != 1 {
+		t.Errorf("scope=prod ByStatus = %v, want connected:1 disconnected:1 pending:1", prod.ByStatus)
+	}
+	if prod.ByTransport[TransportAgent] != 2 || prod.ByTransport[TransportSSH] != 1 {
+		t.Errorf("scope=prod ByTransport = %v, want agent:2 ssh:1", prod.ByTransport)
+	}
+	// by_coven: prod=3 (все три), dc-eu=1 (только prod-1). staging/dev отсутствуют.
+	if prod.ByCoven["prod"] != 3 || prod.ByCoven["dc-eu"] != 1 {
+		t.Errorf("scope=prod ByCoven = %v, want prod:3 dc-eu:1", prod.ByCoven)
+	}
+	if _, leaked := prod.ByCoven["staging"]; leaked {
+		t.Errorf("scope=prod ByCoven просочился staging: %v (scope-leak в агрегате)", prod.ByCoven)
+	}
+	if _, leaked := prod.ByCoven["dev"]; leaked {
+		t.Errorf("scope=prod ByCoven просочился dev: %v (scope-leak в агрегате)", prod.ByCoven)
+	}
+	// stale_count: только prod-2 (prod-3 без last_seen НЕ stale; staging/dev stale, но вне scope).
+	if prod.StaleCount != 1 {
+		t.Errorf("scope=prod StaleCount = %d, want 1 (только prod-2; хосты вне scope не считаются)", prod.StaleCount)
+	}
+
+	// unrestricted → весь флот: 5 хостов, 3 stale (prod-2, stg-1, dev-1).
+	all, err := SelectStats(ctx, integrationPool, ListScope{Unrestricted: true}, stale)
+	if err != nil {
+		t.Fatalf("SelectStats(unrestricted): %v", err)
+	}
+	if all.Total != 5 {
+		t.Errorf("unrestricted Total = %d, want 5", all.Total)
+	}
+	if all.StaleCount != 3 {
+		t.Errorf("unrestricted StaleCount = %d, want 3 (prod-2, stg-1, dev-1)", all.StaleCount)
+	}
+
+	// fail-closed: пустой scope (не Unrestricted) → всё по нулям, НЕ весь флот.
+	empty, err := SelectStats(ctx, integrationPool, ListScope{Covens: nil}, stale)
+	if err != nil {
+		t.Fatalf("SelectStats(empty scope): %v", err)
+	}
+	if empty.Total != 0 || empty.StaleCount != 0 || len(empty.ByStatus) != 0 || len(empty.ByCoven) != 0 {
+		t.Errorf("empty scope = %+v, want всё нули (fail-closed, НЕ весь флот)", empty)
+	}
+}

@@ -152,6 +152,22 @@ tasks:
       destiny: redis
       input:
         version:  "${ default(incarnation.state.redis_version, '') }"
+        # ★ install: ОБЯЗАТЕЛЕН на day-2 (регресс live E2E 2026-07-01). Без него
+        # диспетчер install.yml по !has(input.install) скатывается в package-ветку →
+        # core.pkg `apt install redis-server=<version>` (версия из Nexus-binary в apt
+        # ОТСУТСТВУЕТ → env exited 100). Собираем ТУ ЖЕ binary-структуру, что create
+        # (deploy-body → compute.install из essence.install_method) — единый способ
+        # установки. Отличие от covenant.install: version из РАЗВЁРНУТОГО state
+        # (redis_version), а не input.version (day-2 версию не переустанавливает).
+        install: >-
+          ${ (default(essence.install_method, 'binary') == 'binary')
+               ? {
+                   'method':        'binary',
+                   'base_url':      default(essence.binary_base_url, ''),
+                   'version':       default(incarnation.state.redis_version, ''),
+                   'allow_private': default(essence.binary_allow_private, true)
+                 }
+               : { 'method': 'package' } }
         # host-layout — единый источник essence (v11→v12): conf_dir=compute.conf_dir (сам
         # из essence.conf_dir, см. vars-шапку), data_dir/modules_base_url прямо из essence.
         conf_dir: "${ compute.conf_dir }"

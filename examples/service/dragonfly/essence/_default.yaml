@@ -34,6 +34,11 @@ provision_profile:  redis-debian-12
 provision_await_timeout: "10m"
 # Имя SshProvider-плагина для доставки per-VM bootstrap-токена по SSH (core.bootstrap.delivered).
 provision_ssh_provider: teleport
+# Потолок ожидания появления свежесозданной VM в Teleport перед доставкой токена
+# (core.bootstrap.delivered, transport=teleport, retry-до-join; форма <N>{s|m|h}). reverse-
+# tunnel-агент на новой cloud-VM регистрируется в Teleport заметно позже типовых 3-5мин, поэтому
+# 15m с запасом. Фоллбэк для input.provision.join_wait_timeout.
+provision_join_wait_timeout: "15m"
 
 # ── Способ установки binary: источник upstream-tarball ──────────────────────────
 # install_method=binary тянет DragonFly из upstream-tarball. URL и версия бинаря — author-

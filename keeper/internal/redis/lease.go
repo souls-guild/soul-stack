@@ -86,6 +86,31 @@ func Acquire(ctx context.Context, c *Client, key, holder string, ttl time.Durati
 	return &Lease{client: c, key: key, holder: holder, ttl: ttl}, nil
 }
 
+// PeekLeaseHolder читает текущего holder-а lease-ключа (value = KID держателя)
+// БЕЗ захвата — чистый `GET`. Возвращает (holder, true) если ключ жив;
+// (_, false) если lease свободен / истёк (`redis.Nil`).
+//
+// Read-only-инспекция для наблюдаемости (`GET /v1/cluster` → кто сейчас
+// Reaper-лидер по ключу reaper.LeaderLeaseKey). НЕ участвует в CAS-протоколе
+// Acquire/Renew/Release: только показывает, кому ключ принадлежит прямо сейчас.
+// Значение эфемерно (lease под TTL) — caller трактует ответ как снимок момента.
+func PeekLeaseHolder(ctx context.Context, c *Client, key string) (string, bool, error) {
+	if c == nil {
+		return "", false, errors.New("redis.PeekLeaseHolder: nil client")
+	}
+	if key == "" {
+		return "", false, errors.New("redis.PeekLeaseHolder: empty key")
+	}
+	v, err := c.underlying().Get(ctx, key).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("redis.PeekLeaseHolder: GET %q: %w", key, err)
+	}
+	return v, true, nil
+}
+
 // renewScript — CAS-renew: вернёт 1 если ключ всё ещё наш и TTL обновлён,
 // иначе 0. PEXPIRE применяется к существующему ключу — атомарность
 // GET+PEXPIRE гарантируется тем, что Lua-скрипт исполняется атомарно

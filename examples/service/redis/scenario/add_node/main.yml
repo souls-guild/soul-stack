@@ -86,6 +86,22 @@ tasks:
       destiny: redis
       input:
         version:  "${ default(incarnation.state.redis_version, '') }"
+        # ★ install: ОБЯЗАТЕЛЕН на day-2 (регресс live E2E 2026-07-01). Новая нода
+        # приходит БЕЗ redis — install.yml ставит его. Без install-структуры диспетчер
+        # по !has(input.install) скатывается в package-ветку → core.pkg `apt install
+        # redis-server=<version>` (версия из Nexus-binary в apt ОТСУТСТВУЕТ → env exited
+        # 100). Собираем ТУ ЖЕ binary-структуру, что create (deploy-body → compute.install
+        # из essence.install_method) — новая нода ставится тем же способом, что кластер.
+        # version — из РАЗВЁРНУТОГО state (redis_version кластера), не input.version.
+        install: >-
+          ${ (default(essence.install_method, 'binary') == 'binary')
+               ? {
+                   'method':        'binary',
+                   'base_url':      default(essence.binary_base_url, ''),
+                   'version':       default(incarnation.state.redis_version, ''),
+                   'allow_private': default(essence.binary_allow_private, true)
+                 }
+               : { 'method': 'package' } }
         # conf_dir/data_dir: host-layout новой ноды (директива B) — ТЕ ЖЕ пути, что у
         # кластера. Читаем из essence (v11→v12, Вариант A): layout — author-context, тот
         # же источник, что compute.conf_dir/data_dir у create. Новая нода обязана знать

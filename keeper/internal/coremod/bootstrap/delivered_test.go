@@ -1119,6 +1119,104 @@ func cmds(s *fakeSession) []string {
 	return out
 }
 
+// TestDefaultJoinWaitTimeout_Is15m — guard дефолта Teleport-join: экспортированный
+// DefaultJoinWaitTimeout == 15m. Ловит регресс (был 6m — свежая cloud-VM
+// reverse-tunnel-агентом join-ится позже, шаг падал зря). Значение — часть
+// наблюдаемого контракта: на него завязан инвариант provision-run-timeout
+// (keeper/internal/scenario TestProvisionTimeoutExceedsJoinWait).
+func TestDefaultJoinWaitTimeout_Is15m(t *testing.T) {
+	if coremodbootstrap.DefaultJoinWaitTimeout != 15*time.Minute {
+		t.Errorf("DefaultJoinWaitTimeout = %s, want 15m", coremodbootstrap.DefaultJoinWaitTimeout)
+	}
+}
+
+// TestValidate_JoinWaitTimeout_Forms — guard формата param `join_wait_timeout`:
+// принимается duration-строка (convention `duration`, симметрия с await_timeout —
+// так его задаёт essence.provision_join_wait_timeout) И число секунд (back-compat
+// ADR-063). Отрицательное / невалидная строка — отвергаются.
+func TestValidate_JoinWaitTimeout_Forms(t *testing.T) {
+	m := &coremodbootstrap.Module{}
+	tests := []struct {
+		name string
+		val  any
+		ok   bool
+	}{
+		{"duration-строка 15m", "15m", true},
+		{"duration-строка 90s", "90s", true},
+		{"duration-строка 1d", "1d", true},
+		{"число секунд 60 (back-compat)", float64(60), true},
+		{"число 0 (немедленный deadline)", float64(0), true},
+		{"невалидная строка", "nonsense", false},
+		{"отрицательная строка", "-5m", false},
+		{"отрицательное число", float64(-1), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rep, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
+				State: coremodbootstrap.StateDelivered,
+				Params: mustStruct(t, map[string]any{
+					"ssh_provider":      "ssh-static",
+					"hosts":             hostsParam("vm1", "1.2.3.4", "t"),
+					"join_wait_timeout": tt.val,
+				}),
+			})
+			if rep.Ok != tt.ok {
+				t.Errorf("join_wait_timeout=%v: Ok=%v, want %v (errors=%v)", tt.val, rep.Ok, tt.ok, rep.Errors)
+			}
+		})
+	}
+}
+
+// TestApply_Teleport_JoinWaitDurationString — guard: duration-строка (форма
+// essence.provision_join_wait_timeout) реально доходит до retry-цикла как бюджет
+// ожидания, а не хардкод. "60s"-строкой + flakyDialer(3 fail) → шаг доживает до
+// success (бюджет положительный, ретраи укладываются). Контрпример с крошечным
+// бюджетом ("1ms") в TestApply_Teleport_JoinWaitTiny.
+func TestApply_Teleport_JoinWaitDurationString(t *testing.T) {
+	dialer := &flakyDialer{sess: &fakeSession{}, failFirst: 3, err: errors.New("node offline or does not exist")}
+	m := newTeleportModule(dialer.dial, &fakeAudit{})
+	m.RetryBase = 1 * time.Millisecond
+	m.RetryJitter = 1 * time.Millisecond
+
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(deliverReq(t, map[string]any{
+		"ssh_provider":      "ssh-static",
+		"hosts":             hostsParam("vm1.example.com", "10.0.0.1", "tok"),
+		"start_soul":        false,
+		"join_wait_timeout": "60s", // ★ duration-строка, не число
+	}), stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if last := stream.Last(); last == nil || last.GetFailed() {
+		t.Fatalf("expected success with '60s' budget after retries, got %+v", last)
+	}
+	if dialer.calls < 4 {
+		t.Errorf("expected >=4 Dial attempts (3 fail + success), got %d", dialer.calls)
+	}
+}
+
+// TestApply_Teleport_JoinWaitTiny — контрпример к предыдущему: крошечный бюджет
+// duration-строкой ("1ms") исчерпывается на первой же попытке → failed. Вместе
+// с TestApply_Teleport_JoinWaitDurationString доказывает, что ИМЕННО значение из
+// param управляет deadline (а не игнорируется в пользу хардкод-дефолта).
+func TestApply_Teleport_JoinWaitTiny(t *testing.T) {
+	dialer := &flakyDialer{sess: &fakeSession{}, failFirst: 1 << 30, err: errors.New("node offline or does not exist")}
+	m := newTeleportModule(dialer.dial, &fakeAudit{})
+
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(deliverReq(t, map[string]any{
+		"ssh_provider":      "ssh-static",
+		"hosts":             hostsParam("vm1.example.com", "10.0.0.1", "tok"),
+		"start_soul":        false,
+		"join_wait_timeout": "1ms",
+	}), stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if last := stream.Last(); last == nil || !last.GetFailed() {
+		t.Fatalf("expected failed with '1ms' budget, got %+v", last)
+	}
+}
+
 // containsTokenDeep рекурсивно ищет подстроку token в любом строковом значении
 // структуры (output / audit payload) — страховка от утечки секрета.
 func containsTokenDeep(v any, token string) bool {

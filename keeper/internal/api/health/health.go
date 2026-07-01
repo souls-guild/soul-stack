@@ -74,19 +74,38 @@ type readyResp struct {
 }
 
 func (h *Handler) Readyz(w http.ResponseWriter, r *http.Request) {
+	checks, ok := Check(r.Context(), h.deps)
+
+	resp := readyResp{Checks: checks}
+	status := http.StatusOK
+	if ok {
+		resp.Status = "ok"
+	} else {
+		resp.Status = "not_ready"
+		status = http.StatusServiceUnavailable
+	}
+	writeJSON(w, status, resp)
+}
+
+// Check пингует все непустые зависимости [Deps] параллельно (каждую под
+// [perCheckTimeout]) и возвращает карту `name → "ok" | причина-провала` +
+// агрегированный флаг «все ли ok». Nil-Pinger check пропускается (в карту не
+// попадает). Единый источник health-семантики: `/readyz` ([Handler.Readyz]) и
+// `GET /v1/cluster` self_health (per-instance PG/Redis/Vault) считают доступность
+// одинаково — расхождения между liveness-пробой и cluster-view не будет.
+func Check(ctx context.Context, deps Deps) (map[string]string, bool) {
 	type result struct {
 		name string
 		msg  string // пустой = ok
 	}
-
 	type namedPinger struct {
 		name string
 		p    Pinger
 	}
 	candidates := []namedPinger{
-		{"postgres", h.deps.PG},
-		{"redis", h.deps.Redis},
-		{"vault", h.deps.Vault},
+		{"postgres", deps.PG},
+		{"redis", deps.Redis},
+		{"vault", deps.Vault},
 	}
 	pingers := make([]namedPinger, 0, len(candidates))
 	for _, c := range candidates {
@@ -101,9 +120,9 @@ func (h *Handler) Readyz(w http.ResponseWriter, r *http.Request) {
 		wg.Add(1)
 		go func(i int, name string, p Pinger) {
 			defer wg.Done()
-			ctx, cancel := context.WithTimeout(r.Context(), perCheckTimeout)
+			cctx, cancel := context.WithTimeout(ctx, perCheckTimeout)
 			defer cancel()
-			err := p.Ping(ctx)
+			err := p.Ping(cctx)
 			if err == nil {
 				results[i] = result{name: name}
 				return
@@ -111,7 +130,7 @@ func (h *Handler) Readyz(w http.ResponseWriter, r *http.Request) {
 			// Различаем timeout (наш per-check ctx истёк) от транспортной
 			// ошибки — оператору сильно полезнее: timeout = «висит», error
 			// = «отказывает с понятной причиной».
-			if errors.Is(err, context.DeadlineExceeded) && r.Context().Err() == nil {
+			if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 				results[i] = result{name: name, msg: "ping timeout (2s)"}
 				return
 			}
@@ -130,16 +149,7 @@ func (h *Handler) Readyz(w http.ResponseWriter, r *http.Request) {
 		checks[res.name] = res.msg
 		ok = false
 	}
-
-	resp := readyResp{Checks: checks}
-	status := http.StatusOK
-	if ok {
-		resp.Status = "ok"
-	} else {
-		resp.Status = "not_ready"
-		status = http.StatusServiceUnavailable
-	}
-	writeJSON(w, status, resp)
+	return checks, ok
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

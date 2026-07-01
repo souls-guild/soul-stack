@@ -265,6 +265,30 @@ const (
 	// светится в audit-trail/логах/OTel, фиксируется только факт генерации).
 	EventVaultKVPresent EventType = "vault.kv-present"
 
+	// EventCertRegistered — keeper-side core-модуль `core.cert.registered`
+	// (cert-rotation Вар1, E1) вписал СЕРВИСНЫЙ TLS-серт инкарнации в реестр
+	// Warrant (чтобы Reaper видел его срок и мог ротировать). `source:
+	// keeper_internal`, `archon_aid: NULL`, `correlation_id = incarnation`.
+	// Пишется ТОЛЬКО когда что-то реально вписано (changed=true; тот же
+	// fingerprint уже зарегистрирован → no-op без события). Payload:
+	// `{incarnation, certs}` — `certs` = список `{kind, fingerprint,
+	// serial_number, not_after}` (НЕ-секретные метаданные; сам PEM/приватник в
+	// payload не кладутся, модуль читает лишь публичный серт).
+	EventCertRegistered EventType = "cert.registered"
+
+	// EventCertRotated — Reaper-правило `rotate_due_certs` (cert-rotation Вар1)
+	// ротировало истекающий сервисный серт инкарнации: Keeper сгенерил новый
+	// keypair+CSR (R2), подписал через Vault PKI, положил материал в Vault,
+	// вписал новую active-строку Warrant (старую → superseded) и заспавнил Voyage
+	// day-2-сценария rotate_tls для доставки нового PEM на хосты. Область
+	// `cert.*` (keeper-side lifecycle, parity `voyage.reclaimed`). `source:
+	// keeper_internal`, `archon_aid: NULL`, `correlation_id = voyage_id`. Payload:
+	// `{incarnation, kind, voyage_id, fingerprint, serial_number, not_after,
+	// superseded_cert_id, superseded_serial}` — метаданные НОВОГО серта плюс
+	// cert_id/serial сменённого (superseded_cert_id всегда присутствует); только
+	// НЕ-секретные поля (приватник/PEM никогда не кладутся).
+	EventCertRotated EventType = "cert.rotated"
+
 	// EventSoulCovenChanged — изменён набор Coven-меток Soul-а. Два write-path-а
 	// различаются полем `source`:
 	//   - scenario-путь: keeper-side core-модуль `core.soul.registered`

@@ -139,6 +139,7 @@ func fullSpecGroups() []specGroup {
 			registerHumaSoulCovenAssign(api, stub)
 			registerHumaSoulTraitsAssign(api, stub)
 			registerHumaSoulList(api, stub)
+			registerHumaSoulStats(api, stub, nil)
 			registerHumaSoulGet(api, stub)
 			registerHumaSoulSoulprint(api, stub)
 			registerHumaSoulHistory(api, stub)
@@ -252,6 +253,11 @@ func fullSpecGroups() []specGroup {
 			registerHumaEventTypesList(api, handlers.NewEventTypeCatalogHandler(nil))
 			registerHumaHeraldTypesList(api, handlers.NewHeraldTypeCatalogHandler(nil))
 			registerHumaMyPermissionsList(api, handlers.NewMyPermissionsHandler(nil, nil))
+			return nil
+		}},
+		// GET /v1/cluster — Operation.Path полный под-/v1 (/cluster).
+		{"/v1", func(api huma.API) error {
+			registerHumaClusterGet(api, handlers.ClusterSpecStub())
 			return nil
 		}},
 		// augur смонтирован через r.Route("/augur") — Operation.Path относителен

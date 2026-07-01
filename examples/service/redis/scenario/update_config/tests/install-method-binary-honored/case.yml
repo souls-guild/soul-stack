@@ -1,0 +1,127 @@
+# L0-испытание (Trial, ADR-023): GUARD day-2 install-ветки — update_config ОБЯЗАН
+# ре-ensure'ить redis тем же способом установки (binary), что зафиксировал create,
+# а НЕ скатываться в package. РЕГРЕСС (пойман live E2E 2026-07-01): apply.input day-2
+# НЕ передавал install → destiny `redis` диспетчер install.yml по !has(input.install)
+# уходил в package-ветку → core.pkg `apt install redis-server=<version>`. Версия
+# (напр. 8.6.1) выкачена ТОЛЬКО в Nexus (binary), в apt её НЕТ → env exited 100
+# (E: Version '8.6.1' for 'redis-server' was not found). CONFIG-часть при этом
+# применялась, install-ensure падал.
+#
+# Что ассертим (критерий приёмки):
+#   1. binary-ветка install.yml АКТИВНА: ТРИ core.url.fetched тянут redis-server/
+#      redis-cli/redis-benchmark из Nexus по РАЗВЁРНУТОЙ версии (incarnation.state.
+#      redis_version = 8.6.1), НЕ по input.version (его в day-2 нет). URL per-host:
+#      <base_url>/<arch>/Debian/<distro_ver>/<version>/redis-*. allow_private
+#      прокинут из essence.binary_allow_private.
+#   2. package-ветка ВЫКЛЮЧЕНА: core.pkg.installed redis-server ОТСУТСТВУЕТ в плане.
+#
+# Источник install-структуры — тот же, что create (deploy-body redis-deploy-*.yml
+# передаёт compute.install из essence.install_method): author-context essence, единый
+# способ установки для create и day-2. version day-2 берётся из state (развёрнутая),
+# а не input (day-2 версию не переустанавливает).
+name: update_config honors the deployed binary install method (no package fallback)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.5 }
+    # os.version нужен binary-URL (.../Debian/<distro_ver>/...) — Debian 12.
+    os: { arch: amd64, version: "12" }
+
+  essence:
+    memory_reserve_percent: 75
+    conf_dir: /etc/redis
+    data_dir: /var/lib/redis
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    # ★ install_method — author-context (essence, не operator-input). binary — дефолт;
+    # day-2 apply.input.install собирает binary-структуру из этого поля (симметрия
+    # covenant.install / deploy-body). Кейс — guard day-2 binary-ветки, поэтому задан
+    # явно (хотя дефолт binary — сделать регресс наглядным).
+    install_method: binary
+    # base_url бинарей — Nexus-mirror (author-context). day-2 берёт его в install.base_url,
+    # destiny собирает URL <base_url>/<arch>/Debian/<distro_ver>/<version>/redis-*.
+    binary_base_url: "https://downloads.example.com/redis"
+    # binary_allow_private=true → снят SSRF-guard core.url (дефолтный base = внутренний
+    # Nexus в RFC1918). day-2 обязан прокинуть его в install.allow_private (иначе fetch
+    # на реальном хосте упёрся бы в SSRF-block private-IP).
+    binary_allow_private: true
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+
+  # Развёрнутый incarnation.state (от create с install_method=binary): версия 8.6.1 —
+  # выкачена ТОЛЬКО в Nexus (binary), в apt её НЕТ (тот самый live-регресс). update_config
+  # ре-ensure'ит install по этой развёрнутой версии.
+  state:
+    redis_type: cluster
+    redis_version: "8.6.1"
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    persistence: rdb
+    memory_mb: 1024
+    maxmemory_policy: allkeys-lru
+    redis_config:
+      maxmemory:        "768mb"
+      maxmemory-policy: allkeys-lru
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+    redis_users: []
+
+  input:
+    # Дельта оператора: только новая политика вытеснения.
+    maxmemory_policy: volatile-lru
+
+  vault:
+    secret/redis/update_config:
+      password: upd-redis-pass-16chars
+    secret/redis/update_config/users/default_admin:
+      password: default-admin-secret-pass
+
+assert:
+  task_present:
+    # ★ binary-ветка АКТИВНА: ТРИ core.url.fetched тянут бинари из Nexus по РАЗВЁРНУТОЙ
+    # версии (incarnation.state.redis_version = 8.6.1) — НЕ input.version (day-2 его не
+    # несёт). URL per-host: <base_url>/x86_64/Debian/12/8.6.1/redis-* (amd64→x86_64).
+    # allow_private:true — прокинут из essence.binary_allow_private. Регресс «day-2 в
+    # package» → эти задачи отсутствуют (placeholder-skip), core.pkg ниже присутствует.
+    - module: core.url.fetched
+      params_subset:
+        url: "https://downloads.example.com/redis/x86_64/Debian/12/8.6.1/redis-server"
+        path: /usr/local/bin/redis-server
+        mode: "0755"
+        owner: root
+        group: root
+        allow_private: true
+
+    - module: core.url.fetched
+      params_subset:
+        url: "https://downloads.example.com/redis/x86_64/Debian/12/8.6.1/redis-cli"
+        path: /usr/local/bin/redis-cli
+        mode: "0755"
+        owner: root
+        group: root
+        allow_private: true
+
+    - module: core.url.fetched
+      params_subset:
+        url: "https://downloads.example.com/redis/x86_64/Debian/12/8.6.1/redis-benchmark"
+        path: /usr/local/bin/redis-benchmark
+        mode: "0755"
+        owner: root
+        group: root
+        allow_private: true
+
+  task_absent:
+    # ★ package-ветка ВЫКЛЮЧЕНА (method=binary → static-skip диспетчера install.yml):
+    # core.pkg.installed redis-server — placeholder-skip без params. params_subset не
+    # сматчит placeholder (Params nil) → guard «day-2 НЕ падает в package `apt install
+    # redis-server=<version>`». Это и есть корень live-регресса.
+    - module: core.pkg.installed
+      params_subset:
+        name: redis-server

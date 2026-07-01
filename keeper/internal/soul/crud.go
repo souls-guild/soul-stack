@@ -1186,3 +1186,114 @@ func listFilterClauses(f ListFilter) ([]string, []any) {
 	}
 	return clauses, args
 }
+
+// Stats — агрегированная сводка реестра `souls` в границах Purview-scope
+// оператора (`GET /v1/souls/stats`, Souls Overview UI). Считается ОДНИМ
+// round-trip-ом ([SelectStats]) поверх того же scope-предиката, что и
+// [SelectAll]: агрегат не включает хосты вне видимости оператора (иначе цифры
+// на дашборде расходились бы со scoped-списком).
+//
+//   - ByStatus / ByTransport / ByCoven — плотные карты «значение оси → число
+//     хостов». Пустые оси (нет ни одного хоста) → пустые (не nil) карты.
+//     Transport в модели — agent/ssh (НЕ pull/push): UI сам маппит на pull/push-
+//     лейблы, storage-слой отдаёт доменные значения как есть.
+//   - Total — всего видимых хостов (= сумма ByStatus).
+//   - StaleCount — сколько видимых хостов «протухли» по `last_seen_at`
+//     (< now()-staleThreshold). Порог — тот же `mark_disconnected.stale_after`
+//     Reaper-а (reaper.ResolveMarkDisconnectedStale), чтобы цифра совпадала с
+//     фактом перевода в disconnected. Хост без `last_seen_at` (только-что
+//     pending, ни разу не подключался) в StaleCount НЕ попадает (NULL < X = NULL).
+type Stats struct {
+	ByStatus    map[Status]int
+	ByTransport map[Transport]int
+	ByCoven     map[string]int
+	Total       int
+	StaleCount  int
+}
+
+// statsAxisSQL — единый CTE-запрос агрегата: `scoped` фиксирует набор видимых
+// хостов ОДИН раз (scope-WHERE подставляется в %s), далее оси считаются
+// UNION ALL-ом с дискриминатором `axis`. Строка axis='stale' несёт единственный
+// bucket=COUNT протухших (last_seen_at < now()-$stale); прочие оси группируются.
+// Один плейсхолдер stale-порога — последний позиционный аргумент ($%d).
+//
+// unnest(coven) для by_coven: хост с N метками даёт N строк оси coven (сумма
+// by_coven >= total — это ожидаемо, метки пересекаются). Хост без меток в
+// by_coven не участвует (unnest пустого массива = 0 строк).
+const statsAxisSQLTemplate = `
+WITH scoped AS (
+    SELECT status, transport, coven, last_seen_at
+    FROM souls%s
+)
+SELECT 'status'    AS axis, status                     AS bucket, COUNT(*) AS n FROM scoped GROUP BY status
+UNION ALL
+SELECT 'transport' AS axis, transport                  AS bucket, COUNT(*) AS n FROM scoped GROUP BY transport
+UNION ALL
+SELECT 'coven'     AS axis, c                          AS bucket, COUNT(*) AS n FROM scoped, unnest(coven) AS c GROUP BY c
+UNION ALL
+SELECT 'stale'     AS axis, ''                         AS bucket, COUNT(*) AS n FROM scoped WHERE last_seen_at < now() - $%d::interval
+`
+
+// SelectStats считает агрегированную сводку реестра `souls` в границах RBAC
+// scope-а оператора (`GET /v1/souls/stats`). Один round-trip: все оси
+// (status/transport/coven) + stale-count объединены UNION ALL-ом поверх общего
+// scope-CTE.
+//
+// scope-предикат — тот же [appendScopeClause], что у [SelectAll]/bulk: единый
+// источник scope-intersection-семантики fail-closed (пустой scope без
+// Unrestricted → `coven && ARRAY[]::text[]` = ноль хостов, а НЕ весь флот).
+//
+// staleThreshold — cutoff для StaleCount (хост «протух», если
+// `last_seen_at < now()-staleThreshold`); передаётся из
+// reaper.ResolveMarkDisconnectedStale, чтобы цифра совпала с disconnect-порогом.
+// <= 0 отвергается (иначе cutoff в будущем/сейчас — бессмысленный агрегат;
+// caller обязан передать реальный порог).
+func SelectStats(ctx context.Context, db ExecQueryRower, scope ListScope, staleThreshold time.Duration) (Stats, error) {
+	if staleThreshold <= 0 {
+		return Stats{}, fmt.Errorf("soul: stale threshold must be > 0, got %v", staleThreshold)
+	}
+	stats := Stats{
+		ByStatus:    map[Status]int{},
+		ByTransport: map[Transport]int{},
+		ByCoven:     map[string]int{},
+	}
+
+	clauses, args := appendScopeClause(nil, nil, BulkScope(scope))
+	whereSQL := joinWhere(clauses)
+	// stale-порог — последний позиционный аргумент; PG-interval из Go-duration
+	// через строку "<seconds> seconds" (устойчиво к суб-секундным порогам).
+	args = append(args, fmt.Sprintf("%d seconds", int64(staleThreshold.Seconds())))
+	sql := fmt.Sprintf(statsAxisSQLTemplate, whereSQL, len(args))
+
+	rows, err := db.Query(ctx, sql, args...)
+	if err != nil {
+		return Stats{}, fmt.Errorf("soul: stats query: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			axis   string
+			bucket string
+			n      int
+		)
+		if err := rows.Scan(&axis, &bucket, &n); err != nil {
+			return Stats{}, fmt.Errorf("soul: stats scan: %w", err)
+		}
+		switch axis {
+		case "status":
+			stats.ByStatus[Status(bucket)] = n
+			stats.Total += n
+		case "transport":
+			stats.ByTransport[Transport(bucket)] = n
+		case "coven":
+			stats.ByCoven[bucket] = n
+		case "stale":
+			stats.StaleCount = n
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return Stats{}, fmt.Errorf("soul: stats iter: %w", err)
+	}
+	return stats, nil
+}

@@ -70,6 +70,9 @@ assert:
             listen: ":9121"
             redis_addr: unix:///var/run/redis/redis-server.sock
             password: change-me-please-32
+            # redis_user не передан → default '' (requirepass-модель, back-compat):
+            # флаг --redis.user в ExecStart НЕ добавляется (условный рендер шаблона).
+            redis_user: ""
             extra_args: []
           self:
             sid: trial-host

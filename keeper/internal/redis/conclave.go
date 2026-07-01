@@ -232,6 +232,32 @@ func scanKIDs(ctx context.Context, s redis.Cmdable) ([]string, error) {
 	return out, nil
 }
 
+// ReadInstanceMeta читает value presence-ключа `keeper:instance:<kid>` — лёгкие
+// метаданные инстанса (`{started_at, kid}`-JSON, записанные caller-ом при
+// [RegisterInstance]). Возвращает (meta, true) если ключ жив; (_, false) если
+// инстанс мёртв / ключ истёк (`redis.Nil`). Питает `GET /v1/cluster`: список
+// живых KID-ов ([LiveKIDs]) + started_at каждого.
+//
+// meta отдаётся сырой строкой — парсинг (JSON→started_at) на стороне caller-а
+// (handler), storage-слой не навязывает форму value (fail-safe RegisterInstance
+// мог записать голый KID вместо JSON — caller обязан быть к этому готов).
+func ReadInstanceMeta(ctx context.Context, c *Client, kid string) (string, bool, error) {
+	if c == nil {
+		return "", false, errors.New("redis.ReadInstanceMeta: nil client")
+	}
+	if kid == "" {
+		return "", false, errors.New("redis.ReadInstanceMeta: empty kid")
+	}
+	v, err := c.underlying().Get(ctx, ConclaveKey(kid)).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("redis.ReadInstanceMeta: GET %q: %w", ConclaveKey(kid), err)
+	}
+	return v, true, nil
+}
+
 // CountLive возвращает число живых keeper-инстансов (= len([LiveKIDs])).
 // Питает refuse-guard «я не один» (CountLive > 1, S3) — отдельный helper, чтобы
 // caller-у, которому нужно только число, не аллоцировать слайс KID-ов.

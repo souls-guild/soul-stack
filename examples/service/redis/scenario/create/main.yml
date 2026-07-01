@@ -119,6 +119,13 @@ input:
           Верхняя граница ожидания онбординга созданных VM (барьер await_online,
           ADR-061; форма <N>{s|m|h}). Не задан → essence.provision_await_timeout (дефолт
           10m). Ограничен сверху keeper.yml::max_await_timeout.
+      join_wait_timeout:
+        type: string
+        pattern: "^[0-9]+[smh]$"
+        description: >-
+          Потолок ожидания появления свежесозданной VM в Teleport перед доставкой
+          токена (core.bootstrap.delivered, retry-до-join; форма <N>{s|m|h}). Не задан →
+          essence.provision_join_wait_timeout (дефолт 15m).
       ssh_provider:
         type: string
         description: >-
@@ -351,3 +358,41 @@ tasks:
     when: "input.redis_type == 'cluster'"
   - include: sentinel.yml
     when: "input.redis_type == 'sentinel'"
+
+  # ── ОБЯЗАТЕЛЬНЫЙ мониторинг data-плоскости (Слайс I) ──────────────────────────────
+  # ПОСЛЕ deploy-ветки (cluster/sentinel) create БЕЗУСЛОВНО (без when-гейта) разворачивает
+  # два экспортера метрик на КАЖДЫЙ хост incarnation КОМПОЗИЦИЕЙ переиспользуемых
+  # standalone-destiny через apply:destiny (изолированный render каждой, ADR-009). Мониторинг
+  # — не операторский выбор, а инвариант data-сервиса (контракт=A: версии/порты/checksum в
+  # essence, covenant.input/form НЕ трогаются).
+  #
+  # ★ ПОРЯДОК (staged-render Passage сам стратифицирует): обе задачи читают roster прогона
+  # (arch/пароль резолвятся per-host, apply.input несёт soulprint.self) → они roster-ПОТРЕБИТЕЛИ
+  # и попадают в passage СТРОГО ПОСЛЕ deploy (redis-server поднят, ACL-юзер monitoring залит,
+  # unix-сокет слушается). Отдельного register-ребра не нужно — roster-ось (refresh-эмиттер
+  # provision + roster-чтение deploy) уводит их в поздний passage, как vault()-read деплоя.
+  - name: Apply node-exporter destiny (host metrics)
+    apply:
+      destiny: node-exporter
+      input:
+        version: "${ default(essence.node_exporter_version, '1.8.2') }"
+        # arch НЕ передаём: destiny берёт его напрямую из soulprint.self.os.arch (доступен
+        # в destiny-CEL) — incarnation может смешивать amd64/arm64-хосты.
+        listen: "${ default(essence.node_exporter_listen, ':9100') }"
+
+  # redis-exporter: метрики Redis через unix-сокет (--redis.addr=unix://<socket>). ★ Находка B:
+  # redis на ACL БЕЗ requirepass (default_admin-редизайн убрал requirepass) → exporter ОБЯЗАН
+  # авторизоваться ACL-юзером monitoring (redis_user), иначе WRONGPASS. Пароль резолвится
+  # keeper-side vault() из secret/redis/<inc>/users/monitoring#password (тот же ACL-юзер, что
+  # essence.system_acl_users.monitoring, пароль генерится kv-present ВЫШЕ) — на хост доезжает
+  # уже ЗНАЧЕНИЕ (ADR-012). redis_socket НЕ передаём — дефолт destiny (/var/run/redis/
+  # redis-server.sock) совпадает с unixsocket redis.conf.
+  - name: Apply redis-exporter destiny (redis metrics)
+    apply:
+      destiny: redis-exporter
+      input:
+        version: "${ default(essence.redis_exporter_version, '1.62.0') }"
+        sha256:  "${ default(essence.redis_exporter_sha256, '') }"
+        listen:  "${ default(essence.redis_exporter_listen, ':9121') }"
+        redis_user:     monitoring
+        redis_password: "${ vault('secret/redis/' + incarnation.name + '/users/monitoring#password') }"

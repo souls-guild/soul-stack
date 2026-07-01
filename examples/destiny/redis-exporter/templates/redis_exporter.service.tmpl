@@ -23,7 +23,10 @@
   core.group-шаг). Прав владельца redis exporter НЕ получает, только членство в группе.
 
   Пароль Redis передаётся через Environment=REDIS_PASSWORD (redis_exporter читает
-  его из env), а не в ExecStart — чтобы не светиться в `ps`/journalctl. Файл unit-а
+  его из env), а не в ExecStart — чтобы не светиться в `ps`/journalctl. ACL-username
+  (.vars.redis_user) — в ExecStart флагом --redis.user (не секрет): пусто → флаг опущен
+  (requirepass-модель, default-user), задан → AUTH под этим юзером (нужно на ACL-инстансе
+  без requirepass, иначе WRONGPASS). Файл unit-а
   пишется mode 0644; на хосте, где это важно, ограничьте доступ к каталогу
   /etc/systemd/system или используйте drop-in с EnvironmentFile mode 0600.
 
@@ -55,7 +58,7 @@ DynamicUser=yes
 # group-доступ к unix-сокету Redis (770) для transient-юзера DynamicUser.
 SupplementaryGroups=redis
 Environment=REDIS_PASSWORD={{ .vars.password }}
-ExecStart={{ .vars.bin_dir }}/redis_exporter --redis.addr={{ .vars.redis_addr }} --web.listen-address={{ .vars.listen }}{{ range .vars.extra_args }} {{ . }}{{ end }}
+ExecStart={{ .vars.bin_dir }}/redis_exporter --redis.addr={{ .vars.redis_addr }} --web.listen-address={{ .vars.listen }}{{ if .vars.redis_user }} --redis.user={{ .vars.redis_user }}{{ end }}{{ range .vars.extra_args }} {{ . }}{{ end }}
 Restart=on-failure
 RestartSec=5
 

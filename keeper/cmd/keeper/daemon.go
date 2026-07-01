@@ -38,6 +38,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/cloudinit"
 	"github.com/souls-guild/soul-stack/keeper/internal/conductor"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod"
+	coremodcert "github.com/souls-guild/soul-stack/keeper/internal/coremod/cert"
 	coremodchoir "github.com/souls-guild/soul-stack/keeper/internal/coremod/choir"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/cloud"
 	coremodsoul "github.com/souls-guild/soul-stack/keeper/internal/coremod/soul"
@@ -967,6 +968,11 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 		// incarnation_choir_voices через choir-CRUD (S-T2) + проверка
 		// существования инкарнации. Тот же d.pool, что у остальных PG-adapter-ов.
 		ChoirStore: coremodchoir.NewPGStore(d.pool),
+		// CertStore — `core.cert.registered` (cert-rotation Вар1, E1): SelectActive
+		// + RegisterActive над warrant через cert-CRUD. Модуль читает cert-PEM из
+		// Vault (Deps.Vault выше) и извлекает метаданные сам. KID — issued_by_kid.
+		CertStore: coremodcert.NewPGStore(d.pool),
+		KID:       cfg.KID,
 		// `core.bootstrap.delivered` teleport-режим (ADR-063 amendment): dialer
 		// из keeper.yml::push.teleport. nil/"" → direct, и т.к. direct-набор
 		// (providers/host-CA) тут не заполнен, модуль не регистрируется.
@@ -3991,17 +3997,30 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		// disconnected до следующего тика Reaper-а). Тот же адаптер и Redis-клиент,
 		// что у topology-резолвера (batch SID-lease EXISTS). nil-Redis (single-Keeper
 		// dev) → overlay выключен, PG-снимок отдаётся как есть.
-		SoulPresence:      soulPresence,
-		TTLDefault:        d.ttlDefault,
-		MetricsHTTP:       d.httpMetrics,
-		ScenarioRunner:    d.scenarioRunner,
-		ScenarioDestroyer: d.scenarioRunner,
-		ScenarioDrift:     d.scenarioRunner,
-		ServiceRegistry:   d.serviceRegistry,
-		ServiceLoader:     d.serviceLoader,
-		PushRun:           d.pushRun,
-		PushProviderSvc:   d.pushProviderSvc,
-		HeraldSvc:         d.heraldSvc,
+		SoulPresence: soulPresence,
+		// SoulStatsStaleFn — hot-reload порог disconnect-а для stale_count в
+		// GET /v1/souls/stats (тот же mark_disconnected.stale_after, что flush
+		// last_seen_at и Reaper): читаем свежий cfg-снимок на каждом запросе.
+		SoulStatsStaleFn: func() time.Duration {
+			return reaper.ResolveMarkDisconnectedStale(d.store.Get().Reaper)
+		},
+		// Cluster-view (GET /v1/cluster): Conclave-реестр + Reaper-лидер. Гейтим
+		// non-nil Redis-клиентом (typed-nil interface != nil сломал бы адаптер);
+		// nil-Redis (single-Keeper dev) → роут не монтируется (self-only не нужен).
+		// SelfKID — из конфига (тот же soulstack.kid, что presence-регистрация).
+		ClusterRegistry:     clusterRegistryOrNil(d),
+		ClusterLeaderReader: clusterLeaderReaderOrNil(d),
+		SelfKID:             cfg.KID,
+		TTLDefault:          d.ttlDefault,
+		MetricsHTTP:         d.httpMetrics,
+		ScenarioRunner:      d.scenarioRunner,
+		ScenarioDestroyer:   d.scenarioRunner,
+		ScenarioDrift:       d.scenarioRunner,
+		ServiceRegistry:     d.serviceRegistry,
+		ServiceLoader:       d.serviceLoader,
+		PushRun:             d.pushRun,
+		PushProviderSvc:     d.pushProviderSvc,
+		HeraldSvc:           d.heraldSvc,
 		// ProviderSvc / ProfileSvc — Cloud-CRUD-фасады (ADR-017). Те же
 		// экземпляры, что MCP-HandlerDeps (single source of truth). nil только
 		// если pool не создан (не должно случиться в production-path).
@@ -4615,6 +4634,47 @@ type topologyLeaseChecker struct{ rc *keeperredis.Client }
 
 func (c topologyLeaseChecker) SoulsStreamAlive(ctx context.Context, sids []string) (map[string]struct{}, error) {
 	return keeperredis.SoulsStreamAlive(ctx, c.rc, sids)
+}
+
+// clusterRegistryAdapter адаптирует Redis-клиент под read-поверхность Conclave
+// для `GET /v1/cluster` ([handlers.ClusterRegistry]). Узкая склейка ради изоляции
+// api-пакета от keeperredis (handler зависит от интерфейса, не от клиента).
+type clusterRegistryAdapter struct{ rc *keeperredis.Client }
+
+func (a clusterRegistryAdapter) LiveKIDs(ctx context.Context) ([]string, error) {
+	return keeperredis.LiveKIDs(ctx, a.rc)
+}
+
+func (a clusterRegistryAdapter) InstanceMeta(ctx context.Context, kid string) (string, bool, error) {
+	return keeperredis.ReadInstanceMeta(ctx, a.rc, kid)
+}
+
+// clusterLeaderReaderAdapter читает holder-а ключа Reaper-лидерства
+// (reaper.LeaderLeaseKey) для `GET /v1/cluster` ([handlers.ClusterLeaderReader]).
+// Прямое чтение value ключа (PeekLeaseHolder) — additive к leaderloop-протоколу,
+// он ключ не эксклюзивит на чтение.
+type clusterLeaderReaderAdapter struct{ rc *keeperredis.Client }
+
+func (a clusterLeaderReaderAdapter) ReaperLeaderHolder(ctx context.Context) (string, bool, error) {
+	return keeperredis.PeekLeaseHolder(ctx, a.rc, reaper.LeaderLeaseKey)
+}
+
+// clusterRegistryOrNil / clusterLeaderReaderOrNil — typed-nil-guard-ы cluster-view
+// зависимостей: возвращают nil-интерфейс (а не interface-обёртку над nil-клиентом)
+// при отсутствии Redis, чтобы NewServer корректно gated-off роут (nil-check).
+// Симметрично mcpSoulPresence.
+func clusterRegistryOrNil(d *daemon) handlers.ClusterRegistry {
+	if d.redisClient == nil {
+		return nil
+	}
+	return clusterRegistryAdapter{rc: d.redisClient}
+}
+
+func clusterLeaderReaderOrNil(d *daemon) handlers.ClusterLeaderReader {
+	if d.redisClient == nil {
+		return nil
+	}
+	return clusterLeaderReaderAdapter{rc: d.redisClient}
 }
 
 // mcpSoulPresence — presence-lease-чекер для Voyage command-резолвера на
@@ -5329,6 +5389,32 @@ func (d *daemon) setupReaper(ctx context.Context) error {
 			d.voyageReclaimer = reaper.NewVoyageReclaimer(d.pool, d.auditWriter, logger)
 		}
 
+		// CertRotator — реализация `rotate_due_certs` (cert-rotation Вар1).
+		// Требует Vault (PKI sign + KV write) и PG. Правило DEFAULT OFF (map-driven,
+		// требует явного enabled:true + осмысленного rotate_threshold) + обязательный
+		// dry_run — R1: авто-подмена боевого TLS без оператора опасна. nil Vault/pool
+		// → не собираем (правило деградирует warn-ом в dispatch). Политика
+		// (threshold/jitter/cap) читается из свежего keeper.yml snapshot на каждом
+		// тике (hot-reload через d.store.Get); PKI mount/role — cfg.Vault.PKI*.
+		var certRotator *reaper.CertRotator
+		if d.pool != nil && d.vc != nil {
+			certRotator = reaper.NewCertRotator(d.pool, reaper.CertRotatorDeps{
+				Signer: certPKISignerAdapter{vc: d.vc},
+				Vault:  d.vc,
+				CSRGen: func(cn string, dns []string) ([]byte, []byte, error) {
+					g, gerr := keepervault.GenerateServiceCSR(keepervault.CSRParams{CommonName: cn, DNSNames: dns})
+					if gerr != nil {
+						return nil, nil, gerr
+					}
+					return g.PrivateKeyPEM, g.CSRPEM, nil
+				},
+				Cfg:    func() reaper.CertRotatorConfig { return resolveCertRotatorConfig(d.store.Get(), logger) },
+				Audit:  d.auditWriter,
+				Logger: logger,
+				KID:    cfg.KID,
+			})
+		}
+
 		// OrphanEphemeralTidings — реализация `purge_orphan_ephemeral_tidings`
 		// (ADR-052(g) N2). Снос осиротевших ephemeral-Tiding-ов с grace после
 		// терминала Voyage. Зависит только от d.pool; правило map-driven (OFF без
@@ -5365,6 +5451,7 @@ func (d *daemon) setupReaper(ctx context.Context) error {
 			VoyageReclaim:          d.voyageReclaimer,
 			OrphanEphemeralTidings: orphanEphemeralTidingsPurger,
 			OrphanApplying:         orphanApplyingReconciler,
+			CertRotator:            certRotator,
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "keeper run: build reaper: %v\n", err)
@@ -5380,6 +5467,72 @@ func (d *daemon) setupReaper(ctx context.Context) error {
 		logger.Info("keeper run: reaper disabled in config")
 	}
 	return nil
+}
+
+// certPKISignerAdapter адаптирует *keepervault.Client к reaper.PKISigner:
+// vault.SignCSR возвращает *vault.SignedCertificate, reaper ждёт *reaper.SignedCert
+// (reaper не импортирует vault-пакет ради типа результата — см. rotate_certs.go).
+type certPKISignerAdapter struct{ vc *keepervault.Client }
+
+func (a certPKISignerAdapter) SignCSR(ctx context.Context, mount, role, csrPEM string) (*reaper.SignedCert, error) {
+	signed, err := a.vc.SignCSR(ctx, mount, role, csrPEM)
+	if err != nil {
+		return nil, err
+	}
+	return &reaper.SignedCert{
+		CertificatePEM: signed.CertificatePEM,
+		CAChainPEM:     signed.CAChainPEM,
+		SerialNumber:   signed.SerialNumber,
+		NotAfter:       signed.NotAfter,
+	}, nil
+}
+
+// resolveCertRotatorConfig извлекает политику `rotate_due_certs` из (возможно
+// nil) config-снимка (hot-reload на каждом тике). PKI mount/role — из
+// cfg.Vault.PKI* (тот же, что SoulSeed-подпись). threshold/jitter/cap — из
+// reaper.rules.rotate_due_certs. nil-cfg / отсутствие правила → пустой порог
+// (правило ничего не ротирует — safe default).
+// resolveCertRotatorConfig собирает политику правила rotate_due_certs из свежего
+// keeper.yml snapshot (вызывается на каждом тике — hot-reload). rotate_threshold/
+// rotate_jitter парсятся через config.ParseDuration (convention `<N>d`, как у всех
+// reaper-правил), НЕ через stdlib time.ParseDuration — иначе `30d` не распарсится,
+// Threshold схлопнется в 0 и правило МОЛЧА не будет ротировать при enabled:true
+// (тихий security-сбой). Невалидный формат не глотается: warn-лог + поле остаётся
+// нулевым (правило инертно), симметрично runDurationRule.
+func resolveCertRotatorConfig(cfg *config.KeeperConfig, logger *slog.Logger) reaper.CertRotatorConfig {
+	out := reaper.CertRotatorConfig{}
+	if cfg == nil {
+		return out
+	}
+	out.DefaultPKIMount = cfg.Vault.PKIMount
+	out.DefaultPKIRole = cfg.Vault.PKIRole
+	if cfg.Reaper == nil || cfg.Reaper.Rules == nil {
+		return out
+	}
+	rule, ok := cfg.Reaper.Rules["rotate_due_certs"]
+	if !ok {
+		return out
+	}
+	if rule.RotateThreshold != "" {
+		if d, err := config.ParseDuration(rule.RotateThreshold); err == nil {
+			out.Threshold = d
+		} else if logger != nil {
+			logger.Warn("reaper.rotate_due_certs: невалидный rotate_threshold, правило не ротирует",
+				slog.String("raw", rule.RotateThreshold), slog.Any("error", err))
+		}
+	}
+	if rule.RotateJitter != "" {
+		if d, err := config.ParseDuration(rule.RotateJitter); err == nil {
+			out.JitterWindow = d
+		} else if logger != nil {
+			logger.Warn("reaper.rotate_due_certs: невалидный rotate_jitter, разброс отключён",
+				slog.String("raw", rule.RotateJitter), slog.Any("error", err))
+		}
+	}
+	if rule.MaxRotationsPerTick != nil {
+		out.MaxRotationsPerTick = *rule.MaxRotationsPerTick
+	}
+	return out
 }
 
 // setupConductor — Conductor-loop (ADR-048): leader-elected исполнитель Cadence-

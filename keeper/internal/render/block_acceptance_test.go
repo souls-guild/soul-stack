@@ -141,31 +141,55 @@ func TestAcceptance_RestartBlockFanOut(t *testing.T) {
 	}
 }
 
-// redisSentinelResolver — минимальный DestinyResolver для apply:destiny: redis в
-// sentinel-acceptance: принимает apply:input sentinel-ветки (version/password/
-// config/users/sentinel_enabled/sentinel) через permissive-схему. Тело destiny
-// неважно (один module-шаг) — assert на ТАРГЕТ top-level REPLICAOF-задачи
-// sentinel.yml, а не на destiny-задачи.
+// redisSentinelResolver — минимальный DestinyResolver для apply:destiny в
+// sentinel-acceptance. Принимает apply:input sentinel-ветки redis (version/password/
+// config/users/sentinel_enabled/sentinel) через permissive-схему, а также ОБЯЗАТЕЛЬНЫЙ
+// мониторинг data-плоскости (Слайс I): create БЕЗУСЛОВНО (без when-гейта) добавляет
+// apply:destiny node-exporter/redis-exporter в конце → резолвер обязан их знать, иначе
+// render падает `unknown destiny node-exporter`. Тело destiny неважно (один синтетический
+// module-шаг) — assert на ТАРГЕТ top-level REPLICAOF-задачи sentinel.yml, не на destiny-задачи.
 type redisSentinelResolver struct{}
 
-func (redisSentinelResolver) Resolve(_ context.Context, name string) (*ResolvedDestiny, error) {
-	if name != "redis" {
-		return nil, errors.New("unknown destiny " + name)
-	}
+// syntheticDestiny — минимальный ResolvedDestiny с permissive Input-схемой и одним
+// module-шагом. Тело не важно для assert-ов sentinel-acceptance, важно лишь чтобы
+// apply:destiny разворачивался без снапшота на диске.
+func syntheticDestiny(name string, input config.InputSchemaMap) *ResolvedDestiny {
 	return &ResolvedDestiny{
-		Name: "redis",
+		Name: name,
 		Tasks: []config.Task{
-			{Name: "redis-step", Module: &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{}}},
+			{Name: name + "-step", Module: &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{}}},
 		},
-		Input: config.InputSchemaMap{
+		Input: input,
+	}
+}
+
+func (redisSentinelResolver) Resolve(_ context.Context, name string) (*ResolvedDestiny, error) {
+	switch name {
+	case "redis":
+		return syntheticDestiny("redis", config.InputSchemaMap{
 			"version":          {Type: "string"},
 			"password":         {Type: "string"},
 			"config":           {Type: "object", AdditionalProperties: true},
 			"users":            {Type: "object", AdditionalProperties: true},
 			"sentinel_enabled": {Type: "boolean"},
 			"sentinel":         {Type: "object", AdditionalProperties: true},
-		},
-	}, nil
+		}), nil
+	case "node-exporter":
+		return syntheticDestiny("node-exporter", config.InputSchemaMap{
+			"version": {Type: "string"},
+			"listen":  {Type: "string"},
+		}), nil
+	case "redis-exporter":
+		return syntheticDestiny("redis-exporter", config.InputSchemaMap{
+			"version":        {Type: "string"},
+			"sha256":         {Type: "string"},
+			"listen":         {Type: "string"},
+			"redis_user":     {Type: "string"},
+			"redis_password": {Type: "string"},
+		}), nil
+	default:
+		return nil, errors.New("unknown destiny " + name)
+	}
 }
 
 // TestAcceptance_SentinelReplicaExcludesMaster — ★ P0-РЕГРЕСС (master НЕ
@@ -240,6 +264,9 @@ func TestAcceptance_SentinelReplicaExcludesMaster(t *testing.T) {
 	engine, err := cel.New(cel.WithVault(stubKV{
 		"secret/redis/redis":                     {"password": "fixture-redis-pass-16+"},
 		"secret/redis/redis/users/default_admin": {"password": "fixture-admin-pass-16+"},
+		// Обязательный мониторинг (Слайс I): apply redis-exporter читает пароль
+		// ACL-юзера monitoring keeper-side (vault('secret/redis/<inc>/users/monitoring')).
+		"secret/redis/redis/users/monitoring": {"password": "fixture-monitoring-pass-16+"},
 	}))
 	if err != nil {
 		t.Fatalf("cel.New(WithVault): %v", err)

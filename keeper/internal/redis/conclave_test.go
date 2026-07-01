@@ -313,3 +313,64 @@ func TestLiveKIDs_TTLExpiryDropsDead(t *testing.T) {
 		t.Errorf("LiveKIDs after b expiry = %v, want [%s]", kids, testKIDa)
 	}
 }
+
+func TestReadInstanceMeta_ReturnsStoredValue(t *testing.T) {
+	c, _ := newClientMR(t)
+	ctx := context.Background()
+
+	if err := RegisterInstance(ctx, c, testKIDa, `{"started_at":"2026-07-01T00:00:00Z","kid":"keeper-eu-west-01"}`, 30*time.Second, false); err != nil {
+		t.Fatalf("RegisterInstance: %v", err)
+	}
+
+	meta, ok, err := ReadInstanceMeta(ctx, c, testKIDa)
+	if err != nil {
+		t.Fatalf("ReadInstanceMeta: %v", err)
+	}
+	if !ok {
+		t.Fatal("ReadInstanceMeta ok=false, want true (ключ существует)")
+	}
+	if meta != `{"started_at":"2026-07-01T00:00:00Z","kid":"keeper-eu-west-01"}` {
+		t.Errorf("meta = %q, want stored JSON", meta)
+	}
+}
+
+func TestReadInstanceMeta_MissingKey_NotOK(t *testing.T) {
+	c, _ := newClientMR(t)
+	ctx := context.Background()
+
+	meta, ok, err := ReadInstanceMeta(ctx, c, testKIDa)
+	if err != nil {
+		t.Fatalf("ReadInstanceMeta on missing key: %v", err)
+	}
+	if ok {
+		t.Errorf("ReadInstanceMeta ok=true on missing key (meta=%q), want false", meta)
+	}
+}
+
+func TestPeekLeaseHolder_ReturnsHolder(t *testing.T) {
+	c, mr := newClientMR(t)
+	ctx := context.Background()
+
+	mr.Set("reaper:leader", "keeper-us-east-01")
+
+	holder, ok, err := PeekLeaseHolder(ctx, c, "reaper:leader")
+	if err != nil {
+		t.Fatalf("PeekLeaseHolder: %v", err)
+	}
+	if !ok || holder != "keeper-us-east-01" {
+		t.Errorf("PeekLeaseHolder = (%q, %v), want (keeper-us-east-01, true)", holder, ok)
+	}
+}
+
+func TestPeekLeaseHolder_NoLeader_NotOK(t *testing.T) {
+	c, _ := newClientMR(t)
+	ctx := context.Background()
+
+	holder, ok, err := PeekLeaseHolder(ctx, c, "reaper:leader")
+	if err != nil {
+		t.Fatalf("PeekLeaseHolder on missing key: %v", err)
+	}
+	if ok {
+		t.Errorf("PeekLeaseHolder ok=true on missing key (holder=%q), want false (нет лидера)", holder)
+	}
+}

@@ -218,3 +218,28 @@ func newSoulHistoryReply(v handlers.SoulHistoryView) SoulHistoryReply {
 		Total:  v.Total,
 	}
 }
+
+// soulStatsReply — native 200-тело GET /v1/souls/stats (Souls Overview агрегат).
+// Оси by_status/by_transport/by_coven — map string→int (huma инлайнит как object с
+// additionalProperties:integer); все поля required (агрегат всегда полон, пустая
+// ось → пустой объект {}). transport-ключи by_transport — agent/ssh (домен), UI
+// маппит на pull/push-лейблы.
+type soulStatsReply struct {
+	ByStatus    map[string]int `json:"by_status"`
+	ByTransport map[string]int `json:"by_transport"`
+	ByCoven     map[string]int `json:"by_coven"`
+	Total       int            `json:"total"`
+	StaleCount  int            `json:"stale_count"`
+}
+
+// newSoulStatsReply проецирует доменный handlers.SoulStatsView в native. Карты
+// проброшены как есть (handler гарантирует non-nil → wire несёт `{}`, не `null`).
+func newSoulStatsReply(v handlers.SoulStatsView) soulStatsReply {
+	return soulStatsReply{
+		ByStatus:    v.ByStatus,
+		ByTransport: v.ByTransport,
+		ByCoven:     v.ByCoven,
+		Total:       v.Total,
+		StaleCount:  v.StaleCount,
+	}
+}

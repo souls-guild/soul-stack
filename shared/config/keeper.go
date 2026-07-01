@@ -1524,6 +1524,33 @@ type ReaperRule struct {
 	// нижней границы» (iterator-сортировка `last_drift_check_at NULLS FIRST`
 	// сама естественно даёт round-robin между incarnation-ами).
 	MinIntervalPerIncarnation string `yaml:"min_interval_per_incarnation,omitempty"`
+
+	// RotateThreshold — поле правила `rotate_due_certs` (cert-rotation Вар1): за
+	// сколько до not_after серт считается due (напр. "720h"). Прочие правила
+	// игнорируют. Пустая строка / нулевая duration → правило ничего не ротирует
+	// (защита: без порога сканировать нечего). Ось включения ротации — задать
+	// осмысленный порог + enabled:true.
+	RotateThreshold string `yaml:"rotate_threshold,omitempty"`
+
+	// RotateJitter — поле правила `rotate_due_certs`: ширина разброса
+	// эффективного порога (напр. "168h"), чтобы серты с одинаковым not_after не
+	// ротировались в один тик (anti-thundering-herd). Пустая/нулевая → без
+	// разброса.
+	RotateJitter string `yaml:"rotate_jitter,omitempty"`
+
+	// MaxRotationsPerTick — поле правила `rotate_due_certs`: потолок числа
+	// ротаций за один тик (anti-lavina при массовом истечении). `*int`, чтобы
+	// различить «не задано» (→ дефолт в CertRotator) от явного значения.
+	MaxRotationsPerTick *int `yaml:"max_rotations_per_tick,omitempty"`
+
+	// DryRun — per-rule R1-барьер правила `rotate_due_certs` (cert-rotation
+	// Вар1): авто-подмена боевого TLS без оператора опасна, поэтому боевая
+	// ротация НЕ должна включаться заодно с глобальным reaper.dry_run:false (тот
+	// разрешает боевой purge). `*bool` с семантикой default true: «не задано» →
+	// dry_run (ротация не идёт, первый прогон после enable — сухой); боевая
+	// ротация только при ЯВНОМ `dry_run: false`, независимо от reaper.dry_run.
+	// Прочие правила это поле игнорируют (у них dry_run глобальный).
+	DryRun *bool `yaml:"dry_run,omitempty"`
 }
 
 // KeeperPush — pilot wire-up SshDispatcher (S6, 2026-05-26, [ADR-032 amendment]).

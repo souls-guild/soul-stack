@@ -1,0 +1,43 @@
+name: monitoring-defaults-back-compat
+description: >
+  Инкарнация v12 развёрнута ДО ввода мониторинга — поля monitoring в state нет. Миграция
+  ДОБАВЛЯЕТ read-model monitoring с консервативным default: версии пустые ('' = не
+  развёрнуто), порты — конвенциональные :9100/:9121. Остальной state (redis_type/
+  redis_config/redis_users/tls/persistence/топология) проходит насквозь бит-в-бит.
+
+state_before:
+  redis_type: "sentinel"
+  redis_config:
+    maxmemory: "512mb"
+    appendonly: "yes"
+  redis_users:
+    - { name: "app", perms: "~* +@all", state: "on" }
+  tls:
+    enable: false
+    only: false
+    port: 0
+  persistence: "rdb"
+  memory_mb: 1024
+  shards: 0
+  replicas: 1
+
+state_after:
+  redis_type: "sentinel"
+  redis_config:
+    maxmemory: "512mb"
+    appendonly: "yes"
+  redis_users:
+    - { name: "app", perms: "~* +@all", state: "on" }
+  tls:
+    enable: false
+    only: false
+    port: 0
+  persistence: "rdb"
+  memory_mb: 1024
+  shards: 0
+  replicas: 1
+  monitoring:
+    node_exporter_version: ""
+    redis_exporter_version: ""
+    node_exporter_listen: ":9100"
+    redis_exporter_listen: ":9121"

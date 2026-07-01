@@ -160,6 +160,23 @@ type Deps struct {
 	// тем же Redis-клиентом, что и topology-резолверу (keeperredis.SoulsStreamAlive).
 	SoulPresence handlers.SoulPresence
 
+	// SoulStatsStaleFn — провайдер порога «протухшего» last_seen_at для
+	// stale_count в `GET /v1/souls/stats` (тот же mark_disconnected.stale_after
+	// Reaper-а). Функция читает СВЕЖИЙ конфиг (hot-reload) на каждом запросе,
+	// симметрично TempoVoyageCreateLimits. nil → регистрация подставляет дефолт
+	// (90s, parity reaper.defaultMarkDisconnectedStale) — валидно для unit-тестов.
+	SoulStatsStaleFn func() time.Duration
+
+	// ClusterRegistry / ClusterLeaderReader / SelfKID — зависимости `GET /v1/cluster`
+	// (HA-топология из Conclave + Reaper-лидер). Опциональны: при nil ClusterRegistry
+	// роут не монтируется (single-Keeper dev без Redis — cluster-view не нужен).
+	// Production-wire-up в `keeper run` передаёт обёртки над тем же Redis-клиентом,
+	// что у Conclave-renewal (keeperredis.LiveKIDs / ReadInstanceMeta /
+	// PeekLeaseHolder(reaper.LeaderLeaseKey)); SelfKID = soulstack.kid из конфига.
+	ClusterRegistry     handlers.ClusterRegistry
+	ClusterLeaderReader handlers.ClusterLeaderReader
+	SelfKID             string
+
 	// ScenarioRunner / ServiceRegistry — опциональны: при обоих non-nil
 	// `POST /v1/incarnations` запускает scenario `create` (production);
 	// при nil — Create остаётся stub-ом (insert row, без apply).
@@ -506,6 +523,17 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	incH := handlers.NewIncarnationHandler(deps.IncarnationDB, deps.ScenarioRunner, deps.ScenarioDestroyer, deps.ScenarioDrift, deps.ServiceRegistry, deps.ServiceLoader, deps.AuditWriter, deps.RBAC, logger)
 	soulH := handlers.NewSoulHandler(deps.SoulDB, deps.RBAC, deps.SoulPresence, logger)
 
+	// clusterH опционален: при nil ClusterRegistry `GET /v1/cluster` не монтируется
+	// (single-Keeper dev без Redis — cluster-view не нужен). self_health использует
+	// те же PG/Redis/Vault-pingers, что `/readyz` (health.Check — единый источник).
+	var clusterH *handlers.ClusterHandler
+	if deps.ClusterRegistry != nil {
+		clusterH = handlers.NewClusterHandler(
+			deps.ClusterRegistry, deps.ClusterLeaderReader,
+			health.Deps{PG: deps.PGPinger, Redis: deps.RedisPinger, Vault: deps.VaultPinger},
+			deps.SelfKID, logger)
+	}
+
 	// roleH опционален: при nil RBACSvc role.*-роуты не подключаются (Slice
 	// 1.5 прокидывает поле, production-wire-up в `keeper run` передаёт
 	// *rbac.Service). NewServer не требует RBACSvc — unit/integration-тесты
@@ -720,7 +748,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 		}
 	}
 
-	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, augurH, oracleH, pushH, pushProviderH, providerH, profileH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, heraldTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.LoginGuard, deps.LoginLimitCfg, logger)
+	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, augurH, oracleH, pushH, pushProviderH, providerH, profileH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, heraldTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.LoginGuard, deps.LoginLimitCfg, deps.SoulStatsStaleFn, clusterH, logger)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,

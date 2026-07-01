@@ -91,6 +91,10 @@
     # ssh_provider — input.provision.ssh_provider с фоллбэком на essence.provision_ssh_provider
     # (default-on: форма скрыта, оператор обычно НЕ задаёт → essence-дефолт teleport).
     ssh_provider: "${ default(input.provision.ssh_provider, essence.provision_ssh_provider) }"
+    # join_wait_timeout — потолок retry-ожидания join-а свежей VM в Teleport.
+    # input.provision.join_wait_timeout → essence.provision_join_wait_timeout → '15m'
+    # (симметрично await_timeout шага онбординга).
+    join_wait_timeout: "${ default(input.provision.join_wait_timeout, default(essence.provision_join_wait_timeout, '15m')) }"
     install:      true
   require:
     - provision

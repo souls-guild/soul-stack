@@ -25,14 +25,20 @@ func TestLoadServiceManifest_Golden(t *testing.T) {
 	if cfg.Name != "redis" {
 		t.Errorf("name: got %q want redis", cfg.Name)
 	}
-	if cfg.StateSchemaVersion != 12 {
-		t.Errorf("state_schema_version: got %d want 12", cfg.StateSchemaVersion)
+	if cfg.StateSchemaVersion != 13 {
+		t.Errorf("state_schema_version: got %d want 13", cfg.StateSchemaVersion)
 	}
-	if len(cfg.Destiny) != 1 {
-		t.Errorf("destiny len: got %d want 1", len(cfg.Destiny))
+	if len(cfg.Destiny) != 3 {
+		t.Errorf("destiny len: got %d want 3", len(cfg.Destiny))
 	}
 	if cfg.Destiny[0].Name != "redis" || cfg.Destiny[0].Ref != "v1.0.0" {
 		t.Errorf("destiny[0]: %#v", cfg.Destiny[0])
+	}
+	if cfg.Destiny[1].Name != "node-exporter" || cfg.Destiny[1].Ref != "v1.0.0" {
+		t.Errorf("destiny[1]: %#v", cfg.Destiny[1])
+	}
+	if cfg.Destiny[2].Name != "redis-exporter" || cfg.Destiny[2].Ref != "v1.0.0" {
+		t.Errorf("destiny[2]: %#v", cfg.Destiny[2])
 	}
 	if len(cfg.Modules) != 1 || cfg.Modules[0].Name != "community.redis" || cfg.Modules[0].Ref != "v1.0.0" {
 		t.Errorf("modules: %#v", cfg.Modules)

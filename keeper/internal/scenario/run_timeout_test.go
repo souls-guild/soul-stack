@@ -59,7 +59,7 @@ func hostTask() config.Task {
 // TestEffectiveRunTimeout_ProvisionExtends — РЕЗОЛВЕР-UNIT (главный guard этого
 // бага). План с refresh-эмиттером поднимает потолок до ceiling+deployBudget,
 // обычный план держит базу. Без расширения provision-прогон обрывался бы на
-// defaultRunTimeout (5m), раньше joinWait (6m) и await_timeout (до 30m).
+// defaultRunTimeout (5m), раньше joinWait (15m) и await_timeout (до 30m).
 func TestEffectiveRunTimeout_ProvisionExtends(t *testing.T) {
 	const ceiling = 30 * time.Minute // как config.DefaultMaxAwaitTimeout
 	ceilingFn := func() time.Duration { return ceiling }

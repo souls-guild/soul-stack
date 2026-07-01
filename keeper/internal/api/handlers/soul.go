@@ -553,6 +553,86 @@ type SoulListInput struct {
 // (handler-native T5d: element-схема SoulListView сводится на контрактную SoulListEntry).
 type SoulListReply = sharedapi.PagedResponse[SoulListView]
 
+// SoulStatsView — плоская доменная проекция 200-тела GET /v1/souls/stats (Souls
+// Overview UI). Карты «значение оси → число хостов»; ключи — RAW string домена
+// (status/transport в доменной форме). Transport — agent/ssh (НЕ pull/push):
+// UI сам маппит на pull/push-лейблы. Пустые оси → пустые (не nil) карты, чтобы
+// wire всегда нёс объект (а не null).
+type SoulStatsView struct {
+	ByStatus    map[string]int
+	ByTransport map[string]int
+	ByCoven     map[string]int
+	Total       int
+	StaleCount  int
+}
+
+// SoulStatsReply — результат [SoulHandler.StatsTyped]. Несёт доменную проекцию
+// агрегата; пакет api проецирует её в native wire-DTO.
+type SoulStatsReply struct {
+	Body SoulStatsView
+}
+
+// StatsTyped — доменная функция GET /v1/souls/stats: агрегат реестра souls в
+// границах Purview-scope оператора (тот же fail-closed scope-резолв, что и
+// ListTyped). staleThreshold — cutoff «протухшего» last_seen_at, приходит из
+// reaper.ResolveMarkDisconnectedStale (register-слой читает актуальный конфиг),
+// чтобы stale_count совпадал с disconnect-порогом Reaper-а.
+//
+// fail-closed (симметрично ListTyped): нет claims / nil-scoper / пустой Purview →
+// НУЛЕВОЙ агрегат (200, не 403) — не палим существование хостов вне scope.
+// Ошибки — *problemError (500 PG). Partial-scope (soulprint/state-измерения,
+// S3b-2b) деградирует в coven-агрегат: агрегат по scope-CTE НЕ применяет regex-
+// измерение (coven-pushdown), поэтому regex-scoped оператор увидит агрегат ТОЛЬКО
+// по coven-части своего Purview (строгое подмножество, never over-show) — то же
+// поведение, что offset-fast-path списка.
+func (h *SoulHandler) StatsTyped(ctx context.Context, claims *jwt.Claims, staleThreshold time.Duration) (SoulStatsReply, error) {
+	scope, ok := h.resolveListScopeForClaims(claims)
+	if !ok {
+		// fail-closed: scope не определён → нулевой агрегат, НЕ весь флот.
+		return SoulStatsReply{Body: emptySoulStatsView()}, nil
+	}
+	stats, err := soul.SelectStats(ctx, h.pool,
+		soul.ListScope{Covens: scope.Covens, Unrestricted: scope.Unrestricted},
+		staleThreshold)
+	if err != nil {
+		h.logger.Error("soul.stats: select failed", slog.Any("error", err))
+		return SoulStatsReply{}, &problemError{problem.New(problem.TypeInternalError, "", "souls stats failed")}
+	}
+	return SoulStatsReply{Body: soulStatsView(stats)}, nil
+}
+
+// soulStatsView проецирует доменный [soul.Stats] в плоский wire-view (typed-карты
+// осей → string-ключи). Инициализирует пустые карты как непустые, чтобы wire нёс
+// объект даже для пустой оси.
+func soulStatsView(s soul.Stats) SoulStatsView {
+	v := SoulStatsView{
+		ByStatus:    make(map[string]int, len(s.ByStatus)),
+		ByTransport: make(map[string]int, len(s.ByTransport)),
+		ByCoven:     make(map[string]int, len(s.ByCoven)),
+		Total:       s.Total,
+		StaleCount:  s.StaleCount,
+	}
+	for k, n := range s.ByStatus {
+		v.ByStatus[string(k)] = n
+	}
+	for k, n := range s.ByTransport {
+		v.ByTransport[string(k)] = n
+	}
+	for k, n := range s.ByCoven {
+		v.ByCoven[k] = n
+	}
+	return v
+}
+
+// emptySoulStatsView — нулевой агрегат (fail-closed): пустые (не nil) карты + нули.
+func emptySoulStatsView() SoulStatsView {
+	return SoulStatsView{
+		ByStatus:    map[string]int{},
+		ByTransport: map[string]int{},
+		ByCoven:     map[string]int{},
+	}
+}
+
 // ListTyped — извлечённая доменная функция GET /v1/souls (FULL-TYPED): scoped-видимость
 // (offset-fast-path либо keyset-режим, режим выбирает СЕРВЕР из Purview). fail-closed: нет
 // claims / nil-scoper / пустой Purview / битый regex → ПУСТОЙ список (200). Ошибки —

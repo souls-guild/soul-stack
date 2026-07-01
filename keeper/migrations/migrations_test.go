@@ -211,6 +211,10 @@ func TestEmbed_ContainsExpectedMigrations(t *testing.T) {
 		"090_incarnation_created_scenario_nullable.up.sql",
 		"091_extend_heralds_type.down.sql",
 		"091_extend_heralds_type.up.sql",
+		"092_create_warrant.down.sql",
+		"092_create_warrant.up.sql",
+		"093_create_purge_old_certs.down.sql",
+		"093_create_purge_old_certs.up.sql",
 	}
 	if len(names) != len(want) {
 		t.Fatalf("got %d files, want %d: %v", len(names), len(want), names)
@@ -2990,5 +2994,75 @@ func TestEmbed_TidingEphemeralPayload(t *testing.T) {
 		if !strings.Contains(dstr, frag) {
 			t.Errorf("072 down.sql missing %q; content: %.400s", frag, dstr)
 		}
+	}
+}
+
+// TestEmbed_WarrantTable — sanity на 092 (cert-rotation Вар1): реестр warrant
+// сервисных TLS-сертов инкарнаций с partial unique по (incarnation_id, kind)
+// WHERE status='active', CASCADE-FK на incarnation(name), CHECK на kind/status/
+// fingerprint-формате, индексами по not_after (ось скана Reaper) и status
+// (retention). down дропает таблицу.
+func TestEmbed_WarrantTable(t *testing.T) {
+	b, err := FS.ReadFile("092_create_warrant.up.sql")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	body := string(b)
+	for _, frag := range []string{
+		"CREATE TABLE warrant",
+		"cert_id                   UUID        PRIMARY KEY DEFAULT gen_random_uuid()",
+		"warrant_incarnation_fk",
+		"REFERENCES incarnation (name) ON DELETE CASCADE",
+		"warrant_kind_valid",
+		"kind IN ('cert', 'key', 'ca')",
+		"warrant_status_valid",
+		"status IN ('active', 'superseded', 'expired', 'rotating', 'failed')",
+		"warrant_fingerprint_format",
+		"warrant_active_by_incarnation_kind_idx",
+		"WHERE status = 'active'",
+		"warrant_not_after_idx",
+		"warrant_status_idx",
+		"auto_rotate               BOOLEAN     NOT NULL DEFAULT true",
+		"rotate_threshold_override INTERVAL",
+	} {
+		if !strings.Contains(body, frag) {
+			t.Errorf("092 up.sql missing %q; content head: %.400s", frag, body)
+		}
+	}
+	d, err := FS.ReadFile("092_create_warrant.down.sql")
+	if err != nil {
+		t.Fatalf("read down: %v", err)
+	}
+	if !strings.Contains(string(d), "DROP TABLE IF EXISTS warrant") {
+		t.Errorf("092 down.sql does not drop warrant; content: %.200s", d)
+	}
+}
+
+// TestEmbed_PurgeOldCertsFunction — sanity на 093 (R4, cert-rotation Вар1):
+// Reaper-правило `purge_old_certs(text[], interval, integer)` — DELETE warrant в
+// указанных статусах (superseded/expired/failed) с issued_at старше max_age;
+// active/rotating не трогает (statuses-фильтр). Parity purge_old_seeds (013).
+func TestEmbed_PurgeOldCertsFunction(t *testing.T) {
+	b, err := FS.ReadFile("093_create_purge_old_certs.up.sql")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	body := string(b)
+	for _, frag := range []string{
+		"CREATE OR REPLACE FUNCTION purge_old_certs(",
+		"DELETE FROM warrant",
+		"status = ANY(target_statuses)",
+		"issued_at < NOW() - max_age",
+	} {
+		if !strings.Contains(body, frag) {
+			t.Errorf("093 up.sql missing %q; content head: %.300s", frag, body)
+		}
+	}
+	d, err := FS.ReadFile("093_create_purge_old_certs.down.sql")
+	if err != nil {
+		t.Fatalf("read down: %v", err)
+	}
+	if !strings.Contains(string(d), "DROP FUNCTION IF EXISTS purge_old_certs(text[], interval, integer)") {
+		t.Errorf("093 down.sql does not drop purge_old_certs; content: %.200s", d)
 	}
 }

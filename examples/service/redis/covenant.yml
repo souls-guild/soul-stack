@@ -692,6 +692,19 @@ state_changes:
   # уходит в destiny apply.input). Из essence (host-инвариант, не операторский ввод).
   - set: sysctl_settings
     value: "${ default(essence.sysctl_settings, {}) }"
+  # monitoring: read-model ФАКТА развёрнутых экспортеров (Слайс I, симметрия install/tls
+  # read-model). Версии/порты — из essence.node_exporter_*/redis_exporter_* (те же значения,
+  # что уходят в apply.input двух destiny в create/main.yml). Пароль/юзер ACL-юзера monitoring
+  # в state НЕ хранятся (ИБ — они в Vault, как tls.*_ref). Дефолты дублируют essence/миграцию
+  # 012_to_013 (порты :9100/:9121 конвенциональны; версии — из essence-подложки).
+  - set: monitoring
+    value: >-
+      ${ {
+           'node_exporter_version':  default(essence.node_exporter_version, ''),
+           'redis_exporter_version': default(essence.redis_exporter_version, ''),
+           'node_exporter_listen':   default(essence.node_exporter_listen, ':9100'),
+           'redis_exporter_listen':  default(essence.redis_exporter_listen, ':9121')
+         } }
   # ── Топология (counts) ──────────────────────────────────────────────────────
   # shards/replicas/sentinel_quorum — из тех же input.*, что size-guard/cluster-build/
   # sentinel-ветки. shards — только cluster (не задан → 0). replicas — UNIFIED

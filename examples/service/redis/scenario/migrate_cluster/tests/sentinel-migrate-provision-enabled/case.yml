@@ -150,6 +150,9 @@ assert:
       params_subset:
         ssh_provider: ssh-wb
         install: true
+        # join_wait_timeout — из essence.provision_join_wait_timeout (input.provision его
+        # не задаёт). Guard: essence-дефолт доходит до шага (не хардкод), duration-строка.
+        join_wait_timeout: "15m"
         hosts:
           - { sid: vm-1.example.com, vm_id: i-aaa111, primary_ip: 10.0.0.1, bootstrap_token: tok-vm1 }
           - { sid: vm-2.example.com, vm_id: i-bbb222, primary_ip: 10.0.0.2, bootstrap_token: tok-vm2 }

@@ -1,0 +1,131 @@
+# L0-испытание create: ОБЯЗАТЕЛЬНЫЙ мониторинг data-плоскости (Слайс I, redis-пилот).
+# После deploy-ветки (sentinel/cluster) create БЕЗУСЛОВНО (без when-гейта) разворачивает
+# два экспортера КОМПОЗИЦИЕЙ переиспользуемых standalone-destiny через apply:destiny:
+#   - node-exporter  — метрики хоста (version/listen из essence, arch — soulprint.self);
+#   - redis-exporter — метрики Redis через unix-сокет, авторизуется ACL-юзером monitoring.
+#
+# Доказываем:
+#   1. node-exporter развёрнут: install бинаря в /usr/local/bin/node_exporter (маркер
+#      присутствия под-destiny; version/arch → в url/extract, тут не сверяем);
+#   2. redis-exporter развёрнут: его systemd-unit собран из vars, где
+#      redis_user=monitoring (★ находка B: ACL-инстанс без requirepass → без --redis.user
+#      exporter получит WRONGPASS), redis_addr=unix://<socket> и password — зарезолвленный
+#      keeper-side пароль ACL-юзера monitoring (secret/redis/<inc>/users/monitoring#password);
+#   3. read-model state.monitoring несёт зафиксированные версии/порты экспортеров (симметрия
+#      install/tls read-model); пароль/юзер в state НЕ материализуются (ИБ).
+#
+# Топология: sentinel, replicas_per_master=0 → 1 хост (size-guard PASS). provision выключен
+# (кейс деплоит на готовый roster). render_context.self = единственный хост (node-a).
+name: create deploys mandatory node and redis exporters after deploy with monitoring ACL user
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-a.example.com
+      covens: [create, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/create:
+      password: s3cr3t-redis-pass-create
+    secret/redis/create/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/create/users/replica:
+      password: replica-sys-secret-pass
+    # ★ пароль ACL-юзера monitoring — им авторизуется redis-exporter (проброс в unit).
+    secret/redis/create/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/create/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/create/users/haproxy:
+      password: haproxy-sys-secret-pass
+  essence:
+    redis_type: sentinel
+    sentinel_master_name: master
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    memory_reserve_percent: 75
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+    redis_config:
+      maxmemory:        "256mb"
+      maxmemory-policy: allkeys-lru
+      maxclients:       10000
+      timeout:          300
+    # ★ Новые essence-ключи мониторинга (Слайс I): версии/порты/sha экспортеров.
+    node_exporter_version: "1.8.2"
+    node_exporter_listen: ":9100"
+    redis_exporter_version: "1.62.0"
+    redis_exporter_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    redis_exporter_listen: ":9121"
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+
+  input:
+    provision:
+      enabled: false
+    redis_type: sentinel
+    version: "7.4.1"
+    replicas_per_master: 0
+
+assert:
+  task_present:
+    # 1. node-exporter развёрнут (apply:destiny node-exporter → install бинаря). Маркер
+    #    присутствия под-destiny: единственный core.file.present с path бинаря node_exporter.
+    - module: core.file.present
+      params_subset:
+        path: /usr/local/bin/node_exporter
+        mode: "0755"
+
+    # 2. redis-exporter развёрнут (apply:destiny redis-exporter → render systemd-unit).
+    #    ★ redis_user=monitoring — ключевой assert находки B (без него WRONGPASS на ACL).
+    #    redis_addr — unix-сокет (дефолт destiny), password — зарезолвленный keeper-side
+    #    пароль ACL-юзера monitoring. render_context сверяется ПОЛНОСТЬЮ (deep-compare
+    #    вложенного map): vars несёт все 6 файл-vars, self — единственный хост, essence
+    #    пуст (изоляция под-destiny, ADR-009). Дизамбигуатор от node_exporter unit — path.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/systemd/system/redis_exporter.service
+        template_content: "<present>"
+        mode: "0644"
+        owner: root
+        group: root
+        render_context:
+          vars:
+            bin_dir: /usr/local/bin
+            listen: ":9121"
+            redis_addr: "unix:///var/run/redis/redis-server.sock"
+            password: monitoring-sys-secret-pass
+            redis_user: monitoring
+            extra_args: []
+          self:
+            sid: node-a.example.com
+            covens: [create, redis]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.1
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+  state_changes:
+    redis_type: sentinel
+    redis_version: "7.4.1"
+    # read-model мониторинга: версии/порты экспортеров (симметрия install/tls). Пароль/юзер
+    # НЕ в state (ИБ) — их тут нет намеренно.
+    monitoring:
+      node_exporter_version: "1.8.2"
+      redis_exporter_version: "1.62.0"
+      node_exporter_listen: ":9100"
+      redis_exporter_listen: ":9121"

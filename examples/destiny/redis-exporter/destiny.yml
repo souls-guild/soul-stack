@@ -75,6 +75,23 @@ input:
       зарезолвленный пароль ИЛИ vault-ref: каскад — сервис передаёт vault-ref,
       резолв происходит Soul-side.
 
+  # ACL-username для авторизации redis_exporter (--redis.user=<user>). Требуется, когда
+  # Redis работает на ACL БЕЗ requirepass (default-user убран): без --redis.user exporter
+  # логинится под default-юзером и получает WRONGPASS. Дефолт '' — back-compat requirepass-
+  # модели (default-user + пароль в Environment, без флага --redis.user); пусто → флаг НЕ
+  # добавляется в ExecStart (условный рендер в шаблоне). При заданном значении exporter
+  # передаёт AUTH <user> <password>. Пароль по-прежнему в Environment=REDIS_PASSWORD (юзер
+  # в ExecStart не секретен). Pattern `*` пропускает пустую строку (дефолт) и валидные
+  # Redis-ACL-имена.
+  redis_user:
+    type: string
+    default: ""
+    pattern: "^[A-Za-z0-9._-]*$"
+    description: >-
+      ACL-username для авторизации redis_exporter (--redis.user). Пусто (дефолт) —
+      requirepass-модель (флаг опущен, default-user). Задан — AUTH под этим ACL-юзером
+      (нужно на ACL-инстансе без requirepass, иначе WRONGPASS).
+
   # Passthrough-канал для ЛЮБЫХ флагов redis_exporter сверх базовых --redis.addr
   # и --web.listen-address: дополнительные коллекторы (--check-keys=...,
   # --check-single-keys=...), TLS/basic-auth (--web.config.file=<path>), namespace

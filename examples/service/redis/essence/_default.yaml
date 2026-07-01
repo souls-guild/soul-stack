@@ -81,6 +81,30 @@ provision_profile:  redis-debian-12
 provision_await_timeout: "10m"
 # Имя SshProvider-плагина для доставки per-VM bootstrap-токена по SSH (core.bootstrap.delivered).
 provision_ssh_provider: teleport
+# Потолок ожидания появления свежесозданной VM в Teleport перед доставкой токена
+# (core.bootstrap.delivered, transport=teleport, retry-до-join; форма <N>{s|m|h}). reverse-
+# tunnel-агент на новой cloud-VM регистрируется в Teleport заметно позже типовых 3-5мин, поэтому
+# 15m с запасом. Фоллбэк для input.provision.join_wait_timeout.
+provision_join_wait_timeout: "15m"
+
+# ── Обязательный мониторинг data-плоскости: экспортеры метрик (Слайс I) ───────────
+# create БЕЗУСЛОВНО ставит node_exporter (метрики хоста) + redis_exporter (метрики Redis)
+# на КАЖДЫЙ хост incarnation (ПОСЛЕ deploy-ветки). Версии/порты/checksum — author-context
+# (НЕ operator-input, форма скрыта, контракт=A): оператор переопределяет в spec.essence.
+# compute гонит их в apply.input двух destiny (node-exporter/redis-exporter); arch каждая
+# destiny берёт сама из soulprint.self.os.arch. redis_exporter авторизуется ACL-юзером
+# monitoring (system_acl_users.monitoring, пароль генерится kv-present) — на ACL-инстансе
+# без requirepass без --redis.user был бы WRONGPASS (см. create/main.yml).
+node_exporter_version:  "1.8.2"
+node_exporter_listen:   ":9100"
+redis_exporter_version: "1.62.0"
+# checksum tarball-а redis_exporter (linux-<arch>, форма "sha256:<hex>", 64 hex).
+# core.url.fetched верифицирует его ДО публикации бинаря. ПЛЕЙСХОЛДЕР (нули): реальный
+# оператор ОБЯЗАН подставить checksum под свою пару (redis_exporter_version, arch) из
+# sha256sums GitHub-релиза oliver006/redis_exporter в spec.essence — иначе fail-closed
+# (несовпадение/pattern → честный отказ fetch). Смена версии/arch требует обновить checksum.
+redis_exporter_sha256:  "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+redis_exporter_listen:  ":9121"
 
 # ── Дефолты per-master директив Sentinel (подложка sentinel_master_settings) ─────
 # Нижний слой merge() для input.sentinel_master_settings (compute.sentinel_directives):

@@ -57,6 +57,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/push"
 	"github.com/souls-guild/soul-stack/keeper/internal/soulinstall"
 	"github.com/souls-guild/soul-stack/shared/audit"
+	"github.com/souls-guild/soul-stack/shared/config"
 
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 	"google.golang.org/grpc"
@@ -94,8 +95,12 @@ const (
 // существует на момент шага).
 const (
 	// defaultJoinWaitTimeout — потолок ожидания Teleport-join по умолчанию
-	// (опц. param `join_wait_timeout`). 6 мин с запасом над типовыми 3-5мин.
-	defaultJoinWaitTimeout = 6 * time.Minute
+	// (опц. param `join_wait_timeout`). 15 мин: reverse-tunnel-агент на свежей
+	// cloud-VM появляется в Teleport заметно позже типовых 3-5мин (медленный
+	// join → шаг падал зря, хотя VM в итоге поднималась), поэтому запас с большим
+	// margin. Инвариант: provision-aware run-timeout floor (ceiling+deployBudget)
+	// обязан превышать это значение — TestProvisionTimeoutExceedsJoinWait.
+	defaultJoinWaitTimeout = 15 * time.Minute
 	// DefaultJoinWaitTimeout — экспортированное зеркало defaultJoinWaitTimeout:
 	// делает дефолтный тайм-бюджет Teleport-join частью наблюдаемого контракта,
 	// чтобы статический guard-инвариант (provision-aware effective run-timeout
@@ -265,10 +270,8 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 	} else if ok && (n < 1 || n > 65535) {
 		errs = append(errs, "param \"ssh_port\": must be in 1..65535")
 	}
-	if n, ok, err := util.OptIntParam(req.Params, "join_wait_timeout"); err != nil {
+	if _, _, err := parseJoinWait(req.Params); err != nil {
 		errs = append(errs, err.Error())
-	} else if ok && n < 0 {
-		errs = append(errs, "param \"join_wait_timeout\": must be >= 0 (seconds)")
 	}
 	if _, _, err := util.OptBoolParam(req.Params, "start_soul"); err != nil {
 		errs = append(errs, err.Error())
@@ -335,13 +338,12 @@ func (m *Module) applyDelivered(req *pluginv1.ApplyRequest, stream grpc.ServerSt
 	if !hasStart {
 		startSoul = true // default: запускаем soul после доставки токена
 	}
-	joinWaitSec, hasJoinWait, err := util.OptIntParam(req.Params, "join_wait_timeout")
+	joinWait, hasJoinWait, err := parseJoinWait(req.Params)
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
-	joinWait := defaultJoinWaitTimeout
-	if hasJoinWait {
-		joinWait = time.Duration(joinWaitSec) * time.Second
+	if !hasJoinWait {
+		joinWait = defaultJoinWaitTimeout
 	}
 	install, _, err := util.OptBoolParam(req.Params, "install")
 	if err != nil {
@@ -638,6 +640,46 @@ func parseHosts(params *structpb.Struct) ([]hostInput, error) {
 		out = append(out, h)
 	}
 	return out, nil
+}
+
+// parseJoinWait читает опц. param `join_wait_timeout` в двух формах:
+//   - duration-строка convention `duration` Soul Stack (`"15m"`/`"90s"`/`"1d"`) —
+//     симметрично `await_timeout` у core.soul.registered; так его задаёт essence
+//     (`provision_join_wait_timeout`) через provision-сценарий;
+//   - число секунд (float64) — back-compat с ADR-063 (`int, секунды`).
+//
+// Возвращает (dur, ok, err): ok=false при отсутствии param (caller подставит
+// defaultJoinWaitTimeout). Отрицательное значение / невалидная строка — ошибка
+// (потолок ожидания не может быть отрицательным). 0 допустимо (немедленный
+// deadline: одна попытка без ожидания).
+func parseJoinWait(params *structpb.Struct) (time.Duration, bool, error) {
+	const key = "join_wait_timeout"
+	v, ok := params.GetFields()[key]
+	if !ok || v == nil {
+		return 0, false, nil
+	}
+	switch kind := v.Kind.(type) {
+	case *structpb.Value_StringValue:
+		d, err := config.ParseDuration(kind.StringValue)
+		if err != nil {
+			return 0, false, fmt.Errorf("param %q: invalid duration %q", key, kind.StringValue)
+		}
+		if d < 0 {
+			return 0, false, fmt.Errorf("param %q: must be >= 0", key)
+		}
+		return d, true, nil
+	case *structpb.Value_NumberValue:
+		f := kind.NumberValue
+		if f != float64(int64(f)) {
+			return 0, false, fmt.Errorf("param %q: expected integer seconds, got %v", key, f)
+		}
+		if f < 0 {
+			return 0, false, fmt.Errorf("param %q: must be >= 0 (seconds)", key)
+		}
+		return time.Duration(int64(f)) * time.Second, true, nil
+	default:
+		return 0, false, fmt.Errorf("param %q: expected duration string or integer seconds, got %T", key, v.Kind)
+	}
 }
 
 func hostFromStruct(s *structpb.Struct, idx int) (hostInput, error) {

@@ -16,6 +16,7 @@ package coremod
 
 import (
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/bootstrap"
+	"github.com/souls-guild/soul-stack/keeper/internal/coremod/cert"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/choir"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/cloud"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/soul"
@@ -95,6 +96,18 @@ type Deps struct {
 	// в тестовых сборках без choir-сценариев (модуль тогда не регистрируется).
 	ChoirStore choir.Store
 
+	// CertStore — warrant-CRUD adapter (cert-rotation Вар1, E1) для
+	// `core.cert.registered`: SelectActive + RegisterActive над `warrant`. Прод —
+	// cert.NewPGStore(pool). nil допустим в тестовых сборках без cert-регистрации
+	// (модуль тогда не регистрируется — как choir). Модуль читает cert-PEM из
+	// Vault (общий Deps.Vault) и извлекает метаданные сам, поэтому отдельного
+	// Vault-поля не требует.
+	CertStore cert.Store
+
+	// KID — идентификатор Keeper-инстанса, пробрасывается в
+	// `core.cert.registered` (warrant.issued_by_kid). Пустой → NULL в реестре.
+	KID string
+
 	// BootstrapTransport — режим доставки токена `core.bootstrap.delivered`
 	// (ADR-063 amendment): bootstrap.TransportDirect ("" → direct) или
 	// bootstrap.TransportTeleport. Источник — keeper.yml::push.transport.
@@ -137,12 +150,13 @@ type Deps struct {
 	Audit AuditWriter
 }
 
-// AuditWriter — общий тип для audit-пишущих модулей (cloud/vault/bootstrap);
+// AuditWriter — общий тип для audit-пишущих модулей (cloud/vault/bootstrap/cert);
 // всё совпадает с shared/audit.Writer.
 type AuditWriter interface {
 	cloud.AuditWriter
 	vault.AuditWriter
 	bootstrap.AuditWriter
+	cert.AuditWriter
 }
 
 // Default собирает Registry с keeper-side core-модулями: безусловно
@@ -169,6 +183,14 @@ func Default(d Deps) *Registry {
 	// тогда упадёт «unknown keeper-side module» (как любой не подключённый).
 	if d.ChoirStore != nil {
 		mods[choir.Name] = choir.New(d.ChoirStore)
+	}
+	// `core.cert.registered` (cert-rotation Вар1, E1) — регистрируется при
+	// наличии CertStore И Vault (модуль читает cert-PEM из Vault). nil любого —
+	// сборка без cert-регистрации (dev без Vault / без PG); шаг с этим адресом
+	// тогда упадёт «unknown keeper-side module». Симметрично условной
+	// регистрации core.choir.
+	if d.CertStore != nil && d.Vault != nil {
+		mods[cert.Name] = cert.New(d.Vault, d.CertStore, d.Audit, d.KID)
 	}
 	// `core.bootstrap.delivered` (ADR-063) — регистрируется при наличии нужного
 	// набора зависимостей; набор зависит от transport (ADR-063 amendment):

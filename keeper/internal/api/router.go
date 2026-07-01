@@ -3,6 +3,7 @@ package api
 import (
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -144,7 +145,7 @@ const (
 // Health/meta вынесены вне `/v1/*` по operator-api.md § Health / Meta.
 // chi.NotFound и chi.MethodNotAllowed заменены на problem+json-handlers,
 // чтобы 404/405 не приходили в text/plain default-формате stdlib.
-func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.OperatorHandler, incH *handlers.IncarnationHandler, soulH *handlers.SoulHandler, roleH *handlers.RoleHandler, synodH *handlers.SynodHandler, sigilH *handlers.SigilHandler, sigilKeyH *handlers.SigilKeyHandler, serviceH *handlers.ServiceHandler, provisioningPolicyH *handlers.ProvisioningPolicyHandler, augurH *handlers.AugurHandler, oracleH *handlers.OracleHandler, pushH *handlers.PushHandler, pushProviderH *handlers.PushProviderHandler, providerH *handlers.ProviderHandler, profileH *handlers.ProfileHandler, errandH *handlers.ErrandHandler, voyageH *handlers.VoyageHandler, cadenceH *handlers.CadenceHandler, auditH *handlers.AuditHandler, choirH *handlers.ChoirHandler, heraldH *handlers.HeraldHandler, moduleCatalogH *handlers.ModuleCatalogHandler, moduleFormPrepH *handlers.ModuleFormPrepHandler, permCatalogH *handlers.PermissionCatalogHandler, eventTypeCatalogH *handlers.EventTypeCatalogHandler, heraldTypeCatalogH *handlers.HeraldTypeCatalogHandler, meH *handlers.MyPermissionsHandler, enforcer RBACProvider, auditWriter audit.Writer, metricsHTTP *obs.HTTPMetrics, tollDegraded toll.DegradedReader, tempoLimiter apimiddleware.RateLimiter, tempoMetrics apimiddleware.RateLimitMetrics, tempoVoyageCreateLimits func() apimiddleware.RateLimitLimits, tempoVoyagePreviewLimits func() apimiddleware.RateLimitLimits, webUIEnabled bool, ldapAuth *LDAPAuthDeps, oidcAuth *OIDCAuthDeps, loginGuard apimiddleware.LoginGuard, loginLimitCfg apimiddleware.AuthLoginLimitConfig, logger *slog.Logger) http.Handler {
+func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.OperatorHandler, incH *handlers.IncarnationHandler, soulH *handlers.SoulHandler, roleH *handlers.RoleHandler, synodH *handlers.SynodHandler, sigilH *handlers.SigilHandler, sigilKeyH *handlers.SigilKeyHandler, serviceH *handlers.ServiceHandler, provisioningPolicyH *handlers.ProvisioningPolicyHandler, augurH *handlers.AugurHandler, oracleH *handlers.OracleHandler, pushH *handlers.PushHandler, pushProviderH *handlers.PushProviderHandler, providerH *handlers.ProviderHandler, profileH *handlers.ProfileHandler, errandH *handlers.ErrandHandler, voyageH *handlers.VoyageHandler, cadenceH *handlers.CadenceHandler, auditH *handlers.AuditHandler, choirH *handlers.ChoirHandler, heraldH *handlers.HeraldHandler, moduleCatalogH *handlers.ModuleCatalogHandler, moduleFormPrepH *handlers.ModuleFormPrepHandler, permCatalogH *handlers.PermissionCatalogHandler, eventTypeCatalogH *handlers.EventTypeCatalogHandler, heraldTypeCatalogH *handlers.HeraldTypeCatalogHandler, meH *handlers.MyPermissionsHandler, enforcer RBACProvider, auditWriter audit.Writer, metricsHTTP *obs.HTTPMetrics, tollDegraded toll.DegradedReader, tempoLimiter apimiddleware.RateLimiter, tempoMetrics apimiddleware.RateLimitMetrics, tempoVoyageCreateLimits func() apimiddleware.RateLimitLimits, tempoVoyagePreviewLimits func() apimiddleware.RateLimitLimits, webUIEnabled bool, ldapAuth *LDAPAuthDeps, oidcAuth *OIDCAuthDeps, loginGuard apimiddleware.LoginGuard, loginLimitCfg apimiddleware.AuthLoginLimitConfig, soulStatsStaleFn func() time.Duration, clusterH *handlers.ClusterHandler, logger *slog.Logger) http.Handler {
 	r := chi.NewRouter()
 
 	// huma error-override (ADR-054, FULL-TYPED): глобальный huma.NewError →
@@ -703,7 +704,15 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			r.With(
 				apimiddleware.RequireAction(enforcer, "soul", "list"),
 			).Group(func(r chi.Router) {
-				registerHumaSoulList(newHumaCadenceAPI(r), soulH)
+				soulListReadAPI := newHumaCadenceAPI(r)
+				registerHumaSoulList(soulListReadAPI, soulH)
+				// GET /v1/souls/stats — агрегат Souls Overview. Тот же existence-gate
+				// `RequireAction(soul, list)` и та же read-API-группа, что list/get:
+				// одно право чтения реестра (soul.list) покрывает и агрегат; scope-
+				// сужение делает handler (StatsTyped через тот же Purview-резолв, что
+				// список). staleFn — hot-reload-провайдер порога disconnect-а из
+				// свежего конфига (nil в unit-тестах → дефолт 90s).
+				registerHumaSoulStats(soulListReadAPI, soulH, soulStatsStaleFn)
 			})
 
 			// POST /v1/souls/coven — bulk coven-assign (ТЗ-пилот). Двухслойная
@@ -1080,6 +1089,21 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 		registerHumaEventTypesList(catalogAPI, eventTypeCatalogH)
 		registerHumaHeraldTypesList(catalogAPI, heraldTypeCatalogH)
 		registerHumaMyPermissionsList(catalogAPI, meH)
+
+		// GET /v1/cluster — HA-топология Keeper-кластера из Conclave (ADR-006 amend)
+		// + self-health текущего инстанса (Souls Overview UI). Read-only, без audit
+		// (паттерн health/meta + catalog). Existence-gate `RequireAction(soul, list)`:
+		// переиспользуем существующее право чтения реестра (нового не заводим) — тот,
+		// кому видны Souls, видит и инстансы кластера. clusterH nil (dev/тесты без
+		// Redis-wire-up) → роут не монтируется (register-func no-op). Собственная
+		// chi-группа с RBAC-гейтом; huma наследует middleware.
+		if clusterH != nil {
+			r.With(
+				apimiddleware.RequireAction(enforcer, "soul", "list"),
+			).Group(func(r chi.Router) {
+				registerHumaClusterGet(newHumaCadenceAPI(r), clusterH)
+			})
+		}
 
 		// /v1/augur — реестры Augur (omens / rites, ADR-025). Подключается
 		// только при non-nil augurH (Deps.AugurSvc прокинут). Selector —

@@ -88,6 +88,10 @@ func (f *fakePurger) PurgeOldSeeds(_ context.Context, statuses []string, maxAge 
 	return f.record("purge_old_seeds", maxAge, batchSize, statuses)
 }
 
+func (f *fakePurger) PurgeOldCerts(_ context.Context, statuses []string, maxAge time.Duration, batchSize int) (int64, error) {
+	return f.record("purge_old_certs", maxAge, batchSize, statuses)
+}
+
 func (f *fakePurger) MarkDisconnected(_ context.Context, staleAfter time.Duration, batchSize int) (int64, error) {
 	return f.record("mark_disconnected", staleAfter, batchSize, nil)
 }
@@ -493,25 +497,25 @@ func TestRunner_LeaseLost_StopsLoopAndReacquires(t *testing.T) {
 
 	// Ждём acquire.
 	waitFor(t, 500*time.Millisecond, func() bool {
-		v, _ := mr.Get(leaseKey)
+		v, _ := mr.Get(LeaderLeaseKey)
 		return v == "keeper-test-01"
 	})
 	callsBefore, _, _ := fp.snapshot()
 
 	// «Воруем» lease: подменяем значение → следующий Renew вернёт
 	// ErrLeaseLost, main-loop остановится, dispatch не должен расти.
-	mr.Set(leaseKey, "intruder")
+	mr.Set(LeaderLeaseKey, "intruder")
 
 	// Дадим времени renewal-goroutine отработать. renewEvery = lock_ttl/3
 	// = 100 ms; ждём 250 ms.
 	time.Sleep(250 * time.Millisecond)
 
 	// «Освобождаем» ключ, чтобы Runner смог пере-захватить.
-	mr.Del(leaseKey)
+	mr.Del(LeaderLeaseKey)
 
 	// Проверяем, что после потери lease Runner возвращается к acquire-у.
 	waitFor(t, 2*time.Second, func() bool {
-		v, _ := mr.Get(leaseKey)
+		v, _ := mr.Get(LeaderLeaseKey)
 		return v == "keeper-test-01"
 	})
 
@@ -567,8 +571,8 @@ func TestRunner_AcquireConflict_BlockedWhileHeld(t *testing.T) {
 	t.Cleanup(func() { _ = c.Close() })
 
 	// Захватываем lease извне — Runner должен попасть в backoff-loop.
-	mr.Set(leaseKey, "external-leader")
-	mr.SetTTL(leaseKey, 10*time.Second)
+	mr.Set(LeaderLeaseKey, "external-leader")
+	mr.SetTTL(LeaderLeaseKey, 10*time.Second)
 
 	fp := &fakePurger{}
 	rn, err := NewRunner(Deps{
@@ -587,7 +591,7 @@ func TestRunner_AcquireConflict_BlockedWhileHeld(t *testing.T) {
 	if c, _, _ := fp.snapshot(); c != 0 {
 		t.Errorf("Purger.calls = %d while lease held externally; want 0", c)
 	}
-	if v, _ := mr.Get(leaseKey); v != "external-leader" {
+	if v, _ := mr.Get(LeaderLeaseKey); v != "external-leader" {
 		t.Errorf("external lease was overwritten: got %q", v)
 	}
 }

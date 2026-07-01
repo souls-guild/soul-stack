@@ -80,6 +80,9 @@
       listen:     "${ input.listen }"
       redis_addr: "${ 'unix://' + input.redis_socket }"
       password:   "${ input.redis_password }"
+      # ACL-username (--redis.user): пусто → флаг опущен (requirepass-модель), задан →
+      # AUTH под этим юзером (ACL-инстанс без requirepass, иначе WRONGPASS).
+      redis_user: "${ input.redis_user }"
       # passthrough-флаги redis_exporter (--check-keys=..., --web.config.file=...
       # и пр.): уходят в шаблон списком, range дописывает каждый отдельным токеном
       # ExecStart. Вся ячейка = один ${…} → нативный список (ADR-010).

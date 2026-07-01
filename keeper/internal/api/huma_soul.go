@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-chi/chi/v5"
@@ -216,6 +217,35 @@ func registerHumaSoulList(humaAPI huma.API, soulH *handlers.SoulHandler) {
 	})
 }
 
+// registerHumaSoulStats монтирует GET /v1/souls/stats через huma (READ-агрегат, БЕЗ audit).
+// soulH nil → no-op. staleFn возвращает актуальный порог disconnect-а
+// (reaper.ResolveMarkDisconnectedStale над свежим конфигом — hot-reload) для
+// stale_count; nil → дефолт [defaultSoulStatsStale] (spec-dump / тесты без wire-up).
+// RBAC soul.list — на группе (та же, что list/get).
+func registerHumaSoulStats(humaAPI huma.API, soulH *handlers.SoulHandler, staleFn func() time.Duration) {
+	if soulH == nil {
+		return
+	}
+	huma.Register(humaAPI, soulStatsOperation(), func(ctx context.Context, _ *soulStatsInput) (*soulStatsOutput, error) {
+		stale := defaultSoulStatsStale
+		if staleFn != nil {
+			if d := staleFn(); d > 0 {
+				stale = d
+			}
+		}
+		reply, err := soulH.StatsTyped(ctx, claimsOrNil(ctx), stale)
+		if err != nil {
+			return nil, soulProblem(err)
+		}
+		return &soulStatsOutput{Body: newSoulStatsReply(reply.Body)}, nil
+	})
+}
+
+// defaultSoulStatsStale — fallback-порог stale_count, когда staleFn не задан
+// (spec-dump / unit-тесты). 90s — parity reaper.defaultMarkDisconnectedStale;
+// production-wire-up передаёт провайдер над свежим конфигом (hot-reload).
+const defaultSoulStatsStale = 90 * time.Second
+
 // registerHumaSoulGet монтирует GET /v1/souls/{sid} через huma (READ-with-path, БЕЗ audit).
 func registerHumaSoulGet(humaAPI huma.API, soulH *handlers.SoulHandler) {
 	if soulH == nil {
@@ -396,6 +426,7 @@ func HumaSoulSpecYAML() (string, error) {
 		registerHumaSoulSshTarget(api, stub)
 		registerHumaSoulExec(api, handlers.ErrandSpecStub())
 		registerHumaSoulList(api, stub)
+		registerHumaSoulStats(api, stub, nil)
 		registerHumaSoulGet(api, stub)
 		registerHumaSoulSoulprint(api, stub)
 		registerHumaSoulHistory(api, stub)

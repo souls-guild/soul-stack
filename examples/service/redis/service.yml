@@ -1,5 +1,5 @@
 name: redis
-state_schema_version: 12
+state_schema_version: 13
 description: >-
   Redis по концепции Ansible-роли: ОДИН сервис на режимы развёртывания
   (redis_type ∈ sentinel/cluster). Per-host install + render redis.conf делает
@@ -96,6 +96,14 @@ description: >-
 #     settings={} (глобальные sentinel) — зеркало input.sentinel_master_settings; старые
 #     листы удаляются (delete). cluster (redis_sentinel {}) — sentinel-ветка no-op.
 #     Forward-only (down: нет; восстановление — state_history).
+#   - 011_to_012 (migrations/011_to_012.yml): вынос install + host-layout (conf_dir/
+#     data_dir/modules_base_url) из state в essence (Вариант A) — четыре delete (no-op на
+#     инкарнациях без полей).
+#   - 012_to_013 (migrations/012_to_013.yml): обязательный мониторинг data-плоскости
+#     (Слайс I). state ДОПОЛНЯЕТСЯ read-model monitoring (версии/listen node_exporter+
+#     redis_exporter; симметрия install/tls). Существующим v12 — консервативный default
+#     (версии '', порты :9100/:9121). ОДИН плоский set с has()-guard на объект (зеркало
+#     008_to_009 seeded_from). Пароль/юзер monitoring в state НЕ хранятся (ИБ).
 # incarnation.state фиксирует, что развёрнуто, чтобы оператор видел инсталляцию и
 # повторный apply был idempotent.
 #
@@ -193,6 +201,24 @@ state_schema:
       type: object
       additionalProperties:
         type: string
+
+    # ── Мониторинг data-плоскости (read-model, v13, Слайс I) ──────────────────
+    # ФАКТ развёрнутых экспортеров метрик: create БЕЗУСЛОВНО ставит node_exporter +
+    # redis_exporter на каждый хост (ПОСЛЕ deploy). Версии/listen-порты — из essence
+    # (node_exporter_*/redis_exporter_*, те же значения, что ушли в apply.input двух
+    # destiny). Симметрия install/tls read-model: оператор видит, что развёрнуто, и
+    # повторный apply идемпотентен. Пароль/юзер ACL-юзера monitoring СЮДА НЕ пишутся —
+    # они в Vault (secret/redis/<inc>/users/monitoring), как tls.*_ref (ИБ). Для
+    # v≤12-инкарнаций (мониторинг ещё не развёрнут) — консервативный default: версии ''
+    # (best-effort как memory_mb/io_threads), порты :9100/:9121 (012_to_013).
+    monitoring:
+      type: object
+      additionalProperties: false
+      properties:
+        node_exporter_version:  { type: string }
+        redis_exporter_version: { type: string }
+        node_exporter_listen:   { type: string }
+        redis_exporter_listen:  { type: string }
 
     # ── cloud-provision read-model (v7–v8, ADR-061) ───────────────────────────
     # ФАКТ «эти хосты подняты нашим create-прогоном через cloud-create». Заполняется
@@ -323,8 +349,14 @@ state_schema:
 # Резолв git-URL — гибрид (docs/keeper/config.md::default_destiny_source):
 # запись без git: → default_destiny_source + {name}; с git: → override.
 # `redis` — режим-агностичный standalone-кирпич в examples/destiny/redis/.
+# node-exporter/redis-exporter — переиспользуемые standalone-destiny экспортеров
+# (examples/destiny/), разворачиваются apply:destiny обязательным шагом мониторинга в
+# конце create (Слайс I). arch каждая берёт из soulprint.self; redis-exporter
+# авторизуется ACL-юзером monitoring через новый input redis_user.
 destiny:
   - { name: redis, ref: v1.0.0 }
+  - { name: node-exporter, ref: v1.0.0 }
+  - { name: redis-exporter, ref: v1.0.0 }
 
 # Custom-модули сервиса. Двухуровневая форма <namespace>.<module> (kebab-case)
 # обязательна (docs/service/manifest.md → modules[]). community.redis — ОСНОВНОЙ

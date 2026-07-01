@@ -34,10 +34,12 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// leaseKey — Redis-ключ для лидерства Reaper-а. Зафиксирован в
+// LeaderLeaseKey — Redis-ключ лидерства Reaper-а. Зафиксирован в
 // docs/keeper/reaper.md и не выносится в конфиг — это инвариант кластера
-// (одно правило = один ключ, изменение требует ADR-update).
-const leaseKey = "reaper:leader"
+// (одно правило = один ключ, изменение требует ADR-update). Экспортирован,
+// чтобы `GET /v1/cluster` мог прочитать holder-а лидера (value ключа = KID
+// текущего Reaper-лидера) без дублирования литерала.
+const LeaderLeaseKey = "reaper:leader"
 
 // Дефолты на случай пустых полей в keeper.yml (parser оставляет zero-value).
 // Совпадают с docs/keeper/reaper.md (Конфиг).
@@ -55,7 +57,12 @@ const (
 	defaultPurgeUsedTokensMaxAge    = 90 * 24 * time.Hour
 	defaultPurgeSoulsMaxAge         = 30 * 24 * time.Hour
 	defaultPurgeOldSeedsMaxAge      = 90 * 24 * time.Hour
-	defaultMarkDisconnectedStale    = 90 * time.Second
+	// Retention истории ротаций сервисных сертов (`purge_old_certs`, R4,
+	// cert-rotation Вар1). 90d — parity defaultPurgeOldSeedsMaxAge (тот же класс
+	// «история cert-материала», сохраняем след ротаций достаточно долго для
+	// разбора инцидентов).
+	defaultPurgeOldCertsMaxAge   = 90 * 24 * time.Hour
+	defaultMarkDisconnectedStale = 90 * time.Second
 	defaultPurgeApplyRunsMaxAge     = 30 * 24 * time.Hour
 
 	// Retention истории Voyage-прогонов (`purge_voyages`, ADR-046 §79). 30d
@@ -121,6 +128,10 @@ const (
 var (
 	defaultPurgeSoulsStatuses    = []string{"disconnected", "expired"}
 	defaultPurgeOldSeedsStatuses = []string{"superseded", "expired", "revoked"}
+	// purge_old_certs (R4): active/rotating НЕ трогаем (живой материал / серт в
+	// ротации). superseded — заменённый ротацией, expired — просроченный, failed
+	// — упавшая ротация (осевшая вне active).
+	defaultPurgeOldCertsStatuses = []string{"superseded", "expired", "failed"}
 )
 
 // PurgerAPI — узкий интерфейс, который дёргает Runner. Сужение для
@@ -132,6 +143,7 @@ type PurgerAPI interface {
 	PurgeUsedTokens(ctx context.Context, maxAge time.Duration, batchSize int) (int64, error)
 	PurgeSouls(ctx context.Context, statuses []string, maxAge time.Duration, batchSize int) (int64, error)
 	PurgeOldSeeds(ctx context.Context, statuses []string, maxAge time.Duration, batchSize int) (int64, error)
+	PurgeOldCerts(ctx context.Context, statuses []string, maxAge time.Duration, batchSize int) (int64, error)
 	MarkDisconnected(ctx context.Context, staleAfter time.Duration, batchSize int) (int64, error)
 	PurgeApplyRuns(ctx context.Context, maxAge time.Duration, batchSize int) (int64, error)
 	PurgeVoyages(ctx context.Context, maxAge time.Duration, batchSize int) (int64, error)
@@ -260,6 +272,16 @@ type Deps struct {
 	// [NewEphemeralTidingsPurger] поверх d.pool.
 	OrphanEphemeralTidings *EphemeralTidingsPurger
 
+	// CertRotator — зависимость правила `rotate_due_certs` (cert-rotation Вар1).
+	// Централизованная ротация истекающих сервисных сертов: скан warrant по
+	// not_after (jitter) → csrgen (R2) → Vault PKI sign → WriteKV → supersede+
+	// insert warrant → спавн Voyage(rotate_tls). Правило DEFAULT OFF (map-driven,
+	// требует явного enabled:true в reaper.rules) + обязательный dry_run. nil →
+	// правило деградирует с warn-ом (нет Vault/PKI/PG — dev-сборка). Production
+	// wire-up передаёт [*CertRotator] из [NewCertRotator] (Vault-signer+writer+
+	// csrgen).
+	CertRotator *CertRotator
+
 	// OrphanApplying — зависимость правила `reconcile_orphan_applying` (ADR-027
 	// amend (m)). Снимает осиротевший applying-lock инкарнации от прямого
 	// (standalone, не под Voyage) scenario-run крашнувшегося Keeper-владельца:
@@ -336,7 +358,7 @@ func NewRunner(d Deps) (*Runner, error) {
 // interval/lock_ttl — через intervalFn/lockTTLFn поверх атомарного cfg-кэша.
 func (r *Runner) Run(ctx context.Context) error {
 	loop, err := leaderloop.New(leaderloop.Config{
-		LeaseKey:       leaseKey,
+		LeaseKey:       LeaderLeaseKey,
 		Holder:         r.deps.Holder,
 		Redis:          r.deps.Redis,
 		Logger:         r.deps.Logger,
@@ -431,6 +453,36 @@ func (r *Runner) dispatch(ctx context.Context, cfg *config.KeeperConfig) {
 			r.runStatusesRule(ctx, name, rule.Statuses, defaultPurgeOldSeedsStatuses,
 				rule.MaxAge, defaultPurgeOldSeedsMaxAge, batchSize, dryRun,
 				r.deps.Purger.PurgeOldSeeds)
+		case "purge_old_certs":
+			// Retention истории ротаций сервисных сертов (R4, cert-rotation Вар1):
+			// warrant в superseded/expired/failed старше max_age → DELETE;
+			// active/rotating не трогаются (statuses-фильтр). map-driven (OFF без
+			// явного enabled:true). Parity purge_old_seeds.
+			r.runStatusesRule(ctx, name, rule.Statuses, defaultPurgeOldCertsStatuses,
+				rule.MaxAge, defaultPurgeOldCertsMaxAge, batchSize, dryRun,
+				r.deps.Purger.PurgeOldCerts)
+		case "rotate_due_certs":
+			// Централизованная ротация истекающих сервисных сертов (cert-rotation
+			// Вар1): скан warrant по not_after (jitter) → csrgen (R2) → Vault PKI
+			// sign → WriteKV → supersede+insert warrant → спавн Voyage(rotate_tls).
+			// DEFAULT OFF (map-driven — попадаем сюда только при явном enabled:true).
+			// R1-барьер: авто-подмена боевого TLS без оператора опасна, поэтому
+			// dry_run у этого правила ПЕРСОНАЛЬНЫЙ (default true) и НЕ наследует
+			// глобальный reaper.dry_run — иначе оператор с reaper.dry_run:false (для
+			// боевого purge) молча получил бы боевую ротацию. Боевая ротация только
+			// при явном rotate_due_certs.dry_run:false. nil CertRotator → правило
+			// деградирует с warn-ом (нет Vault/PKI/PG). Политика (threshold/jitter/
+			// cap) — в самом CertRotator.cfg() из keeper.yml, не в общем
+			// ReaperRule.MaxAge; здесь передаём формальный duration-аргумент (в
+			// предикат не входит, parity reclaim-правил).
+			if r.deps.CertRotator == nil {
+				r.deps.Logger.Warn("reaper: rotate_due_certs пропущено — CertRotator не сконфигурирован",
+					slog.String("rule", name))
+				continue
+			}
+			certDryRun := rule.DryRun == nil || *rule.DryRun
+			r.runDurationRule(ctx, name, rule.MaxAge, defaultReclaimVoyagesLease, batchSize, certDryRun,
+				r.deps.CertRotator.Run)
 		case "mark_disconnected":
 			r.runDurationRule(ctx, name, rule.StaleAfter, defaultMarkDisconnectedStale, batchSize, dryRun,
 				r.deps.Purger.MarkDisconnected)

@@ -171,6 +171,12 @@ var pathAllowlist = map[route]string{
 	{method: http.MethodGet, path: "/v1/tidings/{name}"}:    "ADR-052 Tiding get: роут подключён ТОЛЬКО при non-nil heraldH",
 	{method: http.MethodPut, path: "/v1/tidings/{name}"}:    "ADR-052 Tiding update: роут подключён ТОЛЬКО при non-nil heraldH",
 	{method: http.MethodDelete, path: "/v1/tidings/{name}"}: "ADR-052 Tiding delete: роут подключён ТОЛЬКО при non-nil heraldH",
+
+	// GET /v1/cluster — HA-топология из Conclave: роут подключён ТОЛЬКО при non-nil
+	// clusterH (Redis-wire-up); drift-test собирает router с clusterH=nil, поэтому
+	// в спеке объявлен, но в роутере отсутствует — документированный «opt-in»-блок
+	// (паттерн voyageH/cadenceH).
+	{method: http.MethodGet, path: "/v1/cluster"}: "ADR-006 Cluster overview: роут подключён ТОЛЬКО при non-nil clusterH (production-wire-up над Redis-Conclave)",
 }
 
 // collectRoutes собирает фактические `(method, path)` из chi-дерева через
@@ -223,6 +229,8 @@ func collectRoutes(t *testing.T) map[route]struct{} {
 		nil,                                  // oidcAuth (OIDC не сконфигурирован в тесте)
 		nil,                                  // loginGuard (anti-bruteforce off в тесте)
 		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
+		nil,                                  // soulStatsStaleFn (дефолт 90s в тесте)
+		nil,                                  // clusterH (cluster-view не монтируется в тесте)
 		nil,                                  // logger — допустим nil (handler-ы получают io.Discard внутри)
 	)
 

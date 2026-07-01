@@ -1,0 +1,33 @@
+from_version: 12
+to_version: 13
+
+description: >-
+  state_schema v12 → v13: обязательный мониторинг data-плоскости (Слайс I, redis-пилот).
+  state ДОПОЛНЯЕТСЯ read-model-объектом monitoring — зафиксированные версии и listen-порты
+  экспортеров (node_exporter + redis_exporter), развёрнутых create-прогоном (симметрия
+  install/tls read-model). Пароль/юзер ACL-юзера monitoring в state НЕ хранятся (ИБ —
+  они в Vault, как tls.*_ref).
+
+  Forward-only (down: не поддерживается; восстановление — через state_history).
+  Существующие v12-инкарнации развёрнуты ДО ввода мониторинга (экспортеров ещё нет) →
+  консервативный default: версии пустые (''  = «не развёрнуто», best-effort как memory_mb/
+  io_threads в 002_to_003/010_to_011), порты — конвенциональные дефолты :9100/:9121
+  (стандартные listen node_exporter/redis_exporter, не зависят от факта развёртывания;
+  следующий create перезапишет их значениями из essence). ОДИН плоский set с has()-guard
+  на ВЕСЬ объект (CEL-map-литерал-дефолт): monitoring уже есть → сохраняется как есть
+  (идемпотентность повторного прогона), иначе ставится default. Зеркало объект-guard-а
+  008_to_009 (seeded_from). Остальной state (redis_config/redis_users/tls/namedfields/
+  топология) НЕ трогается.
+
+transform:
+  - set:
+      path: state.monitoring
+      value: >-
+        ${ has(state.monitoring)
+             ? state.monitoring
+             : {
+                 'node_exporter_version':  '',
+                 'redis_exporter_version': '',
+                 'node_exporter_listen':   ':9100',
+                 'redis_exporter_listen':  ':9121'
+               } }

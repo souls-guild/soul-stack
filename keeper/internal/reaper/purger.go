@@ -186,6 +186,21 @@ func (p *Purger) PurgeOldSeeds(ctx context.Context, statuses []string, maxAge ti
 	return p.callStatusesIntervalBatch(ctx, "purge_old_seeds", statuses, maxAge, batchSize)
 }
 
+// PurgeOldCerts удаляет batch строк реестра `warrant` (миграция 092) в
+// указанных `statuses` (default `[superseded, expired, failed]`) с `issued_at`
+// старше `maxAge`. Retention растущей истории ротаций сервисных сертов (R4,
+// cert-rotation Вар1). Active/rotating исключены через statuses-фильтр (живой
+// материал / серт в процессе ротации).
+//
+// `statuses` обязательно непустой — без фильтра DELETE снёс бы активные серты.
+// Parity PurgeOldSeeds; SQL-функция `purge_old_certs` (093).
+func (p *Purger) PurgeOldCerts(ctx context.Context, statuses []string, maxAge time.Duration, batchSize int) (int64, error) {
+	if len(statuses) == 0 {
+		return 0, fmt.Errorf("reaper.purge_old_certs: statuses must be non-empty")
+	}
+	return p.callStatusesIntervalBatch(ctx, "purge_old_certs", statuses, maxAge, batchSize)
+}
+
 // PurgeApplyRuns удаляет batch завершённых apply-прогонов из реестра
 // `apply_runs` (миграция 018) с `finished_at` старше `maxAge`. Default
 // `maxAge` = 30d (docs/keeper/reaper.md).
