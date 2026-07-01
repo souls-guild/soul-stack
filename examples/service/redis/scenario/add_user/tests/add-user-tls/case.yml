@@ -56,6 +56,10 @@ fixtures:
   vault:
     secret/redis/add_user:
       password: addusr-redis-pass-16ch
+    # ★ РЕДИЗАЙН default_admin: системный admin-юзер — пароль из ветки users/default_admin
+    # (masterauth-долив в config + AUTH community.redis.acl по TLS).
+    secret/redis/add_user/users/default_admin:
+      password: default-admin-secret-pass
     secret/redis/add_user/users/alice:
       password: alice-user-secret-pass
     secret/services/redis/tls:
@@ -91,7 +95,9 @@ assert:
     - module: community.redis.acl
       params_subset:
         addr: "127.0.0.1:7379"
-        password: addusr-redis-pass-16ch
+        # ★ РЕДИЗАЙН default_admin: AUTH под default_admin (username + его Vault-пароль).
+        username: default_admin
+        password: default-admin-secret-pass
         tls: true
         tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
 

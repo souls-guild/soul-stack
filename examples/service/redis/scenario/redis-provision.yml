@@ -25,7 +25,11 @@
 #   который тело читает, С ТОЙ ЖЕ СЕМАНТИКОЙ:
 #       input.provision.{enabled, provider, profile, await_timeout, ssh_provider}
 #       input.redis_type   input.shards   input.replicas_per_master
-#       incarnation.name   essence.provision_await_timeout
+#       incarnation.name
+#       essence.provision_{provider, profile, await_timeout, ssh_provider}
+#   provider/profile/await_timeout/ssh_provider читаются как default(input.provision.X,
+#   essence.provision_X) — оператор может опустить их (форма provision скрыта, default-on),
+#   тогда берётся essence-дефолт. Инклудящий ОБЯЗАН нести соответствующие essence.provision_*.
 #   Шаги (б)/(в) читают register.provision.hosts — register ПЕРВОГО шага (а)
 #   core.cloud.created (он создаётся ЗДЕСЬ). Пропуск/переименование любого input-поля в
 #   инклудящем НЕ ловится статически (cross-file дрейф невидим soul-lint) — проявится
@@ -53,8 +57,12 @@
   module: core.cloud.created
   register: provision
   params:
-    provider: "${ input.provision.provider }"
-    profile:  "${ input.provision.profile }"
+    # provider/profile — input.provision.X с фоллбэком на essence.provision_X (default-on:
+    # форма provision скрыта, оператор обычно НЕ задаёт provider/profile → essence-дефолт).
+    # ★ TODO: prod/dev provider switch (ENV keeper / Coven-overlay) — отдельный ADR. Сейчас
+    # одна статичная essence-пара (прод); переключение окружения НЕ реализовано.
+    provider: "${ default(input.provision.provider, essence.provision_provider) }"
+    profile:  "${ default(input.provision.profile, essence.provision_profile) }"
     # count = размер кластера по топологии: cluster shards*(1+replicas); sentinel 1+replicas.
     # int() унифицирует числовой тип (YAML→uint64 в L0, JSON→double в проде). ОДНОСТРОЧНЫЙ
     # quoted-string (НЕ block-scalar `>-`): goccy парсит block-scalar как LiteralNode, а
@@ -78,7 +86,9 @@
   module: core.bootstrap.delivered
   params:
     hosts:        "${ register.provision.hosts }"
-    ssh_provider: "${ input.provision.ssh_provider }"
+    # ssh_provider — input.provision.ssh_provider с фоллбэком на essence.provision_ssh_provider
+    # (default-on: форма скрыта, оператор обычно НЕ задаёт → essence-дефолт teleport).
+    ssh_provider: "${ default(input.provision.ssh_provider, essence.provision_ssh_provider) }"
     install:      true
   require:
     - provision

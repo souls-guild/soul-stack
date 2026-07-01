@@ -29,9 +29,12 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.9 }
         os: { arch: amd64 }
+  # ★ РЕДИЗАЙН default_admin (2026-06-30): коннект к нодам — под системным default_admin
+  # (PING-gate + CLUSTER MEET + masterauth деплоя читают его пароль). Прежний главный
+  # секрет secret/redis/<inc>#password ДРОПНУТ — ветка users/default_admin.
   vault:
-    secret/redis/add_node:
-      password: s3cr3t-redis-pass-addnode
+    secret/redis/add_node/users/default_admin:
+      password: default-admin-secret-pass
   state:
     redis_type: cluster
     redis_version: ""
@@ -79,6 +82,12 @@ assert:
               - /var/lib/redis/modules/redisearch.so
               - /var/lib/redis/modules/redistimeseries.so
             config:
+              # ★ РЕДИЗАЙН default_admin: masteruser/masterauth ДОЛИВАЮТСЯ поверх
+              # incarnation.state.redis_config обычными директивами (config-merge add_node) —
+              # статическая replica→master AUTH (нода может войти репликой). masterauth —
+              # пароль системного default_admin из Vault (users/default_admin#password).
+              masteruser: "default_admin"
+              masterauth: "default-admin-secret-pass"
               maxmemory: "256mb"
               cluster-enabled: "yes"
               cluster-config-file: "nodes.conf"
@@ -102,7 +111,8 @@ assert:
     - module: community.redis.command
       params_subset:
         addr: "127.0.0.1:6379"
-        password: s3cr3t-redis-pass-addnode
+        username: default_admin
+        password: default-admin-secret-pass
         args: ["PING"]
 
     # ADD-NODE run_once: endpoint-ы из roster по SID. master.addr пуст (авто-выбор
@@ -112,7 +122,8 @@ assert:
       params_subset:
         action: add-node
         role: replica
-        password: s3cr3t-redis-pass-addnode
+        username: default_admin
+        password: default-admin-secret-pass
         new_node:
           addr: "10.0.0.9:6379"
         seed:

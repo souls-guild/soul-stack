@@ -84,6 +84,10 @@ fixtures:
       sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
   input:
+    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
+    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    provision:
+      enabled: false
     redis_type: cluster
     # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
     # distro-native пин (мажор < 8 → version-gate модулей не активен).

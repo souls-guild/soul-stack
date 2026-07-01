@@ -66,6 +66,11 @@ fixtures:
   vault:
     secret/redis/update_config:
       password: upd-redis-pass-16chars
+    # ★ РЕДИЗАЙН default_admin: системный admin-юзер — пароль из ветки users/default_admin.
+    # Читается masterauth-доливом в apply.input.config (redis.conf) И коннектом
+    # community.redis.config (AUTH под default_admin вместо прежнего requirepass-секрета).
+    secret/redis/update_config/users/default_admin:
+      password: default-admin-secret-pass
 
 assert:
   task_present:
@@ -93,6 +98,11 @@ assert:
               maxmemory-policy: volatile-lru
               save: "900 1 300 10 60 10000"
               appendonly: "no"
+              # ★ РЕДИЗАЙН default_admin: статическая replica→master AUTH доливается в
+              # apply.input.config → redis.conf несёт masteruser/masterauth (на master-нодах
+              # инертны, failover-safe). masterauth — резолвленный пароль default_admin.
+              masteruser: default_admin
+              masterauth: default-admin-secret-pass
           self:
             sid: trial-host
             covens: [update_config]
@@ -113,9 +123,14 @@ assert:
     - module: community.redis.config
       params_subset:
         addr: "127.0.0.1:6379"
-        password: upd-redis-pass-16chars
+        # ★ РЕДИЗАЙН default_admin: AUTH под default_admin (username + его Vault-пароль).
+        username: default_admin
+        password: default-admin-secret-pass
         tls: false
         rewrite: true
+        # config — ЧИСТЫЙ compute.redis_config БЕЗ masterauth-долива (hot-reload шлёт CONFIG
+        # SET только операторской дельты; masteruser/masterauth — replication-материал,
+        # update_config его не трогает на живом инстансе).
         config:
           maxmemory: "768mb"
           maxmemory-policy: volatile-lru

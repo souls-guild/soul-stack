@@ -89,10 +89,12 @@ assert:
           role: ""
           essence: {}
 
+    # ★ РЕДИЗАЙН default_admin: AUTH под default_admin (username + его Vault-пароль).
     - module: community.redis.acl
       params_subset:
         addr: "127.0.0.1:6379"
-        password: updusr-redis-pass-16ch
+        username: default_admin
+        password: default-admin-secret-pass
         tls: false
 
   # state_changes: redis_users = [] (operator-extra очищены, системные не в state).

@@ -80,6 +80,10 @@ fixtures:
         - bgsave-cpulist
 
   input:
+    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
+    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    provision:
+      enabled: false
     redis_type: sentinel
     version: "7.4.1"
     persistence: rdb

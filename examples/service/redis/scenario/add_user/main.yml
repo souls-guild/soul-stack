@@ -67,6 +67,13 @@ validate:
 # дискриминатор коннекта плагина из state.tls (state_schema v3), идентично restart/
 # update_config: ACL LOAD идёт через TLS-коннект, если Redis на TLS.
 compute:
+  # ── admin_user: имя СИСТЕМНОГО ACL-юзера внутрикластерного AUTH (default_admin) ──
+  # ★ РЕДИЗАЙН default_admin (2026-06-30): day-2-тело БЕЗ extends: covenant (нет общего
+  # compute), поэтому имя системного admin-юзера объявляется ЛОКАЛЬНЫМ литералом — единый
+  # источник внутри сценария (плагин-коннект community.redis.acl + masterauth-долив в
+  # config + Vault-путь пароля читают compute.admin_user, не хардкодят 'default_admin' в
+  # каждом месте). Симметрия с covenant.compute.admin_user деплой-тел.
+  admin_user: "${ 'default_admin' }"
   tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
   tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
   # tls_ca — PEM CA-СОДЕРЖИМОЕ коннекта (плагин ждёт PEM, не путь). Берётся из
@@ -115,8 +122,21 @@ tasks:
         version:  "${ default(incarnation.state.redis_version, '') }"
         conf_dir: "${ default(incarnation.state.conf_dir, '/etc/redis') }"
         data_dir: "${ default(incarnation.state.data_dir, '/var/lib/redis') }"
-        password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
-        config:   "${ incarnation.state.redis_config }"
+        # ★ РЕДИЗАЙН default_admin (2026-06-30): apply.input.password УДАЛЁН (destiny redis
+        # его больше не принимает — requirepass убран). masteruser/masterauth ДОЛИВАЮТСЯ в
+        # config обычными директивами ПОВЕРХ развёрнутого state.redis_config (он хранится
+        # БЕЗ masterauth — секрет в Vault, ADR-061). add_user перерендеривает весь кирпич
+        # destiny `redis` (вкл. redis.conf), поэтому статическая replica→master AUTH обязана
+        # доливаться и здесь — иначе redis.conf на диске потерял бы masteruser/masterauth и
+        # cluster/sentinel-реплики после рестарта упёрлись бы в NOAUTH при PSYNC. На master-
+        # нодах директива инертна (failover-safe). masterauth — vault()-в-ячейке (seal-маскинг
+        # ADR-010 §7.4); admin_user = compute.admin_user; путь — secret/redis/<inc>/users/
+        # default_admin#password (та же ветка, что users-блок ниже).
+        config: >-
+          ${ merge(incarnation.state.redis_config, {
+               'masteruser': compute.admin_user,
+               'masterauth': vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password')
+             }) }
         modules_base_url: "${ default(incarnation.state.modules_base_url, '') }"
         # ★★ КРИТИЧНО (system-ACL-users d2): ПОЛНЫЙ users.acl = СИСТЕМНЫЕ (из essence,
         # ПЕРВЫМИ) + operator-extra (state.redis_users + новый, compute.users_new — МАССИВ
@@ -153,6 +173,10 @@ tasks:
     module: community.redis.acl
     params:
       addr:     "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
-      password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+      # ★ РЕДИЗАЙН default_admin (2026-06-30): AUTH под системным default_admin (requirepass
+      # убран). username + его пароль из ветки secret/redis/<inc>/users/default_admin#password.
+      # Плагин community.redis передаёт username в AUTH (parseConnConfig).
+      username: "${ compute.admin_user }"
+      password: "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
       tls:      "${ compute.tls_on }"
       tls_ca:   "${ compute.tls_ca }"

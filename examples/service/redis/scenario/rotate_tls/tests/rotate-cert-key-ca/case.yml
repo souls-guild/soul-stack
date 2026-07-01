@@ -7,15 +7,20 @@
 # Что ассертим:
 #   1. PEM перерендерены (core.file.present, path-дизамбигуатор): redis.crt/redis.key/
 #      ca.crt в /etc/redis/tls/, content = vault(НОВЫЙ ref), mode 0600 owner redis.
+#   1b. ★ users.acl ре-рендерен с долитыми системными (core.file.rendered): тот же
+#      destiny redis кирпич рендерит и users.acl → системные из essence.system_acl_users
+#      (default_admin/replica/monitoring/sentinel/haproxy) долиты ПЕРВЫМИ; без доливки
+#      rotate_tls СТЁР БЫ их (apply.input.password убран — requirepass больше нет).
 #   2. applier-register tls_certs МАТЕРИАЛИЗОВАН: движок эмитит терминальную
 #      core.noop.run(register=tls_certs) после дочерних destiny-задач (id-дизамбигуатор
 #      tls_certs). Это якорь onchanges-гейта — без него onchanges:[tls_certs] падал бы
 #      ErrOnChangesUnknownRegister (был обход force changed:true до 52b16ed).
 #   3. reload re-read (три community.redis.command): addr 127.0.0.1:7379 (TLS-порт),
-#      tls=true, tls_ca = PEM CA, args = CONFIG SET tls-cert-file/tls-key-file/
-#      tls-ca-cert-file на пути в ${conf_dir}/tls/. Args-дизамбигуатор присутствует;
-#      changed=true (force) БОЛЬШЕ НЕ должен стоять — task_absent ловит регресс
-#      обратно на force-форму (см. ниже).
+#      ★ username=default_admin + его пароль (коннект под системным default_admin,
+#      requirepass убран), tls=true, tls_ca = PEM CA, args = CONFIG SET tls-cert-file/
+#      tls-key-file/tls-ca-cert-file на пути в ${conf_dir}/tls/. Args-дизамбигуатор
+#      присутствует; changed=true (force) БОЛЬШЕ НЕ должен стоять — task_absent ловит
+#      регресс обратно на force-форму (см. ниже).
 #   4. state_changes: state.tls несёт НОВЫЕ refs (cert/key/ca), enable/only/port
 #      сохранены.
 #
@@ -37,6 +42,17 @@ fixtures:
   soulprint:
     network: { primary_ip: 10.0.0.5 }
     os: { arch: amd64 }
+
+  # ★ РЕДИЗАЙН default_admin: системные ACL-юзера доливаются в users.acl при ре-рендере
+  # (destiny redis перерендеривает и users.acl). rotate_tls долит их из essence ПЕРВЫМИ
+  # (как деплой-тело) — без них ре-рендер СТЁР БЫ системных из users.acl.
+  essence:
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
 
   # Развёрнутый incarnation.state v3 с ВКЛЮЧЁННЫМ TLS (rotate-предусловие). Текущие refs
   # — СТАРЫЕ (state.tls.*_ref); input даёт новые.
@@ -81,6 +97,19 @@ fixtures:
   vault:
     secret/redis/rotate_tls:
       password: rot-redis-pass-16chars
+    # ★ РЕДИЗАЙН default_admin: коннект CONFIG SET идёт под default_admin (requirepass убран);
+    # системные юзера доливаются в users.acl при ре-рендере → их пароли в Vault той же ветки
+    # secret/redis/<inc>/users/<name>#password.
+    secret/redis/rotate_tls/users/default_admin:
+      password: default-admin-secret-pass
+    secret/redis/rotate_tls/users/replica:
+      password: replica-sys-secret-pass
+    secret/redis/rotate_tls/users/monitoring:
+      password: monitoring-sys-secret-pass
+    secret/redis/rotate_tls/users/sentinel:
+      password: sentinel-sys-secret-pass
+    secret/redis/rotate_tls/users/haproxy:
+      password: haproxy-sys-secret-pass
     # CA коннекта (state.tls.ca_ref pre-run, tls#ca) — текущее доверие на этом прогоне.
     secret/services/redis/tls:
       ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
@@ -115,6 +144,54 @@ assert:
         owner: redis
         group: redis
 
+    # 1b. ★ РЕДИЗАЙН default_admin: ре-рендер ОБЯЗАН долить системных в users.acl (тот же
+    #     destiny redis кирпич, что рендерит PEM). Системные из essence.system_acl_users
+    #     ПЕРВЫМИ (default_admin/replica/monitoring/sentinel/haproxy), operator-extra из
+    #     state.redis_users ПОВЕРХ (здесь пуст → только системные). Пароли — vault() ветки
+    #     users/<name>. Без доливки rotate_tls СТЁР БЫ системных. Дизамбигуатор — path.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/users.acl
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+        render_context:
+          vars:
+            users:
+              default_admin:
+                perms: "~* &* +@all"
+                state: "on"
+                password: default-admin-secret-pass
+              replica:
+                perms: "+psync +replconf +ping"
+                state: "on"
+                password: replica-sys-secret-pass
+              monitoring:
+                perms: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+                state: "on"
+                password: monitoring-sys-secret-pass
+              sentinel:
+                perms: "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+                state: "on"
+                password: sentinel-sys-secret-pass
+              haproxy:
+                perms: "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+                state: "on"
+                password: haproxy-sys-secret-pass
+          self:
+            sid: trial-host
+            covens: [rotate_tls]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
     # 2. APPLIER-REGISTER МАТЕРИАЛИЗОВАН: терминальная core.noop.run(register=tls_certs)
     #    — якорь onchanges-гейта (id-дизамбигуатор; register∪id, см. ExpectedTask.ID).
     #    Эмитится движком ПОСЛЕ дочерних destiny-задач apply-шага, агрегирует OR(changed).
@@ -130,21 +207,24 @@ assert:
     - module: community.redis.command
       params_subset:
         addr: "127.0.0.1:7379"
-        password: rot-redis-pass-16chars
+        username: default_admin
+        password: default-admin-secret-pass
         tls: true
         tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
         args: ["CONFIG", "SET", "tls-cert-file", "/etc/redis/tls/redis.crt"]
     - module: community.redis.command
       params_subset:
         addr: "127.0.0.1:7379"
-        password: rot-redis-pass-16chars
+        username: default_admin
+        password: default-admin-secret-pass
         tls: true
         tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
         args: ["CONFIG", "SET", "tls-key-file", "/etc/redis/tls/redis.key"]
     - module: community.redis.command
       params_subset:
         addr: "127.0.0.1:7379"
-        password: rot-redis-pass-16chars
+        username: default_admin
+        password: default-admin-secret-pass
         tls: true
         tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
         args: ["CONFIG", "SET", "tls-ca-cert-file", "/etc/redis/tls/ca.crt"]

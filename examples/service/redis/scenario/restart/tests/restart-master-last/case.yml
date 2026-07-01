@@ -36,13 +36,15 @@ fixtures:
   input:
     reason: "restart master for L0"
 
-  # Пароль Redis — probe резолвит vault('secret/redis/restart#password')
-  # (incarnation.name == имя сценария == restart). state НЕ задан в fixture →
+  # Пароль Redis — probe резолвит vault('secret/redis/restart/users/default_admin#password')
+  # (incarnation.name == имя сценария == restart). ★ РЕДИЗАЙН default_admin (2026-06-30):
+  # коннект под системным default_admin (username → AUTH), пароль из ветки users/default_admin
+  # (прежний secret/redis/<inc>#password ДРОПНУТ). state НЕ задан в fixture →
   # has(incarnation.state) false → tls_on false → plaintext-ветка коннекта
   # (дискриминатор v3 читает state.tls.enable, не essence).
   vault:
-    secret/redis/restart:
-      password: fixture-redis-pass-16+
+    secret/redis/restart/users/default_admin:
+      password: default-admin-secret-pass
 
 mocks:
   register:
@@ -56,7 +58,8 @@ assert:
     - module: community.redis.role
       params_subset:
         addr: "127.0.0.1:6379"
-        password: fixture-redis-pass-16+
+        username: default_admin
+        password: default-admin-secret-pass
         tls: false
         tls_ca: ""
 

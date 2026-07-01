@@ -66,6 +66,10 @@ fixtures:
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
+    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
+    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    provision:
+      enabled: false
     redis_type: sentinel
     version: "7.4.1"
     persistence: rdb

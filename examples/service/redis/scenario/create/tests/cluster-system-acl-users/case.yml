@@ -69,6 +69,10 @@ fixtures:
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
 
   input:
+    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
+    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    provision:
+      enabled: false
     redis_type: cluster
     version: "7.4.1"
     shards: 1

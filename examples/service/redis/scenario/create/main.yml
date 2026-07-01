@@ -59,14 +59,21 @@ extends: covenant
 # которого covenant НЕ несёт (add-only: covenant.input + это поле = эффективный input).
 input:
   # ── cloud-provision: поднять VM под топологию в том же прогоне (ADR-061, Вариант A) ─
-  # ★ provision (FLAG имя секции, propose-and-wait): опциональный object-вход «создай
-  # машины». Когда задан и enabled=true — create ОДНИМ прогоном (а) создаёт VM через
-  # core.cloud.created (on: keeper), (б) доставляет per-VM bootstrap-токен (иллюстративно),
-  # (в) регистрирует созданные SID + БЛОКИРУЮЩЕ ждёт онбординга (core.soul.registered
-  # await_online + refresh_soulprint, ADR-061), после чего roster пере-резолвится и
-  # cluster/sentinel-ветка катит redis-роль на уже-online хосты. Не задан / enabled=false
-  # — provision.yml group-drop, прогон работает по СУЩЕСТВУЮЩЕМУ roster-у (поведение до
-  # фичи бит-в-бит).
+  # ★ provision (FLAG имя секции, propose-and-wait): object-вход «создай машины».
+  # Когда enabled=true (ДЕФОЛТ, см. default-on ниже) — create ОДНИМ прогоном (а) создаёт VM
+  # через core.cloud.created (on: keeper), (б) доставляет per-VM bootstrap-токен
+  # (иллюстративно), (в) регистрирует созданные SID + БЛОКИРУЮЩЕ ждёт онбординга
+  # (core.soul.registered await_online + refresh_soulprint, ADR-061), после чего roster
+  # пере-резолвится и cluster/sentinel-ветка катит redis-роль на уже-online хосты.
+  # enabled=false — provision.yml group-drop, прогон работает по СУЩЕСТВУЮЩЕМУ roster-у.
+  #
+  # ★ provider/profile/await_timeout/ssh_provider оператор может НЕ задавать — они
+  # фоллбэкают на essence.provision_* (redis-provision.yml: default(input.provision.X,
+  # essence.provision_X)). По умолчанию оператор НЕ выбирает их вручную (форма скрыта).
+  #
+  # ★ FORM: provision НАМЕРЕННО НЕ в form.sections (решение 2026-06-30) — секция скрыта из
+  # Run-формы. soul-lint эмитит form_field_uncovered WARNING на это поле (UI дорисует в
+  # дефолтную секцию) — это ОЖИДАЕМО, не error.
   #
   # ★ node_count тут НЕТ намеренно: число VM выводится из ТОПОЛОГИИ (cluster: shards*(1+
   # replicas_per_master); sentinel: 1+replicas_per_master) — единственный источник истины
@@ -75,6 +82,16 @@ input:
   provision:
     type: object
     required: false
+    # ★ DEFAULT-ON (решение пользователя 2026-06-30): provision ВКЛЮЧЁН по умолчанию.
+    # top-level default объекта = {enabled: true} → оператор, НЕ передавший секцию provision,
+    # получает cloud-create (штатный путь create — поднять VM под топологию). Чтобы катить
+    # на ГОТОВЫЙ roster без provision, оператор задаёт provision: {enabled: false} ЯВНО, либо
+    # пользуется сценарием create_from_souls (близнец без provision-секции). default-on —
+    # ТОЛЬКО у create; create_from_souls provision-секцию не несёт. Дефолт продублирован на
+    # вложенном enabled (плоский mergeInputDefaults не спускается в properties частично
+    # заданного объекта — дубль держит семантику «по умолчанию on» читаемой единообразно).
+    default:
+      enabled: true
     description: >-
       Поднять VM под топологию в том же create-прогоне (ADR-061). enabled=true →
       сначала cloud-create + онбординг (барьер await_online), потом redis-роль на
@@ -83,14 +100,18 @@ input:
     properties:
       enabled:
         type: boolean
-        default: false
-        description: Главный гейт provision. false (или секция опущена) — provision.yml group-drop.
+        default: true
+        description: Главный гейт provision. ДЕФОЛТ true (default-on). false — provision.yml group-drop.
       provider:
         type: string
-        description: Имя cloud-Provider в реестре providers (NOT plugin name → soul-cloud-<provider>).
+        description: >-
+          Имя cloud-Provider в реестре providers (NOT plugin name → soul-cloud-<provider>).
+          Не задан → essence.provision_provider.
       profile:
         type: string
-        description: Имя VM-профиля в реестре profiles (ресурсы/образ/сеть VM).
+        description: >-
+          Имя VM-профиля в реестре profiles (ресурсы/образ/сеть VM). Не задан →
+          essence.provision_profile.
       await_timeout:
         type: string
         pattern: "^[0-9]+[smh]$"
@@ -103,8 +124,7 @@ input:
         description: >-
           Имя SshProvider-плагина (keeper.yml::plugins.ssh_providers[].name) для
           доставки per-VM bootstrap-токена по SSH (core.bootstrap.delivered, ADR-063).
-          Не задан / enabled=false → шаг доставки таргетит как placeholder (provision
-          выключен).
+          Не задан → essence.provision_ssh_provider.
 
 # ── Вычисляемые scenario-vars: ДЕЛЬТА create поверх covenant.compute ────────────────
 # Общий compute-контракт (redis_config/install/conf_dir/data_dir/tls_*/sentinel_directives/
@@ -206,13 +226,12 @@ form:
           show_when: "input.redis_type == 'sentinel'"
           hint: "Per-master опции (down-after-milliseconds, failover-timeout, parallel-syncs, …). Дефолты: down-after 5000, failover-timeout 60000."
 
-    # Облачное создание VM — отдельная секция (опционально, ADR-061).
-    - key: provision
-      title: "Облачное создание VM"
-      description: "Поднять VM под топологию в том же прогоне (опционально, ADR-061)"
-      collapsed: true
-      fields:
-        - { name: provision, label: "Cloud-provision" }
+    # ★ Секция provision НАМЕРЕННО УБРАНА из формы (решение пользователя 2026-06-30):
+    # provision default-on (input.provision.default {enabled: true}), provider/profile из
+    # essence — оператор НЕ выбирает их в Run-форме. Поле input.provision не покрыто формой
+    # → soul-lint form_field_uncovered WARNING (UI дорисует в дефолтную секцию) — ОЖИДАЕМО,
+    # не error. Если понадобится снова показать (per-Coven/ENV-override provider) — вернуть
+    # секцию сюда. ★ TODO: prod/dev provider switch (ENV keeper / Coven-overlay) — отдельный ADR.
 
 # Тело прогона — ветки диспетчера, по одной на режим (CONDITIONAL-INCLUDE, см. описание
 # сценария выше). Порядок include — cluster, sentinel; индексы не важны (ветки

@@ -1,15 +1,16 @@
-# L0-испытание provision (ADR-061, Вариант A) — секция provision ОПУЩЕНА (поведение
-# до фичи). Guard: include provision.yml gated на `has(input.provision) &&
-# input.provision.enabled` (main.yml tasks). Секция не задана → has() false → весь
-# provision.yml НЕ таргетит никого; его keeper-side шаги (core.cloud.created +
-# core.soul.registered) в плане ОТСУТСТВУЮТ (group-drop по include-when), а
-# read-model provisioned_vm_ids/provisioned_provider — консервативный default
-# ([] / '') по тернару state_changes (гейт input.provision, has()-safe).
+# L0-испытание provision (ADR-061, Вариант A) — provision ЯВНО ВЫКЛЮЧЕН
+# (input.provision.enabled=false). ★ С default-on (решение 2026-06-30) ОПУЩЕННАЯ секция
+# означает ВКЛЮЧЕНО (top-level default {enabled: true}) — выключение теперь ТОЛЬКО явным
+# enabled: false. Guard: include provision.yml gated на `has(input.provision) &&
+# input.provision.enabled` (main.yml tasks). enabled=false → весь provision.yml НЕ таргетит
+# никого; его keeper-side шаги (core.cloud.created + core.soul.registered) в плане
+# ОТСУТСТВУЮТ (group-drop по include-when), а read-model provisioned_vm_ids/provisioned_provider —
+# консервативный default ([] / '') по тернару state_changes (гейт input.provision.enabled).
 #
-# Парный к provision-enabled-sentinel/cluster: там секция задана и enabled → шаги
-# присутствуют. Этот кейс доказывает back-compat: без provision прогон работает по
-# существующему roster-у бит-в-бит, лишних cloud-шагов не эмитится.
-name: provision omitted drops cloud-create and onboarding tasks (back-compat)
+# Парный к provision-default-on (там секция опущена → default-on → cloud-шаги присутствуют)
+# и provision-enabled-sentinel/cluster (явный enabled: true). Этот кейс доказывает, что
+# явный enabled: false катит прогон по существующему roster-у, лишних cloud-шагов не эмитится.
+name: provision explicitly disabled drops cloud-create and onboarding tasks
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
@@ -71,7 +72,10 @@ fixtures:
     # sentinel = 1+0 = 1 хост.
     replicas_per_master: 0
     persistence: rdb
-    # provision НЕ задан → include provision.yml group-drop.
+    # ★ provision ЯВНО выключен (default-on: опущенная секция = ВКЛЮЧЕНО, выключение
+    # только явным enabled: false) → include provision.yml group-drop.
+    provision:
+      enabled: false
 
 assert:
   task_present:

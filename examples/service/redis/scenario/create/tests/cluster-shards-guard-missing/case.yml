@@ -42,6 +42,10 @@ fixtures:
       timeout:          300
 
   input:
+    # ★ provision выключен (default-on: опущенная секция = ВКЛЮЧЕНО; кейс деплоит на
+    # ГОТОВЫЙ roster, cloud-create не нужен) → include redis-provision.yml group-drop.
+    provision:
+      enabled: false
     redis_type: cluster
     # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23) и теперь ENUM выкаченных
     # в Nexus сборок — 7.4.1 ∈ enum (мажор < 8 → version-gate модулей не активен).

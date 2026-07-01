@@ -59,11 +59,17 @@ func TestAcceptance_RestartBlockFanOut(t *testing.T) {
 		t.Fatalf("Stratify: %v", err)
 	}
 
-	// Health-gate block-потомок (community.redis.replica-synced) рендерит params с
-	// vault('secret/redis/redis-prod#password') — движок с фикстурным KVReader-ом
-	// (паттерн TestAcceptance_SentinelReplicaExcludesMaster). essence не задан →
-	// essence.tls_enable отсутствует → plaintext-ветка (default false).
-	engine, err := cel.New(cel.WithVault(stubKV{"secret/redis/redis-prod": {"password": "fixture-redis-pass-16+"}}))
+	// Health-gate block-потомок (community.redis.replica-synced) + restart-master
+	// рендерят params с vault('secret/redis/redis-prod/users/default_admin#password')
+	// (★ РЕДИЗАЙН default_admin 2026-06-30: restart/main.yml:117,156 — auth под
+	// системным default_admin) — движок с фикстурным KVReader-ом (паттерн
+	// TestAcceptance_SentinelReplicaExcludesMaster). essence не задан →
+	// essence.tls_enable отсутствует → plaintext-ветка (default false), поэтому
+	// vault(incarnation.state.tls.ca_ref) под compute.tls_on НЕ дёргается.
+	engine, err := cel.New(cel.WithVault(stubKV{
+		"secret/redis/redis-prod":                     {"password": "fixture-redis-pass-16+"},
+		"secret/redis/redis-prod/users/default_admin": {"password": "fixture-admin-pass-16+"},
+	}))
 	if err != nil {
 		t.Fatalf("cel.New(WithVault): %v", err)
 	}
@@ -245,10 +251,16 @@ func TestAcceptance_SentinelReplicaExcludesMaster(t *testing.T) {
 	// 06-25, бывшее `replicas`): size-guard sentinel-ветки сверяет size(hosts)==1+
 	// replicas_per_master (3==1+2). sentinel_quorum/sentinel_master_name из контракта
 	// убраны (quorum АВТО size/2+1, master_name — essence) — больше не задаём.
+	// provision ЯВНО выключен: create несёт input.provision DEFAULT-ON ({enabled: true},
+	// решение 2026-06-30) — опущенная секция включила бы cloud-create + онбординг
+	// (core.cloud.created/registered), которым этот тест (sentinel REPLICAOF master-exclusion)
+	// не нужны и которые потребовали бы essence.provision_*. Передаём enabled:false, чтобы
+	// merge НЕ применил default-on → provision-тело group-drop, рендерится чистая sentinel-ветка.
 	effectiveInput, err := config.ResolveInputValues(m.Input, map[string]any{
 		"redis_type":          "sentinel",
 		"version":             "7.4.1",
 		"replicas_per_master": 2,
+		"provision":           map[string]any{"enabled": false},
 	})
 	if err != nil {
 		t.Fatalf("ResolveInputValues: %v", err)

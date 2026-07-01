@@ -71,14 +71,18 @@ tasks:
   #    слотов источника и переносит каждый (go-redis SETSLOT/MIGRATE/SETSLOT NODE).
   #    ★ НЕ идемпотентен (без unless): повторный прогон сдвинет ещё `slots` слотов.
   #    .where("sid == ...")[0] детерминирован (single-host roster-фильтр; прецедент
-  #    add_node/remove_node). Пароль — keeper-side vault()-резолв; плагин коннектится
-  #    к нодам, password маскируется.
+  #    add_node/remove_node). ★ РЕДИЗАЙН default_admin (2026-06-30): коннект к нодам —
+  #    под системным default_admin (username → AUTH, requirepass убран). password из
+  #    новой Vault-ветки secret/redis/<inc>/users/default_admin#password; плагин коннектится
+  #    к нодам под этой парой (password маскируется). day-2-тело (вне covenant) хардкодит
+  #    'default_admin' напрямую (нет extends: covenant compute.admin_user).
   - name: Reshard N slots from source master to target master
     run_once: true
     module: community.redis.cluster
     params:
       action:   reshard
-      password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+      username: default_admin
+      password: "${ vault('secret/redis/' + incarnation.name + '/users/default_admin#password') }"
       # int() унифицирует uint64-операнд input.slots в числовой тип (тот же приём,
       # что replicas_per_shard в create/cluster.yml); whole-cell ${…} → нативный int.
       slots:    "${ int(input.slots) }"

@@ -110,7 +110,11 @@ tasks:
     changed_when: false
     params:
       addr:     "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
-      password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+      # ★ РЕДИЗАЙН default_admin (2026-06-30): probe-коннект — под системным default_admin
+      # (username → AUTH, requirepass убран). password из новой Vault-ветки secret/redis/
+      # <inc>/users/default_admin#password. day-2-тело (вне covenant) хардкодит 'default_admin'.
+      username: default_admin
+      password: "${ vault('secret/redis/' + incarnation.name + '/users/default_admin#password') }"
       tls:      "${ compute.tls_on }"
       tls_ca:   "${ compute.tls_ca }"
 
@@ -144,9 +148,12 @@ tasks:
         failed_when: "register.self.synced != true"
         # TLS-гейт — scenario-level compute.tls_on/tls_port/tls_ca (см. блок compute
         # выше): то же значение, что у probe-задачи, без повтора дискриминатора.
+        # ★ РЕДИЗАЙН default_admin: коннект ресинк-гейта — под системным default_admin
+        # (username → AUTH), та же Vault-ветка users/default_admin, что у probe.
         params:
           addr:     "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
-          password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+          username: default_admin
+          password: "${ vault('secret/redis/' + incarnation.name + '/users/default_admin#password') }"
           tls:      "${ compute.tls_on }"
           tls_ca:   "${ compute.tls_ca }"
 

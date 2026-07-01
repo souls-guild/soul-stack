@@ -58,12 +58,14 @@ fixtures:
   essence:
     tls_ca_ref: "secret/services/redis/tls#ca"
 
-  # Пароль (incarnation.name == restart) + ДВА РАЗНЫХ CA-PEM:
+  # Пароль (incarnation.name == restart; ★ РЕДИЗАЙН default_admin — коннект под системным
+  # default_admin, ветка users/default_admin; прежний secret/redis/<inc>#password ДРОПНУТ)
+  # + ДВА РАЗНЫХ CA-PEM:
   #   secret/services/redis/tls-v2#ca → NEW-CA (актуальный, по state.tls.ca_ref);
   #   secret/services/redis/tls#ca    → OLD-CA (устаревший, по essence.tls_ca_ref).
   vault:
-    secret/redis/restart:
-      password: fixture-redis-pass-16+
+    secret/redis/restart/users/default_admin:
+      password: default-admin-secret-pass
     secret/services/redis/tls-v2:
       ca: "-----BEGIN CERTIFICATE-----\nNEW-CA\n-----END CERTIFICATE-----"
     secret/services/redis/tls:
@@ -82,7 +84,8 @@ assert:
     - module: community.redis.role
       params_subset:
         addr: "127.0.0.1:7379"
-        password: fixture-redis-pass-16+
+        username: default_admin
+        password: default-admin-secret-pass
         tls: true
         tls_ca: "-----BEGIN CERTIFICATE-----\nNEW-CA\n-----END CERTIFICATE-----"
 
@@ -91,7 +94,8 @@ assert:
     - module: community.redis.replica-synced
       params_subset:
         addr: "127.0.0.1:7379"
-        password: fixture-redis-pass-16+
+        username: default_admin
+        password: default-admin-secret-pass
         tls: true
         tls_ca: "-----BEGIN CERTIFICATE-----\nNEW-CA\n-----END CERTIFICATE-----"
 

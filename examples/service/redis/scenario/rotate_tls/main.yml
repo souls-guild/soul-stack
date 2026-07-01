@@ -79,6 +79,12 @@ validate:
 # заведомо включён (assert-guard ниже), но дискриминатор оставлен симметричным
 # остальным day-2-сценариям (единый паттерн).
 compute:
+  # ── admin_user: имя системного ACL-юзера внутрикластерного AUTH (default_admin) ──
+  # ★ РЕДИЗАЙН default_admin (2026-06-30): коннект CONFIG SET к live-Redis идёт под
+  # системным default_admin (requirepass убран). rotate_tls НЕ extends covenant, поэтому
+  # имя хардкодится здесь литералом (как covenant.compute.admin_user, day-2-тела вне
+  # covenant — см. covenant.yml). Пароль — secret/redis/<inc>/users/default_admin#password.
+  admin_user: "${ 'default_admin' }"
   tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
   tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
   # tls_ca — CA коннекта (PEM из vault(state.tls.ca_ref)). incarnation.state — PRE-RUN
@@ -129,6 +135,8 @@ tasks:
   #    (seal-маскинг). config — текущий state.redis_config (redis.conf не меняется при
   #    ротации; tls-*-file пути те же). version/conf_dir/data_dir/users — из state.
   #    register: tls_certs — applier-register, гейтящий reload ниже (см. шапку).
+  #    ★ РЕДИЗАЙН default_admin: apply.input.password УДАЛЁН (destiny его не принимает —
+  #    requirepass убран); аутентификация — под системным default_admin из users ниже.
   - name: Re-render TLS PEM material from the new Vault refs
     register: tls_certs
     apply:
@@ -137,7 +145,6 @@ tasks:
         version:  "${ default(incarnation.state.redis_version, '') }"
         conf_dir: "${ compute.conf_dir }"
         data_dir: "${ default(incarnation.state.data_dir, '/var/lib/redis') }"
-        password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
         config:   "${ incarnation.state.redis_config }"
         modules_base_url: "${ default(incarnation.state.modules_base_url, '') }"
         tls:
@@ -147,16 +154,31 @@ tasks:
           cert_ref: "${ compute.cert_ref }"
           key_ref:  "${ compute.key_ref }"
           ca_ref:   "${ compute.ca_ref }"
+        # ★ СИСТЕМНЫЕ + operator-extra (как деплой-тело): destiny redis перерендеривает и
+        # users.acl (тот же кирпич) → ОБЯЗАН долить системных из essence.system_acl_users
+        # ПЕРВЫМИ (default_admin/replica/monitoring/sentinel/haproxy), иначе rotate_tls СТЁР
+        # БЫ их из users.acl. operator-extra (state.redis_users — МАССИВ AclUser) ПОВЕРХ
+        # (last-wins). Системные НЕ в state — доливаются из essence на каждом рендере.
+        # Vault-пароль той же ветки secret/redis/<inc>/users/<name>#password.
         users: >-
-          ${ has(incarnation.state.redis_users)
-             ? merge(incarnation.state.redis_users.map(u, {
-                 u.name: {
-                   'perms':    u.perms,
-                   'state':    u.state,
-                   'password': vault('secret/redis/' + incarnation.name + '/users/' + u.name + '#password')
+          ${ merge(
+               merge(default(essence.system_acl_users, {}).map(name, {
+                 name: {
+                   'perms':    essence.system_acl_users[name],
+                   'state':    'on',
+                   'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
                  }
-               }))
-             : {} }
+               })),
+               has(incarnation.state.redis_users)
+                 ? merge(incarnation.state.redis_users.map(u, {
+                     u.name: {
+                       'perms':    u.perms,
+                       'state':    u.state,
+                       'password': vault('secret/redis/' + incarnation.name + '/users/' + u.name + '#password')
+                     }
+                   }))
+                 : {}
+             ) }
 
   # 3. HOT-RELOAD CERT: три community.redis.command (CONFIG SET tls-cert-file /
   #    tls-key-file / tls-ca-cert-file) пересоздают SSL_CTX на live-инстансе. Redis 6.2+
@@ -173,7 +195,8 @@ tasks:
     onchanges: [tls_certs]
     params:
       addr:     "127.0.0.1:${ compute.tls_port }"
-      password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+      username: "${ compute.admin_user }"
+      password: "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
       tls:      "${ compute.tls_on }"
       tls_ca:   "${ compute.tls_ca }"
       args:     ["CONFIG", "SET", "tls-cert-file", "${ compute.conf_dir + '/tls/redis.crt' }"]
@@ -183,7 +206,8 @@ tasks:
     onchanges: [tls_certs]
     params:
       addr:     "127.0.0.1:${ compute.tls_port }"
-      password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+      username: "${ compute.admin_user }"
+      password: "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
       tls:      "${ compute.tls_on }"
       tls_ca:   "${ compute.tls_ca }"
       args:     ["CONFIG", "SET", "tls-key-file", "${ compute.conf_dir + '/tls/redis.key' }"]
@@ -193,7 +217,8 @@ tasks:
     onchanges: [tls_certs]
     params:
       addr:     "127.0.0.1:${ compute.tls_port }"
-      password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+      username: "${ compute.admin_user }"
+      password: "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
       tls:      "${ compute.tls_on }"
       tls_ca:   "${ compute.tls_ca }"
       args:     ["CONFIG", "SET", "tls-ca-cert-file", "${ compute.conf_dir + '/tls/ca.crt' }"]

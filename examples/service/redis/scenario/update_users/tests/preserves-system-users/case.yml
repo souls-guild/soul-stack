@@ -124,11 +124,12 @@ assert:
           role: ""
           essence: {}
 
-    # hot-reload ACL LOAD — plain-инстанс.
+    # hot-reload ACL LOAD — plain-инстанс. ★ РЕДИЗАЙН default_admin: AUTH под default_admin.
     - module: community.redis.acl
       params_subset:
         addr: "127.0.0.1:6379"
-        password: updusr-redis-pass-16ch
+        username: default_admin
+        password: default-admin-secret-pass
         tls: false
 
   # state_changes: redis_users = НОВЫЙ набор operator-extra (alice+carol) БЕЗ системных,

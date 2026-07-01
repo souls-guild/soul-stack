@@ -69,11 +69,13 @@ fixtures:
       tls-ca-cert-file: /etc/redis/tls/ca.crt
       tls-replication:  "yes"
 
-  # Пароль (secret/redis/restart#password, incarnation.name == restart) + PEM CA
-  # (secret/services/redis/tls#ca, по state.tls.ca_ref — day-2 резолвит его vault()).
+  # Пароль (secret/redis/restart/users/default_admin#password, incarnation.name == restart;
+  # ★ РЕДИЗАЙН default_admin — коннект под системным default_admin, прежний secret/redis/
+  # <inc>#password ДРОПНУТ) + PEM CA (secret/services/redis/tls#ca, по state.tls.ca_ref —
+  # day-2 резолвит его vault(); CA-ветка TLS-материала, не пароль — не меняется).
   vault:
-    secret/redis/restart:
-      password: fixture-redis-pass-16+
+    secret/redis/restart/users/default_admin:
+      password: default-admin-secret-pass
     secret/services/redis/tls:
       ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
 
@@ -90,7 +92,8 @@ assert:
     - module: community.redis.role
       params_subset:
         addr: "127.0.0.1:7379"
-        password: fixture-redis-pass-16+
+        username: default_admin
+        password: default-admin-secret-pass
         tls: true
         tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
 
@@ -102,6 +105,7 @@ assert:
     - module: community.redis.replica-synced
       params_subset:
         addr: "127.0.0.1:7379"
-        password: fixture-redis-pass-16+
+        username: default_admin
+        password: default-admin-secret-pass
         tls: true
         tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"

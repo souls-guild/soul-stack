@@ -3,6 +3,7 @@
 
 # Claude Code runtime artifacts (scheduled task lockfile)
 .claude/scheduled_tasks.lock
+.claude/worktrees/
 
 # Go build artefacts
 *.exe

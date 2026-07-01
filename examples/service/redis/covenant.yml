@@ -745,10 +745,16 @@ state_changes:
       ${ (has(input.provision) && input.provision.enabled)
            ? register.provision.hosts.map(h, h.sid)
            : [] }
+  # provisioned_provider — ФАКТ-провайдер созданных VM. provider читается как
+  # default(input.provision.provider, essence.provision_provider): оператор обычно НЕ задаёт
+  # provider (форма provision скрыта, default-on) → фоллбэк на essence.provision_provider
+  # (симметрия с redis-provision.yml::core.cloud.created.params.provider). Гейт input.provision
+  # (has()-safe) держит non-provision-путь: enabled=false / create_from_souls → '' (VM не
+  # провижены этим прогоном). ★ TODO: prod/dev provider switch (ENV keeper / Coven-overlay) — отдельный ADR.
   - set: provisioned_provider
     value: >-
       ${ (has(input.provision) && input.provision.enabled)
-           ? input.provision.provider
+           ? default(input.provision.provider, essence.provision_provider)
            : '' }
 
   # redis_users — ТИПИЗИРОВАННЫЙ массив AclUser (wave 1b, map→array). state хранит

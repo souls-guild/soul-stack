@@ -69,6 +69,10 @@ fixtures:
   vault:
     secret/redis/update_config:
       password: upd-redis-pass-16chars
+    # ★ РЕДИЗАЙН default_admin: системный admin-юзер — пароль из ветки users/default_admin
+    # (masterauth-долив в config + AUTH community.redis.config по TLS).
+    secret/redis/update_config/users/default_admin:
+      password: default-admin-secret-pass
     secret/services/redis/tls:
       ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
 
@@ -101,6 +105,10 @@ assert:
               tls-key-file: /etc/redis/tls/redis.key
               tls-ca-cert-file: /etc/redis/tls/ca.crt
               tls-replication: "yes"
+              # ★ РЕДИЗАЙН default_admin: статическая replica→master AUTH доливается в
+              # apply.input.config → redis.conf несёт masteruser/masterauth (failover-safe).
+              masteruser: default_admin
+              masterauth: default-admin-secret-pass
           self:
             sid: trial-host
             covens: [update_config]
@@ -121,10 +129,14 @@ assert:
     - module: community.redis.config
       params_subset:
         addr: "127.0.0.1:7379"
-        password: upd-redis-pass-16chars
+        # ★ РЕДИЗАЙН default_admin: AUTH под default_admin (username + его Vault-пароль).
+        username: default_admin
+        password: default-admin-secret-pass
         tls: true
         tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
         rewrite: true
+        # config — ЧИСТЫЙ compute.redis_config БЕЗ masterauth-долива (hot-reload = только
+        # операторская дельта; masteruser/masterauth — replication-материал, не трогается).
         config:
           maxmemory: "1536mb"
           maxmemory-policy: allkeys-lru

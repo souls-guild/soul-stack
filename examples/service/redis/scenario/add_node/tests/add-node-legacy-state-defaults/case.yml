@@ -24,9 +24,12 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.9 }
         os: { arch: amd64 }
+  # ★ РЕДИЗАЙН default_admin (2026-06-30): коннект к нодам — под системным default_admin
+  # (PING-gate + CLUSTER MEET + masterauth деплоя читают его пароль). Прежний главный
+  # секрет secret/redis/<inc>#password ДРОПНУТ — ветка users/default_admin.
   vault:
-    secret/redis/add_node:
-      password: s3cr3t-redis-pass-addnode
+    secret/redis/add_node/users/default_admin:
+      password: default-admin-secret-pass
   # СТАРАЯ инкарнация: state БЕЗ conf_dir/data_dir/modules_base_url (поля добавлены
   # позже как create-only с has()-safe чтением на day-2). redis_version="" тоже без
   # пина (< 8 эффективно → модули проходят дефолтными путями).
@@ -71,7 +74,8 @@ assert:
       params_subset:
         action: add-node
         role: master
-        password: s3cr3t-redis-pass-addnode
+        username: default_admin
+        password: default-admin-secret-pass
         new_node:
           addr: "10.0.0.9:6379"
         seed:

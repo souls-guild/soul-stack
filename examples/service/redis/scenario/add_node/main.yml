@@ -94,8 +94,24 @@ tasks:
         # ловит отсутствие листа на существующем incarnation.state, как modules_base_url).
         conf_dir: "${ default(incarnation.state.conf_dir, '/etc/redis') }"
         data_dir: "${ default(incarnation.state.data_dir, '/var/lib/redis') }"
-        password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
-        config:   "${ incarnation.state.redis_config }"
+        # ★ РЕДИЗАЙН default_admin (2026-06-30): apply.input.password УДАЛЁН (requirepass
+        # убран — destiny больше не принимает password). Аутентификация — под системным
+        # default_admin, его пароль приходит в users ниже (системные доливаются из essence).
+        #
+        # ★ СТАТИЧЕСКАЯ replica→master AUTH в redis.conf — masteruser/masterauth ДОЛИВАЮТСЯ
+        # поверх incarnation.state.redis_config (источник истины с create) ОБЫЧНЫМИ директивами
+        # (как эталон cluster deploy). КРИТИЧНО, если новая нода входит репликой: cluster-
+        # реплика при FULLSYNC проходит AUTH ТОЛЬКО по статической masterauth в redis.conf
+        # (плагин шлёт лишь REPLICATE master-id, masterauth не выставляет) — без неё PSYNC
+        # упёрся бы в NOAUTH → master_link_status:DOWN. Доливается на новой ноде host-инвариантно
+        # (один default_admin на кластер). Failover-safe: на role=master инертны. day-2-тело
+        # (вне covenant) хардкодит 'default_admin' напрямую. masterauth — vault()-В-ЯЧЕЙКЕ
+        # (seal-маскинг, ADR-010 §7.4); путь — secret/redis/<inc>/users/default_admin#password.
+        config: >-
+          ${ merge(incarnation.state.redis_config, {
+               'masteruser': 'default_admin',
+               'masterauth': vault('secret/redis/' + incarnation.name + '/users/default_admin#password')
+             }) }
         # Источник .so Redis-модулей — из state (директива «модули ВСЕГДА ВСЕ»): новая
         # нода кластера тянет тот же набор модулей из того же источника, что и кластер.
         # modules_base_url сохранён в state при create; default '' для старых
@@ -130,14 +146,17 @@ tasks:
 
   # 3. Health-gate: новая нода обязана ответить PING ДО ввода в кластер.
   #    community.redis.command, retry/until через retry. addr localhost (плагин на
-  #    самой ноде), пароль — keeper-side vault().
+  #    самой ноде). ★ РЕДИЗАЙН default_admin (2026-06-30): PING-коннект — под системным
+  #    default_admin (username → AUTH, requirepass убран); пароль из новой Vault-ветки
+  #    users/default_admin. day-2-тело (вне covenant) хардкодит 'default_admin'.
   - name: Wait for the new node to answer PING
     where: soulprint.self.sid == input.new_node_sid
     module: community.redis.command
     retry: { count: 10, delay: 3s }
     params:
       addr:     "127.0.0.1:6379"
-      password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+      username: default_admin
+      password: "${ vault('secret/redis/' + incarnation.name + '/users/default_admin#password') }"
       args:     ["PING"]
 
   # 4. ADD-NODE — run_once. Endpoint-ы строятся из roster (soulprint.hosts) по SID:
@@ -152,7 +171,10 @@ tasks:
     params:
       action:   add-node
       role:     "${ default(input.role, 'replica') }"
-      password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+      # ★ РЕДИЗАЙН default_admin (2026-06-30): коннект к нодам — под системным default_admin
+      # (username → AUTH, requirepass убран); пароль из новой Vault-ветки users/default_admin.
+      username: default_admin
+      password: "${ vault('secret/redis/' + incarnation.name + '/users/default_admin#password') }"
       new_node:
         addr: "${ soulprint.hosts.where(\"sid == input.new_node_sid\")[0].network.primary_ip + ':6379' }"
       seed:

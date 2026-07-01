@@ -24,9 +24,12 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.3 }
         os: { arch: amd64 }
+  # ★ РЕДИЗАЙН default_admin (2026-06-30): коннект к нодам кластера — под системным
+  # default_admin (username → AUTH), его пароль из ветки secret/redis/<inc>/users/
+  # default_admin#password. Прежний главный секрет secret/redis/<inc>#password ДРОПНУТ.
   vault:
-    secret/redis/remove_node:
-      password: s3cr3t-redis-pass-removenode
+    secret/redis/remove_node/users/default_admin:
+      password: default-admin-secret-pass
   state:
     redis_type: cluster
     redis_version: ""
@@ -51,7 +54,8 @@ assert:
     - module: community.redis.cluster
       params_subset:
         action: remove-node
-        password: s3cr3t-redis-pass-removenode
+        username: default_admin
+        password: default-admin-secret-pass
         node:
           addr: "10.0.0.3:6379"
         seed:

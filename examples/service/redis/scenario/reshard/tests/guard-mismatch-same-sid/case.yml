@@ -19,9 +19,12 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.2 }
         os: { arch: amd64 }
+  # ★ РЕДИЗАЙН default_admin (2026-06-30): vault-ветка default_admin (коннект под
+  # системным admin-юзером). Guard рвёт render ДО RESHARD-задачи — пароль здесь не
+  # резолвится, но ветка приведена к новой форме для консистентности с happy-кейсом.
   vault:
-    secret/redis/reshard:
-      password: s3cr3t-redis-pass-reshard
+    secret/redis/reshard/users/default_admin:
+      password: default-admin-secret-pass
   state:
     redis_type: cluster
     redis_version: ""

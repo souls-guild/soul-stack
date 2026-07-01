@@ -19,9 +19,12 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.9 }
         os: { arch: amd64 }
+  # ★ РЕДИЗАЙН default_admin (2026-06-30): vault-ветка default_admin (коннект под
+  # системным admin-юзером). Guard рвёт render ДО destiny/ADD-NODE — пароль здесь не
+  # резолвится, но ветка приведена к новой форме для консистентности с happy-кейсами.
   vault:
-    secret/redis/add_node:
-      password: s3cr3t-redis-pass-addnode
+    secret/redis/add_node/users/default_admin:
+      password: default-admin-secret-pass
   state:
     redis_type: cluster
     redis_version: ""

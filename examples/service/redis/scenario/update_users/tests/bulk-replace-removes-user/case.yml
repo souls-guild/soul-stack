@@ -45,6 +45,10 @@ fixtures:
   vault:
     secret/redis/update_users:
       password: updusr-redis-pass-16ch
+    # ★ РЕДИЗАЙН default_admin: системный admin-юзер — пароль из ветки users/default_admin
+    # (masterauth-долив в apply.input.config + AUTH community.redis.acl).
+    secret/redis/update_users/users/default_admin:
+      password: default-admin-secret-pass
     secret/redis/update_users/users/alice:
       password: alice-user-secret-pass
 
@@ -76,10 +80,12 @@ assert:
           essence: {}
 
     # 2. HOT-RELOAD ACL: community.redis.acl к живому plain-инстансу.
+    #    ★ РЕДИЗАЙН default_admin: AUTH под default_admin (username + его Vault-пароль).
     - module: community.redis.acl
       params_subset:
         addr: "127.0.0.1:6379"
-        password: updusr-redis-pass-16ch
+        username: default_admin
+        password: default-admin-secret-pass
         tls: false
 
   # state_changes: redis_users = НОВЫЙ набор ЦЕЛИКОМ (только alice, bob выпал — bulk-

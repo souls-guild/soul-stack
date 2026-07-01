@@ -62,13 +62,20 @@ fixtures:
   vault:
     secret/redis/update_config:
       password: upd-redis-pass-16chars
+    # ★ РЕДИЗАЙН default_admin: системный admin-юзер — пароль из ветки users/default_admin
+    # (masterauth-долив в apply.input.config + AUTH community.redis.config).
+    secret/redis/update_config/users/default_admin:
+      password: default-admin-secret-pass
 
 assert:
   task_present:
     # hot-reload несёт перевычисленный merged config с долитой passthrough-директивой.
+    # ★ РЕДИЗАЙН default_admin: AUTH под default_admin (username + его Vault-пароль).
     - module: community.redis.config
       params_subset:
         addr: "127.0.0.1:6379"
+        username: default_admin
+        password: default-admin-secret-pass
         rewrite: true
         config:
           maxmemory: "768mb"

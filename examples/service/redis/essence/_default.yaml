@@ -64,6 +64,24 @@ binary_version:  ""
 # resolvable хостом) ставит false в spec.essence инкарнации — guard восстанавливается.
 binary_allow_private: true
 
+# ── Cloud-provision дефолты: provider/profile/timeout/ssh для create default-on ──
+# create поднимает VM по умолчанию (input.provision default-on, решение 2026-06-30).
+# Оператор НЕ выбирает provider/profile в Run-форме (она скрыта) — они приходят ОТСЮДА:
+# redis-provision.yml читает default(input.provision.X, essence.provision_X), covenant
+# state_changes provisioned_provider — то же. Author-context: оператор переопределяет в
+# spec.essence инкарнации (другой провайдер/профиль/таймаут), но дефолт — прод-окружение.
+#
+# ★ TODO: prod/dev provider switch (ENV keeper / Coven-overlay) — отдельный ADR. Пока
+# ОДНА статичная пара provider/profile (прод). Переключение prod/dev по окружению Keeper-а
+# или по Coven-overlay инкарнации НЕ реализовано — это заглушка под будущую развилку.
+provision_provider: wb-prod
+provision_profile:  redis-debian-12
+# Верхняя граница ожидания онбординга созданных VM (барьер await_online, core.soul.registered
+# refresh_soulprint; форма <N>{s|m|h}). Фоллбэк для input.provision.await_timeout.
+provision_await_timeout: "10m"
+# Имя SshProvider-плагина для доставки per-VM bootstrap-токена по SSH (core.bootstrap.delivered).
+provision_ssh_provider: teleport
+
 # ── Дефолты per-master директив Sentinel (подложка sentinel_master_settings) ─────
 # Нижний слой merge() для input.sentinel_master_settings (compute.sentinel_directives):
 # ключ — имя опции SENTINEL SET без префикса/master-name, значение — строка. Сюда
