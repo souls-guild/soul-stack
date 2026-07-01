@@ -41,6 +41,7 @@ func TestNativeEnumConstsPinned(t *testing.T) {
 
 		// HeraldType
 		{"HeraldTypeWebhook", string(HeraldTypeWebhook), "webhook"},
+		{"HeraldTypeTelegram", string(HeraldTypeTelegram), "telegram"},
 
 		// GitRefType
 		{"GitRefTypeBranch", string(GitRefTypeBranch), "branch"},

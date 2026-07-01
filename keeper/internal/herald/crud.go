@@ -565,7 +565,7 @@ func validateHerald(h *Herald) error {
 	if err := ValidateConfig(h.Type, h.Config); err != nil {
 		return wrapValidation(err)
 	}
-	if err := ValidateSecretRef(h.SecretRef); err != nil {
+	if err := ValidateSecretRef(h.Type, h.SecretRef); err != nil {
 		return wrapValidation(err)
 	}
 	return nil

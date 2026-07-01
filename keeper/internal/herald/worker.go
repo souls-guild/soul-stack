@@ -10,7 +10,6 @@ package herald
 // mini-reaper ([RequeueExpired]) возвращают осиротевшие после крэша job-ы.
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -184,8 +183,14 @@ func (w *DeliveryWorker) handle(ctx context.Context, payload []byte) {
 	w.requeue(ctx, job, payload, derr)
 }
 
-// deliver делает один webhook-POST. Возврат (statusCode, nil) на 2xx; иначе
-// ошибка (SSRF-guard / транспорт / non-2xx) — caller решает retry/терминал.
+// deliver доставляет один job. Возврат (statusCode, nil) на 2xx; иначе ошибка
+// (SSRF-guard / транспорт / non-2xx) — caller решает retry/терминал.
+//
+// Двухклассовая модель (ADR-052 amendment): резолв канала + Enabled-проверка +
+// ЕДИНЫЙ SSRF-guard (validateDeliveryEndpoint + guardedDeliveryClient) — общие
+// для ВСЕХ HTTP-типов; per-type request-builder ([HeraldTransport]) строит URL/
+// тело/заголовки/подпись. Новый HTTP-тип НЕ может обойти guard — deliver() зовёт
+// его сам, а не транспорт. Классификация non-2xx (isTerminalStatus) — общая.
 func (w *DeliveryWorker) deliver(ctx context.Context, job *DeliveryJob) (int, error) {
 	h, err := w.Heralds.HeraldByName(ctx, job.Herald)
 	if err != nil {
@@ -203,49 +208,39 @@ func (w *DeliveryWorker) deliver(ctx context.Context, job *DeliveryJob) (int, er
 		return 0, errTerminalNoRetry{fmt.Errorf("herald: channel %q disabled", h.Name)}
 	}
 
-	target, err := resolveWebhook(ctx, h, w.KV)
+	tr, ok := transportFor(h.Type)
+	if !ok {
+		// Тип без HTTP-транспорта (неизвестный / не-HTTP-класс без своей ветки) —
+		// доставлять нечем, устойчивая ошибка: терминал без retry.
+		return 0, errTerminalNoRetry{fmt.Errorf("herald: channel %q type %q has no transport", h.Name, h.Type)}
+	}
+
+	dr, err := tr.BuildRequest(ctx, h, job, w.KV)
 	if err != nil {
-		// Битый config / Vault-сбой signing-token-а. Vault-сбой может быть
-		// транзиентным — оставляем retry (НЕ terminal-no-retry).
+		// Транспорт сам классифицировал ошибку (terminal-no-retry для битого
+		// config / Vault-сбой transient) — пробрасываем как есть.
 		return 0, err
 	}
 
-	// SSRF-валидация URL ПЕРЕД запросом (config мог измениться после create).
-	if err := validateDeliveryEndpoint(target.url, target.httpAllowed, target.allowPrivate); err != nil {
+	// SSRF-валидация URL ПЕРЕД запросом (config мог измениться после create) —
+	// ЕДИНАЯ точка для всех HTTP-типов.
+	if err := validateDeliveryEndpoint(dr.req.URL.String(), dr.httpAllowed, dr.allowPrivate); err != nil {
 		// Guard отверг — это устойчивая ошибка конфигурации, ретраить
 		// бессмысленно: терминальный fail.
 		return 0, errTerminalNoRetry{err}
 	}
 
-	body, err := buildPayload(job)
+	client := guardedDeliveryClient(w.Resolver, dr.allowPrivate, w.Timeout)
+	resp, err := client.Do(dr.req)
 	if err != nil {
-		return 0, errTerminalNoRetry{err}
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target.url, bytes.NewReader(body))
-	if err != nil {
-		return 0, errTerminalNoRetry{fmt.Errorf("herald: build request: %w", err)}
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "soul-stack-keeper/herald")
-	for k, v := range target.headers {
-		req.Header.Set(k, v)
-	}
-	if target.signingKey != nil {
-		req.Header.Set(SignatureHeader, signBody(target.signingKey, body))
-	}
-
-	client := guardedDeliveryClient(w.Resolver, target.allowPrivate, w.Timeout)
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0, fmt.Errorf("herald: webhook POST: %w", err)
+		return 0, fmt.Errorf("herald: delivery POST: %w", err)
 	}
 	defer resp.Body.Close()
 	// Дренируем тело (с лимитом) — переиспользование keep-alive-соединения.
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		err := fmt.Errorf("herald: webhook returned status %d", resp.StatusCode)
+		err := fmt.Errorf("herald: delivery returned status %d", resp.StatusCode)
 		if isTerminalStatus(resp.StatusCode) {
 			// 4xx (кроме 408/429) — устойчивая клиентская ошибка (auth/route/
 			// payload): повтор не поможет, терминал без retry.

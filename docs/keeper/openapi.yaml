@@ -911,9 +911,10 @@ components:
           description: опц. vault-ref на signing-token (vault:<mount>/<path>); сам секрет не хранится
           type: string
         type:
-          description: тип канала (closed-enum, webhook в MVP); значение вне enum → 422
+          description: "тип канала (closed-enum: webhook|telegram); значение вне enum → 422"
           enum:
             - webhook
+            - telegram
           type: string
       required:
         - name
@@ -958,9 +959,10 @@ components:
           description: опц. vault-ref на signing-token; отсутствие очищает подпись
           type: string
         type:
-          description: тип канала (closed-enum, webhook в MVP)
+          description: "тип канала (closed-enum: webhook|telegram)"
           enum:
             - webhook
+            - telegram
           type: string
       required:
         - type

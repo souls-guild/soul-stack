@@ -29,15 +29,23 @@ var nameRe = regexp.MustCompile(NamePattern)
 // ValidName проверяет соответствие name канонической форме.
 func ValidName(name string) bool { return nameRe.MatchString(name) }
 
-// HeraldType — closed-enum типа канала. В MVP только webhook (ADR-052(a));
-// slack/email — additive post-MVP (новое значение enum + CHECK heralds_type_enum).
+// HeraldType — closed-enum типа канала. Канонический набор известных типов —
+// реестр дескрипторов [heraldTypeSpecs] (единый источник); добавление типа —
+// одна запись туда + CHECK-миграция + huma-enum (сверяются guard-тестом с
+// [AllHeraldTypes]). webhook — HTTP-класс с HMAC-подписью; telegram — HTTP-класс,
+// auth через vault-ref bot_token_ref в config (ADR-052 amendment).
 type HeraldType string
 
-const HeraldWebhook HeraldType = "webhook"
+const (
+	HeraldWebhook  HeraldType = "webhook"
+	HeraldTelegram HeraldType = "telegram"
+)
 
-// ValidHeraldType — true для известного типа канала.
+// ValidHeraldType — true для известного типа канала (наличие в реестре
+// дескрипторов). Единый источник — [heraldTypeSpecs].
 func ValidHeraldType(t HeraldType) bool {
-	return t == HeraldWebhook
+	_, ok := typeSpec(t)
+	return ok
 }
 
 // Herald — runtime-представление строки реестра `heralds`.
@@ -108,24 +116,34 @@ type Tiding struct {
 }
 
 // ValidateConfig проверяет config канала по его типу (то, что БД-CHECK не
-// покрывает — JSONB shape зависит от type). Для webhook:
-//   - `url` обязателен и строка;
-//   - SSRF-контур взведён по умолчанию (ADR-052(e), паттерн core.url):
-//     https-only через [netguard.ValidateEndpoint], если в config не задан
-//     явный opt-out `http_allowed: true`; при opt-out — проверяется только
-//     корректность URL (http допускается);
-//   - литеральный private-IP в host блокируется (часть ValidateEndpoint),
-//     если не задан opt-out `allow_private: true` (DNS-резолв приватки —
-//     dial-фаза доставки, S3).
+// покрывает — JSONB shape зависит от type). Обход управляется декларативным
+// дескриптором типа ([heraldTypeSpecs]): (1) required-присутствие + kind-
+// соответствие + secret-поле → валидный vault-ref (generic [validateBySpec]),
+// (2) доменный per-type хук транспорта (для webhook — SSRF-контур URL; для
+// telegram — chat_id непустой). Единый источник валидатора и каталога.
 //
-// fail-closed: неизвестный/битый config отвергается на CRUD-этапе, до записи.
+// fail-closed: неизвестный тип / битый config отвергается на CRUD-этапе, до
+// записи.
 func ValidateConfig(t HeraldType, config map[string]any) error {
-	switch t {
-	case HeraldWebhook:
-		return validateWebhookConfig(config)
-	default:
-		return fmt.Errorf("herald: unknown type %q (must be webhook)", t)
+	spec, ok := typeSpec(t)
+	if !ok {
+		return fmt.Errorf("herald: unknown type %q (known: %v)", t, AllHeraldTypes())
 	}
+	return validateBySpec(spec, config)
+}
+
+// validateTelegramConfig — доменный хук транспорта telegram. Form-проверки полей
+// (bot_token_ref vault-ref, chat_id/parse_mode) делает generic-обход
+// [validateBySpec] по дескриптору; здесь — доп. инвариант chat_id (непустая
+// строка после трима: пробельный chat_id — мёртвый адрес). Endpoint telegram
+// фиксирован (api.telegram.org) — SSRF-guard тривиально проходит на доставке,
+// на CRUD не проверяется.
+func validateTelegramConfig(config map[string]any) error {
+	chatID, _ := config["chat_id"].(string)
+	if strings.TrimSpace(chatID) == "" {
+		return fmt.Errorf("herald: telegram config %q must be a non-empty chat id", "chat_id")
+	}
+	return nil
 }
 
 func validateWebhookConfig(config map[string]any) error {
@@ -170,12 +188,20 @@ func configBool(config map[string]any, key string) bool {
 	return ok && v
 }
 
-// ValidateSecretRef проверяет, что secret_ref (если задан) — корректный
-// vault-ref (`vault:<mount>/<path>`), тем же парсером, что omens.auth_ref. nil
-// допустим — секрет канала опционален (подпись webhook-а не обязательна).
-func ValidateSecretRef(ref *string) error {
-	if ref == nil {
+// ValidateSecretRef проверяет top-level secret_ref канала. Семантика (ADR-052
+// amendment, разводка секрета): secret_ref — СТРОГО HMAC signing-token webhook-а;
+// у прочих типов он обязан быть ПУСТ (их auth-credential — vault-ref-поле ВНУТРИ
+// config, напр. telegram bot_token_ref). Правила:
+//   - nil/пусто — всегда ок (подпись webhook-а опциональна);
+//   - type≠webhook + непустой secret_ref → ошибка (поле не для этого типа);
+//   - type=webhook + непустой secret_ref → обязан быть корректным vault-ref
+//     (`vault:<mount>/<path>`), тем же парсером, что omens.auth_ref.
+func ValidateSecretRef(t HeraldType, ref *string) error {
+	if ref == nil || *ref == "" {
 		return nil
+	}
+	if t != HeraldWebhook {
+		return fmt.Errorf("herald: secret_ref is only for webhook signing; %s uses a vault-ref field inside config", t)
 	}
 	if _, err := vault.ParseRef(*ref); err != nil {
 		return fmt.Errorf("herald: invalid secret_ref %q (must be a vault-ref vault:<mount>/<path>): %w", *ref, err)

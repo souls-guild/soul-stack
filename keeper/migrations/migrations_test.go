@@ -209,6 +209,8 @@ func TestEmbed_ContainsExpectedMigrations(t *testing.T) {
 		"089_add_incarnation_created_scenario.up.sql",
 		"090_incarnation_created_scenario_nullable.down.sql",
 		"090_incarnation_created_scenario_nullable.up.sql",
+		"091_extend_heralds_type.down.sql",
+		"091_extend_heralds_type.up.sql",
 	}
 	if len(names) != len(want) {
 		t.Fatalf("got %d files, want %d: %v", len(names), len(want), names)
@@ -303,6 +305,32 @@ func TestEmbed_OperatorsAuthMethodLDAPOIDC(t *testing.T) {
 	}
 	if !strings.Contains(string(d), "'jwt', 'mtls', 'combined'") {
 		t.Errorf("083 down.sql does not restore prior set; content: %.200s", d)
+	}
+}
+
+// TestEmbed_HeraldsTypeTelegram — sanity на 091 (ADR-052 amendment): only-add
+// расширение CHECK heralds_type_enum значением `telegram`. Up расширяет набор
+// (webhook+telegram), down возвращает к прежнему (только webhook).
+func TestEmbed_HeraldsTypeTelegram(t *testing.T) {
+	b, err := FS.ReadFile("091_extend_heralds_type.up.sql")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	body := string(b)
+	for _, frag := range []string{
+		"DROP CONSTRAINT heralds_type_enum",
+		"'webhook', 'telegram'",
+	} {
+		if !strings.Contains(body, frag) {
+			t.Errorf("091 up.sql missing %q; content head: %.300s", frag, body)
+		}
+	}
+	d, err := FS.ReadFile("091_extend_heralds_type.down.sql")
+	if err != nil {
+		t.Fatalf("read down: %v", err)
+	}
+	if !strings.Contains(string(d), "('webhook')") {
+		t.Errorf("091 down.sql does not restore webhook-only set; content: %.200s", d)
 	}
 }
 
