@@ -11,8 +11,10 @@ spec:
         provider:          { type: string, required: true, description: "Имя cloud-Provider в реестре (driver + креды + регион)." }
         profile:           { type: map,    description: "Параметры VM-профиля (backend-специфично)." }
         count:             { type: int,    description: "Сколько VM создать (default 1, >= 1)." }
-        userdata:          { type: string, description: "Cloud-init userdata (взаимоисключим с generate_userdata)." }
+        userdata:          { type: string, description: "Cloud-init userdata (взаимоисключим с generate_userdata и self_onboard)." }
         generate_userdata: { type: bool,   description: "Сгенерировать userdata из keeper.yml cloud_init (ADR-017(h))." }
+        name:              { type: string, description: "Базовое имя VM-батча (self-onboard Вариант T): keeper предсказывает FQDN=<name>-<index>.<suffix>. Обязателен при self_onboard." }
+        self_onboard:      { type: bool,   description: "VM онбордится сама из cloud-init (Вариант T, ADR-017(h)): keeper предсказывает FQDN и запекает per-VM токены в userdata. Требует name + providers.fqdn_suffix." }
     destroyed:
       description: Keeper-side (on:keeper). Облачные VM уничтожены, реестры cascade-обновлены (ADR-017).
       input:

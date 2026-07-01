@@ -1,0 +1,71 @@
+name: preserves-unrelated
+description: >
+  Инкарнация, у которой logging в state УЖЕ есть (напр. повторный прогон миграции или state,
+  где log-shipping развёрнут с непустым sink). has()-guard объекта СОХРАНЯЕТ существующие
+  значения logging как есть (идемпотентность, НЕ перезатирает дефолтами), остальной state
+  (redis_type/redis_config/redis_users/redis_sentinel/monitoring/топология) проходит насквозь
+  бит-в-бит. Зеркало объект-guard-а v12→v13 (monitoring) и 008_to_009 (seeded_from).
+
+state_before:
+  redis_type: "cluster"
+  redis_config:
+    maxmemory: "256mb"
+    appendonly: "yes"
+  redis_users:
+    - { name: "app", perms: "~* +@all", state: "on" }
+  redis_sentinel:
+    master_name: "master"
+    quorum: 2
+    master_settings:
+      down-after-milliseconds: "5000"
+      failover-timeout: "60000"
+    settings: {}
+  tls:
+    enable: true
+    only: false
+    port: 7379
+  persistence: "rdb_aof_1sec"
+  shards: 3
+  replicas: 1
+  monitoring:
+    node_exporter_version: "1.8.2"
+    redis_exporter_version: "1.62.0"
+    node_exporter_listen: ":19100"
+    redis_exporter_listen: ":19121"
+  logging:
+    vector_version: "0.40.0"
+    vector_sink_type: "loki"
+    vector_sink_endpoint: "https://loki.example.com"
+    vector_log_sources: ["/var/log/redis/*.log"]
+
+state_after:
+  redis_type: "cluster"
+  redis_config:
+    maxmemory: "256mb"
+    appendonly: "yes"
+  redis_users:
+    - { name: "app", perms: "~* +@all", state: "on" }
+  redis_sentinel:
+    master_name: "master"
+    quorum: 2
+    master_settings:
+      down-after-milliseconds: "5000"
+      failover-timeout: "60000"
+    settings: {}
+  tls:
+    enable: true
+    only: false
+    port: 7379
+  persistence: "rdb_aof_1sec"
+  shards: 3
+  replicas: 1
+  monitoring:
+    node_exporter_version: "1.8.2"
+    redis_exporter_version: "1.62.0"
+    node_exporter_listen: ":19100"
+    redis_exporter_listen: ":19121"
+  logging:
+    vector_version: "0.40.0"
+    vector_sink_type: "loki"
+    vector_sink_endpoint: "https://loki.example.com"
+    vector_log_sources: ["/var/log/redis/*.log"]

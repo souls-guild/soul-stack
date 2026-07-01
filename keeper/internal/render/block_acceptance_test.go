@@ -187,6 +187,15 @@ func (redisSentinelResolver) Resolve(_ context.Context, name string) (*ResolvedD
 			"redis_user":     {Type: "string"},
 			"redis_password": {Type: "string"},
 		}), nil
+	case "vector":
+		return syntheticDestiny("vector", config.InputSchemaMap{
+			"version":       {Type: "string"},
+			"sha256":        {Type: "string"},
+			"sink_type":     {Type: "string"},
+			"sink_endpoint": {Type: "string"},
+			"sink_auth_ref": {Type: "string"},
+			"log_sources":   {Type: "array"},
+		}), nil
 	default:
 		return nil, errors.New("unknown destiny " + name)
 	}

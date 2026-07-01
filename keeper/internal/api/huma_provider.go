@@ -25,6 +25,7 @@ func newProvider(v handlers.ProviderView) Provider {
 		CreatedAt:      v.CreatedAt,
 		CreatedByAID:   v.CreatedByAID,
 		CredentialsRef: v.CredentialsRef,
+		FQDNSuffix:     v.FQDNSuffix,
 		Name:           v.Name,
 		Region:         v.Region,
 		Type:           v.Type,
@@ -61,6 +62,7 @@ func registerHumaProviderCreate(humaAPI huma.API, providerH *handlers.ProviderHa
 			Type:           in.Body.Type,
 			Region:         in.Body.Region,
 			CredentialsRef: in.Body.CredentialsRef,
+			FQDNSuffix:     in.Body.FQDNSuffix,
 		})
 		if err != nil {
 			return nil, providerProblem(err)

@@ -1,0 +1,85 @@
+{{/*
+  vector.yaml — конфигурация Vector log-shipping агента. Go text/template strict
+  (ADR-010, Вариант B): input читается напрямую (.input.data_dir / .input.log_sources /
+  .input.journald / .input.sink_type / .input.sink_endpoint). File-vars (.vars) конфиг НЕ
+  использует — все значения из input.
+
+  Структура заимствована из ansible-роли vector (идея, НЕ копия): sources (type file с
+  include-списком путей + read_from end; опц. type journald) → sinks (один sink,
+  выбранный по sink_type). Transforms в MVP не выделяются (source→sink напрямую).
+
+  ★ Секрет доступа к коллектору (sink_auth_ref) в этот файл НЕ пишется: он уходит в
+  systemd-unit через Environment=VECTOR_SINK_TOKEN, а sink-секции ниже ссылаются на
+  него как "${VECTOR_SINK_TOKEN}" — Vector подставляет env при старте (нет секрета на
+  диске в конфиге). Литерал "${...}" здесь — синтаксис env-подстановки САМОГО Vector,
+  а не наш CEL/text-template маркер (шаблон отдаёт его как есть).
+
+  data_dir (global) — persistent disk-buffer: checkpoint-сдвиги прочитанных файлов и
+  очередь sink-а. Владелец — сервис-аккаунт (account.yml).
+
+  ★ inputs sink-а перечисляют ФАКТИЧЕСКИ отрендеренные source-ключи: file-source
+  service_logs (если log_sources непуст) и/или journald-source journald_logs (если
+  journald). При пустом наборе источников sink НЕ рендерится (Vector стартует пустым —
+  валидный degenerate-конфиг, деплой не падает). Sprig list/append вне allowlist
+  (templating.md §3.3) — inputs собираются условными строками, не промежуточным списком.
+*/}}
+data_dir: {{ .input.data_dir }}
+
+# Внутренние логи самого Vector (уровень — input.log_level, через env VECTOR_LOG в unit).
+healthchecks:
+  enabled: false
+
+sources:
+{{- if .input.log_sources }}
+  service_logs:
+    type: file
+    read_from: end
+    include:
+{{- range .input.log_sources }}
+      - {{ . }}
+{{- end }}
+{{- end }}
+{{- if .input.journald }}
+  journald_logs:
+    type: journald
+    current_boot_only: true
+{{- end }}
+
+{{- if or .input.log_sources .input.journald }}
+sinks:
+  out:
+{{- if eq .input.sink_type "loki" }}
+    type: loki
+    endpoint: {{ .input.sink_endpoint }}
+    auth:
+      strategy: bearer
+      token: "${VECTOR_SINK_TOKEN}"
+    labels:
+      host: "{{ "{{" }} host {{ "}}" }}"
+      source: "{{ "{{" }} source_type {{ "}}" }}"
+    encoding:
+      codec: json
+{{- else if eq .input.sink_type "elasticsearch" }}
+    type: elasticsearch
+    endpoints:
+      - {{ .input.sink_endpoint }}
+    auth:
+      strategy: basic
+      user: vector
+      password: "${VECTOR_SINK_TOKEN}"
+{{- else if eq .input.sink_type "vector" }}
+    type: vector
+    address: {{ .input.sink_endpoint }}
+{{- else }}
+    type: console
+    encoding:
+      codec: json
+{{- end }}
+    inputs:
+{{- if .input.log_sources }}
+      - service_logs
+{{- end }}
+{{- if .input.journald }}
+      - journald_logs
+{{- end }}
+{{- end }}

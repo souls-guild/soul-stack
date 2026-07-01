@@ -215,6 +215,8 @@ func TestEmbed_ContainsExpectedMigrations(t *testing.T) {
 		"092_create_warrant.up.sql",
 		"093_create_purge_old_certs.down.sql",
 		"093_create_purge_old_certs.up.sql",
+		"094_add_providers_fqdn_suffix.down.sql",
+		"094_add_providers_fqdn_suffix.up.sql",
 	}
 	if len(names) != len(want) {
 		t.Fatalf("got %d files, want %d: %v", len(names), len(want), names)

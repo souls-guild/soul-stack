@@ -37,7 +37,10 @@ type CreateInput struct {
 	Type           string
 	Region         string
 	CredentialsRef string
-	CallerAID      string
+	// FQDNSuffix — опц. суффикс FQDN VM провайдера (self-onboard Вариант T,
+	// ADR-017(h)). nil → self-onboard недоступен для провайдера.
+	FQDNSuffix *string
+	CallerAID  string
 }
 
 // Create вставляет новый Provider.
@@ -57,6 +60,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Provider, error)
 		Type:           in.Type,
 		Region:         in.Region,
 		CredentialsRef: in.CredentialsRef,
+		FQDNSuffix:     in.FQDNSuffix,
 		CreatedByAID:   createdBy,
 	}
 	if err := Insert(ctx, s.pool, p); err != nil {

@@ -60,6 +60,14 @@ fixtures:
     redis_exporter_version: "1.62.0"
     redis_exporter_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
     redis_exporter_listen: ":9121"
+    # ★ essence-ключи log-shipping (Слайс V-I, ADR-065): версия/checksum/sink агента vector.
+    # console sink (дефолт) — endpoint/auth не нужны; log_sources = redis-логи.
+    vector_version: "0.40.0"
+    vector_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    vector_sink_type: console
+    vector_sink_endpoint: ""
+    vector_sink_auth_ref: ""
+    vector_log_sources: ["/var/log/redis/*.log"]
     system_acl_users:
       default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
@@ -119,6 +127,14 @@ assert:
           role: ""
           essence: {}
 
+    # 3. vector развёрнут (apply:destiny vector → install бинаря). Маркер присутствия
+    #    под-destiny log-shipping (Слайс V-I): единственный core.file.present с path бинаря
+    #    vector. version/arch → в url/extract, sink console (дефолт) — тут не сверяем.
+    - module: core.file.present
+      params_subset:
+        path: /usr/local/bin/vector
+        mode: "0755"
+
   state_changes:
     redis_type: sentinel
     redis_version: "7.4.1"
@@ -129,3 +145,10 @@ assert:
       redis_exporter_version: "1.62.0"
       node_exporter_listen: ":9100"
       redis_exporter_listen: ":9121"
+    # read-model log-shipping (Слайс V-I, ADR-065): версия/sink/источники агента vector.
+    # sink_auth_ref (токен коллектора) НЕ в state (ИБ) — намеренно отсутствует.
+    logging:
+      vector_version: "0.40.0"
+      vector_sink_type: console
+      vector_sink_endpoint: ""
+      vector_log_sources: ["/var/log/redis/*.log"]

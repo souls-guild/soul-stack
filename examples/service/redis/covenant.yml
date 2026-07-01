@@ -705,6 +705,20 @@ state_changes:
            'node_exporter_listen':   default(essence.node_exporter_listen, ':9100'),
            'redis_exporter_listen':  default(essence.redis_exporter_listen, ':9121')
          } }
+  # logging: read-model ФАКТА развёрнутого log-shipping (Слайс V-I, ADR-065; симметрия
+  # monitoring). Версия/sink_type/endpoint/log_sources — из essence.vector_* (те же значения,
+  # что уходят в apply.input destiny vector в create/main.yml). ★ vector_sink_auth_ref СЮДА НЕ
+  # пишется — это секрет (Vault-ref/токен), в state не оседает (ИБ, как tls.*_ref и пароль
+  # monitoring). Дефолты дублируют essence/миграцию 013_to_014 (console — безопасный дефолт без
+  # инфры; version из essence-подложки). Оператор видит, что развёрнуто; повторный apply идемпотентен.
+  - set: logging
+    value: >-
+      ${ {
+           'vector_version':       default(essence.vector_version, ''),
+           'vector_sink_type':     default(essence.vector_sink_type, 'console'),
+           'vector_sink_endpoint': default(essence.vector_sink_endpoint, ''),
+           'vector_log_sources':   default(essence.vector_log_sources, [])
+         } }
   # ── Топология (counts) ──────────────────────────────────────────────────────
   # shards/replicas/sentinel_quorum — из тех же input.*, что size-guard/cluster-build/
   # sentinel-ветки. shards — только cluster (не задан → 0). replicas — UNIFIED

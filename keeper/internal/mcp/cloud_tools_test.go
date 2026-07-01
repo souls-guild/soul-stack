@@ -67,9 +67,14 @@ func (p *cloudFakePool) QueryRow(_ context.Context, sql string, args ...any) pgx
 			s := args[4].(string)
 			createdBy = &s
 		}
+		var fqdnSuffix *string
+		if len(args) > 5 && args[5] != nil {
+			s := args[5].(string)
+			fqdnSuffix = &s
+		}
 		p.providers[name] = &provider.Provider{
 			Name: name, Type: args[1].(string), Region: args[2].(string),
-			CredentialsRef: args[3].(string), CreatedByAID: createdBy, CreatedAt: now,
+			CredentialsRef: args[3].(string), FQDNSuffix: fqdnSuffix, CreatedByAID: createdBy, CreatedAt: now,
 		}
 		return cloudRow{[]any{now}}
 	case strings.Contains(sql, "INSERT INTO profiles"):
@@ -95,7 +100,7 @@ func (p *cloudFakePool) QueryRow(_ context.Context, sql string, args ...any) pgx
 		if !ok {
 			return cloudErrRow{pgx.ErrNoRows}
 		}
-		return cloudRow{[]any{pr.Name, pr.Type, pr.Region, pr.CredentialsRef, pr.CreatedByAID, pr.CreatedAt}}
+		return cloudRow{[]any{pr.Name, pr.Type, pr.Region, pr.CredentialsRef, pr.CreatedByAID, pr.CreatedAt, pr.FQDNSuffix}}
 	case strings.Contains(sql, "FROM profiles") && strings.Contains(sql, "WHERE name = $1"):
 		pr, ok := p.profiles[args[0].(string)]
 		if !ok {
@@ -110,7 +115,7 @@ func (p *cloudFakePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows
 	rows := &cloudRows{}
 	if strings.Contains(sql, "FROM providers") {
 		for _, pr := range p.providers {
-			rows.data = append(rows.data, []any{pr.Name, pr.Type, pr.Region, pr.CredentialsRef, pr.CreatedByAID, pr.CreatedAt})
+			rows.data = append(rows.data, []any{pr.Name, pr.Type, pr.Region, pr.CredentialsRef, pr.CreatedByAID, pr.CreatedAt, pr.FQDNSuffix})
 		}
 		return rows, nil
 	}

@@ -63,7 +63,7 @@ const (
 	// разбора инцидентов).
 	defaultPurgeOldCertsMaxAge   = 90 * 24 * time.Hour
 	defaultMarkDisconnectedStale = 90 * time.Second
-	defaultPurgeApplyRunsMaxAge     = 30 * 24 * time.Hour
+	defaultPurgeApplyRunsMaxAge  = 30 * 24 * time.Hour
 
 	// Retention истории Voyage-прогонов (`purge_voyages`, ADR-046 §79). 30d
 	// ВЫРОВНЕНО на defaultPurgeApplyRunsMaxAge сознательно: voyage_targets

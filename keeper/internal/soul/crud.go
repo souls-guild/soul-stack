@@ -68,6 +68,11 @@ FROM souls
 WHERE sid = $1
 `
 
+const deleteBySIDSQL = `
+DELETE FROM souls
+WHERE sid = $1
+`
+
 // updateStatusSQL — атомарный UPDATE статуса с фиксацией last_seen_by_kid
 // (для аудита «какой Keeper последним держал стрим»). last_seen_at пишется
 // в Redis, в PG — flush; здесь не трогаем.
@@ -211,6 +216,28 @@ func Insert(ctx context.Context, db ExecQueryRower, s *Soul) error {
 	)
 	if err := row.Scan(&s.RegisteredAt, &s.RequestedAt); err != nil {
 		return mapInsertError(err)
+	}
+	return nil
+}
+
+// DeleteBySID удаляет запись souls по SID. FK bootstrap_tokens.sid и
+// soul_seeds.sid объявлены ON DELETE CASCADE (миграции 008/009) — связанные
+// токены и seed-записи уходят вместе с Soul-ом. Возвращает [ErrSoulNotFound],
+// если строки с таким SID нет (идемпотентно для caller-а, который откатывает
+// только что вставленную запись).
+//
+// Точечный откат по SID; batch-GC просроченных Soul-ов — отдельная Reaper-
+// функция purge_souls (миграция 012), она статус-фильтрованная.
+func DeleteBySID(ctx context.Context, db ExecQueryRower, sid string) error {
+	if !ValidSID(sid) {
+		return fmt.Errorf("soul: invalid SID %q", sid)
+	}
+	tag, err := db.Exec(ctx, deleteBySIDSQL, sid)
+	if err != nil {
+		return fmt.Errorf("soul: delete: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrSoulNotFound
 	}
 	return nil
 }

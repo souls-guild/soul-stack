@@ -12,8 +12,8 @@ import (
 	"time"
 
 	keepercert "github.com/souls-guild/soul-stack/keeper/internal/cert"
-	"github.com/souls-guild/soul-stack/keeper/internal/coremod/internaltest"
 	coremodcert "github.com/souls-guild/soul-stack/keeper/internal/coremod/cert"
+	"github.com/souls-guild/soul-stack/keeper/internal/coremod/internaltest"
 	"github.com/souls-guild/soul-stack/shared/audit"
 
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"

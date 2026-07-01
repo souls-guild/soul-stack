@@ -1,5 +1,5 @@
 name: redis
-state_schema_version: 13
+state_schema_version: 14
 description: >-
   Redis по концепции Ansible-роли: ОДИН сервис на режимы развёртывания
   (redis_type ∈ sentinel/cluster). Per-host install + render redis.conf делает
@@ -220,6 +220,26 @@ state_schema:
         node_exporter_listen:   { type: string }
         redis_exporter_listen:  { type: string }
 
+    # ── Log-shipping data-плоскости (read-model, v14, Слайс V-I, ADR-065) ──────
+    # ФАКТ развёрнутого агента отгрузки логов: create БЕЗУСЛОВНО ставит vector на
+    # каждый хост (ПОСЛЕ deploy+экспортеров). version/sink_type/endpoint/log_sources —
+    # из essence.vector_* (те же значения, что ушли в apply.input destiny vector).
+    # ★ sink_auth_ref (токен коллектора) СЮДА НЕ пишется — секрет живёт в Vault
+    # (как tls.*_ref и пароль monitoring). Симметрия monitoring read-model: оператор
+    # видит, что развёрнуто. Для v≤13-инкарнаций (log-shipping ещё не развёрнут) —
+    # консервативный default: version '' (не развёрнуто, best-effort как monitoring),
+    # sink_type console (безопасный, без инфры), endpoint '' , log_sources [] (013_to_014).
+    logging:
+      type: object
+      additionalProperties: false
+      properties:
+        vector_version:       { type: string }
+        vector_sink_type:     { type: string }
+        vector_sink_endpoint: { type: string }
+        vector_log_sources:
+          type: array
+          items: { type: string }
+
     # ── cloud-provision read-model (v7–v8, ADR-061) ───────────────────────────
     # ФАКТ «эти хосты подняты нашим create-прогоном через cloud-create». Заполняется
     # create ТОЛЬКО когда input.provision.enabled (provider/vm_ids/sids из register
@@ -357,6 +377,7 @@ destiny:
   - { name: redis, ref: v1.0.0 }
   - { name: node-exporter, ref: v1.0.0 }
   - { name: redis-exporter, ref: v1.0.0 }
+  - { name: vector, ref: v1.0.0 }
 
 # Custom-модули сервиса. Двухуровневая форма <namespace>.<module> (kebab-case)
 # обязательна (docs/service/manifest.md → modules[]). community.redis — ОСНОВНОЙ

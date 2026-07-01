@@ -1,0 +1,69 @@
+{{/*
+  systemd-unit Vector. Go text/template strict (ADR-010), Вариант B: input читается
+  `.input.<name>` напрямую (user/group/data_dir/log_level/journald), путь бинаря и
+  конфига — file-vars (.vars.bin_path/.vars.config_path). Перечень полей — destiny.yml
+  input:.
+
+  ★ Сервис-аккаунт — стабильный system-user (прод-конвенция §2, stateful): persistent
+  disk-buffer (data_dir) переживает рестарты и принадлежит фиксированному uid (DynamicUser
+  непригоден — после смены uid Vector не прочитает свой checkpoint). Под root не работает.
+
+  ★ ExecStartPre validate: Vector проверяет конфиг ДО запуска (--config-yaml validate) —
+  битый vector.yaml не роняет уже работающий сервис на рестарте (fail в pre → start не
+  идёт, старый процесс остаётся, паритет ansible exec_start_pre). ExecReload=SIGHUP:
+  Vector перечитывает конфиг по HUP без рестарта (мы этим не пользуемся — рестарт-onchanges
+  в service.yml, — но оставлено для ручного reload оператором).
+
+  ★ Секрет коллектора — Environment=VECTOR_SINK_TOKEN (.vars.sink_token, seal-маскинг на
+  выходе): vector.yaml на диске секрета НЕ содержит (ссылается на env "${VECTOR_SINK_TOKEN}"),
+  systemd передаёт значение процессу. Пусто → sink без auth (console/открытый коллектор).
+  VECTOR_LOG задаёт уровень внутренних логов самого Vector.
+
+  ★ systemd-hardening (прод-конвенция §3, «безопасность на первом месте»): беспривилегированный
+  Rust-демон. ReadWritePaths=data_dir — единственная запись (disk-buffer); ProtectSystem=strict
+  делает / только-чтение (лог-файлы сервиса Vector ЧИТАЕТ — read вне защищённых зон разрешён).
+  Сеть открыта (sink push → AF_INET/AF_INET6). MemoryDenyWriteExecute НЕ ставим: Vector-бинарь
+  может использовать W+X для регексов/VRL (в отличие от Go-экспортеров). При journald=true —
+  SupplementaryGroups=systemd-journal для доступа к системному журналу.
+*/}}
+[Unit]
+Description=Vector log-shipping agent
+Documentation=https://vector.dev
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User={{ .input.user }}
+Group={{ .input.group }}
+{{- if .input.journald }}
+# Доступ к системному журналу (source type journald).
+SupplementaryGroups=systemd-journal
+{{- end }}
+Environment=VECTOR_LOG={{ .input.log_level }}
+Environment=VECTOR_SINK_TOKEN={{ .vars.sink_token }}
+ExecStartPre={{ .vars.bin_path }} validate --no-environment --config-yaml {{ .vars.config_path }}
+ExecStart={{ .vars.bin_path }} --config-yaml {{ .vars.config_path }}
+ExecReload=/bin/kill -HUP $MAINPID
+SyslogIdentifier=vector
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+KillSignal=SIGTERM
+
+# systemd-hardening (прод-конвенция §3).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+LockPersonality=yes
+RestrictNamespaces=yes
+ProtectProc=invisible
+ReadWritePaths={{ .input.data_dir }}
+
+[Install]
+WantedBy=multi-user.target

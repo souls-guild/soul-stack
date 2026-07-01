@@ -31,6 +31,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"text/template"
@@ -61,6 +62,10 @@ const (
 	SoulServicePath = "/etc/systemd/system/soul.service"
 	// SoulBinaryPath — путь установки soul-бинаря.
 	SoulBinaryPath = "/usr/local/bin/soul"
+	// SelfOnboardTokensPath — файл map FQDN→token на VM (self-onboard Вариант T).
+	// cloud-init выбирает свой токен по hostname и делает `soul init`. Права 0600
+	// (несёт секреты, тест-стенд). См. Blueprint.SelfOnboardTokens.
+	SelfOnboardTokensPath = "/etc/soul/self-onboard-tokens"
 
 	// KeeperCAMode — права keeper-ca.pem при SSH-install (0600; в cloud-init
 	// тот же файл пишется write_files-ом с 0644 — оба варианта приватнее не
@@ -113,7 +118,25 @@ type Blueprint struct {
 	// SoulVersion — опц. строка-метка (для диагностики). В cloud-init попадает
 	// комментарием. Sig-verify бинаря отложен (ADR-017(h) amendment).
 	SoulVersion string
+
+	// SelfOnboardTokens — map FQDN→plain-bootstrap-token для self-onboard
+	// «Вариант T» (ADR-017(h) amendment). Непустой → cloud-init запекает эти
+	// токены в userdata (общий blob) и добавляет фазу `soul init` (токен
+	// выбирается по hostname VM), между установкой бинаря и `soul run`. VM сама
+	// онбордится в один цикл cloud-init, без claim-callback и без keeper.push.
+	//
+	// ★ БЕЗОПАСНОСТЬ (тест-стенд): в этом режиме plain-токены попадают в userdata,
+	// который cloud-провайдер хранит в plaintext metadata. Это осознанный компромисс
+	// self-onboard тест-стенда (снимает security-guard `bootstrap_token` — см.
+	// RenderCloudInitYAML). TODO(prod): для прода вернуть late-binding claim (Вариант
+	// C) или per-VM userdata (individual blob на VM вместо общего map).
+	//
+	// Пустой/nil → обычный B-flat рендер (токенов в userdata нет, guard активен).
+	SelfOnboardTokens map[string]string
 }
+
+// selfOnboard — режим self-onboard (Blueprint несёт per-VM токены).
+func (b Blueprint) selfOnboard() bool { return len(b.SelfOnboardTokens) > 0 }
 
 // Validate проверяет, что Blueprint заполнен достаточно для рендера. Возвращает
 // первую найденную ошибку с понятным сообщением (несколько ошибок поднимать не
@@ -182,12 +205,14 @@ func RenderCloudInitYAML(bp Blueprint) (string, error) {
 	// единый источник правды без текстового дубля в шаблоне. Indent 6 пробелов
 	// кладёт блок под YAML-ключ `content: |` (как indentBlock для CA PEM).
 	view := struct {
-		TLSCAPemIndented       string
-		SoulConfigYAMLIndented string
-		SystemdUnitIndented    string
-		SoulBinaryURL          string
-		UseSystemCA            bool
-		SoulVersion            string
+		TLSCAPemIndented          string
+		SoulConfigYAMLIndented    string
+		SystemdUnitIndented       string
+		SoulBinaryURL             string
+		UseSystemCA               bool
+		SoulVersion               string
+		SelfOnboard               bool
+		SelfOnboardTokensIndented string
 	}{
 		TLSCAPemIndented:       indentBlock(bp.KeeperCAPem, "      "),
 		SoulConfigYAMLIndented: indentBlock(SoulConfigYAML(host, port), "      "),
@@ -195,6 +220,10 @@ func RenderCloudInitYAML(bp Blueprint) (string, error) {
 		SoulBinaryURL:          bp.SoulBinaryURL,
 		UseSystemCA:            bp.useSystemCA(),
 		SoulVersion:            bp.SoulVersion,
+		SelfOnboard:            bp.selfOnboard(),
+	}
+	if bp.selfOnboard() {
+		view.SelfOnboardTokensIndented = indentBlock(selfOnboardTokensFile(bp.SelfOnboardTokens), "      ")
 	}
 
 	var sb strings.Builder
@@ -203,13 +232,19 @@ func RenderCloudInitYAML(bp Blueprint) (string, error) {
 	}
 	out := sb.String()
 
-	// Security floor: userdata НЕ должен нести bootstrap-токен или vault-ref.
-	// Token — отдельный шаг scenario (B-flat), vault-ref — резолвится раньше.
-	if strings.Contains(out, "bootstrap_token") {
-		return "", errors.New("cloud-init render: output contains 'bootstrap_token' substring — userdata must not carry per-VM tokens (B-flat invariant)")
-	}
+	// Security floor: userdata НЕ должен нести vault-ref (секреты резолвятся ДО
+	// рендера) — держится ВСЕГДА, включая self-onboard (в userdata легитимны
+	// только bootstrap-токены, но не vault-пути).
 	if strings.Contains(out, "vault:") {
 		return "", errors.New("cloud-init render: output contains 'vault:' substring — vault-refs must be resolved before render")
+	}
+	// Security floor `bootstrap_token`: userdata НЕ должен нести токены (B-flat).
+	// ★ СНИМАЕТСЯ в self-onboard-режиме (Вариант T, тест-стенд): там per-VM токены
+	// в userdata — намеренно (VM онбордится в один цикл cloud-init). Вне
+	// self-onboard guard активен как раньше (защита от случайной утечки).
+	// TODO(prod): вернуть guard для прода (late-binding claim / per-VM userdata).
+	if !bp.selfOnboard() && strings.Contains(out, "bootstrap_token") {
+		return "", errors.New("cloud-init render: output contains 'bootstrap_token' substring — userdata must not carry per-VM tokens (B-flat invariant)")
 	}
 	return out, nil
 }
@@ -270,6 +305,28 @@ func binaryCurlCmd(url string, systemCA bool) string {
 		return fmt.Sprintf("curl --fail --show-error --silent --output %s %s", SoulBinaryPath, url)
 	}
 	return fmt.Sprintf("curl --fail --show-error --silent --cacert %s --output %s %s", KeeperCAPath, SoulBinaryPath, url)
+}
+
+// selfOnboardTokensFile сериализует map FQDN→token в построчный формат
+// `<fqdn> <token>` (self-onboard Вариант T). Формат grep/awk-friendly: cloud-init
+// выбирает свою строку по `$(hostname -f)` первым полем. FQDN отсортированы —
+// байт-стабильность рендера (map iteration в Go недетерминирован). Токены
+// base64url без пробелов (bootstraptoken.Generate), поэтому split по пробелу
+// однозначен.
+func selfOnboardTokensFile(tokens map[string]string) string {
+	fqdns := make([]string, 0, len(tokens))
+	for fqdn := range tokens {
+		fqdns = append(fqdns, fqdn)
+	}
+	sort.Strings(fqdns)
+	var b strings.Builder
+	for _, fqdn := range fqdns {
+		b.WriteString(fqdn)
+		b.WriteByte(' ')
+		b.WriteString(tokens[fqdn])
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 // SoulConfigYAML — содержимое soul.yml (минимальный конфиг soul-агента для

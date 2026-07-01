@@ -217,6 +217,91 @@ func newStateHistoryEntry(v handlers.StateHistoryView) StateHistoryEntry {
 	}
 }
 
+// === runs reply-DTO (список прогонов инкарнации + per-host детали) ===
+
+// RunSummaryEntry — native элемент runs.items (GET /v1/incarnations/{name}/runs).
+// status — агрегатный статус прогона (applying/success/failed/cancelled). finished_at
+// / started_by_aid — omitempty (nil → ключ опущен: прогон ещё applying / инициатор
+// снят). Форма симметрична StateHistoryEntry.
+type RunSummaryEntry struct {
+	ApplyID      string     `json:"apply_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"`
+	Scenario     string     `json:"scenario"`
+	Status       string     `json:"status" enum:"applying,success,failed,cancelled"`
+	StartedAt    time.Time  `json:"started_at"`
+	FinishedAt   *time.Time `json:"finished_at,omitempty"`
+	StartedByAID *string    `json:"started_by_aid,omitempty" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"`
+}
+
+// RunHostStatusEntry — native элемент runs/{apply_id}.hosts[]: статус одного хоста в
+// прогоне. failed_task_idx (локальный индекс упавшей задачи в её Passage) /
+// failed_plan_index (глобальный сквозной plan_index той же задачи) / error_summary
+// заполнены ТОЛЬКО на упавшем хосте (omitempty: nil → ключ опущен на success/running).
+// status — host-level статус (planned/claimed/running/dispatched/success/failed/
+// cancelled/orphaned/no_match).
+type RunHostStatusEntry struct {
+	SID             string  `json:"sid" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$"`
+	Status          string  `json:"status"`
+	Passage         int     `json:"passage"`
+	FailedTaskIdx   *int    `json:"failed_task_idx,omitempty"`
+	FailedPlanIndex *int    `json:"failed_plan_index,omitempty"`
+	ErrorSummary    *string `json:"error_summary,omitempty"`
+	Attempt         int32   `json:"attempt"`
+	CancelRequested bool    `json:"cancel_requested"`
+}
+
+// RunDetailReply — native тело GET /v1/incarnations/{name}/runs/{apply_id}: шапка
+// прогона (apply_id/scenario/status/время/инициатор) + срез по хостам. hosts non-nil
+// (пустой прогон без host-строк невозможен — SelectRunDetail вернул бы not-found).
+type RunDetailReply struct {
+	ApplyID      string               `json:"apply_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"`
+	Scenario     string               `json:"scenario"`
+	Status       string               `json:"status" enum:"applying,success,failed,cancelled"`
+	StartedAt    time.Time            `json:"started_at"`
+	FinishedAt   *time.Time           `json:"finished_at,omitempty"`
+	StartedByAID *string              `json:"started_by_aid,omitempty" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"`
+	Hosts        []RunHostStatusEntry `json:"hosts"`
+}
+
+// newRunSummaryEntry проецирует доменный handlers.RunSummaryView в native.
+func newRunSummaryEntry(v handlers.RunSummaryView) RunSummaryEntry {
+	return RunSummaryEntry{
+		ApplyID:      v.ApplyID,
+		Scenario:     v.Scenario,
+		Status:       v.Status,
+		StartedAt:    v.StartedAt,
+		FinishedAt:   v.FinishedAt,
+		StartedByAID: v.StartedByAID,
+	}
+}
+
+// newRunDetailReply проецирует доменный handlers.RunDetailView в native (шапка +
+// hosts). hosts всегда материализуется как non-nil срез (byte-exact `[]` при 0
+// длине не встречается — see RunDetailReply).
+func newRunDetailReply(v handlers.RunDetailView) RunDetailReply {
+	hosts := make([]RunHostStatusEntry, len(v.Hosts))
+	for i, hs := range v.Hosts {
+		hosts[i] = RunHostStatusEntry{
+			SID:             hs.SID,
+			Status:          hs.Status,
+			Passage:         hs.Passage,
+			FailedTaskIdx:   hs.FailedTaskIdx,
+			FailedPlanIndex: hs.FailedPlanIndex,
+			ErrorSummary:    hs.ErrorSummary,
+			Attempt:         hs.Attempt,
+			CancelRequested: hs.CancelRequested,
+		}
+	}
+	return RunDetailReply{
+		ApplyID:      v.ApplyID,
+		Scenario:     v.Scenario,
+		Status:       v.Status,
+		StartedAt:    v.StartedAt,
+		FinishedAt:   v.FinishedAt,
+		StartedByAID: v.StartedByAID,
+		Hosts:        hosts,
+	}
+}
+
 // ptrMap оборачивает домен-`map[string]any` в `*map[string]interface{}`, сохраняя nil-различимость:
 // nil-map → nil-указатель (json-тег без omitempty → `null`), непустой → указатель на тот же map.
 func ptrMap(m map[string]any) *map[string]interface{} {

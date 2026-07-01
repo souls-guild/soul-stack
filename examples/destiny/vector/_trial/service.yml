@@ -1,0 +1,18 @@
+# service.yml L0-обёртки destiny vector (Trial, ADR-023).
+#
+# Обёртка не настоящий сервис: единственная роль — дать standalone destiny vector
+# render-only L0-проверку через scenario apply:destiny. Резолв apply:destiny зеркалит
+# ПРОД (slice A): name → service.yml::destiny[] + URL из default_destiny_source
+# (case.yml). Поэтому даже обёртке нужен service.yml с объявленной зависимостью.
+name: trial-vector
+state_schema_version: 1
+description: >-
+  L0-харнесс destiny vector (ADR-023). Не сервис — scenario-обёртка под render-only
+  Trial. state_schema здесь номинальный (Trial L0 его не ассертит). arch destiny берёт
+  напрямую из soulprint.self.os.arch (apply:input его не передаёт).
+
+state_schema:
+  type: object
+
+destiny:
+  - { name: vector, ref: v1.0.0 }

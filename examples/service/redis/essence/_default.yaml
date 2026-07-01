@@ -106,6 +106,36 @@ redis_exporter_version: "1.62.0"
 redis_exporter_sha256:  "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 redis_exporter_listen:  ":9121"
 
+# ── Обязательный log-shipping data-плоскости: Vector (Слайс V-I, ADR-065) ─────────
+# create БЕЗУСЛОВНО ставит vector (агент отгрузки логов) на КАЖДЫЙ хост incarnation
+# (ПОСЛЕ deploy-ветки и экспортеров). ДОПОЛНЯЕТ node_exporter/redis_exporter (метрики,
+# pull) лог-плоскостью (логи, push) — три разных observability-слоя, НЕ пересекаются.
+# Версии/checksum/sink — author-context (НЕ operator-input, форма скрыта, контракт=A):
+# оператор переопределяет в spec.essence. compute гонит их в apply.input destiny vector
+# (create/main.yml); arch destiny берёт сама из soulprint.self.os.arch.
+vector_version:  "0.40.0"
+# checksum tarball-а Vector (<arch>-unknown-linux-gnu, форма "sha256:<hex>", 64 hex).
+# core.url.fetched верифицирует его ДО публикации бинаря. ПЛЕЙСХОЛДЕР (нули): реальный
+# оператор ОБЯЗАН подставить checksum под свою пару (vector_version, arch) из
+# sha256sums.txt GitHub-релиза vectordotdev/vector в spec.essence — иначе fail-closed
+# (несовпадение/pattern → честный отказ fetch). Смена версии/arch требует обновить checksum.
+vector_sha256:   "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+# sink_type — куда шлём логи (loki/elasticsearch/vector/console). Дефолт console (безопасно,
+# без внешней инфры: логи в stdout самого vector). sink_endpoint — адрес центрального
+# коллектора (форма зависит от sink_type: loki/elasticsearch — URL, vector — host:port;
+# console — не используется). Пусто (default) допустимо только для console. sink_auth_ref —
+# токен доступа к коллектору (Vault-ref ИЛИ значение); резолвится Soul-side, в state НЕ
+# оседает (ИБ, как tls.*_ref). Пусто → sink без auth. Оператор задаёт sink_type/endpoint/
+# auth_ref в spec.essence при живом коллекторе (Grafana Loki и т.п.).
+vector_sink_type:      console
+vector_sink_endpoint:  ""
+vector_sink_auth_ref:  ""
+# Пути/glob-ы лог-файлов redis, которые vector читает (source type file). redis-server и
+# redis-sentinel пишут в /var/log/redis/*.log (logfile redis.conf/sentinel.conf, glob
+# покрывает оба демона — синхронно с logrotate destiny redis). journald по умолчанию off
+# (только файлы). Оператор расширяет список в spec.essence при необходимости.
+vector_log_sources:  ["/var/log/redis/*.log"]
+
 # ── Дефолты per-master директив Sentinel (подложка sentinel_master_settings) ─────
 # Нижний слой merge() для input.sentinel_master_settings (compute.sentinel_directives):
 # ключ — имя опции SENTINEL SET без префикса/master-name, значение — строка. Сюда

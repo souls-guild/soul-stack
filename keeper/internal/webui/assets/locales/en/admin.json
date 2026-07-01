@@ -297,5 +297,29 @@
   "themeDarkDesc": "Dark",
   "themeSystemDesc": "Follow system",
   "themeWarmDesc": "Warm tones",
-  "themeDeepDesc": "Deep dark"
+  "themeDeepDesc": "Deep dark",
+
+  "appearanceFontTitle": "Font",
+  "appearanceFontDesc": "Choose the interface font. Independent of theme, saved across sessions.",
+  "fontAriaGroup": "Interface font",
+
+  "fontSystem": "System",
+  "fontMono": "Monospace",
+  "fontSerif": "Serif",
+  "fontManrope": "Manrope",
+  "fontQuicksand": "Quicksand",
+  "fontUnbounded": "Unbounded",
+  "fontCaveat": "Caveat",
+  "fontComfortaa": "Comfortaa",
+  "fontComicNeue": "Comic Neue",
+
+  "fontSystemDesc": "Default system font",
+  "fontMonoDesc": "Monospaced (JetBrains Mono)",
+  "fontSerifDesc": "With serifs (Merriweather)",
+  "fontManropeDesc": "Geometric humanist",
+  "fontQuicksandDesc": "Rounded grotesque",
+  "fontUnboundedDesc": "Angular grotesque",
+  "fontCaveatDesc": "Handwritten, readable",
+  "fontComfortaaDesc": "Rounded decorative",
+  "fontComicNeueDesc": "Friendly, playful — but readable"
 }

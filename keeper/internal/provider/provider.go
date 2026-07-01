@@ -37,12 +37,29 @@ func ValidCredentialsRef(ref string) bool {
 		len(ref) > len(CredentialsRefPrefix)
 }
 
+// FQDNSuffixPattern — форма fqdn_suffix (self-onboard Вариант T, ADR-017(h)):
+// DNS-labels через точку, без ведущей/замыкающей точки и без underscore
+// (RFC-1035-совместимо — keeper склеит `<name>-<index>.<suffix>` в валидный
+// FQDN=SID). Дублирует CHECK providers_fqdn_suffix_format (миграция 094).
+const FQDNSuffixPattern = `^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$`
+
+var fqdnSuffixRe = regexp.MustCompile(FQDNSuffixPattern)
+
+// ValidFQDNSuffix проверяет непустой суффикс на соответствие [FQDNSuffixPattern].
+// Пустой суффикс валидатор НЕ пропускает — «суффикса нет» кодируется NULL/nil,
+// а не пустой строкой (пустая дала бы FQDN с висящей точкой).
+func ValidFQDNSuffix(suffix string) bool { return fqdnSuffixRe.MatchString(suffix) }
+
 // Provider — runtime-представление строки реестра `providers`.
 type Provider struct {
-	Name           string    `json:"name"`
-	Type           string    `json:"type"`
-	Region         string    `json:"region"`
-	CredentialsRef string    `json:"credentials_ref"`
-	CreatedByAID   *string   `json:"created_by_aid,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
+	Name           string `json:"name"`
+	Type           string `json:"type"`
+	Region         string `json:"region"`
+	CredentialsRef string `json:"credentials_ref"`
+	// FQDNSuffix — суффикс FQDN VM провайдера (self-onboard Вариант T, ADR-017(h)):
+	// keeper предсказывает SID=FQDN как `<name>-<index>.<FQDNSuffix>`. nil → провайдер
+	// без предсказуемого FQDN, self-onboard недоступен. Без ведущей точки.
+	FQDNSuffix   *string   `json:"fqdn_suffix,omitempty"`
+	CreatedByAID *string   `json:"created_by_aid,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
 }

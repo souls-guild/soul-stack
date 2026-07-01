@@ -78,6 +78,12 @@ type fakeIncDB struct {
 	// UnknownSID). UpdateHosts SQL `UPDATE incarnation SET spec = ...` ловится
 	// общим Exec — фиксирует факт записи в execCalls.
 	soulsExisting map[string]struct{}
+
+	// Runs read-view (GET .../runs[/{apply_id}]): count-строка списка прогонов
+	// (COUNT(DISTINCT apply_id) FROM apply_runs) и rows list/detail (SELECT ...
+	// FROM apply_runs). nil → пустой список / 0 (для scope-gate/empty-тестов).
+	applyRunsCountRow func(sql string) pgx.Row
+	applyRunsRows     func() (pgx.Rows, error)
 }
 
 func (f *fakeIncDB) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
@@ -146,6 +152,14 @@ func (f *fakeIncDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row
 		}
 		return staticRow{values: []any{int(0)}}
 	}
+	// Runs read-view (GET .../runs): COUNT(DISTINCT apply_id) FROM apply_runs.
+	// applyRunsCountRow контролирует значение; nil → 0 (пустой список прогонов).
+	if strings.Contains(sql, "COUNT(DISTINCT apply_id) FROM apply_runs") {
+		if f.applyRunsCountRow != nil {
+			return f.applyRunsCountRow(sql)
+		}
+		return staticRow{values: []any{int(0)}}
+	}
 	return errRow{err: errors.New("fakeIncDB.QueryRow: unexpected SQL: " + sql)}
 }
 
@@ -161,6 +175,14 @@ func (f *fakeIncDB) Query(_ context.Context, sql string, args ...any) (pgx.Rows,
 			}
 		}
 		return &stringRows{values: found}, nil
+	}
+	// Runs read-view: SELECT ... FROM apply_runs (list прогонов / detail per-host).
+	// Отдельный hook от listRows (тот — incarnation-list), nil → пустой набор.
+	if strings.Contains(sql, "FROM apply_runs") {
+		if f.applyRunsRows != nil {
+			return f.applyRunsRows()
+		}
+		return &emptyRows{}, nil
 	}
 	if strings.Contains(sql, "FROM incarnation") {
 		f.lastListArgs = args

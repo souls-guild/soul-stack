@@ -18,6 +18,7 @@ type Provider struct {
 	CreatedAt      time.Time `json:"created_at"`
 	CreatedByAID   *string   `json:"created_by_aid,omitempty" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
 	CredentialsRef string    `json:"credentials_ref"`
+	FQDNSuffix     *string   `json:"fqdn_suffix,omitempty"`
 	Name           string    `json:"name"`
 	Region         string    `json:"region"`
 	Type           string    `json:"type"`

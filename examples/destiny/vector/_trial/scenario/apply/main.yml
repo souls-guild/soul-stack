@@ -1,0 +1,51 @@
+# L0-харнесс destiny vector (Trial, ADR-023). Минимальный scenario, чья единственная
+# задача — apply:destiny vector, чтобы дать destiny render-only L0. Каноническая
+# раскладка обёртки (ADR-023): подкаталог самой destiny — `vector/_trial/scenario/apply/`.
+# Резолвер L0 зеркалит прод (slice A): apply:destiny резолвится по имени из
+# `_trial/service.yml::destiny[]` + URL из `default_destiny_source` тест-кейса.
+name: apply
+description: >-
+  Trial-харнесс: делегирует установку Vector в destiny vector через apply:destiny.
+  Не сервис — обёртка под L0-render destiny.
+
+input:
+  version:
+    type: string
+    required: true
+    pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+  sha256:
+    type: string
+    required: true
+    pattern: "^sha256:[0-9a-f]{64}$"
+  sink_type:
+    type: string
+    default: console
+    enum: [loki, elasticsearch, vector, console]
+  sink_endpoint:
+    type: string
+    default: ""
+  sink_auth_ref:
+    type: string
+    default: ""
+    secret: true
+  log_sources:
+    type: array
+    default: []
+    items:
+      type: string
+  journald:
+    type: boolean
+    default: false
+
+tasks:
+  - name: Apply vector destiny
+    apply:
+      destiny: vector
+      input:
+        version:       "${ input.version }"
+        sha256:        "${ input.sha256 }"
+        sink_type:     "${ input.sink_type }"
+        sink_endpoint: "${ input.sink_endpoint }"
+        sink_auth_ref: "${ input.sink_auth_ref }"
+        log_sources:   "${ input.log_sources }"
+        journald:      "${ input.journald }"

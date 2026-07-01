@@ -44,6 +44,7 @@ func (noopCloudSouls) Insert(_ context.Context, _ *keepersoul.Soul) error { retu
 func (noopCloudSouls) UpdateStatus(_ context.Context, _ string, _ keepersoul.Status, _ *string) error {
 	return nil
 }
+func (noopCloudSouls) DeleteBySID(_ context.Context, _ string) error { return nil }
 
 type noopCloudTokens struct{}
 
@@ -53,6 +54,7 @@ func (noopCloudTokens) Generate() (bootstraptoken.PlainToken, error) {
 func (noopCloudTokens) Insert(_ context.Context, sid, _ string, _ *string) (*bootstraptoken.Record, error) {
 	return &bootstraptoken.Record{SID: sid}, nil
 }
+func (noopCloudTokens) DeleteByTokenID(_ context.Context, _ string) error { return nil }
 
 type noopVault struct{}
 

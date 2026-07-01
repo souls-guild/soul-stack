@@ -47,12 +47,12 @@ var (
 // insertSQL — INSERT с RETURNING для получения server-side created_at
 // (DEFAULT NOW()) одной round-trip-ой.
 const insertSQL = `
-INSERT INTO providers (name, type, region, credentials_ref, created_by_aid)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO providers (name, type, region, credentials_ref, created_by_aid, fqdn_suffix)
+VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING created_at
 `
 
-const selectColumns = `name, type, region, credentials_ref, created_by_aid, created_at`
+const selectColumns = `name, type, region, credentials_ref, created_by_aid, created_at, fqdn_suffix`
 
 const selectByNameSQL = `
 SELECT ` + selectColumns + `
@@ -90,14 +90,24 @@ func Insert(ctx context.Context, db ExecQueryRower, p *Provider) error {
 		return fmt.Errorf("provider: invalid credentials_ref %q (must start with %q and carry a path)",
 			p.CredentialsRef, CredentialsRefPrefix)
 	}
+	// fqdn_suffix опционален (self-onboard Вариант T); если задан — обязан быть
+	// валидным DNS-суффиксом (иначе предсказанный FQDN=SID не пройдёт soul.ValidSID).
+	if p.FQDNSuffix != nil && !ValidFQDNSuffix(*p.FQDNSuffix) {
+		return fmt.Errorf("provider: invalid fqdn_suffix %q (must match %s; use nil for none)",
+			*p.FQDNSuffix, FQDNSuffixPattern)
+	}
 
 	var createdByAID any
 	if p.CreatedByAID != nil {
 		createdByAID = *p.CreatedByAID
 	}
+	var fqdnSuffix any
+	if p.FQDNSuffix != nil {
+		fqdnSuffix = *p.FQDNSuffix
+	}
 
 	row := db.QueryRow(ctx, insertSQL,
-		p.Name, p.Type, p.Region, p.CredentialsRef, createdByAID,
+		p.Name, p.Type, p.Region, p.CredentialsRef, createdByAID, fqdnSuffix,
 	)
 	if err := row.Scan(&p.CreatedAt); err != nil {
 		return mapInsertError(err)
@@ -131,6 +141,7 @@ func scanProvider(row pgx.Row) (*Provider, error) {
 	var (
 		p            Provider
 		createdByAID *string
+		fqdnSuffix   *string
 	)
 	err := row.Scan(
 		&p.Name,
@@ -139,6 +150,7 @@ func scanProvider(row pgx.Row) (*Provider, error) {
 		&p.CredentialsRef,
 		&createdByAID,
 		&p.CreatedAt,
+		&fqdnSuffix,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -147,6 +159,7 @@ func scanProvider(row pgx.Row) (*Provider, error) {
 		return nil, fmt.Errorf("provider: scan: %w", err)
 	}
 	p.CreatedByAID = createdByAID
+	p.FQDNSuffix = fqdnSuffix
 	return &p, nil
 }
 

@@ -24,6 +24,13 @@ import (
 type ResolvedProvider struct {
 	Driver      string
 	Credentials map[string]any
+
+	// FQDNSuffix — суффикс FQDN VM провайдера (self-onboard Вариант T, ADR-017(h)):
+	// keeper предсказывает SID=FQDN как `<name>-<index>.<FQDNSuffix>`. Пустой →
+	// провайдер без предсказуемого FQDN (self_onboard: true тогда отдаст ошибку).
+	// В Credentials НЕ кладётся (driver его не использует — FQDN он возвращает сам;
+	// suffix нужен только keeper-у для предсказания).
+	FQDNSuffix string
 }
 
 // regionKey — ключ, под которым `region` из Provider-реестра кладётся в
@@ -149,7 +156,13 @@ func (r *CredentialsResolverPG) Resolve(ctx context.Context, providerName string
 	// реестровое значение — авторитетный источник, секрет хранит только auth-данные.
 	creds[regionKey] = p.Region
 
-	return &ResolvedProvider{Driver: p.Type, Credentials: creds}, nil
+	// fqdn_suffix (self-onboard Вариант T) — опционально; пустая строка при nil.
+	var suffix string
+	if p.FQDNSuffix != nil {
+		suffix = *p.FQDNSuffix
+	}
+
+	return &ResolvedProvider{Driver: p.Type, Credentials: creds, FQDNSuffix: suffix}, nil
 }
 
 // ResolveProfile читает Profile по имени и возвращает его VM-spec params

@@ -67,11 +67,22 @@ type incarnationHistoryReply struct {
 	Total  int32               `json:"total" doc:"общее число записей в наборе"`
 }
 
+// incarnationRunsReply — alias-цель схемы GET /v1/incarnations/{name}/runs envelope.
+// Та же контрактная форма (4 поля int32 items/offset/limit/total, все required, БЕЗ
+// cursor-полей), items.$ref на native element RunSummaryEntry. Имя типа = контрактное
+// имя схемы (huma DefaultSchemaNamer капитализирует → "IncarnationRunsReply").
+type incarnationRunsReply struct {
+	Items  []RunSummaryEntry `json:"items" doc:"страница прогонов инкарнации (свёртка apply_runs)"`
+	Offset int32             `json:"offset" doc:"сдвиг от начала набора"`
+	Limit  int32             `json:"limit" doc:"размер страницы"`
+	Total  int32             `json:"total" doc:"общее число прогонов инкарнации"`
+}
+
 // registerIncarnationEnvelopes вешает на registry huma-alias инстанцированных generic
 // sharedapi.PagedResponse[<element>] → named-struct envelope, чтобы huma строил схему
-// list/history-Body под контрактным именем и контрактной формой (4 поля int32, $ref на
-// контрактный element). Вызывается в newHumaCadenceAPI для каждой собранной huma.API.
-// Wire-тип (тело PagedResponse) НЕ меняется — меняется лишь OpenAPI-схема.
+// list/history/runs-Body под контрактным именем и контрактной формой (4 поля int32,
+// $ref на контрактный element). Вызывается в newHumaCadenceAPI для каждой собранной
+// huma.API. Wire-тип (тело PagedResponse) НЕ меняется — меняется лишь OpenAPI-схема.
 func registerIncarnationEnvelopes(api huma.API) {
 	schemas := api.OpenAPI().Components.Schemas
 	// ★ handler-native T5d: wire-тип list/history-Body — PagedResponse[handlers.*View].
@@ -85,5 +96,9 @@ func registerIncarnationEnvelopes(api huma.API) {
 	schemas.RegisterTypeAlias(
 		reflect.TypeFor[sharedapi.PagedResponse[handlers.StateHistoryView]](),
 		reflect.TypeFor[incarnationHistoryReply](),
+	)
+	schemas.RegisterTypeAlias(
+		reflect.TypeFor[sharedapi.PagedResponse[handlers.RunSummaryView]](),
+		reflect.TypeFor[incarnationRunsReply](),
 	)
 }

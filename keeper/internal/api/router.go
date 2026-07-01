@@ -538,6 +538,21 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				registerHumaIncarnationHistory(newHumaCadenceAPI(r), incH)
 			})
 
+			// GET /v1/incarnations/{name}/runs[/{apply_id}] — read-view прогонов
+			// (apply_runs), под UI «статус выполнения / текущая джоба». Прогон
+			// (apply_run) — НЕ Voyage: закрывает UI-баг apply_id→/voyages/ 404. READ
+			// (БЕЗ audit, newHumaCadenceAPI). Permission incarnation.history (reuse
+			// read-tier: кто видит историю инкарнации, тот видит и её прогоны); per-
+			// {name} scope — in-handler inScope-предикат (GetInScopeFor, action=history),
+			// как у History; WHERE по incarnation_name в store-слое отсекает прогоны
+			// чужой инкарнации (cross-incarnation apply_id → 404).
+			r.With(
+				apimiddleware.RequireAction(enforcer, "incarnation", "history"),
+			).Group(func(r chi.Router) {
+				registerHumaIncarnationRuns(newHumaCadenceAPI(r), incH)
+				registerHumaIncarnationRunDetail(newHumaCadenceAPI(r), incH)
+			})
+
 			// POST /v1/incarnations/{name}/scenarios/{scenario} — запуск именованного
 			// scenario. Блокируется Toll-middleware при cluster:degraded (ADR-038):
 			// 503 + Retry-After. Toll-middleware ПЕРВЫМ в chain (outermost), чтобы 503

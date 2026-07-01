@@ -21,9 +21,12 @@ type PluginHost interface {
 	// Create создаёт `count` VM через CloudDriver-плагин `driver` (= Provider.Type)
 	// с заданным profile. credentials — plain-секрет провайдера (+region),
 	// резолвленный Keeper-ом из Provider-реестра (A-flow); userdata — cloud-init
-	// blob для bootstrap soul-агента. Stream-агрегация — на стороне реализации;
-	// модуль получает финальный []VmInfo (или ошибку при stream-fail).
-	Create(ctx context.Context, driver string, profile, credentials map[string]any, count int32, userdata string) ([]*pluginv1.VmInfo, error)
+	// blob для bootstrap soul-агента. name — базовое имя VM-батча (self-onboard
+	// Вариант T, ADR-017(h)): драйвер именует i-ю VM как `<name>-<index>`, чтобы
+	// FQDN был предсказуем keeper-ом; пустое → драйвер именует по своему усмотрению.
+	// Stream-агрегация — на стороне реализации; модуль получает финальный []VmInfo
+	// (или ошибку при stream-fail).
+	Create(ctx context.Context, driver string, profile, credentials map[string]any, count int32, userdata, name string) ([]*pluginv1.VmInfo, error)
 
 	// Destroy удаляет VM с указанными vm_id через `driver` (= Provider.Type).
 	// credentials — plain-секрет провайдера (+region), резолвленный Keeper-ом.
@@ -61,7 +64,7 @@ var ErrPluginHostNotImplemented = errors.New("cloud pluginhost: not implemented 
 // [PluginAdapter] вместо StubHost.
 type StubHost struct{}
 
-func (StubHost) Create(_ context.Context, _ string, _, _ map[string]any, _ int32, _ string) ([]*pluginv1.VmInfo, error) {
+func (StubHost) Create(_ context.Context, _ string, _, _ map[string]any, _ int32, _, _ string) ([]*pluginv1.VmInfo, error) {
 	return nil, ErrPluginHostNotImplemented
 }
 

@@ -54,6 +54,9 @@ type ProviderCreateInput struct {
 	Type           string
 	Region         string
 	CredentialsRef string
+	// FQDNSuffix — опц. суффикс FQDN VM (self-onboard Вариант T, ADR-017(h)).
+	// Пусто/nil → self-onboard недоступен для провайдера.
+	FQDNSuffix *string
 }
 
 // ProviderView — ПЛОСКАЯ wire-форма Provider-а (Create-201 / Get-200 / list-element).
@@ -64,6 +67,7 @@ type ProviderView struct {
 	Type           string
 	Region         string
 	CredentialsRef string
+	FQDNSuffix     *string
 	CreatedAt      time.Time
 	CreatedByAID   *string
 }
@@ -82,6 +86,7 @@ func toProviderView(p *provider.Provider) ProviderView {
 		Type:           p.Type,
 		Region:         p.Region,
 		CredentialsRef: p.CredentialsRef,
+		FQDNSuffix:     p.FQDNSuffix,
 		CreatedAt:      p.CreatedAt.UTC(),
 		CreatedByAID:   p.CreatedByAID,
 	}
@@ -95,16 +100,21 @@ type ProviderWriteReply struct {
 	Type           string
 	Region         string
 	CredentialsRef string
+	FQDNSuffix     *string
 }
 
 // AuditPayload собирает audit-payload create-роута Provider-а.
 func (r ProviderWriteReply) AuditPayload() middleware.AuditPayload {
-	return middleware.AuditPayload{
+	p := middleware.AuditPayload{
 		"name":            r.Name,
 		"type":            r.Type,
 		"region":          r.Region,
 		"credentials_ref": r.CredentialsRef,
 	}
+	if r.FQDNSuffix != nil {
+		p["fqdn_suffix"] = *r.FQDNSuffix
+	}
+	return p
 }
 
 // ProviderDeleteReply — результат DeleteTyped (audit-поля; HTTP-ответ 204).
@@ -140,12 +150,21 @@ func (h *ProviderHandler) CreateTyped(ctx context.Context, claims *keeperjwt.Cla
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
 			"field 'credentials_ref' must start with "+provider.CredentialsRefPrefix+" and carry a path")}
 	}
+	// fqdn_suffix опционален (self-onboard Вариант T); если задан — валидируем
+	// формат до round-trip-а (пустая строка не допускается — используй отсутствие).
+	if req.FQDNSuffix != nil {
+		if *req.FQDNSuffix == "" || !provider.ValidFQDNSuffix(*req.FQDNSuffix) {
+			return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
+				"field 'fqdn_suffix' must match "+provider.FQDNSuffixPattern+" (omit the field for none)")}
+		}
+	}
 
 	p, err := h.svc.Create(ctx, provider.CreateInput{
 		Name:           req.Name,
 		Type:           req.Type,
 		Region:         req.Region,
 		CredentialsRef: req.CredentialsRef,
+		FQDNSuffix:     req.FQDNSuffix,
 		CallerAID:      claims.Subject,
 	})
 	switch {
@@ -156,6 +175,7 @@ func (h *ProviderHandler) CreateTyped(ctx context.Context, claims *keeperjwt.Cla
 			Type:           p.Type,
 			Region:         p.Region,
 			CredentialsRef: p.CredentialsRef,
+			FQDNSuffix:     p.FQDNSuffix,
 		}, nil
 	case errors.Is(err, provider.ErrProviderAlreadyExists):
 		return zero, &problemError{problem.New(problem.TypeProviderExists, "",

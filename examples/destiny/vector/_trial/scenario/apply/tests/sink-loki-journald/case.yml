@@ -1,0 +1,129 @@
+# L0-испытание (Trial, ADR-023) destiny vector: sink_type=loki + journald + auth-токен.
+#
+# Дополняет render-defaults (console/file-only): доказывает вторую ветку sink-выбора и
+# journald-source. Render-only — content vector.yaml (loki-секция) L0 не исполняет; сигнал
+# доставки — render_context.input (sink_type=loki + endpoint + journald=true) для конфига
+# и render_context.vars.sink_token (зарезолвленный секрет коллектора) для unit.
+#
+# ★ Покрывает ветку input.journald=true (render-defaults красит только false) — coverage-
+# gate soul-trial требует обе.
+name: vector destiny renders loki sink with journald source and auth token
+
+fixtures:
+  default_destiny_source: "file://../../{name}"
+  input:
+    version: "0.40.0"
+    sha256: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    sink_type: loki
+    sink_endpoint: "https://loki.example.com"
+    # секрет уже зарезолвлен (в проде — vault-ref, резолв Soul-side); L0 передаёт значение.
+    sink_auth_ref: "loki-bearer-token-secret"
+    log_sources: ["/var/log/redis/*.log"]
+    journald: true
+  soulprint:
+    os:
+      arch: arm64
+
+assert:
+  task_present:
+    # arch arm64 → Rust-триплет aarch64-unknown-linux-gnu (маппинг vars.arch_triplet).
+    - module: core.url.fetched
+      params_subset:
+        url: https://github.com/vectordotdev/vector/releases/download/v0.40.0/vector-0.40.0-aarch64-unknown-linux-gnu.tar.gz
+        path: /tmp/vector-0.40.0.tar.gz
+        checksum: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        mode: "0644"
+
+    # install-путь бинаря внутри распакованного — тот же aarch64-триплет.
+    - module: core.file.present
+      params_subset:
+        path: /usr/local/bin/vector
+        src: /tmp/vector-0.40.0/vector-aarch64-unknown-linux-gnu/bin/vector
+        mode: "0755"
+
+    # vector.yaml: render_context.input несёт loki sink + endpoint + journald=true.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/vector/vector.yaml
+        template_content: "<present>"
+        mode: "0640"
+        owner: root
+        group: vector
+        render_context:
+          input:
+            version: "0.40.0"
+            sha256: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+            base_url: "https://github.com/vectordotdev/vector/releases/download"
+            bin_dir: /usr/local/bin
+            user: vector
+            group: vector
+            data_dir: /var/lib/vector
+            log_level: info
+            sink_type: loki
+            sink_endpoint: "https://loki.example.com"
+            sink_auth_ref: "loki-bearer-token-secret"
+            log_sources: ["/var/log/redis/*.log"]
+            journald: true
+          vars: {}
+          self:
+            sid: trial-host
+            covens: [apply]
+            choirs: []
+            traits: {}
+            role: ""
+            os:
+              arch: arm64
+          role: ""
+          essence: {}
+
+    # unit: render_context.vars.sink_token — зарезолвленный секрет коллектора (проброс в
+    # Environment=VECTOR_SINK_TOKEN). journald=true → шаблон добавит SupplementaryGroups
+    # (в L0 не виден — статический текст .tmpl, но input.journald в контексте есть).
+    # render_context сверяется ЦЕЛИКОМ (deep-compare каждого ключа, как vector.yaml выше):
+    # vars — file-vars + sink_token; input — все поля после defaults (loki + endpoint +
+    # journald=true); self — синтетический arm64-хост; essence пуст (изоляция под-destiny).
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/systemd/system/vector.service
+        template_content: "<present>"
+        mode: "0644"
+        owner: root
+        group: root
+        render_context:
+          vars:
+            bin_path: /usr/local/bin/vector
+            config_path: /etc/vector/vector.yaml
+            sink_token: "loki-bearer-token-secret"
+          input:
+            version: "0.40.0"
+            sha256: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+            base_url: "https://github.com/vectordotdev/vector/releases/download"
+            bin_dir: /usr/local/bin
+            user: vector
+            group: vector
+            data_dir: /var/lib/vector
+            log_level: info
+            sink_type: loki
+            sink_endpoint: "https://loki.example.com"
+            sink_auth_ref: "loki-bearer-token-secret"
+            log_sources: ["/var/log/redis/*.log"]
+            journald: true
+          self:
+            sid: trial-host
+            covens: [apply]
+            choirs: []
+            traits: {}
+            role: ""
+            os:
+              arch: arm64
+          role: ""
+          essence: {}
+
+    - module: core.service.running
+      params_subset:
+        name: vector
+        enabled: true
+
+    - module: core.service.restarted
+      params_subset:
+        name: vector

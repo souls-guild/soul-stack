@@ -103,6 +103,23 @@ func GenerateUserdata(cfg Config) (string, error) {
 	return soulinstall.RenderCloudInitYAML(cfg.Blueprint())
 }
 
+// GenerateUserdataSelfOnboard рендерит cloud-config YAML для self-onboard
+// «Вариант T» (ADR-017(h) amendment): userdata несёт map FQDN→plain-token и фазу
+// `soul init` (токен по hostname). Keeper предсказывает FQDN каждой VM ДО create
+// и передаёт сюда токены. Токены попадают в userdata (тест-стенд) — security-guard
+// `bootstrap_token` снят внутри soulinstall для этого режима (см. Blueprint.SelfOnboardTokens).
+//
+// tokens пуст → ошибка (self-onboard без токенов бессмыслен; caller обязан
+// передать непустой map). vault-ref-floor остаётся активен и здесь.
+func GenerateUserdataSelfOnboard(cfg Config, tokens map[string]string) (string, error) {
+	if len(tokens) == 0 {
+		return "", errors.New("cloud_init: self-onboard requires non-empty FQDN→token map")
+	}
+	bp := cfg.Blueprint()
+	bp.SelfOnboardTokens = tokens
+	return soulinstall.RenderCloudInitYAML(bp)
+}
+
 // Resolver резолвит [config.KeeperCloudInit] в [Config] с подгрузкой PEM CA
 // из Vault. Создаётся одним экземпляром в daemon и переиспользуется на каждый
 // GenerateUserdata-вызов; собственного state не несёт (vault-client читает

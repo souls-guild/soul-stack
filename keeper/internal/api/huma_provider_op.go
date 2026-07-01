@@ -26,10 +26,11 @@ type providerCreateInput struct {
 // произвольная строка; credentials_ref — vault-ref. additionalProperties=false
 // (huma-дефолт) → unknown поле → 400. Доменная валидация формата — в CreateTyped (422).
 type ProviderCreateRequest struct {
-	Name           string `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"имя Cloud-Provider-а (kebab)"`
-	Type           string `json:"type" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"имя CloudDriver-плагина (= plugins.cloud_drivers[].name)"`
-	Region         string `json:"region" required:"true" doc:"регион провайдера"`
-	CredentialsRef string `json:"credentials_ref" required:"true" pattern:"^vault:" doc:"vault-ref до credentials (vault:<path>); значение НЕ резолвится"`
+	Name           string  `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"имя Cloud-Provider-а (kebab)"`
+	Type           string  `json:"type" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"имя CloudDriver-плагина (= plugins.cloud_drivers[].name)"`
+	Region         string  `json:"region" required:"true" doc:"регион провайдера"`
+	CredentialsRef string  `json:"credentials_ref" required:"true" pattern:"^vault:" doc:"vault-ref до credentials (vault:<path>); значение НЕ резолвится"`
+	FQDNSuffix     *string `json:"fqdn_suffix,omitempty" doc:"суффикс FQDN VM (self-onboard: keeper предсказывает FQDN=<name>-<index>.<fqdn_suffix>). Опущено → self-onboard недоступен"`
 }
 
 type providerCreateOutput struct {

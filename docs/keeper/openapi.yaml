@@ -1341,6 +1341,34 @@ components:
           description: echo path-scenario (игнорируется)
           type: string
       type: object
+    IncarnationRunsReply:
+      additionalProperties: false
+      properties:
+        items:
+          description: страница прогонов инкарнации (свёртка apply_runs)
+          items:
+            $ref: "#/components/schemas/RunSummaryEntry"
+          type:
+            - array
+            - "null"
+        limit:
+          description: размер страницы
+          format: int32
+          type: integer
+        offset:
+          description: сдвиг от начала набора
+          format: int32
+          type: integer
+        total:
+          description: общее число прогонов инкарнации
+          format: int32
+          type: integer
+      required:
+        - items
+        - offset
+        - limit
+        - total
+      type: object
     IncarnationSetTraitsRequest:
       additionalProperties: false
       properties:
@@ -2066,6 +2094,8 @@ components:
           type: string
         credentials_ref:
           type: string
+        fqdn_suffix:
+          type: string
         name:
           type: string
         region:
@@ -2085,6 +2115,9 @@ components:
         credentials_ref:
           description: vault-ref до credentials (vault:<path>); значение НЕ резолвится
           pattern: "^vault:"
+          type: string
+        fqdn_suffix:
+          description: "суффикс FQDN VM (self-onboard: keeper предсказывает FQDN=<name>-<index>.<fqdn_suffix>). Опущено → self-onboard недоступен"
           type: string
         name:
           description: имя Cloud-Provider-а (kebab)
@@ -2546,6 +2579,104 @@ components:
         - name
         - operators
         - permissions
+      type: object
+    RunDetailReply:
+      additionalProperties: false
+      properties:
+        apply_id:
+          pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+          type: string
+        finished_at:
+          format: date-time
+          type: string
+        hosts:
+          items:
+            $ref: "#/components/schemas/RunHostStatusEntry"
+          type:
+            - array
+            - "null"
+        scenario:
+          type: string
+        started_at:
+          format: date-time
+          type: string
+        started_by_aid:
+          pattern: ^[a-z0-9][a-z0-9._@-]{1,127}$
+          type: string
+        status:
+          enum:
+            - applying
+            - success
+            - failed
+            - cancelled
+          type: string
+      required:
+        - apply_id
+        - scenario
+        - status
+        - started_at
+        - hosts
+      type: object
+    RunHostStatusEntry:
+      additionalProperties: false
+      properties:
+        attempt:
+          format: int32
+          type: integer
+        cancel_requested:
+          type: boolean
+        error_summary:
+          type: string
+        failed_plan_index:
+          format: int64
+          type: integer
+        failed_task_idx:
+          format: int64
+          type: integer
+        passage:
+          format: int64
+          type: integer
+        sid:
+          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$
+          type: string
+        status:
+          type: string
+      required:
+        - sid
+        - status
+        - passage
+        - attempt
+        - cancel_requested
+      type: object
+    RunSummaryEntry:
+      additionalProperties: false
+      properties:
+        apply_id:
+          pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+          type: string
+        finished_at:
+          format: date-time
+          type: string
+        scenario:
+          type: string
+        started_at:
+          format: date-time
+          type: string
+        started_by_aid:
+          pattern: ^[a-z0-9][a-z0-9._@-]{1,127}$
+          type: string
+        status:
+          enum:
+            - applying
+            - success
+            - failed
+            - cancelled
+          type: string
+      required:
+        - apply_id
+        - scenario
+        - status
+        - started_at
       type: object
     Scenario:
       additionalProperties: false
@@ -6904,6 +7035,135 @@ paths:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Internal Server Error
       summary: Перезапустить create из error_locked
+      tags:
+        - incarnation
+  /v1/incarnations/{name}/runs:
+    get:
+      description: "Свёртка apply_runs по apply_id: статус прогона (applying/success/failed/cancelled), границы времени, инициатор. Прогон (apply_run) — НЕ Voyage. Вне RBAC-scope → 404. Permission incarnation.history. Read-only."
+      operationId: listIncarnationRuns
+      parameters:
+        - description: имя инкарнации
+          in: path
+          name: name
+          required: true
+          schema:
+            description: имя инкарнации
+            type: string
+        - description: сдвиг от начала набора, ≥0 (out-of-range → 400)
+          explode: false
+          in: query
+          name: offset
+          schema:
+            default: 0
+            description: сдвиг от начала набора, ≥0 (out-of-range → 400)
+            format: int32
+            type: integer
+        - description: размер страницы 1..1000 (out-of-range → 400)
+          explode: false
+          in: query
+          name: limit
+          schema:
+            default: 50
+            description: размер страницы 1..1000 (out-of-range → 400)
+            format: int32
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IncarnationRunsReply"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Bad Request
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Список прогонов инкарнации (paged)
+      tags:
+        - incarnation
+  /v1/incarnations/{name}/runs/{apply_id}:
+    get:
+      description: "Срез по хостам одного apply_id: статус каждого хоста + адрес упавшей задачи (task_idx/plan_index/error). Чужой apply_id / вне RBAC-scope → 404. Permission incarnation.history. Read-only."
+      operationId: getIncarnationRun
+      parameters:
+        - description: имя инкарнации
+          in: path
+          name: name
+          required: true
+          schema:
+            description: имя инкарнации
+            type: string
+        - description: ULID прогона; не-ULID → 400
+          in: path
+          name: apply_id
+          required: true
+          schema:
+            description: ULID прогона; не-ULID → 400
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunDetailReply"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Bad Request
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Детали прогона инкарнации (per-host)
       tags:
         - incarnation
   /v1/incarnations/{name}/scenarios/{scenario}:

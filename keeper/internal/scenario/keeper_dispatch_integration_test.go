@@ -54,7 +54,7 @@ func (fakeResolver) ResolveProfile(_ context.Context, _ string) (map[string]any,
 
 type fakeHost struct{ cloud.StubHost }
 
-func (fakeHost) Create(_ context.Context, _ string, _, _ map[string]any, count int32, _ string) ([]*pluginv1.VmInfo, error) {
+func (fakeHost) Create(_ context.Context, _ string, _, _ map[string]any, count int32, _, _ string) ([]*pluginv1.VmInfo, error) {
 	out := make([]*pluginv1.VmInfo, 0, count)
 	for i := int32(0); i < count; i++ {
 		out = append(out, &pluginv1.VmInfo{VmId: "vm-1", Fqdn: "vm1.example.com", PrimaryIp: "10.0.0.1"})
@@ -68,6 +68,7 @@ func (fakeCloudSouls) Insert(_ context.Context, _ *keepersoul.Soul) error { retu
 func (fakeCloudSouls) UpdateStatus(_ context.Context, _ string, _ keepersoul.Status, _ *string) error {
 	return nil
 }
+func (fakeCloudSouls) DeleteBySID(_ context.Context, _ string) error { return nil }
 
 type fakeCloudTokens struct{}
 
@@ -77,6 +78,7 @@ func (fakeCloudTokens) Generate() (bootstraptoken.PlainToken, error) {
 func (fakeCloudTokens) Insert(_ context.Context, sid, _ string, _ *string) (*bootstraptoken.Record, error) {
 	return &bootstraptoken.Record{SID: sid}, nil
 }
+func (fakeCloudTokens) DeleteByTokenID(_ context.Context, _ string) error { return nil }
 
 // --- fake choir-Store ---------------------------------------------------------
 

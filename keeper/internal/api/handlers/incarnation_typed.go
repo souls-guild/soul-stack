@@ -29,6 +29,7 @@ import (
 
 	apimiddleware "github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
+	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
@@ -1140,6 +1141,162 @@ func (h *IncarnationHandler) HistoryTyped(ctx context.Context, name, applyID str
 		entries = append(entries, toStateHistoryView(e, schema))
 	}
 	return IncarnationHistoryReply{Items: entries, Offset: offset, Limit: limit, Total: total}, nil
+}
+
+// --- Runs (READ) — прогоны инкарнации per-task view -------------------
+//
+// GET /v1/incarnations/{name}/runs         — список прогонов (свёртка apply_runs).
+// GET /v1/incarnations/{name}/runs/{apply} — детали одного прогона (срез по хостам,
+//                                            адрес упавшей задачи = «текущая джоба»).
+//
+// scope-гейт — тот же inScope-предикат, что у History/Get (action=history):
+// эндпоинты в incarnation-домене, scope резолвится по incarnation. WHERE по
+// incarnation_name в store-слое дополнительно отсекает прогоны чужой инкарнации.
+
+// RunSummaryView — ПЛОСКАЯ доменная строка списка прогонов. Пакет api проецирует
+// её в native. Status — агрегатный статус прогона (applying/success/failed/cancelled).
+type RunSummaryView struct {
+	ApplyID      string
+	Scenario     string
+	Status       string
+	StartedAt    time.Time
+	FinishedAt   *time.Time
+	StartedByAID *string
+}
+
+// RunHostStatusView — ПЛОСКАЯ доменная строка одного хоста в деталях прогона.
+// FailedTaskIdx/FailedPlanIndex/ErrorSummary заполнены только на упавшем хосте
+// (nil на success/ещё-running).
+type RunHostStatusView struct {
+	SID             string
+	Status          string
+	Passage         int
+	FailedTaskIdx   *int
+	FailedPlanIndex *int
+	ErrorSummary    *string
+	Attempt         int32
+	CancelRequested bool
+}
+
+// RunDetailView — ПЛОСКАЯ доменная проекция деталей прогона (шапка + срез по хостам).
+type RunDetailView struct {
+	ApplyID      string
+	Scenario     string
+	Status       string
+	StartedAt    time.Time
+	FinishedAt   *time.Time
+	StartedByAID *string
+	Hosts        []RunHostStatusView
+}
+
+// IncarnationRunsReply — typed envelope GET /v1/incarnations/{name}/runs (handler-native:
+// element — доменный RunSummaryView). Пакет api проецирует его в native-envelope через
+// RegisterTypeAlias на sharedapi.PagedResponse[handlers.RunSummaryView].
+type IncarnationRunsReply = sharedapi.PagedResponse[RunSummaryView]
+
+// RunsTyped — доменная функция GET /v1/incarnations/{name}/runs (READ, typed-query).
+// existence-probe (404) + scope-гейт (вне scope → 404, parity History) через inScope.
+// CheckPageBounds → 400. Отдаёт страницу прогонов, новейшие сверху.
+func (h *IncarnationHandler) RunsTyped(ctx context.Context, name string, offset, limit int, inScope func(*incarnation.Incarnation) bool) (IncarnationRunsReply, error) {
+	var zero IncarnationRunsReply
+
+	if !incarnation.ValidName(name) {
+		return zero, incProblem(problem.TypeValidationFailed, "path 'name' must match "+incarnation.NamePattern)
+	}
+	if err := sharedapi.CheckPageBounds(offset, limit); err != nil {
+		return zero, incProblem(problem.TypeMalformedRequest, err.Error())
+	}
+
+	if _, err := h.existenceProbeInScope(ctx, name, inScope, "runs"); err != nil {
+		return zero, err
+	}
+
+	summaries, total, err := applyrun.ListRunsByIncarnation(ctx, h.db, name, offset, limit)
+	if err != nil {
+		h.logger.Error("incarnation.runs: list failed", slog.String("name", name), slog.Any("error", err))
+		return zero, incProblem(problem.TypeInternalError, "list runs failed")
+	}
+	items := make([]RunSummaryView, 0, len(summaries))
+	for _, s := range summaries {
+		items = append(items, RunSummaryView{
+			ApplyID:      s.ApplyID,
+			Scenario:     s.Scenario,
+			Status:       string(s.Status),
+			StartedAt:    s.StartedAt,
+			FinishedAt:   s.FinishedAt,
+			StartedByAID: s.StartedByAID,
+		})
+	}
+	return IncarnationRunsReply{Items: items, Offset: offset, Limit: limit, Total: total}, nil
+}
+
+// RunDetailTyped — доменная функция GET /v1/incarnations/{name}/runs/{apply_id}
+// (READ). existence-probe (404) + scope-гейт (вне scope → 404) через inScope; bad
+// apply_id → 400; прогон не найден / принадлежит другой инкарнации → 404.
+func (h *IncarnationHandler) RunDetailTyped(ctx context.Context, name, applyID string, inScope func(*incarnation.Incarnation) bool) (RunDetailView, error) {
+	var zero RunDetailView
+
+	if !incarnation.ValidName(name) {
+		return zero, incProblem(problem.TypeValidationFailed, "path 'name' must match "+incarnation.NamePattern)
+	}
+	if !audit.IsValidULID(applyID) {
+		return zero, incProblem(problem.TypeMalformedRequest, "path 'apply_id' must be a Crockford-base32 ULID (26 chars)")
+	}
+
+	if _, err := h.existenceProbeInScope(ctx, name, inScope, "runs"); err != nil {
+		return zero, err
+	}
+
+	d, err := applyrun.SelectRunDetail(ctx, h.db, applyID, name)
+	if err != nil {
+		if errors.Is(err, applyrun.ErrApplyRunNotFound) {
+			return zero, incProblem(problem.TypeNotFound, "run "+applyID+" not found")
+		}
+		h.logger.Error("incarnation.run-detail: select failed",
+			slog.String("name", name), slog.String("apply_id", applyID), slog.Any("error", err))
+		return zero, incProblem(problem.TypeInternalError, "get run detail failed")
+	}
+
+	hosts := make([]RunHostStatusView, 0, len(d.Hosts))
+	for _, hs := range d.Hosts {
+		hosts = append(hosts, RunHostStatusView{
+			SID:             hs.SID,
+			Status:          string(hs.Status),
+			Passage:         hs.Passage,
+			FailedTaskIdx:   hs.FailedTaskIdx,
+			FailedPlanIndex: hs.FailedPlanIndex,
+			ErrorSummary:    hs.ErrorSummary,
+			Attempt:         hs.Attempt,
+			CancelRequested: hs.CancelRequested,
+		})
+	}
+	return RunDetailView{
+		ApplyID:      d.ApplyID,
+		Scenario:     d.Scenario,
+		Status:       string(d.Status),
+		StartedAt:    d.StartedAt,
+		FinishedAt:   d.FinishedAt,
+		StartedByAID: d.StartedByAID,
+		Hosts:        hosts,
+	}, nil
+}
+
+// existenceProbeInScope — общий existence-probe + scope-гейт для Runs/RunDetail:
+// SELECT incarnation, вне scope или отсутствие → единый 404 (parity History). action
+// — для лога. Возвращает найденную инкарнацию (nil → ошибка уже отдана).
+func (h *IncarnationHandler) existenceProbeInScope(ctx context.Context, name string, inScope func(*incarnation.Incarnation) bool, action string) (*incarnation.Incarnation, error) {
+	inc, err := incarnation.SelectByName(ctx, h.db, name)
+	if err != nil {
+		if errors.Is(err, incarnation.ErrIncarnationNotFound) {
+			return nil, incProblem(problem.TypeNotFound, "incarnation "+name+" not found")
+		}
+		h.logger.Error("incarnation."+action+": existence-probe failed", slog.String("name", name), slog.Any("error", err))
+		return nil, incProblem(problem.TypeInternalError, action+" probe failed")
+	}
+	if inScope == nil || !inScope(inc) {
+		return nil, incProblem(problem.TypeNotFound, "incarnation "+name+" not found")
+	}
+	return inc, nil
 }
 
 // mapCreatePlanError маппит ошибку [scenario.ResolveCreatePlan] в доменный

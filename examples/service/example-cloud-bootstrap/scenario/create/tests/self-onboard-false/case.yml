@@ -1,0 +1,51 @@
+# L0-испытание B-flat (self_onboard опущен = false): input без self_onboard.
+# Поток: (1) core.cloud.created с generate_userdata: true (userdata БЕЗ токенов),
+# (2) core.bootstrap.delivered доставляет per-VM токен по SSH, (3) core.soul.registered
+# await_online. Шаг (2) ПРИСУТСТВУЕТ (when: !self_onboard — STATIC true при
+# опущенном self_onboard). self_onboard=false / name опущен.
+#
+# Парный к self-onboard-true (там deliver пропущен, self_onboard/generate_userdata
+# инвертированы). Покрывает ветку when=true шага deliver.
+name: b-flat (self_onboard omitted) emits generate_userdata cloud-create and deliver
+
+fixtures:
+  hosts:
+    - sid: vm-1.example.com
+      covens: [self-onboard-inc]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  input:
+    provider: wb-prod
+    profile: redis-small
+    count: 1
+    ssh_provider: ssh-wb
+
+mocks:
+  register:
+    provision:
+      vm_ids: [i-aaa]
+      hosts:
+        - { sid: vm-1.example.com, vm_id: i-aaa, primary_ip: 10.0.0.1, bootstrap_token: tok-vm1 }
+
+assert:
+  task_present:
+    # (1) core.cloud.created: generate_userdata=true (B-flat, userdata без токенов);
+    # self_onboard=false (self_onboard опущен → CEL даёт false).
+    - module: core.cloud.created
+      params_subset:
+        provider: wb-prod
+        count: 1
+        self_onboard: false
+        generate_userdata: true
+
+    # (2) core.bootstrap.delivered ПРИСУТСТВУЕТ (B-flat доставка токена по SSH).
+    - module: core.bootstrap.delivered
+      params_subset:
+        ssh_provider: ssh-wb
+
+    # (3) core.soul.registered barrier.
+    - module: core.soul.registered
+      params_subset:
+        sid: [vm-1.example.com]
+        await_online: true

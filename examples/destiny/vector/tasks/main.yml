@@ -1,0 +1,19 @@
+# tasks/main.yml — точка входа destiny vector. Только include-список: логические
+# группы разнесены по соседним файлам, раскрываются inline ДО render (docs/destiny/
+# tasks.md §4 — within-destiny include раскрывается в плоский список).
+#
+# Обзор конвейера (клон node-exporter):
+#   install.yml — fetch tarball Vector → extract (подготовка артефакта в /tmp);
+#   account.yml — group + user vector + data_dir (persistent buffer) + config_dir
+#                 (core.file.directory);
+#   service.yml — install бинаря vector (core.file.present src:) + render vector.yaml
+#                 (sources/sinks) + render hardened-unit + core.service.running +
+#                 restarted onchanges на config/unit/binary. install-шаг бинаря здесь,
+#                 а не в install.yml: его register читает onchanges рестарта, а per-file
+#                 линтер отвергает cross-file onchanges.
+
+- include: install.yml
+
+- include: account.yml
+
+- include: service.yml

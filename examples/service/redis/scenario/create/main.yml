@@ -396,3 +396,24 @@ tasks:
         listen:  "${ default(essence.redis_exporter_listen, ':9121') }"
         redis_user:     monitoring
         redis_password: "${ vault('secret/redis/' + incarnation.name + '/users/monitoring#password') }"
+
+  # ── ОБЯЗАТЕЛЬНЫЙ log-shipping data-плоскости (Слайс V-I, ADR-065) ──────────────────
+  # ПОСЛЕ экспортеров create БЕЗУСЛОВНО (без when-гейта) разворачивает vector (агент отгрузки
+  # логов) на КАЖДЫЙ хост incarnation КОМПОЗИЦИЕЙ переиспользуемой standalone-destiny через
+  # apply:destiny (изолированный render, ADR-009). vector ДОПОЛНЯЕТ node/redis-exporter
+  # (метрики, pull) лог-плоскостью (логи redis, push) — не операторский выбор, а инвариант
+  # data-сервиса (контракт=A: версии/checksum/sink в essence). arch destiny берёт сама из
+  # soulprint.self.os.arch. sink_auth_ref — Vault-ref ИЛИ значение: caller (essence) передаёт
+  # ref, резолв Soul-side (secret в state НЕ оседает, ИБ). log_sources — redis-логи из essence
+  # (/var/log/redis/*.log). Порядок: roster не читает (arch — soulprint-факт destiny), но
+  # apply.input несёт soulprint.self → roster-потребитель → passage ПОСЛЕ deploy, как экспортеры.
+  - name: Apply vector destiny (log shipping)
+    apply:
+      destiny: vector
+      input:
+        version:       "${ default(essence.vector_version, '0.40.0') }"
+        sha256:        "${ default(essence.vector_sha256, '') }"
+        sink_type:     "${ default(essence.vector_sink_type, 'console') }"
+        sink_endpoint: "${ default(essence.vector_sink_endpoint, '') }"
+        sink_auth_ref: "${ default(essence.vector_sink_auth_ref, '') }"
+        log_sources:   "${ default(essence.vector_log_sources, []) }"

@@ -1,6 +1,9 @@
 # PM workspace
 .pm/
 
+# Serena LSP project config (tool-specific, local)
+.serena/
+
 # Claude Code runtime artifacts (scheduled task lockfile)
 .claude/scheduled_tasks.lock
 .claude/worktrees/

@@ -1,7 +1,15 @@
 #cloud-config
+{{- if .SelfOnboard }}
+# Soul Stack — cloud-init userdata (ADR-017(h) amendment, self-onboard «Вариант T»).
+# ★ Per-VM bootstrap-токены ЗАПЕЧЕНЫ в userdata (map FQDN->token ниже): VM выбирает
+# свой токен по hostname и онбордится (soul init) в один цикл cloud-init, без
+# claim-callback и без keeper.push. ТЕСТ-СТЕНД: userdata хранится провайдером в
+# plaintext metadata — осознанный компромисс. TODO(prod): late-binding claim.
+{{- else }}
 # Soul Stack — cloud-init userdata (ADR-017(h) amendment 2026-05-27, B-flat).
 # Per-VM bootstrap-токен НЕ хранится здесь — он доставляется отдельным шагом
 # scenario (типично keeper.push через SSH-провайдер). См. docs/keeper/cloud.md.
+{{- end }}
 {{- if .SoulVersion }}
 # soul-version: {{ .SoulVersion }}
 {{- end }}
@@ -22,6 +30,15 @@ write_files:
     permissions: '0644'
     content: |
 {{ .SystemdUnitIndented }}
+{{- if .SelfOnboard }}
+  # Map FQDN->bootstrap-token (self-onboard). Формат `<fqdn> <token>` построчно;
+  # soul init ниже выбирает свою строку по $(hostname -f). Права 0600 (секреты).
+  - path: /etc/soul/self-onboard-tokens
+    owner: root:root
+    permissions: '0600'
+    content: |
+{{ .SelfOnboardTokensIndented }}
+{{- end }}
 
 runcmd:
   - install -d -m 0755 /etc/soul /var/lib/soul-stack /var/lib/soul-stack/modules /var/lib/soul-stack/seed
@@ -35,6 +52,15 @@ runcmd:
   - curl --fail --show-error --silent --cacert /etc/soul/tls/keeper-ca.pem --output /usr/local/bin/soul {{ .SoulBinaryURL }}
 {{- end }}
   - chmod 0755 /usr/local/bin/soul
+{{- if .SelfOnboard }}
+  # self-onboard: выбираем свой токен по hostname (не хардкод) и делаем bootstrap
+  # (soul init) ДО запуска демона. ★ Токен идёт через env SOUL_BOOTSTRAP_TOKEN,
+  # НЕ через argv --token= — argv виден в ps/journald на самой VM. init одноразов
+  # (генерит key+CSR -> Bootstrap-RPC -> SoulSeed); после него soul.service поднимает
+  # уже онбордившийся демон. Неуспех init -> soul.service всё равно стартует и будет
+  # ретраить, но без seed присоединения не будет (диагностика в journald).
+  - SOUL_BOOTSTRAP_TOKEN="$(awk -v h="$(hostname -f)" '$1==h {print $2}' /etc/soul/self-onboard-tokens)" /usr/local/bin/soul init --config /etc/soul/soul.yml
+{{- end }}
   - systemctl daemon-reload
   - systemctl enable soul.service
   - systemctl start soul.service

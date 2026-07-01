@@ -72,7 +72,7 @@ func TestPluginAdapter_UnknownProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPluginAdapter: %v", err)
 	}
-	if _, err := a.Create(context.Background(), "missing", nil, nil, 1, ""); err == nil {
+	if _, err := a.Create(context.Background(), "missing", nil, nil, 1, "", ""); err == nil {
 		t.Fatal("expected unknown-driver error on Create")
 	}
 	if _, err := a.Destroy(context.Background(), "missing", nil, []string{"vm-1"}); err == nil {

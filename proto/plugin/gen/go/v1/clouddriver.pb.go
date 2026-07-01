@@ -226,11 +226,28 @@ type CreateRequest struct {
 	// Cloud-init userdata для bootstrap soul-агента на свежей VM (PM-decision:
 	// cloud-init userdata). Сырой userdata-blob, который драйвер передаёт
 	// провайдеру при создании (AWS RunInstances UserData). Применяется ко ВСЕМ
-	// VM батча одинаково: bootstrap-токен per-SID на этой фазе ещё неизвестен
-	// (SID = FQDN присваивается провайдером уже ПОСЛЕ create) — см. open question
-	// про chicken-egg в docs/keeper/cloud.md → Credentials-flow.
+	// VM батча одинаково.
+	//
+	// Self-onboard (ADR-017(h) amendment «Вариант T»): когда Keeper задаёт `name`
+	// (ниже) и знает FQDN-суффикс провайдера, он ПРЕДСКАЗЫВАЕТ FQDN каждой VM
+	// (`<name>-<index>.<suffix>`) ещё ДО create и запекает per-VM bootstrap-токены
+	// в этот userdata (общий blob несёт map FQDN→token; cloud-init на VM выбирает
+	// свой токен по hostname). Без self-onboard userdata токенов не несёт (B-flat,
+	// токен доставляется отдельным шагом core.bootstrap.delivered).
 	// forward-compat only-add: added v1.
-	Userdata      string `protobuf:"bytes,4,opt,name=userdata,proto3" json:"userdata,omitempty"`
+	Userdata string `protobuf:"bytes,4,opt,name=userdata,proto3" json:"userdata,omitempty"`
+	// Базовое имя VM-батча, заданное Keeper-ом (self-onboard «Вариант T»,
+	// ADR-017(h) amendment). Драйвер ОБЯЗАН именовать i-ю VM батча как
+	// `<name>-<index>` (index 0-based), чтобы FQDN (`<name>-<index>.<suffix>`)
+	// был ПРЕДСКАЗУЕМ Keeper-ом ДО create — это снимает chicken-egg «SID=FQDN
+	// известен только после create» и позволяет запечь per-VM токены в userdata.
+	//
+	// Пустое значение (default) → драйвер именует VM по своему усмотрению
+	// (прежнее поведение: auto-slug/timestamp) — self-onboard тогда недоступен.
+	// Имя обязано укладываться в name-ограничения провайдера (Keeper не знает их
+	// per-provider — за формат отвечает автор сценария/провайдера).
+	// forward-compat only-add: added v1.
+	Name          string `protobuf:"bytes,5,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -289,6 +306,13 @@ func (x *CreateRequest) GetCredentials() *structpb.Struct {
 func (x *CreateRequest) GetUserdata() string {
 	if x != nil {
 		return x.Userdata
+	}
+	return ""
+}
+
+func (x *CreateRequest) GetName() string {
+	if x != nil {
+		return x.Name
 	}
 	return ""
 }
@@ -1026,12 +1050,13 @@ const file_v1_clouddriver_proto_rawDesc = "" +
 	"\aprofile\x18\x01 \x01(\v2\x17.google.protobuf.StructR\aprofile\">\n" +
 	"\x14ValidateProfileReply\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x16\n" +
-	"\x06errors\x18\x02 \x03(\tR\x06errors\"\xaf\x01\n" +
+	"\x06errors\x18\x02 \x03(\tR\x06errors\"\xc3\x01\n" +
 	"\rCreateRequest\x121\n" +
 	"\aprofile\x18\x01 \x01(\v2\x17.google.protobuf.StructR\aprofile\x12\x14\n" +
 	"\x05count\x18\x02 \x01(\x05R\x05count\x129\n" +
 	"\vcredentials\x18\x03 \x01(\v2\x17.google.protobuf.StructR\vcredentials\x12\x1a\n" +
-	"\buserdata\x18\x04 \x01(\tR\buserdata\"n\n" +
+	"\buserdata\x18\x04 \x01(\tR\buserdata\x12\x12\n" +
+	"\x04name\x18\x05 \x01(\tR\x04name\"n\n" +
 	"\vCreateEvent\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x12-\n" +
 	"\x03vms\x18\x02 \x03(\v2\x1b.soulstack.plugin.v1.VmInfoR\x03vms\x12\x16\n" +

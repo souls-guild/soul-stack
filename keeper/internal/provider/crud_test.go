@@ -151,8 +151,8 @@ func TestInsert_HappyPath(t *testing.T) {
 	if !strings.Contains(f.queryRowSQL, "INSERT INTO providers") {
 		t.Errorf("SQL: %q", f.queryRowSQL)
 	}
-	if len(f.queryRowArgs) != 5 {
-		t.Fatalf("args len = %d, want 5", len(f.queryRowArgs))
+	if len(f.queryRowArgs) != 6 {
+		t.Fatalf("args len = %d, want 6", len(f.queryRowArgs))
 	}
 	if f.queryRowArgs[0] != "aws-eu" || f.queryRowArgs[1] != "aws" {
 		t.Errorf("args head = %v / %v", f.queryRowArgs[0], f.queryRowArgs[1])
@@ -162,6 +162,10 @@ func TestInsert_HappyPath(t *testing.T) {
 	}
 	if f.queryRowArgs[4] != "archon-alice" {
 		t.Errorf("args[4] created_by_aid = %v", f.queryRowArgs[4])
+	}
+	// args[5] — fqdn_suffix (nil у validProvider, self-onboard не задан).
+	if f.queryRowArgs[5] != nil {
+		t.Errorf("args[5] fqdn_suffix = %v, want nil", f.queryRowArgs[5])
 	}
 }
 
@@ -279,7 +283,7 @@ func TestSelectByName_HappyPath(t *testing.T) {
 		queryRowFunc: func(_ string) pgx.Row {
 			return staticRow{values: []any{
 				"aws-eu", "aws", "eu-central-1", "vault:secret/cloud/aws-eu",
-				any("archon-alice"), now,
+				any("archon-alice"), now, any(nil),
 			}}
 		},
 	}
@@ -316,8 +320,8 @@ func TestSelectAll_HappyPath(t *testing.T) {
 		},
 		queryFunc: func(_ string) (pgx.Rows, error) {
 			return &fakeRows{rows: []staticRow{
-				{values: []any{"aws-eu", "aws", "eu", "vault:a", any(nil), now}},
-				{values: []any{"yc-ru", "yc", "ru", "vault:b", any("archon-alice"), now}},
+				{values: []any{"aws-eu", "aws", "eu", "vault:a", any(nil), now, any(nil)}},
+				{values: []any{"yc-ru", "yc", "ru", "vault:b", any("archon-alice"), now, any("ns.vm.clv3")}},
 			}}, nil
 		},
 	}
@@ -431,4 +435,50 @@ func TestValidCredentialsRef(t *testing.T) {
 			t.Errorf("ValidCredentialsRef(%q) = true, want false", r)
 		}
 	}
+}
+
+// TestValidFQDNSuffix — форма fqdn_suffix (self-onboard Вариант T): DNS-labels
+// через точку, без ведущей/замыкающей точки и underscore.
+func TestValidFQDNSuffix(t *testing.T) {
+	good := []string{"clv3", "vm.clv3", "fedorovstepan2-dev.vm.xc.clv3", "a.b.c"}
+	bad := []string{"", ".clv3", "clv3.", "vm..clv3", "with_underscore.clv3", "UPPER.clv3", "-lead.clv3"}
+	for _, s := range good {
+		if !ValidFQDNSuffix(s) {
+			t.Errorf("ValidFQDNSuffix(%q) = false, want true", s)
+		}
+	}
+	for _, s := range bad {
+		if ValidFQDNSuffix(s) {
+			t.Errorf("ValidFQDNSuffix(%q) = true, want false", s)
+		}
+	}
+}
+
+// TestInsert_FQDNSuffix — Insert прокидывает fqdn_suffix в args[5] и реджектит
+// невалидный суффикс до round-trip-а (self-onboard Вариант T).
+func TestInsert_FQDNSuffix(t *testing.T) {
+	t.Run("valid suffix passed as args[5]", func(t *testing.T) {
+		f := &fakeDB{queryRowFunc: func(_ string) pgx.Row { return staticRow{values: []any{time.Now()}} }}
+		p := validProvider()
+		suffix := "ns.vm.clv3"
+		p.FQDNSuffix = &suffix
+		if err := Insert(context.Background(), f, p); err != nil {
+			t.Fatalf("Insert: %v", err)
+		}
+		if f.queryRowArgs[5] != "ns.vm.clv3" {
+			t.Errorf("args[5] fqdn_suffix = %v, want ns.vm.clv3", f.queryRowArgs[5])
+		}
+	})
+	t.Run("invalid suffix rejected before round-trip", func(t *testing.T) {
+		f := &fakeDB{queryRowFunc: func(_ string) pgx.Row { return staticRow{values: []any{time.Now()}} }}
+		p := validProvider()
+		bad := ".leading-dot"
+		p.FQDNSuffix = &bad
+		if err := Insert(context.Background(), f, p); err == nil {
+			t.Fatal("expected error on invalid fqdn_suffix")
+		}
+		if f.queryRowCalls != 0 {
+			t.Errorf("QueryRow called %d times on invalid suffix; want 0 (reject before DB)", f.queryRowCalls)
+		}
+	})
 }

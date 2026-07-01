@@ -1,0 +1,76 @@
+# tasks/service.yml — раскладка бинаря vector + рендер vector.yaml (sources/sinks) +
+# основной systemd-unit.
+#
+# Install-шаг бинаря живёт ЗДЕСЬ (а не в install.yml) намеренно: его register vector_bin
+# читает onchanges рестарта ниже, а per-file линтер (validateTaskRefs, shared/config/
+# destiny_tasks.go) отвергает cross-file onchanges. install.yml готовит артефакт в /tmp
+# (fetch+extract), service.yml ставит бинарь, рендерит конфиг и поднимает сервис.
+#
+# Явного daemon-reload-шага НЕТ: core.service (daemon_reload: auto) сам перечитывает
+# systemd при смене unit-файла ПЕРЕД start/restart.
+
+# Разложить бинарь из распакованного каталога в bin_dir через core.file.present src:
+# (копия содержимого regular-файла с хоста; docs/module/core/file). Идемпотентность
+# нативная: желаемый хэш = sha256(содержимое src), changed строго при смене байт бинаря
+# (или дрейфе mode/owner). register — апгрейд версии (changed=true) рестартит сервис.
+- name: Install vector binary
+  module: core.file.present
+  register: vector_bin
+  params:
+    path: "${ vars.bin_path }"
+    src: "${ vars.src_bin }"
+    mode: "0755"
+    owner: root
+    group: root
+
+# Конфигурация Vector (vector.yaml: sources/transforms/sinks). Go text/template strict
+# (ADR-010, Вариант B): шаблон читает input НАПРЯМУЮ (.input.log_sources / .input.journald
+# / .input.sink_type / .input.sink_endpoint / .input.log_level) и file-vars (.vars.*).
+# Секрет sink_auth_ref в конфиг НЕ пишется — уходит в unit через Environment (ниже),
+# ExecStart читает env VECTOR_SINK_TOKEN. register — рестарт при изменении конфига.
+#
+# mode 0640 owner root group vector: конфиг может нести адрес коллектора; читает его
+# сервис-аккаунт по group-read, world-read закрыт.
+- name: Render vector configuration
+  module: core.file.rendered
+  register: vector_config
+  params:
+    path: "${ vars.config_path }"
+    template: templates/vector.yaml.tmpl
+    mode: "0640"
+    owner: root
+    group: "${ input.group }"
+
+# Основной systemd-unit (.tmpl, ADR-010). register — рестарт при изменении файла.
+# Секрет коллектора пробрасывается в unit через Environment=VECTOR_SINK_TOKEN
+# (sink_auth_ref, маскируется на выходе): не светится в vector.yaml на диске, а в ps/
+# journalctl попадает только имя env, не значение (systemd Environment не логируется).
+- name: Render vector systemd unit
+  module: core.file.rendered
+  register: vector_unit
+  params:
+    path: "${ '/etc/systemd/system/' + vars.service_name + '.service' }"
+    template: templates/vector.service.tmpl
+    mode: "0644"
+    owner: root
+    group: root
+    vars:
+      # Секрет доступа к коллектору — единственный vars-passthrough (в самом vector.yaml
+      # его нет). Уже зарезолвленный секрет ИЛИ '' (sink без auth). seal-маскинг на выходе.
+      sink_token: "${ input.sink_auth_ref }"
+
+- name: Ensure vector is running and enabled at boot
+  module: core.service.running
+  params:
+    name: "${ vars.service_name }"
+    enabled: true
+
+# Рестарт демона — реактивно на ЛЮБОЕ из трёх: конфиг (vector_config), unit-файл
+# (vector_unit) ИЛИ переустановленный бинарь (vector_bin, changed при апгрейде версии).
+# daemon-reload при смене unit core.service делает сам перед рестартом.
+- name: Restart vector because config, unit or binary changed
+  module: core.service.restarted
+  onchanges: [vector_config, vector_unit, vector_bin]
+  timeout: 30s
+  params:
+    name: "${ vars.service_name }"

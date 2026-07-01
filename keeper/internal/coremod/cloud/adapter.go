@@ -78,7 +78,7 @@ func (a *PluginAdapter) Providers() []string {
 // Create — реализация [PluginHost.Create]. Spawn one-shot, server-stream
 // Read до EOF, аггрегация всех VmInfo из всех событий стрима. `driver` —
 // имя CloudDriver-плагина (= Provider.Type), под которым он в discovery-кеше.
-func (a *PluginAdapter) Create(ctx context.Context, driver string, profile, credentials map[string]any, count int32, userdata string) ([]*pluginv1.VmInfo, error) {
+func (a *PluginAdapter) Create(ctx context.Context, driver string, profile, credentials map[string]any, count int32, userdata, name string) ([]*pluginv1.VmInfo, error) {
 	d, ok := a.providers[driver]
 	if !ok {
 		return nil, fmt.Errorf("cloud adapter: unknown driver %q (known: %v)", driver, a.Providers())
@@ -108,6 +108,7 @@ func (a *PluginAdapter) Create(ctx context.Context, driver string, profile, cred
 		Count:       count,
 		Credentials: credsStruct,
 		Userdata:    userdata,
+		Name:        name,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("cloud adapter: create rpc %s: %w", d.Manifest.Address(), err)

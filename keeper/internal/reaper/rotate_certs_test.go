@@ -43,8 +43,8 @@ type fakeCertDB struct {
 	casCalls         int
 	markFailedCalls  int
 
-	execErr     error // если задан — все Exec падают (кроме скан-Query)
-	insertVErr  error // ошибка INSERT INTO voyages
+	execErr    error // если задан — все Exec падают (кроме скан-Query)
+	insertVErr error // ошибка INSERT INTO voyages
 }
 
 func (f *fakeCertDB) BeginTx(_ context.Context, _ pgx.TxOptions) (pgx.Tx, error) {
@@ -120,8 +120,10 @@ func (t *fakeCertTx) CopyFrom(_ context.Context, _ pgx.Identifier, _ []string, s
 	t.db.insertedTargets += int(n)
 	return n, t.db.execErr
 }
-func (t *fakeCertTx) SendBatch(context.Context, *pgx.Batch) pgx.BatchResults { panic("unexpected SendBatch") }
-func (t *fakeCertTx) LargeObjects() pgx.LargeObjects                         { panic("unexpected LargeObjects") }
+func (t *fakeCertTx) SendBatch(context.Context, *pgx.Batch) pgx.BatchResults {
+	panic("unexpected SendBatch")
+}
+func (t *fakeCertTx) LargeObjects() pgx.LargeObjects { panic("unexpected LargeObjects") }
 func (t *fakeCertTx) Prepare(context.Context, string, string) (*pgconn.StatementDescription, error) {
 	panic("unexpected Prepare")
 }

@@ -1672,3 +1672,218 @@ func TestIntegration_UpdateStatus_NoMatchSetsFinishedAt(t *testing.T) {
 		t.Error("finished_at nil после перехода в no_match; want set (иначе строка не purge-ится)")
 	}
 }
+
+// --- read-view прогонов (GET /v1/incarnations/{name}/runs[/{apply_id}]) ---
+
+// TestIntegration_ListRunsByIncarnation — свёртка apply_runs по apply_id: список
+// прогонов инкарнации с агрегатным статусом, границами времени и исключением
+// прогонов ЧУЖОЙ инкарнации.
+func TestIntegration_ListRunsByIncarnation(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	seedIncarnation(t, "redis-prod", "archon-alice")
+	seedIncarnation(t, "redis-staging", "archon-alice")
+	ctx := context.Background()
+	aid := "archon-alice"
+
+	// Прогон A: два хоста, оба success → success, finished_at set.
+	for _, sid := range []string{"host-a", "host-b"} {
+		mustInsertRun(t, ctx, "01HRUNA", sid, "redis-prod", "create", StatusPlanned, &aid)
+		if err := UpdateStatus(ctx, integrationPool, "01HRUNA", sid, 0, StatusSuccess, nil); err != nil {
+			t.Fatalf("UpdateStatus A/%s: %v", sid, err)
+		}
+	}
+	// Прогон B: один хост success, второй ещё running → applying, finished_at NULL.
+	mustInsertRun(t, ctx, "01HRUNB", "host-a", "redis-prod", "restart", StatusRunning, &aid)
+	mustInsertRun(t, ctx, "01HRUNB", "host-b", "redis-prod", "restart", StatusRunning, &aid)
+	if err := UpdateStatus(ctx, integrationPool, "01HRUNB", "host-a", 0, StatusSuccess, nil); err != nil {
+		t.Fatalf("UpdateStatus B/host-a: %v", err)
+	}
+	// Прогон C: чужая инкарнация — в выборку redis-prod не попадает.
+	mustInsertRun(t, ctx, "01HRUNC", "host-z", "redis-staging", "create", StatusSuccess, &aid)
+
+	runs, total, err := ListRunsByIncarnation(ctx, integrationPool, "redis-prod", 0, 50)
+	if err != nil {
+		t.Fatalf("ListRunsByIncarnation: %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("total = %d, want 2 (чужая инкарнация исключена)", total)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("len(runs) = %d, want 2", len(runs))
+	}
+	// ORDER BY MIN(started_at) DESC — B (позже вставлен) первым.
+	byID := map[string]RunSummary{runs[0].ApplyID: runs[0], runs[1].ApplyID: runs[1]}
+	a, okA := byID["01HRUNA"]
+	b, okB := byID["01HRUNB"]
+	if !okA || !okB {
+		t.Fatalf("ожидались apply_id 01HRUNA и 01HRUNB; got %+v", runs)
+	}
+	if a.Status != RunStatusSuccess {
+		t.Errorf("A.Status = %q, want success", a.Status)
+	}
+	if a.Scenario != "create" {
+		t.Errorf("A.Scenario = %q, want create", a.Scenario)
+	}
+	if a.FinishedAt == nil {
+		t.Error("A.FinishedAt nil, want set (все хосты финишировали)")
+	}
+	if a.StartedByAID == nil || *a.StartedByAID != aid {
+		t.Errorf("A.StartedByAID = %v, want %q", a.StartedByAID, aid)
+	}
+	if b.Status != RunStatusApplying {
+		t.Errorf("B.Status = %q, want applying (host-b ещё running)", b.Status)
+	}
+	if b.FinishedAt != nil {
+		t.Errorf("B.FinishedAt = %v, want nil (не все хосты финишировали)", b.FinishedAt)
+	}
+}
+
+// TestIntegration_ListRunsByIncarnation_Empty — инкарнация без прогонов.
+func TestIntegration_ListRunsByIncarnation_Empty(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	seedIncarnation(t, "redis-prod", "archon-alice")
+	ctx := context.Background()
+
+	runs, total, err := ListRunsByIncarnation(ctx, integrationPool, "redis-prod", 0, 50)
+	if err != nil {
+		t.Fatalf("ListRunsByIncarnation: %v", err)
+	}
+	if total != 0 || len(runs) != 0 {
+		t.Errorf("total=%d len=%d, want 0/0", total, len(runs))
+	}
+}
+
+// TestIntegration_ListRunsByIncarnation_Paging — total считает ВСЕ прогоны,
+// страница ограничена limit/offset.
+func TestIntegration_ListRunsByIncarnation_Paging(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	seedIncarnation(t, "redis-prod", "archon-alice")
+	ctx := context.Background()
+	aid := "archon-alice"
+
+	for _, id := range []string{"01HR01", "01HR02", "01HR03"} {
+		mustInsertRun(t, ctx, id, "host-a", "redis-prod", "create", StatusSuccess, &aid)
+	}
+	runs, total, err := ListRunsByIncarnation(ctx, integrationPool, "redis-prod", 0, 2)
+	if err != nil {
+		t.Fatalf("ListRunsByIncarnation: %v", err)
+	}
+	if total != 3 {
+		t.Errorf("total = %d, want 3", total)
+	}
+	if len(runs) != 2 {
+		t.Errorf("len(runs) = %d, want 2 (limit)", len(runs))
+	}
+}
+
+// TestIntegration_SelectRunDetail — детали одного прогона: per-host строки,
+// адрес упавшей задачи, агрегатный статус failed.
+func TestIntegration_SelectRunDetail(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	seedIncarnation(t, "redis-prod", "archon-alice")
+	ctx := context.Background()
+	aid := "archon-alice"
+
+	mustInsertRun(t, ctx, "01HDET", "host-a", "redis-prod", "scale", StatusRunning, &aid)
+	mustInsertRun(t, ctx, "01HDET", "host-b", "redis-prod", "scale", StatusRunning, &aid)
+	// host-a: упавшая задача (task_idx=2 локально, plan_index=5 глобально).
+	if err := RecordTaskFailure(ctx, integrationPool, "01HDET", "host-a", 0, 2, 5, "task 2 core.pkg.installed: boom"); err != nil {
+		t.Fatalf("RecordTaskFailure: %v", err)
+	}
+	if err := UpdateStatus(ctx, integrationPool, "01HDET", "host-a", 0, StatusFailed, strp("task 2 core.pkg.installed: boom")); err != nil {
+		t.Fatalf("UpdateStatus host-a: %v", err)
+	}
+	if err := UpdateStatus(ctx, integrationPool, "01HDET", "host-b", 0, StatusSuccess, nil); err != nil {
+		t.Fatalf("UpdateStatus host-b: %v", err)
+	}
+
+	d, err := SelectRunDetail(ctx, integrationPool, "01HDET", "redis-prod")
+	if err != nil {
+		t.Fatalf("SelectRunDetail: %v", err)
+	}
+	if d.ApplyID != "01HDET" || d.Scenario != "scale" {
+		t.Errorf("d = {%q, %q}, want {01HDET, scale}", d.ApplyID, d.Scenario)
+	}
+	if d.Status != RunStatusFailed {
+		t.Errorf("d.Status = %q, want failed", d.Status)
+	}
+	if d.FinishedAt == nil {
+		t.Error("d.FinishedAt nil, want set (оба хоста терминальны)")
+	}
+	if len(d.Hosts) != 2 {
+		t.Fatalf("len(Hosts) = %d, want 2", len(d.Hosts))
+	}
+	// ORDER BY sid ASC → host-a первым.
+	ha := d.Hosts[0]
+	if ha.SID != "host-a" || ha.Status != StatusFailed {
+		t.Errorf("Hosts[0] = {%q, %q}, want {host-a, failed}", ha.SID, ha.Status)
+	}
+	if ha.FailedTaskIdx == nil || *ha.FailedTaskIdx != 2 {
+		t.Errorf("Hosts[0].FailedTaskIdx = %v, want 2", ha.FailedTaskIdx)
+	}
+	if ha.FailedPlanIndex == nil || *ha.FailedPlanIndex != 5 {
+		t.Errorf("Hosts[0].FailedPlanIndex = %v, want 5", ha.FailedPlanIndex)
+	}
+	if ha.ErrorSummary == nil || *ha.ErrorSummary != "task 2 core.pkg.installed: boom" {
+		t.Errorf("Hosts[0].ErrorSummary = %v", ha.ErrorSummary)
+	}
+	hb := d.Hosts[1]
+	if hb.SID != "host-b" || hb.Status != StatusSuccess {
+		t.Errorf("Hosts[1] = {%q, %q}, want {host-b, success}", hb.SID, hb.Status)
+	}
+	if hb.FailedTaskIdx != nil {
+		t.Errorf("Hosts[1].FailedTaskIdx = %v, want nil (success)", hb.FailedTaskIdx)
+	}
+}
+
+// TestIntegration_SelectRunDetail_CrossIncarnationIsolation — apply_id, живущий в
+// ДРУГОЙ инкарнации, недоступен через detail первой (scope-инвариант: apply_id
+// не резолвится в обход incarnation-предиката).
+func TestIntegration_SelectRunDetail_CrossIncarnationIsolation(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	seedIncarnation(t, "redis-prod", "archon-alice")
+	seedIncarnation(t, "redis-staging", "archon-alice")
+	ctx := context.Background()
+	aid := "archon-alice"
+
+	mustInsertRun(t, ctx, "01HXINC", "host-a", "redis-staging", "create", StatusSuccess, &aid)
+
+	// Прогон существует, но принадлежит redis-staging — из redis-prod not-found.
+	_, err := SelectRunDetail(ctx, integrationPool, "01HXINC", "redis-prod")
+	if !errors.Is(err, ErrApplyRunNotFound) {
+		t.Fatalf("err = %v, want ErrApplyRunNotFound (cross-incarnation)", err)
+	}
+	// Из своей инкарнации — доступен.
+	if _, err := SelectRunDetail(ctx, integrationPool, "01HXINC", "redis-staging"); err != nil {
+		t.Fatalf("SelectRunDetail(own): %v", err)
+	}
+}
+
+// TestIntegration_SelectRunDetail_NotFound — неизвестный apply_id.
+func TestIntegration_SelectRunDetail_NotFound(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	seedIncarnation(t, "redis-prod", "archon-alice")
+	ctx := context.Background()
+
+	_, err := SelectRunDetail(ctx, integrationPool, "01HGHOST", "redis-prod")
+	if !errors.Is(err, ErrApplyRunNotFound) {
+		t.Fatalf("err = %v, want ErrApplyRunNotFound", err)
+	}
+}
+
+// mustInsertRun — helper: Insert одной host-строки прогона, fatal при ошибке.
+func mustInsertRun(t *testing.T, ctx context.Context, applyID, sid, inc, scenario string, status Status, startedBy *string) {
+	t.Helper()
+	if err := Insert(ctx, integrationPool, &ApplyRun{
+		ApplyID: applyID, SID: sid, IncarnationName: inc,
+		Scenario: scenario, Status: status, StartedByAID: startedBy,
+	}); err != nil {
+		t.Fatalf("Insert(%s/%s): %v", applyID, sid, err)
+	}
+}

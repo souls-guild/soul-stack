@@ -55,11 +55,17 @@ func (f *fakeProviderPool) QueryRow(_ context.Context, sql string, args ...any) 
 			s := args[4].(string)
 			createdBy = &s
 		}
+		var fqdnSuffix *string
+		if len(args) > 5 && args[5] != nil {
+			s := args[5].(string)
+			fqdnSuffix = &s
+		}
 		f.entries[name] = &provider.Provider{
 			Name:           name,
 			Type:           args[1].(string),
 			Region:         args[2].(string),
 			CredentialsRef: args[3].(string),
+			FQDNSuffix:     fqdnSuffix,
 			CreatedByAID:   createdBy,
 			CreatedAt:      now,
 		}
@@ -72,7 +78,7 @@ func (f *fakeProviderPool) QueryRow(_ context.Context, sql string, args ...any) 
 		if !ok {
 			return errRowProv{err: pgx.ErrNoRows}
 		}
-		return scanRowProv{values: []any{p.Name, p.Type, p.Region, p.CredentialsRef, p.CreatedByAID, p.CreatedAt}}
+		return scanRowProv{values: []any{p.Name, p.Type, p.Region, p.CredentialsRef, p.CreatedByAID, p.CreatedAt, p.FQDNSuffix}}
 	}
 	return errRowProv{err: pgx.ErrNoRows}
 }
@@ -80,7 +86,7 @@ func (f *fakeProviderPool) QueryRow(_ context.Context, sql string, args ...any) 
 func (f *fakeProviderPool) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
 	rows := &fakeProvRows{}
 	for _, p := range f.entries {
-		rows.data = append(rows.data, []any{p.Name, p.Type, p.Region, p.CredentialsRef, p.CreatedByAID, p.CreatedAt})
+		rows.data = append(rows.data, []any{p.Name, p.Type, p.Region, p.CredentialsRef, p.CreatedByAID, p.CreatedAt, p.FQDNSuffix})
 	}
 	return rows, nil
 }

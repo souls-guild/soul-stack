@@ -29,6 +29,10 @@ func (s *SoulPG) UpdateStatus(ctx context.Context, sid string, status keepersoul
 	return keepersoul.UpdateStatus(ctx, s.DB, sid, status, kid)
 }
 
+func (s *SoulPG) DeleteBySID(ctx context.Context, sid string) error {
+	return keepersoul.DeleteBySID(ctx, s.DB, sid)
+}
+
 // TokenPG — adapter поверх keeper/internal/bootstraptoken с фиксированным TTL.
 // TTL берётся из cfg-поля keeper-config (через ctor); MVP — 24h, согласуется
 // с рекомендацией docs/soul/onboarding.md (часы, не дни — токен это
@@ -53,6 +57,10 @@ func (t *TokenPG) Generate() (bootstraptoken.PlainToken, error) {
 
 func (t *TokenPG) Insert(ctx context.Context, sid, tokenHash string, createdByAID *string) (*bootstraptoken.Record, error) {
 	return bootstraptoken.Insert(ctx, t.DB, sid, tokenHash, t.TTL, createdByAID)
+}
+
+func (t *TokenPG) DeleteByTokenID(ctx context.Context, tokenID string) error {
+	return bootstraptoken.DeleteByTokenID(ctx, t.DB, tokenID)
 }
 
 // PoolBeginner — узкое подмножество `*pgxpool.Pool`, нужное cascade-tx

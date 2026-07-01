@@ -328,6 +328,49 @@ func registerHumaIncarnationHistory(humaAPI huma.API, incH *handlers.Incarnation
 	})
 }
 
+// registerHumaIncarnationRuns монтирует GET /v1/incarnations/{name}/runs (READ-with-
+// typed-query, БЕЗ audit). scope-предикат тот же, что у History (action=history) → вне
+// scope 404. incH nil → no-op.
+func registerHumaIncarnationRuns(humaAPI huma.API, incH *handlers.IncarnationHandler) {
+	if incH == nil {
+		return
+	}
+	huma.Register(humaAPI, incRunsOperation(), func(ctx context.Context, in *incRunsInput) (*incRunsOutput, error) {
+		claims, _ := apimiddleware.ClaimsFromContext(ctx)
+		reply, err := incH.RunsTyped(ctx, in.Name, int(in.Offset), int(in.Limit), incH.GetInScopeFor(claims, "history"))
+		if err != nil {
+			return nil, incProblem(err)
+		}
+		items := make([]RunSummaryEntry, len(reply.Items))
+		for i := range reply.Items {
+			items[i] = newRunSummaryEntry(reply.Items[i])
+		}
+		return &incRunsOutput{Body: incarnationRunsReply{
+			Items:  items,
+			Offset: int32(reply.Offset),
+			Limit:  int32(reply.Limit),
+			Total:  int32(reply.Total),
+		}}, nil
+	})
+}
+
+// registerHumaIncarnationRunDetail монтирует GET /v1/incarnations/{name}/runs/{apply_id}
+// (READ-with-path, БЕЗ audit). scope-предикат тот же, что у History (action=history).
+// incH nil → no-op.
+func registerHumaIncarnationRunDetail(humaAPI huma.API, incH *handlers.IncarnationHandler) {
+	if incH == nil {
+		return
+	}
+	huma.Register(humaAPI, incRunDetailOperation(), func(ctx context.Context, in *incRunDetailInput) (*incRunDetailOutput, error) {
+		claims, _ := apimiddleware.ClaimsFromContext(ctx)
+		reply, err := incH.RunDetailTyped(ctx, in.Name, in.ApplyID, incH.GetInScopeFor(claims, "history"))
+		if err != nil {
+			return nil, incProblem(err)
+		}
+		return &incRunDetailOutput{Body: newRunDetailReply(reply)}, nil
+	})
+}
+
 // --- helpers ---
 
 // rawQueryCtxKey — context-key для raw url.Values, засташенного [stashRawQuery]-
@@ -393,6 +436,8 @@ func HumaIncarnationSpecYAML() (string, error) {
 		registerHumaIncarnationGet(api, stub)
 		registerHumaIncarnationFormPrefill(api, stub)
 		registerHumaIncarnationHistory(api, stub)
+		registerHumaIncarnationRuns(api, stub)
+		registerHumaIncarnationRunDetail(api, stub)
 		registerHumaIncarnationRun(api, stub)
 		registerHumaIncarnationUnlock(api, stub)
 		registerHumaIncarnationUpgrade(api, stub)

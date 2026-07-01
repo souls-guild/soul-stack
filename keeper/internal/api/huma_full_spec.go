@@ -111,6 +111,8 @@ func fullSpecGroups() []specGroup {
 			registerHumaIncarnationGet(api, stub)
 			registerHumaIncarnationFormPrefill(api, stub)
 			registerHumaIncarnationHistory(api, stub)
+			registerHumaIncarnationRuns(api, stub)
+			registerHumaIncarnationRunDetail(api, stub)
 			registerHumaIncarnationRun(api, stub)
 			registerHumaIncarnationUnlock(api, stub)
 			registerHumaIncarnationUpgrade(api, stub)

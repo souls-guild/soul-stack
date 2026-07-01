@@ -93,11 +93,29 @@ message CreateRequest {
   // Cloud-init userdata для bootstrap soul-агента на свежей VM (PM-decision:
   // cloud-init userdata). Сырой userdata-blob, который драйвер передаёт
   // провайдеру при создании (AWS RunInstances UserData). Применяется ко ВСЕМ
-  // VM батча одинаково: bootstrap-токен per-SID на этой фазе ещё неизвестен
-  // (SID = FQDN присваивается провайдером уже ПОСЛЕ create) — см. open question
-  // про chicken-egg в docs/keeper/cloud.md → Credentials-flow.
+  // VM батча одинаково.
+  //
+  // Self-onboard (ADR-017(h) amendment «Вариант T»): когда Keeper задаёт `name`
+  // (ниже) и знает FQDN-суффикс провайдера, он ПРЕДСКАЗЫВАЕТ FQDN каждой VM
+  // (`<name>-<index>.<suffix>`) ещё ДО create и запекает per-VM bootstrap-токены
+  // в этот userdata (общий blob несёт map FQDN→token; cloud-init на VM выбирает
+  // свой токен по hostname). Без self-onboard userdata токенов не несёт (B-flat,
+  // токен доставляется отдельным шагом core.bootstrap.delivered).
   // forward-compat only-add: added v1.
   string userdata = 4;
+
+  // Базовое имя VM-батча, заданное Keeper-ом (self-onboard «Вариант T»,
+  // ADR-017(h) amendment). Драйвер ОБЯЗАН именовать i-ю VM батча как
+  // `<name>-<index>` (index 0-based), чтобы FQDN (`<name>-<index>.<suffix>`)
+  // был ПРЕДСКАЗУЕМ Keeper-ом ДО create — это снимает chicken-egg «SID=FQDN
+  // известен только после create» и позволяет запечь per-VM токены в userdata.
+  //
+  // Пустое значение (default) → драйвер именует VM по своему усмотрению
+  // (прежнее поведение: auto-slug/timestamp) — self-onboard тогда недоступен.
+  // Имя обязано укладываться в name-ограничения провайдера (Keeper не знает их
+  // per-provider — за формат отвечает автор сценария/провайдера).
+  // forward-compat only-add: added v1.
+  string name = 5;
 }
 
 // CreateEvent — событие из Create-stream-а.

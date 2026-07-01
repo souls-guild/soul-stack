@@ -165,6 +165,85 @@ func TestRenderCloudInitYAML_Stable(t *testing.T) {
 	}
 }
 
+// TestRenderCloudInitYAML_SelfOnboard — self-onboard «Вариант T» (ADR-017(h)):
+// Blueprint несёт map FQDN→token, cloud-init запекает их и добавляет фазу
+// `soul init` (токен по hostname) между установкой бинаря и `soul run`.
+func TestRenderCloudInitYAML_SelfOnboard(t *testing.T) {
+	bp := validBlueprint()
+	bp.SelfOnboardTokens = map[string]string{
+		"redis-0.fedorovstepan2-dev.vm.xc.clv3": "TOKEN-AAA",
+		"redis-1.fedorovstepan2-dev.vm.xc.clv3": "TOKEN-BBB",
+	}
+	out, err := soulinstall.RenderCloudInitYAML(bp)
+	if err != nil {
+		t.Fatalf("RenderCloudInitYAML self-onboard: %v", err)
+	}
+
+	// Токены и FQDN запечены (map доставлен на VM).
+	for fqdn, tok := range bp.SelfOnboardTokens {
+		if !strings.Contains(out, fqdn) {
+			t.Errorf("self-onboard userdata missing FQDN %q", fqdn)
+		}
+		if !strings.Contains(out, tok) {
+			t.Errorf("self-onboard userdata missing token for %q", fqdn)
+		}
+	}
+
+	// Фаза soul init присутствует и токен выбирается по hostname (не хардкод).
+	if !strings.Contains(out, "soul init") {
+		t.Error("self-onboard userdata has no `soul init` phase")
+	}
+	if !strings.Contains(out, "hostname") {
+		t.Error("self-onboard must select token by hostname (no hostname reference found)")
+	}
+	// init ДО `soul run`/systemd start: соберём индексы и сверим порядок.
+	initIdx := strings.Index(out, "soul init")
+	startIdx := strings.Index(out, "systemctl start soul")
+	if initIdx < 0 || startIdx < 0 {
+		t.Fatalf("both soul-init and systemctl-start must be present (init=%d start=%d)", initIdx, startIdx)
+	}
+	if initIdx > startIdx {
+		t.Errorf("`soul init` (%d) must run BEFORE `systemctl start soul` (%d)", initIdx, startIdx)
+	}
+
+	// Токен НЕ в argv `soul init` (env SOUL_BOOTSTRAP_TOKEN, не --token=<plain>):
+	// argv виден в ps/journald на VM. Проверяем, что нет `--token=TOKEN-`.
+	if strings.Contains(out, "--token=TOKEN-") {
+		t.Errorf("self-onboard leaks token into `soul init --token=` argv (use env SOUL_BOOTSTRAP_TOKEN)")
+	}
+
+	// Валидный YAML.
+	var v map[string]any
+	if err := yaml.Unmarshal([]byte(out), &v); err != nil {
+		t.Fatalf("self-onboard userdata is not valid YAML: %v", err)
+	}
+}
+
+// TestRenderCloudInitYAML_SecurityGuard_BlocksTokenWithoutSelfOnboard — без
+// self-onboard security-floor сохранён: подстрока bootstrap_token в userdata
+// (например, случайно протёкшая через Blueprint) валит рендер. Guard снимается
+// ТОЛЬКО в self-onboard-режиме (где токены в userdata — намеренно, тест-стенд).
+func TestRenderCloudInitYAML_SecurityGuard_BlocksTokenWithoutSelfOnboard(t *testing.T) {
+	bp := validBlueprint()
+	// Протёкший токен в поле, попадающем в userdata (SoulVersion идёт комментарием).
+	bp.SoulVersion = "v1 bootstrap_token=leak"
+	if _, err := soulinstall.RenderCloudInitYAML(bp); err == nil {
+		t.Fatal("security guard must reject bootstrap_token substring when NOT self-onboard")
+	}
+}
+
+// TestRenderCloudInitYAML_SelfOnboard_RejectsVaultRef — даже в self-onboard
+// vault-ref в userdata остаётся запрещён (секреты резолвятся ДО рендера; только
+// bootstrap-токены легитимны в self-onboard-userdata, не vault-refs).
+func TestRenderCloudInitYAML_SelfOnboard_RejectsVaultRef(t *testing.T) {
+	bp := validBlueprint()
+	bp.SelfOnboardTokens = map[string]string{"h0.example.com": "TOK"}
+	bp.SoulVersion = "vault:secret/leak"
+	if _, err := soulinstall.RenderCloudInitYAML(bp); err == nil {
+		t.Fatal("vault-ref must be rejected even in self-onboard mode")
+	}
+}
+
 // firstStepCmdContains возвращает индекс первого шага, .Cmd которого содержит sub,
 // или -1.
 func firstStepCmdContains(steps []soulinstall.InstallStep, sub string) int {

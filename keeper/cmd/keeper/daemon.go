@@ -1017,6 +1017,22 @@ func (p *cloudInitProvider) GenerateUserdata(ctx context.Context) (string, error
 	return cloudinit.GenerateUserdata(resolved)
 }
 
+// GenerateUserdataSelfOnboard рендерит userdata с запечёнными per-VM токенами
+// (self-onboard «Вариант T», ADR-017(h) amendment). Тот же snapshot+Vault-резолв
+// cloud_init, что GenerateUserdata, но с map FQDN→token — cloud-init на VM выберет
+// свой токен по hostname и онбордится сам.
+func (p *cloudInitProvider) GenerateUserdataSelfOnboard(ctx context.Context, tokens map[string]string) (string, error) {
+	cfg := p.store.Get()
+	if cfg == nil {
+		return "", fmt.Errorf("cloud_init: keeper config snapshot is nil")
+	}
+	resolved, err := p.resolver.Resolve(ctx, cfg.CloudInit)
+	if err != nil {
+		return "", err
+	}
+	return cloudinit.GenerateUserdataSelfOnboard(resolved, tokens)
+}
+
 // Resolve реализует coremodbootstrap.InstallResolver — install-режим
 // `core.bootstrap.delivered` (ADR-063 amendment): тот же snapshot+Vault-резолв,
 // что GenerateUserdata, но отдаёт резолвленный cloudinit.Config (не рендеренный

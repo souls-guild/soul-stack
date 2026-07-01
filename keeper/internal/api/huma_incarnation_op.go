@@ -177,6 +177,68 @@ func incHistoryOperation() huma.Operation {
 	}
 }
 
+// === GET /v1/incarnations/{name}/runs (runs) — READ-with-typed-query (БЕЗ audit) ===
+//
+// Список прогонов инкарнации (свёртка apply_runs по apply_id) + per-run детали ниже.
+// Закрывает UI-баг apply_id→/voyages/ 404: прогон инкарнации (apply_run) — НЕ Voyage,
+// у него свой read-view. scope-гейт — тот же inScope-предикат, что у History (action=
+// incarnation.history): эндпоинты в incarnation-домене, per-{name} scope in-handler.
+
+// incRunsInput — huma-input GET /v1/incarnations/{name}/runs. Name — path; offset/limit
+// — int32 с default (out-of-range → 400 в RunsTyped).
+type incRunsInput struct {
+	Name   string `path:"name" doc:"имя инкарнации"`
+	Offset int32  `query:"offset" default:"0" doc:"сдвиг от начала набора, ≥0 (out-of-range → 400)"`
+	Limit  int32  `query:"limit" default:"50" doc:"размер страницы 1..1000 (out-of-range → 400)"`
+}
+
+// incRunsOutput — huma-output GET .../runs (FULL-TYPED). Body — TAGGED native envelope
+// incarnationRunsReply (items.$ref на native RunSummaryEntry: snake_case-wire).
+type incRunsOutput struct {
+	Body incarnationRunsReply
+}
+
+func incRunsOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "listIncarnationRuns",
+		Method:        http.MethodGet,
+		Path:          "/{name}/runs",
+		Summary:       "Список прогонов инкарнации (paged)",
+		Description:   "Свёртка apply_runs по apply_id: статус прогона (applying/success/failed/cancelled), границы времени, инициатор. Прогон (apply_run) — НЕ Voyage. Вне RBAC-scope → 404. Permission incarnation.history. Read-only.",
+		Tags:          []string{"incarnation"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
+}
+
+// === GET /v1/incarnations/{name}/runs/{apply_id} (run detail) — READ-with-path (БЕЗ audit) ===
+
+// incRunDetailInput — huma-input GET .../runs/{apply_id}. Name/ApplyID — path. Формат
+// apply_id (ULID) валидирует RunDetailTyped → 400 (не-ULID), симметрично History-фильтру.
+type incRunDetailInput struct {
+	Name    string `path:"name" doc:"имя инкарнации"`
+	ApplyID string `path:"apply_id" doc:"ULID прогона; не-ULID → 400"`
+}
+
+// incRunDetailOutput — huma-output GET .../runs/{apply_id} (FULL-TYPED). Body — native
+// RunDetailReply (шапка прогона + срез по хостам с адресом упавшей задачи).
+type incRunDetailOutput struct {
+	Body RunDetailReply
+}
+
+func incRunDetailOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "getIncarnationRun",
+		Method:        http.MethodGet,
+		Path:          "/{name}/runs/{apply_id}",
+		Summary:       "Детали прогона инкарнации (per-host)",
+		Description:   "Срез по хостам одного apply_id: статус каждого хоста + адрес упавшей задачи (task_idx/plan_index/error). Чужой apply_id / вне RBAC-scope → 404. Permission incarnation.history. Read-only.",
+		Tags:          []string{"incarnation"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
+}
+
 // === POST /v1/incarnations/{name}/scenarios/{scenario} (run) — MIDDLEWARE-AUDIT incarnation.scenario_started (202+body) ===
 
 // incRunInput — huma-input POST .../scenarios/{scenario}. Name/Scenario — path; Body —
