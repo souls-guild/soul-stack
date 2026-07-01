@@ -16,9 +16,6 @@ fixtures:
   state:
     redis_type: sentinel
     redis_version: "7.2.4"
-    conf_dir: /etc/redis
-    data_dir: /var/lib/redis
-    modules_base_url: "https://artifacts.example.com/redis/modules"
     tls:
       enable:   false
       only:     false
@@ -35,6 +32,10 @@ fixtures:
       - { name: bob, perms: "~app:* +@read", state: "on" }
 
   essence:
+    # host-layout (conf_dir/data_dir/modules_base_url) — в essence (v11→v12, Вариант A).
+    conf_dir: /etc/redis
+    data_dir: /var/lib/redis
+    modules_base_url: "https://artifacts.example.com/redis/modules"
     system_acl_users:
       default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"

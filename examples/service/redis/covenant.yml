@@ -60,9 +60,9 @@ input:
   #
   # ★ Раскладка conf_dir/data_dir тоже НЕ операторский input (#2): дефолты переехали
   # в essence (conf_dir/data_dir), compute читает их оттуда. Override — в spec.essence
-  # инкарнации, не в Run-форме. В state conf_dir/data_dir ОСТАЮТСЯ (day-2 add_node читает
-  # layout из incarnation.state) — источник правки лишь сместился input→essence, форма
-  # state не меняется.
+  # инкарнации, не в Run-форме. В state conf_dir/data_dir НЕ персистятся (state_changes
+  # их не пишет, см. ниже) — layout живёт в essence, day-2 add_node читает
+  # essence.conf_dir/data_dir (has()-safe default). Источник правки — только essence.
 
   memory_mb:
     type: integer
@@ -662,10 +662,6 @@ state_changes:
   # read-model дублирует выбор; tls-namedfield выше несёт производные enable/only/port.
   - set: connection_mode
     value: "${ input.connection_mode }"
-  # install: нормализованный compute.install (method всегда; base_url/version при
-  # binary). Тот же install, что уходит в destiny `redis` (apply.input.install).
-  - set: install
-    value: "${ compute.install }"
   # persistence: input.persistence (default rdb) — тот же ключ, по которому выбран
   # essence.persistence_presets в redis_config (read-model дублирует выбор оператора).
   - set: persistence
@@ -688,19 +684,10 @@ state_changes:
   # встроены). НЕ operator-выбор (input.modules удалён) — compute.redis_modules_deployed.
   - set: modules
     value: "${ compute.redis_modules_deployed }"
-  # modules_base_url: источник .so (read-model, из essence). Сохраняем для day-2
-  # (add_node читает его из state, чтобы новая нода тянула .so из того же источника).
-  # Пусто → не задан в essence (Redis 8+ — модули встроены, источник не нужен).
-  - set: modules_base_url
-    value: "${ compute.modules_base_url }"
-  # conf_dir/data_dir: host-layout (read-model). Сохраняем для day-2 (add_node читает
-  # их из state, чтобы новая нода знала тот же layout, что и кластер). ★ #2: источник —
-  # essence (тот же compute.conf_dir/data_dir, что ушёл в destiny), не input. В state
-  # ОСТАЮТСЯ — форма state не меняется (правка лишь сместила источник input→essence).
-  - set: conf_dir
-    value: "${ compute.conf_dir }"
-  - set: data_dir
-    value: "${ compute.data_dir }"
+  # ★ install + host-layout (conf_dir/data_dir/modules_base_url) вынесены в essence
+  # (v11→v12, Вариант A): install — read-model без читателей, layout — day-2 читают
+  # essence напрямую (default(essence.<x>, '<деф>')). Здесь их set-ов больше нет —
+  # ключей нет в state_schema, set писал бы поле вне схемы → валидация state упала бы.
   # sysctl_settings: применённый host-tuning (тот же essence.sysctl_settings, что
   # уходит в destiny apply.input). Из essence (host-инвариант, не операторский ввод).
   - set: sysctl_settings

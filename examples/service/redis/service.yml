@@ -1,5 +1,5 @@
 name: redis
-state_schema_version: 11
+state_schema_version: 12
 description: >-
   Redis по концепции Ansible-роли: ОДИН сервис на режимы развёртывания
   (redis_type ∈ sentinel/cluster). Per-host install + render redis.conf делает
@@ -103,9 +103,11 @@ description: >-
 #   - redis_config (opaque, additionalProperties:true) — ВЫЧИСЛЕННЫЙ ИТОГ трансляции
 #     простого ввода в redis.conf-map (что реально уйдёт в render и CONFIG SET). Это
 #     write-model «как развёрнуто».
-#   - именованные поля (tls/install/persistence/...) — НАМЕРЕНИЕ оператора в простых
+#   - именованные поля (tls/persistence/...) — НАМЕРЕНИЕ оператора в простых
 #     типизированных понятиях (read-model). День-2-сценарии читают их именованно
-#     (restart — state.tls, будущие update_config — state.install/persistence/memory_mb).
+#     (restart — state.tls, update_config — state.persistence/memory_mb). install и
+#     host-layout (conf_dir/data_dir/modules_base_url) вынесены в essence (v11→v12,
+#     Вариант A): install — read-model без читателей, layout — day-2 читают essence.
 # ОБА представления заполняются из ОДНОГО compute-прохода create (compute.*): namedfields
 # и redis_config считаются из тех же compute.tls_*/input.* — рассинхрона между ними нет.
 state_schema:
@@ -161,16 +163,6 @@ state_schema:
     io_threads:
       type: integer
       minimum: 0
-    # Способ установки redis (package — distro-пакет; binary — upstream-tarball).
-    # base_url/version материализуются при method=binary. Из default(input.install,
-    # {method:package}). day-2 update_config читает state.install.method.
-    install:
-      type: object
-      additionalProperties: false
-      properties:
-        method:   { type: string, enum: [package, binary] }
-        base_url: { type: string }
-        version:  { type: string }
     # Режим persistence (концепция роли). Из input.persistence (default rdb).
     # ★ v11: enum РАСШИРЕН до 6 значений (aof/rdb_aof разбиты на _1sec/_always по
     # частоте fsync AOF; off/rdb без изменений). Старые aof/rdb_aof ремапятся в
@@ -195,20 +187,6 @@ state_schema:
       items:
         type: string
         enum: [search, json, timeseries, bloom]
-    # Источник .so Redis-модулей (modules_base_url оператора, read-model). Сохраняется
-    # для day-2 (add_node): новая нода кластера тянет .so из ТОГО ЖЕ источника. Пусто,
-    # если оператор не задавал (Redis 8+ — модули встроены, источник не нужен).
-    modules_base_url:
-      type: string
-    # Host-layout (директива B, read-model): базовые каталоги конфигурации и данных
-    # Redis, переопределяемые оператором (input.conf_dir/data_dir). Сохраняются для
-    # day-2 (add_node): новая нода кластера обязана знать ТОТ ЖЕ layout. default =
-    # текущий путь (/etc/redis, /var/lib/redis); для старых инкарнаций без этих полей
-    # day-2 читает их has()-safe-дефолтом (back-compat). Симметрично modules_base_url.
-    conf_dir:
-      type: string
-    data_dir:
-      type: string
     # Применённые kernel-параметры под Redis (host-tuning). Из essence.sysctl_settings
     # (тот же map, что ушёл в destiny через apply.input). key→value (строки).
     sysctl_settings:

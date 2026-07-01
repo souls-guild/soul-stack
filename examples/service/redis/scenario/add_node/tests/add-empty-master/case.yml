@@ -27,10 +27,14 @@ fixtures:
   vault:
     secret/redis/add_node/users/default_admin:
       password: default-admin-secret-pass
+  # modules_base_url — в essence (v11→v12, Вариант A): вынесен из state, day-2 читает
+  # его отсюда. Кейс не ассертит modules-пути (guard/add-node-плагин), layout для
+  # правдивости fixtures (форма state v12 без layout-ключей).
+  essence:
+    modules_base_url: "https://artifacts.example.com/redis/modules"
   state:
     redis_type: cluster
     redis_version: ""
-    modules_base_url: "https://artifacts.example.com/redis/modules"
     redis_config:
       maxmemory: "256mb"
       cluster-enabled: "yes"

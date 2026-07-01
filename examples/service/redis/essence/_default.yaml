@@ -95,8 +95,9 @@ sentinel_master_defaults:
 # ── Host-layout: базовые каталоги конфигурации и данных Redis (#2, 2026-06-26) ───
 # conf_dir/data_dir переехали из operator-input в essence (author-context): оператор
 # переопределяет раскладку в spec.essence под свой storage-layout, а не в Run-форме
-# каждого прогона. compute читает их отсюда и гонит в destiny (apply.input) + персистит
-# в state (day-2 add_node читает layout из incarnation.state). Дефолт = текущий путь.
+# каждого прогона. compute читает их отсюда и гонит в destiny (apply.input); в state
+# они не персистятся — day-2 add_node читает layout из essence.conf_dir/data_dir
+# (has()-safe default). Дефолт = текущий путь.
 conf_dir: /etc/redis
 data_dir: /var/lib/redis
 

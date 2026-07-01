@@ -14,14 +14,16 @@ fixtures:
   state:
     redis_type: sentinel
     redis_version: "7.2.4"
-    conf_dir: /etc/redis
-    data_dir: /var/lib/redis
     redis_config:
       maxmemory: "256mb"
     redis_users:
       - { name: bob, perms: "~app:* +@read", state: "on" }
 
   essence:
+    # host-layout — в essence (v11→v12, Вариант A). guard рвёт render до deploy-тела,
+    # layout здесь для правдивости fixtures (форма state v12 без layout-ключей).
+    conf_dir: /etc/redis
+    data_dir: /var/lib/redis
     system_acl_users:
       replica:    "+psync +replconf +ping"
       monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"

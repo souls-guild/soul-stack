@@ -258,8 +258,6 @@ assert:
       cert_ref: "secret/services/redis/tls#cert"
       key_ref:  "secret/services/redis/tls#key"
       ca_ref:   "secret/services/redis/tls#ca"
-    install:
-      method: package
     persistence: rdb
     memory_mb: 0
     maxmemory_policy: ""

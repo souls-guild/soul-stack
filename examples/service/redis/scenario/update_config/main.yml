@@ -198,17 +198,18 @@ tasks:
 
   # 1. Перерендерить redis.conf на диск с новым merged config (тот же режим-агностичный
   #    destiny redis, что create/add_node). Это desired state на диске — для следующего
-  #    рестарта процесса (startup-only-директивы из state.redis_config + новые). conf_dir/
-  #    data_dir/version — из state (host-layout кластера, директива B); пароль/users —
-  #    keeper-side vault(), сохраняются неизменными (update_config их не трогает, но
-  #    redis.conf рендерится целиком). config — ПЕРЕВЫЧИСЛЕННЫЙ compute.redis_config.
+  #    рестарта процесса (startup-only-директивы из state.redis_config + новые). version —
+  #    из state; conf_dir/data_dir — из essence (host-layout кластера, директива B, вынесен
+  #    в essence v11→v12, Вариант A); пароль/users — keeper-side vault(), сохраняются
+  #    неизменными (update_config их не трогает, но redis.conf рендерится целиком).
+  #    config — ПЕРЕВЫЧИСЛЕННЫЙ compute.redis_config.
   - name: Re-render redis.conf with the updated config (full file on disk)
     apply:
       destiny: redis
       input:
         version:  "${ default(incarnation.state.redis_version, '') }"
-        conf_dir: "${ default(incarnation.state.conf_dir, '/etc/redis') }"
-        data_dir: "${ default(incarnation.state.data_dir, '/var/lib/redis') }"
+        conf_dir: "${ default(essence.conf_dir, '/etc/redis') }"
+        data_dir: "${ default(essence.data_dir, '/var/lib/redis') }"
         # ★ РЕДИЗАЙН default_admin (2026-06-30): apply.input.password УДАЛЁН (destiny redis
         # его больше не принимает — requirepass убран). masteruser/masterauth ДОЛИВАЮТСЯ в
         # config обычными директивами ПОВЕРХ перевычисленного compute.redis_config. КРИТИЧНО:
@@ -225,7 +226,7 @@ tasks:
                'masteruser': compute.admin_user,
                'masterauth': vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password')
              }) }
-        modules_base_url: "${ default(incarnation.state.modules_base_url, '') }"
+        modules_base_url: "${ default(essence.modules_base_url, '') }"
         # ★★ КРИТИЧНО (system-ACL-users d2): redis.conf-рендер этой задачи перерендеривает
         # и users.acl (тот же destiny `redis` кирпич) → ОБЯЗАН долить системные из essence,
         # иначе update_config СТЁР БЫ replica/monitoring/sentinel/haproxy (как add_user).

@@ -33,12 +33,10 @@ fixtures:
 
   # Развёрнутый incarnation.state v9: sentinel-инкарнация, залитая migrate_cluster.
   # seeded_from.detached=false (источник ещё привязан) — detach_source выставит true.
+  # host-layout вынесен в essence (v11→v12); detach_source его НЕ читает → в state нет.
   state:
     redis_type: sentinel
     redis_version: "7.2.4"
-    conf_dir: /etc/redis
-    data_dir: /var/lib/redis
-    modules_base_url: "https://artifacts.example.com/redis/modules"
     tls:
       enable:   false
       only:     false

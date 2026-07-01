@@ -321,8 +321,6 @@ assert:
     memory_mb: 1024
     maxmemory_policy: volatile-lru
     persistence: rdb
-    install:
-      method: package
     tls:
       enable:   false
       only:     false

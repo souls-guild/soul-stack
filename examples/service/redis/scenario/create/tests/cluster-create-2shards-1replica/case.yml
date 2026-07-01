@@ -88,8 +88,8 @@ fixtures:
     # version ОБЯЗАТЕЛЬНА (директива пользователя 2026-06-23): фиксированный
     # distro-native пин (мажор < 8 → version-gate модулей не активен).
     version: "7.4.1"
-    # install_method=package ЯВНО (default редизайна — binary): state.install
-    # ассертит method=package; кейс изолирует cluster-replicas от install-модели.
+    # install_method=package ЯВНО (default редизайна — binary): кейс изолирует
+    # cluster-replicas от install-модели.
     shards: 2
     replicas_per_master: 1
     cluster_node_timeout: 8000
@@ -184,13 +184,12 @@ assert:
     redis_hosts: []
     # ── namedfields (read-model, v3): топология cluster. shards=2 (input.shards),
     # replicas=1 (UNIFIED input.replicas_per_master, реплик на шард). sentinel_quorum
-    # = 0 (не sentinel-режим). persistence default rdb; install package; tls off.
+    # = 0 (не sentinel-режим). persistence default rdb; tls off. install вынесен в
+    # essence (v11→v12) — в state_changes его нет.
     shards: 2
     replicas: 1
     sentinel_quorum: 0
     persistence: rdb
-    install:
-      method: package
     tls:
       enable:   false
       only:     false

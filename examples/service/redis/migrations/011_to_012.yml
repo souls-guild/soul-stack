@@ -1,0 +1,14 @@
+from_version: 11
+to_version: 12
+
+description: >-
+  v11→v12: вынос install + host-layout (conf_dir/data_dir/modules_base_url)
+  из incarnation.state в essence. install — read-model без читателей; layout —
+  day-2 переведены на essence-чтение (Вариант A, решение пользователя 2026-06-30:
+  desync-риск принят). Forward-only, delete no-op на инкарнациях без полей.
+
+transform:
+  - delete: { path: state.install }
+  - delete: { path: state.conf_dir }
+  - delete: { path: state.data_dir }
+  - delete: { path: state.modules_base_url }

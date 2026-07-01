@@ -136,8 +136,6 @@ assert:
     replicas: 1
     sentinel_quorum: 0
     persistence: rdb
-    install:
-      method: package
     tls:
       enable:   false
       only:     false

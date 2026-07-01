@@ -242,8 +242,6 @@ assert:
     # connection_mode=plain (default); io_threads=0 (default).
     connection_mode: plain
     io_threads: 0
-    install:
-      method: package
     tls:
       enable:   false
       only:     false

@@ -250,15 +250,9 @@ assert:
         down-after-milliseconds: "5000"
         failover-timeout: "60000"
       settings: {}
-    # ── namedfields (read-model): install=binary (тот же compute.install, что ушёл в
-    # destiny apply.input). base_url из essence, version из input.version. allow_private —
-    # из essence.binary_allow_private (дефолт true): compute.install материализует его при
-    # method=binary, state_changes.install = compute.install целиком.
-    install:
-      method:        binary
-      base_url:      "https://downloads.example.com/redis"
-      version:       "7.4.1"
-      allow_private: true
+    # ── namedfields (read-model). install вынесен из state в essence (v11→v12,
+    # Вариант A): в state_changes его больше нет (поле не в state_schema). Способ
+    # установки binary покрыт destiny-задачами fetch-бинарей выше (не через state).
     # TLS off (essence без tls_*): enable/only false, port 7379 (essence-дефолт),
     # refs пусты (essence.tls_*_ref не заданы → has()-цепочка даёт '').
     tls:

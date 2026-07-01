@@ -114,14 +114,15 @@ tasks:
   #    паролями из Vault (keeper-side vault(), .tmpl хеширует, plaintext не пишет).
   #    redis.conf/TLS НЕ трогаем — add_user меняет ТОЛЬКО ACL (apply destiny рендерит
   #    весь кирпич, но оживляем мы лишь ACL шагом 2; redis.conf на диске не изменится
-  #    при тех же config — idempotent рендер). version/conf_dir/data_dir — из state.
+  #    при тех же config — idempotent рендер). version — из state; conf_dir/data_dir —
+  #    из essence (v11→v12, host-layout вынесен в essence, Вариант A).
   - name: Re-render users.acl with the new ACL user set (full file on disk)
     apply:
       destiny: redis
       input:
         version:  "${ default(incarnation.state.redis_version, '') }"
-        conf_dir: "${ default(incarnation.state.conf_dir, '/etc/redis') }"
-        data_dir: "${ default(incarnation.state.data_dir, '/var/lib/redis') }"
+        conf_dir: "${ default(essence.conf_dir, '/etc/redis') }"
+        data_dir: "${ default(essence.data_dir, '/var/lib/redis') }"
         # ★ РЕДИЗАЙН default_admin (2026-06-30): apply.input.password УДАЛЁН (destiny redis
         # его больше не принимает — requirepass убран). masteruser/masterauth ДОЛИВАЮТСЯ в
         # config обычными директивами ПОВЕРХ развёрнутого state.redis_config (он хранится
@@ -137,7 +138,7 @@ tasks:
                'masteruser': compute.admin_user,
                'masterauth': vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password')
              }) }
-        modules_base_url: "${ default(incarnation.state.modules_base_url, '') }"
+        modules_base_url: "${ default(essence.modules_base_url, '') }"
         # ★★ КРИТИЧНО (system-ACL-users d2): ПОЛНЫЙ users.acl = СИСТЕМНЫЕ (из essence,
         # ПЕРВЫМИ) + operator-extra (state.redis_users + новый, compute.users_new — МАССИВ
         # AclUser, wave 1b, ПОВЕРХ). add_user перерендеривает ВЕСЬ файл (не append) → БЕЗ долива системных

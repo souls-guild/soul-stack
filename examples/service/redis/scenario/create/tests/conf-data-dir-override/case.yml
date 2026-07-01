@@ -14,7 +14,8 @@
 #     `dir` из data_dir (/srv/redis-data) и `aclfile` из conf_dir (/opt/redis/users.acl),
 #     а НЕ захардкоженные /var/lib/redis ÷ /etc/redis/users.acl (директива B, фикс хардкода
 #     dir/aclfile в redis.conf.tmpl мимо override);
-#   - state.conf_dir/data_dir персистят override (day-2 add_node читает их).
+#   - override host-layout едет в essence (conf_dir/data_dir), НЕ в state — day-2
+#     add_node читает его из essence.conf_dir/data_dir (см. state_changes-assert ниже).
 # version=5:6.2.7 (< 8) → модули активны (.so под data_dir проверяемы). TLS off
 # (этот кейс про ФАЙЛОВЫЕ пути задач destiny). TLS-директивы redis.conf под override
 # conf_dir покрывает отдельный кейс conf-data-dir-override-tls (qa-фикс хардкода
@@ -198,6 +199,8 @@ assert:
     redis_type: sentinel
     redis_version: "7.4.1"
     modules: [bloom, json, search, timeseries]
-    # ★ override персистит в state → day-2 add_node читает его (тот же layout у новой ноды).
-    conf_dir: /opt/redis
-    data_dir: /srv/redis-data
+    # ★ conf_dir/data_dir вынесены из state в essence (v11→v12, Вариант A): override
+    # больше НЕ персистит в state (в state_changes их нет — поля не в state_schema).
+    # host-layout override живёт в spec.essence инкарнации; day-2 add_node читает его
+    # оттуда (default(essence.conf_dir/data_dir, ...)). Destiny-задачи выше уже проверяют,
+    # что override доехал до путей redis.conf/data-dir на ЭТОМ create-прогоне.

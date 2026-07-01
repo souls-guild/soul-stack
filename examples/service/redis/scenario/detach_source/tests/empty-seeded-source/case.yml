@@ -21,12 +21,11 @@ fixtures:
 
   # incarnation.state v9 sentinel-инкарнации, НИКОГДА не проходившей migrate_cluster:
   # seeded_from есть (форма от миграции 008_to_009), но source_endpoints ПУСТ.
+  # host-layout (conf_dir/data_dir/modules_base_url) вынесен в essence (v11→v12);
+  # detach_source его НЕ читает (нет deploy-тела) → в state v12 этих ключей нет.
   state:
     redis_type: sentinel
     redis_version: "7.2.4"
-    conf_dir: /etc/redis
-    data_dir: /var/lib/redis
-    modules_base_url: "https://artifacts.example.com/redis/modules"
     tls:
       enable:   false
       only:     false

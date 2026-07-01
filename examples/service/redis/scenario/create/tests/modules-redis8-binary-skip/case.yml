@@ -203,10 +203,3 @@ assert:
     redis_version: "8.0.3"
     # Redis 8+ → модули встроены, .so не качаются → развёрнутый набор пуст.
     modules: []
-    install:
-      method:        binary
-      base_url:      "https://downloads.example.com/redis"
-      version:       "8.0.3"
-      # allow_private — compute.install несёт его (SSRF-guard fetch бинарей с internal
-      # Nexus; default essence.binary_allow_private=true).
-      allow_private: true

@@ -93,7 +93,15 @@ compute:
   # CONFIG SET коннектится старым CA и сам же подменяет материал. На СЛЕДУЮЩИХ day-2
   # state.tls.ca_ref уже новый → коннект новым CA. Симметрично tls_port из state.tls.port.
   tls_ca:   "${ compute.tls_on ? vault(incarnation.state.tls.ca_ref) : '' }"
-  conf_dir: "${ default(incarnation.state.conf_dir, '/etc/redis') }"
+  # ★ ИБ-КРИТИЧНО host-layout (v11→v12, Вариант A): conf_dir из essence (единый источник
+  # с data_dir/modules_base_url ниже; прежний drift «conf_dir из compute, data_dir/
+  # modules_base_url из state» устранён). conf_dir задаёт, КУДА destiny кладёт PEM
+  # (${conf_dir}/tls/*) и куда CONFIG SET tls-*-file указывает redis-серверу — оба
+  # плеча ОБЯЗАНЫ читать ОДИН источник, иначе cert ляжет не туда, где redis ищет.
+  # DESYNC-РИСК ПРИНЯТ: если оператор сменил essence.conf_dir ПОСЛЕ create, cert ляжет
+  # по НОВОМУ пути, а работающий redis-server ещё ищет по СТАРОМУ (перечитывается лишь на
+  # рестарте) → при connection_mode=tls (plain закрыт) узел станет недоступен по сети.
+  conf_dir: "${ default(essence.conf_dir, '/etc/redis') }"
 
   # Эффективные refs: новый из input бьёт текущий из state (подложка — частичная
   # ротация). has()-цепочка (default(input, state) упал бы no-such-key, если input.*_ref
@@ -133,7 +141,8 @@ tasks:
   #    create). apply.input.tls несёт enable + НОВЫЕ cert_ref/key_ref/ca_ref → destiny
   #    server.yml кладёт cert/key/ca через core.file.present + vault(ref) в ячейке
   #    (seal-маскинг). config — текущий state.redis_config (redis.conf не меняется при
-  #    ротации; tls-*-file пути те же). version/conf_dir/data_dir/users — из state.
+  #    ротации; tls-*-file пути те же). version/users — из state; conf_dir/data_dir/
+  #    modules_base_url — из essence (host-layout, v11→v12, Вариант A; см. vars-шапку).
   #    register: tls_certs — applier-register, гейтящий reload ниже (см. шапку).
   #    ★ РЕДИЗАЙН default_admin: apply.input.password УДАЛЁН (destiny его не принимает —
   #    requirepass убран); аутентификация — под системным default_admin из users ниже.
@@ -143,10 +152,12 @@ tasks:
       destiny: redis
       input:
         version:  "${ default(incarnation.state.redis_version, '') }"
+        # host-layout — единый источник essence (v11→v12): conf_dir=compute.conf_dir (сам
+        # из essence.conf_dir, см. vars-шапку), data_dir/modules_base_url прямо из essence.
         conf_dir: "${ compute.conf_dir }"
-        data_dir: "${ default(incarnation.state.data_dir, '/var/lib/redis') }"
+        data_dir: "${ default(essence.data_dir, '/var/lib/redis') }"
         config:   "${ incarnation.state.redis_config }"
-        modules_base_url: "${ default(incarnation.state.modules_base_url, '') }"
+        modules_base_url: "${ default(essence.modules_base_url, '') }"
         tls:
           enable:   "${ incarnation.state.tls.enable }"
           only:     "${ incarnation.state.tls.only }"

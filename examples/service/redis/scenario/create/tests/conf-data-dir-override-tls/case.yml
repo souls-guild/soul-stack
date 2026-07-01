@@ -242,6 +242,8 @@ assert:
       key_ref:  "secret/services/redis/tls#key"
       ca_ref:   "secret/services/redis/tls#ca"
     modules: [bloom, json, search, timeseries]
-    # ★ override персистит в state → day-2 add_node читает его (тот же layout у новой ноды).
-    conf_dir: /opt/redis
-    data_dir: /srv/redis-data
+    # ★ conf_dir/data_dir вынесены из state в essence (v11→v12, Вариант A): override
+    # больше НЕ персистит в state (в state_changes их нет — поля не в state_schema).
+    # host-layout override живёт в spec.essence инкарнации; day-2 читает его оттуда.
+    # Destiny-задачи выше (в т.ч. TLS PEM под conf_dir override) уже проверяют, что
+    # override доехал до путей на ЭТОМ create-прогоне.

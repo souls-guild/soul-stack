@@ -25,8 +25,13 @@ fixtures:
     network: { primary_ip: 10.0.0.6 }
     os: { arch: amd64 }
 
+  # host-layout (conf_dir/data_dir/modules_base_url) — в essence (v11→v12, Вариант A):
+  # вынесен из state, day-2 читает отсюда.
   essence:
     memory_reserve_percent: 75
+    conf_dir: /etc/redis
+    data_dir: /var/lib/redis
+    modules_base_url: "https://artifacts.example.com/redis/modules"
     persistence_presets:
       rdb:
         save: "900 1 300 10 60 10000"
@@ -37,9 +42,6 @@ fixtures:
   state:
     redis_type: sentinel
     redis_version: "7.2.4"
-    conf_dir: /etc/redis
-    data_dir: /var/lib/redis
-    modules_base_url: "https://artifacts.example.com/redis/modules"
     tls:
       enable:   true
       only:     false

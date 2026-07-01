@@ -35,10 +35,13 @@ fixtures:
   vault:
     secret/redis/add_node/users/default_admin:
       password: default-admin-secret-pass
+  # host-layout — в essence (v11→v12, Вариант A): modules_base_url вынесен из state,
+  # day-2 add_node читает его отсюда (новая нода тянет .so из того же источника).
+  essence:
+    modules_base_url: "https://artifacts.example.com/redis/modules"
   state:
     redis_type: cluster
     redis_version: ""
-    modules_base_url: "https://artifacts.example.com/redis/modules"
     redis_config:
       maxmemory: "256mb"
       cluster-enabled: "yes"
@@ -68,8 +71,8 @@ assert:
         group: redis
         render_context:
           vars:
-            # host-layout (директива B): новая нода берёт layout из incarnation.state
-            # (default /etc/redis ÷ /var/lib/redis; legacy-state без ключей → дефолт),
+            # host-layout (директива B): новая нода берёт layout из essence (v11→v12,
+            # Вариант A; default /etc/redis ÷ /var/lib/redis, essence без override → дефолт),
             # шаблон выводит dir/aclfile из них — тот же layout, что у создавшей кластер ноды.
             conf_dir: /etc/redis
             data_dir: /var/lib/redis

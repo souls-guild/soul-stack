@@ -100,7 +100,7 @@ fixtures:
     # модулей НЕ активен) — гасит модули ИМЕННО ПУСТОЙ base_url.
     version: "7.4.1"
     # install_method=package ЯВНО (default редизайна — binary): кейс про modules-gate,
-    # не про install — package-ветка даёт state.install.method=package и не плодит
+    # не про install — package-ветка даёт compute.install.method=package и не плодит
     # binary-modules-dir/.so (иначе task_absent на modules-dir ловит binary-задачи).
     replicas_per_master: 2
 
@@ -202,8 +202,6 @@ assert:
     shards: 0
     persistence: rdb
     maxmemory_policy: ""
-    install:
-      method: package
     tls:
       enable:   false
       only:     false

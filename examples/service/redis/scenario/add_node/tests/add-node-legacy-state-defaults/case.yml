@@ -1,15 +1,17 @@
-# L0-испытание add_node — DAY-2 has()-SAFE на СТАРОЙ инкарнации (coverage_gap qa).
-# Guard: add_node читает incarnation.state.conf_dir/data_dir/modules_base_url через
-# default(...,'<дефолт>') — для СТАРЫХ инкарнаций, чей state НЕ содержит этих полей
-# (создан до директивы B / до «модули ВСЕГДА ВСЕ»), default ловит отсутствие листа
-# на существующем incarnation.state и НЕ падает «no such key». Регресс «голый
-# incarnation.state.conf_dir» = render-фейл no-such-key на старом state.
+# L0-испытание add_node — DAY-2 has()-SAFE, host-layout из ESSENCE (v11→v12, Вариант A).
+# Guard: add_node читает conf_dir/data_dir/modules_base_url из essence через
+# default(essence.<x>, '<дефолт>'). Когда essence НЕ переопределяет host-layout
+# (essence без этих ключей), default ловит отсутствие листа и НЕ падает «no such key»,
+# отдавая дефолтные пути. Регресс «голый essence.conf_dir» = render-фейл no-such-key
+# на essence без host-layout-override. Переезд с incarnation.state на essence: host-
+# layout вынесен из state в essence (v11→v12), day-2 читает его оттуда.
 #
-# state НАМЕРЕННО без conf_dir/data_dir/modules_base_url (старая инкарнация). Ожидаем:
+# essence НАМЕРЕННО без conf_dir/data_dir/modules_base_url (layout не переопределён).
+# Ожидаем:
 #   - render НЕ падает no-such-key (рендер успешен, план собран);
 #   - destiny получает ДЕФОЛТНЫЕ пути: redis.conf → /etc/redis, modules-dir → /var/lib/redis;
 #   - add-node плагин строит endpoint-ы из roster как обычно.
-name: add_node tolerates legacy state without conf_dir/data_dir/modules_base_url
+name: add_node tolerates essence without conf_dir/data_dir/modules_base_url override
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
@@ -30,9 +32,11 @@ fixtures:
   vault:
     secret/redis/add_node/users/default_admin:
       password: default-admin-secret-pass
-  # СТАРАЯ инкарнация: state БЕЗ conf_dir/data_dir/modules_base_url (поля добавлены
-  # позже как create-only с has()-safe чтением на day-2). redis_version="" тоже без
-  # пина (< 8 эффективно → модули проходят дефолтными путями).
+  # essence БЕЗ conf_dir/data_dir/modules_base_url: host-layout НЕ переопределён
+  # оператором → day-2 читает его дефолтными путями (default(essence.<x>, '<деф>')).
+  # essence-блок опущен целиком (пустой essence) — проверяем has()-safe на отсутствие
+  # всех трёх ключей разом. redis_version="" — без пина (< 8 эффективно → модули
+  # проходят дефолтными путями).
   state:
     redis_type: cluster
     redis_version: ""
@@ -51,19 +55,20 @@ fixtures:
 
 assert:
   task_present:
-    # redis.conf под ДЕФОЛТНЫМ conf_dir (state без conf_dir → default /etc/redis):
-    # доказывает, что default(...) сработал, render не упал. Дизамбигуатор — path.
+    # redis.conf под ДЕФОЛТНЫМ conf_dir (essence без conf_dir → default /etc/redis):
+    # доказывает, что default(essence.conf_dir, '/etc/redis') сработал, render не упал.
+    # Дизамбигуатор — path.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
-    # data-dir под ДЕФОЛТНЫМ data_dir (state без data_dir → default /var/lib/redis):
-    # доказывает, что default(incarnation.state.data_dir, '/var/lib/redis') сработал
-    # has()-safe на старом state. Дизамбигуатор — path. БЕЗУСЛОВНАЯ задача install.yml
-    # (data-dir создаётся в обеих install-ветках, не gated) — присутствует всегда.
+    # data-dir под ДЕФОЛТНЫМ data_dir (essence без data_dir → default /var/lib/redis):
+    # доказывает, что default(essence.data_dir, '/var/lib/redis') сработал has()-safe на
+    # essence без override. Дизамбигуатор — path. БЕЗУСЛОВНАЯ задача install.yml (data-dir
+    # создаётся в обеих install-ветках, не gated) — присутствует всегда.
     # ★ НЕ modules-dir (/var/lib/redis/modules): после редизайна «модули ВСЕГДА ВСЕ»
     # (2026-06-25) modules-группа gated на vars.redis_modules_enabled, требующий
-    # НЕПУСТОЙ modules_base_url; legacy-state его не несёт → default(...,'') = '' →
-    # vanilla redis → modules.yml group-drop (modules-dir в плане НЕТ — корректно).
+    # НЕПУСТОЙ modules_base_url; essence без ключа → default(essence.modules_base_url,'')
+    # = '' → vanilla redis → modules.yml group-drop (modules-dir в плане НЕТ — корректно).
     # data_dir-дефолт доказываем безусловной data-dir задачей.
     - module: core.file.directory
       params_subset:

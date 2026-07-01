@@ -1,0 +1,82 @@
+# L0-испытание add_node — host-layout ИЗ ESSENCE читается (v11→v12, Вариант A, парный
+# с add-node-legacy-state-defaults). Guard: когда essence ПЕРЕОПРЕДЕЛЯЕТ conf_dir/
+# data_dir/modules_base_url, add_node кладёт redis.conf/.so под ЭТИ пути (не дефолтные) —
+# новая нода получает ТОТ ЖЕ layout, что кластер. Регресс «add_node игнорирует essence-
+# override layout» (читает дефолт или state вместо essence) = redis.conf/.so разойдутся
+# с кластером → нода недоступна/без модулей.
+#
+# essence с override: conf_dir=/opt/redis, data_dir=/srv/redis-data, непустой
+# modules_base_url (redis_version="" < 8 → модули активны, .so под data_dir override).
+# Ожидаем:
+#   - redis.conf → /opt/redis/redis.conf (conf_dir override из essence);
+#   - modules-dir → /srv/redis-data/modules (data_dir override из essence);
+#   - add-node плагин строит endpoint-ы из roster как обычно.
+name: add_node reads host-layout override from essence
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-1.example.com
+      covens: [add_node, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+    - sid: node-9.example.com
+      covens: [add_node, redis]
+      soulprint:
+        network: { primary_ip: 10.0.0.9 }
+        os: { arch: amd64 }
+  vault:
+    secret/redis/add_node/users/default_admin:
+      password: default-admin-secret-pass
+  # ★ host-layout ПЕРЕОПРЕДЕЛЁН оператором в essence (v11→v12): day-2 обязан читать
+  # ИМЕННО эти пути (не дефолтные), чтобы новая нода легла в тот же layout, что кластер.
+  essence:
+    conf_dir: /opt/redis
+    data_dir: /srv/redis-data
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+  state:
+    redis_type: cluster
+    redis_version: ""
+    redis_config:
+      maxmemory: "256mb"
+      cluster-enabled: "yes"
+      cluster-config-file: "nodes.conf"
+      cluster-node-timeout: "5000"
+    redis_users: []
+    redis_hosts: []
+
+  input:
+    new_node_sid: node-9.example.com
+    seed_sid: node-1.example.com
+    role: master
+
+assert:
+  task_present:
+    # redis.conf под conf_dir OVERRIDE из essence (/opt/redis, НЕ дефолт /etc/redis):
+    # доказывает, что default(essence.conf_dir, '/etc/redis') вернул essence-override.
+    # Дизамбигуатор — path.
+    - module: core.file.rendered
+      params_subset:
+        path: /opt/redis/redis.conf
+    # modules-dir под data_dir OVERRIDE из essence (/srv/redis-data/modules): непустой
+    # essence.modules_base_url активирует modules-группу (redis < 8), .so под data_dir
+    # override — доказывает, что default(essence.data_dir,...) + default(essence.
+    # modules_base_url,...) прочитаны из essence. Дизамбигуатор — path.
+    - module: core.file.directory
+      params_subset:
+        path: /srv/redis-data/modules
+    # ADD-NODE плагин: пустой master_sid → master.addr пуст (role=master). Endpoint-ы
+    # из roster. Доказывает, что day-2-проход дошёл до конца (render не сорвался).
+    - module: community.redis.cluster
+      params_subset:
+        action: add-node
+        role: master
+        username: default_admin
+        password: default-admin-secret-pass
+        new_node:
+          addr: "10.0.0.9:6379"
+        seed:
+          addr: "10.0.0.1:6379"
+        master:
+          addr: ""

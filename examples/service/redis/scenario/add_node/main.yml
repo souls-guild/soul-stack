@@ -87,13 +87,14 @@ tasks:
       input:
         version:  "${ default(incarnation.state.redis_version, '') }"
         # conf_dir/data_dir: host-layout новой ноды (директива B) — ТЕ ЖЕ пути, что у
-        # кластера. Читаем из incarnation.state (create персистит их как modules_base_url):
-        # новая нода обязана знать тот же layout, иначе redis.conf/.so/tls легли бы в
-        # дефолтные пути, разойдясь с кластером. default(...,'/etc/redis'|'/var/lib/redis')
-        # — has()-safe для СТАРЫХ инкарнаций без этих полей в state (back-compat: default
-        # ловит отсутствие листа на существующем incarnation.state, как modules_base_url).
-        conf_dir: "${ default(incarnation.state.conf_dir, '/etc/redis') }"
-        data_dir: "${ default(incarnation.state.data_dir, '/var/lib/redis') }"
+        # кластера. Читаем из essence (v11→v12, Вариант A): layout — author-context, тот
+        # же источник, что compute.conf_dir/data_dir у create. Новая нода обязана знать
+        # тот же layout, иначе redis.conf/.so/tls легли бы в дефолтные пути, разойдясь с
+        # кластером. default(...,'/etc/redis'|'/var/lib/redis') — has()-safe, если essence
+        # не переопределяет layout (дефолтные пути). Desync-риск принят: если оператор
+        # сменил essence.conf_dir/data_dir после create — новая нода получит НОВЫЙ layout.
+        conf_dir: "${ default(essence.conf_dir, '/etc/redis') }"
+        data_dir: "${ default(essence.data_dir, '/var/lib/redis') }"
         # ★ РЕДИЗАЙН default_admin (2026-06-30): apply.input.password УДАЛЁН (requirepass
         # убран — destiny больше не принимает password). Аутентификация — под системным
         # default_admin, его пароль приходит в users ниже (системные доливаются из essence).
@@ -112,11 +113,11 @@ tasks:
                'masteruser': 'default_admin',
                'masterauth': vault('secret/redis/' + incarnation.name + '/users/default_admin#password')
              }) }
-        # Источник .so Redis-модулей — из state (директива «модули ВСЕГДА ВСЕ»): новая
+        # Источник .so Redis-модулей — из essence (директива «модули ВСЕГДА ВСЕ»): новая
         # нода кластера тянет тот же набор модулей из того же источника, что и кластер.
-        # modules_base_url сохранён в state при create; default '' для старых
-        # incarnation без поля (Redis 8+ — модули встроены, base_url не используется).
-        modules_base_url: "${ default(incarnation.state.modules_base_url, '') }"
+        # essence.modules_base_url — author-context (v11→v12); default '' если не задан
+        # (Redis 8+ — модули встроены, base_url не используется).
+        modules_base_url: "${ default(essence.modules_base_url, '') }"
         # ★★ КРИТИЧНО (system-ACL-users d2): новая нода ОБЯЗАНА получить тот же users.acl,
         # что и кластер — СИСТЕМНЫЕ (из essence, ПЕРВЫМИ: replica/monitoring/sentinel/
         # haproxy) + operator-extra (state.redis_users — МАССИВ AclUser, wave 1b, ПОВЕРХ).

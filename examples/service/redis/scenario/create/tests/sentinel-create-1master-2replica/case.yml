@@ -251,8 +251,6 @@ assert:
     shards: 0
     persistence: rdb
     maxmemory_policy: ""
-    install:
-      method: package
     tls:
       enable:   false
       only:     false

@@ -46,7 +46,12 @@ fixtures:
   # ★ РЕДИЗАЙН default_admin: системные ACL-юзера доливаются в users.acl при ре-рендере
   # (destiny redis перерендеривает и users.acl). rotate_tls долит их из essence ПЕРВЫМИ
   # (как деплой-тело) — без них ре-рендер СТЁР БЫ системных из users.acl.
+  # host-layout (conf_dir/data_dir/modules_base_url) — в essence (v11→v12, Вариант A):
+  # вынесен из state, rotate_tls читает отсюда (conf_dir задаёт путь PEM/tls-*-file).
   essence:
+    conf_dir: /etc/redis
+    data_dir: /var/lib/redis
+    modules_base_url: "https://artifacts.example.com/redis/modules"
     system_acl_users:
       default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
@@ -66,9 +71,6 @@ fixtures:
   state:
     redis_type: sentinel
     redis_version: "7.2.4"
-    conf_dir: /etc/redis
-    data_dir: /var/lib/redis
-    modules_base_url: "https://artifacts.example.com/redis/modules"
     tls:
       enable:   true
       only:     false
