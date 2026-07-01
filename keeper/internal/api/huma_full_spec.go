@@ -250,6 +250,7 @@ func fullSpecGroups() []specGroup {
 		{"/v1", func(api huma.API) error {
 			registerHumaPermissionsList(api, handlers.NewPermissionCatalogHandler(nil))
 			registerHumaEventTypesList(api, handlers.NewEventTypeCatalogHandler(nil))
+			registerHumaHeraldTypesList(api, handlers.NewHeraldTypeCatalogHandler(nil))
 			registerHumaMyPermissionsList(api, handlers.NewMyPermissionsHandler(nil, nil))
 			return nil
 		}},

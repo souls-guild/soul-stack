@@ -37,11 +37,11 @@ type webhookTarget struct {
 	signingKey []byte
 }
 
-// resolveWebhook извлекает параметры доставки из Herald-записи: url, headers,
-// opt-out-флаги и (если задан secret_ref) signing-token из Vault. Ошибка —
-// канал не webhook / битый config / Vault-сбой (caller трактует как
-// terminal-fail доставки этого job-а, секрет в текст ошибки не утекает).
-func resolveWebhook(ctx context.Context, h *Herald, kv KVReader) (*webhookTarget, error) {
+// resolveWebhookTarget извлекает параметры доставки webhook-канала из Herald-
+// записи: url, headers, opt-out-флаги и (если задан secret_ref) signing-token из
+// Vault. Ошибка — канал не webhook / битый config / Vault-сбой (caller трактует
+// как terminal-fail доставки этого job-а, секрет в текст ошибки не утекает).
+func resolveWebhookTarget(ctx context.Context, h *Herald, kv KVReader) (*webhookTarget, error) {
 	if h.Type != HeraldWebhook {
 		return nil, fmt.Errorf("herald: channel %q is not webhook (type %q)", h.Name, h.Type)
 	}
@@ -82,7 +82,21 @@ func configHeaders(config map[string]any) map[string]string {
 	return out
 }
 
-// resolveSigningKey читает signing-token канала из Vault по secret_ref.
+// resolveSigningKey читает signing-token webhook-канала из Vault по secret_ref.
+// Тонкая обёртка над [resolveVaultString] (общий резолв одиночного vault-ref-
+// поля), возвращает raw-байты ключа для HMAC-подписи.
+func resolveSigningKey(ctx context.Context, kv KVReader, secretRef string) ([]byte, error) {
+	s, err := resolveVaultString(ctx, kv, secretRef)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(s), nil
+}
+
+// resolveVaultString читает одиночное строковое значение секрета из Vault по
+// vault-ref — общий резолвер для всех секрет-полей каналов (webhook secret_ref,
+// telegram bot_token_ref, slack/mattermost/discord webhook_url_ref, custom
+// header_secret_ref, email password_ref).
 //
 // Формат ref: `vault:<mount>/<path>` с опц. суффиксом `#<field>` (симметрия
 // vault()/readVaultRef). Выбор поля:
@@ -94,35 +108,35 @@ func configHeaders(config map[string]any) map[string]string {
 //
 // БЕЗОПАСНОСТЬ: значение секрета в текст ошибок НЕ попадает; ref маскируется
 // caller-ом через MaskSecrets при логировании error-message.
-func resolveSigningKey(ctx context.Context, kv KVReader, secretRef string) ([]byte, error) {
+func resolveVaultString(ctx context.Context, kv KVReader, secretRef string) (string, error) {
 	if kv == nil {
-		return nil, fmt.Errorf("herald: secret_ref set but no Vault client configured")
+		return "", fmt.Errorf("herald: secret ref set but no Vault client configured")
 	}
 	body := strings.TrimPrefix(secretRef, "vault:")
 	pathPart, field, hasField := strings.Cut(body, "#")
 	ref := "vault:" + pathPart
 	logicalPath, err := vault.ParseRef(ref)
 	if err != nil {
-		return nil, fmt.Errorf("herald: invalid secret_ref: %w", err)
+		return "", fmt.Errorf("herald: invalid secret ref: %w", err)
 	}
 	data, err := kv.ReadKV(ctx, logicalPath)
 	if err != nil {
-		return nil, fmt.Errorf("herald: read signing secret: %w", err)
+		return "", fmt.Errorf("herald: read secret: %w", err)
 	}
 
 	var rawVal any
 	if hasField {
 		if field == "" {
-			return nil, fmt.Errorf("herald: secret_ref has empty #field")
+			return "", fmt.Errorf("herald: secret ref has empty #field")
 		}
 		v, ok := data[field]
 		if !ok {
-			return nil, fmt.Errorf("herald: signing secret has no field %q", field)
+			return "", fmt.Errorf("herald: secret has no field %q", field)
 		}
 		rawVal = v
 	} else {
 		if len(data) != 1 {
-			return nil, fmt.Errorf("herald: secret has %d fields — secret_ref must specify #field", len(data))
+			return "", fmt.Errorf("herald: secret has %d fields — ref must specify #field", len(data))
 		}
 		for _, v := range data {
 			rawVal = v
@@ -130,7 +144,7 @@ func resolveSigningKey(ctx context.Context, kv KVReader, secretRef string) ([]by
 	}
 	s, ok := rawVal.(string)
 	if !ok {
-		return nil, fmt.Errorf("herald: signing secret field is not a string")
+		return "", fmt.Errorf("herald: secret field is not a string")
 	}
-	return []byte(s), nil
+	return s, nil
 }

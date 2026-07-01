@@ -53,6 +53,7 @@ func webUIRouter(t *testing.T, verifier *keeperjwt.Verifier, webUIEnabled bool) 
 		handlers.NewModuleFormPrepHandler(nil, nil),
 		handlers.NewPermissionCatalogHandler(nil),
 		handlers.NewEventTypeCatalogHandler(nil),
+		handlers.NewHeraldTypeCatalogHandler(nil),
 		handlers.NewMyPermissionsHandler(nil, nil),
 		nil, // enforcer
 		nil, // auditWriter

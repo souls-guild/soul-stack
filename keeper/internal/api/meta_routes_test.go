@@ -88,6 +88,7 @@ func metaRouter(t *testing.T, verifier *keeperjwt.Verifier) http.Handler {
 		handlers.NewModuleFormPrepHandler(nil, nil),
 		handlers.NewPermissionCatalogHandler(nil),
 		handlers.NewEventTypeCatalogHandler(nil),
+		handlers.NewHeraldTypeCatalogHandler(nil),
 		handlers.NewMyPermissionsHandler(nil, nil),
 		nil,                                  // enforcer
 		nil,                                  // auditWriter

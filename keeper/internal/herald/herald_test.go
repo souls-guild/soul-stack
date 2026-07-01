@@ -66,11 +66,14 @@ func TestValidName(t *testing.T) {
 // --- ValidHeraldType --------------------------------------------------
 
 func TestValidHeraldType(t *testing.T) {
-	if !ValidHeraldType(HeraldWebhook) {
-		t.Error("webhook must be valid")
+	for _, ty := range []HeraldType{HeraldWebhook, HeraldTelegram, HeraldSlack, HeraldMattermost, HeraldDiscord, HeraldCustom, HeraldEmail} {
+		if !ValidHeraldType(ty) {
+			t.Errorf("%s must be valid", ty)
+		}
 	}
-	if ValidHeraldType(HeraldType("slack")) {
-		t.Error("slack must be invalid in MVP")
+	// pagerduty не в реестре — неизвестный тип (fail-closed).
+	if ValidHeraldType(HeraldType("pagerduty")) {
+		t.Error("pagerduty must be invalid (not in registry)")
 	}
 }
 
@@ -105,7 +108,7 @@ func TestValidateConfig_Webhook(t *testing.T) {
 }
 
 func TestValidateConfig_UnknownType(t *testing.T) {
-	if err := ValidateConfig(HeraldType("slack"), map[string]any{"url": "https://x/y"}); err == nil {
+	if err := ValidateConfig(HeraldType("pagerduty"), map[string]any{"url": "https://x/y"}); err == nil {
 		t.Error("unknown type must error")
 	}
 }
@@ -113,17 +116,26 @@ func TestValidateConfig_UnknownType(t *testing.T) {
 // --- ValidateSecretRef ------------------------------------------------
 
 func TestValidateSecretRef(t *testing.T) {
-	if err := ValidateSecretRef(nil); err != nil {
+	if err := ValidateSecretRef(HeraldWebhook, nil); err != nil {
 		t.Errorf("nil secret_ref must be ok (optional), got %v", err)
 	}
-	if err := ValidateSecretRef(strptr("vault:secret/keeper/herald/sign")); err != nil {
+	if err := ValidateSecretRef(HeraldWebhook, strptr("vault:secret/keeper/herald/sign")); err != nil {
 		t.Errorf("valid vault-ref err = %v", err)
 	}
-	if err := ValidateSecretRef(strptr("plain-token")); err == nil {
+	if err := ValidateSecretRef(HeraldWebhook, strptr("plain-token")); err == nil {
 		t.Error("non-vault-ref must error")
 	}
-	if err := ValidateSecretRef(strptr("vault:secret")); err == nil {
+	if err := ValidateSecretRef(HeraldWebhook, strptr("vault:secret")); err == nil {
 		t.Error("vault-ref without <mount>/<path> must error")
+	}
+	// Разводка секрета (ADR-052 amendment): secret_ref только для webhook-подписи;
+	// у telegram даже валидный vault-ref в secret_ref → ошибка (его credential —
+	// bot_token_ref в config).
+	if err := ValidateSecretRef(HeraldTelegram, strptr("vault:secret/keeper/tg")); err == nil {
+		t.Error("secret_ref for telegram must error (secret_ref is webhook-only)")
+	}
+	if err := ValidateSecretRef(HeraldTelegram, nil); err != nil {
+		t.Errorf("nil secret_ref for telegram must be ok, got %v", err)
 	}
 }
 
@@ -384,7 +396,7 @@ func TestInsertHerald_RejectsBeforeDB(t *testing.T) {
 	}{
 		{"nil", nil},
 		{"bad name", &Herald{Name: "Bad", Type: HeraldWebhook, Config: map[string]any{"url": "https://x/y"}}},
-		{"bad type", &Herald{Name: "ok", Type: HeraldType("slack"), Config: map[string]any{"url": "https://x/y"}}},
+		{"bad type", &Herald{Name: "ok", Type: HeraldType("pagerduty"), Config: map[string]any{"url": "https://x/y"}}},
 		{"bad config", &Herald{Name: "ok", Type: HeraldWebhook, Config: map[string]any{}}},
 		{"bad secret_ref", &Herald{Name: "ok", Type: HeraldWebhook, Config: map[string]any{"url": "https://x/y"}, SecretRef: strptr("plain")}},
 	}

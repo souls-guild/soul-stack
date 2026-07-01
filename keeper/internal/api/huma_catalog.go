@@ -45,6 +45,18 @@ func registerHumaEventTypesList(humaAPI huma.API, eventTypeH *handlers.EventType
 	})
 }
 
+// registerHumaHeraldTypesList монтирует GET /v1/herald-types через huma.
+// heraldTypeH nil → no-op. READ-вариант: huma вызывает ListTyped → typed output,
+// без audit.
+func registerHumaHeraldTypesList(humaAPI huma.API, heraldTypeH *handlers.HeraldTypeCatalogHandler) {
+	if heraldTypeH == nil {
+		return
+	}
+	huma.Register(humaAPI, heraldTypesListOperation(), func(_ context.Context, _ *heraldTypesListInput) (*heraldTypesListOutput, error) {
+		return &heraldTypesListOutput{Body: newHeraldTypeCatalogReply(heraldTypeH.ListTyped())}, nil
+	})
+}
+
 // registerHumaMyPermissionsList монтирует GET /v1/me/permissions через huma. meH
 // nil → no-op. READ-вариант pilot-1: claims (AID) из ctx (RequireJWT положил до
 // humachi) → GetTyped(aid) → typed output, без audit. Нет claims (auth-chain не
@@ -73,6 +85,7 @@ func HumaCatalogSpecYAML() (string, error) {
 	return humaDumpSpec(func(api huma.API) error {
 		registerHumaPermissionsList(api, handlers.NewPermissionCatalogHandler(nil))
 		registerHumaEventTypesList(api, handlers.NewEventTypeCatalogHandler(nil))
+		registerHumaHeraldTypesList(api, handlers.NewHeraldTypeCatalogHandler(nil))
 		registerHumaMyPermissionsList(api, handlers.NewMyPermissionsHandler(nil, nil))
 		return nil
 	})

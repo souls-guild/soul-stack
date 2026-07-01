@@ -82,6 +82,36 @@ func eventTypesListOperation() huma.Operation {
 	}
 }
 
+// === GET /v1/herald-types — каталог типов Herald-канала ===
+
+// heraldTypesListInput — huma-input GET /v1/herald-types. Параметров нет — пустая
+// структура (parity roleListInput).
+type heraldTypesListInput struct{}
+
+// heraldTypesListOutput — huma-output GET /v1/herald-types (FULL-TYPED). Body —
+// typed 200-тело (huma-native api.HeraldTypeCatalogReply). Wire-форма (types/fields
+// non-nil, сортировка типов как AllHeraldTypes) зафиксирована golden-JSON snapshot-
+// тестом.
+type heraldTypesListOutput struct {
+	Body HeraldTypeCatalogReply
+}
+
+// heraldTypesListOperation — метаданные GET /v1/herald-types. Path = "/herald-types"
+// относительно chi-группы /v1 (абсолютный — distinct-path на общей huma.API/дампе,
+// см. permissionsListOperation). DefaultStatus=200. READ-роут: audit НЕ навешан.
+func heraldTypesListOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "listHeraldTypes",
+		Method:        http.MethodGet,
+		Path:          "/herald-types",
+		Summary:       "Каталог типов Herald-канала",
+		Description:   "Типы канала уведомлений и их config-поля (webhook/telegram/slack/mattermost/discord/custom/email): name/label/required/secret/kind. Источник — herald.TypeCatalog (тот же, что валидирует CRUD). Auth-only, без отдельной permission (само-описывающий). Read-only, без audit.",
+		Tags:          []string{"herald"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusInternalServerError},
+	}
+}
+
 // === GET /v1/me/permissions — эффективные права текущего Архонта ===
 
 // myPermissionsListInput — huma-input GET /v1/me/permissions. Параметров нет (AID

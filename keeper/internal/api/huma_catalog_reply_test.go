@@ -39,6 +39,14 @@ func TestGoldenWire_CatalogReply(t *testing.T) {
 		EventTypeCatalogReply{Areas: nil, PointEvents: nil},
 		`{"areas":null,"point_events":null}`)
 
+	// --- HeraldTypeCatalogReply: types + nested fields (ADR-052 amendment) ---
+	goldenCatalogWire(t, "HeraldTypeCatalogReply/full",
+		HeraldTypeCatalogReply{Types: []HeraldTypeCatalogEntry{{Type: "telegram", Fields: []HeraldTypeFieldSpec{{Name: "bot_token_ref", Label: "Vault-ref токена бота", Required: true, Secret: true, Kind: "vault_ref"}}}}},
+		`{"types":[{"type":"telegram","fields":[{"name":"bot_token_ref","label":"Vault-ref токена бота","required":true,"secret":true,"kind":"vault_ref"}]}]}`)
+	goldenCatalogWire(t, "HeraldTypeCatalogReply/nil",
+		HeraldTypeCatalogReply{Types: nil},
+		`{"types":null}`)
+
 	// --- MyPermissionsReply: scope set/nil, измерения set/nil, wildcard ---
 	res := "soul"
 	act := "list"

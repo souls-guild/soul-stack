@@ -58,6 +58,32 @@ type EventTypeCatalogReply struct {
 	PointEvents []EventTypePoint `json:"point_events"`
 }
 
+// === herald-types catalog (GET /v1/herald-types) ===
+
+// HeraldTypeFieldSpec — native описание одного config-поля типа канала (форма 1:1
+// с доменным HeraldFieldView): name/label — строки; required/secret — bool БЕЗ
+// omitempty; kind — строка (herald.FieldKind).
+type HeraldTypeFieldSpec struct {
+	Name     string `json:"name"`
+	Label    string `json:"label"`
+	Required bool   `json:"required"`
+	Secret   bool   `json:"secret"`
+	Kind     string `json:"kind"`
+}
+
+// HeraldTypeCatalogEntry — native дескриптор одного типа канала: type + fields
+// (оба non-nil; fields []HeraldTypeFieldSpec БЕЗ omitempty).
+type HeraldTypeCatalogEntry struct {
+	Type   string                `json:"type"`
+	Fields []HeraldTypeFieldSpec `json:"fields"`
+}
+
+// HeraldTypeCatalogReply — native 200-тело GET /v1/herald-types: types
+// []HeraldTypeCatalogEntry (БЕЗ omitempty).
+type HeraldTypeCatalogReply struct {
+	Types []HeraldTypeCatalogEntry `json:"types"`
+}
+
 // === me-permissions (GET /v1/me/permissions) ===
 
 // MyPermissionScope — native scope-сводка одного эффективного права (форма 1:1 с
@@ -115,6 +141,26 @@ func newEventTypeCatalogReply(c handlers.EventTypeCatalog) EventTypeCatalogReply
 		points = append(points, EventTypePoint{Name: p.Name})
 	}
 	return EventTypeCatalogReply{Areas: areas, PointEvents: points}
+}
+
+// newHeraldTypeCatalogReply проецирует handlers.HeraldTypeCatalog в native
+// (types/fields — non-nil).
+func newHeraldTypeCatalogReply(c handlers.HeraldTypeCatalog) HeraldTypeCatalogReply {
+	types := make([]HeraldTypeCatalogEntry, 0, len(c.Types))
+	for _, ty := range c.Types {
+		fields := make([]HeraldTypeFieldSpec, 0, len(ty.Fields))
+		for _, f := range ty.Fields {
+			fields = append(fields, HeraldTypeFieldSpec{
+				Name:     f.Name,
+				Label:    f.Label,
+				Required: f.Required,
+				Secret:   f.Secret,
+				Kind:     f.Kind,
+			})
+		}
+		types = append(types, HeraldTypeCatalogEntry{Type: ty.Type, Fields: fields})
+	}
+	return HeraldTypeCatalogReply{Types: types}
 }
 
 // newMyPermissionScope проецирует плоскую handlers.MyScope в native pointer-optional
