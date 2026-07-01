@@ -898,7 +898,7 @@ components:
       properties:
         config:
           additionalProperties: {}
-          description: per-type config (webhook — { url, опц. headers, опц. http_allowed/allow_private })
+          description: per-type config (форма зависит от type; см. каталог GET /v1/herald-types)
           type: object
         enabled:
           description: канал включён (опущено → true)
@@ -911,10 +911,15 @@ components:
           description: опц. vault-ref на signing-token (vault:<mount>/<path>); сам секрет не хранится
           type: string
         type:
-          description: "тип канала (closed-enum: webhook|telegram); значение вне enum → 422"
+          description: "тип канала (closed-enum: webhook|telegram|slack|mattermost|discord|custom|email); значение вне enum → 422"
           enum:
-            - webhook
+            - custom
+            - discord
+            - email
+            - mattermost
+            - slack
             - telegram
+            - webhook
           type: string
       required:
         - name
@@ -945,6 +950,53 @@ components:
         - offset
         - total
       type: object
+    HeraldTypeCatalogEntry:
+      additionalProperties: false
+      properties:
+        fields:
+          items:
+            $ref: "#/components/schemas/HeraldTypeFieldSpec"
+          type:
+            - array
+            - "null"
+        type:
+          type: string
+      required:
+        - type
+        - fields
+      type: object
+    HeraldTypeCatalogReply:
+      additionalProperties: false
+      properties:
+        types:
+          items:
+            $ref: "#/components/schemas/HeraldTypeCatalogEntry"
+          type:
+            - array
+            - "null"
+      required:
+        - types
+      type: object
+    HeraldTypeFieldSpec:
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+        label:
+          type: string
+        name:
+          type: string
+        required:
+          type: boolean
+        secret:
+          type: boolean
+      required:
+        - name
+        - label
+        - required
+        - secret
+        - kind
+      type: object
     HeraldUpdateRequest:
       additionalProperties: false
       properties:
@@ -959,10 +1011,15 @@ components:
           description: опц. vault-ref на signing-token; отсутствие очищает подпись
           type: string
         type:
-          description: "тип канала (closed-enum: webhook|telegram)"
+          description: "тип канала (closed-enum: webhook|telegram|slack|mattermost|discord|custom|email)"
           enum:
-            - webhook
+            - custom
+            - discord
+            - email
+            - mattermost
+            - slack
             - telegram
+            - webhook
           type: string
       required:
         - type
@@ -5641,6 +5698,26 @@ paths:
       summary: Каталог event-types для Tiding-подписки
       tags:
         - event-type
+  /v1/herald-types:
+    get:
+      description: "Типы канала уведомлений и их config-поля (webhook/telegram/slack/mattermost/discord/custom/email): name/label/required/secret/kind. Источник — herald.TypeCatalog (тот же, что валидирует CRUD). Auth-only, без отдельной permission (само-описывающий). Read-only, без audit."
+      operationId: listHeraldTypes
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HeraldTypeCatalogReply"
+          description: OK
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Каталог типов Herald-канала
+      tags:
+        - herald
   /v1/heralds:
     get:
       description: Реестр Herald-каналов с пагинацией (ADR-052). Permission herald.list. Read-only, без audit.

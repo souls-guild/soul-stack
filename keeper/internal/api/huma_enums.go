@@ -87,8 +87,13 @@ const (
 type HeraldType string
 
 const (
-	HeraldTypeWebhook  HeraldType = "webhook"
-	HeraldTypeTelegram HeraldType = "telegram"
+	HeraldTypeWebhook    HeraldType = "webhook"
+	HeraldTypeTelegram   HeraldType = "telegram"
+	HeraldTypeSlack      HeraldType = "slack"
+	HeraldTypeMattermost HeraldType = "mattermost"
+	HeraldTypeDiscord    HeraldType = "discord"
+	HeraldTypeCustom     HeraldType = "custom"
+	HeraldTypeEmail      HeraldType = "email"
 )
 
 // GitRefType — тип git-ref (ADR-007). INLINE-enum.

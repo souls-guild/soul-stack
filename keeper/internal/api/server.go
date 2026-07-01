@@ -637,6 +637,11 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	// тот же, что валидирует CRUD). Auth-only (без RequirePermission, см. router.go).
 	eventTypeCatalogH := handlers.NewEventTypeCatalogHandler(logger)
 
+	// heraldTypeCatalogH монтируется ВСЕГДА: каталог типов Herald-канала и их
+	// config-полей (`GET /v1/herald-types`, ADR-052 amendment) — статика из пакета
+	// herald (источник тот же, что валидирует CRUD). Auth-only (без RequirePermission).
+	heraldTypeCatalogH := handlers.NewHeraldTypeCatalogHandler(logger)
+
 	// meH монтируется ВСЕГДА: эффективные права текущего Архонта
 	// (`GET /v1/me/permissions`) резолвятся из RBAC-снимка (deps.RBAC non-nil
 	// гарантирован выше). Auth-only (без RequirePermission, см. router.go).
@@ -715,7 +720,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 		}
 	}
 
-	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, augurH, oracleH, pushH, pushProviderH, providerH, profileH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.LoginGuard, deps.LoginLimitCfg, logger)
+	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, augurH, oracleH, pushH, pushProviderH, providerH, profileH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, heraldTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.LoginGuard, deps.LoginLimitCfg, logger)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,

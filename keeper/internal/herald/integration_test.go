@@ -201,7 +201,7 @@ func TestIntegration_Herald_TypeCHECK(t *testing.T) {
 	// heralds_type_enum (defence in depth — БД не пускает чужой type).
 	_, err := integrationPool.Exec(ctx,
 		`INSERT INTO heralds (name, type, config) VALUES ($1, $2, '{}'::jsonb)`,
-		"bad-type", "slack")
+		"bad-type", "pagerduty")
 	if err == nil {
 		t.Fatal("expected CHECK violation on heralds_type_enum")
 	}

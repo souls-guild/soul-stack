@@ -37,8 +37,8 @@ type heraldCreateInput struct {
 // (committed-рукопись → HeraldCreateRequest).
 type HeraldCreateRequest struct {
 	Name      string         `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"имя Herald-канала (kebab-case, 1..63), уникальное в кластере"`
-	Type      string         `json:"type" required:"true" enum:"webhook,telegram" doc:"тип канала (closed-enum: webhook|telegram); значение вне enum → 422"`
-	Config    map[string]any `json:"config" required:"true" doc:"per-type config (webhook — { url, опц. headers, опц. http_allowed/allow_private })"`
+	Type      string         `json:"type" required:"true" enum:"custom,discord,email,mattermost,slack,telegram,webhook" doc:"тип канала (closed-enum: webhook|telegram|slack|mattermost|discord|custom|email); значение вне enum → 422"`
+	Config    map[string]any `json:"config" required:"true" doc:"per-type config (форма зависит от type; см. каталог GET /v1/herald-types)"`
 	SecretRef *string        `json:"secret_ref,omitempty" doc:"опц. vault-ref на signing-token (vault:<mount>/<path>); сам секрет не хранится"`
 	Enabled   *bool          `json:"enabled,omitempty" doc:"канал включён (опущено → true)"`
 }
@@ -148,7 +148,7 @@ type heraldUpdateInput struct {
 // secret_ref/enabled опциональны. Имя структуры = контрактное имя схемы в OpenAPI
 // (committed-рукопись → HeraldUpdateRequest).
 type HeraldUpdateRequest struct {
-	Type      string         `json:"type" required:"true" enum:"webhook,telegram" doc:"тип канала (closed-enum: webhook|telegram)"`
+	Type      string         `json:"type" required:"true" enum:"custom,discord,email,mattermost,slack,telegram,webhook" doc:"тип канала (closed-enum: webhook|telegram|slack|mattermost|discord|custom|email)"`
 	Config    map[string]any `json:"config" required:"true" doc:"per-type config (replace — полностью заменяет существующий)"`
 	SecretRef *string        `json:"secret_ref,omitempty" doc:"опц. vault-ref на signing-token; отсутствие очищает подпись"`
 	Enabled   *bool          `json:"enabled,omitempty" doc:"канал включён (опущено → true)"`

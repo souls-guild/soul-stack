@@ -183,14 +183,17 @@ func (w *DeliveryWorker) handle(ctx context.Context, payload []byte) {
 	w.requeue(ctx, job, payload, derr)
 }
 
-// deliver доставляет один job. Возврат (statusCode, nil) на 2xx; иначе ошибка
-// (SSRF-guard / транспорт / non-2xx) — caller решает retry/терминал.
+// deliver доставляет один job. Возврат (statusCode, nil) на успех; иначе ошибка
+// (SSRF-guard / транспорт / non-2xx) — caller решает retry/терминал. Для email
+// statusCode всегда 0 (SMTP не имеет HTTP-статуса).
 //
-// Двухклассовая модель (ADR-052 amendment): резолв канала + Enabled-проверка +
-// ЕДИНЫЙ SSRF-guard (validateDeliveryEndpoint + guardedDeliveryClient) — общие
-// для ВСЕХ HTTP-типов; per-type request-builder ([HeraldTransport]) строит URL/
-// тело/заголовки/подпись. Новый HTTP-тип НЕ может обойти guard — deliver() зовёт
-// его сам, а не транспорт. Классификация non-2xx (isTerminalStatus) — общая.
+// Двухклассовая модель (ADR-052 amendment): резолв канала + Enabled-проверка —
+// общие. Далее диспетчер по классу: email → [deliverEmail] (своя SMTP-ветка,
+// свой SSRF-guard/транспорт); иначе HTTP-класс → [resolveDelivery] строит
+// httpDelivery, а ЕДИНЫЙ SSRF-guard (validateDeliveryEndpoint +
+// guardedDeliveryClient) и client.Do зовёт сам deliver(). Новый HTTP-тип НЕ
+// может обойти guard by construction. Классификация non-2xx (isTerminalStatus) —
+// общая для HTTP.
 func (w *DeliveryWorker) deliver(ctx context.Context, job *DeliveryJob) (int, error) {
 	h, err := w.Heralds.HeraldByName(ctx, job.Herald)
 	if err != nil {
@@ -208,32 +211,39 @@ func (w *DeliveryWorker) deliver(ctx context.Context, job *DeliveryJob) (int, er
 		return 0, errTerminalNoRetry{fmt.Errorf("herald: channel %q disabled", h.Name)}
 	}
 
-	tr, ok := transportFor(h.Type)
-	if !ok {
-		// Тип без HTTP-транспорта (неизвестный / не-HTTP-класс без своей ветки) —
-		// доставлять нечем, устойчивая ошибка: терминал без retry.
-		return 0, errTerminalNoRetry{fmt.Errorf("herald: channel %q type %q has no transport", h.Name, h.Type)}
+	// SMTP-класс — своя ветка (свой транспорт net/smtp + свой SSRF-guard по
+	// резолвнутому IP). Без httpDelivery/HTTP-клиента.
+	if h.Type == HeraldEmail {
+		if err := deliverEmail(ctx, h, job, w.KV, w.Resolver); err != nil {
+			return 0, err
+		}
+		return 0, nil
 	}
 
-	dr, err := tr.BuildRequest(ctx, h, job, w.KV)
+	// HTTP-класс: драйвер строит httpDelivery, guard+dial — общие.
+	hd, err := resolveDelivery(ctx, h, job, w.KV)
 	if err != nil {
-		// Транспорт сам классифицировал ошибку (terminal-no-retry для битого
-		// config / Vault-сбой transient) — пробрасываем как есть.
+		// Драйвер сам классифицировал ошибку (terminal-no-retry для битого config /
+		// Vault-сбой transient) — пробрасываем как есть.
 		return 0, err
 	}
 
 	// SSRF-валидация URL ПЕРЕД запросом (config мог измениться после create) —
 	// ЕДИНАЯ точка для всех HTTP-типов.
-	if err := validateDeliveryEndpoint(dr.req.URL.String(), dr.httpAllowed, dr.allowPrivate); err != nil {
-		// Guard отверг — это устойчивая ошибка конфигурации, ретраить
-		// бессмысленно: терминальный fail.
+	if err := validateDeliveryEndpoint(hd.url, hd.httpAllowed, hd.allowPrivate); err != nil {
+		// Guard отверг — устойчивая ошибка конфигурации, ретраить бессмысленно.
 		return 0, errTerminalNoRetry{err}
 	}
 
-	client := guardedDeliveryClient(w.Resolver, dr.allowPrivate, w.Timeout)
-	resp, err := client.Do(dr.req)
+	req, err := buildHTTPRequest(ctx, hd)
 	if err != nil {
-		return 0, fmt.Errorf("herald: delivery POST: %w", err)
+		return 0, errTerminalNoRetry{fmt.Errorf("herald: build request: %w", err)}
+	}
+
+	client := guardedDeliveryClient(w.Resolver, hd.allowPrivate, w.Timeout)
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("herald: delivery %s: %w", req.Method, err)
 	}
 	defer resp.Body.Close()
 	// Дренируем тело (с лимитом) — переиспользование keep-alive-соединения.

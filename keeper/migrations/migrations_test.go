@@ -308,21 +308,23 @@ func TestEmbed_OperatorsAuthMethodLDAPOIDC(t *testing.T) {
 	}
 }
 
-// TestEmbed_HeraldsTypeTelegram — sanity на 091 (ADR-052 amendment): only-add
-// расширение CHECK heralds_type_enum значением `telegram`. Up расширяет набор
-// (webhook+telegram), down возвращает к прежнему (только webhook).
-func TestEmbed_HeraldsTypeTelegram(t *testing.T) {
+// TestEmbed_HeraldsTypeExtended — sanity на 091 (ADR-052 amendment): only-add
+// расширение CHECK heralds_type_enum channel-типами telegram/slack/mattermost/
+// discord/custom (HTTP) и email (SMTP). Up расширяет набор всеми 7, down
+// возвращает к прежнему (только webhook).
+func TestEmbed_HeraldsTypeExtended(t *testing.T) {
 	b, err := FS.ReadFile("091_extend_heralds_type.up.sql")
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
 	body := string(b)
-	for _, frag := range []string{
-		"DROP CONSTRAINT heralds_type_enum",
-		"'webhook', 'telegram'",
-	} {
+	frags := []string{"DROP CONSTRAINT heralds_type_enum"}
+	for _, ty := range []string{"webhook", "telegram", "slack", "mattermost", "discord", "custom", "email"} {
+		frags = append(frags, "'"+ty+"'")
+	}
+	for _, frag := range frags {
 		if !strings.Contains(body, frag) {
-			t.Errorf("091 up.sql missing %q; content head: %.300s", frag, body)
+			t.Errorf("091 up.sql missing %q; content head: %.400s", frag, body)
 		}
 	}
 	d, err := FS.ReadFile("091_extend_heralds_type.down.sql")

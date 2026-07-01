@@ -66,15 +66,14 @@ func TestValidName(t *testing.T) {
 // --- ValidHeraldType --------------------------------------------------
 
 func TestValidHeraldType(t *testing.T) {
-	if !ValidHeraldType(HeraldWebhook) {
-		t.Error("webhook must be valid")
+	for _, ty := range []HeraldType{HeraldWebhook, HeraldTelegram, HeraldSlack, HeraldMattermost, HeraldDiscord, HeraldCustom, HeraldEmail} {
+		if !ValidHeraldType(ty) {
+			t.Errorf("%s must be valid", ty)
+		}
 	}
-	if !ValidHeraldType(HeraldTelegram) {
-		t.Error("telegram must be valid (slice 1 pilot)")
-	}
-	// mattermost ещё не в реестре — неизвестный тип (заменяет прежний slack-негатив).
-	if ValidHeraldType(HeraldType("mattermost")) {
-		t.Error("mattermost must be invalid (not yet in registry)")
+	// pagerduty не в реестре — неизвестный тип (fail-closed).
+	if ValidHeraldType(HeraldType("pagerduty")) {
+		t.Error("pagerduty must be invalid (not in registry)")
 	}
 }
 
@@ -109,7 +108,7 @@ func TestValidateConfig_Webhook(t *testing.T) {
 }
 
 func TestValidateConfig_UnknownType(t *testing.T) {
-	if err := ValidateConfig(HeraldType("mattermost"), map[string]any{"url": "https://x/y"}); err == nil {
+	if err := ValidateConfig(HeraldType("pagerduty"), map[string]any{"url": "https://x/y"}); err == nil {
 		t.Error("unknown type must error")
 	}
 }
@@ -397,7 +396,7 @@ func TestInsertHerald_RejectsBeforeDB(t *testing.T) {
 	}{
 		{"nil", nil},
 		{"bad name", &Herald{Name: "Bad", Type: HeraldWebhook, Config: map[string]any{"url": "https://x/y"}}},
-		{"bad type", &Herald{Name: "ok", Type: HeraldType("mattermost"), Config: map[string]any{"url": "https://x/y"}}},
+		{"bad type", &Herald{Name: "ok", Type: HeraldType("pagerduty"), Config: map[string]any{"url": "https://x/y"}}},
 		{"bad config", &Herald{Name: "ok", Type: HeraldWebhook, Config: map[string]any{}}},
 		{"bad secret_ref", &Herald{Name: "ok", Type: HeraldWebhook, Config: map[string]any{"url": "https://x/y"}, SecretRef: strptr("plain")}},
 	}

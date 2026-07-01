@@ -208,6 +208,7 @@ func collectRoutes(t *testing.T) map[route]struct{} {
 		handlers.NewModuleFormPrepHandler(nil, nil), // moduleFormPrepH — non-nil → /v1/modules/{name}/form-prep монтируется (ADR-045 S3); resolver nil не дёргается при обходе
 		handlers.NewPermissionCatalogHandler(nil),   // permCatalogH — /v1/permissions монтируется всегда (статика rbac-каталога)
 		handlers.NewEventTypeCatalogHandler(nil),    // eventTypeCatalogH — /v1/event-types монтируется всегда (статика herald-каталога)
+		handlers.NewHeraldTypeCatalogHandler(nil),   // heraldTypeCatalogH — /v1/herald-types монтируется всегда (статика herald-type-каталога)
 		handlers.NewMyPermissionsHandler(nil, nil),  // meH — /v1/me/permissions монтируется всегда (зависит лишь от RBAC-снимка); PermissionsOf при обходе дерева не дёргается
 		nil,                                  // enforcer — RequirePermission собирается lazily
 		nil,                                  // auditWriter — Audit собирается lazily
