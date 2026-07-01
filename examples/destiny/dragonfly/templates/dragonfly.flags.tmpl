@@ -1,7 +1,8 @@
 {{/*
   dragonfly.conf — FLAGFILE DragonFly (absl flags, НЕ redis.conf!). Go text/template
-  strict (ADR-010). Контекст: .vars (password, config + host-layout), .self (primary_ip
-  для bind).
+  strict (ADR-010). Контекст: .vars (config + host-layout), .self (primary_ip
+  для bind). ★ РЕДИЗАЙН default_admin: .vars.password больше НЕ передаётся (requirepass
+  убран — аутентификация под ACL-юзером default_admin, см. секцию --aclfile ниже).
 
   ★ ФОРМАТ (верифицировано на исходниках DF v1.x + официальный tools/packaging/debian/
   dragonfly.conf): КАЖДАЯ директива — отдельная строка `--<flag>=<value>` (двойной дефис,
@@ -59,12 +60,15 @@
 --dbfilename=dump
 
 {{- /*
-  Аутентификация (--requirepass). DF redis-совместим: AUTH <password>. Значение —
-  зарезолвленный keeper-side пароль (ADR-012); в логах маскируется seal-слоем.
-*/}}
---requirepass={{ .vars.password }}
+  ★ РЕДИЗАЙН default_admin: --requirepass УБРАН. Аутентификация (вкл. внутреннюю:
+  репликация masterauth, sentinel monitor, health-PING) идёт под СИСТЕМНЫМ ACL-юзером
+  default_admin (users.acl, ~* &* +@all). При заданном --aclfile встроенный default
+  рендерится `off` (users.acl.tmpl), поэтому безпарольного built-in default-доступа нет —
+  внешние коннекты идут под default_admin (плагин community.redis передаёт username).
+  requirepass + aclfile одновременно избыточны (DF при aclfile берёт авторитет default из
+  файла). masteruser/masterauth (replica→master AUTH) — обычные ключи merged config
+  (scenario кладёт их в config-map через vault()-в-ячейке), печатаются range-ом config ниже.
 
-{{- /*
   ACL-юзеры в отдельном файле (--aclfile). DF принимает redis-формат aclfile, включая
   хешированный пароль `#<sha256hex>` (DF acl/user.cc SetPasswordHash is_hashed) → тот же
   users.acl.tmpl, что redis (plaintext в файл не пишется). Путь выводится из conf_dir.

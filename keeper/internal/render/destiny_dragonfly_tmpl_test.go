@@ -50,7 +50,6 @@ func renderDragonflyTmpl(t *testing.T, name string, root map[string]any) string 
 func TestDragonflyFlagfile_AbslFlagForm(t *testing.T) {
 	root := map[string]any{
 		"vars": map[string]any{
-			"password": "s3cr3t-dragonfly-pass",
 			"conf_dir": "/etc/dragonfly",
 			"data_dir": "/var/lib/dragonfly",
 			"port":     6379,
@@ -58,6 +57,8 @@ func TestDragonflyFlagfile_AbslFlagForm(t *testing.T) {
 			"log_dir":  "/var/log/dragonfly",
 			// merged config от scenario — DF-флаги (underscore-форма). TLS-блок здесь:
 			// доказывает, что bool-флаг tls рендерится как --tls=true (валидно для absl).
+			// ★ РЕДИЗАЙН default_admin: masteruser/masterauth — ОБЫЧНЫЕ ключи config (scenario
+			// кладёт их через vault()-в-ячейке); flagfile range-ит их как любую директиву.
 			// ★ maxmemory_policy НЕ кладём: у DF нет такого флага (absl FATAL на неизвестном).
 			// ★ tls_port НЕ кладём: у DF нет tls_port — TLS встаёт на основной --port
 			// (TestDragonflyFlagfile_TLSOnMainPort гейтит отсутствие --tls_port).
@@ -66,6 +67,8 @@ func TestDragonflyFlagfile_AbslFlagForm(t *testing.T) {
 				"maxclients":    10000,
 				"tls":           "true",
 				"tls_cert_file": "/etc/dragonfly/tls/dragonfly.crt",
+				"masteruser":    "default_admin",
+				"masterauth":    "df-admin-secret",
 			},
 		},
 		"self": map[string]any{
@@ -83,16 +86,25 @@ func TestDragonflyFlagfile_AbslFlagForm(t *testing.T) {
 	mustContainLine(t, out, "--unixsocket=/var/run/dragonfly/dragonfly.sock")
 	mustContainLine(t, out, "--dir=/var/lib/dragonfly")
 	mustContainLine(t, out, "--dbfilename=dump")
-	mustContainLine(t, out, "--requirepass=s3cr3t-dragonfly-pass")
 	mustContainLine(t, out, "--aclfile=/etc/dragonfly/users.acl")
 	mustContainLine(t, out, "--pidfile=/var/run/dragonfly/dragonfly.pid")
 	mustContainLine(t, out, "--log_dir=/var/log/dragonfly")
 
+	// ★ РЕДИЗАЙН default_admin: requirepass УБРАН из flagfile — аутентификация под ACL-юзером
+	// default_admin (users.acl). Guard на регресс возврата requirepass (снова открыл бы
+	// главный пароль вместо ACL-модели).
+	if strings.Contains(out, "--requirepass") {
+		t.Fatalf("flagfile содержит --requirepass: редизайн default_admin убрал его (аутентификация под ACL default_admin). Рендер:\n%s", out)
+	}
+
 	// (в) merged config — --<key>=<value> с DF-флагами (underscore). bool tls=true.
+	// masteruser/masterauth (replica→master AUTH под default_admin) — обычные ключи config.
 	mustContainLine(t, out, "--maxmemory=256mb")
 	mustContainLine(t, out, "--maxclients=10000")
 	mustContainLine(t, out, "--tls=true")
 	mustContainLine(t, out, "--tls_cert_file=/etc/dragonfly/tls/dragonfly.crt")
+	mustContainLine(t, out, "--masteruser=default_admin")
+	mustContainLine(t, out, "--masterauth=df-admin-secret")
 
 	// НЕ redis.conf: ни одной строки без ведущего `--` (кроме пустых) — каждая
 	// непустая строка обязана быть absl-флагом. Ловит регресс «redis.conf-синтаксис».
@@ -117,7 +129,6 @@ func TestDragonflyFlagfile_AbslFlagForm(t *testing.T) {
 func TestDragonflyFlagfile_TLSOnMainPort(t *testing.T) {
 	root := map[string]any{
 		"vars": map[string]any{
-			"password": "s3cr3t-dragonfly-pass",
 			"conf_dir": "/etc/dragonfly",
 			"data_dir": "/var/lib/dragonfly",
 			"port":     6379,
@@ -159,7 +170,6 @@ func TestDragonflyFlagfile_TLSOnMainPort(t *testing.T) {
 func TestDragonflyFlagfile_HostLayoutOverride(t *testing.T) {
 	root := map[string]any{
 		"vars": map[string]any{
-			"password": "pw0000000000000000",
 			"conf_dir": "/opt/df/conf",
 			"data_dir": "/mnt/df/data",
 			"port":     6379,

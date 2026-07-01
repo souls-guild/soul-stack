@@ -41,9 +41,10 @@ fixtures:
     df_config:
       maxmemory:        "256mb"
 
+  # Vault: probe коннектится под default_admin (requirepass убран).
   vault:
-    secret/dragonfly/restart:
-      password: fixture-df-pass-16chars
+    secret/dragonfly/restart/users/default_admin:
+      password: dfadmin-restart-pass
 
 mocks:
   register:
@@ -52,11 +53,12 @@ mocks:
 
 assert:
   task_present:
-    # probe community.redis.role (ЛОКАЛЬНЫЙ UNIX-сокет, БЕЗ tls/tls_ca). Единственная в плане.
+    # probe community.redis.role (ЛОКАЛЬНЫЙ UNIX-сокет, БЕЗ tls/tls_ca). AUTH под default_admin.
     - module: community.redis.role
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
-        password: fixture-df-pass-16chars
+        username: default_admin
+        password: dfadmin-restart-pass
 
   # ── master-restart НЕВЫРАЗИМ в presence (как redis-аналог) ──────────────────
   # В плане ДВЕ идентичных core.service.restarted name=dragonfly (block-рестарт реплики +

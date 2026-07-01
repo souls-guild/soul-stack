@@ -82,32 +82,44 @@ sentinel_redis_version: "7.2.4"
 sentinel_redis_package_version: "5:7.0.15-1~deb12u7"
 
 # ── Системные ACL-юзеры DragonFly + sentinel-демона ─────────────────────────────
-# Имя→ACL-perms-строка СЛУЖЕБНЫХ юзеров: replica (репликация PSYNC), monitoring (метрики),
-# sentinel (sentinel↔df AUTH), haproxy (health-check балансировщика). DragonFly redis-
-# совместим → те же perms-наборы, что у redis-сервиса (скопированы 1:1 из service redis
-# essence). Два набора (redis-server-команды vs sentinel-команды) → ДВА aclfile: users.acl
-# (DragonFly, system_acl_users) и sentinel-users.acl (sentinel-демон, system_acl_users_sentinel).
+# Имя→ACL-perms-строка СЛУЖЕБНЫХ юзеров: default_admin (полные права — внутрикластерный
+# AUTH: репликация masterauth, sentinel monitor, health-PING; заменил requirepass-юзера
+# default), replica (репликация PSYNC), monitoring (метрики), sentinel (sentinel↔df AUTH),
+# haproxy (health-check балансировщика). DragonFly redis-совместим → те же perms-наборы,
+# что у redis-сервиса (скопированы 1:1 из service redis essence). Два набора (redis-server-
+# команды vs sentinel-команды) → ДВА aclfile: users.acl (DragonFly, system_acl_users) и
+# sentinel-users.acl (sentinel-демон, system_acl_users_sentinel).
 #
-# Пароль КАЖДОГО системного юзера — в Vault: secret/dragonfly/<incarnation>/users/<name>#password
-# (default — главный secret/dragonfly/<incarnation>#password). scenario резолвит keeper-side
-# через vault() и доливает системных в apply.input.users/sentinel_users.
+# Пароль КАЖДОГО системного юзера (вкл. default_admin) — в Vault по ЕДИНОЙ ветке:
+# secret/dragonfly/<incarnation>/users/<name>#password. scenario резолвит keeper-side через
+# vault() и доливает системных в apply.input.users/sentinel_users.
 #
-# ★ default-юзер: в system_acl_users (DragonFly) его НЕТ — он задаётся --requirepass во
-# flagfile (users.acl.tmpl его не дублирует). В system_acl_users_sentinel default ЕСТЬ
-# (у sentinel-демона нет requirepass-эквивалента для aclfile-доступа). Имена системных =
-# default/replica/monitoring/sentinel/haproxy — validate-guard create отвергает operator-
-# extra с любым из этих имён.
+# ★ default_admin (РЕДИЗАЙН default_admin, симметрия redis 2026-06-30): СИСТЕМНЫЙ юзер с
+# полными правами `~* &* +@all`, доливается ВСЕГДА (как replica/monitoring) — в ОБА набора.
+# Заменил прежнюю модель «default в requirepass»: requirepass УСТАРЕЛ и убран из flagfile,
+# вся аутентификация (вкл. внутреннюю: репликация/sentinel/health-PING) идёт под default_admin.
+# Плагин community.redis коннектится username=default_admin (см. create/day-2 деплой-тела).
+# DragonFly несёт полный redis-совместимый ACL (SETUSER/aclfile с #<sha256>/masteruser/
+# masterauth — acl/user.cc, tls_helpers.cc), поэтому модель переносится без адаптации.
 #
-# Набор DragonFly (БЕЗ default — он в requirepass):
+# ★ default (встроенный DragonFly-юзер): в system_acl_users[_sentinel] его НЕТ — он
+# рендерится `off` в users.acl/sentinel-users.acl (users.acl.tmpl добавляет `user default
+# off`, когда default не задан), ЕСЛИ оператор не объявил его в input.users. Имена системных
+# = default_admin/replica/monitoring/sentinel/haproxy — validate-guard create отвергает
+# operator-extra с любым из этих имён. `default` из reserved УБРАН (оператор может объявить
+# встроенного default в input.users).
+#
+# Набор DragonFly (redis-server-команды + default_admin):
 system_acl_users:
+  default_admin: "~* &* +@all"
   replica:    "+psync +replconf +ping"
   monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
   sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
   haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
 
-# Набор sentinel-демона (ВКЛЮЧАЕТ default):
+# Набор sentinel-демона (sentinel-команды + default_admin для sentinel-демон auth):
 system_acl_users_sentinel:
-  default:    "allchannels allkeys +@all"
+  default_admin: "allchannels allkeys +@all"
   monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
   sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"

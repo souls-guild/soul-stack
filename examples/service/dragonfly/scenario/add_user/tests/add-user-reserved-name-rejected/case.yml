@@ -1,5 +1,5 @@
 # L0-испытание validate-guard add_user (system-ACL-users): operator НЕ может добавить юзера
-# с именем СЛУЖЕБНОГО (default/replica/monitoring/sentinel/haproxy). Оператор задаёт
+# с именем СЛУЖЕБНОГО (default_admin/replica/monitoring/sentinel/haproxy). Оператор задаёт
 # user.name=sentinel — зарезервировано (доливается из essence ПОВЕРХ operator-extra → молча
 # перекрыл бы sentinel-perms). validate-правило add_user/main.yml ловит на INPUT-валидации
 # (422 ДО applying). Правило false → expect_render_error.
@@ -11,12 +11,9 @@ fixtures:
     network: { primary_ip: 10.0.0.5 }
     os: { arch: amd64 }
 
+  # state v2: install/conf_dir/data_dir вынесены в essence (не в state).
   state:
     df_version: "1.39.0"
-    conf_dir: /etc/dragonfly
-    data_dir: /var/lib/dragonfly
-    install:
-      method: package
     df_config:
       maxmemory: "256mb"
     df_users:
@@ -28,9 +25,5 @@ fixtures:
       name: sentinel
       perms: "~* +@all"
       state: "on"
-
-  vault:
-    secret/dragonfly/add_user:
-      password: addusr-df-pass-16chars
 
 expect_render_error: "зарезервировано за служебным"

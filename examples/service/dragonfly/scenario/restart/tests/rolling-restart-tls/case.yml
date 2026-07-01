@@ -46,11 +46,11 @@ fixtures:
       tls_ca_cert_file: /etc/dragonfly/tls/ca.crt
       tls_replication:  "true"
 
-  # Пароль (secret/dragonfly/restart#password). ★ PEM CA локальному коннекту НЕ нужен —
-  # probe/health-gate идут по UNIX-сокету (UDS без TLS), vault(ca_ref) не вызывается.
+  # Vault: probe/health-gate под default_admin (requirepass убран). ★ PEM CA локальному коннекту
+  # НЕ нужен — probe/health-gate идут по UNIX-сокету (UDS без TLS), vault(ca_ref) не вызывается.
   vault:
-    secret/dragonfly/restart:
-      password: fixture-df-pass-16chars
+    secret/dragonfly/restart/users/default_admin:
+      password: dfadmin-restart-pass
 
 mocks:
   register:
@@ -60,13 +60,16 @@ mocks:
 assert:
   task_present:
     # probe (community.redis.role): ЛОКАЛЬНЫЙ UNIX-сокет (БЕЗ tls/tls_ca, даже на TLS-инстансе).
+    # AUTH под default_admin.
     - module: community.redis.role
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
-        password: fixture-df-pass-16chars
+        username: default_admin
+        password: dfadmin-restart-pass
 
     # slave-health-gate (community.redis.replica-synced): тот же socket-коннект.
     - module: community.redis.replica-synced
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
-        password: fixture-df-pass-16chars
+        username: default_admin
+        password: dfadmin-restart-pass

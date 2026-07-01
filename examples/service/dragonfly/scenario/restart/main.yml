@@ -57,6 +57,9 @@ state_changes: {}
 # override, дефолт верен.
 compute:
   local_addr: "${ 'unix:' + default(essence.run_dir, '/var/run/dragonfly') + '/dragonfly.sock' }"
+  # ★ admin_user (редизайн default_admin): probe роли + health-gate реплики коннектятся к
+  # локальному DragonFly под ним (requirepass убран). Литерал (day-2 вне covenant).
+  admin_user: "${ 'default_admin' }"
 
 tasks:
   # Probe: фактическая роль каждого хоста через плагин community.redis.role (go-redis INFO
@@ -71,7 +74,9 @@ tasks:
     changed_when: false
     params:
       addr:     "${ compute.local_addr }"
-      password: "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
+      # ★ РЕДИЗАЙН default_admin: AUTH под default_admin (requirepass убран). UDS без TLS.
+      username: "${ compute.admin_user }"
+      password: "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
 
   # Rolling-restart реплик по одному хосту (serial: 1). serial: на block: катит весь блок
   # целиком по одному набору хостов перед следующей волной (orchestration.md §2, Вариант A:
@@ -102,7 +107,9 @@ tasks:
         failed_when: "register.self.synced != true"
         params:
           addr:     "${ compute.local_addr }"
-          password: "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
+          # ★ РЕДИЗАЙН default_admin: AUTH под default_admin (requirepass убран). UDS без TLS.
+          username: "${ compute.admin_user }"
+          password: "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
 
   # Рестарт master-а ПОСЛЕ всех реплик (rolling-инвариант «master последним»). run_once: —
   # ровно один хост (первый по SID) из резолва on:+where: (orchestration.md §2). >1 «текущих

@@ -4,7 +4,7 @@
 # Что ассертим:
 #   1. Сервисы остановлены (core.service.stopped): dragonfly, redis-sentinel, disable-thp.
 #   2. DragonFly снят ПАКЕТОМ (core.pkg.absent name=dragonfly) — package-ветка активна
-#      (state.install.method=package → static-гейт group-keep).
+#      (essence.install_method=package → static-гейт group-keep; v1→v2 способ из essence).
 #   3. Наши конфиг-артефакты DragonFly удалены (core.file.absent): users.acl/dragonfly.conf/
 #      TLS PEM в /etc/dragonfly + logrotate/sysctl/disable-thp drop-in. (sentinel.conf/
 #      sentinel-users.acl ЗДЕСЬ НЕ удаляются — их кладёт destiny `redis` в /etc/redis, рефактор.)
@@ -21,13 +21,14 @@ fixtures:
         network: { primary_ip: 10.0.0.5 }
         os: { arch: amd64 }
 
-  # incarnation.state package-инкарнации (install.method=package, conf_dir дефолтный).
+  # ★ v1→v2: способ установки и conf_dir из essence (install_method=package, conf_dir дефолтный).
+  essence:
+    install_method: package
+    conf_dir: /etc/dragonfly
+
+  # incarnation.state v2 (install/conf_dir/data_dir больше не в state).
   state:
     df_version: "1.39.0"
-    conf_dir: /etc/dragonfly
-    data_dir: /var/lib/dragonfly
-    install:
-      method: package
     df_config:
       maxmemory: "256mb"
 

@@ -59,14 +59,15 @@ input:
 
 # ── Декларативные input-инварианты (validate:) ───────────────────────────────────
 # system-ACL-users guard (как create/add_user): ни один элемент input.users НЕ может занять
-# имя СЛУЖЕБНОГО (default/replica/monitoring/sentinel/haproxy). Системные доливаются в users.acl
-# из essence ПОВЕРХ operator-extra (last-wins) — operator `replica` молча перекрыл бы replica-
-# perms репликации. Ловим на INPUT-валидации (422 ДО applying). INPUT-ONLY (essence недоступен):
+# имя СЛУЖЕБНОГО (default_admin/replica/monitoring/sentinel/haproxy). Системные доливаются в
+# users.acl из essence ПОВЕРХ operator-extra (last-wins) — operator `replica` молча перекрыл бы
+# replica-perms репликации; operator `default_admin` подменил бы admin-учётку. Ловим на INPUT-
+# валидации (422 ДО applying). INPUT-ONLY (essence недоступен):
 # список имён захардкожен. .all() над МАССИВОМ итерирует элементы AclUser; имя — поле u.name.
 # input.users required → has()-обвязка не нужна.
 validate:
-  - that: "input.users.all(u, !(u.name in ['default', 'replica', 'monitoring', 'sentinel', 'haproxy']))"
-    message: "имя ACL-пользователя зарезервировано за служебным (default/replica/monitoring/sentinel/haproxy): выбери другое имя — служебные юзеры заводятся автоматически из essence"
+  - that: "input.users.all(u, !(u.name in ['default_admin', 'replica', 'monitoring', 'sentinel', 'haproxy']))"
+    message: "имя ACL-пользователя зарезервировано за служебным (default_admin/replica/monitoring/sentinel/haproxy): выбери другое имя — служебные юзеры заводятся автоматически из essence"
 
 # ── Вычисляемые scenario-vars (compute:) ─────────────────────────────────────────
 # Рун-уровневый контекст (input/essence/incarnation — без soulprint).
@@ -77,6 +78,13 @@ validate:
 # у ACL LOAD убраны даже на TLS-инстансе). run_dir host-инвариант; default дублирует дефолт.
 compute:
   local_addr: "${ 'unix:' + default(essence.run_dir, '/var/run/dragonfly') + '/dragonfly.sock' }"
+  # ★ admin_user (редизайн default_admin): имя системного admin-юзера, литерал (day-2 вне
+  # covenant). ACL LOAD коннектится под ним; masteruser/masterauth-долив читает его.
+  admin_user: "${ 'default_admin' }"
+  # ── Эффективный host-layout: install/conf_dir/data_dir из essence (v1→v2, миграция) ──
+  install:  "${ (default(essence.install_method, 'package') == 'binary') ? { 'method': 'binary', 'base_url': default(essence.binary_base_url, ''), 'version': default(essence.binary_version, '') } : { 'method': 'package' } }"
+  conf_dir: "${ default(essence.conf_dir, '/etc/dragonfly') }"
+  data_dir: "${ default(essence.data_dir, '/var/lib/dragonfly') }"
 
 # ── Мутация incarnation.state ─────────────────────────────────────────────────
 # ★ BULK-REPLACE: state.df_users ЗАМЕНЯЕТСЯ input.users ЦЕЛИКОМ (массив AclUser
@@ -93,26 +101,35 @@ tasks:
   #    `dragonfly`, что create/add_user). vars.users — merged набор с per-user паролями из Vault
   #    (keeper-side vault(), .tmpl хеширует sha256). dragonfly.conf/TLS НЕ оживляем — update_users
   #    меняет ТОЛЬКО ACL (flagfile на диске не изменится при тех же config — idempotent рендер).
-  #    version/install/conf_dir/data_dir — из state. sentinel-блок в apply.input НЕ передаём.
+  #    version — из state; install/conf_dir/data_dir — из essence (v1→v2, Вариант A). sentinel-
+  #    блок в apply.input НЕ передаём.
   - name: Re-render users.acl with the new ACL user set (full file on disk)
     apply:
       destiny: dragonfly
       input:
         version:  "${ has(incarnation.state.df_version) ? incarnation.state.df_version : '' }"
-        install:  "${ default(incarnation.state.install, {'method': 'package'}) }"
-        conf_dir: "${ default(incarnation.state.conf_dir, '/etc/dragonfly') }"
-        data_dir: "${ default(incarnation.state.data_dir, '/var/lib/dragonfly') }"
-        password: "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
-        config:   "${ incarnation.state.df_config }"
+        install:  "${ compute.install }"
+        conf_dir: "${ compute.conf_dir }"
+        data_dir: "${ compute.data_dir }"
+        # ★ РЕДИЗАЙН default_admin: apply.input.password УДАЛЁН. masteruser/masterauth ДОЛИВАЮТСЯ
+        # в config обычными флагами ПОВЕРХ state.df_config — update_users перерендеривает весь
+        # flagfile, без долива flagfile потерял бы replica→master AUTH → NOAUTH после рестарта.
+        # masterauth — vault()-в-ячейке (seal-маскинг); путь — secret/dragonfly/<inc>/users/
+        # default_admin#password (та же ветка, что users-блок ниже).
+        config: >-
+          ${ merge(incarnation.state.df_config, {
+               'masteruser': compute.admin_user,
+               'masterauth': vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password')
+             }) }
         # ★★ КРИТИЧНО (system-ACL-users): ПОЛНЫЙ users.acl = СИСТЕМНЫЕ (из essence, ПЕРВЫМИ) +
         # operator-extra (НОВЫЙ input.users — МАССИВ AclUser, ПОВЕРХ). update_users перерендеривает
-        # ВЕСЬ файл (не append) → БЕЗ долива системных этот рендер СТЁР БЫ replica/monitoring/
-        # sentinel/haproxy → сломал бы репликацию/sentinel/health-check на day-2. Системные
-        # доливаются на КАЖДОМ рендере из essence.system_acl_users. last-wins: operator-extra
-        # перекрывает одноимённого системного (имена системных закрыты validate-guard — коллизии
-        # нет). Vault-пароль каждого — secret/dragonfly/<inc>/users/<name>#password. ★ bulk-replace:
-        # operator-extra-слой = input.users ЦЕЛИКОМ (то, чего в нём нет, в файл не попадёт = удаление
-        # юзера). Идентичен render-у create (там operator-extra = input.users), отличие лишь в источнике.
+        # ВЕСЬ файл (не append) → БЕЗ долива системных этот рендер СТЁР БЫ default_admin/replica/
+        # monitoring/sentinel/haproxy → сломал бы AUTH/репликацию/sentinel на day-2. Системные (вкл.
+        # default_admin) доливаются на КАЖДОМ рендере из essence.system_acl_users. last-wins:
+        # operator-extra перекрывает одноимённого системного (имена системных закрыты validate-
+        # guard — коллизии нет). Vault-пароль каждого — secret/dragonfly/<inc>/users/<name>#password.
+        # ★ bulk-replace: operator-extra-слой = input.users ЦЕЛИКОМ (то, чего в нём нет, в файл не
+        # попадёт = удаление юзера). Идентичен render-у create, отличие лишь в источнике.
         users: >-
           ${ merge(
                merge(default(essence.system_acl_users, {}).map(name, {
@@ -139,4 +156,7 @@ tasks:
     module: community.redis.acl
     params:
       addr:     "${ compute.local_addr }"
-      password: "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
+      # ★ РЕДИЗАЙН default_admin: AUTH под default_admin (requirepass убран). username + его
+      # пароль из ветки secret/dragonfly/<inc>/users/default_admin#password. UDS без TLS.
+      username: "${ compute.admin_user }"
+      password: "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"

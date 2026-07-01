@@ -84,7 +84,15 @@ validate:
 # его же подменяешь». run_dir host-инвариант; default дублирует дефолт.
 compute:
   local_addr: "${ 'unix:' + default(essence.run_dir, '/var/run/dragonfly') + '/dragonfly.sock' }"
-  conf_dir:   "${ default(incarnation.state.conf_dir, '/etc/dragonfly') }"
+  # ★ admin_user (редизайн default_admin): 3 CONFIG SET tls_*_file коннектятся под ним
+  # (requirepass убран). Литерал (day-2 вне covenant).
+  admin_user: "${ 'default_admin' }"
+  # ── host-layout из essence (v1→v2, миграция): conf_dir/data_dir/install больше не в state ──
+  # ★ conf_dir из essence (не state) — day-2 читает актуальный layout; PEM кладётся в
+  # ${conf_dir}/tls/. install у rotate read-model без реального читателя → package-дефолт.
+  conf_dir:   "${ default(essence.conf_dir, '/etc/dragonfly') }"
+  data_dir:   "${ default(essence.data_dir, '/var/lib/dragonfly') }"
+  install:    "${ (default(essence.install_method, 'package') == 'binary') ? { 'method': 'binary', 'base_url': default(essence.binary_base_url, ''), 'version': default(essence.binary_version, '') } : { 'method': 'package' } }"
 
   # Эффективные refs: новый из input бьёт текущий из state (подложка — частичная ротация).
   # has()-цепочка (default(input, state) упал бы no-such-key, если input.*_ref отсутствует
@@ -119,41 +127,63 @@ tasks:
 
   # 2. Перерендерить PEM в ${conf_dir}/tls/ из НОВЫХ refs (тот же destiny `dragonfly`, что create).
   #    apply.input.tls несёт enable + НОВЫЕ cert_ref/key_ref/ca_ref → destiny server.yml кладёт
-  #    cert/key/ca через core.file.present + vault(ref) в ячейке (seal-маскинг). config — текущий
-  #    state.df_config (dragonfly.conf не меняется при ротации; tls_*_file пути те же).
-  #    version/install/conf_dir/data_dir/users — из state. register: tls_certs — applier-register,
-  #    гейтящий reload ниже. ★ users: state.df_users — МАССИВ AclUser → MAP имя→{perms,state,password}
-  #    (.map), per-user пароль из Vault. Без долива системных тут не страшно: rotate перерендеривает
-  #    users.acl как побочный эффект полного destiny-прохода, но ОЖИВЛЯЕМ мы лишь TLS (ACL LOAD здесь
-  #    нет) — users.acl на диске останется консистентен только если несёт ВСЕХ. Для безопасности
-  #    operator-extra достаточно (системные доезжают через create/add_user/update_users); на этом
-  #    rotate-прогоне ACL не оживляется, файл лишь переписывается тем же содержимым (idempotent).
+  #    cert/key/ca через core.file.present + vault(ref) в ячейке (seal-маскинг). config —
+  #    state.df_config + долив masteruser/masterauth (dragonfly.conf сам при ротации не
+  #    меняется; tls_*_file пути те же), симметрично add_user/update_users — иначе flagfile
+  #    на диске потерял бы replica→master AUTH → NOAUTH после рестарта реплики.
+  #    version — из state; install/conf_dir/data_dir — из essence (v1→v2). register: tls_certs —
+  #    applier-register, гейтящий reload ниже. ★ users: СИСТЕМНЫЕ (из essence, вкл. default_admin)
+  #    + operator-extra (state.df_users) — destiny перерендеривает весь users.acl, без долива
+  #    системных стёр бы default_admin/replica/... → сломал бы AUTH/репликацию (симметрия redis
+  #    rotate_tls). ACL здесь НЕ оживляется (ACL LOAD нет), но файл на диске обязан нести ВСЕХ.
   - name: Re-render TLS PEM material from the new Vault refs
     register: tls_certs
     apply:
       destiny: dragonfly
       input:
         version:  "${ has(incarnation.state.df_version) ? incarnation.state.df_version : '' }"
-        install:  "${ default(incarnation.state.install, {'method': 'package'}) }"
+        # host-layout — из essence (v1→v2, Вариант A): install/conf_dir/data_dir из compute
+        # (сам из essence). ★ РЕДИЗАЙН default_admin: apply.input.password УДАЛЁН (destiny
+        # больше не принимает — requirepass убран); аутентификация под системным default_admin
+        # из users ниже.
+        install:  "${ compute.install }"
         conf_dir: "${ compute.conf_dir }"
-        data_dir: "${ default(incarnation.state.data_dir, '/var/lib/dragonfly') }"
-        password: "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
-        config:   "${ incarnation.state.df_config }"
+        data_dir: "${ compute.data_dir }"
+        config: >-
+          ${ merge(incarnation.state.df_config, {
+               'masteruser': compute.admin_user,
+               'masterauth': vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password')
+             }) }
         tls:
           enable:   "${ incarnation.state.tls.enable }"
           cert_ref: "${ compute.cert_ref }"
           key_ref:  "${ compute.key_ref }"
           ca_ref:   "${ compute.ca_ref }"
+        # ★ СИСТЕМНЫЕ + operator-extra (как деплой-тело/redis rotate_tls): destiny перерендеривает
+        # и users.acl (тот же кирпич) → ОБЯЗАН долить системных из essence.system_acl_users
+        # ПЕРВЫМИ (default_admin/replica/monitoring/sentinel/haproxy), иначе rotate_tls СТЁР БЫ их
+        # из users.acl → сломал бы AUTH/репликацию. operator-extra (state.df_users — МАССИВ
+        # AclUser) ПОВЕРХ (last-wins). Системные НЕ в state — доливаются из essence на каждом
+        # рендере. Vault-пароль той же ветки secret/dragonfly/<inc>/users/<name>#password.
         users: >-
-          ${ has(incarnation.state.df_users)
-             ? merge(incarnation.state.df_users.map(u, {
-                 u.name: {
-                   'perms':    u.perms,
-                   'state':    u.state,
-                   'password': vault('secret/dragonfly/' + incarnation.name + '/users/' + u.name + '#password')
+          ${ merge(
+               merge(default(essence.system_acl_users, {}).map(name, {
+                 name: {
+                   'perms':    essence.system_acl_users[name],
+                   'state':    'on',
+                   'password': vault('secret/dragonfly/' + incarnation.name + '/users/' + name + '#password')
                  }
-               }))
-             : {} }
+               })),
+               has(incarnation.state.df_users)
+                 ? merge(incarnation.state.df_users.map(u, {
+                     u.name: {
+                       'perms':    u.perms,
+                       'state':    u.state,
+                       'password': vault('secret/dragonfly/' + incarnation.name + '/users/' + u.name + '#password')
+                     }
+                   }))
+                 : {}
+             ) }
 
   # 3. HOT-RELOAD CERT: три community.redis.command (CONFIG SET tls_cert_file / tls_key_file /
   #    tls_ca_cert_file — UNDERSCORE, DragonFly-форма) пересоздают SSL_CTX на live-инстансе.
@@ -170,7 +200,9 @@ tasks:
     onchanges: [tls_certs]
     params:
       addr:     "${ compute.local_addr }"
-      password: "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
+      # ★ РЕДИЗАЙН default_admin: AUTH под default_admin (requirepass убран). UDS без TLS.
+      username: "${ compute.admin_user }"
+      password: "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
       args:     ["CONFIG", "SET", "tls_cert_file", "${ compute.conf_dir + '/tls/dragonfly.crt' }"]
 
   - name: Re-read the rotated TLS key when it changed (CONFIG SET tls_key_file)
@@ -178,7 +210,9 @@ tasks:
     onchanges: [tls_certs]
     params:
       addr:     "${ compute.local_addr }"
-      password: "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
+      # ★ РЕДИЗАЙН default_admin: AUTH под default_admin (requirepass убран). UDS без TLS.
+      username: "${ compute.admin_user }"
+      password: "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
       args:     ["CONFIG", "SET", "tls_key_file", "${ compute.conf_dir + '/tls/dragonfly.key' }"]
 
   - name: Re-read the rotated TLS CA cert when it changed (CONFIG SET tls_ca_cert_file)
@@ -186,5 +220,7 @@ tasks:
     onchanges: [tls_certs]
     params:
       addr:     "${ compute.local_addr }"
-      password: "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
+      # ★ РЕДИЗАЙН default_admin: AUTH под default_admin (requirepass убран). UDS без TLS.
+      username: "${ compute.admin_user }"
+      password: "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
       args:     ["CONFIG", "SET", "tls_ca_cert_file", "${ compute.conf_dir + '/tls/ca.crt' }"]

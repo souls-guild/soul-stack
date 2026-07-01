@@ -4,9 +4,10 @@ description: |
   Базовый сценарий жизни режим-агностичного destiny dragonfly (standalone) на чистом
   хосте:
     1. apply destiny dragonfly — установить DragonFly и поднять сервис с отрендеренным
-       dragonfly.conf (FLAGFILE, TCP 6379, requirepass).
+       dragonfly.conf (FLAGFILE, TCP 6379). Аутентификация под ACL-юзером default_admin
+       (requirepass убран — редизайн default_admin); users.acl несёт default_admin.
     2. ping                    — убедиться, что отвечает PONG (DragonFly redis-совместим,
-       redis-cli из distro-пакета redis-tools).
+       redis-cli из distro-пакета redis-tools; AUTH под default_admin).
 
   Тест прогоняется на эфемерном стенде (см. блок `stand:`), на котором нет ни DragonFly,
   ни конфигов. После прохода стенд уничтожается.
@@ -23,10 +24,17 @@ stand:
 # В реальном прогоне config мержит scenario сервиса; здесь передаём готовый map.
 input:
   version:  "1.39.0"
-  password: "vault:test/dragonfly/password"
   config:
     maxmemory:  256mb
     maxclients: 10000
+  # ★ РЕДИЗАЙН default_admin: password УДАЛЁН (requirepass убран). Аутентификация под ACL-юзером
+  # default_admin — приходит в users с per-user паролем (в реальном прогоне scenario доливает
+  # системных из essence). Пароль здесь — зарезолвленное значение (vault: в L2-стенде).
+  users:
+    default_admin:
+      perms:    "~* &* +@all"
+      state:    "on"
+      password: "vault:test/dragonfly/password"
 
 # Двойной прогон: фреймворк применит destiny с этим input ещё раз и проверит, что во втором
 # применении не было изменений ни в одном шаге (идемпотентность).
@@ -64,10 +72,11 @@ verify:
   - name: dragonfly-responds-to-ping
     # DragonFly redis-совместим: redis-cli PING по TCP (DF слушает 6379). redis-cli — из
     # distro-пакета redis-tools (install.yml ставит его БЕЗУСЛОВНО, DF своего cli не несёт).
+    # ★ AUTH под default_admin (requirepass убран) — redis-cli --user/-a.
     apply:
       destiny: core.cmd.shell
       input:
-        cmd: "redis-cli -h 127.0.0.1 -p 6379 -a vault:test/dragonfly/password PING"
+        cmd: "redis-cli -h 127.0.0.1 -p 6379 --user default_admin -a vault:test/dragonfly/password PING"
     expect:
       stdout_contains: "PONG"
 

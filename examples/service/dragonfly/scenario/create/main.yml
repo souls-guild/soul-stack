@@ -202,13 +202,15 @@ form:
 # открывает второй порт), поэтому «выключить TLS и закрыть plain» невыразимо — основной порт
 # слушает всегда (plain при tls_enabled=false, TLS при tls_enabled=true). См. tls_enabled выше.
 validate:
-  # system-ACL-users guard: operator-extra (input.users) НЕ может занять имя СЛУЖЕБНОГО
-  # юзера (default/replica/monitoring/sentinel/haproxy доливаются из essence last-wins ПОВЕРХ
-  # → operator с тем же именем молча перекрыл бы служебные perms). INPUT-ONLY (essence в
-  # validate недоступен): список зарезервированных захардкожен. .all() над массивом AclUser,
-  # имя — поле u.name.
-  - that: "!has(input.users) || input.users.all(u, !(u.name in ['default', 'replica', 'monitoring', 'sentinel', 'haproxy']))"
-    message: "имя ACL-пользователя зарезервировано за служебным (default/replica/monitoring/sentinel/haproxy): выбери другое имя — служебные юзеры заводятся автоматически из essence"
+  # system-ACL-users guard (редизайн default_admin): operator-extra (input.users) НЕ может
+  # занять имя СЛУЖЕБНОГО юзера (default_admin/replica/monitoring/sentinel/haproxy доливаются
+  # из essence last-wins ПОВЕРХ → operator с тем же именем молча перекрыл бы служебные perms;
+  # operator `default_admin` подменил бы admin-учётку внутрикластерного AUTH). INPUT-ONLY
+  # (essence в validate недоступен): список зарезервированных захардкожен. .all() над массивом
+  # AclUser, имя — поле u.name. ★ `default` из reserved УБРАН (встроенный default больше НЕ
+  # системный — его роль занял default_admin; оператор может объявить default в input.users).
+  - that: "!has(input.users) || input.users.all(u, !(u.name in ['default_admin', 'replica', 'monitoring', 'sentinel', 'haproxy']))"
+    message: "имя ACL-пользователя зарезервировано за служебным (default_admin/replica/monitoring/sentinel/haproxy): выбери другое имя — служебные юзеры заводятся автоматически из essence"
 
 # ── Вычисляемые scenario-vars (compute:) ──────────────────────────────────────
 # compute: резолвится KEEPER-SIDE ОДИН раз на прогон в рун-уровневом контексте (input/
@@ -221,6 +223,14 @@ validate:
 # (tls_cert_file/tls_key_file/tls_ca_cert_file) выводятся из compute.conf_dir (destiny кладёт
 # PEM в ${conf_dir}/tls/ — flagfile обязан смотреть ТУДА ЖЕ).
 compute:
+  # ── admin_user: имя СИСТЕМНОГО ACL-юзера внутрикластерного AUTH (default_admin) ──
+  # ★ РЕДИЗАЙН default_admin (симметрия redis 2026-06-30): ЕДИНЫЙ источник имени admin-юзера,
+  # под которым идёт ВСЯ внутрикластерная аутентификация (репликация masterauth, sentinel
+  # monitor/auth, health-PING) — заменил прежний requirepass DragonFly. Деплой-тело читает
+  # compute.admin_user в плагин-вызовах community.redis.* (username/auth_user) и в Vault-пути
+  # его пароля. Литерал (не из input/essence): имя системного юзера — инвариант сервиса, не
+  # операторский выбор. Пароль default_admin — secret/dragonfly/<inc>/users/default_admin#password.
+  admin_user: "${ 'default_admin' }"
   # Эффективная версия DragonFly: package → input.version (required_when=package);
   # binary → essence.binary_version. Объявлена ОДИН раз (state + плагин читают её).
   df_version: "${ input.install_method == 'binary' ? default(essence.binary_version, '') : (has(input.version) ? input.version : '') }"
@@ -318,15 +328,12 @@ state_changes:
            'key_ref':  compute.tls_key_ref,
            'ca_ref':   compute.tls_ca_ref
          } }
-  - set: install
-    value: "${ compute.install }"
+  # ★ install + host-layout (conf_dir/data_dir) вынесены в essence (v1→v2, Вариант A):
+  # install — read-model без читателей, layout — day-2 читают essence напрямую
+  # (default(essence.<x>, '<деф>')). Их set-ов больше нет — ключей нет в state_schema,
+  # set писал бы поле вне схемы → валидация state упала бы.
   - set: memory_mb
     value: "${ int(default(input.memory_mb, 0)) }"
-  # conf_dir/data_dir: host-layout (read-model, из essence).
-  - set: conf_dir
-    value: "${ compute.conf_dir }"
-  - set: data_dir
-    value: "${ compute.data_dir }"
   - set: sysctl_settings
     value: "${ default(essence.sysctl_settings, {}) }"
   # Топология: replicas (реплик master-а), sentinel_quorum=0 (auto, не материализуется).
@@ -355,6 +362,34 @@ state_changes:
 
 # ── Тело прогона (ИНЛАЙН, sentinel-only — без диспетчера/include) ──────────────
 tasks:
+  # ── Генерация паролей в Vault ПЕРЕД любым чтением секретов (core.vault.kv-present) ──
+  # ★ ГЕНЕРАЦИЯ СЕКРЕТОВ СЕРВИСОМ (симметрия redis 2026-06-28): оператор НЕ пред-сеет пароли
+  # в Vault — create САМ генерит недостающие крипто-случайно (generate-if-absent). Шаг
+  # keeper-side (on: keeper, core.vault.kv-present): для каждого target читает путь и, если
+  # поля нет — пишет crypto/rand-значение по policy; есть — no-op (НЕ перезатирает, ротация —
+  # отдельный сценарий). changed=true только при реальной генерации.
+  #
+  # ★★ PASSAGE-ИНВАРИАНТ: этот шаг ОБЯЗАН исполниться (запись в Vault) ДО render-фазы задач,
+  # читающих те же секреты через ${ vault(...) } (apply dragonfly + apply redis sentinel +
+  # community.redis.*). Модель staged-render (ADR-056): passage N applies ДО render passage
+  # N+1. vault() в render с отсутствующим секретом РВЁТ render, поэтому generate ОБЯЗАН быть в
+  # БОЛЕЕ РАННЕМ passage. Шаг — `on: keeper` БЕЗ roster-зависимости → Stratify держит его в
+  # passage 0; read-задачи деплоя читают roster (soulprint.hosts/soulprint.self) → passage > 0.
+  #
+  # targets ВЫЧИСЛЯЮТСЯ из ТОГО ЖЕ essence/input, что и read-задачи (drift «что генерим ≡ что
+  # читаем» = баг, список юзеров НЕ хардкодится): union ключей system_acl_users ∪
+  # system_acl_users_sentinel (default_admin в НИХ) + operator-extra input.users. policy
+  # alphanumeric/32 (ACL-safe). ★ БЕЗ главного secret/dragonfly/<inc>#password — requirepass
+  # убран (редизайн default_admin), admin-учётка теперь default_admin (в наборах).
+  - name: Ensure dragonfly passwords exist in Vault (generate if absent)
+    on: keeper
+    module: core.vault.kv-present
+    params:
+      policy:
+        length: 32
+        charset: alphanumeric
+      targets: "${ merge(default(essence.system_acl_users, {}).map(n, { n: 0 }) + default(essence.system_acl_users_sentinel, {}).map(n, { n: 0 })).map(name, { 'path': 'secret/dragonfly/' + incarnation.name + '/users/' + name, 'field': 'password' }) + (has(input.users) ? input.users.map(u, { 'path': 'secret/dragonfly/' + incarnation.name + '/users/' + u.name, 'field': 'password' }) : []) }"
+
   # ── 0. SIZE-GUARD (топология) — keeper-side render-time assert ────────────────
   # Размер roster-а ОБЯЗАН быть ровно 1+replicas_per_master (один master + реплики; sentinel-
   # демон на КАЖДОМ хосте). Иначе master-election (run_once по sort soulprint.hosts) и
@@ -380,15 +415,35 @@ tasks:
         install:  "${ compute.install }"
         conf_dir: "${ compute.conf_dir }"
         data_dir: "${ compute.data_dir }"
-        password: "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
+        # ★ РЕДИЗАЙН default_admin: input.password УБРАН (requirepass убран из flagfile).
+        # Аутентификация — под системным default_admin, его пароль приходит в users ниже.
         # Единый compute.df_config (тот же map, что в state_changes.df_config — drift снят
         # самим compute). Базовый merge (БЕЗ cluster; tls/tls_replication true при TLS — TLS
         # на основном порту, БЕЗ tls_port). HOST-ИНВАРИАНТ → apply.input.
-        config: "${ compute.df_config }"
-        # СИСТЕМНЫЕ + operator-extra ACL: служебные replica/monitoring/sentinel/haproxy из
-        # essence.system_acl_users ПЕРВЫМИ, operator-extra (input.users — массив AclUser)
-        # ПОВЕРХ (last-wins). default — в requirepass flagfile, не здесь. Vault-пароль —
-        # secret/dragonfly/<inc>/users/<name>#password. operator-extra: .map(u, {u.name: …}).
+        #
+        # ★ РЕДИЗАЙН default_admin: СТАТИЧЕСКАЯ replica→master AUTH во flagfile — masteruser/
+        # masterauth ДОЛИВАЮТСЯ в config ОБЫЧНЫМИ флагами (поверх compute.df_config). КРИТИЧНО
+        # для ПЕРСИСТЕНТНОСТИ через рестарт: плагин community.redis.replica (шаг 3) ставит их
+        # CONFIG SET-ом в рантайме, но CONFIG SET НЕ сохраняется → при рестарте DragonFly
+        # поднялся бы без masterauth → replica master_link_status:DOWN. Статический флаг во
+        # flagfile переживает рестарт. Директивы host-ИНВАРИАНТНЫ (один default_admin на
+        # кластер) → apply.input. ★ ОТЛИЧНО от state_changes.df_config: там ЧИСТЫЙ compute.df_config
+        # БЕЗ masterauth — пароль НЕ уезжает в state (секрет в Vault). masterauth — vault()-В-
+        # ЯЧЕЙКЕ (seal-маскинг). admin_user = default_admin; путь — secret/dragonfly/<inc>/users/
+        # default_admin#password. Имена флагов DF — underscore-форма (masteruser/masterauth —
+        # одно слово, совпадает с redis).
+        config: >-
+          ${ merge(compute.df_config, {
+               'masteruser': compute.admin_user,
+               'masterauth': vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password')
+             }) }
+        # ★ СИСТЕМНЫЕ + operator-extra ACL: служебные default_admin/replica/monitoring/sentinel/
+        # haproxy из essence.system_acl_users ПЕРВЫМИ, operator-extra (input.users — массив
+        # AclUser) ПОВЕРХ (last-wins). ★ default_admin (редизайн) — СИСТЕМНЫЙ юзер полного
+        # доступа (~* &* +@all): под ним идёт внутрикластерный AUTH (заменил requirepass). Без
+        # системных репликация (replica), sentinel↔df AUTH (sentinel) и admin-коннект
+        # (default_admin) сломаются. Vault-пароль — secret/dragonfly/<inc>/users/<name>#password.
+        # operator-extra: .map(u, {u.name: …}).
         users: >-
           ${ merge(
                merge(default(essence.system_acl_users, {}).map(name, {
@@ -435,7 +490,11 @@ tasks:
     retry: { count: 10, delay: 3s }
     params:
       addr:     "${ compute.local_addr }"
-      password: "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
+      # ★ РЕДИЗАЙН default_admin: AUTH под default_admin (requirepass убран). username + его
+      # пароль из ветки secret/dragonfly/<inc>/users/default_admin#password. Локальный UDS без
+      # TLS (не сетевой путь) — tls/tls_ca НЕ ставим даже на TLS-инстансе.
+      username: "${ compute.admin_user }"
+      password: "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
       args:     ["PING"]
 
   # ── 2b. Sentinel-плоскость через destiny `redis` (sentinel_only-capability, REUSE) ─
@@ -458,9 +517,11 @@ tasks:
   # ★ version (R4): distro-пин ПАКЕТА redis-server (essence.sentinel_redis_package_version,
   #   apt-форма с epoch). required_when destiny `redis` истинно (install.method=package по
   #   умолчанию) → version обязателен ДАЖЕ при deploy_redis=false (пакет ставится всегда).
-  # ★ password (R3): requirepass-секрет DragonFly — required-поле destiny `redis` даже при
-  #   deploy_redis=false (sentinel default-юзер аутентифицируется им к DragonFly-master через
-  #   sentinel_users.default → secret/dragonfly/<inc>#password). Тот же главный секрет DF.
+  # ★ РЕДИЗАЙН default_admin (R3 переработан): input.password УДАЛЁН из destiny `redis` —
+  #   sentinel-демон коннектится к DragonFly-master под ACL-юзером default_admin (auth_user/
+  #   auth_pass в sentinel-блоке), а connection-AUTH к самому :26379 — под default_admin из
+  #   sentinel-набора (sentinel_users.default_admin). Прежний тернар «default → главный секрет»
+  #   УБРАН — все системные по ЕДИНОЙ ветке secret/dragonfly/<inc>/users/<name>#password.
   - name: Apply redis destiny in sentinel_only mode (sentinel daemon monitoring the DragonFly master)
     apply:
       destiny: redis
@@ -471,9 +532,6 @@ tasks:
         # distro-пин ПАКЕТА redis-server (несёт redis-sentinel). apt-форма с epoch — ОТДЕЛЬНО
         # от sentinel_redis_version (semver version-gate плагина). required при package-install.
         version:  "${ compute.sentinel_redis_package_version }"
-        # requirepass DragonFly: sentinel default-юзер общим паролем DF-master. required-поле
-        # destiny `redis` (R3) — тот же главный секрет, что у DragonFly (--requirepass).
-        password: "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
         sentinel:
           # master_name — то же логическое имя monitored master, что DF-плоскость.
           master_name: "${ default(essence.sentinel_master_name, 'master') }"
@@ -483,23 +541,26 @@ tasks:
           # quorum — АВТО (большинство): size(soulprint.hosts)/2+1. Считается ИНЛАЙН в apply.input
           # (НЕ из compute — compute не видит soulprint, барьер host-инвариантности).
           quorum:      "${ int(size(soulprint.hosts)) / 2 + 1 }"
-          # auth_pass — пароль DragonFly (sentinel↔DF-master AUTH). Тот же главный секрет DF.
-          auth_pass:   "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
+          # ★ РЕДИЗАЙН default_admin: sentinel AUTH на DragonFly-master — под ACL-юзером
+          # default_admin (requirepass убран). auth_user + auth_pass рендерятся в sentinel.conf
+          # (sentinel auth-user/auth-pass <master>). Без auth_user sentinel пошёл бы под
+          # built-in default (теперь off) → NOAUTH на мониторинге DF-master.
+          auth_user:   "${ compute.admin_user }"
+          auth_pass:   "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
           # стартовые per-master тайминги failover в sentinel.conf. compute.sentinel_directives
           # — map `sentinel <opt> <master>` → значение; шаблон range-ит .vars.sentinel_config.
           config:      "${ compute.sentinel_directives }"
         # 2-й aclfile sentinel-демона: служебные из essence.system_acl_users_sentinel
-        # (sentinel-команды). ★ Vault-пароль: default-юзер → ГЛАВНЫЙ секрет secret/dragonfly/
-        # <inc>#password (тот же, что requirepass DragonFly — иначе sentinel-демон не пустил бы
-        # default-клиента общим паролем DF-master). Остальные → ветка users/<name>#password.
+        # (sentinel-команды). ★ РЕДИЗАЙН default_admin: прежний тернар «default → ГЛАВНЫЙ секрет,
+        # остальные → users/<name>» УБРАН — все системные (вкл. default_admin) по ЕДИНОЙ ветке
+        # secret/dragonfly/<inc>/users/<name>#password. sentinel-демон коннектится к :26379 под
+        # default_admin (его пароль из этой ветки), к DF-master — auth_user default_admin.
         sentinel_users: >-
           ${ merge(default(essence.system_acl_users_sentinel, {}).map(name, {
                name: {
                  'perms':    essence.system_acl_users_sentinel[name],
                  'state':    'on',
-                 'password': (name == 'default')
-                   ? vault('secret/dragonfly/' + incarnation.name + '#password')
-                   : vault('secret/dragonfly/' + incarnation.name + '/users/' + name + '#password')
+                 'password': vault('secret/dragonfly/' + incarnation.name + '/users/' + name + '#password')
                }
              })) }
 
@@ -512,13 +573,20 @@ tasks:
   # реплицирует сам себя): `where:` исключает выбранного master по SID — задача рендерится
   # ТОЛЬКО на репликах. ★ Локальный addr (UDS) без tls/tls_ca: коннект плагина к своему
   # инстансу идёт по сокету (не сетевой путь), TLS там не нужен.
+  #
+  # ★ РЕДИЗАЙН default_admin: replica→master AUTH под ACL-юзером default_admin (requirepass
+  # убран). username (→ CONFIG SET masteruser) + password (→ CONFIG SET masterauth) — плагин
+  # выставляет их В РАНТАЙМЕ для первичного REPLICAOF. ПЕРСИСТ через рестарт обеспечивает
+  # статический masteruser/masterauth во flagfile (apply dragonfly шаг 1). Пароль —
+  # secret/dragonfly/<inc>/users/default_admin#password (та же ветка, что health-PING).
   - name: Make replicas follow the elected master (REPLICAOF)
     where: "soulprint.self.sid != soulprint.hosts[0].sid"
     module: community.redis.replica
     params:
       addr:        "${ compute.local_addr }"
       master_addr: "${ soulprint.hosts[0].network.primary_ip + ':6379' }"
-      password:    "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
+      username:    "${ compute.admin_user }"
+      password:    "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
 
   # ── 4. SENTINEL MONITOR reconcile: community.redis.sentinel на КАЖДОМ хосте ────
   # addr — локальный sentinel (127.0.0.1:26379); monitor.ip — HOST-ИНВАРИАНТНЫЙ адрес master-
@@ -532,11 +600,14 @@ tasks:
       addr:        "127.0.0.1:26379"
       master_name: "${ default(essence.sentinel_master_name, 'master') }"
       # ★ CONNECTION-AUTH к sentinel-демону :26379 (отдельно от auth_pass — мониторинг
-      # master-а): sentinel.conf несёт aclfile sentinel-users.acl, default-юзер требует
-      # пароль (sentinel_users.default = главный секрет DF secret/dragonfly/<inc>#password,
-      # шаг 1). password → redis.Options.Password (AUTH соединения). Без него → NOAUTH.
-      password:    "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
-      auth_pass:   "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
+      # master-а): sentinel.conf несёт aclfile sentinel-users.acl, built-in default рендерится
+      # `off`, коннект под СИСТЕМНЫМ default_admin (sentinel-набор, шаг 2b). ★ РЕДИЗАЙН
+      # default_admin: username + secret/dragonfly/<inc>/users/default_admin#password (прежний
+      # главный секрет ДРОПНУТ). password → redis.Options.Password (AUTH соединения). Без него → NOAUTH.
+      username:    "${ compute.admin_user }"
+      password:    "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+      auth_user:   "${ compute.admin_user }"
+      auth_pass:   "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
       # ★ Версия sentinel-ДЕМОНА (distro redis-sentinel), НЕ DragonFly: этот param гейтит
       # version-aware sentinel-фичи плагина (versionGE 7.0.0). df_version сюда тащить НЕЛЬЗЯ —
       # DF и sentinel-демон разные продукты с разными версиями.
@@ -561,8 +632,10 @@ tasks:
     failed_when: "register.self.result != 'PONG'"
     params:
       addr: "127.0.0.1:26379"
-      # ★ CONNECTION-AUTH: sentinel-демон защищён aclfile (default-юзер требует пароль,
-      # шаг 1 sentinel_users.default = главный секрет DF). PING без AUTH → NOAUTH. Тот
-      # же главный секрет, что --requirepass DragonFly.
-      password: "${ vault('secret/dragonfly/' + incarnation.name + '#password') }"
+      # ★ CONNECTION-AUTH: sentinel-демон защищён aclfile (built-in default рендерится `off`,
+      # коннект под СИСТЕМНЫМ default_admin sentinel-набора). PING без AUTH → NOAUTH. ★ РЕДИЗАЙН
+      # default_admin: username + secret/dragonfly/<inc>/users/default_admin#password (прежний
+      # главный секрет ДРОПНУТ). Та же пара, что коннект-AUTH шага 4 (SENTINEL MONITOR к :26379).
+      username: "${ compute.admin_user }"
+      password: "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
       args: ["PING"]

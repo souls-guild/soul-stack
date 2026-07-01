@@ -31,9 +31,11 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.1 }
         os: { arch: amd64 }
+  # Vault: default_admin (внутрикластерный AUTH + masterauth) + системные + TLS PEM. Главного
+  # secret/dragonfly/create#password больше нет (requirepass убран — редизайн default_admin).
   vault:
-    secret/dragonfly/create:
-      password: s3cr3t-dragonfly-pass
+    secret/dragonfly/create/users/default_admin:
+      password: dfadmin-create-pass
     secret/dragonfly/create/users/replica:
       password: replica-sys-secret-pass
     secret/dragonfly/create/users/monitoring:
@@ -58,12 +60,13 @@ fixtures:
       maxmemory:        "256mb"
       maxclients:       10000
     system_acl_users:
+      default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
       monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
       sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
     system_acl_users_sentinel:
-      default:    "allchannels allkeys +@all"
+      default_admin: "allchannels allkeys +@all"
       monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
@@ -97,19 +100,22 @@ assert:
         group: dragonfly
 
     # ── 2 (БЛОКЕР #2): health-gate PING — addr ЛОКАЛЬНЫЙ UNIX-сокет (НЕ 127.0.0.1:7379) ──
+    # AUTH под default_admin (requirepass убран). UDS без tls/tls_ca.
     - module: community.redis.command
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
-        password: s3cr3t-dragonfly-pass
+        username: default_admin
+        password: dfadmin-create-pass
         args: ["PING"]
 
     # ── 3 (БЛОКЕР #1+#2): REPLICAOF реплик — свой addr unix-сокет; master_addr на ОСНОВНОЙ
-    #    порт 6379 (НЕ tls-порт 7379, его нет). where исключает master → node-2. ──
+    #    порт 6379 (НЕ tls-порт 7379, его нет). where исключает master → node-2. AUTH под default_admin. ──
     - module: community.redis.replica
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
         master_addr: "10.0.0.1:6379"
-        password: s3cr3t-dragonfly-pass
+        username: default_admin
+        password: dfadmin-create-pass
 
     # ── 5. SENTINEL-ПЛОСКОСТЬ через destiny `redis` (sentinel_only, ВТОРОЙ apply) ──
     # install redis-server (distro-пин R4, несёт redis-sentinel) + sentinel.conf в /etc/redis.
@@ -152,8 +158,6 @@ assert:
       failover_timeout_ms: 60000
     replicas: 1
     sentinel_quorum: 0
-    install:
-      method: package
     # ★ state.tls: enable + refs, БЕЗ only/port (у DragonFly TLS на основном порту).
     tls:
       enable:   true

@@ -20,9 +20,11 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.9 }
         os: { arch: amd64 }
+  # Vault: default_admin (masterauth-долив + внутрикластерный AUTH) + системные. Главного
+  # secret/dragonfly/create#password больше нет (requirepass убран — редизайн default_admin).
   vault:
-    secret/dragonfly/create:
-      password: s3cr3t-dragonfly-pass
+    secret/dragonfly/create/users/default_admin:
+      password: dfadmin-create-pass
     secret/dragonfly/create/users/replica:
       password: replica-sys-secret-pass
     secret/dragonfly/create/users/monitoring:
@@ -38,12 +40,13 @@ fixtures:
       maxmemory:        "256mb"
       maxclients:       10000
     system_acl_users:
+      default_admin: "~* &* +@all"
       replica:    "+psync +replconf +ping"
       monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
       sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
     system_acl_users_sentinel:
-      default:    "allchannels allkeys +@all"
+      default_admin: "allchannels allkeys +@all"
       monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
@@ -59,7 +62,8 @@ assert:
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
         master_addr: "10.0.0.9:6379"
-        password: s3cr3t-dragonfly-pass
+        username: default_admin
+        password: dfadmin-create-pass
 
     # SENTINEL MONITOR: monitor.ip — единственный хост; auto-quorum = 1.
     # redis_version — версия sentinel-ДЕМОНА (essence.sentinel_redis_version, дефолт 7.2.4),
@@ -68,10 +72,12 @@ assert:
       params_subset:
         addr: "127.0.0.1:26379"
         master_name: master
-        # ★ CONNECTION-AUTH к sentinel-демону :26379 (главный секрет DF, default-юзер
-        # требует пароль). Отдельно от auth_pass (мониторинг master). Guard на NOAUTH.
-        password: s3cr3t-dragonfly-pass
-        auth_pass: s3cr3t-dragonfly-pass
+        # ★ CONNECTION-AUTH к sentinel-демону :26379 под default_admin (built-in default off).
+        # auth_pass/auth_user — мониторинг DF-master под default_admin. Guard на NOAUTH.
+        username: default_admin
+        password: dfadmin-create-pass
+        auth_user: default_admin
+        auth_pass: dfadmin-create-pass
         redis_version: "7.2.4"
         monitor:
           ip: 10.0.0.9

@@ -46,9 +46,10 @@ fixtures:
     df_config:
       maxmemory:        "256mb"
 
+  # Vault: probe/health-gate коннектятся под default_admin (requirepass убран).
   vault:
-    secret/dragonfly/restart:
-      password: fixture-df-pass-16chars
+    secret/dragonfly/restart/users/default_admin:
+      password: dfadmin-restart-pass
 
 mocks:
   register:
@@ -57,15 +58,17 @@ mocks:
 
 assert:
   task_present:
-    # probe community.redis.role: ЛОКАЛЬНЫЙ UNIX-сокет (БЕЗ tls/tls_ca).
+    # probe community.redis.role: ЛОКАЛЬНЫЙ UNIX-сокет (БЕЗ tls/tls_ca). AUTH под default_admin.
     - module: community.redis.role
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
-        password: fixture-df-pass-16chars
+        username: default_admin
+        password: dfadmin-restart-pass
 
     # slave-health-gate community.redis.replica-synced (block-потомок, where slave): тот же
     # socket-коннект. Наличие гейта внутри slave-block-а доказывает рендер block fan-out.
     - module: community.redis.replica-synced
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
-        password: fixture-df-pass-16chars
+        username: default_admin
+        password: dfadmin-restart-pass

@@ -1,0 +1,48 @@
+name: drops-install-layout
+description: >
+  Инкарнация v1 несёт install + host-layout (conf_dir/data_dir) в state. Миграция
+  ВЫРЕЗАЕТ все три поля (вынесены в essence, Вариант A). Остальной state
+  (df_config/df_users/tls/df_sentinel/df_version/топология/sysctl_settings)
+  проходит насквозь бит-в-бит.
+
+state_before:
+  df_version: "1.39.0"
+  df_config:
+    maxmemory: "256mb"
+    maxclients: 10000
+  df_users:
+    - { name: "app", perms: "~* +@all", state: "on" }
+  tls:
+    enable: true
+    cert_ref: "secret/services/dragonfly/tls#cert"
+    key_ref: "secret/services/dragonfly/tls#key"
+    ca_ref: "secret/services/dragonfly/tls#ca"
+  install:
+    method: "binary"
+    base_url: "https://artifacts.example.com/dragonfly/binaries"
+    version: "1.39.0"
+  conf_dir: "/opt/dragonfly"
+  data_dir: "/srv/dragonfly-data"
+  sysctl_settings:
+    vm.overcommit_memory: "1"
+  memory_mb: 1024
+  replicas: 1
+  sentinel_quorum: 0
+
+state_after:
+  df_version: "1.39.0"
+  df_config:
+    maxmemory: "256mb"
+    maxclients: 10000
+  df_users:
+    - { name: "app", perms: "~* +@all", state: "on" }
+  tls:
+    enable: true
+    cert_ref: "secret/services/dragonfly/tls#cert"
+    key_ref: "secret/services/dragonfly/tls#key"
+    ca_ref: "secret/services/dragonfly/tls#ca"
+  sysctl_settings:
+    vm.overcommit_memory: "1"
+  memory_mb: 1024
+  replicas: 1
+  sentinel_quorum: 0

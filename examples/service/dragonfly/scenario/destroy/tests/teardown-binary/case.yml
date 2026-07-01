@@ -1,6 +1,6 @@
 # L0-испытание destroy: teardown инкарнации, развёрнутой BINARY-способом (upstream-tarball).
 # Render-only, герметично. Парный к teardown-package — покрывает binary-ветку гейта по
-# state.install.method.
+# essence.install_method (v1→v2: способ установки вынесен из state в essence).
 #
 # Что ассертим:
 #   1. Сервисы остановлены (core.service.stopped): dragonfly, redis-sentinel, disable-thp.
@@ -20,15 +20,17 @@ fixtures:
         network: { primary_ip: 10.0.0.5 }
         os: { arch: amd64 }
 
-  # incarnation.state binary-инкарнации (install.method=binary).
+  # ★ v1→v2: способ установки и conf_dir читаются из essence (install/conf_dir вынесены из
+  # state). binary-ветка гейта — essence.install_method=binary.
+  essence:
+    install_method: binary
+    binary_base_url: "https://artifacts.example.com/dragonfly"
+    binary_version: "1.39.0"
+    conf_dir: /etc/dragonfly
+
+  # incarnation.state v2 (install/conf_dir/data_dir больше не в state).
   state:
     df_version: "1.39.0"
-    conf_dir: /etc/dragonfly
-    data_dir: /var/lib/dragonfly
-    install:
-      method: binary
-      base_url: "https://artifacts.example.com/dragonfly"
-      version: "1.39.0"
     df_config:
       maxmemory: "256mb"
 

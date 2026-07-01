@@ -19,7 +19,7 @@ description: >-
     - сервисы dragonfly + redis-sentinel + disable-thp ОСТАНАВЛИВАЮТСЯ (core.service.stopped,
       идемпотентно — нет сервиса → no-op). redis-sentinel поднимает destiny `redis` (sentinel
       из redis-плоскости, рефактор) — но имя systemd-юнита то же, остановка остаётся валидной;
-    - DragonFly УБИРАЕТСЯ по СПОСОБУ установки (state.install.method, static-гейт → group-drop):
+    - DragonFly УБИРАЕТСЯ по СПОСОБУ установки (essence.install_method, static-гейт → group-drop):
       binary-ветка удаляет /usr/local/bin/dragonfly + свой unit-файл; package-ветка снимает
       distro-deb dragonfly (core.pkg.absent — пакет уносит свой systemd-юнит чисто, без отдельного
       daemon-reload);
@@ -44,9 +44,9 @@ description: >-
   инкарнации (Soul-side, не keeper — host-операции над systemd/файлами).
 
 # ── Входной контракт оператора ────────────────────────────────────────────────
-# Пуст: destroy не принимает операторского ввода. Что снимать — ФАКТ из incarnation.state,
-# записанный create-прогоном (install.method, conf_dir), а не выбор оператора в момент teardown.
-# Operator только инициирует удаление (DELETE /v1/incarnations/{name}).
+# Пуст: destroy не принимает операторского ввода. Что снимать — способ установки и conf_dir
+# из essence (install_method/conf_dir, v1→v2 вынесены из state), а не выбор оператора в момент
+# teardown. Operator только инициирует удаление (DELETE /v1/incarnations/{name}).
 input: {}
 
 tasks:
@@ -72,32 +72,31 @@ tasks:
       name: disable-thp
 
   # ── 2a. Убрать DragonFly — BINARY-ветка (upstream-tarball install) ────────────
-  # Гейт static (incarnation.state.install.method только → isStaticWhen) → render-phase
-  # GROUP-DROP: на package-инкарнации эти задачи физически исключены из плана. binary-create
-  # положил бинарь в /usr/local/bin и СВОЙ unit в /etc/systemd/system — оба наши, удаляем.
-  # has()-цепочка: install может отсутствовать целиком (back-compat) → default() не годится
-  # для корня, has() даёт безопасный false.
+  # Гейт static (essence.install_method только → isStaticWhen) → render-phase GROUP-DROP: на
+  # package-инкарнации эти задачи физически исключены из плана. ★ v1→v2: способ установки
+  # ВЫНЕСЕН из state в essence (install больше не в state) — гейт читает essence.install_method
+  # (тот же источник, что compute.install у create). binary-create положил бинарь в
+  # /usr/local/bin и СВОЙ unit в /etc/systemd/system — оба наши, удаляем.
   - name: Remove the dragonfly binary (binary install)
     module: core.file.absent
-    when: "has(incarnation.state) && has(incarnation.state.install) && has(incarnation.state.install.method) && incarnation.state.install.method == 'binary'"
+    when: "default(essence.install_method, 'package') == 'binary'"
     params:
       path: /usr/local/bin/dragonfly
 
   - name: Remove the dragonfly systemd unit (binary install)
     module: core.file.absent
-    when: "has(incarnation.state) && has(incarnation.state.install) && has(incarnation.state.install.method) && incarnation.state.install.method == 'binary'"
+    when: "default(essence.install_method, 'package') == 'binary'"
     params:
       path: /etc/systemd/system/dragonfly.service
 
   # ── 2b. Убрать DragonFly — PACKAGE-ветка (distro-deb dragonfly) ───────────────
   # Гейт static (group-drop на binary-инкарнации). package-create поставил distro-deb dragonfly
   # с его собственным systemd-юнитом — снимаем ПАКЕТОМ (core.pkg.absent), пакет уносит свой
-  # юнит чисто (отдельный daemon-reload не нужен — apt/dpkg сам реконсилит systemd). Предикат —
-  # «install отсутствует ИЛИ method не задан ИЛИ method == package» (симметрия install.yml
-  # package-гейту: package — дефолт).
+  # юнит чисто (отдельный daemon-reload не нужен — apt/dpkg сам реконсилит systemd). ★ v1→v2:
+  # способ установки из essence.install_method (package — дефолт): «method != binary».
   - name: Remove the dragonfly distribution package (package install)
     module: core.pkg.absent
-    when: "!has(incarnation.state) || !has(incarnation.state.install) || !has(incarnation.state.install.method) || incarnation.state.install.method == 'package'"
+    when: "default(essence.install_method, 'package') != 'binary'"
     params:
       name: dragonfly
 
@@ -111,27 +110,27 @@ tasks:
   - name: Remove the dragonfly users.acl
     module: core.file.absent
     params:
-      path: "${ default(incarnation.state.conf_dir, '/etc/dragonfly') + '/users.acl' }"
+      path: "${ default(essence.conf_dir, '/etc/dragonfly') + '/users.acl' }"
 
   - name: Remove the dragonfly.conf flagfile
     module: core.file.absent
     params:
-      path: "${ default(incarnation.state.conf_dir, '/etc/dragonfly') + '/dragonfly.conf' }"
+      path: "${ default(essence.conf_dir, '/etc/dragonfly') + '/dragonfly.conf' }"
 
   - name: Remove the TLS server certificate
     module: core.file.absent
     params:
-      path: "${ default(incarnation.state.conf_dir, '/etc/dragonfly') + '/tls/dragonfly.crt' }"
+      path: "${ default(essence.conf_dir, '/etc/dragonfly') + '/tls/dragonfly.crt' }"
 
   - name: Remove the TLS server private key
     module: core.file.absent
     params:
-      path: "${ default(incarnation.state.conf_dir, '/etc/dragonfly') + '/tls/dragonfly.key' }"
+      path: "${ default(essence.conf_dir, '/etc/dragonfly') + '/tls/dragonfly.key' }"
 
   - name: Remove the TLS CA certificate
     module: core.file.absent
     params:
-      path: "${ default(incarnation.state.conf_dir, '/etc/dragonfly') + '/tls/ca.crt' }"
+      path: "${ default(essence.conf_dir, '/etc/dragonfly') + '/tls/ca.crt' }"
 
   - name: Remove the dragonfly logrotate config
     module: core.file.absent

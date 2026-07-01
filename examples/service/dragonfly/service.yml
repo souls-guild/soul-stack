@@ -1,5 +1,5 @@
 name: dragonfly
-state_schema_version: 1
+state_schema_version: 2
 description: >-
   DragonFly по концепции Ansible-роли (PILOT, sentinel-only). Оператор задаёт ПРОСТЫЕ
   типизированные понятия (память, ACL-юзеры, реплики, TLS), а сценарий create транслирует
@@ -16,15 +16,23 @@ description: >-
   rotate_tls/destroy/update_config) — СЛЕД. слайс ПОСЛЕ review. Без диспетчера по режиму
   (один режим), без миграций (v1).
 
-# state_schema_version = 1 (PILOT): миграций нет (migrations/ пуст). incarnation.state
-# фиксирует, что развёрнуто, чтобы оператор видел инсталляцию и повторный apply был
-# idempotent. Мини-схема (без cluster/modules/provision/seeded_from — вне PILOT-скоупа).
+# state_schema_version = 2: цепочка миграций forward-only (ADR-019).
+#   - 001_to_002 (migrations/001_to_002.yml): вынос install + host-layout
+#     (conf_dir/data_dir) из state в essence — install read-model без читателей,
+#     layout day-2 читают essence напрямую (default(essence.<x>, '<деф>')). Симметрия
+#     redis 011_to_012 (Вариант A). У DragonFly НЕТ modules_base_url (redis-модули к DF
+#     неприменимы) → вырезаются три поля, не четыре. sysctl_settings ОСТАЁТСЯ (read-model).
+# incarnation.state фиксирует, что развёрнуто, чтобы оператор видел инсталляцию и
+# повторный apply был idempotent. Мини-схема (без cluster/modules/provision/seeded_from —
+# вне PILOT-скоупа).
 #
 # ГРАНИЦА двух представлений конфига (как у redis):
 #   - df_config (opaque, additionalProperties:true) — ВЫЧИСЛЕННЫЙ ИТОГ трансляции простого
 #     ввода в flagfile-map (что реально уйдёт в render). Write-model «как развёрнуто».
-#   - именованные поля (tls/install/memory_mb/...) — НАМЕРЕНИЕ оператора в простых
-#     типизированных понятиях (read-model). День-2-сценарии (СЛЕД. слайс) читают их именованно.
+#   - именованные поля (tls/memory_mb/...) — НАМЕРЕНИЕ оператора в простых типизированных
+#     понятиях (read-model). День-2-сценарии читают их именованно. install и host-layout
+#     (conf_dir/data_dir) вынесены в essence (v1→v2, Вариант A): install — read-model без
+#     читателей, layout — day-2 читают essence.
 # ОБА заполняются из ОДНОГО compute-прохода create — рассинхрона нет.
 state_schema:
   type: object
@@ -52,25 +60,14 @@ state_schema:
         cert_ref: { type: string }
         key_ref:  { type: string }
         ca_ref:   { type: string }
-    # Способ установки DragonFly (package — distro-deb; binary — upstream-tarball). base_url/
-    # version материализуются при method=binary. Из compute.install.
-    install:
-      type: object
-      additionalProperties: false
-      properties:
-        method:   { type: string, enum: [package, binary] }
-        base_url: { type: string }
-        version:  { type: string }
+    # ★ install + host-layout (conf_dir/data_dir) ВЫНЕСЕНЫ в essence (v1→v2, Вариант A):
+    # install — read-model без читателей, layout — day-2 читают essence напрямую
+    # (default(essence.conf_dir, '/etc/dragonfly') / data_dir). В state их полей больше нет —
+    # set писал бы ключ вне схемы → валидация state упала бы (см. миграцию 001_to_002).
     # Бюджет памяти под DragonFly, МБ. Из input.memory_mb; не задан → 0.
     memory_mb:
       type: integer
       minimum: 64
-    # Host-layout (read-model): базовые каталоги конфигурации и данных DragonFly. Из essence
-    # (conf_dir/data_dir). default = текущий путь (/etc/dragonfly, /var/lib/dragonfly).
-    conf_dir:
-      type: string
-    data_dir:
-      type: string
     # Применённые kernel-параметры под DragonFly (host-tuning). Из essence.sysctl_settings.
     sysctl_settings:
       type: object

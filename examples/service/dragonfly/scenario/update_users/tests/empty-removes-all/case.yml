@@ -14,12 +14,9 @@ fixtures:
     network: { primary_ip: 10.0.0.5 }
     os: { arch: amd64 }
 
+  # state v2: install/conf_dir/data_dir вынесены в essence (не в state).
   state:
     df_version: "1.39.0"
-    conf_dir: /etc/dragonfly
-    data_dir: /var/lib/dragonfly
-    install:
-      method: package
     tls:
       enable:   false
       cert_ref: ""
@@ -35,9 +32,10 @@ fixtures:
   input:
     users: []
 
+  # Vault: default_admin (masterauth-долив во flagfile + ACL LOAD-AUTH читают его безусловно).
   vault:
-    secret/dragonfly/update_users:
-      password: updusr-df-pass-16chars
+    secret/dragonfly/update_users/users/default_admin:
+      password: dfadmin-update-users-pass
 
 assert:
   task_present:
@@ -63,11 +61,12 @@ assert:
           essence: {}
 
     # HOT-RELOAD ACL: community.redis.acl через ЛОКАЛЬНЫЙ UNIX-сокет (ACL LOAD приводит инстанс
-    # к пустому operator-набору).
+    # к пустому operator-набору). AUTH под default_admin (requirepass убран).
     - module: community.redis.acl
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
-        password: updusr-df-pass-16chars
+        username: default_admin
+        password: dfadmin-update-users-pass
 
   # state_changes: df_users = [] (operator-extra стёрт целиком).
   state_changes:

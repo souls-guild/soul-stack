@@ -102,8 +102,10 @@
       users: "${ default(input.users, {}) }"
 
 # dragonfly.conf (FLAGFILE) из merged-конфига. register для day-2. owner/group dragonfly,
-# mode 0640 — flagfile несёт requirepass, читает только сервис. Шаблон печатает базовые
-# --флаги + range merged config (см. dragonfly.flags.tmpl).
+# mode 0640 — flagfile несёт masterauth/password-хеши, читает только сервис. Шаблон печатает
+# базовые --флаги + range merged config (см. dragonfly.flags.tmpl). ★ РЕДИЗАЙН default_admin:
+# vars.password УБРАН (requirepass убран из flagfile) — аутентификация под ACL-юзером
+# default_admin (users.acl), masteruser/masterauth приходят обычными ключами config-map.
 - name: Render dragonfly.conf
   module: core.file.rendered
   register: dragonfly_conf
@@ -114,7 +116,6 @@
     owner: "${ vars.dragonfly_user }"
     group: "${ vars.dragonfly_group }"
     vars:
-      password: "${ input.password }"
       config:   "${ default(input.config, {}) }"
       # host-layout (директива B): шаблон выводит --dir из data_dir (snapshot) и --aclfile
       # из conf_dir (туда же, куда «Render users.acl» кладёт файл).

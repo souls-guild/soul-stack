@@ -21,13 +21,10 @@ fixtures:
     network: { primary_ip: 10.0.0.5 }
     os: { arch: amd64 }
 
-  # Развёрнутый incarnation.state: уже есть юзер bob; add_user добавляет alice.
+  # Развёрнутый incarnation.state (v2: install/conf_dir/data_dir вынесены в essence): уже есть
+  # юзер bob; add_user добавляет alice.
   state:
     df_version: "1.39.0"
-    conf_dir: /etc/dragonfly
-    data_dir: /var/lib/dragonfly
-    install:
-      method: package
     tls:
       enable:   false
       cert_ref: ""
@@ -44,9 +41,12 @@ fixtures:
       perms: "~* +@all"
       state: "on"
 
+  # Vault: default_admin (masterauth-долив во flagfile + ACL LOAD-AUTH читают его безусловно) +
+  # per-user пароли operator-extra. Главного secret/dragonfly/add_user#password больше нет
+  # (requirepass убран — редизайн default_admin).
   vault:
-    secret/dragonfly/add_user:
-      password: addusr-df-pass-16chars
+    secret/dragonfly/add_user/users/default_admin:
+      password: dfadmin-add-user-pass
     secret/dragonfly/add_user/users/alice:
       password: alice-user-secret-pass
     secret/dragonfly/add_user/users/bob:
@@ -84,11 +84,12 @@ assert:
           essence: {}
 
     # 2. HOT-RELOAD ACL: community.redis.acl к живому инстансу через ЛОКАЛЬНЫЙ UNIX-сокет
-    #    (БЕЗ tls/tls_ca — UDS не сетевой путь).
+    #    (БЕЗ tls/tls_ca — UDS не сетевой путь). AUTH под default_admin (requirepass убран).
     - module: community.redis.acl
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
-        password: addusr-df-pass-16chars
+        username: default_admin
+        password: dfadmin-add-user-pass
 
   # state_changes: df_users несёт bob+alice БЕЗ пароля (массив AclUser). Порядок = array-upsert:
   # сохранённый bob ПЕРВЫМ (filter оставил), новый alice ДОПИСАН в конец.

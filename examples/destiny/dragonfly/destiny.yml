@@ -113,16 +113,13 @@ input:
           Upstream-версия DragonFly для пути распакованного каталога (semver, напр. 1.39.0).
           Обязательна при method=binary. Имя tarball-а версии не несёт (dragonfly-<arch>.tar.gz).
 
-  password:
-    type: string
-    required: true
-    secret: true
-    min_length: 16
-    description: >-
-      Пароль DragonFly (--requirepass). Маскируется в логах/трейсах/UI. Destiny получает
-      УЖЕ зарезолвленное значение: caller-сценарий читает секрет из Vault keeper-side через
-      CEL-функцию vault() в render-фазе и прокидывает результат в apply:input. Destiny
-      остаётся «глупой» — кладёт готовый пароль во flagfile, vault-клиент не тянет (ADR-012).
+  # ★ input.password УДАЛЁН (РЕДИЗАЙН default_admin): --requirepass убран из flagfile, главного
+  # пароля больше нет. Аутентификация идёт под СИСТЕМНЫМ ACL-юзером default_admin (приходит в
+  # `users` ниже с per-user паролем, как replica/monitoring). Шаблон dragonfly.flags.tmpl больше
+  # НЕ читает .vars.password — destiny его не принимает и не передаёт в render_context. Пароли
+  # ВСЕХ юзеров (вкл. default_admin) — в map `users` (поле password каждого, зарезолвлено
+  # keeper-side). replica→master AUTH (masteruser/masterauth) — ОБЫЧНЫЕ флаги, которые scenario
+  # кладёт прямо в `config`-map (vault()-в-ячейке, seal-маскинг), destiny range-ит их во flagfile.
 
   # Merged-конфиг dragonfly.conf (FLAGFILE): caller (scenario сервиса) сливает default→
   # вычисления→passthrough через merge() и передаёт ГОТОВЫЙ map. Шаблон range-ит его ПОСЛЕ
