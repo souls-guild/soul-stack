@@ -20,7 +20,7 @@ Permission: `incarnation.create`. MCP-tool: `keeper.incarnation.create`.
 | `service` | `string` | yes | Имя сервиса из `keeper.yml → services[].name` ([config.md → services](../config.md#services--default_destiny_source--default_module_source)). |
 | `covens` | `list<string>` | optional | Declared environment-теги incarnation ([ADR-008](../../adr/0008-coven-stable-tags.md#adr-008-coven--только-стабильные-логические-теги) amendment a). Формат каждой метки — `^[a-z][a-z0-9]*(-[a-z0-9]+)*$` (как у Soul-меток). По умолчанию `[]`. Несут RBAC coven-scope incarnation-операций (см. ниже). |
 | `traits` | `object` | optional | Operator-set key-value trait-метки инкарнации ([ADR-060](../../adr/0060-traits.md) R1 slice a): ключ → значение `scalar` ИЛИ `list of scalars` (`{"owner": "alice", "owners": ["alice", "bob"]}`). Кладутся в `incarnation.traits` (источник истины) и материализованно проецируются в `souls.traits` хостов-членов. Вложенный объект/массив-в-массиве → `422`. По умолчанию `{}` (нет меток). Day-2 замена — `PUT /v1/incarnations/{name}/traits`. |
-| `create_scenario` | `string` | conditional | Имя стартового (bootstrap) сценария — сценария с top-level `create: true` в `scenario/<name>/main.yml` (механизм нескольких create-сценариев; имя `create` НЕ привилегировано, годность даёт только ключ `create: true`). Формат `^[a-z][a-z0-9_]*$`. **Required, если сервис предлагает ≥1 create-сценарий**: пустое поле → `422 validation-failed` с текстом-перечислением годных сценариев. Значение вне create-набора (operational-сценарий, напр. `add_user`, либо несуществующее имя) → `422 validation-failed`. **Для сервиса без create-сценариев поле игнорируется** — создаётся bare-инкарнация (см. ниже). Сохраняется в `incarnation.created_scenario`; `rerun-create` перезапускает именно его. |
+| `create_scenario` | `string` | conditional | Имя стартового (bootstrap) сценария — сценария с top-level `create: true` в `scenario/<name>/main.yml` (механизм нескольких create-сценариев; имя `create` НЕ привилегировано, годность даёт только ключ `create: true`). Формат `^[a-z][a-z0-9_]*$`. **Required, если сервис предлагает ≥1 create-сценарий**: пустое поле → `422 validation-failed` с текстом-перечислением годных сценариев. Значение вне create-набора (operational-сценарий, напр. `add_user`, либо несуществующее имя) → `422 validation-failed`. **Для сервиса без create-сценариев поле игнорируется** — создаётся bare-инкарнация (см. ниже). Сохраняется в `incarnation.created_scenario`; `rerun-last` использует его на create-пути (когда последним упавшим был именно стартовый сценарий). |
 | `input` | `object` | optional | Input для выбранного стартового сценария, валидируется против `scenario/<create_scenario>/input:`-схемы сервиса (НЕ обязательно `create`). Для bare-инкарнации не валидируется (прогона нет). По умолчанию `{}`. |
 
 ```json
@@ -67,36 +67,41 @@ Permission: `incarnation.create`. MCP-tool: `keeper.incarnation.create`.
 
 Пример (redis несёт три create-сценария — `create` / `create_from_souls` / `migrate_cluster`): чтобы поднять кластер с нуля, оператор передаёт `"create_scenario": "create"`; чтобы залить данные с внешнего кластера при создании — `"create_scenario": "migrate_cluster"`.
 
-#### `POST /v1/incarnations/{name}/rerun-create` — перезапустить стартовый сценарий из `error_locked`
+#### `POST /v1/incarnations/{name}/rerun-last` — перезапустить последний упавший сценарий из `error_locked`
 
-Permission: `incarnation.create-rerun`. MCP-tool: `keeper.incarnation.rerun-create`. Path-param: `name`.
+Permission: `incarnation.rerun-last`. MCP-tool: `keeper.incarnation.rerun-last`. Path-param: `name`. OperationID: `rerunLastIncarnation`.
 
-Атомарно снимает блок `error_locked` и **тем же действием** перезапускает СОЗДАВШИЙ стартовый сценарий incarnation ([architecture.md → Атомарность и `error_locked`](../../architecture.md#атомарность-и-error_locked)). Перезапускается именно `incarnation.created_scenario` (имя стартового сценария, выбранного при создании, читается под `FOR UPDATE`), а не хардкод `create`: инкарнация, созданная через `create_from_souls`, ре-ранит `create_from_souls`. Под одним `FOR UPDATE`: `error_locked → applying` минуя `ready` (race-free), `state` НЕ трогается (last known-good сохраняется, snapshot перехода пишется в `state_history` с общим `apply_id`). Отличие от `unlock`: `unlock` только снимает блок (оператор сам решает, что делать дальше), а `rerun-create` снимает блок и запускает bootstrap одним подтверждённым действием. Асинхронная операция — `202` + `apply_id`, опрос статуса через `GET /v1/incarnations/{name}`.
+Атомарно снимает блок `error_locked` и **тем же действием** перезапускает **последний упавший сценарий** incarnation ([architecture.md → Атомарность и `error_locked`](../../architecture.md#атомарность-и-error_locked)) — это может быть как bootstrap-сценарий (`create`/…, если создание провалилось), так и любая day-2-операция (`add_user`, `restart`, …). Имя упавшего сценария читается под `FOR UPDATE` (create-путь — `incarnation.created_scenario`, day-2-путь — сценарий последнего провалившегося прогона). Под одним `FOR UPDATE`: `error_locked → applying` минуя `ready` (race-free), `state` НЕ трогается (last known-good сохраняется, snapshot перехода пишется в `state_history` с общим `apply_id`). Отличие от `unlock`: `unlock` только снимает блок (оператор сам решает, что делать дальше), а `rerun-last` снимает блок и перезапускает упавший сценарий одним подтверждённым действием. Асинхронная операция — `202` + `apply_id`, опрос статуса через `GET /v1/incarnations/{name}`.
 
-Scope ЖЁСТКО ограничен СОЗДАВШИМ стартовым сценарием. Запрос отвергается (`409 incarnation-locked`, `detail` поясняет — нужен обычный `unlock` + ручной `run`) в двух случаях:
+**Восстановление input упавшего прогона.** Сценарий перезапускается с ТЕМИ ЖЕ входными значениями, что были у упавшего прогона (а не с дефолтами) — иначе rerun с required-полями (например redis-кластер: `version`/`shards`) упал бы на input-валидации либо применил дефолты. Источник input:
 
-- последний упавший сценарий incarnation — **не** создавший её стартовый (например упал day-2 `add_user`): rerun перезапустил бы bootstrap вместо фактически провалившейся операции;
-- инкарнация **bare** (`created_scenario IS NULL` — создана без bootstrap-сценария): перезапускать нечего.
+- **create-путь** — `incarnation.spec.input` (то, что задекларировал оператор при создании);
+- **day-2-путь** — рецепт упавшего прогона `apply_runs.recipe.input` (читается по `apply_id` последнего snapshot-а того же `FOR UPDATE`; vault-refs хранятся строками, секреты не раскрыты).
+
+Работает **только из статуса `error_locked`**. Запрос отвергается `409 incarnation-locked` (`detail` поясняет — нужен обычный `unlock` + ручной `run`) в двух случаях:
+
+- **статус не `error_locked`** (нечего перезапускать — прогона в ошибке нет);
+- **input упавшего прогона недоступен** (fail-closed): рецепт вычищен ретеншном Reaper (`purge_apply_runs`) либо это legacy-прогон без сохранённого рецепта (`recipe IS NULL`). Транзакция НЕ коммитится; оператор снимает блок обычным `unlock` и запускает нужный сценарий вручную с явным input.
 
 Тот же `apply_id` идёт и в `state_history`-snapshot unlock-перехода, и в перезапускаемый прогон — снимок коррелирует с прогоном.
 
-**Request `IncarnationRerunCreateRequest`:**
+**Request `IncarnationRerunLastRequest`:**
 
 | Поле | Тип | Required | Смысл |
 |---|---|---|---|
-| `reason` | `string` | yes | Свободный текст для audit-trail (пишется в payload audit-события `incarnation.create_rerun`). Подтверждение осознанности действия — UI требует confirm. |
+| `reason` | `string` (1..500 символов) | yes | Свободный текст для audit-trail (пишется в payload audit-события `incarnation.rerun_last`). Подтверждение осознанности действия — UI требует confirm. |
 
 ```json
-{ "reason": "fixed network ACL — retry redis bootstrap on redis-prod" }
+{ "reason": "fixed network ACL — retry failed scenario on redis-prod" }
 ```
 
-**Response `202 Accepted`:** `{"apply_id": "<ULID>", "incarnation": "redis-prod"}`.
+**Response `202 Accepted`:** `{"apply_id": "<ULID>", "incarnation": "redis-prod", "scenario": "add_user"}` — `scenario` эхует имя перезапущенного (упавшего) сценария.
 
-**Errors:** `403 forbidden` (нет `incarnation.create-rerun`), `404 not-found` (incarnation не существует), `409 incarnation-locked` (статус не `error_locked`; ИЛИ последний упавший сценарий — не создавший стартовый; ИЛИ инкарнация bare — `created_scenario IS NULL`, перезапускать нечего), `422 validation-failed` (пустой `reason` / невалидный path-`name`), `500 internal-error` (runner не сконфигурирован / транзакция / запуск прогона).
+**Errors:** `403 forbidden` (нет `incarnation.rerun-last`), `404 not-found` (incarnation не существует), `409 incarnation-locked` (статус не `error_locked`; ИЛИ input упавшего прогона недоступен — рецепт вычищен ретеншном / legacy-прогон), `422 validation-failed` (пустой `reason` / `reason` длиннее 500 символов / невалидный path-`name`), `500 internal-error` (runner не сконфигурирован / транзакция / запуск прогона).
 
 **RBAC:** scope тот же, что у `incarnation.run` / `incarnation.unlock` — `coven=`/`service=`/`incarnation=` (приземляется по path-`name`: declared `covens ∪ {name}` + `service` из строки incarnation).
 
-**Audit:** `incarnation.create_rerun` (`source: api` / `mcp`, `correlation_id=apply_id`, payload `{name, reason, previous_status, apply_id}`) — пишется handler-ом после успешного unlock-перехода (`previous_status` известен только после него), НЕ переиспользует `incarnation.unlocked`.
+**Audit:** `incarnation.rerun_last` (`source: api` / `mcp`, `correlation_id=apply_id`, payload `{name, reason, scenario, previous_status, apply_id}`) — пишется handler-ом после успешного unlock-перехода (`previous_status` известен только после него), НЕ переиспользует `incarnation.unlocked`.
 
 #### `POST /v1/incarnations/{name}/scenarios/{scenario}` — запустить произвольный сценарий
 
@@ -140,7 +145,7 @@ Permission: `incarnation.get`. MCP-tool: `keeper.incarnation.get`. Path-param: `
 | `service_version` | `string` (git-ref) | Пин-версия сервиса. |
 | `state_schema_version` | `int` | Версия state_schema ([ADR-019](../../adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)). |
 | `covens` | `list<string>` | Declared environment-теги ([ADR-008](../../adr/0008-coven-stable-tags.md#adr-008-coven--только-стабильные-логические-теги) amendment a). Источник RBAC coven-scope (`covens ∪ {name}`). Всегда массив (пустой, если тегов нет). |
-| `created_scenario` | `string` (optional) | Имя стартового (bootstrap) сценария, которым создана инкарнация (механизм нескольких create-сценариев). `rerun-create` перезапускает именно его. Для **bare-инкарнации** (создана без bootstrap-сценария) — `null`/опущен (поле с `omitempty`). |
+| `created_scenario` | `string` (optional) | Имя стартового (bootstrap) сценария, которым создана инкарнация (механизм нескольких create-сценариев). `rerun-last` использует его на create-пути (когда последним упавшим был именно стартовый сценарий). Для **bare-инкарнации** (создана без bootstrap-сценария) — `null`/опущен (поле с `omitempty`). |
 | `spec` | `object` | jsonb — то, что задекларировал оператор ([architecture.md → Incarnation](../../architecture.md#incarnation--runtime-инстанс-сервиса)). Sensitive-значения замаскированы (`***MASKED***`, см. [§ Маскинг state/spec в GET-ответах](../operator-api.md#маскинг-state--spec-в-get-ответах-defense-in-depth)). |
 | `state` | `object` | jsonb — текущая структурированная конфигурация. Sensitive-значения замаскированы (см. там же). |
 | `status` | `enum` | `provisioning` / `ready` / `applying` / `error_locked` / `migration_failed` / `drift` / `destroying`. |

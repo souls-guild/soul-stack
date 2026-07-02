@@ -6,7 +6,7 @@ package api
 //   - MIDDLEWARE-AUDIT (create / run / unlock / upgrade): монтируются через
 //     newHumaIncarnationAPI(evt) (huma-audit-middleware вариант B); register-func
 //     кладёт payload из *Typed-reply.AuditPayload через SetHumaAuditPayload.
-//   - SELF-AUDIT (rerun-create / check-drift / destroy / update-hosts): монтируются
+//   - SELF-AUDIT (rerun-last / check-drift / destroy / update-hosts): монтируются
 //     через newHumaCadenceAPI (БЕЗ audit-навески); audit пишет САМ handler ВНУТРИ
 //     *Typed (h.auditW.Write). Перепутать класс = S6-регрессия.
 //   - READ (get / list / history): newHumaCadenceAPI, audit НЕ пишут.
@@ -135,10 +135,10 @@ func registerHumaIncarnationUpgrade(humaAPI huma.API, incH *handlers.Incarnation
 
 // --- SELF-AUDIT ---
 
-// registerHumaIncarnationRerunCreate монтирует POST /v1/incarnations/{name}/rerun-create
-// (SELF-AUDIT incarnation.create_rerun — пишет САМ handler внутри RerunCreateTyped,
+// registerHumaIncarnationRerunLast монтирует POST /v1/incarnations/{name}/rerun-last
+// (SELF-AUDIT incarnation.rerun_last — пишет САМ handler внутри RerunLastTyped,
 // audit-middleware НЕ навешан). incH nil → no-op.
-func registerHumaIncarnationRerunCreate(humaAPI huma.API, incH *handlers.IncarnationHandler) {
+func registerHumaIncarnationRerunLast(humaAPI huma.API, incH *handlers.IncarnationHandler) {
 	if incH == nil {
 		return
 	}
@@ -147,11 +147,11 @@ func registerHumaIncarnationRerunCreate(humaAPI huma.API, incH *handlers.Incarna
 		if !ok {
 			return nil, incMissingClaims()
 		}
-		body, err := incH.RerunCreateTyped(ctx, claims, in.Name, in.Body.Reason)
+		body, err := incH.RerunLastTyped(ctx, claims, in.Name, in.Body.Reason)
 		if err != nil {
 			return nil, incProblem(err)
 		}
-		return &incRerunOutput{Status: http.StatusAccepted, Body: newIncarnationRerunCreateReply(body)}, nil
+		return &incRerunOutput{Status: http.StatusAccepted, Body: newIncarnationRerunLastReply(body)}, nil
 	})
 }
 
@@ -441,7 +441,7 @@ func HumaIncarnationSpecYAML() (string, error) {
 		registerHumaIncarnationRun(api, stub)
 		registerHumaIncarnationUnlock(api, stub)
 		registerHumaIncarnationUpgrade(api, stub)
-		registerHumaIncarnationRerunCreate(api, stub)
+		registerHumaIncarnationRerunLast(api, stub)
 		registerHumaIncarnationCheckDrift(api, stub)
 		registerHumaIncarnationDestroy(api, stub)
 		registerHumaIncarnationUpdateHosts(api, stub)

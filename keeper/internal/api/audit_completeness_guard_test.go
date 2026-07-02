@@ -96,7 +96,7 @@ var auditedWriteRoutes = map[route]auditedRoute{
 	{http.MethodPost, "/v1/incarnations/{name}/scenarios/{scenario}"}: {events: []audit.EventType{audit.EventIncarnationScenarioStarted}},
 	{http.MethodPost, "/v1/incarnations/{name}/unlock"}:               {events: []audit.EventType{audit.EventIncarnationUnlocked}},
 	{http.MethodPost, "/v1/incarnations/{name}/upgrade"}:              {events: []audit.EventType{audit.EventIncarnationUpgradeStarted}},
-	{http.MethodPost, "/v1/incarnations/{name}/rerun-create"}:         {events: []audit.EventType{audit.EventIncarnationCreateRerun}, note: "self-audit: handler пишет внутри RerunCreateTyped"},
+	{http.MethodPost, "/v1/incarnations/{name}/rerun-last"}:           {events: []audit.EventType{audit.EventIncarnationRerunLast}, note: "self-audit: handler пишет внутри RerunLastTyped"},
 	{http.MethodPost, "/v1/incarnations/{name}/check-drift"}:          {events: []audit.EventType{audit.EventIncarnationDriftChecked}, note: "self-audit: handler пишет внутри CheckDriftTyped"},
 	{http.MethodDelete, "/v1/incarnations/{name}"}:                    {events: []audit.EventType{audit.EventIncarnationDestroyStarted}, note: "self-audit: destroy_started пишет service-слой incarnation.Destroy"},
 	{http.MethodPatch, "/v1/incarnations/{name}/hosts"}:               {events: []audit.EventType{audit.EventIncarnationHostsUpdated}, note: "self-audit: handler пишет внутри UpdateHostsTyped"},

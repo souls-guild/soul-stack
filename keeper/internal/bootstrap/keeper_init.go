@@ -50,9 +50,8 @@ const vaultSigningKeyField = "signing_key"
 // ADR-013(c): JWT не должен быть читаем другими пользователями.
 const credentialFileMode os.FileMode = 0o400
 
-// ErrAlreadyInitialized возвращается Init-ом, когда `Count(operators) > 0`
-// под удерживаемым advisory lock-ом. Caller (`keeper/cmd/keeper`)
-// маппит в exit-code 1 + сообщение «already initialized».
+// ErrAlreadyInitialized — есть хотя бы один НЕ-системный оператор
+// (`CountNonSystem > 0` под advisory lock). Caller маппит в exit-code 1.
 var ErrAlreadyInitialized = errors.New("bootstrap: keeper already initialized (operators registry not empty)")
 
 // ErrSigningKeyMissing возвращается, если в Vault KV нет поля
@@ -159,7 +158,7 @@ type Result struct {
 //  2. Read signing-key из Vault KV (mount/path из SigningKeyRef).
 //  3. Создание JWT-issuer-а.
 //  4. BEGIN tx → `pg_advisory_xact_lock(AdvisoryLockID)` →
-//     `Count(operators)`; >0 → откат + [ErrAlreadyInitialized].
+//     `CountNonSystem(operators)`; >0 → откат + [ErrAlreadyInitialized].
 //  5. Insert operator (created_by_aid=NULL).
 //  6. Issue JWT.
 //  7. COMMIT.
@@ -214,7 +213,8 @@ func Init(ctx context.Context, cfg Config) (*Result, error) {
 		return nil, fmt.Errorf("bootstrap: acquire advisory lock: %w", err)
 	}
 
-	n, err := operator.Count(ctx, tx)
+	// Только НЕ-системные: archon-system — FK-якорь, а не реальный Архонт (ADR-013 amendment 2026-07-01).
+	n, err := operator.CountNonSystem(ctx, tx)
 	if err != nil {
 		return nil, fmt.Errorf("bootstrap: count operators: %w", err)
 	}

@@ -2759,14 +2759,14 @@ func waitIncarnationStatus(t *testing.T, name string, want incarnation.Status) *
 	return nil
 }
 
-// TestIntegration_FromLocked_RerunCreate_DrivesRun — GUARD (блокер S2): rerun-
+// TestIntegration_FromLocked_RerunLast_DrivesRun — GUARD (блокер S2): rerun-
 // create из error_locked ДОВОДИТ до реального прогона. UnlockForRerun под FOR
 // UPDATE резервирует applying (минуя ready), затем Start{FromLocked:true} — и
 // lockRun обязан УВИДЕТЬ applying как валидный стартовый статус, а не отвергнуть
 // прогон. Без FromLocked-ветки прогон застревал бы в applying навсегда (lockRun
 // видел applying → ErrAlreadyRunning → отказ). Проверяем: dispatch состоялся,
 // инкарнация дошла до ready (не осталась в applying).
-func TestIntegration_FromLocked_RerunCreate_DrivesRun(t *testing.T) {
+func TestIntegration_FromLocked_RerunLast_DrivesRun(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	inc := &incarnation.Incarnation{
@@ -2784,7 +2784,7 @@ func TestIntegration_FromLocked_RerunCreate_DrivesRun(t *testing.T) {
 	r := newRunner(t, disp, gitURL)
 
 	applyID := audit.NewULID()
-	// Unlock-часть rerun-create: error_locked → applying минуя ready (race-free),
+	// Unlock-часть rerun-last: error_locked → applying минуя ready (race-free),
 	// как в handler-е/MCP-tool-е.
 	if _, err := incarnation.UnlockForRerun(context.Background(), integrationPool,
 		"noop-prod", "rerun bootstrap verified", "archon-alice", audit.NewULID(), applyID); err != nil {

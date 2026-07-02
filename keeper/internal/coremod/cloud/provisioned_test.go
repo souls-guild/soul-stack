@@ -981,7 +981,7 @@ func TestApply_Created_SelfOnboard_FQDNMismatch_Fails(t *testing.T) {
 // ★ guard на major-риск review: souls (pending) + токены выписываются ДО
 // PluginHost.Create. Если Create падает, вставленные записи ОБЯЗАНЫ быть
 // откачены — иначе presence-барьер await_online виснет на онбординге
-// несуществующих VM, а rerun-create упирается в PK-конфликт insert soul под
+// несуществующих VM, а rerun-last упирается в PK-конфликт insert soul под
 // тем же предсказанным FQDN (self-onboard не идемпотентен).
 func TestApply_Created_SelfOnboard_CreateFails_CleansOrphanedSoulsAndTokens(t *testing.T) {
 	fp := &fakePlugins{createErr: errors.New("driver create failed: quota exceeded")}

@@ -35,27 +35,27 @@ var (
 	ErrIncarnationAlreadyExists = errors.New("incarnation: name already exists")
 	ErrIncarnationNotFound      = errors.New("incarnation: name not found")
 	ErrIncarnationNotLocked     = errors.New("incarnation: not in unlockable status")
-	// ErrIncarnationNotErrorLocked — статус НЕ error_locked: rerun-create
+	// ErrIncarnationNotErrorLocked — статус НЕ error_locked: rerun-last
 	// допустим строго из error_locked (architecture.md → «Атомарность и
-	// error_locked»: scope ЖЁСТКО ограничен rerun scenario `create`; для
-	// migration_failed / destroy_failed / прочих — обычный unlock + ручной run).
-	// Отдельный sentinel от [ErrIncarnationNotLocked] (тот шире — покрывает три
-	// блокирующих статуса): rerun сужает допуск до одного.
-	ErrIncarnationNotErrorLocked = errors.New("incarnation: not in error_locked status (rerun-create requires error_locked)")
-	// ErrRerunScenarioNotCreate — rerun-create неприменим. Две причины:
-	//   - последний прогон, упавший в error_locked, был НЕ создавшим сценарием
-	//     (например day-2 add_user): rerun перезапустил бы bootstrap вместо
-	//     фактически провалившейся операции — нужен обычный unlock + ручной run;
-	//   - bare-инкарнация (created_scenario IS NULL, миграция 090): создана без
-	//     bootstrap-сценария, перезапускать нечего.
-	// rerun-create по контракту (architecture.md → «Атомарность и error_locked»)
-	// перезапускает строго СОЗДАВШИЙ bootstrap-сценарий. Handler маппит в 409
-	// incarnation-locked.
-	ErrRerunScenarioNotCreate = errors.New("incarnation: rerun-create not applicable (last failed scenario is not the creating one, or incarnation is bare)")
-	ErrIncarnationBusy        = errors.New("incarnation: run in progress (applying)")
-	ErrIncarnationLocked      = errors.New("incarnation: locked — unlock required before upgrade")
-	ErrDowngradeUnsupported   = errors.New("incarnation: schema downgrade unsupported (forward-only, ADR-019)")
-	ErrSchemaVersionMismatch  = errors.New("incarnation: current schema version does not match migration chain")
+	// error_locked»: для migration_failed / destroy_failed / прочих — обычный
+	// unlock + ручной run). Отдельный sentinel от [ErrIncarnationNotLocked] (тот
+	// шире — покрывает три блокирующих статуса): rerun сужает допуск до одного.
+	ErrIncarnationNotErrorLocked = errors.New("incarnation: not in error_locked status (rerun-last requires error_locked)")
+	// ErrRerunInputUnavailable — rerun-last не может восстановить input упавшего
+	// day-2-прогона: последний snapshot state_history указывает на apply_run,
+	// чьего рецепта (`apply_runs.recipe`) нет — recipe IS NULL (legacy-путь
+	// dispatchWave, Insert(running) рецепт не несёт) ЛИБО строка apply_run
+	// вычищена Reaper-ретеншном (purge_apply_runs). Fail-closed: без сохранённого
+	// input перезапуск day-2-сценария применил бы дефолты / упал на input-
+	// валидации — вместо этого отказ, оператор снимает блок обычным unlock и
+	// запускает нужный сценарий вручную с явным input. create-путь (последний
+	// упавший == created_scenario) этого sentinel-а не достигает — input берётся
+	// из incarnation.spec.input, который живёт с инкарнацией. Handler маппит в 409.
+	ErrRerunInputUnavailable = errors.New("incarnation: rerun-last cannot recover the failed run's input (recipe unavailable — use unlock + manual run with explicit input)")
+	ErrIncarnationBusy       = errors.New("incarnation: run in progress (applying)")
+	ErrIncarnationLocked     = errors.New("incarnation: locked — unlock required before upgrade")
+	ErrDowngradeUnsupported  = errors.New("incarnation: schema downgrade unsupported (forward-only, ADR-019)")
+	ErrSchemaVersionMismatch = errors.New("incarnation: current schema version does not match migration chain")
 	// ErrAlreadyFinalized — single-winner state-commit (ADR-027(j), W1): строка
 	// incarnation существует, но уже НЕ в рабочем статусе прогона
 	// (applying / destroying) — другой обработчик выиграл финализацию (RunResult
@@ -610,8 +610,22 @@ func buildListWhere(f ListFilter, scope ListScope) (string, []any, error) {
 // ни coven, ни state-names, ни traits) при !Unrestricted даёт `FALSE` — ни одной
 // incarnation (а НЕ весь список). Это симметрично [soul.appendScopeClause].
 func appendScopeClause(clauses []string, args []any, scope ListScope) ([]string, []any) {
-	if scope.Unrestricted {
+	cond, args := ScopeCondition(args, scope)
+	if cond == "" {
 		return clauses, args
+	}
+	return append(clauses, cond), args
+}
+
+// ScopeCondition — переиспользуемая SQL-форма scope-предиката [ListScope] над
+// колонками таблицы incarnation (covens/name/traits). Экспортирована для
+// встраивания в чужие запросы подзапросом `... IN (SELECT name FROM incarnation
+// WHERE <cond>)` (глобальный read-view прогонов, applyrun) — единый источник
+// семантики scope с [SelectAll]. Placeholder-нумерация продолжает переданные
+// args. Unrestricted → пустое условие; пустой scope → `FALSE` (fail-closed).
+func ScopeCondition(args []any, scope ListScope) (string, []any) {
+	if scope.Unrestricted {
+		return "", args
 	}
 
 	var dims []string
@@ -644,14 +658,14 @@ func appendScopeClause(clauses []string, args []any, scope ListScope) ([]string,
 	if len(dims) == 0 {
 		// fail-closed: scope введён (не Unrestricted), но пуст по измерениям —
 		// ни одной видимой incarnation. Детерминированный FALSE, не «весь список».
-		return append(clauses, "FALSE"), args
+		return "FALSE", args
 	}
 
 	scopeClause := dims[0]
 	for _, d := range dims[1:] {
 		scopeClause += " OR " + d
 	}
-	return append(clauses, "("+scopeClause+")"), args
+	return "(" + scopeClause + ")", args
 }
 
 // stateClause строит один jsonb-pushdown-предикат. Path уже прошёл
@@ -881,34 +895,30 @@ var _ TxBeginner = (*pgxpool.Pool)(nil)
 // UnlockResult — итог [Unlock]: статус до снятия блока (для reply / audit) и
 // идентификатор записанного state_history-snapshot-а.
 //
-// CreatedScenario заполняется ТОЛЬКО [UnlockForRerun] (для [Unlock] — ""):
-// имя стартового сценария инкарнации (incarnation.created_scenario), которое
-// caller перезапускает через runner.Start. Заменяет хардкод `create` в rerun-
-// create-handler-ах — инкарнация, созданная `create_cluster`, перезапускает
-// `create_cluster`. Для bare-инкарнации (created_scenario IS NULL) [UnlockForRerun]
-// отказывает раньше ([ErrRerunScenarioNotCreate]) — это поле непустое всегда,
-// когда rerun дошёл до результата.
+// Scenario заполняется ТОЛЬКО [UnlockForRerun] (для [Unlock] — ""): имя
+// сценария, который caller перезапускает через runner.Start. Это последний
+// упавший сценарий инкарнации (последний snapshot state_history) — bootstrap-
+// сценарий на create-пути (== incarnation.created_scenario) ИЛИ day-2-сценарий
+// (add_user / update_acl / …). Заменяет прежний хардкод «перезапускаем только
+// created_scenario»: rerun-last перезапускает фактически провалившуюся операцию.
 //
-// Input заполняется ТОЛЬКО [UnlockForRerun] (для [Unlock] — nil): сохранённый
-// при создании оператор-input (incarnation.spec.input), прочитанный под тем же
-// FOR UPDATE. Caller пробрасывает его в RunSpec.Input перезапускаемого
-// bootstrap-прогона — rerun-create восстанавливает падение с ТЕМИ ЖЕ входными
-// значениями (version/shards/…), а не с дефолтами. nil = инкарнация создана без
-// input.
+// Input заполняется ТОЛЬКО [UnlockForRerun] (для [Unlock] — nil): input упавшего
+// прогона. На create-пути — сохранённый оператор-input incarnation.spec.input
+// (прочитан под тем же FOR UPDATE). На day-2-пути — input из рецепта упавшего
+// apply_run (`apply_runs.recipe.input`, инвариант A: vault-ref строками, секреты
+// не раскрыты). Caller пробрасывает его в RunSpec.Input — rerun-last
+// восстанавливает падение с ТЕМИ ЖЕ входными значениями (version/shards/user/…),
+// а не с дефолтами. nil = сценарий без input.
 type UnlockResult struct {
-	PreviousStatus  Status
-	HistoryID       string
-	CreatedScenario string
-	Input           map[string]any
+	PreviousStatus Status
+	HistoryID      string
+	Scenario       string
+	Input          map[string]any
 }
 
-// InputFromSpec извлекает сохранённый оператор-input из freeform jsonb-spec
-// инкарнации (`incarnation.spec.input`, кладётся на create-пути:
-// CreateTyped/callIncarnationCreate пишут spec["input"]). Симметрично
-// [readSpecHosts] / [TraitsFromSpec]: отсутствие ключа / не-object форма → nil
-// («input не задавался»), без ошибки (spec freeform, тип не гарантируется).
-// Используется [UnlockForRerun] для проброса stored-input в перезапускаемый
-// bootstrap-прогон (rerun-create восстанавливает падение с теми же значениями).
+// InputFromSpec извлекает ключ `input` из freeform jsonb-объекта: либо
+// incarnation.spec (create-путь), либо recipe apply_run (day-2-путь, [UnlockForRerun]).
+// Отсутствие ключа / не-object форма → nil без ошибки (jsonb freeform).
 func InputFromSpec(spec map[string]any) map[string]any {
 	if spec == nil {
 		return nil
@@ -1203,14 +1213,14 @@ WHERE name = $1 AND status = 'applying'
 	return nil
 }
 
-// rerunCreateScenarioLabel — значение `state_history.scenario` для unlock-части
-// rerun-create. По конвенции unlock-перехода (state_history требует non-null
+// rerunLastScenarioLabel — значение `state_history.scenario` для unlock-части
+// rerun-last. По конвенции unlock-перехода (state_history требует non-null
 // scenario): фиксируем сам факт снятия error_locked под этой меткой, отдельной
-// от unlockScenarioLabel — rerun снимает блок И перезапускает create, его след
-// в истории отличается от обычного ручного unlock.
-const rerunCreateScenarioLabel = "rerun-create"
+// от unlockScenarioLabel — rerun снимает блок И перезапускает последний упавший
+// сценарий, его след в истории отличается от обычного ручного unlock.
+const rerunLastScenarioLabel = "rerun-last"
 
-// UnlockForRerun — unlock-часть rerun-create (architecture.md → «Атомарность и
+// UnlockForRerun — unlock-часть rerun-last (architecture.md → «Атомарность и
 // error_locked»). Атомарно снимает error_locked и переводит incarnation
 // error_locked → applying МИНУЯ ready: окна, в котором конкурентный прогон
 // проскочил бы в освободившийся ready, не возникает (переход под одним
@@ -1219,39 +1229,41 @@ const rerunCreateScenarioLabel = "rerun-create"
 //
 // Допуск ЖЁСТКО из error_locked: migration_failed / destroy_failed / ready /
 // applying / destroying → [ErrIncarnationNotErrorLocked] (для них — обычный
-// unlock + ручной run; rerun = специализированный rerun создавшего bootstrap-
-// сценария, см. ниже про scope).
+// unlock + ручной run).
 //
-// Scope=created-scenario: дополнительно сужает допуск — последний прогон, упавший
-// в error_locked (последний snapshot state_history), обязан быть СОЗДАВШИМ
-// сценарием инкарнации (incarnation.created_scenario, миграции 089+090 — может
-// быть `create` ИЛИ `create_cluster`/`create_standalone`/… при нескольких
-// bootstrap-сценариях). Иной сценарий (например day-2 add_user, тоже залочивший
-// инкарнацию) → [ErrRerunScenarioNotCreate]: rerun-create перезапускает строго
-// создавший bootstrap, не произвольную упавшую операцию.
+// Scope=last-failed: перезапускается ПОСЛЕДНИЙ упавший сценарий инкарнации
+// (последний snapshot state_history: run.go::abort → lockIncarnation →
+// UpdateStateFromRun пишет туда имя упавшего сценария и его apply_id). Это может
+// быть создавший bootstrap (`create`/`create_cluster`/…) ИЛИ day-2-сценарий
+// (add_user / update_acl / …) — оба перезапускаются одинаково.
 //
-// Bare-инкарнация (created_scenario IS NULL — создана без bootstrap-сценария,
-// миграция 090): rerun-create неприменим → [ErrRerunScenarioNotCreate] сразу
-// после gate (перезапускать нечего; чинить day-2-провал — обычным unlock + run).
+// Восстановление input упавшего прогона (чтобы перезапуск шёл с ТЕМИ ЖЕ
+// значениями, а не с дефолтами):
+//   - create-путь (последний упавший == incarnation.created_scenario): input из
+//     incarnation.spec.input, прочитанный тем же FOR UPDATE (живёт с инкарнацией).
+//   - day-2-путь (иначе, включая bare-инкарнацию с created_scenario IS NULL):
+//     input из рецепта упавшего apply_run (`apply_runs.recipe.input` по apply_id
+//     последнего snapshot-а; инвариант A — vault-ref строками, секреты не
+//     раскрыты). Рецепт недоступен → fail-closed [ErrRerunInputUnavailable]
+//     (причины и семантика — у sentinel), транзакция НЕ коммитится.
 //
-// Caller (handler / MCP-tool) ПОСЛЕ успешного коммита запускает создавший
-// сценарий (incarnation.created_scenario) через runner.Start с тем же applyID,
-// что передан сюда: статус уже applying, lockRun стартующего прогона лочит ту же
-// строку и видит applying как валидный стартовый статус (как авто-create в
-// create-handler-е). Передача applyID сюда нужна для записи его в
-// state_history.apply_id — снимок unlock-перехода коррелирует с запускаемым прогоном.
+// Caller (handler / MCP-tool) ПОСЛЕ успешного коммита запускает
+// [UnlockResult.Scenario] через runner.Start с тем же applyID, что передан сюда:
+// статус уже applying, lockRun стартующего прогона лочит ту же строку и видит
+// applying как валидный стартовый статус. Передача applyID сюда нужна для записи
+// его в state_history.apply_id — снимок unlock-перехода коррелирует с запускаемым
+// прогоном.
 //
 // Атомарность: одна транзакция SELECT … FOR UPDATE → gate error_locked →
-// INSERT state_history → UPDATE status=applying → commit. FOR UPDATE
-// сериализует rerun относительно конкурентного scenario-runner-а (его lockRun
-// лочит ту же строку).
+// last-failed probe → (day-2) recipe probe → INSERT state_history →
+// UPDATE status=applying → commit. FOR UPDATE сериализует rerun относительно
+// конкурентного scenario-runner-а (его lockRun лочит ту же строку).
 //
 // Возврат:
 //   - [ErrIncarnationNotFound]       — name не существует (404).
 //   - [ErrIncarnationNotErrorLocked] — статус не error_locked (409).
-//   - [ErrRerunScenarioNotCreate]    — последний упавший сценарий не совпал с
-//     создавшим (incarnation.created_scenario) ЛИБО bare-инкарнация
-//     (created_scenario IS NULL) (409).
+//   - [ErrRerunInputUnavailable]     — day-2-путь, но input упавшего прогона
+//     недоступен (recipe IS NULL / apply_run вычищен) (409).
 //
 // reason пишется в audit-payload caller-ом (state_history-схема MVP не несёт
 // metadata-колонки); previous_status возвращается в [UnlockResult].
@@ -1260,7 +1272,7 @@ func UnlockForRerun(ctx context.Context, pool TxBeginner, name, reason, rerunByA
 		return nil, fmt.Errorf("incarnation: invalid name %q", name)
 	}
 	if reason == "" {
-		return nil, fmt.Errorf("incarnation: rerun-create reason is empty")
+		return nil, fmt.Errorf("incarnation: rerun-last reason is empty")
 	}
 	if historyID == "" {
 		return nil, fmt.Errorf("incarnation: empty history_id")
@@ -1271,15 +1283,15 @@ func UnlockForRerun(ctx context.Context, pool TxBeginner, name, reason, rerunByA
 
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("incarnation: begin rerun-create tx: %w", err)
+		return nil, fmt.Errorf("incarnation: begin rerun-last tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	// spec читаем тем же FOR UPDATE-снимком (колонка в конце — порядок state,
 	// status, created_scenario НЕ сдвигается, plain Unlock/Destroy сканируют первые
-	// две, как раньше): из spec.input достаём сохранённый оператор-input для
-	// проброса в перезапускаемый bootstrap-прогон (B1: rerun-create восстанавливает
-	// падение с теми же version/shards/…, а не с дефолтами).
+	// две, как раньше): на create-пути из spec.input достаём сохранённый оператор-
+	// input для проброса в перезапускаемый bootstrap-прогон (rerun-last
+	// восстанавливает падение с теми же version/shards/…, а не с дефолтами).
 	const selectForUpdateSQL = `
 SELECT state, status, created_scenario, spec
 FROM incarnation
@@ -1296,48 +1308,75 @@ FOR UPDATE
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrIncarnationNotFound
 		}
-		return nil, fmt.Errorf("incarnation: rerun-create select: %w", err)
+		return nil, fmt.Errorf("incarnation: rerun-last select: %w", err)
 	}
 	previous := Status(statusStr)
 	if previous != StatusErrorLocked {
 		return nil, ErrIncarnationNotErrorLocked
 	}
-	// created_scenario NULL = bare-инкарнация (создана без bootstrap-сценария,
-	// миграции 089+090): rerun-create неприменим — перезапускать нечего. Отказ
-	// [ErrRerunScenarioNotCreate] (handler → 409 с пояснением). bare попадает в
-	// error_locked лишь через day-2-сценарий, который и надо чинить обычным
-	// unlock + ручным run, а не rerun-create bootstrap-а.
-	if createdScenario == nil {
-		return nil, ErrRerunScenarioNotCreate
-	}
 
-	// Scope=created-scenario: rerun-create перезапускает строго СОЗДАВШИЙ bootstrap-
-	// сценарий (тот, что в incarnation.created_scenario — может быть `create` ИЛИ
-	// `create_cluster`/`create_standalone` при нескольких create). Сценарий, упавший
-	// в error_locked, читаем из последнего snapshot-а state_history (run.go::abort→
-	// lockIncarnation→UpdateStateFromRun пишет туда имя упавшего сценария). Если это
-	// НЕ создавший сценарий (например day-2 add_user тоже залочил инкарнацию) — отказ:
-	// rerun перезапустил бы bootstrap вместо фактически провалившейся операции. Та же
-	// FOR UPDATE-tx: чтение сериализовано относительно конкурентного scenario-runner-а.
-	const lastScenarioSQL = `
-SELECT scenario
+	// Scope=last-failed: перезапускается ПОСЛЕДНИЙ упавший сценарий инкарнации.
+	// Последний snapshot state_history несёт имя упавшего сценария И apply_id того
+	// прогона (run.go::abort → lockIncarnation → UpdateStateFromRun). apply_id —
+	// авторитетная корреляция с рецептом (day-2 input), точнее сопоставления по
+	// имени сценария. Та же FOR UPDATE-tx: чтение сериализовано относительно
+	// конкурентного scenario-runner-а.
+	const lastRunSQL = `
+SELECT scenario, apply_id
 FROM state_history
 WHERE incarnation_name = $1
 ORDER BY history_id DESC
 LIMIT 1
 `
-	var lastScenario string
-	if err := tx.QueryRow(ctx, lastScenarioSQL, name).Scan(&lastScenario); err != nil {
+	var (
+		lastScenario string
+		lastApplyID  string
+	)
+	if err := tx.QueryRow(ctx, lastRunSQL, name).Scan(&lastScenario, &lastApplyID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// error_locked без единого snapshot-а — недостижимо штатно (lockIncarnation
-			// всегда пишет state_history при провале). Fail-closed: не считаем
-			// отсутствие следа за создавший сценарий.
-			return nil, ErrRerunScenarioNotCreate
+			// всегда пишет state_history при провале). Fail-closed: без следа упавшего
+			// прогона перезапускать нечего.
+			return nil, ErrRerunInputUnavailable
 		}
-		return nil, fmt.Errorf("incarnation: rerun-create last scenario probe: %w", err)
+		return nil, fmt.Errorf("incarnation: rerun-last last-run probe: %w", err)
 	}
-	if lastScenario != *createdScenario {
-		return nil, ErrRerunScenarioNotCreate
+
+	// Восстановление input упавшего прогона: create-путь vs day-2-путь.
+	var rerunInput map[string]any
+	if createdScenario != nil && lastScenario == *createdScenario {
+		// create-путь: последний упавший == создавший bootstrap. Input оператора
+		// хранится в incarnation.spec.input (прочитан под тем же FOR UPDATE):
+		// null/битый jsonb spec-а — не ошибка консистентности (spec freeform;
+		// unmarshal вернёт nil-map), input — nil при отсутствии ключа.
+		spec, _ := unmarshalJSONB(specBytes)
+		rerunInput = InputFromSpec(spec)
+	} else {
+		// day-2-путь (включая bare-инкарнацию, created_scenario IS NULL): input
+		// упавшего day-2-прогона живёт только в рецепте apply_run. Читаем recipe по
+		// apply_id последнего snapshot-а (любая passage/sid-строка прогона — recipe
+		// один на прогон). Рецепт недоступен → fail-closed
+		// [ErrRerunInputUnavailable] (причины — у sentinel), tx НЕ коммитится.
+		const recipeSQL = `
+SELECT recipe
+FROM apply_runs
+WHERE apply_id = $1 AND recipe IS NOT NULL
+LIMIT 1
+`
+		var recipeBytes []byte
+		if err := tx.QueryRow(ctx, recipeSQL, lastApplyID).Scan(&recipeBytes); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, ErrRerunInputUnavailable
+			}
+			return nil, fmt.Errorf("incarnation: rerun-last recipe probe: %w", err)
+		}
+		recipe, uerr := unmarshalJSONB(recipeBytes)
+		if uerr != nil {
+			// Битый recipe-jsonb — не консистентно с инвариантом A (recipe пишется
+			// json.Marshal-ом). Fail-closed, а не silent bootstrap-input.
+			return nil, ErrRerunInputUnavailable
+		}
+		rerunInput = InputFromSpec(recipe)
 	}
 
 	var changedByArg any
@@ -1355,9 +1394,9 @@ INSERT INTO state_history (
 ) VALUES ($1, $2, $3, $4, $4, $5, $6)
 `
 	if _, err := tx.Exec(ctx, historyInsertSQL,
-		historyID, name, rerunCreateScenarioLabel, stateBytes, changedByArg, applyID,
+		historyID, name, rerunLastScenarioLabel, stateBytes, changedByArg, applyID,
 	); err != nil {
-		return nil, fmt.Errorf("incarnation: insert rerun-create state_history: %w", err)
+		return nil, fmt.Errorf("incarnation: insert rerun-last state_history: %w", err)
 	}
 
 	// status → applying (МИНУЯ ready), status_details сбрасываются (блок снят).
@@ -1369,23 +1408,18 @@ SET status = $2, status_details = NULL, updated_at = NOW()
 WHERE name = $1
 `
 	if _, err := tx.Exec(ctx, updateSQL, name, string(StatusApplying)); err != nil {
-		return nil, fmt.Errorf("incarnation: rerun-create update: %w", err)
+		return nil, fmt.Errorf("incarnation: rerun-last update: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("incarnation: commit rerun-create tx: %w", err)
+		return nil, fmt.Errorf("incarnation: commit rerun-last tx: %w", err)
 	}
 
-	// Stored оператор-input из spec.input (B1): null/битый jsonb spec-а — не
-	// ошибка консистентности (spec freeform; unmarshal вернёт nil-map / спарсит
-	// что есть), input — nil при отсутствии ключа. Проброс делает caller через
-	// RunSpec.Input.
-	spec, _ := unmarshalJSONB(specBytes)
 	return &UnlockResult{
-		PreviousStatus:  previous,
-		HistoryID:       historyID,
-		CreatedScenario: *createdScenario,
-		Input:           InputFromSpec(spec),
+		PreviousStatus: previous,
+		HistoryID:      historyID,
+		Scenario:       lastScenario,
+		Input:          rerunInput,
 	}, nil
 }
 
@@ -1402,7 +1436,7 @@ const migrationScenarioLabel = "migration"
 // (не `migration`, под которой идут шаги самой миграции) фиксирует ПРИЧИНУ
 // перехода в drift в истории — «новая версия ждёт применения на хостах», чтобы
 // триаж отличал upgrade-drift от drift, найденного Scry-сканом. Симметрично
-// другим transition-меткам (unlock / rerun-create / voyage-orphan-release).
+// другим transition-меткам (unlock / rerun-last / voyage-orphan-release).
 const upgradeDriftScenarioLabel = "upgrade-pending-apply"
 
 // UpgradeInput — вход [UpgradeStateSchema]. Caller (Slice 2) резолвит

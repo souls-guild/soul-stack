@@ -16,7 +16,7 @@ import "sort"
 //   - operator (5): create / revoke / issue-token / list / read;
 //   - role (6): create / delete / list / update / grant-operator / revoke-operator;
 //   - synod (8): create / update / delete / list / add-operator / remove-operator / grant-role / revoke-role (ADR-049);
-//   - incarnation (13): create / create-rerun / run / get / list / history / unlock / upgrade / destroy / check-drift / update-hosts / update (deprecated-alias) / traits-set;
+//   - incarnation (13): create / rerun-last / run / get / list / history / unlock / upgrade / destroy / check-drift / update-hosts / update (deprecated-alias) / traits-set;
 //   - soul (6): list / create / issue-token / coven-assign / traits-assign / ssh-target-update;
 //   - plugin (3): allow / revoke / list;
 //   - sigil (4): key-introduce / key-retire / key-list / key-set-primary;
@@ -87,22 +87,20 @@ var AllowedPermissions = map[string]struct{}{
 
 	// incarnation.*
 	"incarnation.create": {},
-	// incarnation.create-rerun — перезапуск scenario `create` из error_locked
-	// (`POST /v1/incarnations/{name}/rerun-create`, architecture.md →
-	// «Атомарность и error_locked»). Отдельное право от `incarnation.create`
-	// (создание новой инкарнации) и `incarnation.unlock` (снятие блока без
-	// перезапуска): rerun = снятие error_locked + rerun bootstrap-а одним
-	// действием, требует явного подтверждения reason. Scope-селектор тот же
-	// (incarnation/coven/service по path-{name}).
-	"incarnation.create-rerun": {},
-	"incarnation.run":          {},
-	"incarnation.get":          {},
-	"incarnation.list":         {},
-	"incarnation.history":      {},
-	"incarnation.unlock":       {},
-	"incarnation.upgrade":      {},
-	"incarnation.destroy":      {},
-	"incarnation.check-drift":  {},
+	// incarnation.rerun-last — перезапуск последнего упавшего сценария из
+	// error_locked (`POST /v1/incarnations/{name}/rerun-last`). Отдельное право от
+	// `incarnation.create`/`incarnation.unlock`: rerun снимает error_locked +
+	// перезапускает последний упавший сценарий одним действием, требует reason.
+	// Scope-селектор тот же (incarnation/coven/service по path-{name}).
+	"incarnation.rerun-last":  {},
+	"incarnation.run":         {},
+	"incarnation.get":         {},
+	"incarnation.list":        {},
+	"incarnation.history":     {},
+	"incarnation.unlock":      {},
+	"incarnation.upgrade":     {},
+	"incarnation.destroy":     {},
+	"incarnation.check-drift": {},
 	// incarnation.update-hosts — изменение declared `spec.hosts[]` записи
 	// incarnation через Operator API (`PATCH /v1/incarnations/{name}/hosts`,
 	// UI Hosts editing): тот же scope-селектор incarnation/coven/service, что

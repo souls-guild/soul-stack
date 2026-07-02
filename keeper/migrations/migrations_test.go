@@ -867,7 +867,7 @@ func TestEmbed_IncarnationTraits(t *testing.T) {
 
 // TestEmbed_IncarnationCreatedScenario — sanity на 089 (механизм нескольких
 // create-сценариев, Вариант A): колонка incarnation.created_scenario
-// (NOT NULL DEFAULT 'create') хранит имя стартового сценария; rerun-create
+// (NOT NULL DEFAULT 'create') хранит имя стартового сценария; rerun-last
 // перезапускает именно его. up добавляет колонку с DEFAULT; down дропает.
 func TestEmbed_IncarnationCreatedScenario(t *testing.T) {
 	b, err := FS.ReadFile("089_add_incarnation_created_scenario.up.sql")

@@ -116,7 +116,7 @@ func fullSpecGroups() []specGroup {
 			registerHumaIncarnationRun(api, stub)
 			registerHumaIncarnationUnlock(api, stub)
 			registerHumaIncarnationUpgrade(api, stub)
-			registerHumaIncarnationRerunCreate(api, stub)
+			registerHumaIncarnationRerunLast(api, stub)
 			registerHumaIncarnationCheckDrift(api, stub)
 			registerHumaIncarnationDestroy(api, stub)
 			registerHumaIncarnationUpdateHosts(api, stub)
@@ -133,6 +133,12 @@ func fullSpecGroups() []specGroup {
 			registerHumaVoiceRemove(api, stub)
 			registerHumaChoirList(api, stub)
 			registerHumaVoiceList(api, stub)
+			return nil
+		}},
+		{"/v1/runs", func(api huma.API) error {
+			stub := handlers.IncarnationSpecStub()
+			registerHumaRunsList(api, stub)
+			registerHumaRunsStats(api, stub)
 			return nil
 		}},
 		{"/v1/souls", func(api huma.API) error {

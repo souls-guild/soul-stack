@@ -403,41 +403,48 @@ func traitScalarEquals(traits map[string]any, key, value string) bool {
 // предрезолв имён по state-CEL.
 func (h *IncarnationHandler) ResolveListScopeFor(ctx context.Context, claims *jwt.Claims) func(serviceFilter string) (incarnation.ListScope, bool) {
 	return func(serviceFilter string) (incarnation.ListScope, bool) {
-		if claims == nil || h.scoper == nil {
-			return incarnation.ListScope{}, false
-		}
-		pv := h.scoper.ResolvePurview(claims.Subject, "incarnation", "list")
-		if pv.Unrestricted {
-			return incarnation.ListScope{Unrestricted: true}, true
-		}
-		if scopeEmpty(pv) {
-			return incarnation.ListScope{}, false
-		}
-		scope := incarnation.ListScope{Covens: pv.Covens}
-		// state-измерение fail-OPEN: резолв упал → НЕ расширяем выдачу его именами,
-		// но coven-измерение остаётся в силе (НЕ роняем весь List). Логируем.
-		if len(pv.StateExprs) > 0 {
-			names, err := h.resolveStateNames(ctx, pv.StateExprs, serviceFilter)
-			if err != nil {
-				h.logger.Warn("incarnation.list: state-scope резолв упал — применяется только coven-измерение (fail-closed по state)",
-					slog.String("aid", claims.Subject), slog.Any("error", err))
-			} else {
-				scope.StateNames = names
-			}
-		}
-		// trait-измерение (ADR-047 amendment, ADR-060 п.7 slice 1): scope-пары
-		// `key:value` → SQL-pushdown `traits->>$key = $value` (scalar-equality, без
-		// CEL/резолва; НЕ containment `@>` — BUG#1 fix, [incarnation.appendScopeClause]).
-		// Битая пара (рассинхрон с парсером) пропускается, не роняет List.
-		for _, pair := range pv.TraitExprs {
-			key, value, ok := splitTraitPair(pair)
-			if !ok {
-				continue
-			}
-			scope.Traits = append(scope.Traits, incarnation.TraitPair{Key: key, Value: value})
-		}
-		return scope, true
+		return h.resolveListScope(ctx, claims, "list", serviceFilter)
 	}
+}
+
+// resolveListScope — общий Purview→[incarnation.ListScope] резолв list-подобных
+// read-ов (List action=list; глобальные runs/stats action=history). Семантика —
+// как у [IncarnationHandler.ResolveListScopeFor] (та же fail-closed граница).
+func (h *IncarnationHandler) resolveListScope(ctx context.Context, claims *jwt.Claims, action, serviceFilter string) (incarnation.ListScope, bool) {
+	if claims == nil || h.scoper == nil {
+		return incarnation.ListScope{}, false
+	}
+	pv := h.scoper.ResolvePurview(claims.Subject, "incarnation", action)
+	if pv.Unrestricted {
+		return incarnation.ListScope{Unrestricted: true}, true
+	}
+	if scopeEmpty(pv) {
+		return incarnation.ListScope{}, false
+	}
+	scope := incarnation.ListScope{Covens: pv.Covens}
+	// state-измерение fail-OPEN: резолв упал → НЕ расширяем выдачу его именами,
+	// но coven-измерение остаётся в силе (НЕ роняем весь List). Логируем.
+	if len(pv.StateExprs) > 0 {
+		names, err := h.resolveStateNames(ctx, pv.StateExprs, serviceFilter)
+		if err != nil {
+			h.logger.Warn("incarnation."+action+": state-scope резолв упал — применяется только coven-измерение (fail-closed по state)",
+				slog.String("aid", claims.Subject), slog.Any("error", err))
+		} else {
+			scope.StateNames = names
+		}
+	}
+	// trait-измерение (ADR-047 amendment, ADR-060 п.7 slice 1): scope-пары
+	// `key:value` → SQL-pushdown `traits->>$key = $value` (scalar-equality, без
+	// CEL/резолва; НЕ containment `@>` — BUG#1 fix, [incarnation.appendScopeClause]).
+	// Битая пара (рассинхрон с парсером) пропускается, не роняет List.
+	for _, pair := range pv.TraitExprs {
+		key, value, ok := splitTraitPair(pair)
+		if !ok {
+			continue
+		}
+		scope.Traits = append(scope.Traits, incarnation.TraitPair{Key: key, Value: value})
+	}
+	return scope, true
 }
 
 // --- RBAC scope-селекторы роутов --------------------------------------

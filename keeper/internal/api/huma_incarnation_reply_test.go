@@ -60,10 +60,10 @@ func TestGoldenWire_IncarnationReply(t *testing.T) {
 		IncarnationUpgradeReply{ApplyID: apply},
 		`{"apply_id":"01J0APPLYULID"}`)
 
-	// --- IncarnationRerunCreateReply ---
-	goldenIncarnationWire(t, "RerunCreateReply",
-		IncarnationRerunCreateReply{ApplyID: apply, Incarnation: "redis-prod"},
-		`{"apply_id":"01J0APPLYULID","incarnation":"redis-prod"}`)
+	// --- IncarnationRerunLastReply ---
+	goldenIncarnationWire(t, "RerunLastReply",
+		IncarnationRerunLastReply{ApplyID: apply, Incarnation: "redis-prod", Scenario: "add_user"},
+		`{"apply_id":"01J0APPLYULID","incarnation":"redis-prod","scenario":"add_user"}`)
 
 	// --- IncarnationDestroyReply ---
 	goldenIncarnationWire(t, "DestroyReply",

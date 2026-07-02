@@ -845,7 +845,7 @@ func (r *Runner) lockRun(ctx context.Context, spec RunSpec) (*incarnation.Incarn
 			return nil
 		}
 		if spec.FromLocked {
-			// rerun-create: UnlockForRerun под FOR UPDATE уже перевёл
+			// rerun-last: UnlockForRerun под FOR UPDATE уже перевёл
 			// error_locked→applying минуя ready (race-free). Статус НЕ транзитим
 			// повторно — обязаны УВИДЕТЬ applying, иначе старт отклоняется
 			// (fail-closed): любой иной статус означает, что зарезервированная
@@ -855,9 +855,9 @@ func (r *Runner) lockRun(ctx context.Context, spec RunSpec) (*incarnation.Incarn
 			}
 			// Запись epoch applying-флага на уже-applying-строку (ADR-027 amend
 			// (m-S1)): UnlockForRerun транзитит error_locked→applying БЕЗ epoch,
-			// поэтому без этого дописывания rerun-create-applying оставался бы с
+			// поэтому без этого дописывания rerun-last-applying оставался бы с
 			// NULL-epoch и не попадал под reconcile_orphan_applying — краш владельца
-			// mid-rerun-create давал orphan навсегда. lockApplyingWithEpoch WHERE
+			// mid-rerun-last давал orphan навсегда. lockApplyingWithEpoch WHERE
 			// name=$1 (без status-guard) идемпотентно перезаписывает epoch, статус
 			// остаётся applying. Остаточное микроокно UnlockForRerun-tx↔эта tx
 			// деградирует в тот же NULL-epoch known-gap (не хуже текущего).

@@ -66,16 +66,17 @@ const (
 	// консистентность (architecture.md → «Атомарность и error_locked»).
 	EventIncarnationUnlocked EventType = "incarnation.unlocked"
 
-	// EventIncarnationCreateRerun — оператор перезапустил scenario `create` из
-	// error_locked через Operator API / MCP (`POST /v1/incarnations/{name}/
-	// rerun-create`, architecture.md → «Атомарность и error_locked»).
-	// `source: api` / `mcp`, `archon_aid` — инициатор; payload: `{name, reason,
-	// previous_status, apply_id}`. Атомарно снимает error_locked (state НЕ
+	// EventIncarnationRerunLast — оператор перезапустил ПОСЛЕДНИЙ упавший сценарий
+	// из error_locked через Operator API / MCP (`POST /v1/incarnations/{name}/
+	// rerun-last`, architecture.md → «Атомарность и error_locked»). `source: api` /
+	// `mcp`, `archon_aid` — инициатор; payload: `{name, reason, scenario,
+	// previous_status, apply_id}` (scenario — имя перезапущенного: bootstrap
+	// `create`/… ИЛИ day-2 add_user/…). Атомарно снимает error_locked (state НЕ
 	// трогается — last known-good, snapshot в state_history) и тем же действием
-	// запускает scenario `create` (переход error_locked → applying минуя ready
-	// под одним FOR UPDATE). Отдельное событие от `incarnation.unlocked` (ручной
-	// unlock не перезапускает прогон) — путь восстановления различен.
-	EventIncarnationCreateRerun EventType = "incarnation.create_rerun"
+	// запускает последний упавший сценарий (переход error_locked → applying минуя
+	// ready под одним FOR UPDATE). Отдельное событие от `incarnation.unlocked`
+	// (ручной unlock не перезапускает прогон) — путь восстановления различен.
+	EventIncarnationRerunLast EventType = "incarnation.rerun_last"
 
 	// EventIncarnationUpgradeStarted — оператор инициировал перевод
 	// incarnation на новую state_schema_version через Operator API

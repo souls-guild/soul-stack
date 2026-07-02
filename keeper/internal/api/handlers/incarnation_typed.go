@@ -11,7 +11,7 @@ package handlers
 //     middleware (вариант B) СНАРУЖИ. *Typed возвращает reply, НЕСУЩИЙ audit-payload
 //     (поле AuditPayload) — huma-register-func кладёт его через SetHumaAuditPayload.
 //     Сами *Typed audit НЕ пишут.
-//   - SELF-AUDIT (rerun-create / check-drift / destroy / update-hosts): audit пишет
+//   - SELF-AUDIT (rerun-last / check-drift / destroy / update-hosts): audit пишет
 //     САМ handler через h.auditW.Write ВНУТРИ *Typed (payload собирается только после
 //     доменной операции — previous_status / drift_summary / old-new snapshot). audit-
 //     middleware на этих роутах НЕ навешан.
@@ -72,7 +72,7 @@ type IncarnationCreateRequestInput struct {
 	// сценарии (≥1 `create: true`) + пусто → 422 create_scenario_required; сервис
 	// БЕЗ create-сценариев + пусто → bare-инкарнация (StatusReady без прогона).
 	// Непустое имя обязано входить в create-набор, иначе 422; выбор сохраняется в
-	// incarnation.created_scenario (NULL для bare) и rerun-create перезапускает его.
+	// incarnation.created_scenario (NULL для bare; rerun-last использует его на create-пути).
 	CreateScenario string
 }
 
@@ -175,7 +175,7 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	// createScenarioCol — значение колонки created_scenario: NULL для bare-
 	// инкарнации (нет bootstrap-сценария), иначе указатель на выбранное имя.
 	// autoCreate=false НЕ делает её NULL — bootstrap-сценарий есть (chosen),
-	// просто прогон отложен; rerun-create должен знать, что перезапускать.
+	// просто прогон отложен; rerun-last использует его на create-пути.
 	var createScenarioCol *string
 	if !bareNoScenario {
 		createScenarioCol = &createScenario
@@ -527,21 +527,25 @@ func (h *IncarnationHandler) UpgradeTyped(ctx context.Context, claims *jwt.Claim
 	}, nil
 }
 
-// --- RerunCreate (SELF-AUDIT incarnation.create_rerun) ----------------
+// --- RerunLast (SELF-AUDIT incarnation.rerun_last) --------------------
 
-// IncarnationRerunCreateView — ПЛОСКАЯ доменная проекция 202-тела POST .../rerun-create
-// (handler-native). Пакет api проецирует её в native IncarnationRerunCreateReply.
-type IncarnationRerunCreateView struct {
+// IncarnationRerunLastView — ПЛОСКАЯ доменная проекция 202-тела POST .../rerun-last
+// (handler-native). Пакет api проецирует её в native IncarnationRerunLastReply.
+type IncarnationRerunLastView struct {
 	ApplyID     string
 	Incarnation string
+	// Scenario — имя перезапущенного сценария (последний упавший: bootstrap
+	// `create`/… ИЛИ day-2 add_user/…). UI показывает его лейблом.
+	Scenario string
 }
 
-// RerunCreateTyped — извлечённая доменная функция POST /v1/incarnations/{name}/
-// rerun-create (SELF-AUDIT: incarnation.create_rerun пишет САМ handler внутри —
-// payload previous_status известен только после UnlockForRerun). Parity (w,r)-
-// RerunCreate. source — ScenarioInvocationSource(ctx) (api / mcp). 202 + apply_id.
-func (h *IncarnationHandler) RerunCreateTyped(ctx context.Context, claims *jwt.Claims, name, reason string) (IncarnationRerunCreateView, error) {
-	var zero IncarnationRerunCreateView
+// RerunLastTyped — извлечённая доменная функция POST /v1/incarnations/{name}/
+// rerun-last (SELF-AUDIT: incarnation.rerun_last пишет САМ handler внутри —
+// payload previous_status/scenario известны только после UnlockForRerun). Parity
+// (w,r)-RerunLast. source — ScenarioInvocationSource(ctx) (api / mcp). 202 +
+// apply_id + scenario.
+func (h *IncarnationHandler) RerunLastTyped(ctx context.Context, claims *jwt.Claims, name, reason string) (IncarnationRerunLastView, error) {
+	var zero IncarnationRerunLastView
 
 	if !incarnation.ValidName(name) {
 		return zero, incProblem(problem.TypeValidationFailed, "path 'name' must match "+incarnation.NamePattern)
@@ -564,7 +568,7 @@ func (h *IncarnationHandler) RerunCreateTyped(ctx context.Context, claims *jwt.C
 		if errors.Is(err, incarnation.ErrIncarnationNotFound) {
 			return zero, incProblem(problem.TypeNotFound, "incarnation "+name+" not found")
 		}
-		h.logger.Error("incarnation.rerun-create: select failed", slog.String("name", name), slog.Any("error", err))
+		h.logger.Error("incarnation.rerun-last: select failed", slog.String("name", name), slog.Any("error", err))
 		return zero, incProblem(problem.TypeInternalError, "select incarnation failed")
 	}
 
@@ -583,54 +587,55 @@ func (h *IncarnationHandler) RerunCreateTyped(ctx context.Context, claims *jwt.C
 			return zero, incProblem(problem.TypeNotFound, "incarnation "+name+" not found")
 		case errors.Is(err, incarnation.ErrIncarnationNotErrorLocked):
 			return zero, incProblem(problem.TypeIncarnationLocked,
-				"incarnation "+name+" is not error_locked — rerun-create requires error_locked")
-		case errors.Is(err, incarnation.ErrRerunScenarioNotCreate):
-			return zero, incProblem(problem.TypeIncarnationLocked,
-				"incarnation "+name+" rerun-create неприменим: создана без bootstrap-сценария (bare) "+
-					"либо последний упавший сценарий — не создавший. rerun-create перезапускает только создавший bootstrap")
+				"incarnation "+name+" is not error_locked — rerun-last requires error_locked")
+		case errors.Is(err, incarnation.ErrRerunInputUnavailable):
+			return zero, incProblem(problem.TypeRerunInputUnavailable,
+				"incarnation "+name+" rerun-last неприменим: input упавшего прогона недоступен "+
+					"(рецепт вычищен ретеншном либо legacy-прогон без рецепта) — сними блок обычным unlock "+
+					"и запусти нужный сценарий вручную с явным input")
 		default:
-			h.logger.Error("incarnation.rerun-create: unlock failed",
+			h.logger.Error("incarnation.rerun-last: unlock failed",
 				slog.String("name", name), slog.String("by_aid", claims.Subject), slog.Any("error", err))
-			return zero, incProblem(problem.TypeInternalError, "rerun-create unlock failed")
+			return zero, incProblem(problem.TypeInternalError, "rerun-last unlock failed")
 		}
 	}
 
-	// rerun-create перезапускает СОЗДАВШИЙ стартовый сценарий (механизм нескольких
-	// create): UnlockForRerun вернул incarnation.created_scenario под FOR UPDATE.
-	// Input — сохранённый при создании оператор-input (spec.input, прочитан тем же
-	// FOR UPDATE): без него перезапуск bootstrap-а с required-полями (redis cluster:
-	// version/shards) упал бы на input-валидации / применил дефолты (B1).
+	// rerun-last перезапускает ПОСЛЕДНИЙ упавший сценарий (UnlockForRerun вернул его
+	// имя и input под FOR UPDATE): bootstrap `create`/… на create-пути ИЛИ day-2
+	// add_user/… — с ТЕМИ ЖЕ входными значениями (spec.input или recipe.input), а не
+	// с дефолтами.
 	if err := h.runner.Start(ctx, scenario.RunSpec{
 		ApplyID:         applyID,
 		IncarnationName: name,
 		ServiceRef:      serviceRef,
-		ScenarioName:    res.CreatedScenario,
+		ScenarioName:    res.Scenario,
 		Input:           res.Input,
 		StartedByAID:    claims.Subject,
 		FromLocked:      true,
 	}); err != nil {
-		h.logger.Error("incarnation.rerun-create: scenario start failed",
+		h.logger.Error("incarnation.rerun-last: scenario start failed",
 			slog.String("name", name), slog.String("apply_id", applyID),
-			slog.String("scenario", res.CreatedScenario), slog.Any("error", err))
-		return zero, incProblem(problem.TypeInternalError, "start scenario create failed")
+			slog.String("scenario", res.Scenario), slog.Any("error", err))
+		return zero, incProblem(problem.TypeInternalError, "start scenario "+res.Scenario+" failed")
 	}
 
 	if h.auditW != nil {
 		_ = h.auditW.Write(ctx, &audit.Event{
-			EventType:     audit.EventIncarnationCreateRerun,
+			EventType:     audit.EventIncarnationRerunLast,
 			Source:        apimiddleware.ScenarioInvocationSource(ctx),
 			ArchonAID:     claims.Subject,
 			CorrelationID: applyID,
 			Payload: map[string]any{
 				"name":            name,
 				"reason":          reason,
+				"scenario":        res.Scenario,
 				"previous_status": string(res.PreviousStatus),
 				"apply_id":        applyID,
 			},
 		})
 	}
 
-	return IncarnationRerunCreateView{ApplyID: applyID, Incarnation: name}, nil
+	return IncarnationRerunLastView{ApplyID: applyID, Incarnation: name, Scenario: res.Scenario}, nil
 }
 
 // --- CheckDrift (SELF-AUDIT incarnation.drift_checked) ----------------
@@ -1155,8 +1160,11 @@ func (h *IncarnationHandler) HistoryTyped(ctx context.Context, name, applyID str
 
 // RunSummaryView — ПЛОСКАЯ доменная строка списка прогонов. Пакет api проецирует
 // её в native. Status — агрегатный статус прогона (applying/success/failed/cancelled).
+// Incarnation — владелец прогона: в per-incarnation wire не отдаётся (имплицитен),
+// в глобальном GET /v1/runs — отдельное поле entry.
 type RunSummaryView struct {
 	ApplyID      string
+	Incarnation  string
 	Scenario     string
 	Status       string
 	StartedAt    time.Time
@@ -1218,16 +1226,23 @@ func (h *IncarnationHandler) RunsTyped(ctx context.Context, name string, offset,
 	}
 	items := make([]RunSummaryView, 0, len(summaries))
 	for _, s := range summaries {
-		items = append(items, RunSummaryView{
-			ApplyID:      s.ApplyID,
-			Scenario:     s.Scenario,
-			Status:       string(s.Status),
-			StartedAt:    s.StartedAt,
-			FinishedAt:   s.FinishedAt,
-			StartedByAID: s.StartedByAID,
-		})
+		items = append(items, newRunSummaryView(s))
 	}
 	return IncarnationRunsReply{Items: items, Offset: offset, Limit: limit, Total: total}, nil
+}
+
+// newRunSummaryView проецирует store-строку [applyrun.RunSummary] в доменный view
+// (общая для per-incarnation Runs и глобального AllRuns).
+func newRunSummaryView(s applyrun.RunSummary) RunSummaryView {
+	return RunSummaryView{
+		ApplyID:      s.ApplyID,
+		Incarnation:  s.Incarnation,
+		Scenario:     s.Scenario,
+		Status:       string(s.Status),
+		StartedAt:    s.StartedAt,
+		FinishedAt:   s.FinishedAt,
+		StartedByAID: s.StartedByAID,
+	}
 }
 
 // RunDetailTyped — доменная функция GET /v1/incarnations/{name}/runs/{apply_id}

@@ -488,7 +488,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 		// FULL-TYPED huma (ADR-054, ТИРАЖ-БАТЧ-2g домена incarnation ЦЕЛИКОМ — MIXED
 		// audit-класс): create/run/unlock/upgrade — WRITE-MIDDLEWARE-AUDIT вариант B
 		// (newHumaIncarnationAPI(evt) — huma САМ пишет ответ, audit держит hctx.Status()
-		// + carrier-payload из *Typed-reply.AuditPayload, иначе рецидив S6); rerun-create/
+		// + carrier-payload из *Typed-reply.AuditPayload, иначе рецидив S6); rerun-last/
 		// check-drift/destroy/update-hosts — WRITE-SELF-AUDIT (audit пишет САМ handler
 		// ВНУТРИ *Typed через h.auditW.Write — payload собирается после доменной операции;
 		// audit-middleware НЕ навешан, newHumaCadenceAPI); list/get/history — read (БЕЗ
@@ -577,14 +577,14 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				registerHumaIncarnationUpgrade(newHumaIncarnationAPI(r, auditWriter, audit.EventIncarnationUpgradeStarted, logger), incH)
 			})
 
-			// POST /v1/incarnations/{name}/rerun-create — снять error_locked + перезапустить
-			// scenario `create`. WRITE-SELF-AUDIT: incarnation.create_rerun пишет сам handler
-			// (payload previous_status известен только после UnlockForRerun; audit-middleware
-			// НЕ навешан). Permission incarnation.create-rerun, scope incScope.
+			// POST /v1/incarnations/{name}/rerun-last — снять error_locked + перезапустить
+			// последний упавший сценарий. WRITE-SELF-AUDIT: incarnation.rerun_last пишет сам
+			// handler (payload известен только после UnlockForRerun; audit-middleware НЕ
+			// навешан). Permission incarnation.rerun-last, scope incScope.
 			r.With(
-				apimiddleware.RequirePermissionMulti(enforcer, "incarnation", "create-rerun", incScope),
+				apimiddleware.RequirePermissionMulti(enforcer, "incarnation", "rerun-last", incScope),
 			).Group(func(r chi.Router) {
-				registerHumaIncarnationRerunCreate(newHumaCadenceAPI(r), incH)
+				registerHumaIncarnationRerunLast(newHumaCadenceAPI(r), incH)
 			})
 
 			// POST /v1/incarnations/{name}/check-drift — Scry on-demand (ADR-031, Slice B).
@@ -685,6 +685,22 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 					registerHumaVoiceList(choirReadAPI, choirH)
 				})
 			}
+		})
+
+		// /v1/runs — глобальный read-view прогонов (страница «All Runs» UI):
+		// свёртка apply_runs по apply_id ЧЕРЕЗ ВСЕ инкарнации + сводные счётчики
+		// /stats. READ (БЕЗ audit, newHumaCadenceAPI). Permission incarnation.history
+		// (reuse read-tier per-incarnation runs, RequireAction existence-gate);
+		// сужение по Purview — in-handler (fail-closed: пустой scope → пустой
+		// список / нулевой агрегат, parity souls/stats).
+		r.Route("/runs", func(r chi.Router) {
+			r.With(
+				apimiddleware.RequireAction(enforcer, "incarnation", "history"),
+			).Group(func(r chi.Router) {
+				runsAPI := newHumaCadenceAPI(r)
+				registerHumaRunsList(runsAPI, incH)
+				registerHumaRunsStats(runsAPI, incH)
+			})
 		})
 
 		// /v1/souls — онбординг + реестр (M2.x): Create + List + issue-token.

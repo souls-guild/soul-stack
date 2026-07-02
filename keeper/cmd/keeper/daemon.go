@@ -624,11 +624,11 @@ func (d *daemon) setupStorage(ctx context.Context) error {
 	return nil
 }
 
-// setupOperatorBootstrapGuard — Count operators + restart-семантика ADR-013(d)
-// (пустой реестр без --initialize → отказ старта). Зависит от applied
-// migrations.
+// setupOperatorBootstrapGuard — restart-семантика ADR-013(d): пустой реестр без
+// --initialize → отказ старта. Считаем только НЕ-системных: archon-system всегда
+// присутствует после миграций и не должен снимать guard на свежей БД.
 func (d *daemon) setupOperatorBootstrapGuard(ctx context.Context) error {
-	n, err := operator.Count(ctx, d.pool)
+	n, err := operator.CountNonSystem(ctx, d.pool)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: count operators: %v\n", err)
 		return errSetupFailed

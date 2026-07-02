@@ -633,18 +633,18 @@ func TestUnlock_FromErrorLocked_Regression(t *testing.T) {
 
 // TestUnlockForRerun_FromErrorLocked — допуск из error_locked: state не меняется
 // (state_before == state_after), статус → applying (НЕ ready — race-free), под
-// одним FOR UPDATE; snapshot в state_history с меткой rerun-create и общим
+// одним FOR UPDATE; snapshot в state_history с меткой rerun-last и общим
 // apply_id; commit.
 func TestUnlockForRerun_FromErrorLocked(t *testing.T) {
 	const applyID = "01HRERUN00000000000000000A"
 	tx := &fakeTx{
 		execErrAt: -1,
-		// QueryRow #1 — FOR UPDATE (state, status, created_scenario, spec); #2 —
-		// last-scenario probe (scope=created-scenario: последний упавший = создавший
-		// `create` → допуск). spec несёт оператор-input (B1: проброс в RunSpec.Input).
+		// #1 FOR UPDATE (state, status, created_scenario, spec); #2 last-run probe
+		// (scenario, apply_id). create-путь (last==created) → input из spec.input,
+		// recipe-probe НЕ идёт.
 		queryRows: []scriptedRow{
 			{values: []any{[]byte(`{"primary":"redis-01"}`), "error_locked", "create", []byte(`{"input":{"version":"8.6.1"}}`)}},
-			{values: []any{"create"}},
+			{values: []any{"create", "01HFAILEDRUN0000000000000A"}},
 		},
 	}
 	pool := &fakePool{txs: []*fakeTx{tx}}
@@ -656,34 +656,30 @@ func TestUnlockForRerun_FromErrorLocked(t *testing.T) {
 	if res.PreviousStatus != StatusErrorLocked {
 		t.Errorf("PreviousStatus = %q, want error_locked", res.PreviousStatus)
 	}
-	if res.CreatedScenario != "create" {
-		t.Errorf("CreatedScenario = %q, want create", res.CreatedScenario)
+	if res.Scenario != "create" {
+		t.Errorf("Scenario = %q, want create", res.Scenario)
 	}
-	// B1: stored spec.input возвращён в UnlockResult.Input (caller пробрасывает в
-	// RunSpec.Input перезапускаемого bootstrap-прогона).
+	// create-путь: stored spec.input возвращён в UnlockResult.Input.
 	if res.Input == nil {
-		t.Fatal("UnlockResult.Input = nil — spec.input НЕ прочитан под FOR UPDATE (B1 регресс)")
+		t.Fatal("UnlockResult.Input = nil — spec.input НЕ прочитан под FOR UPDATE")
 	}
 	if res.Input["version"] != "8.6.1" {
 		t.Errorf("UnlockResult.Input[version] = %v, want 8.6.1 (stored spec.input)", res.Input["version"])
 	}
 	if !tx.committed {
-		t.Error("rerun-create tx not committed")
+		t.Error("rerun-last tx not committed")
 	}
 	// INSERT history + UPDATE status → applying (НЕ ready).
 	if tx.execN != 2 {
 		t.Fatalf("Exec = %d, want 2 (history + update)", tx.execN)
 	}
-	// history-INSERT: scenario=rerun-create, state_before==state_after ($4),
-	// apply_id ($6) = переданный applyID.
 	hist := tx.execArgs[0]
-	if hist[2] != rerunCreateScenarioLabel {
-		t.Errorf("history scenario = %v, want %q", hist[2], rerunCreateScenarioLabel)
+	if hist[2] != rerunLastScenarioLabel {
+		t.Errorf("history scenario = %v, want %q", hist[2], rerunLastScenarioLabel)
 	}
 	if hist[5] != applyID {
 		t.Errorf("history apply_id = %v, want %q", hist[5], applyID)
 	}
-	// UPDATE: статус → applying, НЕ ready (race-free, минуя ready).
 	if got := tx.execArgs[1][1]; got != string(StatusApplying) {
 		t.Errorf("UPDATE status arg = %v, want applying (минуя ready)", got)
 	}
@@ -718,85 +714,153 @@ func TestUnlockForRerun_RejectNonErrorLocked(t *testing.T) {
 	}
 }
 
-// TestUnlockForRerun_RejectNonCreateScenario — scope=create (GUARD): error_locked,
-// но последний упавший сценарий — НЕ create (add_user) → ErrRerunScenarioNotCreate,
-// транзакция НЕ коммитится. rerun-create перезапускает строго bootstrap `create`.
-func TestUnlockForRerun_RejectNonCreateScenario(t *testing.T) {
+// TestUnlockForRerun_Day2_ReusesRecipeInput — day-2 happy-path: последний упавший
+// — add_user (≠ created `create`), его input берётся из recipe apply_run (НЕ из
+// spec.input) → допуск, Scenario=="add_user", Input=={user:alice}.
+func TestUnlockForRerun_Day2_ReusesRecipeInput(t *testing.T) {
+	const applyID = "01HRERUN00000000000000000E"
 	tx := &fakeTx{
 		execErrAt: -1,
 		queryRows: []scriptedRow{
-			{values: []any{[]byte(`{"primary":"redis-01"}`), "error_locked", "create", []byte("{}")}},
-			{values: []any{"add_user"}},
+			// spec.input несёт version — НЕ должен просочиться (day-2 берёт recipe).
+			{values: []any{[]byte(`{"primary":"redis-01"}`), "error_locked", "create", []byte(`{"input":{"version":"8.6.1"}}`)}},
+			{values: []any{"add_user", "01HFAILEDRUN0000000000000E"}},
+			{values: []any{[]byte(`{"scenario_name":"add_user","input":{"user":"alice"}}`)}},
 		},
 	}
 	pool := &fakePool{txs: []*fakeTx{tx}}
 
-	_, err := UnlockForRerun(context.Background(), pool, "redis-prod", "x", "archon-alice", "01HRERUNHIST000000000000E", "01HRERUN00000000000000000E")
-	if !errors.Is(err, ErrRerunScenarioNotCreate) {
-		t.Fatalf("err = %v, want ErrRerunScenarioNotCreate", err)
+	res, err := UnlockForRerun(context.Background(), pool, "redis-prod", "rerun add_user", "archon-alice", "01HRERUNHIST000000000000E", applyID)
+	if err != nil {
+		t.Fatalf("UnlockForRerun day-2 add_user: %v", err)
+	}
+	if res.Scenario != "add_user" {
+		t.Errorf("Scenario = %q, want add_user (последний упавший day-2)", res.Scenario)
+	}
+	if res.Input == nil {
+		t.Fatal("UnlockResult.Input = nil — recipe.input НЕ прочитан (day-2 регресс)")
+	}
+	if res.Input["user"] != "alice" {
+		t.Errorf("UnlockResult.Input[user] = %v, want alice (recipe.input)", res.Input["user"])
+	}
+	if _, leaked := res.Input["version"]; leaked {
+		t.Error("UnlockResult.Input несёт spec.input[version] — day-2 обязан брать recipe.input, не spec")
+	}
+	if !tx.committed {
+		t.Error("rerun-last day-2 tx not committed")
+	}
+	// history-label — rerun-last, применён последний упавший day-2-сценарий.
+	if tx.execArgs[0][2] != rerunLastScenarioLabel {
+		t.Errorf("history scenario = %v, want %q", tx.execArgs[0][2], rerunLastScenarioLabel)
+	}
+}
+
+// TestUnlockForRerun_Day2_RecipeNull_FailClosed — day-2, но recipe отсутствует
+// (recipe IS NULL / apply_run вычищен → ErrNoRows): fail-closed
+// ErrRerunInputUnavailable, транзакция НЕ коммитится (без silent bootstrap-input).
+func TestUnlockForRerun_Day2_RecipeNull_FailClosed(t *testing.T) {
+	tx := &fakeTx{
+		execErrAt: -1,
+		queryRows: []scriptedRow{
+			{values: []any{[]byte(`{"primary":"redis-01"}`), "error_locked", "create", []byte(`{"input":{"version":"8.6.1"}}`)}},
+			{values: []any{"add_user", "01HFAILEDRUN0000000000000F"}},
+			{err: pgx.ErrNoRows}, // recipe-probe: строки нет (WHERE recipe IS NOT NULL)
+		},
+	}
+	pool := &fakePool{txs: []*fakeTx{tx}}
+
+	_, err := UnlockForRerun(context.Background(), pool, "redis-prod", "x", "archon-alice", "01HRERUNHIST000000000000F", "01HRERUN00000000000000000F")
+	if !errors.Is(err, ErrRerunInputUnavailable) {
+		t.Fatalf("err = %v, want ErrRerunInputUnavailable (recipe недоступен)", err)
 	}
 	if tx.committed {
-		t.Error("tx committed (должен быть отказ scope=create без мутации)")
+		t.Error("tx committed (fail-closed: отказ без мутации)")
 	}
 	if tx.execN != 0 {
 		t.Errorf("Exec = %d, want 0 (отказ ДО мутации)", tx.execN)
 	}
 }
 
-// TestUnlockForRerun_CustomCreateScenario — инкарнация СОЗДАНА `create_cluster`
-// (incarnation.created_scenario), последний упавший = `create_cluster` → допуск
-// + UnlockResult.CreatedScenario == "create_cluster" (механизм нескольких create:
-// rerun перезапускает СОЗДАВШИЙ сценарий, не хардкод `create`). GUARD на пункт 4 ТЗ.
-func TestUnlockForRerun_CustomCreateScenario(t *testing.T) {
-	const applyID = "01HRERUN00000000000000000F"
+// TestUnlockForRerun_Day2_BareIncarnation — bare-инкарнация (created_scenario IS
+// NULL) залочена day-2-сценарием: rerun-last применим через recipe-путь
+// (created==nil → day-2), Scenario=="add_user", Input из recipe.
+func TestUnlockForRerun_Day2_BareIncarnation(t *testing.T) {
 	tx := &fakeTx{
 		execErrAt: -1,
 		queryRows: []scriptedRow{
-			{values: []any{[]byte(`{"shards":3}`), "error_locked", "create_cluster", []byte(`{"input":{"shards":3,"version":"8.6.1"}}`)}},
-			{values: []any{"create_cluster"}},
+			{values: []any{[]byte(`{}`), "error_locked", nil, []byte(`{}`)}}, // created_scenario = NULL
+			{values: []any{"add_user", "01HFAILEDRUN0000000000000B"}},
+			{values: []any{[]byte(`{"input":{"user":"bob"}}`)}},
 		},
 	}
 	pool := &fakePool{txs: []*fakeTx{tx}}
 
-	res, err := UnlockForRerun(context.Background(), pool, "redis-prod", "rerun cluster", "archon-alice", "01HRERUNHIST000000000000F", applyID)
+	res, err := UnlockForRerun(context.Background(), pool, "redis-bare", "rerun bare day-2", "archon-alice", "01HRERUNHIST00000000000B0", "01HRERUN0000000000000000B0")
+	if err != nil {
+		t.Fatalf("UnlockForRerun bare day-2: %v", err)
+	}
+	if res.Scenario != "add_user" {
+		t.Errorf("Scenario = %q, want add_user", res.Scenario)
+	}
+	if res.Input == nil || res.Input["user"] != "bob" {
+		t.Errorf("UnlockResult.Input = %v, want {user:bob} (recipe.input)", res.Input)
+	}
+	if !tx.committed {
+		t.Error("rerun-last bare day-2 tx not committed")
+	}
+}
+
+// TestUnlockForRerun_CustomCreateScenario — инкарнация СОЗДАНА `create_cluster`,
+// последний упавший = `create_cluster` → create-путь: Scenario=="create_cluster",
+// input из spec.input (рестарт СОЗДАВШЕГО сценария с его значениями).
+func TestUnlockForRerun_CustomCreateScenario(t *testing.T) {
+	const applyID = "01HRERUN00000000000000000C"
+	tx := &fakeTx{
+		execErrAt: -1,
+		queryRows: []scriptedRow{
+			{values: []any{[]byte(`{"shards":3}`), "error_locked", "create_cluster", []byte(`{"input":{"shards":3,"version":"8.6.1"}}`)}},
+			{values: []any{"create_cluster", "01HFAILEDRUN0000000000000C"}},
+		},
+	}
+	pool := &fakePool{txs: []*fakeTx{tx}}
+
+	res, err := UnlockForRerun(context.Background(), pool, "redis-prod", "rerun cluster", "archon-alice", "01HRERUNHIST000000000000C", applyID)
 	if err != nil {
 		t.Fatalf("UnlockForRerun created_scenario=create_cluster: %v", err)
 	}
-	if res.CreatedScenario != "create_cluster" {
-		t.Errorf("CreatedScenario = %q, want create_cluster (рестарт СОЗДАВШЕГО сценария)", res.CreatedScenario)
+	if res.Scenario != "create_cluster" {
+		t.Errorf("Scenario = %q, want create_cluster (рестарт СОЗДАВШЕГО сценария)", res.Scenario)
 	}
-	// B1: stored spec.input cluster-сценария проброшен (shards/version), а не дефолты.
 	if res.Input == nil {
-		t.Fatal("UnlockResult.Input = nil — spec.input cluster НЕ прочитан (B1 регресс)")
+		t.Fatal("UnlockResult.Input = nil — spec.input cluster НЕ прочитан")
 	}
 	if shards, ok := res.Input["shards"].(float64); !ok || shards != 3 {
 		t.Errorf("UnlockResult.Input[shards] = %v (%T), want 3", res.Input["shards"], res.Input["shards"])
 	}
 	if !tx.committed {
-		t.Error("rerun-create tx not committed для валидного custom create-сценария")
+		t.Error("rerun-last tx not committed для валидного custom create-сценария")
 	}
 }
 
-// TestUnlockForRerun_LastScenarioNotCreatedOne — инкарнация создана `create_cluster`,
-// но последний упавший — day-2 `add_user` (тоже залочил) → ErrRerunScenarioNotCreate:
-// rerun перезапускает СОЗДАВШИЙ bootstrap, а не любую упавшую операцию (guard сохранён
-// при нескольких create).
-func TestUnlockForRerun_LastScenarioNotCreatedOne(t *testing.T) {
+// TestUnlockForRerun_NoStateHistory_FailClosed — error_locked без единого
+// snapshot-а state_history (недостижимо штатно) → ErrRerunInputUnavailable
+// fail-closed, транзакция НЕ коммитится.
+func TestUnlockForRerun_NoStateHistory_FailClosed(t *testing.T) {
 	tx := &fakeTx{
 		execErrAt: -1,
 		queryRows: []scriptedRow{
-			{values: []any{[]byte(`{"shards":3}`), "error_locked", "create_cluster", []byte("{}")}},
-			{values: []any{"add_user"}},
+			{values: []any{[]byte(`{}`), "error_locked", "create", []byte("{}")}},
+			{err: pgx.ErrNoRows}, // last-run probe: следа нет
 		},
 	}
 	pool := &fakePool{txs: []*fakeTx{tx}}
 
-	_, err := UnlockForRerun(context.Background(), pool, "redis-prod", "x", "archon-alice", "01HRERUNHIST00000000000G", "01HRERUN0000000000000000G")
-	if !errors.Is(err, ErrRerunScenarioNotCreate) {
-		t.Fatalf("err = %v, want ErrRerunScenarioNotCreate (last=add_user ≠ created=create_cluster)", err)
+	_, err := UnlockForRerun(context.Background(), pool, "redis-prod", "x", "archon-alice", "01HRERUNHIST00000000000G0", "01HRERUN0000000000000000G0")
+	if !errors.Is(err, ErrRerunInputUnavailable) {
+		t.Fatalf("err = %v, want ErrRerunInputUnavailable (нет snapshot-а)", err)
 	}
 	if tx.committed {
-		t.Error("tx committed (должен быть отказ без мутации)")
+		t.Error("tx committed (fail-closed без snapshot-а)")
 	}
 }
 

@@ -217,7 +217,7 @@ var catalogManifest = []toolEntry{
 
 	// --- Incarnation (11) ---
 	//
-	// Все 11 tools (create/run/get/list/history/unlock/rerun-create/upgrade/destroy/check-drift/traits-set)
+	// Все 11 tools (create/run/get/list/history/unlock/rerun-last/upgrade/destroy/check-drift/traits-set)
 	// Implemented: dispatch-ветки заведены, тела — паритет REST
 	// IncarnationHandler. destroy подключён в S-D4 (DELETE /v1/incarnations/{name}).
 	// check-drift подключён в ADR-031 Slice B (Scry on-demand-пилот). traits-set —
@@ -279,10 +279,10 @@ var catalogManifest = []toolEntry{
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
-			Name:         "keeper.incarnation.rerun-create",
-			Description:  "Снимает error_locked и тем же действием перезапускает scenario 'create' (rerun bootstrap-а). Только из error_locked. Асинхронная операция — возвращает _apply_id. Permission: incarnation.create-rerun.",
-			InputSchema:  schemaIncarnationRerunCreateInput,
-			OutputSchema: schemaApplyIDOutputWithIncarnation,
+			Name:         "keeper.incarnation.rerun-last",
+			Description:  "Снимает error_locked и тем же действием перезапускает ПОСЛЕДНИЙ упавший сценарий инкарнации (bootstrap 'create'/… или day-2 add_user/…) с сохранённым input упавшего прогона. Только из error_locked. Асинхронная операция — возвращает _apply_id + scenario. Permission: incarnation.rerun-last.",
+			InputSchema:  schemaIncarnationRerunLastInput,
+			OutputSchema: schemaIncarnationRerunLastOutput,
 		},
 	},
 	{
@@ -1249,7 +1249,7 @@ var (
 "service":{"type":"string"},
 "covens":{"type":"array","items":{"type":"string","pattern":"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"},"description":"Declared env-Coven-метки incarnation (ADR-008 amendment a). Влияют на RBAC-scope create: оператор со scoped-permission incarnation.create on coven=X может создать только incarnation с covens в своём scope."},
 "input":{"type":"object"},
-"create_scenario":{"type":"string","pattern":"^[a-z][a-z0-9_]*$","description":"Имя стартового сценария (механизм нескольких create-сценариев). Пусто: если сервис предлагает create-сценарии → выбор обязателен (validation-failed с их списком); если сервис без create-сценариев → bare-инкарнация (ready без прогона). Непустое обязано входить в create-набор сервиса (scenario с create: true), иначе validation-failed; сохраняется в incarnation.created_scenario (NULL для bare) и rerun-create перезапускает его."},
+"create_scenario":{"type":"string","pattern":"^[a-z][a-z0-9_]*$","description":"Имя стартового сценария (механизм нескольких create-сценариев). Пусто: если сервис предлагает create-сценарии → выбор обязателен (validation-failed с их списком); если сервис без create-сценариев → bare-инкарнация (ready без прогона). Непустое обязано входить в create-набор сервиса (scenario с create: true), иначе validation-failed; сохраняется в incarnation.created_scenario (NULL для bare; rerun-last использует его на create-пути)."},
 "traits":{"type":"object","additionalProperties":{"oneOf":[{"type":"string"},{"type":"number"},{"type":"boolean"},{"type":"array","items":{"oneOf":[{"type":"string"},{"type":"number"},{"type":"boolean"}]}}]},"propertyNames":{"pattern":"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"},"description":"Operator-set trait-метки инкарнации (ADR-060 amend R1) ключ→(scalar|list of scalars). Извлекаются в incarnation.traits (источник истины) и проецируются в souls.traits хостов-членов."}}}`)
 
 	schemaIncarnationRunInput = json.RawMessage(`{
@@ -1311,14 +1311,24 @@ var (
 "name":{"type":"string"},
 "reason":{"type":"string","minLength":1,"maxLength":500}}}`)
 
-	schemaIncarnationRerunCreateInput = json.RawMessage(`{
+	schemaIncarnationRerunLastInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
 "required":["name","reason"],
 "properties":{
 "name":{"type":"string"},
-"reason":{"type":"string","minLength":1,"maxLength":500,"description":"Свободный текст подтверждения оператора; пишется в audit incarnation.create_rerun."}}}`)
+"reason":{"type":"string","minLength":1,"maxLength":500,"description":"Свободный текст подтверждения оператора; пишется в audit incarnation.rerun_last."}}}`)
+
+	schemaIncarnationRerunLastOutput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["incarnation","scenario"],
+"properties":{
+"_apply_id":{"type":"string","description":"ULID перезапущенного прогона."},
+"incarnation":{"type":"string"},
+"scenario":{"type":"string","description":"Имя перезапущенного сценария (последний упавший: bootstrap 'create'/… или day-2 add_user/…)."}}}`)
 
 	schemaIncarnationUnlockOutput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",

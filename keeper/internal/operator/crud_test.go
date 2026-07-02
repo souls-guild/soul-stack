@@ -465,6 +465,36 @@ func TestCount_PropagatesError(t *testing.T) {
 	}
 }
 
+func TestCountNonSystem_HappyPath(t *testing.T) {
+	f := &fakeDB{
+		rowFunc: func() pgx.Row {
+			return staticRow{values: []any{int64(2)}}
+		},
+	}
+	n, err := CountNonSystem(context.Background(), f)
+	if err != nil {
+		t.Fatalf("CountNonSystem: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("CountNonSystem = %d, want 2", n)
+	}
+	// Guard: SQL обязан фильтровать по created_via, иначе archon-system снова блокирует bootstrap.
+	if !strings.Contains(f.lastQuerySQL, "created_via") {
+		t.Errorf("SQL = %q, want фильтр по created_via", f.lastQuerySQL)
+	}
+}
+
+func TestCountNonSystem_PropagatesError(t *testing.T) {
+	wantErr := errors.New("pg down")
+	f := &fakeDB{
+		rowFunc: func() pgx.Row { return errRow{err: wantErr} },
+	}
+	_, err := CountNonSystem(context.Background(), f)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("err = %v, want wrap of %v", err, wantErr)
+	}
+}
+
 func TestRevoke_HappyPath(t *testing.T) {
 	f := &fakeDB{execTag: pgconn.NewCommandTag("UPDATE 1")}
 	if err := Revoke(context.Background(), f, "archon-bob", "left team"); err != nil {

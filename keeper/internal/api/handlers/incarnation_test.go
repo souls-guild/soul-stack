@@ -60,10 +60,14 @@ type fakeIncDB struct {
 	unlockSelectRow func(name string) pgx.Row
 	execCalls       []string
 
-	// Rerun-create-path: last-scenario probe (scope=create gate в UnlockForRerun)
-	// `SELECT scenario FROM state_history ... ORDER BY history_id DESC LIMIT 1`.
-	// nil → дефолт "create" (последний упавший сценарий = create, допуск).
+	// Rerun-last-path: last-run probe в UnlockForRerun
+	// `SELECT scenario, apply_id FROM state_history ... ORDER BY history_id DESC LIMIT 1`.
+	// nil → дефолт [create, <applyID>] (create-путь: последний упавший = create).
 	lastScenarioRow func(name string) pgx.Row
+	// Rerun-last day-2-path: recipe probe `SELECT recipe FROM apply_runs WHERE
+	// apply_id = $1 AND recipe IS NOT NULL LIMIT 1`. nil → ErrNoRows (fail-closed:
+	// recipe недоступен). Задать для day-2 happy-path.
+	recipeRow func(applyID string) pgx.Row
 
 	// Upgrade-path: SELECT FOR UPDATE (state, state_schema_version, status).
 	upgradeSelectRow func(name string) pgx.Row
@@ -84,6 +88,14 @@ type fakeIncDB struct {
 	// FROM apply_runs). nil → пустой список / 0 (для scope-gate/empty-тестов).
 	applyRunsCountRow func(sql string) pgx.Row
 	applyRunsRows     func() (pgx.Rows, error)
+
+	// Global runs read-view (GET /v1/runs[/stats]): COUNT(*) по свёртке apply_runs.
+	// runsCalled/lastRunsSQL/lastRunsArgs — факт и содержимое count-запроса
+	// (fail-closed- и scope-pushdown-проверки). nil runsCountRow → 0.
+	runsCountRow func(sql string) pgx.Row
+	lastRunsSQL  string
+	lastRunsArgs []any
+	runsCalled   bool
 }
 
 func (f *fakeIncDB) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
@@ -122,8 +134,14 @@ func (f *fakeIncDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row
 		if f.lastScenarioRow != nil {
 			return f.lastScenarioRow(args[0].(string))
 		}
-		// Дефолт: последний упавший сценарий = create (scope=create допуск).
-		return staticRow{values: []any{"create"}}
+		// Дефолт: последний упавший = create (create-путь), apply_id — заглушка.
+		return staticRow{values: []any{"create", "01HFAILEDRUN00000000000000"}}
+	}
+	if strings.Contains(sql, "FROM apply_runs") && strings.Contains(sql, "recipe IS NOT NULL") {
+		if f.recipeRow != nil {
+			return f.recipeRow(args[0].(string))
+		}
+		return errRow{err: pgx.ErrNoRows}
 	}
 	// UpdateHosts: UPDATE incarnation SET spec = ... RETURNING updated_at.
 	// Этот UPDATE-with-RETURNING приходит ДО общего match-а "WHERE name = $1"
@@ -157,6 +175,16 @@ func (f *fakeIncDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row
 	if strings.Contains(sql, "COUNT(DISTINCT apply_id) FROM apply_runs") {
 		if f.applyRunsCountRow != nil {
 			return f.applyRunsCountRow(sql)
+		}
+		return staticRow{values: []any{int(0)}}
+	}
+	// Global runs read-view (GET /v1/runs): COUNT(*) по свёртке apply_runs.
+	if strings.Contains(sql, "COUNT(*)") && strings.Contains(sql, "FROM apply_runs") {
+		f.runsCalled = true
+		f.lastRunsSQL = sql
+		f.lastRunsArgs = args
+		if f.runsCountRow != nil {
+			return f.runsCountRow(sql)
 		}
 		return staticRow{values: []any{int(0)}}
 	}
@@ -1724,23 +1752,20 @@ func makeIncStatusRow(name, status string) pgx.Row {
 }
 
 // makeUnlockSelectRow конструирует staticRow под FOR UPDATE-select unlock-семейства.
-// Несёт 4 колонки в порядке rerun-select-а (state, status, created_scenario, spec):
-// plain Unlock / Destroy сканируют только первые две (staticRow.Scan читает ровно
-// len(dest)), UnlockForRerun — все четыре (created_scenario *string, миграции
-// 089+090, "create"; spec []byte для проброса spec.input, B1 — пустой `{}`).
+// Несёт 4 колонки (state, status, created_scenario, spec): plain Unlock / Destroy
+// сканируют первые две, UnlockForRerun — все четыре.
 func makeUnlockSelectRow(status string) pgx.Row {
 	return staticRow{values: []any{[]byte("{}"), status, "create", []byte("{}")}}
 }
 
-// makeUnlockSelectRowSpec — как makeUnlockSelectRow, но 4-я колонка spec несёт
-// заданный jsonb (B1 guard: проверка проброса spec.input в RunSpec.Input
-// перезапускаемого bootstrap-прогона).
+// makeUnlockSelectRowSpec — как makeUnlockSelectRow, но spec несёт заданный jsonb
+// (проверка проброса spec.input в RunSpec.Input на create-пути).
 func makeUnlockSelectRowSpec(status string, specJSON []byte) pgx.Row {
 	return staticRow{values: []any{[]byte("{}"), status, "create", specJSON}}
 }
 
 // makeUnlockSelectRowBare — как makeUnlockSelectRow, но created_scenario = NULL
-// (bare-инкарнация): 3-й scan-dest **string получит nil. Для rerun-create bare→409.
+// (bare-инкарнация): 3-й scan-dest **string получит nil.
 func makeUnlockSelectRowBare(status string) pgx.Row {
 	return staticRow{values: []any{[]byte("{}"), status, any(nil), []byte("{}")}}
 }
@@ -1902,7 +1927,7 @@ func makeIncStatusRowBare(name, status string) pgx.Row {
 // (created_scenario IS NULL) запускает ОБЫЧНЫЙ operational-сценарий (day-2) через
 // RunTyped штатно — 202, прогон стартует. RunTyped резолвит инкарнацию по
 // SelectByName и НЕ читает created_scenario для day-2-запуска (он нужен только
-// rerun-create). Регресс = day-2-путь начинает требовать created_scenario не-NULL
+// rerun-last на create-пути). Регресс = day-2-путь начинает требовать created_scenario не-NULL
 // (или паникует на NULL-проекции) → bare-инкарнации лишаются day-2-операций.
 func TestIncarnation_Run_BareIncarnation_Day2_202(t *testing.T) {
 	db := &fakeIncDB{

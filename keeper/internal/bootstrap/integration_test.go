@@ -37,6 +37,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/auditpg"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/keeper/internal/migrate"
+	"github.com/souls-guild/soul-stack/keeper/internal/operator"
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 	keepervault "github.com/souls-guild/soul-stack/keeper/internal/vault"
 	"github.com/souls-guild/soul-stack/keeper/migrations"
@@ -169,6 +170,18 @@ func resetState(t *testing.T) {
 		if _, err := integrationPool.Exec(ctx, stmt); err != nil {
 			t.Fatalf("re-seed cluster-admin: %v", err)
 		}
+	}
+}
+
+// seedSystemOperator восстанавливает archon-system (миграция 086), который
+// resetState сносит через TRUNCATE, — воспроизводит чистую БД после миграций.
+func seedSystemOperator(t *testing.T) {
+	t.Helper()
+	if _, err := integrationPool.Exec(context.Background(),
+		`INSERT INTO operators (aid, display_name, auth_method, created_by_aid, created_via, metadata)
+		 VALUES ('archon-system', 'System (Soul Stack)', 'jwt', NULL, 'system', '{}'::jsonb)
+		 ON CONFLICT (aid) DO NOTHING`); err != nil {
+		t.Fatalf("seed archon-system: %v", err)
 	}
 }
 
@@ -842,5 +855,106 @@ func TestIntegration_Init_GrantsRealRBACAccess(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("membership rows = %d, want 1 (revoke-lockout откатился)", n)
+	}
+}
+
+// Guard (ADR-013 amendment 2026-07-01): bootstrap проходит на чистой БД, где присутствует archon-system.
+func TestIntegration_Init_IgnoresSystemArchon(t *testing.T) {
+	resetState(t)
+	seedSystemOperator(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	writer := auditpg.NewWriter(integrationPool)
+
+	res, err := Init(ctx, Config{
+		ArchonAID:        "archon-alice",
+		TTLBootstrap:     time.Hour,
+		Pool:             integrationPool,
+		VaultClient:      integrationVaultC,
+		SigningKeyRef:    "vault:" + integrationKVPath,
+		IssuerFactory:    newIssuerFactory(),
+		AuditWriter:      writer,
+		CredentialOutput: filepath.Join(dir, "k.token"),
+	})
+	if err != nil {
+		t.Fatalf("Init на чистой БД с archon-system: %v (want success — системный оператор не считается)", err)
+	}
+	if res.CredentialPath == "" {
+		t.Errorf("CredentialPath empty")
+	}
+
+	// В реестре — archon-system (system) + archon-alice (bootstrap).
+	var (
+		total     int64
+		nonSystem int64
+	)
+	if err := integrationPool.QueryRow(ctx, `SELECT COUNT(*) FROM operators`).Scan(&total); err != nil {
+		t.Fatalf("count operators: %v", err)
+	}
+	if total != 2 {
+		t.Errorf("operators total = %d, want 2 (archon-system + archon-alice)", total)
+	}
+	if err := integrationPool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM operators WHERE created_via <> 'system'`).Scan(&nonSystem); err != nil {
+		t.Fatalf("count non-system: %v", err)
+	}
+	if nonSystem != 1 {
+		t.Errorf("non-system operators = %d, want 1 (только archon-alice)", nonSystem)
+	}
+}
+
+// Как только появляется реальный (не-системный) Архонт, повторный Init → ErrAlreadyInitialized.
+func TestIntegration_Init_AlreadyInitialized_WithSystemArchon(t *testing.T) {
+	resetState(t)
+	seedSystemOperator(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	writer := auditpg.NewWriter(integrationPool)
+
+	cfg := Config{
+		ArchonAID:        "archon-alice",
+		TTLBootstrap:     time.Hour,
+		Pool:             integrationPool,
+		VaultClient:      integrationVaultC,
+		SigningKeyRef:    "vault:" + integrationKVPath,
+		IssuerFactory:    newIssuerFactory(),
+		AuditWriter:      writer,
+		CredentialOutput: filepath.Join(dir, "k1.token"),
+	}
+	if _, err := Init(ctx, cfg); err != nil {
+		t.Fatalf("Init#1: %v", err)
+	}
+
+	cfg2 := cfg
+	cfg2.ArchonAID = "archon-bob"
+	cfg2.CredentialOutput = filepath.Join(dir, "k2.token")
+	_, err := Init(ctx, cfg2)
+	if err == nil {
+		t.Fatal("Init#2: expected ErrAlreadyInitialized, got nil")
+	}
+	if !errors.Is(err, ErrAlreadyInitialized) {
+		t.Errorf("err = %v, want ErrAlreadyInitialized", err)
+	}
+}
+
+// Restart-guard (ADR-013(d)): на БД только с archon-system CountNonSystem=0 → «реестр пуст».
+func TestIntegration_CountNonSystem_IgnoresSystemArchon(t *testing.T) {
+	resetState(t)
+	seedSystemOperator(t)
+	ctx := context.Background()
+
+	total, err := operator.Count(ctx, integrationPool)
+	if err != nil {
+		t.Fatalf("Count: %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("Count = %d, want 1 (archon-system)", total)
+	}
+	nonSystem, err := operator.CountNonSystem(ctx, integrationPool)
+	if err != nil {
+		t.Fatalf("CountNonSystem: %v", err)
+	}
+	if nonSystem != 0 {
+		t.Errorf("CountNonSystem = %d, want 0 (archon-system не считается → restart-guard требует bootstrap)", nonSystem)
 	}
 }

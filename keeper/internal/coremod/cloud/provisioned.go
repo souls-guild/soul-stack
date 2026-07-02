@@ -438,7 +438,7 @@ func (m *Module) applyCreatedSelfOnboard(ctx context.Context, stream grpc.Server
 	// Souls (pending) + токены выписываются ДО create — потому любой провал ПОСЛЕ
 	// вставки (create-fail, пустой/несовпавший FQDN, ошибка userdata-render)
 	// оставил бы осиротевшие записи: presence-барьер await_online завис бы на
-	// онбординге несуществующих VM, а rerun-create упёрся бы в PK-конфликт insert
+	// онбординге несуществующих VM, а rerun-last упёрся бы в PK-конфликт insert
 	// soul под тем же предсказанным FQDN. Накопленные записи откатываем defer-ом,
 	// если не дошли до успешного финала (флаг success). На успехе — оставляем.
 	//

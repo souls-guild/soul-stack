@@ -8,7 +8,7 @@ package api
 //   - MIDDLEWARE-AUDIT (create / run / unlock / upgrade): huma-audit-middleware пишет
 //     event СНАРУЖИ (вариант B). registerHuma*-func кладёт payload через
 //     SetHumaAuditPayload из *Typed-reply.AuditPayload.
-//   - SELF-AUDIT (rerun-create / check-drift / destroy / update-hosts): audit пишет
+//   - SELF-AUDIT (rerun-last / check-drift / destroy / update-hosts): audit пишет
 //     САМ handler ВНУТРИ *Typed; audit-middleware НЕ навешан (newHumaCadenceAPI).
 //
 // Все incarnation-huma-op несут ПОЛНЫЙ путь /{name}[/...] относительно группы
@@ -52,7 +52,7 @@ type IncarnationCreateRequest struct {
 	// create_scenario_required; сервис без них + пусто → bare-инкарнация (ready без
 	// прогона, created_scenario=NULL). Авто-create по дефолтному `create` больше
 	// нет. Непустое имя обязано входить в create-набор сервиса, иначе 422; выбор
-	// сохраняется в incarnation.created_scenario и rerun-create перезапускает его.
+	// сохраняется в incarnation.created_scenario (rerun-last использует его на create-пути).
 	CreateScenario string `json:"create_scenario,omitempty" pattern:"^[a-z][a-z0-9_]*$" doc:"имя стартового сценария (механизм нескольких create, scenario с create:true). Пусто: сервис предлагает create-сценарии → 422 create_scenario_required; сервис без них → bare-инкарнация (ready без прогона)"`
 }
 
@@ -351,34 +351,33 @@ func incUpgradeOperation() huma.Operation {
 	}
 }
 
-// === POST /v1/incarnations/{name}/rerun-create (rerun-create) — SELF-AUDIT incarnation.create_rerun (202+body) ===
+// === POST /v1/incarnations/{name}/rerun-last (rerun-last) — SELF-AUDIT incarnation.rerun_last (202+body) ===
 
-// incRerunInput — huma-input POST .../rerun-create. Name — path; Body — typed тело.
+// incRerunInput — huma-input POST .../rerun-last. Name — path; Body — typed тело.
 type incRerunInput struct {
 	Name string `path:"name" doc:"имя инкарнации"`
-	Body IncarnationRerunCreateRequest
+	Body IncarnationRerunLastRequest
 }
 
-// IncarnationRerunCreateRequest — Go-форма тела POST .../rerun-create. reason required.
-// additionalProperties:false → unknown поле → 400. Имя = контрактное имя схемы (T4b).
-type IncarnationRerunCreateRequest struct {
+// IncarnationRerunLastRequest — Go-форма тела POST .../rerun-last. reason required.
+type IncarnationRerunLastRequest struct {
 	Reason string `json:"reason" required:"true" minLength:"1" maxLength:"500" doc:"свободный текст подтверждения"`
 }
 
-// incRerunOutput — huma-output POST .../rerun-create (FULL-TYPED). Status=202; Body —
-// native IncarnationRerunCreateReply (apply_id + echo incarnation).
+// incRerunOutput — huma-output POST .../rerun-last (FULL-TYPED). Status=202; Body —
+// native IncarnationRerunLastReply (apply_id + echo incarnation + scenario).
 type incRerunOutput struct {
 	Status int `json:"-"`
-	Body   IncarnationRerunCreateReply
+	Body   IncarnationRerunLastReply
 }
 
 func incRerunOperation() huma.Operation {
 	return huma.Operation{
-		OperationID:   "rerunCreateIncarnation",
+		OperationID:   "rerunLastIncarnation",
 		Method:        http.MethodPost,
-		Path:          "/{name}/rerun-create",
-		Summary:       "Перезапустить create из error_locked",
-		Description:   "Снимает error_locked и тем же действием перезапускает scenario create (одна tx FOR UPDATE). Permission incarnation.create-rerun.",
+		Path:          "/{name}/rerun-last",
+		Summary:       "Перезапустить последний упавший сценарий из error_locked",
+		Description:   "Снимает error_locked и тем же действием перезапускает последний упавший сценарий инкарнации (bootstrap create/… или day-2 add_user/…) с сохранённым input упавшего прогона (одна tx FOR UPDATE). Permission incarnation.rerun-last.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusAccepted,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},

@@ -34,11 +34,15 @@ const (
 	mcpCodeNotImplemented      = "not-implemented"
 
 	// Incarnation-коды из docs/keeper/mcp-tools.md → § Errors (стабильные
-	// URN-suffix-ы). incarnation-locked покрывает все state-конфликты
-	// ресурса (error_locked / busy / downgrade / schema-mismatch — REST
-	// маппит их в один problem-type TypeIncarnationLocked).
-	mcpCodeIncarnationExists = "incarnation-already-exists"
-	mcpCodeIncarnationLocked = "incarnation-locked"
+	// URN-suffix-ы). incarnation-locked покрывает state-конфликты ресурса
+	// (error_locked / busy / downgrade / schema-mismatch — REST маппит их в один
+	// problem-type TypeIncarnationLocked). rerun-input-unavailable отделён от него
+	// (симметрия REST TypeRerunInputUnavailable): rerun-last day-2 не может
+	// восстановить input упавшего прогона (рецепт вычищен ретеншном / legacy без
+	// рецепта) — machine-readable отличие от «статус не error_locked».
+	mcpCodeIncarnationExists     = "incarnation-already-exists"
+	mcpCodeIncarnationLocked     = "incarnation-locked"
+	mcpCodeRerunInputUnavailable = "rerun-input-unavailable"
 
 	// Role-коды (RBAC-CRUD, Slice 2b). role-already-exists — UNIQUE-violation
 	// на rbac_roles.name; role-builtin — попытка delete/update встроенной роли
@@ -214,8 +218,10 @@ func mapServiceErrorToMCP(err error) (code, detail string) {
 // Соответствие REST problem-type ↔ MCP-code (docs/keeper/mcp-tools.md § Errors):
 //   - TypeNotFound          → not-found.
 //   - TypeIncarnationExists  → incarnation-already-exists.
-//   - TypeIncarnationLocked  → incarnation-locked (все state-конфликты ресурса:
-//     not-unlockable / busy / locked / downgrade / schema-mismatch).
+//   - TypeIncarnationLocked  → incarnation-locked (state-конфликты ресурса:
+//     not-unlockable / not-error-locked / busy / locked / downgrade / schema-mismatch).
+//   - TypeRerunInputUnavailable → rerun-input-unavailable (rerun-last day-2: input
+//     упавшего прогона недоступен — рецепт вычищен / legacy без рецепта).
 //   - TypeValidationFailed   → validation-failed (no-op upgrade / broken chain).
 //
 // Внутренние сбои резолва (service-not-registered / load-failed / no-manifest /
@@ -235,9 +241,9 @@ func mapIncarnationErrorToMCP(err error) (code, detail string) {
 	case errors.Is(err, incarnation.ErrIncarnationNotLocked):
 		return mcpCodeIncarnationLocked, "incarnation is not in an unlockable status — nothing to unlock"
 	case errors.Is(err, incarnation.ErrIncarnationNotErrorLocked):
-		return mcpCodeIncarnationLocked, "incarnation is not error_locked — rerun-create requires error_locked"
-	case errors.Is(err, incarnation.ErrRerunScenarioNotCreate):
-		return mcpCodeIncarnationLocked, "last failed scenario is not `create` — rerun-create restarts `create` only"
+		return mcpCodeIncarnationLocked, "incarnation is not error_locked — rerun-last requires error_locked"
+	case errors.Is(err, incarnation.ErrRerunInputUnavailable):
+		return mcpCodeRerunInputUnavailable, "rerun-last: failed run's input is unavailable (recipe purged / legacy run) — use unlock + manual run with explicit input"
 	case errors.Is(err, incarnation.ErrIncarnationBusy):
 		return mcpCodeIncarnationLocked, "incarnation is applying — operation rejected until run completes"
 	case errors.Is(err, incarnation.ErrIncarnationLocked):

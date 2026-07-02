@@ -456,8 +456,8 @@ func (h *Handler) handleToolsCall(ctx context.Context, claims *jwt.Claims, req j
 		return h.callIncarnationHistory(ctx, claims, req, p.Arguments), false
 	case "keeper.incarnation.unlock":
 		return h.callIncarnationUnlock(ctx, claims, req, p.Arguments), false
-	case "keeper.incarnation.rerun-create":
-		return h.callIncarnationRerunCreate(ctx, claims, req, p.Arguments), false
+	case "keeper.incarnation.rerun-last":
+		return h.callIncarnationRerunLast(ctx, claims, req, p.Arguments), false
 	case "keeper.incarnation.create":
 		return h.callIncarnationCreate(ctx, claims, req, p.Arguments), false
 	case "keeper.incarnation.run":

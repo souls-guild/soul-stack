@@ -62,11 +62,16 @@ type fakePool struct {
 	// amend R1, паритет REST insertArgs).
 	insertIncArgs []any
 
-	// lastScenarioFn — backing для rerun-create probe `SELECT scenario FROM
-	// state_history … ORDER BY history_id DESC LIMIT 1` (UnlockForRerun scope-
-	// check). nil → отдаём имя создавшего сценария из incFn-строки (дефолт
-	// `create`), что моделирует «последний упавший сценарий = create».
+	// lastScenarioFn — backing для rerun-last probe `SELECT scenario, apply_id FROM
+	// state_history … ORDER BY history_id DESC LIMIT 1` (UnlockForRerun last-run).
+	// nil → отдаём имя создавшего сценария из incFn-строки (дефолт `create`) —
+	// create-путь (последний упавший = created).
 	lastScenarioFn func(name string) (string, error)
+
+	// recipeFn — backing для rerun-last day-2 recipe probe `SELECT recipe FROM
+	// apply_runs WHERE apply_id = $1 AND recipe IS NOT NULL LIMIT 1`. nil →
+	// ErrNoRows (fail-closed). Задать для day-2 happy-path (recipe-jsonb с input).
+	recipeFn func(applyID string) ([]byte, error)
 
 	// soulBulkCountFn — backing для souls-bulk-проекции traits (SyncTraitsToHosts
 	// → CountBulkMatched: `SELECT COUNT(*) FROM souls …`). nil → 0 (0 хостов-членов,
@@ -171,7 +176,7 @@ func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row 
 		return staticRow{values: []any{time.Now().UTC()}}
 	}
 	// FOR UPDATE-select из incarnation. ПОЛНАЯ строка (UpdateTraits:
-	// `covens, traits` в проекции → scanIncarnation) → newIncRow. rerun-create
+	// `covens, traits` в проекции → scanIncarnation) → newIncRow. rerun-last
 	// (state, status, created_scenario) → rerunForUpdateRow. Частичная
 	// (unlock: state,status / upgrade: state,state_schema_version,status) →
 	// forUpdateIncRow. args[0] = name.
@@ -191,26 +196,38 @@ func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row 
 		}
 		return forUpdateIncRow{inc: inc, withVersion: contains(sql, "state_schema_version")}
 	}
-	// rerun-create scope-probe: SELECT scenario FROM state_history … LIMIT 1.
-	// Идёт ДО общего `FROM state_history`/COUNT (тот требует COUNT-токен).
+	// rerun-last last-run probe: SELECT scenario, apply_id FROM state_history …
+	// LIMIT 1. Идёт ДО общего `FROM state_history`/COUNT (тот требует COUNT-токен).
 	if contains(sql, "SELECT scenario") && contains(sql, "FROM state_history") {
 		name := args[0].(string)
+		const dummyApplyID = "01HFAILEDRUN00000000000000"
 		if f.lastScenarioFn != nil {
 			s, err := f.lastScenarioFn(name)
 			if err != nil {
 				return errRow{err: err}
 			}
-			return staticRow{values: []any{s}}
+			return staticRow{values: []any{s, dummyApplyID}}
 		}
-		// Дефолт: «последний упавший сценарий = создавший». created_scenario
-		// строки берём из incFn (если задан), иначе канонический `create`.
+		// Дефолт: «последний упавший = создавший». created_scenario строки берём
+		// из incFn (если задан), иначе канонический `create`.
 		last := "create"
 		if f.incFn != nil {
 			if inc, err := f.incFn(name); err == nil && inc.CreatedScenario != nil {
 				last = *inc.CreatedScenario
 			}
 		}
-		return staticRow{values: []any{last}}
+		return staticRow{values: []any{last, dummyApplyID}}
+	}
+	// rerun-last day-2 recipe probe: SELECT recipe FROM apply_runs WHERE apply_id …
+	if contains(sql, "FROM apply_runs") && contains(sql, "recipe IS NOT NULL") {
+		if f.recipeFn != nil {
+			b, err := f.recipeFn(args[0].(string))
+			if err != nil {
+				return errRow{err: err}
+			}
+			return staticRow{values: []any{b}}
+		}
+		return errRow{err: pgx.ErrNoRows}
 	}
 	// SelectByName / existence-probe (полная строка incarnation).
 	if contains(sql, "FROM incarnation") {

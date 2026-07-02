@@ -26,18 +26,18 @@
 | `_apply_id` | `string` (ULID) | ID запуска. |
 | `incarnation` | `string` | Имя созданного instance. |
 
-#### `keeper.incarnation.rerun-create`
+#### `keeper.incarnation.rerun-last`
 
-Перезапуск создавшего стартового сценария из `error_locked`: зеркало REST [`POST /v1/incarnations/{name}/rerun-create`](../operator-api/incarnations.md#post-v1incarnationsnamererun-create--перезапустить-стартовый-сценарий-из-error_locked). Permission: `incarnation.create-rerun`. Async: **да**.
+Перезапуск **последнего упавшего** сценария из `error_locked`: зеркало REST [`POST /v1/incarnations/{name}/rerun-last`](../operator-api/incarnations.md#post-v1incarnationsnamererun-last--перезапустить-последний-упавший-сценарий-из-error_locked). Permission: `incarnation.rerun-last`. Async: **да**.
 
-Под одним `FOR UPDATE` снимает блок (`state` НЕ трогается — last known-good, snapshot в `state_history`) и тем же действием перезапускает СОЗДАВШИЙ стартовый сценарий — `incarnation.created_scenario`, а не хардкод `create` (`error_locked → applying` минуя `ready`). Отличие от `keeper.incarnation.unlock`: тот лишь снимает блок, rerun снимает и перезапускает bootstrap одним действием. Scope ЖЁСТКО ограничен создавшим стартовым сценарием — если последний упавший сценарий не создавал инкарнацию ЛИБО инкарнация bare (`created_scenario IS NULL`, перезапускать нечего), tool возвращает `incarnation-locked`. Опрос статуса — `keeper.incarnation.get`. Audit-событие — `incarnation.create_rerun` (НЕ `incarnation.unlocked`).
+Под одним `FOR UPDATE` снимает блок (`state` НЕ трогается — last known-good, snapshot в `state_history`) и тем же действием перезапускает **последний упавший сценарий** инкарнации — bootstrap (`create`/…, если провалилось создание) ИЛИ day-2-операцию (`add_user`/…) — с сохранённым input упавшего прогона (`error_locked → applying` минуя `ready`). Input восстанавливается из `incarnation.spec.input` (create-путь) либо из рецепта упавшего прогона (`apply_runs.recipe.input`, day-2-путь), не из дефолтов. Отличие от `keeper.incarnation.unlock`: тот лишь снимает блок, rerun снимает и перезапускает упавший сценарий одним действием. Работает только из `error_locked`; если статус не `error_locked` ЛИБО input упавшего прогона недоступен (рецепт вычищен ретеншном / legacy-прогон, fail-closed), tool возвращает `incarnation-locked`. Опрос статуса — `keeper.incarnation.get`. Audit-событие — `incarnation.rerun_last` (НЕ `incarnation.unlocked`).
 
 **Input:**
 
 | Поле | Тип | Required | Смысл |
 |---|---|---|---|
 | `name` | `string` | yes | Имя instance. |
-| `reason` | `string` | yes | Свободный текст для audit-trail (payload `incarnation.create_rerun`). |
+| `reason` | `string` (1..500 символов) | yes | Свободный текст для audit-trail (payload `incarnation.rerun_last`). |
 
 **Output:**
 
@@ -45,8 +45,9 @@
 |---|---|---|
 | `_apply_id` | `string` (ULID) | ID перезапущенного прогона. |
 | `incarnation` | `string` | Имя instance. |
+| `scenario` | `string` | Имя перезапущенного (последнего упавшего) сценария — bootstrap `create`/… или day-2 `add_user`/…. |
 
-Ошибки: `not-found` (incarnation не существует), `incarnation-locked` (статус не `error_locked`; ИЛИ последний упавший сценарий — не создавший стартовый; ИЛИ инкарнация bare — `created_scenario IS NULL`), `validation-failed` (пустой `reason` / битый `name`), `internal-error` (runner не сконфигурирован / транзакция / запуск).
+Ошибки: `not-found` (incarnation не существует), `incarnation-locked` (статус не `error_locked`; ИЛИ input упавшего прогона недоступен — рецепт вычищен ретеншном / legacy-прогон), `validation-failed` (пустой `reason` / `reason` длиннее 500 символов / битый `name`), `internal-error` (runner не сконфигурирован / транзакция / запуск).
 
 #### `keeper.incarnation.run`
 

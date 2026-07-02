@@ -44,18 +44,27 @@ const (
 	TypeWouldLockOutCluster  = "https://soul-stack.io/errors/would-lock-out-cluster"
 	TypeIncarnationExists    = "https://soul-stack.io/errors/incarnation-already-exists"
 	TypeIncarnationLocked    = "https://soul-stack.io/errors/incarnation-locked"
-	TypeSoulExists           = "https://soul-stack.io/errors/soul-already-exists"
-	TypeBootstrapTokenActive = "https://soul-stack.io/errors/bootstrap-token-active"
-	TypeRoleNotFound         = "https://soul-stack.io/errors/role-not-found"
-	TypeRoleExists           = "https://soul-stack.io/errors/role-already-exists"
-	TypeRoleBuiltin          = "https://soul-stack.io/errors/role-builtin"
-	TypeSynodNotFound        = "https://soul-stack.io/errors/synod-not-found"
-	TypeSynodExists          = "https://soul-stack.io/errors/synod-already-exists"
-	TypeSynodBuiltin         = "https://soul-stack.io/errors/synod-builtin"
-	TypeSigilActive          = "https://soul-stack.io/errors/sigil-already-active"
-	TypeSigilNotFound        = "https://soul-stack.io/errors/sigil-not-found"
-	TypePluginNotInCache     = "https://soul-stack.io/errors/plugin-not-in-cache"
-	TypeServiceExists        = "https://soul-stack.io/errors/service-already-exists"
+	// TypeRerunInputUnavailable — `rerun-last` не может восстановить input упавшего
+	// day-2-прогона: рецепт (`apply_runs.recipe`) недоступен (recipe IS NULL на
+	// legacy-пути dispatchWave ЛИБО строка вычищена Reaper-ретеншном). 409 Conflict,
+	// как и [TypeIncarnationLocked] (тот же HTTP-класс «целевое состояние
+	// недостижимо»), но отдельный URN: оба кейса rerun-last были неразличимы
+	// machine-readable (UI вынужденно матчил подстроку detail). Отделяет
+	// «input упавшего прогона утрачен → unlock + ручной run» от «статус не
+	// error_locked → unlock» (последний остаётся на [TypeIncarnationLocked]).
+	TypeRerunInputUnavailable = "https://soul-stack.io/errors/rerun-input-unavailable"
+	TypeSoulExists            = "https://soul-stack.io/errors/soul-already-exists"
+	TypeBootstrapTokenActive  = "https://soul-stack.io/errors/bootstrap-token-active"
+	TypeRoleNotFound          = "https://soul-stack.io/errors/role-not-found"
+	TypeRoleExists            = "https://soul-stack.io/errors/role-already-exists"
+	TypeRoleBuiltin           = "https://soul-stack.io/errors/role-builtin"
+	TypeSynodNotFound         = "https://soul-stack.io/errors/synod-not-found"
+	TypeSynodExists           = "https://soul-stack.io/errors/synod-already-exists"
+	TypeSynodBuiltin          = "https://soul-stack.io/errors/synod-builtin"
+	TypeSigilActive           = "https://soul-stack.io/errors/sigil-already-active"
+	TypeSigilNotFound         = "https://soul-stack.io/errors/sigil-not-found"
+	TypePluginNotInCache      = "https://soul-stack.io/errors/plugin-not-in-cache"
+	TypeServiceExists         = "https://soul-stack.io/errors/service-already-exists"
 	// Augur — реестр Omen / Rite (ADR-025, augur.md). omen-already-exists —
 	// UNIQUE на omens.name (409). not-found Omen / Rite — общий TypeNotFound.
 	TypeOmenExists = "https://soul-stack.io/errors/omen-already-exists"
@@ -169,6 +178,7 @@ var titles = map[string]string{
 	TypeWouldLockOutCluster:        "Operation would lock out the cluster",
 	TypeIncarnationExists:          "Incarnation already exists",
 	TypeIncarnationLocked:          "Incarnation is locked",
+	TypeRerunInputUnavailable:      "Rerun input unavailable",
 	TypeSoulExists:                 "Soul already exists",
 	TypeBootstrapTokenActive:       "Bootstrap token already active",
 	TypeRoleNotFound:               "Role not found",
@@ -259,6 +269,7 @@ var statuses = map[string]int{
 	TypeWouldLockOutCluster:        http.StatusConflict,
 	TypeIncarnationExists:          http.StatusConflict,
 	TypeIncarnationLocked:          http.StatusConflict,
+	TypeRerunInputUnavailable:      http.StatusConflict,
 	TypeSoulExists:                 http.StatusConflict,
 	TypeBootstrapTokenActive:       http.StatusConflict,
 	TypeRoleNotFound:               http.StatusNotFound,

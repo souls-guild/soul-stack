@@ -84,10 +84,10 @@ FROM operators
 WHERE aid = $1
 `
 
-// countOperatorsSQL — COUNT(*) без фильтра по revoked_at. Используется
-// bootstrap-инвариантом из ADR-013: «реестр пуст» означает 0 строк,
-// независимо от revoked-флага.
 const countOperatorsSQL = `SELECT COUNT(*) FROM operators`
+
+// Исключает системный archon-system (ADR-013 amendment 2026-07-01).
+const countNonSystemOperatorsSQL = `SELECT COUNT(*) FROM operators WHERE created_via <> 'system'`
 
 // ListFilter — параметры `GET /v1/operators`. Пустые поля = «без фильтра».
 // IncludeRevoked=false → SQL добавляет `revoked_at IS NULL` (отдаём только
@@ -242,13 +242,22 @@ func scanOperator(row pgx.Row) (*Operator, error) {
 	return &op, nil
 }
 
-// Count возвращает суммарное число записей в operators (включая
-// revoked). Используется bootstrap-инвариантом «реестр пуст» из ADR-013
-// под PG advisory lock — см. `keeper/internal/bootstrap`.
+// Count — суммарное число operators (включая revoked и системных).
+// Для bootstrap-инварианта используй [CountNonSystem].
 func Count(ctx context.Context, db execQueryRower) (int64, error) {
 	var n int64
 	if err := db.QueryRow(ctx, countOperatorsSQL).Scan(&n); err != nil {
 		return 0, fmt.Errorf("operator: count: %w", err)
+	}
+	return n, nil
+}
+
+// CountNonSystem — число НЕ-системных операторов (включая revoked); основа
+// bootstrap-инварианта «реестр пуст» (ADR-013 amendment 2026-07-01).
+func CountNonSystem(ctx context.Context, db execQueryRower) (int64, error) {
+	var n int64
+	if err := db.QueryRow(ctx, countNonSystemOperatorsSQL).Scan(&n); err != nil {
+		return 0, fmt.Errorf("operator: count non-system: %w", err)
 	}
 	return n, nil
 }

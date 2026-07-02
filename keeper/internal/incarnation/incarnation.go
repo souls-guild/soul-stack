@@ -56,8 +56,8 @@ const (
 const NamePattern = `^[a-z0-9][a-z0-9-]{0,62}$`
 
 // ReasonMaxLen — верхняя граница свободного текста подтверждения (reason) у
-// unlock / rerun-create. Единый источник для huma-тега maxLength и рантайм-
-// валидатора (UnlockTyped / RerunCreateTyped 422-ят `len(reason) > ReasonMaxLen`).
+// unlock / rerun-last. Единый источник для huma-тега maxLength и рантайм-
+// валидатора (UnlockTyped / RerunLastTyped 422-ят `len(reason) > ReasonMaxLen`).
 // Нижняя граница (непустота) — отдельная проверка `reason == ""`.
 const ReasonMaxLen = 500
 
@@ -94,7 +94,6 @@ type Incarnation struct {
 	// (механизм нескольких create-сценариев, Вариант A; колонка
 	// incarnation.created_scenario NULLABLE, миграции 089+090). Runtime-факт:
 	// оператор выбирает его при POST /v1/incarnations (поле `create_scenario`).
-	// rerun-create перезапускает ИМЕННО этот сценарий.
 	//
 	// nil = bare-инкарнация (NULL в БД): сервис без create-сценариев создаётся
 	// StatusReady БЕЗ прогона (миграция 090 сняла NOT NULL/DEFAULT). Непустой

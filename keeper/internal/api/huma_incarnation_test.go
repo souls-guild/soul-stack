@@ -6,7 +6,7 @@ package api
 //   - MIDDLEWARE-AUDIT (create/run/unlock/upgrade): event пишет huma-audit-middleware
 //     (вариант B) — guard через assertMiddlewareAudit (audit на 2xx с непустым
 //     payload; на 4xx/403 — пусто).
-//   - SELF-AUDIT (rerun-create/check-drift/destroy/update-hosts): event пишет САМ
+//   - SELF-AUDIT (rerun-last/check-drift/destroy/update-hosts): event пишет САМ
 //     handler ВНУТРИ *Typed — guard через assertSelfAudit (event с requiredKey).
 //
 // Плюс: golden byte-exact wire каждого роута; ChiCoexistence на РЕАЛЬНОМ buildRouter
@@ -105,7 +105,7 @@ func TestHumaIncarnation_ChiCoexistence(t *testing.T) {
 		{http.MethodPost, "/v1/incarnations/{name}/scenarios/{scenario}"}:          0,
 		{http.MethodPost, "/v1/incarnations/{name}/unlock"}:                        0,
 		{http.MethodPost, "/v1/incarnations/{name}/upgrade"}:                       0,
-		{http.MethodPost, "/v1/incarnations/{name}/rerun-create"}:                  0,
+		{http.MethodPost, "/v1/incarnations/{name}/rerun-last"}:                    0,
 		{http.MethodPost, "/v1/incarnations/{name}/check-drift"}:                   0,
 		{http.MethodDelete, "/v1/incarnations/{name}"}:                             0,
 		{http.MethodPatch, "/v1/incarnations/{name}/hosts"}:                        0,
@@ -148,7 +148,7 @@ func (e incEnforcer) HoldsAction(string, string, string) bool { return e.allow }
 
 // humaIncarnationRouter монтирует ВСЕ incarnation-роуты через huma ровно по навеске
 // router.go: per-route RBAC + правильный audit-класс (MIDDLEWARE для create/run/unlock/
-// upgrade; SELF для rerun-create/check-drift/destroy/update-hosts; read без audit) +
+// upgrade; SELF для rerun-last/check-drift/destroy/update-hosts; read без audit) +
 // huma-op с полным путём /{name}[/...] на группе /v1/incarnations. enforcer/auditW/incH
 // параметризованы. injectClaims заменяет RequireJWT.
 func humaIncarnationRouter(t *testing.T, enforcer incEnforcer, auditW audit.Writer, incH *handlers.IncarnationHandler) *chi.Mux {
@@ -180,8 +180,8 @@ func humaIncarnationRouter(t *testing.T, enforcer incEnforcer, auditW audit.Writ
 				registerHumaIncarnationUpgrade(newHumaIncarnationAPI(r, auditW, audit.EventIncarnationUpgradeStarted, nil), incH)
 			})
 			// SELF-AUDIT
-			r.With(injectClaims, multi("create-rerun")).Group(func(r chi.Router) {
-				registerHumaIncarnationRerunCreate(newHumaCadenceAPI(r), incH)
+			r.With(injectClaims, multi("rerun-last")).Group(func(r chi.Router) {
+				registerHumaIncarnationRerunLast(newHumaCadenceAPI(r), incH)
 			})
 			r.With(injectClaims, multi("check-drift")).Group(func(r chi.Router) {
 				registerHumaIncarnationCheckDrift(newHumaCadenceAPI(r), incH)
@@ -628,9 +628,9 @@ func TestHumaIncarnation_Run_WireAndMiddlewareAudit(t *testing.T) {
 	assertMiddlewareAudit(t, auditCap, audit.EventIncarnationScenarioStarted, "scenario")
 }
 
-// === SELF-AUDIT: rerun-create ===
+// === SELF-AUDIT: rerun-last ===
 
-func TestHumaIncarnation_RerunCreate_SelfAudit(t *testing.T) {
+func TestHumaIncarnation_RerunLast_SelfAudit(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	db := &incTestDB{
 		selectByName: func(name string) pgx.Row { return incRow(name, "error_locked", "{}") },
@@ -639,7 +639,7 @@ func TestHumaIncarnation_RerunCreate_SelfAudit(t *testing.T) {
 	incH := handlers.NewIncarnationHandler(db, &incTestStarter{}, nil, nil, &incTestResolver{ok: true}, nil, auditCap, nil, nil)
 	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations/redis-prod/rerun-create", strings.NewReader(`{"reason":"retry"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations/redis-prod/rerun-last", strings.NewReader(`{"reason":"retry"}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202; body=%s", rec.Code, rec.Body.String())
@@ -654,10 +654,10 @@ func TestHumaIncarnation_RerunCreate_SelfAudit(t *testing.T) {
 	if reply.ApplyID == "" || reply.Incarnation != "redis-prod" {
 		t.Errorf("reply = %+v", reply)
 	}
-	assertSelfAudit(t, auditCap, audit.EventIncarnationCreateRerun, "previous_status")
+	assertSelfAudit(t, auditCap, audit.EventIncarnationRerunLast, "previous_status")
 }
 
-func TestHumaIncarnation_RerunCreate_NotErrorLocked_409_NoAudit(t *testing.T) {
+func TestHumaIncarnation_RerunLast_NotErrorLocked_409_NoAudit(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	db := &incTestDB{
 		selectByName: func(name string) pgx.Row { return incRow(name, "ready", "{}") },
@@ -666,7 +666,7 @@ func TestHumaIncarnation_RerunCreate_NotErrorLocked_409_NoAudit(t *testing.T) {
 	incH := handlers.NewIncarnationHandler(db, &incTestStarter{}, nil, nil, &incTestResolver{ok: true}, nil, auditCap, nil, nil)
 	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations/redis-prod/rerun-create", strings.NewReader(`{"reason":"x"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations/redis-prod/rerun-last", strings.NewReader(`{"reason":"x"}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
@@ -899,7 +899,7 @@ func TestHumaIncarnation_SpecYAML(t *testing.T) {
 	for _, want := range []string{
 		"createIncarnation", "listIncarnations", "getIncarnation", "getIncarnationHistory",
 		"runIncarnationScenario", "unlockIncarnation", "upgradeIncarnation",
-		"rerunCreateIncarnation", "checkIncarnationDrift", "destroyIncarnation", "updateIncarnationHosts",
+		"rerunLastIncarnation", "checkIncarnationDrift", "destroyIncarnation", "updateIncarnationHosts",
 	} {
 		if !strings.Contains(frag, want) {
 			t.Errorf("спека не содержит op %q", want)
@@ -991,7 +991,9 @@ func (f *incTestDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row
 		}
 		return errRow2{pgx.ErrNoRows}
 	case strings.Contains(sql, "SELECT scenario") && strings.Contains(sql, "FROM state_history"):
-		return staticRow1("create")
+		return incStaticRow{values: []any{"create", "01HFAILEDRUN00000000000000"}}
+	case strings.Contains(sql, "FROM apply_runs") && strings.Contains(sql, "recipe IS NOT NULL"):
+		return errRow2{pgx.ErrNoRows}
 	case strings.Contains(sql, "UPDATE incarnation") && strings.Contains(sql, "RETURNING updated_at"):
 		return staticRow1Time(time.Now().UTC())
 	case strings.Contains(sql, "WHERE name = $1") || strings.Contains(sql, "FROM incarnation\nWHERE name"):

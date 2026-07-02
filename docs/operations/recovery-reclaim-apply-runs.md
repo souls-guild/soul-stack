@@ -128,7 +128,7 @@ Voyage-orphan-lock-release (выше) закрывает осиротевший 
 **Known-gap — NULL-epoch + FromLocked-микроокно → ручной `unlock`.** Правило реклеймит только строки с известным epoch (`applying_by_kid IS NOT NULL`). Два класса остаются за бортом:
 
 - **legacy/pre-082** — applying-строки, поставленные до миграции 082 (epoch-колонок ещё не было), несут NULL `applying_by_kid`;
-- **rerun-create микроокно** — `UnlockForRerun` транзитит `error_locked → applying` БЕЗ epoch, epoch дописывается следующей tx; краш точно в зазоре между этими двумя tx оставляет NULL-epoch.
+- **rerun-last микроокно** — `UnlockForRerun` транзитит `error_locked → applying` БЕЗ epoch, epoch дописывается следующей tx; краш точно в зазоре между этими двумя tx оставляет NULL-epoch.
 
 Без presence-свидетеля смерти владельца (нет `applying_by_kid`) снятие небезопасно — такой lock правило сознательно НЕ трогает. Снимается оператором вручную: `POST /v1/incarnations/{name}/unlock` ([operator-api/incarnations.md → unlock](../keeper/operator-api/incarnations.md#post-v1incarnationsnameunlock--снять-error_locked)) после разбора, что прогон действительно мёртв. Диагностика `applying`-stuck — [faq.md](faq.md).
 

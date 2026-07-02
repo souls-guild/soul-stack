@@ -71,12 +71,12 @@ FROM incarnation WHERE name = $1`
 }
 
 // TestIntegration_LockApplyingWithEpoch_FromLocked — guard на инвариант ADR-027
-// amend (m-S1) FromLocked: rerun-create-старт пишет epoch на уже-applying-строку.
+// amend (m-S1) FromLocked: rerun-last-старт пишет epoch на уже-applying-строку.
 // UnlockForRerun транзитит error_locked→applying БЕЗ epoch (NULL-колонки);
 // lockRun{FromLocked:true} обязан дописать applying_apply_id/applying_attempt/
 // applying_by_kid/applying_since тем же lockApplyingWithEpoch (parity с обычным
-// lockRun). Без этого rerun-create-applying оставался бы NULL-epoch → не попадал
-// под reconcile_orphan_applying → краш владельца mid-rerun-create = orphan навсегда.
+// lockRun). Без этого rerun-last-applying оставался бы NULL-epoch → не попадал
+// под reconcile_orphan_applying → краш владельца mid-rerun-last = orphan навсегда.
 func TestIntegration_LockApplyingWithEpoch_FromLocked(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -97,7 +97,7 @@ func TestIntegration_LockApplyingWithEpoch_FromLocked(t *testing.T) {
 	}
 	seedCreateHistory(t, name)
 
-	// Unlock-часть rerun-create: error_locked→applying минуя ready (race-free),
+	// Unlock-часть rerun-last: error_locked→applying минуя ready (race-free),
 	// БЕЗ epoch — applying_* остаются NULL после этого шага.
 	if _, err := incarnation.UnlockForRerun(ctx, integrationPool,
 		name, "rerun bootstrap verified", "archon-alice", applyID, applyID); err != nil {
@@ -143,7 +143,7 @@ FROM incarnation WHERE name = $1`
 	if status != "applying" {
 		t.Errorf("status = %q, want applying (FromLocked не должен ломать статус)", status)
 	}
-	// Parity с обычным lockRun: все 4 epoch-колонки непустые — rerun-create-applying
+	// Parity с обычным lockRun: все 4 epoch-колонки непустые — rerun-last-applying
 	// попадает под reconcile_orphan_applying.
 	if gotApply == nil || *gotApply != applyID {
 		t.Errorf("applying_apply_id = %v, want %q (epoch не записан на FromLocked-пути)", gotApply, applyID)

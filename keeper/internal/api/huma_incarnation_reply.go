@@ -26,7 +26,7 @@ package api
 //
 // OUTPUT-PATTERN ИМЁН (батч 5): incarnation_name (Name + echo Incarnation) ←
 // incarnation.NamePattern; covens[] ← soul.CovenPattern (per-element, output covens в
-// Incarnation* View/Reply). Reply-типы output-only (create/run/upgrade/rerun-create —
+// Incarnation* View/Reply). Reply-типы output-only (create/run/upgrade/rerun-last —
 // отдельные *Request/*Input) → input-422-риска нет. service — FK на serviceregistry,
 // формат покрыт INPUT-доменом (incarnation.create service, батч 4) — output-эхо НЕ
 // тегируем (вне name-скоупа Service-View этого батча).
@@ -69,10 +69,11 @@ type IncarnationUpgradeReply struct {
 	ApplyID string `json:"apply_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"` // ULID (audit.NewULID)
 }
 
-// IncarnationRerunCreateReply — native 202-тело POST .../rerun-create (apply_id + echo).
-type IncarnationRerunCreateReply struct {
+// IncarnationRerunLastReply — native 202-тело POST .../rerun-last (apply_id + echo + перезапущенный scenario).
+type IncarnationRerunLastReply struct {
 	ApplyID     string `json:"apply_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"`     // ULID (audit.NewULID)
 	Incarnation string `json:"incarnation" pattern:"^[a-z0-9][a-z0-9-]{0,62}$"` // ← incarnation.NamePattern
+	Scenario    string `json:"scenario" pattern:"^[a-z][a-z0-9_]*$"`            // имя перезапущенного сценария (последний упавший)
 }
 
 // IncarnationDestroyReply — native 202-тело DELETE /v1/incarnations/{name} (apply_id).
@@ -155,8 +156,8 @@ func newIncarnationUpgradeReply(v handlers.IncarnationUpgradeView) IncarnationUp
 	return IncarnationUpgradeReply{ApplyID: v.ApplyID}
 }
 
-func newIncarnationRerunCreateReply(v handlers.IncarnationRerunCreateView) IncarnationRerunCreateReply {
-	return IncarnationRerunCreateReply{ApplyID: v.ApplyID, Incarnation: v.Incarnation}
+func newIncarnationRerunLastReply(v handlers.IncarnationRerunLastView) IncarnationRerunLastReply {
+	return IncarnationRerunLastReply{ApplyID: v.ApplyID, Incarnation: v.Incarnation, Scenario: v.Scenario}
 }
 
 func newIncarnationDestroyReply(v handlers.IncarnationDestroyView) IncarnationDestroyReply {

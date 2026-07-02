@@ -101,7 +101,7 @@
 
 В MCP-протоколе нет HTTP status codes — `202 Accepted + body {apply_id}` Operator API в MCP отображается как **structured output** tool-а с top-level полем `_apply_id` (underscore-prefix отличает MCP-convention от business-data).
 
-Список async-tools: `keeper.incarnation.create`, `keeper.incarnation.rerun-create`, `keeper.incarnation.run`, `keeper.incarnation.upgrade`, `keeper.incarnation.destroy`, `keeper.push.apply`, `keeper.push.cleanup`. `keeper.soul.errand.run` — sync-by-default (server-cap 30s), при превышении возвращает `async=true` со `status=running`; poll через `keeper.errand.get`.
+Список async-tools: `keeper.incarnation.create`, `keeper.incarnation.rerun-last`, `keeper.incarnation.run`, `keeper.incarnation.upgrade`, `keeper.incarnation.destroy`, `keeper.push.apply`, `keeper.push.cleanup`. `keeper.soul.errand.run` — sync-by-default (server-cap 30s), при превышении возвращает `async=true` со `status=running`; poll через `keeper.errand.get`.
 
 **Опрос статуса:**
 
@@ -131,7 +131,7 @@ RFC 7807 ProblemDetails Operator API ([operator-api.md → Error format](operato
 | `not-found` | Ресурс не существует. |
 | `validation-failed` | Семантическая ошибка валидации input. |
 | `malformed-request` | Неверный JSON/неверные query params. |
-| `incarnation-locked` | Incarnation в `error_locked` — вызвать `keeper.incarnation.unlock` перед новым прогоном. В `keeper.incarnation.rerun-create` — статус не `error_locked`; ИЛИ последний упавший сценарий не создавал инкарнацию; ИЛИ инкарнация bare (`created_scenario IS NULL`, перезапускать нечего) — rerun перезапускает только СОЗДАВШИЙ стартовый сценарий. |
+| `incarnation-locked` | Incarnation в `error_locked` — вызвать `keeper.incarnation.unlock` перед новым прогоном. В `keeper.incarnation.rerun-last` — статус не `error_locked`; ИЛИ input упавшего прогона недоступен (рецепт вычищен ретеншном Reaper / legacy-прогон без рецепта, fail-closed) — сними блок обычным `unlock` и запусти сценарий вручную с явным input. |
 | `migration-failed` | Incarnation в `migration_failed` — нужен ручной разбор state_history. |
 | `would-lock-out-cluster` | Операция оставила бы кластер без активного Архонта с эффективным `*`-permission. Возникает в `keeper.operator.revoke` (отзыв последнего `*`-Архонта), в role-операциях `keeper.role.delete` / `keeper.role.update` / `keeper.role.revoke-operator` (см. [§ Role](#role-6)) и в synod-операциях `keeper.synod.delete` / `keeper.synod.remove-operator` / `keeper.synod.revoke-role` (эффективный `*` может приходить через Synod, см. [§ Synod](#synod-8)). |
 | `role-not-found` | Роль с указанным `name` отсутствует в `rbac_roles` (`keeper.role.delete` / `keeper.role.update` / `keeper.role.grant-operator` / `keeper.role.revoke-operator`; `keeper.synod.grant-role` над несуществующей ролью). |
@@ -184,7 +184,7 @@ RFC 7807 ProblemDetails Operator API ([operator-api.md → Error format](operato
 
 ### Incarnation (11)
 
-Вынесены в доменный файл — [mcp-tools/incarnations.md](mcp-tools/incarnations.md): `keeper.incarnation.create`, `keeper.incarnation.rerun-create`, `keeper.incarnation.run`, `keeper.incarnation.get`, `keeper.incarnation.list`, `keeper.incarnation.history`, `keeper.incarnation.unlock`, `keeper.incarnation.upgrade`, `keeper.incarnation.check-drift`, `keeper.incarnation.destroy`, `keeper.incarnation.traits-set` — одиннадцать tool-ов с MCP-парностью к REST-роутам [operator-api.md → Incarnation (12)](operator-api.md#incarnation-12--жизненный-цикл-runtime-инстансов-adr-009). 12-й REST-роут `PATCH /v1/incarnations/{name}/hosts` — REST-only (MCP-tool-а нет). Источник правды по семантике — [operator-api/incarnations.md](operator-api/incarnations.md).
+Вынесены в доменный файл — [mcp-tools/incarnations.md](mcp-tools/incarnations.md): `keeper.incarnation.create`, `keeper.incarnation.rerun-last`, `keeper.incarnation.run`, `keeper.incarnation.get`, `keeper.incarnation.list`, `keeper.incarnation.history`, `keeper.incarnation.unlock`, `keeper.incarnation.upgrade`, `keeper.incarnation.check-drift`, `keeper.incarnation.destroy`, `keeper.incarnation.traits-set` — одиннадцать tool-ов с MCP-парностью к REST-роутам [operator-api.md → Incarnation (12)](operator-api.md#incarnation-12--жизненный-цикл-runtime-инстансов-adr-009). 12-й REST-роут `PATCH /v1/incarnations/{name}/hosts` — REST-only (MCP-tool-а нет). Источник правды по семантике — [operator-api/incarnations.md](operator-api/incarnations.md).
 
 ### Soul (5)
 

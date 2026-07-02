@@ -212,3 +212,17 @@ cadence_scheduler:
 #     proxy_addr: proxy.example.com:443     # gRPC sshgrpc-listener Teleport Proxy
 #     identity_file: /etc/soul/teleport-identity   # tctl auth sign, доступ к нодам
 #     cluster: example.com                  # имя кластера, где резолвятся node-name (SID)
+
+push:
+  transport: teleport
+  teleport:
+    proxy_addr: tp.rwb.ru:443
+    identity_file: /tmp/keeper-dev/keeper-push.identity
+    cluster: teleport-rwb
+
+# cloud-init userdata для core.cloud.provisioned (ADR-017(h));
+# dev-стенд: bastion-туннель 192.168.2.3, CA в Vault (поле ca), artifact-хост :8443.
+cloud_init:
+  bootstrap_endpoint: "192.168.2.3:9442"
+  tls_ca_ref: "vault:secret/keeper/bootstrap-ca"
+  soul_binary_url: "https://192.168.2.3:8443/soul"

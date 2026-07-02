@@ -218,7 +218,7 @@ type RunSpec struct {
 	TerminalMode    TerminalMode
 
 	// FromLocked — старт прогона по уже зарезервированному статусу applying
-	// (rerun-create: incarnation.UnlockForRerun под FOR UPDATE перевёл
+	// (rerun-last: incarnation.UnlockForRerun под FOR UPDATE перевёл
 	// error_locked→applying минуя ready, race-free). lockRun при FromLocked НЕ
 	// транзитит статус повторно — обязан увидеть applying, иначе старт отклоняется
 	// (fail-closed). Нулевое значение = обычный старт.
@@ -237,7 +237,7 @@ type RunSpec struct {
 	// VoyageID — back-link на породивший прогон Voyage (voyages.voyage_id,
 	// ADR-043). Проброс из VoyageWorker через ScenarioSpawner.SpawnScenarioRun
 	// (production-spawner кладёт его сюда). nil ⇒ прогон НЕ через Voyage: прямые
-	// пути scenario `create` (auto_create) / rerun-create / destroy и их
+	// пути scenario `create` (auto_create) / rerun-last / destroy и их
 	// MCP-аналоги вызывают Runner напрямую, минуя voyage-orchestrator. Несётся
 	// в payload терминального события incarnation.run_completed ТОЛЬКО когда
 	// != nil (симметрия с CadenceID) — для visibility-фетча per-incarnation

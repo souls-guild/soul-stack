@@ -129,8 +129,8 @@ const (
 // Length-границы (ТИРАЖ-БАТЧ 6). Авторитетные рантайм-источники без ЭКСПОРТНОГО
 // const — дублируем литерал рядом со ссылкой (как ssh_port/batch выше).
 //
-//   - reasonRuntimeMinLen: unlock/rerun-create reason — рантайм 422-ит
-//     `reason == ""` (UnlockTyped / RerunCreateTyped; обе TypeValidationFailed → 422).
+//   - reasonRuntimeMinLen: unlock/rerun-last reason — рантайм 422-ит
+//     `reason == ""` (UnlockTyped / RerunLastTyped; обе TypeValidationFailed → 422).
 //   - covenRuntimeMaxLen: длина Coven-метки — soul.ValidCoven len>63 → 422
 //     (soul.go:81, covenMaxLen=63). Тот же предел у declared-роли
 //     (validHostRole len>63, incarnation.go:177) и у incarnation-имени через
@@ -138,7 +138,7 @@ const (
 //     в ValidCoven) — кандидат на экспорт soul.CovenMaxLen.
 //
 // Верхняя граница reason — ЭКСПОРТНАЯ incarnation.ReasonMaxLen (=500): и тег
-// maxLength, и рантайм-валидатор (UnlockTyped / RerunCreateTyped 422-ят
+// maxLength, и рантайм-валидатор (UnlockTyped / RerunLastTyped 422-ят
 // `len(reason) > ReasonMaxLen`) ссылаются на этот единый const, поэтому кейс
 // runtime берёт его напрямую через strconv.Itoa (не литерал).
 const (
@@ -585,12 +585,12 @@ var constraintSyncCases = []constraintSyncCase{
 		source:    "audit.NewULID (incarnation upgrade)",
 	},
 	{
-		name:      "IncarnationRerunCreateReply apply_id ULID",
-		structPtr: &IncarnationRerunCreateReply{},
+		name:      "IncarnationRerunLastReply apply_id ULID",
+		structPtr: &IncarnationRerunLastReply{},
 		fieldPath: []string{"ApplyID"},
 		tag:       tagPattern,
 		runtime:   ulidRuntimePattern,
-		source:    "audit.NewULID (incarnation rerun-create)",
+		source:    "audit.NewULID (incarnation rerun-last)",
 	},
 	{
 		name:      "IncarnationDestroyReply apply_id ULID",
@@ -1317,7 +1317,7 @@ var constraintSyncCases = []constraintSyncCase{
 	},
 
 	// --- incarnation_name (incarnation.NamePattern ^[a-z0-9][a-z0-9-]{0,62}$) ---
-	// IncarnationGetReply.name + echo Incarnation в create/run/rerun-create + choir/voice
+	// IncarnationGetReply.name + echo Incarnation в create/run/rerun-last + choir/voice
 	// incarnation_name. DecreeView.incarnation_name — отдельный const oracle.IncarnationPattern
 	// (значение идентично, но домен decree — сверяем с ЕГО источником).
 	{
@@ -1345,8 +1345,8 @@ var constraintSyncCases = []constraintSyncCase{
 		source:    "incarnation.NamePattern (output incarnation echo)",
 	},
 	{
-		name:      "IncarnationRerunCreateReply incarnation (incarnation.NamePattern, echo)",
-		structPtr: &IncarnationRerunCreateReply{},
+		name:      "IncarnationRerunLastReply incarnation (incarnation.NamePattern, echo)",
+		structPtr: &IncarnationRerunLastReply{},
 		fieldPath: []string{"Incarnation"},
 		tag:       tagPattern,
 		runtime:   incarnation.NamePattern,
@@ -1381,10 +1381,10 @@ var constraintSyncCases = []constraintSyncCase{
 	// LENGTH-ГРАНИЦЫ INPUT (ТИРАЖ-БАТЧ 6 + добивка). minLength/maxLength, где
 	// рантайм РЕАЛЬНО 422-ит ту же границу. reason — обе границы: непустота
 	// (minLength:1) + верх incarnation.ReasonMaxLen (maxLength:500, рантайм-
-	// валидатор UnlockTyped/RerunCreateTyped, решение PM вариант (а)).
+	// валидатор UnlockTyped/RerunLastTyped, решение PM вариант (а)).
 	// ====================================================================
 
-	// --- reason непустота + верх ReasonMaxLen (UnlockTyped/RerunCreateTyped → 422) ---
+	// --- reason непустота + верх ReasonMaxLen (UnlockTyped/RerunLastTyped → 422) ---
 	{
 		name:      "incarnation.unlock reason minLength",
 		structPtr: &incUnlockInput{},
@@ -1402,20 +1402,20 @@ var constraintSyncCases = []constraintSyncCase{
 		source:    "incarnation.ReasonMaxLen (UnlockTyped, len(reason) > 500 → 422)",
 	},
 	{
-		name:      "incarnation.rerun-create reason minLength",
+		name:      "incarnation.rerun-last reason minLength",
 		structPtr: &incRerunInput{},
 		fieldPath: []string{"Body", "Reason"},
 		tag:       tagMinLength,
 		runtime:   reasonRuntimeMinLen,
-		source:    "RerunCreateTyped (incarnation_typed.go, reason == \"\" → 422)",
+		source:    "RerunLastTyped (incarnation_typed.go, reason == \"\" → 422)",
 	},
 	{
-		name:      "incarnation.rerun-create reason maxLength",
+		name:      "incarnation.rerun-last reason maxLength",
 		structPtr: &incRerunInput{},
 		fieldPath: []string{"Body", "Reason"},
 		tag:       tagMaxLength,
 		runtime:   strconv.Itoa(incarnation.ReasonMaxLen),
-		source:    "incarnation.ReasonMaxLen (RerunCreateTyped, len(reason) > 500 → 422)",
+		source:    "incarnation.ReasonMaxLen (RerunLastTyped, len(reason) > 500 → 422)",
 	},
 
 	// --- ssh_user непустота (UpdateSshTargetTyped soul.go:1529, "" → 422) ---

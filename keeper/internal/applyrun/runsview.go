@@ -36,14 +36,16 @@ const (
 	RunStatusCancelled RunStatus = "cancelled"
 )
 
-// RunSummary — одна строка списка прогонов инкарнации (GET .../runs). Свёртка
-// всех host×passage-строк одного apply_id: агрегатный статус, границы времени,
-// инициатор.
+// RunSummary — одна строка списка прогонов (GET .../runs и глобальный GET
+// /v1/runs). Свёртка всех host×passage-строк одного apply_id: агрегатный статус,
+// границы времени, инициатор. Incarnation — владелец прогона (в per-incarnation
+// выборке совпадает с аргументом, в глобальной — из строк apply_id).
 type RunSummary struct {
-	ApplyID   string
-	Scenario  string
-	Status    RunStatus
-	StartedAt time.Time
+	ApplyID     string
+	Incarnation string
+	Scenario    string
+	Status      RunStatus
+	StartedAt   time.Time
 	// FinishedAt — NULL, пока хотя бы одна host-строка не финишировала (прогон
 	// applying); иначе MAX(finished_at) по строкам.
 	FinishedAt   *time.Time
@@ -165,6 +167,7 @@ func ListRunsByIncarnation(ctx context.Context, db ExecQueryRower, incarnationNa
 		if err := rows.Scan(&rs.ApplyID, &rs.Scenario, &rs.StartedAt, &rs.FinishedAt, &rs.StartedByAID, &statusStrs); err != nil {
 			return nil, 0, fmt.Errorf("applyrun: scan run summary: %w", err)
 		}
+		rs.Incarnation = incarnationName
 		rs.Status = AggregateRunStatus(toStatuses(statusStrs))
 		out = append(out, rs)
 	}
