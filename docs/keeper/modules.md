@@ -303,6 +303,32 @@ Generate-if-absent для Vault KV-секретов на keeper-стороне (
 
 **Security-инвариант (ADR-010):** сгенерированное **значение** никогда не уходит в register-output / audit-payload / лог / OTel / текст ошибки — наружу только `path` + имена сгенерированных полей. register-output — `generated` (map путь → \[поля]); audit-event `vault.kv-present` (`source: keeper_internal`) пишется только при `changed=true`, payload `{paths}` — без значений. Полный per-module справочник с params (`targets` / `policy`) / output / security — [docs/module/core/vault/README.md](../module/core/vault/README.md#corevaultkv-present).
 
+## Авто-синтез `core.module.installed` из `service.yml::modules[]`
+
+Сам шаг `core.module.installed` — **Soul-side** (доставка SoulModule-плагина на хост: allow-check → `FetchModule` → verify → hot-register; хостовая сторона — [soul/modules.md](../soul/modules.md), фиксация — [ADR-065](../adr/0065-core-module-installed.md)). Keeper при этом **синтезирует** такие шаги в план прогона из manifest-декларации `service.yml::modules[]` (`{name, ref}`, [service/manifest.md](../service/manifest.md#формат-destiny-и-modules)) — оператор декларирует зависимость один раз на сервис, install-boilerplate в каждом сценарии не нужен ([ADR-065 amendment 2026-07-03](../adr/0065-core-module-installed.md)).
+
+**Точка синтеза.** Сразу после раскрытия `include:` (плоский список задач, [scenario/orchestration.md §6](../scenario/orchestration.md#6-двухуровневый-резолв-ресурсов)) и до Stratify — одинаково во всех местах, строящих план прогона: scenario-runner (apply), check-drift (drift-план ≡ apply-плану, иначе синтез-шаг был бы вечным drift-ом), claim-render Acolyte (воспроизводит план run-goroutine — корреляция plan_index/TaskEvent) и L0-trial-harness. Pre-flight/parsing/UI-поверхности план не мутируют.
+
+**Что вставляется.** Для каждой записи `modules[]`, у которой в плане есть задача-потребитель (задача `module:` с префиксом `<ns>.<module>.`), синтезируется обычная задача плана с именем-маркером:
+
+```yaml
+- name: install community.redis (service manifest)   # имя-маркер синтез-шага
+  module: core.module.installed
+  params: { name: community.redis, ref: v1.2.0 }     # name+ref — из записи manifest
+```
+
+- **Позиция** — непосредственно перед первой задачей-потребителем; потребитель внутри `block:` → вставка перед block-ом целиком. Несколько синтез-шагов перед одной задачей — в порядке манифеста.
+- **Без `on:`/`where:`** — обычная roster-задача: стратифицируется как её потребитель, в т.ч. едет **после** roster-refresh-границы ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)) — provision-from-zero работает без спец-логики.
+- **Модуль без потребителей в плане НЕ синтезируется**; записи `core.*` пропускаются (они и так запрещены валидацией манифеста, `core_module_in_modules_list`).
+- `ref` в params — **pin-сверка** ([ADR-065(c)](../adr/0065-core-module-installed.md)): активный Sigil-допуск обязан быть на этом ref, иначе шаг `failed`.
+- Синтез-шаг проходит render → dispatch → TaskEvent как любая задача и виден в run-view по имени-маркеру.
+
+**Takeover — явный шаг отключает синтез.** Явный `core.module.installed` с тем же **литеральным** `params.name` в плане подавляет синтез этого имени — оператор сам управляет позицией, `ref` и `when:`. `${…}`-CEL в `params.name` литеральному сравнению не поддаётся: синтез не подавится, возможен дубль-шаг — безвредный (идемпотентность по sha256: бинарь уже установлен → `changed=false`, fetch не выполняется).
+
+**Идемпотентность и ошибки.** Скип только модульный (sha256 установленного бинаря == sha активного Sigil-допуска); plan-level skip нет — Keeper не ведёт реестра установленного per-host, roster меняется mid-run. Отсутствие записи в `plugins.soul_modules[]` / активного Sigil-допуска ловит Soul-side allow-check шага (`module_not_allowed`) — как у явного шага; keeper-side pre-flight-гейта в MVP нет (вместе с validation-hint «модуль используется, но не задекларирован» — post-MVP).
+
+**Ограничение MVP.** Потребители определяются по `module:`-задачам сценария (top-level и внутри `block:`); модуль, используемый **только внутри destiny** (через `apply:`), потребителем не считается — ему по-прежнему нужен явный install-шаг. Push не затрагивается — там модули едут скопом ([ADR-020](../adr/0020-plugin-infrastructure.md)).
+
 ## См. также
 
 - [architecture.md → Модель модулей](../architecture.md#модель-модулей) — общая модель core/custom, Soul-side vs Keeper-side, протокол SoulModule.
@@ -310,4 +336,5 @@ Generate-if-absent для Vault KV-секретов на keeper-стороне (
 - [scenario/orchestration.md §3](../scenario/orchestration.md#3-таргет-шага--on) — `on:`, диспетчер шага между Soul-стороной и Keeper-стороной.
 - [storage.md](storage.md) — таблицы `souls`, привязка coven.
 - [cloud.md](cloud.md) — `core.cloud.provisioned` и граница с coven-привязкой (`core.soul.registered` — отдельный шаг).
+- [soul/modules.md](../soul/modules.md) — хостовая сторона `core.module.installed`: доставка, verify, кеш custom-модулей.
 - [naming-rules.md → Модули Destiny](../naming-rules.md#модули-destiny) — словарь имён.

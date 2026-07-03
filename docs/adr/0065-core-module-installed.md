@@ -1,6 +1,8 @@
 # ADR-065. core.module.installed — доставка SoulModule-плагинов на Soul-хост (FetchModule + каталог plugins.soul_modules)
 
-> **Статус: active (принят, docs-first ДО кода; реализация — слайсы S1–S6).** Дизайн architect-а, все решения утверждены пользователем (2026-07-02). Закрывает open Q №5 «где живёт реестр модулей в Keeper-е» ([architecture.md → Открытые вопросы](../architecture.md#текущие)) и дизайн-долг [ADR-015 Consequences](0015-core-modules-mvp.md) («спецификация `core.module.installed` — отдельная задача»). **Amends [ADR-012](0012-keeper-soul-grpc.md) (третий RPC `FetchModule`, only-add) / [ADR-020](0020-plugin-infrastructure.md) (каталог `plugins.soul_modules[]`) / [ADR-015](0015-core-modules-mvp.md) (спецификация зафиксирована).** [ADR-026](0026-sigil.md) (Sigil) — **НЕ меняется**: допуски, подпись, snapshot-раздача и host-side verify реюзаются как есть, новых trust-механизмов нет.
+> **Статус: amended (принят, docs-first ДО кода; реализация — слайсы S1–S6; amendment 2026-07-03 — авто-синтез install-шагов из `service.yml::modules[]`).** Дизайн architect-а, все решения утверждены пользователем (2026-07-02). Закрывает open Q №5 «где живёт реестр модулей в Keeper-е» ([architecture.md → Открытые вопросы](../architecture.md#текущие)) и дизайн-долг [ADR-015 Consequences](0015-core-modules-mvp.md) («спецификация `core.module.installed` — отдельная задача»). **Amends [ADR-012](0012-keeper-soul-grpc.md) (третий RPC `FetchModule`, only-add) / [ADR-020](0020-plugin-infrastructure.md) (каталог `plugins.soul_modules[]`) / [ADR-015](0015-core-modules-mvp.md) (спецификация зафиксирована).** [ADR-026](0026-sigil.md) (Sigil) — **НЕ меняется**: допуски, подпись, snapshot-раздача и host-side verify реюзаются как есть, новых trust-механизмов нет.
+>
+> **Amendment 2026-07-03 (авто-синтез из `modules[]`)** — см. одноимённый блок в (e): канон «только явный шаг, без auto-inject» **снят** — Keeper синтезирует Soul-side шаги `core.module.installed` из явной manifest-декларации `service.yml::modules[]`; validation-hint post-MVP сохраняется в обратном направлении.
 
 **Контекст.** `core.module.installed` заявлен с [ADR-015](0015-core-modules-mvp.md) как инфраструктурный core-модуль доставки custom-модулей (`soul-mod-*`) на управляемый хост, но ни транспорта байтов Keeper→Soul, ни реестра источников SoulModule на Keeper-е не существовало — спецификация была отложена «до имплементации Soul-демона». Тем временем вся смежная инфраструктура уже live: git-резолв каталога плагинов в ФС-кеш ([`keeper/internal/plugingit`](../../keeper/internal/plugingit), [ADR-026(g)](0026-sigil.md) — но только для keeper-side kinds `cloud_drivers`/`ssh_providers`), Sigil-допуски в PG (`plugin_sigils` + persisted `manifest_raw`) и их раздача Soul-у (`SigilSnapshot`/`SigilTrustAnchors`, ReplaceAll), host-side verify ([`shared/pluginhost`](../../shared/pluginhost)). Первый реальный потребитель — `community.redis.*` в cloud-provision-прогонах: свежесозданная VM должна получить плагин **в том же прогоне**, который ставит redis-роль ([ADR-061](0061-onboarding-await-and-midrun-reresolve.md)/[ADR-063](0063-bootstrap-token-delivery.md)). Не хватало ровно двух кусков: (1) канал передачи байтов бинаря Keeper→Soul; (2) откуда Keeper эти байты берёт (open Q №5).
 
@@ -69,6 +71,18 @@ plugins:
 
 `service.yml::modules[]` — **validation-hint post-MVP**: render/soul-lint гейт «модуль используется в задачах → обязан быть в `modules[]` и иметь активный Sigil-допуск». Это подсказка-проверка, **НЕ auto-inject** install-шага.
 
+**Amendment 2026-07-03: авто-синтез install-шагов из `service.yml::modules[]`.** Канон (e) «только явный шаг, без auto-inject» **снят**: Keeper синтезирует Soul-side шаги `core.module.installed` из **явной manifest-декларации** `service.yml::modules[]` (`{name, ref}`, [ADR-007](0007-versioning-git-ref.md); формат — [service/manifest.md](../service/manifest.md)) — оператор декларирует зависимость один раз на сервис, а не boilerplate-шагом в каждом сценарии. Это НЕ отвергнутый auto-inject «по анализу используемых модулей без декларации» (см. Отвергнутые альтернативы): декларация явная, канон «оператор пишет явно» соблюдён на уровне манифеста.
+
+- **Точка синтеза** — scenario-runner, сразу после раскрытия `include:` (плоский список задач) и ДО Stratify ([ADR-056](0056-staged-render-passage.md)); симметрично в check-drift ([ADR-031](0031-scry-drift.md)), claim-render Acolyte (воспроизводит план run-goroutine — корреляция plan_index/TaskEvent) и L0-trial-harness. Синтезированный шаг — обычная задача плана: проходит render→dispatch→TaskEvent, виден в run-view с именем-маркером `install <ns>.<module> (service manifest)`. Pre-flight/parsing/UI-поверхности план НЕ мутируют.
+- **Позиция** — непосредственно перед первой задачей-потребителем (задача `module:` с префиксом `<ns>.<module>.`; потребитель внутри `block:` → вставка перед block-ом целиком). Модуль без потребителей в плане НЕ синтезируется. Passage синтез-шаг получает по общим осям Stratify: как roster-потребитель (без `on:`) он автоматически едет после roster-refresh-границы ([ADR-061](0061-onboarding-await-and-midrun-reresolve.md)) — provision-from-zero работает без спец-логики.
+- **Params** — `{name: <из записи>, ref: <из записи>}`: `ref`-pin-сверка (c) наследуется из манифеста.
+- **Дедуп/takeover** — явный шаг `core.module.installed` с тем же литеральным `params.name` в плане отключает синтез этого имени (оператор сам управляет позицией/`ref`/`when:`). CEL-выражение в `params.name` явного шага литеральному сравнению не поддаётся — возможен дубль-шаг, безвредный по идемпотентности (c).
+- **Идемпотентность** — только модульная (c), по sha256; plan-level skip нет (Keeper не ведёт реестра установленного per-host, roster меняется mid-run).
+- **Без keeper-side fail-fast в MVP** — отсутствие записи в `plugins.soul_modules[]`/активного Sigil-допуска ловит Soul-side allow-check (f) fail-closed до единого сетевого байта (`module_not_allowed`); pre-flight-гейт до `applying` — вместе с validation-hint post-MVP.
+- **Push не затрагивается** — модули едут скопом ([ADR-020](0020-plugin-infrastructure.md)), в oneshot нет EventStream. `core.*` в `modules[]` по-прежнему запрещён манифест-валидацией (`core_module_in_modules_list`).
+- **Validation-hint post-MVP сохраняется** — в обратном направлении: модуль используется в задачах, но не задекларирован в `modules[]` (+ нет активного Sigil-допуска) → soul-lint/render-гейт. После синтеза hint важнее: незадекларированный модуль не получает install-шага и падает в рантайме.
+- **Ограничение MVP** — потребители определяются по top-level/`block:` `module:`-задачам сценария; модули, используемые только внутри destiny (через `apply:`), потребителями не считаются — оператору остаётся явный шаг; follow-up вместе с validation-hint.
+
 ### (f) Sigil-верификация install-time — реюз, новых trust-механизмов НЕТ
 
 1. **allow-check ДО fetch:** нет активного допуска `(namespace, name)` с `kind: soul_module` в локальном Sigil-наборе Soul-а → шаг `failed` `module_not_allowed` — **до единого сетевого байта**.
@@ -83,7 +97,7 @@ plugins:
 ## Границы MVP
 
 - **без `absent`-state** — cleanup кеша через существующий TTL (`cleanup.modules_ttl_days`, [soul/modules.md](../soul/modules.md));
-- **без auto-inject** install-шагов (см. (e));
+- ~~**без auto-inject** install-шагов~~ — **снят amendment-ом 2026-07-03**: авто-синтез из явной декларации `service.yml::modules[]` (см. (e));
 - **без beacon-hot-reload** при rescan (см. (d));
 - **без скопа «все allowed скопом»** (см. (c));
 - **S3-artifact-store — post-GA** за fetch-абстракцией (см. (b)).
@@ -101,7 +115,7 @@ plugins:
 - **Байты через EventStream** (chunk-message в `oneof payload`). Отвергнуто: мегабайты артефакта в control-plane-стриме блокируют очередь apply/presence-сообщений; отдельный HTTP/2-стрим на том же соединении даёт изоляцию бесплатно.
 - **Новое хранилище байтов** (PG `bytea` / обязательный artifact-store). Отвергнуто: байты уже лежат в ФС-кеше git-резолвера, допуски — уже в PG; третье хранилище — дубль без выигрыша, обязательный artifact-store ломал бы обязательный контур [ADR-053](0053-dependency-tiers.md). S3 — post-GA опция за fetch-абстракцией.
 - **Рестарт демона вместо hot-register.** Отвергнуто: рестарт = обрыв EventStream = обрыв текущего прогона — install-шаг и потребитель модуля не могут жить в одном прогоне.
-- **Auto-inject install-шага** (по анализу используемых модулей). Отвергнуто: скрытая магия против канона «оператор пишет явно»; вместо этого post-MVP validation-hint через `service.yml::modules[]`.
+- **Auto-inject install-шага по анализу используемых модулей БЕЗ декларации.** Отвергнуто: скрытая магия против канона «оператор пишет явно». Синтез из явной декларации `service.yml::modules[]` (amendment 2026-07-03, см. (e)) — НЕ этот случай: оператор декларирует зависимость явно на уровне манифеста; прежняя формулировка «только явный шаг» снята amendment-ом, validation-hint post-MVP сохраняется в обратном направлении.
 - **`ref` как выбор версии.** Отвергнуто: источник истины «какой бинарь допущен» — sha256 активного Sigil-допуска, а не параметр задачи; `ref` в params — только pin-сверка.
 
 ## Слайсы

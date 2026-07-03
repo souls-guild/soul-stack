@@ -232,6 +232,14 @@ func (r *Runner) CheckDrift(ctx context.Context, spec CheckDriftSpec) (*DriftRep
 	}
 	scn.Tasks = expanded
 
+	// Синтез install-шагов из modules[] (ADR-065) — симметрично run(): drift-план
+	// обязан совпадать с apply-планом, иначе сам синтез-шаг был бы вечным drift-ом.
+	if synthed, names := config.SynthesizeModuleInstalls(scn.Tasks, art.Manifest.Modules); len(names) > 0 {
+		scn.Tasks = synthed
+		log.Info("scenario: check-drift — синтезированы install-шаги модулей из manifest.modules[] (ADR-065)",
+			slog.Any("modules", names))
+	}
+
 	// 2. Roster + essence (как в run.go).
 	hosts, err := r.deps.Topology.LoadIncarnationHosts(ctx, spec.IncarnationName)
 	if err != nil {

@@ -68,7 +68,7 @@ service-<name>/
 | `state_schema_version` | да | integer (≥1) | Версия структуры `incarnation.state` в Postgres. **НЕ** версия сервиса (это git tag по [ADR-007](../adr/0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте)). Инкрементируется явно при breaking-изменениях schema; требует соответствующей миграции в `migrations/`. |
 | `state_schema` | да | JSON Schema object | Структура `incarnation.state` JSONB-поля в Postgres. Формат — JSON Schema (`type: object` на корне), draft-07-совместимый. См. [«Формат `state_schema`»](#формат-state_schema) ниже. |
 | `destiny` | да (если есть зависимости) | array<{name, ref, git?}> | Список destiny-зависимостей. Каждая запись: `{ name: <kebab-case>, ref: <git-tag-или-branch> }` + опц. `git: <полный-URL>` (override источника, см. ниже). Core-модули **не перечисляются** — они всегда доступны ([ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация)). |
-| `modules` | да (если есть зависимости) | array<{name, ref}> | Список custom-модулей `{ name: <namespace>.<module>, ref: <git-tag-или-branch> }`. Core-модули **не перечисляются** ([ADR-015](../adr/0015-core-modules-mvp.md#adr-015-core-модули-mvp-точный-список)). |
+| `modules` | да (если есть зависимости) | array<{name, ref}> | Список custom-модулей `{ name: <namespace>.<module>, ref: <git-tag-или-branch> }`. Core-модули **не перечисляются** ([ADR-015](../adr/0015-core-modules-mvp.md#adr-015-core-модули-mvp-точный-список)). Из записей Keeper **авто-синтезирует** install-шаги `core.module.installed` в план прогона — см. [ниже](#modules--источник-авто-синтеза-install-шагов-adr-065). |
 
 ### Что в `service.yml` НЕ лежит
 
@@ -113,6 +113,17 @@ Keeper валидирует `incarnation.state` против `state_schema` пр
 
 Прочее расширение полей (`enabled`, `optional` и т.п.) — отдельный propose-and-wait.
 
+### `modules[]` — источник авто-синтеза install-шагов (ADR-065)
+
+`modules[]` — не только декларация зависимостей для валидации и UI. Keeper из каждой записи **синтезирует** Soul-side шаг `core.module.installed` с `params: {name, ref}` и вставляет его в план прогона непосредственно перед первой задачей-потребителем модуля (задача `module: <ns>.<module>.<state>`; потребитель внутри `block:` → вставка перед block-ом целиком). Зависимость декларируется один раз на сервис — install-boilerplate в каждом сценарии не нужен ([ADR-065 amendment 2026-07-03](../adr/0065-core-module-installed.md)).
+
+- **Модуль без задач-потребителей в сценарии не синтезируется.**
+- **Takeover:** явный шаг `core.module.installed` с тем же литеральным `params.name` отключает синтез этого имени — оператор сам управляет позицией, `ref` и `when:`.
+- `ref` записи уходит в params синтез-шага как **pin-сверка**: активный Sigil-допуск обязан быть на этом ref.
+- **Ограничение MVP:** потребители определяются по `module:`-задачам сценария; модуль, используемый только внутри destiny (через `apply:`), потребителем не считается — ему нужен явный install-шаг.
+
+Полная механика (точки синтеза, позиция, имя-маркер, идемпотентность) — [`docs/keeper/modules.md → Авто-синтез`](../keeper/modules.md#авто-синтез-coremoduleinstalled-из-serviceymlmodules).
+
 ### Пример
 
 ```yaml
@@ -150,7 +161,9 @@ state_schema:
 destiny:
   - { name: redis, ref: v1.0.0 }      # режим-агностичный кирпич: install + render redis.conf
 
-# Custom-модули, нужные сценариям (двухуровневая форма <namespace>.<module>)
+# Custom-модули, нужные сценариям (двухуровневая форма <namespace>.<module>).
+# Keeper синтезирует из записи install-шаг core.module.installed перед первым
+# потребителем в плане прогона (ADR-065) — явный шаг в сценарии не нужен.
 modules:
   - { name: community.redis, ref: v1.0.0 }  # живой Redis-рантайм (CONFIG SET, ACL, cluster, sentinel)
 ```

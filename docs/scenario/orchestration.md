@@ -724,6 +724,8 @@ requisites / `on:` / `where:`) **не раскрывается** — это ош
 
 > **Это override правила `include:` из [destiny/tasks.md §4](../destiny/tasks.md#4-базовые-блоки).** В destiny `include:` — строго сосед в той же папке `tasks/`, выход за её пределы запрещён. В scenario правило **иное**: `include:` (и резолв `templates/`/`vars.yml`/`tests/`) двухуровневый — локально, затем service-level, fallback делает движок. `tasks.md §4` при этом **не меняется** — там описано поведение для destiny; отличие scenario зафиксировано здесь.
 
+> **Синтезированные задачи `core.module.installed`.** Сразу после раскрытия `include:` (до стратификации) Keeper вставляет в плоский план install-шаги custom-модулей из `service.yml::modules[]` — перед первой задачей-потребителем каждого модуля, с именем-маркером `install <ns>.<module> (service manifest)`. Это обычные задачи плана (render → dispatch → TaskEvent), в run-view видны как остальные. Механика синтеза (позиция, takeover явным шагом, ограничения MVP) — [keeper/modules.md → Авто-синтез](../keeper/modules.md#авто-синтез-coremoduleinstalled-из-serviceymlmodules), [ADR-065](../adr/0065-core-module-installed.md).
+
 ### Тесты сценария
 
 Раскладка: `scenario/<name>/tests/<case>/case.yml`. Формат `case.yml` — `verify:` / `expect:` — **переиспользуется из [destiny/testing.md](../destiny/testing.md)** (отдельного DSL ассерций нет, тот же подход). Дельта scenario:

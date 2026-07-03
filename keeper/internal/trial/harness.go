@@ -117,6 +117,16 @@ func renderCase(ctx context.Context, c *Case, caseFile string) (renderedCase, er
 	}
 	scn.Tasks = expanded
 
+	// Синтез install-шагов из service.yml::modules[] (ADR-065) — зеркало прод
+	// scenario.run (после ExpandIncludes, до render): L0-план ≡ прод-план.
+	svcManifest, err := loadTrialServiceManifest(caseFile)
+	if err != nil {
+		return rc, err
+	}
+	if svcManifest != nil {
+		scn.Tasks, _ = config.SynthesizeModuleInstalls(scn.Tasks, svcManifest.Modules)
+	}
+
 	// fixtureVault реализует и render.KVReader (vault-resolve params), и
 	// cel.KVReader (CEL-функция vault()) — один герметичный reader на обе фазы.
 	fv := newFixtureVault(c.Fixtures.Vault)
@@ -133,9 +143,9 @@ func renderCase(ctx context.Context, c *Case, caseFile string) (renderedCase, er
 	// service.yml::destiny[] (декларация зависимости + ref/git) + шаблон
 	// default_destiny_source из case.yml (file://, герметично). Сценарии без
 	// apply:destiny резолвер не дёргают; service.yml без destiny[] — не ошибка.
-	deps, err := loadServiceDestinyDeps(caseFile)
-	if err != nil {
-		return rc, err
+	var deps []config.DependencyRef
+	if svcManifest != nil {
+		deps = svcManifest.Destiny
 	}
 	destiny := newFixtureDestinyResolver(serviceRootFor(caseFile), c.Fixtures.DefaultDestinySource, deps)
 
@@ -301,12 +311,10 @@ func serviceRootFor(caseFile string) string {
 	return filepath.Dir(filepath.Dir(scenarioDir))     // .../<service-root>
 }
 
-// loadServiceDestinyDeps читает `<service-root>/service.yml` и возвращает его
-// destiny[]-зависимости (зеркало прод DestinySource.resolverFor). Отсутствие
-// service.yml — не ошибка (кейс может не использовать apply:destiny): тогда
-// deps пуст, и первое же apply:destiny отвергнется как необъявленная
-// зависимость, симметрично проду.
-func loadServiceDestinyDeps(caseFile string) ([]config.DependencyRef, error) {
+// loadTrialServiceManifest читает `<service-root>/service.yml` кейса. Отсутствие
+// файла — не ошибка (nil, nil): standalone-обёртки destiny живут без манифеста.
+// Единый загрузчик для destiny[]-deps, state_schema и modules[]-синтеза.
+func loadTrialServiceManifest(caseFile string) (*config.ServiceManifest, error) {
 	svcPath := filepath.Join(serviceRootFor(caseFile), "service.yml")
 	if _, err := os.Stat(svcPath); errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
@@ -317,26 +325,29 @@ func loadServiceDestinyDeps(caseFile string) ([]config.DependencyRef, error) {
 	}
 	if hasErrors(diags) {
 		return nil, fmt.Errorf("trial: service.yml %s невалиден: %s", svcPath, formatDiags(diags))
+	}
+	return manifest, nil
+}
+
+// loadServiceDestinyDeps — destiny[]-зависимости service.yml (зеркало прод
+// DestinySource.resolverFor). Без service.yml deps пуст, и первое же
+// apply:destiny отвергнется как необъявленная зависимость, симметрично проду.
+func loadServiceDestinyDeps(caseFile string) ([]config.DependencyRef, error) {
+	manifest, err := loadTrialServiceManifest(caseFile)
+	if manifest == nil || err != nil {
+		return nil, err
 	}
 	return manifest.Destiny, nil
 }
 
-// loadServiceStateSchema читает `<service-root>/service.yml` и возвращает его
-// state_schema-map (тип коллекции для add-материализации, зеркало прод
-// art.Manifest.StateSchema). Отсутствие service.yml / state_schema — не ошибка
-// (nil): add в уже существующую коллекцию выводит тип из значения state, schema
-// нужна лишь для материализации отсутствующего поля.
+// loadServiceStateSchema — state_schema-map service.yml (тип коллекции для
+// add-материализации, зеркало прод art.Manifest.StateSchema). Отсутствие
+// service.yml / state_schema — не ошибка (nil): add в уже существующую
+// коллекцию выводит тип из значения state.
 func loadServiceStateSchema(caseFile string) (map[string]any, error) {
-	svcPath := filepath.Join(serviceRootFor(caseFile), "service.yml")
-	if _, err := os.Stat(svcPath); errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	manifest, _, diags, err := config.LoadServiceManifest(svcPath, config.ValidateOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("trial: загрузка service.yml %s: %w", svcPath, err)
-	}
-	if hasErrors(diags) {
-		return nil, fmt.Errorf("trial: service.yml %s невалиден: %s", svcPath, formatDiags(diags))
+	manifest, err := loadTrialServiceManifest(caseFile)
+	if manifest == nil || err != nil {
+		return nil, err
 	}
 	return manifest.StateSchema, nil
 }

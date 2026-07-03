@@ -188,6 +188,15 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	}
 	scn.Tasks = expanded
 
+	// Синтез install-шагов core.module.installed из service.yml::modules[]
+	// (ADR-065): ПОСЛЕ ExpandIncludes (потребители в ветках видны), ДО Stratify
+	// (синтез-шаг — roster-задача, стратифицируется как её потребитель).
+	if synthed, names := config.SynthesizeModuleInstalls(scn.Tasks, art.Manifest.Modules); len(names) > 0 {
+		scn.Tasks = synthed
+		log.Info("scenario: синтезированы install-шаги модулей из manifest.modules[] (ADR-065)",
+			slog.Any("modules", names))
+	}
+
 	// 2.5. Provision-aware effective run-timeout (ADR-0061). Deadline переехал сюда из
 	//      Start (runner.go) — план распарсен, видно, provision-ли это. Обычный прогон
 	//      держит defaultRunTimeout (5m) — защита от вечного barrier ЦЕЛА. Прогон с

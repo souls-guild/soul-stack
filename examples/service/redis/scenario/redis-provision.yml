@@ -120,10 +120,4 @@
     await_timeout:     "${ default(input.provision.await_timeout, default(essence.provision_await_timeout, '10m')) }"
     refresh_soulprint: true
 
-# (г) Доставка SoulModule-плагина community.redis на созданные хосты (ADR-065): Soul-side
-#     шаг; roster-ось refresh-эмиттера (в) ставит его ПОСЛЕ await_online и ДО community.redis.*.
-- name: Install the community.redis plugin on provisioned hosts
-  on: ["${ incarnation.name }"]
-  module: core.module.installed
-  params:
-    name: community.redis
+# (г) install community.redis синтезируется Keeper-ом из service.yml::modules[] (ADR-065); явный шаг = takeover.

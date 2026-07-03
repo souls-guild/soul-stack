@@ -70,10 +70,11 @@ assert:
   # оба с пустым when/id и теми же params; дискриминатор — block/task-`where`
   # (TargetSIDs), который presence-матчер НЕ видит (taskMatches смотрит только
   # module/params_subset/when/id). bare task_present сматчил бы ОБА → collision-fail.
-  # Поэтому master-restart остаётся в позиционной форме (формы сосуществуют): index 3 —
-  # master-restart (после probe[0] + block Restart[1] + replica-synced[2]).
+  # Поэтому master-restart остаётся в позиционной форме (формы сосуществуют): index 4 —
+  # master-restart (после синтез-install[0] (ADR-065, service.yml::modules[]) +
+  # probe[1] + block Restart[2] + replica-synced[3]).
   rendered_tasks:
-    - index: 3
+    - index: 4
       module: core.service.restarted
       params:
         name: redis-server
