@@ -43,10 +43,10 @@ import (
 var profileSchemaJSON []byte
 
 // runMetaKey — server.metadata-ключ идемпотентности: значение = идентификатор
-// прогона/incarnation (из profile.labels). Имя без двоеточия (некоторые
-// OpenStack-инсталляции урезают `:` в metadata-ключах). Повторный Create по
-// тому же ключу не плодит дубли — существующие живые VM
-// (BUILD/ACTIVE/REBUILD) переиспользуются.
+// прогона (из profile.labels либо CreateRequest.name как fallback). Имя без
+// двоеточия (некоторые OpenStack-инсталляции урезают `:` в metadata-ключах).
+// Повторный Create с тем же значением переиспользует живые VM
+// (BUILD/ACTIVE/REBUILD), а не плодит дубли (NIM-16).
 const runMetaKey = "soulstack-run"
 
 // Активные/переходные статусы OpenStack-инстанса, в которых VM считается
@@ -142,10 +142,13 @@ func parseProfile(p map[string]any) vmProfile {
 	return prof
 }
 
-// Create: проверка идемпотентности по metadata → servers.Create → wait-until-
-// ready → финальное событие с VmInfo (fqdn = server.AccessIPv4/floating IP /
-// первый адрес из server.Addresses; если ничего нет — Fqdn пустой, attributes
-// несут пометку no_address — Keeper-side увидит и решит сам).
+// Create: fail-closed без идентичности (нет name и нет run-метки — иначе rerun
+// плодит orphan-VM, NIM-16) → идемпотент-скан живых VM по metadata[runMetaKey] →
+// добор недостающих с первыми свободными индексами → wait-until-ready →
+// финальное событие с VmInfo (fqdn = server.AccessIPv4/floating IP / первый
+// адрес из server.Addresses; если ничего нет — Fqdn пустой, attributes несут
+// пометку no_address — Keeper-side увидит и решит сам). name без метки
+// становится run-меткой (стамп metadata).
 func (o *OpenstackDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerStreamingServer[pluginv1.CreateEvent]) error {
 	ctx := stream.Context()
 	count := req.GetCount()
@@ -158,6 +161,20 @@ func (o *OpenstackDriver) Create(req *pluginv1.CreateRequest, stream grpc.Server
 		creds.Region = prof.region
 	}
 
+	// Fail-closed: без name и без run-метки прогон неотличим от предыдущих →
+	// idempotency-скан невозможен, rerun плодил бы orphan-VM (NIM-16). Guard
+	// стоит до newOsClient — Keystone-auth это уже вызов OpenStack API.
+	nameBase := req.GetName()
+	if nameBase == "" && prof.runLabel == "" {
+		return sendCreateFailed(stream, clouddriver.FailInvalidParams, "identity",
+			fmt.Errorf("no run identity: set step param `name` or profile.labels[%q]", runMetaKey))
+	}
+	// name без явной метки становится run-меткой → создаваемые VM всегда несут
+	// metadata[runMetaKey], будущие прогоны матчатся по нему.
+	if prof.runLabel == "" {
+		prof.runLabel = nameBase
+	}
+
 	cli, err := newOsClient(ctx, creds)
 	if err != nil {
 		return sendCreateFailed(stream, clouddriver.FailAuth, "os-client", err)
@@ -165,31 +182,34 @@ func (o *OpenstackDriver) Create(req *pluginv1.CreateRequest, stream grpc.Server
 
 	backoff := defaultBackoff()
 
-	// Идемпотентность: если по runLabel уже есть живые VM — переиспользуем,
-	// добиваем только недостающие. Без runLabel idempotency-проверку не делаем
-	// (некому соотнести прогон).
-	var existing []servers.Server
-	if prof.runLabel != "" {
-		existing, err = o.findByRunLabel(ctx, cli, backoff, prof.runLabel)
-		if err != nil {
-			return sendCreateFailed(stream, clouddriver.Classify(classifyOS, err), "list-existing", err)
-		}
-		if int32(len(existing)) >= count {
-			_ = stream.Send(&pluginv1.CreateEvent{
-				Message: fmt.Sprintf("idempotent: %d VM already present for run %q", len(existing), prof.runLabel),
-			})
-			return o.finalizeCreate(ctx, cli, stream, backoff, serverIDs(existing))
-		}
-		count -= int32(len(existing))
+	// Идемпотентность (NIM-16): скан всегда (после guard runLabel непуст) —
+	// живые VM прогона переиспользуются, добиваются только недостающие.
+	existing, err := o.findByRunLabel(ctx, cli, backoff, prof.runLabel)
+	if err != nil {
+		return sendCreateFailed(stream, clouddriver.Classify(classifyOS, err), "list-existing", err)
+	}
+	if int32(len(existing)) >= count {
+		_ = stream.Send(&pluginv1.CreateEvent{
+			Message: fmt.Sprintf("idempotent: %d VM already present for run %q", len(existing), prof.runLabel),
+		})
+		return o.finalizeCreate(ctx, cli, stream, backoff, serverIDs(existing))
+	}
+
+	need := count - int32(len(existing))
+	names := gapFillNames(existing, nameBase, prof.runLabel, need)
+	if len(existing) > 0 {
+		_ = stream.Send(&pluginv1.CreateEvent{
+			Message: fmt.Sprintf("idempotent: reusing %d existing VM for run %q, creating %d more", len(existing), prof.runLabel, need),
+		})
 	}
 
 	if err := stream.Send(&pluginv1.CreateEvent{
-		Message: fmt.Sprintf("servers.Create count=%d flavor=%s image=%s", count, prof.flavorID, prof.imageID),
+		Message: fmt.Sprintf("servers.Create count=%d flavor=%s image=%s", need, prof.flavorID, prof.imageID),
 	}); err != nil {
 		return err
 	}
 
-	newServers, err := o.createServers(ctx, cli, backoff, prof, req.GetUserdata(), count)
+	newServers, err := o.createServers(ctx, cli, backoff, prof, req.GetUserdata(), names)
 	if err != nil {
 		return sendCreateFailed(stream, clouddriver.Classify(classifyOS, err), "servers.Create", err)
 	}
@@ -198,14 +218,14 @@ func (o *OpenstackDriver) Create(req *pluginv1.CreateRequest, stream grpc.Server
 	return o.finalizeCreate(ctx, cli, stream, backoff, allIDs)
 }
 
-// createServers вызывает servers.Create count раз. OpenStack создаёт по одному
-// серверу за вызов (нет batch-Create как у EC2.RunInstances). Имя каждого
-// сервера — слегка рандомизированный slug по runLabel, чтобы избежать nova-
-// конфликта по имени, если конкретное облако его требует уникальным.
-func (o *OpenstackDriver) createServers(ctx context.Context, cli osAPI, backoff clouddriver.BackoffConfig, prof vmProfile, userdata string, count int32) ([]servers.Server, error) {
-	out := make([]servers.Server, 0, count)
-	for i := int32(0); i < count; i++ {
-		opts := buildCreateOpts(prof, userdata, i)
+// createServers вызывает servers.Create по одному разу на каждое имя (OpenStack
+// создаёт по одному серверу за вызов, нет batch-Create как у EC2.RunInstances).
+// Имена приходят готовыми из gap-fill — детерминированные и без коллизий с уже
+// существующими VM (NIM-16).
+func (o *OpenstackDriver) createServers(ctx context.Context, cli osAPI, backoff clouddriver.BackoffConfig, prof vmProfile, userdata string, names []string) ([]servers.Server, error) {
+	out := make([]servers.Server, 0, len(names))
+	for _, name := range names {
+		opts := buildCreateOpts(prof, userdata, name)
 		var srv *servers.Server
 		err := clouddriver.Retry(ctx, backoff, classifyOS, func() error {
 			var rerr error
@@ -222,20 +242,23 @@ func (o *OpenstackDriver) createServers(ctx context.Context, cli osAPI, backoff 
 	return out, nil
 }
 
-// buildCreateOpts формирует servers.CreateOpts из vmProfile. seq — индекс VM
-// в текущем создании (0..count-1), используется для дельты имени.
+// buildCreateOpts формирует servers.CreateOpts с готовым именем VM
+// (детерминированное `<nameBase>-<seq>` / `soul-<runLabel>-<seq>` из gap-fill).
 //
 // Userdata: gophercloud servers.CreateOpts кодирует UserData в base64 САМ
 // (см. servers.CreateOpts.ToServerCreateMap → base64.StdEncoding.EncodeToString).
 // Драйвер кладёт plain []byte cloud-init blob — в отличие от EC2-драйвера,
 // где SDK НЕ кодирует и base64 делает author.
-func buildCreateOpts(prof vmProfile, userdata string, seq int32) servers.CreateOpts {
-	metadata := make(map[string]string, len(prof.labels))
+func buildCreateOpts(prof vmProfile, userdata, name string) servers.CreateOpts {
+	metadata := make(map[string]string, len(prof.labels)+1)
 	for k, v := range prof.labels {
 		metadata[k] = v
 	}
+	if prof.runLabel != "" {
+		metadata[runMetaKey] = prof.runLabel
+	}
 	opts := servers.CreateOpts{
-		Name:             vmName(prof.runLabel, seq),
+		Name:             name,
 		FlavorRef:        prof.flavorID,
 		ImageRef:         prof.imageID,
 		AvailabilityZone: prof.availabilityZone,
@@ -249,15 +272,38 @@ func buildCreateOpts(prof vmProfile, userdata string, seq int32) servers.CreateO
 	return opts
 }
 
-// vmName — имя инстанса OpenStack: `soul-<runLabel-or-anon>-<seq>`. Без
-// runLabel используется time-based-семя, чтобы избежать коллизии между двумя
-// независимыми run-ами; в проде оператор обязан задать labels[soulstack-run]
-// явно.
-func vmName(runLabel string, seq int32) string {
-	if runLabel == "" {
-		return fmt.Sprintf("soul-anon-%d-%d", time.Now().UnixNano(), seq)
+// vmName — детерминированное имя i-й VM батча (NIM-16, чистая функция без
+// time-компоненты — иначе idempotency-скан не находил бы свои VM): nameBase
+// (CreateRequest.name, self-onboard «Вариант T» ADR-017(h)) → `<nameBase>-<seq>`
+// (keeper предсказал FQDN и запёк per-VM токен под ним — имя ОБЯЗАНО совпасть);
+// иначе `soul-<runLabel>-<seq>`.
+func vmName(nameBase, runLabel string, seq int32) string {
+	if nameBase != "" {
+		return fmt.Sprintf("%s-%d", nameBase, seq)
 	}
 	return fmt.Sprintf("soul-%s-%d", runLabel, seq)
+}
+
+// gapFillNames выдаёт need имён для недостающих VM, беря первые свободные индексы
+// seq=0,1,2,… (занятые = имена existing) → при частичном rerun новые VM не
+// коллидируют по имени с уже существующими (NIM-16). Занятость считается по живым
+// existing: индекс VM в DELETING может переиспользоваться — nova, требующая
+// уникальные имена, ответит Conflict громко и без orphan-ов (дефолтная nova
+// дубли имён допускает — различение всё равно по metadata[runMetaKey]).
+func gapFillNames(existing []servers.Server, nameBase, runLabel string, need int32) []string {
+	occupied := make(map[string]bool, len(existing))
+	for _, s := range existing {
+		occupied[s.Name] = true
+	}
+	names := make([]string, 0, need)
+	for seq := int32(0); int32(len(names)) < need; seq++ {
+		n := vmName(nameBase, runLabel, seq)
+		if occupied[n] {
+			continue
+		}
+		names = append(names, n)
+	}
+	return names
 }
 
 // finalizeCreate ждёт готовности VM (ACTIVE + IP) и шлёт финальное событие.
@@ -328,6 +374,9 @@ func (o *OpenstackDriver) finalizeCreate(ctx context.Context, cli osAPI, stream 
 // runLabel в текущем project-е. servers.List поддерживает filter по metadata
 // через ListOpts.Metadata в более новых API; в качестве переносимого варианта
 // фильтруем уже после: вытащить всё и отсеять Python-сайд.
+//
+// В отличие от wb-драйвера name-матч-ветки нет: до-фиксовых unlabeled VM с
+// детерминированными именами у openstack не существует (anon-имена рандомные).
 //
 // PageSize не задаём — gophercloud Pager сам пейджит. AllTenants=false:
 // драйвер живёт в scope одного project-а (по credentials).

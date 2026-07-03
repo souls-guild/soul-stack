@@ -243,9 +243,139 @@ func TestValidate_RegionOptional(t *testing.T) {
 	}
 }
 
+// TestVmName_Precedence — детерминированное имя (NIM-16): nameBase из
+// CreateRequest.name даёт `<nameBase>-<seq>` (keeper предсказывает FQDN по нему),
+// побеждая runLabel; без nameBase — `soul-<runLabel>-<seq>` (anon-ветка удалена).
+func TestVmName_Precedence(t *testing.T) {
+	cases := []struct {
+		name     string
+		nameBase string
+		runLabel string
+		seq      int32
+		want     string
+	}{
+		{name: "nameBase wins", nameBase: "redis", runLabel: "run-x", seq: 0, want: "redis-0"},
+		{name: "nameBase index 2", nameBase: "redis", seq: 2, want: "redis-2"},
+		{name: "runLabel when no nameBase", runLabel: "run-x", seq: 1, want: "soul-run-x-1"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := vmName(c.nameBase, c.runLabel, c.seq); got != c.want {
+				t.Errorf("vmName(%q,%q,%d) = %q, want %q", c.nameBase, c.runLabel, c.seq, got, c.want)
+			}
+		})
+	}
+}
+
+// TestCreate_HonorsRequestName — CreateRequest.name доходит до servers.Create как
+// `<name>-<seq>` + metadata-стамп runMetaKey=<name> (драйвер соблюдает
+// keeper-заданное имя для предсказуемого FQDN, self-onboard «Вариант T»).
+func TestCreate_HonorsRequestName(t *testing.T) {
+	f := &fakeOS{
+		createOut: &servers.Server{ID: "srv-1", Name: "redis-0", Status: statusBuild},
+		getSeq:    []*servers.Server{activeServer("srv-1", "10.0.0.5")},
+	}
+	withFakeOS(t, f)
+
+	d := &OpenstackDriver{}
+	s := &createStream{}
+	err := d.Create(&pluginv1.CreateRequest{
+		Count: 1,
+		Profile: mustStruct(t, map[string]any{
+			"image_id": "img-1", "flavor_id": "m1.small", "network_id": "net-1",
+		}),
+		Credentials: mustStruct(t, validKeystoneCreds()),
+		Name:        "redis",
+	}, s)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	co, ok := f.lastCreateOpts.(servers.CreateOpts)
+	if !ok {
+		t.Fatalf("CreateServer not called or opts type=%T", f.lastCreateOpts)
+	}
+	if co.Name != "redis-0" {
+		t.Errorf("servers.Create name=%q, want redis-0 (honor CreateRequest.name)", co.Name)
+	}
+	if got := co.Metadata[runMetaKey]; got != "redis" {
+		t.Errorf("metadata[%s]=%q, want redis (name stamped as run identity)", runMetaKey, got)
+	}
+}
+
+// TestCreate_NameDerivedRerun_ReusesExisting — ★ NIM-16 центральный сценарий:
+// rerun шага с name и БЕЗ метки в профиле. Прошлый прогон застампил
+// metadata[runMetaKey]=<name> → скан (runLabel=nameBase) находит live VM и
+// переиспользует её. Регресс-страховка связки стамп+всегда-скан: красный при
+// откате фоллбека prof.runLabel=nameBase.
+func TestCreate_NameDerivedRerun_ReusesExisting(t *testing.T) {
+	existing := *activeServer("redis-0", "10.0.0.5")
+	existing.Metadata = map[string]string{runMetaKey: "redis"} // стамп прошлого прогона
+	f := &fakeOS{
+		listOut: []servers.Server{existing},
+		getSeq:  []*servers.Server{&existing},
+	}
+	withFakeOS(t, f)
+
+	d := &OpenstackDriver{}
+	s := &createStream{}
+	if err := d.Create(&pluginv1.CreateRequest{
+		Count: 1,
+		Profile: mustStruct(t, map[string]any{ // без labels — идентичность из Name
+			"image_id": "img-1", "flavor_id": "m1.small", "network_id": "net-1",
+		}),
+		Credentials: mustStruct(t, validKeystoneCreds()),
+		Name:        "redis",
+	}, s); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if f.createCall != 0 {
+		t.Errorf("CreateServer called %d times; name-derived rerun must reuse stamped VM", f.createCall)
+	}
+	last := s.last()
+	if last == nil || last.Failed {
+		t.Fatalf("final=%+v, want success", last)
+	}
+	if len(last.Vms) != 1 || last.Vms[0].VmId != "redis-0" {
+		t.Errorf("reused vms=%+v, want [redis-0]", last.Vms)
+	}
+}
+
+// TestCreate_NoIdentity_FailsClosed — ★ NIM-16: без name и без run-метки прогон
+// неотличим от предыдущих → повторный Create плодил бы orphan-VM. Fail-closed ДО
+// любого вызова OpenStack API (ни create, ни list, ни Keystone-auth).
+func TestCreate_NoIdentity_FailsClosed(t *testing.T) {
+	withFastBackoff(t, 2) // регресс-страховка: без guard тест не должен спать до дедлайна
+	f := &fakeOS{}
+	withFakeOS(t, f)
+	d := &OpenstackDriver{}
+	s := &createStream{}
+	if err := d.Create(&pluginv1.CreateRequest{
+		Count: 1,
+		Profile: mustStruct(t, map[string]any{ // без labels, Name пуст
+			"image_id": "img-1", "flavor_id": "m1.small", "network_id": "net-1",
+		}),
+		Credentials: mustStruct(t, validKeystoneCreds()),
+	}, s); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	last := s.last()
+	if last == nil || !last.Failed {
+		t.Fatalf("expected failed=true on missing identity, got %+v", last)
+	}
+	if !strings.HasPrefix(last.Message, "invalid_params:") {
+		t.Errorf("message=%q, want invalid_params-class prefix", last.Message)
+	}
+	if f.createCall != 0 {
+		t.Errorf("CreateServer called %d times; fail-closed must NOT touch OpenStack API", f.createCall)
+	}
+	if f.listCall != 0 {
+		t.Errorf("ListServers called %d times; fail-closed must NOT touch OpenStack API", f.listCall)
+	}
+}
+
 func TestCreate_HappyPath(t *testing.T) {
 	f := &fakeOS{
-		createOut: &servers.Server{ID: "srv-aaa", Name: "soul-anon-1-0", Status: statusBuild},
+		createOut: &servers.Server{ID: "srv-aaa", Name: "soul-run1-0", Status: statusBuild},
 		getSeq:    []*servers.Server{activeServer("srv-aaa", "10.0.0.5")},
 	}
 	withFakeOS(t, f)
@@ -256,6 +386,7 @@ func TestCreate_HappyPath(t *testing.T) {
 		Count: 1,
 		Profile: mustStruct(t, map[string]any{
 			"image_id": "img-1", "flavor_id": "m1.small", "network_id": "net-1",
+			"labels": map[string]any{runMetaKey: "run1"},
 		}),
 		Credentials: mustStruct(t, validKeystoneCreds()),
 		Userdata:    "#cloud-config\n",
@@ -309,6 +440,7 @@ func TestCreate_WaitsForActive(t *testing.T) {
 		Count: 1,
 		Profile: mustStruct(t, map[string]any{
 			"image_id": "img-1", "flavor_id": "m1.small", "network_id": "net-1",
+			"labels": map[string]any{runMetaKey: "run"},
 		}),
 		Credentials: mustStruct(t, validKeystoneCreds()),
 	}, s); err != nil {
@@ -339,6 +471,7 @@ func TestCreate_KeystoneAuthError(t *testing.T) {
 		Count: 1,
 		Profile: mustStruct(t, map[string]any{
 			"image_id": "img-1", "flavor_id": "m1.small", "network_id": "net-1",
+			"labels": map[string]any{runMetaKey: "run"},
 		}),
 		Credentials: mustStruct(t, validKeystoneCreds()),
 	}, s); err != nil {
@@ -405,6 +538,7 @@ func TestCreate_CtxCancel_AntiOrphan(t *testing.T) {
 		Count: 1,
 		Profile: mustStruct(t, map[string]any{
 			"image_id": "img-1", "flavor_id": "m1.small", "network_id": "net-1",
+			"labels": map[string]any{runMetaKey: "run"},
 		}),
 		Credentials: mustStruct(t, validKeystoneCreds()),
 	}, s); err != nil {
@@ -435,6 +569,7 @@ func TestCreate_WaitDeadline_AntiOrphan(t *testing.T) {
 		Count: 1,
 		Profile: mustStruct(t, map[string]any{
 			"image_id": "img-1", "flavor_id": "m1.small", "network_id": "net-1",
+			"labels": map[string]any{runMetaKey: "run"},
 		}),
 		Credentials: mustStruct(t, validKeystoneCreds()),
 	}, s); err != nil {
@@ -474,6 +609,7 @@ func TestCreate_TerminalStatusProbe(t *testing.T) {
 				Count: 1,
 				Profile: mustStruct(t, map[string]any{
 					"image_id": "img-1", "flavor_id": "m1.small", "network_id": "net-1",
+					"labels": map[string]any{runMetaKey: "run"},
 				}),
 				Credentials: mustStruct(t, validKeystoneCreds()),
 			}, s); err != nil {
@@ -521,6 +657,7 @@ func TestCreate_TransientProbeError_SwallowAndRetry(t *testing.T) {
 		Count: 1,
 		Profile: mustStruct(t, map[string]any{
 			"image_id": "img-1", "flavor_id": "m1.small", "network_id": "net-1",
+			"labels": map[string]any{runMetaKey: "run"},
 		}),
 		Credentials: mustStruct(t, validKeystoneCreds()),
 	}, s); err != nil {
@@ -574,6 +711,46 @@ func TestCreate_Idempotent_OverCount(t *testing.T) {
 	}
 	if len(last.Vms) != 3 {
 		t.Errorf("vms=%d, want 3 (all existing returned, not truncated to count)", len(last.Vms))
+	}
+}
+
+// TestCreate_PartialRerun_NoIndexCollision — ★ NIM-16: частичный rerun по
+// metadata-метке. existing "soul-run-delta-0" (индекс 0 занят), count=2 → новая
+// VM берёт первый свободный индекс "soul-run-delta-1", а не дубль "-0".
+func TestCreate_PartialRerun_NoIndexCollision(t *testing.T) {
+	withFastBackoff(t, 2)
+	existing := *activeServer("soul-run-delta-0", "10.1.0.1")
+	existing.Metadata = map[string]string{runMetaKey: "run-delta"}
+	f := &fakeOS{
+		listOut:   []servers.Server{existing},
+		createOut: &servers.Server{ID: "srv-new", Status: statusBuild},
+		getFn: func(_ int) (*servers.Server, error) {
+			return activeServer("srv-any", "10.1.0.2"), nil
+		},
+	}
+	withFakeOS(t, f)
+
+	d := &OpenstackDriver{}
+	s := &createStream{}
+	if err := d.Create(&pluginv1.CreateRequest{
+		Count: 2,
+		Profile: mustStruct(t, map[string]any{
+			"image_id": "img-1", "flavor_id": "m1.small", "network_id": "net-1",
+			"labels": map[string]any{runMetaKey: "run-delta"},
+		}),
+		Credentials: mustStruct(t, validKeystoneCreds()),
+	}, s); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if f.createCall != 1 {
+		t.Errorf("CreateServer called %d times, want 1 (gap = count - existing)", f.createCall)
+	}
+	co, ok := f.lastCreateOpts.(servers.CreateOpts)
+	if !ok {
+		t.Fatalf("lastCreateOpts type=%T", f.lastCreateOpts)
+	}
+	if co.Name != "soul-run-delta-1" {
+		t.Errorf("gap-fill name=%q, want soul-run-delta-1 (no -0 collision)", co.Name)
 	}
 }
 

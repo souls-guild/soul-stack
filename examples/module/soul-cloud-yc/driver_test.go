@@ -56,6 +56,7 @@ type fakeYC struct {
 	deleteN   int
 
 	lastCreateInput *computev1.CreateInstanceRequest
+	lastListInput   *computev1.ListInstancesRequest
 	lastDeleted     []string
 }
 
@@ -99,8 +100,9 @@ func (f *fakeYC) DeleteInstance(_ context.Context, id string, _ ...grpc.CallOpti
 	return f.deleteErr
 }
 
-func (f *fakeYC) ListInstances(_ context.Context, _ *computev1.ListInstancesRequest, _ ...grpc.CallOption) (*computev1.ListInstancesResponse, error) {
+func (f *fakeYC) ListInstances(_ context.Context, in *computev1.ListInstancesRequest, _ ...grpc.CallOption) (*computev1.ListInstancesResponse, error) {
 	f.listCall++
+	f.lastListInput = in
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
@@ -172,6 +174,7 @@ func mustStruct(t *testing.T, m map[string]any) *structpb.Struct {
 func runningInstance(id, ip, fqdn string) *computev1.Instance {
 	return &computev1.Instance{
 		Id:     id,
+		Name:   id, // имя = id: gap-fill (NIM-16) считает занятость по GetName()
 		Fqdn:   fqdn,
 		Status: computev1.Instance_RUNNING,
 		ZoneId: "ru-central1-a",
@@ -196,6 +199,38 @@ func validCredsIAM() map[string]any {
 		"iam_token": "t1.fake-iam-token",
 		"folder_id": "b1g111111111",
 		"zone":      "ru-central1-a",
+	}
+}
+
+// labeledProfile — validProfile + run-label идентичности (Create fail-closed без
+// name и без label, NIM-16).
+func labeledProfile(run string) map[string]any {
+	p := validProfile()
+	p["labels"] = map[string]any{runLabelKey: run}
+	return p
+}
+
+// TestVmName_Precedence — детерминированное имя (NIM-16): nameBase из
+// CreateRequest.name даёт `<nameBase>-<seq>` (keeper предсказывает FQDN по нему),
+// побеждая runLabel; без nameBase — `soul-<runLabel>-<seq>` (anon-ветка удалена).
+func TestVmName_Precedence(t *testing.T) {
+	cases := []struct {
+		name     string
+		nameBase string
+		runLabel string
+		seq      int32
+		want     string
+	}{
+		{name: "nameBase wins", nameBase: "redis", runLabel: "run-x", seq: 0, want: "redis-0"},
+		{name: "nameBase index 2", nameBase: "redis", seq: 2, want: "redis-2"},
+		{name: "runLabel when no nameBase", runLabel: "run-x", seq: 1, want: "soul-run-x-1"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := vmName(c.nameBase, c.runLabel, c.seq); got != c.want {
+				t.Errorf("vmName(%q,%q,%d) = %q, want %q", c.nameBase, c.runLabel, c.seq, got, c.want)
+			}
+		})
 	}
 }
 
@@ -254,7 +289,7 @@ func TestCreate_HappyPath(t *testing.T) {
 	s := &createStream{}
 	err := d.Create(&pluginv1.CreateRequest{
 		Count:       1,
-		Profile:     mustStruct(t, validProfile()),
+		Profile:     mustStruct(t, labeledProfile("run1")),
 		Credentials: mustStruct(t, validCredsIAM()),
 		Userdata:    "#cloud-config\n",
 	}, s)
@@ -357,6 +392,7 @@ func TestCreate_PassesProfileFieldsToYC(t *testing.T) {
 }
 
 func TestCreate_WaitsForRunning(t *testing.T) {
+	withFastBackoff(t, 4)
 	f := &fakeYC{
 		createOut: &computev1.Instance{Id: "epd-bbb"},
 		getSeq: []*computev1.Instance{
@@ -371,7 +407,7 @@ func TestCreate_WaitsForRunning(t *testing.T) {
 	s := &createStream{}
 	if err := d.Create(&pluginv1.CreateRequest{
 		Count:       1,
-		Profile:     mustStruct(t, validProfile()),
+		Profile:     mustStruct(t, labeledProfile("run")),
 		Credentials: mustStruct(t, validCredsIAM()),
 	}, s); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -402,7 +438,7 @@ func TestCreate_AuthError(t *testing.T) {
 	s := &createStream{}
 	if err := d.Create(&pluginv1.CreateRequest{
 		Count:       1,
-		Profile:     mustStruct(t, validProfile()),
+		Profile:     mustStruct(t, labeledProfile("run")),
 		Credentials: mustStruct(t, map[string]any{"folder_id": "b1g", "zone": "ru-central1-a"}),
 	}, s); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -431,7 +467,7 @@ func TestCreate_AmbiguousCredentials(t *testing.T) {
 	s := &createStream{}
 	if err := d.Create(&pluginv1.CreateRequest{
 		Count:   1,
-		Profile: mustStruct(t, validProfile()),
+		Profile: mustStruct(t, labeledProfile("run")),
 		Credentials: mustStruct(t, map[string]any{
 			"iam_token":   "t1.x",
 			"oauth_token": "y0_x",
@@ -443,6 +479,142 @@ func TestCreate_AmbiguousCredentials(t *testing.T) {
 	}
 	if !s.last().Failed || !strings.Contains(s.last().Message, "ambiguous") {
 		t.Errorf("ambiguous-auth event=%+v", s.last())
+	}
+}
+
+// TestCreate_NoIdentity_FailsClosed — ★ NIM-16: без name и без run-label прогон
+// неотличим от предыдущих → повторный Create плодил бы orphan-VM. Fail-closed ДО
+// любого вызова YC API (ни create, ни list).
+func TestCreate_NoIdentity_FailsClosed(t *testing.T) {
+	withFastBackoff(t, 2) // регресс-страховка: без guard тест не должен спать до дедлайна
+	f := &fakeYC{}
+	withFakeYC(t, f)
+	d := &YcDriver{}
+	s := &createStream{}
+	if err := d.Create(&pluginv1.CreateRequest{
+		Count:       1,
+		Profile:     mustStruct(t, validProfile()), // без labels, Name пуст
+		Credentials: mustStruct(t, validCredsIAM()),
+	}, s); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	last := s.last()
+	if last == nil || !last.Failed {
+		t.Fatalf("expected failed=true on missing identity, got %+v", last)
+	}
+	if !strings.HasPrefix(last.Message, "invalid_params:") {
+		t.Errorf("message=%q, want invalid_params-class prefix", last.Message)
+	}
+	if f.createCall != 0 {
+		t.Errorf("CreateInstance called %d times; fail-closed must NOT touch YC API", f.createCall)
+	}
+	if f.listCall != 0 {
+		t.Errorf("ListInstances called %d times; fail-closed must NOT touch YC API", f.listCall)
+	}
+}
+
+// TestCreate_HonorsRequestName — ★ NIM-16: CreateRequest.name доходит до
+// CreateInstance как `<name>-<seq>` (драйвер соблюдает keeper-заданное имя для
+// предсказуемого FQDN) И штампуется в labels[soulstack-run] (будущие прогоны
+// матчатся по label, а не только по имени).
+func TestCreate_HonorsRequestName(t *testing.T) {
+	f := &fakeYC{
+		createOut: &computev1.Instance{Id: "epd-1"},
+		getSeq: []*computev1.Instance{
+			runningInstance("epd-1", "10.0.0.5", "redis-0.ru-central1.internal"),
+		},
+	}
+	withFakeYC(t, f)
+	d := &YcDriver{}
+	s := &createStream{}
+	if err := d.Create(&pluginv1.CreateRequest{
+		Count:       1,
+		Profile:     mustStruct(t, validProfile()),
+		Credentials: mustStruct(t, validCredsIAM()),
+		Name:        "redis",
+	}, s); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if f.lastCreateInput == nil {
+		t.Fatal("CreateInstance not called")
+	}
+	if f.lastCreateInput.GetName() != "redis-0" {
+		t.Errorf("CreateInstance name = %q, want redis-0 (honor CreateRequest.name)", f.lastCreateInput.GetName())
+	}
+	if got := f.lastCreateInput.GetLabels()[runLabelKey]; got != "redis" {
+		t.Errorf("labels[%s]=%q, want redis (name stamped as run-label)", runLabelKey, got)
+	}
+}
+
+// TestCreate_NameDerivedRerun_ReusesExisting — ★ NIM-16 центральный сценарий:
+// rerun по name-derived идентичности. VM первого прогона несёт стампованный
+// labels[soulstack-run]="redis"; повторный Create{Name:"redis"} без labels обязан
+// сканировать по этому label (ассерт фильтра — guard на откат стампа: fake сам
+// не фильтрует) и переиспользовать живую VM, а не плодить дубль.
+func TestCreate_NameDerivedRerun_ReusesExisting(t *testing.T) {
+	existing := runningInstance("redis-0", "10.0.0.5", "redis-0.ru-central1.internal")
+	existing.Labels = map[string]string{runLabelKey: "redis"}
+	f := &fakeYC{
+		listOut: &computev1.ListInstancesResponse{Instances: []*computev1.Instance{existing}},
+		getSeq:  []*computev1.Instance{existing},
+	}
+	withFakeYC(t, f)
+	d := &YcDriver{}
+	s := &createStream{}
+	if err := d.Create(&pluginv1.CreateRequest{
+		Count:       1,
+		Profile:     mustStruct(t, validProfile()), // без labels — идентичность из Name
+		Credentials: mustStruct(t, validCredsIAM()),
+		Name:        "redis",
+	}, s); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if f.createCall != 0 {
+		t.Errorf("CreateInstance called %d times; name-derived rerun must reuse existing VM", f.createCall)
+	}
+	wantFilter := `labels.` + runLabelKey + `="redis"`
+	if !strings.Contains(f.lastListInput.GetFilter(), wantFilter) {
+		t.Errorf("ListInstances filter=%q, want %q (name stamped as run-label)", f.lastListInput.GetFilter(), wantFilter)
+	}
+	last := s.last()
+	if last == nil || last.Failed {
+		t.Fatalf("final=%+v, want success", last)
+	}
+	if len(last.Vms) != 1 || last.Vms[0].VmId != "redis-0" {
+		t.Errorf("reused vms=%+v, want [redis-0]", last.Vms)
+	}
+}
+
+// TestCreate_PartialRerun_NoIndexCollision — ★ NIM-16: label-путь, частичный
+// rerun. existing "soul-run-delta-0" (индекс 0 занят), count=2 → новая VM берёт
+// первый свободный индекс "soul-run-delta-1", а не дубль "-0".
+func TestCreate_PartialRerun_NoIndexCollision(t *testing.T) {
+	withFastBackoff(t, 2)
+	existing := runningInstance("soul-run-delta-0", "10.1.0.1", "soul-run-delta-0.ru-central1.internal")
+	f := &fakeYC{
+		listOut:   &computev1.ListInstancesResponse{Instances: []*computev1.Instance{existing}},
+		createOut: &computev1.Instance{Id: "epd-new"},
+		getFn: func(_ int) (*computev1.Instance, error) {
+			return runningInstance("soul-run-delta-1", "10.1.0.2", "soul-run-delta-1.ru-central1.internal"), nil
+		},
+	}
+	withFakeYC(t, f)
+	d := &YcDriver{}
+	s := &createStream{}
+	prof := validProfile()
+	prof["labels"] = map[string]any{runLabelKey: "run-delta"}
+	if err := d.Create(&pluginv1.CreateRequest{
+		Count:       2,
+		Profile:     mustStruct(t, prof),
+		Credentials: mustStruct(t, validCredsIAM()),
+	}, s); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if f.createCall != 1 {
+		t.Errorf("CreateInstance called %d times, want 1 (gap = count - existing)", f.createCall)
+	}
+	if f.lastCreateInput == nil || f.lastCreateInput.GetName() != "soul-run-delta-1" {
+		t.Errorf("gap-fill name=%q, want soul-run-delta-1 (no -0 collision)", f.lastCreateInput.GetName())
 	}
 }
 
@@ -553,7 +725,7 @@ func TestCreate_CtxCancel_AntiOrphan(t *testing.T) {
 	s := &createStream{ctx: ctx}
 	if err := d.Create(&pluginv1.CreateRequest{
 		Count:       1,
-		Profile:     mustStruct(t, validProfile()),
+		Profile:     mustStruct(t, labeledProfile("run")),
 		Credentials: mustStruct(t, validCredsIAM()),
 	}, s); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -580,7 +752,7 @@ func TestCreate_WaitDeadline_AntiOrphan(t *testing.T) {
 	s := &createStream{}
 	if err := d.Create(&pluginv1.CreateRequest{
 		Count:       1,
-		Profile:     mustStruct(t, validProfile()),
+		Profile:     mustStruct(t, labeledProfile("run")),
 		Credentials: mustStruct(t, validCredsIAM()),
 	}, s); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -622,7 +794,7 @@ func TestCreate_TerminalStateProbe(t *testing.T) {
 			s := &createStream{}
 			if err := d.Create(&pluginv1.CreateRequest{
 				Count:       1,
-				Profile:     mustStruct(t, validProfile()),
+				Profile:     mustStruct(t, labeledProfile("run")),
 				Credentials: mustStruct(t, validCredsIAM()),
 			}, s); err != nil {
 				t.Fatalf("Create: %v", err)
@@ -664,7 +836,7 @@ func TestCreate_TransientProbeError_SwallowAndRetry(t *testing.T) {
 	s := &createStream{}
 	if err := d.Create(&pluginv1.CreateRequest{
 		Count:       1,
-		Profile:     mustStruct(t, validProfile()),
+		Profile:     mustStruct(t, labeledProfile("run")),
 		Credentials: mustStruct(t, validCredsIAM()),
 	}, s); err != nil {
 		t.Fatalf("Create: %v", err)

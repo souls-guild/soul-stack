@@ -198,9 +198,11 @@ func intField(m map[string]any, key string) int64 {
 	return 0
 }
 
-// Create: проверка идемпотентности по label → CreateInstance → wait-until-ready
-// → финальное событие с VmInfo (fqdn = YC internal-DNS). См. doc-комментарий
-// пакета.
+// Create: fail-closed без идентичности (нет name и нет run-label — иначе rerun
+// плодит orphan-VM, NIM-16) → идемпотент-скан живых VM по label soulstack-run →
+// добор недостающих с первыми свободными индексами → wait-until-ready → финальное
+// событие с VmInfo (fqdn = YC internal-DNS). name без label становится run-label
+// (стамп labels). См. doc-комментарий пакета.
 func (y *YcDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerStreamingServer[pluginv1.CreateEvent]) error {
 	ctx := stream.Context()
 	count := req.GetCount()
@@ -221,6 +223,19 @@ func (y *YcDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerStreami
 	folderID := firstNonEmpty(prof.folderID, creds.FolderID)
 	zone := firstNonEmpty(prof.zone, creds.Zone)
 
+	// Fail-closed: без name и без run-label прогон неотличим от предыдущих →
+	// idempotency-скан невозможен, rerun плодил бы orphan-VM (NIM-16).
+	nameBase := req.GetName()
+	if nameBase == "" && prof.runLabel == "" {
+		return sendCreateFailed(stream, clouddriver.FailInvalidParams, "identity",
+			fmt.Errorf("no run identity: set step param `name` or profile.labels[%q]", runLabelKey))
+	}
+	// name без явного label становится run-label → создаваемые VM всегда несут
+	// label soulstack-run, будущие прогоны матчатся по нему.
+	if prof.runLabel == "" {
+		prof.runLabel = nameBase
+	}
+
 	cli, err := newYcClient(ctx, creds)
 	if err != nil {
 		return sendCreateFailed(stream, clouddriver.FailAuth, "yc-client", err)
@@ -228,31 +243,35 @@ func (y *YcDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerStreami
 
 	backoff := defaultBackoff()
 
-	// Идемпотентность: если по runLabel уже есть живые VM — переиспользуем,
-	// добиваем только недостающие. Без runLabel idempotency-проверку не делаем
-	// (некому соотнести прогон).
-	var existing []*computev1.Instance
-	if prof.runLabel != "" {
-		existing, err = y.findByRunLabel(ctx, cli, backoff, folderID, prof.runLabel)
-		if err != nil {
-			return sendCreateFailed(stream, clouddriver.Classify(classifyYC, err), "list-existing", err)
-		}
-		if int32(len(existing)) >= count {
-			_ = stream.Send(&pluginv1.CreateEvent{
-				Message: fmt.Sprintf("idempotent: %d VM already present for run %q", len(existing), prof.runLabel),
-			})
-			return y.finalizeCreate(ctx, cli, stream, backoff, instanceIDs(existing))
-		}
-		count -= int32(len(existing))
+	// Идемпотентность (NIM-16): скан живых VM батча по label soulstack-run —
+	// всегда (после guard runLabel непуст). Есть живые — переиспользуем, добиваем
+	// только недостающие.
+	existing, err := y.findByRunLabel(ctx, cli, backoff, folderID, prof.runLabel)
+	if err != nil {
+		return sendCreateFailed(stream, clouddriver.Classify(classifyYC, err), "list-existing", err)
+	}
+	if int32(len(existing)) >= count {
+		_ = stream.Send(&pluginv1.CreateEvent{
+			Message: fmt.Sprintf("idempotent: %d VM already present for run %q", len(existing), prof.runLabel),
+		})
+		return y.finalizeCreate(ctx, cli, stream, backoff, instanceIDs(existing))
+	}
+
+	need := count - int32(len(existing))
+	names := gapFillNames(existing, nameBase, prof.runLabel, need)
+	if len(existing) > 0 {
+		_ = stream.Send(&pluginv1.CreateEvent{
+			Message: fmt.Sprintf("idempotent: reusing %d existing VM for run %q, creating %d more", len(existing), prof.runLabel, need),
+		})
 	}
 
 	if err := stream.Send(&pluginv1.CreateEvent{
-		Message: fmt.Sprintf("yc.InstanceService.Create count=%d zone=%s platform=%s image=%s", count, zone, prof.platformID, prof.imageID),
+		Message: fmt.Sprintf("yc.InstanceService.Create count=%d zone=%s platform=%s image=%s", need, zone, prof.platformID, prof.imageID),
 	}); err != nil {
 		return err
 	}
 
-	newInstances, err := y.createInstances(ctx, cli, backoff, prof, folderID, zone, req.GetUserdata(), count)
+	newInstances, err := y.createInstances(ctx, cli, backoff, prof, folderID, zone, req.GetUserdata(), names)
 	if err != nil {
 		return sendCreateFailed(stream, clouddriver.Classify(classifyYC, err), "CreateInstance", err)
 	}
@@ -261,14 +280,14 @@ func (y *YcDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerStreami
 	return y.finalizeCreate(ctx, cli, stream, backoff, allIDs)
 }
 
-// createInstances вызывает CreateInstance count раз. YC создаёт по одному VM
-// за вызов (нет batch-Create как у EC2.RunInstances). Имя каждой VM — слегка
-// рандомизированный slug по runLabel, чтобы избежать YC-конфликта «name must
-// be unique within folder».
-func (y *YcDriver) createInstances(ctx context.Context, cli ycAPI, backoff clouddriver.BackoffConfig, prof vmProfile, folderID, zone, userdata string, count int32) ([]*computev1.Instance, error) {
-	out := make([]*computev1.Instance, 0, count)
-	for i := int32(0); i < count; i++ {
-		in := buildCreateRequest(prof, folderID, zone, userdata, i)
+// createInstances вызывает CreateInstance по одному разу на каждое имя. YC
+// создаёт по одной VM за вызов (нет batch-Create как у EC2.RunInstances). Имена
+// приходят готовыми из gap-fill — детерминированные и без коллизий с уже
+// существующими VM (NIM-16).
+func (y *YcDriver) createInstances(ctx context.Context, cli ycAPI, backoff clouddriver.BackoffConfig, prof vmProfile, folderID, zone, userdata string, names []string) ([]*computev1.Instance, error) {
+	out := make([]*computev1.Instance, 0, len(names))
+	for _, name := range names {
+		in := buildCreateRequest(prof, folderID, zone, userdata, name)
 		var inst *computev1.Instance
 		err := clouddriver.Retry(ctx, backoff, classifyYC, func() error {
 			var rerr error
@@ -283,10 +302,10 @@ func (y *YcDriver) createInstances(ctx context.Context, cli ycAPI, backoff cloud
 	return out, nil
 }
 
-// buildCreateRequest формирует CreateInstanceRequest из vmProfile. seq — индекс
-// VM в текущем создании (0..count-1), используется для дельты имени, чтобы не
-// получить конфликт «name must be unique».
-func buildCreateRequest(prof vmProfile, folderID, zone, userdata string, seq int32) *computev1.CreateInstanceRequest {
+// buildCreateRequest формирует CreateInstanceRequest с готовым именем VM
+// (детерминированное `<nameBase>-<seq>` / `soul-<runLabel>-<seq>` из gap-fill,
+// NIM-16). runLabel штампуется в labels[soulstack-run] — идентичность прогона.
+func buildCreateRequest(prof vmProfile, folderID, zone, userdata, name string) *computev1.CreateInstanceRequest {
 	metadata := map[string]string{}
 	if userdata != "" {
 		metadata[userdataMetaKey] = userdata
@@ -294,6 +313,9 @@ func buildCreateRequest(prof vmProfile, folderID, zone, userdata string, seq int
 	labels := make(map[string]string, len(prof.labels))
 	for k, v := range prof.labels {
 		labels[k] = v
+	}
+	if prof.runLabel != "" {
+		labels[runLabelKey] = prof.runLabel
 	}
 
 	natSpec := (*computev1.OneToOneNatSpec)(nil)
@@ -311,7 +333,7 @@ func buildCreateRequest(prof vmProfile, folderID, zone, userdata string, seq int
 
 	req := &computev1.CreateInstanceRequest{
 		FolderId:      folderID,
-		Name:          vmName(prof.runLabel, seq),
+		Name:          name,
 		ZoneId:        zone,
 		PlatformId:    prof.platformID,
 		Labels:        labels,
@@ -341,18 +363,38 @@ func buildCreateRequest(prof vmProfile, folderID, zone, userdata string, seq int
 	return req
 }
 
-// vmName — имя VM, удовлетворяющее YC-ограничению `[a-z][-a-z0-9]{1,62}`:
-// `soul-<runLabel-or-anon>-<seq>`. При пустом runLabel используется суффикс
-// time-based-семени, чтобы избежать коллизии между двумя независимыми
-// run-ами без идемпотент-label-а.
-func vmName(runLabel string, seq int32) string {
-	if runLabel == "" {
-		// nano-timestamp без зависимостей: достаточно для уникальности в
-		// рамках непрерывного create-а; в проде оператор обязан задать
-		// labels[soulstack-run] явно.
-		return fmt.Sprintf("soul-anon-%d-%d", time.Now().UnixNano(), seq)
+// vmName — детерминированное имя i-й VM батча (NIM-16, чистая функция без
+// time-компоненты — иначе idempotency-скан не находил бы свои VM): nameBase
+// (CreateRequest.name, self-onboard «Вариант T» ADR-017(h)) → `<nameBase>-<seq>`
+// (keeper предсказал FQDN и запёк per-VM токен под ним — имя ОБЯЗАНО совпасть);
+// иначе `soul-<runLabel>-<seq>`. Валидность nameBase под YC-ограничение имени
+// `[a-z][-a-z0-9]{1,62}` — ответственность keeper-стороны.
+func vmName(nameBase, runLabel string, seq int32) string {
+	if nameBase != "" {
+		return fmt.Sprintf("%s-%d", nameBase, seq)
 	}
 	return fmt.Sprintf("soul-%s-%d", runLabel, seq)
+}
+
+// gapFillNames выдаёт need имён для недостающих VM, беря первые свободные индексы
+// seq=0,1,2,… (занятые = имена existing) → при частичном rerun новые VM не
+// коллидируют по имени с уже существующими (NIM-16). Занятость считается по живым
+// existing: индекс VM в DELETING может переиспользоваться — YC ответит
+// AlreadyExists, громко и без orphan-ов.
+func gapFillNames(existing []*computev1.Instance, nameBase, runLabel string, need int32) []string {
+	occupied := make(map[string]bool, len(existing))
+	for _, inst := range existing {
+		occupied[inst.GetName()] = true
+	}
+	names := make([]string, 0, need)
+	for seq := int32(0); int32(len(names)) < need; seq++ {
+		n := vmName(nameBase, runLabel, seq)
+		if occupied[n] {
+			continue
+		}
+		names = append(names, n)
+	}
+	return names
 }
 
 // finalizeCreate ждёт готовности VM (RUNNING + FQDN/IP) и шлёт финальное
@@ -419,9 +461,13 @@ func (y *YcDriver) finalizeCreate(ctx context.Context, cli ycAPI, stream grpc.Se
 }
 
 // findByRunLabel перечисляет живые (не STOPPED/ERROR/CRASHED/DELETING) VM с
-// заданным runLabel в folder-е. YC ListInstances поддерживает простой DSL
-// фильтра `labels.<key>="<value>"`; статус мы фильтруем уже после, чтобы не
-// зависеть от вариаций синтаксиса DSL у разных версий API.
+// заданным runLabel в folder-е (NIM-16: скан всегда — идентичность гарантирована
+// guard-ом в Create). YC ListInstances поддерживает простой DSL фильтра
+// `labels.<key>="<value>"`; статус фильтруем после, чтобы не зависеть от вариаций
+// синтаксиса DSL у разных версий API. В отличие от wb-драйвера name-матч-ветки
+// (усыновление до-фиксовых unlabeled VM по имени) здесь НЕТ: anon-имена были
+// рандомными (time-seed), детерминированного паттерна для матча не существует,
+// live-прогонов не было.
 func (y *YcDriver) findByRunLabel(ctx context.Context, cli ycAPI, backoff clouddriver.BackoffConfig, folderID, runLabel string) ([]*computev1.Instance, error) {
 	in := &computev1.ListInstancesRequest{
 		FolderId: folderID,

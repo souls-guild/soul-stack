@@ -91,6 +91,7 @@ func TestL1_CreateOverGRPC(t *testing.T) {
 		Profile:     l1Struct(t, validProfile()),
 		Credentials: l1Struct(t, validCredsIAM()),
 		Userdata:    "#cloud-config\n",
+		Name:        "soul-l1", // NIM-16: идентичность — иначе Create fail-closed
 	})
 	if err != nil {
 		t.Fatalf("Create rpc: %v", err)

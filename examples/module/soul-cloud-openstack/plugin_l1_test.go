@@ -89,6 +89,7 @@ func TestL1_CreateOverGRPC(t *testing.T) {
 		Count: 1,
 		Profile: l1Struct(t, map[string]any{
 			"image_id": "img-1", "flavor_id": "m1.small", "network_id": "net-1",
+			"labels": map[string]any{runMetaKey: "run-l1"},
 		}),
 		Credentials: l1Struct(t, validKeystoneCreds()),
 		Userdata:    "#cloud-config\n",
