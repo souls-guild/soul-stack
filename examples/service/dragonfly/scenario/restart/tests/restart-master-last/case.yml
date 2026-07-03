@@ -64,10 +64,11 @@ assert:
   # В плане ДВЕ идентичных core.service.restarted name=dragonfly (block-рестарт реплики +
   # master-рестарт), обе с пустым when/id и теми же params; дискриминатор — block/task-`where`
   # (TargetSIDs), который presence-матчер task_present НЕ видит → сматчил бы ОБЕ (collision).
-  # Поэтому master-restart ассертим позиционно: index 3 (probe[0] + block Restart[1] +
-  # replica-synced[2] + master-restart[3]).
+  # Поэтому master-restart ассертим позиционно: index 4 (синтез-install[0] (ADR-065,
+  # service.yml::modules[]) + probe[1] + block Restart[2] + replica-synced[3] +
+  # master-restart[4]).
   rendered_tasks:
-    - index: 3
+    - index: 4
       module: core.service.restarted
       params:
         name: dragonfly

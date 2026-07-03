@@ -86,14 +86,19 @@ assert:
       params_subset:
         path: /etc/redis/redis.conf
 
+    # ★ Синтез из service.yml::modules[] присутствует и без provision (ADR-065);
+    # ref — из записи манифеста.
+    - module: core.module.installed
+      params_subset:
+        name: community.redis
+        ref: v1.0.0
+
   task_absent:
     # provision.yml шаги ОТСУТСТВУЮТ (include-when has(input.provision) false →
     # group-drop). core.cloud.created — создание VM; core.soul.registered — барьер
-    # онбординга; core.module.installed — доставка плагина (ADR-065). Никто не
-    # эмитится без provision.
+    # онбординга. Никто не эмитится без provision.
     - module: core.cloud.created
     - module: core.soul.registered
-    - module: core.module.installed
 
   state_changes:
     redis_type: sentinel

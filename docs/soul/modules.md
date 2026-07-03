@@ -27,7 +27,7 @@
 
 - `soul`-демон при apply Destiny-шага дёргает встроенный core-модуль или sub-process custom-модуля.
 - Доставка custom-модулей на хост — через сам Destiny: встроенный core-модуль `core.module.installed` ([ADR-065](../adr/0065-core-module-installed.md)) — allow-check по локальному Sigil-набору **до** fetch (нет активного допуска → `module_not_allowed` без единого сетевого байта) → server-streaming RPC `FetchModule` с Keeper-а → полный verify (sha256 + подпись Sigil + `manifest_sha256`, `shared/pluginhost`) → atomic rename в каталожный слот → hot-register без рестарта демона (модуль доступен задачам того же прогона). Идемпотентность: sha256 установленного бинаря == sha активного Sigil → `changed=false`, fetch не выполняется. Это обычная Destiny-операция, ничего магического.
-- Демон не пытается «угадать», какие модули понадобятся вперёд. Если нужный модуль отсутствует в момент apply — шаг падает, оператор должен включить `core.module.installed` в свою Destiny явно (перед первым использованием модуля).
+- Демон не пытается «угадать», какие модули понадобятся вперёд: если нужный модуль отсутствует в момент apply — шаг падает. Install-шаг перед первым потребителем модуля обычно **синтезирует сам Keeper** из декларации `service.yml::modules[]` ([ADR-065 amendment](../adr/0065-core-module-installed.md); канон — [keeper/modules.md → Авто-синтез](../keeper/modules.md#авто-синтез-coremoduleinstalled-из-serviceymlmodules)) — для Soul-а синтезированный шаг неотличим от явного, доставка/verify/кеш не меняются. Явный шаг остаётся для takeover (свои позиция/`ref`/`when:`) и для модулей, используемых только внутри destiny.
 
 ## Поведение в push (`keeper.push`)
 

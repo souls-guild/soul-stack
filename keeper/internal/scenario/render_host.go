@@ -76,6 +76,11 @@ func RenderForHost(ctx context.Context, deps Deps, recipe *applyrun.Recipe, inca
 	}
 	scn.Tasks = expanded
 
+	// Синтез install-шагов из modules[] (ADR-065) — Acolyte обязан воспроизвести
+	// РОВНО план run-goroutine (те же задачи, те же plan_index), иначе синтез-шаг
+	// потерялся бы на claim-пути, а корреляция TaskEvent↔RenderedTask съехала бы.
+	scn.Tasks, _ = config.SynthesizeModuleInstalls(scn.Tasks, art.Manifest.Modules)
+
 	// 3. Roster прогона (как run-goroutine): весь roster incarnation. SID-валидация
 	//    «хост ещё в roster-е» (disconnected/revoked между dispatch и claim →
 	//    ошибка) делается ТУТ, до full-roster render-а — roster грузится всё равно,
