@@ -1,14 +1,17 @@
 kid: keeper-dev-01
 
 listen:
+  # bootstrap/event_stream на 0.0.0.0 — доступ docker/remote-душ (host-gateway/host-IP;
+  # на 127.0.0.1 контейнер keeper не видит). host-флот цел (0.0.0.0 ⊇ loopback), cert SAN
+  # покрывает localhost/127/host.docker.internal/host-IP. NIM-26, прецедент e2e-live config_builder.go.
   grpc:
     bootstrap:
-      addr: "127.0.0.1:9442"
+      addr: "0.0.0.0:9442"
       tls:
         cert: /tmp/keeper-dev/tls/keeper.crt
         key:  /tmp/keeper-dev/tls/keeper.key
     event_stream:
-      addr: "127.0.0.1:9443"
+      addr: "0.0.0.0:9443"
       tls:
         cert: /tmp/keeper-dev/tls/keeper.crt
         key:  /tmp/keeper-dev/tls/keeper.key

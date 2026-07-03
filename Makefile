@@ -91,7 +91,7 @@ PKG_ARCH ?= amd64
 KEEPER_IMAGE ?= soul-stack/keeper
 SOUL_IMAGE   ?= soul-stack/soul
 
-.PHONY: gen build build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-k8s docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand gen-openapi check-openapi check-template sync-webui check-webui sbom pkg pkg-keeper pkg-soul pkg-soul-lint sign stress load-test help
+.PHONY: gen build build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-k8s docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand gen-openapi check-openapi check-template sync-webui check-webui sbom pkg pkg-keeper pkg-soul pkg-soul-lint sign stress load-test help dev-souls-docker dev-souls-docker-down
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -464,6 +464,18 @@ dev-jwt:
 # в БД сохраняются (заново НЕ регистрируем). Скрипт — dev/souls-up.sh.
 dev-souls:
 	@bash dev/souls-up.sh
+
+# Поднять локальный флот souls как docker-контейнеры (soul-docker-1..N) для day-2
+# сценариев и UI-тестов без облака (NIM-26). N — переменная SOULS_COUNT. WSL2:
+# KEEPER_HOST=host-IP (см. docs/dev/local-setup.md). Скрипт — dev/souls-docker-up.sh.
+SOULS_COUNT ?= 3
+dev-souls-docker:
+	@bash dev/souls-docker-up.sh $(SOULS_COUNT)
+
+# Снести docker-флот souls: контейнеры soul-docker-* + записи реестра + dev-каталоги.
+# Скрипт — dev/souls-docker-down.sh.
+dev-souls-docker-down:
+	@bash dev/souls-docker-down.sh
 
 # Vite dev-сервер web-репо (companion ../soul-stack-web). `--host` обязателен,
 # иначе vite слушает только [::1] и 127.0.0.1:5173 отказывает. Путь web —

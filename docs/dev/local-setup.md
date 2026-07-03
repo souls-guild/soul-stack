@@ -246,6 +246,55 @@ curl -H "Authorization: Bearer ${TOKEN}" 127.0.0.1:8080/v1/souls
 make dev-jwt AID=archon-keyset ROLES='["keyset-demo"]'
 ```
 
+## Docker-души (изолированный флот)
+
+Host-флот (`make dev-souls`) поднимает души как процессы на хосте — все они делят
+ФС, пакеты и сервисы машины разработчика. Для **day-2 сценариев** (установка
+пакетов, `core.service.*`, правка файлов) и UI-тестов без облака нужна изоляция:
+каждая душа — свой privileged Debian-12 systemd-контейнер с отдельной ФС.
+
+`make dev-souls-docker` поднимает `N` таких контейнеров (`SOULS_COUNT`, default 3)
+с предсказуемыми именами `soul-docker-1..N` (sid == имя контейнера), онбордит их к
+keeper-процессу на хосте и ждёт `connected`. `make dev-souls-docker-down` сносит
+контейнеры, чистит их из реестра (каскадный psql-DELETE — DELETE-эндпоинта в
+Operator API нет) и удаляет per-soul dev-каталоги.
+
+```sh
+make build-linux          # обязательно: свежий soul/bin/soul-linux-amd64 (bind-mount ro в контейнер)
+make dev-souls-docker              # поднять SOULS_COUNT душ (default 3)
+make dev-souls-docker SOULS_COUNT=5
+bash dev/souls-docker-up.sh 5      # то же напрямую, N позиционным аргументом
+make dev-souls-docker-down         # снести всё
+```
+
+Образ переиспользует базовый Dockerfile e2e-live (`tests/e2e-live/dockerfiles/`);
+свежий бинарь монтируется ro, поэтому ребилд образа после `make build-linux` не
+нужен. Флаги контейнера (privileged, `--cgroupns=host`, tmpfs `/run`,
+`/sys/fs/cgroup`) — паритет с e2e-live harness.
+
+**Keeper слушает gRPC на `0.0.0.0`.** Контейнер дозванивается к keeper по адресу
+host-gateway (нативный Linux: docker-bridge ~172.17.0.1) или host-IP (WSL2) — на
+loopback `127.0.0.1` keeper для контейнера недостижим в **любом** окружении. Поэтому
+`dev/keeper.dev.yml` биндит bootstrap/event_stream на `0.0.0.0` (openapi/mcp/metrics
+остаются на loopback). Прецедент — `tests/e2e-live/harness/config_builder.go`.
+
+**Зависимость на re-provision (SAN).** Docker-душа дозванивается к keeper по
+`host.docker.internal` (или host-IP), поэтому этот SAN должен быть в keeper-серте.
+Он добавлен в `dev/provision.sh` — после обновления provision-скрипта нужен один
+раз `make dev-provision` (перевыпуск серта) + `make dev-keeper` (рестарт). Скрипт
+сам предупредит, если серт устарел.
+
+**WSL2.** Из Docker-Desktop-VM `host.docker.internal` резолвится в DD-VM-шлюз, где
+keeper НЕ слушает → bootstrap падает. На WSL2 keeper-эндпоинт должен быть host-IP,
+и его же надо добавить в SAN серта:
+
+```sh
+IP=$(hostname -I | awk '{print $1}')
+DEV_KEEPER_EXTRA_IP=$IP make dev-provision   # host-IP в ip_sans keeper-серта
+make dev-keeper
+KEEPER_HOST=$IP make dev-souls-docker         # души дозваниваются на host-IP
+```
+
 ## Быстрое восстановление стенда после /tmp-чистки
 
 На macOS смена суток (а также reboot) **чистит `/tmp`** — исчезает весь

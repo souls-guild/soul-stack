@@ -20,7 +20,9 @@
 #   PG_DSN         — DSN для secret/keeper/postgres
 #                    (default postgres://keeper:keeper@localhost:5434/keeper?sslmode=disable)
 #   PKI_ROLE_DOMAINS — allowed_domains для роли soul-seed
-#                    (default example.com,test,localhost)
+#                    (default example.com,test,localhost,host.docker.internal,soul-docker-*)
+#   DEV_KEEPER_EXTRA_IP — опц. доп. IP в ip_sans keeper-серта (WSL2 host-IP для
+#                    docker-душ, NIM-26); пусто → только 127.0.0.1
 #   REPO_ROOT      — корень репозитория soul-stack (источник examples/);
 #                    по умолчанию выводится из пути этого скрипта
 
@@ -30,7 +32,10 @@ VAULT_ADDR="${VAULT_ADDR:-http://127.0.0.1:8200}"
 VAULT_TOKEN="${VAULT_TOKEN:-root}"
 KEEPER_DEV_DIR="${KEEPER_DEV_DIR:-/tmp/keeper-dev}"
 PG_DSN="${PG_DSN:-postgres://keeper:keeper@localhost:5434/keeper?sslmode=disable}"
-PKI_ROLE_DOMAINS="${PKI_ROLE_DOMAINS:-example.com,test,localhost}"
+# host.docker.internal — keeper-cert SAN; soul-docker-* — glob для bare-CN docker-душ (NIM-26).
+PKI_ROLE_DOMAINS="${PKI_ROLE_DOMAINS:-example.com,test,localhost,host.docker.internal,soul-docker-*}"
+# Опц. host-IP в ip_sans keeper-серта (WSL2: keeper endpoint = host-IP, NIM-26).
+DEV_KEEPER_EXTRA_IP="${DEV_KEEPER_EXTRA_IP:-}"
 # REPO_ROOT — корень репо: каталог на уровень выше dev/ (где лежит этот скрипт).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
@@ -111,14 +116,20 @@ else
         common_name="soul-stack" ttl=87600h >/dev/null
 fi
 
-# 5. PKI role `soul-seed`.
-if vault_cli read pki/roles/soul-seed >/dev/null 2>&1; then
-    skip "pki role soul-seed already exists"
+# 5. PKI role `soul-seed` (подписывает keeper-cert И SoulSeed-CSR душ). Идемпотентность
+# по СОДЕРЖИМОМУ: перезаписываем, пока allowed_domains не включает soul-docker (иначе
+# старая роль без glob осталась бы и CSR docker-душ падал бы 400). allow_bare_domains —
+# точное host.docker.internal; allow_glob_domains — docker-CN soul-docker-N (bare-имена
+# вне доменов) матчатся glob-ом soul-docker-*; host-флот *.example.com не затронут. NIM-26.
+if vault_cli read -field=allowed_domains pki/roles/soul-seed 2>/dev/null | grep -q 'soul-docker'; then
+    skip "pki role soul-seed already allows soul-docker-* (glob)"
 else
     log "writing pki role soul-seed (allowed_domains=${PKI_ROLE_DOMAINS})"
     vault_cli write pki/roles/soul-seed \
         allowed_domains="${PKI_ROLE_DOMAINS}" \
         allow_subdomains=true \
+        allow_bare_domains=true \
+        allow_glob_domains=true \
         allow_localhost=true \
         max_ttl=720h >/dev/null
 fi
@@ -152,13 +163,15 @@ KEY="${KEEPER_DEV_DIR}/tls/keeper.key"
 VAULT_CA="${KEEPER_DEV_DIR}/tls/vault-ca.crt"
 
 # issue_keeper_cert — выписать leaf из Vault PKI и разложить crt/key/ca по файлам.
+# SAN включает host.docker.internal (docker-души dev-флота, NIM-26) + опц.
+# DEV_KEEPER_EXTRA_IP (WSL2 host-IP). localhost/127.0.0.1 сохранены (host-флот).
 issue_keeper_cert() {
-    log "issuing keeper server cert from Vault PKI (CN=localhost, SAN=DNS:localhost,IP:127.0.0.1, ttl=720h)"
+    log "issuing keeper server cert from Vault PKI (CN=localhost, SAN=DNS:localhost,host.docker.internal,IP:127.0.0.1${DEV_KEEPER_EXTRA_IP:+,${DEV_KEEPER_EXTRA_IP}}, ttl=720h)"
     local issue_json
     issue_json="$(vault_cli write -format=json pki/issue/soul-seed \
         common_name=localhost \
-        ip_sans=127.0.0.1 \
-        alt_names=localhost \
+        ip_sans="127.0.0.1${DEV_KEEPER_EXTRA_IP:+,${DEV_KEEPER_EXTRA_IP}}" \
+        alt_names=localhost,host.docker.internal \
         ttl=720h)"
     printf '%s' "${issue_json}" | python3 -c "
 import sys, json
@@ -194,6 +207,15 @@ tls_material_current() {
 
     # keeper.crt должен цепляться к сохранённому (== живому) root.
     openssl verify -CAfile "${VAULT_CA}" "${CRT}" >/dev/null 2>&1 || return 1
+
+    # SAN должен включать host.docker.internal (docker-души, NIM-26) + опц.
+    # DEV_KEEPER_EXTRA_IP — иначе перевыпуск, чтобы docker-душа не поймала SAN-mismatch.
+    local san
+    san="$(openssl x509 -in "${CRT}" -noout -ext subjectAltName 2>/dev/null || true)"
+    printf '%s' "${san}" | grep -q 'host.docker.internal' || return 1
+    if [ -n "${DEV_KEEPER_EXTRA_IP}" ]; then
+        printf '%s' "${san}" | grep -q "${DEV_KEEPER_EXTRA_IP}" || return 1
+    fi
     return 0
 }
 
