@@ -220,7 +220,7 @@ state_schema:
         node_exporter_listen:   { type: string }
         redis_exporter_listen:  { type: string }
 
-    # ── Log-shipping data-плоскости (read-model, v14, Слайс V-I, ADR-065) ──────
+    # ── Log-shipping data-плоскости (read-model, v14, Слайс V-I, ADR-067) ──────
     # ФАКТ развёрнутого агента отгрузки логов: create БЕЗУСЛОВНО ставит vector на
     # каждый хост (ПОСЛЕ deploy+экспортеров). version/sink_type/endpoint/log_sources —
     # из essence.vector_* (те же значения, что ушли в apply.input destiny vector).

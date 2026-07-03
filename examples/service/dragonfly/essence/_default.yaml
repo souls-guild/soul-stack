@@ -61,9 +61,9 @@ node_exporter_allow_private: true
 # checksum/sink — author-context: оператор переопределяет в spec.essence. compute гонит их в
 # apply.input destiny vector; arch destiny берёт сама из soulprint.self.os.arch.
 vector_version:  "0.40.0"
-# checksum tarball-а Vector (<arch>-unknown-linux-gnu, "sha256:<hex>"). ПЛЕЙСХОЛДЕР (нули по
-# факту): реальный оператор ОБЯЗАН подставить checksum под пару (vector_version, arch) из
-# sha256sums.txt релиза vectordotdev/vector в spec.essence — иначе fail-closed (честный отказ fetch).
+# checksum tarball-а Vector (<arch>-unknown-linux-gnu, "sha256:<hex>"). Дефолт — реальный pinned
+# sha256 под пару (vector_version, arch); при смене версии/arch оператор ОБЯЗАН обновить checksum
+# под свою пару из sha256sums.txt релиза vectordotdev/vector в spec.essence — иначе fail-closed (честный отказ fetch).
 vector_sha256:   "sha256:112b047df17df46feb22fc69234e8fc2ad5a411cd2e7d369f3b70c00617a4e90"
 # Корень загрузки релизов Vector — WB Nexus raw-proxy (см. node_exporter_base_url).
 vector_base_url: "https://nexus-proxy.wb.ru/repository/raw-proxy-github/vectordotdev/vector/releases/download"

@@ -3,7 +3,7 @@ to_version: 14
 
 description: >-
   state_schema v13 → v14: обязательный log-shipping data-плоскости (Слайс V-I, redis-пилот,
-  ADR-065). state ДОПОЛНЯЕТСЯ read-model-объектом logging — зафиксированные версия/sink/
+  ADR-067). state ДОПОЛНЯЕТСЯ read-model-объектом logging — зафиксированные версия/sink/
   источники агента vector, развёрнутого create-прогоном на каждый хост (симметрия v12→v13
   monitoring: экспортеры метрик). Секрет доступа к коллектору (sink_auth_ref) в state НЕ
   хранится (ИБ — он в Vault, как tls.*_ref и пароль ACL-юзера monitoring).

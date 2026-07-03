@@ -11,7 +11,7 @@ description: >-
 #
 # ★ Наблюдаемость: Vector — лог-плоскость (sources→transforms→sinks, PUSH логов),
 # ДОПОЛНЯЕТ node-exporter (метрики хоста, pull) и redis-exporter (метрики Redis),
-# НЕ заменяет их. Три разных observability-слоя (ADR-065 amends ADR-064/024).
+# НЕ заменяет их. Три разных observability-слоя (ADR-067 amends ADR-024).
 #
 # Раскладка клонирует node-exporter (install tarball GitHub + sha256 → extract →
 # file.present бинарь + стабильный system-аккаунт + hardened systemd unit +

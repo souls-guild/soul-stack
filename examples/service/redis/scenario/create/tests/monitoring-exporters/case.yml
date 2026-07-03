@@ -60,7 +60,7 @@ fixtures:
     redis_exporter_version: "1.62.0"
     redis_exporter_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
     redis_exporter_listen: ":9121"
-    # ★ essence-ключи log-shipping (Слайс V-I, ADR-065): версия/checksum/sink агента vector.
+    # ★ essence-ключи log-shipping (Слайс V-I, ADR-067): версия/checksum/sink агента vector.
     # console sink (дефолт) — endpoint/auth не нужны; log_sources = redis-логи.
     vector_version: "0.40.0"
     vector_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
@@ -145,7 +145,7 @@ assert:
       redis_exporter_version: "1.62.0"
       node_exporter_listen: ":9100"
       redis_exporter_listen: ":9121"
-    # read-model log-shipping (Слайс V-I, ADR-065): версия/sink/источники агента vector.
+    # read-model log-shipping (Слайс V-I, ADR-067): версия/sink/источники агента vector.
     # sink_auth_ref (токен коллектора) НЕ в state (ИБ) — намеренно отсутствует.
     logging:
       vector_version: "0.40.0"

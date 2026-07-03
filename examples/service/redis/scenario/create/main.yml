@@ -405,7 +405,7 @@ tasks:
         redis_user:     monitoring
         redis_password: "${ vault('secret/redis/' + incarnation.name + '/users/monitoring#password') }"
 
-  # ── ОБЯЗАТЕЛЬНЫЙ log-shipping data-плоскости (Слайс V-I, ADR-065) ──────────────────
+  # ── ОБЯЗАТЕЛЬНЫЙ log-shipping data-плоскости (Слайс V-I, ADR-067) ──────────────────
   # ПОСЛЕ экспортеров create БЕЗУСЛОВНО (без when-гейта) разворачивает vector (агент отгрузки
   # логов) на КАЖДЫЙ хост incarnation КОМПОЗИЦИЕЙ переиспользуемой standalone-destiny через
   # apply:destiny (изолированный render, ADR-009). vector ДОПОЛНЯЕТ node/redis-exporter
