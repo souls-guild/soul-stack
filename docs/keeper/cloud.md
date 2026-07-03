@@ -76,8 +76,10 @@ keeper.profile.create
 1. **Резолвит Provider-реестр.** `params.provider` — это имя строки `providers` (не имя CloudDriver-плагина). Keeper читает строку, берёт `type` (= имя плагина `soul-cloud-<type>`), `region` и `credentials_ref`.
 2. **Резолвит credentials.** По `credentials_ref` (`vault:<mount>/<path>`) Keeper читает секрет из Vault KV тем же keeper-side Vault-клиентом, что `core.vault.kv-read`, и кладёт plain-секрет + `region` в `CreateRequest.credentials`. Драйвер в Vault **НЕ ходит** (см. [Credentials-flow](#credentials-flow) ниже).
 3. **Дёргает `CloudDriver.Create`** через PluginHost (spawn one-shot, ADR-020): провайдер создаёт VM, стримит прогресс, ждёт готовности (running + IP/DNS) и возвращает `VmInfo` с заполненным `fqdn` (= SID).
-4. Для каждой VM создаётся запись в `souls` со `status: pending` и выписывается bootstrap-токен под её FQDN (plain-токен попадает только в register-output, в БД — hash).
-5. Cloud-init на VM (через `userdata`) ставит `soul`-бинарь и токен. Soul стартует, делает CSR, переходит в `connected`.
+4. Для каждой VM создаётся запись в `souls` со `status: pending` и выписывается bootstrap-токен под её FQDN (plain-токен попадает только в register-output — `register.<step>.hosts[i].bootstrap_token`, в БД — hash).
+5. Cloud-init на VM (через `userdata`) ставит **только setup**: `soul`-бинарь, CA, `soul.yml`, systemd-unit — **без токена**. Токен доставляет отдельный keeper-side шаг `module: core.bootstrap.delivered` ([ADR-063](../adr/0063-bootstrap-token-delivery.md), [modules.md → core.bootstrap.delivered](modules.md#corebootstrapdelivered)); он же делает redeem (`soul init`) на VM. После init Soul поднимает EventStream и переходит в `connected`.
+
+Шаги 4–5 — режим **B-flat (default)**. При `self_onboard: true` порядок другой: токены выписываются **ДО** create и запекаются в userdata — VM онбордится сама, шаг доставки не нужен (см. [Self-onboard «Вариант T»](#self-onboard-вариант-t)).
 
 State `destroyed` симметричен: Keeper резолвит тот же Provider (для credentials) и зовёт `CloudDriver.Destroy(vm_ids, credentials)`, затем — cascade-транзакция реестров ([ADR-017](../adr/0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read)).
 
@@ -90,7 +92,7 @@ State `destroyed` симметричен: Keeper резолвит тот же Pr
 - `region` живёт **внутри** credentials/profile Struct, а не отдельным типизированным полем: он provider-specific (у Proxmox/OpenStack своего `region` нет).
 - Секрет **маскируется на любом выходе** (audit / OTel / SSE / error-сообщения) тем же `MaskSecrets`, что чистит bootstrap-токен и vault-ref-ы. Драйверам поэтому **не нужна** capability `vault_access`.
 
-> **Cloud-init bootstrap (B-flat, ADR-017(h) amendment 2026-05-27).** Реализованный MVP: per-VM bootstrap-токен выписывается ПОСЛЕ возврата `VmInfo` (когда SID известен) и кладётся в `register.<step>.hosts[i].bootstrap_token`. **Cloud-init userdata токены НЕ несёт** (cloud-provider API хранит userdata в plaintext metadata, доступной процессам VM) — содержит только: установку `soul`-бинаря (curl с pinned-CA), embedded PEM CA Keeper-а (`/etc/soul/tls/keeper-ca.pem`), минимальный `soul.yml` с `keeper.endpoints`, systemd-unit `soul.service`. **Доставка per-VM-токена на VM — отдельный шаг сценария** (типично `keeper.push` через SSH-провайдер: `module: keeper.push`, читает `register.<step>.hosts[].bootstrap_token` и доставляет на VM через SSH). См. [«Cloud-init bootstrap (MVP)»](#cloud-init-bootstrap-mvp) ниже.
+> **Cloud-init bootstrap (B-flat, ADR-017(h) amendment 2026-05-27).** Реализованный MVP: per-VM bootstrap-токен выписывается ПОСЛЕ возврата `VmInfo` (когда SID известен) и кладётся в `register.<step>.hosts[i].bootstrap_token`. **Cloud-init userdata токены НЕ несёт** (cloud-provider API хранит userdata в plaintext metadata, доступной процессам VM) — содержит только: установку `soul`-бинаря (curl с pinned-CA), embedded PEM CA Keeper-а (`/etc/soul/tls/keeper-ca.pem`), минимальный `soul.yml` с `keeper.endpoints`, systemd-unit `soul.service`. **Доставка per-VM-токена на VM — отдельный keeper-side шаг сценария `module: core.bootstrap.delivered`** ([ADR-063](../adr/0063-bootstrap-token-delivery.md); прежняя заглушка `keeper.push.applied` отвергнута — такого keeper-side модуля не существовало, BUG#2): шаг читает `${ register.<step>.hosts }` (`sid`/`primary_ip`/`bootstrap_token`), по SSH кладёт токен на VM (STDIN, не argv) и там же делает redeem — `soul init`. См. [«Cloud-init bootstrap (MVP)»](#cloud-init-bootstrap-mvp) ниже и [modules.md → core.bootstrap.delivered](modules.md#corebootstrapdelivered).
 
 > **Coven-привязка нового хоста — отдельный scenario-шаг.** `core.cloud.provisioned` создаёт VM и регистрирует их в `souls`, но **сам по себе coven-метки не назначает**: запись `souls → coven` — это отдельный шаг сценария через core-модуль `core.soul.registered` ([`docs/keeper/modules.md`](modules.md)). Разделение сознательное: cloud-create и привязка к coven — разные операции реестра, каждый со своими guard-rails, и они компонуются в сценарии независимо.
 
@@ -111,22 +113,29 @@ State `destroyed` симметричен: Keeper резолвит тот же Pr
 
 Реализованный B-flat вариант (ADR-017(h) amendment 2026-05-27). Цель: новая VM, созданная `core.cloud.provisioned`, поднимает `soul`-агента и подключается к Keeper-кластеру.
 
+Bootstrap-доставка токена — три режима:
+
+1. **B-flat (default)** — userdata несёт только setup, **без токенов**; токен доставляет отдельный шаг `core.bootstrap.delivered` (token-only). Описан во [Flow](#flow) ниже.
+2. **Full-install** — платформы без cloud-init userdata: `core.bootstrap.delivered` с `install: true` (`transport: teleport`) сам ставит весь setup по SSH и доставляет токен ([ADR-063](../adr/0063-bootstrap-token-delivery.md), [modules.md → core.bootstrap.delivered](modules.md#corebootstrapdelivered)).
+3. **Self-onboard «Вариант T»** — `self_onboard: true` на `core.cloud.created`: per-VM токены запечены в userdata, VM онбордится **сама в один цикл cloud-init**, шага доставки нет ([ADR-017(h) amendment 2026-07-01](../adr/0017-keeper-side-core.md)). См. [подраздел ниже](#self-onboard-вариант-t).
+
 ### Flow
 
-1. **Шаг сценария `core.cloud.provisioned` (`state: created`)** с параметром `generate_userdata: true`:
+1. **Шаг сценария `module: core.cloud.created`** с параметром `generate_userdata: true`:
    - Keeper резолвит `keeper.yml::cloud_init.tls_ca_ref` в PEM CA через Vault (поле `ca`).
-   - Keeper рендерит cloud-config YAML по embed template (`keeper/internal/cloudinit/templates/cloud-init.tmpl`).
+   - Keeper рендерит cloud-config YAML по embed template `keeper/internal/soulinstall/templates/cloud-init.tmpl`. Install-blueprint (пути/права/soul.yml/unit) вынесен в shared-пакет [`keeper/internal/soulinstall`](../../keeper/internal/soulinstall) — единый источник для userdata-пути **и** full-install по SSH ([ADR-063](../adr/0063-bootstrap-token-delivery.md) amendment 2026-06-30); `keeper/internal/cloudinit` остался config-резолвером (Vault) и тонкой обёрткой рендера.
    - Userdata уходит в `CreateRequest.userdata` (ADR-017(e) only-add), провайдер создаёт VM с этой userdata.
    - После Create — Keeper выписывает per-VM bootstrap-токен под FQDN VM, кладёт в `register.<step>.hosts[i].bootstrap_token` (plaintext, маскируется на всех выходах audit/SSE/OTel substring-фильтром `audit.MaskSecrets`).
 2. **На VM работает cloud-init:**
    - Устанавливает CA: `/etc/soul/tls/keeper-ca.pem` (PEM, embedded в userdata).
    - Скачивает `soul`-бинарь: `curl --cacert /etc/soul/tls/keeper-ca.pem $SOUL_BINARY_URL` → `/usr/local/bin/soul` (pinned-CA, TOFU-mitigation). При `soul_binary_ca: system` curl идёт без `--cacert` (системный trust-store, для публичных CA artifact-хостов); см. поле в разделе «Конфиг».
-   - Пишет минимальный `/etc/soul/soul.yml` с `keeper.endpoints[0] = {host, bootstrap_port, event_stream_port}`.
-   - `systemctl enable + start soul.service`. Soul без bootstrap-токена пока ничего не делает (звонит на Keeper-Bootstrap-RPC — отвергается без токена).
-3. **Шаг 2 сценария — доставка токена** (типично `module: keeper.push`):
-   - Читает `register.<step1>.hosts[i].bootstrap_token` через CEL.
-   - Через SSH-провайдер (Sigil-allowed `soul-ssh-*`) кладёт токен на VM в место, откуда `soul` его подхватит для CSR-онбординга.
-4. **Soul → Bootstrap-RPC** (ADR-012(b)): CSR с токеном → подпись Vault PKI → mTLS-cert. Дальше — EventStream.
+   - Пишет минимальный `/etc/soul/soul.yml` с `keeper.endpoints[0] = {host, bootstrap_port, event_stream_port}` (`event_stream_port` — из `cloud_init.event_stream_port`; не задан → fallback на порт `bootstrap_endpoint`, single-port LB).
+   - `systemctl daemon-reload + enable + start soul.service`. Без SoulSeed демон **сам не онбордится**: `soul run` завершается ошибкой «SoulSeed not found — run `soul init` first» и рестартится systemd-ом, пока токен не доставлен и не redeem-нут (шаг 3).
+3. **Следующий шаг сценария — доставка токена: `module: core.bootstrap.delivered`** ([ADR-063](../adr/0063-bootstrap-token-delivery.md), спецификация — [modules.md → core.bootstrap.delivered](modules.md#corebootstrapdelivered)):
+   - Читает `${ register.<step1>.hosts }` (`sid` / `primary_ip` / `bootstrap_token`) через CEL.
+   - По SSH (direct-режим через SshProvider-плагин + CA-signed host-cert, либо `transport: teleport` by-name) кладёт токен в `token_path` (default `/etc/soul/token`); **токен идёт в STDIN, не в argv**.
+   - Там же **redeem токена**: `test -e <seed-cert> || SOUL_BOOTSTRAP_TOKEN="$(cat <token_path>)" soul init --config /etc/soul/soul.yml` — идемпотентно (guard по seed-cert; токен single-use). При `start_soul: true` (default) — `systemctl daemon-reload && enable && start soul`.
+4. **`soul init` → Bootstrap-RPC** (ADR-012(b)): CSR с токеном → подпись Vault PKI → mTLS-cert (SoulSeed). Дальше демон держит EventStream; онбординга набора VM дожидается барьер `await_online` шага `core.soul.registered` ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)).
 
 ### Конфиг
 
@@ -135,15 +144,19 @@ State `destroyed` симметричен: Keeper резолвит тот же Pr
 ```yaml
 cloud_init:
   bootstrap_endpoint: lb.keeper.example:9442      # LB host:port (Bootstrap-RPC listener)
+  event_stream_port:  9443                         # опц.: TCP-порт EventStream (mTLS); 0/нет → порт bootstrap_endpoint
   tls_ca_ref:         vault:secret/keeper/ca      # PEM CA, поле `ca` в KV
   soul_binary_url:    https://artifacts.example/soul/v1.0.0/soul
   soul_binary_ca:     keeper                       # опц.: keeper (default) | system
   soul_version:       v1.0.0                       # опц. метка для диагностики
 ```
 
+Тот же блок — единый источник install-параметров и для **full-install-режима** `core.bootstrap.delivered` (платформы без cloud-init userdata): имя `cloud_init` сохранено сознательно, второй блок под тем же содержимым был бы drift ([ADR-063](../adr/0063-bootstrap-token-delivery.md) amendment 2026-06-30).
+
 Поля:
 
 - `bootstrap_endpoint` — `host:port` LB (Bootstrap-RPC listener).
+- `event_stream_port` — опц. TCP-порт EventStream-фазы (mTLS) того же host-а; попадает в `event_stream_port` генерённого `soul.yml`. `0`/опущено → back-compat fallback на порт `bootstrap_endpoint` (single-port LB). Без него на топологиях с раздельными портами `soul run` дозванивался бы EventStream-ом на Bootstrap-only listener («Unimplemented: method EventStream», 6-я стена [ADR-063](../adr/0063-bootstrap-token-delivery.md)).
 - `tls_ca_ref` — vault-ref (`vault:<mount>/<path>`) на PEM-CA Keeper-а (поле `ca` в KV).
 - `soul_binary_url` — HTTPS URL для скачивания `soul`-бинаря (plain http отвергается).
 - `soul_binary_ca` — какой trust-store использует curl при скачивании бинаря:
@@ -164,20 +177,51 @@ Hot-reload работает: правка `keeper.yml` через `keeper-reload
   module: core.cloud.created           # base core.cloud + state created (НЕ core.cloud.provisioned; state — последний сегмент)
   params:
     provider:          aws-prod
-    profile:           {image: ami-0001, instance_type: t3.medium}
+    profile:           redis-medium-eu # ИМЯ записи реестра profiles (НЕ inline-object — ADR-017 amendment 2026-06-29)
     count:             3
     generate_userdata: true            # ← рендер из keeper.yml::cloud_init
   register: vm
 ```
 
-`generate_userdata: true` и `userdata: "..."` — **mutually exclusive** (одновременное присутствие → fail). Без обоих провайдер получает пустой userdata.
+`profile` — **имя** строки реестра `profiles` (`POST /v1/profiles` до прогона): Keeper резолвит имя в VM-spec params через Profile-реестр, симметрично `provider`→credentials. Inline-object в `params.profile` **не поддерживается** (рудимент раннего дизайна до появления Profile-реестра; [ADR-017](../adr/0017-keeper-side-core.md) amendment 2026-06-29).
+
+`generate_userdata: true` и `userdata: "..."` — **mutually exclusive** (одновременное присутствие → fail). Без обоих провайдер получает пустой userdata. `self_onboard: true` тоже взаимоисключим с явным `userdata:` — keeper обязан сам запечь токены (см. ниже).
+
+### Self-onboard «Вариант T»
+
+Третий режим bootstrap-доставки ([ADR-017(h) amendment 2026-07-01](../adr/0017-keeper-side-core.md)): VM онбордится **сама в один цикл cloud-init**, без шага `core.bootstrap.delivered` и без claim-callback. Chicken-egg «SID известен только ПОСЛЕ create» снят предсказанием FQDN: keeper сам задаёт базовое имя VM-батча (param `name` → `CreateRequest.name`, драйвер именует VM `<name>-<index>`) и знает FQDN-суффикс провайдера (поле реестра `providers.fqdn_suffix`, миграция 094) — полный FQDN `<name>-<index>.<fqdn_suffix>` каждой VM известен ДО create.
+
+```yaml
+- name: provision
+  on: keeper
+  module: core.cloud.created
+  params:
+    provider:     dev-cloud       # у Provider-а должен быть задан fqdn_suffix
+    profile:      redis-medium-eu
+    count:        3
+    name:         soul-e2e        # base-имя: FQDN = soul-e2e-<i>.<fqdn_suffix>
+    self_onboard: true            # generate_userdata подразумевается
+  register: vm
+```
+
+Как работает:
+
+1. Keeper **ДО create** выписывает per-VM bootstrap-токены на предсказанные SID (записи `souls` со `status: pending`, в `bootstrap_tokens` — hash) и рендерит userdata с map FQDN→token: файл `/etc/soul/self-onboard-tokens` (`0600`, строки `<fqdn> <token>`).
+2. Провайдер создаёт VM с этой userdata; keeper сверяет фактические FQDN с предсказанными — расхождение (драйвер не учёл `CreateRequest.name`) → fail-fast, иначе токен не совпал бы с hostname VM. Провал create/сверки **откатывает** вставленные souls/токены (orphan-cleanup — без него rerun упирался бы в PK-конфликт).
+3. cloud-init на VM ставит обычный setup (CA, `soul.yml`, unit, `soul`-бинарь), затем **между установкой бинаря и стартом `soul.service`** выбирает свою строку токена по `$(hostname -f)` и делает `soul init` (токен уходит через env `SOUL_BOOTSTRAP_TOKEN`, не argv). После init `soul.service` поднимает уже онбордившийся демон; онбординга набора ждёт штатный барьер `await_online` (`core.soul.registered`).
+
+Контракт params: `self_onboard: true` (bool, opt) **требует `name`**; **взаимоисключим с явным `userdata:`**; `generate_userdata` подразумевается — блок `keeper.yml::cloud_init` обязан быть сконфигурирован. **Plain-токен в register-output НЕ кладётся** — ключа `bootstrap_token` в `register.<step>.hosts[i]` в этом режиме нет (доставки нет); output несёт признак `self_onboard: true`.
+
+> **★ Security — осознанное отступление от B-flat.** B-flat держит userdata «без токенов» (cloud-provider хранит userdata в plaintext-metadata, доступной процессам VM). Self-onboard кладёт токены в userdata сознательно: они **single-use** — redeem происходит немедленно, на первом же boot-цикле, повторное употребление невозможно; альтернатива — обязательная push-доставка, которой на части платформ нет. Режим — **opt-in per-шаг** (`self_onboard`); default остаётся B-flat.
+
+Границы: провайдер без предсказуемого FQDN (пустой `fqdn_suffix`) — явная ошибка шага; на платформах с выключенным userdata (WB `ci_user_data`, [ADR-066](../adr/0066-teleport-onboarding-profile.md)) режим недоступен — там штатный путь full-install через Teleport ([ADR-063](../adr/0063-bootstrap-token-delivery.md)).
 
 ### Безопасность
 
-- **Userdata НЕ несёт токены** (cloud-provider plaintext metadata).
+- **Userdata НЕ несёт токены** (cloud-provider plaintext metadata) — в default-режиме B-flat. Исключение — opt-in [self-onboard «Вариант T»](#self-onboard-вариант-t): токены в userdata сознательно, single-use.
 - **Pinned-CA для curl** (`soul_binary_ca: keeper`, default) — атакующий не может подменить `soul`-бинарь man-in-the-middle-ом (требует владения приватником CA Keeper-а). При `soul_binary_ca: system` верификация cert artifact-хоста идёт по системному trust-store (для публичных CA); ослабляется **только** этот шаг — Bootstrap-канал (souls↔keeper mTLS) пинится на keeper-CA всегда, plain-http по-прежнему отвергается.
 - **TLS CA из Vault** — единый источник правды, ротация без правок keeper.yml.
-- **Per-VM-токен доставляется отдельным шагом по SSH** — атакующая поверхность ограничена SSH-доступом, а не cloud metadata.
+- **Per-VM-токен доставляется отдельным шагом по SSH** (`core.bootstrap.delivered`: токен в STDIN, не в argv; audit-payload без токенов) — атакующая поверхность ограничена SSH-доступом, а не cloud metadata.
 
 ### Пример
 

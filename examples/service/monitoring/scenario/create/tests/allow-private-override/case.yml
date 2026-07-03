@@ -1,0 +1,33 @@
+# L0-испытание create: input.node_exporter_allow_private=true (SSRF-guard opt-out)
+# доезжает через apply:input до core.url.fetched destiny node-exporter (паттерн
+# redis exporters-base-url-override). Дефолтный кейс (false, guard держится) —
+# render-defaults.
+name: create passes node_exporter_allow_private opt-out through to destiny fetch
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  # L0-render не применяет default-ы scenario-контракта — дефолты передаются явно
+  # (см. render-defaults); проверяемое отличие — node_exporter_allow_private: true.
+  input:
+    node_exporter_version:    "1.8.2"
+    node_exporter_collectors: []
+    node_exporter_allow_private: true
+    redis_exporter_version:   "1.62.0"
+    redis_exporter_sha256:    "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    bin_dir:                  /usr/local/bin
+    redis_socket:             /var/run/redis/redis-server.sock
+    node_exporter_listen:     ":9100"
+    redis_exporter_listen:    ":9121"
+    redis_exporter_extra_args: []
+  soulprint:
+    os:
+      arch: amd64
+
+assert:
+  task_present:
+    # Дизамбигуатор от redis_exporter-fetch — url/path. allow_private: true — снятый guard.
+    - module: core.url.fetched
+      params_subset:
+        url: https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-amd64.tar.gz
+        path: /tmp/node_exporter-1.8.2.tar.gz
+        allow_private: true

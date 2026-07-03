@@ -199,20 +199,16 @@ func (m *MongoModule) applyCommand(ctx context.Context, stream grpc.ServerStream
 	})
 }
 
-// commandDoc строит bson.D команды из params.command (map). Порядок ключей в
-// map не детерминирован, но первый ключ команды mongo обязан быть её именем —
-// поэтому command_name (если задан) выносится ПЕРВЫМ элементом bson.D, остальные
-// поля идут за ним. Без command_name берём любой первый ключ map (для команд с
-// единственным полем, напр. {ping: 1}).
+// commandDoc строит bson.D команды из params.command (map). Первый ключ команды
+// mongo обязан быть её именем, а порядок итерации map не детерминирован — надёжны
+// только single-field команды ({ping: 1} и т.п.), порядок multi-field не
+// гарантирован (ограничение пилота).
 func commandDoc(v *structpb.Value) (bson.D, error) {
 	fields := structField(v)
 	if len(fields) == 0 {
 		return nil, fmt.Errorf("params.command: must be a non-empty map (bson-документ команды)")
 	}
 	doc := bson.D{}
-	// name-first: если ровно одно поле — оно и есть команда; иначе caller обязан
-	// был передать корректный порядок через отдельный ключ. Для PILOT достаточно
-	// single-field команд (ping/serverStatus/…), где порядок неважен.
 	for k, vv := range fields {
 		doc = append(doc, bson.E{Key: k, Value: valueToNative(vv)})
 	}

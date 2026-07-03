@@ -86,7 +86,8 @@ monitoring/
         ├── templates/
         │   └── redis_exporter.service.tmpl   # systemd-unit redis_exporter (инлайн, unix-сокет)
         └── tests/
-            └── render-defaults/case.yml     # L0-trial (render-only)
+            ├── render-defaults/case.yml     # L0-trial (render-only, дефолты)
+            └── allow-private-override/case.yml  # L0-trial: opt-out SSRF-guard (allow_private: true)
 ```
 
 `node_exporter.service.tmpl` удалён: node-exporter рендерит сама destiny.
@@ -139,6 +140,7 @@ monitoring/
 | `redis_socket` | string (abs path) | `/var/run/redis/redis-server.sock` | Unix-сокет Redis. |
 | `node_exporter_listen` | string `host:port` | `:9100` | Listen-адрес node_exporter (`--web.listen-address`). |
 | `node_exporter_collectors` | array enum `smartmon`/`nvme`/`ipmi` | `[]` | Какие textfile-коллекторы железа node-exporter ставить. `[]` = только ядро (на VM железа нет). |
+| `node_exporter_allow_private` | boolean | `false` | SSRF-guard opt-out destiny `node-exporter`: разрешить fetch tarball-а при private-resolve `base_url` (внутреннее зеркало). Пробрасывается в `core.url.fetched` (`allow_private`). Дефолтный `base_url` — публичный GitHub, guard держится. |
 | `redis_exporter_listen` | string `host:port` | `:9121` | Listen-адрес redis_exporter. |
 | `redis_exporter_extra_args` | array string | `[]` | Доп. флаги инлайн-redis_exporter (`--check-keys=…`, `--web.config.file=…` для TLS/basic-auth и пр.). Каждый элемент — отдельный токен `ExecStart`. |
 
@@ -184,6 +186,11 @@ node_exporter качается через destiny `node-exporter` без checksu
 сборку `redis_addr=unix://...`, создание пользователя `redis-exporter`
 (`core.user.present`) и декларативные `core.service.{enabled,running}`-шаги. Даёт
 `PASS`.
+
+Второй кейс — `tests/allow-private-override/case.yml`: проверяет, что
+`node_exporter_allow_private: true` доезжает через `apply: input:` до
+`core.url.fetched` destiny (`allow_private: true`, SSRF-guard снят);
+в render-defaults guard держится (`allow_private: false`).
 
 > `apply:destiny node-exporter` резолвится зеркалом прода (slice A, ADR-023): имя →
 > `service.yml::destiny[]` + URL из `fixtures.default_destiny_source` кейса

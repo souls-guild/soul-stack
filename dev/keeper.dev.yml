@@ -85,7 +85,7 @@ plugins:
   #
   # DEV-shortcut (без публичного git-репо драйвера): кеш-слот
   # /tmp/keeper-dev/plugins/wb-wb/{manual-0001,current} наполнен ВРУЧНУЮ
-  # (manifest.yaml + бинарь soul-cloud-wb из /home/co-cy/vscode/tools/wb-plugins).
+  # (manifest.yaml + бинарь soul-cloud-wb из /home/co-cy/vscode/soulstack/wb-plugins).
   # source — file:// без выставленного SOUL_STACK_ALLOW_FILE_REPOS=1: git-резолвер
   # отбракует схему (validateGitScheme → ErrSourceUnavailable), превратит в warning
   # и НЕ тронет ручной current-symlink (per-entry fail-closed в ResolveCatalog).

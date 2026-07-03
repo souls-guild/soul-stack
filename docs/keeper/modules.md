@@ -220,9 +220,31 @@ DoS-guard, fail-closed. Поле `keeper.yml::max_await_timeout` (duration, defa
 
 Полный per-module справочник — [docs/module/core/choir/README.md](../module/core/choir/README.md).
 
+## `core.cloud.created` / `core.cloud.destroyed`
+
+Создание/удаление VM через CloudDriver-плагин ([ADR-017](../adr/0017-keeper-side-core.md)). **Keeper-side**, диспетчер `on: keeper`. Registry-ключ — base `core.cloud`; state (`created` / `destroyed`, также `resized`) приходит из суффикса адреса. Реализация — [`keeper/internal/coremod/cloud/provisioned.go`](../../keeper/internal/coremod/cloud/provisioned.go). Полный flow (Provider/Profile-резолв, credentials Вариант A, userdata-рендер, guard-rails destroy) — [cloud.md](cloud.md); per-module справочник — [docs/module/core/cloud/README.md](../module/core/cloud/README.md).
+
+### Параметры `created` (`params:`)
+
+| Параметр | Тип | Обязательность | Default | Описание |
+|---|---|---|---|---|
+| `provider` | string | required | — | ИМЯ строки реестра `providers`: keeper резолвит её в driver-имя (`soul-cloud-<type>`) + plain-credentials из Vault (Вариант A, [cloud.md → Credentials-flow](cloud.md#credentials-flow)). |
+| `profile` | string | optional | — | ИМЯ строки реестра `profiles` (**НЕ inline-object**, [ADR-017 amendment 2026-06-29](../adr/0017-keeper-side-core.md)); keeper резолвит имя в VM-spec params. |
+| `count` | int (≥ 1) | optional | `1` | Сколько VM создать. |
+| `userdata` | string | optional | — | Готовый cloud-init blob (legacy / gold-image flow). Взаимоисключим и с `generate_userdata: true`, и с `self_onboard: true`. |
+| `generate_userdata` | bool | optional | `false` | Рендер userdata из `keeper.yml::cloud_init` — setup **без токенов**, режим B-flat ([cloud.md → Cloud-init bootstrap](cloud.md#cloud-init-bootstrap-mvp)). |
+| `name` | string | optional; **required при `self_onboard: true`** | — | Базовое имя VM-батча → `CreateRequest.name`; драйвер именует VM `<name>-<index>`. В связке с полем Provider-реестра `fqdn_suffix` (миграция 094) даёт предсказуемый FQDN `<name>-<index>.<fqdn_suffix>` ДО create. |
+| `self_onboard` | bool | optional | `false` | Self-onboard «Вариант T» ([ADR-017(h) amendment 2026-07-01](../adr/0017-keeper-side-core.md)): keeper ДО create выписывает per-VM токены на предсказанные SID и запекает их в userdata (`/etc/soul/self-onboard-tokens`, `0600`) — VM онбордится сама в один цикл cloud-init, шаг `core.bootstrap.delivered` не нужен. Требует `name` и непустой `providers.fqdn_suffix` (иначе явная ошибка); **взаимоисключим с явным `userdata:`**; `generate_userdata` подразумевается (блок `keeper.yml::cloud_init` обязателен). **Plain-токен в register-output НЕ кладётся** (ключа `bootstrap_token` нет). Провал create/сверки FQDN откатывает вставленные souls/токены (orphan-cleanup). Осознанное отступление от security-floor B-flat (single-use токены, opt-in per-шаг) — [cloud.md → Self-onboard «Вариант T»](cloud.md#self-onboard-вариант-t). |
+
+Output `created` (`register.<имя>.*`): `hosts[]` (`sid` / `vm_id` / `primary_ip` / `attributes`; в B-flat дополнительно `bootstrap_token` — plain, единственная точка видимости, маскируется `audit.MaskSecrets`), `count`, `vm_ids`, `action`. При `self_onboard: true` — плюс признак `self_onboard: true` и **без** `bootstrap_token`. Params `destroyed` (`provider` / `vm_ids` / `sids` + cascade-семантика) — [per-module README](../module/core/cloud/README.md) и [cloud.md](cloud.md).
+
 ## `core.bootstrap.delivered`
 
-Тонкая доставка per-VM bootstrap-токена по SSH на свежесозданные cloud-init-VM ([ADR-063](../adr/0063-bootstrap-token-delivery.md)). **Keeper-side**, диспетчер `on: keeper`. Registry-ключ — base `core.bootstrap`; state `delivered` приходит из суффикса адреса. Регистрируется только при полном наборе SSH-зависимостей (`BootstrapProviders` + `BootstrapHostCAs` + `BootstrapDial` в `coremod.Deps`) — иначе шаг падает «unknown keeper-side module». Реализация — [`keeper/internal/coremod/bootstrap/delivered.go`](../../keeper/internal/coremod/bootstrap/delivered.go).
+Доставка per-VM bootstrap-токена по SSH на свежесозданные VM ([ADR-063](../adr/0063-bootstrap-token-delivery.md)). **Keeper-side**, диспетчер `on: keeper`. Registry-ключ — base `core.bootstrap`; state `delivered` приходит из суффикса адреса. Реализация — [`keeper/internal/coremod/bootstrap/delivered.go`](../../keeper/internal/coremod/bootstrap/delivered.go).
+
+**Два транспорта** (`keeper.yml::push.transport`, [ADR-063 amendment Teleport](../adr/0063-bootstrap-token-delivery.md#amendment-teleport-by-name-transport)): **`direct`** (default) — generic `push.Dial` по `primary_ip` через SshProvider-плагин (Authorize/Sign + CA-signed host-cert verify из Vault host-CA); **`teleport`** — by-name через Teleport Proxy (target=SID, не IP; транспорт+auth+host-verify целиком через Teleport identity-file, Authorize/Sign/Vault-host-CA не задействованы, retry-до-join). Регистрация условна: direct-режим требует полного набора SSH-зависимостей (`BootstrapProviders` + `BootstrapHostCAs` + `BootstrapDial` в `coremod.Deps`), teleport — только dialer; иначе шаг падает «unknown keeper-side module».
+
+**Два режима работы** ([ADR-063 amendment full-install](../adr/0063-bootstrap-token-delivery.md#amendment-2026-06-30--full-install-режим-платформы-без-cloud-init-userdata)): **token-only** (default) — cloud-init уже поставил setup, доставляется только токен + redeem; **full-install** (`install: true`, только `transport: teleport`) — модуль сперва ставит ВЕСЬ setup (keeper-ca.pem → soul.yml → soul.service → curl soul-бинаря) по шагам `soulinstall.RenderInstallScript` — тот же shared-blueprint, что у cloud-init userdata, — затем токен/redeem/start. Для платформ, где провайдер не принимает userdata.
 
 **Закрывает BUG#2 cloud-provision.** До ADR-063 scenario нёс адрес-заглушку `keeper.push.applied`, которой keeper-side не существует (это audit-event push-прогона Destiny, не модуль) — созданная VM ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)) не получала токен, барьер `await_online` не набирал presence, прогон уходил в `error_locked`.
 
@@ -255,6 +277,8 @@ cloud-init (B-flat, [ADR-017(h)](../adr/0017-keeper-side-core.md)) уже пос
 | `ssh_user` | string | optional | `root` | SSH-пользователь. |
 | `ssh_port` | int (1..65535) | optional | `22` | TCP-порт sshd. |
 | `start_soul` | bool | optional | `true` | Активация unit-а после init: `systemctl daemon-reload && systemctl enable soul && systemctl start soul`. `soul init` (шаг 5) идёт независимо от флага. |
+| `install` | bool | optional | `false` | Full-install-режим: перед токеном поставить весь setup по SSH (см. «Два режима работы» выше). Только `transport: teleport`; в direct-режиме → Validate-ошибка. Требует сконфигурированного блока `keeper.yml::cloud_init` (источник blueprint, config-reuse). |
+| `join_wait_timeout` | int (секунды) | optional | `360` | Потолок ожидания Teleport-join хоста (retry-with-backoff до появления ноды в кластере); релевантен только в `transport: teleport`. По истечении — шаг `failed` (B1-strict). |
 
 ### Выходной контракт (`output:` модуля)
 
@@ -266,8 +290,8 @@ cloud-init (B-flat, [ADR-017(h)](../adr/0017-keeper-side-core.md)) уже пос
 
 ### Границы MVP (ADR-063)
 
-- Один key-based SshProvider, только токен, хосты последовательно.
-- **★ C1 — cloud-init CA-signed host-key (required-для-live, СЛЕДУЮЩИЙ слайс).** `push.Dial` доверяет только host-cert, подписанному host-CA (отказ от TOFU) — свежая VM обязана иметь CA-signed host-key, иначе handshake реджектится. До C1 модуль валиден на render (L0 Trial) + unit-тестах, но live-e2e не пройдёт.
+- Один key-based SshProvider, хосты последовательно. Full-install — только `transport: teleport`.
+- **★ C1 — cloud-init CA-signed host-key (required-для-live direct-режима, отдельный слайс).** `push.Dial` доверяет только host-cert, подписанному host-CA (отказ от TOFU) — свежая VM обязана иметь CA-signed host-key, иначе handshake реджектится: до C1 live-e2e в **direct**-режиме не пройдёт (модуль валиден на render L0 Trial + unit-тестах). К `transport: teleport` C1 **неприменим** — host-verify идёт через Teleport CA.
 
 ## `core.vault.kv-read`
 

@@ -36,6 +36,7 @@ fixtures:
   input:
     node_exporter_version:    "1.8.2"
     node_exporter_collectors: []
+    node_exporter_allow_private: false
     redis_exporter_version:   "1.62.0"
     # redis_exporter_sha256 ОБЯЗАТЕЛЕН (required:true): redis_exporter — инлайн-fetch
     # со своим checksum (node_exporter качается через destiny node-exporter, у которой
@@ -136,7 +137,8 @@ assert:
             # list/string → флаг в ExecStart НЕ добавляется (условный рендер).
             version: "1.8.2"
             base_url: "https://github.com/prometheus/node_exporter/releases/download"
-            # allow_private не передан monitoring-ом → default false destiny (guard держится).
+            # allow_private прокинут monitoring-ом (input-дефолт false) → guard держится;
+            # opt-out true — кейс allow-private-override.
             allow_private: false
             listen: ":9100"
             collectors: []

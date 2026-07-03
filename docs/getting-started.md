@@ -129,7 +129,7 @@ curl -s -X POST http://127.0.0.1:8080/v1/souls \
 
 ### 6.2. Применить токен на хосте (`soul init`)
 
-`soul init` читает токен из stdin (флаг с токеном не поддерживается — чтобы не светить в `ps`), генерирует приватный ключ + CSR, подключается к Bootstrap-listener-у Keeper-а и раскладывает полученный SoulSeed. Нужен `soul.yml` с адресом Keeper-а и путём к доверенному CA.
+`soul init` берёт токен из флага `--token` или из env `SOUL_BOOTSTRAP_TOKEN` (флаг побеждает env; env-форма безопаснее — значение флага светится в `ps`/shell-history), генерирует приватный ключ + CSR, подключается к Bootstrap-listener-у Keeper-а и раскладывает полученный SoulSeed. Нужен `soul.yml` с адресом Keeper-а и путём к доверенному CA.
 
 Минимальный `soul.yml` для локального demo (CA — корневой Vault-CA из шага 2):
 
@@ -151,7 +151,7 @@ keeper:
 Полный контракт `soul.yml` — [soul/config.md](soul/config.md). Онбординг:
 
 ```sh
-printf '%s' '<bootstrap_token из 6.1>' | ./soul/bin/soul init --config /tmp/soul-demo/soul.yml
+SOUL_BOOTSTRAP_TOKEN='<bootstrap_token из 6.1>' ./soul/bin/soul init --config /tmp/soul-demo/soul.yml
 ```
 
 При успехе SoulSeed (cert/key/ca) раскладывается в `paths.seed`, запись в `souls` переходит `pending → connected`. Запустить демон (держит EventStream к Keeper-у):
@@ -166,7 +166,7 @@ printf '%s' '<bootstrap_token из 6.1>' | ./soul/bin/soul init --config /tmp/so
 curl -s http://127.0.0.1:8080/v1/souls -H "Authorization: Bearer $TOKEN"
 ```
 
-> **Способ доставки токена и бинаря на реальный хост** — выбор оператора (SSH/SCP, cloud-init, CI, `keeper.push`). Перечень — [soul/onboarding.md → Способы доставки](soul/onboarding.md#способы-доставки-токена).
+> **Способ доставки токена и бинаря на реальный хост** — выбор оператора (SSH/SCP, cloud-init, CI, шаг сценария `core.bootstrap.delivered`). Перечень — [soul/onboarding.md → Способы доставки](soul/onboarding.md#способы-доставки-токена).
 
 ## Шаг 7. Apply: применить сценарий `hello-world`
 

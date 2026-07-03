@@ -20,9 +20,8 @@ package herald
 // одна запись в [channelDrivers] (+ CHECK-миграция + huma-enum, сверяются
 // guard-тестом с [AllHeraldTypes]).
 //
-// NB(имена на подтверждении PM/юзера, propose-and-wait): channelDriver /
-// httpDelivery / HeraldFieldSpec / FieldKind предложены architect; в naming-
-// rules пока НЕ фиксируются.
+// Имена channelDriver / httpDelivery / HeraldFieldSpec / FieldKind закреплены
+// в naming-rules (ADR-052 amendment).
 
 import (
 	"context"

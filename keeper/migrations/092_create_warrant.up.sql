@@ -14,7 +14,7 @@
 -- осознанное исключение из инварианта identity-модели: сервисный серт ≠
 -- identity-серт, и он уже лежит в Vault для ручного rotate_tls). Приватник в
 -- БД НЕ хранится — только vault_ref + fingerprint + serial. Решение
--- зафиксировано отдельным ADR cert-rotation (флаг для architect/docs-writer).
+-- зафиксировано амендментом ADR-017 (cert-rotation Warrant).
 --
 -- На одну (incarnation, kind) — много warrant-строк (история ротаций); один
 -- active-серт каждого kind одновременно — гарантирует partial unique index

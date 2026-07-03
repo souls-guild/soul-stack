@@ -310,7 +310,7 @@ Self-lockout-проверки Synod — **из БД под `SELECT … FOR UPDAT
 | `synod.grant-role` | Добавление роли в bundle группы (`POST /v1/synods/{name}/roles`). Идемпотентно. **Под least-privilege subset:** роль выдаётся всем членам группы — caller обязан держать все эффективные права роли, иначе `403 forbidden`. | `synod.role-granted` |
 | `synod.revoke-role` | Снятие роли из bundle группы (`DELETE /v1/synods/{name}/roles/{role_name}`). **Под self-lockout:** снятие отнимает права роли у всех членов — запрещено, если это последняя `*`-дающая роль группы и кто-то держал `*` только через неё → `409 would-lock-out-cluster`. | `synod.role-revoked` |
 
-### Incarnation (12) — [ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) / [scenario/](../scenario/README.md) / [ADR-031](../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile) / [ADR-060](../adr/0060-traits.md)
+### Incarnation (13, из них одна — deprecated-alias) — [ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) / [scenario/](../scenario/README.md) / [ADR-031](../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile) / [ADR-060](../adr/0060-traits.md)
 
 | Permission | Семантика |
 |---|---|
@@ -324,10 +324,23 @@ Self-lockout-проверки Synod — **из БД под `SELECT … FOR UPDAT
 | `incarnation.upgrade` | Перевод instance на новую `state_schema_version` (запуск миграций, [migrations.md](../migrations.md)). |
 | `incarnation.destroy` | Удаление instance (с tombstone-периодом для облачных VM, [cloud.md](cloud.md)). |
 | `incarnation.check-drift` | Scry on-demand-проверка drift ([ADR-031](../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile)): рендер `scenario/converge/` в `dry_run`-режиме + сборка `DriftReport`. Sync-операция (не async). Селекторы — те же, что у `incarnation.run` (`coven=`/`service=`/`incarnation=`). |
-| `incarnation.update-hosts` | Изменение mutable-полей записи incarnation через Operator API. MVP-объём — declared `spec.hosts[]` (`PATCH /v1/incarnations/{name}/hosts`, три mode: replace/append/remove; ADR-008). Селекторы — те же, что у других incarnation-мутаций (`coven=`/`service=`/`incarnation=`). **Deprecated-alias:** прежнее имя `incarnation.update` канонизируется в `incarnation.update-hosts` на load снимка enforcer-а (backcompat — существующие роли с `incarnation.update` продолжают работать, не требуют миграции). |
+| `incarnation.update-hosts` | Изменение mutable-полей записи incarnation через Operator API. MVP-объём — declared `spec.hosts[]` (`PATCH /v1/incarnations/{name}/hosts`, три mode: replace/append/remove; ADR-008). Селекторы — те же, что у других incarnation-мутаций (`coven=`/`service=`/`incarnation=`). Прежнее имя — `incarnation.update` (deprecated-alias, следующая строка). |
+| `incarnation.update` | **DEPRECATED-alias** `incarnation.update-hosts` (PM-decision 2026-06-02: имя сужено под задел будущих update-covens/update-spec). `ParsePermission` канонизирует его в `incarnation.update-hosts` на load снимка enforcer-а — существующие роли в `keeper.yml`/БД со старым именем продолжают работать (доступ к `PATCH /v1/incarnations/{name}/hosts`), миграции не требуют. Остаётся в каталоге навсегда (closed enum, removed-имена — never); роутер монтирует только каноническое имя. |
 | `incarnation.traits-set` | Целостная замена operator-set key-value trait-меток инкарнации (`incarnation.traits` jsonb — источник истины, [ADR-060](../adr/0060-traits.md) R1 slice a) через `PUT /v1/incarnations/{name}/traits`; проецируется sync-hook-ом в `souls.traits` хостов-членов. Перенос operator-facing trait-управления с per-soul (`soul.traits-assign`, deprecated) на per-incarnation. Action — kebab (`traits-set`), грамматика `<resource>.<action>` (паттерн `soul.traits-assign` / `incarnation.update-hosts`). trait-**ключ** НЕ scope-измерение RBAC — авторизация одним incarnation-scope-гейтом (`coven=`/`service=`/`incarnation=` по path-`name`, тот же селектор, что у `incarnation.update-hosts`). Audit-событие `incarnation.traits_changed` (только КЛЮЧИ, не значения). MCP-зеркало — `keeper.incarnation.traits-set`. |
 
-### Soul (4) — реестр хостов
+### Choir (5) — [ADR-044](../adr/0044-choir.md)
+
+CRUD именованной топологии хостов внутри инкарнации (Choir / Voice, таблицы `incarnation_choirs` / `incarnation_choir_voices`). **REST-only** (`/v1/incarnations/{name}/choirs*`, MCP-tool-ов нет; тела и семантика — [operator-api/choirs.md](operator-api/choirs.md)); роуты подключаются только при сконфигурированном ChoirDB-пуле. Choir принадлежит инкарнации, поэтому селектор — тот же, что у `incarnation.*`: `incarnation=` / `service=` / `coven=` (приземляется по path-`{name}`); bare — unrestricted. Мутирующие пишут audit, read-only `choir.list` — нет.
+
+| Permission | Семантика | Audit-event |
+|---|---|---|
+| `choir.create` | Создание Choir внутри инкарнации (`POST /v1/incarnations/{name}/choirs`). | `choir.created` |
+| `choir.delete` | Удаление Choir (`DELETE /v1/incarnations/{name}/choirs/{choir}`). | `choir.deleted` |
+| `choir.list` | Перечисление Choir-ов инкарнации (`GET …/choirs`) и Voice-членов одного Choir (`GET …/choirs/{choir}/voices`) — one-permission-on-read. | — (read-only) |
+| `choir.add-voice` | Добавление Voice (хоста) в Choir (`POST …/choirs/{choir}/voices`). Action — kebab, грамматика `<resource>.<action>` (паттерн `soul.ssh-target-update` / `sigil.key-introduce`). | `choir.voice_added` |
+| `choir.remove-voice` | Снятие Voice из Choir (`DELETE …/choirs/{choir}/voices/{sid}`). | `choir.voice_removed` |
+
+### Soul (6) — реестр хостов
 
 | Permission | Семантика |
 |---|---|
@@ -355,6 +368,17 @@ roles:
 С такой ролью `POST /v1/souls/coven {mode: append, label: dev, selector: {all: true}}` затронет лишь хосты с меткой `dev`/`stage`; попытка навесить `label: prod` отвергается `422` (метка вне scope), а хосты вне `dev`/`stage` не попадают в UPDATE.
 
 Будущие кандидаты (`soul.revoke` для отзыва SoulSeed) — вводятся отдельным PR при появлении соответствующих API-операций. `soul.get` сознательно не вводится: single-soul read покрывается `soul.list` (паттерн service/omen/vigil/decree).
+
+### Service (4) — [ADR-029](../adr/0029-service-registry.md)
+
+Управление реестром Service-ов `service_registry` (git-источник + ref сервиса; роуты — [operator-api.md → Service](operator-api.md), реестр — [ADR-029](../adr/0029-service-registry.md)). Селектор — **NoSelector** (CRUD оперирует самим реестром, паттерн `provider.*` / `push-provider.*` / `operator.*`). Мутирующие три пишут audit ([ADR-022](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)), read-only `service.list` — нет.
+
+| Permission | Семантика |
+|---|---|
+| `service.register` | Регистрация Service в реестре (`POST /v1/services`; MCP `keeper.service.register`). `409 service-already-exists` на дубль `name`. |
+| `service.update` | Правка записи реестра (`PATCH /v1/services/{name}`; MCP `keeper.service.update`). |
+| `service.list` | Перечисление (`GET /v1/services`) + single-get (`GET /v1/services/{name}`) + четыре git-проекции (`/refs` / `/scenarios` / `/state-schema` / `/dependencies`) — one-permission-on-read, отдельной `service.get` нет. MCP `keeper.service.list`. |
+| `service.deregister` | Снятие Service из реестра (`DELETE /v1/services/{name}`; MCP `keeper.service.deregister`). |
 
 ### Push (3) — [push.md](push.md)
 

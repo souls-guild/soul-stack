@@ -47,7 +47,7 @@ func TestSeedCertPath_SyncWithSoulSeedLayout(t *testing.T) {
 
 func extractStringConst(t *testing.T, src []byte, name string) string {
 	t.Helper()
-	re := regexp.MustCompile(name + `\s*=\s*"([^"]+)"`)
+	re := regexp.MustCompile(`\b` + regexp.QuoteMeta(name) + `\s*=\s*"([^"]+)"`)
 	m := re.FindSubmatch(src)
 	if m == nil {
 		t.Fatalf("константа %s не найдена в soul/internal/seed/seed.go", name)

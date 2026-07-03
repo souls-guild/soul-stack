@@ -80,6 +80,14 @@ input:
       Список textfile-коллекторов node-exporter (smartmon|nvme|ipmi). [] = только
       ядро node_exporter без oneshot-сборщиков железа.
 
+  node_exporter_allow_private:
+    type: boolean
+    default: false
+    description: >-
+      SSRF-guard opt-out destiny node-exporter: разрешить fetch tarball-а при
+      private-resolve base_url (внутреннее зеркало). Default false — дефолтный
+      base_url публичный GitHub, guard держится.
+
   redis_exporter_listen:
     type: string
     default: ":9121"
@@ -134,6 +142,8 @@ tasks:
         # на VM железа нет, ставится только ядро. base_url/user/textfile_dir не
         # передаём — дефолты destiny устроят.
         collectors: "${ input.node_exporter_collectors }"
+        # SSRF-guard opt-out при private-resolve base_url; default false — guard держится.
+        allow_private: "${ input.node_exporter_allow_private }"
 
   # ── redis_exporter ──────────────────────────────────────────────────────────
   # ОСТАЁТСЯ ИНЛАЙН (НЕ apply:destiny redis-exporter) — осознанно. Назначение

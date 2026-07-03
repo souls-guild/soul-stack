@@ -398,14 +398,14 @@ paths:
 
 > `event_stream_port` и `bootstrap_port` **оба обязательны** и оба явные — молчаливого ухода bootstrap на event-stream-порт нет ([ADR-012(b)](../adr/0012-keeper-soul-grpc.md), [config.md → keeper.endpoints](../soul/config.md)). Несколько keeper-ов перечисляются как несколько записей `endpoints[]` с `priority`.
 
-**Доставка токена.** Способ физической доставки bootstrap-токена на хост — выбор оператора ([onboarding.md → Способы доставки](../soul/onboarding.md#способы-доставки-токена)): `keeper.push`, Ansible-role, SSH/SCP, CI/CD, cloud-init. Рекомендация по безопасности: файл токена `mode 0400` owner `soul-stack`, директория `mode 0700`; на systemd ≥ 250 — `LoadCredential=` (токен в tmpfs, не на диск).
+**Доставка токена.** Способ физической доставки bootstrap-токена на хост — выбор оператора ([onboarding.md → Способы доставки](../soul/onboarding.md#способы-доставки-токена)): шаг сценария `core.bootstrap.delivered`, Ansible-role, SSH/SCP, CI/CD, cloud-init. Рекомендация по безопасности: файл токена `mode 0400` owner `soul-stack`, директория `mode 0700`; на systemd ≥ 250 — `LoadCredential=` (токен в tmpfs, не на диск).
 
 ### 8.4. `soul init` — обмен токена на SoulSeed
 
-`soul init` читает токен из stdin (приоритет) или env `SOUL_BOOTSTRAP_TOKEN` — флага с токеном нет намеренно, чтобы не светить в `ps`/history:
+`soul init` берёт токен из флага `--token` или из env `SOUL_BOOTSTRAP_TOKEN` (флаг побеждает env; stdin не читается). Env-форма предпочтительнее — значение `--token` светилось бы в `ps`/shell-history:
 
 ```sh
-sudo -u soul-stack sh -c 'cat /run/soul-bootstrap-token | soul init --config=/etc/soul/soul.yml'
+sudo -u soul-stack sh -c 'SOUL_BOOTSTRAP_TOKEN="$(cat /run/soul-bootstrap-token)" soul init --config=/etc/soul/soul.yml'
 ```
 
 Команда: определяет SID (= FQDN), генерирует приватный ключ + CSR (ключ **никогда не покидает хост**), подключается к bootstrap-listener-у Keeper-а, предъявляет токен + CSR, получает подписанный SoulSeed и атомарно раскладывает его в `paths.seed`. Если SoulSeed уже есть — `init` падает (защита от случайного перевыпуска); перевыпуск — отдельная процедура ([identity.md → Ротация SoulSeed](../soul/identity.md#ротация-soulseed)).

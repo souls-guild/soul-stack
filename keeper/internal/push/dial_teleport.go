@@ -138,9 +138,10 @@ func NewTeleportDialer(cfg TeleportDialerConfig) (Dialer, error) {
 		return nil, fmt.Errorf("push: NewTeleportDialer: identity %q: SSH-client-config: %w", cfg.IdentityFile, err)
 	}
 
-	// При UseSystemTrust ServerName proxy-cert = host из ProxyAddr (без порта).
-	// Резолвим один раз на старте: битый proxy_addr (нет `:port`) — конструктор-
-	// ошибка через buildBootstrapTeleportDialer → errSetupFailed, не поздний Dial.
+	// При UseSystemTrust (не-alpn ветка) ServerName proxy-cert = host из ProxyAddr
+	// (без порта). Резолвим один раз на старте: битый proxy_addr (нет `:port`) —
+	// конструктор-ошибка через buildBootstrapTeleportDialer → errSetupFailed, не
+	// поздний Dial.
 	var proxyHost string
 	if cfg.UseSystemTrust {
 		h, _, err := net.SplitHostPort(cfg.ProxyAddr)
@@ -240,13 +241,17 @@ func buildProxyClientConfig(cfg TeleportDialerConfig, tlsConfig *tls.Config, ssh
 // верифицируется через identity-CA-pool (RootCAs из creds.TLSConfig()) + sentinel-
 // ServerName `teleport.cluster.local`, проставленные самим Teleport API client.
 //
-// useSystemTrust=true: proxy за публичным L7-TLS-балансировщиком. RootCAs=nil → Go
-// берёт системный trust store (верифицирует публичный балансировщик-cert);
-// ServerName=proxyHost снимает sentinel `teleport.cluster.local` (его в SAN
-// балансировщика нет). Certificates/GetClientCertificate (mTLS client-cert для
-// auth на proxy) НЕ трогаются — без них коннект отвергается. Это НЕ
-// InsecureSkipVerify: верификация cert сохранена, лишь смещена на системный trust
-// + реальный host.
+// useSystemTrust=true: proxy за публичным L7-TLS-балансировщиком, который
+// проксирует raw gRPC как есть. RootCAs=nil → Go берёт системный trust store
+// (верифицирует публичный балансировщик-cert); ServerName=proxyHost снимает
+// sentinel `teleport.cluster.local` (его в SAN балансировщика нет).
+// Certificates/GetClientCertificate (mTLS client-cert для auth на proxy) НЕ
+// трогаются — без них коннект отвергается. Это НЕ InsecureSkipVerify: верификация
+// cert сохранена, лишь смещена на системный trust + реальный host.
+//
+// При AlpnUpgrade=true НЕ вызывается: alpn-ветка задаёт внутренний trust сама
+// (applyProxyTLSTrustALPN), UseSystemTrust игнорируется — см.
+// TeleportDialerConfig.AlpnUpgrade.
 //
 // Выделено отдельной чистой функцией ради guard-теста: applyProxyTLSTrust
 // тестируется напрямую (живая Teleport-сеть для proxy.NewClient в тесте недоступна).

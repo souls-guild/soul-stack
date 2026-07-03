@@ -81,7 +81,7 @@ Permission: `incarnation.rerun-last`. MCP-tool: `keeper.incarnation.rerun-last`.
 Работает **только из статуса `error_locked`**. Два кейса отказа — **разные problem-type** (оба `409 Conflict`, machine-readable различие для UI/SDK):
 
 - **статус не `error_locked`** (нечего перезапускать — прогона в ошибке нет) → `409 incarnation-locked`;
-- **input упавшего прогона недоступен** (fail-closed): рецепт вычищен ретеншном Reaper (`purge_apply_runs`) либо это legacy-прогон без сохранённого рецепта (`recipe IS NULL`) → `409 rerun-input-unavailable` ([§ Типы ошибок](../operator-api.md#типы-ошибок)). Транзакция НЕ коммитится; оператор снимает блок обычным `unlock` и запускает нужный сценарий вручную с явным input.
+- **input упавшего прогона недоступен** (fail-closed), `recipe IS NULL` по одной из трёх причин: прогон упал **до dispatch** (render_failed / no_hosts / pre-flight — терминальная строка `apply_runs` записана без рецепта); рецепт **вычищен ретеншном** Reaper (`purge_apply_runs`); **legacy-прогон** без сохранённого рецепта → `409 rerun-input-unavailable` ([§ Типы ошибок](../operator-api.md#типы-ошибок)). Транзакция НЕ коммитится; оператор снимает блок обычным `unlock` и запускает нужный сценарий вручную с явным input.
 
 Тот же `apply_id` идёт и в `state_history`-snapshot unlock-перехода, и в перезапускаемый прогон — снимок коррелирует с прогоном.
 
@@ -97,7 +97,7 @@ Permission: `incarnation.rerun-last`. MCP-tool: `keeper.incarnation.rerun-last`.
 
 **Response `202 Accepted`:** `{"apply_id": "<ULID>", "incarnation": "redis-prod", "scenario": "add_user"}` — `scenario` эхует имя перезапущенного (упавшего) сценария.
 
-**Errors:** `403 forbidden` (нет `incarnation.rerun-last`), `404 not-found` (incarnation не существует), `409 incarnation-locked` (статус не `error_locked`), `409 rerun-input-unavailable` (input упавшего day-2-прогона недоступен — рецепт вычищен ретеншном / legacy-прогон без рецепта; см. выше), `422 validation-failed` (пустой `reason` / `reason` длиннее 500 символов / невалидный path-`name`), `500 internal-error` (runner не сконфигурирован / транзакция / запуск прогона).
+**Errors:** `403 forbidden` (нет `incarnation.rerun-last`), `404 not-found` (incarnation не существует), `409 incarnation-locked` (статус не `error_locked`), `409 rerun-input-unavailable` (input упавшего day-2-прогона недоступен — прогон упал до dispatch и рецепт не записан / рецепт вычищен ретеншном / legacy-прогон без рецепта; см. выше), `422 validation-failed` (пустой `reason` / `reason` длиннее 500 символов / невалидный path-`name` / сервис инкарнации не зарегистрирован в реестре Service-ов), `500 internal-error` (runner не сконфигурирован / транзакция / запуск прогона).
 
 **RBAC:** scope тот же, что у `incarnation.run` / `incarnation.unlock` — `coven=`/`service=`/`incarnation=` (приземляется по path-`name`: declared `covens ∪ {name}` + `service` из строки incarnation).
 
