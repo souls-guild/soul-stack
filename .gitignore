@@ -4,6 +4,9 @@
 # Serena LSP project config (tool-specific, local)
 .serena/
 
+# Nimbalyst GUI local data (tool-specific, local)
+nimbalyst-local/
+
 # Claude Code runtime artifacts (scheduled task lockfile)
 .claude/scheduled_tasks.lock
 .claude/worktrees/
