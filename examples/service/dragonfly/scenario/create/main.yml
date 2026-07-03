@@ -411,6 +411,28 @@ state_changes:
     value: "${ int(default(input.memory_mb, 0)) }"
   - set: sysctl_settings
     value: "${ default(essence.sysctl_settings, {}) }"
+  # monitoring: read-model ФАКТА развёрнутого node_exporter (Слайс II, ADR-024; симметрия
+  # install/tls read-model). Версия/порт — из essence.node_exporter_* (те же значения, что
+  # уходят в apply.input destiny node-exporter). ★ node-exporter-ONLY (DragonFly отдаёт метрики
+  # нативно) — redis_exporter-полей тут нет. Дефолты дублируют essence/миграцию 004_to_005.
+  - set: monitoring
+    value: >-
+      ${ {
+           'node_exporter_version': default(essence.node_exporter_version, ''),
+           'node_exporter_listen':  default(essence.node_exporter_listen, ':9100')
+         } }
+  # logging: read-model ФАКТА развёрнутого log-shipping (Слайс V-I vector; симметрия monitoring).
+  # Версия/sink_type/endpoint/log_sources — из essence.vector_* (те же значения, что уходят в
+  # apply.input destiny vector). ★ vector_sink_auth_ref СЮДА НЕ пишется — секрет (в Vault, как
+  # tls.*_ref). Дефолты дублируют essence/миграцию 005_to_006 (console — безопасный дефолт).
+  - set: logging
+    value: >-
+      ${ {
+           'vector_version':       default(essence.vector_version, ''),
+           'vector_sink_type':     default(essence.vector_sink_type, 'console'),
+           'vector_sink_endpoint': default(essence.vector_sink_endpoint, ''),
+           'vector_log_sources':   default(essence.vector_log_sources, [])
+         } }
   # Топология: replicas (реплик master-а), sentinel_quorum=0 (auto, не материализуется).
   - set: replicas
     value: "${ int(default(input.replicas_per_master, 0)) }"
@@ -766,3 +788,41 @@ tasks:
       username: "${ compute.admin_user }"
       password: "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
       args: ["PING"]
+
+  # ── 6. ОБЯЗАТЕЛЬНЫЙ мониторинг data-плоскости (Слайс II, ADR-024) ──────────────
+  # ПОСЛЕ deploy-ветки (DF + sentinel-плоскость + health-gates) create БЕЗУСЛОВНО (без when-
+  # гейта) разворачивает node_exporter на КАЖДЫЙ хост incarnation КОМПОЗИЦИЕЙ переиспользуемой
+  # standalone-destiny через apply:destiny (изолированный render, ADR-009). Мониторинг — не
+  # операторский выбор, а инвариант data-сервиса (контракт=A: версии/порты в essence).
+  # ★ node-exporter-ONLY: DragonFly отдаёт СВОИ метрики нативно (встроенный prometheus-эндпоинт)
+  # → redis_exporter-аналог НЕ ставим. arch destiny берёт сама из soulprint.self.os.arch.
+  - name: Apply node-exporter destiny (host metrics)
+    apply:
+      destiny: node-exporter
+      input:
+        version: "${ default(essence.node_exporter_version, '1.8.2') }"
+        listen:  "${ default(essence.node_exporter_listen, ':9100') }"
+        # Корень загрузки: essence-override на внутреннее зеркало/nexus-proxy; default — GitHub.
+        base_url: "${ default(essence.node_exporter_base_url, 'https://github.com/prometheus/node_exporter/releases/download') }"
+        # SSRF-guard opt-out при private-resolve base_url; default false — guard держится.
+        allow_private: "${ default(essence.node_exporter_allow_private, false) }"
+
+  # ── 7. ОБЯЗАТЕЛЬНЫЙ log-shipping data-плоскости (Слайс V-I vector) ─────────────
+  # ПОСЛЕ экспортера create БЕЗУСЛОВНО разворачивает vector (агент отгрузки логов) на КАЖДЫЙ
+  # хост КОМПОЗИЦИЕЙ переиспользуемой standalone-destiny через apply:destiny (ADR-009). vector
+  # ДОПОЛНЯЕТ node_exporter (метрики, pull) лог-плоскостью (логи, push). log_sources — ОБЕ
+  # плоскости: DragonFly glog (/var/log/dragonfly/*.log) + sentinel-демон (/var/log/redis/*.log).
+  # sink_auth_ref — Vault-ref ИЛИ значение (резолв Soul-side, секрет в state НЕ оседает, ИБ).
+  - name: Apply vector destiny (log shipping)
+    apply:
+      destiny: vector
+      input:
+        version:       "${ default(essence.vector_version, '0.40.0') }"
+        sha256:        "${ default(essence.vector_sha256, '') }"
+        base_url:      "${ default(essence.vector_base_url, 'https://github.com/vectordotdev/vector/releases/download') }"
+        # SSRF-guard opt-out при private-resolve base_url; default false — guard держится.
+        allow_private: "${ default(essence.vector_allow_private, false) }"
+        sink_type:     "${ default(essence.vector_sink_type, 'console') }"
+        sink_endpoint: "${ default(essence.vector_sink_endpoint, '') }"
+        sink_auth_ref: "${ default(essence.vector_sink_auth_ref, '') }"
+        log_sources:   "${ default(essence.vector_log_sources, []) }"

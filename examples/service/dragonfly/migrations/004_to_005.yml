@@ -1,0 +1,29 @@
+from_version: 4
+to_version: 5
+
+description: >-
+  state_schema v4 → v5: обязательный мониторинг data-плоскости (Слайс II, ADR-024).
+  state ДОПОЛНЯЕТСЯ read-model-объектом monitoring — зафиксированные версия и listen-порт
+  экспортера метрик хоста (node_exporter), развёрнутого create-прогоном (симметрия install/tls
+  read-model). ★ node-exporter-ONLY: DragonFly отдаёт СВОИ метрики нативно (встроенный
+  prometheus-эндпоинт) → data-plane exporter (аналог redis_exporter) НЕ ставится, поля под него
+  в monitoring нет.
+
+  Forward-only (down: не поддерживается; восстановление — через state_history). Существующие
+  v4-инкарнации развёрнуты ДО ввода мониторинга (экспортера ещё нет) → консервативный default:
+  версия пустая ('' = «не развёрнуто», best-effort как memory_mb), порт — конвенциональный :9100
+  (стандартный listen node_exporter; следующий create перезапишет значением из essence). ОДИН
+  плоский set с has()-guard на ВЕСЬ объект (CEL-map-литерал-дефолт): monitoring уже есть →
+  сохраняется как есть (идемпотентность повторного прогона), иначе ставится default. Зеркало
+  redis 012_to_013 (объект-guard). Остальной state НЕ трогается.
+
+transform:
+  - set:
+      path: state.monitoring
+      value: >-
+        ${ has(state.monitoring)
+             ? state.monitoring
+             : {
+                 'node_exporter_version': '',
+                 'node_exporter_listen':  ':9100'
+               } }

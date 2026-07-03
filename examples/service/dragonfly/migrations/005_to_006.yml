@@ -1,0 +1,31 @@
+from_version: 5
+to_version: 6
+
+description: >-
+  state_schema v5 → v6: обязательный log-shipping data-плоскости (Слайс V-I vector).
+  state ДОПОЛНЯЕТСЯ read-model-объектом logging — зафиксированные версия/sink/источники агента
+  vector, развёрнутого create-прогоном на каждый хост (симметрия v4→v5 monitoring: экспортер
+  метрик). Секрет доступа к коллектору (sink_auth_ref) в state НЕ хранится (ИБ — он в Vault, как
+  tls.*_ref).
+
+  Forward-only (down: не поддерживается; восстановление — через state_history). Существующие
+  v5-инкарнации развёрнуты ДО ввода log-shipping (агента vector ещё нет) → консервативный default:
+  version пустая ('' = «не развёрнуто», best-effort как monitoring в 004_to_005), sink_type console
+  (безопасный дефолт без внешней инфры), sink_endpoint '' , log_sources [] (следующий create
+  перезапишет их значениями из essence.vector_*). ОДИН плоский set с has()-guard на ВЕСЬ объект
+  (CEL-map-литерал-дефолт): logging уже есть → сохраняется как есть (идемпотентность повторного
+  прогона), иначе ставится default. Зеркало redis 013_to_014 (объект-guard). Остальной state
+  (включая monitoring) НЕ трогается.
+
+transform:
+  - set:
+      path: state.logging
+      value: >-
+        ${ has(state.logging)
+             ? state.logging
+             : {
+                 'vector_version':       '',
+                 'vector_sink_type':     'console',
+                 'vector_sink_endpoint': '',
+                 'vector_log_sources':   []
+               } }

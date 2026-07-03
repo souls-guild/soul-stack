@@ -1,0 +1,69 @@
+name: preserves-unrelated
+description: >
+  Инкарнация, у которой logging в state УЖЕ есть (напр. повторный прогон миграции или state, где
+  log-shipping развёрнут с непустым sink). has()-guard объекта СОХРАНЯЕТ существующие значения
+  logging как есть (идемпотентность, НЕ перезатирает дефолтами), остальной state (df_config/
+  df_users/df_sentinel/monitoring/топология) проходит насквозь бит-в-бит. Зеркало redis 013_to_014
+  preserves-unrelated.
+
+state_before:
+  df_version: "1.39.0"
+  df_config:
+    maxmemory: "512mb"
+    maxclients: 10000
+  df_users:
+    - { name: "app", perms: "~app:* +@read +@write", state: "on" }
+  tls:
+    enable: true
+    cert_ref: "secret/services/dragonfly/tls#cert"
+    key_ref: "secret/services/dragonfly/tls#key"
+    ca_ref: "secret/services/dragonfly/tls#ca"
+  replicas: 2
+  sentinel_quorum: 0
+  df_sentinel:
+    master_name: master
+    quorum: 0
+    down_after_ms: 5000
+    failover_timeout_ms: 60000
+  provisioned_vm_ids: ["i-aaa111", "i-bbb222"]
+  provisioned_provider: "wb-prod"
+  provisioned_sids: ["node-1.example.com", "node-2.example.com"]
+  monitoring:
+    node_exporter_version: "1.8.2"
+    node_exporter_listen: ":19100"
+  logging:
+    vector_version: "0.40.0"
+    vector_sink_type: "loki"
+    vector_sink_endpoint: "https://loki.example.com"
+    vector_log_sources: ["/var/log/dragonfly/*.log", "/var/log/redis/*.log"]
+
+state_after:
+  df_version: "1.39.0"
+  df_config:
+    maxmemory: "512mb"
+    maxclients: 10000
+  df_users:
+    - { name: "app", perms: "~app:* +@read +@write", state: "on" }
+  tls:
+    enable: true
+    cert_ref: "secret/services/dragonfly/tls#cert"
+    key_ref: "secret/services/dragonfly/tls#key"
+    ca_ref: "secret/services/dragonfly/tls#ca"
+  replicas: 2
+  sentinel_quorum: 0
+  df_sentinel:
+    master_name: master
+    quorum: 0
+    down_after_ms: 5000
+    failover_timeout_ms: 60000
+  provisioned_vm_ids: ["i-aaa111", "i-bbb222"]
+  provisioned_provider: "wb-prod"
+  provisioned_sids: ["node-1.example.com", "node-2.example.com"]
+  monitoring:
+    node_exporter_version: "1.8.2"
+    node_exporter_listen: ":19100"
+  logging:
+    vector_version: "0.40.0"
+    vector_sink_type: "loki"
+    vector_sink_endpoint: "https://loki.example.com"
+    vector_log_sources: ["/var/log/dragonfly/*.log", "/var/log/redis/*.log"]

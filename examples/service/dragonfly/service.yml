@@ -1,5 +1,5 @@
 name: dragonfly
-state_schema_version: 4
+state_schema_version: 6
 description: >-
   DragonFly по концепции Ansible-роли (PILOT, sentinel-only). Оператор задаёт ПРОСТЫЕ
   типизированные понятия (память, ACL-юзеры, реплики, TLS), а сценарий create транслирует
@@ -16,7 +16,7 @@ description: >-
   rotate_tls/destroy/update_config) — СЛЕД. слайс ПОСЛЕ review. Без диспетчера по режиму
   (один режим), без миграций (v1).
 
-# state_schema_version = 4: цепочка миграций forward-only (ADR-019).
+# state_schema_version = 6: цепочка миграций forward-only (ADR-019).
 #   - 001_to_002 (migrations/001_to_002.yml): вынос install + host-layout
 #     (conf_dir/data_dir) из state в essence — install read-model без читателей,
 #     layout day-2 читают essence напрямую (default(essence.<x>, '<деф>')). Симметрия
@@ -35,9 +35,19 @@ description: >-
 #     souls, без sids они повисли бы, anti-replay нарушен). Рядом с provisioned_vm_ids: vm_ids —
 #     provider-id (для core.cloud.destroyed), sids — Keeper-side идентичность Soul (для cascade).
 #     Зеркало redis 007_to_008.
+#   - 004_to_005 (migrations/004_to_005.yml): обязательный мониторинг data-плоскости
+#     (Слайс II, ADR-024). state ДОПОЛНЯЕТСЯ read-model monitoring (версия/listen node_exporter).
+#     ★ node-exporter-ONLY: DragonFly отдаёт метрики нативно → data-plane exporter не нужен
+#     (в отличие от redis, где есть redis_exporter). Существующим v4 — консервативный default
+#     (версия '', порт :9100). ОДИН плоский set с has()-guard на объект (зеркало redis 012_to_013).
+#   - 005_to_006 (migrations/005_to_006.yml): обязательный log-shipping data-плоскости
+#     (Слайс V-I vector). state ДОПОЛНЯЕТСЯ read-model logging (версия/sink/источники агента
+#     vector). ★ sink_auth_ref (токен коллектора) СЮДА НЕ пишется — секрет в Vault (как tls.*_ref).
+#     Существующим v5 — консервативный default (версия '', sink console, endpoint '', sources []).
+#     ОДИН плоский set с has()-guard на объект (зеркало redis 013_to_014).
 # incarnation.state фиксирует, что развёрнуто, чтобы оператор видел инсталляцию и
 # повторный apply был idempotent. Мини-схема (без cluster/modules/seeded_from — вне
-# PILOT-скоупа; provision-read-model добавлен v2→v4 по образцу redis).
+# PILOT-скоупа; provision-read-model добавлен v2→v4, observability v4→v6 по образцу redis).
 #
 # ГРАНИЦА двух представлений конфига (как у redis):
 #   - df_config (opaque, additionalProperties:true) — ВЫЧИСЛЕННЫЙ ИТОГ трансляции простого
@@ -86,6 +96,39 @@ state_schema:
       type: object
       additionalProperties:
         type: string
+
+    # ── Мониторинг data-плоскости (read-model, v5, Слайс II, ADR-024) ──────────
+    # ФАКТ развёрнутого экспортера метрик хоста: create БЕЗУСЛОВНО ставит node_exporter
+    # на каждый хост (ПОСЛЕ deploy). ★ node-exporter-ONLY: DragonFly отдаёт СВОИ метрики
+    # нативно (встроенный prometheus-эндпоинт) → data-plane exporter не нужен (в отличие
+    # от redis, где redis_exporter обязателен). Версия/listen — из essence (node_exporter_*,
+    # те же значения, что ушли в apply.input destiny node-exporter). Симметрия install/tls
+    # read-model. Для v≤4 (мониторинг не развёрнут) — консервативный default (версия '',
+    # порт :9100; 004_to_005).
+    monitoring:
+      type: object
+      additionalProperties: false
+      properties:
+        node_exporter_version: { type: string }
+        node_exporter_listen:  { type: string }
+
+    # ── Log-shipping data-плоскости (read-model, v6, Слайс V-I vector) ─────────
+    # ФАКТ развёрнутого агента отгрузки логов: create БЕЗУСЛОВНО ставит vector на каждый
+    # хост (ПОСЛЕ deploy+экспортера). version/sink_type/endpoint/log_sources — из
+    # essence.vector_* (те же значения, что ушли в apply.input destiny vector). ★ sink_auth_ref
+    # (токен коллектора) СЮДА НЕ пишется — секрет в Vault (как tls.*_ref). Для v≤5 (log-shipping
+    # не развёрнут) — консервативный default: version '', sink console (безопасный, без инфры),
+    # endpoint '', log_sources [] (005_to_006).
+    logging:
+      type: object
+      additionalProperties: false
+      properties:
+        vector_version:       { type: string }
+        vector_sink_type:     { type: string }
+        vector_sink_endpoint: { type: string }
+        vector_log_sources:
+          type: array
+          items: { type: string }
 
     # ── Топология (counts, sentinel-режим) ─────────────────────────────────────
     # replicas — реплик master-а (из input.replicas_per_master). sentinel_quorum — ВСЕГДА 0
@@ -161,9 +204,18 @@ state_schema:
 #     sentinel_only (deploy_redis=false) для sentinel-демона над DragonFly-master-ом
 #     (рефактор «sentinel из destiny redis»: DragonFly не несёт redis-sentinel). scenario
 #     create делает ДВА apply:destiny (dragonfly + redis), ADR-009.
+#   - `node-exporter` — переиспользуемый standalone-destiny экспортера метрик хоста
+#     (examples/destiny/node-exporter/), разворачивается apply:destiny обязательным шагом
+#     мониторинга в конце create (Слайс II, ADR-024). arch берёт из soulprint.self. ★ БЕЗ
+#     redis-exporter: DragonFly отдаёт метрики нативно (node-exporter-ONLY).
+#   - `vector`     — переиспользуемый standalone-destiny агента отгрузки логов
+#     (examples/destiny/vector/), разворачивается apply:destiny обязательным шагом log-shipping
+#     (Слайс V-I). Читает логи DragonFly (glog) + sentinel-демона (redis).
 destiny:
   - { name: dragonfly, ref: v1.0.0 }
   - { name: redis, ref: v1.0.0 }
+  - { name: node-exporter, ref: v1.0.0 }
+  - { name: vector, ref: v1.0.0 }
 
 # Custom-модули сервиса. community.redis — ОСНОВНОЙ интерфейс к живому DragonFly (redis-
 # совместим: PING/REPLICAOF/SENTINEL работают; examples/module/soul-mod-community-redis/).

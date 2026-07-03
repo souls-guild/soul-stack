@@ -1,0 +1,56 @@
+name: logging-defaults-back-compat
+description: >
+  Инкарнация v5 развёрнута ДО ввода log-shipping — поля logging в state нет (monitoring уже есть,
+  добавлен 004_to_005). Миграция ДОБАВЛЯЕТ read-model logging с консервативным default: version
+  пустая ('' = не развёрнуто), sink_type console (безопасный дефолт без инфры), endpoint пустой,
+  log_sources пустой. Остальной state (df_config/df_users/tls/monitoring/топология) проходит
+  насквозь бит-в-бит. Зеркало redis 013_to_014 logging-defaults-back-compat.
+
+state_before:
+  df_version: "1.39.0"
+  df_config:
+    maxmemory: "256mb"
+    maxclients: 10000
+  df_users:
+    - { name: "app", perms: "~* +@all", state: "on" }
+  tls:
+    enable: false
+    cert_ref: ""
+    key_ref: ""
+    ca_ref: ""
+  memory_mb: 1024
+  replicas: 1
+  sentinel_quorum: 0
+  provisioned_vm_ids: []
+  provisioned_provider: ""
+  provisioned_sids: []
+  monitoring:
+    node_exporter_version: "1.8.2"
+    node_exporter_listen: ":9100"
+
+state_after:
+  df_version: "1.39.0"
+  df_config:
+    maxmemory: "256mb"
+    maxclients: 10000
+  df_users:
+    - { name: "app", perms: "~* +@all", state: "on" }
+  tls:
+    enable: false
+    cert_ref: ""
+    key_ref: ""
+    ca_ref: ""
+  memory_mb: 1024
+  replicas: 1
+  sentinel_quorum: 0
+  provisioned_vm_ids: []
+  provisioned_provider: ""
+  provisioned_sids: []
+  monitoring:
+    node_exporter_version: "1.8.2"
+    node_exporter_listen: ":9100"
+  logging:
+    vector_version: ""
+    vector_sink_type: "console"
+    vector_sink_endpoint: ""
+    vector_log_sources: []

@@ -40,6 +40,47 @@ provision_ssh_provider: teleport
 # Фоллбэк для input.provision.join_wait_timeout.
 provision_join_wait_timeout: "10m"
 
+# ── Обязательный мониторинг data-плоскости: node_exporter (Слайс II, ADR-024) ────
+# create БЕЗУСЛОВНО ставит node_exporter (метрики хоста) на КАЖДЫЙ хост incarnation
+# (ПОСЛЕ deploy-ветки). ★ node-exporter-ONLY: DragonFly отдаёт СВОИ метрики нативно
+# (встроенный prometheus-эндпоинт) → data-plane exporter (аналог redis_exporter) НЕ нужен.
+# Версия/порт — author-context (НЕ operator-input): оператор переопределяет в spec.essence.
+# compute гонит их в apply.input destiny node-exporter; arch destiny берёт сама из
+# soulprint.self.os.arch.
+node_exporter_version: "1.8.2"
+node_exporter_listen:  ":9100"
+# Корень загрузки релизов node_exporter — WB Nexus raw-proxy (зеркалит github-путь 1:1).
+# Не-WB оператор переопределяет в spec.essence (или убирает ключ — default destiny = GitHub).
+node_exporter_base_url: "https://nexus-proxy.wb.ru/repository/raw-proxy-github/prometheus/node_exporter/releases/download"
+# SSRF-guard opt-out: base_url выше — WB Nexus, резолвится в private-IP. Публичный-mirror — false.
+node_exporter_allow_private: true
+
+# ── Обязательный log-shipping data-плоскости: Vector (Слайс V-I) ─────────────────
+# create БЕЗУСЛОВНО ставит vector (агент отгрузки логов) на КАЖДЫЙ хост (ПОСЛЕ deploy и
+# экспортера). ДОПОЛНЯЕТ node_exporter (метрики, pull) лог-плоскостью (логи, push). Версии/
+# checksum/sink — author-context: оператор переопределяет в spec.essence. compute гонит их в
+# apply.input destiny vector; arch destiny берёт сама из soulprint.self.os.arch.
+vector_version:  "0.40.0"
+# checksum tarball-а Vector (<arch>-unknown-linux-gnu, "sha256:<hex>"). ПЛЕЙСХОЛДЕР (нули по
+# факту): реальный оператор ОБЯЗАН подставить checksum под пару (vector_version, arch) из
+# sha256sums.txt релиза vectordotdev/vector в spec.essence — иначе fail-closed (честный отказ fetch).
+vector_sha256:   "sha256:112b047df17df46feb22fc69234e8fc2ad5a411cd2e7d369f3b70c00617a4e90"
+# Корень загрузки релизов Vector — WB Nexus raw-proxy (см. node_exporter_base_url).
+vector_base_url: "https://nexus-proxy.wb.ru/repository/raw-proxy-github/vectordotdev/vector/releases/download"
+# SSRF-guard opt-out для private-resolve WB Nexus (см. node_exporter_allow_private).
+vector_allow_private: true
+# sink_type — куда шлём логи (loki/elasticsearch/vector/console). Дефолт console (безопасно,
+# без внешней инфры). sink_endpoint — адрес коллектора (форма зависит от sink_type; console —
+# не используется). sink_auth_ref — токен доступа (Vault-ref ИЛИ значение); резолвится Soul-side,
+# в state НЕ оседает (ИБ, как tls.*_ref). Пусто → sink без auth. Оператор задаёт при живом коллекторе.
+vector_sink_type:      console
+vector_sink_endpoint:  ""
+vector_sink_auth_ref:  ""
+# Пути/glob-ы лог-файлов, которые vector читает (source type file). ДВЕ плоскости: сам DragonFly
+# логирует через glog в /var/log/dragonfly/*.log (destiny dragonfly --log_dir), а sentinel-демон
+# (distro redis-server) — в /var/log/redis/*.log (destiny redis). Оператор расширяет в spec.essence.
+vector_log_sources:  ["/var/log/dragonfly/*.log", "/var/log/redis/*.log"]
+
 # ── Способ установки binary: источник upstream-tarball ──────────────────────────
 # install_method=binary тянет DragonFly из upstream-tarball. URL и версия бинаря — author-
 # context (оператор переопределяет в spec.essence под свой mirror). destiny строит имя

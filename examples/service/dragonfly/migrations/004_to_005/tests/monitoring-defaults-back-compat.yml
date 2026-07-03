@@ -1,0 +1,48 @@
+name: monitoring-defaults-back-compat
+description: >
+  Инкарнация v4 развёрнута ДО ввода мониторинга — поля monitoring в state нет. Миграция
+  ДОБАВЛЯЕТ read-model monitoring с консервативным default: версия пустая ('' = не развёрнуто),
+  порт — конвенциональный :9100. ★ node-exporter-ONLY: redis_exporter-полей нет (DragonFly отдаёт
+  метрики нативно). Остальной state (df_version/df_config/df_users/tls/топология/provision)
+  проходит насквозь бит-в-бит. Зеркало redis 012_to_013 monitoring-defaults-back-compat.
+
+state_before:
+  df_version: "1.39.0"
+  df_config:
+    maxmemory: "256mb"
+    maxclients: 10000
+  df_users:
+    - { name: "app", perms: "~* +@all", state: "on" }
+  tls:
+    enable: false
+    cert_ref: ""
+    key_ref: ""
+    ca_ref: ""
+  memory_mb: 1024
+  replicas: 1
+  sentinel_quorum: 0
+  provisioned_vm_ids: []
+  provisioned_provider: ""
+  provisioned_sids: []
+
+state_after:
+  df_version: "1.39.0"
+  df_config:
+    maxmemory: "256mb"
+    maxclients: 10000
+  df_users:
+    - { name: "app", perms: "~* +@all", state: "on" }
+  tls:
+    enable: false
+    cert_ref: ""
+    key_ref: ""
+    ca_ref: ""
+  memory_mb: 1024
+  replicas: 1
+  sentinel_quorum: 0
+  provisioned_vm_ids: []
+  provisioned_provider: ""
+  provisioned_sids: []
+  monitoring:
+    node_exporter_version: ""
+    node_exporter_listen: ":9100"
