@@ -35,10 +35,10 @@ provision_await_timeout: "10m"
 # Имя SshProvider-плагина для доставки per-VM bootstrap-токена по SSH (core.bootstrap.delivered).
 provision_ssh_provider: teleport
 # Потолок ожидания появления свежесозданной VM в Teleport перед доставкой токена
-# (core.bootstrap.delivered, transport=teleport, retry-до-join; форма <N>{s|m|h}). reverse-
-# tunnel-агент на новой cloud-VM регистрируется в Teleport заметно позже типовых 3-5мин, поэтому
-# 15m с запасом. Фоллбэк для input.provision.join_wait_timeout.
-provision_join_wait_timeout: "15m"
+# (core.bootstrap.delivered, transport=teleport, retry-до-join; форма <N>{s|m|h}). Enroll VM
+# в Teleport делает внешний WB-reconciler непредсказуемо долго (наблюдаемо >25 мин, верхняя
+# граница неизвестна) — 55m как большой запас для E2E. Фоллбэк для input.provision.join_wait_timeout.
+provision_join_wait_timeout: "55m"
 
 # ── Способ установки binary: источник upstream-tarball ──────────────────────────
 # install_method=binary тянет DragonFly из upstream-tarball. URL и версия бинаря — author-

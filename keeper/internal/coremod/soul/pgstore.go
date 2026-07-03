@@ -33,3 +33,7 @@ func (s *PGStore) Insert(ctx context.Context, soul *keepersoul.Soul) error {
 func (s *PGStore) UpdateCoven(ctx context.Context, sid string, coven []string) ([]string, error) {
 	return keepersoul.UpdateCoven(ctx, s.DB, sid, coven)
 }
+
+func (s *PGStore) SoulsWithSoulprint(ctx context.Context, sids []string) (map[string]struct{}, error) {
+	return keepersoul.SelectSoulsWithSoulprint(ctx, s.DB, sids)
+}

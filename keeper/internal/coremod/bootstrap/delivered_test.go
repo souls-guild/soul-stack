@@ -11,6 +11,7 @@ import (
 	coremodbootstrap "github.com/souls-guild/soul-stack/keeper/internal/coremod/bootstrap"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/internaltest"
 	"github.com/souls-guild/soul-stack/keeper/internal/push"
+	"github.com/souls-guild/soul-stack/keeper/internal/soulinstall"
 	"github.com/souls-guild/soul-stack/shared/audit"
 
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
@@ -275,9 +276,10 @@ func TestApply_Success_TokenInStdinNotArgv(t *testing.T) {
 		t.Errorf("Sign got empty ephemeral public key")
 	}
 
-	// Две команды: запись токена (со stdin) + systemctl start soul (start_soul default true).
-	if len(sess.calls) != 2 {
-		t.Fatalf("Session.Run calls = %d, want 2 (write token + start soul); calls=%v", len(sess.calls), cmds(sess))
+	// Три команды: запись токена (со stdin) + soul init + активация unit-а
+	// (start_soul default true).
+	if len(sess.calls) != 3 {
+		t.Fatalf("Session.Run calls = %d, want 3 (write token + soul init + activate); calls=%v", len(sess.calls), cmds(sess))
 	}
 	writeCall := sess.calls[0]
 	// ★ Токен — в STDIN.
@@ -292,11 +294,14 @@ func TestApply_Success_TokenInStdinNotArgv(t *testing.T) {
 	if !strings.Contains(writeCall.cmd, "/etc/soul/token") || !strings.Contains(writeCall.cmd, "cat >") {
 		t.Errorf("write command unexpected: %q", writeCall.cmd)
 	}
-	if sess.calls[1].cmd != "systemctl start soul" {
-		t.Errorf("second command = %q, want 'systemctl start soul'", sess.calls[1].cmd)
+	if !strings.Contains(sess.calls[1].cmd, "soul init") {
+		t.Errorf("second command = %q, want soul init", sess.calls[1].cmd)
 	}
-	if len(sess.calls[1].stdin) != 0 {
-		t.Errorf("start-soul command must have empty stdin, got %q", sess.calls[1].stdin)
+	if !strings.Contains(sess.calls[2].cmd, "systemctl start soul") {
+		t.Errorf("third command = %q, want systemctl activation chain", sess.calls[2].cmd)
+	}
+	if len(sess.calls[2].stdin) != 0 {
+		t.Errorf("activation command must have empty stdin, got %q", sess.calls[2].stdin)
 	}
 	if !sess.closed {
 		t.Errorf("session not closed")
@@ -385,9 +390,17 @@ func TestApply_StartSoulFalse_SkipsStart(t *testing.T) {
 	if last == nil || last.GetFailed() {
 		t.Fatalf("expected success, got %+v", last)
 	}
-	// Только запись токена, без systemctl start.
-	if len(sess.calls) != 1 {
-		t.Fatalf("Session.Run calls = %d, want 1 (write only); cmds=%v", len(sess.calls), cmds(sess))
+	// Запись токена + soul init, без systemctl (start_soul=false).
+	if len(sess.calls) != 2 {
+		t.Fatalf("Session.Run calls = %d, want 2 (write + init); cmds=%v", len(sess.calls), cmds(sess))
+	}
+	if !strings.Contains(sess.calls[1].cmd, "soul init") {
+		t.Errorf("second command = %q, want soul init", sess.calls[1].cmd)
+	}
+	for _, c := range sess.calls {
+		if strings.Contains(c.cmd, "systemctl") {
+			t.Errorf("systemctl must not run when start_soul=false: %q", c.cmd)
+		}
 	}
 	hosts, _ := last.GetOutput().AsMap()["hosts"].([]any)
 	h0, _ := hosts[0].(map[string]any)
@@ -418,6 +431,10 @@ func TestApply_CustomTokenPathAndUserPort(t *testing.T) {
 	}
 	if !strings.Contains(sess.calls[0].cmd, "/opt/soul/seed") {
 		t.Errorf("custom token_path not used: %q", sess.calls[0].cmd)
+	}
+	// soul init читает токен из того же custom token_path (subshell на VM).
+	if len(sess.calls) < 2 || !strings.Contains(sess.calls[1].cmd, `$(cat /opt/soul/seed)`) {
+		t.Errorf("soul init must read token from custom token_path; cmds=%v", cmds(sess))
 	}
 	if dialer.lastCfg.User != "deploy" || dialer.lastCfg.Port != 2222 {
 		t.Errorf("custom ssh_user/ssh_port not used: user=%q port=%d", dialer.lastCfg.User, dialer.lastCfg.Port)
@@ -801,9 +818,9 @@ func TestApply_Teleport_CtxCancel_NoHang(t *testing.T) {
 // independent, НЕ общий бюджет. dialWithJoinRetry вычисляет
 // `deadline = time.Now().Add(joinWait)` при КАЖДОМ вызове (на каждый хост),
 // поэтому хосты обрабатываются последовательно и каждый получает свой полный
-// join_wait. Первый хост доставляется (1 Run — запись токена, start_soul:false),
-// затем шаг валится на втором. join_wait=0 → дедлайн второго истекает сразу
-// (одна fail-попытка), тест не платит реальные минуты.
+// join_wait. Первый хост доставляется (2 Run — запись токена + soul init,
+// start_soul:false), затем шаг валится на втором. join_wait=0 → дедлайн второго
+// истекает сразу (одна fail-попытка), тест не платит реальные минуты.
 func TestApply_Teleport_MultiHost_PerHostDeadline(t *testing.T) {
 	const okSID, failSID = "vm1.example.com", "vm2.example.com"
 	dialer := &perHostDialer{okSID: okSID, err: errors.New("node offline or does not exist")}
@@ -834,13 +851,13 @@ func TestApply_Teleport_MultiHost_PerHostDeadline(t *testing.T) {
 	}
 
 	// ★ Первый хост был доставлен ДО провала второго: ровно один Dial вернул
-	// сессию (okSID), на ней прошла запись токена (1 Run, start_soul:false).
+	// сессию (okSID), на ней прошли запись токена + soul init (start_soul:false).
 	okSess, ok := dialer.byHost[okSID]
 	if !ok || okSess == nil {
 		t.Fatalf("first host %q was never dialed successfully (per-host independent deadline expected)", okSID)
 	}
-	if len(okSess.calls) != 1 {
-		t.Errorf("first host: Session.Run calls = %d, want 1 (token write, start_soul=false); cmds=%v", len(okSess.calls), cmds(okSess))
+	if len(okSess.calls) != 2 {
+		t.Errorf("first host: Session.Run calls = %d, want 2 (token write + init, start_soul=false); cmds=%v", len(okSess.calls), cmds(okSess))
 	}
 	if string(okSess.calls[0].stdin) != "tok-1" {
 		t.Errorf("first host token not delivered via stdin: got %q, want tok-1", okSess.calls[0].stdin)
@@ -868,10 +885,11 @@ func newTeleportInstallModule(dialer push.Dialer, inst coremodbootstrap.InstallR
 }
 
 // TestApply_InstallOmitted_TokenOnly_BitForBit — guard (a), реверс-guard: без
-// param `install` (опущен) поведение БИТ-В-БИТ token-only — НИ ОДНОГО install-шага,
+// param `install` (опущен) поведение token-only — НИ ОДНОГО install-шага,
 // install-резолвер НЕ дёргается. Ловит регресс, если install выполнился бы
 // безусловно. teleport-режим (install-режим только там), Install-резолвер задан,
-// но при отсутствии param `install` он обязан остаться нетронутым.
+// но при отсутствии param `install` он обязан остаться нетронутым. soul init —
+// часть доставки (redeem токена), НЕ install-шаг: он идёт в обоих режимах.
 func TestApply_InstallOmitted_TokenOnly_BitForBit(t *testing.T) {
 	sess := &fakeSession{}
 	dialer := &dialRecorder{sess: sess}
@@ -895,15 +913,18 @@ func TestApply_InstallOmitted_TokenOnly_BitForBit(t *testing.T) {
 	if inst.calls != 0 {
 		t.Errorf("install resolver called %d times despite install omitted — must be 0", inst.calls)
 	}
-	// ★ Ровно один Run — запись токена (start_soul:false). Ни одного install-шага.
-	if len(sess.calls) != 1 {
-		t.Fatalf("Session.Run calls = %d, want 1 (token only, no install); cmds=%v", len(sess.calls), cmds(sess))
+	// ★ Два Run — запись токена + soul init (start_soul:false). Ни одного install-шага.
+	if len(sess.calls) != 2 {
+		t.Fatalf("Session.Run calls = %d, want 2 (token + init, no install); cmds=%v", len(sess.calls), cmds(sess))
 	}
 	if string(sess.calls[0].stdin) != token {
 		t.Errorf("token-only: expected token in stdin, got %q", sess.calls[0].stdin)
 	}
 	if !strings.Contains(sess.calls[0].cmd, "cat >") || !strings.Contains(sess.calls[0].cmd, "/etc/soul/token") {
-		t.Errorf("token-only: single Run must be token-write, got %q", sess.calls[0].cmd)
+		t.Errorf("token-only: first Run must be token-write, got %q", sess.calls[0].cmd)
+	}
+	if !strings.Contains(sess.calls[1].cmd, "soul init") {
+		t.Errorf("token-only: second Run must be soul init, got %q", sess.calls[1].cmd)
 	}
 }
 
@@ -934,9 +955,9 @@ func TestApply_Install_FullSequenceBeforeToken(t *testing.T) {
 		t.Errorf("install resolver calls = %d, want 1 (resolved once per step)", inst.calls)
 	}
 
-	// install (6 шагов: каталоги/CA/soul.yml/unit/curl/chmod) + токен + start = 8.
-	if len(sess.calls) != 8 {
-		t.Fatalf("Session.Run calls = %d, want 8 (6 install + token + start); cmds=%v", len(sess.calls), cmds(sess))
+	// install (6 шагов: каталоги/CA/soul.yml/unit/curl/chmod) + токен + init + activate = 9.
+	if len(sess.calls) != 9 {
+		t.Fatalf("Session.Run calls = %d, want 9 (6 install + token + init + activate); cmds=%v", len(sess.calls), cmds(sess))
 	}
 
 	// ★ Порядок install-шагов до токена (по характерным подстрокам команд).
@@ -954,7 +975,7 @@ func TestApply_Install_FullSequenceBeforeToken(t *testing.T) {
 		}
 	}
 
-	// ★ Токен — ПОСЛЕ install-шагов (индекс 6), затем start soul (индекс 7).
+	// ★ Токен — ПОСЛЕ install-шагов (индекс 6), затем soul init (7) и активация (8).
 	tokenCall := sess.calls[6]
 	if !strings.Contains(tokenCall.cmd, "/etc/soul/token") || !strings.Contains(tokenCall.cmd, "cat >") {
 		t.Errorf("call[6] must be token-write, got %q", tokenCall.cmd)
@@ -962,8 +983,11 @@ func TestApply_Install_FullSequenceBeforeToken(t *testing.T) {
 	if string(tokenCall.stdin) != token {
 		t.Errorf("token not in stdin at call[6]: got %q, want %q", tokenCall.stdin, token)
 	}
-	if sess.calls[7].cmd != "systemctl start soul" {
-		t.Errorf("call[7] = %q, want 'systemctl start soul'", sess.calls[7].cmd)
+	if !strings.Contains(sess.calls[7].cmd, "soul init") {
+		t.Errorf("call[7] = %q, want soul init", sess.calls[7].cmd)
+	}
+	if !strings.Contains(sess.calls[8].cmd, "systemctl start soul") {
+		t.Errorf("call[8] = %q, want systemctl activation chain", sess.calls[8].cmd)
 	}
 }
 
@@ -1003,15 +1027,16 @@ func TestApply_Install_SecretsInStdinNotArgv(t *testing.T) {
 		t.Errorf("CA-PEM never delivered via stdin")
 	}
 
-	// ★ Токен — в stdin последнего (token) шага, НЕ в argv ни одной команды.
+	// ★ Токен — в stdin token-шага, НЕ в argv ни одной команды (включая soul init:
+	// тот несёт литеральную $(cat …), раскрываемую только на VM).
 	for _, c := range sess.calls {
 		if strings.Contains(c.cmd, token) {
 			t.Fatalf("SECURITY: token leaked into argv: cmd=%q", c.cmd)
 		}
 	}
-	tokenCall := sess.calls[len(sess.calls)-1] // start_soul:false → токен последний
+	tokenCall := sess.calls[len(sess.calls)-2] // start_soul:false → токен, затем init
 	if string(tokenCall.stdin) != token {
-		t.Errorf("token not in stdin of final step: got %q", tokenCall.stdin)
+		t.Errorf("token not in stdin of token step: got %q", tokenCall.stdin)
 	}
 }
 
@@ -1053,6 +1078,62 @@ func TestApply_Install_StepError_FailsStep_B1Strict(t *testing.T) {
 	}
 }
 
+// TestApply_SoulInit_SeedGuardAndUnitActivation — guard 5-й стены + бонус-дыры
+// (ADR-063 amendment): доставленный токен без redeem — мёртвый груз (soul-side
+// «подхвата» /etc/soul/token нет, seed создаёт ТОЛЬКО `soul init`), поэтому после
+// token-write обязан идти init-шаг; активация unit-а — daemon-reload + enable +
+// start (parity cloud-init.tmpl: без enable после ребута VM soul.service не
+// поднимется, без daemon-reload systemd не видит свежезаписанный unit).
+func TestApply_SoulInit_SeedGuardAndUnitActivation(t *testing.T) {
+	prov := &fakeProvider{allow: true}
+	sess := &fakeSession{}
+	dialer := &dialRecorder{sess: sess}
+	m := newModule(t, prov, dialer.dial, &fakeAudit{})
+
+	const token = "tok-init-secret"
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(deliverReq(t, map[string]any{
+		"ssh_provider": "ssh-static",
+		"hosts":        hostsParam("vm1.example.com", "10.0.0.1", token),
+		// start_soul default true.
+	}), stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if last := stream.Last(); last == nil || last.GetFailed() {
+		t.Fatalf("expected success, got %+v", last)
+	}
+	if len(sess.calls) != 3 {
+		t.Fatalf("Session.Run calls = %d, want 3 (token + init + activate); cmds=%v", len(sess.calls), cmds(sess))
+	}
+
+	initCall := sess.calls[1]
+	// ★ Идемпотентность: guard по seed-cert — токен single-use, повторный init
+	// после успешного redeem завалил бы хост при retry шага.
+	if !strings.HasPrefix(initCall.cmd, "test -e "+soulinstall.SeedCertPath+" || ") {
+		t.Errorf("init cmd must be guarded by seed-cert existence check: %q", initCall.cmd)
+	}
+	// ★ Secret-floor: команда несёт ЛИТЕРАЛЬНУЮ нераскрытую $(cat token_path) —
+	// раскрывается subshell-ом на VM, токен НЕ в argv keeper-а (симметрия
+	// cloud-init.tmpl self-onboard-фазы). STDIN пуст.
+	if !strings.Contains(initCall.cmd, `SOUL_BOOTSTRAP_TOKEN="$(cat /etc/soul/token)"`) {
+		t.Errorf("init cmd must read token via literal subshell from token_path: %q", initCall.cmd)
+	}
+	if !strings.Contains(initCall.cmd, soulinstall.SoulBinaryPath+" init --config "+soulinstall.SoulConfigPath) {
+		t.Errorf("init cmd must run soul init with soul.yml config: %q", initCall.cmd)
+	}
+	if strings.Contains(initCall.cmd, token) {
+		t.Errorf("SECURITY: token leaked into init argv: %q", initCall.cmd)
+	}
+	if len(initCall.stdin) != 0 {
+		t.Errorf("init cmd must have empty stdin, got %q", initCall.stdin)
+	}
+
+	// ★ Активация unit-а одной цепочкой: daemon-reload → enable → start.
+	if sess.calls[2].cmd != "systemctl daemon-reload && systemctl enable soul && systemctl start soul" {
+		t.Errorf("activation cmd = %q, want 'systemctl daemon-reload && systemctl enable soul && systemctl start soul'", sess.calls[2].cmd)
+	}
+}
+
 // flakyDialer — мок push.Dialer: первые failFirst вызовов возвращают err, далее
 // — заданную сессию. Для retry-до-join guard-теста.
 type flakyDialer struct {
@@ -1086,8 +1167,8 @@ func (d *alwaysFailDialer) dial(_ context.Context, _ push.DialConfig) (push.Sess
 
 // perHostDialer — мок push.Dialer, дающий новую сессию для одного SID и всегда
 // ошибку для остальных. Для multi-host guard-теста (teleport-режим адресует по
-// SID = cfg.Host). Каждый успешный Dial — отдельная *fakeSession (один Run на
-// хост в teleport-режиме при start_soul:false), чтобы проверять доставку
+// SID = cfg.Host). Каждый успешный Dial — отдельная *fakeSession (token + init
+// на хост в teleport-режиме при start_soul:false), чтобы проверять доставку
 // независимо.
 type perHostDialer struct {
 	okSID  string

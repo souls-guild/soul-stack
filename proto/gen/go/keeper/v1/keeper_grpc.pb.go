@@ -22,6 +22,7 @@ const (
 	Keeper_Ping_FullMethodName        = "/soulstack.keeper.v1.Keeper/Ping"
 	Keeper_Bootstrap_FullMethodName   = "/soulstack.keeper.v1.Keeper/Bootstrap"
 	Keeper_EventStream_FullMethodName = "/soulstack.keeper.v1.Keeper/EventStream"
+	Keeper_FetchModule_FullMethodName = "/soulstack.keeper.v1.Keeper/FetchModule"
 )
 
 // KeeperClient is the client API for Keeper service.
@@ -38,6 +39,11 @@ type KeeperClient interface {
 	// EventStream: долгоживущий bidirectional gRPC-стрим с mTLS.
 	// Единственный канал коммуникации после онбординга (ADR-002, ADR-012(a)).
 	EventStream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[FromSoul, FromKeeper], error)
+	// FetchModule: server-streaming раздача байтов SoulModule-плагина по
+	// content-addressed sha256 (эпик core.module.installed, S2). Тот же
+	// mTLS-listener, что EventStream; отдельный HTTP/2-стрим не занимает
+	// control-plane. Keeper отдаёт ТОЛЬКО sigil-allowed бинарь (fail-closed).
+	FetchModule(ctx context.Context, in *PluginFetchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PluginChunk], error)
 }
 
 type keeperClient struct {
@@ -81,6 +87,25 @@ func (c *keeperClient) EventStream(ctx context.Context, opts ...grpc.CallOption)
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type Keeper_EventStreamClient = grpc.BidiStreamingClient[FromSoul, FromKeeper]
 
+func (c *keeperClient) FetchModule(ctx context.Context, in *PluginFetchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PluginChunk], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &Keeper_ServiceDesc.Streams[1], Keeper_FetchModule_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[PluginFetchRequest, PluginChunk]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Keeper_FetchModuleClient = grpc.ServerStreamingClient[PluginChunk]
+
 // KeeperServer is the server API for Keeper service.
 // All implementations must embed UnimplementedKeeperServer
 // for forward compatibility.
@@ -95,6 +120,11 @@ type KeeperServer interface {
 	// EventStream: долгоживущий bidirectional gRPC-стрим с mTLS.
 	// Единственный канал коммуникации после онбординга (ADR-002, ADR-012(a)).
 	EventStream(grpc.BidiStreamingServer[FromSoul, FromKeeper]) error
+	// FetchModule: server-streaming раздача байтов SoulModule-плагина по
+	// content-addressed sha256 (эпик core.module.installed, S2). Тот же
+	// mTLS-listener, что EventStream; отдельный HTTP/2-стрим не занимает
+	// control-plane. Keeper отдаёт ТОЛЬКО sigil-allowed бинарь (fail-closed).
+	FetchModule(*PluginFetchRequest, grpc.ServerStreamingServer[PluginChunk]) error
 	mustEmbedUnimplementedKeeperServer()
 }
 
@@ -113,6 +143,9 @@ func (UnimplementedKeeperServer) Bootstrap(context.Context, *BootstrapRequest) (
 }
 func (UnimplementedKeeperServer) EventStream(grpc.BidiStreamingServer[FromSoul, FromKeeper]) error {
 	return status.Error(codes.Unimplemented, "method EventStream not implemented")
+}
+func (UnimplementedKeeperServer) FetchModule(*PluginFetchRequest, grpc.ServerStreamingServer[PluginChunk]) error {
+	return status.Error(codes.Unimplemented, "method FetchModule not implemented")
 }
 func (UnimplementedKeeperServer) mustEmbedUnimplementedKeeperServer() {}
 func (UnimplementedKeeperServer) testEmbeddedByValue()                {}
@@ -178,6 +211,17 @@ func _Keeper_EventStream_Handler(srv interface{}, stream grpc.ServerStream) erro
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type Keeper_EventStreamServer = grpc.BidiStreamingServer[FromSoul, FromKeeper]
 
+func _Keeper_FetchModule_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(PluginFetchRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(KeeperServer).FetchModule(m, &grpc.GenericServerStream[PluginFetchRequest, PluginChunk]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Keeper_FetchModuleServer = grpc.ServerStreamingServer[PluginChunk]
+
 // Keeper_ServiceDesc is the grpc.ServiceDesc for Keeper service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -200,6 +244,11 @@ var Keeper_ServiceDesc = grpc.ServiceDesc{
 			Handler:       _Keeper_EventStream_Handler,
 			ServerStreams: true,
 			ClientStreams: true,
+		},
+		{
+			StreamName:    "FetchModule",
+			Handler:       _Keeper_FetchModule_Handler,
+			ServerStreams: true,
 		},
 	},
 	Metadata: "keeper/v1/keeper.proto",

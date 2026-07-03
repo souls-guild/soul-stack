@@ -56,6 +56,15 @@ input:
       Корень загрузки релизов Vector. По умолчанию GitHub Releases;
       переопределяется на внутреннее зеркало/nexus-proxy.
 
+  # SSRF-guard opt-out для private-resolve base_url — паттерн redis destiny.yml install.allow_private.
+  allow_private:
+    type: boolean
+    default: false
+    description: >-
+      Снять SSRF-guard core.url для fetch tarball-а (разрешить dial в RFC1918/
+      loopback — легитимный internal Nexus). Нужен, когда base_url резолвится в
+      private-адрес. Default false — guard держится (github-public back-compat).
+
   bin_dir:
     type: string
     default: /usr/local/bin

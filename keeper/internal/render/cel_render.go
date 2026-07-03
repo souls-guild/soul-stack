@@ -393,12 +393,25 @@ func hostLoopVars(in RenderInput, host *topology.HostFacts, hostCount int, loop 
 // (orchestration.md §7.1). Контекст — input/incarnation/soulprint.self плюс
 // Register этого хоста (слайс 2 полной грамматики): register-данные probe-задач
 // прогона, накопленные после барьера и резолвнутые по register-имени
-// (in.RegisterByHost[host.SID]). nil-register у хоста (нет register: задач) →
-// `register.*` в sets даст eval-ошибку "no such key", как и раньше.
+// (in.RegisterByHost[host.SID]) поверх run-level подложки register keeper-side
+// задач (bucket KeeperTargetSID, host-wins — ADR-056 amendment 2026-07-02).
+// nil-register у хоста без keeper-подложки → `register.*` в sets даст
+// eval-ошибку "no such key", как и раньше.
 func stateChangesVars(in RenderInput, host *topology.HostFacts) cel.Vars {
+	reg := in.RegisterByHost[host.SID]
+	if keeperReg := in.RegisterByHost[KeeperTargetSID]; len(keeperReg) > 0 {
+		merged := make(map[string]any, len(keeperReg)+len(reg))
+		for k, v := range keeperReg {
+			merged[k] = v
+		}
+		for k, v := range reg { // host-wins при коллизии
+			merged[k] = v
+		}
+		reg = merged
+	}
 	return cel.Vars{
 		Input:         in.Input,
-		Register:      in.RegisterByHost[host.SID],
+		Register:      reg,
 		Incarnation:   incarnationVars(in, len(in.Hosts)),
 		SoulprintSelf: soulprintSelfMap(host),
 		Essence:       in.Essence,

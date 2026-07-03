@@ -3,7 +3,11 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"sync"
 	"testing"
 
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
@@ -137,7 +141,110 @@ func TestRun_DispatchesToPluginViaComposite(t *testing.T) {
 	}
 }
 
+// --- Rescan (hot-register, ADR-065(d)) ---
+
+func TestPluginRegistry_RescanPicksUpNewModule(t *testing.T) {
+	root := t.TempDir()
+	writeSlot(t, root, "wb", "echo")
+	discovered, _, err := pluginhost.Discover(root)
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	r := NewPluginRegistry(&fakeSpawner{}, discovered, nil)
+	if _, ok := r.Lookup("wb.extra"); ok {
+		t.Fatal("Lookup(wb.extra): найден до установки")
+	}
+
+	writeSlot(t, root, "wb", "extra")
+	if _, err := r.Rescan(root); err != nil {
+		t.Fatalf("Rescan: %v", err)
+	}
+	if _, ok := r.Lookup("wb.extra"); !ok {
+		t.Error("Lookup(wb.extra) после Rescan: not found")
+	}
+	if _, ok := r.Lookup("wb.echo"); !ok {
+		t.Error("Lookup(wb.echo): существующий модуль потерян после Rescan")
+	}
+}
+
+func TestCompositeRegistry_RescanKeepsCoreLayer(t *testing.T) {
+	root := t.TempDir()
+	plug := NewPluginRegistry(&fakeSpawner{}, nil, nil)
+	core := mapRegistry{"core.pkg": &fakeModule{}}
+	c := NewCompositeRegistry(core, plug)
+
+	writeSlot(t, root, "wb", "extra")
+	if _, err := plug.Rescan(root); err != nil {
+		t.Fatalf("Rescan: %v", err)
+	}
+	got, ok := c.Lookup("core.pkg")
+	if !ok || got != core["core.pkg"] {
+		t.Error("core-слой composite задет Rescan-ом plugin-слоя")
+	}
+	if _, ok := c.Lookup("wb.extra"); !ok {
+		t.Error("новый модуль недоступен через composite после Rescan")
+	}
+}
+
+func TestPluginRegistry_ConcurrentLookupAndRescan(t *testing.T) {
+	root := t.TempDir()
+	writeSlot(t, root, "wb", "echo")
+	discovered, _, err := pluginhost.Discover(root)
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	r := NewPluginRegistry(&fakeSpawner{}, discovered, nil)
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					r.Lookup("wb.echo")
+					r.Names()
+				}
+			}
+		}()
+	}
+	for i := 0; i < 50; i++ {
+		if _, err := r.Rescan(root); err != nil {
+			t.Errorf("Rescan #%d: %v", i, err)
+			break
+		}
+	}
+	close(stop)
+	wg.Wait()
+
+	if _, ok := r.Lookup("wb.echo"); !ok {
+		t.Error("Lookup(wb.echo) после конкурентных Rescan-ов: not found")
+	}
+}
+
 // --- helpers ---
+
+// writeSlot материализует валидный каталожный слот `<root>/<ns>-<name>/`
+// (manifest.yaml + исполняемый бинарь) — формат core.module.installed.
+func writeSlot(t *testing.T, root, namespace, name string) {
+	t.Helper()
+	dir := filepath.Join(root, namespace+"-"+name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := fmt.Sprintf("kind: soul_module\nnamespace: %s\nname: %s\nprotocol_version: 1\n"+
+		"spec:\n  states:\n    applied:\n      description: test state\n      input: {}\n", namespace, name)
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "soul-mod-"+name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func makeDiscovered(namespace, name string) pluginhost.Discovered {
 	return pluginhost.Discovered{

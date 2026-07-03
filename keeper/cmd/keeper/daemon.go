@@ -2783,6 +2783,14 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 		sigilStore = sigil.NewPGStore(d.pool)
 	}
 
+	// FetchModule (эпик core.module.installed, S2): раздача sigil-allowed байтов
+	// SoulModule по sha256. Gate по d.sigilSvc (typed-nil-guard как trustAnchors):
+	// Sigil выключен → nil-интерфейс → FetchModule отвечает Unavailable.
+	var moduleBinaries keepergrpc.ModuleBinarySource
+	if d.sigilSvc != nil {
+		moduleBinaries = d.sigilSvc
+	}
+
 	// Connect-time broadcast набора trust-anchor-ов (ADR-026(h), R3-S6): «живой»
 	// holder, заполненный в setupSigil и обновляемый watcher-ом ротации. typed-nil-
 	// guard: при выключенном Sigil holder == nil → передаём nil-интерфейс (иначе
@@ -2822,6 +2830,8 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 		LastSeenFlushInterval: lastSeenFlushInterval,
 		SigilStore:            sigilStore,
 		TrustAnchors:          trustAnchors,
+		ModuleBinaries:        moduleBinaries,
+		ModuleFetchMaxBytes:   cfg.Plugins.ResolvedMaxArtifactSize(),
 		// Connect-time broadcast active-набора Vigil (ADR-030, beacons-контур S2,
 		// ReplaceAll). Источник — реестр vigils + souls поверх общего pool-а
 		// (covens хоста резолвятся из souls, набор — по sid ∪ covens). Доставка

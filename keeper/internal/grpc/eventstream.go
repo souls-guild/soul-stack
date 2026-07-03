@@ -189,6 +189,20 @@ type EventStreamDeps struct {
 	// (single-instance/dev без Redis): hook no-op. Production wire-up
 	// (`keeper run`) передаёт *toll.Watcher, gate-нутый отсутствием Redis.
 	TollNotifier TollNotifier
+
+	// ModuleBinaries — sigil-резолв «sha256 → путь к allowed-бинарю SoulModule»
+	// для FetchModule (эпик core.module.installed, S2). nil → FetchModule
+	// отвечает Unavailable (Sigil выключен / dev / unit). Production wire-up
+	// передаёт sigil.Service.
+	ModuleBinaries ModuleBinarySource
+
+	// ModuleFetchMaxBytes — предохранитель размера отдаваемого бинаря
+	// (plugins.max_artifact_size_mb). <=0 → дефолт из config.
+	ModuleFetchMaxBytes int64
+
+	// ModuleFetchPerSID — лимит параллельных FetchModule на один SID (защита
+	// control-plane от flood-а). <=0 → [defaultModuleFetchPerSID].
+	ModuleFetchPerSID int
 }
 
 // TollNotifier — узкая поверхность Toll-hook-а disconnect-event-а. Сужение
@@ -225,6 +239,14 @@ type VigilSource interface {
 // байты, иначе Soul-side verify (fail-closed) отвергнет печать.
 type SigilStore interface {
 	ListActive(ctx context.Context) ([]*sigil.Sigil, error)
+}
+
+// ModuleBinarySource — узкая поверхность резолва sha256 → путь к sigil-allowed
+// бинарю SoulModule ([sigil.Service.LookupModuleBinary]): изолирует FetchModule
+// от полного sigil.Service и допускает fake в unit-тестах. Не-allowed sha —
+// ошибка [sigil.ErrModuleNotAllowed].
+type ModuleBinarySource interface {
+	LookupModuleBinary(ctx context.Context, sha256Hex string) (string, error)
 }
 
 // TrustAnchorSource — узкая поверхность чтения ТЕКУЩЕГО набора trust-anchor-ов
@@ -411,6 +433,10 @@ type eventStreamHandler struct {
 	// Переполнение → AugurReply{ERROR}, без нового спавна (non-blocking
 	// acquire). nil → лимит выключен (старое поведение, dev/unit без Augur).
 	augurSem chan struct{}
+
+	// fetchInflight — per-SID inflight-лимит FetchModule (защита control-plane
+	// от flood-а fetch-стримов). Zero-value usable (lazy map).
+	fetchInflight sidInflight
 
 	// soulLeaseOwner / instanceAlive — seam-ы presence-gated force-release-а
 	// SID-lease-а (ADR-027 amend (n)) в [acquireSoulLease]. По умолчанию —

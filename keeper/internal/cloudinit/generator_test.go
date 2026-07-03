@@ -161,6 +161,32 @@ func TestResolver_HappyPath(t *testing.T) {
 	}
 }
 
+// TestResolver_EventStreamPort — keeper.yml::cloud_init.event_stream_port
+// доезжает через Resolve до Config и в userdata-soul.yml (6-я стена ADR-063:
+// без него оба порта soul.yml выводились из bootstrap_endpoint).
+func TestResolver_EventStreamPort(t *testing.T) {
+	r := cloudinit.NewResolver(&fakeVault{kv: map[string]any{"ca": testCAPem}})
+	cfg, err := r.Resolve(context.Background(), &config.KeeperCloudInit{
+		BootstrapEndpoint: "lb.keeper.example:9442",
+		EventStreamPort:   9443,
+		TLSCARef:          "vault:secret/keeper/ca",
+		SoulBinaryURL:     "https://artifacts.example/soul",
+	})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if cfg.EventStreamPort != 9443 {
+		t.Fatalf("EventStreamPort not propagated: %d", cfg.EventStreamPort)
+	}
+	out, err := cloudinit.GenerateUserdata(cfg)
+	if err != nil {
+		t.Fatalf("GenerateUserdata: %v", err)
+	}
+	if !strings.Contains(out, "event_stream_port: 9443") || !strings.Contains(out, "bootstrap_port: 9442") {
+		t.Errorf("userdata soul.yml ports wrong (want event 9443 / bootstrap 9442)")
+	}
+}
+
 func TestResolver_NilBlock_Fails(t *testing.T) {
 	r := cloudinit.NewResolver(&fakeVault{})
 	_, err := r.Resolve(context.Background(), nil)

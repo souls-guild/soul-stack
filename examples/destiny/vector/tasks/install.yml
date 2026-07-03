@@ -17,6 +17,8 @@
     path: "${ vars.tarball_path }"
     checksum: "${ input.sha256 }"
     mode: "0644"
+    # SSRF-guard opt-out при private-resolve base_url (паттерн redis destiny.yml install.allow_private).
+    allow_private: "${ input.allow_private }"
 
 # 2. Распаковать tarball в каталог. format auto-detect по .tar.gz. Идемпотентно:
 #    core.archive пишет marker и повторно не распаковывает тот же архив. Пути — из

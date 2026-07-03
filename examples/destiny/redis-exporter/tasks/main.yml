@@ -20,10 +20,12 @@
 - name: Fetch redis_exporter tarball
   module: core.url.fetched
   params:
-    url: "${ 'https://github.com/oliver006/redis_exporter/releases/download/v' + input.version + '/redis_exporter-v' + input.version + '.linux-' + input.arch + '.tar.gz' }"
+    url: "${ input.base_url + '/v' + input.version + '/redis_exporter-v' + input.version + '.linux-' + input.arch + '.tar.gz' }"
     path: "${ '/tmp/redis_exporter-' + input.version + '.tar.gz' }"
     checksum: "${ input.sha256 }"
     mode: "0644"
+    # SSRF-guard opt-out при private-resolve base_url (паттерн redis destiny.yml install.allow_private).
+    allow_private: "${ input.allow_private }"
 
 - name: Extract redis_exporter tarball
   module: core.archive.extracted

@@ -77,8 +77,10 @@
 #     cloud-init (шаг (а) generate_userdata:false), поэтому весь setup ставится ЗДЕСЬ
 #     по Teleport SSH: soul-бинарь (pinned-CA HTTPS) + keeper-CA + soul.yml + systemd-
 #     unit (тот же install-blueprint, что cloud-init B-flat). Затем кладёт токен в
-#     /etc/soul/token (umask 077, 0400, ★токен в STDIN не в argv) и запускает soul
-#     (start_soul default true). ssh_provider — имя SshProvider-плагина (Teleport).
+#     /etc/soul/token (umask 077, 0400, ★токен в STDIN не в argv), redeem-ит его
+#     (`soul init` — CSR→Bootstrap→SoulSeed; идемпотентно по seed-cert-guard) и
+#     активирует unit: daemon-reload + enable + start (start_soul default true).
+#     ssh_provider — имя SshProvider-плагина (Teleport).
 #     Ошибка любого хоста → шаг failed (B1-strict) → state не коммитится → error_locked.
 #     require: provision — токены приходят из его register.
 - name: Install soul and deliver per-VM bootstrap token over SSH
@@ -117,3 +119,11 @@
     await_online:      true
     await_timeout:     "${ default(input.provision.await_timeout, default(essence.provision_await_timeout, '10m')) }"
     refresh_soulprint: true
+
+# (г) Доставка SoulModule-плагина community.redis на созданные хосты (ADR-065): Soul-side
+#     шаг; roster-ось refresh-эмиттера (в) ставит его ПОСЛЕ await_online и ДО community.redis.*.
+- name: Install the community.redis plugin on provisioned hosts
+  on: ["${ incarnation.name }"]
+  module: core.module.installed
+  params:
+    name: community.redis

@@ -9,13 +9,16 @@
   bin/
     soul-<sha>                 # текущая версия + 1–2 предыдущих для отката
   modules/
-    soul-mod-<name>-<sha>      # custom-модуль
-    soul-mod-<other>-<sha>
-    ...
+    community-redis/           # каталожный слот custom-модуля: <ns>-<name>/
+      manifest.yaml            #   материализован из PluginSigil.manifest_raw
+      soul-mod-redis           #   бинарь (single-active, atomic rename)
+    wb-haproxy/
+      manifest.yaml
+      soul-mod-haproxy
 ```
 
 - **`bin/soul-<sha>`** — сам исполняемый файл агента. Имя содержит SHA-256 бинаря, что позволяет держать рядом несколько версий и откатываться без перекачки. Используется push-режимом (Keeper выкатывает бинарь через SSH); в pull-режиме обновление демона — задача оператора (systemd-unit, package manager).
-- **`modules/soul-mod-<name>-<sha>`** — custom-модули (см. [naming-rules.md → Модули Destiny](../naming-rules.md#модули-destiny)). Один файл на (имя × версию). Запускается `soul`-бинарём как sub-process по gRPC-stdio.
+- **`modules/<ns>-<name>/{manifest.yaml, soul-mod-<name>}`** — каталожный слот custom-модуля ([ADR-065](../adr/0065-core-module-installed.md); имена — [naming-rules.md → Модули Destiny](../naming-rules.md#модули-destiny)). **Single-active** на пару `(namespace, name)`: одна активная версия, запись через atomic rename; несколько версий рядом не хранятся — authority = активный Sigil-допуск, «откат» = revoke+allow другого допуска на Keeper-е + повторный install-шаг. `manifest.yaml` материализуется из `PluginSigil.manifest_raw` (приезжает `SigilSnapshot`-ом, не через fetch). Бинарь запускается `soul`-бинарём как sub-process по gRPC-stdio.
 - **Core-модули на диске не лежат.** Они статически встроены в `soul-<sha>`-бинарь.
 
 Путь `/var/lib/soul-stack/modules/` настраивается через `paths.modules` в [`soul.yml`](config.md#paths). Путь к `bin/` сейчас фиксирован соглашением (под него выкатывается push-бинарь).
@@ -23,15 +26,15 @@
 ## Поведение в pull (агентский режим)
 
 - `soul`-демон при apply Destiny-шага дёргает встроенный core-модуль или sub-process custom-модуля.
-- Доставка custom-модулей на хост — через сам Destiny: встроенный core-модуль `core.module.installed` стягивает модуль с Keeper-а (или artifact-store), кладёт в `/var/lib/soul-stack/modules/`, проверяет фингерпринт. Это обычная Destiny-операция, ничего магического.
-- Демон не пытается «угадать», какие модули понадобятся вперёд. Если нужный модуль отсутствует в момент apply — шаг падает, оператор должен включить `core.module.installed` в свою Destiny явно.
+- Доставка custom-модулей на хост — через сам Destiny: встроенный core-модуль `core.module.installed` ([ADR-065](../adr/0065-core-module-installed.md)) — allow-check по локальному Sigil-набору **до** fetch (нет активного допуска → `module_not_allowed` без единого сетевого байта) → server-streaming RPC `FetchModule` с Keeper-а → полный verify (sha256 + подпись Sigil + `manifest_sha256`, `shared/pluginhost`) → atomic rename в каталожный слот → hot-register без рестарта демона (модуль доступен задачам того же прогона). Идемпотентность: sha256 установленного бинаря == sha активного Sigil → `changed=false`, fetch не выполняется. Это обычная Destiny-операция, ничего магического.
+- Демон не пытается «угадать», какие модули понадобятся вперёд. Если нужный модуль отсутствует в момент apply — шаг падает, оператор должен включить `core.module.installed` в свою Destiny явно (перед первым использованием модуля).
 
 ## Поведение в push (`keeper.push`)
 
-- Keeper передаёт хосту **все модули, зарегистрированные в Keeper-е** (без статического анализа Destiny). Сравнение по SHA-256 на каждый модуль; ничего не изменилось — копирование пропускается. Это работает за счёт горячего кеша на хосте.
+- Keeper передаёт хосту **все модули, зарегистрированные в Keeper-е** (без статического анализа Destiny). Сравнение по SHA-256 на каждый модуль; ничего не изменилось — копирование пропускается. Это работает за счёт горячего кеша на хосте (те же каталожные слоты `<ns>-<name>/`, что в pull).
 - Сам `soul`-бинарь докатывается тем же механизмом: Keeper сравнивает SHA-256 целевой версии с тем, что лежит в `bin/`, и копирует только при расхождении.
 - Первый прогон на новом хосте — медленный (копируется бинарь и все модули). Последующие — мгновенные.
-- Имена файлов с SHA в суффиксе позволяют держать несколько версий рядом и откатываться без перекачки.
+- Для `bin/` имена файлов с SHA в суффиксе позволяют держать несколько версий агента рядом и откатываться без перекачки; слоты модулей — single-active ([ADR-065](../adr/0065-core-module-installed.md)).
 
 Полный алгоритм push-доставки — в [keeper/push.md → Доставка `soul`-бинаря и модулей на хост](../keeper/push.md#доставка-soul-бинаря-и-модулей-на-хост).
 

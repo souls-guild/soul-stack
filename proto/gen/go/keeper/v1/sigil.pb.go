@@ -180,6 +180,117 @@ func (x *SigilSnapshot) GetSigils() []*PluginSigil {
 	return nil
 }
 
+// PluginFetchRequest — запрос байтов SoulModule-плагина (FetchModule, эпик
+// core.module.installed S2). Авторитет допуска — binary_sha256
+// (content-addressed, формат как PluginSigil.binary_sha256: hex lowercase,
+// 64 символа); namespace/name — контекст для логов/аудита Keeper-а.
+type PluginFetchRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Namespace     string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	BinarySha256  string                 `protobuf:"bytes,3,opt,name=binary_sha256,json=binarySha256,proto3" json:"binary_sha256,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PluginFetchRequest) Reset() {
+	*x = PluginFetchRequest{}
+	mi := &file_keeper_v1_sigil_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PluginFetchRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PluginFetchRequest) ProtoMessage() {}
+
+func (x *PluginFetchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_keeper_v1_sigil_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PluginFetchRequest.ProtoReflect.Descriptor instead.
+func (*PluginFetchRequest) Descriptor() ([]byte, []int) {
+	return file_keeper_v1_sigil_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *PluginFetchRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *PluginFetchRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *PluginFetchRequest) GetBinarySha256() string {
+	if x != nil {
+		return x.BinarySha256
+	}
+	return ""
+}
+
+// PluginChunk — один чанк байтов бинаря в server-streaming ответе FetchModule.
+// Целостность собранного файла Soul сверяет по sha256 запроса (S3); отдельные
+// offset/checksum-поля не требуются (при необходимости — only-add).
+type PluginChunk struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Data          []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PluginChunk) Reset() {
+	*x = PluginChunk{}
+	mi := &file_keeper_v1_sigil_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PluginChunk) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PluginChunk) ProtoMessage() {}
+
+func (x *PluginChunk) ProtoReflect() protoreflect.Message {
+	mi := &file_keeper_v1_sigil_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PluginChunk.ProtoReflect.Descriptor instead.
+func (*PluginChunk) Descriptor() ([]byte, []int) {
+	return file_keeper_v1_sigil_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *PluginChunk) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
 // SigilTrustAnchors — ПОЛНЫЙ набор trust-anchor-ов подписи Sigil (replace-
 // семантика, ADR-026, ротация R3). Едет only-add в FromKeeper.oneof.
 //
@@ -197,7 +308,7 @@ type SigilTrustAnchors struct {
 
 func (x *SigilTrustAnchors) Reset() {
 	*x = SigilTrustAnchors{}
-	mi := &file_keeper_v1_sigil_proto_msgTypes[2]
+	mi := &file_keeper_v1_sigil_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -209,7 +320,7 @@ func (x *SigilTrustAnchors) String() string {
 func (*SigilTrustAnchors) ProtoMessage() {}
 
 func (x *SigilTrustAnchors) ProtoReflect() protoreflect.Message {
-	mi := &file_keeper_v1_sigil_proto_msgTypes[2]
+	mi := &file_keeper_v1_sigil_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -222,7 +333,7 @@ func (x *SigilTrustAnchors) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SigilTrustAnchors.ProtoReflect.Descriptor instead.
 func (*SigilTrustAnchors) Descriptor() ([]byte, []int) {
-	return file_keeper_v1_sigil_proto_rawDescGZIP(), []int{2}
+	return file_keeper_v1_sigil_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *SigilTrustAnchors) GetPubkeyPem() []string {
@@ -245,7 +356,13 @@ const file_keeper_v1_sigil_proto_rawDesc = "" +
 	"\tsignature\x18\x05 \x01(\fR\tsignature\x12\x1a\n" +
 	"\bmanifest\x18\x06 \x01(\fR\bmanifest\"I\n" +
 	"\rSigilSnapshot\x128\n" +
-	"\x06sigils\x18\x01 \x03(\v2 .soulstack.keeper.v1.PluginSigilR\x06sigils\"2\n" +
+	"\x06sigils\x18\x01 \x03(\v2 .soulstack.keeper.v1.PluginSigilR\x06sigils\"k\n" +
+	"\x12PluginFetchRequest\x12\x1c\n" +
+	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12#\n" +
+	"\rbinary_sha256\x18\x03 \x01(\tR\fbinarySha256\"!\n" +
+	"\vPluginChunk\x12\x12\n" +
+	"\x04data\x18\x01 \x01(\fR\x04data\"2\n" +
 	"\x11SigilTrustAnchors\x12\x1d\n" +
 	"\n" +
 	"pubkey_pem\x18\x01 \x03(\tR\tpubkeyPemBCZAgithub.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;keeperv1b\x06proto3"
@@ -262,11 +379,13 @@ func file_keeper_v1_sigil_proto_rawDescGZIP() []byte {
 	return file_keeper_v1_sigil_proto_rawDescData
 }
 
-var file_keeper_v1_sigil_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_keeper_v1_sigil_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_keeper_v1_sigil_proto_goTypes = []any{
-	(*PluginSigil)(nil),       // 0: soulstack.keeper.v1.PluginSigil
-	(*SigilSnapshot)(nil),     // 1: soulstack.keeper.v1.SigilSnapshot
-	(*SigilTrustAnchors)(nil), // 2: soulstack.keeper.v1.SigilTrustAnchors
+	(*PluginSigil)(nil),        // 0: soulstack.keeper.v1.PluginSigil
+	(*SigilSnapshot)(nil),      // 1: soulstack.keeper.v1.SigilSnapshot
+	(*PluginFetchRequest)(nil), // 2: soulstack.keeper.v1.PluginFetchRequest
+	(*PluginChunk)(nil),        // 3: soulstack.keeper.v1.PluginChunk
+	(*SigilTrustAnchors)(nil),  // 4: soulstack.keeper.v1.SigilTrustAnchors
 }
 var file_keeper_v1_sigil_proto_depIdxs = []int32{
 	0, // 0: soulstack.keeper.v1.SigilSnapshot.sigils:type_name -> soulstack.keeper.v1.PluginSigil
@@ -288,7 +407,7 @@ func file_keeper_v1_sigil_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_keeper_v1_sigil_proto_rawDesc), len(file_keeper_v1_sigil_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

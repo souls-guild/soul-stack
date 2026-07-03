@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"time"
@@ -72,6 +73,8 @@ type TeleportDialerConfig struct {
 	// alpn-режим САМ задаёт внутренний trust → UseSystemTrust при AlpnUpgrade=true
 	// игнорируется (alpn-ветка приоритетна). Teleport сам добавляет
 	// WithALPNConnUpgradePing внутри newDialerForGRPCClient.
+	//
+	// NextProtos сбрасывается в buildProxyClientConfig — см. комментарий там.
 	AlpnUpgrade bool
 }
 
@@ -101,9 +104,9 @@ type TeleportDialerConfig struct {
 //
 // Connect ленивый per-Dial (новый proxy.Client на каждую сессию): доставка
 // токена — редкая oneshot-операция (несколько VM за cloud-create-прогон),
-// удержание долгоживущего proxy-клиента не оправдано. proxy.Client закрывается
-// сразу после установления target-канала — туннель уже мультиплексирован в
-// возвращённый net.Conn и переживёт закрытие gRPC-клиента.
+// удержание долгоживущего proxy-клиента не оправдано. proxy.Client живёт
+// столько же, сколько SSH-сессия (target-conn — мультиплекс поверх его
+// gRPC-стрима), закрывается в Session.Close() — см. [teleportSession].
 func NewTeleportDialer(cfg TeleportDialerConfig) (Dialer, error) {
 	if cfg.ProxyAddr == "" {
 		return nil, errors.New("push: NewTeleportDialer: proxy_addr пуст")
@@ -198,11 +201,9 @@ func NewTeleportDialer(cfg TeleportDialerConfig) (Dialer, error) {
 			return nil, err
 		}
 
-		// proxy.Client больше не нужен: target-туннель живёт в conn, обёрнутом
-		// в *ssh.Client. Закрываем gRPC-клиент сразу, чтобы не утекали его
-		// соединения за время доставки токена.
-		_ = proxyClient.Close()
-		return &sshSession{client: client}, nil
+		// Ownership proxyClient переходит сессии (закрытие — в teleportSession.Close()
+		// после client): ранний Close убил бы gRPC-стрим под conn — см. teleportSession.
+		return newTeleportSession(&sshSession{client: client}, proxyClient), nil
 	}, nil
 }
 
@@ -219,6 +220,8 @@ func NewTeleportDialer(cfg TeleportDialerConfig) (Dialer, error) {
 // путь к Auth, не на DialHost; второе отключило бы верификацию публичного cert
 // (MITM-дыра).
 func buildProxyClientConfig(cfg TeleportDialerConfig, tlsConfig *tls.Config, sshConfig apissh.ClientConfig, dialTimeout time.Duration) proxy.ClientConfig {
+	// ★ h2-first ALPN (из creds.TLSConfig()) уводит TLS-routing proxy в web-стек → 403; сброс — vendor добавит teleport-proxy-ssh-grpc, grpc-go допишет h2 в конец (порядок tsh).
+	tlsConfig.NextProtos = nil
 	return proxy.ClientConfig{
 		ProxyAddress: cfg.ProxyAddr,
 		SSHConfig:    sshConfig,
@@ -289,6 +292,32 @@ func applyProxyTLSTrustALPN(tlsConfig *tls.Config, identityCAPEM [][]byte) error
 	}
 	tlsConfig.RootCAs = pool
 	return nil
+}
+
+// teleportSession — Session, владеющая proxy.Client-ом. conn от DialHost — не
+// самостоятельный сокет, а мультиплекс поверх gRPC-стрима этого же proxy-клиента
+// (streamutils.NewConn поверх ProxySSH): закрыть proxyClient раньше SSH-client-а
+// = убить транспорт (первый NewSession → `ssh: unexpected packet in response to
+// channel open: <nil>`). Поэтому proxyClient живёт до Close() сессии.
+type teleportSession struct {
+	Session
+	proxyClient io.Closer
+}
+
+func newTeleportSession(sess Session, proxyClient io.Closer) Session {
+	return &teleportSession{Session: sess, proxyClient: proxyClient}
+}
+
+// Close закрывает SSH-client первым, proxy-клиент после. Идемпотентен.
+func (s *teleportSession) Close() error {
+	err := s.Session.Close()
+	if s.proxyClient != nil {
+		if cerr := s.proxyClient.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+		s.proxyClient = nil
+	}
+	return err
 }
 
 // newTeleportSSHClient проводит SSH-handshake к target поверх уже открытого

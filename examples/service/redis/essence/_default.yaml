@@ -78,14 +78,14 @@ provision_provider: wb-prod
 provision_profile:  redis-debian-12
 # Верхняя граница ожидания онбординга созданных VM (барьер await_online, core.soul.registered
 # refresh_soulprint; форма <N>{s|m|h}). Фоллбэк для input.provision.await_timeout.
-provision_await_timeout: "10m"
+provision_await_timeout: "8m"
 # Имя SshProvider-плагина для доставки per-VM bootstrap-токена по SSH (core.bootstrap.delivered).
 provision_ssh_provider: teleport
 # Потолок ожидания появления свежесозданной VM в Teleport перед доставкой токена
-# (core.bootstrap.delivered, transport=teleport, retry-до-join; форма <N>{s|m|h}). reverse-
-# tunnel-агент на новой cloud-VM регистрируется в Teleport заметно позже типовых 3-5мин, поэтому
-# 15m с запасом. Фоллбэк для input.provision.join_wait_timeout.
-provision_join_wait_timeout: "15m"
+# (core.bootstrap.delivered, transport=teleport, retry-до-join; форма <N>{s|m|h}).
+# fail-fast: VM обычно online ~5m (запас x2), большой timeout маскирует провал enroll.
+# Фоллбэк для input.provision.join_wait_timeout.
+provision_join_wait_timeout: "10m"
 
 # ── Обязательный мониторинг data-плоскости: экспортеры метрик (Слайс I) ───────────
 # create БЕЗУСЛОВНО ставит node_exporter (метрики хоста) + redis_exporter (метрики Redis)
@@ -97,14 +97,26 @@ provision_join_wait_timeout: "15m"
 # без requirepass без --redis.user был бы WRONGPASS (см. create/main.yml).
 node_exporter_version:  "1.8.2"
 node_exporter_listen:   ":9100"
+# Корень загрузки релизов node_exporter. WB-стенд закрыт к github.com напрямую →
+# WB Nexus raw-proxy (зеркалит github-путь 1:1 после raw-proxy-github/). destiny-default
+# остаётся GitHub Releases (back-compat не-WB окружений); не-WB оператор переопределяет
+# в spec.essence или убирает ключ.
+node_exporter_base_url: "https://nexus-proxy.wb.ru/repository/raw-proxy-github/prometheus/node_exporter/releases/download"
+# SSRF-guard opt-out: base_url выше — WB Nexus, резолвится в private-IP (симметрия
+# binary_allow_private). Публичный-mirror-деплой — false (или убрать ключ) в spec.essence.
+node_exporter_allow_private: true
 redis_exporter_version: "1.62.0"
 # checksum tarball-а redis_exporter (linux-<arch>, форма "sha256:<hex>", 64 hex).
 # core.url.fetched верифицирует его ДО публикации бинаря. ПЛЕЙСХОЛДЕР (нули): реальный
 # оператор ОБЯЗАН подставить checksum под свою пару (redis_exporter_version, arch) из
 # sha256sums GitHub-релиза oliver006/redis_exporter в spec.essence — иначе fail-closed
 # (несовпадение/pattern → честный отказ fetch). Смена версии/arch требует обновить checksum.
-redis_exporter_sha256:  "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+redis_exporter_sha256:  "sha256:a09f92a6b366e37c654e50522c7b80e4a625396b2499fd42cf17e1aa91e56d5e"
 redis_exporter_listen:  ":9121"
+# Корень загрузки релизов redis_exporter — WB Nexus raw-proxy (см. node_exporter_base_url).
+redis_exporter_base_url: "https://nexus-proxy.wb.ru/repository/raw-proxy-github/oliver006/redis_exporter/releases/download"
+# SSRF-guard opt-out для private-resolve WB Nexus (см. node_exporter_allow_private).
+redis_exporter_allow_private: true
 
 # ── Обязательный log-shipping data-плоскости: Vector (Слайс V-I, ADR-065) ─────────
 # create БЕЗУСЛОВНО ставит vector (агент отгрузки логов) на КАЖДЫЙ хост incarnation
@@ -119,7 +131,11 @@ vector_version:  "0.40.0"
 # оператор ОБЯЗАН подставить checksum под свою пару (vector_version, arch) из
 # sha256sums.txt GitHub-релиза vectordotdev/vector в spec.essence — иначе fail-closed
 # (несовпадение/pattern → честный отказ fetch). Смена версии/arch требует обновить checksum.
-vector_sha256:   "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+vector_sha256:   "sha256:112b047df17df46feb22fc69234e8fc2ad5a411cd2e7d369f3b70c00617a4e90"
+# Корень загрузки релизов Vector — WB Nexus raw-proxy (см. node_exporter_base_url).
+vector_base_url: "https://nexus-proxy.wb.ru/repository/raw-proxy-github/vectordotdev/vector/releases/download"
+# SSRF-guard opt-out для private-resolve WB Nexus (см. node_exporter_allow_private).
+vector_allow_private: true
 # sink_type — куда шлём логи (loki/elasticsearch/vector/console). Дефолт console (безопасно,
 # без внешней инфры: логи в stdout самого vector). sink_endpoint — адрес центрального
 # коллектора (форма зависит от sink_type: loki/elasticsearch — URL, vector — host:port;

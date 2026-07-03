@@ -46,6 +46,7 @@ assert:
             # collector_options/web_telemetry_path) + дефолты destiny-схемы.
             version: "1.11.1"
             base_url: "https://github.com/prometheus/node_exporter/releases/download"
+            allow_private: false
             listen: ":9100"
             collectors: [smartmon, nvme, ipmi]
             bin_dir: /usr/local/bin

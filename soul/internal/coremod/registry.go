@@ -4,14 +4,16 @@
 // связывает каноническое имя верхнего уровня (`core.pkg` / `core.file` / …)
 // с реализацией sdk/module.SoulModule.
 //
-// MVP — 19 Soul-side модулей: pkg / file / service / user / group (Core.a.1),
+// MVP — 20 Soul-side модулей: pkg / file / service / user / group (Core.a.1),
 // exec / cmd / cron / mount (Core.a.2), git / archive / sysctl (Core.a.3),
 // url (Core.a.4), line (Core.a.5 — пилот in-place построчной правки, ADR-015),
 // repo / firewall (Core.a.6 — пакетный репозиторий + правило файрвола, ADR-015),
 // http (Core.a.7 — read-probe HTTP, verb probe, changed=false, ADR-015),
 // noop (ADR-015 — no-op/barrier-якорь, verb run, changed=false),
 // augur (ADR-025 — read-probe живого доступа к внешней системе через брокер
-// Augur, verb fetch, changed=false).
+// Augur, verb fetch, changed=false),
+// module (ADR-065 — доставка SoulModule-плагина: allow-check → FetchModule →
+// Sigil-verify → atomic install; host-зависимости через Deps).
 package coremod
 
 import (
@@ -27,6 +29,7 @@ import (
 	"github.com/souls-guild/soul-stack/soul/internal/coremod/group"
 	httpmod "github.com/souls-guild/soul-stack/soul/internal/coremod/http"
 	"github.com/souls-guild/soul-stack/soul/internal/coremod/line"
+	installmod "github.com/souls-guild/soul-stack/soul/internal/coremod/module"
 	"github.com/souls-guild/soul-stack/soul/internal/coremod/mount"
 	"github.com/souls-guild/soul-stack/soul/internal/coremod/noop"
 	"github.com/souls-guild/soul-stack/soul/internal/coremod/pkg"
@@ -46,30 +49,35 @@ type Registry struct {
 	mods map[string]module.SoulModule
 }
 
-// Default возвращает Registry со всеми 19 Soul-side core-модулями MVP.
+// Default возвращает Registry со всеми 20 Soul-side core-модулями MVP.
 // Используется при wire-up в cmd/soul; в тестах удобнее собрать собственный
 // Registry через NewRegistry с фиксированными зависимостями.
-func Default() *Registry {
+//
+// install — host-зависимости core.module (ADR-065: Sigil-набор, trust-anchor-ы,
+// корень кеша модулей). Zero-значение валидно (push-режим/тесты): install-шаг
+// откажет fail-closed module_not_allowed.
+func Default(install installmod.Deps) *Registry {
 	return NewRegistry(map[string]module.SoulModule{
-		augur.Name:    augur.New(),
-		pkg.Name:      pkg.New(),
-		file.Name:     file.New(),
-		service.Name:  service.New(),
-		user.Name:     user.New(),
-		group.Name:    group.New(),
-		line.Name:     line.New(),
-		exec.Name:     exec.New(),
-		cmd.Name:      cmd.New(),
-		cron.Name:     cron.New(),
-		mount.Name:    mount.New(),
-		noop.Name:     noop.New(),
-		git.Name:      git.New(),
-		archive.Name:  archive.New(),
-		sysctl.Name:   sysctl.New(),
-		url.Name:      url.New(),
-		repo.Name:     repo.New(),
-		firewall.Name: firewall.New(),
-		httpmod.Name:  httpmod.New(),
+		augur.Name:      augur.New(),
+		pkg.Name:        pkg.New(),
+		file.Name:       file.New(),
+		service.Name:    service.New(),
+		user.Name:       user.New(),
+		group.Name:      group.New(),
+		line.Name:       line.New(),
+		exec.Name:       exec.New(),
+		cmd.Name:        cmd.New(),
+		cron.Name:       cron.New(),
+		mount.Name:      mount.New(),
+		noop.Name:       noop.New(),
+		git.Name:        git.New(),
+		archive.Name:    archive.New(),
+		sysctl.Name:     sysctl.New(),
+		url.Name:        url.New(),
+		repo.Name:       repo.New(),
+		firewall.Name:   firewall.New(),
+		httpmod.Name:    httpmod.New(),
+		installmod.Name: installmod.New(install),
 	})
 }
 

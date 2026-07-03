@@ -362,9 +362,19 @@ func TestResolveEntry_CurrentSymlinkAtomicSwap(t *testing.T) {
 }
 
 func TestResolveCatalog_CollectsWarningsAndDoesNotFail(t *testing.T) {
-	// Один годный entry (cloud), один сломанный (нет manifest в checkout-е).
+	// Годные entry: cloud + soul_module; сломанный (нет manifest в checkout-е).
 	okRepo := newFixtureRepo(t)
 	taggedPlugin(okRepo, "soul-cloud-hetzner", []byte("bin"))
+
+	modRepo := newFixtureRepo(t)
+	modRepo.writePlugin(`kind: soul_module
+protocol_version: 1
+namespace: community
+name: redis
+spec: { states: { pinged: {} } }
+`, "soul-mod-redis", []byte("modbin"))
+	modRepo.commit("soul module plugin")
+	modRepo.tag("v1.0.0")
 
 	brokenRepo := newFixtureRepo(t)
 	brokenRepo.writeFile("README", []byte("no manifest"))
@@ -378,6 +388,9 @@ func TestResolveCatalog_CollectsWarningsAndDoesNotFail(t *testing.T) {
 		SSHProviders: []config.PluginCatalogEntry{
 			{Name: "broken", Source: brokenRepo.fileURL(), Ref: "v9.9.9"},
 		},
+		SoulModules: []config.PluginCatalogEntry{
+			{Name: "redis", Source: modRepo.fileURL(), Ref: "v1.0.0"},
+		},
 	}
 	r, _ := newTestResolver(t)
 
@@ -385,11 +398,18 @@ func TestResolveCatalog_CollectsWarningsAndDoesNotFail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveCatalog вернул fatal: %v", err)
 	}
-	if len(slots) != 1 {
-		t.Fatalf("slots = %d, want 1 (только hetzner): %v", len(slots), slots)
+	if len(slots) != 2 {
+		t.Fatalf("slots = %d, want 2 (hetzner + community.redis): %v", len(slots), slots)
 	}
-	if slots[0].Name != "hetzner" {
-		t.Errorf("резолвнутый слот = %q, want hetzner", slots[0].Name)
+	byName := map[string]ResolvedSlot{}
+	for _, s := range slots {
+		byName[s.Name] = s
+	}
+	if _, ok := byName["hetzner"]; !ok {
+		t.Errorf("нет слота hetzner: %v", byName)
+	}
+	if mod, ok := byName["redis"]; !ok || mod.Namespace != "community" {
+		t.Errorf("нет слота community.redis: %v", byName)
 	}
 	if len(warns) != 1 {
 		t.Fatalf("warns = %d, want 1 (broken entry): %v", len(warns), warns)

@@ -591,7 +591,8 @@ func (h *IncarnationHandler) RerunLastTyped(ctx context.Context, claims *jwt.Cla
 		case errors.Is(err, incarnation.ErrRerunInputUnavailable):
 			return zero, incProblem(problem.TypeRerunInputUnavailable,
 				"incarnation "+name+" rerun-last неприменим: input упавшего прогона недоступен "+
-					"(рецепт вычищен ретеншном либо legacy-прогон без рецепта) — сними блок обычным unlock "+
+					"(прогон упал до dispatch — render/no_hosts/preflight, рецепт не записан; "+
+					"рецепт вычищен ретеншном; legacy-прогон без рецепта) — сними блок обычным unlock "+
 					"и запусти нужный сценарий вручную с явным input")
 		default:
 			h.logger.Error("incarnation.rerun-last: unlock failed",

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 
@@ -372,6 +373,228 @@ func TestAwait_NoChecker_Failed(t *testing.T) {
 	}
 	if !stream.Last().Failed {
 		t.Fatal("expected failed: await_online without presence-checker configured")
+	}
+}
+
+// TestAwait_RefreshSoulprint_WaitsForFacts — при refresh_soulprint+await_online
+// барьер требует ПЕРВЫЙ typed soulprint, не только presence-lease: SID online
+// сразу, но facts появляются позже → барьер ждёт facts, после появления — успех.
+// Guard на 7-ю стену live-create (render следующего Passage читает
+// soulprint.self.* — facts обязаны быть в PG до прохода барьера).
+func TestAwait_RefreshSoulprint_WaitsForFacts(t *testing.T) {
+	fs := newFakeStore()
+	p := newFakePresence()
+	p.online["h1.example.com"] = struct{}{}
+	fs.factsAfter["h1.example.com"] = 3 // facts «доезжают» к 3-му facts-опросу
+
+	m := newAwaitModule(t, fs, p, "")
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State: "registered",
+		Params: mustStruct(t, map[string]any{
+			"sid":                 "h1.example.com",
+			"coven":               []any{"redis"},
+			"await_online":        true,
+			"await_timeout":       "5s",
+			"await_poll_interval": "1ms",
+			"refresh_soulprint":   true,
+		}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	ev := stream.Last()
+	if ev == nil || ev.Failed {
+		t.Fatalf("expected success after facts arrive, got %+v", ev)
+	}
+	if fs.factsCalls < 3 {
+		t.Errorf("barrier must poll facts until present (>= 3 polls), got %d", fs.factsCalls)
+	}
+	if out := ev.Output.AsMap(); out["satisfied"] != true {
+		t.Errorf("satisfied=%v, want true", out["satisfied"])
+	}
+}
+
+// TestAwait_RefreshSoulprint_FactsPresent_ImmediatePass — facts уже в PG
+// (rerun / create_from_souls-путь: хосты онбордились раньше) → барьер проходит
+// на первом же опросе, нулевое ожидание.
+func TestAwait_RefreshSoulprint_FactsPresent_ImmediatePass(t *testing.T) {
+	fs := newFakeStore()
+	p := newFakePresence()
+	p.online["h1.example.com"] = struct{}{}
+	fs.factsBySID["h1.example.com"] = struct{}{}
+
+	m := newAwaitModule(t, fs, p, "")
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State: "registered",
+		Params: mustStruct(t, map[string]any{
+			"sid":                 "h1.example.com",
+			"coven":               []any{"redis"},
+			"await_online":        true,
+			"await_timeout":       "5s",
+			"await_poll_interval": "500ms",
+			"refresh_soulprint":   true,
+		}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	ev := stream.Last()
+	if ev.Failed {
+		t.Fatalf("expected immediate success, got %+v", ev)
+	}
+	if p.calls != 1 || fs.factsCalls != 1 {
+		t.Errorf("expected single poll (presence=%d, facts=%d), want 1/1", p.calls, fs.factsCalls)
+	}
+}
+
+// TestAwait_RefreshSoulprint_FactlessTimeout_Failed — SID online, но typed
+// facts так и не записаны к таймауту → failed с диагностикой «online but
+// factless» (отличимой от «not online»).
+func TestAwait_RefreshSoulprint_FactlessTimeout_Failed(t *testing.T) {
+	fs := newFakeStore()
+	p := newFakePresence()
+	p.online["h1.example.com"] = struct{}{} // online, facts не появятся
+
+	m := newAwaitModule(t, fs, p, "")
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State: "registered",
+		Params: mustStruct(t, map[string]any{
+			"sid":                 "h1.example.com",
+			"coven":               []any{"redis"},
+			"await_online":        true,
+			"await_timeout":       "30ms",
+			"await_poll_interval": "1ms",
+			"refresh_soulprint":   true,
+		}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	ev := stream.Last()
+	if !ev.Failed {
+		t.Fatalf("expected failed: online SID without facts must not satisfy barrier, got %+v", ev)
+	}
+	if !strings.Contains(ev.Message, "online but factless") || !strings.Contains(ev.Message, "h1.example.com") {
+		t.Errorf("message must name factless SIDs distinctly, got %q", ev.Message)
+	}
+}
+
+// TestAwait_RefreshSoulprint_TwoClasses_Diagnostics — таймаут при обоих классах
+// недобора: h1 online+factless, h2 не online → сообщение несёт оба списка раздельно.
+func TestAwait_RefreshSoulprint_TwoClasses_Diagnostics(t *testing.T) {
+	fs := newFakeStore()
+	p := newFakePresence()
+	p.online["h1.example.com"] = struct{}{} // h2 никогда не поднимется
+
+	m := newAwaitModule(t, fs, p, "")
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State: "registered",
+		Params: mustStruct(t, map[string]any{
+			"sid":                 []any{"h1.example.com", "h2.example.com"},
+			"coven":               []any{"redis"},
+			"await_online":        true,
+			"await_timeout":       "30ms",
+			"await_poll_interval": "1ms",
+			"refresh_soulprint":   true,
+		}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	ev := stream.Last()
+	if !ev.Failed {
+		t.Fatalf("expected failed, got %+v", ev)
+	}
+	if !strings.Contains(ev.Message, "not online") || !strings.Contains(ev.Message, "h2.example.com") {
+		t.Errorf("message must carry not-online class with SIDs, got %q", ev.Message)
+	}
+	if !strings.Contains(ev.Message, "online but factless") || !strings.Contains(ev.Message, "h1.example.com") {
+		t.Errorf("message must carry factless class with SIDs, got %q", ev.Message)
+	}
+}
+
+// TestAwait_BackCompat_NoRefresh_FactsNotChecked — await_online БЕЗ
+// refresh_soulprint: старое поведение (только presence), facts не опрашиваются
+// и их отсутствие не мешает проходу барьера.
+func TestAwait_BackCompat_NoRefresh_FactsNotChecked(t *testing.T) {
+	fs := newFakeStore()
+	p := newFakePresence()
+	p.online["h1.example.com"] = struct{}{} // facts отсутствуют
+
+	m := newAwaitModule(t, fs, p, "")
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State: "registered",
+		Params: mustStruct(t, map[string]any{
+			"sid":                 "h1.example.com",
+			"coven":               []any{"redis"},
+			"await_online":        true,
+			"await_timeout":       "5s",
+			"await_poll_interval": "1ms",
+		}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if stream.Last().Failed {
+		t.Fatalf("expected success without refresh_soulprint (presence-only barrier), got %+v", stream.Last())
+	}
+	if fs.factsCalls != 0 {
+		t.Errorf("facts must not be polled without refresh_soulprint, got %d calls", fs.factsCalls)
+	}
+}
+
+// TestAwait_RefreshWithoutAwait_NoBarrier — refresh_soulprint: true БЕЗ
+// await_online: барьера нет вообще (Stratify/re-resolve-функция флага не
+// требует facts-ожидания сама по себе).
+func TestAwait_RefreshWithoutAwait_NoBarrier(t *testing.T) {
+	fs := newFakeStore()
+	p := newFakePresence()
+
+	m := newAwaitModule(t, fs, p, "")
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State: "registered",
+		Params: mustStruct(t, map[string]any{
+			"sid":               "h1.example.com",
+			"coven":             []any{"redis"},
+			"refresh_soulprint": true,
+		}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if stream.Last().Failed {
+		t.Fatalf("expected success, got %+v", stream.Last())
+	}
+	if p.calls != 0 || fs.factsCalls != 0 {
+		t.Errorf("no barrier requested: presence=%d facts=%d polls, want 0/0", p.calls, fs.factsCalls)
+	}
+}
+
+// TestAwait_RefreshSoulprint_FactsError_Failed — persistent сбой facts-чтения
+// (PG) во время барьера → failed (B1-strict не подтверждает кворум вслепую).
+func TestAwait_RefreshSoulprint_FactsError_Failed(t *testing.T) {
+	fs := newFakeStore()
+	fs.factsErr = errors.New("pg down")
+	p := newFakePresence()
+	p.online["h1.example.com"] = struct{}{}
+
+	m := newAwaitModule(t, fs, p, "")
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State: "registered",
+		Params: mustStruct(t, map[string]any{
+			"sid":                 "h1.example.com",
+			"coven":               []any{"redis"},
+			"await_online":        true,
+			"await_timeout":       "30ms",
+			"await_poll_interval": "1ms",
+			"refresh_soulprint":   true,
+		}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if !stream.Last().Failed {
+		t.Fatal("expected failed on persistent facts-read error")
 	}
 }
 

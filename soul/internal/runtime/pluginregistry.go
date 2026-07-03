@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sync"
 
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 	"github.com/souls-guild/soul-stack/sdk/module"
@@ -47,13 +48,16 @@ func (s PluginHostSpawner) Spawn(ctx context.Context, d pluginhost.Discovered) (
 // pluginhost.Discover. Lookup возвращает обёртку pluginSoulModule, которая
 // на каждый Apply-вызов делает Spawn → Apply → Close (one-shot, ADR-020(d)).
 //
-// Concurrency: read-only после конструктора, безопасен для конкурентных
-// Lookup-ов. Spawn-сессии независимы друг от друга — Host сам сериализует
-// создание сокетов через atomic-counter.
+// Concurrency: mods защищена RWMutex — Rescan (hot-register из
+// core.module.installed, ADR-065(d)) конкурентен с Lookup идущего прогона.
+// Spawn-сессии независимы друг от друга — Host сам сериализует создание
+// сокетов через atomic-counter.
 type PluginRegistry struct {
 	spawner PluginSpawner
-	mods    map[string]pluginhost.Discovered
 	logger  *slog.Logger
+
+	mu   sync.RWMutex
+	mods map[string]pluginhost.Discovered
 }
 
 // NewPluginRegistry собирает registry. Имя ключа — `<namespace>.<name>`
@@ -65,6 +69,10 @@ func NewPluginRegistry(spawner PluginSpawner, discovered []pluginhost.Discovered
 	if logger == nil {
 		logger = slog.Default()
 	}
+	return &PluginRegistry{spawner: spawner, mods: indexSoulModules(discovered), logger: logger}
+}
+
+func indexSoulModules(discovered []pluginhost.Discovered) map[string]pluginhost.Discovered {
 	mods := make(map[string]pluginhost.Discovered, len(discovered))
 	for _, d := range discovered {
 		if d.Manifest == nil || d.Manifest.Kind != pluginhost.KindSoulModule {
@@ -72,11 +80,30 @@ func NewPluginRegistry(spawner PluginSpawner, discovered []pluginhost.Discovered
 		}
 		mods[d.Manifest.Address()] = d
 	}
-	return &PluginRegistry{spawner: spawner, mods: mods, logger: logger}
+	return mods
+}
+
+// Rescan — hot-register (ADR-065(d)): повторный полный discover каталога
+// модулей и атомарная замена набора custom-модулей без рестарта демона.
+// Возвращает discovery-warnings для логирования caller-ом (тем же стилем, что
+// на старте). Beacon-реестр при Rescan НЕ пересобирается — MVP-ограничение
+// ADR-065, hot-reload soul_beacon — post-MVP.
+func (r *PluginRegistry) Rescan(modulesRoot string) ([]string, error) {
+	discovered, warnings, err := pluginhost.Discover(modulesRoot)
+	if err != nil {
+		return warnings, err
+	}
+	mods := indexSoulModules(discovered)
+	r.mu.Lock()
+	r.mods = mods
+	r.mu.Unlock()
+	return warnings, nil
 }
 
 // Names возвращает список зарегистрированных custom-модулей.
 func (r *PluginRegistry) Names() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	out := make([]string, 0, len(r.mods))
 	for k := range r.mods {
 		out = append(out, k)
@@ -88,7 +115,9 @@ func (r *PluginRegistry) Names() []string {
 // каждый Apply. Возвращаемая module.SoulModule реализует только Apply;
 // Validate/Plan возвращают BaseModule-defaults (apply-цикл MVP их не зовёт).
 func (r *PluginRegistry) Lookup(name string) (module.SoulModule, bool) {
+	r.mu.RLock()
 	d, ok := r.mods[name]
+	r.mu.RUnlock()
 	if !ok {
 		return nil, false
 	}

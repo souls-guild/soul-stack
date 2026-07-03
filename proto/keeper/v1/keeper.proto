@@ -25,6 +25,12 @@ service Keeper {
   // EventStream: долгоживущий bidirectional gRPC-стрим с mTLS.
   // Единственный канал коммуникации после онбординга (ADR-002, ADR-012(a)).
   rpc EventStream(stream FromSoul) returns (stream FromKeeper);
+
+  // FetchModule: server-streaming раздача байтов SoulModule-плагина по
+  // content-addressed sha256 (эпик core.module.installed, S2). Тот же
+  // mTLS-listener, что EventStream; отдельный HTTP/2-стрим не занимает
+  // control-plane. Keeper отдаёт ТОЛЬКО sigil-allowed бинарь (fail-closed).
+  rpc FetchModule(PluginFetchRequest) returns (stream PluginChunk);
 }
 
 message PingRequest {}

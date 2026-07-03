@@ -130,6 +130,12 @@ assert:
         refresh_soulprint: true
         await_timeout: "10m"
 
+    # (г) core.module.installed: доставка SoulModule-плагина community.redis на созданные
+    # хосты ДО первой community.redis.*-задачи деплой-ветки (ADR-065).
+    - module: core.module.installed
+      params_subset:
+        name: community.redis
+
     # Основной деплой sentinel-ветки катится после provision (redis.conf рендерится).
     - module: core.file.rendered
       params_subset:

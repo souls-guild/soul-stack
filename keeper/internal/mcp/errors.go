@@ -38,8 +38,9 @@ const (
 	// (error_locked / busy / downgrade / schema-mismatch — REST маппит их в один
 	// problem-type TypeIncarnationLocked). rerun-input-unavailable отделён от него
 	// (симметрия REST TypeRerunInputUnavailable): rerun-last day-2 не может
-	// восстановить input упавшего прогона (рецепт вычищен ретеншном / legacy без
-	// рецепта) — machine-readable отличие от «статус не error_locked».
+	// восстановить input упавшего прогона (причины — см. sentinel
+	// [incarnation.ErrRerunInputUnavailable]) — machine-readable отличие от
+	// «статус не error_locked».
 	mcpCodeIncarnationExists     = "incarnation-already-exists"
 	mcpCodeIncarnationLocked     = "incarnation-locked"
 	mcpCodeRerunInputUnavailable = "rerun-input-unavailable"
@@ -221,7 +222,7 @@ func mapServiceErrorToMCP(err error) (code, detail string) {
 //   - TypeIncarnationLocked  → incarnation-locked (state-конфликты ресурса:
 //     not-unlockable / not-error-locked / busy / locked / downgrade / schema-mismatch).
 //   - TypeRerunInputUnavailable → rerun-input-unavailable (rerun-last day-2: input
-//     упавшего прогона недоступен — рецепт вычищен / legacy без рецепта).
+//     упавшего прогона недоступен — причины см. [incarnation.ErrRerunInputUnavailable]).
 //   - TypeValidationFailed   → validation-failed (no-op upgrade / broken chain).
 //
 // Внутренние сбои резолва (service-not-registered / load-failed / no-manifest /
@@ -243,7 +244,7 @@ func mapIncarnationErrorToMCP(err error) (code, detail string) {
 	case errors.Is(err, incarnation.ErrIncarnationNotErrorLocked):
 		return mcpCodeIncarnationLocked, "incarnation is not error_locked — rerun-last requires error_locked"
 	case errors.Is(err, incarnation.ErrRerunInputUnavailable):
-		return mcpCodeRerunInputUnavailable, "rerun-last: failed run's input is unavailable (recipe purged / legacy run) — use unlock + manual run with explicit input"
+		return mcpCodeRerunInputUnavailable, "rerun-last: failed run's input is unavailable (run failed before dispatch, no recipe recorded / recipe purged by retention / legacy run) — use unlock + manual run with explicit input"
 	case errors.Is(err, incarnation.ErrIncarnationBusy):
 		return mcpCodeIncarnationLocked, "incarnation is applying — operation rejected until run completes"
 	case errors.Is(err, incarnation.ErrIncarnationLocked):

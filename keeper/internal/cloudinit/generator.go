@@ -46,11 +46,13 @@ const (
 // текущий config.Store snapshot).
 type Config struct {
 	// BootstrapEndpoint — `host:port` LB Keeper-а (Bootstrap-RPC listener).
-	// Тот же host:port используется в userdata-шаблоне как event_stream_port
-	// (за LB-ом обе фазы ведут на разные backend-listener-ы; Soul ещё
-	// SoulSeed-cert-а не имеет — обращается только к Bootstrap, EventStream
-	// добавится после онбординга).
+	// host идёт в soul.yml keeper.endpoints[0].host, port — в bootstrap_port.
 	BootstrapEndpoint string
+
+	// EventStreamPort — TCP-порт EventStream-фазы (mTLS) того же host-а;
+	// soul.yml event_stream_port. 0 → порт bootstrap_endpoint (back-compat,
+	// single-port LB). 6-я стена ADR-063.
+	EventStreamPort int
 
 	// TLSCAPem — PEM-encoded CA Keeper-а (содержимое `ca`-поля из Vault KV).
 	// Запекается в userdata под `write_files: /etc/soul/tls/keeper-ca.pem`,
@@ -80,6 +82,7 @@ type Config struct {
 func (c Config) Blueprint() soulinstall.Blueprint {
 	return soulinstall.Blueprint{
 		BootstrapEndpoint: c.BootstrapEndpoint,
+		EventStreamPort:   c.EventStreamPort,
 		KeeperCAPem:       c.TLSCAPem,
 		SoulBinaryURL:     c.SoulBinaryURL,
 		SoulBinaryCA:      c.SoulBinaryCA,
@@ -183,6 +186,7 @@ func (r *Resolver) Resolve(ctx context.Context, cfg *config.KeeperCloudInit) (Co
 
 	return Config{
 		BootstrapEndpoint: cfg.BootstrapEndpoint,
+		EventStreamPort:   cfg.EventStreamPort,
 		TLSCAPem:          caPem,
 		SoulBinaryURL:     cfg.SoulBinaryURL,
 		SoulBinaryCA:      cfg.SoulBinaryCA,

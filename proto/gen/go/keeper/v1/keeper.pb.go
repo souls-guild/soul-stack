@@ -561,11 +561,12 @@ const file_keeper_v1_keeper_proto_rawDesc = "" +
 	"\x0eerrand_request\x18\n" +
 	" \x01(\v2\".soulstack.keeper.v1.ErrandRequestH\x00R\rerrandRequest\x12H\n" +
 	"\rcancel_errand\x18\v \x01(\v2!.soulstack.keeper.v1.CancelErrandH\x00R\fcancelErrandB\t\n" +
-	"\apayload2\xfe\x01\n" +
+	"\apayload2\xda\x02\n" +
 	"\x06Keeper\x12H\n" +
 	"\x04Ping\x12 .soulstack.keeper.v1.PingRequest\x1a\x1e.soulstack.keeper.v1.PingReply\x12W\n" +
 	"\tBootstrap\x12%.soulstack.keeper.v1.BootstrapRequest\x1a#.soulstack.keeper.v1.BootstrapReply\x12Q\n" +
-	"\vEventStream\x12\x1d.soulstack.keeper.v1.FromSoul\x1a\x1f.soulstack.keeper.v1.FromKeeper(\x010\x01BCZAgithub.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;keeperv1b\x06proto3"
+	"\vEventStream\x12\x1d.soulstack.keeper.v1.FromSoul\x1a\x1f.soulstack.keeper.v1.FromKeeper(\x010\x01\x12Z\n" +
+	"\vFetchModule\x12'.soulstack.keeper.v1.PluginFetchRequest\x1a .soulstack.keeper.v1.PluginChunk0\x01BCZAgithub.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;keeperv1b\x06proto3"
 
 var (
 	file_keeper_v1_keeper_proto_rawDescOnce sync.Once
@@ -606,7 +607,9 @@ var file_keeper_v1_keeper_proto_goTypes = []any{
 	(*ErrandRequest)(nil),       // 22: soulstack.keeper.v1.ErrandRequest
 	(*CancelErrand)(nil),        // 23: soulstack.keeper.v1.CancelErrand
 	(*BootstrapRequest)(nil),    // 24: soulstack.keeper.v1.BootstrapRequest
-	(*BootstrapReply)(nil),      // 25: soulstack.keeper.v1.BootstrapReply
+	(*PluginFetchRequest)(nil),  // 25: soulstack.keeper.v1.PluginFetchRequest
+	(*BootstrapReply)(nil),      // 26: soulstack.keeper.v1.BootstrapReply
+	(*PluginChunk)(nil),         // 27: soulstack.keeper.v1.PluginChunk
 }
 var file_keeper_v1_keeper_proto_depIdxs = []int32{
 	4,  // 0: soulstack.keeper.v1.FromSoul.hello:type_name -> soulstack.keeper.v1.Hello
@@ -632,11 +635,13 @@ var file_keeper_v1_keeper_proto_depIdxs = []int32{
 	0,  // 20: soulstack.keeper.v1.Keeper.Ping:input_type -> soulstack.keeper.v1.PingRequest
 	24, // 21: soulstack.keeper.v1.Keeper.Bootstrap:input_type -> soulstack.keeper.v1.BootstrapRequest
 	2,  // 22: soulstack.keeper.v1.Keeper.EventStream:input_type -> soulstack.keeper.v1.FromSoul
-	1,  // 23: soulstack.keeper.v1.Keeper.Ping:output_type -> soulstack.keeper.v1.PingReply
-	25, // 24: soulstack.keeper.v1.Keeper.Bootstrap:output_type -> soulstack.keeper.v1.BootstrapReply
-	3,  // 25: soulstack.keeper.v1.Keeper.EventStream:output_type -> soulstack.keeper.v1.FromKeeper
-	23, // [23:26] is the sub-list for method output_type
-	20, // [20:23] is the sub-list for method input_type
+	25, // 23: soulstack.keeper.v1.Keeper.FetchModule:input_type -> soulstack.keeper.v1.PluginFetchRequest
+	1,  // 24: soulstack.keeper.v1.Keeper.Ping:output_type -> soulstack.keeper.v1.PingReply
+	26, // 25: soulstack.keeper.v1.Keeper.Bootstrap:output_type -> soulstack.keeper.v1.BootstrapReply
+	3,  // 26: soulstack.keeper.v1.Keeper.EventStream:output_type -> soulstack.keeper.v1.FromKeeper
+	27, // 27: soulstack.keeper.v1.Keeper.FetchModule:output_type -> soulstack.keeper.v1.PluginChunk
+	24, // [24:28] is the sub-list for method output_type
+	20, // [20:24] is the sub-list for method input_type
 	20, // [20:20] is the sub-list for extension type_name
 	20, // [20:20] is the sub-list for extension extendee
 	0,  // [0:20] is the sub-list for field type_name

@@ -27,10 +27,40 @@ type fakeStore struct {
 	updateErr    error
 	insertErr    error
 	selectErr    error
+
+	// Факты soulprint для барьера refresh_soulprint (модель fakePresence):
+	// factsBySID — SID с уже записанным typed soulprint; factsAfter —
+	// sid → с какого SoulsWithSoulprint-вызова facts «появляются в PG».
+	factsBySID map[string]struct{}
+	factsAfter map[string]int
+	factsCalls int
+	factsErr   error
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{byID: map[string]*keepersoul.Soul{}}
+	return &fakeStore{
+		byID:       map[string]*keepersoul.Soul{},
+		factsBySID: map[string]struct{}{},
+		factsAfter: map[string]int{},
+	}
+}
+
+func (s *fakeStore) SoulsWithSoulprint(_ context.Context, sids []string) (map[string]struct{}, error) {
+	if s.factsErr != nil {
+		return nil, s.factsErr
+	}
+	s.factsCalls++
+	res := map[string]struct{}{}
+	for _, sid := range sids {
+		if _, ok := s.factsBySID[sid]; ok {
+			res[sid] = struct{}{}
+			continue
+		}
+		if after, ok := s.factsAfter[sid]; ok && s.factsCalls >= after {
+			res[sid] = struct{}{}
+		}
+	}
+	return res, nil
 }
 
 func (s *fakeStore) SelectBySID(_ context.Context, sid string) (*keepersoul.Soul, error) {

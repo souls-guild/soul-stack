@@ -1268,6 +1268,7 @@ type KeeperPlugins struct {
 	MaxCloneSizeMB    int                  `yaml:"max_clone_size_mb,omitempty"`
 	CloudDrivers      []PluginCatalogEntry `yaml:"cloud_drivers,omitempty"`
 	SSHProviders      []PluginCatalogEntry `yaml:"ssh_providers,omitempty"`
+	SoulModules       []PluginCatalogEntry `yaml:"soul_modules,omitempty"`
 }
 
 // ResolvedFetchTimeout возвращает эффективный `plugins.fetch_timeout`: пусто /
@@ -1710,9 +1711,11 @@ type KeeperPushTeleport struct {
 	//
 	// true: коннект к Proxy оборачивается в ALPN-conn-upgrade (WebSocket-туннель
 	// на `/webapi/connectionupgrade`), который L7-LB пропускает — без него
-	// DialHost падает на `403 / content-type "text/plain"`. Чинит ВНЕШНИЙ
-	// TLS-туннель к LB; ВНУТРЕННИЙ gRPC-mTLS чинит `use_system_trust` — для
-	// proxy-за-L7-LB оба включаются ПАРОЙ.
+	// DialHost падает на `403 / content-type "text/plain"`. Внутренний gRPC-mTLS
+	// alpn-ветка настраивает сама (объединённый trust: identity-CA ∪ системный),
+	// поэтому для proxy-за-L7-LB достаточно одного `alpn_upgrade: true`;
+	// `use_system_trust` при включённом alpn — no-op, он применяется только при
+	// выключенном alpn (LB проксирует raw gRPC как есть).
 	AlpnUpgrade bool `yaml:"alpn_upgrade,omitempty" json:"alpn_upgrade,omitempty"`
 }
 
@@ -1757,8 +1760,13 @@ type KeeperPushTarget struct {
 //
 // `BootstrapEndpoint` — `host:port` LB, через который Soul-агент будет звонить
 // на Bootstrap-RPC (ADR-012(b), отдельный listener) ПОСЛЕ установки. В userdata
-// он рендерится в `keeper.endpoints[0]` (host + bootstrap_port; event_stream-
-// порт указывается тем же — за LB-ом он один и тот же).
+// он рендерится в `keeper.endpoints[0]` (host + bootstrap_port).
+//
+// `EventStreamPort` — TCP-порт EventStream-фазы (mTLS-listener) для того же
+// host-а; идёт в `keeper.endpoints[0].event_stream_port` soul.yml. 0/опущен →
+// используется порт из `bootstrap_endpoint` (back-compat: single-port LB).
+// Без него soul dial-ил EventStream на Bootstrap-порт («Unimplemented:
+// method EventStream») — 6-я стена ADR-063.
 //
 // `TLSCARef` — vault-ref (`vault:<mount>/<path>`) на PEM-CA Keeper-а. На
 // GenerateUserdata-вызове резолвится через keeper-vault-клиент (поле в Vault KV —
@@ -1786,6 +1794,7 @@ type KeeperPushTarget struct {
 // signature verification — отдельный slice).
 type KeeperCloudInit struct {
 	BootstrapEndpoint string `yaml:"bootstrap_endpoint"`
+	EventStreamPort   int    `yaml:"event_stream_port,omitempty"`
 	TLSCARef          string `yaml:"tls_ca_ref"`
 	SoulBinaryURL     string `yaml:"soul_binary_url"`
 	SoulBinaryCA      string `yaml:"soul_binary_ca,omitempty"`

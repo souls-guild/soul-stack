@@ -20,10 +20,29 @@ const defaultAwaitPollInterval = 2 * time.Second
 
 // awaitConfig — разобранные+валидированные параметры барьера онбординга
 // (ADR-061). nil-указатель означает «барьер не запрошен».
+//
+// requireFacts (ADR-061 amendment, 7-я стена live-create): при
+// refresh_soulprint: true SID засчитывается барьером только когда online
+// (presence-lease) И typed soulprint записан в PG — иначе render следующего
+// Passage читал бы soulprint.self.* до асинхронной записи первого репорта.
 type awaitConfig struct {
 	timeout      time.Duration
 	minCount     int
 	pollInterval time.Duration
+	requireFacts bool
+}
+
+// awaitResult — итог барьера. online/pending — по presence-lease; factless —
+// online-SID без typed facts (только при requireFacts, иначе пусто); ready —
+// засчитанные барьером (online, при requireFacts — минус factless).
+// lastErr — presence/facts-ошибка последних опросов для диагностики таймаута.
+type awaitResult struct {
+	online    []string
+	pending   []string
+	factless  []string
+	ready     []string
+	satisfied bool
+	lastErr   error
 }
 
 // validateAwaitParams — статическая проверка await-полей (для Validate /
@@ -148,19 +167,20 @@ func (m *Module) resolvedMaxAwaitTimeout() time.Duration {
 	return d
 }
 
-// awaitOnline блокирующе поллит presence (Redis SID-lease) по набору SID до
-// online ≥ minCount или истечения timeout. Возвращает (online, pending,
-// satisfied, lastErr, error): satisfied=true → кворум набран; false → таймаут.
+// awaitOnline блокирующе поллит готовность SID до ready ≥ minCount или
+// истечения timeout. Готовность: online (Redis SID-lease); при
+// cfg.requireFacts — online И typed soulprint в PG (ADR-061 amendment:
+// facts уже записаны → нулевое ожидание rerun/create_from_souls; ждёт только
+// первый репорт provision-from-zero).
 //
-// lastErr — presence-ошибка с последних опросов, если они падали Redis-сбоем
-// (для диагностики таймаута: «redis недоступен» vs «хосты не онбордились»).
-// Возвращается даже при satisfied=false без фатала, чтобы вызывающий мог
-// различить причину недобора кворума.
+// res.lastErr — presence/facts-ошибка с последних опросов (для диагностики
+// таймаута: «инфра недоступна» vs «хосты не онбордились»). Возвращается и при
+// satisfied=false без фатала, чтобы вызывающий различил причину недобора.
 //
 // Источник истины online — lease (PresenceChecker), НЕ PG souls.status
-// (ADR-006(a)/ADR-061). Persistent Redis-ошибка → error (B1-strict не может
+// (ADR-006(a)/ADR-061). Persistent infra-ошибка → error (B1-strict не может
 // подтвердить кворум вслепую). context-cancel (отмена прогона) — тоже error.
-func (m *Module) awaitOnline(ctx context.Context, sids []string, cfg *awaitConfig) (online, pending []string, satisfied bool, lastErr, err error) {
+func (m *Module) awaitOnline(ctx context.Context, sids []string, cfg *awaitConfig) (awaitResult, error) {
 	bctx, cancel := context.WithTimeout(ctx, cfg.timeout)
 	defer cancel()
 
@@ -168,35 +188,83 @@ func (m *Module) awaitOnline(ctx context.Context, sids []string, cfg *awaitConfi
 	ticker := time.NewTicker(cfg.pollInterval)
 	defer ticker.Stop()
 
+	var res awaitResult
+	polled := false // хоть один опрос дошёл до presence-результата
 	for {
 		alive, perr := m.presence.SoulsStreamAlive(bctx, sids)
 		if perr != nil {
-			lastErr = perr
+			res.lastErr = perr
 		} else {
-			lastErr = nil // успешный опрос сбрасывает «висящую» infra-ошибку
-			online, pending = splitOnline(sids, alive)
-			if len(online) >= cfg.minCount {
-				return online, pending, true, nil, nil
+			polled = true
+			res.online, res.pending = splitOnline(sids, alive)
+			res.ready, res.factless = res.online, nil
+			res.lastErr = nil // успешный опрос сбрасывает «висящую» infra-ошибку
+			if cfg.requireFacts {
+				withFacts, ferr := m.Store.SoulsWithSoulprint(bctx, sids)
+				if ferr != nil {
+					// facts неизвестны → кворум на этом опросе не оцениваем.
+					res.lastErr = ferr
+					res.ready = nil
+				} else {
+					res.ready, res.factless = splitFacts(res.online, withFacts)
+				}
+			}
+			if res.lastErr == nil && len(res.ready) >= cfg.minCount {
+				res.satisfied = true
+				return res, nil
 			}
 		}
 
 		select {
 		case <-bctx.Done():
-			// Таймаут барьера: если хоть раз дошли до presence-результата, online/
-			// pending уже посчитаны (B1-strict diagnostics). Если все опросы
-			// падали Redis-ошибкой — отдаём её фаталом (источник presence недоступен).
-			if online == nil && pending == nil && lastErr != nil {
-				return nil, sids, false, lastErr, fmt.Errorf("await_online: presence check failed: %w", lastErr)
+			// Таймаут барьера: если хоть раз дошли до presence-результата, поля
+			// диагностики посчитаны (B1-strict diagnostics). Если ВСЕ опросы падали
+			// infra-ошибкой — отдаём её фаталом (источник готовности недоступен).
+			if !polled && res.lastErr != nil {
+				res.pending = sids
+				return res, fmt.Errorf("await_online: presence check failed: %w", res.lastErr)
 			}
-			if online == nil && pending == nil {
-				pending = sids
+			if !polled {
+				res.pending = sids
 			}
-			// lastErr ненулевой здесь → persistent сбой на последних опросах при
-			// частичном недоборе: возвращаем его для обогащения диагностики.
-			return online, pending, false, lastErr, nil
+			// res.lastErr ненулевой здесь → persistent сбой на последних опросах
+			// при частичном недоборе: остаётся в res для обогащения диагностики.
+			return res, nil
 		case <-ticker.C:
 		}
 	}
+}
+
+// barrierTimeoutMessage — диагностика B1-strict-провала барьера. При
+// requireFacts классы недобора разделены: «not online» (нет lease) vs «online
+// but factless» (lease есть, typed soulprint ещё не записан) — иначе оператор
+// не отличит несостоявшийся онбординг от гонки первого репорта.
+func barrierTimeoutMessage(sids []string, cfg *awaitConfig, res awaitResult) string {
+	var msg string
+	if cfg.requireFacts {
+		msg = fmt.Sprintf(
+			"onboarding barrier: %d/%d souls ready (online+soulprint) to await_min_count=%d within %s",
+			len(res.ready), len(sids), cfg.minCount, cfg.timeout)
+		if len(res.pending) > 0 {
+			msg += fmt.Sprintf(" (not online: %v)", res.pending)
+		}
+		if len(res.factless) > 0 {
+			msg += fmt.Sprintf(" (online but factless: %v)", res.factless)
+		}
+		if res.lastErr != nil {
+			msg += fmt.Sprintf(" (last error: %v)", res.lastErr)
+		}
+		return msg
+	}
+	msg = fmt.Sprintf(
+		"onboarding barrier: %d/%d souls online to await_min_count=%d within %s (pending: %v)",
+		len(res.online), len(sids), cfg.minCount, cfg.timeout, res.pending)
+	// Persistent presence-сбой на последних опросах: иначе infra-проблема
+	// (redis недоступен) маскируется под «хосты не онбордились».
+	if res.lastErr != nil {
+		msg += fmt.Sprintf(" (last presence error: %v)", res.lastErr)
+	}
+	return msg
 }
 
 // splitOnline делит набор SID на online (есть в alive-множестве) и pending.
@@ -212,4 +280,19 @@ func splitOnline(sids []string, alive map[string]struct{}) (online, pending []st
 		}
 	}
 	return online, pending
+}
+
+// splitFacts делит online-набор на ready (typed soulprint записан) и factless.
+// Порядок — по входному порядку online.
+func splitFacts(online []string, withFacts map[string]struct{}) (ready, factless []string) {
+	ready = make([]string, 0, len(online))
+	factless = make([]string, 0)
+	for _, sid := range online {
+		if _, ok := withFacts[sid]; ok {
+			ready = append(ready, sid)
+		} else {
+			factless = append(factless, sid)
+		}
+	}
+	return ready, factless
 }

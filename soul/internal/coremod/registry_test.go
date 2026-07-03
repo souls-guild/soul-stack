@@ -6,11 +6,12 @@ import (
 
 	"github.com/souls-guild/soul-stack/sdk/module"
 	"github.com/souls-guild/soul-stack/soul/internal/coremod"
+	installmod "github.com/souls-guild/soul-stack/soul/internal/coremod/module"
 	"github.com/souls-guild/soul-stack/soul/internal/coremod/pkg"
 )
 
 func TestDefault_ContainsAllCoreMVP(t *testing.T) {
-	r := coremod.Default()
+	r := coremod.Default(installmod.Deps{})
 	want := []string{
 		// Core.a.1
 		"core.pkg", "core.file", "core.service", "core.user", "core.group",
@@ -30,6 +31,8 @@ func TestDefault_ContainsAllCoreMVP(t *testing.T) {
 		"core.noop",
 		// ADR-025 — read-probe Augur
 		"core.augur",
+		// ADR-065 — доставка SoulModule-плагина
+		"core.module",
 	}
 	for _, name := range want {
 		if _, ok := r.Lookup(name); !ok {
@@ -51,7 +54,7 @@ func TestDefault_ContainsAllCoreMVP(t *testing.T) {
 }
 
 func TestLookup_UnknownModule(t *testing.T) {
-	r := coremod.Default()
+	r := coremod.Default(installmod.Deps{})
 	if _, ok := r.Lookup("core.frobnicate"); ok {
 		t.Fatal("Lookup unknown: ok=true")
 	}

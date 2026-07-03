@@ -78,7 +78,10 @@ Scenario `output:`-блока **нет**: scenario пишет результат
 > ([scenario/orchestration.md §7.1](../scenario/orchestration.md#71-грамматика-state_changes--список-crud-операций)).
 > `TaskEvent.register_data` накапливается на Keeper-стороне (таблица
 > `apply_task_register`), после барьера scenario-runner строит per-host
-> register-карту и рендерит `sets`. Это сознательно **отдельно** от
+> register-карту и рендерит `sets`. Register keeper-side задач (`on: keeper`,
+> напр. `core.cloud.created`) тоже виден в `state_changes` — run-level
+> подложкой, идентичной для всех хостов; при коллизии имён per-host register
+> хоста приоритетнее (host-wins, см. §7.1). Это сознательно **отдельно** от
 > chaining-а внутри сценария: `register.*` в `where:` — волатильный рантайм-предикат
 > до коммита, а `register.*` в `sets` — стабильный post-barrier-снимок.
 > Прямой проброс destiny-`output:` (прочитанного через `register:` на

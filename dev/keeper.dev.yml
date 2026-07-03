@@ -94,6 +94,15 @@ plugins:
   # { name: wb, source: "ssh://...wb-plugins", ref: "<tag>" }.
   cloud_drivers:
     - { name: wb, source: "file:///dev/null/soul-cloud-wb-manual-slot", ref: "manual-0001" }
+  # SoulModule-каталог (эпик core.module.installed, S1) — та же схема, что у wb:
+  # кеш-слот /tmp/keeper-dev/plugins/community-redis/{manual-0001,current} наполнен
+  # ВРУЧНУЮ; file://-source без SOUL_STACK_ALLOW_FILE_REPOS=1 → warning резолвера,
+  # ручной current-symlink не тронут. Запись нужна ТОЛЬКО для FilterByCatalog
+  # (`name` = manifest.name плагина community.redis, т.е. `redis`).
+  # ВРЕМЕННО, под удаление: с реальным git-репо заменить на
+  # { name: redis, source: "ssh://...community-redis", ref: "<tag>" }.
+  soul_modules:
+    - { name: redis, source: "file:///dev/null/community-redis-manual-slot", ref: "manual-0001" }
 
 plugin_runtime:
   socket_dir: /tmp/keeper-dev/plugin-sockets
@@ -139,6 +148,9 @@ allow_unsafe_single_path_multi_keeper: false
 # initial-старте, ни на рестарте keeper-a при живом keeper-b (фаза 4). Значение
 # совпадает с keeper-b.dev.yml и стендом мега-теста (3×acolytes:2).
 acolytes: 2
+
+# Потолок await_timeout онбординг-барьера (ADR-061): run-бюджет provision = max_await_timeout + 10m deploy → 20m. fail-fast: VM обычно online ~5m, большой timeout маскирует провал enroll (essence redis: join_wait 10m + await 8m укладываются).
+max_await_timeout: 10m
 
 # VoyageWorker-пул (ADR-043): claim+execute унифицированных Voyage-прогонов
 # (kind=scenario|command). Config-gated OFF по умолчанию (workers:0); включён
@@ -219,10 +231,17 @@ push:
     proxy_addr: tp.rwb.ru:443
     identity_file: /tmp/keeper-dev/keeper-push.identity
     cluster: teleport-rwb
+    # proxy за публичным L7-TLS-балансировщиком (*.tp.rwb.ru), ADR-063 amendment;
+    # use_system_trust — страховка при alpn off (при alpn_upgrade=true no-op)
+    use_system_trust: true
+    alpn_upgrade: true
 
 # cloud-init userdata для core.cloud.provisioned (ADR-017(h));
 # dev-стенд: bastion-туннель 192.168.2.3, CA в Vault (поле ca), artifact-хост :8443.
 cloud_init:
   bootstrap_endpoint: "192.168.2.3:9442"
+  # EventStream (mTLS) живёт на 9443 — без этого blueprint выводил оба порта
+  # soul.yml из bootstrap_endpoint и soul dial-ил EventStream на 9442 (ADR-063).
+  event_stream_port: 9443
   tls_ca_ref: "vault:secret/keeper/bootstrap-ca"
   soul_binary_url: "https://192.168.2.3:8443/soul"

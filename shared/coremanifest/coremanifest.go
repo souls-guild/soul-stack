@@ -62,6 +62,7 @@ var coreFiles = []string{
 	"firewall.yaml",
 	"http.yaml",
 	"noop.yaml",
+	"module.yaml",
 
 	// Keeper-side core (ADR-017/ADR-044, on: keeper). Имена state выровнены на
 	// фактический dispatch coremod-ов keeper-стороны: core.soul.registered,

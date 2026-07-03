@@ -335,6 +335,40 @@ func SelectSoulprint(ctx context.Context, db ExecQueryRower, sid string) (*Soulp
 	return &rec, nil
 }
 
+const selectSoulsWithSoulprintSQL = `
+SELECT sid
+FROM souls
+WHERE sid = ANY($1) AND soulprint_facts IS NOT NULL
+`
+
+// SelectSoulsWithSoulprint возвращает подмножество sids, у которых записан
+// typed soulprint (`souls.soulprint_facts IS NOT NULL`). Batch-чек для барьера
+// онбординга `core.soul.registered` (ADR-061 amendment: presence + first
+// soulprint при refresh_soulprint); форма результата симметрична
+// redis.SoulsStreamAlive. Неизвестные SID просто отсутствуют в результате.
+func SelectSoulsWithSoulprint(ctx context.Context, db ExecQueryRower, sids []string) (map[string]struct{}, error) {
+	res := make(map[string]struct{}, len(sids))
+	if len(sids) == 0 {
+		return res, nil
+	}
+	rows, err := db.Query(ctx, selectSoulsWithSoulprintSQL, sids)
+	if err != nil {
+		return nil, fmt.Errorf("soul: souls with soulprint select: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sid string
+		if err := rows.Scan(&sid); err != nil {
+			return nil, fmt.Errorf("soul: souls with soulprint scan: %w", err)
+		}
+		res[sid] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("soul: souls with soulprint rows: %w", err)
+	}
+	return res, nil
+}
+
 func scanSoul(row pgx.Row) (*Soul, error) {
 	var (
 		s             Soul

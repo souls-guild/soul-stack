@@ -30,8 +30,8 @@ SoulSeed модуль **не** выписывает
 | `sid` | string **или** array of string | required | `SID` Soul-а (FQDN). Каждый валидируется как FQDN (`keepersoul.ValidSID`); невалидный — шаг падает. Принимает одиночную строку **или** список ([ADR-061](../../../adr/0061-onboarding-await-and-midrun-reresolve.md)) — список обычно приходит CEL-выражением `${ register.<provision>.hosts }`; литеральный список `sid: [a, b]` `soul-lint` статически не проходит (manifest объявляет `string`), см. [list-SID](#list-sid). |
 | `coven` | array of string | required | Набор стабильных Coven-меток. Каждая метка валидируется как kebab-case (`keepersoul.ValidCoven`, 1..63 символа); мусор вроде `Prod`/`a_b` — шаг падает. При списочном `sid` применяется к каждому SID. |
 | `mode` | string | optional (default `append`) | Стратегия применения набора `coven` к существующим меткам: `append` / `replace` / `remove`. Неизвестное значение — шаг падает. |
-| `refresh_soulprint` | bool | optional (default `false`) | **Pending (S2/S3 [ADR-061](../../../adr/0061-onboarding-await-and-midrun-reresolve.md)).** Намерение — mid-run re-resolve roster прогона. Сейчас флаг валидируется как известный, но фактический re-resolve **не реализован**; output всегда `refreshed: false`. |
-| `await_online` | bool | optional (default `false`) | **Барьер онбординга** ([ADR-061](../../../adr/0061-onboarding-await-and-midrun-reresolve.md), [`await.go`](../../../../keeper/internal/coremod/soul/await.go)). `true` — после регистрации всех SID шаг блокирующе ждёт, пока они станут online (Redis SID-lease). Без сконфигурированного presence-checker-а на keeper-е → шаг `failed`. |
+| `refresh_soulprint` | bool | optional (default `false`) | **Реализован (S2/S3 [ADR-061](../../../adr/0061-onboarding-await-and-midrun-reresolve.md)).** `true` — шаг становится passage-определяющей границей (Stratify), после его успеха scenario-runner пере-резолвит roster перед следующим Passage (live-снимок); output `refreshed` эхает флаг. Вместе с `await_online: true` ужесточает барьер до facts-wait (см. [барьер](#барьер-онбординга-await_online)). |
+| `await_online` | bool | optional (default `false`) | **Барьер онбординга** ([ADR-061](../../../adr/0061-onboarding-await-and-midrun-reresolve.md), [`await.go`](../../../../keeper/internal/coremod/soul/await.go)). `true` — после регистрации всех SID шаг блокирующе ждёт их готовности: online (Redis SID-lease); при `refresh_soulprint: true` — дополнительно записанный первый typed soulprint. Без сконфигурированного presence-checker-а на keeper-е → шаг `failed`. |
 | `await_timeout` | duration | **required при `await_online: true`** | Верхняя граница ожидания. Без него при `await_online: true` валидация падает. Ограничен сверху `keeper.yml::max_await_timeout`. |
 | `await_min_count` | int | optional (default = число SID) | Минимум online-хостов для успеха. Default — все зарегистрированные SID. Диапазон `0 < await_min_count ≤ len(sids)`. |
 | `await_poll_interval` | duration | optional (default `2s`) | Период опроса presence во время барьера. |
@@ -57,11 +57,13 @@ Manifest объявляет `sid` как `type: string` (урезанный DSL 
 При `await_online: true` ([ADR-061](../../../adr/0061-onboarding-await-and-midrun-reresolve.md), [`await.go`](../../../../keeper/internal/coremod/soul/await.go)):
 
 1. Шаг сперва регистрирует все SID (souls+coven, как без барьера).
-2. Затем блокирующе поллит presence с периодом `await_poll_interval` под общим `await_timeout`, пока online-хостов не станет `≥ await_min_count`.
+2. Затем блокирующе поллит готовность с периодом `await_poll_interval` под общим `await_timeout`, пока готовых хостов не станет `≥ await_min_count`.
 
 **Источник «online» — Redis SID-lease** (живой EventStream, `SoulsStreamAlive`), **не** PG `souls.status` (отстающий lifecycle-снимок).
 
-**B1-strict:** недобор кворума к таймауту → шаг `failed` → fail-stop прогона → `incarnation.state` не коммитится → `incarnation.status: error_locked`. `register.<name>.pending` несёт не успевшие SID. Персистентная Redis-ошибка опроса или отмена прогона — тоже `failed`. `await_online: true` без presence-checker-а на keeper-е → `failed` (молчаливый success недопустим).
+**Facts-wait при `refresh_soulprint: true`** ([ADR-061 amendment 2026-07-02](../../../adr/0061-onboarding-await-and-midrun-reresolve.md)): SID «готов» = online **и** typed soulprint записан в PG (`souls.soulprint_facts IS NOT NULL`). Одного lease мало — render следующего Passage читает `soulprint.self.*`, а запись initial-репорта асинхронна (best-effort, [ADR-018](../../../adr/0018-soulprint-typed.md)): на provision-from-zero гонка давала `render_failed` «no such key». На rerun / `create_from_souls` facts уже в PG → проход на первом опросе, нулевое ожидание. Без `refresh_soulprint` — presence-only, facts не опрашиваются.
+
+**B1-strict:** недобор кворума к таймауту → шаг `failed` → fail-stop прогона → `incarnation.state` не коммитится → `incarnation.status: error_locked`. `register.<name>.pending` несёт не успевшие SID; при facts-wait классы недобора в сообщении разделены — `not online: [sids]` vs `online but factless: [sids]`. Персистентная ошибка опроса (Redis presence / PG facts-чек) или отмена прогона — тоже `failed`. `await_online: true` без presence-checker-а на keeper-е → `failed` (молчаливый success недопустим).
 
 **Потолок `await_timeout`.** `keeper.yml::max_await_timeout` (duration, default `30m`, [`shared/config/keeper.go`](../../../../shared/config/keeper.go)) ограничивает `await_timeout` сверху. `await_timeout` > потолка → шаг `failed` **до** опроса (fail-closed: явная ошибка, не тихое обрезание) — DoS-guard против `await_timeout: 100h`, держащего run-goroutine/Acolyte-воркер.
 
@@ -118,11 +120,11 @@ Manifest объявляет `sid` как `type: string` (урезанный DSL 
 | `coven` | array of string | **Итоговый** набор coven после применения `mode`, а не переданный аргумент. При списочном `sid` — набор первого SID. |
 | `mode` | string | Применённый `mode`. |
 | `created` | bool | `true`, если хотя бы одна запись `souls` была создана модулем; `false`, если все уже существовали. |
-| `refreshed` | bool | **Всегда `false`** в текущем срезе (mid-run re-resolve — pending S3, см. `refresh_soulprint`). |
+| `refreshed` | bool | Эхо значения `refresh_soulprint`: `true` ⇒ re-resolve roster перед следующим Passage гарантированно выполнится (S3 [ADR-061](../../../adr/0061-onboarding-await-and-midrun-reresolve.md)). |
 | `removed` | array of string | Только при `mode: remove`: метки, фактически снятые. Пустой массив иначе. |
 | `online` | array of string | **Только при `await_online: true`**: SID, ставшие online (Redis SID-lease) к моменту успеха/таймаута барьера. |
 | `pending` | array of string | **Только при `await_online: true`**: SID, не успевшие online к таймауту (диагностика B1-strict). |
-| `satisfied` | bool | **Только при `await_online: true`**: достигнут ли `await_min_count` (`true` при успехе; `false` при `failed`). |
+| `satisfied` | bool | **Только при `await_online: true`**: достигнут ли `await_min_count` (`true` при успехе; `false` при `failed`). При `refresh_soulprint: true` считается по «готовым» (online **и** soulprint записан). |
 
 Поля `online`/`pending`/`satisfied` присутствуют только при `await_online: true`. Плюс стандартные `.changed` / `.failed` DSL-ядра.
 
@@ -162,4 +164,4 @@ Manifest объявляет `sid` как `type: string` (урезанный DSL 
 - [scenario/orchestration.md §3](../../../scenario/orchestration.md#3-таргет-шага--on) — `on:`, диспетчер шага между Soul-стороной и Keeper-стороной.
 - [naming-rules.md → Модули Destiny](../../../naming-rules.md#модули-destiny) — словарь имён.
 - [ADR-017](../../../adr/0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read) — Keeper-side core-модули.
-- [ADR-061](../../../adr/0061-onboarding-await-and-midrun-reresolve.md) — барьер онбординга `await_online`, list-SID, оживление `refresh_soulprint` (re-resolve roster — pending S2/S3).
+- [ADR-061](../../../adr/0061-onboarding-await-and-midrun-reresolve.md) — барьер онбординга `await_online` (amendment 2026-07-02: + facts-wait при `refresh_soulprint`), list-SID, `refresh_soulprint` re-resolve roster (S2/S3 реализованы).

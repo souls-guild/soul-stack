@@ -131,7 +131,7 @@ func TestSigilVerifySuccess(t *testing.T) {
 	if errors.Is(err, ErrSigilVerify) {
 		t.Fatalf("verify must pass for valid sigil, got %v", err)
 	}
-	if _, serr := os.Stat(filepath.Join(e.dir, digestSidecarName)); serr != nil {
+	if _, serr := os.Stat(filepath.Join(e.dir, DigestSidecarName)); serr != nil {
 		t.Fatalf("sidecar not sealed after verify-pass: %v", serr)
 	}
 }
@@ -144,7 +144,7 @@ func TestSigilVerifyNoSigil(t *testing.T) {
 	if ve := asVerifyError(t, err); ve.Reason != VerifyReasonNoSigil {
 		t.Fatalf("reason = %q, want %q", ve.Reason, VerifyReasonNoSigil)
 	}
-	if _, serr := os.Stat(filepath.Join(e.dir, digestSidecarName)); !os.IsNotExist(serr) {
+	if _, serr := os.Stat(filepath.Join(e.dir, DigestSidecarName)); !os.IsNotExist(serr) {
 		t.Fatalf("sidecar must NOT be sealed on fail-closed, stat err = %v", serr)
 	}
 }
@@ -295,7 +295,7 @@ func TestSigilReExecBySidecar(t *testing.T) {
 
 	// Первый Spawn: verify-pass → seal.
 	_, _ = h.Spawn(context.Background(), e.discovered())
-	sidecar := filepath.Join(e.dir, digestSidecarName)
+	sidecar := filepath.Join(e.dir, DigestSidecarName)
 	st1, err := os.Stat(sidecar)
 	if err != nil {
 		t.Fatalf("sidecar after first spawn: %v", err)

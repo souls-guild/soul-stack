@@ -28,6 +28,7 @@ var expectedModules = map[string][]string{
 	"core.firewall": {"present", "absent"},
 	"core.http":     {"probe"},
 	"core.noop":     {"run"},                             // no-op/barrier-якорь (ADR-015)
+	"core.module":   {"installed"},                       // доставка SoulModule-плагина (ADR-065)
 	"core.soul":     {"registered"},                      // keeper-side (on: keeper)
 	"core.cloud":    {"created", "destroyed", "resized"}, // keeper-side (ADR-017; resized — авто-расширение VM)
 	"core.vault":    {"kv-read", "kv-present"},           // keeper-side (ADR-017): kv-read (явное чтение) + kv-present (generate-if-absent)

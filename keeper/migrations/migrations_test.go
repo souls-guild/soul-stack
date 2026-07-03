@@ -217,6 +217,8 @@ func TestEmbed_ContainsExpectedMigrations(t *testing.T) {
 		"093_create_purge_old_certs.up.sql",
 		"094_add_providers_fqdn_suffix.down.sql",
 		"094_add_providers_fqdn_suffix.up.sql",
+		"095_rename_permission_rerun_last.down.sql",
+		"095_rename_permission_rerun_last.up.sql",
 	}
 	if len(names) != len(want) {
 		t.Fatalf("got %d files, want %d: %v", len(names), len(want), names)
@@ -3066,5 +3068,35 @@ func TestEmbed_PurgeOldCertsFunction(t *testing.T) {
 	}
 	if !strings.Contains(string(d), "DROP FUNCTION IF EXISTS purge_old_certs(text[], interval, integer)") {
 		t.Errorf("093 down.sql does not drop purge_old_certs; content: %.200s", d)
+	}
+}
+
+// TestEmbed_RenamePermissionRerunLast — data-фикс 095: rename
+// `incarnation.create-rerun` → `incarnation.rerun-last` в rbac_role_permissions.
+// Каталог переименован без deprecated-alias — без миграции кастомная роль со
+// старой строкой молча получала бы 403 на rerun-last.
+func TestEmbed_RenamePermissionRerunLast(t *testing.T) {
+	b, err := FS.ReadFile("095_rename_permission_rerun_last.up.sql")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	body := string(b)
+	for _, frag := range []string{
+		"UPDATE rbac_role_permissions",
+		"SET permission = 'incarnation.rerun-last'",
+		"'incarnation.create-rerun'",
+		"NOT EXISTS",
+		"DELETE FROM rbac_role_permissions",
+	} {
+		if !strings.Contains(body, frag) {
+			t.Errorf("095 up.sql missing %q; content head: %.300s", frag, body)
+		}
+	}
+	d, err := FS.ReadFile("095_rename_permission_rerun_last.down.sql")
+	if err != nil {
+		t.Fatalf("read down: %v", err)
+	}
+	if !strings.Contains(string(d), "SET permission = 'incarnation.create-rerun'") {
+		t.Errorf("095 down.sql does not restore old name; content: %.200s", d)
 	}
 }

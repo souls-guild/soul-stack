@@ -136,7 +136,7 @@ func TestSpawnWithoutSigilRefused(t *testing.T) {
 	if !errors.Is(err, ErrSigilVerify) {
 		t.Fatalf("expected ErrSigilVerify (fail-closed), got %v", err)
 	}
-	if _, serr := os.Stat(filepath.Join(dir, digestSidecarName)); !os.IsNotExist(serr) {
+	if _, serr := os.Stat(filepath.Join(dir, DigestSidecarName)); !os.IsNotExist(serr) {
 		t.Fatalf("sidecar must NOT be sealed without Sigil, stat err = %v", serr)
 	}
 }

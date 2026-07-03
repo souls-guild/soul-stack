@@ -713,6 +713,9 @@ plugins:
   ssh_providers:
     - { name: vault-ssh, source: "git@github.com:soul-stack-ecosystem/soul-ssh-vault.git", ref: v1.0.0 }
     - { name: static,    source: "git@github.com:soul-stack-ecosystem/soul-ssh-static.git", ref: main }
+
+  soul_modules:                     # SoulModule-плагины (ADR-065): резолв тем же резолвером, допуск тем же Sigil-флоу
+    - { name: redis, source: "git@github.com:souls-guild/soul-mod-community-redis.git", ref: v1.2.0 }
 ```
 
 Версия плагина — **git ref** (tag или branch) согласно [ADR-007](../adr/0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте). Никаких semver-range.
@@ -751,12 +754,12 @@ Config-поля резолвера в [`config.md → plugins`](config.md):
 | `plugins.max_artifact_size_mb` | `256` | Потолок размера бинаря `dist/<binary-name>` (size-limit hardening). Превышение → `ErrArtifactTooLarge`, fail-closed. |
 | `plugins.max_clone_size_mb` | `1024` | Потолок размера рабочего дерева клона (checkout + `.git`). Превышение → `ErrCloneTooLarge` + cleanup, fail-closed. |
 
-Каталог `SoulModule`-плагинов (`modules:`) — пока в [`keeper.yml`](config.md) тем же форматом; раздача на хосты — через core-модуль `core.module.installed` (см. [`../soul/modules.md`](../soul/modules.md)).
+Каталог `SoulModule`-плагинов — **`plugins.soul_modules[]`** тем же форматом (`{name, source, ref}`; [ADR-065](../adr/0065-core-module-installed.md), amendment [ADR-020](../adr/0020-plugin-infrastructure.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle)): резолвится тем же резолвером в `cache_root`, допускается тем же Sigil-флоу. Раздача на Soul-хосты — server-streaming RPC `FetchModule` (content-addressed: Keeper отдаёт только байты, чей sha256 есть в активном допуске `kind: soul_module`) + core-модуль `core.module.installed` (см. [`../soul/modules.md`](../soul/modules.md)).
 
 ## Преимущества единой инфраструктуры
 
 - Один SDK на язык (Go / Rust / Python) покрывает все три kind-а плагинов через общий `sdk/handshake/` helper.
-- Один способ распространения и кеширования: artifact-store + кеш host-а по SHA-256 + Sigil-верификация перед запуском (см. [Integrity-model](#integrity-model)).
+- Один способ распространения и кеширования: git-резолв каталога `plugins.*` в кеш Keeper-а + кеш host-а по SHA-256 (на Soul — через `FetchModule`, [ADR-065](../adr/0065-core-module-installed.md)) + Sigil-верификация перед запуском (см. [Integrity-model](#integrity-model)).
 - Один способ конфигурирования (manifest + JSON Schema параметров).
 - Третьи стороны могут выпускать собственные плагины (cloud-провайдер для нишевого облака, SSH-провайдер для нестандартной CA, custom-модуль конкретной компании) без модификации ядра Soul Stack.
 - Один формат audit-trail (`side_effects` → audit-event).

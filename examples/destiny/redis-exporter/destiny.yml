@@ -39,6 +39,25 @@ input:
     enum: [amd64, arm64]
     description: Архитектура GitHub-релизного tarball-а (amd64|arm64).
 
+  # https-only (core.url отвергнёт http:// на Validate без allow_http). Полный URL
+  # tarball-а собирается CEL-ом в tasks/main.yml из base_url + version + arch.
+  base_url:
+    type: string
+    default: "https://github.com/oliver006/redis_exporter/releases/download"
+    pattern: "^https://[A-Za-z0-9._/:-]+$"
+    description: >-
+      Корень загрузки релизов redis_exporter. По умолчанию GitHub Releases;
+      переопределяется на внутреннее зеркало/nexus-proxy.
+
+  # SSRF-guard opt-out для private-resolve base_url — паттерн redis destiny.yml install.allow_private.
+  allow_private:
+    type: boolean
+    default: false
+    description: >-
+      Снять SSRF-guard core.url для fetch tarball-а (разрешить dial в RFC1918/
+      loopback — легитимный internal Nexus). Нужен, когда base_url резолвится в
+      private-адрес. Default false — guard держится (github-public back-compat).
+
   bin_dir:
     type: string
     default: /usr/local/bin

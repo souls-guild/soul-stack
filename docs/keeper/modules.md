@@ -69,8 +69,8 @@ Keeper-side задача исполняется на самом keeper-е — х
 | `sid` | string **или** array of string, `format: fqdn` | required | — | `SID` Soul-а (FQDN), к которому применяется привязка. Принимает **одиночную строку ИЛИ список** ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md), см. [list-SID](#list-sid--регистрацияожидание-n-хостов-одним-шагом)). Список на практике приходит CEL-выражением `${ register.<provision>.hosts }` (SID-список от `core.cloud.provisioned`); литеральный список `sid: [a, b]` статически `soul-lint` **не** проходит (manifest объявляет `sid` как `string`) — это осознанный trade-off, см. [list-SID](#list-sid--регистрацияожидание-n-хостов-одним-шагом). |
 | `coven` | array of string, `pattern: "^[a-z][a-z0-9-]*$"`, `min_items: 1`, `unique: true` | required | — | Набор стабильных Coven-меток. Минимум одна метка. При списочном `sid` применяется к каждому SID. |
 | `mode` | string, `enum: [append, replace, remove]` | optional | `append` | Стратегия применения набора `coven` к существующим меткам (см. ниже). |
-| `refresh_soulprint` | boolean | optional | `false` | **Pending (слайсы S2/S3 [ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)).** Намерение: после успешного шага пере-резолвить roster прогона, чтобы следующий Passage видел новые online-хосты. Сейчас флаг **валидируется как известный** (не ошибка), но фактический mid-run re-resolve **не реализован** — output всегда `refreshed: false`. Не полагаться на работающий re-resolve до S3. |
-| `await_online` | boolean | optional | `false` | **Барьер онбординга** ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)). `true` — после записи `souls`+coven для всех SID шаг **блокирующе** ждёт, пока зарегистрированные Souls станут online. Источник «online» — **Redis SID-lease** (живой EventStream), **не** PG `souls.status`. Требует сконфигурированного presence-checker-а на keeper-е: `await_online: true` без него → шаг `failed`. |
+| `refresh_soulprint` | boolean | optional | `false` | **Реализован (S2/S3 [ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)).** `true` — шаг становится passage-определяющей границей (Stratify), после его успеха scenario-runner пере-резолвит roster перед следующим Passage (live-снимок); output `refreshed` эхает значение флага. **Вместе с `await_online: true`** дополнительно ужесточает барьер: SID засчитывается только когда online **и** typed soulprint записан в PG (см. [facts-wait](#барьер-онбординга-await_online), amendment 2026-07-02). |
+| `await_online` | boolean | optional | `false` | **Барьер онбординга** ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)). `true` — после записи `souls`+coven для всех SID шаг **блокирующе** ждёт готовности зарегистрированных Souls. Готовность: online по **Redis SID-lease** (живой EventStream, **не** PG `souls.status`); при `refresh_soulprint: true` — дополнительно записанный первый typed soulprint (`souls.soulprint_facts`). Требует сконфигурированного presence-checker-а на keeper-е: `await_online: true` без него → шаг `failed`. |
 | `await_timeout` | duration | **required при `await_online: true`** | — | Верхняя граница ожидания барьера. **Обязателен** при `await_online: true` — без него валидация падает (барьер не должен висеть вечно). Сверху ограничен `keeper.yml::max_await_timeout` (см. [потолок](#потолок-await_timeout-max_await_timeout)). |
 | `await_min_count` | int | optional | число регистрируемых SID | Минимум online-хостов для успеха барьера. Default — **все** зарегистрированные SID (`len(sids)`). Допустимый диапазон: `0 < await_min_count ≤ len(sids)`. |
 | `await_poll_interval` | duration | optional | `2s` | Период опроса presence (Redis SID-lease) во время барьера. |
@@ -100,11 +100,13 @@ Keeper-side задача исполняется на самом keeper-е — х
 При `await_online: true` шаг работает в два этапа ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)):
 
 1. Сперва — обычная регистрация (souls+coven, как без барьера) для **всех** SID.
-2. Затем — **блокирующий** опрос presence с периодом `await_poll_interval` под общим таймаутом `await_timeout`, пока число online-хостов среди регистрируемых SID не достигнет `await_min_count`.
+2. Затем — **блокирующий** опрос готовности с периодом `await_poll_interval` под общим таймаутом `await_timeout`, пока число готовых хостов среди регистрируемых SID не достигнет `await_min_count`.
 
 **Источник истины «online» — Redis SID-lease** (живой EventStream-lease, [ADR-006(a)](../adr/0006-cache-redis.md)), **НЕ** PG `souls.status`. PG-статус — lifecycle-снимок, отстаёт от реального состояния стрима; lease — конструктивно авторитетный признак, что агент на связи (тот же источник, что presence-фильтр таргет-резолвера и lease-aware Reaper). Барьер не считает хост online до фактического стрима.
 
-**B1-strict (failure-семантика).** Если к `await_timeout` online `< await_min_count` — шаг завершается **`failed`** → fail-stop прогона → `incarnation.state` **не коммитится** → `incarnation.status: error_locked`. Частично-онбордившийся флот не «протекает» в роль-применение: либо набран кворум, либо явный fail с диагностикой (`pending[]` в сообщении и в output). Персистентная Redis-ошибка опроса (источник presence недоступен) — тоже `failed`, не «слепой» успех; отмена прогона (context-cancel) — `failed`.
+**Facts-wait при `refresh_soulprint: true`** ([ADR-061 amendment 2026-07-02](../adr/0061-onboarding-await-and-midrun-reresolve.md)). SID «готов» = **online (lease) И typed soulprint записан в PG** (`souls.soulprint_facts IS NOT NULL`). Одного lease мало: render следующего Passage читает `soulprint.self.*`, а Soul шлёт initial-репорт при connect **best-effort** ([ADR-018](../adr/0018-soulprint-typed.md)) — его запись асинхронна, на provision-from-zero барьер и render укладываются в одну секунду (гонка → `render_failed` «no such key»). На rerun / `create_from_souls` facts давно в PG → барьер проходит на первом же опросе, нулевое ожидание. Без `refresh_soulprint` барьер остаётся presence-only (facts не опрашиваются).
+
+**B1-strict (failure-семантика).** Если к `await_timeout` готовых `< await_min_count` — шаг завершается **`failed`** → fail-stop прогона → `incarnation.state` **не коммитится** → `incarnation.status: error_locked`. Частично-онбордившийся флот не «протекает» в роль-применение: либо набран кворум, либо явный fail с диагностикой (`pending[]` в сообщении и в output; при facts-wait классы недобора разделены — `not online: [sids]` vs `online but factless: [sids]`, чтобы гонка первого репорта была отличима от несостоявшегося онбординга). Персистентная ошибка опроса (Redis presence или PG facts-чек недоступны) — тоже `failed`, не «слепой» успех; отмена прогона (context-cancel) — `failed`.
 
 Запрос `await_online: true` без сконфигурированного presence-checker-а на keeper-е завершается `failed` (молчаливый success при отсутствии источника presence недопустим).
 
@@ -124,11 +126,11 @@ DoS-guard, fail-closed. Поле `keeper.yml::max_await_timeout` (duration, defa
 | `coven` | array of string | **Итоговый** набор coven-меток на хосте после применения `mode` (а не переданный набор-аргумент). При списочном `sid` — набор первого SID. |
 | `mode` | string | Применённый `mode` (эхо `params.mode`, удобно при шаблонной композиции). |
 | `created` | boolean | `true`, если хотя бы одна запись в `souls` была создана модулем; `false`, если все уже существовали. |
-| `refreshed` | boolean | **Всегда `false`** в текущем срезе (mid-run re-resolve — pending S3, см. `refresh_soulprint`). Поле эхо-выдаётся для стабильной формы output. |
+| `refreshed` | boolean | Эхо значения `refresh_soulprint`: `true` ⇒ scenario-runner гарантированно пере-резолвит roster перед следующим Passage (S3 [ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)). |
 | `removed` | array of string | **Только при `mode: remove`**: метки, которые были фактически сняты. Пустой массив, если no-op (или mode ≠ `remove`). |
 | `online` | array of string | **Только при `await_online: true`**: SID, ставшие online (Redis SID-lease) к моменту успеха/таймаута барьера. |
 | `pending` | array of string | **Только при `await_online: true`**: SID, не успевшие стать online к таймауту (диагностика B1-strict-провала). |
-| `satisfied` | boolean | **Только при `await_online: true`**: достигнут ли `await_min_count`. При успехе `true`; при `failed`-провале — `false` (поля `online`/`pending` несут диагностику). |
+| `satisfied` | boolean | **Только при `await_online: true`**: достигнут ли `await_min_count` (при `refresh_soulprint: true` — по «готовым»: online **и** soulprint записан). При успехе `true`; при `failed`-провале — `false` (поля `online`/`pending` несут диагностику; факт-классы — в failed-сообщении шага). |
 
 Поля `online`/`pending`/`satisfied` присутствуют в output **только** когда задан `await_online: true`; без барьера их нет. Плюс стандартные `.changed` / `.failed` DSL-ядра ([destiny/tasks.md §8](../destiny/tasks.md#8-requisites--salt-style-зависимости)).
 
@@ -146,7 +148,7 @@ DoS-guard, fail-closed. Поле `keeper.yml::max_await_timeout` (duration, defa
     refresh_soulprint: true
 ```
 
-После этого шага запись в реестре `souls` создана/обновлена. (Mid-run re-resolve roster через `refresh_soulprint` — pending S3, [ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md): сейчас следующий Passage старого roster ещё не растёт автоматически.)
+После этого шага запись в реестре `souls` создана/обновлена, а scenario-runner пере-резолвит roster перед следующим Passage (`refresh_soulprint: true`, S3 [ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)).
 
 ### Пример: регистрация+барьер для N созданных VM
 
@@ -224,17 +226,18 @@ DoS-guard, fail-closed. Поле `keeper.yml::max_await_timeout` (duration, defa
 
 **Закрывает BUG#2 cloud-provision.** До ADR-063 scenario нёс адрес-заглушку `keeper.push.applied`, которой keeper-side не существует (это audit-event push-прогона Destiny, не модуль) — созданная VM ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)) не получала токен, барьер `await_online` не набирал presence, прогон уходил в `error_locked`.
 
-### Дизайн A1 — «тонкая доставка»
+### Дизайн A1 — «тонкая доставка» + init-фаза
 
-cloud-init (B-flat, [ADR-017(h)](../adr/0017-keeper-side-core.md)) уже поставил на VM soul-бинарь + CA + systemd-unit (но **намеренно НЕ токен** — userdata логируется провайдером). Модуль кладёт **ТОЛЬКО** токен и опционально запускает soul-агент. Поток per-host (**последовательно**):
+cloud-init (B-flat, [ADR-017(h)](../adr/0017-keeper-side-core.md)) уже поставил на VM soul-бинарь + CA + systemd-unit (но **намеренно НЕ токен** — userdata логируется провайдером). Модуль кладёт токен, **redeem-ит его** (`soul init` — единственный механизм создания SoulSeed; soul-side «подхвата» token-файла не существует, [ADR-063 amendment init-фаза](../adr/0063-bootstrap-token-delivery.md#amendment-2026-07-02--init-фаза-в-потоке-a1-активация-unit-а-event_stream_port-в-cloud_init)) и опционально активирует unit. Поток per-host (**последовательно**):
 
 1. `SshProvider.Authorize(host, user)` — deny прерывает доставку до connect-а (**fail-closed**).
 2. ephemeral ed25519-keypair + `SshProvider.Sign(pubkey)` → `ssh.AuthMethod`-ы (переиспользует `push.NewEphemeralEd25519` + `push.AuthMethodsFromSign`). Приватник не покидает Keeper.
 3. `push.Dial` → `Session` (CA-signed host-cert verify, тот же путь, что `SshDispatcher.SendApply`).
 4. `session.Run("install -d -m 0700 /etc/soul && umask 077 && cat > <token_path> && chmod 0400 <token_path>", tokenBytes)` — **★ токен в STDIN, НЕ в argv** (иначе утечёт в `ps`/audit/journald на VM).
-5. если `start_soul` — `session.Run("systemctl start soul", nil)`.
+5. `session.Run("test -e /var/lib/soul-stack/seed/current/cert.pem || SOUL_BOOTSTRAP_TOKEN=\"$(cat <token_path>)\" /usr/local/bin/soul init --config /etc/soul/soul.yml", nil)` — redeem токена (CSR→Bootstrap-RPC→SoulSeed). Guard по seed-cert = идемпотентность (токен single-use); литеральная `$(cat …)` раскрывается subshell-ом на VM — токен не в argv keeper-а. Выполняется независимо от `start_soul`.
+6. если `start_soul` — `session.Run("systemctl daemon-reload && systemctl enable soul && systemctl start soul", nil)` (parity с cloud-init runcmd: daemon-reload подхватывает свежий unit в install-режиме, enable переживает ребут VM).
 
-**B1-strict:** ошибка любого хоста (Authorize-deny / connect-fail / write-fail / start-fail) → шаг `failed` → state не коммитится → `error_locked`.
+**B1-strict:** ошибка любого хоста (Authorize-deny / connect-fail / write-fail / init-fail / start-fail) → шаг `failed` → state не коммитится → `error_locked`.
 
 ### Адресация и сторона
 
@@ -251,7 +254,7 @@ cloud-init (B-flat, [ADR-017(h)](../adr/0017-keeper-side-core.md)) уже пос
 | `token_path` | string | optional | `/etc/soul/token` | Путь файла токена на VM. |
 | `ssh_user` | string | optional | `root` | SSH-пользователь. |
 | `ssh_port` | int (1..65535) | optional | `22` | TCP-порт sshd. |
-| `start_soul` | bool | optional | `true` | `systemctl start soul` после доставки. |
+| `start_soul` | bool | optional | `true` | Активация unit-а после init: `systemctl daemon-reload && systemctl enable soul && systemctl start soul`. `soul init` (шаг 5) идёт независимо от флага. |
 
 ### Выходной контракт (`output:` модуля)
 
@@ -259,7 +262,7 @@ cloud-init (B-flat, [ADR-017(h)](../adr/0017-keeper-side-core.md)) уже пос
 
 ### Безопасность
 
-- Токен в STDIN, не в argv (шаг 4). Audit-payload `bootstrap.delivered` — `{action, ssh_provider, count, sids}`, **без токенов**. Текст ошибки маскируется (`audit.MaskSecrets`) перед `failed`-event. CA-signed host-cert verify обязателен (пустой host-CA → явная ошибка). fail-closed Authorize.
+- Токен в STDIN, не в argv (шаг 4); init-шаг (5) несёт литеральную нераскрытую `$(cat <token_path>)` — токен раскрывается subshell-ом на VM, не keeper-ом. Audit-payload `bootstrap.delivered` — `{action, ssh_provider, count, sids}`, **без токенов**. Текст ошибки маскируется (`audit.MaskSecrets`) перед `failed`-event. CA-signed host-cert verify обязателен (пустой host-CA → явная ошибка). fail-closed Authorize.
 
 ### Границы MVP (ADR-063)
 

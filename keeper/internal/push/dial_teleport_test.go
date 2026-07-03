@@ -1,6 +1,7 @@
 package push
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/tls"
@@ -10,6 +11,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -309,6 +311,90 @@ func TestBuildProxyClientConfig_AlpnUpgrade(t *testing.T) {
 	// Compile-time guard: имя поля proxy.ClientConfig.ALPNConnUpgradeRequired
 	// зафиксировано (ловит переименование в апстрим-teleport при bump).
 	_ = proxy.ClientConfig{ALPNConnUpgradeRequired: true}
+}
+
+// TestBuildProxyClientConfig_ResetsNextProtos — guard ALPN-ловушки «h2-first →
+// 403 web-стек» (см. комментарий у сброса NextProtos в buildProxyClientConfig).
+// Инвариант держится для ОБЕИХ веток (alpn и direct-gRPC) — call site один.
+func TestBuildProxyClientConfig_ResetsNextProtos(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		alpn bool
+	}{
+		{"alpn_upgrade", true},
+		{"direct_grpc", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tlsCfg := &tls.Config{NextProtos: []string{"h2"}} // как из creds.TLSConfig()
+			got := buildProxyClientConfig(
+				TeleportDialerConfig{ProxyAddr: "tp.rwb.ru:443", AlpnUpgrade: tc.alpn},
+				tlsCfg, apissh.ClientConfig{}, time.Second,
+			)
+			c, err := got.TLSConfigFunc("")
+			if err != nil {
+				t.Fatalf("TLSConfigFunc returned error: %v", err)
+			}
+			if len(c.NextProtos) != 0 {
+				t.Errorf("NextProtos = %v, want empty: h2 первым уведёт TLS-routing proxy в web-стек (403)", c.NextProtos)
+			}
+		})
+	}
+}
+
+// journalCloser пишет метку в общий журнал закрытий.
+type journalCloser struct {
+	label   string
+	journal *[]string
+	closed  int
+}
+
+func (c *journalCloser) Close() error {
+	c.closed++
+	*c.journal = append(*c.journal, c.label)
+	return nil
+}
+
+// journalSession — inner-Session для teleportSession, фиксирует момент Close.
+type journalSession struct {
+	journal *[]string
+}
+
+func (s *journalSession) Run(context.Context, string, []byte) (string, error) { return "", nil }
+func (s *journalSession) Close() error {
+	*s.journal = append(*s.journal, "client")
+	return nil
+}
+
+// TestTeleportSession_ProxyClientOwnership — guard ownership-контракта: conn от
+// DialHost мультиплексирован поверх gRPC-стрима proxy-клиента, ранний Close
+// убивает транспорт под *ssh.Client (live-баг: первый sess.Run → `ssh:
+// unexpected packet in response to channel open: <nil>`). Требования: proxy-
+// клиент НЕ закрыт после получения Session, закрыт ровно один раз в
+// sess.Close(), ПОСЛЕ SSH-client-а; повторный Close идемпотентен.
+func TestTeleportSession_ProxyClientOwnership(t *testing.T) {
+	var journal []string
+	proxyClient := &journalCloser{label: "proxy", journal: &journal}
+
+	sess := newTeleportSession(&journalSession{journal: &journal}, proxyClient)
+
+	if proxyClient.closed != 0 {
+		t.Fatalf("proxy-клиент закрыт сразу после dial (closed=%d) — conn мёртв до первого Run", proxyClient.closed)
+	}
+	if err := sess.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if proxyClient.closed != 1 {
+		t.Fatalf("после sess.Close(): proxy closed=%d, want 1", proxyClient.closed)
+	}
+	if want := []string{"client", "proxy"}; !slices.Equal(journal, want) {
+		t.Fatalf("порядок закрытия %v, want %v (proxy раньше client оборвал бы туннель под живым ssh)", journal, want)
+	}
+	if err := sess.Close(); err != nil {
+		t.Fatalf("повторный Close: %v", err)
+	}
+	if proxyClient.closed != 1 {
+		t.Fatalf("повторный Close снова закрыл proxy: closed=%d", proxyClient.closed)
+	}
 }
 
 // writeValidIdentityFile собирает минимально-валидный Teleport identity-file

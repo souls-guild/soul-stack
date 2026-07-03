@@ -655,3 +655,41 @@ func TestIntegration_SelectStats_Scope(t *testing.T) {
 		t.Errorf("empty scope = %+v, want всё нули (fail-closed, НЕ весь флот)", empty)
 	}
 }
+
+// TestIntegration_SelectSoulsWithSoulprint — GUARD (ADR-061 amendment,
+// facts-часть барьера онбординга): batch-чек возвращает ровно те SID, у которых
+// записан typed soulprint (`soulprint_facts IS NOT NULL`); свежесозданный
+// pending-хост без первого репорта — отсутствует; неизвестный SID — отсутствует.
+func TestIntegration_SelectSoulsWithSoulprint(t *testing.T) {
+	resetAll(t)
+	ctx := context.Background()
+
+	for _, sid := range []string{"with-facts.example.com", "factless.example.com"} {
+		if err := Insert(ctx, integrationPool, &Soul{SID: sid, Status: StatusPending, Coven: []string{}}); err != nil {
+			t.Fatalf("Insert(%s): %v", sid, err)
+		}
+	}
+	now := time.Now().UTC()
+	if err := UpdateSoulprint(ctx, integrationPool, "with-facts.example.com",
+		[]byte(`{"sid":"with-facts.example.com","os":{"family":"debian","arch":"amd64"}}`), now, now); err != nil {
+		t.Fatalf("UpdateSoulprint: %v", err)
+	}
+
+	got, err := SelectSoulsWithSoulprint(ctx, integrationPool,
+		[]string{"with-facts.example.com", "factless.example.com", "unknown.example.com"})
+	if err != nil {
+		t.Fatalf("SelectSoulsWithSoulprint: %v", err)
+	}
+	if _, ok := got["with-facts.example.com"]; !ok {
+		t.Errorf("with-facts SID missing from result: %v", got)
+	}
+	if len(got) != 1 {
+		t.Errorf("result = %v, want only with-facts SID", got)
+	}
+
+	// Пустой вход — пустой результат без запроса (нулевой SID-набор легален).
+	empty, err := SelectSoulsWithSoulprint(ctx, integrationPool, nil)
+	if err != nil || len(empty) != 0 {
+		t.Errorf("nil sids: got %v, %v; want empty, nil", empty, err)
+	}
+}

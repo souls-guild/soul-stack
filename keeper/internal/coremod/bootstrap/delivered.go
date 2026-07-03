@@ -6,11 +6,13 @@
 // `keeper.push.applied`, который keeper-dispatch отвергал как unknown module —
 // созданная VM никогда не получала токен и не онбордилась.
 //
-// Дизайн A1 («тонкая доставка»): cloud-init (B-flat, ADR-017(h)) уже поставил на
-// VM soul-бинарь + CA + systemd-unit. Модуль кладёт ТОЛЬКО токен и опционально
-// `systemctl start soul`. Поток per-host (последовательно): Authorize (deny →
-// fail-closed) → ephemeral keypair + Sign → Dial (CA-signed host-cert verify) →
-// запись токена в `token_path` (★токен в STDIN, не в argv) → опц. start soul.
+// Дизайн A1 («тонкая доставка», + init-фаза по ADR-063 amendment): cloud-init
+// (B-flat, ADR-017(h)) уже поставил на VM soul-бинарь + CA + systemd-unit.
+// Модуль кладёт токен, redeem-ит его (`soul init`, seed-guard-идемпотентно) и
+// опционально активирует unit. Поток per-host (последовательно): Authorize
+// (deny → fail-closed) → ephemeral keypair + Sign → Dial (CA-signed host-cert
+// verify) → запись токена в `token_path` (★токен в STDIN, не в argv) →
+// soul init (см. initSoulCmdFmt) → опц. daemon-reload + enable + start.
 // Ошибка любого хоста прерывает шаг (B1-strict): state не коммитится, прогон
 // уходит в error_locked.
 //
@@ -123,8 +125,19 @@ const (
 // scenario (доверенный keeper-side вход, не Soul-reported), shell-escape не нужен.
 const deliverScriptFmt = "install -d -m 0700 /etc/soul && umask 077 && cat > %s && chmod 0400 %s"
 
-// startSoulCmd — запуск soul-агента после доставки токена (start_soul: true).
-const startSoulCmd = "systemctl start soul"
+// initSoulCmdFmt — redeem токена после записи (5-я стена ADR-063): seed создаёт
+// ТОЛЬКО `soul init` (soul-side «подхвата» token-файла нет), без init доставленный
+// токен — мёртвый груз, soul run падает «SoulSeed not found». %s: seed-cert-guard
+// (SeedCertPath — токен single-use, повторный init после успешного redeem завалил
+// бы хост при retry шага) / token_path / бинарь / soul.yml. ★ Литеральная $(cat …)
+// раскрывается subshell-ом на VM — токен НЕ в argv keeper-а; симметрия
+// cloud-init.tmpl self-onboard-фазы бит-в-бит.
+const initSoulCmdFmt = `test -e %s || SOUL_BOOTSTRAP_TOKEN="$(cat %s)" %s init --config %s`
+
+// startSoulCmd — активация soul-агента после init (start_soul: true): parity с
+// cloud-init.tmpl runcmd — daemon-reload подхватывает свежезаписанный unit
+// (install-режим), enable переживает ребут VM; оба идемпотентны.
+const startSoulCmd = "systemctl daemon-reload && systemctl enable soul && systemctl start soul"
 
 // SshProviderHost — узкая поверхность SSH-аутентификации, нужная модулю:
 // Authorize (право Keeper-а ходить на хост) + Sign (выпуск SSH-credentials на
@@ -388,11 +401,12 @@ func (m *Module) applyDelivered(req *pluginv1.ApplyRequest, stream grpc.ServerSt
 	}
 
 	script := fmt.Sprintf(deliverScriptFmt, tokenPath, tokenPath)
+	initCmd := fmt.Sprintf(initSoulCmdFmt, soulinstall.SeedCertPath, tokenPath, soulinstall.SoulBinaryPath, soulinstall.SoulConfigPath)
 
 	results := make([]any, 0, len(hosts))
 	sids := make([]any, 0, len(hosts))
 	for _, h := range hosts {
-		started, err := m.deliverHost(ctx, prov, h, sshUser, int(sshPort), script, installSteps, startSoul, joinWait)
+		started, err := m.deliverHost(ctx, prov, h, sshUser, int(sshPort), script, initCmd, installSteps, startSoul, joinWait)
 		if err != nil {
 			// B1-strict: ошибка любого хоста валит весь шаг. maskErr страхует
 			// от утечки vault-ref/токена в текст ошибки (failed-event уходит в
@@ -436,8 +450,8 @@ func (m *Module) applyDelivered(req *pluginv1.ApplyRequest, stream grpc.ServerSt
 }
 
 // deliverHost обрабатывает один хост: открытие SSH-сессии (transport-зависимо) →
-// опц. install-blueprint → запись токена (STDIN) → опц. start soul. Возвращает
-// (started, error).
+// опц. install-blueprint → запись токена (STDIN) → soul init (redeem токена,
+// seed-guard-идемпотентно) → опц. активация unit-а. Возвращает (started, error).
 //
 // Открытие сессии расходится по transport:
 //   - direct: Authorize (fail-closed) → ephemeral keypair + Sign → Dial по
@@ -451,8 +465,8 @@ func (m *Module) applyDelivered(req *pluginv1.ApplyRequest, stream grpc.ServerSt
 // сессии ПЕРЕД токеном — VM без cloud-init получает setch (бинарь/CA/soul.yml/unit)
 // прямо здесь. Любой ненулевой exit install-шага валит хост (B1-strict).
 //
-// Хвост (запись токена + start soul) общий для обоих режимов.
-func (m *Module) deliverHost(ctx context.Context, prov SshProviderHost, h hostInput, user string, port int, script string, installSteps []soulinstall.InstallStep, startSoul bool, joinWait time.Duration) (started bool, err error) {
+// Хвост (запись токена + soul init + активация) общий для обоих режимов.
+func (m *Module) deliverHost(ctx context.Context, prov SshProviderHost, h hostInput, user string, port int, script, initCmd string, installSteps []soulinstall.InstallStep, startSoul bool, joinWait time.Duration) (started bool, err error) {
 	var sess push.Session
 	if m.teleport() {
 		sess, err = m.dialTeleport(ctx, h, user, port, joinWait)
@@ -477,6 +491,11 @@ func (m *Module) deliverHost(ctx context.Context, prov SshProviderHost, h hostIn
 	// ★ Токен — в STDIN (script делает `cat > token_path`), НЕ в argv.
 	if _, rerr := sess.Run(ctx, script, []byte(h.token)); rerr != nil {
 		return false, fmt.Errorf("write token: %w", rerr)
+	}
+
+	// soul init — см. initSoulCmdFmt (5-я стена: без redeem токен бесполезен).
+	if _, rerr := sess.Run(ctx, initCmd, nil); rerr != nil {
+		return false, fmt.Errorf("soul init: %w", rerr)
 	}
 
 	if startSoul {

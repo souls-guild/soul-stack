@@ -331,6 +331,11 @@ provision_git_repo \
     "${EXAMPLES}/destiny/node-exporter" \
     "${KEEPER_DEV_DIR}/destiny/node-exporter" \
     v1.0.0 "destiny node-exporter"
+# vector (лог-пайплайн, Слайс I мониторинга redis) — объявлен в redis/service.yml::destiny[].
+provision_git_repo \
+    "${EXAMPLES}/destiny/vector" \
+    "${KEEPER_DEV_DIR}/destiny/vector" \
+    v1.0.0 "destiny vector"
 
 # 10. Seed реестра сервисов в Postgres (service_registry + keeper_settings).
 #

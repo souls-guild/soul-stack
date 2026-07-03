@@ -53,6 +53,7 @@ import (
 	"github.com/souls-guild/soul-stack/soul/internal/beacon"
 	soulbootstrap "github.com/souls-guild/soul-stack/soul/internal/bootstrap"
 	"github.com/souls-guild/soul-stack/soul/internal/coremod"
+	installmod "github.com/souls-guild/soul-stack/soul/internal/coremod/module"
 	coremodutil "github.com/souls-guild/soul-stack/soul/internal/coremod/util"
 	soulgrpc "github.com/souls-guild/soul-stack/soul/internal/grpc"
 	"github.com/souls-guild/soul-stack/soul/internal/pluginhost"
@@ -583,7 +584,6 @@ func buildRegistry(cfg *config.SoulConfig, logger *slog.Logger, logPrefix string
 		}
 	}
 
-	core := coremod.Default()
 	pluginReg := runtime.NewPluginRegistry(
 		runtime.PluginHostSpawner{Host: host},
 		discovered,
@@ -591,13 +591,42 @@ func buildRegistry(cfg *config.SoulConfig, logger *slog.Logger, logPrefix string
 	)
 	// Конфликты имён `<namespace>.<name>` между core и custom разрешаются в
 	// пользу core (защита от подмены core.* кастомным плагином). Имена
-	// записываем в лог для аудита.
-	for _, name := range pluginReg.Names() {
-		if _, clash := core.Lookup(name); clash {
-			logger.Warn(logPrefix+": custom module shadowed by core",
-				slog.String("module", name))
+	// записываем в лог для аудита; повторяется при каждом hot-register.
+	var core *coremod.Registry
+	logShadowedByCore := func() {
+		for _, name := range pluginReg.Names() {
+			if _, clash := core.Lookup(name); clash {
+				logger.Warn(logPrefix+": custom module shadowed by core",
+					slog.String("module", name))
+			}
 		}
 	}
+	// core.module (ADR-065) получает Sigil-набор/якоря/корень кеша — те же,
+	// что у verify custom-плагинов; в push-режиме sigils/anchors nil →
+	// install-шаг fail-closed module_not_allowed. Rescan — hot-register
+	// (ADR-065(d)) после успешной установки; beacon-реестр при этом НЕ
+	// пересобирается (MVP-ограничение ADR-065, hot-reload soul_beacon — post-MVP).
+	core = coremod.Default(installmod.Deps{
+		Sigils:      sigils,
+		Anchors:     host.SigilAnchors,
+		ModulesRoot: cfg.Paths.Modules,
+		Rescan: func() {
+			warnings, err := pluginReg.Rescan(cfg.Paths.Modules)
+			if err != nil {
+				logger.Warn(logPrefix+": plugin rescan failed",
+					slog.String("modules_root", cfg.Paths.Modules),
+					slog.Any("error", err))
+				return
+			}
+			for _, w := range warnings {
+				logger.Warn(logPrefix+": plugin discovery warning", slog.String("detail", w))
+			}
+			logShadowedByCore()
+			logger.Info(logPrefix+": modules rescanned",
+				slog.Int("custom", len(pluginReg.Names())))
+		},
+	})
+	logShadowedByCore()
 	logger.Info(logPrefix+": modules registered",
 		slog.Int("core", len(core.Names())),
 		slog.Int("custom", len(pluginReg.Names())),
@@ -1077,6 +1106,10 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 				// Keeper, root-credential (учётка внешней системы) на Soul не
 				// попадает (ADR-025).
 				applyCtx = augur.WithRun(applyCtx, augurClient, req.GetApplyId())
+				// FetchModule-транспорт текущей сессии для core.module.installed
+				// (ADR-065): та же ClientConn, отдельный HTTP/2-стрим; паттерн
+				// augur.WithRun.
+				applyCtx = installmod.WithFetcher(applyCtx, sess)
 				if err := runner.Run(applyCtx, req, sess); err != nil {
 					logger.Error("apply: send failed (stream broken)", slog.Any("error", err))
 					return

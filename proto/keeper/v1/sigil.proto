@@ -53,6 +53,23 @@ message SigilSnapshot {
   repeated PluginSigil sigils = 1;
 }
 
+// PluginFetchRequest — запрос байтов SoulModule-плагина (FetchModule, эпик
+// core.module.installed S2). Авторитет допуска — binary_sha256
+// (content-addressed, формат как PluginSigil.binary_sha256: hex lowercase,
+// 64 символа); namespace/name — контекст для логов/аудита Keeper-а.
+message PluginFetchRequest {
+  string namespace = 1;
+  string name = 2;
+  string binary_sha256 = 3;
+}
+
+// PluginChunk — один чанк байтов бинаря в server-streaming ответе FetchModule.
+// Целостность собранного файла Soul сверяет по sha256 запроса (S3); отдельные
+// offset/checksum-поля не требуются (при необходимости — only-add).
+message PluginChunk {
+  bytes data = 1;
+}
+
 // SigilTrustAnchors — ПОЛНЫЙ набор trust-anchor-ов подписи Sigil (replace-
 // семантика, ADR-026, ротация R3). Едет only-add в FromKeeper.oneof.
 //

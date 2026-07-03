@@ -84,9 +84,12 @@ redis_bin_dir: /usr/local/bin
 # (бинари install.yml + .so modules.yml); soulprint не трогаем. amd64→x86_64,
 # arm64→aarch64, прочее (в т.ч. синтетический arch фикстур) — как есть.
 # ★ has()-guard render-safe в МЁРТВОМ package-проходе (file-var резолвится до skip-
-# проекции): absent soulprint.self.os.arch → '' (значение не используется — задачи skip).
+# проекции). Guard ДВУХступенчатый: CEL has() тестирует только ПОСЛЕДНИЙ компонент
+# пути — одиночный has(soulprint.self.os.arch) при absent os сам вычисляет
+# soulprint.self.os и кидает «no such key: os». Поэтому absent os И absent os.arch
+# оба нормализуются к '' (значение не используется — задачи skip).
 redis_arch: >-
-  ${ has(soulprint.self.os.arch)
+  ${ has(soulprint.self.os) && has(soulprint.self.os.arch)
        ? (soulprint.self.os.arch == 'amd64' ? 'x86_64'
           : (soulprint.self.os.arch == 'arm64' ? 'aarch64' : soulprint.self.os.arch))
        : '' }
@@ -107,12 +110,14 @@ redis_arch: >-
 # дистрибутива — soulprint.self.os (есть в destiny-CEL, прецедент node-exporter/modules).
 # ★ soulprint.self.os.arch/version — has()-guard render-safe: в МЁРТВОМ package-проходе
 # (binary-блок static-skip) var всё равно резолвится, а fixtures package-кейсов могут не
-# нести os.version → голый soulprint.self.os.version упал бы «no such key». В binary-проходе
-# soulprint несёт оба поля (ADR-018 typed). Значение в мёртвом проходе не используется (skip).
+# нести os / os.version → голый soulprint.self.os.version упал бы «no such key». Guard
+# двухступенчатый (has(os) && has(os.version)) — см. redis_arch выше: has() тестирует
+# только последний компонент пути. В binary-проходе soulprint несёт оба поля (ADR-018
+# typed). Значение в мёртвом проходе не используется (skip).
 redis_binary_url_base: >-
   ${ (has(input.install) && has(input.install.base_url) ? input.install.base_url : '')
        + '/' + vars.redis_arch
-       + '/Debian/' + (has(soulprint.self.os.version) ? soulprint.self.os.version : '')
+       + '/Debian/' + (has(soulprint.self.os) && has(soulprint.self.os.version) ? soulprint.self.os.version : '')
        + '/' + (has(input.install) && has(input.install.version) ? input.install.version : '') }
 
 # ── SSRF-guard для fetch бинарей Nexus (core.url.fetched allow_private) ─────────

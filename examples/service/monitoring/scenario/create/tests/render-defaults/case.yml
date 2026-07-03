@@ -136,6 +136,8 @@ assert:
             # list/string → флаг в ExecStart НЕ добавляется (условный рендер).
             version: "1.8.2"
             base_url: "https://github.com/prometheus/node_exporter/releases/download"
+            # allow_private не передан monitoring-ом → default false destiny (guard держится).
+            allow_private: false
             listen: ":9100"
             collectors: []
             bin_dir: /usr/local/bin

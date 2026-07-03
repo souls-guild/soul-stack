@@ -39,6 +39,9 @@ func (fakeSoulStore) Insert(_ context.Context, _ *keepersoul.Soul) error { retur
 func (fakeSoulStore) UpdateCoven(_ context.Context, _ string, c []string) ([]string, error) {
 	return c, nil
 }
+func (fakeSoulStore) SoulsWithSoulprint(_ context.Context, _ []string) (map[string]struct{}, error) {
+	return map[string]struct{}{}, nil
+}
 
 // --- fake cloud-зависимости (happy-path created без PG) -----------------------
 

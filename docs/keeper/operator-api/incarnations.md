@@ -1,10 +1,10 @@
 # Incarnation — endpoints жизненного цикла runtime-инстансов
 
-Доменная секция [Operator API](../operator-api.md): эндпоинты `/v1/incarnations*` (создание / прогон сценариев / чтение / unlock / upgrade / drift / destroy, [ADR-009](../../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация)). Conventions, error-format, pagination, secret-masking (вкл. маскинг `state`/`spec` в GET-ответах), mapping-таблица — в корневом [operator-api.md](../operator-api.md). MCP-сторона — [mcp-tools/incarnations.md](../mcp-tools/incarnations.md).
+Доменная секция [Operator API](../operator-api.md): эндпоинты `/v1/incarnations*` (создание / прогон сценариев / чтение / unlock / upgrade / drift / destroy, [ADR-009](../../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация)) + глобальный read-view прогонов `/v1/runs*` (страница «All Runs»; прогоны принадлежат инкарнациям — handler и permission из incarnation-домена). Conventions, error-format, pagination, secret-masking (вкл. маскинг `state`/`spec` в GET-ответах), mapping-таблица — в корневом [operator-api.md](../operator-api.md). MCP-сторона — [mcp-tools/incarnations.md](../mcp-tools/incarnations.md).
 
 ## Endpoint-секции
 
-Mapping endpoint ↔ MCP-tool ↔ permission (таблица 12 роутов) — в корневом [operator-api.md → Incarnation (12)](../operator-api.md#incarnation-12--жизненный-цикл-runtime-инстансов-adr-009).
+Mapping endpoint ↔ MCP-tool ↔ permission (таблица 15 роутов) — в корневом [operator-api.md → Incarnation (15)](../operator-api.md#incarnation-15--жизненный-цикл-runtime-инстансов-adr-009); глобальные `/v1/runs*` — [operator-api.md → Runs (2)](../operator-api.md#runs-2--глобальный-read-view-прогонов-через-все-инкарнации).
 
 #### `POST /v1/incarnations` — создать instance
 
@@ -78,10 +78,10 @@ Permission: `incarnation.rerun-last`. MCP-tool: `keeper.incarnation.rerun-last`.
 - **create-путь** — `incarnation.spec.input` (то, что задекларировал оператор при создании);
 - **day-2-путь** — рецепт упавшего прогона `apply_runs.recipe.input` (читается по `apply_id` последнего snapshot-а того же `FOR UPDATE`; vault-refs хранятся строками, секреты не раскрыты).
 
-Работает **только из статуса `error_locked`**. Запрос отвергается `409 incarnation-locked` (`detail` поясняет — нужен обычный `unlock` + ручной `run`) в двух случаях:
+Работает **только из статуса `error_locked`**. Два кейса отказа — **разные problem-type** (оба `409 Conflict`, machine-readable различие для UI/SDK):
 
-- **статус не `error_locked`** (нечего перезапускать — прогона в ошибке нет);
-- **input упавшего прогона недоступен** (fail-closed): рецепт вычищен ретеншном Reaper (`purge_apply_runs`) либо это legacy-прогон без сохранённого рецепта (`recipe IS NULL`). Транзакция НЕ коммитится; оператор снимает блок обычным `unlock` и запускает нужный сценарий вручную с явным input.
+- **статус не `error_locked`** (нечего перезапускать — прогона в ошибке нет) → `409 incarnation-locked`;
+- **input упавшего прогона недоступен** (fail-closed): рецепт вычищен ретеншном Reaper (`purge_apply_runs`) либо это legacy-прогон без сохранённого рецепта (`recipe IS NULL`) → `409 rerun-input-unavailable` ([§ Типы ошибок](../operator-api.md#типы-ошибок)). Транзакция НЕ коммитится; оператор снимает блок обычным `unlock` и запускает нужный сценарий вручную с явным input.
 
 Тот же `apply_id` идёт и в `state_history`-snapshot unlock-перехода, и в перезапускаемый прогон — снимок коррелирует с прогоном.
 
@@ -97,7 +97,7 @@ Permission: `incarnation.rerun-last`. MCP-tool: `keeper.incarnation.rerun-last`.
 
 **Response `202 Accepted`:** `{"apply_id": "<ULID>", "incarnation": "redis-prod", "scenario": "add_user"}` — `scenario` эхует имя перезапущенного (упавшего) сценария.
 
-**Errors:** `403 forbidden` (нет `incarnation.rerun-last`), `404 not-found` (incarnation не существует), `409 incarnation-locked` (статус не `error_locked`; ИЛИ input упавшего прогона недоступен — рецепт вычищен ретеншном / legacy-прогон), `422 validation-failed` (пустой `reason` / `reason` длиннее 500 символов / невалидный path-`name`), `500 internal-error` (runner не сконфигурирован / транзакция / запуск прогона).
+**Errors:** `403 forbidden` (нет `incarnation.rerun-last`), `404 not-found` (incarnation не существует), `409 incarnation-locked` (статус не `error_locked`), `409 rerun-input-unavailable` (input упавшего day-2-прогона недоступен — рецепт вычищен ретеншном / legacy-прогон без рецепта; см. выше), `422 validation-failed` (пустой `reason` / `reason` длиннее 500 символов / невалидный path-`name`), `500 internal-error` (runner не сконфигурирован / транзакция / запуск прогона).
 
 **RBAC:** scope тот же, что у `incarnation.run` / `incarnation.unlock` — `coven=`/`service=`/`incarnation=` (приземляется по path-`name`: declared `covens ∪ {name}` + `service` из строки incarnation).
 
@@ -189,6 +189,90 @@ Permission: `incarnation.history`. MCP-tool: `keeper.incarnation.history`. Path-
 | `changed_by_aid` | `string` | FK на `operators(aid)`. |
 | `apply_id` | `string` (ULID) | ULID запуска. |
 | `created_at` | `string` (RFC 3339) | Когда. |
+
+#### `GET /v1/incarnations/{name}/runs` — список прогонов инкарнации
+
+Permission: `incarnation.history` (reuse read-tier: кто видит историю инкарнации, тот видит и её прогоны; отдельная permission не вводится). **REST-only — MCP-tool-а нет.** Path-param: `name`. OperationID: `listIncarnationRuns`.
+
+Read-view прогонов (свёртка `apply_runs` по `apply_id`), под UI «статус выполнения / текущая джоба». Прогон (apply_run) — **НЕ Voyage**: у одиночного прогона сценария свой read-view (закрывает UI-баг `apply_id`→`/voyages/` 404). Отличие от `GET …/history`: history — журнал **изменений state** (`state_history`, запись появляется после успешного коммита), runs — журнал **самих прогонов** (включая идущие `applying` и упавшие, у которых state-коммита не было).
+
+**Граница данных.** `apply_runs` хранит статус на **host-строку** (planned…orphaned), не per-task прогресс (`TaskEvent` агрегируется на Soul-е, [ADR-012](../../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add)). Единственная per-task деталь — адрес упавшей задачи на failed-строке (см. detail-эндпоинт ниже).
+
+**Query:** `offset` (≥0, default 0), `limit` (1..1000, default 50) — [§ Pagination](../operator-api.md#pagination); out-of-range → `400`.
+
+**Response `200`:** `{items: [RunSummaryEntry], offset, limit, total}`, новейшие сверху (`MIN(started_at) DESC`):
+
+| Поле | Тип | Смысл |
+|---|---|---|
+| `apply_id` | `string` (ULID) | ID прогона. |
+| `scenario` | `string` | Имя сценария прогона. |
+| `status` | `enum` | Агрегатный статус ВСЕГО прогона — свёртка host-строк: `applying` (хотя бы одна строка не терминальна), `failed` (все терминальны, есть `failed`/`orphaned` — приоритетнее `cancelled`), `cancelled` (все терминальны, есть `cancelled`, нет `failed`/`orphaned`), `success` (только `success`/`no_match`). |
+| `started_at` | `string` (RFC 3339) | `MIN(started_at)` по host-строкам. |
+| `finished_at` | `string` (RFC 3339, optional) | `MAX(finished_at)`, только когда ВСЕ host-строки финишировали; иначе ключ опущен (прогон ещё `applying`). |
+| `started_by_aid` | `string` (AID, optional) | Инициатор; ключ опущен, если инициатор снят. |
+
+**RBAC:** гейт — existence-`RequireAction(incarnation, history)`; per-`{name}` scope — in-handler inScope-предикат (тот же, что у History): incarnation вне Purview-scope или несуществующая → единый `404 not-found`.
+
+**Errors:** `400 malformed-request` (out-of-range `offset`/`limit`), `404 not-found`, `422 validation-failed` (невалидный path-`name`).
+
+#### `GET /v1/incarnations/{name}/runs/{apply_id}` — детали прогона (per-host)
+
+Permission: `incarnation.history`. **REST-only — MCP-tool-а нет.** Path-params: `name`, `apply_id` (ULID; не-ULID → `400 malformed-request`). OperationID: `getIncarnationRun`.
+
+Срез одного прогона по хостам: шапка (`apply_id`/`scenario`/`status`/`started_at`/`finished_at`/`started_by_aid` — форма списка выше) + `hosts[]`. На один хост приходится N строк (по Passage staged-render) — UI видит адрес упавшей задачи per-passage.
+
+**`hosts[]` — `RunHostStatusEntry`:**
+
+| Поле | Тип | Смысл |
+|---|---|---|
+| `sid` | `string` (FQDN) | Хост. |
+| `status` | `enum` | Host-level статус строки: `planned`/`claimed`/`running`/`dispatched`/`success`/`failed`/`cancelled`/`orphaned`/`no_match`. |
+| `passage` | `int` | Номер Passage строки. |
+| `failed_task_idx` | `int` (optional) | ЛОКАЛЬНЫЙ индекс упавшей задачи в `ApplyRequest` своего Passage; только на упавшем хосте (иначе ключ опущен). |
+| `failed_plan_index` | `int` (optional) | ГЛОБАЛЬНЫЙ сквозной `plan_index` той же задачи по всему плану сценария (ключ корреляции с планом); только на упавшем хосте. |
+| `error_summary` | `string` (optional) | Operator-facing причина (`task <idx> <module>: <message>`, secret-masked на write-path); только на упавшем хосте. |
+| `attempt` | `int` | Номер попытки строки. |
+| `cancel_requested` | `bool` | Запрошена ли отмена. |
+
+**Errors:** `400 malformed-request` (не-ULID `apply_id`), `404 not-found` (incarnation вне scope/не существует; `apply_id` не существует **или принадлежит другой инкарнации** — store-слой фильтрует `WHERE apply_id AND incarnation_name`, cross-incarnation чтение прогонов исключено), `422 validation-failed` (невалидный path-`name`).
+
+#### `GET /v1/runs` — глобальный список прогонов
+
+Permission: `incarnation.history` (reuse read-tier per-incarnation runs). **REST-only — MCP-tool-а нет.** OperationID: `listRuns`. Страница «All Runs» UI.
+
+Та же свёртка `apply_runs` по `apply_id`, но **через все инкарнации**: элемент — форма `RunSummaryEntry` (см. `GET …/runs` выше) + поле `incarnation` (`string`, инкарнация-владелец прогона — глобальный список без него нечитаем). Сортировка `started_at DESC, apply_id DESC` (новейшие сверху).
+
+**Query:**
+
+| Param | Тип | Смысл |
+|---|---|---|
+| `status` | `enum` (`applying`/`success`/`failed`/`cancelled`) | Опциональный фильтр по агрегатному статусу прогона. Применяется на SQL-уровне (иначе `total`/`offset` разъехались бы с постфильтром). Невалидное значение → `422 validation-failed`. |
+| `incarnation` | `string` | Опциональный фильтр по имени инкарнации-владельца. Невалидное имя → `422 validation-failed`. |
+| `offset` | `int` (≥0, default 0) | [§ Pagination](../operator-api.md#pagination). |
+| `limit` | `int` (default 50) | **Cap = 100** (не общий 1000: глобальная свёртка дороже плоского списка). Out-of-range / >100 → `400 malformed-request`. |
+
+**Response `200`:** `{items: [GlobalRunEntry], offset, limit, total}`; `total` — общее число прогонов под теми же фильтрами и scope.
+
+**RBAC (Purview, [ADR-047](../../adr/0047-purview.md#adr-047-purview--scoped-rbac-видимость-узлов-role-default_scope--расширенный-селектор)):** гейт — existence-`RequireAction(incarnation, history)` на chi-группе `/v1/runs`; сужение видимости — in-handler тем же scope-резолвом, что у `GET /v1/incarnations` (action=`history`): Purview-scope уходит в SQL подзапросом по таблице `incarnation` и AND-пересекается с пользовательскими фильтрами. **Fail-closed:** нет claims / scope не резолвится / пустой Purview → пустой список (`200`, НЕ `403` и НЕ прогоны всего флота).
+
+**Errors:** `400 malformed-request` (пагинация/limit>100), `403 forbidden` (нет `incarnation.history`), `422 validation-failed` (невалидный `status`/`incarnation`-фильтр), `500 internal-error`.
+
+#### `GET /v1/runs/stats` — сводные счётчики прогонов
+
+Permission: `incarnation.history`. **REST-only — MCP-tool-а нет.** OperationID: `getRunsStats`. Параметров нет.
+
+Счётчики прогонов по агрегатному статусу в границах Purview-scope оператора (тот же fail-closed резолв, что у `GET /v1/runs`: пустой scope → нулевой агрегат, `200`).
+
+**Response `200 RunsStatsReply`** — две корзины одинаковой формы:
+
+| Поле | Тип | Смысл |
+|---|---|---|
+| `all` | `object` | За всё время. |
+| `last_24h` | `object` | Прогоны, **стартовавшие** за последние 24 часа (окно по `started_at` прогона — та же ось, что порядок списка). |
+
+Форма корзины: `{total, applying, success, failed, cancelled}` (`int`; `total` = сумма; нулевые счётчики включены — enum закрыт; `failed` включает orphaned-хосты).
+
+**Errors:** `403 forbidden`, `500 internal-error`.
 
 #### ~~`GET /v1/incarnations/{name}/tides` — список Tide-прогонов~~ — superseded-by `GET /v1/voyages` ([ADR-043](../../adr/0043-voyage.md#adr-043-voyage--унифицированный-батчевый-прогон), эндпоинт `/v1/tides` и таблица `tides` удалены в Wave 5; раздел ниже — историческая запись)
 

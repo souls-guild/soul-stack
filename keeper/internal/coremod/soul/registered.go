@@ -56,11 +56,16 @@ const (
 
 // Store — узкое подмножество keeper/internal/soul, нужное модулю.
 // Полный pgxpool наружу не подсовываем — это упрощает unit-тестирование
-// (fake реализует только три метода) и фиксирует контракт.
+// (fake реализует только четыре метода) и фиксирует контракт.
+//
+// SoulsWithSoulprint — batch-чек «typed soulprint записан в PG» (подмножество
+// sids с `soulprint_facts IS NOT NULL`) для facts-части барьера онбординга
+// (ADR-061 amendment: refresh_soulprint ⇒ барьер ждёт presence И первый soulprint).
 type Store interface {
 	SelectBySID(ctx context.Context, sid string) (*keepersoul.Soul, error)
 	Insert(ctx context.Context, s *keepersoul.Soul) error
 	UpdateCoven(ctx context.Context, sid string, coven []string) ([]string, error)
+	SoulsWithSoulprint(ctx context.Context, sids []string) (map[string]struct{}, error)
 }
 
 // PresenceChecker — узкая поверхность batch-проверки «жив ли Redis SID-lease»
@@ -209,6 +214,12 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	if aerr != nil {
 		return util.SendFailed(stream, aerr.Error())
 	}
+	// refresh_soulprint ⇒ барьер ждёт presence И первый typed soulprint (ADR-061
+	// amendment): render следующего Passage читает soulprint.self.*, presence
+	// одного lease его не гарантирует (запись первого репорта асинхронна).
+	if awaitCfg != nil {
+		awaitCfg.requireFacts = refreshSoulprint
+	}
 
 	// replace + пустой coven — ошибка (двойная footgun-защита).
 	if modeParam == ModeReplace && len(wanted) == 0 {
@@ -231,31 +242,24 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		}
 	}
 
-	// Барьер: блокирующе ждём presence по всем SID до min_count/timeout.
-	var online, pending []string
-	satisfied := true
+	// Барьер: блокирующе ждём готовность (presence, при refresh_soulprint — и
+	// первый typed soulprint) по всем SID до min_count/timeout.
+	var barrier awaitResult
+	barrier.satisfied = true
 	if awaitCfg != nil {
-		var lastErr error
-		online, pending, satisfied, lastErr, err = m.awaitOnline(ctx, sids, awaitCfg)
+		barrier, err = m.awaitOnline(ctx, sids, awaitCfg)
 		if err != nil {
 			return util.SendFailed(stream, err.Error())
 		}
-		if !satisfied {
+		if !barrier.satisfied {
 			// B1-strict: недобор кворума к таймауту → failed (fail-stop прогона,
 			// state не коммитится → error_locked).
-			msg := fmt.Sprintf(
-				"onboarding barrier: %d/%d souls online to await_min_count=%d within %s (pending: %v)",
-				len(online), len(sids), awaitCfg.minCount, awaitCfg.timeout, pending)
-			// Persistent presence-сбой на последних опросах: иначе infra-проблема
-			// (redis недоступен) маскируется под «хосты не онбордились».
-			if lastErr != nil {
-				msg += fmt.Sprintf(" (last presence error: %v)", lastErr)
-			}
+			msg := barrierTimeoutMessage(sids, awaitCfg, barrier)
 			return util.SendFailed(stream, msg)
 		}
 	}
 
-	out := buildOutput(sids, savedFirst, modeParam, anyCreated, removedFirst, refreshSoulprint, awaitCfg != nil, online, pending, satisfied)
+	out := buildOutput(sids, savedFirst, modeParam, anyCreated, removedFirst, refreshSoulprint, awaitCfg != nil, barrier.online, barrier.pending, barrier.satisfied)
 	return util.SendFinal(stream, anyChanged, out)
 }
 

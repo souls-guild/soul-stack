@@ -43,9 +43,11 @@ var (
 	ErrIncarnationNotErrorLocked = errors.New("incarnation: not in error_locked status (rerun-last requires error_locked)")
 	// ErrRerunInputUnavailable — rerun-last не может восстановить input упавшего
 	// day-2-прогона: последний snapshot state_history указывает на apply_run,
-	// чьего рецепта (`apply_runs.recipe`) нет — recipe IS NULL (legacy-путь
-	// dispatchWave, Insert(running) рецепт не несёт) ЛИБО строка apply_run
-	// вычищена Reaper-ретеншном (purge_apply_runs). Fail-closed: без сохранённого
+	// чьего рецепта (`apply_runs.recipe`) нет — recipe IS NULL по одной из причин:
+	// прогон упал ДО dispatch (render_failed/no_hosts/preflight) → терминальную
+	// строку пишет sentinel-путь ensureTerminalApplyRun (run.go) без рецепта; ЛИБО
+	// legacy-путь dispatchWave (Insert(running) рецепт не несёт); ЛИБО строка
+	// apply_run вычищена Reaper-ретеншном (purge_apply_runs). Fail-closed: без сохранённого
 	// input перезапуск day-2-сценария применил бы дефолты / упал на input-
 	// валидации — вместо этого отказ, оператор снимает блок обычным unlock и
 	// запускает нужный сценарий вручную с явным input. create-путь (последний
@@ -1263,7 +1265,8 @@ const rerunLastScenarioLabel = "rerun-last"
 //   - [ErrIncarnationNotFound]       — name не существует (404).
 //   - [ErrIncarnationNotErrorLocked] — статус не error_locked (409).
 //   - [ErrRerunInputUnavailable]     — day-2-путь, но input упавшего прогона
-//     недоступен (recipe IS NULL / apply_run вычищен) (409).
+//     недоступен (recipe IS NULL: ранний abort без рецепта / legacy / apply_run
+//     вычищен — полный список у sentinel) (409).
 //
 // reason пишется в audit-payload caller-ом (state_history-схема MVP не несёт
 // metadata-колонки); previous_status возвращается в [UnlockResult].

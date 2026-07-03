@@ -7,6 +7,8 @@
 > **Amendment (Teleport by-name transport) — реализован (пилот).** Второй транспортный режим `transport: teleport` (by-name через Teleport Proxy, host-verify через Teleport identity-file, C1 неприменим) + keeper-side Teleport-Dialer + retry-до-join + wire-up daemon (teleport-режим) + guard-тесты. См. §Amendment ниже. direct-режим bootstrap-модуля в daemon-е пока не подключён (BootstrapDial=nil → не регистрируется) — это generic-live-слайс.
 >
 > **Amendment (full-install режим для платформ без cloud-init userdata) — Слайс 1/3 реализован.** `core.bootstrap.delivered` получает второй режим работы — **full-install** по Teleport SSH (ставит ВЕСЬ setup, а не только токен) для платформ без cloud-init userdata (напр. WB namespace без `ci_user_data`). Install-blueprint вынесен в shared [keeper/internal/soulinstall](../../keeper/internal/soulinstall) — единый источник правды (canonical `Blueprint`), переиспользуемый обоими путями онбординга. Слайс 1 (blueprint-вынос: `Blueprint`/`RenderCloudInitYAML`/`RenderInstallScript`/`InstallStep` + переключение `cloudinit`-пакета на shared + тесты) **готов**; Слайс 2 (install-режим в самом модуле delivered) и Слайс 3 (scenario `generate_userdata:false`+`install:true`+live) — следующие. См. §Amendment (full-install режим) ниже.
+>
+> **Amendment (init-фаза + активация unit-а + `event_stream_port`) — реализован, live-обходами доказан.** Live-прогон push-install-flow упёрся в две стены: (5) токен доставлялся, но никем не redeem-ился — soul-side «подхвата» token-файла не существует, seed создаёт ТОЛЬКО `soul init`, и soul run падал рестарт-циклом «SoulSeed not found»; (6) blueprint выводил ОБА порта soul.yml из одного `bootstrap_endpoint` — soul dial-ил EventStream на Bootstrap-порт («Unimplemented: method EventStream»). Плюс дыра: push-install делал только `systemctl start` без `daemon-reload`/`enable` — после ребута VM unit не поднимался. См. §Amendment (init-фаза) ниже.
 
 **Контекст.** [ADR-061](0061-onboarding-await-and-midrun-reresolve.md) ввёл единый create-прогон provision→онбординг→роль: `core.cloud.created` создаёт N VM, register-output несёт их `sid` + plain bootstrap-токены, затем `core.soul.registered` с `await_online` блокирующе ждёт онбординга. Между «VM создана» и «`soul`-агент online» VM должна получить свой bootstrap-токен — без него CSR-онбординг ([docs/soul/onboarding.md](../soul/onboarding.md)) не стартует.
 
@@ -24,9 +26,10 @@ cloud-init (B-flat, [ADR-017(h)](0017-keeper-side-core.md)) ставит на VM
 2. ephemeral ed25519-keypair + `SshProvider.Sign(pubkey)` → `ssh.AuthMethod`-ы (переиспользует `push.NewEphemeralEd25519` + `push.AuthMethodsFromSign`). Приватник **НИКОГДА** не покидает Keeper.
 3. `push.Dial(DialConfig{Host: primary_ip, HostAuthorities: <host-CA из Vault>, …})` → `Session` (CA-signed host-cert verify — тот же, что push).
 4. `session.Run("install -d -m 0700 /etc/soul && umask 077 && cat > <token_path> && chmod 0400 <token_path>", tokenBytes)` — **★ токен в STDIN, НЕ в argv** (иначе утечёт в `ps`/audit.log/journald на самой VM).
-5. если `start_soul` — `session.Run("systemctl start soul", nil)`.
+5. `session.Run("test -e /var/lib/soul-stack/seed/current/cert.pem || SOUL_BOOTSTRAP_TOKEN=\"$(cat <token_path>)\" /usr/local/bin/soul init --config /etc/soul/soul.yml", nil)` — **redeem токена** (CSR→Bootstrap-RPC→SoulSeed; §Amendment init-фаза). Guard по seed-cert = идемпотентность (токен single-use); литеральная `$(cat …)` раскрывается subshell-ом на VM — токен не в argv keeper-а.
+6. если `start_soul` — `session.Run("systemctl daemon-reload && systemctl enable soul && systemctl start soul", nil)` (parity с cloud-init runcmd; enable переживает ребут VM).
 
-**B1-strict.** Ошибка любого хоста (Authorize-deny / connect-fail / write-fail / start-fail) → шаг `failed` → state не коммитится → `error_locked`. Партиальной доставки нет.
+**B1-strict.** Ошибка любого хоста (Authorize-deny / connect-fail / write-fail / init-fail / start-fail) → шаг `failed` → state не коммитится → `error_locked`. Партиальной доставки нет.
 
 ## Адресация и сторона
 
@@ -43,7 +46,7 @@ cloud-init (B-flat, [ADR-017(h)](0017-keeper-side-core.md)) ставит на VM
 | `token_path` | string | — | `/etc/soul/token` | Путь файла токена на VM. |
 | `ssh_user` | string | — | `root` | SSH-пользователь. |
 | `ssh_port` | int (1..65535) | — | `22` | TCP-порт sshd. |
-| `start_soul` | bool | — | `true` | `systemctl start soul` после доставки токена. |
+| `start_soul` | bool | — | `true` | Активация unit-а после init: `systemctl daemon-reload && systemctl enable soul && systemctl start soul`. `soul init` (шаг 5) выполняется независимо от этого флага. |
 
 ## Выходной контракт (`output:` модуля)
 
@@ -125,7 +128,26 @@ Drift между двумя рендерерами невозможен конс
 
 **Cross-ref:** [ADR-017(h)](0017-keeper-side-core.md) — `generate_userdata` НЕ единственный путь онбординга (full-install по SSH — альтернатива для платформ без userdata).
 
-## Что закрывает / отвергнуто
+## Amendment 2026-07-02 — init-фаза в потоке A1, активация unit-а, `event_stream_port` в cloud_init
+
+Три дефекта push-install-flow, каждый доказан live-обходом (после ручного обхода soul выходил в CONNECTED):
+
+**(5-я стена, blocker) Нет init-фазы — доставленный токен никем не redeem-ился.** A1 заканчивался на «токен в `token_path` + `systemctl start soul`», молча предполагая, что soul-агент сам подхватит token-файл. Такого механизма **не существует**: `/etc/soul/token` знали только delivered-модуль и доки, потребителя в `soul/` нет. SoulSeed создаёт ТОЛЬКО `soul init` (токен из `--token` > env `SOUL_BOOTSTRAP_TOKEN`, STDIN не читается; CSR→Bootstrap-RPC→seed в `<paths.seed>/current/`), и `soul run` падал рестарт-циклом «SoulSeed not found — run soul init --token first».
+
+Фикс — новый шаг 5 потока A1 между token-write и активацией (оба режима, token-only и install):
+
+```
+test -e /var/lib/soul-stack/seed/current/cert.pem || SOUL_BOOTSTRAP_TOKEN="$(cat <token_path>)" /usr/local/bin/soul init --config /etc/soul/soul.yml
+```
+
+- **Идемпотентность обязательна:** guard по seed-cert — токен single-use, retry шага после успешного redeem без guard завалил бы хост. Путь guard-а закреплён константой `soulinstall.SeedCertPath` + sync-guard-тест с layout-константами `soul/internal/seed` (`currentLink`/`CertFile`) и `paths.seed` генерённого soul.yml (`TestSeedCertPath_SyncWithSoulSeedLayout`).
+- **Secret-floor сохранён:** команда несёт литеральную нераскрытую `$(cat <token_path>)`, раскрывается subshell-ом на VM — токен НЕ в argv keeper-а; STDIN пуст. Бит-в-бит симметрия self-onboard-фазы cloud-init.tmpl.
+- **token-write остаётся:** init читает токен из файла — второй передачи секрета нет, контракт `token_path` additive.
+- `soul init` выполняется независимо от `start_soul` (redeem — суть доставки, start — отдельная опция).
+
+**(Дыра, major) Нет `daemon-reload` + `enable`.** push-install делал только `systemctl start soul` — cloud-init.tmpl runcmd делает `daemon-reload` (подхват свежезаписанного unit-а) + `enable` (unit переживает ребут) + `start`. Без enable после ребута VM soul.service не поднимался. Фикс: `start_soul` теперь выполняет цепочку `systemctl daemon-reload && systemctl enable soul && systemctl start soul` (все три идемпотентны, безопасно в обоих режимах).
+
+**(6-я стена, blocker) `event_stream_port` в soul.yml = bootstrap-порту.** `keeper.yml::cloud_init` нёс только `bootstrap_endpoint` (`host:port`), и blueprint выводил ОБА порта soul.yml из него — soul run dial-ил EventStream на Bootstrap-only listener (`Unimplemented: method EventStream not implemented`; EventStream живёт на отдельном mTLS-порту, ADR-012(b)). Допущение «за LB-ом порт один» на live-топологиях не выполняется. Фикс: новое опциональное поле **`cloud_init.event_stream_port`** (int) → `cloudinit.Config.EventStreamPort` → `soulinstall.Blueprint.EventStreamPort` → `event_stream_port` soul.yml в обоих рендерерах (cloud-init userdata и install-script); `bootstrap_port` по-прежнему из `bootstrap_endpoint`. `0`/опущено → back-compat fallback на bootstrap-порт (single-port LB, прежнее поведение бит-в-бит).
 
 - **Закрывает BUG#2 cloud-provision** (заглушка `keeper.push.applied` keeper-side не существовала).
 - **Имя `keeper.push.applied` отвергнуто** как адрес keeper-side core: `push.applied` — это audit-event-тип оператор-инициированного push-прогона Destiny (`POST /v1/push/apply`), не keeper-side модуль доставки токена. Совпадение было иллюстративной заглушкой scenario, вводившей в заблуждение.

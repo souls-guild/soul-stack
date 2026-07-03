@@ -38,6 +38,19 @@ if len(hosts)==0 && !allKeeperTasks(scn.Tasks) && !provisionsRoster { abort no_h
 
 **Cross-ref:** amendment 2026-06-28 (no_hosts-bypass — родственный chicken-egg на run.go).
 
+## Amendment 2026-07-02 — барьер ждёт presence И первый soulprint при `refresh_soulprint`
+
+**Проблема (структурная гонка, 7-я стена live-create).** Барьер `await_online` ждал **только** presence-lease (Redis SID-lease = транспорт жив), НЕ первый typed soulprint в PG; `refresh_soulprint` был пассивным echo-флагом (пере-резолв roster из registry, facts не ждёт и не запрашивает). Сразу после барьера render следующего Passage (redis `vars.yml`: `soulprint.self.os.arch`) читает soulprint, но `souls.soulprint_facts` ещё `NULL`: Soul шлёт initial SoulprintReport при connect ([ADR-018](0018-soulprint-typed.md), best-effort), его обработка асинхронна, на provision-from-zero барьер и render укладываются в одну секунду → `render_failed` «no such key: os». Флот `create_from_souls` гонку не ловил — онбординг случался за часы до create, facts давно в PG.
+
+**Решение (Вариант 1 — facts-wait в барьере).** При `refresh_soulprint: true` **и** `await_online: true` барьер дополнительно требует от каждого SID записанного typed soulprint (`souls.soulprint_facts IS NOT NULL`, batch-чек `soul.SelectSoulsWithSoulprint` через расширенный `Store` модуля). SID **«готов» = online (lease) И facts записаны**; `await_min_count` считается по готовым. Тот же `await_poll_interval`, тот же `await_timeout`.
+
+- **Диагностика таймаута (B1-strict)** различает классы недобора: `not online: [sids]` (нет lease — онбординг не состоялся) и `online but factless: [sids]` (lease есть, первый репорт ещё не записан — гонка/потеря initial-send). Без разделения инфра-гонка неотличима от несостоявшегося онбординга.
+- **Идемпотентность.** `create_from_souls` / rerun: facts уже в PG → барьер проходит на первом же опросе (нулевое ожидание). Ждёт первый soulprint только provision-from-zero — в норме мс-секунды (initial-send при connect есть).
+- **Back-compat.** `refresh_soulprint: false`/опущен → прежний presence-only барьер, facts не опрашиваются. `refresh_soulprint` без `await_online` — барьера нет вообще (Stratify-эмиттер + re-resolve, §S2/§S3, не меняются).
+- **Справочно [ADR-018](0018-soulprint-typed.md).** Initial-report при connect остаётся best-effort — не гарантирован к моменту lease; гонку компенсирует keeper-side facts-wait, ADR-018 не меняется.
+
+**Отвергнуто/отложено (Вариант 2, backlog).** Активный запрос soulprint (`SoulprintRequest` в `FromKeeper` oneof) — правка proto-контракта ради случая, который закрывается пассивным ожиданием записи; вернуться, если initial-send покажет систематические потери.
+
 **Контекст.** Целевой сценарий — **один create-scenario** разворачивает N-шардовый кластер из «ничего»:
 
 1. `core.cloud.provisioned` (`on: keeper`, [ADR-017](0017-keeper-side-core.md)) создаёт N VM, register-output несёт их `sid` / bootstrap-токены / cloud-метаданные;
@@ -117,6 +130,7 @@ Single-binary провижн-прогон с долгим барьером `awai
 - `keeper.yml::max_await_timeout` (duration, default 30m) — потолок барьера.
 - output `register.<name>` дополнен `online[]` / `pending[]` / `satisfied`.
 - presence-источник барьера — Redis SID-lease, не PG.
+- при `refresh_soulprint: true` барьер ждёт presence **И** первый typed soulprint (`souls.soulprint_facts IS NOT NULL`); таймаут-диагностика различает `not online` / `online but factless` (amendment 2026-07-02).
 
 ## Отвергнутые альтернативы
 
@@ -140,4 +154,5 @@ Single-binary провижн-прогон с долгим барьером `awai
 - S3: scenario-runner пере-резолвит roster на refresh-границе (live-snapshot текущего online-набора); `register.<name>.refreshed` эхает флаг.
 - no_hosts-bypass (amendment 2026-06-28): два класса provision-from-zero исполняются на пустом roster — (а) all-keeper (`allKeeperTasks`), (б) mixed с refresh-эмиттером (`config.HasRefreshEmitter`, roster пере-резолвится mid-run §S2/§S3); host-only и mixed-БЕЗ-refresh держат no_hosts; Essence keeper-контекст при пустом roster; guard-тесты (keeper-only→исполняет / host-only→no_hosts / mixed+refresh→доходит до dispatch / mixed-без-refresh→no_hosts / юнит `allKeeperTasks` + юнит `HasRefreshEmitter`).
 - size-asserts-гейт (amendment 2026-06-29): size-asserts деплой-веток redis (`create/cluster.yml`/`create/sentinel.yml`/`migrate_cluster/cluster.yml`) гейтятся `when: "!(has(input.provision) && input.provision.enabled)"` (STATIC, pre-flight placeholder-skip при provision); roster-инвариант на provision-пути гарантируется `count`-формулой `redis-provision.yml` + `await_online`-барьером, НЕ pre-flight-ом; guard-тесты (provision.enabled+пустой roster→skip не fail / без provision+mismatch→`ErrAssertFailed`); pre-flight остаётся не-staged (правится сервис-DSL, не `EvalAsserts`).
+- facts-wait барьера (amendment 2026-07-02): при `refresh_soulprint: true` барьер засчитывает SID только с записанным typed soulprint; guard-тесты (factless online → ждёт, после facts → проход / facts уже в PG → мгновенный проход rerun-пути / timeout factless → failed «online but factless» / оба класса в диагностике / back-compat `refresh_soulprint: false` → presence-only, facts не опрашиваются / persistent facts-read-сбой → failed).
 - Открытый риск: standalone staged-recovery долгого барьера ([ADR-056 §S4](0056-staged-render-passage.md)) — provision-сценарии рекомендуется гнать через Voyage.

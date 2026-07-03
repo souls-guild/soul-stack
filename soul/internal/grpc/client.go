@@ -563,6 +563,14 @@ func (s *StreamSession) SendErrandResult(r *keeperv1.ErrandResult) error {
 	return s.stream.Send(&keeperv1.FromSoul{Payload: &keeperv1.FromSoul_ErrandResult{ErrandResult: r}})
 }
 
+// FetchModule открывает server-streaming fetch байтов SoulModule-плагина по
+// той же mTLS-ClientConn, что EventStream (ADR-065(a)): артефакт едет отдельным
+// HTTP/2-стримом и не душит control-plane. writeMu не нужен — это независимый
+// RPC, не Send в bidi-stream. Реализует coremod/module.Fetcher.
+func (s *StreamSession) FetchModule(ctx context.Context, req *keeperv1.PluginFetchRequest) (grpc.ServerStreamingClient[keeperv1.PluginChunk], error) {
+	return keeperv1.NewKeeperClient(s.conn).FetchModule(ctx, req)
+}
+
 // Close корректно завершает сессию: CloseSend → cancel ctx → conn.Close.
 // Идемпотентен.
 func (s *StreamSession) Close() error {

@@ -53,6 +53,8 @@ assert:
         url: https://github.com/prometheus/node_exporter/releases/download/v1.11.1/node_exporter-1.11.1.linux-amd64.tar.gz
         path: /tmp/node_exporter-1.11.1.tar.gz
         mode: "0644"
+        # back-compat: github-default → SSRF-guard держится (allow_private default false).
+        allow_private: false
 
     # Единственный core.archive.extracted в плане.
     - module: core.archive.extracted

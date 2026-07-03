@@ -89,9 +89,11 @@ assert:
   task_absent:
     # provision.yml шаги ОТСУТСТВУЮТ (include-when has(input.provision) false →
     # group-drop). core.cloud.created — создание VM; core.soul.registered — барьер
-    # онбординга. Ни тот, ни другой не эмитится без provision.
+    # онбординга; core.module.installed — доставка плагина (ADR-065). Никто не
+    # эмитится без provision.
     - module: core.cloud.created
     - module: core.soul.registered
+    - module: core.module.installed
 
   state_changes:
     redis_type: sentinel

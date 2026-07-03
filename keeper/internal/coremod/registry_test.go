@@ -37,6 +37,9 @@ func (noopSoulStore) Insert(_ context.Context, _ *keepersoul.Soul) error { retur
 func (noopSoulStore) UpdateCoven(_ context.Context, _ string, c []string) ([]string, error) {
 	return c, nil
 }
+func (noopSoulStore) SoulsWithSoulprint(_ context.Context, _ []string) (map[string]struct{}, error) {
+	return map[string]struct{}{}, nil
+}
 
 type noopCloudSouls struct{}
 

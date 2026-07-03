@@ -7,10 +7,11 @@
 //   - kind-specific обёртки [CloudDriverPlugin], [SshProviderPlugin], общий
 //     приватный [Plugin] с gRPC-conn;
 //   - kind-specific дефолт SocketDir (`/var/run/soul-stack-keeper/plugins`);
-//   - фильтр Discover-результатов: на Keeper-host принимаются только
-//     cloud_driver и ssh_provider;
+//   - фильтр Discover-результатов: на Keeper-host принимаются cloud_driver,
+//     ssh_provider и soul_module (последний — реестр для раздачи Soul-ам,
+//     эпик core.module.installed; Spawn его отвергает);
 //   - [FilterByCatalog] для cross-check найденных плагинов с реестром
-//     `keeper.yml::plugins.{cloud_drivers,ssh_providers}`.
+//     `keeper.yml::plugins.{cloud_drivers,ssh_providers,soul_modules}`.
 package pluginhost
 
 import (
@@ -132,8 +133,10 @@ type Plugin struct {
 }
 
 // Discover — Keeper-host discovery: ищет плагины в cacheRoot и оставляет
-// только kind ∈ {cloud_driver, ssh_provider}. Soul-плагины и невалидные
-// записи попадают в warnings.
+// только kind ∈ {cloud_driver, ssh_provider, soul_module}. soul_module Keeper
+// НЕ spawn-ит ([Host.Spawn] его отвергает) — держит в реестре для раздачи
+// Soul-ам (эпик core.module.installed). Прочие kind-ы и невалидные записи
+// попадают в warnings.
 //
 // Раскладка кеша (R-nested layout, A1-S1 — git-резолвер наполняет слоты):
 //
@@ -144,14 +147,15 @@ type Plugin struct {
 //	      manifest.yaml
 //	      soul-cloud-<name>           # для kind=cloud_driver
 //	      soul-ssh-<name>             # для kind=ssh_provider
+//	      soul-mod-<name>             # для kind=soul_module
 //
 // Discovery идёт через `current` (одноуровневый резолв символа): для каждого
 // каталога `<ns>-<name>` дискаверится `<ns>-<name>/current/`. Каталоги без
 // валидного `current` (резолвер ещё не наполнил слот) попадают в warnings.
 //
-// Наполнение кеша git-резолвером (`plugins.{cloud_drivers,ssh_providers}` →
-// commit_sha-слот) делает [plugingit.Resolver] ДО Discover при старте Keeper-а;
-// [FilterByCatalog] фильтрует найденное по реестру.
+// Наполнение кеша git-резолвером (`plugins.{cloud_drivers,ssh_providers,
+// soul_modules}` → commit_sha-слот) делает [plugingit.Resolver] ДО Discover
+// при старте Keeper-а; [FilterByCatalog] фильтрует найденное по реестру.
 func Discover(cacheRoot string) ([]Discovered, []string, error) {
 	entries, err := os.ReadDir(cacheRoot)
 	if err != nil {
@@ -178,14 +182,14 @@ func Discover(cacheRoot string) ([]Discovered, []string, error) {
 		all = append(all, found...)
 		warnings = append(warnings, warns...)
 	}
-	keeperOnly, filterWarns := sharedhost.FilterByKinds(all, []string{KindCloudDriver, KindSSHProvider})
+	keeperOnly, filterWarns := sharedhost.FilterByKinds(all, []string{KindCloudDriver, KindSSHProvider, KindSoulModule})
 	return keeperOnly, append(warnings, filterWarns...), nil
 }
 
 // FilterByCatalog оставляет в `found` только те плагины, чьё `manifest.name`
-// упомянуто в каталоге `keeper.yml::plugins.{cloud_drivers,ssh_providers}`.
-// Сравнение идёт по полю `name` (PluginCatalogEntry.Name) — это тот же
-// kebab-case, что и `manifest.name`.
+// упомянуто в каталоге `keeper.yml::plugins.{cloud_drivers,ssh_providers,
+// soul_modules}`. Сравнение идёт по полю `name` (PluginCatalogEntry.Name) —
+// это тот же kebab-case, что и `manifest.name`.
 //
 // Возвращает отфильтрованный список и список warnings:
 //
@@ -202,45 +206,51 @@ func FilterByCatalog(found []Discovered, plugins *config.KeeperPlugins) ([]Disco
 	// found валидировал оба списка одновременно. set-ы пустые если nil-блок.
 	wantCloud := indexEntries(plugins.CloudDrivers)
 	wantSSH := indexEntries(plugins.SSHProviders)
+	wantModules := indexEntries(plugins.SoulModules)
+
+	// Каталог-ключ per kind — единая точка соответствия kind → yaml-список.
+	catalogKey := map[string]string{
+		KindCloudDriver: "cloud_drivers",
+		KindSSHProvider: "ssh_providers",
+		KindSoulModule:  "soul_modules",
+	}
+	want := map[string]map[string]struct{}{
+		KindCloudDriver: wantCloud,
+		KindSSHProvider: wantSSH,
+		KindSoulModule:  wantModules,
+	}
 
 	var (
 		out      []Discovered
 		warnings []string
 	)
-	seenCloud := make(map[string]bool, len(wantCloud))
-	seenSSH := make(map[string]bool, len(wantSSH))
+	seen := map[string]map[string]bool{
+		KindCloudDriver: make(map[string]bool, len(wantCloud)),
+		KindSSHProvider: make(map[string]bool, len(wantSSH)),
+		KindSoulModule:  make(map[string]bool, len(wantModules)),
+	}
 	for _, d := range found {
-		switch d.Manifest.Kind {
-		case KindCloudDriver:
-			if _, ok := wantCloud[d.Manifest.Name]; ok {
-				out = append(out, d)
-				seenCloud[d.Manifest.Name] = true
-			} else {
-				warnings = append(warnings, fmt.Sprintf(
-					"plugin %s (kind=cloud_driver) not declared in keeper.yml::plugins.cloud_drivers",
-					d.Manifest.Address()))
-			}
-		case KindSSHProvider:
-			if _, ok := wantSSH[d.Manifest.Name]; ok {
-				out = append(out, d)
-				seenSSH[d.Manifest.Name] = true
-			} else {
-				warnings = append(warnings, fmt.Sprintf(
-					"plugin %s (kind=ssh_provider) not declared in keeper.yml::plugins.ssh_providers",
-					d.Manifest.Address()))
-			}
+		kind := d.Manifest.Kind
+		wantNames, ok := want[kind]
+		if !ok {
+			continue
+		}
+		if _, declared := wantNames[d.Manifest.Name]; declared {
+			out = append(out, d)
+			seen[kind][d.Manifest.Name] = true
+		} else {
+			warnings = append(warnings, fmt.Sprintf(
+				"plugin %s (kind=%s) not declared in keeper.yml::plugins.%s",
+				d.Manifest.Address(), kind, catalogKey[kind]))
 		}
 	}
-	for name := range wantCloud {
-		if !seenCloud[name] {
-			warnings = append(warnings, fmt.Sprintf(
-				"keeper.yml::plugins.cloud_drivers[name=%s] declared but binary not found in cache", name))
-		}
-	}
-	for name := range wantSSH {
-		if !seenSSH[name] {
-			warnings = append(warnings, fmt.Sprintf(
-				"keeper.yml::plugins.ssh_providers[name=%s] declared but binary not found in cache", name))
+	for _, kind := range []string{KindCloudDriver, KindSSHProvider, KindSoulModule} {
+		for name := range want[kind] {
+			if !seen[kind][name] {
+				warnings = append(warnings, fmt.Sprintf(
+					"keeper.yml::plugins.%s[name=%s] declared but binary not found in cache",
+					catalogKey[kind], name))
+			}
 		}
 	}
 	return out, warnings

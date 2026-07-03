@@ -54,6 +54,7 @@ assert:
             version: "0.40.0"
             sha256: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
             base_url: "https://github.com/vectordotdev/vector/releases/download"
+            allow_private: false
             bin_dir: /usr/local/bin
             user: vector
             group: vector
@@ -98,6 +99,7 @@ assert:
             version: "0.40.0"
             sha256: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
             base_url: "https://github.com/vectordotdev/vector/releases/download"
+            allow_private: false
             bin_dir: /usr/local/bin
             user: vector
             group: vector

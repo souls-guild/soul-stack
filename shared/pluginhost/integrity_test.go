@@ -55,7 +55,7 @@ func TestSealDigestWritesReadOnlySidecar(t *testing.T) {
 	dir := t.TempDir()
 	bin := writePluginBin(t, dir, "payload")
 
-	sidecar := filepath.Join(dir, digestSidecarName)
+	sidecar := filepath.Join(dir, DigestSidecarName)
 	if err := sealDigest(bin, sidecar); err != nil {
 		t.Fatalf("sealDigest: %v", err)
 	}

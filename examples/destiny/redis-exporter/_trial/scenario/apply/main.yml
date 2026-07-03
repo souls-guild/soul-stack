@@ -31,6 +31,12 @@ input:
     required: true
     secret: true
     min_length: 16
+  # base_url_override — опциональный проброс зеркала/nexus в destiny.base_url.
+  # Пуст (default "") → destiny берёт свой default (GitHub Releases). Нужен
+  # L0-кейсу base-url-override (зеркало node-exporter).
+  base_url_override:
+    type: string
+    default: ""
 
 tasks:
   - name: Apply redis-exporter destiny
@@ -42,3 +48,4 @@ tasks:
         arch:           "${ input.arch }"
         redis_socket:   "${ input.redis_socket }"
         redis_password: "${ input.redis_password }"
+        base_url:       "${ input.base_url_override != '' ? input.base_url_override : 'https://github.com/oliver006/redis_exporter/releases/download' }"

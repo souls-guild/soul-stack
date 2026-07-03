@@ -379,6 +379,11 @@ tasks:
         # arch НЕ передаём: destiny берёт его напрямую из soulprint.self.os.arch (доступен
         # в destiny-CEL) — incarnation может смешивать amd64/arm64-хосты.
         listen: "${ default(essence.node_exporter_listen, ':9100') }"
+        # Корень загрузки: essence-override на внутреннее зеркало/nexus-proxy (хосты без
+        # доступа к github.com); default — GitHub Releases (back-compat).
+        base_url: "${ default(essence.node_exporter_base_url, 'https://github.com/prometheus/node_exporter/releases/download') }"
+        # SSRF-guard opt-out при private-resolve base_url (паттерн binary_allow_private); default false — guard держится.
+        allow_private: "${ default(essence.node_exporter_allow_private, false) }"
 
   # redis-exporter: метрики Redis через unix-сокет (--redis.addr=unix://<socket>). ★ Находка B:
   # redis на ACL БЕЗ requirepass (default_admin-редизайн убрал requirepass) → exporter ОБЯЗАН
@@ -394,6 +399,9 @@ tasks:
         version: "${ default(essence.redis_exporter_version, '1.62.0') }"
         sha256:  "${ default(essence.redis_exporter_sha256, '') }"
         listen:  "${ default(essence.redis_exporter_listen, ':9121') }"
+        base_url: "${ default(essence.redis_exporter_base_url, 'https://github.com/oliver006/redis_exporter/releases/download') }"
+        # SSRF-guard opt-out при private-resolve base_url (паттерн binary_allow_private); default false — guard держится.
+        allow_private: "${ default(essence.redis_exporter_allow_private, false) }"
         redis_user:     monitoring
         redis_password: "${ vault('secret/redis/' + incarnation.name + '/users/monitoring#password') }"
 
@@ -413,6 +421,9 @@ tasks:
       input:
         version:       "${ default(essence.vector_version, '0.40.0') }"
         sha256:        "${ default(essence.vector_sha256, '') }"
+        base_url:      "${ default(essence.vector_base_url, 'https://github.com/vectordotdev/vector/releases/download') }"
+        # SSRF-guard opt-out при private-resolve base_url (паттерн binary_allow_private); default false — guard держится.
+        allow_private: "${ default(essence.vector_allow_private, false) }"
         sink_type:     "${ default(essence.vector_sink_type, 'console') }"
         sink_endpoint: "${ default(essence.vector_sink_endpoint, '') }"
         sink_auth_ref: "${ default(essence.vector_sink_auth_ref, '') }"

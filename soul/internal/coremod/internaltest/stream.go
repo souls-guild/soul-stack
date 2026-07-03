@@ -21,10 +21,12 @@ import (
 
 // ApplyStream — fake grpc.ServerStreamingServer[ApplyEvent] для unit-тестов.
 // Захватывает все Send-события в Events; единственное финальное событие
-// доступно как Last().
+// доступно как Last(). Ctx (опционально) — контекст прогона для модулей,
+// читающих stream.Context() (augur-клиент, FetchModule-транспорт core.module).
 type ApplyStream struct {
 	grpc.ServerStreamingServer[pluginv1.ApplyEvent]
 	Events []*pluginv1.ApplyEvent
+	Ctx    context.Context
 }
 
 func (s *ApplyStream) Send(e *pluginv1.ApplyEvent) error {
@@ -32,7 +34,12 @@ func (s *ApplyStream) Send(e *pluginv1.ApplyEvent) error {
 	return nil
 }
 
-func (s *ApplyStream) Context() context.Context { return context.Background() }
+func (s *ApplyStream) Context() context.Context {
+	if s.Ctx != nil {
+		return s.Ctx
+	}
+	return context.Background()
+}
 
 // Last — последнее отправленное событие; nil если ничего не было.
 func (s *ApplyStream) Last() *pluginv1.ApplyEvent {

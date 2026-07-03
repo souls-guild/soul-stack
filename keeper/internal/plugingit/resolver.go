@@ -152,11 +152,12 @@ func NewResolver(cacheRoot, workRoot string, gitTimeout time.Duration, maxArtifa
 // import-обхода.
 const bytesPerMiB = 1024 * 1024
 
-// ResolveCatalog резолвит весь каталог cloud_drivers + ssh_providers.
-// Per-entry ошибки превращаются в warnings (fail-closed): сломанная запись
-// скипается, Keeper не падает. Возвращает (успешно зарезолвленные слоты,
-// warnings, fatal-ошибку). fatal — только то, что ломает резолв В ПРИНЦИПЕ
-// (например, невозможность создать workRoot); nil plugins → пустой результат.
+// ResolveCatalog резолвит весь каталог cloud_drivers + ssh_providers +
+// soul_modules. Per-entry ошибки превращаются в warnings (fail-closed):
+// сломанная запись скипается, Keeper не падает. Возвращает (успешно
+// зарезолвленные слоты, warnings, fatal-ошибку). fatal — только то, что ломает
+// резолв В ПРИНЦИПЕ (например, невозможность создать workRoot); nil plugins →
+// пустой результат.
 func (r *Resolver) ResolveCatalog(ctx context.Context, plugins *config.KeeperPlugins) ([]ResolvedSlot, []string, error) {
 	if plugins == nil {
 		return nil, nil, nil
@@ -165,9 +166,11 @@ func (r *Resolver) ResolveCatalog(ctx context.Context, plugins *config.KeeperPlu
 		slots    []ResolvedSlot
 		warnings []string
 	)
-	entries := make([]config.PluginCatalogEntry, 0, len(plugins.CloudDrivers)+len(plugins.SSHProviders))
+	entries := make([]config.PluginCatalogEntry, 0,
+		len(plugins.CloudDrivers)+len(plugins.SSHProviders)+len(plugins.SoulModules))
 	entries = append(entries, plugins.CloudDrivers...)
 	entries = append(entries, plugins.SSHProviders...)
+	entries = append(entries, plugins.SoulModules...)
 
 	for _, e := range entries {
 		slot, err := r.ResolveEntry(ctx, e)

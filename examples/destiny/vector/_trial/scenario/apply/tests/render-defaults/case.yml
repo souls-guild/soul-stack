@@ -44,6 +44,8 @@ assert:
         path: /tmp/vector-0.40.0.tar.gz
         checksum: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
         mode: "0644"
+        # back-compat: github-default → SSRF-guard держится (allow_private default false).
+        allow_private: false
 
     - module: core.archive.extracted
       params_subset:
@@ -109,6 +111,7 @@ assert:
             version: "0.40.0"
             sha256: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
             base_url: "https://github.com/vectordotdev/vector/releases/download"
+            allow_private: false
             bin_dir: /usr/local/bin
             user: vector
             group: vector
@@ -151,6 +154,7 @@ assert:
             version: "0.40.0"
             sha256: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
             base_url: "https://github.com/vectordotdev/vector/releases/download"
+            allow_private: false
             bin_dir: /usr/local/bin
             user: vector
             group: vector

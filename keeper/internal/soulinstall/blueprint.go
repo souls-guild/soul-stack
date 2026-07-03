@@ -62,6 +62,12 @@ const (
 	SoulServicePath = "/etc/systemd/system/soul.service"
 	// SoulBinaryPath — путь установки soul-бинаря.
 	SoulBinaryPath = "/usr/local/bin/soul"
+	// SeedCertPath — cert.pem активного SoulSeed на VM: <paths.seed из
+	// SoulConfigYAML>/current/cert.pem (layout soul/internal/seed, симлинк
+	// `current` + CertFile). Существование файла = токен уже redeem-нут — guard
+	// идемпотентности `soul init` в core.bootstrap.delivered (токен single-use).
+	// Sync-guard: TestSeedCertPath_SyncWithSoulSeedLayout.
+	SeedCertPath = "/var/lib/soul-stack/seed/current/cert.pem"
 	// SelfOnboardTokensPath — файл map FQDN→token на VM (self-onboard Вариант T).
 	// cloud-init выбирает свой токен по hostname и делает `soul init`. Права 0600
 	// (несёт секреты, тест-стенд). См. Blueprint.SelfOnboardTokens.
@@ -93,11 +99,14 @@ const (
 // общий для обоих путей доставки (config-reuse, DRY).
 type Blueprint struct {
 	// BootstrapEndpoint — `host:port` LB Keeper-а (Bootstrap-RPC listener).
-	// Тот же host:port идёт в soul.yml как event_stream_port и bootstrap_port
-	// (за LB обе фазы ведут на разные backend-listener-ы; Soul ещё SoulSeed-
-	// cert-а не имеет — обращается только к Bootstrap, EventStream добавится
-	// после онбординга).
+	// host идёт в soul.yml keeper.endpoints[0].host, port — в bootstrap_port.
 	BootstrapEndpoint string
+
+	// EventStreamPort — TCP-порт EventStream-фазы (mTLS-listener) того же
+	// host-а; идёт в soul.yml event_stream_port. 0 → порт bootstrap_endpoint
+	// (back-compat: single-port LB). См. 6-ю стену ADR-063: оба порта из одного
+	// endpoint → soul dial-ил EventStream на Bootstrap-порт.
+	EventStreamPort int
 
 	// KeeperCAPem — PEM-encoded CA Keeper-а (содержимое `ca`-поля из Vault KV).
 	// Пишется на VM по [KeeperCAPath]; затем curl --cacert использует его при
@@ -157,6 +166,9 @@ func (b Blueprint) Validate() error {
 	if !strings.HasPrefix(b.SoulBinaryURL, "https://") {
 		return fmt.Errorf("cloud_init.soul_binary_url %q must be https (CA over TLS only, plain http rejected)", b.SoulBinaryURL)
 	}
+	if b.EventStreamPort < 0 || b.EventStreamPort > 65535 {
+		return fmt.Errorf("cloud_init.event_stream_port %d must be in 1..65535 (0 = порт bootstrap_endpoint)", b.EventStreamPort)
+	}
 	switch b.SoulBinaryCA {
 	case "", SoulBinaryCAKeeper, SoulBinaryCASystem:
 	default:
@@ -184,6 +196,20 @@ func (b Blueprint) hostPort() (string, int, error) {
 	return host, port, nil
 }
 
+// soulEndpoint — host + пара портов для soul.yml. EventStreamPort==0 →
+// fallback на bootstrap-порт (back-compat: single-port LB).
+func (b Blueprint) soulEndpoint() (host string, eventPort, bootstrapPort int, err error) {
+	host, bootstrapPort, err = b.hostPort()
+	if err != nil {
+		return "", 0, 0, err
+	}
+	eventPort = b.EventStreamPort
+	if eventPort == 0 {
+		eventPort = bootstrapPort
+	}
+	return host, eventPort, bootstrapPort, nil
+}
+
 // RenderCloudInitYAML рендерит cloud-config YAML по cloud-init template.
 // Идемпотентна: на тех же входах даёт байт-идентичный вывод.
 //
@@ -195,7 +221,7 @@ func RenderCloudInitYAML(bp Blueprint) (string, error) {
 	if err := bp.Validate(); err != nil {
 		return "", err
 	}
-	host, port, err := bp.hostPort()
+	host, eventPort, bootstrapPort, err := bp.soulEndpoint()
 	if err != nil {
 		return "", err
 	}
@@ -215,7 +241,7 @@ func RenderCloudInitYAML(bp Blueprint) (string, error) {
 		SelfOnboardTokensIndented string
 	}{
 		TLSCAPemIndented:       indentBlock(bp.KeeperCAPem, "      "),
-		SoulConfigYAMLIndented: indentBlock(SoulConfigYAML(host, port), "      "),
+		SoulConfigYAMLIndented: indentBlock(SoulConfigYAML(host, eventPort, bootstrapPort), "      "),
 		SystemdUnitIndented:    indentBlock(SystemdUnit(), "      "),
 		SoulBinaryURL:          bp.SoulBinaryURL,
 		UseSystemCA:            bp.useSystemCA(),
@@ -276,7 +302,7 @@ func RenderInstallScript(bp Blueprint) ([]InstallStep, error) {
 	if err := bp.Validate(); err != nil {
 		return nil, err
 	}
-	host, port, err := bp.hostPort()
+	host, eventPort, bootstrapPort, err := bp.soulEndpoint()
 	if err != nil {
 		return nil, err
 	}
@@ -288,7 +314,7 @@ func RenderInstallScript(bp Blueprint) ([]InstallStep, error) {
 		{Cmd: fmt.Sprintf("umask 077 && cat > %s && chmod %s %s", KeeperCAPath, KeeperCAMode, KeeperCAPath),
 			Stdin: []byte(bp.KeeperCAPem)},
 		{Cmd: fmt.Sprintf("cat > %s", SoulConfigPath),
-			Stdin: []byte(SoulConfigYAML(host, port))},
+			Stdin: []byte(SoulConfigYAML(host, eventPort, bootstrapPort))},
 		{Cmd: fmt.Sprintf("cat > %s", SoulServicePath),
 			Stdin: []byte(SystemdUnit())},
 		{Cmd: binaryCurlCmd(bp.SoulBinaryURL, bp.useSystemCA())},
@@ -333,7 +359,9 @@ func selfOnboardTokensFile(tokens map[string]string) string {
 // bootstrap: keeper.endpoints + pin CA). Единый источник: эта же функция даёт
 // тело soul.yml и для SSH-install (RenderInstallScript), и для cloud-init
 // (RenderCloudInitYAML подставляет вывод под write_files /etc/soul/soul.yml).
-func SoulConfigYAML(host string, port int) string {
+// Порты фаз разные: eventStreamPort — EventStream (mTLS), bootstrapPort —
+// Bootstrap-RPC (см. 6-ю стену ADR-063).
+func SoulConfigYAML(host string, eventStreamPort, bootstrapPort int) string {
 	return fmt.Sprintf(`# Минимальный конфиг soul-агента для cloud-init bootstrap.
 # Per-VM-токен и SoulSeed-сертификат добавит следующий шаг scenario.
 paths:
@@ -346,7 +374,7 @@ keeper:
       bootstrap_port: %d
   tls:
     ca: %s
-`, host, port, port, KeeperCAPath)
+`, host, eventStreamPort, bootstrapPort, KeeperCAPath)
 }
 
 // SystemdUnit — содержимое soul.service. Единый источник: эта же функция даёт

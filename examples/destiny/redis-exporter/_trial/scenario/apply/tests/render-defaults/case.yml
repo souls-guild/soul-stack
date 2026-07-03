@@ -41,6 +41,8 @@ assert:
         path: /tmp/redis_exporter-1.62.0.tar.gz
         checksum: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
         mode: "0644"
+        # back-compat: github-default → SSRF-guard держится (allow_private default false).
+        allow_private: false
 
     - module: core.archive.extracted
       params_subset:

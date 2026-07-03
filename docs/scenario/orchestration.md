@@ -951,7 +951,7 @@ state_changes:
 #### `register.*` как источник значения
 
 `value:` / `patch:` / `match:` видят `register.<task>.<поле>` — результат
-probe-задачи прогона:
+`register:`-задачи прогона (host-probe **или** keeper-side шага, см. ниже):
 
 ```yaml
 state_changes:
@@ -965,8 +965,25 @@ task_idx)`). **После** cross-host барьера (§7) scenario-runner за
 register-данные прогона, резолвит `task_idx → register-имя` по своему плану
 задач и строит **per-host** register-карту (`sid → register-имя → payload`).
 Рендер идёт per-host в том же last-wins-порядке, что и для `soulprint.self.*`:
-register адресует **результат именно того хоста**, для которого вычисляется
-значение.
+register **host-задачи** адресует **результат именно того хоста**, для которого
+вычисляется значение.
+
+**Register keeper-side задач (`on: keeper`) — run-level слой.** Register,
+эмитированный keeper-side задачей (например `core.cloud.created` с
+`register: provision`), доступен в рендере `state_changes` как **run-level
+подложка**: keeper на прогон один, значение идентично для всех хостов. При
+коллизии имён per-host register конкретного хоста **приоритетнее** (host-wins).
+Граница видимости каналов ([ADR-056](../adr/0056-staged-render-passage.md)) при
+этом сохраняется: в `params:` / `when:` / `changed_when:` **host-задач**
+keeper-register по-прежнему **не виден** — сознательная изоляция per-host
+контекста от keeper-канала (сам keeper-канал keeper-задачи последующих Passage
+читают, как и раньше). Подложка keeper-register действует **только** в
+`state_changes` — run-level конструкции, вычисляющей общий `incarnation.state`.
+Канонический потребитель — cloud-provision read-model
+([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)):
+`state_changes` читает `register.provision.vm_ids` / `.hosts` от keeper-шага
+`core.cloud.created` (см. `provisioned_*` в
+[`examples/service/redis/covenant.yml`](../../examples/service/redis/covenant.yml)).
 
 `register.*` здесь — **стабильный** post-barrier-снимок (значения уже
 зафиксированы фактом успешного apply), не волатильный рантайм-предикат как
@@ -975,9 +992,15 @@ register адресует **результат именно того хоста*
 на тот инстанс, что держит run-goroutine; общая таблица переживает
 cross-Keeper-роутинг и не даёт коммитить state по неполной картине register.
 
-Обращение к `register.<task>.*`, для которого хост не дал register-данных
-(нет такой probe-задачи на хосте), — eval-ошибка «no such key» → прогон
-`error_locked` (как и любое обращение к необъявленному ключу в CEL).
+Обращение к register-имени **host-задачи**, для которого данный хост не дал
+register-данных (нет такой probe-задачи на хосте), — eval-ошибка «no such key»
+→ прогон `error_locked` (как и любое обращение к необъявленному ключу в CEL).
+Keeper-register-ссылка резолвится из run-level подложки на любом хосте и даёт
+«no such key», только если keeper-задача в прогоне register не эмитила (шаг
+отброшен — например, static-when group-drop provision-ветки). Условное чтение
+гейтуется предикатом по всегда существующим данным: канон — гейт по `input.*`
+с короткозамыкающим тернаром, **не** `has(register.…)` (см. комментарий у
+`provisioned_*` в redis `covenant.yml`).
 
 **`no_log` не попадает в state-граф.** Если probe-задача помечена
 `no_log: true` ([destiny/tasks.md](../destiny/tasks.md)), её `register` **не

@@ -244,6 +244,71 @@ func TestRenderCloudInitYAML_SelfOnboard_RejectsVaultRef(t *testing.T) {
 	}
 }
 
+// TestSoulConfigYAML_Ports — soul.yml несёт РАЗНЫЕ порты фаз: event_stream_port
+// (EventStream, mTLS) и bootstrap_port (Bootstrap-RPC, server-only TLS). 6-я
+// стена ADR-063: оба порта выводились из одного bootstrap_endpoint → soul run
+// dial-ил EventStream на Bootstrap-порт («Unimplemented: method EventStream»).
+func TestSoulConfigYAML_Ports(t *testing.T) {
+	out := soulinstall.SoulConfigYAML("lb.keeper.example", 9443, 9442)
+	if !strings.Contains(out, "event_stream_port: 9443") {
+		t.Errorf("soul.yml missing event_stream_port 9443:\n%s", out)
+	}
+	if !strings.Contains(out, "bootstrap_port: 9442") {
+		t.Errorf("soul.yml missing bootstrap_port 9442:\n%s", out)
+	}
+}
+
+// TestRender_EventStreamPort — Blueprint.EventStreamPort доезжает до soul.yml в
+// ОБОИХ рендерерах; 0 → back-compat fallback на порт bootstrap_endpoint
+// (single-port LB); вне диапазона — Validate-ошибка.
+func TestRender_EventStreamPort(t *testing.T) {
+	withPort := validBlueprint() // bootstrap_endpoint lb.keeper.example:9442
+	withPort.EventStreamPort = 9443
+
+	t.Run("install script", func(t *testing.T) {
+		steps, err := soulinstall.RenderInstallScript(withPort)
+		if err != nil {
+			t.Fatalf("RenderInstallScript: %v", err)
+		}
+		idx := firstStepCmdContains(steps, soulinstall.SoulConfigPath)
+		if idx < 0 {
+			t.Fatal("no soul.yml write step")
+		}
+		yml := string(steps[idx].Stdin)
+		if !strings.Contains(yml, "event_stream_port: 9443") || !strings.Contains(yml, "bootstrap_port: 9442") {
+			t.Errorf("install soul.yml ports wrong:\n%s", yml)
+		}
+	})
+
+	t.Run("cloud-init", func(t *testing.T) {
+		out, err := soulinstall.RenderCloudInitYAML(withPort)
+		if err != nil {
+			t.Fatalf("RenderCloudInitYAML: %v", err)
+		}
+		if !strings.Contains(out, "event_stream_port: 9443") || !strings.Contains(out, "bootstrap_port: 9442") {
+			t.Errorf("cloud-init soul.yml ports wrong")
+		}
+	})
+
+	t.Run("fallback 0 → bootstrap port", func(t *testing.T) {
+		out, err := soulinstall.RenderCloudInitYAML(validBlueprint())
+		if err != nil {
+			t.Fatalf("RenderCloudInitYAML: %v", err)
+		}
+		if !strings.Contains(out, "event_stream_port: 9442") {
+			t.Errorf("fallback must reuse bootstrap port for event_stream_port")
+		}
+	})
+
+	t.Run("out of range → Validate error", func(t *testing.T) {
+		bad := validBlueprint()
+		bad.EventStreamPort = 70000
+		if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), "event_stream_port") {
+			t.Fatalf("expected event_stream_port range error, got %v", err)
+		}
+	})
+}
+
 // firstStepCmdContains возвращает индекс первого шага, .Cmd которого содержит sub,
 // или -1.
 func firstStepCmdContains(steps []soulinstall.InstallStep, sub string) int {
