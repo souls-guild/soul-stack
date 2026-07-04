@@ -238,6 +238,40 @@ func TestToolsCall_IncarnationRerunLast_Day2ReusesRecipeInput(t *testing.T) {
 	if rec.events[0].Payload["scenario"] != "add_user" {
 		t.Errorf("audit scenario = %v, want add_user", rec.events[0].Payload["scenario"])
 	}
+	// day-2 recipe без from_upgrade → RunSpec.FromUpgrade=false.
+	if starter.gotSpec.FromUpgrade {
+		t.Error("RunSpec.FromUpgrade = true, want false (recipe без from_upgrade)")
+	}
+}
+
+// TestToolsCall_IncarnationRerunLast_Day2FromUpgrade — MAJOR-guard (ADR-0068,
+// паритет REST): MCP rerun-last прогона с recipe.from_upgrade=true пробрасывает
+// FromUpgrade=true в RunSpec → перезапуск из upgrade/<slug>/, а не scenario/.
+func TestToolsCall_IncarnationRerunLast_Day2FromUpgrade(t *testing.T) {
+	pool := &fakePool{
+		incFn:          incLockedSpec(map[string]any{}),
+		lastScenarioFn: func(string) (string, error) { return "to_v2", nil },
+		recipeFn: func(string) ([]byte, error) {
+			return []byte(`{"scenario_name":"to_v2","from_upgrade":true,"input":{}}`), nil
+		},
+	}
+	starter := &mcpStarter{}
+	h, _ := newTestHandlerFull(t, pool, rerunRBAC(), starter, &mcpResolver{ok: true}, nil)
+
+	resp := callTool(t, h, "archon-alice", "keeper.incarnation.rerun-last",
+		`{"name":"redis-prod","reason":"rerun upgrade verified ok"}`)
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+	if starter.calls != 1 {
+		t.Fatalf("scenario start calls = %d, want 1", starter.calls)
+	}
+	if starter.gotSpec.ScenarioName != "to_v2" {
+		t.Errorf("ScenarioName = %q, want to_v2", starter.gotSpec.ScenarioName)
+	}
+	if !starter.gotSpec.FromUpgrade {
+		t.Error("RunSpec.FromUpgrade = false, want true (recipe.from_upgrade → перезапуск из upgrade/)")
+	}
 }
 
 // TestToolsCall_IncarnationRerunLast_Day2BareIncarnation — bare-инкарнация

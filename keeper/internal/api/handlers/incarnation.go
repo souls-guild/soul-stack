@@ -103,6 +103,9 @@ type ServiceSnapshotLoader interface {
 	Load(ctx context.Context, ref artifact.ServiceRef) (*artifact.ServiceArtifact, error)
 	LoadMigrationChain(art *artifact.ServiceArtifact, from, to int) (statemigrate.Chain, error)
 	ReadFile(art *artifact.ServiceArtifact, file string) ([]byte, error)
+	// ListUpgrades — скан upgrade/<slug>/ целевого снапшота (ADR-0068): нужен
+	// Upgrade-handler-у, чтобы incarnation.PrepareUpgrade резолвил found/legacy.
+	ListUpgrades(art *artifact.ServiceArtifact) ([]artifact.Scenario, error)
 }
 
 // IncarnationHandler — handler-ы endpoints incarnation:

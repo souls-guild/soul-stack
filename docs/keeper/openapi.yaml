@@ -1502,6 +1502,9 @@ components:
         apply_id:
           pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
           type: string
+        run_apply_id:
+          pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+          type: string
       required:
         - apply_id
       type: object

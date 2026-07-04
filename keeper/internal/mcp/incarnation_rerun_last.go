@@ -127,6 +127,9 @@ func (h *Handler) callIncarnationRerunLast(ctx context.Context, claims *jwt.Clai
 		Input:           res.Input,
 		StartedByAID:    claims.Subject,
 		FromLocked:      true,
+		// Упавший прогон мог быть upgrade-сценарием (recipe.from_upgrade) — перезапуск
+		// из upgrade/<slug>/, а не scenario/ (ADR-0068, паритет REST RerunLastTyped).
+		FromUpgrade: res.FromUpgrade,
 	}); err != nil {
 		h.deps.Logger.Error("mcp: incarnation.rerun-last scenario start failed",
 			slog.String("name", a.Name),

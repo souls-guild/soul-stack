@@ -64,9 +64,12 @@ type IncarnationUnlockReply struct {
 	UnlockedByAID  string            `json:"unlocked_by_aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
 }
 
-// IncarnationUpgradeReply — native 202-тело POST .../upgrade (apply_id).
+// IncarnationUpgradeReply — native 202-тело POST .../upgrade. apply_id — M (ULID
+// state-миграции, всегда). run_apply_id — R (ULID автозапущенного upgrade-прогона,
+// ADR-0068 §5); omitempty — опущен в legacy-ветке (upgrade-сценарий не найден).
 type IncarnationUpgradeReply struct {
-	ApplyID string `json:"apply_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"` // ULID (audit.NewULID)
+	ApplyID    string  `json:"apply_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"`               // ULID (audit.NewULID)
+	RunApplyID *string `json:"run_apply_id,omitempty" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"` // ULID Runner-прогона (found-ветвь)
 }
 
 // IncarnationRerunLastReply — native 202-тело POST .../rerun-last (apply_id + echo + перезапущенный scenario).
@@ -153,7 +156,7 @@ func newIncarnationUnlockReply(v handlers.IncarnationUnlockView) IncarnationUnlo
 }
 
 func newIncarnationUpgradeReply(v handlers.IncarnationUpgradeView) IncarnationUpgradeReply {
-	return IncarnationUpgradeReply{ApplyID: v.ApplyID}
+	return IncarnationUpgradeReply{ApplyID: v.ApplyID, RunApplyID: v.RunApplyID}
 }
 
 func newIncarnationRerunLastReply(v handlers.IncarnationRerunLastView) IncarnationRerunLastReply {

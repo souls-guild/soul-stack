@@ -436,7 +436,11 @@ func (h *IncarnationHandler) UnlockTyped(ctx context.Context, claims *jwt.Claims
 // IncarnationUpgradeView — ПЛОСКАЯ доменная проекция 202-тела POST .../upgrade (handler-native).
 // Пакет api проецирует её в native IncarnationUpgradeReply.
 type IncarnationUpgradeView struct {
+	// ApplyID — M: ULID state-миграции (back-compat, присутствует всегда).
 	ApplyID string
+	// RunApplyID — R: ULID автозапущенного upgrade-прогона (ADR-0068 §5, found-ветвь).
+	// nil в legacy (upgrade-сценарий не найден → drift без host-оркестрации).
+	RunApplyID *string
 }
 
 // IncarnationUpgradeReply — typed reply UpgradeTyped. Body — плоская доменная проекция 202-тела;
@@ -493,6 +497,19 @@ func (h *IncarnationHandler) UpgradeTyped(ctx context.Context, claims *jwt.Claim
 		}
 	}
 
+	// found-режим (ADR-0068 §5): upgrade-сценарий найден → генерим R (ULID
+	// Runner-прогона, ОТДЕЛЬНЫЙ от M) и коммитим автозапуск (upgradeTx зарезервирует
+	// applying вместо drift). Runner обязателен — проверяем ДО резервирования
+	// applying, иначе incarnation завис бы в applying без прогона.
+	var runApplyID string
+	if upIn.UpgradeSlug != "" {
+		if h.runner == nil {
+			return zero, incProblem(problem.TypeInternalError, "scenario runner is not configured")
+		}
+		runApplyID = audit.NewULID()
+		upIn.RunApplyID = runApplyID
+	}
+
 	if _, err := incarnation.UpgradeStateSchema(ctx, h.db, upIn); err != nil {
 		switch {
 		case errors.Is(err, incarnation.ErrIncarnationNotFound):
@@ -517,14 +534,48 @@ func (h *IncarnationHandler) UpgradeTyped(ctx context.Context, claims *jwt.Claim
 		}
 	}
 
-	return IncarnationUpgradeReply{
-		Body: IncarnationUpgradeView{ApplyID: applyID},
-		AuditPayload: apimiddleware.AuditPayload{
-			"name":       name,
-			"to_version": toVersion,
-			"apply_id":   applyID,
-		},
-	}, nil
+	// Found → автозапуск upgrade-сценария Runner-ом на новом пине (upIn.TargetRef.Ref
+	// = to_version). FromLocked: applying уже зарезервирован upgradeTx (иначе lockRun
+	// упрётся в applying); FromUpgrade: грузить upgrade/<slug>/. Input пуст —
+	// upgrade-сценарий работает со state, НЕ input (ADR-0068 §7). Ошибку Start
+	// зеркалим RerunLastTyped (applying зарезервирован в tx; при сбое старта
+	// incarnation остаётся в applying, триаж/rerun-last доведут).
+	if upIn.UpgradeSlug != "" {
+		if err := h.runner.Start(ctx, scenario.RunSpec{
+			ApplyID:         runApplyID,
+			IncarnationName: name,
+			ServiceRef:      upIn.TargetRef,
+			ScenarioName:    upIn.UpgradeSlug,
+			FromUpgrade:     true,
+			FromLocked:      true,
+			StartedByAID:    claims.Subject,
+		}); err != nil {
+			h.logger.Error("incarnation.upgrade: upgrade-scenario start failed",
+				slog.String("name", name), slog.String("run_apply_id", runApplyID),
+				slog.String("scenario", upIn.UpgradeSlug), slog.Any("error", err))
+			return zero, incProblem(problem.TypeInternalError, "start upgrade scenario "+upIn.UpgradeSlug+" failed")
+		}
+	} else {
+		// Legacy (ADR-0068 §5): перехода без upgrade-сценария → drift без host-
+		// оркестрации, оператор доводит обычным apply. from = pre-upgrade пин
+		// (inc не перезагружался после tx).
+		h.logger.Warn("incarnation.upgrade: no upgrade scenario for transition — legacy drift, manual apply required",
+			slog.String("incarnation", name),
+			slog.String("from", inc.ServiceVersion),
+			slog.String("to", toVersion))
+	}
+
+	view := IncarnationUpgradeView{ApplyID: applyID}
+	auditPayload := apimiddleware.AuditPayload{
+		"name":       name,
+		"to_version": toVersion,
+		"apply_id":   applyID,
+	}
+	if runApplyID != "" {
+		view.RunApplyID = &runApplyID
+		auditPayload["run_apply_id"] = runApplyID
+	}
+	return IncarnationUpgradeReply{Body: view, AuditPayload: auditPayload}, nil
 }
 
 // --- RerunLast (SELF-AUDIT incarnation.rerun_last) --------------------
@@ -613,6 +664,9 @@ func (h *IncarnationHandler) RerunLastTyped(ctx context.Context, claims *jwt.Cla
 		Input:           res.Input,
 		StartedByAID:    claims.Subject,
 		FromLocked:      true,
+		// Упавший прогон мог быть upgrade-сценарием (recipe.from_upgrade) — тогда
+		// перезапуск обязан идти из upgrade/<slug>/, а не scenario/ (ADR-0068).
+		FromUpgrade: res.FromUpgrade,
 	}); err != nil {
 		h.logger.Error("incarnation.rerun-last: scenario start failed",
 			slog.String("name", name), slog.String("apply_id", applyID),

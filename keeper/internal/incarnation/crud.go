@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/statemigrate"
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
@@ -916,6 +917,11 @@ type UnlockResult struct {
 	HistoryID      string
 	Scenario       string
 	Input          map[string]any
+	// FromUpgrade — упавший прогон был upgrade-сценарием (recipe.from_upgrade,
+	// ADR-0068): rerun-last обязан перезапустить его из upgrade/<slug>/, а не
+	// scenario/<slug>/. Заполняется только day-2-путём [UnlockForRerun] (create
+	// никогда не upgrade → false). Caller пробрасывает в RunSpec.FromUpgrade.
+	FromUpgrade bool
 }
 
 // InputFromSpec извлекает ключ `input` из freeform jsonb-объекта: либо
@@ -1346,7 +1352,11 @@ LIMIT 1
 	}
 
 	// Восстановление input упавшего прогона: create-путь vs day-2-путь.
-	var rerunInput map[string]any
+	// fromUpgrade — только day-2 (recipe.from_upgrade); create-путь всегда false.
+	var (
+		rerunInput  map[string]any
+		fromUpgrade bool
+	)
 	if createdScenario != nil && lastScenario == *createdScenario {
 		// create-путь: последний упавший == создавший bootstrap. Input оператора
 		// хранится в incarnation.spec.input (прочитан под тем же FOR UPDATE):
@@ -1380,6 +1390,9 @@ LIMIT 1
 			return nil, ErrRerunInputUnavailable
 		}
 		rerunInput = InputFromSpec(recipe)
+		// recipe.FromUpgrade строкой freeform-jsonb (как InputFromSpec): upgrade-
+		// прогон перезапускается из upgrade/, а не scenario/ (ADR-0068).
+		fromUpgrade, _ = recipe["from_upgrade"].(bool)
 	}
 
 	var changedByArg any
@@ -1423,6 +1436,7 @@ WHERE name = $1
 		HistoryID:      historyID,
 		Scenario:       lastScenario,
 		Input:          rerunInput,
+		FromUpgrade:    fromUpgrade,
 	}, nil
 }
 
@@ -1452,8 +1466,22 @@ type UpgradeInput struct {
 	TargetSchemaVer  int                    // state_schema_version из service.yml снапшота
 	Chain            statemigrate.Chain     // цепочка current→target (пустая = no-op ref-bump)
 	Evaluator        statemigrate.Evaluator // migration-CEL ([statemigrate.NewEvaluator])
-	ApplyID          string                 // ULID upgrade-операции (общий на цепочку)
+	ApplyID          string                 // ULID upgrade-операции (M, общий на цепочку миграции)
 	ChangedByAID     *string                // Архонт-инициатор (nil — без identity)
+
+	// UpgradeSlug — имя найденного upgrade-сценария для перехода from→to (ADR-0068
+	// §5). Заполняет [PrepareUpgrade] (скан upgrade/ целевого снапшота); пусто →
+	// legacy (drift + host-раскатка вручную).
+	UpgradeSlug string
+	// RunApplyID — ULID Runner-прогона upgrade-сценария (R), ОТДЕЛЬНЫЙ от ApplyID
+	// миграции (M). Found-режим (applying + linkage-снимок под R) включается ТОЛЬКО
+	// когда И UpgradeSlug, И RunApplyID непусты: R — коммит caller-а на автозапуск.
+	// Caller без автозапуска (MCP) оставляет пустым → legacy-drift, чтобы не
+	// зарезервировать applying без прогона (иначе incarnation завис бы). ADR-0068 §5/B.
+	RunApplyID string
+	// TargetRef — git-координаты целевой версии (Ref=to_version), резолвнутые
+	// [PrepareUpgrade]. Для runner.Start(ServiceRef) автозапуска upgrade-сценария.
+	TargetRef artifact.ServiceRef
 }
 
 // UpgradeResult — итог [UpgradeStateSchema]: схема до/после и число
@@ -1624,34 +1652,46 @@ FOR UPDATE
 		return nil, fmt.Errorf("incarnation: marshal migrated state: %w", err)
 	}
 
-	// Финальный статус — drift, НЕ ready (ADR-031, amendment поведения upgrade):
-	// upgrade сменил incarnation.state/версии в БД, но хосты остались на старой
-	// раскатке — реальное состояние расходится с новым state. drift —
-	// информационный, не блокирующий статус (ADR-031(d)): сигнал оператору
-	// «накати новую версию на хосты», remediation = обычный apply (drift→ready).
-	// Допустимый переход: gate выше пропускает в этот UPDATE только из ready/drift
-	// (applying→Busy, error_locked/migration_failed→Locked), оба валидно
-	// переходят в drift; error_locked/applying здесь недостижимы.
-	const updateSQL = `
+	// found-ветвь (ADR-0068 §5/B): И slug, И R непусты (R = коммит caller-а на
+	// автозапуск; без R applying резервировать нельзя — incarnation завис бы без
+	// прогона, поэтому caller без автозапуска, напр. MCP, идёт legacy).
+	found := in.UpgradeSlug != "" && in.RunApplyID != ""
+
+	// legacy → drift (ADR-031: хосты позади БД-state, remediation = ручной apply),
+	// сюда же no-op ref-bump; found → applying (ADR-0068: управление уходит
+	// Runner-у автозапуска upgrade-сценария, зеркало UnlockForRerun;
+	// applying_apply_id=R дозаполнит lockRun при FromLocked). status — контролируемая
+	// константа (не пользовательский ввод), Sprintf-инъекции нет; legacy-текст
+	// байт-в-байт прежний (регресс-тесты на литерал 'drift'). Gate выше пускает в
+	// UPDATE только из ready/drift — оба валидно переходят и в drift, и в applying.
+	finalStatus := StatusDrift
+	if found {
+		finalStatus = StatusApplying
+	}
+	updateSQL := fmt.Sprintf(`
 UPDATE incarnation
 SET state                = $2,
     state_schema_version = $3,
     service_version      = $4,
-    status               = 'drift',
+    status               = '%s',
     status_details       = NULL,
     updated_at           = NOW()
 WHERE name = $1
-`
+`, finalStatus)
 	if _, err := tx.Exec(ctx, updateSQL, in.Name, finalBytes, in.TargetSchemaVer, in.TargetServiceVer); err != nil {
 		return nil, fmt.Errorf("incarnation: upgrade update: %w", err)
 	}
 
-	// Причина перехода в drift — отдельной zero-diff history-записью (после
-	// шагов миграции; state_before == state_after = пост-миграционный state).
-	// Фиксирует «upgrade to <ver>: hosts pending apply» в истории, отделяя
-	// upgrade-drift от Scry-drift при триаже (симметрично transition-записи
-	// Unlock). Общий apply_id со step-снимками связывает запись с этим upgrade-ом.
-	if err := writeUpgradeDriftHistory(ctx, tx, in, applyRes.FinalState); err != nil {
+	// Zero-diff transition-запись (state_before == state_after = пост-миграционный
+	// state): legacy → drift-transition под M (метка upgrade-pending-apply,
+	// отделяет upgrade-drift от Scry-drift при триаже); found → linkage-снимок под
+	// R со scenario=slug (зеркало UnlockForRerun-снимка — линкует автозапуск-прогон
+	// с этим upgrade-ом).
+	if found {
+		if err := writeUpgradeRunHistory(ctx, tx, in, applyRes.FinalState); err != nil {
+			return nil, err
+		}
+	} else if err := writeUpgradeDriftHistory(ctx, tx, in, applyRes.FinalState); err != nil {
 		return nil, err
 	}
 
@@ -1690,6 +1730,35 @@ INSERT INTO state_history (
 		audit.NewULID(), in.Name, upgradeDriftScenarioLabel, stateBytes, changedByArg, in.ApplyID,
 	); err != nil {
 		return fmt.Errorf("incarnation: insert drift-transition state_history: %w", err)
+	}
+	return nil
+}
+
+// writeUpgradeRunHistory пишет zero-diff linkage-снимок передачи управления
+// автозапуску upgrade-прогона (found-ветвь ADR-0068 §5/B): apply_id = R
+// ([UpgradeInput.RunApplyID]), scenario = найденный slug, state_before ==
+// state_after = пост-миграционный final state. Зеркало UnlockForRerun-снимка
+// (applying + zero-diff под apply_id прогона) — линкует R с этим upgrade-ом в
+// истории, отдельно от M-меток самой миграции.
+func writeUpgradeRunHistory(ctx context.Context, tx ExecQueryRower, in UpgradeInput, finalState map[string]any) error {
+	stateBytes, err := marshalJSONB(finalState)
+	if err != nil {
+		return fmt.Errorf("incarnation: marshal state (upgrade-run history): %w", err)
+	}
+	var changedByArg any
+	if in.ChangedByAID != nil {
+		changedByArg = *in.ChangedByAID
+	}
+	const historyInsertSQL = `
+INSERT INTO state_history (
+    history_id, incarnation_name, scenario, state_before, state_after,
+    changed_by_aid, apply_id
+) VALUES ($1, $2, $3, $4, $4, $5, $6)
+`
+	if _, err := tx.Exec(ctx, historyInsertSQL,
+		audit.NewULID(), in.Name, in.UpgradeSlug, stateBytes, changedByArg, in.RunApplyID,
+	); err != nil {
+		return fmt.Errorf("incarnation: insert upgrade-run state_history: %w", err)
 	}
 	return nil
 }

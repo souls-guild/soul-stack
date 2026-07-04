@@ -46,6 +46,11 @@ type Recipe struct {
 	// apply). Заполняется только check-drift-путём (Runner.CheckDrift), обычный
 	// run/destroy-путь не трогает.
 	DryRun bool `json:"dry_run,omitempty"`
+	// FromUpgrade — грузить сценарий из upgrade/<slug>/, а не scenario/<slug>/
+	// (ADR-0068): Acolyte при claim re-render-ит upgrade-прогон тем же путём, что
+	// run-goroutine. omitempty/false для forward-compat — отсутствие в jsonb ==
+	// обычный scenario/-путь. Заполняется found-веткой автозапуска (RunSpec.FromUpgrade).
+	FromUpgrade bool `json:"from_upgrade,omitempty"`
 }
 
 // MarshalRecipe сериализует рецепт в jsonb-форму колонки apply_runs.recipe.

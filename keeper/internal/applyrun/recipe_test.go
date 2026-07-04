@@ -83,6 +83,43 @@ func TestUnmarshalRecipe_Empty(t *testing.T) {
 	}
 }
 
+// TestRecipe_FromUpgradeRoundtrip — jsonb-персистенция FromUpgrade (ADR-0068):
+// Acolyte при claim обязан прочитать флаг и рендерить upgrade/<slug>/, а не
+// scenario/. true → присутствует в jsonb; дефолт false опущен (omitempty,
+// forward-compat со старыми рецептами).
+func TestRecipe_FromUpgradeRoundtrip(t *testing.T) {
+	in := &Recipe{
+		ServiceRef:   artifact.ServiceRef{Name: "redis", Ref: "v2.0.0"},
+		ScenarioName: "to_v2",
+		FromUpgrade:  true,
+	}
+	b, err := MarshalRecipe(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(b), `"from_upgrade":true`) {
+		t.Fatalf("marshalled recipe lost from_upgrade; got: %s", b)
+	}
+	out, err := UnmarshalRecipe(b)
+	if err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !out.FromUpgrade {
+		t.Errorf("FromUpgrade = false, want true (round-trip)")
+	}
+
+	// Дефолт false — omitempty опускает ключ (forward-compat: старые рецепты без
+	// поля читаются как false → обычный scenario/-путь).
+	legacy := &Recipe{ServiceRef: artifact.ServiceRef{Name: "redis", Ref: "v1"}, ScenarioName: "create"}
+	lb, err := MarshalRecipe(legacy)
+	if err != nil {
+		t.Fatalf("marshal legacy: %v", err)
+	}
+	if strings.Contains(string(lb), "from_upgrade") {
+		t.Errorf("legacy recipe carries from_upgrade key (must be omitempty): %s", lb)
+	}
+}
+
 // TestUnmarshalRecipe_NilInput — рецепт сценария без input (Input nil)
 // roundtrip-ит корректно.
 func TestUnmarshalRecipe_NilInput(t *testing.T) {

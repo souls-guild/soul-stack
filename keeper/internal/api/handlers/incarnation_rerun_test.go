@@ -207,6 +207,50 @@ func TestRerunLast_Day2_ReusesRecipeInput_202(t *testing.T) {
 	if ev == nil || ev.Payload["scenario"] != "add_user" {
 		t.Errorf("audit scenario = %v, want add_user", ev)
 	}
+	// day-2 recipe без from_upgrade → RunSpec.FromUpgrade=false (перезапуск из scenario/).
+	if starter.gotSpec.FromUpgrade {
+		t.Error("RunSpec.FromUpgrade = true, want false (recipe без from_upgrade)")
+	}
+}
+
+// TestRerunLast_Day2_FromUpgradeRecipe_202 — MAJOR-guard (ADR-0068): rerun-last
+// прогона, чей recipe.from_upgrade=true (упавший found-автозапуск upgrade-сценария),
+// обязан пробросить FromUpgrade=true в RunSpec — иначе перезапуск ищет scenario/<slug>/
+// (которого нет, §3) и падает 500. Проверяет проводку UnlockResult.FromUpgrade →
+// RunSpec.FromUpgrade на уровне ХЕНДЛЕРА (DB-слой это не ловит).
+func TestRerunLast_Day2_FromUpgradeRecipe_202(t *testing.T) {
+	db := &fakeIncDB{
+		selectByNameRow: func(n string) pgx.Row { return makeIncStatusRow(n, "error_locked") },
+		unlockSelectRow: func(_ string) pgx.Row {
+			return makeUnlockSelectRowSpec("error_locked", []byte(`{}`))
+		},
+		lastScenarioRow: func(_ string) pgx.Row {
+			return staticRow{values: []any{"to_v2", "01HFAILEDUPGRADE0000000000"}}
+		},
+		recipeRow: func(_ string) pgx.Row {
+			return staticRow{values: []any{[]byte(`{"scenario_name":"to_v2","from_upgrade":true,"input":{}}`)}}
+		},
+	}
+	starter := &fakeStarter{}
+	aw := &fakeAuditWriter{}
+	h := newRerunHandler(db, starter, aw)
+
+	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun upgrade verified")
+	if err != nil {
+		t.Fatalf("RerunLastTyped day-2 upgrade err = %v", err)
+	}
+	if out.Scenario != "to_v2" {
+		t.Errorf("reply scenario = %q, want to_v2", out.Scenario)
+	}
+	if starter.calls != 1 {
+		t.Fatalf("scenario start calls = %d, want 1", starter.calls)
+	}
+	if !starter.gotSpec.FromUpgrade {
+		t.Error("RunSpec.FromUpgrade = false, want true (recipe.from_upgrade → перезапуск из upgrade/)")
+	}
+	if !starter.gotSpec.FromLocked {
+		t.Error("RunSpec.FromLocked = false, want true (applying зарезервирован)")
+	}
 }
 
 // TestRerunLast_Day2_BareIncarnation_202 — bare-инкарнация (created_scenario IS

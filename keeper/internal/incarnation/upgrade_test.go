@@ -746,6 +746,10 @@ func TestUnlockForRerun_Day2_ReusesRecipeInput(t *testing.T) {
 	if _, leaked := res.Input["version"]; leaked {
 		t.Error("UnlockResult.Input несёт spec.input[version] — day-2 обязан брать recipe.input, не spec")
 	}
+	// recipe без from_upgrade → FromUpgrade=false (перезапуск из scenario/, ADR-0068).
+	if res.FromUpgrade {
+		t.Error("UnlockResult.FromUpgrade = true, want false (recipe без from_upgrade)")
+	}
 	if !tx.committed {
 		t.Error("rerun-last day-2 tx not committed")
 	}
@@ -961,5 +965,128 @@ func TestUnlock_FromApplying_Rejected(t *testing.T) {
 	_, err := Unlock(context.Background(), pool, "redis-prod", "x", "archon-alice", "01HUNLOCK0000000000000013")
 	if !errors.Is(err, ErrIncarnationNotLocked) {
 		t.Fatalf("err = %v, want ErrIncarnationNotLocked", err)
+	}
+}
+
+// --- upgrade found-ветвь (ADR-0068 §5/B) ------------------------------
+
+// TestUpgradeStateSchema_FoundModeApplyingRunHistory — found: UpgradeSlug + R
+// заданы → финальный статус applying (НЕ drift), transition-запись под R со
+// scenario=slug (linkage автозапуска), шаги миграции остаются под M.
+func TestUpgradeStateSchema_FoundModeApplyingRunHistory(t *testing.T) {
+	const migM, runR = "01HUPGRADEMIGR00000000000M", "01HUPGRADERUN000000000000R"
+	tx := &fakeTx{
+		execErrAt: -1,
+		selectRow: scriptedRow{values: []any{[]byte(`{"v":1}`), 1, "ready"}},
+	}
+	pool := &fakePool{txs: []*fakeTx{tx}}
+
+	_, err := UpgradeStateSchema(context.Background(), pool, UpgradeInput{
+		Name:             "redis-prod",
+		TargetServiceVer: "v2.0.0",
+		TargetSchemaVer:  2,
+		Chain:            statemigrate.Chain{setStep(1, 2)},
+		Evaluator:        newEvaluator(t),
+		ApplyID:          migM,
+		UpgradeSlug:      "to_v2",
+		RunApplyID:       runR,
+	})
+	if err != nil {
+		t.Fatalf("UpgradeStateSchema found: %v", err)
+	}
+	if !tx.committed {
+		t.Fatal("found upgrade tx not committed")
+	}
+	if got := upgradeUPDATEStatus(t, tx); got != string(StatusApplying) {
+		t.Errorf("финальный статус = %q, want applying (found → Runner-у, ADR-0068)", got)
+	}
+	var sawRunHistory, sawDriftHistory bool
+	for i, sql := range tx.execSQLs {
+		if !strings.Contains(sql, "INSERT INTO state_history") {
+			continue
+		}
+		switch tx.execArgs[i][2] {
+		case "to_v2":
+			// run/drift-history INSERT: 6 args (state_before==state_after=$4),
+			// apply_id на индексе 5 (у migration-step 7 args → индекс 6).
+			sawRunHistory = true
+			if tx.execArgs[i][5] != runR {
+				t.Errorf("run-history apply_id = %v, want R=%s", tx.execArgs[i][5], runR)
+			}
+		case upgradeDriftScenarioLabel:
+			sawDriftHistory = true
+		case migrationScenarioLabel:
+			if tx.execArgs[i][6] != migM {
+				t.Errorf("migration-step apply_id = %v, want M=%s", tx.execArgs[i][6], migM)
+			}
+		}
+	}
+	if !sawRunHistory {
+		t.Error("нет linkage-записи под R (scenario=slug) — found не написал run-history")
+	}
+	if sawDriftHistory {
+		t.Error("found написал drift-pending-apply — должен писать run-history под R, не drift")
+	}
+}
+
+// TestUpgradeStateSchema_SlugWithoutRunApplyID_Legacy — АНТИ-СТРЭНДИНГ (ADR-0068
+// §5/B): slug найден, но RunApplyID пуст (caller без автозапуска, напр. MCP) →
+// legacy drift, НЕ applying. Иначе incarnation завис бы в applying без прогона.
+func TestUpgradeStateSchema_SlugWithoutRunApplyID_Legacy(t *testing.T) {
+	tx := &fakeTx{
+		execErrAt: -1,
+		selectRow: scriptedRow{values: []any{[]byte(`{"v":1}`), 1, "ready"}},
+	}
+	pool := &fakePool{txs: []*fakeTx{tx}}
+
+	_, err := UpgradeStateSchema(context.Background(), pool, UpgradeInput{
+		Name:             "redis-prod",
+		TargetServiceVer: "v2.0.0",
+		TargetSchemaVer:  2,
+		Chain:            statemigrate.Chain{setStep(1, 2)},
+		Evaluator:        newEvaluator(t),
+		ApplyID:          "01HUPGRADEMIGR00000000000N",
+		UpgradeSlug:      "to_v2", // slug есть, R пуст → caller не автозапускает
+	})
+	if err != nil {
+		t.Fatalf("UpgradeStateSchema: %v", err)
+	}
+	if got := upgradeUPDATEStatus(t, tx); got != string(StatusDrift) {
+		t.Errorf("статус = %q, want drift (slug без R = legacy, анти-стрэндинг)", got)
+	}
+	var sawDrift bool
+	for i, sql := range tx.execSQLs {
+		if strings.Contains(sql, "INSERT INTO state_history") && tx.execArgs[i][2] == upgradeDriftScenarioLabel {
+			sawDrift = true
+		}
+	}
+	if !sawDrift {
+		t.Error("slug-без-R обязан писать legacy drift-pending-apply под M")
+	}
+}
+
+// TestUnlockForRerun_Day2_FromUpgradeRecipe — упавший day-2-прогон был upgrade-
+// сценарием (recipe.from_upgrade=true, ADR-0068): rerun-last возвращает
+// FromUpgrade=true, чтобы RunSpec перезапустил его из upgrade/, а не scenario/.
+func TestUnlockForRerun_Day2_FromUpgradeRecipe(t *testing.T) {
+	tx := &fakeTx{
+		execErrAt: -1,
+		queryRows: []scriptedRow{
+			{values: []any{[]byte(`{"v":2}`), "error_locked", "create", []byte(`{}`)}},
+			{values: []any{"to_v2", "01HFAILEDUPGRADE0000000000"}},
+			{values: []any{[]byte(`{"scenario_name":"to_v2","from_upgrade":true,"input":{}}`)}},
+		},
+	}
+	pool := &fakePool{txs: []*fakeTx{tx}}
+
+	res, err := UnlockForRerun(context.Background(), pool, "redis-prod", "rerun upgrade", "archon-alice", "01HRERUNHIST0000000000UPG", "01HRERUN000000000000000UPG")
+	if err != nil {
+		t.Fatalf("UnlockForRerun day-2 upgrade: %v", err)
+	}
+	if !res.FromUpgrade {
+		t.Error("UnlockResult.FromUpgrade = false, want true (recipe.from_upgrade → rerun из upgrade/)")
+	}
+	if res.Scenario != "to_v2" {
+		t.Errorf("Scenario = %q, want to_v2", res.Scenario)
 	}
 }

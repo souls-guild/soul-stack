@@ -121,6 +121,14 @@ func (l *ServiceLoader) LoadMigrationChain(art *ServiceArtifact, from, to int) (
 	return chain, nil
 }
 
+// ListUpgrades — метод-обёртка над пакетной [ListUpgrades] (ADR-0068 §3): скан
+// upgrade/<slug>/main.yml снапшота art для резолва upgrade-цели в
+// [incarnation.PrepareUpgrade]. Делегирует в пакетную функцию с localDir снапшота
+// и логгером загрузчика; сигнатура сужена под incarnation.ServiceSnapshotLoader.
+func (l *ServiceLoader) ListUpgrades(art *ServiceArtifact) ([]Scenario, error) {
+	return ListUpgrades(art.LocalDir, l.snap.logger)
+}
+
 // ReadSnapshotFile читает файл из снапшота по абсолютному localDir (корень
 // материализованного снапшота сервиса/destiny) и relative-path. Экспортируемая
 // обёртка над общим securejoin-ридером — для caller-ов вне пакета (render-wiring

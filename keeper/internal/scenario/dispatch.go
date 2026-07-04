@@ -139,6 +139,7 @@ func (r *Runner) dispatchPlanned(ctx context.Context, spec RunSpec, log *slog.Lo
 		ScenarioName: spec.ScenarioName,
 		Input:        spec.Input, // vault-ref КАК ЕСТЬ — инвариант A
 		StartedByAID: startedByPtr(spec.StartedByAID),
+		FromUpgrade:  spec.FromUpgrade, // upgrade-прогон грузит upgrade/<slug>/ на claim (ADR-0068)
 	}
 
 	dispatched := 0

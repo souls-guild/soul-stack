@@ -29,6 +29,11 @@ type fakePrepLoader struct {
 	chainErr error
 
 	chainCalls int
+
+	// upgrades / upgradesErr — ответ ListUpgrades (ADR-0068): непустой список с
+	// FromVersions, содержащим текущий пин, → found. upgradesErr → fail-open legacy.
+	upgrades    []artifact.Scenario
+	upgradesErr error
 }
 
 func (f *fakePrepLoader) Load(_ context.Context, ref artifact.ServiceRef) (*artifact.ServiceArtifact, error) {
@@ -47,6 +52,13 @@ func (f *fakePrepLoader) LoadMigrationChain(_ *artifact.ServiceArtifact, _, _ in
 		return nil, f.chainErr
 	}
 	return f.chain, nil
+}
+
+func (f *fakePrepLoader) ListUpgrades(_ *artifact.ServiceArtifact) ([]artifact.Scenario, error) {
+	if f.upgradesErr != nil {
+		return nil, f.upgradesErr
+	}
+	return f.upgrades, nil
 }
 
 func prepInc(serviceVersion string, schema int) *Incarnation {
@@ -142,5 +154,63 @@ func TestPrepareUpgrade_ChainBroken(t *testing.T) {
 		prepInc("v1", 1), "v3", "01ARZ3NDEKTSV4RRFFQ69G5FAV", nil)
 	if !errors.Is(err, artifact.ErrMigrationChainBroken) {
 		t.Fatalf("err = %v, want ErrMigrationChainBroken (passed through)", err)
+	}
+}
+
+// TestPrepareUpgrade_FoundUpgradeScenario — found-ветвь (ADR-0068 §5): upgrade-
+// сценарий, чей from ⊇ текущий пин (v1), резолвится в UpgradeSlug; TargetRef
+// запинен на to_version (для runner.Start автозапуска).
+func TestPrepareUpgrade_FoundUpgradeScenario(t *testing.T) {
+	loader := &fakePrepLoader{
+		targetSchema: 2,
+		chain:        statemigrate.Chain{setStep(1, 2)},
+		upgrades:     []artifact.Scenario{{Name: "to_v2", FromVersions: []string{"v0", "v1"}}},
+	}
+	in, err := PrepareUpgrade(context.Background(), fakePrepResolver{ok: true}, loader,
+		prepInc("v1", 1), "v2", "01ARZ3NDEKTSV4RRFFQ69G5FAV", nil)
+	if err != nil {
+		t.Fatalf("PrepareUpgrade found: %v", err)
+	}
+	if in.UpgradeSlug != "to_v2" {
+		t.Errorf("UpgradeSlug = %q, want to_v2 (from ⊇ v1)", in.UpgradeSlug)
+	}
+	if in.TargetRef.Ref != "v2" {
+		t.Errorf("TargetRef.Ref = %q, want v2 (пин цели для runner.Start)", in.TargetRef.Ref)
+	}
+}
+
+// TestPrepareUpgrade_LegacyNoUpgradeMatch — upgrade-сценарий есть, но from НЕ
+// содержит текущий пин → legacy (UpgradeSlug пуст, §5 fail-open).
+func TestPrepareUpgrade_LegacyNoUpgradeMatch(t *testing.T) {
+	loader := &fakePrepLoader{
+		targetSchema: 2,
+		chain:        statemigrate.Chain{setStep(1, 2)},
+		upgrades:     []artifact.Scenario{{Name: "to_v2", FromVersions: []string{"v0"}}},
+	}
+	in, err := PrepareUpgrade(context.Background(), fakePrepResolver{ok: true}, loader,
+		prepInc("v1", 1), "v2", "01ARZ3NDEKTSV4RRFFQ69G5FAV", nil)
+	if err != nil {
+		t.Fatalf("PrepareUpgrade legacy: %v", err)
+	}
+	if in.UpgradeSlug != "" {
+		t.Errorf("UpgradeSlug = %q, want empty (from не матчит v1 → legacy)", in.UpgradeSlug)
+	}
+}
+
+// TestPrepareUpgrade_ListUpgradesFailsOpenLegacy — сбой скана upgrade/ НЕ роняет
+// апгрейд: fail-open в legacy (§5★, чтобы патч-апгрейды не ломались).
+func TestPrepareUpgrade_ListUpgradesFailsOpenLegacy(t *testing.T) {
+	loader := &fakePrepLoader{
+		targetSchema: 2,
+		chain:        statemigrate.Chain{setStep(1, 2)},
+		upgradesErr:  errors.New("fs: read upgrade dir failed"),
+	}
+	in, err := PrepareUpgrade(context.Background(), fakePrepResolver{ok: true}, loader,
+		prepInc("v1", 1), "v2", "01ARZ3NDEKTSV4RRFFQ69G5FAV", nil)
+	if err != nil {
+		t.Fatalf("PrepareUpgrade must not fail on ListUpgrades error (fail-open): %v", err)
+	}
+	if in.UpgradeSlug != "" {
+		t.Errorf("UpgradeSlug = %q, want empty (fail-open legacy)", in.UpgradeSlug)
 	}
 }

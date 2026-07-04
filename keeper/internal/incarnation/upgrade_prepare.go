@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/statemigrate"
@@ -51,6 +52,9 @@ type ServiceResolver interface {
 type ServiceSnapshotLoader interface {
 	Load(ctx context.Context, ref artifact.ServiceRef) (*artifact.ServiceArtifact, error)
 	LoadMigrationChain(art *artifact.ServiceArtifact, from, to int) (statemigrate.Chain, error)
+	// ListUpgrades сканирует upgrade/<slug>/main.yml целевого снапшота (ADR-0068
+	// §3), возвращая сценарии с заполненным FromVersions для резолва from→to.
+	ListUpgrades(art *artifact.ServiceArtifact) ([]artifact.Scenario, error)
 }
 
 // PrepareUpgrade — оркестрация резолва upgrade-цели (Variant C): из текущего
@@ -127,6 +131,20 @@ func PrepareUpgrade(
 		return UpgradeInput{}, fmt.Errorf("%w: %v", ErrBuildEvaluator, err)
 	}
 
+	// Резолв upgrade-сценария для перехода inc.ServiceVersion → toVersion (ADR-0068
+	// §5): скан upgrade/ целевого снапшота, матч from ⊇ текущего пина. Ошибку скана
+	// уводим в legacy (slug="") — fail-open §5★: сбойный/недекларированный переход
+	// уходит в drift, а не падает (патч-апгрейды не должны ломаться).
+	upgrades, uerr := loader.ListUpgrades(art)
+	if uerr != nil {
+		// Не молча: реальный сбой скана (upgrade/ есть, но нечитаем) иначе выглядел бы
+		// как «нет сценария». slog.Default — сигнатура чистая от транспортного логгера.
+		slog.Default().Warn("incarnation: upgrade scan failed, falling back to legacy",
+			slog.String("incarnation", inc.Name), slog.String("service", inc.Service),
+			slog.String("to_version", toVersion), slog.Any("error", uerr))
+	}
+	slug, _ := artifact.ResolveUpgradeScenario(upgrades, inc.ServiceVersion)
+
 	return UpgradeInput{
 		Name:             inc.Name,
 		TargetServiceVer: toVersion,
@@ -135,5 +153,7 @@ func PrepareUpgrade(
 		Evaluator:        ev,
 		ApplyID:          applyID,
 		ChangedByAID:     changedByAID,
+		UpgradeSlug:      slug,
+		TargetRef:        ref, // ref.Ref уже = toVersion (см. выше) — для runner.Start автозапуска
 	}, nil
 }

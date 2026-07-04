@@ -317,6 +317,7 @@ func (r *Runner) CheckDrift(ctx context.Context, spec CheckDriftSpec) (*DriftRep
 		Input:        spec.InputOverride, // override как был передан; state-merge — в RenderForHost не нужно (Acolyte перечитывает state)
 		StartedByAID: startedBy,
 		DryRun:       true,
+		FromUpgrade:  false, // converge — day-2 scenario/, никогда upgrade/ (ADR-0068)
 	}
 	for _, h := range hosts {
 		if err := applyrun.InsertPlanned(ctx, r.deps.DB, &applyrun.ApplyRun{

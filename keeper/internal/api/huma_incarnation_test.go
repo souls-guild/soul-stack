@@ -314,6 +314,9 @@ func (l incPreflightLoader) Load(_ context.Context, ref artifact.ServiceRef) (*a
 func (incPreflightLoader) LoadMigrationChain(_ *artifact.ServiceArtifact, _, _ int) (statemigrate.Chain, error) {
 	return statemigrate.Chain{}, nil
 }
+func (incPreflightLoader) ListUpgrades(_ *artifact.ServiceArtifact) ([]artifact.Scenario, error) {
+	return nil, nil
+}
 func (l incPreflightLoader) ReadFile(_ *artifact.ServiceArtifact, file string) ([]byte, error) {
 	return os.ReadFile(filepath.Join(l.localDir, filepath.FromSlash(file)))
 }
@@ -389,6 +392,9 @@ func (l incValidateLoader) Load(_ context.Context, ref artifact.ServiceRef) (*ar
 }
 func (incValidateLoader) LoadMigrationChain(_ *artifact.ServiceArtifact, _, _ int) (statemigrate.Chain, error) {
 	return statemigrate.Chain{}, nil
+}
+func (incValidateLoader) ListUpgrades(_ *artifact.ServiceArtifact) ([]artifact.Scenario, error) {
+	return nil, nil
 }
 func (l incValidateLoader) ReadFile(_ *artifact.ServiceArtifact, file string) ([]byte, error) {
 	return os.ReadFile(filepath.Join(l.localDir, filepath.FromSlash(file)))
@@ -1202,6 +1208,9 @@ func (incTestLoader) Load(_ context.Context, ref artifact.ServiceRef) (*artifact
 }
 func (incTestLoader) LoadMigrationChain(_ *artifact.ServiceArtifact, _, _ int) (statemigrate.Chain, error) {
 	return statemigrate.Chain{}, nil
+}
+func (incTestLoader) ListUpgrades(_ *artifact.ServiceArtifact) ([]artifact.Scenario, error) {
+	return nil, nil
 }
 func (incTestLoader) ReadFile(_ *artifact.ServiceArtifact, _ string) ([]byte, error) {
 	return nil, nil
