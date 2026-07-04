@@ -19,13 +19,13 @@
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: soul-stack-postgres
+    container_name: ${STACK_PREFIX:-soul-stack}-postgres
     environment:
       POSTGRES_USER: keeper
       POSTGRES_PASSWORD: keeper
       POSTGRES_DB: keeper
     ports:
-      - "5434:5432"
+      - "${PG_PORT:-5434}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -36,7 +36,7 @@ services:
 
   vault:
     image: hashicorp/vault:1.18
-    container_name: soul-stack-vault
+    container_name: ${STACK_PREFIX:-soul-stack}-vault
     cap_add:
       - IPC_LOCK
     environment:
@@ -47,7 +47,7 @@ services:
       # https://127.0.0.1:8200, но dev-listener — HTTP, без TLS.
       VAULT_ADDR: http://127.0.0.1:8200
     ports:
-      - "8200:8200"
+      - "${VAULT_PORT:-8200}:8200"
     healthcheck:
       test: ["CMD", "vault", "status"]
       interval: 2s
@@ -56,9 +56,9 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: soul-stack-redis
+    container_name: ${STACK_PREFIX:-soul-stack}-redis
     ports:
-      - "6381:6379"
+      - "${REDIS_PORT:-6381}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 2s
@@ -71,7 +71,7 @@ services:
   # dev/otel-collector.yaml, смонтирован read-only.
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.115.1
-    container_name: soul-stack-otel-collector
+    container_name: ${STACK_PREFIX:-soul-stack}-otel-collector
     command: ["--config=/etc/otel-collector.yaml"]
     volumes:
       - ./otel-collector.yaml:/etc/otel-collector.yaml:ro
@@ -79,7 +79,7 @@ services:
       # OTLP gRPC — единственный наружу проброшенный порт коллектора:
       # keeper/soul шлют сюда (127.0.0.1:4317). Стандартный OTLP-порт,
       # свободен на dev-стенде (PG 5434 / Redis 6381 / Vault 8200 не задеты).
-      - "4317:4317"
+      - "${OTEL_PORT:-4317}:4317"
     depends_on:
       - jaeger
 
@@ -88,14 +88,14 @@ services:
   # внутри docker-сети; наружу проброшен только UI-порт.
   jaeger:
     image: jaegertracing/all-in-one:1.62.0
-    container_name: soul-stack-jaeger
+    container_name: ${STACK_PREFIX:-soul-stack}-jaeger
     environment:
       # Включает OTLP-приёмник Jaeger (:4317/:4318 внутри контейнера);
       # коллектор экспортирует сюда по docker-DNS-имени `jaeger`.
       COLLECTOR_OTLP_ENABLED: "true"
     ports:
       # Jaeger UI — http://127.0.0.1:16686. Стандартный порт, свободен.
-      - "16686:16686"
+      - "${JAEGER_PORT:-16686}:16686"
 
 volumes:
   postgres_data:

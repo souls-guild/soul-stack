@@ -3,31 +3,58 @@
 # dev/souls-up.sh — переподнять локальный флот souls (все localhost-процессы).
 #
 # Зачем: при рестарте keeper / смене суток (чистка /tmp) souls слетают в
-# disconnected. Скрипт переподнимает их по реестру БД: на каждый зарегистрированный
-# sid пишет soul.yml (если нет), онбордит (если нет seed) и (пере)запускает
-# `soul run`. Covens сохранены в БД — заново НЕ регистрируем, только run.
+# disconnected. Скрипт переподнимает их по реестру БД стенда: на каждый
+# зарегистрированный sid пишет soul.yml (если нет), онбордит (если нет seed) и
+# (пере)запускает `soul run`. Covens сохранены в БД — заново НЕ регистрируем.
 #
-# Идемпотентен: повторный запуск гасит старый `soul run` каждого sid и поднимает
-# заново; уже-валидный seed не переонбордит (cert валиден против неизменного
-# Vault PKI-root).
+# NIM-25: параметризован профилем стенда (DEV_STAND). Пустой DEV_STAND = default
+# (как исторически: БД keeper, keeper openapi :8080 / ES :9443 / bootstrap :9442,
+# каталоги /tmp/keeper-dev, SID как в реестре). Непустой DEV_STAND — второй+ стенд
+# рядом: своя БД keeper_<slug>, свои порты keeper (offset), каталоги
+# /tmp/keeper-dev-<slug>; derived-переменные — dev/stand-env.sh.
+#
+# ЛЁГКИЙ РЕЖИМ (DEDICATED_INFRA=0, default): Redis ОБЩИЙ на все стенды, presence/
+# SID-lease живут в глобальных ключах soul:<sid>:hb / soul:<sid>:lock — поэтому
+# один флот душ за раз на стенд; SID, пересекающиеся с соседним стендом, НЕ
+# поддержаны (столкнутся в общем Redis) — регистрируй души стенда с namespace в
+# SID (напр. web-01.<slug>.example.com). HA/failover-демо (несколько флотов на
+# пересекающихся SID) — только DEDICATED_INFRA=1 (свой Redis).
+#
+# Идемпотентен: повторный запуск гасит старый `soul run` каждого sid ПО PID
+# (per-sid pidfile) и поднимает заново; уже-валидный seed не переонбордит.
 #
 # Параметры через env:
-#   KEEPER_DEV_DIR — корень dev-артефактов (default /tmp/keeper-dev)
-#   REPO_ROOT      — корень репо soul-stack (по умолчанию из пути скрипта)
+#   DEV_STAND — идентификатор стенда (пусто=default), см. dev/stand-env.sh
+#   REPO_ROOT — корень репо soul-stack (по умолчанию из пути скрипта)
 
 set -euo pipefail
 
-KEEPER_DEV_DIR="${KEEPER_DEV_DIR:-/tmp/keeper-dev}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 
+# Профиль стенда: STAND_DEV_DIR / STAND_SLUG / OPENAPI_PORT / ES_PORT / BOOTSTRAP_PORT /
+# PG_DB / STACK_PREFIX / DEDICATED_INFRA / VAULT_ADDR / …
+source "${SCRIPT_DIR}/stand-env.sh"
+
 SOUL_BIN="${REPO_ROOT}/soul/bin/soul"
 MINT_JWT="${SCRIPT_DIR}/mint-jwt.sh"
-VAULT_CA="${KEEPER_DEV_DIR}/tls/vault-ca.crt"
-API_BASE="http://127.0.0.1:8080"
+VAULT_CA="${STAND_DEV_DIR}/tls/vault-ca.crt"
+API_BASE="http://127.0.0.1:${OPENAPI_PORT}"
 
 log()  { printf '[souls-up] %s\n' "$*" >&2; }
 fail() { printf '[souls-up] [fail] %s\n' "$*" >&2; exit 1; }
+
+log "стенд: slug=${STAND_SLUG:-<default>} dir=${STAND_DEV_DIR} db=${PG_DB} api=${API_BASE}"
+
+# sid_safe_for_stand SID — 0, если SID не столкнётся в ОБЩЕМ Redis (soul:<sid>:hb|lock)
+# с соседним стендом: default-стенд (нет slug), dedicated (свой Redis) или SID уже
+# несёт namespace стенда. namespace выводим ЛОКАЛЬНО из STAND_SLUG (не из stand-env). F7.
+sid_safe_for_stand() {
+    [ -n "${STAND_SLUG}" ] || return 0
+    [ "${DEDICATED_INFRA}" = "1" ] && return 0
+    case "$1" in *".${STAND_SLUG}."*) return 0 ;; esac
+    return 1
+}
 
 # 1. Бинарь soul.
 if [ ! -x "${SOUL_BIN}" ]; then
@@ -36,25 +63,25 @@ if [ ! -x "${SOUL_BIN}" ]; then
         || fail "сборка soul не удалась — собери вручную: make build"
 fi
 
-[ -s "${VAULT_CA}" ] || fail "нет Vault-CA (${VAULT_CA}) — запусти 'make dev-provision'"
+[ -s "${VAULT_CA}" ] || fail "нет Vault-CA (${VAULT_CA}) — запусти 'DEV_STAND=${STAND_SLUG} make dev-provision'"
 
-# 2. Список зарегистрированных sid из БД.
-SIDS="$(docker exec soul-stack-postgres psql -U keeper -d keeper -tA -c 'SELECT sid FROM souls' 2>/dev/null)" \
-    || fail "не удалось прочитать souls из БД (soul-stack-postgres поднят? 'make dev-up')"
+# 2. Список зарегистрированных sid из БД стенда (${PG_DB}).
+SIDS="$(docker exec "${STACK_PREFIX}-postgres" psql -U keeper -d "${PG_DB}" -tA -c 'SELECT sid FROM souls' 2>/dev/null)" \
+    || fail "не удалось прочитать souls из БД (${STACK_PREFIX}-postgres/${PG_DB} поднят? 'make dev-up' + 'DEV_STAND=${STAND_SLUG} make dev-provision')"
 
 if [ -z "${SIDS}" ]; then
-    log "реестр souls пуст — нечего поднимать (зарегистрируй souls через API/UI)"
+    log "реестр souls (${PG_DB}) пуст — нечего поднимать (зарегистрируй souls через API/UI)"
     exit 0
 fi
 
-# 3. Admin-JWT для issue-token-вызовов.
+# 3. Admin-JWT для issue-token-вызовов (mint-jwt сам параметризован стендом — iss/KV/vault).
 log "минчу admin-JWT для issue-token"
 ADMIN_JWT="$(AID=archon-alice ROLES='["cluster-admin"]' TTL=3600 bash "${MINT_JWT}")" \
     || fail "не удалось выпустить admin-JWT (см. mint-jwt вывод выше)"
 
 # write_soul_yml DIR SID — записать дефолтный soul.yml для sid, если его нет.
 # Схема ключей — shared/config/soul.go (SoulConfig). priority:1 = единственный
-# dev-keeper-a (9443/9442). Per-sid modules/seed-каталоги внутри DIR.
+# dev-keeper стенда (ES_PORT/BOOTSTRAP_PORT). Per-sid modules/seed-каталоги внутри DIR.
 write_soul_yml() {
     local dir="$1" sid="$2" cfg="$1/soul.yml"
     if [ -f "${cfg}" ]; then
@@ -71,8 +98,8 @@ paths:
 keeper:
   endpoints:
     - host: 127.0.0.1
-      event_stream_port: 9443
-      bootstrap_port: 9442
+      event_stream_port: ${ES_PORT}
+      bootstrap_port: ${BOOTSTRAP_PORT}
       priority: 1
   failback:
     enabled: true
@@ -136,11 +163,49 @@ except Exception:
     log "  ${sid} онбордён"
 }
 
-# Цикл по sid: каталог, soul.yml, modules, онбординг, (пере)запуск.
+# _kill_pid_if_soul PID CFG — kill -9 строго по PID, только если он жив и cmdline
+# содержит cfg-путь (страховка от переиспользования PID).
+_kill_pid_if_soul() {
+    local p="$1" cfg="$2"
+    [ -n "${p}" ] || return 0
+    kill -0 "${p}" 2>/dev/null || return 0
+    grep -qa -- "${cfg}" "/proc/${p}/cmdline" 2>/dev/null || return 0
+    log "  гашу старый soul (pid=${p})"
+    kill -9 "${p}" 2>/dev/null || true
+}
+
+# kill_old_soul PIDFILE CFG — погасить прежний `soul run` sid-а ПО PID из pidfile
+# (не pkill по общему паттерну — задел бы души соседних стендов в общем Redis).
+# Fallback (миграция со старого запуска без pidfile) — PID по ТОЧНОМУ cfg-пути
+# (per-sid, не общий паттерн), гасим его же по PID.
+kill_old_soul() {
+    local pidfile="$1" cfg="$2"
+    if [ -f "${pidfile}" ]; then
+        _kill_pid_if_soul "$(cat "${pidfile}" 2>/dev/null || true)" "${cfg}"
+        rm -f "${pidfile}"
+    fi
+    if command -v pgrep >/dev/null 2>&1; then
+        for p in $(pgrep -f "soul run.*${cfg}" 2>/dev/null || true); do
+            _kill_pid_if_soul "${p}" "${cfg}"
+        done
+    fi
+}
+
+# Цикл по sid: F7-guard, каталог, soul.yml, modules, онбординг, (пере)запуск.
 while IFS= read -r sid; do
     [ -n "${sid}" ] || continue
-    dir="${KEEPER_DEV_DIR}/${sid}"
+
+    # F7: лёгкий non-default стенд — SID без namespace стенда столкнётся в ОБЩЕМ
+    # Redis (soul:<sid>:hb|lock) с соседом на том же SID. Не поднимаем такой SID
+    # (гарантия непересечения); чинится регистрацией души с namespaced SID.
+    if ! sid_safe_for_stand "${sid}"; then
+        log "  [warn] ${sid} без namespace '${STAND_SLUG}' — риск коллизии в общем Redis; soul run ПРОПУЩЕН (перерегистрируй sid с '.${STAND_SLUG}.' или ставь DEDICATED_INFRA=1)"
+        continue
+    fi
+
+    dir="${STAND_DEV_DIR}/${sid}"
     cfg="${dir}/soul.yml"
+    pidfile="${dir}/soul.pid"
     mkdir -p "${dir}/modules"
     log "soul ${sid} (${dir})"
 
@@ -156,16 +221,18 @@ while IFS= read -r sid; do
         continue
     fi
 
-    pkill -9 -f "soul run.*${dir}/soul.yml" || true
-    nohup "${SOUL_BIN}" run --config="${cfg}" >> "${dir}/soul.log" 2>&1 &
-    log "  soul run запущен (pid=$!)"
+    # Гасим прежний `soul run` ЭТОГО sid ПО PID (per-sid pidfile).
+    kill_old_soul "${pidfile}" "${cfg}"
+    nohup "${SOUL_BIN}" run --config="${cfg}" >> "${dir}/soul.log" 2>&1 </dev/null &
+    printf '%s\n' "$!" > "${pidfile}"
+    log "  soul run запущен (pid=$!, pidfile=${pidfile})"
 done <<EOF
 ${SIDS}
 EOF
 
 # Дать souls подключиться и показать сводку статусов.
 sleep 5
-log "статусы souls:"
-docker exec soul-stack-postgres psql -U keeper -d keeper -c \
+log "статусы souls (${PG_DB}):"
+docker exec "${STACK_PREFIX}-postgres" psql -U keeper -d "${PG_DB}" -c \
     'SELECT status, count(*) FROM souls GROUP BY status ORDER BY status' >&2 \
     || log "[warn] не удалось прочитать статусы из БД"

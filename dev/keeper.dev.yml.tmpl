@@ -1,4 +1,4 @@
-kid: keeper-dev-01
+kid: ${KID}
 
 listen:
   # bootstrap/event_stream на 0.0.0.0 — доступ docker/remote-душ (host-gateway/host-IP;
@@ -6,32 +6,32 @@ listen:
   # покрывает localhost/127/host.docker.internal/host-IP. NIM-26, прецедент e2e-live config_builder.go.
   grpc:
     bootstrap:
-      addr: "0.0.0.0:9442"
+      addr: "0.0.0.0:${BOOTSTRAP_PORT}"
       tls:
-        cert: /tmp/keeper-dev/tls/keeper.crt
-        key:  /tmp/keeper-dev/tls/keeper.key
+        cert: ${STAND_DEV_DIR}/tls/keeper.crt
+        key:  ${STAND_DEV_DIR}/tls/keeper.key
     event_stream:
-      addr: "0.0.0.0:9443"
+      addr: "0.0.0.0:${ES_PORT}"
       tls:
-        cert: /tmp/keeper-dev/tls/keeper.crt
-        key:  /tmp/keeper-dev/tls/keeper.key
+        cert: ${STAND_DEV_DIR}/tls/keeper.crt
+        key:  ${STAND_DEV_DIR}/tls/keeper.key
         # ClientCAs для mTLS: Vault PKI root (CN=soul-stack) — тот же корень,
         # что подписывает SoulSeed-сертификаты. См. dev/provision.sh шаг 7.
-        ca:   /tmp/keeper-dev/tls/vault-ca.crt
-  openapi: { addr: "127.0.0.1:8080" }
-  mcp:     { addr: "127.0.0.1:8081" }
-  metrics: { addr: "127.0.0.1:9090" }
+        ca:   ${STAND_DEV_DIR}/tls/vault-ca.crt
+  openapi: { addr: "127.0.0.1:${OPENAPI_PORT}" }
+  mcp:     { addr: "127.0.0.1:${MCP_PORT}" }
+  metrics: { addr: "127.0.0.1:${METRICS_PORT}" }
 
 postgres:
-  dsn_ref: vault:secret/keeper/postgres
+  dsn_ref: ${PG_DSN_REF}
   pool: { min: 2, max: 10 }
 
 redis:
-  addr: "127.0.0.1:6381"
+  addr: "${REDIS_ADDR}"
   password_ref: ""
 
 vault:
-  addr: "http://127.0.0.1:8200"
+  addr: "${VAULT_ADDR}"
   token: "root"
   auth:
     method: token
@@ -40,8 +40,8 @@ vault:
 
 auth:
   jwt:
-    signing_key_ref: vault:secret/keeper/jwt-signing-key
-    issuer: keeper-dev-01
+    signing_key_ref: ${JWT_KEY_REF}
+    issuer: ${ISSUER}
     ttl_default: 24h
     ttl_bootstrap: 720h
 
@@ -50,7 +50,7 @@ otel:
   # Jaeger UI http://127.0.0.1:16686. Insecure-gRPC (dev-collector без TLS).
   enabled: true
   exporter: otlp
-  endpoint: "127.0.0.1:4317"
+  endpoint: "${OTEL_ENDPOINT}"
 
 logging:
   level: info
@@ -78,10 +78,10 @@ logging:
 # (поле signing_key, PEM PKCS#8). После добавления — рестарт keeper (hot-reload
 # Sigil-блок НЕ поднимает) + допуск бинаря через POST /v1/plugins/sigils.
 sigil:
-  signing_key_ref: vault:secret/keeper/sigil-signing-key
+  signing_key_ref: ${SIGIL_KEY_REF}
 
 plugins:
-  cache_root: /tmp/keeper-dev/plugins
+  cache_root: ${STAND_DEV_DIR}/plugins
   # CloudDriver-каталог. FilterByCatalog оставляет в discovery только плагины,
   # чьё manifest.name упомянуто здесь (поле `name`); без записи `wb` найденный
   # ручной кеш-слот wb-wb был бы отброшен.
@@ -108,7 +108,7 @@ plugins:
     - { name: redis, source: "file:///dev/null/community-redis-manual-slot", ref: "manual-0001" }
 
 plugin_runtime:
-  socket_dir: /tmp/keeper-dev/plugin-sockets
+  socket_dir: ${STAND_DEV_DIR}/plugin-sockets
   startup_timeout: 10s
   shutdown_grace: 10s
   allowed_capabilities:

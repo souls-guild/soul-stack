@@ -1,0 +1,63 @@
+# Dev-конфиг soul для E2E smoke. Единый стиль адресации Keeper (Форма A):
+# один host с двумя явными портами покрывает обе фазы.
+#   `soul init` → bootstrap_port (9442, server-only TLS)
+#   `soul run`  → event_stream_port (9443, mTLS bidi-stream)
+# Заменяет прежнюю пару soul-init.dev.yml / soul-run.dev.yml.
+sid: ${SOUL_SID}
+
+paths:
+  modules: ${STAND_DEV_DIR}/soul-modules
+  seed:    ${STAND_DEV_DIR}/soul-seed
+
+keeper:
+  # Multi-endpoint failover (ADR-002, soul-shedding S4). Перечислены ОБА
+  # dev-keeper по приоритету: priority 1 = keeper-a (dev/keeper.dev.yml,
+  # порты 9443/9442), priority 2 = keeper-b (dev/keeper-b.dev.yml, 9543/9542).
+  # Soul дайлит по приоритету (внутри группы — spray-shuffle); при падении
+  # keeper-a уходит на keeper-b, при восстановлении возвращается (см.
+  # failback ниже). Процедура демо — docs/dev/local-setup.md → soul-failover.
+  endpoints:
+    - host: 127.0.0.1
+      event_stream_port: ${ES_PORT}
+      bootstrap_port: ${BOOTSTRAP_PORT}
+      priority: 1
+    - host: 127.0.0.1
+      event_stream_port: 9543
+      bootstrap_port: 9542
+      priority: 2
+  retry:
+    max_attempts: 5
+    backoff: { initial: 1s, max: 30s, jitter: true }
+    handshake_timeout: 10s
+  failback:
+    # Proactive-возврат на higher-priority endpoint (keeper-a) после его
+    # восстановления. interval/spray опущены → дефолты loadFailback (1h / 10m).
+    # На dev интервал по умолчанию большой; для быстрой демо переопредели в
+    # копии конфига или сократи (см. docs/dev/local-setup.md → soul-failover).
+    enabled: true
+  tls:
+    # Vault PKI root (CN=soul-stack): keeper-cert Vault-issued, верифицируется
+    # этим корнем на bootstrap-фазе. См. dev/provision.sh.
+    ca: ${STAND_DEV_DIR}/tls/vault-ca.crt
+
+soulprint:
+  refresh_interval: 5m
+
+# Prometheus /metrics на loopback (dev). Включён, чтобы локально проверять
+# soul-метрики (scrape `curl 127.0.0.1:9191/metrics`). Порт 9191 — свободен
+# на dev-стенде (9090/9091 заняты keeper/мега-тест-soul). basic_auth не
+# включаем по умолчанию: loopback-bind защищает эндпоинт. Чтобы прогнать
+# auth-путь — выставь basic_auth.{enabled,username,password_file}.
+metrics:
+  enabled: true
+  listen: "127.0.0.1:${SOUL_METRICS_PORT}"
+
+# OTel-трейсы в dev-стек: otel-collector (docker-compose) :4317 → Jaeger
+# UI http://127.0.0.1:16686. Insecure-gRPC (dev-collector без TLS).
+otel:
+  enabled: true
+  endpoint: "127.0.0.1:4317"
+
+logging:
+  level: info
+  format: text

@@ -135,6 +135,169 @@ Convention имени поля внутри KV: короткое (`signing_key` 
 в [docs/keeper/config.md](../keeper/config.md). Остальные `_ref`-поля
 (`redis.password_ref`, AppRole credentials) — отложены на следующие slice-ы.
 
+## Параллельные стенды (`DEV_STAND`)
+
+По умолчанию все dev-цели работают с **одним** стендом на фиксированных портах
+(`8080`/`8081`/`9090`/`9442`/`9443`, web `5173`) и каталогом `/tmp/keeper-dev/`.
+Пока стенд занят (правило validating требует **живого** локального стенда — keeper
+поднят, данные засеяны), взять второй тикет/фичу в работу нельзя: коллизия портов,
+БД и dev-каталога. Механизм `DEV_STAND` (NIM-25) разводит **2–4 стенда** параллельно
+— у каждого свои порты, БД и Vault-префикс поверх общих контейнеров инфраструктуры.
+
+### Как задать стенд
+
+Стенд выбирается переменной окружения `DEV_STAND=<slug>` перед любой dev-целью
+(`slug` — тикет/фича, напр. `nim30`; валидация `^[a-z0-9][a-z0-9-]{0,30}$`):
+
+- **Пусто (`DEV_STAND` не задан)** — стенд по умолчанию, всё байт-в-байт как
+  исторически: slot `0`, offset `0`, каталог `/tmp/keeper-dev`, порты `8080…`, БД
+  `keeper`, KV `secret/keeper`. Ни одна существующая команда не меняет поведения.
+- **Непустой** — второй+ стенд: свой каталог `/tmp/keeper-dev-<slug>`, БД
+  `keeper_<slug>`, Vault-префикс `secret/keeper/<slug>/`, свои порты.
+
+**Слот** (`1..3`) выделяется автоматически из файла-реестра
+`/tmp/soul-stack-stands.tsv` (строки `slug<TAB>slot`, read-modify-write под `flock`
+— параллельный первый запуск разных слагов не заберёт один слот). Слот слага
+переиспользуется между запусками, пока не освобождён (см.
+[Освобождение слота](#освобождение-слота)). Override — `DEV_STAND_SLOT=<1..3>`.
+Offset всех портов стенда = `slot × 10`.
+
+Первый запуск любой стенд-aware цели печатает сводку стенда:
+
+```
+[stand] slug=nim30 slot=1 offset=10 dir=/tmp/keeper-dev-nim30 dedicated=0
+[stand] kid=keeper-dev-nim30 pg_db=keeper_nim30 kv=secret/keeper/nim30 stack=soul-stack
+[stand] ports: openapi=8090 mcp=8091 metrics=9100 bootstrap=9452 es=9453 web=5183 soul-metrics=9201
+```
+
+Единый источник derived-переменных — sourced-хелпер
+[`dev/stand-env.sh`](../../dev/stand-env.sh) (читается каждой `make dev-*`-целью и
+`dev/*.sh`-скриптом; напрямую не запускается).
+
+### Офсет портов
+
+Все порты стенда = базовый порт `+ slot×10`. База (slot 0) — исторические значения:
+
+| Порт | Переменная | slot 0 (default) | slot 1 | slot 2 | slot 3 |
+|---|---|---|---|---|---|
+| OpenAPI | `OPENAPI_PORT` | `8080` | `8090` | `8100` | `8110` |
+| MCP | `MCP_PORT` | `8081` | `8091` | `8101` | `8111` |
+| Metrics | `METRICS_PORT` | `9090` | `9100` | `9110` | `9120` |
+| Bootstrap (gRPC) | `BOOTSTRAP_PORT` | `9442` | `9452` | `9462` | `9472` |
+| Event stream (gRPC) | `ES_PORT` | `9443` | `9453` | `9463` | `9473` |
+| Web (vite) | `WEB_PORT` | `5173` | `5183` | `5193` | `5203` |
+| Soul-metrics | `SOUL_METRICS_PORT` | `9191` | `9201` | `9211` | `9221` |
+
+Пример — стенд `nim30` (slot 1): keeper на `http://127.0.0.1:8090`, MCP `:8091`,
+web `http://127.0.0.1:5183/ui/`, soul-metrics `:9201`.
+
+### Что разводится, что общее (лёгкий режим, default)
+
+Лёгкий режим (`DEDICATED_INFRA=0`, по умолчанию) разводит только **бесплатное**,
+переиспользуя один комплект контейнеров:
+
+| Ресурс | Стенд по умолчанию | Стенд `<slug>` |
+|---|---|---|
+| Каталог dev-материала | `/tmp/keeper-dev` | `/tmp/keeper-dev-<slug>` |
+| БД (в общем PG) | `keeper` | `keeper_<slug>` |
+| Vault KV-префикс (в общем Vault) | `secret/keeper/` | `secret/keeper/<slug>/` |
+| KID keeper-а | `keeper-dev-01` | `keeper-dev-<slug>` |
+| SID эталонной soul | `web-01.example.com` | `web-01.<slug>.example.com` |
+| Порты keeper/web/soul | `8080…` | `+ slot×10` |
+| Контейнеры PG / Vault / Redis | общий комплект `soul-stack-*` | тот же общий комплект |
+
+Контейнеры PG, Vault и Redis — **общие**. Для PG и Vault это безвредно: разные БД
+(`keeper_<slug>`) и KV-префиксы (`secret/keeper/<slug>/`) полностью изолируют данные
+стендов. **Redis — общий и НЕ разводится** в лёгком режиме, и это граница:
+
+> **Граница лёгкого режима: общий Redis.** Фоновая координация keeper-а живёт в
+> Redis: лидерство Conductor/Reaper (единые ключи `conductor:leader`/`reaper:leader`),
+> presence-реестр Conclave, SoulLease, pub/sub между инстансами (термины — в
+> [словаре имён](../naming-rules.md)). На общем Redis эта фоновая жизнь **шарится
+> между стендами**: лидером Conductor/Reaper становится keeper только одного стенда,
+> а Conclave считает keeper-ы разных стендов инстансами одного кластера. Для
+> UI-работы, просмотра данных и ручных API-вызовов это нормально. Но **параллельные
+> apply-прогоны** и **HA/failover-демо** (два keeper, soul-shedding) в лёгком режиме
+> **не поддержаны** — для них берите `DEDICATED_INFRA=1`.
+
+### Полная изоляция: `DEDICATED_INFRA=1`
+
+`DEDICATED_INFRA=1` даёт стенду **свой комплект контейнеров** — полная развязка,
+включая Redis:
+
+- отдельный `docker compose`-проект `COMPOSE_PROJECT_NAME=soul-stack-<slug>` (свои
+  контейнеры, тома, сеть); `dev-up`/`dev-down`/`dev-reset` бьют **именно его**;
+- инфра-порты тоже сдвигаются на `slot×10` (в лёгком режиме — общие, без сдвига):
+
+| Инфра-порт | default (общий) | dedicated slot 1 |
+|---|---|---|
+| Postgres | `5434` | `5444` |
+| Vault | `8200` | `8210` |
+| Redis | `6381` | `6391` |
+| OTLP gRPC | `4317` | `4327` |
+| Jaeger UI | `16686` | `16696` |
+
+Для dedicated-стенда `make dev-up` обязателен — он поднимает свой compose-проект. В
+лёгком режиме второй стенд переиспользует уже поднятую общую инфру, `dev-up` для него
+не нужен.
+
+### Рецепты
+
+```sh
+# Стенд по умолчанию (как исторически) — общая инфра поднимается один раз.
+make dev-up dev-provision dev-keeper dev-web
+
+# Второй стенд nim30 параллельно (лёгкий режим, общая инфра уже поднята):
+DEV_STAND=nim30 make dev-provision \
+  && DEV_STAND=nim30 make dev-keeper \
+  && DEV_STAND=nim30 make dev-web \
+  && DEV_STAND=nim30 make dev-souls-docker
+
+# Полностью изолированный стенд (свои контейнеры, свой Redis — для apply/HA-демо):
+DEV_STAND=big DEDICATED_INFRA=1 make dev-up dev-provision dev-keeper
+
+# Снос стенда nim30 (души → демоны → освобождение слота):
+DEV_STAND=nim30 make dev-souls-docker-down \
+  && DEV_STAND=nim30 make dev-stop \
+  && DEV_STAND=nim30 make dev-stand-free
+```
+
+`make dev-stop` гасит демоны **только** своего стенда (keeper/web по pidfile в
+`/tmp/keeper-dev-<slug>/`, souls по stand-scoped паттерну) — соседние стенды не
+задевает. Токен для API-вызовов стенда — `TOKEN=$(DEV_STAND=nim30 make dev-jwt)`.
+
+### WSL2: docker-души на нестандартном стенде
+
+Docker-души (`dev-souls-docker`) дозваниваются к keeper-у по host-IP, и на WSL2
+`host.docker.internal` из Docker-Desktop-VM до keeper-а не достаёт (общий разбор — в
+[Docker-души](#docker-души-изолированный-флот)). Для нестандартного стенда те же три
+условия, но с `DEV_STAND`:
+
+```sh
+make build-linux                              # свежий soul-бинарь (bind-mount ro в контейнер)
+IP=$(hostname -I | awk '{print $1}')
+DEV_STAND=nim30 DEV_KEEPER_EXTRA_IP=$IP make dev-provision   # host-IP в ip_sans серта стенда
+DEV_STAND=nim30 make dev-keeper
+DEV_STAND=nim30 KEEPER_HOST=$IP make dev-souls-docker         # души дозваниваются на host-IP
+```
+
+Контейнеры стенда именуются `soul-docker-<slug>-1..N` (sid == имя контейнера), не
+пересекаясь с душами других стендов. `make build-linux` перед `dev-souls-docker`
+обязателен — контейнер монтирует свежий `soul/bin/soul-linux-amd64` ro.
+
+### Освобождение слота
+
+Слот держится в реестре `/tmp/soul-stack-stands.tsv`, пока его явно не освободить:
+
+```sh
+DEV_STAND=nim30 make dev-stand-free   # убрать строку слага из реестра (идемпотентно)
+```
+
+После этого порты слота снова доступны следующему стенду. Альтернатива — вручную
+убрать строку `nim30<TAB>…` из `/tmp/soul-stack-stands.tsv`. Реестр живёт в `/tmp` и
+очищается при перезагрузке (на macOS — при смене суток) вместе с dev-материалом; при
+DEDICATED_INFRA снос контейнеров стенда — `DEV_STAND=<slug> make dev-down`.
+
 ## Готовый dev-конфиг
 
 Для smoke-прогона Keeper-а есть закоммиченный конфиг

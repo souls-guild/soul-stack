@@ -14,11 +14,10 @@
 # команды проксируются через `docker exec soul-stack-vault vault ...`.
 #
 # Параметры через env:
-#   VAULT_ADDR     — endpoint Vault dev-сервера (default http://127.0.0.1:8200)
-#   VAULT_TOKEN    — root-token dev-сервера (default root)
-#   KEEPER_DEV_DIR — корень dev-артефактов (default /tmp/keeper-dev)
-#   PG_DSN         — DSN для secret/keeper/postgres
-#                    (default postgres://keeper:keeper@localhost:5434/keeper?sslmode=disable)
+#   DEV_STAND      — идентификатор стенда (пусто=default); derived-переменные (STAND_DEV_DIR /
+#                    PG_DB / VAULT_KV_PREFIX / STACK_PREFIX / порты) — dev/stand-env.sh (NIM-25)
+#   VAULT_TOKEN    — форсится root (dev); VAULT_ADDR/PG_PORT — из stand-env
+#   PG_DSN         — DSN для ${VAULT_KV_PREFIX}/postgres (default выводится из стенда: БД ${PG_DB})
 #   PKI_ROLE_DOMAINS — allowed_domains для роли soul-seed
 #                    (default example.com,test,localhost,host.docker.internal,soul-docker-*)
 #   DEV_KEEPER_EXTRA_IP — опц. доп. IP в ip_sans keeper-серта (WSL2 host-IP для
@@ -28,19 +27,25 @@
 
 set -euo pipefail
 
-VAULT_ADDR="${VAULT_ADDR:-http://127.0.0.1:8200}"
-VAULT_TOKEN="${VAULT_TOKEN:-root}"
-KEEPER_DEV_DIR="${KEEPER_DEV_DIR:-/tmp/keeper-dev}"
-PG_DSN="${PG_DSN:-postgres://keeper:keeper@localhost:5434/keeper?sslmode=disable}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Профиль стенда: STAND_DEV_DIR / PG_DB / VAULT_KV_PREFIX / STACK_PREFIX / PG_PORT / … (NIM-25).
+source "${SCRIPT_DIR}/stand-env.sh"
+
+# Явный dev VAULT_TOKEN=root: в env юзера бывает прод-токен — форсим root.
+# VAULT_ADDR — из stand-env (лёгкий режим = общий :8200).
+VAULT_TOKEN=root
+KEEPER_DEV_DIR="${STAND_DEV_DIR}"
+PG_DSN="${PG_DSN:-postgres://keeper:keeper@localhost:${PG_PORT}/${PG_DB}?sslmode=disable}"
 # host.docker.internal — keeper-cert SAN; soul-docker-* — glob для bare-CN docker-душ (NIM-26).
 PKI_ROLE_DOMAINS="${PKI_ROLE_DOMAINS:-example.com,test,localhost,host.docker.internal,soul-docker-*}"
 # Опц. host-IP в ip_sans keeper-серта (WSL2: keeper endpoint = host-IP, NIM-26).
 DEV_KEEPER_EXTRA_IP="${DEV_KEEPER_EXTRA_IP:-}"
 # REPO_ROOT — корень репо: каталог на уровень выше dev/ (где лежит этот скрипт).
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 
 export VAULT_ADDR VAULT_TOKEN
+
+log_stand() { printf '[provision] стенд: slug=%s slot=%s dir=%s pg_db=%s kv=%s stack=%s\n' "${STAND_SLUG:-<default>}" "${STAND_SLOT}" "${STAND_DEV_DIR}" "${PG_DB}" "${VAULT_KV_PREFIX}" "${STACK_PREFIX}"; }
 
 log() { printf '[provision] %s\n' "$*"; }
 skip() { printf '[provision] [skip] %s\n' "$*"; }
@@ -64,11 +69,13 @@ else
         docker exec \
             -e VAULT_ADDR=http://127.0.0.1:8200 \
             -e VAULT_TOKEN="$VAULT_TOKEN" \
-            soul-stack-vault vault "$@"
+            "${STACK_PREFIX}-vault" vault "$@"
     }
-    VAULT_ENDPOINT_DESC="http://127.0.0.1:8200 (via docker exec soul-stack-vault)"
-    log "vault CLI: docker exec soul-stack-vault vault"
+    VAULT_ENDPOINT_DESC="http://127.0.0.1:8200 (via docker exec ${STACK_PREFIX}-vault)"
+    log "vault CLI: docker exec ${STACK_PREFIX}-vault vault"
 fi
+
+log_stand
 
 # Sanity: Vault достижим и unsealed.
 if ! vault_cli status >/dev/null 2>&1; then
@@ -76,24 +83,37 @@ if ! vault_cli status >/dev/null 2>&1; then
 fi
 log "vault reachable at ${VAULT_ENDPOINT_DESC}"
 
-# 1. KV: secret/keeper/postgres (поле `dsn`).
-if vault_cli kv get -field=dsn secret/keeper/postgres >/dev/null 2>&1; then
-    skip "secret/keeper/postgres already set"
+# 1. KV: ${VAULT_KV_PREFIX}/postgres (поле `dsn`). Префикс per-стенд (NIM-25).
+if vault_cli kv get -field=dsn "${VAULT_KV_PREFIX}/postgres" >/dev/null 2>&1; then
+    skip "${VAULT_KV_PREFIX}/postgres already set"
 else
-    log "writing secret/keeper/postgres"
-    vault_cli kv put secret/keeper/postgres dsn="${PG_DSN}" >/dev/null
+    log "writing ${VAULT_KV_PREFIX}/postgres"
+    vault_cli kv put "${VAULT_KV_PREFIX}/postgres" dsn="${PG_DSN}" >/dev/null
 fi
 
-# 2. KV: secret/keeper/jwt-signing-key (поле `signing_key`).
+# 2. KV: ${VAULT_KV_PREFIX}/jwt-signing-key (поле `signing_key`).
 # signing_key — 32 байта случайных данных в base64, генерится один раз
 # и фиксируется в Vault. При re-run скрипта существующий ключ НЕ
 # перегенерируется, иначе все ранее выпущенные JWT станут невалидны.
-if vault_cli kv get -field=signing_key secret/keeper/jwt-signing-key >/dev/null 2>&1; then
-    skip "secret/keeper/jwt-signing-key already set"
+if vault_cli kv get -field=signing_key "${VAULT_KV_PREFIX}/jwt-signing-key" >/dev/null 2>&1; then
+    skip "${VAULT_KV_PREFIX}/jwt-signing-key already set"
 else
-    log "generating and writing secret/keeper/jwt-signing-key"
+    log "generating and writing ${VAULT_KV_PREFIX}/jwt-signing-key"
     SIGNING_KEY="$(openssl rand -base64 32)"
-    vault_cli kv put secret/keeper/jwt-signing-key signing_key="${SIGNING_KEY}" >/dev/null
+    vault_cli kv put "${VAULT_KV_PREFIX}/jwt-signing-key" signing_key="${SIGNING_KEY}" >/dev/null
+fi
+
+# 2b. KV: ${VAULT_KV_PREFIX}/sigil-signing-key (поле `signing_key`, ed25519 PEM PKCS#8).
+# Обязателен: при пустом реестре sigil_signing_keys keeper падает на старте без него
+# (fallback на cfg.signing_key_ref, ADR-026(h)). Генерится один раз, при re-run НЕ
+# перегенерируется (иначе сломались бы уже введённые Sigil-допуски).
+if vault_cli kv get -field=signing_key "${VAULT_KV_PREFIX}/sigil-signing-key" >/dev/null 2>&1; then
+    skip "${VAULT_KV_PREFIX}/sigil-signing-key already set"
+else
+    log "generating and writing ${VAULT_KV_PREFIX}/sigil-signing-key (ed25519 PEM PKCS#8)"
+    SIGIL_KEY="$(openssl genpkey -algorithm ed25519 2>/dev/null)"
+    [ -n "${SIGIL_KEY}" ] || fail "openssl genpkey ed25519 не дал ключ (нужен openssl ≥1.1.1)"
+    vault_cli kv put "${VAULT_KV_PREFIX}/sigil-signing-key" signing_key="${SIGIL_KEY}" >/dev/null
 fi
 
 # 3. PKI secrets engine на пути `pki/`.
@@ -228,31 +248,55 @@ else
     issue_keeper_cert
 fi
 
-# 8. Sanity: Postgres reachable. Apply миграций делает сам `keeper init`
-# (идемпотентно через migrate.Apply), поэтому отдельный schema-bootstrap
-# в provision.sh не нужен — это был бы дубликат.
+# 8. Sanity: Postgres reachable. Apply миграций делает сам `keeper init`/`keeper run`
+# (идемпотентно через migrate.Apply в БД стенда ${PG_DB}), поэтому отдельный
+# schema-bootstrap в provision.sh не нужен — это был бы дубликат.
 #
-# psql_cli — обёртка над `psql`, симметрично vault_cli: host-CLI, если есть,
-# иначе fallback внутрь контейнера. SQL передаётся через stdin (-f -), чтобы не
-# зависеть от наличия psql на хосте и от кавычек в shell.
+# Две обёртки (симметрично vault_cli): psql_admin — всегда существующая bootstrap-БД
+# `keeper` (reachability + CREATE DATABASE стенда); psql_stand — БД стенда ${PG_DB}
+# (seed). Для default обе бьют в `keeper` (идентично прежнему psql_cli). NIM-25.
+PG_ADMIN_DSN="postgres://keeper:keeper@localhost:${PG_PORT}/keeper?sslmode=disable"
 PG_REACHABLE=0
 if command -v psql >/dev/null 2>&1; then
-    psql_cli() { psql "${PG_DSN}" -v ON_ERROR_STOP=1 -q "$@"; }
-    if psql "${PG_DSN}" -c 'SELECT 1' >/dev/null 2>&1; then
+    psql_admin() { psql "${PG_ADMIN_DSN}" -v ON_ERROR_STOP=1 -q "$@"; }
+    psql_stand() { psql "${PG_DSN}" -v ON_ERROR_STOP=1 -q "$@"; }
+    if psql "${PG_ADMIN_DSN}" -c 'SELECT 1' >/dev/null 2>&1; then
         PG_REACHABLE=1
         log "postgres reachable via host psql"
     else
         log "postgres NOT reachable via host psql (keeper init will retry)"
     fi
 else
-    psql_cli() { docker exec -i soul-stack-postgres psql -U keeper -d keeper -v ON_ERROR_STOP=1 -q "$@"; }
-    if docker exec soul-stack-postgres pg_isready -U keeper -d keeper >/dev/null 2>&1; then
+    psql_admin() { docker exec -i "${STACK_PREFIX}-postgres" psql -U keeper -d keeper -v ON_ERROR_STOP=1 -q "$@"; }
+    psql_stand() { docker exec -i "${STACK_PREFIX}-postgres" psql -U keeper -d "${PG_DB}" -v ON_ERROR_STOP=1 -q "$@"; }
+    if docker exec "${STACK_PREFIX}-postgres" pg_isready -U keeper -d keeper >/dev/null 2>&1; then
         PG_REACHABLE=1
         log "postgres reachable via docker exec pg_isready"
     else
         log "postgres NOT ready yet (keeper init will retry)"
     fi
 fi
+
+# 8b. БД стенда ${PG_DB} — создать идемпотентно (CREATE DATABASE без IF NOT EXISTS).
+# Лёгкая изоляция: общий Postgres, отдельная БД на стенд. Default (keeper) создаётся
+# docker-compose — пропускаем. Создаём ДО keeper init/run (тот мигрирует ${PG_DB}). NIM-25.
+ensure_stand_db() {
+    if [ "${PG_DB}" = "keeper" ]; then
+        skip "БД keeper (default) — создаётся docker-compose"
+        return 0
+    fi
+    if [ "${PG_REACHABLE}" != "1" ]; then
+        skip "БД ${PG_DB}: postgres недоступен — создание отложено (повтори provision)"
+        return 0
+    fi
+    if [ "$(psql_admin -tAc "SELECT 1 FROM pg_database WHERE datname='${PG_DB}'" 2>/dev/null)" = "1" ]; then
+        skip "БД ${PG_DB} уже существует"
+    else
+        log "создаю БД ${PG_DB} (owner keeper)"
+        psql_admin -c "CREATE DATABASE \"${PG_DB}\" OWNER keeper" >/dev/null
+    fi
+}
+ensure_stand_db
 
 # 9. Git-репозитории service/destiny-артефактов из examples/.
 #
@@ -367,9 +411,9 @@ provision_git_repo \
 # (serviceregistry.Holder.Resolve / DefaultDestinySource) читает только БД.
 # Без seed-а E2E-smoke поднял бы пустой реестр и Resolve("hello-world"/"redis")
 # вернул бы false. Сеем те же записи, что раньше были в services[]:
-#   - service hello-world → file:///tmp/keeper-dev/repos/hello-world @ main
-#   - service redis       → file:///tmp/keeper-dev/repos/redis @ main
-#   - keeper_settings[default_destiny_source] = file:///tmp/keeper-dev/destiny/{name}
+#   - service hello-world → file://${KEEPER_DEV_DIR}/repos/hello-world @ main
+#   - service redis       → file://${KEEPER_DEV_DIR}/repos/redis @ main
+#   - keeper_settings[default_destiny_source] = file://${KEEPER_DEV_DIR}/destiny/{name}
 #
 # Способ — прямой psql INSERT (provision имеет PG-доступ; Архонт/JWT для
 # service.* API на этом шаге ещё не выпущены). Идемпотентно: ON CONFLICT DO
@@ -388,21 +432,23 @@ seed_service_registry() {
         skip "service-реестр: postgres недоступен — seed пропущен (повторить provision после keeper init)"
         return 0
     fi
-    # Схема создаётся keeper init-ом (migrate.Apply). До неё seed невозможен.
-    if ! psql_cli -tAc "SELECT to_regclass('public.service_registry') IS NOT NULL AND to_regclass('public.keeper_settings') IS NOT NULL" 2>/dev/null | grep -qx t; then
+    # Схема создаётся keeper init/run-ом (migrate.Apply) в БД стенда. До неё seed невозможен.
+    if ! psql_stand -tAc "SELECT to_regclass('public.service_registry') IS NOT NULL AND to_regclass('public.keeper_settings') IS NOT NULL" 2>/dev/null | grep -qx t; then
         skip "service-реестр: схема ещё не применена (нет service_registry/keeper_settings) — seed отложен до запуска после keeper init; повторить 'make dev-provision'"
         return 0
     fi
 
     log "seeding service_registry (hello-world, redis) + keeper_settings[default_destiny_source]"
-    psql_cli -f - <<'SQL'
+    # Unquoted heredoc: подставляется только ${KEEPER_DEV_DIR}; {name} (без $) остаётся
+    # плейсхолдером keeper-а. Иных $-литералов в SQL нет.
+    psql_stand -f - <<SQL
 INSERT INTO service_registry (name, git, ref) VALUES
-    ('hello-world', 'file:///tmp/keeper-dev/repos/hello-world', 'main'),
-    ('redis',       'file:///tmp/keeper-dev/repos/redis',       'main')
+    ('hello-world', 'file://${KEEPER_DEV_DIR}/repos/hello-world', 'main'),
+    ('redis',       'file://${KEEPER_DEV_DIR}/repos/redis',       'main')
 ON CONFLICT (name) DO NOTHING;
 
 INSERT INTO keeper_settings (key, value) VALUES
-    ('default_destiny_source', 'file:///tmp/keeper-dev/destiny/{name}')
+    ('default_destiny_source', 'file://${KEEPER_DEV_DIR}/destiny/{name}')
 ON CONFLICT (key) DO NOTHING;
 SQL
     log "service-реестр засеян (hello-world, redis, default_destiny_source)"

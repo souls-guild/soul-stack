@@ -7,8 +7,8 @@
 # делят ФС хоста. Здесь каждая душа = privileged Debian-12 systemd-контейнер с
 # примонтированным свежим soul-бинарём; онбординг к keeper-процессу на хосте.
 #
-# Имена предсказуемые: soul-docker-1..N (sid == имя контейнера). Идемпотентно:
-# существующий контейнер soul-docker-$i пересоздаётся (docker rm -f перед run).
+# Имена предсказуемые: soul-docker-1..N (для стенда — soul-docker-<stand>-1..N; sid ==
+# имя контейнера). Идемпотентно: существующий контейнер пересоздаётся (docker rm -f перед run).
 #
 # Образ переиспользует базовый Dockerfile e2e-live (tests/e2e-live/dockerfiles/),
 # контекст самодостаточен. Свежий soul-бинарь bind-mount-ится ro (ребилд образа
@@ -23,26 +23,30 @@
 #   $1 / SOULS_COUNT   — сколько душ поднять (default 3)
 #   KEEPER_HOST        — host keeper-эндпоинта из контейнера (default host.docker.internal)
 #   SOUL_DOCKER_IMAGE  — тег dev-образа (default soul-stack-dev-soul:debian12)
-#   KEEPER_DEV_DIR     — корень dev-артефактов (default /tmp/keeper-dev)
+#   DEV_STAND          — идентификатор стенда (пусто=default; префикс/БД/порты/dev-dir — dev/stand-env.sh)
 #   REPO_ROOT          — корень репо soul-stack (по умолчанию из пути скрипта)
 #   VAULT_TOKEN        — root-token dev-Vault для mint-jwt (default root)
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="${REPO_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
+
+# Профиль стенда: STAND_DEV_DIR / OPENAPI_PORT / BOOTSTRAP_PORT / ES_PORT / STACK_PREFIX / PG_DB / STAND_SLUG. NIM-25.
+source "${SCRIPT_DIR}/stand-env.sh"
+
 COUNT="${1:-${SOULS_COUNT:-3}}"
 KEEPER_HOST="${KEEPER_HOST:-host.docker.internal}"
 IMAGE="${SOUL_DOCKER_IMAGE:-soul-stack-dev-soul:debian12}"
-KEEPER_DEV_DIR="${KEEPER_DEV_DIR:-/tmp/keeper-dev}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="${REPO_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 
 SOUL_BIN="${REPO_ROOT}/soul/bin/soul-linux-amd64"
 DOCKERFILE_DIR="${REPO_ROOT}/tests/e2e-live/dockerfiles"
 DOCKERFILE="${DOCKERFILE_DIR}/debian-12.Dockerfile"
 MINT_JWT="${SCRIPT_DIR}/mint-jwt.sh"
-VAULT_CA="${KEEPER_DEV_DIR}/tls/vault-ca.crt"
-API_BASE="http://127.0.0.1:8080"
-PREFIX="soul-docker"
+VAULT_CA="${STAND_DEV_DIR}/tls/vault-ca.crt"
+API_BASE="http://127.0.0.1:${OPENAPI_PORT}"
+PREFIX="soul-docker${STAND_SLUG:+-${STAND_SLUG}}"
+STAND_ENV_HINT="${STAND_SLUG:+DEV_STAND=${STAND_SLUG} }"
 
 log()  { printf '[souls-docker-up] %s\n' "$*" >&2; }
 fail() { printf '[souls-docker-up] [fail] %s\n' "$*" >&2; exit 1; }
@@ -50,11 +54,11 @@ fail() { printf '[souls-docker-up] [fail] %s\n' "$*" >&2; exit 1; }
 # 1. Preflight.
 command -v docker >/dev/null 2>&1 || fail "docker не найден в PATH"
 [ -x "${SOUL_BIN}" ] || fail "нет linux-бинаря soul (${SOUL_BIN}) — собери: make build-linux"
-[ -s "${VAULT_CA}" ] || fail "нет Vault-CA (${VAULT_CA}) — запусти 'make dev-provision'"
+[ -s "${VAULT_CA}" ] || fail "нет Vault-CA (${VAULT_CA}) — запусти '${STAND_ENV_HINT}make dev-provision'"
 [ -f "${DOCKERFILE}" ] || fail "нет базового Dockerfile (${DOCKERFILE})"
 
 code="$(curl -s -o /dev/null -w '%{http_code}' "${API_BASE}/healthz" 2>/dev/null || true)"
-[ "${code}" = "200" ] || fail "keeper не отвечает на ${API_BASE}/healthz (code=${code:-none}) — запусти 'make dev-keeper'"
+[ "${code}" = "200" ] || fail "keeper не отвечает на ${API_BASE}/healthz (code=${code:-none}) — запусти '${STAND_ENV_HINT}make dev-keeper'"
 
 case "${COUNT}" in ''|*[!0-9]*) fail "COUNT должен быть числом (получено: ${COUNT})" ;; esac
 [ "${COUNT}" -ge 1 ] || fail "COUNT должен быть >= 1"
@@ -64,7 +68,7 @@ if [ "${KEEPER_HOST}" = "host.docker.internal" ] && grep -qi microsoft /proc/ver
     host_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
     log "[warn] WSL2 обнаружен, а KEEPER_HOST=host.docker.internal — из DD-VM keeper недостижим."
     log "[warn] перезапусти с KEEPER_HOST=${host_ip:-<host-IP>} и переиздай cert:"
-    log "[warn]   DEV_KEEPER_EXTRA_IP=${host_ip:-<host-IP>} make dev-provision && make dev-keeper"
+    log "[warn]   ${STAND_ENV_HINT}DEV_KEEPER_EXTRA_IP=${host_ip:-<host-IP>} make dev-provision && ${STAND_ENV_HINT}make dev-keeper"
 fi
 
 # 2. Образ (идемпотентно: docker кеширует слои; подхватит правку Dockerfile).
@@ -91,8 +95,8 @@ paths:
 keeper:
   endpoints:
     - host: ${KEEPER_HOST}
-      event_stream_port: 9443
-      bootstrap_port: 9442
+      event_stream_port: ${ES_PORT}
+      bootstrap_port: ${BOOTSTRAP_PORT}
       priority: 1
   retry:
     max_attempts: 30
@@ -158,7 +162,7 @@ wait_systemd_ready() {
 spawn_soul() {
     local i="$1"
     local sid="${PREFIX}-${i}" name="${PREFIX}-${i}"
-    local dir="${KEEPER_DEV_DIR}/${name}" cfg
+    local dir="${STAND_DEV_DIR}/${name}" cfg
     cfg="${dir}/soul.yml"
     mkdir -p "${dir}"
     log "soul ${sid}"
@@ -222,15 +226,15 @@ done
 log "жду connected для ${COUNT} душ (до 60s)"
 connected=0
 for _ in $(seq 1 60); do
-    connected="$(docker exec soul-stack-postgres psql -U keeper -d keeper -tA -c \
-        "SELECT count(*) FROM souls WHERE sid LIKE '${PREFIX}-%' AND status='connected'" 2>/dev/null || echo 0)"
+    connected="$(docker exec "${STACK_PREFIX}-postgres" psql -U keeper -d "${PG_DB}" -tA -c \
+        "SELECT count(*) FROM souls WHERE sid ~ '^${PREFIX}-[0-9]+$' AND status='connected'" 2>/dev/null || echo 0)"
     [ "${connected:-0}" -ge "${COUNT}" ] && break
     sleep 1
 done
 
 log "статусы docker-душ:"
-docker exec soul-stack-postgres psql -U keeper -d keeper -c \
-    "SELECT sid, status FROM souls WHERE sid LIKE '${PREFIX}-%' ORDER BY sid" >&2 \
+docker exec "${STACK_PREFIX}-postgres" psql -U keeper -d "${PG_DB}" -c \
+    "SELECT sid, status FROM souls WHERE sid ~ '^${PREFIX}-[0-9]+$' ORDER BY sid" >&2 \
     || log "[warn] не удалось прочитать статусы из БД"
 
 log "итог: connected=${connected}/${COUNT}, ошибок онбординга=${failed}"

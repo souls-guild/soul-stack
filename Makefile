@@ -91,7 +91,7 @@ PKG_ARCH ?= amd64
 KEEPER_IMAGE ?= soul-stack/keeper
 SOUL_IMAGE   ?= soul-stack/soul
 
-.PHONY: gen build build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand gen-openapi check-openapi check-template sync-webui check-webui sbom pkg pkg-keeper pkg-soul pkg-soul-lint sign stress load-test help dev-souls-docker dev-souls-docker-down
+.PHONY: gen build build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-openapi check-openapi check-template check-stand-template check-soul-template sync-webui check-webui sbom pkg pkg-keeper pkg-soul pkg-soul-lint sign stress load-test help dev-souls-docker dev-souls-docker-down
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -415,41 +415,46 @@ tidy:
 # `dev-down` НЕ удаляет volume — данные `postgres_data` сохраняются между
 # циклами `up/down`. Для полного сброса (миграция изменилась, БД в
 # inconsistent state) — `make dev-reset`.
+#
+# Стенд-aware (NIM-25): DEDICATED_INFRA=1 → свой docker-проект (COMPOSE_PROJECT_NAME=
+# ${STACK_PREFIX} = soul-stack-<slug>) + offset-порты, down/reset бьют ИМЕННО его.
+# Лёгкий режим (пустой DEV_STAND или DEDICATED_INFRA=0) — общая инфра, проект как раньше.
 dev-up:
-	@cd dev && docker compose up -d
+	@bash -c '. dev/stand-env.sh && stand_summary'
+	@bash -c 'set -e; . dev/stand-env.sh >/dev/null; if [ "$${DEDICATED_INFRA}" = "1" ]; then export COMPOSE_PROJECT_NAME="$${STACK_PREFIX}"; fi; cd dev && docker compose up -d'
 
 # `dev-down` сначала гасит локальные keeper/soul-демоны dev-воркфлоу
 # (см. `dev-stop`), потом инфру docker-compose. Иначе orphan-`keeper run`
 # от прошлой сессии висит и держит порты (8080/8081/9090/9442/9443) —
 # свежий запуск падает на `bind: address already in use`.
 dev-down: dev-stop
-	@cd dev && docker compose down
+	@bash -c 'set -e; . dev/stand-env.sh >/dev/null; if [ "$${DEDICATED_INFRA}" = "1" ]; then export COMPOSE_PROJECT_NAME="$${STACK_PREFIX}"; fi; cd dev && docker compose down'
 
-# Останавливает ЛОКАЛЬНЫЕ keeper/soul-демоны dev-воркфлоу (foreground-процессы
-# из `docs/dev/local-setup.md` → `keeper run`/`soul run`). Pidfile dev-скрипты
-# не пишут, поэтому матчим по СПЕЦИФИЧНОМУ паттерну с dev-конфигом
-# (`keeper.dev.yml`/`soul.dev.yml`) — чужие keeper/soul с прод-конфигом
-# не задеваются. `|| true` — не падать, если процессов нет.
+# Гасит демоны ЭТОГО стенда (DEV_STAND): keeper/web по pidfile в ${STAND_DEV_DIR}
+# (keeper-run/web-run их пишут), souls — по stand-scoped паттерну (--config под
+# ${STAND_DEV_DIR}/). Пустой DEV_STAND = только default-стенд; соседние стенды НЕ
+# задеваются (было: широкий pkill по имени, убивавший все стенды). NIM-25.
 dev-stop:
-	@pkill -f 'keeper run.*keeper\.dev\.yml' || true
-	@pkill -f 'soul run.*soul\.dev\.yml' || true
-	@echo "dev-stop: локальные keeper/soul-демоны остановлены (если были)"
+	@bash -c 'set -e; . dev/stand-env.sh; stand_summary; d="$${STAND_DEV_DIR}"; kp="$$(cat "$$d/keeper.pid" 2>/dev/null || true)"; if [ -n "$$kp" ] && kill -0 "$$kp" 2>/dev/null && grep -qa keeper "/proc/$$kp/cmdline" 2>/dev/null; then kill -9 "$$kp" 2>/dev/null || true; fi; rm -f "$$d/keeper.pid"; wp="$$(cat "$$d/web.pid" 2>/dev/null || true)"; if [ -n "$$wp" ] && kill -0 "$$wp" 2>/dev/null && grep -qaE 'vite|node|npm' "/proc/$$wp/cmdline" 2>/dev/null; then pkill -9 -P "$$wp" 2>/dev/null || true; kill -9 "$$wp" 2>/dev/null || true; fi; rm -f "$$d/web.pid"; pkill -f "soul run.*$$d/" 2>/dev/null || true; echo "dev-stop: стенд $${STAND_SLUG:-<default>} остановлен (keeper/web по pidfile, souls по stand-паттерну)"'
 
 dev-reset:
-	@cd dev && docker compose down -v && docker compose up -d
+	@bash -c '. dev/stand-env.sh && stand_summary'
+	@bash -c 'set -e; . dev/stand-env.sh >/dev/null; if [ "$${DEDICATED_INFRA}" = "1" ]; then export COMPOSE_PROJECT_NAME="$${STACK_PREFIX}"; fi; cd dev && docker compose down -v && docker compose up -d'
 
 # Idempotent bootstrap-провижининг секретов и TLS-материала для local-dev.
 # Скрипт безопасен к повторному запуску: каждый шаг проверяет своё состояние.
 # Подробности — `docs/dev/local-setup.md`.
 dev-provision:
+	@bash -c '. dev/stand-env.sh && stand_summary'
 	@bash dev/provision.sh
 
 # Полный smoke-цикл: поднять стек → провижининг Vault/TLS → `keeper init` →
 # seed service-реестра. Собирает keeper-бинарь перед запуском (зависим от
-# Go-кода, поэтому не делаем shortcut через `keeper/bin/keeper`-as-is). JWT-файл
-# оператора пишется в /tmp/keeper-dev/archon-alice.jwt — следующий запуск smoke
-# упадёт на `keeper init` (operators registry уже не пуст) — для повторного
-# прогона делать `make dev-reset && make dev-smoke`.
+# Go-кода, поэтому не делаем shortcut через `keeper/bin/keeper`-as-is). Стенд-aware
+# (DEV_STAND): init идёт по отрендеренному ${STAND_DEV_DIR}/keeper.dev.yml, JWT-файл
+# оператора — ${STAND_DEV_DIR}/archon-alice.jwt (default /tmp/keeper-dev/…). Следующий
+# запуск smoke упадёт на `keeper init` (operators registry уже не пуст) — для
+# повторного прогона делать `make dev-reset && make dev-smoke`.
 #
 # Второй `dev-provision` — ПОСЛЕ `keeper init`: на свежей БД (dev-reset) схемы
 # (service_registry / keeper_settings) ещё нет, первый provision-проход их seed
@@ -462,10 +467,13 @@ dev-smoke:
 	@$(MAKE) dev-up
 	@$(MAKE) dev-provision
 	@cd keeper && go build -o $(BIN_DIR)/keeper ./cmd/keeper
-	@./keeper/bin/keeper init \
-		--archon=archon-alice \
-		--config=dev/keeper.dev.yml \
-		--credential-out=/tmp/keeper-dev/archon-alice.jwt
+	@VAULT_TOKEN=root bash -c '. dev/stand-env.sh >/dev/null && \
+		mkdir -p "$${STAND_DEV_DIR}" && \
+		envsubst "$${KEEPER_RENDER_WHITELIST}" < dev/keeper.dev.yml.tmpl > "$${STAND_DEV_DIR}/keeper.dev.yml" && \
+		./keeper/bin/keeper init \
+			--archon=archon-alice \
+			--config="$${STAND_DEV_DIR}/keeper.dev.yml" \
+			--credential-out="$${STAND_DEV_DIR}/archon-alice.jwt"'
 	@$(MAKE) dev-provision
 
 # Рестарт keeper с ПОЛНЫМ dev-env (SOUL_STACK_ALLOW_FILE_REPOS=1 + writable
@@ -473,6 +481,7 @@ dev-smoke:
 # keeper, чистит leader-leases, ждёт healthz 200. Если нет TLS-материала —
 # подсказывает `make dev-provision`. Скрипт — dev/keeper-run.sh.
 dev-keeper:
+	@bash -c '. dev/stand-env.sh && stand_summary'
 	@bash dev/keeper-run.sh
 
 # Выпустить Archon-JWT для ad-hoc dev-API-вызовов (без `keeper init`). Ключ
@@ -483,12 +492,14 @@ AID ?= archon-alice
 ROLES ?= ["cluster-admin"]
 TTL ?= 43200
 dev-jwt:
+	@bash -c '. dev/stand-env.sh && stand_summary' >&2
 	@AID='$(AID)' ROLES='$(ROLES)' TTL='$(TTL)' bash dev/mint-jwt.sh
 
 # Переподнять локальный флот souls по реестру БД: на каждый sid пишет soul.yml
 # (если нет), онбордит при отсутствии seed, (пере)запускает `soul run`. Covens
 # в БД сохраняются (заново НЕ регистрируем). Скрипт — dev/souls-up.sh.
 dev-souls:
+	@bash -c '. dev/stand-env.sh && stand_summary'
 	@bash dev/souls-up.sh
 
 # Поднять локальный флот souls как docker-контейнеры (soul-docker-1..N) для day-2
@@ -496,11 +507,13 @@ dev-souls:
 # KEEPER_HOST=host-IP (см. docs/dev/local-setup.md). Скрипт — dev/souls-docker-up.sh.
 SOULS_COUNT ?= 3
 dev-souls-docker:
+	@bash -c '. dev/stand-env.sh && stand_summary'
 	@bash dev/souls-docker-up.sh $(SOULS_COUNT)
 
 # Снести docker-флот souls: контейнеры soul-docker-* + записи реестра + dev-каталоги.
 # Скрипт — dev/souls-docker-down.sh.
 dev-souls-docker-down:
+	@bash -c '. dev/stand-env.sh && stand_summary'
 	@bash dev/souls-docker-down.sh
 
 # Vite dev-сервер web-репо (companion ../soul-stack-web). `--host` обязателен,
@@ -508,6 +521,7 @@ dev-souls-docker-down:
 # переменная WEB_DIR. Скрипт — dev/web-run.sh.
 WEB_DIR ?= ../soul-stack-web
 dev-web:
+	@bash -c '. dev/stand-env.sh && stand_summary'
 	@WEB_DIR='$(WEB_DIR)' bash dev/web-run.sh
 
 # Полный подъём dev-стенда одной командой: provision → keeper → souls → web.
@@ -518,12 +532,20 @@ dev-stand:
 	@$(MAKE) dev-keeper
 	@$(MAKE) dev-souls
 	@$(MAKE) dev-web
-	@echo ""
-	@echo "=== dev-стенд поднят ==="
-	@echo "keeper:  healthz http://127.0.0.1:8080/healthz | openapi :8080 | mcp :8081 | metrics :9090"
-	@echo "souls:   статусы — docker exec soul-stack-postgres psql -U keeper -d keeper -c 'SELECT status, count(*) FROM souls GROUP BY status'"
-	@echo "web:     http://127.0.0.1:5173"
-	@echo "токен:   TOKEN=\$$(make dev-jwt)   (параметры: AID=... ROLES='[...]' TTL=...)"
+	@bash -c 'set -e; . dev/stand-env.sh >/dev/null; \
+		echo ""; \
+		echo "=== dev-стенд поднят ($${STAND_SLUG:-<default>}) ==="; \
+		echo "keeper:  healthz http://127.0.0.1:$${OPENAPI_PORT}/healthz | openapi :$${OPENAPI_PORT} | mcp :$${MCP_PORT} | metrics :$${METRICS_PORT}"; \
+		echo "souls:   статусы — docker exec $${STACK_PREFIX}-postgres psql -U keeper -d $${PG_DB} -c '\''SELECT status, count(*) FROM souls GROUP BY status'\''"; \
+		echo "web:     http://127.0.0.1:$${WEB_PORT}"; \
+		echo "токен:   TOKEN=\$$(make dev-jwt)   (параметры: AID=... ROLES='\''[...]'\'' TTL=...)"'
+
+# Освободить слот стенда: убрать строку slug из реестра слотов (идемпотентно —
+# нет строки = no-op). Порты слота снова доступны следующему стенду. NIM-25.
+dev-stand-free:
+	@test -n "$(DEV_STAND)" || { echo "dev-stand-free: укажи DEV_STAND=<slug>"; exit 1; }
+	@DEV_STAND='' bash -c '. dev/stand-env.sh >/dev/null && _stand_free_slot "$(DEV_STAND)"'
+	@echo "dev-stand-free: слот слага '$(DEV_STAND)' освобождён (реестр обновлён)"
 
 # OpenAPI committed-снимок: источник правды — huma-агрегатор в коде
 # (HumaFullSpecYAML, served на GET /openapi.yaml). docs/keeper/openapi.yaml —
@@ -604,6 +626,58 @@ check-webui:
 		exit 1; \
 	else \
 		echo "embed-UI: copy in sync"; \
+	fi
+
+# keeper.dev.yml: committed-копия (dev/keeper.dev.yml) — golden, её читают dev-smoke
+# и docs; keeper-run/dev-smoke рендерят конфиг из keeper.dev.yml.tmpl. check-stand-template
+# держит их сведёнными: рендер шаблона с ПУСТЫМ DEV_STAND (default-стенд) обязан быть
+# байт-в-байт committed. Расхождение = правку .tmpl забыли перенести в committed. NIM-25.
+STAND_TMPL := dev/keeper.dev.yml.tmpl
+STAND_GOLDEN := dev/keeper.dev.yml
+
+check-stand-template:
+	@command -v envsubst >/dev/null 2>&1 || { echo "check-stand-template: envsubst не найден (пакет gettext)"; exit 1; }
+	@out=$$(mktemp); \
+	DEV_STAND='' bash -c '. dev/stand-env.sh >/dev/null && envsubst "$${KEEPER_RENDER_WHITELIST}" < $(STAND_TMPL)' > "$$out"; \
+	if diff -q $(STAND_GOLDEN) "$$out" >/dev/null; then \
+		echo "keeper.dev.yml: committed совпадает с рендером .tmpl (default-стенд)"; \
+		rm -f "$$out"; \
+	else \
+		echo "keeper.dev.yml drift: .tmpl и committed keeper.dev.yml разошлись:"; \
+		diff $(STAND_GOLDEN) "$$out" || true; \
+		rm -f "$$out"; \
+		echo ""; \
+		echo "пересобери committed: bash -c '. dev/stand-env.sh && envsubst \"\$$KEEPER_RENDER_WHITELIST\" < $(STAND_TMPL)' > $(STAND_GOLDEN)"; \
+		exit 1; \
+	fi
+
+# soul.dev.yml: committed-копия (dev/soul.dev.yml) — golden; keeper-run/souls-up рендерят
+# soul-конфиг из soul.dev.yml.tmpl. check-soul-template держит их сведёнными: рендер с
+# ПУСТЫМ DEV_STAND (default-стенд) обязан быть байт-в-байт committed. Симметрия с
+# check-stand-template, whitelist SOUL_RENDER_WHITELIST — из dev/stand-env.sh. NIM-25.
+# Пока dev/soul.dev.yml.tmpl не смержен (зона soul.dev-developer) — цель тихо пропускается,
+# чтобы не рушить `make check` до merge (так же, как check-template/check-webui без companion).
+SOUL_TMPL := dev/soul.dev.yml.tmpl
+SOUL_GOLDEN := dev/soul.dev.yml
+
+check-soul-template:
+	@command -v envsubst >/dev/null 2>&1 || { echo "check-soul-template: envsubst не найден (пакет gettext)"; exit 1; }
+	@if [ ! -f "$(SOUL_TMPL)" ]; then \
+		echo "check-soul-template: $(SOUL_TMPL) отсутствует (soul.dev-зона не смержена) — пропуск"; \
+	else \
+		out=$$(mktemp); \
+		DEV_STAND='' bash -c '. dev/stand-env.sh >/dev/null && envsubst "$${SOUL_RENDER_WHITELIST}" < $(SOUL_TMPL)' > "$$out"; \
+		if diff -q "$(SOUL_GOLDEN)" "$$out" >/dev/null; then \
+			echo "soul.dev.yml: committed совпадает с рендером .tmpl (default-стенд)"; \
+			rm -f "$$out"; \
+		else \
+			echo "soul.dev.yml drift: .tmpl и committed $(SOUL_GOLDEN) разошлись:"; \
+			diff "$(SOUL_GOLDEN)" "$$out" || true; \
+			rm -f "$$out"; \
+			echo ""; \
+			echo "пересобери committed через envsubst SOUL_RENDER_WHITELIST < $(SOUL_TMPL) > $(SOUL_GOLDEN)"; \
+			exit 1; \
+		fi; \
 	fi
 
 # --- Release/packaging ---
@@ -729,7 +803,7 @@ sign:
 # пропускается через SKIP_VULNCHECK=1 (см. таргет), в CI гонит реально.
 # `test-plugins` — go.mod-плагины вне go.work (GOWORK=off). `trial` — L0-render
 # по корпусу examples/service/ (ловит сломанные case.yml-ассерты).
-check: check-fmt vet build test test-plugins check-gen check-openapi check-template check-webui check-doc-links check-vuln lint trial
+check: check-fmt vet build test test-plugins check-gen check-openapi check-template check-stand-template check-soul-template check-webui check-doc-links check-vuln lint trial
 	@echo "check: все проверки пройдены"
 
 # gofmt-форматирование по всем модулям. `gofmt -l` печатает только файлы,
@@ -1032,6 +1106,8 @@ help:
 	@echo "  dev-souls         переподнять локальный флот souls по реестру БД"
 	@echo "  dev-web           vite dev-сервер web-репо (--host; WEB_DIR=<путь>)"
 	@echo "  dev-stand         полный подъём стенда: provision → keeper → souls → web"
+	@echo "  dev-stand-free    освободить слот стенда (DEV_STAND=<slug>): убрать строку из реестра"
+	@echo "  (все dev-* стенд-aware: DEV_STAND=<slug> — второй+ стенд рядом; DEDICATED_INFRA=1 — свой docker-проект)"
 	@echo ""
 	@echo "Нагрузочное тестирование (soul-legion, нужен поднятый стенд):"
 	@echo "  stress            one-button нагрузка: build+mint-JWT+gon+cleanup (ENV: COUNT/RAMP/API/VOYAGE/WRITE/WRITE_DURATION/VOYAGE_CONCURRENCY/VOYAGE_POLL/ISSUE_CONCURRENCY/...)"
@@ -1043,6 +1119,8 @@ help:
 	@echo "  check-template    CI-guard на drift embedded plugin-template (skip без companion)"
 	@echo "  sync-webui        вендоринг dist/ companion soul-stack-web → keeper/internal/webui/assets/"
 	@echo "  check-webui       CI-guard на drift embedded UI (skip без companion)"
+	@echo "  check-stand-template  CI-guard на drift keeper.dev.yml.tmpl ↔ committed keeper.dev.yml"
+	@echo "  check-soul-template   CI-guard на drift soul.dev.yml.tmpl ↔ committed soul.dev.yml (skip без .tmpl)"
 	@echo ""
 	@echo "Release/packaging (аддитивно, НЕ входят в check):"
 	@echo "  docker-keeper     ПРОД-образ keeper (multi-stage distroless) → \$$(KEEPER_IMAGE):\$$(VERSION); push в свой registry"
