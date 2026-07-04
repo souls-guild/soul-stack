@@ -41,7 +41,7 @@ description: >-
 #     (в отличие от redis, где есть redis_exporter). Существующим v4 — консервативный default
 #     (версия '', порт :9100). ОДИН плоский set с has()-guard на объект (зеркало redis 012_to_013).
 #   - 005_to_006 (migrations/005_to_006.yml): обязательный log-shipping data-плоскости
-#     (Слайс V-I vector). state ДОПОЛНЯЕТСЯ read-model logging (версия/sink/источники агента
+#     (Слайс V-I, ADR-067). state ДОПОЛНЯЕТСЯ read-model logging (версия/sink/источники агента
 #     vector). ★ sink_auth_ref (токен коллектора) СЮДА НЕ пишется — секрет в Vault (как tls.*_ref).
 #     Существующим v5 — консервативный default (версия '', sink console, endpoint '', sources []).
 #     ОДИН плоский set с has()-guard на объект (зеркало redis 013_to_014).
@@ -112,7 +112,7 @@ state_schema:
         node_exporter_version: { type: string }
         node_exporter_listen:  { type: string }
 
-    # ── Log-shipping data-плоскости (read-model, v6, Слайс V-I vector) ─────────
+    # ── Log-shipping data-плоскости (read-model, v6, Слайс V-I, ADR-067) ─────────
     # ФАКТ развёрнутого агента отгрузки логов: create БЕЗУСЛОВНО ставит vector на каждый
     # хост (ПОСЛЕ deploy+экспортера). version/sink_type/endpoint/log_sources — из
     # essence.vector_* (те же значения, что ушли в apply.input destiny vector). ★ sink_auth_ref
@@ -210,7 +210,7 @@ state_schema:
 #     redis-exporter: DragonFly отдаёт метрики нативно (node-exporter-ONLY).
 #   - `vector`     — переиспользуемый standalone-destiny агента отгрузки логов
 #     (examples/destiny/vector/), разворачивается apply:destiny обязательным шагом log-shipping
-#     (Слайс V-I). Читает логи DragonFly (glog) + sentinel-демона (redis).
+#     (Слайс V-I, ADR-067). Читает логи DragonFly (glog) + sentinel-демона (redis).
 destiny:
   - { name: dragonfly, ref: v1.0.0 }
   - { name: redis, ref: v1.0.0 }

@@ -55,7 +55,7 @@ node_exporter_base_url: "https://nexus-proxy.wb.ru/repository/raw-proxy-github/p
 # SSRF-guard opt-out: base_url выше — WB Nexus, резолвится в private-IP. Публичный-mirror — false.
 node_exporter_allow_private: true
 
-# ── Обязательный log-shipping data-плоскости: Vector (Слайс V-I) ─────────────────
+# ── Обязательный log-shipping data-плоскости: Vector (Слайс V-I, ADR-067) ─────────
 # create БЕЗУСЛОВНО ставит vector (агент отгрузки логов) на КАЖДЫЙ хост (ПОСЛЕ deploy и
 # экспортера). ДОПОЛНЯЕТ node_exporter (метрики, pull) лог-плоскостью (логи, push). Версии/
 # checksum/sink — author-context: оператор переопределяет в spec.essence. compute гонит их в
