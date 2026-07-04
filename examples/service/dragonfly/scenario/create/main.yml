@@ -421,7 +421,7 @@ state_changes:
            'node_exporter_version': default(essence.node_exporter_version, ''),
            'node_exporter_listen':  default(essence.node_exporter_listen, ':9100')
          } }
-  # logging: read-model ФАКТА развёрнутого log-shipping (Слайс V-I vector; симметрия monitoring).
+  # logging: read-model ФАКТА развёрнутого log-shipping (Слайс V-I, ADR-067; симметрия monitoring).
   # Версия/sink_type/endpoint/log_sources — из essence.vector_* (те же значения, что уходят в
   # apply.input destiny vector). ★ vector_sink_auth_ref СЮДА НЕ пишется — секрет (в Vault, как
   # tls.*_ref). Дефолты дублируют essence/миграцию 005_to_006 (console — безопасный дефолт).
@@ -807,7 +807,7 @@ tasks:
         # SSRF-guard opt-out при private-resolve base_url; default false — guard держится.
         allow_private: "${ default(essence.node_exporter_allow_private, false) }"
 
-  # ── 7. ОБЯЗАТЕЛЬНЫЙ log-shipping data-плоскости (Слайс V-I vector) ─────────────
+  # ── 7. ОБЯЗАТЕЛЬНЫЙ log-shipping data-плоскости (Слайс V-I, ADR-067) ─────────────
   # ПОСЛЕ экспортера create БЕЗУСЛОВНО разворачивает vector (агент отгрузки логов) на КАЖДЫЙ
   # хост КОМПОЗИЦИЕЙ переиспользуемой standalone-destiny через apply:destiny (ADR-009). vector
   # ДОПОЛНЯЕТ node_exporter (метрики, pull) лог-плоскостью (логи, push). log_sources — ОБЕ

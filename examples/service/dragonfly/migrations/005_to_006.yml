@@ -2,7 +2,7 @@ from_version: 5
 to_version: 6
 
 description: >-
-  state_schema v5 → v6: обязательный log-shipping data-плоскости (Слайс V-I vector).
+  state_schema v5 → v6: обязательный log-shipping data-плоскости (Слайс V-I, ADR-067).
   state ДОПОЛНЯЕТСЯ read-model-объектом logging — зафиксированные версия/sink/источники агента
   vector, развёрнутого create-прогоном на каждый хост (симметрия v4→v5 monitoring: экспортер
   метрик). Секрет доступа к коллектору (sink_auth_ref) в state НЕ хранится (ИБ — он в Vault, как
