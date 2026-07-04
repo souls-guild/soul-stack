@@ -126,6 +126,7 @@ func makeHostsIncRow(name, status string, hosts []SpecHost) pgx.Row {
 		[]byte("{}"), // traits
 		any(nil), []byte(nil),
 		"create", // created_scenario
+		any(nil), // applying_apply_id
 	}}
 }
 

@@ -111,7 +111,8 @@ const selectByNameSQL = `
 SELECT name, service, service_version, state_schema_version,
        spec, state, status, status_details, created_by_aid,
        created_at, updated_at, covens, traits,
-       last_drift_check_at, last_drift_summary, created_scenario
+       last_drift_check_at, last_drift_summary, created_scenario,
+       applying_apply_id
 FROM incarnation
 WHERE name = $1
 `
@@ -424,6 +425,7 @@ func scanIncarnation(row pgx.Row) (*Incarnation, error) {
 		&inc.LastDriftCheckAt,
 		&driftSummaryBytes,
 		&inc.CreatedScenario,
+		&inc.ApplyingApplyID, // ADR-068 §A1: non-null пока applying, null на терминале
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -506,7 +508,8 @@ func SelectAll(ctx context.Context, db ExecQueryRower, filter ListFilter, scope 
 	listSQL := `SELECT name, service, service_version, state_schema_version,
        spec, state, status, status_details, created_by_aid,
        created_at, updated_at, covens, traits,
-       last_drift_check_at, last_drift_summary, created_scenario
+       last_drift_check_at, last_drift_summary, created_scenario,
+       applying_apply_id
 FROM incarnation` + whereSQL + orderSQL +
 		fmt.Sprintf(" OFFSET $%d LIMIT $%d", len(args)+1, len(args)+2)
 	listArgs := append(append([]any{}, args...), offset, limit)

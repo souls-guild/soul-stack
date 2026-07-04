@@ -87,6 +87,8 @@ func TestHumaIncarnation_ChiCoexistence(t *testing.T) {
 		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
 		nil,                                  // soulStatsStaleFn (дефолт 90s в тесте)
 		nil,                                  // clusterH (cluster-view не монтируется в тесте)
+		nil,                                  // sseTokenH (ADR-068 §A0 — не тестируется здесь)
+		nil,                                  // runEventsDeps (ADR-068 §A3 — не тестируется здесь)
 		nil,                                  // logger
 	)
 	routes, ok := h.(chi.Routes)
@@ -1066,6 +1068,7 @@ func incRow(name, status, state string) pgx.Row {
 		[]byte("{}"), // traits
 		any(nil), []byte(nil),
 		"create", // created_scenario (миграция 089, NOT NULL DEFAULT)
+		any(nil), // applying_apply_id (ADR-068 §A1)
 	}}
 }
 
@@ -1082,6 +1085,7 @@ func incRowBare(name, status, state string) pgx.Row {
 		[]byte("{}"), // traits
 		any(nil), []byte(nil),
 		any(nil), // created_scenario = NULL (bare, миграция 090)
+		any(nil), // applying_apply_id (ADR-068 §A1, bare → NULL)
 	}}
 }
 

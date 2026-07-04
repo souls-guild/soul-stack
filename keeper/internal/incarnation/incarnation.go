@@ -122,6 +122,12 @@ type Incarnation struct {
 	// on-demand из Slice B возвращается прямо в response). Читается из колонки
 	// типизированно ([scanIncarnation]), на wire уходит typed-объектом.
 	LastDriftSummary *DriftScanSummary `json:"last_drift_summary,omitempty"`
+
+	// ApplyingApplyID — apply_id текущего идущего прогона (ADR-068 §A1, колонка
+	// applying_apply_id, ADR-027 m-S1). Non-null ровно пока прогон идёт (пишется в
+	// lockRun, чистится на терминале); nil = прогон не идёт. Read-source линковки
+	// incarnation→live-run для SSE-подписки (UI не угадывает через /v1/runs).
+	ApplyingApplyID *string `json:"applying_apply_id,omitempty"`
 }
 
 // HistoryEntry — запись `state_history` (snapshot per-change, ADR-009 / ADR-019).

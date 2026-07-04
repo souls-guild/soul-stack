@@ -289,6 +289,7 @@ func makeIncarnationRow(name string) pgx.Row {
 		[]byte("{}"),          // traits (ADR-060 amend R1)
 		any(nil), []byte(nil), // last_drift_check_at, last_drift_summary (ADR-031 Slice C)
 		"create", // created_scenario (миграция 089, NOT NULL DEFAULT)
+		any(nil), // applying_apply_id (ADR-068 §A1)
 	}}
 }
 
@@ -578,6 +579,7 @@ func TestIncarnation_Get_200_StateMasked(t *testing.T) {
 				[]byte("{}"),          // traits
 				any(nil), []byte(nil), // ADR-031 Slice C
 				"create", // created_scenario (миграция 089, NOT NULL DEFAULT)
+				any(nil), // applying_apply_id (ADR-068 §A1)
 			}}
 		},
 	}
@@ -1054,6 +1056,7 @@ func incListRow(name string, covens []string, state map[string]any) staticRow {
 		[]byte("{}"), // traits
 		any(nil), []byte(nil),
 		"create", // created_scenario (миграция 089, NOT NULL DEFAULT)
+		any(nil), // applying_apply_id (ADR-068 §A1)
 	}}
 }
 
@@ -1159,6 +1162,7 @@ func incListRowBare(name string) staticRow {
 		[]byte("{}"), // traits
 		any(nil), []byte(nil),
 		any(nil), // created_scenario = NULL (bare, миграция 090)
+		any(nil), // applying_apply_id (ADR-068 §A1, bare → NULL)
 	}}
 }
 
@@ -1603,6 +1607,7 @@ func TestIncarnationScopeSelector_ReadsRow(t *testing.T) {
 			[]byte("{}"),          // traits
 			any(nil), []byte(nil), // ADR-031 Slice C
 			"create", // created_scenario (миграция 089, NOT NULL DEFAULT)
+			any(nil), // applying_apply_id (ADR-068 §A1)
 		}}
 	}}
 	sel := IncarnationScopeSelector(db)
@@ -1748,6 +1753,7 @@ func makeIncStatusRow(name, status string) pgx.Row {
 		[]byte("{}"),          // traits
 		any(nil), []byte(nil), // ADR-031 Slice C
 		"create", // created_scenario (миграция 089, NOT NULL DEFAULT)
+		any(nil), // applying_apply_id (ADR-068 §A1)
 	}}
 }
 
@@ -1920,6 +1926,7 @@ func makeIncStatusRowBare(name, status string) pgx.Row {
 		[]byte("{}"),          // traits
 		any(nil), []byte(nil), // ADR-031 Slice C
 		any(nil), // created_scenario = NULL (bare, миграция 090)
+		any(nil), // applying_apply_id (ADR-068 §A1, bare → NULL)
 	}}
 }
 
@@ -2195,6 +2202,7 @@ func makeIncRowVer(name, serviceVersion string, schema int) pgx.Row {
 		[]byte("{}"),          // traits
 		any(nil), []byte(nil), // ADR-031 Slice C
 		"create", // created_scenario (миграция 089, NOT NULL DEFAULT)
+		any(nil), // applying_apply_id (ADR-068 §A1)
 	}}
 }
 
@@ -2746,6 +2754,7 @@ func makeIncRowWithHosts(name, status string, hosts []map[string]any) pgx.Row {
 		[]byte("{}"), // traits
 		any(nil), []byte(nil),
 		"create", // created_scenario (миграция 089, NOT NULL DEFAULT)
+		any(nil), // applying_apply_id (ADR-068 §A1)
 	}}
 }
 

@@ -113,6 +113,9 @@ func fullSpecGroups() []specGroup {
 			registerHumaIncarnationHistory(api, stub)
 			registerHumaIncarnationRuns(api, stub)
 			registerHumaIncarnationRunDetail(api, stub)
+			// SSE live-ход прогона (ADR-068 §A3): non-nil zero-deps регистрирует
+			// операцию для спеки (handler-closure при dump не вызывается).
+			registerHumaIncarnationRunEvents(api, &runEventsDeps{})
 			registerHumaIncarnationRun(api, stub)
 			registerHumaIncarnationUnlock(api, stub)
 			registerHumaIncarnationUpgrade(api, stub)
@@ -139,6 +142,12 @@ func fullSpecGroups() []specGroup {
 			stub := handlers.IncarnationSpecStub()
 			registerHumaRunsList(api, stub)
 			registerHumaRunsStats(api, stub)
+			return nil
+		}},
+		// POST /v1/sse-token — минтинг короткоживущего SSE-транспорт-токена (ADR-068
+		// §A0). Operation.Path полный под-/v1 (/sse-token) → prefix "/v1".
+		{"/v1", func(api huma.API) error {
+			registerHumaSseToken(api, &sseTokenHandler{})
 			return nil
 		}},
 		{"/v1/souls", func(api huma.API) error {

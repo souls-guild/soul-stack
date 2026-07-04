@@ -59,6 +59,7 @@ func newIncRow(inc *incarnation.Incarnation) incRow {
 		inc.LastDriftCheckAt,
 		driftSummary,
 		inc.CreatedScenario,
+		inc.ApplyingApplyID, // ADR-068 §A1: non-null пока applying, nil на терминале
 	}}
 }
 

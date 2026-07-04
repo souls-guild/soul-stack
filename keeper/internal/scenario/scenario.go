@@ -33,6 +33,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/applybus"
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/auditpg"
 	"github.com/souls-guild/soul-stack/keeper/internal/essence"
@@ -371,6 +372,12 @@ type Deps struct {
 	// (`incarnation.run_completed`, T3). nil → trail не пишется (резолв работает,
 	// но без аудита — допустимо для unit-тестов).
 	Audit audit.Writer
+
+	// ApplyBus — pub/sub-шина apply-событий (ADR-068 §A2): keeper-side task.executed
+	// публикуется сюда СИММЕТРИЧНО Soul-side (grpc/events_taskevent.go), чтобы
+	// `on: keeper`-задачи были видны на operator-SSE. nil → keeper-side события в SSE
+	// не идут (audit-путь работает как прежде). Та же шина, что у grpc-handler-ов.
+	ApplyBus *applybus.EventBus
 	// AuditReader — read-доступ к журналу аудита для свёртки per-task changed
 	// (T3): множество (sid, task_idx) CHANGED-задач прогона. nil → терминальное
 	// событие incarnation.run_completed эмитится без changed_tasks (свёртка

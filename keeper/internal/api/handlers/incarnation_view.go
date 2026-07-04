@@ -32,6 +32,7 @@ import (
 // метки, ADR-060) и CreatedScenario (стартовый сценарий, механизм нескольких create)
 // проецируются с omitempty (пустой map / пустая строка → ключ опущен).
 type IncarnationGetView struct {
+	ApplyingApplyID    *string
 	Covens             []string
 	CreatedAt          time.Time
 	CreatedByAID       *string
@@ -93,6 +94,7 @@ func maskWithSchema(payload map[string]any, schema audit.SecretSchema) map[strin
 // к MaskSecrets, БИТ-В-БИТ. date-time — `.UTC()` БЕЗ Truncate. covens nil → `[]`.
 func toIncarnationGetView(inc *incarnation.Incarnation, schema audit.SecretSchema) IncarnationGetView {
 	view := IncarnationGetView{
+		ApplyingApplyID:    inc.ApplyingApplyID, // ADR-068 §A1: линковка на live-run
 		Covens:             coalesceCoven(inc.Covens),
 		CreatedAt:          inc.CreatedAt.UTC(),
 		CreatedByAID:       inc.CreatedByAID,

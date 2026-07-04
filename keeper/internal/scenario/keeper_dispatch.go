@@ -8,6 +8,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/applybus"
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
@@ -85,6 +86,9 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, log *slo
 		// молча мёртвая (ADR-052 §k). Эмитим ДО failed-return, чтобы упавшая
 		// keeper-задача тоже отметилась в журнале (status FAILED, не CHANGED).
 		r.emitKeeperTaskExecuted(ctx, spec.ApplyID, passage, rt, changed, failed, msg, log)
+		// applybus-публикация (ADR-068 §A2) — РЯДОМ с audit, не вместо: keeper-side
+		// прогресс `on: keeper` виден на operator-SSE симметрично Soul-side.
+		r.publishKeeperTaskExecuted(spec.ApplyID, passage, rt, changed, failed)
 
 		if failed {
 			summary := composeKeeperFailure(rt, msg)
@@ -142,8 +146,9 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, log *slo
 //
 // Секрет-гигиена: register_data/output в payload НЕ кладётся (keeper-задачи могут
 // нести vault-резолвленный output); message — только на провале и только для
-// не-no_log (для no_log подавляется helper-ом). SSE/applybus НЕ публикуется —
-// keeper-side прогресс на operator-SSE не идёт (только запись в audit).
+// не-no_log (для no_log подавляется helper-ом). Это audit-путь (свёртка
+// changed_tasks/Tiding); SSE-видимость keeper-side прогресса — отдельным каналом
+// [Runner.publishKeeperTaskExecuted] (ADR-068 §A2), рядом с этим эмитом.
 //
 // Audit=nil (unit-сборка без аудита) → no-op. Ошибка записи только логируется:
 // потеря события = деградация наблюдаемости, прогон не валим.
@@ -183,6 +188,49 @@ func (r *Runner) emitKeeperTaskExecuted(ctx context.Context, applyID string, pas
 		log.Warn("scenario: запись audit task.executed keeper-задачи провалена",
 			slog.Int("task_idx", rt.Index), slog.String("module", rt.Module), slog.Any("error", err))
 	}
+}
+
+// publishKeeperTaskExecuted транслирует keeper-side task.executed в SSE-канал через
+// applybus (ADR-068 §A2) — СИММЕТРИЧНО Soul-side [publishTaskExecuted]
+// (grpc/events_taskevent.go): та же форма payload (snake_case-ключи, тот же набор
+// полей), sid = [render.KeeperTargetSID]. Без этого `on: keeper`-шаги (cloud/vault/
+// registered) немые в live-ходе прогона.
+//
+// ★СЕКРЕТ-ГИГИЕНА (ровно как Soul-side): в SSE НЕ кладём output/register_data/message
+// (keeper-задачи несут vault-резолвленный output); на failed — только error{code,module}
+// без message. Финальный [audit.MaskSecrets] на SSE-write-path — второй барьер.
+// task_idx/passage — int32 (паритет типов с Soul-side proto-getter-ами).
+//
+// ApplyBus=nil (single-Keeper dev / unit без SSE) → no-op, как Soul-side.
+func (r *Runner) publishKeeperTaskExecuted(applyID string, passage int, rt *render.RenderedTask, changed, failed bool) {
+	if r.deps.ApplyBus == nil {
+		return
+	}
+	payload := map[string]any{
+		"apply_id":    applyID,
+		"kind":        string(applybus.KindTaskExecuted),
+		"sid":         render.KeeperTargetSID,
+		"task_idx":    int32(rt.Index),
+		"task_status": keeperTaskStatus(changed, failed).String(),
+		"passage":     int32(passage),
+	}
+	if rt.NoLog {
+		payload["suppressed"] = "no_log"
+	}
+	if failed {
+		// keeper-side не несёт структурного error.code (модуль вернул message/gRPC-error);
+		// code="" — честное значение, ключи code+module симметричны Soul-side. message
+		// (stderr) в SSE НЕ кладём — floor для всех упавших задач (BUG-3, как Soul-side).
+		payload["error"] = map[string]any{
+			"code":   "",
+			"module": rt.Module,
+		}
+	}
+	r.deps.ApplyBus.Publish(applybus.Event{
+		ApplyID: applyID,
+		Kind:    applybus.KindTaskExecuted,
+		Payload: payload,
+	})
 }
 
 // keeperTaskStatus маппит исход keeper-задачи (changed/failed) в keeperv1-enum,

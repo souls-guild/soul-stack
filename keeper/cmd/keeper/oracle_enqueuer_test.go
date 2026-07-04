@@ -64,11 +64,11 @@ func (r enqErrRow) Scan(...any) error { return r.err }
 // enqIncRow эмулирует строку incarnation в порядке scanIncarnation:
 // name, service, service_version, state_schema_version, spec, state, status,
 // status_details, created_by_aid, created_at, updated_at, covens, traits,
-// last_drift_check_at, last_drift_summary, created_scenario.
+// last_drift_check_at, last_drift_summary, created_scenario, applying_apply_id.
 type enqIncRow struct{ inc *incarnation.Incarnation }
 
 func (r enqIncRow) Scan(dest ...any) error {
-	if len(dest) != 16 {
+	if len(dest) != 17 {
 		return errors.New("enqIncRow: len mismatch")
 	}
 	*dest[0].(*string) = r.inc.Name
@@ -89,6 +89,8 @@ func (r enqIncRow) Scan(dest ...any) error {
 	// created_scenario NULLABLE (миграция 090): scanIncarnation читает в **string.
 	// nil-указатель инкарнации = bare (NULL); иначе указатель на имя стартового сценария.
 	*dest[15].(**string) = r.inc.CreatedScenario
+	// applying_apply_id (ADR-068 §A1, миграция 082): non-null пока applying, nil на терминале.
+	*dest[16].(**string) = r.inc.ApplyingApplyID
 	return nil
 }
 

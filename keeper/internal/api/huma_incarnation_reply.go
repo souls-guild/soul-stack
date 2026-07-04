@@ -88,7 +88,10 @@ type IncarnationDestroyReply struct {
 // ключ опущен; traits — голый map, НЕ `*map`, чтобы пустой `{}` опускался). created_at/
 // updated_at — наносекундный time-wire (handler даёт .UTC() без Truncate).
 type IncarnationGetReply struct {
-	Covens             []string                `json:"covens" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"` // ← soul.CovenPattern (per-element)
+	// ApplyingApplyID — apply_id идущего прогона (ADR-068 §A1); omitempty: nil (прогон
+	// не идёт / терминал) → ключ опущен. UI открывает live-SSE по этому apply_id.
+	ApplyingApplyID    *string                 `json:"applying_apply_id,omitempty" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"` // ULID (audit.NewULID)
+	Covens             []string                `json:"covens" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"`                 // ← soul.CovenPattern (per-element)
 	CreatedAt          time.Time               `json:"created_at"`
 	CreatedByAID       *string                 `json:"created_by_aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
 	CreatedScenario    string                  `json:"created_scenario,omitempty"`                             // стартовый сценарий (механизм нескольких create); пустой → опущен
@@ -185,6 +188,7 @@ func newDriftScanSummary(v *handlers.DriftScanSummaryView) *DriftScanSummary {
 // status — native enum-каст (тот же underlying string).
 func newIncarnationGetReply(v handlers.IncarnationGetView) IncarnationGetReply {
 	return IncarnationGetReply{
+		ApplyingApplyID:    v.ApplyingApplyID,
 		Covens:             v.Covens,
 		CreatedAt:          v.CreatedAt,
 		CreatedByAID:       v.CreatedByAID,

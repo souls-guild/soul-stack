@@ -2735,8 +2735,11 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 		// Scoped-резолв `vault:`-ref в operator-input (docs/input.md →
 		// «vault_scope»): тот же vault-клиент, что у render-pipeline + audit
 		// для security-trail + config-расширение hard deny-list.
-		Vault:          d.vc,
-		Audit:          d.auditWriter,
+		Vault: d.vc,
+		Audit: d.auditWriter,
+		// ApplyBus (ADR-068 §A2): keeper-side task.executed на operator-SSE. Та же
+		// шина, что у grpc-handler-ов (d.applyBus уже собран выше в этом же setup-шаге).
+		ApplyBus:       d.applyBus,
 		AuditReader:    auditpg.NewReader(d.pool),
 		InputDenyPaths: cfg.Vault.InputDenyPaths,
 		// Cutover-флаг исполнения apply (ADR-027, Phase 1.4.2): при keeper.acolytes>0
@@ -4013,6 +4016,10 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		OperatorDB:          d.pool,
 		IncarnationDB:       d.pool,
 		SoulDB:              d.pool,
+		// ApplyBus — live-SSE прогона (ADR-068 §A3): та же шина, что у grpc-handler-ов
+		// и scenario-runner-а. nil-Redis (single-Keeper dev) — шина всё равно non-nil
+		// (local-only), SSE-route монтируется.
+		ApplyBus: d.applyBus,
 		// ChoirDB — реестр Choir/Voice (ADR-044, S-T3). Тот же *pgxpool.Pool, что
 		// и IncarnationDB (Choir-таблицы в той же БД): wire-up монтирует
 		// `/v1/incarnations/{name}/choirs` (при nil роуты gated-off).

@@ -430,6 +430,7 @@ func TestSelectByName_HappyPath(t *testing.T) {
 				[]byte(`{"team":"dba"}`), // traits
 				any(nil), []byte(nil),    // last_drift_check_at, last_drift_summary
 				"create", // created_scenario
+				any(nil), // applying_apply_id
 			}}
 		},
 	}
@@ -486,6 +487,7 @@ func TestSelectAll_NoFilter(t *testing.T) {
 					[]byte("{}"), // traits
 					any(nil), []byte(nil),
 					"create", // created_scenario
+					any(nil), // applying_apply_id
 				}},
 				{values: []any{
 					"b", "redis", "v1", 1,
@@ -494,6 +496,7 @@ func TestSelectAll_NoFilter(t *testing.T) {
 					[]byte("{}"), // traits
 					any(nil), []byte(nil),
 					"create", // created_scenario
+					any(nil), // applying_apply_id
 				}},
 			}}, nil
 		},
@@ -1562,6 +1565,7 @@ func TestSelectByName_ReadsCreatedScenario(t *testing.T) {
 					[]byte(nil), any(nil), now, now, []string(nil),
 					[]byte("{}"), any(nil), []byte(nil),
 					createdScenario, // created_scenario (string | nil=NULL)
+					any(nil),        // applying_apply_id
 				}}
 			},
 		}
@@ -1582,5 +1586,44 @@ func TestSelectByName_ReadsCreatedScenario(t *testing.T) {
 	}
 	if bare.CreatedScenario != nil {
 		t.Errorf("bare CreatedScenario = %v, want nil (NULL)", bare.CreatedScenario)
+	}
+}
+
+// TestSelectByName_ReadsApplyingApplyID — guard ADR-068 §A1: SelectByName читает
+// колонку applying_apply_id в Incarnation.ApplyingApplyID — non-null пока прогон идёт
+// (applying), nil на терминале (NULL). Read-source линковки incarnation→live-run.
+func TestSelectByName_ReadsApplyingApplyID(t *testing.T) {
+	now := time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC)
+	makeF := func(applyingApplyID any) *fakeDB {
+		return &fakeDB{
+			queryRowFunc: func(_ string) pgx.Row {
+				return staticRow{values: []any{
+					"redis-cluster", "redis", "v1", 1,
+					[]byte("{}"), []byte("{}"), "applying",
+					[]byte(nil), any(nil), now, now, []string(nil),
+					[]byte("{}"), any(nil), []byte(nil),
+					"create",        // created_scenario
+					applyingApplyID, // applying_apply_id (string=applying | nil=терминал)
+				}}
+			},
+		}
+	}
+
+	// Прогон идёт → non-null apply_id.
+	applying, err := SelectByName(context.Background(), makeF("01HAPPLYINGRUN000000000000"), "redis-cluster")
+	if err != nil {
+		t.Fatalf("SelectByName(applying): %v", err)
+	}
+	if applying.ApplyingApplyID == nil || *applying.ApplyingApplyID != "01HAPPLYINGRUN000000000000" {
+		t.Errorf("ApplyingApplyID = %v, want 01HAPPLYINGRUN000000000000 (non-null пока applying)", applying.ApplyingApplyID)
+	}
+
+	// Терминал → NULL → nil.
+	terminal, err := SelectByName(context.Background(), makeF(nil), "redis-cluster")
+	if err != nil {
+		t.Fatalf("SelectByName(terminal): %v", err)
+	}
+	if terminal.ApplyingApplyID != nil {
+		t.Errorf("terminal ApplyingApplyID = %v, want nil (NULL на терминале)", terminal.ApplyingApplyID)
 	}
 }

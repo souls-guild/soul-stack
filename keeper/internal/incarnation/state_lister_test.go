@@ -108,6 +108,7 @@ func incToStaticRow(inc *Incarnation) staticRow {
 		nil,          // last_drift_check_at
 		nil,          // last_drift_summary
 		"create",     // created_scenario
+		nil,          // applying_apply_id
 	}}
 }
 

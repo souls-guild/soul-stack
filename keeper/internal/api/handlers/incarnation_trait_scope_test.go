@@ -42,6 +42,7 @@ func incTraitRow(name string, traits map[string]any) staticRow {
 		traitsBytes,
 		any(nil), []byte(nil),
 		"create",
+		any(nil), // applying_apply_id (ADR-068 §A1)
 	}}
 }
 
