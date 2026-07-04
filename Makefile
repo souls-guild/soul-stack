@@ -91,7 +91,7 @@ PKG_ARCH ?= amd64
 KEEPER_IMAGE ?= soul-stack/keeper
 SOUL_IMAGE   ?= soul-stack/soul
 
-.PHONY: gen build build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-k8s docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand gen-openapi check-openapi check-template sync-webui check-webui sbom pkg pkg-keeper pkg-soul pkg-soul-lint sign stress load-test help dev-souls-docker dev-souls-docker-down
+.PHONY: gen build build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand gen-openapi check-openapi check-template sync-webui check-webui sbom pkg pkg-keeper pkg-soul pkg-soul-lint sign stress load-test help dev-souls-docker dev-souls-docker-down
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -291,6 +291,32 @@ e2e-live: build-linux
 	else \
 		echo "go test -tags=e2e_live ./... in tests/e2e-live"; \
 		(cd tests/e2e-live && go test -tags=e2e_live -timeout=30m -p 1 ./...) || exit 1; \
+	fi
+
+# e2e-live-gate — ОБЯЗАТЕЛЬНЫЙ локальный live-гейт перед батч-коммитом крупной
+# фичи (~15-25 мин, docker). Каноническое L3b-подмножество: механика доставки
+# SoulModule (TestL3bModuleDeliveryLive — ADR-065 install-synthesis → FetchModule
+# → Sigil-verify → hot-register → живое apply против redis) + apply-смок nginx
+# (TestL3bSmokeNginxLive) + smoke plugin-канала (TestL3bPluginChannel). Полный
+# `make e2e-live` остаётся nightly/pre-release.
+#
+# Deps ОТЛИЧАЮТСЯ от e2e-live: нужен ещё нативный `build` — harness запускает
+# Keeper НА ХОСТЕ (host-arch keeper/bin/keeper, см. locateKeeperBinary), а не в
+# контейнере. Плагин community.redis собирает сам тест (harness.BuildCommunityRedisPlugin),
+# в Makefile его сборка не нужна.
+#
+# E2E_KEEPER_HOST — IP, по которому soul-контейнер дозванивается до Keeper-на-хосте;
+# на WSL2 нужен явный LAN-IP (localhost из контейнера не виден). Не задан снаружи —
+# автодетект первого IP через `hostname -I`. Гейт падает громко (без `|| true` —
+# exit-код go test доходит до make).
+e2e-live-gate: build build-linux
+	@if [ -z "$$(cd tests/e2e-live && go list -tags=e2e_live ./... 2>/dev/null)" ]; then \
+		echo "skip tests/e2e-live (no Go packages under build-tag e2e_live)"; \
+	else \
+		host="$${E2E_KEEPER_HOST:-$$(hostname -I | awk '{print $$1}')}"; \
+		echo "e2e-live-gate: go test -tags=e2e_live -run 'TestL3bModuleDeliveryLive|TestL3bSmokeNginxLive|TestL3bPluginChannel' . (E2E_KEEPER_HOST=$$host)"; \
+		(cd tests/e2e-live && E2E_KEEPER_HOST=$$host go test -tags=e2e_live -count=1 -timeout 25m -run 'TestL3bModuleDeliveryLive|TestL3bSmokeNginxLive|TestL3bPluginChannel' .) || exit 1; \
+		echo "e2e-live-gate: локальный live-гейт пройден"; \
 	fi
 
 # docker-build-keeper — собирает образ `keeper:e2e-k8s` для L3c kind-cluster.

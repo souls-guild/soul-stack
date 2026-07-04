@@ -30,6 +30,10 @@
 
 - `make check` гонит L0 + L2 (через `lint`). L1 / L3a / L3b / L3c — отдельными
   таргетами по запросу (требуют docker / kind).
+- Перед батч-коммитом **крупной** фичи — обязательный локальный live-гейт
+  `make e2e-live-gate` (курируемое L3b-подмножество, docker; см.
+  [Локальный live-гейт крупных фич](#локальный-live-гейт-крупных-фич-make-e2e-live-gate)).
+  `make check` его не включает.
 - GitHub Actions workflow для регулярного прогона L3a/L3b/L3c — отдельная задача
   ([ADR-039 § 7](../adr/0039-e2e-testing.md#adr-039-e2e-тестирование--три-уровня-без-новой-сущности-словаря)),
   не добавляется в текущий slice.
@@ -54,6 +58,70 @@
 Разовый флак на старте контейнера (testcontainers infra — например timeout
 поднятия Vault) — это не регресс кода: перепрогнать изолированно
 затронутый пакет (`go test -tags=integration ./<pkg>/...`), а не откатывать изменения.
+
+## Локальный live-гейт крупных фич (`make e2e-live-gate`)
+
+`e2e-live-gate` — **обязательный локальный live-прогон перед батч-коммитом каждой
+крупной фичи**. Это курируемое подмножество L3b (~15-25 мин, нужен docker), а не
+весь `make e2e-live` (тот остаётся nightly / pre-release). Смысл гейта — доказать
+на реальном `soul`-бинаре, что ключевая механика жива, до того как правки уйдут в
+коммит.
+
+**Что прогоняет** (build-tag `e2e_live`: реальный `soul` в privileged Debian-12
+контейнере + Keeper-процесс на хосте + mTLS + живое apply). Маска —
+`TestL3bModuleDeliveryLive|TestL3bSmokeNginxLive|TestL3bPluginChannel`:
+
+- **Механика доставки `SoulModule`** (fixture `tests/e2e-live/module-delivery-live`,
+  `TestL3bModuleDeliveryLive_*`) — флагманская проверка, ради которой гейт заведён:
+  синтез шага установки модуля из `service.yml::modules[]` по
+  [ADR-065](../adr/0065-core-module-installed.md) → `FetchModule` с Keeper →
+  Sigil-verify подписи → hot-register в реестре Soul → живое исполнение
+  доставленного модуля против реального redis.
+- **Базовый apply-смок nginx** (`TestL3bSmokeNginxLive_*`): `core.pkg` apt-install +
+  `core.service` systemd-start на живом хосте — проверка, что обычный apply не сломан.
+- **Smoke plugin-канала** (`TestL3bPluginChannel_*`): каталог модулей + allow-механика
+  gRPC-stdio канала плагинов.
+
+**Когда обязателен.** Перед батч-коммитом фичи, подходящей под критерий «крупная» —
+те же триггеры, что эскалируют на architect: затронуто **>5 файлов** ИЛИ правятся
+**ключевые узлы** (контракт Keeper↔Soul, plugin-инфраструктура, render/dispatch-пайплайн,
+`state_schema`, шаблонизатор). Мелкая правка гейт не требует. `make check` гейт
+**не** включает (он docker-free); полный `make e2e-live` — nightly / pre-release.
+
+**Как запускать:**
+
+```bash
+make e2e-live-gate
+```
+
+Таргет сам собирает нативный `keeper` (`make build` — harness запускает Keeper на
+хосте) и linux-`soul` (`make build-linux` — mount в контейнер); плагин
+`community.redis` собирает сам тест. `E2E_KEEPER_HOST` (IP, по которому
+soul-контейнер дозванивается до Keeper-на-хосте) **автодетектится таргетом** через
+`hostname -I`. На **WSL2** это критично: `localhost` из контейнера не виден, нужен
+LAN-IP. Переопределить вручную — `make e2e-live-gate E2E_KEEPER_HOST=<ip>`.
+
+**Запускать изолированно**, без параллельной docker/build-нагрузки: L3b-тесты
+поднимают docker-контейнеры (keeper + PG + Redis + Vault + soul) и на WSL2
+чувствительны к конкурентной docker-нагрузке — при параллельном запуске с другой
+тяжёлой docker/build-работой Vault-контейнер может не подняться (connection
+refused). При флаке поднятия контейнеров (инфраструктура, не регресс кода) —
+перезапустить гейт.
+
+**Что НЕ покрывает** (это стенд / облако / ФАЗА 2 / L3c-k8s, не локальный гейт):
+облачный provision (`CloudDriver`), Nexus-binary `install_method`,
+exporter / vector-destinies (egress-мониторинг), sentinel- и cluster-топологии redis,
+multi-keeper HA.
+
+**Redis-create локально НЕ покрыт.** Канонический `TestL3bRedisLive_CreateStandalone`
+имеет **безусловный `t.Skip`** — то есть create redis-сервиса локально не
+проверяется вообще. Это осознанное дизайн-решение (architect): локальный гейт
+гарантирует **только механику доставки модулей**, а redis-паритет (input
+`version`=Nexus-enum, `install_method`=binary, sentinel- / cluster-топологии)
+обеспечивается **стендовыми live-прогонами (ФАЗА 2)** против реального
+Redis / DragonFly, а не локальным docker-гейтом. Будущему читателю: это НЕ пробел
+покрытия. Механику доставки модулей гейт проверяет через отдельную лёгкую fixture
+`tests/e2e-live/module-delivery-live`, не через полный redis-create.
 
 ## Документы по уровням
 

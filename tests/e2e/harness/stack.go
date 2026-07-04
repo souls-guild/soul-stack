@@ -558,12 +558,17 @@ func (s *Stack) CreateIncarnation(t *testing.T, name string, serviceRef string, 
 // RunScenario(create) сразу после Create: второй параллельный create-прогон
 // отвергается («incarnation уже в статусе applying»), и ожидание его apply_id
 // зависнет. Возвращает (incarnationName, applyID).
+//
+// create_scenario=`create` — Фаза-2 контракт (2026-06-29): выбор стартового
+// сценария обязателен при непустом create-наборе сервиса; scenario обязан нести
+// `create: true`. Bare-путь (без прогона) — CreateIncarnation.
 func (s *Stack) CreateIncarnationWithApply(t *testing.T, name, serviceRef string, spec map[string]any) (string, string) {
 	t.Helper()
 	c := s.opClient(t)
 	body := map[string]any{
-		"name":    name,
-		"service": stripServiceRef(serviceRef),
+		"name":            name,
+		"service":         stripServiceRef(serviceRef),
+		"create_scenario": "create",
 	}
 	if spec != nil {
 		body["input"] = spec

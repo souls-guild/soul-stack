@@ -1,4 +1,6 @@
 name: create
+# create: true — стартовый сценарий (Фаза 2: create-набор = РОВНО {scenario с флагом}).
+create: true
 description: >-
   L3b real-soul-in-container flagship-smoke (ADR-039): устанавливает nginx
   пакетным менеджером, рендерит site-config из шаблона и поднимает

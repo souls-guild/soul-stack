@@ -1,0 +1,26 @@
+name: create
+# create: true — стартовый сценарий (Фаза 2: create-набор = РОВНО {scenario с флагом}).
+create: true
+description: >-
+  Поднять redis core-модулями (apt + systemd) БЕЗ community.redis-потребителя.
+  Негативный ассерт NIM-32: модуль объявлен в service.yml::modules[], но create
+  его НЕ использует → keeper не синтезирует core.module.installed в create-план
+  (ADR-065(e): модуль без потребителей не синтезируется).
+
+# Фокус-сценарий: state не меняется (commit state — отдельный инвариант).
+state_changes: {}
+
+tasks:
+  # apt redis-server (retry против флапающего apt-mirror, как smoke-nginx-live).
+  # Дефолтный Debian-redis: 127.0.0.1:6379 без auth — цель PING в day-2.
+  - name: Install redis-server package
+    module: core.pkg.installed
+    retry: { count: 3, delay: 10s }
+    params:
+      name: redis-server
+
+  - name: Ensure redis-server is running and enabled at boot
+    module: core.service.running
+    params:
+      name: redis-server
+      enabled: true

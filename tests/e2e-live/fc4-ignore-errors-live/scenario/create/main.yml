@@ -1,4 +1,6 @@
 name: create
+# create: true — стартовый сценарий (Фаза 2: create-набор = РОВНО {scenario с флагом}).
+create: true
 description: >-
   FC-4 happy-path: задача с РЕАЛЬНО падающим модулем + failed_when:false. На
   Soul-е core.exec.run несуществующего бинаря провалит fork/exec (file not

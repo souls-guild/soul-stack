@@ -36,6 +36,8 @@ import (
 )
 
 func TestL3bRedisLive_CreateStandalone(t *testing.T) {
+	t.Skip("redis-паритет доказывается стендовым live-прогоном (ФАЗА 2, образец прогон-23), а не локальным гейтом: input version=Nexus-enum, standalone-режим удалён 2026-06-25, install_method=binary требует Nexus, exporter/vector-destinies требуют egress. Локальный гейт гарантирует МЕХАНИКУ доставки модулей — tests/e2e-live/module-delivery-live (NIM-32). Симметрично redis_cluster_live_test.go::t.Skip.")
+
 	stack := harness.NewStack(t, harness.Config{
 		ExamplePath: "examples/service/redis",
 		ServiceName: "redis",

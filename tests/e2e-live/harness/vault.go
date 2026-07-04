@@ -40,6 +40,11 @@ const (
 	// KVv2 требует префикс `data/` между mount-ом и логическим путём.
 	vaultJWTKeyPath = "secret/data/keeper/jwt-signing-key"
 
+	// sigilSigningKeyRef — config-ссылка `sigil.signing_key_ref` keeper.yml
+	// (parity dev/keeper.dev.yml); vaultSigilKeyPath — её KV v2 data-path.
+	sigilSigningKeyRef = "vault:secret/keeper/sigil-signing-key"
+	vaultSigilKeyPath  = "secret/data/keeper/sigil-signing-key"
+
 	// vaultPKIMountPath — endpoint enable mount-а PKI на пути `pki/`.
 	vaultPKIMountPath = "sys/mounts/pki"
 
@@ -174,6 +179,36 @@ func InitVaultTestSecrets(t *testing.T, stack *Stack) {
 		},
 	}); err != nil {
 		t.Fatalf("InitVaultTestSecrets: write jwt signing-key: %v", err)
+	}
+}
+
+// SeedSigilSigningKey кладёт ed25519-ключ подписи Sigil (ADR-026) в Vault KV
+// `secret/keeper/sigil-signing-key`, поле `signing_key` — base64 от raw
+// 32-байтного seed (одна из форм keeper/internal/sigil/key.go::parseEd25519Key).
+//
+// Вызывается NewStack-ом ТОЛЬКО при непустом cfg.SoulModules: sigil-блок в
+// keeper.yml без этого секрета валит `keeper run` на setupSigil (cfg-fallback
+// buildSigilSigner-а читает ключ при старте). Канон ADR-039 §3 «sigil-key НЕ
+// pre-seed» остаётся для стендов без plugin-канала — InitVaultTestSecrets
+// этот ключ по-прежнему не сеет.
+func SeedSigilSigningKey(t *testing.T, stack *Stack) {
+	t.Helper()
+	if stack == nil || stack.VaultAddr == "" || stack.vaultToken == "" {
+		t.Fatal("SeedSigilSigningKey: stack.VaultAddr / vaultToken пустые (NewStack не вызван?)")
+	}
+	seed := make([]byte, 32)
+	if _, err := rand.Read(seed); err != nil {
+		t.Fatalf("SeedSigilSigningKey: rand.Read: %v", err)
+	}
+	vc := newVaultClient(stack.VaultAddr, stack.vaultToken)
+	ctx, cancel := context.WithTimeout(context.Background(), vaultHTTPTimeout)
+	defer cancel()
+	if _, err := vc.write(ctx, vaultSigilKeyPath, map[string]any{
+		"data": map[string]any{
+			"signing_key": base64.StdEncoding.EncodeToString(seed),
+		},
+	}); err != nil {
+		t.Fatalf("SeedSigilSigningKey: write sigil signing-key: %v", err)
 	}
 }
 

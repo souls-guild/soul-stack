@@ -1,4 +1,6 @@
 name: create
+# create: true — стартовый сценарий (Фаза 2: create-набор = РОВНО {scenario с флагом}).
+create: true
 description: >-
   FC-3 retry:+until: health-gate против реального тайминга (L3b capstone).
 

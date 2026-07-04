@@ -47,12 +47,29 @@ import (
 // заводит per-test bare git-repo в $TMP (L3b-3).
 //
 // Souls — количество soul-контейнеров, спавнящихся через SpawnSoulContainer
-// (L3b-2+). На L3b-1 параметр принимается, но контейнеры НЕ создаются —
-// harness логирует warn-сообщение.
+// (L3b-2+). 0 — keeper-only стенд (без soul-контейнеров и без pre-flight
+// требования soul-linux-бинаря): лёгкие тесты keeper-side поверхностей
+// (plugin-канал NIM-32 S1 и т.п.).
+//
+// SoulModules — каталог `plugins.soul_modules[]` keeper.yml (ADR-065(b)):
+// SoulModule-плагины, которые keeper при старте git-резолвит в cache_root
+// (plugingit, слот `<ns>-<name>/current/`). Непустой список автоматически
+// включает Sigil (config_builder пишет sigil-блок, NewStack сеет
+// ed25519-ключ подписи в Vault) — без Signer-а allow-флоу не поднимается.
 type Config struct {
 	ExamplePath string
 	ServiceName string
 	Souls       int
+	SoulModules []SoulModuleEntry
+}
+
+// SoulModuleEntry — одна запись каталога `plugins.soul_modules[]`
+// (`{name, source, ref}`, зеркало config.PluginCatalogEntry — harness не
+// импортирует shared/config, публичный контракт тестируется как чёрный ящик).
+type SoulModuleEntry struct {
+	Name   string
+	Source string
+	Ref    string
 }
 
 // Stack — изолированный E2E-стенд одного теста.
@@ -77,6 +94,12 @@ type Stack struct {
 
 	// SoulContainers — populated SpawnSoulContainer-ом в L3b-2+; nil/empty на L3b-1.
 	SoulContainers []*SoulContainer
+
+	// PluginCacheRoot — `plugins.cache_root` keeper.yml (заполняется
+	// buildKeeperYAML-ом): сюда plugingit-резолвер материализует слоты
+	// `<ns>-<name>/current/` каталога плагинов (ADR-065(b)/(g)). Тесты
+	// plugin-канала ассертят слот по этому пути.
+	PluginCacheRoot string
 
 	// caBundle — PEM-bundle Vault PKI root CA, выданный IssueKeeperServerCert-ом.
 	// soul-контейнер mount-ит его как `/etc/soul/ca.pem`, чтобы верифицировать
@@ -126,17 +149,20 @@ type Stack struct {
 // Без любого из бинарей — t.Skip с подсказкой про `make build` / `make build-linux`.
 func NewStack(t *testing.T, cfg Config) *Stack {
 	t.Helper()
-	if cfg.Souls <= 0 {
-		cfg.Souls = 1
+	if cfg.Souls < 0 {
+		cfg.Souls = 0
 	}
 
 	// Pre-flight: keeper-бинарь (нативный, host-arch).
 	if _, err := locateKeeperBinary(); err != nil {
 		t.Skipf("L3b: keeper-бинарь не найден (%v); экспортируй KEEPER_BIN или сделай `make build`", err)
 	}
-	// Pre-flight: linux-soul-бинарь (для L3b-2+).
-	if _, err := locateLinuxSoulBinary(); err != nil {
-		t.Skipf("L3b: soul-linux-amd64 не найден (%v); экспортируй SOUL_BIN_LINUX или сделай `make build-linux`", err)
+	// Pre-flight: linux-soul-бинарь (для L3b-2+). Keeper-only стенд (Souls=0)
+	// его не монтирует — не требуем.
+	if cfg.Souls > 0 {
+		if _, err := locateLinuxSoulBinary(); err != nil {
+			t.Skipf("L3b: soul-linux-amd64 не найден (%v); экспортируй SOUL_BIN_LINUX или сделай `make build-linux`", err)
+		}
 	}
 
 	s := &Stack{
@@ -163,6 +189,13 @@ func NewStack(t *testing.T, cfg Config) *Stack {
 
 	// Vault test-secrets: PKI + JWT signing-key. Симметрично provision.sh.
 	InitVaultTestSecrets(t, s)
+
+	// Sigil-ключ подписи — только при непустом каталоге SoulModules: keeper с
+	// sigil-блоком в конфиге падает на старте без Vault-секрета (buildSigilSigner
+	// cfg-fallback), а без sigil-блока plugin.allow-роуты не регистрируются.
+	if len(cfg.SoulModules) > 0 {
+		SeedSigilSigningKey(t, s)
+	}
 
 	// Outgoing-TLS material для keeper-server listener-ов.
 	keeperCertPEM, keeperKeyPEM, caPEM := IssueKeeperServerCert(t, s)
@@ -566,14 +599,19 @@ func (s *Stack) CreateIncarnation(t *testing.T, name string, serviceRef string, 
 // CreateIncarnation + RunScenario(create). Симметрично L3a-harness
 // (tests/e2e/harness/stack.go::CreateIncarnationWithApply).
 //
+// create_scenario=`create` — Фаза-2 контракт (2026-06-29): выбор стартового
+// сценария обязателен при непустом create-наборе сервиса; scenario обязан нести
+// `create: true`. Bare-путь (без прогона) — CreateIncarnation.
+//
 // Возвращает (incarnationName, applyID авто-create-прогона).
 func (s *Stack) CreateIncarnationWithApply(t *testing.T, name string, serviceRef string, spec map[string]any) (string, string) {
 	t.Helper()
 	c := s.opClient(t)
 	service := stripServiceRef(serviceRef)
 	body := map[string]any{
-		"name":    name,
-		"service": service,
+		"name":            name,
+		"service":         service,
+		"create_scenario": "create",
 	}
 	if spec != nil {
 		body["input"] = spec

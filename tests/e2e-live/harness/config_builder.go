@@ -51,6 +51,7 @@ func (s *Stack) buildKeeperYAML(certPath, keyPath, caPath string) string {
 
 	pluginsCacheDir := s.tmpDir + "/plugins"
 	socketsDir := s.tmpDir + "/plugin-sockets"
+	s.PluginCacheRoot = pluginsCacheDir
 
 	tmpl := `kid: keeper-test-01
 
@@ -99,9 +100,7 @@ logging:
   format: text
   rotation: { max_size_mb: 100, max_files: 5, compress: false }
 
-plugins:
-  cache_root: %s
-
+%s
 plugin_runtime:
   socket_dir: %s
   startup_timeout: 10s
@@ -141,11 +140,31 @@ reaper:
 		httpAddr, mcpAddr, metricsAddr,
 		s.RedisAddr,
 		s.VaultAddr, s.vaultToken,
-		pluginsCacheDir, socketsDir,
+		s.buildPluginsSection(pluginsCacheDir), socketsDir,
 	)
 
 	s.seedPostgresDSN()
 	return yaml
+}
+
+// buildPluginsSection рендерит блок `plugins:` (+ опциональный `sigil:`).
+// Непустой cfg.SoulModules добавляет каталог `soul_modules[]` (ADR-065(b),
+// flow-форма записей как в docs/keeper/plugins.md) и включает Sigil:
+// без sigil.signing_key_ref keeper не регистрирует plugin.allow/revoke/list
+// (setupSigil), и допускать материализованный слот было бы нечем. Ключ в
+// Vault сеет NewStack (SeedSigilSigningKey) ДО keeper run.
+func (s *Stack) buildPluginsSection(cacheDir string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "plugins:\n  cache_root: %s\n", cacheDir)
+	if len(s.cfg.SoulModules) == 0 {
+		return b.String()
+	}
+	b.WriteString("  soul_modules:\n")
+	for _, m := range s.cfg.SoulModules {
+		fmt.Fprintf(&b, "    - { name: %s, source: %q, ref: %q }\n", m.Name, m.Source, m.Ref)
+	}
+	b.WriteString("\nsigil:\n  signing_key_ref: " + sigilSigningKeyRef + "\n")
+	return b.String()
 }
 
 // seedPostgresDSN кладёт PG DSN в Vault KV `secret/keeper/postgres` (поле `dsn`).

@@ -1,4 +1,6 @@
 name: create
+# create: true — стартовый сценарий (Фаза 2: create-набор = РОВНО {scenario с флагом}).
+create: true
 description: >-
   Staged-render probe→where на реальном soul-флоте (ADR-056 §S5, L3b capstone).
   Passage 0: probe роли каждого хоста (core.cmd.shell printf master|slave по
