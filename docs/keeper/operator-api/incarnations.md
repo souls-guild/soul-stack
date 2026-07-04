@@ -353,7 +353,7 @@ Permission: `incarnation.upgrade`. MCP-tool: `keeper.incarnation.upgrade`. Path-
 
 Запускает миграцию state по [ADR-019](../../adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl) + переключает `service_version`. Одной PG-транзакцией ([migrations.md](../../migrations.md)).
 
-С [ADR-0068](../../adr/0068-service-upgrade-v2.md) апгрейд — two-phase: если у целевой версии есть upgrade-сценарий (`upgrade/<slug>/` с `from:` ⊇ текущего пина, режим `found`) — после миграции автозапускается host-оркестрация перехода (`status: applying` → `ready`); иначе (`legacy`) — прежнее поведение (смена пина + state-миграции + `drift`, оператор доводит обычным apply). Парный READ-эндпоинт `GET /v1/incarnations/{name}/upgrade-paths` («куда и как могу обновиться»: теги реестра + on-demand `?to=` анализ `direction`/`mode`) — [ADR-0068 §6](../../adr/0068-service-upgrade-v2.md).
+С [ADR-0068](../../adr/0068-service-upgrade-v2.md) апгрейд — two-phase: если у целевой версии есть upgrade-сценарий (`upgrade/<slug>/` с `from:` ⊇ текущего пина, режим `found`) — после миграции автозапускается host-оркестрация перехода (`status: applying` → `ready`); иначе (`legacy`) — прежнее поведение (смена пина + state-миграции + `drift`, оператор доводит обычным apply). Парный READ-эндпоинт `GET /v1/incarnations/{name}/upgrade-paths` («куда и как могу обновиться»: дёшево — теги реестра + `is_current`; `?to=` — `direction`/`mode`/`reachable`) описан отдельной секцией ниже.
 
 **Request:**
 
@@ -361,9 +361,38 @@ Permission: `incarnation.upgrade`. MCP-tool: `keeper.incarnation.upgrade`. Path-
 |---|---|---|---|
 | `to_version` | `string` (git-ref сервиса) | yes | Целевая версия сервиса. |
 
-**Response `202 Accepted`:** `{"apply_id": "<ULID>"}`. Опрос — `GET /v1/incarnations/{name}` (`status: applying` → `ready` или `migration_failed`).
+**Response `202 Accepted`:** `{"apply_id": "<ULID>", "run_apply_id": "<ULID>"}` — два ULID = двухфазность ([ADR-0068 §5](../../adr/0068-service-upgrade-v2.md)):
+
+- `apply_id` (M) — ULID state-миграции, present всегда.
+- `run_apply_id` (R) — ULID Runner-прогона upgrade-сценария; **только в found-ветви** (есть upgrade-сценарий для перехода → автозапуск). В legacy-ветви (нет сценария → `drift`) поле опущено (`omitempty`). Опрос прогона — `GET .../runs/{run_apply_id}`.
+
+Опрос статуса инкарнации — `GET /v1/incarnations/{name}` (`status: applying` → `ready` или `migration_failed`).
 
 **Errors:** `404 not-found`, `409 incarnation-locked`, `409 migration-failed`, `422 validation-failed` (целевая версия не зарегистрирована).
+
+#### `GET /v1/incarnations/{name}/upgrade-paths` — пути апгрейда
+
+Permission: `incarnation.upgrade` (read-грань). Path-param: `name`. Query-param: `to` (опц., git-ref цели). **READ, без audit.** Дизайн — [ADR-0068 §6](../../adr/0068-service-upgrade-v2.md); enum-словарь — [naming-rules.md → Upgrade v2](../../naming-rules.md#upgrade-v2-каталог-upgrade-ключ-from-upgrade-paths).
+
+Два взаимоисключающих блока (`paths` без `?to=` / `target` с `?to=`) + общие `current_version` и `current_state_schema_version` (текущий пин и схема инкарнации):
+
+- **Без `?to=` — дёшево**: `paths[]` — теги реестра сервиса (`ref` / `type` / `commit` / `is_current`). `is_current` — совпадение тега с текущим пином. Направление (forward/downgrade) **не вычисляется** — запрет semver-парсинга имён тегов ([ADR-007](../../adr/0007-versioning-git-ref.md)).
+- **С `?to=<ref>` — on-demand анализ одной цели**: объект `target` (ниже).
+
+**`target` (только `?to=`):**
+
+| Поле | Тип | Смысл |
+|---|---|---|
+| `to` / `resolved_commit` / `target_state_schema_version` | `string` / `string` / `int` | Запрошенный ref, sha1 снапшота, state_schema цели. |
+| `direction` | `enum` | `no-op` \| `downgrade` \| `forward` \| `same-schema` (ref-bump без смены схемы). |
+| `mode` | `enum` | `found` \| `legacy` — только для `forward`/`same-schema` (при downgrade/no-op опущен). |
+| `slug` | `string` | slug upgrade-сценария при `found` (опущен иначе). |
+| `downgrade` | `bool` | Цель ниже по схеме (цепочка не грузится, forward-only). |
+| `reachable` | `bool` | Цель достижима апгрейдом. `false` только при битой цепочке миграций. |
+| `unreachable_reason` | `string` | Причина недостижимости (при `reachable: false`): `migration_chain_broken`. Опущен, если достижима. |
+| `state_migrations[]` | `array` | Применяемая цепочка `{from, to, path}` ([ADR-019](../../adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)); пусто при downgrade/битой цепочке. |
+
+**Errors:** `404 not-found` (нет инкарнации / вне scope). **Битая цепочка миграций — НЕ ошибка**: `200` с `reachable: false` + `unreachable_reason` (preview отдаёт недостижимую цель как данные). `502` — ls-remote тегов / load снапшота цели; `500` — прочий сбой цепочки миграций.
 
 #### `POST /v1/incarnations/{name}/check-drift` — Scry-проверка drift
 
