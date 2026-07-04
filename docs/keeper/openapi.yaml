@@ -2674,7 +2674,8 @@ components:
           format: int64
           type: integer
         sid:
-          pattern: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$
+          description: FQDN хоста ЛИБО синтетический sid прогона (keeper=on:keeper, __run__=run-sentinel аборта до dispatch), не адресующий Soul (NIM-36)
+          pattern: ^(keeper|__run__|[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*)$
           type: string
         status:
           type: string

@@ -45,7 +45,7 @@ forward-only (ADR-019):
   (Слайс II, [ADR-024](../../../docs/adr/0024-observability.md)): read-model `monitoring`
   (версия/listen node_exporter). Существующим v4 — консервативный default (версия `''`, порт `:9100`);
 - [`005_to_006`](migrations/005_to_006.yml) — **обязательный log-shipping** data-плоскости
-  (Слайс V-I vector): read-model `logging` (версия/sink/источники vector). `sink_auth_ref`
+  (Слайс V-I, [ADR-067](../../../docs/adr/0067-vector-log-shipping.md)): read-model `logging` (версия/sink/источники vector). `sink_auth_ref`
   сюда **не** пишется (секрет в Vault). Существующим v5 — default (версия `''`, sink `console`).
 
 `incarnation.state` фиксирует, что развёрнуто (`required: [df_config]`):
@@ -232,7 +232,7 @@ opt-out под private-resolve зеркала). Read-model — `state.monitoring
 
 ### vector (отгрузка логов, push — Слайс V-I)
 
-Шаг 7 деплоя (**после** экспортера) безусловно ставит [`vector`](../../destiny/vector/) — агент
+Шаг 7 деплоя (**после** экспортера) безусловно ставит [`vector`](../../destiny/vector/) ([ADR-067](../../../docs/adr/0067-vector-log-shipping.md)) — агент
 отгрузки логов, дополняющий метрики-плоскость лог-плоскостью. essence: `vector_version`
 (`0.40.0`), `vector_sha256` (★ плейсхолдер — реальный оператор **обязан** подставить checksum
 под пару `(version, arch)` в `spec.essence`, иначе fail-closed), `vector_base_url` (WB Nexus),

@@ -92,7 +92,7 @@ assert:
     monitoring:
       node_exporter_version: "1.8.2"
       node_exporter_listen: ":9100"
-    # read-model log-shipping (Слайс V-I): версия/sink/источники vector. sink_auth_ref (токен) НЕ
+    # read-model log-shipping (Слайс V-I, ADR-067): версия/sink/источники vector. sink_auth_ref (токен) НЕ
     # в state (ИБ) — намеренно отсутствует. log_sources — ОБЕ плоскости (DragonFly glog + sentinel).
     logging:
       vector_version: "0.40.0"

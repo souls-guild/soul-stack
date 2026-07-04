@@ -65,6 +65,24 @@ var sidRe = regexp.MustCompile(SIDPattern)
 // ValidSID проверяет соответствие SID канонической форме.
 func ValidSID(sid string) bool { return sidRe.MatchString(sid) }
 
+// ReservedSIDs — синтетические apply_runs.sid, не адресующие Soul: keeper-side
+// target (render.KeeperTargetSID) и run-sentinel аборта до dispatch
+// (render.RunSentinelSID). Регистрация Soul с таким sid дала бы коллизию PK
+// apply_runs(apply_id, sid, passage) и неотличимость от синтетики в UI (NIM-36).
+// Литералы дублируют render-константы (soul — leaf-пакет, render не импортирует);
+// дрейф ловит reserved_sid_test.go.
+var ReservedSIDs = map[string]struct{}{
+	"keeper":  {}, // = render.KeeperTargetSID
+	"__run__": {}, // = render.RunSentinelSID (underscore и так не проходит ValidSID)
+}
+
+// IsReservedSID — sid зарезервирован системой (см. ReservedSIDs); Soul с таким
+// именем регистрировать нельзя (bootstrap отклоняет).
+func IsReservedSID(sid string) bool {
+	_, ok := ReservedSIDs[sid]
+	return ok
+}
+
 // CovenPattern — каноническая форма Coven-метки: одноуровневый kebab-case
 // (ADR-008 — стабильные логические теги). Совпадает по форме с именем
 // сервиса/сценария и с `reCovenName` в shared/config (валидация `on:`-меток

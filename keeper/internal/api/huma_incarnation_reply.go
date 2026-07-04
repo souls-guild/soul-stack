@@ -240,7 +240,7 @@ type RunSummaryEntry struct {
 // status — host-level статус (planned/claimed/running/dispatched/success/failed/
 // cancelled/orphaned/no_match).
 type RunHostStatusEntry struct {
-	SID             string  `json:"sid" pattern:"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$"`
+	SID             string  `json:"sid" pattern:"^(keeper|__run__|[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*)$" doc:"FQDN хоста ЛИБО синтетический sid прогона (keeper=on:keeper, __run__=run-sentinel аборта до dispatch), не адресующий Soul (NIM-36)"`
 	Status          string  `json:"status"`
 	Passage         int     `json:"passage"`
 	FailedTaskIdx   *int    `json:"failed_task_idx,omitempty"`
