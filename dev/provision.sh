@@ -309,9 +309,10 @@ provision_git_repo() {
 
     git -C "${dest}" init -q -b main
     git -C "${dest}" add -A
-    git -C "${dest}" commit -q -m "${kind} snapshot from examples/ (dev-provision)"
+    # -c *.gpgsign=false: снять подпись оператора (нет ssh-askpass в WSL, dev-артефактам подпись не нужна).
+    git -C "${dest}" -c commit.gpgsign=false commit -q -m "${kind} snapshot from examples/ (dev-provision)"
     if [ "${is_tag}" = "1" ]; then
-        git -C "${dest}" tag -f "${ref}" >/dev/null
+        git -C "${dest}" -c tag.gpgsign=false tag -f "${ref}" >/dev/null
         log "git-репо ${kind} @ ${dest} (branch main + tag ${ref})"
     else
         log "git-репо ${kind} @ ${dest} (branch ${ref})"
