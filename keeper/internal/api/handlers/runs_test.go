@@ -58,6 +58,37 @@ func TestAllRunsTyped_BadIncarnationName_422(t *testing.T) {
 	requireProblemStatus(t, err, 422)
 }
 
+// TestAllRunsTyped_BadSort_422 — не-whitelist поле сортировки → 422 (sentinel из
+// store, ADR-068 §B1).
+func TestAllRunsTyped_BadSort_422(t *testing.T) {
+	h := newRunsHandler(&fakeIncDB{}, fakeIncScoper{unrestricted: true})
+	_, err := h.AllRunsTyped(context.Background(), runsClaims(),
+		AllRunsInput{Sort: "created_at; DROP TABLE apply_runs", Offset: 0, Limit: 50})
+	requireProblemStatus(t, err, 422)
+}
+
+// TestAllRunsTyped_BadSortDir_422 — не-asc/desc направление → 422.
+func TestAllRunsTyped_BadSortDir_422(t *testing.T) {
+	h := newRunsHandler(&fakeIncDB{}, fakeIncScoper{unrestricted: true})
+	_, err := h.AllRunsTyped(context.Background(), runsClaims(),
+		AllRunsInput{SortDir: "sideways", Offset: 0, Limit: 50})
+	requireProblemStatus(t, err, 422)
+}
+
+// TestAllRunsTyped_ValidSort_OK — валидные sort/sort_dir прокидываются в store и
+// не роняют путь (реальный порядок — в integration-тестах applyrun).
+func TestAllRunsTyped_ValidSort_OK(t *testing.T) {
+	db := &fakeIncDB{}
+	h := newRunsHandler(db, fakeIncScoper{unrestricted: true})
+	if _, err := h.AllRunsTyped(context.Background(), runsClaims(),
+		AllRunsInput{Sort: "status", SortDir: "asc", Offset: 0, Limit: 50}); err != nil {
+		t.Fatalf("AllRunsTyped(valid sort): %v", err)
+	}
+	if !db.runsCalled {
+		t.Error("валидный sort не дошёл до store")
+	}
+}
+
 // --- AllRunsTyped: fail-closed Purview ----------------------------------
 
 // TestAllRunsTyped_NilClaims_FailClosed — нет claims → пустая страница (200), store

@@ -24,6 +24,8 @@ import (
 type runsListInput struct {
 	Status      string `query:"status" doc:"фильтр по агрегатному статусу прогона (applying/success/failed/cancelled); невалидный → 422"`
 	Incarnation string `query:"incarnation" doc:"фильтр по имени инкарнации; невалидное имя → 422"`
+	Sort        string `query:"sort" doc:"поле сортировки (started_at/finished_at/status/incarnation/scenario; дефолт started_at); невалидное → 422"`
+	SortDir     string `query:"sort_dir" doc:"направление сортировки (asc/desc; дефолт desc); невалидное → 422"`
 	Offset      int32  `query:"offset" default:"0" doc:"сдвиг от начала набора, ≥0 (out-of-range → 400)"`
 	Limit       int32  `query:"limit" default:"50" doc:"размер страницы 1..100 (out-of-range → 400)"`
 }
@@ -40,7 +42,7 @@ func runsListOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/",
 		Summary:       "Глобальный список прогонов (paged)",
-		Description:   "Свёртка apply_runs по apply_id ЧЕРЕЗ ВСЕ инкарнации: статус прогона (applying/success/failed/cancelled), инкарнация-владелец, границы времени, инициатор. Прогон (apply_run) — НЕ Voyage. Видимость scoped по RBAC (ADR-047, fail-closed: пустой scope → пустой список). Permission incarnation.history. Read-only.",
+		Description:   "Свёртка apply_runs по apply_id ЧЕРЕЗ ВСЕ инкарнации: статус прогона (applying/success/failed/cancelled), инкарнация-владелец, границы времени, инициатор. Прогон (apply_run) — НЕ Voyage. Сортировка колонок — sort/sort_dir (стабильный tie-break apply_id). Видимость scoped по RBAC (ADR-047, fail-closed: пустой scope → пустой список). Permission incarnation.history. Read-only.",
 		Tags:          []string{"runs"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},

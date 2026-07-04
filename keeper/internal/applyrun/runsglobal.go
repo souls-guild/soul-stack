@@ -2,6 +2,7 @@ package applyrun
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -23,6 +24,29 @@ type RunsFilter struct {
 	Status RunStatus
 	// Incarnation — фильтр по имени инкарнации ("" = все).
 	Incarnation string
+	// Sort — поле сортировки (whitelist [runsSortableColumns], "" = дефолт
+	// started_at). SortDir — asc|desc ("" = desc). Невалидное значение всплывает
+	// из [ListRuns] sentinel-ошибкой ([ErrInvalidRunsSortField]/[ErrInvalidRunsSortDir]
+	// → 422 на handler-е). ADR-068 §B1.
+	Sort    string
+	SortDir string
+}
+
+// Sentinel-ошибки валидации сортировки [ListRuns] (handler маппит в 422). ADR-068 §B1.
+var (
+	ErrInvalidRunsSortField = errors.New("applyrun: invalid sort field")
+	ErrInvalidRunsSortDir   = errors.New("applyrun: invalid sort direction")
+)
+
+// runsSortableColumns — closed whitelist полей сортировки GET /v1/runs →
+// alias-колонка свёртки (подзапрос runs). Колонка берётся отсюда, не из сырой
+// строки — иначе SQL-инъекция через ORDER BY. ADR-068 §B1.
+var runsSortableColumns = map[string]string{
+	"started_at":  "started_at",
+	"finished_at": "finished_at",
+	"status":      "status",
+	"incarnation": "incarnation",
+	"scenario":    "scenario",
 }
 
 // ValidRunStatus — закрытый набор агрегатных статусов прогона (фильтр /v1/runs).
@@ -115,11 +139,53 @@ func buildRunsQuery(filter RunsFilter, scope incarnation.ListScope) (sub, outerW
 	return sub, outerWhere, args
 }
 
+// buildRunsOrderBy — тело ORDER BY из whitelist-поля + направления. Дефолт поля
+// started_at, направления desc (byte-exact прежнему `started_at DESC, apply_id DESC`).
+// Tie-break `apply_id DESC` добавляется всегда (стабильность при равных значениях
+// сорт-колонки). finished_at → NULLS LAST (applying-прогоны без finished_at — в
+// конец при любом направлении). ADR-068 §B1.
+func buildRunsOrderBy(sort, sortDir string) (string, error) {
+	if sort == "" {
+		sort = "started_at"
+	}
+	col, ok := runsSortableColumns[sort]
+	if !ok {
+		return "", fmt.Errorf("%w: %q", ErrInvalidRunsSortField, sort)
+	}
+	dir, err := runsSortDirSQL(sortDir)
+	if err != nil {
+		return "", err
+	}
+	var nulls string
+	if sort == "finished_at" {
+		nulls = " NULLS LAST"
+	}
+	return fmt.Sprintf("%s %s%s, apply_id DESC", col, dir, nulls), nil
+}
+
+// runsSortDirSQL валидирует направление сортировки. Пустое → DESC (дефолт
+// /v1/runs — новейшие сверху, в отличие от asc-дефолта incarnation).
+func runsSortDirSQL(d string) (string, error) {
+	switch d {
+	case "", "desc":
+		return "DESC", nil
+	case "asc":
+		return "ASC", nil
+	}
+	return "", fmt.Errorf("%w: %q", ErrInvalidRunsSortDir, d)
+}
+
 // ListRuns отдаёт страницу прогонов через все инкарнации (свёртка по apply_id),
-// новейшие сверху, и общее число прогонов под теми же фильтрами/scope. Фильтр по
-// агрегатному статусу — на SQL-уровне (иначе total/offset разъехались бы с
-// Go-постфильтром).
+// в порядке filter.Sort/SortDir (дефолт — новейшие сверху), и общее число прогонов
+// под теми же фильтрами/scope. Фильтр по агрегатному статусу — на SQL-уровне (иначе
+// total/offset разъехались бы с Go-постфильтром).
 func ListRuns(ctx context.Context, db ExecQueryRower, filter RunsFilter, scope incarnation.ListScope, offset, limit int) ([]RunSummary, int, error) {
+	// Валидация sort — до БД: невалидное поле/направление → sentinel-ошибка (422),
+	// без лишнего count-запроса.
+	orderBy, err := buildRunsOrderBy(filter.Sort, filter.SortDir)
+	if err != nil {
+		return nil, 0, err
+	}
 	sub, outerWhere, args := buildRunsQuery(filter, scope)
 
 	countSQL := "SELECT COUNT(*) FROM (" + sub + ") runs" + outerWhere
@@ -128,9 +194,11 @@ func ListRuns(ctx context.Context, db ExecQueryRower, filter RunsFilter, scope i
 		return nil, 0, fmt.Errorf("applyrun: count global runs: %w", err)
 	}
 
+	// ORDER BY — из whitelist-выражения (не из сырого ввода); countSQL выше НЕ
+	// затрагивается — total от сортировки не зависит (ADR-068 §B1).
 	listSQL := "SELECT apply_id, incarnation, scenario, started_at, finished_at, started_by_aid, status FROM (" +
 		sub + ") runs" + outerWhere +
-		fmt.Sprintf("\nORDER BY started_at DESC, apply_id DESC OFFSET $%d LIMIT $%d", len(args)+1, len(args)+2)
+		fmt.Sprintf("\nORDER BY %s OFFSET $%d LIMIT $%d", orderBy, len(args)+1, len(args)+2)
 	listArgs := append(append([]any{}, args...), offset, limit)
 
 	rows, err := db.Query(ctx, listSQL, listArgs...)

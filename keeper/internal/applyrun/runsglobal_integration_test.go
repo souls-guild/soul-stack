@@ -241,6 +241,86 @@ func TestIntegration_SelectRunsStats(t *testing.T) {
 	}
 }
 
+// TestIntegration_ListRuns_Sort — сортировка по whitelist-колонке на реальном PG
+// (ADR-068 §B1): порядок по колонке в обоих направлениях, стабильный tie-break
+// apply_id DESC при равных значениях, NULLS LAST для finished_at (applying-прогон
+// в конец), total не зависит от sort.
+func TestIntegration_ListRuns_Sort(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	seedIncarnation(t, "redis-prod", "archon-alice")
+	seedIncarnation(t, "redis-staging", "archon-alice")
+	ctx := context.Background()
+
+	// apply_id лексикографически возрастают A<B<C<D → tie-break apply_id DESC даёт
+	// D,C,B,A. Два прогона в redis-prod (A,B) и redis-staging (C,D); D — applying
+	// (running-хост, finished_at IS NULL).
+	seedRun(t, ctx, "01HSORTA", "redis-prod", "create", StatusSuccess)
+	seedRun(t, ctx, "01HSORTB", "redis-prod", "restart", StatusSuccess)
+	seedRun(t, ctx, "01HSORTC", "redis-staging", "create", StatusSuccess)
+	seedRun(t, ctx, "01HSORTD", "redis-staging", "scale", StatusRunning)
+
+	ids := func(runs []RunSummary) []string {
+		out := make([]string, len(runs))
+		for i, r := range runs {
+			out[i] = r.ApplyID
+		}
+		return out
+	}
+	eq := func(got, want []string) bool {
+		if len(got) != len(want) {
+			return false
+		}
+		for i := range got {
+			if got[i] != want[i] {
+				return false
+			}
+		}
+		return true
+	}
+
+	// incarnation ASC: redis-prod < redis-staging; внутри группы tie-break
+	// apply_id DESC → [B,A, D,C].
+	runs, total, err := ListRuns(ctx, integrationPool,
+		RunsFilter{Sort: "incarnation", SortDir: "asc"}, unrestrictedScope, 0, 50)
+	if err != nil {
+		t.Fatalf("ListRuns(incarnation asc): %v", err)
+	}
+	if total != 4 {
+		t.Errorf("incarnation asc: total=%d, want 4", total)
+	}
+	if want := []string{"01HSORTB", "01HSORTA", "01HSORTD", "01HSORTC"}; !eq(ids(runs), want) {
+		t.Errorf("incarnation asc: порядок %v, want %v", ids(runs), want)
+	}
+
+	// incarnation DESC: redis-staging первой → [D,C, B,A].
+	runs, totalDesc, err := ListRuns(ctx, integrationPool,
+		RunsFilter{Sort: "incarnation", SortDir: "desc"}, unrestrictedScope, 0, 50)
+	if err != nil {
+		t.Fatalf("ListRuns(incarnation desc): %v", err)
+	}
+	if want := []string{"01HSORTD", "01HSORTC", "01HSORTB", "01HSORTA"}; !eq(ids(runs), want) {
+		t.Errorf("incarnation desc: порядок %v, want %v", ids(runs), want)
+	}
+	// total не зависит от направления сортировки (guard 4).
+	if totalDesc != total {
+		t.Errorf("total разошёлся при смене sort_dir: asc=%d desc=%d", total, totalDesc)
+	}
+
+	// finished_at: applying-прогон (01HSORTD, finished_at IS NULL) — в конце при
+	// ОБОИХ направлениях (NULLS LAST).
+	for _, dir := range []string{"asc", "desc"} {
+		runs, _, err = ListRuns(ctx, integrationPool,
+			RunsFilter{Sort: "finished_at", SortDir: dir}, unrestrictedScope, 0, 50)
+		if err != nil {
+			t.Fatalf("ListRuns(finished_at %s): %v", dir, err)
+		}
+		if got := ids(runs); len(got) != 4 || got[len(got)-1] != "01HSORTD" {
+			t.Errorf("finished_at %s: applying-прогон не в конце (NULLS LAST): %v", dir, got)
+		}
+	}
+}
+
 // TestIntegration_SelectRunsStats_Scoped — счётчики в границах Purview-scope:
 // только прогоны видимых инкарнаций.
 func TestIntegration_SelectRunsStats_Scoped(t *testing.T) {

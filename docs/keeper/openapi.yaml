@@ -9391,7 +9391,7 @@ paths:
         - role
   /v1/runs:
     get:
-      description: "Свёртка apply_runs по apply_id ЧЕРЕЗ ВСЕ инкарнации: статус прогона (applying/success/failed/cancelled), инкарнация-владелец, границы времени, инициатор. Прогон (apply_run) — НЕ Voyage. Видимость scoped по RBAC (ADR-047, fail-closed: пустой scope → пустой список). Permission incarnation.history. Read-only."
+      description: "Свёртка apply_runs по apply_id ЧЕРЕЗ ВСЕ инкарнации: статус прогона (applying/success/failed/cancelled), инкарнация-владелец, границы времени, инициатор. Прогон (apply_run) — НЕ Voyage. Сортировка колонок — sort/sort_dir (стабильный tie-break apply_id). Видимость scoped по RBAC (ADR-047, fail-closed: пустой scope → пустой список). Permission incarnation.history. Read-only."
       operationId: listRuns
       parameters:
         - description: фильтр по агрегатному статусу прогона (applying/success/failed/cancelled); невалидный → 422
@@ -9407,6 +9407,20 @@ paths:
           name: incarnation
           schema:
             description: фильтр по имени инкарнации; невалидное имя → 422
+            type: string
+        - description: поле сортировки (started_at/finished_at/status/incarnation/scenario; дефолт started_at); невалидное → 422
+          explode: false
+          in: query
+          name: sort
+          schema:
+            description: поле сортировки (started_at/finished_at/status/incarnation/scenario; дефолт started_at); невалидное → 422
+            type: string
+        - description: направление сортировки (asc/desc; дефолт desc); невалидное → 422
+          explode: false
+          in: query
+          name: sort_dir
+          schema:
+            description: направление сортировки (asc/desc; дефолт desc); невалидное → 422
             type: string
         - description: сдвиг от начала набора, ≥0 (out-of-range → 400)
           explode: false

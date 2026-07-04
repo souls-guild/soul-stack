@@ -9,6 +9,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -27,8 +28,12 @@ const maxAllRunsPageLimit = 100
 type AllRunsInput struct {
 	Status      string
 	Incarnation string
-	Offset      int
-	Limit       int
+	// Sort — поле сортировки (started_at/finished_at/status/incarnation/scenario,
+	// "" = started_at); SortDir — asc|desc ("" = desc). Невалидное → 422. ADR-068 §B1.
+	Sort    string
+	SortDir string
+	Offset  int
+	Limit   int
 }
 
 // AllRunsReply — typed envelope GET /v1/runs (handler-native, element — доменный
@@ -64,6 +69,9 @@ func (h *IncarnationHandler) AllRunsTyped(ctx context.Context, claims *jwt.Claim
 		}
 		filter.Incarnation = in.Incarnation
 	}
+	// Валидность sort/sort_dir — в store (whitelist), sentinel-ошибки → 422 ниже.
+	filter.Sort = in.Sort
+	filter.SortDir = in.SortDir
 
 	scope, ok := h.resolveListScope(ctx, claims, "history", "")
 	if !ok {
@@ -73,6 +81,9 @@ func (h *IncarnationHandler) AllRunsTyped(ctx context.Context, claims *jwt.Claim
 
 	summaries, total, err := applyrun.ListRuns(ctx, h.db, filter, scope, in.Offset, in.Limit)
 	if err != nil {
+		if errors.Is(err, applyrun.ErrInvalidRunsSortField) || errors.Is(err, applyrun.ErrInvalidRunsSortDir) {
+			return zero, incProblem(problem.TypeValidationFailed, err.Error())
+		}
 		h.logger.Error("runs.list: select failed", slog.Any("error", err))
 		return zero, incProblem(problem.TypeInternalError, "list runs failed")
 	}

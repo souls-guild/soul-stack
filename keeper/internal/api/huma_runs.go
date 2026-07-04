@@ -24,6 +24,8 @@ func registerHumaRunsList(humaAPI huma.API, incH *handlers.IncarnationHandler) {
 		reply, err := incH.AllRunsTyped(ctx, claimsOrNil(ctx), handlers.AllRunsInput{
 			Status:      in.Status,
 			Incarnation: in.Incarnation,
+			Sort:        in.Sort,
+			SortDir:     in.SortDir,
 			Offset:      int(in.Offset),
 			Limit:       int(in.Limit),
 		})
