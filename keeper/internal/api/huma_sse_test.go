@@ -1,8 +1,8 @@
 package api
 
-// Guard-инварианты ADR-068 §A0 (POST /v1/sse-token) и §A3 (SSE-route live-хода
-// прогона). Фокус — БЕЗОПАСНОСТЬ: RBAC/anti-enum 403, секрет-гигиена frame-payload,
-// query-token handshake, TTL короткоживущего токена. Интеграция поверх минимального
+// Guard-инварианты ADR-068 §A3 (SSE-route live-хода прогона). Фокус — БЕЗОПАСНОСТЬ:
+// RBAC/anti-enum 403, секрет-гигиена frame-payload, auth через `*/events`-chain
+// (fetch-streaming Authorization: Bearer, §A0). Интеграция поверх минимального
 // /v1-роутера (RequireJWT + huma), без PG (fake access-store) и без /mcp/events.
 
 import (
@@ -56,8 +56,8 @@ func ptrStr(s string) *string { return &s }
 
 func discardLogger() *slog.Logger { return slog.New(slog.NewJSONHandler(io.Discard, nil)) }
 
-// sseTestHarness — минимальный /v1-роутер (RequireJWT + huma) с SSE-route и sse-token,
-// + функция минтинга operator-JWT. access nil → run-events не монтируется.
+// sseTestHarness — минимальный /v1-роутер (RequireJWT + huma) с SSE-route +
+// функция минтинга operator-JWT. access nil → run-events не монтируется.
 func sseTestHarness(t *testing.T, bus *applybus.EventBus, access runEventsAccess, rbac apimiddleware.PermissionChecker) (*httptest.Server, func(aid string) string) {
 	t.Helper()
 	installHumaErrorOverride()
@@ -86,9 +86,6 @@ func sseTestHarness(t *testing.T, bus *applybus.EventBus, access runEventsAccess
 					registerHumaIncarnationRunEvents(newHumaCadenceAPI(r), deps)
 				})
 			}
-		})
-		r.Group(func(r chi.Router) {
-			registerHumaSseToken(newHumaCadenceAPI(r), newSseTokenHandler(issuer, discardLogger()))
 		})
 	})
 	srv := httptest.NewServer(r)
@@ -251,8 +248,9 @@ func TestRunEventsSSE_OwnerStreamsAndMasks(t *testing.T) {
 	}
 }
 
-// TestRunEventsSSE_QueryTokenAllowed — доступ по ?access_token= (без Authorization):
-// middleware канона берёт токен из query для */events. Доказывает A0→A3 транспорт.
+// TestRunEventsSSE_QueryTokenAllowed — SSE-route принимает и ?access_token= (canon
+// middleware для */events), помимо основного Authorization: Bearer (fetch-streaming
+// §A0). Guard: канон-путь query-token не сломан этим слайсом.
 func TestRunEventsSSE_QueryTokenAllowed(t *testing.T) {
 	bus := applybus.NewBus(slog.Default())
 	const applyID = "01APPLYQUERYTOK00000000000"
@@ -266,95 +264,6 @@ func TestRunEventsSSE_QueryTokenAllowed(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("query-token status = %d, want 200 (middleware */events)", resp.StatusCode)
-	}
-}
-
-// === A0: POST /v1/sse-token ===
-
-func TestSseToken_IssuesShortToken(t *testing.T) {
-	bus := applybus.NewBus(slog.Default())
-	srv, mint := sseTestHarness(t, bus, nil, nil)
-
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/sse-token", nil)
-	req.Header.Set("Authorization", "Bearer "+mint("archon-op"))
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("POST sse-token: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", resp.StatusCode)
-	}
-	var body struct {
-		AccessToken string `json:"access_token"`
-		ExpiresIn   int    `json:"expires_in"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if body.ExpiresIn != 60 {
-		t.Errorf("expires_in = %d, want 60", body.ExpiresIn)
-	}
-	// Токен верифицируется тем же ключом, sub=оператор, TTL~60s.
-	verifier, _ := keeperjwt.NewVerifier([]byte(sseAPISigningKey), sseAPIIssuer)
-	claims, err := verifier.Verify(body.AccessToken)
-	if err != nil {
-		t.Fatalf("минтованный токен не верифицируется: %v", err)
-	}
-	if claims.Subject != "archon-op" {
-		t.Errorf("sub = %q, want archon-op", claims.Subject)
-	}
-	ttl := claims.ExpiresAt.Sub(claims.IssuedAt)
-	if ttl < 55*time.Second || ttl > 65*time.Second {
-		t.Errorf("TTL = %s, want ~60s (короткоживущий)", ttl)
-	}
-}
-
-func TestSseToken_MissingAuth_401(t *testing.T) {
-	bus := applybus.NewBus(slog.Default())
-	srv, _ := sseTestHarness(t, bus, nil, nil)
-	resp, err := http.Post(srv.URL+"/v1/sse-token", "application/json", nil)
-	if err != nil {
-		t.Fatalf("POST: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Errorf("no-auth status = %d, want 401 (Bearer обязателен)", resp.StatusCode)
-	}
-}
-
-// TestSseToken_EndToEndHandshake — полный A0→A3: минтуем short-token через POST
-// /v1/sse-token, открываем SSE по ?access_token=<short-jwt> → 200. Доказывает, что
-// short-token валиден на SSE-route (тот же signing key, middleware верифицирует).
-func TestSseToken_EndToEndHandshake(t *testing.T) {
-	bus := applybus.NewBus(slog.Default())
-	const applyID = "01APPLYHANDSHAKE0000000000"
-	srv, mint := sseTestHarness(t, bus, fakeRunAccess{acc: &applyrun.Access{IncarnationName: "redis-prod", StartedByAID: ptrStr("archon-op")}}, stubRBACChecker{})
-
-	// 1) authed POST /v1/sse-token (Bearer) → short-token.
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/sse-token", nil)
-	req.Header.Set("Authorization", "Bearer "+mint("archon-op"))
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("POST sse-token: %v", err)
-	}
-	var body struct {
-		AccessToken string `json:"access_token"`
-	}
-	_ = json.NewDecoder(resp.Body).Decode(&body)
-	resp.Body.Close()
-	if body.AccessToken == "" {
-		t.Fatal("short-token пуст")
-	}
-
-	// 2) EventSource-эквивалент: GET SSE ?access_token=<short-jwt> → 200.
-	stream, err := http.Get(sseURL(srv, "redis-prod", applyID) + "?access_token=" + body.AccessToken)
-	if err != nil {
-		t.Fatalf("GET SSE handshake: %v", err)
-	}
-	defer stream.Body.Close()
-	if stream.StatusCode != http.StatusOK {
-		t.Errorf("handshake SSE status = %d, want 200", stream.StatusCode)
 	}
 }
 

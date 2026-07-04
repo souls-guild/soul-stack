@@ -149,8 +149,7 @@ type Deps struct {
 	// ApplyBus — pub/sub-шина apply-событий для live-SSE прогона (ADR-068 §A3,
 	// GET /v1/incarnations/{name}/runs/{apply_id}/events). Та же шина, что у
 	// grpc-handler-ов + scenario-runner-а (publisher-ы). При nil SSE-route не
-	// монтируется (opt-in wire-up, паттерн VoyageDB); POST /v1/sse-token остаётся
-	// (зависит только от JWTIssuer).
+	// монтируется (opt-in wire-up, паттерн VoyageDB).
 	ApplyBus *applybus.EventBus
 
 	// ChoirDB — CRUD-поверхность реестра Choir/Voice (ADR-044, S-T3). При nil
@@ -759,13 +758,12 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 		}
 	}
 
-	// sse-token монтируется ВСЕГДА (зависит лишь от JWTIssuer, обязателен выше);
 	// SSE run-events — opt-in (при nil ApplyBus/pool/RBAC newRunEventsDeps даёт nil →
-	// route не монтируется, паттерн VoyageDB), ADR-068 §A0/§A3.
-	sseTokenH := newSseTokenHandler(deps.JWTIssuer, logger)
+	// route не монтируется, паттерн VoyageDB), ADR-068 §A3. Auth SSE-route — Bearer
+	// через `*/events`-chain (fetch-streaming, A0); отдельного минтинг-эндпоинта нет.
 	runEventsDeps := newRunEventsDeps(deps.ApplyBus, deps.IncarnationDB, deps.RBAC, logger)
 
-	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, augurH, oracleH, pushH, pushProviderH, providerH, profileH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, heraldTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.LoginGuard, deps.LoginLimitCfg, deps.SoulStatsStaleFn, clusterH, sseTokenH, runEventsDeps, logger)
+	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, augurH, oracleH, pushH, pushProviderH, providerH, profileH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, heraldTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.LoginGuard, deps.LoginLimitCfg, deps.SoulStatsStaleFn, clusterH, runEventsDeps, logger)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,

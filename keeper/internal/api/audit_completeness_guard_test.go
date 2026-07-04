@@ -211,13 +211,6 @@ var writeRoutesNoAudit = map[route]string{
 	// читает state одной инкарнации, ничего не мутирует. Permission
 	// incarnation.get (паттерн read). audit намеренно не пишется.
 	{http.MethodPost, "/v1/incarnations/{name}/scenarios/{scenario}/form-prefill"}: "day-2 pre-fill формы из incarnation.state (docs/input.md): read-only-резолв одной инкарнации, без мутации — audit намеренно не пишется (паттерн get/module.form-prep)",
-
-	// POST /v1/sse-token — минтинг короткоживущего SSE-транспорт-токена (ADR-068 §A0):
-	// POST по HTTP-методу (выдаёт credential, не кэшируется/не в URL), но read-like по
-	// эффекту — деривирует токен из УЖЕ аутентифицированной identity, ничего не мутирует
-	// (нет DB-записи, нет смены оператора). audit намеренно не пишется (иначе шум: web
-	// минтит токен на каждое открытие SSE-стрима).
-	{http.MethodPost, "/v1/sse-token"}: "ADR-068 §A0: минтинг короткоживущего SSE-транспорт-токена из текущей identity — read-like POST без мутации состояния, audit намеренно не пишется (web минтит per-stream-open)",
 }
 
 // writeMethods — HTTP-методы, считающиеся мутирующими для guard-а.

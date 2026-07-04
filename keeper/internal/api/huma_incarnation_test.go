@@ -87,7 +87,6 @@ func TestHumaIncarnation_ChiCoexistence(t *testing.T) {
 		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
 		nil,                                  // soulStatsStaleFn (дефолт 90s в тесте)
 		nil,                                  // clusterH (cluster-view не монтируется в тесте)
-		nil,                                  // sseTokenH (ADR-068 §A0 — не тестируется здесь)
 		nil,                                  // runEventsDeps (ADR-068 §A3 — не тестируется здесь)
 		nil,                                  // logger
 	)

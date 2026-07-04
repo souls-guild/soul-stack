@@ -2,13 +2,17 @@ package api
 
 // GET /v1/incarnations/{name}/runs/{apply_id}/events — live-ход прогона инкарнации
 // (SSE, ADR-068 §A3). Симметрия существующему RunDetail-пути + прецеденту SSE
-// `/mcp/events`, но на Operator-плоскости /v1 (свой query-token из канона).
+// `/mcp/events`, но на Operator-плоскости /v1.
 //
-// ПОЧЕМУ НЕ /mcp/events: та — MCP-плоскость (JSON-RPC tool-call streaming), свой auth,
-// не читает access_token. Тащить web-UI в MCP-канал = смешение плоскостей. Operator-API
-// /v1/* уже имеет query-token из коробки (middleware.extractToken для */events).
-// ★ /mcp/events этим слайсом НЕ трогается — узкий дубль потока/маскинга здесь
-// (ADR-068 §A3 «продублировать узко» — вместо расшаривания кода из mcp/sse.go).
+// AUTH (ADR-068 §A0 = fetch-streaming): фронт открывает поток через `fetch()`+
+// `getReader()` и шлёт `Authorization: Bearer` (в отличие от EventSource, fetch умеет
+// заголовки) → токен НЕ в URL. Route под /v1 RequireJWT-цепочкой (`*/events`-путь).
+// Отдельного минтинг-эндпоинта/короткого query-token НЕТ (отброшен из ADR-068).
+//
+// ПОЧЕМУ НЕ /mcp/events: та — MCP-плоскость (JSON-RPC tool-call streaming), свой auth.
+// Тащить web-UI в MCP-канал = смешение плоскостей. ★ /mcp/events этим слайсом НЕ
+// трогается — узкий дубль потока/маскинга здесь (ADR-068 §A3 «продублировать узко»,
+// вместо расшаривания кода из mcp/sse.go).
 //
 // Регистрируется через huma.StreamResponse → операция попадает в OpenAPI-спеку
 // (drift-guard TestFullSpec_CoversAllRoutes) при полном контроле тела стрима
@@ -100,7 +104,7 @@ func incRunEventsOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/{name}/runs/{apply_id}/events",
 		Summary:       "Live-ход прогона инкарнации (SSE)",
-		Description:   "text/event-stream: task.executed/apply.completed/failed/cancelled по apply_id. Auth: Bearer ИЛИ ?access_token=<short-jwt> из POST /v1/sse-token. Доступ: инициатор ИЛИ incarnation.get/history; чужой/несуществующий apply_id → 403 (anti-enum, parity /mcp/events). Секреты в payload маскируются.",
+		Description:   "text/event-stream: task.executed/apply.completed/failed/cancelled по apply_id. Auth: Authorization: Bearer (fetch-streaming, ADR-068 §A0). Доступ: инициатор ИЛИ incarnation.get/history; чужой/несуществующий apply_id → 403 (anti-enum, parity /mcp/events). Секреты в payload маскируются.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests, http.StatusInternalServerError},

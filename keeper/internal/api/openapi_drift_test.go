@@ -231,7 +231,6 @@ func collectRoutes(t *testing.T) map[route]struct{} {
 		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
 		nil,                                  // soulStatsStaleFn (дефолт 90s в тесте)
 		nil,                                  // clusterH (cluster-view не монтируется в тесте)
-		&sseTokenHandler{},                   // sseTokenH — POST /v1/sse-token монтируется всегда (ADR-068 §A0); Issue при обходе дерева не вызывается
 		&runEventsDeps{},                     // runEventsDeps — SSE run-events монтируется (ADR-068 §A3); методы deps при обходе дерева не вызываются
 		nil,                                  // logger — допустим nil (handler-ы получают io.Discard внутри)
 	)

@@ -145,12 +145,6 @@ func fullSpecGroups() []specGroup {
 			registerHumaRunsStats(api, stub)
 			return nil
 		}},
-		// POST /v1/sse-token — минтинг короткоживущего SSE-транспорт-токена (ADR-068
-		// §A0). Operation.Path полный под-/v1 (/sse-token) → prefix "/v1".
-		{"/v1", func(api huma.API) error {
-			registerHumaSseToken(api, &sseTokenHandler{})
-			return nil
-		}},
 		{"/v1/souls", func(api huma.API) error {
 			stub := handlers.SoulSpecStub()
 			registerHumaSoulCreate(api, stub)
