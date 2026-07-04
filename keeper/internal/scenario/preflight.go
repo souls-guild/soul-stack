@@ -61,7 +61,7 @@ func (r *Runner) PreflightAssert(ctx context.Context, spec RunSpec) error {
 	if err != nil {
 		return fmt.Errorf("preflight: load service: %w", err)
 	}
-	scn, err := r.parseScenario(art, spec.ScenarioName)
+	scn, err := r.parseScenario(art, spec.ScenarioName, spec.FromUpgrade)
 	if err != nil {
 		return fmt.Errorf("preflight: %w", err)
 	}

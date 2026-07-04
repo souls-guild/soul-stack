@@ -54,6 +54,13 @@ type ScenarioManifest struct {
 	// этим флагом (teardown — отдельный спец-флоу DELETE).
 	Create *bool `yaml:"create,omitempty"`
 
+	// FromVersions — self-describing список версий-источников upgrade-сценария
+	// (`upgrade/<slug>/main.yml`): из каких пинов этот сценарий умеет апгрейдить.
+	// Симметрия с `create: true` (self-describing дискриминатор в самом файле);
+	// пусто/нет ключа = не upgrade-сценарий. YAML-ключ `from` (Go-имя иное во
+	// избежание коллизии с artifact.StateSchemaMigration.From). ADR-0068.
+	FromVersions []string `yaml:"from,omitempty"`
+
 	// Form — опциональный презентационный слой `input:`-формы (form_layout.go):
 	// как UI группирует/подписывает поля input в секции. nil = ключа нет (UI
 	// рисует input плоско, forward-compat). Не влияет на контракт ввода/валидацию.

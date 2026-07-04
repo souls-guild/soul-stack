@@ -47,6 +47,11 @@ import (
 // `scenario/<name>/main.yml`.
 const scenarioMainFile = "scenario/%s/main.yml"
 
+// upgradeMainFile — точка входа upgrade-сценария (ADR-0068 §3): второй канал
+// загрузки Runner-ом рядом со scenario/. Выбор пути — по [RunSpec.FromUpgrade]
+// (scenarioRelPath); формат симметричен scenarioMainFile.
+const upgradeMainFile = "upgrade/%s/main.yml"
+
 // CreateScenarioName — имя bootstrap-сценария, который incarnation.Create
 // (REST + MCP) прогоняет первым при появлении новой incarnation. Lifecycle-kind
 // (см. [LifecycleScenarioNames]).
@@ -223,6 +228,12 @@ type RunSpec struct {
 	// транзитит статус повторно — обязан увидеть applying, иначе старт отклоняется
 	// (fail-closed). Нулевое значение = обычный старт.
 	FromLocked bool
+
+	// FromUpgrade — грузить upgrade/<name>/main.yml вместо scenario/ (ADR-0068):
+	// второй канал авто-дискавери для version-к-версии upgrade-сценариев. Нулевое
+	// значение = обычный scenario/-путь (сегодняшнее поведение). Found-ветвь
+	// автозапуска (кто ставит флаг) — Slice 2.
+	FromUpgrade bool
 
 	// CadenceID — back-link на Cadence-расписание, породившее этот прогон
 	// (ADR-046 §2, T4b-фундамент). nil ⇒ ручной прогон (оператор/Voyage без

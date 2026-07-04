@@ -2795,6 +2795,12 @@ components:
           type: string
         form:
           $ref: "#/components/schemas/ScenarioForm"
+        from_versions:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
         input_schema:
           additionalProperties: {}
           type: object

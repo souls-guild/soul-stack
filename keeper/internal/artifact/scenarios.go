@@ -21,7 +21,12 @@ import (
 // чтобы не плодить magic-string по пакету.
 const scenarioDir = "scenario"
 
-// scenarioMainFile — корневой YAML scenario внутри `scenario/<name>/`.
+// upgradeDir — второй канал авто-дискавери сценариев (ADR-0068 §3): каталог
+// `upgrade/<slug>/main.yml` рядом со scenarioDir. Держит version-к-версии
+// upgrade-сценарии отдельно от day-2 scenario/ (в обычных списках не мелькают).
+const upgradeDir = "upgrade"
+
+// scenarioMainFile — корневой YAML scenario внутри `<dir>/<name>/`.
 const scenarioMainFile = "main.yml"
 
 // Scenario — одна запись listing-а scenario из материализованного снапшота
@@ -45,6 +50,11 @@ type Scenario struct {
 	// omitempty — false (non-create сценарий) опускается из reply бит-в-бит как до
 	// фичи. `destroy` этим флагом НЕ помечается (teardown — спец-флоу DELETE).
 	Create bool `json:"create,omitempty"`
+	// FromVersions — self-describing список версий-источников upgrade-сценария
+	// (top-level `from:` в `upgrade/<slug>/main.yml`, ADR-0068 §3): из каких пинов
+	// сценарий умеет апгрейдить. Заполняется только через [ListUpgrades]; у обычных
+	// scenario/-записей nil → omitempty опускает поле бит-в-бит как до фичи.
+	FromVersions []string `json:"from_versions,omitempty"`
 	// Runnable — признак «запускаем оператором из Run-формы» (ADR-042 «тупой
 	// фронт»): create=true, destroy=false (удаление — спец-флоу DELETE),
 	// operational=true. Размечает listing-handler по канону scenario-пакета
@@ -148,6 +158,10 @@ type scenarioYAML struct {
 	// loadScenario). Строгую валидацию типа делает soul-lint (config-валидатор);
 	// тут best-effort проекция для UI — невалидный тип останется nil → false.
 	Create *bool `yaml:"create"`
+	// FromVersions — top-level `from:` upgrade-манифеста (ADR-0068). Проецируется в
+	// Scenario.FromVersions только на upgrade-пути ([ListUpgrades]); для scenario/
+	// ключа нет → nil. Строгую валидацию типа делает soul-lint (config-валидатор).
+	FromVersions []string `yaml:"from"`
 	// Form — опциональный презентационный слой (top-level `form:`). Нестандартные
 	// под-ключи игнорируются (yaml.Unmarshal в struct ловит только перечисленные);
 	// строгую валидацию формы делает soul-lint, не listing.
@@ -182,33 +196,53 @@ type scenarioFormFieldYAML struct {
 // ListScenarios сканирует `scenario/*/main.yml` в материализованном снапшоте
 // service-репозитория (serviceRoot — абсолютный путь к снапшоту, обычно
 // [ServiceArtifact.LocalDir]) и возвращает отсортированный по имени список
-// scenario-метаданных.
+// scenario-метаданных для day-2 UI-dropdown.
 //
-// Семантика partial-success: каждое scenario обрабатывается изолированно.
+// Это ТОЛЬКО scenario/-канал: upgrade/<slug>/ здесь НЕ появляется (ADR-0068 §3 —
+// upgrade-сценарии не пугают оператора в day-2-списках; их отдаёт [ListUpgrades]).
+func ListScenarios(serviceRoot string, logger *slog.Logger) ([]Scenario, error) {
+	return listFromDir(serviceRoot, scenarioDir, logger)
+}
+
+// ListUpgrades — зеркало [ListScenarios] для второго канала авто-дискавери
+// (ADR-0068 §3): сканирует `upgrade/<slug>/main.yml` того же снапшота и отдаёт
+// список с заполненным [Scenario.FromVersions]. Отсутствие каталога `upgrade/` →
+// пустой список (сервис без upgrade-сценариев валиден), как у ListScenarios с
+// отсутствующим `scenario/`.
+func ListUpgrades(serviceRoot string, logger *slog.Logger) ([]Scenario, error) {
+	return listFromDir(serviceRoot, upgradeDir, logger)
+}
+
+// listFromDir — общий скан каталога сценариев (`scenario/` или `upgrade/`) в
+// снапшоте сервиса: `<dir>/<name>/main.yml` → отсортированный по имени список
+// метаданных. Единственное различие между [ListScenarios] и [ListUpgrades] —
+// каталог `dir`; всё прочее (partial-success, securejoin, type-catalog-резолв)
+// общее.
+//
+// Семантика partial-success: каждый сценарий обрабатывается изолированно.
 // Неразобранный YAML / отсутствующий main.yml → warning в logger и пропуск,
-// но НЕ возврат ошибки (UI dropdown должен отображать остальные scenario,
-// даже если одно сломано в репо). Сам `scenarioDir` может отсутствовать —
-// сервис без сценариев валиден (вернём пустой список). Логгер опционален
-// (nil → slog.Default).
+// но НЕ возврат ошибки (UI dropdown должен отображать остальные, даже если один
+// сломан в репо). Сам каталог `dir` может отсутствовать — сервис без сценариев/
+// апгрейдов валиден (вернём пустой список). Логгер опционален (nil → slog.Default).
 //
 // Безопасность пути — securejoin на каждый дочерний join (защита от `..` /
 // симлинк-побега из снапшота). Симлинки внутри снапшота не следуем по сути
 // (read os.ReadDir + securejoin); серверная сторона держит снапшот immutable.
-func ListScenarios(serviceRoot string, logger *slog.Logger) ([]Scenario, error) {
+func listFromDir(serviceRoot, dir string, logger *slog.Logger) ([]Scenario, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	scenariosRoot, err := securejoin.SecureJoin(serviceRoot, scenarioDir)
+	dirRoot, err := securejoin.SecureJoin(serviceRoot, dir)
 	if err != nil {
-		return nil, fmt.Errorf("artifact: небезопасный путь scenario-каталога: %w", err)
+		return nil, fmt.Errorf("artifact: небезопасный путь каталога %s: %w", dir, err)
 	}
 
-	entries, err := os.ReadDir(scenariosRoot)
+	entries, err := os.ReadDir(dirRoot)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return []Scenario{}, nil
 		}
-		return nil, fmt.Errorf("artifact: чтение scenario-каталога %s: %w", scenarioDir, err)
+		return nil, fmt.Errorf("artifact: чтение каталога %s: %w", dir, err)
 	}
 
 	// Каталог переиспользуемых именованных типов сервиса (`types.yml`) — общий
@@ -223,7 +257,7 @@ func ListScenarios(serviceRoot string, logger *slog.Logger) ([]Scenario, error) 
 			continue
 		}
 		name := e.Name()
-		sc, ok := loadScenario(serviceRoot, name, logger)
+		sc, ok := loadScenario(serviceRoot, dir, name, logger)
 		if !ok {
 			continue
 		}
@@ -234,16 +268,17 @@ func ListScenarios(serviceRoot string, logger *slog.Logger) ([]Scenario, error) 
 	return out, nil
 }
 
-// loadScenario читает один `scenario/<name>/main.yml` и парсит его в [Scenario].
-// Возвращает (_, false) при отсутствующем main.yml или невалидном YAML
-// (partial-success: warning логируется, caller пропускает запись).
+// loadScenario читает один `<dir>/<name>/main.yml` (dir — scenarioDir либо
+// upgradeDir) и парсит его в [Scenario]. Возвращает (_, false) при отсутствующем
+// main.yml или невалидном YAML (partial-success: warning логируется, caller
+// пропускает запись).
 //
 // Имя scenario берётся из директории (надёжный источник: совпадает с тем,
 // что пишут в `apply.scenario` / `apply.destiny`); top-level `name:` в YAML
 // игнорируется, даже если задан — расхождение имени директории и YAML-имени
 // — баг service-репо, а не listing-а.
-func loadScenario(serviceRoot, name string, logger *slog.Logger) (Scenario, bool) {
-	relPath := filepath.ToSlash(filepath.Join(scenarioDir, name, scenarioMainFile))
+func loadScenario(serviceRoot, dir, name string, logger *slog.Logger) (Scenario, bool) {
+	relPath := filepath.ToSlash(filepath.Join(dir, name, scenarioMainFile))
 	mainPath, err := securejoin.SecureJoin(serviceRoot, relPath)
 	if err != nil {
 		logger.Warn("artifact: scenario пропущена — небезопасный путь",
@@ -284,7 +319,7 @@ func loadScenario(serviceRoot, name string, logger *slog.Logger) (Scenario, bool
 	if raw.Extends != "" {
 		schema = mergeCovenantInputRaw(serviceRoot, raw.Extends, schema, logger)
 	}
-	return Scenario{
+	sc := Scenario{
 		Name:        name,
 		Path:        relPath,
 		Create:      raw.Create != nil && *raw.Create,
@@ -292,7 +327,14 @@ func loadScenario(serviceRoot, name string, logger *slog.Logger) (Scenario, bool
 		InputSchema: schema,
 		Tags:        raw.Tags,
 		Form:        scenarioFormProjection(raw.Form),
-	}, true
+	}
+	// Изоляция канала ФИЗИЧЕСКАЯ, не только по каталогу (ADR-0068 §3): стрэй `from:`
+	// в scenario/<name>/main.yml не должен просочиться в day-2 reply — FromVersions
+	// несёт только upgrade/-канал.
+	if dir == upgradeDir {
+		sc.FromVersions = raw.FromVersions
+	}
+	return sc, true
 }
 
 // mergeCovenantInputRaw читает covenant.yml по имени из `extends:` и сливает его

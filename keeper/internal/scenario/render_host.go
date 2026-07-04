@@ -63,7 +63,9 @@ func RenderForHost(ctx context.Context, deps Deps, recipe *applyrun.Recipe, inca
 	if err != nil {
 		return nil, nil, fmt.Errorf("scenario: RenderForHost: load service: %w", err)
 	}
-	scn, err := parseScenarioFromArtifact(deps.Loader, art, recipe.ScenarioName)
+	// Acolyte-путь остаётся scenario-only в Slice 1 (ADR-0068): upgrade-рецепт для
+	// re-render по хосту — Slice 2/3, recipe пока не несёт FromUpgrade.
+	scn, err := parseScenarioFromArtifact(deps.Loader, art, recipe.ScenarioName, false)
 	if err != nil {
 		return nil, nil, err
 	}
