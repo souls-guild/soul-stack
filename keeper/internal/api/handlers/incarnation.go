@@ -132,7 +132,8 @@ type ServiceSnapshotLoader interface {
 // сконфигурирован, симметрично Run/Upgrade); auditW=nil → trail destroy не пишется
 // (допустимо в unit-тестах).
 //
-// Все зависимости immutable; safe for concurrent use.
+// Зависимости immutable после wire-up (refs — late-binding через [SetServiceRefs]
+// до старта HTTP-сервера); safe for concurrent use.
 type IncarnationHandler struct {
 	db        IncarnationDB
 	runner    ScenarioStarter
@@ -143,6 +144,14 @@ type IncarnationHandler struct {
 	auditW    audit.Writer
 	scoper    PurviewResolver
 	logger    *slog.Logger
+
+	// refs — ls-remote тегов/веток реестра сервиса, нужен ТОЛЬКО дешёвому режиму
+	// UpgradePathsTyped (ADR-0068 §6, перечисление целей апгрейда). Тот же
+	// [ServiceRefsLister], что у ServiceHandler — БЕЗ дублирования ls-remote.
+	// Инжектится late-binding-ом через [SetServiceRefs] (конструктор с 143 call-site-
+	// ами не расширяем; паттерн [OperatorHandler.SetProvisioningGate]); nil → дешёвый
+	// режим отвечает 500 (не сконфигурирован). on-demand ?to= refs НЕ использует.
+	refs ServiceRefsLister
 }
 
 // NewIncarnationHandler создаёт handler. runner / destroyer / drift / services /
@@ -162,6 +171,17 @@ func NewIncarnationHandler(db IncarnationDB, runner ScenarioStarter, destroyer D
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
 	}
 	return &IncarnationHandler{db: db, runner: runner, destroyer: destroyer, drift: drift, services: services, loader: loader, auditW: auditW, scoper: scoper, logger: logger}
+}
+
+// SetServiceRefs late-binding-ом подключает refs-lister (ls-remote тегов реестра
+// сервиса) для дешёвого режима [UpgradePathsTyped] (ADR-0068 §6). Отдельный сеттер,
+// а не 10-й позиционный арг конструктора: NewIncarnationHandler зовётся из 140+ мест
+// (в основном тесты с nil-депами), расширение сигнатуры раздуло бы диф без пользы
+// (паттерн [OperatorHandler.SetProvisioningGate]). Вызывается один раз в `keeper run`
+// до старта HTTP-сервера; nil → дешёвый upgrade-paths отвечает 500. Потокобезопасность
+// не требуется (вызов до приёма запросов).
+func (h *IncarnationHandler) SetServiceRefs(refs ServiceRefsLister) {
+	h.refs = refs
 }
 
 // ContextReader возвращает read-поверхность БД handler-а для RBAC-экстрактора

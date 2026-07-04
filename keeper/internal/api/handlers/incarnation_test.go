@@ -2134,6 +2134,7 @@ type fakeLoader struct {
 	loadCalls     int
 	chainCalls    int
 	readFileCalls int
+	upgradesCalls int
 
 	// loadedRefs фиксирует ref.Ref каждого Load (порядок вызовов) — guard-тесты
 	// version-pin сверяют, на какой версии сервиса материализовался снапшот.
@@ -2166,6 +2167,7 @@ func (f *fakeLoader) LoadMigrationChain(_ *artifact.ServiceArtifact, _, _ int) (
 }
 
 func (f *fakeLoader) ListUpgrades(_ *artifact.ServiceArtifact) ([]artifact.Scenario, error) {
+	f.upgradesCalls++
 	return f.upgrades, nil
 }
 
@@ -2308,6 +2310,50 @@ func TestIncarnation_Upgrade_FoundAutostart_202(t *testing.T) {
 	}
 	if sp.StartedByAID != "archon-alice" {
 		t.Errorf("RunSpec.StartedByAID = %q, want archon-alice", sp.StartedByAID)
+	}
+	// ADR-0068 §7 инвариант: upgrade-сценарий работает со state, НЕ с input —
+	// input НЕ мигрируется. RunSpec.Input обязан быть nil (регресс, если кто-то
+	// начнёт протаскивать spec.input в upgrade-прогон).
+	if sp.Input != nil {
+		t.Errorf("RunSpec.Input = %v, want nil (input НЕ мигрируется, ADR-0068 §7)", sp.Input)
+	}
+}
+
+// TestIncarnation_Upgrade_FoundNilRunner_500 — found-ветвь (upgrade-сценарий есть),
+// но runner не сконфигурирован → 500 ДО резервирования applying (анти-зомби, ADR-0068
+// §5: инкарнация не должна зависнуть в applying без Runner-прогона).
+func TestIncarnation_Upgrade_FoundNilRunner_500(t *testing.T) {
+	mig, err := statemigrate.Parse([]byte("from_version: 1\nto_version: 2\ntransform:\n  - set:\n      path: state.foo\n      value: bar\n"))
+	if err != nil {
+		t.Fatalf("parse migration: %v", err)
+	}
+	selectCalled := false
+	db := &fakeIncDB{
+		selectByNameRow:  func(name string) pgx.Row { return makeIncRowVer(name, "v1", 1) },
+		upgradeSelectRow: func(_ string) pgx.Row { selectCalled = true; return makeUpgradeSelectRow(1, "ready") },
+	}
+	loader := &fakeLoader{
+		targetSchema: 2,
+		chain:        statemigrate.Chain{mig},
+		upgrades:     []artifact.Scenario{{Name: "to_v2", FromVersions: []string{"v1"}}},
+	}
+	// runner=nil (2-й арг) при найденном upgrade-сценарии.
+	h := NewIncarnationHandler(db, nil, nil, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
+	req := newChiRequest(http.MethodPost, "/v1/incarnations/redis-prod/upgrade",
+		bytes.NewReader([]byte(`{"to_version":"v2"}`)), "name", "redis-prod")
+	req = withClaims(req, "archon-alice")
+	rec := incUpgrade(h, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("Code = %d, want 500 (found + runner=nil); body=%s", rec.Code, rec.Body.String())
+	}
+	// Анти-зомби: applying НЕ резервировался (UpgradeStateSchema SELECT FOR UPDATE
+	// не вызван, никакой tx не открыт) — проверка runner=nil ДО смены статуса.
+	if selectCalled {
+		t.Error("UpgradeStateSchema SELECT FOR UPDATE вызван — applying зарезервирован ДО проверки runner (анти-зомби нарушен)")
+	}
+	if len(db.execCalls) != 0 {
+		t.Errorf("execCalls = %v, want пусто (никакого tx до 500)", db.execCalls)
 	}
 }
 

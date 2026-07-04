@@ -266,6 +266,23 @@ func registerHumaIncarnationGet(humaAPI huma.API, incH *handlers.IncarnationHand
 	})
 }
 
+// registerHumaIncarnationUpgradePaths монтирует GET /v1/incarnations/{name}/upgrade-paths
+// (READ, БЕЗ audit; ADR-0068 §6). scope-предикат action=upgrade (read-грань, тот же
+// permission incarnation.upgrade, что POST .../upgrade) → вне scope 404. incH nil → no-op.
+func registerHumaIncarnationUpgradePaths(humaAPI huma.API, incH *handlers.IncarnationHandler) {
+	if incH == nil {
+		return
+	}
+	huma.Register(humaAPI, incUpgradePathsOperation(), func(ctx context.Context, in *incUpgradePathsInput) (*incUpgradePathsOutput, error) {
+		claims, _ := apimiddleware.ClaimsFromContext(ctx)
+		view, err := incH.UpgradePathsTyped(ctx, in.Name, in.To, incH.GetInScopeFor(claims, "upgrade"))
+		if err != nil {
+			return nil, incProblem(err)
+		}
+		return &incUpgradePathsOutput{Body: newIncarnationUpgradePathsReply(view)}, nil
+	})
+}
+
 // registerHumaIncarnationList монтирует GET /v1/incarnations (READ-with-typed-query,
 // БЕЗ audit). state.<field>-фильтры huma как typed-параметры НЕ биндит (динамические
 // ключи) — извлекаем их из исходного query через humaQueryFromContext. incH nil → no-op.
@@ -434,6 +451,7 @@ func HumaIncarnationSpecYAML() (string, error) {
 		registerHumaIncarnationCreate(api, stub)
 		registerHumaIncarnationList(api, stub)
 		registerHumaIncarnationGet(api, stub)
+		registerHumaIncarnationUpgradePaths(api, stub)
 		registerHumaIncarnationFormPrefill(api, stub)
 		registerHumaIncarnationHistory(api, stub)
 		registerHumaIncarnationRuns(api, stub)

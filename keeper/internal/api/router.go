@@ -54,6 +54,7 @@ import (
 //	POST   /v1/incarnations/{name}/scenarios/{scenario}/form-prefill — day-2 prefill формы из state (docs/input.md).
 //	POST   /v1/incarnations/{name}/unlock            — снять error_locked (M0.6c).
 //	POST   /v1/incarnations/{name}/upgrade           — перевод state_schema_version (ADR-019).
+//	GET    /v1/incarnations/{name}/upgrade-paths     — пути апгрейда: теги + on-demand ?to= (ADR-0068 §6).
 //	DELETE /v1/incarnations/{name}                   — destroy incarnation (S-D4).
 //	PATCH  /v1/incarnations/{name}/hosts             — править declared spec.hosts[] (ADR-008).
 //	PUT    /v1/incarnations/{name}/traits            — заменить operator-set trait-метки (ADR-060).
@@ -530,6 +531,18 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				apimiddleware.RequireAction(enforcer, "incarnation", "get"),
 			).Group(func(r chi.Router) {
 				registerHumaIncarnationFormPrefill(newHumaCadenceAPI(r), incH)
+			})
+
+			// GET /v1/incarnations/{name}/upgrade-paths — read-анализ путей апгрейда
+			// (ADR-0068 §6): дешёвый список тегов реестра + on-demand ?to= per-target.
+			// READ (БЕЗ audit, newHumaCadenceAPI). Permission incarnation.upgrade (read-
+			// грань, тот же, что POST .../upgrade); existence-gate RequireAction(action=
+			// upgrade), per-{name} scope — in-handler inScope (GetInScopeFor, action=
+			// upgrade), как get/form-prefill.
+			r.With(
+				apimiddleware.RequireAction(enforcer, "incarnation", "upgrade"),
+			).Group(func(r chi.Router) {
+				registerHumaIncarnationUpgradePaths(newHumaCadenceAPI(r), incH)
 			})
 
 			r.With(

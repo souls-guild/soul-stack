@@ -521,6 +521,9 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 		opH.SetProvisioningGate(gate)
 	}
 	incH := handlers.NewIncarnationHandler(deps.IncarnationDB, deps.ScenarioRunner, deps.ScenarioDestroyer, deps.ScenarioDrift, deps.ServiceRegistry, deps.ServiceLoader, deps.AuditWriter, deps.RBAC, logger)
+	// refs-lister (тот же ls-remote-кеш, что у ServiceHandler) для дешёвого режима
+	// GET .../upgrade-paths (ADR-0068 §6); late-binding, конструктор не расширяем.
+	incH.SetServiceRefs(deps.ServiceRefs)
 	soulH := handlers.NewSoulHandler(deps.SoulDB, deps.RBAC, deps.SoulPresence, logger)
 
 	// clusterH опционален: при nil ClusterRegistry `GET /v1/cluster` не монтируется

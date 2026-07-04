@@ -72,6 +72,41 @@ type IncarnationUpgradeReply struct {
 	RunApplyID *string `json:"run_apply_id,omitempty" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"` // ULID Runner-прогона (found-ветвь)
 }
 
+// IncarnationUpgradePathsReply — native 200-тело GET .../upgrade-paths (ADR-0068 §6).
+// Два режима (omitempty): без ?to= заполнен paths (теги реестра + is_current); с
+// ?to= — target (анализ одной цели). current_* — текущий пин/схема инкарнации.
+type IncarnationUpgradePathsReply struct {
+	CurrentVersion            string             `json:"current_version"`
+	CurrentStateSchemaVersion int                `json:"current_state_schema_version"`
+	Paths                     []UpgradePathRef   `json:"paths,omitempty"`
+	Target                    *UpgradePathTarget `json:"target,omitempty"`
+}
+
+// UpgradePathRef — один git-ref реестра сервиса (element paths, дешёвый режим).
+// is_current — ref == текущий пин инкарнации (ADR-0068 §6).
+type UpgradePathRef struct {
+	Ref       string `json:"ref"`
+	Type      string `json:"type"`
+	Commit    string `json:"commit"`
+	IsCurrent bool   `json:"is_current"`
+}
+
+// UpgradePathTarget — on-demand анализ одной цели (?to=). direction — no-op/downgrade/
+// forward/same-schema; mode — found/legacy ТОЛЬКО для forward/same-schema (omitempty:
+// при downgrade/no-op бессмыслен → опущен); slug — при found; downgrade — цель ниже по
+// схеме (цепочку не грузим, forward-only); state_migrations — применяемая цепочка
+// (переиспользует native StateSchemaMigration state-schema-эндпоинта).
+type UpgradePathTarget struct {
+	To                       string                 `json:"to"`
+	ResolvedCommit           string                 `json:"resolved_commit"`
+	TargetStateSchemaVersion int                    `json:"target_state_schema_version"`
+	Direction                string                 `json:"direction"`
+	Mode                     string                 `json:"mode,omitempty"`
+	Slug                     string                 `json:"slug,omitempty"`
+	Downgrade                bool                   `json:"downgrade"`
+	StateMigrations          []StateSchemaMigration `json:"state_migrations,omitempty"`
+}
+
 // IncarnationRerunLastReply — native 202-тело POST .../rerun-last (apply_id + echo + перезапущенный scenario).
 type IncarnationRerunLastReply struct {
 	ApplyID     string `json:"apply_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"`     // ULID (audit.NewULID)
@@ -157,6 +192,41 @@ func newIncarnationUnlockReply(v handlers.IncarnationUnlockView) IncarnationUnlo
 
 func newIncarnationUpgradeReply(v handlers.IncarnationUpgradeView) IncarnationUpgradeReply {
 	return IncarnationUpgradeReply{ApplyID: v.ApplyID, RunApplyID: v.RunApplyID}
+}
+
+// newIncarnationUpgradePathsReply проецирует доменный handlers.IncarnationUpgradePaths-
+// View в native (ADR-0068 §6). Paths/Target взаимоисключающи (omitempty): дешёвый →
+// paths, on-demand → target. state_migrations реюзают StateSchemaMigration.
+func newIncarnationUpgradePathsReply(v handlers.IncarnationUpgradePathsView) IncarnationUpgradePathsReply {
+	out := IncarnationUpgradePathsReply{
+		CurrentVersion:            v.CurrentVersion,
+		CurrentStateSchemaVersion: v.CurrentStateSchemaVersion,
+	}
+	if v.Paths != nil {
+		paths := make([]UpgradePathRef, 0, len(v.Paths))
+		for _, p := range v.Paths {
+			paths = append(paths, UpgradePathRef{Ref: p.Ref, Type: p.Type, Commit: p.Commit, IsCurrent: p.IsCurrent})
+		}
+		out.Paths = paths
+	}
+	if v.Target != nil {
+		t := v.Target
+		migs := make([]StateSchemaMigration, 0, len(t.StateMigrations))
+		for _, m := range t.StateMigrations {
+			migs = append(migs, StateSchemaMigration{From: m.From, Path: m.Path, To: m.To})
+		}
+		out.Target = &UpgradePathTarget{
+			To:                       t.To,
+			ResolvedCommit:           t.ResolvedCommit,
+			TargetStateSchemaVersion: t.TargetStateSchemaVersion,
+			Direction:                t.Direction,
+			Mode:                     t.Mode,
+			Slug:                     t.Slug,
+			Downgrade:                t.Downgrade,
+			StateMigrations:          migs,
+		}
+	}
+	return out
 }
 
 func newIncarnationRerunLastReply(v handlers.IncarnationRerunLastView) IncarnationRerunLastReply {

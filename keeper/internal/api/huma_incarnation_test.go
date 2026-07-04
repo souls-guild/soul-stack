@@ -101,6 +101,7 @@ func TestHumaIncarnation_ChiCoexistence(t *testing.T) {
 		{http.MethodPost, "/v1/incarnations"}:                                      0,
 		{http.MethodGet, "/v1/incarnations"}:                                       0,
 		{http.MethodGet, "/v1/incarnations/{name}"}:                                0,
+		{http.MethodGet, "/v1/incarnations/{name}/upgrade-paths"}:                  0,
 		{http.MethodGet, "/v1/incarnations/{name}/history"}:                        0,
 		{http.MethodPost, "/v1/incarnations/{name}/scenarios/{scenario}"}:          0,
 		{http.MethodPost, "/v1/incarnations/{name}/unlock"}:                        0,
