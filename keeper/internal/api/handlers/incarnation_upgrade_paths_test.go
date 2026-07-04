@@ -157,6 +157,9 @@ func TestUpgradePaths_Target_Found(t *testing.T) {
 	if got.From != 1 || got.To != 2 || got.Path != "migrations/001_to_002.yml" {
 		t.Errorf("migration step = %+v, want {1 2 migrations/001_to_002.yml}", got)
 	}
+	if !tgt.Reachable || tgt.UnreachableReason != "" {
+		t.Errorf("reachable/reason = %v/%q, want true/empty (цепочка собралась)", tgt.Reachable, tgt.UnreachableReason)
+	}
 }
 
 // TestUpgradePaths_Target_Legacy — ?to=v2 без подходящего upgrade-сценария →
@@ -182,6 +185,9 @@ func TestUpgradePaths_Target_Legacy(t *testing.T) {
 	}
 	if len(tgt.StateMigrations) != 1 {
 		t.Errorf("StateMigrations len = %d, want 1 (forward грузит цепочку)", len(tgt.StateMigrations))
+	}
+	if !tgt.Reachable {
+		t.Errorf("Reachable = false, want true (forward с собранной цепочкой)")
 	}
 }
 
@@ -215,6 +221,9 @@ func TestUpgradePaths_Target_Downgrade(t *testing.T) {
 	if loader.upgradesCalls != 0 {
 		t.Errorf("upgradesCalls = %d, want 0 (downgrade не зовёт ListUpgrades)", loader.upgradesCalls)
 	}
+	if !tgt.Reachable {
+		t.Errorf("Reachable = false, want true (downgrade — другое направление, не «недостижимость»)")
+	}
 }
 
 // TestUpgradePaths_Target_Noop — ?to==пин И схема равна текущей → direction=no-op.
@@ -236,6 +245,9 @@ func TestUpgradePaths_Target_Noop(t *testing.T) {
 	if loader.upgradesCalls != 0 {
 		t.Errorf("upgradesCalls = %d, want 0 (no-op не зовёт ListUpgrades)", loader.upgradesCalls)
 	}
+	if !view.Target.Reachable {
+		t.Errorf("Reachable = false, want true (no-op достижим)")
+	}
 }
 
 // TestUpgradePaths_Target_SameSchema — схема равна текущей, но ref другой (ref-bump)
@@ -254,15 +266,41 @@ func TestUpgradePaths_Target_SameSchema(t *testing.T) {
 	if view.Target.Downgrade {
 		t.Errorf("Downgrade = true, want false (same-schema)")
 	}
+	if !view.Target.Reachable {
+		t.Errorf("Reachable = false, want true (same-schema достижим)")
+	}
 }
 
-// TestUpgradePaths_Target_BrokenChain_422 — цепочка миграций к цели неполна → 422
-// (цель недостижима; parity POST .../upgrade).
-func TestUpgradePaths_Target_BrokenChain_422(t *testing.T) {
+// TestUpgradePaths_Target_BrokenChain_Unreachable_200 — структурно битая цепочка
+// миграций к цели → НЕ HTTP-ошибка, а 200 с reachable=false + unreachable_reason
+// (preview показывает недостижимую цель как ДАННЫЕ, ADR-0068 §6). direction/mode
+// ВСЁ РАВНО вычислены (цель — forward, found/legacy известны); state_migrations пуст.
+func TestUpgradePaths_Target_BrokenChain_Unreachable_200(t *testing.T) {
 	loader := &fakeLoader{targetSchema: 3, chainErr: artifact.ErrMigrationChainBroken}
 	h := newUpPathsHandler(upPathsDB(), loader, nil)
-	_, err := h.UpgradePathsTyped(context.Background(), "redis-prod", "v3", alwaysInScope)
-	wantUpPathsProblem(t, err, http.StatusUnprocessableEntity, problem.TypeValidationFailed)
+	view, err := h.UpgradePathsTyped(context.Background(), "redis-prod", "v3", alwaysInScope)
+	if err != nil {
+		t.Fatalf("UpgradePathsTyped: %v (битая цепочка — preview-данные, не HTTP-ошибка)", err)
+	}
+	tgt := view.Target
+	if tgt == nil {
+		t.Fatal("Target = nil")
+	}
+	if tgt.Reachable {
+		t.Errorf("Reachable = true, want false (битая цепочка)")
+	}
+	if tgt.UnreachableReason != "migration_chain_broken" {
+		t.Errorf("UnreachableReason = %q, want migration_chain_broken", tgt.UnreachableReason)
+	}
+	if tgt.Direction != upgradeDirectionForward {
+		t.Errorf("direction = %q, want forward (цель — апгрейд, недостижима лишь цепочкой)", tgt.Direction)
+	}
+	if tgt.Mode != upgradeModeLegacy {
+		t.Errorf("mode = %q, want legacy (mode всё равно вычислен на forward)", tgt.Mode)
+	}
+	if len(tgt.StateMigrations) != 0 {
+		t.Errorf("StateMigrations = %+v, want пусто (цепочку собрать нельзя)", tgt.StateMigrations)
+	}
 }
 
 // TestUpgradePaths_Target_ChainError_500 — НЕ-битая ошибка LoadMigrationChain (парс

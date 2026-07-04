@@ -4072,6 +4072,8 @@ components:
           type: boolean
         mode:
           type: string
+        reachable:
+          type: boolean
         resolved_commit:
           type: string
         slug:
@@ -4087,12 +4089,15 @@ components:
           type: integer
         to:
           type: string
+        unreachable_reason:
+          type: string
       required:
         - to
         - resolved_commit
         - target_state_schema_version
         - direction
         - downgrade
+        - reachable
       type: object
     VigilCreateRequest:
       additionalProperties: false

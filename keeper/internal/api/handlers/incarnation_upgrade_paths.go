@@ -31,6 +31,12 @@ const (
 	upgradeModeLegacy = "legacy" // нет — апгрейд ушёл бы в drift без host-оркестрации
 )
 
+// unreachableReasonMigrationChainBroken — машинный признак недостижимости цели при
+// `?to=`: структурно битая цепочка state-миграций (ADR-019). Preview-эндпоинт «на что
+// и как могу перейти» показывает такую цель как ДАННЫЕ (reachable=false), а не HTTP-
+// ошибку — оператор должен видеть недостижимую цель, а не 4xx.
+const unreachableReasonMigrationChainBroken = "migration_chain_broken"
+
 // IncarnationUpgradePathsView — ПЛОСКАЯ доменная проекция GET .../upgrade-paths.
 // Два режима одного эндпоинта (ADR-0068 §6):
 //   - дешёвый (toRef==""): заполнен Paths — теги реестра сервиса + пометка is_current;
@@ -64,8 +70,14 @@ type UpgradePathTargetView struct {
 	Mode                     string // found | legacy
 	Slug                     string // slug upgrade-сценария при found
 	Downgrade                bool   // цель ниже по схеме → цепочку НЕ грузим (forward-only)
+	// Reachable — цель достижима апгрейдом. false ТОЛЬКО при структурно битой цепочке
+	// миграций (unreachable_reason); downgrade/no-op — reachable=true (это другое
+	// направление, сигналится Direction, а не «недостижимость»).
+	Reachable bool
+	// UnreachableReason — машинная причина недостижимости (пусто при reachable=true).
+	UnreachableReason string
 	// StateMigrations — применяемая цепочка current→target (форма {from,to,path}).
-	// При downgrade — nil (не грузим, ADR-019).
+	// При downgrade / битой цепочке — пусто (не грузим / собрать нельзя).
 	StateMigrations []artifact.Migration
 }
 
@@ -165,6 +177,7 @@ func (h *IncarnationHandler) upgradePathsTarget(ctx context.Context, inc *incarn
 		To:                       toRef,
 		ResolvedCommit:           art.SHA1,
 		TargetStateSchemaVersion: target,
+		Reachable:                true, // сбрасывается в false только на битой цепочке
 	}
 	switch {
 	case target < current:
@@ -202,9 +215,15 @@ func (h *IncarnationHandler) upgradePathsTarget(ctx context.Context, inc *incarn
 		chain, cerr := h.loader.LoadMigrationChain(art, current, target)
 		if cerr != nil {
 			if errors.Is(cerr, artifact.ErrMigrationChainBroken) {
-				// Структурно битая цепочка — цель недостижима (parity POST .../upgrade → 422).
-				return nil, incProblem(problem.TypeValidationFailed,
-					"migration chain to "+toRef+" is broken: "+cerr.Error())
+				// Preview-эндпоинт (ADR-0068 §6): структурно битая цепочка — недостижимая
+				// цель как ДАННЫЕ, НЕ HTTP-ошибка. direction/mode уже вычислены (forward,
+				// found/legacy), цепочку собрать нельзя → reachable=false + причина,
+				// state_migrations пуст. Оператор видит «сюда перейти нельзя», не 4xx.
+				h.logger.Warn("incarnation.upgrade-paths: target unreachable — migration chain broken",
+					slog.String("name", inc.Name), slog.String("to", toRef), slog.Any("error", cerr))
+				tgt.Reachable = false
+				tgt.UnreachableReason = unreachableReasonMigrationChainBroken
+				return tgt, nil
 			}
 			// Прочий сбой (парс кривого migrations/-файла / I/O уже материализованного
 			// снапшота) = keeper-internal дефект → 500 (parity UpgradeTyped default). 502

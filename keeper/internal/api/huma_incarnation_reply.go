@@ -94,7 +94,9 @@ type UpgradePathRef struct {
 // UpgradePathTarget — on-demand анализ одной цели (?to=). direction — no-op/downgrade/
 // forward/same-schema; mode — found/legacy ТОЛЬКО для forward/same-schema (omitempty:
 // при downgrade/no-op бессмыслен → опущен); slug — при found; downgrade — цель ниже по
-// схеме (цепочку не грузим, forward-only); state_migrations — применяемая цепочка
+// схеме (цепочку не грузим, forward-only); reachable — цель достижима апгрейдом
+// (false + unreachable_reason только при битой цепочке миграций — preview показывает
+// недостижимую цель как ДАННЫЕ, не HTTP-ошибку); state_migrations — применяемая цепочка
 // (переиспользует native StateSchemaMigration state-schema-эндпоинта).
 type UpgradePathTarget struct {
 	To                       string                 `json:"to"`
@@ -104,6 +106,8 @@ type UpgradePathTarget struct {
 	Mode                     string                 `json:"mode,omitempty"`
 	Slug                     string                 `json:"slug,omitempty"`
 	Downgrade                bool                   `json:"downgrade"`
+	Reachable                bool                   `json:"reachable"`
+	UnreachableReason        string                 `json:"unreachable_reason,omitempty"`
 	StateMigrations          []StateSchemaMigration `json:"state_migrations,omitempty"`
 }
 
@@ -223,6 +227,8 @@ func newIncarnationUpgradePathsReply(v handlers.IncarnationUpgradePathsView) Inc
 			Mode:                     t.Mode,
 			Slug:                     t.Slug,
 			Downgrade:                t.Downgrade,
+			Reachable:                t.Reachable,
+			UnreachableReason:        t.UnreachableReason,
 			StateMigrations:          migs,
 		}
 	}
