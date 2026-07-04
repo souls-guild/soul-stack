@@ -125,6 +125,24 @@ func TestBootstrap_InvalidSID(t *testing.T) {
 	}
 }
 
+// TestBootstrap_ReservedSID — Soul с зарезервированным sid (keeper) отклоняется
+// до Vault/DB: reject синтетики прогона на bootstrap (NIM-36).
+func TestBootstrap_ReservedSID(t *testing.T) {
+	h := newBootstrapHandler(BootstrapDeps{
+		Pool: fakeTxBeginner{}, VaultClient: fakeSigner{}, AuditWriter: nopAudit{},
+		KID: "k1", PKIMount: "pki", PKIRole: "soul-seed",
+	}, discardLogger(t))
+
+	_, err := h.Bootstrap(context.Background(), &keeperv1.BootstrapRequest{
+		Sid:            "keeper",
+		BootstrapToken: "tok",
+		CsrPem:         []byte("dummy"),
+	})
+	if got := status.Code(err); got != codes.InvalidArgument {
+		t.Fatalf("code = %v, want InvalidArgument", got)
+	}
+}
+
 func TestBootstrap_EmptyToken(t *testing.T) {
 	h := newBootstrapHandler(BootstrapDeps{
 		Pool: fakeTxBeginner{}, VaultClient: fakeSigner{}, AuditWriter: nopAudit{},

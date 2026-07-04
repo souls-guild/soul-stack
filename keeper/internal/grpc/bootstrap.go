@@ -184,6 +184,10 @@ func (h *bootstrapHandler) Bootstrap(ctx context.Context, req *keeperv1.Bootstra
 	if !soul.ValidSID(sid) {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid sid %q", sid)
 	}
+	// Зарезервированные sid (keeper / __run__) — синтетика прогона, не Soul (NIM-36).
+	if soul.IsReservedSID(sid) {
+		return nil, status.Errorf(codes.InvalidArgument, "reserved sid %q", sid)
+	}
 	plainToken := req.GetBootstrapToken()
 	if strings.TrimSpace(plainToken) == "" {
 		return nil, status.Error(codes.InvalidArgument, "bootstrap_token is empty")
