@@ -289,8 +289,9 @@ func TestUpgradePaths_Target_BrokenChain_Unreachable_200(t *testing.T) {
 	if tgt.Reachable {
 		t.Errorf("Reachable = true, want false (битая цепочка)")
 	}
-	if tgt.UnreachableReason != "migration_chain_broken" {
-		t.Errorf("UnreachableReason = %q, want migration_chain_broken", tgt.UnreachableReason)
+	wantReason := "migration chain to v3 is broken: " + artifact.ErrMigrationChainBroken.Error()
+	if tgt.UnreachableReason != wantReason {
+		t.Errorf("UnreachableReason = %q, want %q", tgt.UnreachableReason, wantReason)
 	}
 	if tgt.Direction != upgradeDirectionForward {
 		t.Errorf("direction = %q, want forward (цель — апгрейд, недостижима лишь цепочкой)", tgt.Direction)

@@ -389,7 +389,7 @@ Permission: `incarnation.upgrade` (read-грань). Path-param: `name`. Query-p
 | `slug` | `string` | slug upgrade-сценария при `found` (опущен иначе). |
 | `downgrade` | `bool` | Цель ниже по схеме (цепочка не грузится, forward-only). |
 | `reachable` | `bool` | Цель достижима апгрейдом. `false` только при битой цепочке миграций. |
-| `unreachable_reason` | `string` | Причина недостижимости (при `reachable: false`): `migration_chain_broken`. Опущен, если достижима. |
+| `unreachable_reason` | `string` | Человекочитаемая причина недостижимости (при `reachable: false`), напр. `migration chain to <to> is broken: <детали>`. Опущена, если достижима. |
 | `state_migrations[]` | `array` | Применяемая цепочка `{from, to, path}` ([ADR-019](../../adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)); пусто при downgrade/битой цепочке. |
 
 **Errors:** `404 not-found` (нет инкарнации / вне scope). **Битая цепочка миграций — НЕ ошибка**: `200` с `reachable: false` + `unreachable_reason` (preview отдаёт недостижимую цель как данные). `502` — ls-remote тегов / load снапшота цели; `500` — прочий сбой цепочки миграций.

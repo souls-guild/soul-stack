@@ -31,12 +31,6 @@ const (
 	upgradeModeLegacy = "legacy" // нет — апгрейд ушёл бы в drift без host-оркестрации
 )
 
-// unreachableReasonMigrationChainBroken — машинный признак недостижимости цели при
-// `?to=`: структурно битая цепочка state-миграций (ADR-019). Preview-эндпоинт «на что
-// и как могу перейти» показывает такую цель как ДАННЫЕ (reachable=false), а не HTTP-
-// ошибку — оператор должен видеть недостижимую цель, а не 4xx.
-const unreachableReasonMigrationChainBroken = "migration_chain_broken"
-
 // IncarnationUpgradePathsView — ПЛОСКАЯ доменная проекция GET .../upgrade-paths.
 // Два режима одного эндпоинта (ADR-0068 §6):
 //   - дешёвый (toRef==""): заполнен Paths — теги реестра сервиса + пометка is_current;
@@ -222,7 +216,7 @@ func (h *IncarnationHandler) upgradePathsTarget(ctx context.Context, inc *incarn
 				h.logger.Warn("incarnation.upgrade-paths: target unreachable — migration chain broken",
 					slog.String("name", inc.Name), slog.String("to", toRef), slog.Any("error", cerr))
 				tgt.Reachable = false
-				tgt.UnreachableReason = unreachableReasonMigrationChainBroken
+				tgt.UnreachableReason = "migration chain to " + toRef + " is broken: " + cerr.Error()
 				return tgt, nil
 			}
 			// Прочий сбой (парс кривого migrations/-файла / I/O уже материализованного
