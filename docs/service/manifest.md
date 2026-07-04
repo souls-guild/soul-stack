@@ -40,6 +40,9 @@ service-<name>/
 │   │   └── main.yml
 │   └── restart/
 │       └── main.yml
+├── upgrade/                            # ОПЦ.: version-к-версии upgrade-сценарии (2-й канал авто-дискавери — ADR-0068)
+│   └── v2/
+│       └── main.yml                    # top-level from: [<исходные теги>] + задачи host-перехода
 ├── types.yml                           # ОПЦ.: переиспользуемые именованные input-типы (секция types:, $type-ссылка — ADR-062)
 ├── migrations/                         # ОПЦ.: state_schema миграции (если state_schema_version > 1)
 │   ├── 001_to_002.yml
@@ -54,6 +57,8 @@ service-<name>/
 Обязательны только `service.yml` и хотя бы один сценарий (`scenario/<name>/main.yml`). Всё остальное появляется по мере необходимости.
 
 Сценарии перечислять в `service.yml` не нужно — keeper находит их auto-discover-ом по каталогу `scenario/`.
+
+Второй канал авто-дискавери — каталог `upgrade/<slug>/` рядом со `scenario/`: version-к-версии upgrade-сценарии с self-describing top-level ключом `from:` (версии-источники). Их запускает `POST /v1/incarnations/{name}/upgrade`, а в обычных day-2-списках сценариев они не показываются. Дизайн — [ADR-0068](../adr/0068-service-upgrade-v2.md), имена — [naming-rules.md → Upgrade v2](../naming-rules.md#upgrade-v2-каталог-upgrade-ключ-from-upgrade-paths).
 
 ## `service.yml` — манифест
 

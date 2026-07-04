@@ -353,6 +353,8 @@ Permission: `incarnation.upgrade`. MCP-tool: `keeper.incarnation.upgrade`. Path-
 
 Запускает миграцию state по [ADR-019](../../adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl) + переключает `service_version`. Одной PG-транзакцией ([migrations.md](../../migrations.md)).
 
+С [ADR-0068](../../adr/0068-service-upgrade-v2.md) апгрейд — two-phase: если у целевой версии есть upgrade-сценарий (`upgrade/<slug>/` с `from:` ⊇ текущего пина, режим `found`) — после миграции автозапускается host-оркестрация перехода (`status: applying` → `ready`); иначе (`legacy`) — прежнее поведение (смена пина + state-миграции + `drift`, оператор доводит обычным apply). Парный READ-эндпоинт `GET /v1/incarnations/{name}/upgrade-paths` («куда и как могу обновиться»: теги реестра + on-demand `?to=` анализ `direction`/`mode`) — [ADR-0068 §6](../../adr/0068-service-upgrade-v2.md).
+
 **Request:**
 
 | Поле | Тип | Required | Смысл |
