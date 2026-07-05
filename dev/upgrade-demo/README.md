@@ -66,6 +66,37 @@ bash dev/upgrade-demo/run.sh
 в конце вывода). Скрипт печатает фактические curl-ответы по каждому кейсу и падает с
 понятной ошибкой, если стена (нет keeper/фичи/Vault).
 
+## Кликабельный UI-стенд (`ui-stand.sh`) — посмотреть в браузере
+
+Поднимает **изолированный** демо-keeper на `:8090` (конфиг `keeper-demo.yml`, без
+`push`-блока — штатный `keeper.dev.yml` в dev падает на отсутствующем teleport-identity)
++ web-UI на `:5174` (companion-репо `soul-stack-web`, ветка `feat/nim34-upgrade-paths-ui`,
+где в Upgrade-модалке отрисовывается предпросмотр `upgrade-paths`). Выделенные порты —
+чтобы жить рядом с общим стендом на `:8080`, не мешая другой сессии (свой `kid`,
+`acolytes:0`, reaper/voyage OFF на общем PG).
+
+```bash
+bash dev/upgrade-demo/ui-stand.sh
+```
+
+Скрипт сам поднимает docker/Vault (при нужде, включая ed25519 sigil-ключ), сеет сервис +
+инкарнацию `updemo-ui` на `v1.0.0` и печатает **URL + JWT + что кликать**. Открой
+`http://localhost:5174/ui/`, залогинься токеном, зайди в `updemo-ui` → **Upgrade** →
+выбери версию в дропдауне:
+
+| Выбор | Панель предпросмотра в модалке |
+|---|---|
+| `v2.0.0` | **found** (зелёный) · direction forward · миграции 1→2 · «host-оркестрация запустится» |
+| `v2.0.1` | **legacy** (серый) · direction forward · миграции 1→2 · «смена версии → drift» |
+
+Нажатие **Upgrade** на `v2.0.1` — живой legacy-переход инкарнации в `drift` на `v2.0.1`
+(schema 2, без хостов). `v2.0.0` (found) в UI показывает предпросмотр, но сам апгрейд —
+уровень e2e-live (нужны souls, см. ниже).
+
+> **★ web-репо** должно быть на ветке `feat/nim34-upgrade-paths-ui` (там UI-потребитель
+> upgrade-paths); скрипт предупредит, если это не так. Остановить стенд:
+> `pkill -f 'keeper-demo.yml' ; pkill -f 'vite.*--port 5174'`.
+
 ## Что НЕ покрыто
 
 - **found-автозапуск** (`POST upgrade` на `v2.0.0`): found-ветвь после миграции
@@ -80,7 +111,9 @@ bash dev/upgrade-demo/run.sh
 
 ```
 dev/upgrade-demo/
-  run.sh                     # идемпотентный прогон (boot/reuse → сборка → сев → кейсы)
+  ui-stand.sh                # ★ кликабельный UI-стенд (демо-keeper :8090 + web :5174)
+  keeper-demo.yml            # изолированный демо-keeper конфиг (без push; порты 8090/8091/9091)
+  run.sh                     # curl-прогон кейсов (boot/reuse → сборка → сев → кейсы)
   README.md                  # этот файл
   tree/
     v1.0.0/service.yml + essence/_default.yaml

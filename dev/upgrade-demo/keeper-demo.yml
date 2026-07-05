@@ -1,0 +1,133 @@
+# dev/upgrade-demo/keeper-demo.yml — ИЗОЛИРОВАННЫЙ демо-keeper для UI-стенда NIM-34.
+#
+# Отличия от dev/keeper.dev.yml (чтобы жить РЯДОМ с общим стендом, не мешая):
+#   - выделенные порты (openapi 8090 / mcp 8091 / metrics 9091 / grpc 9452-9453) —
+#     не конфликтует с keeper другой сессии на 8080/9090/9442/9443;
+#   - kid keeper-demo-nim34 (свой identity/lease);
+#   - БЕЗ `push:`-блока (teleport-identity нет в dev → штатный конфиг падает на старте);
+#   - acolytes:0 + allow_unsafe_single_path_multi_keeper:true — НЕ участвует в
+#     acolyte work-queue (не claim-ит чужие apply_runs); reaper/voyage OFF —
+#     не purge-ит и не трогает данные соседней сессии на общем PG.
+# Общие PG/Redis/Vault/TLS (HA-модель это допускает). Под удаление вне UI-демо.
+
+kid: keeper-demo-nim34
+
+listen:
+  grpc:
+    bootstrap:
+      addr: "0.0.0.0:9452"
+      tls:
+        cert: /tmp/keeper-dev/tls/keeper.crt
+        key:  /tmp/keeper-dev/tls/keeper.key
+    event_stream:
+      addr: "0.0.0.0:9453"
+      tls:
+        cert: /tmp/keeper-dev/tls/keeper.crt
+        key:  /tmp/keeper-dev/tls/keeper.key
+        ca:   /tmp/keeper-dev/tls/vault-ca.crt
+  openapi: { addr: "127.0.0.1:8090" }
+  mcp:     { addr: "127.0.0.1:8091" }
+  metrics: { addr: "127.0.0.1:9091" }
+
+postgres:
+  dsn_ref: vault:secret/keeper/postgres
+  pool: { min: 2, max: 10 }
+
+redis:
+  addr: "127.0.0.1:6381"
+  password_ref: ""
+
+vault:
+  addr: "http://127.0.0.1:8200"
+  token: "root"
+  auth:
+    method: token
+  pki_mount: "pki"
+  pki_role: "soul-seed"
+
+auth:
+  jwt:
+    signing_key_ref: vault:secret/keeper/jwt-signing-key
+    # issuer совпадает со стандартным dev (dev/mint-jwt.sh выпускает токен с этим iss).
+    issuer: keeper-dev-01
+    ttl_default: 24h
+    ttl_bootstrap: 720h
+
+otel:
+  enabled: true
+  exporter: otlp
+  endpoint: "127.0.0.1:4317"
+
+logging:
+  level: info
+  format: text
+  rotation: { max_size_mb: 100, max_files: 5, compress: false }
+
+# Sigil — подпись бинарей плагинов (ADR-026). Ключ засеян dev-провижином/стендом
+# (secret/keeper/sigil-signing-key). Демо upgrade-paths плагины не спавнит.
+sigil:
+  signing_key_ref: vault:secret/keeper/sigil-signing-key
+
+plugins:
+  cache_root: /tmp/keeper-dev/plugins
+  cloud_drivers:
+    - { name: wb, source: "file:///dev/null/soul-cloud-wb-manual-slot", ref: "manual-0001" }
+  soul_modules:
+    - { name: redis, source: "file:///dev/null/community-redis-manual-slot", ref: "manual-0001" }
+
+plugin_runtime:
+  socket_dir: /tmp/keeper-dev/plugin-sockets-demo
+  startup_timeout: 10s
+  shutdown_grace: 10s
+  allowed_capabilities:
+    - run_as_root
+    - network_outbound
+    - network_inbound
+    - vault_access
+    - fs_write_root
+    - exec_subprocess
+  conflict_policy: warn
+  enable_tls: false
+
+hot_reload:
+  enable_signal: true
+  enable_inotify: false
+  audit_correlation_id: true
+
+audit:
+  enabled: true
+  otel_export: false
+  retention_days: 365
+
+watchman_interval: 5s
+watchman_fail_threshold: 3
+
+# acolytes:0 — демо-keeper НЕ участвует в acolyte work-queue (не claim-ит apply_runs
+# соседней сессии). Требует allow_unsafe (иначе refuse-guard откажет старт при живом
+# втором keeper). Для upgrade-paths (READ) и legacy-upgrade (in-tx, без хостов)
+# acolyte не нужен.
+allow_unsafe_single_path_multi_keeper: true
+acolytes: 0
+
+max_await_timeout: 10m
+
+# Voyage-воркеры OFF — демо массовый апгрейд не гоняет; не трогаем чужую очередь.
+voyage:
+  workers: 0
+  max_scope: 10000
+  max_batch_size: 10000
+
+# Reaper OFF — демо-keeper НЕ purge-ит общий PG (данные соседней сессии целы).
+reaper:
+  enabled: false
+  interval: 1h
+  dry_run: true
+  batch_size: 500
+  lock_ttl: 5m
+  rules: {}
+
+cadence_scheduler:
+  poll_floor: 30s
+  poll_ceiling: 60s
+  poll_idle: 120s
+  lock_ttl: 5m
