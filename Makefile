@@ -318,6 +318,9 @@ e2e-live: build-linux
 # SHELL=bash — для `set -o pipefail` (сохранить exit go test через tee).
 e2e-live-gate: SHELL := /bin/bash
 e2e-live-gate: build build-linux
+	@echo "e2e-live-gate: harness unit-guard (docker-free) — WaitApplySuccess apply-брекет NIM-46"
+	@(cd tests/e2e-live && go test -run '^TestApplySettled$$' -count=1 ./harness/) \
+		|| { echo "e2e-live-gate: FALSE-GREEN — harness unit-guard TestApplySettled упал" >&2; exit 1; }
 	@if [ -z "$$(cd tests/e2e-live && go list -tags=e2e_live ./... 2>/dev/null)" ]; then \
 		echo "skip tests/e2e-live (no Go packages under build-tag e2e_live)"; \
 	else \

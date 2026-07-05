@@ -728,50 +728,56 @@ func (s *Stack) RunScenario(t *testing.T, incarnationName string, scenarioName s
 	return out.ApplyID
 }
 
-// WaitApplySuccess блокируется до перехода apply_runs.status в success у всех
-// строк прогона. PK apply_runs = (apply_id, sid) → один прогон даёт N строк.
+// WaitApplySuccess блокируется до УСПЕШНОГО терминала прогона: все строки
+// apply_runs (PK = apply_id+sid, N строк на прогон) в success И apply-брекет
+// incarnation.applying_apply_id снят с этого applyID.
+//
+// Брекет обязателен (NIM-46): keeper-строка (sid="keeper") завершается success
+// СТРОГО ДО планирования soul-строк, поэтому «все видимые строки success» без
+// снятого брекета — ложное «готово» (NIM-45-гонка). Решение — [applySettled].
 //
 // Терминальный ≠ success — немедленный t.Fatal с дампом матрицы статусов.
 func (s *Stack) WaitApplySuccess(t *testing.T, applyID string, timeoutSec int) {
 	t.Helper()
+	const q = `
+SELECT ar.sid, ar.status, i.applying_apply_id
+FROM apply_runs ar
+LEFT JOIN incarnation i ON i.name = ar.incarnation_name
+WHERE ar.apply_id = $1`
 	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
+	var lastSnap []ApplyRunRow
+	var lastInFlight bool
 	for time.Now().Before(deadline) {
-		rows, err := s.db.Query(context.Background(),
-			"SELECT sid, status FROM apply_runs WHERE apply_id = $1", applyID)
+		rows, err := s.db.Query(context.Background(), q, applyID)
 		if err != nil {
 			t.Fatalf("WaitApplySuccess %s: query: %v", applyID, err)
 		}
-		statuses := map[string]string{}
+		var snap []ApplyRunRow
+		inFlight := false
 		for rows.Next() {
 			var sid, st string
-			if err := rows.Scan(&sid, &st); err != nil {
+			var applyingID *string
+			if err := rows.Scan(&sid, &st, &applyingID); err != nil {
 				rows.Close()
 				t.Fatalf("WaitApplySuccess %s: scan: %v", applyID, err)
 			}
-			statuses[sid] = st
-		}
-		rows.Close()
-		if len(statuses) == 0 {
-			time.Sleep(250 * time.Millisecond)
-			continue
-		}
-		allSuccess := true
-		for sid, st := range statuses {
-			switch st {
-			case "success":
-				continue
-			case "failed", "cancelled", "orphaned", "no_match":
-				t.Fatalf("WaitApplySuccess %s: sid=%s reached terminal %q (статусы=%v)", applyID, sid, st, statuses)
-			default:
-				allSuccess = false
+			snap = append(snap, ApplyRunRow{SID: sid, Status: st})
+			if applyingID != nil && *applyingID == applyID {
+				inFlight = true
 			}
 		}
-		if allSuccess {
+		rows.Close()
+		lastSnap, lastInFlight = snap, inFlight
+		done, failSID, failStatus := applySettled(snap, inFlight)
+		if failSID != "" {
+			t.Fatalf("WaitApplySuccess %s: sid=%s reached terminal %q (строки=%v)", applyID, failSID, failStatus, snap)
+		}
+		if done {
 			return
 		}
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(300 * time.Millisecond)
 	}
-	t.Fatalf("WaitApplySuccess %s: success не достигнут за %ds", applyID, timeoutSec)
+	t.Fatalf("WaitApplySuccess %s: success не достигнут за %ds (applyInFlight=%v, строки=%v)", applyID, timeoutSec, lastInFlight, lastSnap)
 }
 
 // WaitIncarnationReady блокируется до перехода incarnation.status в `ready`.
