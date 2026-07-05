@@ -650,6 +650,54 @@ func (s *Stack) CreateIncarnationWithApply(t *testing.T, name string, serviceRef
 	return out.Incarnation, out.ApplyID
 }
 
+// CreateIncarnationWithApplyScenario — как CreateIncarnationWithApply, но
+// create-сценарий выбирается явно (сервисы с несколькими `create: true`, напр.
+// redis create/create_from_souls/migrate_cluster, иначе POST → 422).
+func (s *Stack) CreateIncarnationWithApplyScenario(t *testing.T, name, serviceRef, createScenario string, spec map[string]any) (string, string) {
+	t.Helper()
+	c := s.opClient(t)
+	body := map[string]any{
+		"name":            name,
+		"service":         stripServiceRef(serviceRef),
+		"create_scenario": createScenario,
+	}
+	if spec != nil {
+		body["input"] = spec
+	}
+
+	var resp []byte
+	var status int
+	var err error
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		resp, status, err = c.post(context.Background(), "/v1/incarnations", body)
+		if err != nil {
+			t.Fatalf("CreateIncarnationWithApplyScenario %s: http: %v", name, err)
+		}
+		if status == http.StatusAccepted {
+			break
+		}
+		if status == http.StatusUnprocessableEntity &&
+			strings.Contains(string(resp), "is not registered") &&
+			time.Now().Before(deadline) {
+			time.Sleep(250 * time.Millisecond)
+			continue
+		}
+		t.Fatalf("CreateIncarnationWithApplyScenario %s: status %d, body=%s", name, status, string(resp))
+	}
+	var out struct {
+		ApplyID     string `json:"apply_id"`
+		Incarnation string `json:"incarnation"`
+	}
+	if err := json.Unmarshal(resp, &out); err != nil {
+		t.Fatalf("CreateIncarnationWithApplyScenario %s: decode: %v (body=%s)", name, err, string(resp))
+	}
+	if out.ApplyID == "" {
+		t.Fatalf("CreateIncarnationWithApplyScenario %s: пустой apply_id (create-scenario %q не запущен?) body=%s", name, createScenario, string(resp))
+	}
+	return out.Incarnation, out.ApplyID
+}
+
 // RunScenario запускает scenario на существующей incarnation.
 //
 // 202 → возвращает apply_id. Другая статус-страница — t.Fatal.

@@ -654,6 +654,29 @@ func (s *Stack) AssertHostHTTPContains(t *testing.T, soulIdx int, url, substr st
 		soulIdx, url, substr, retrySec, lastCode, lastOut)
 }
 
+// AssertRedisACLUser проверяет, что юзер виден в ЖИВОМ redis через redis-cli ACL
+// LIST (AUTH admin) — живой эффект community.redis.acl, а не только state.
+func (s *Stack) AssertRedisACLUser(t *testing.T, soulIdx int, host string, port int, adminUser, adminPass, wantUser string) {
+	t.Helper()
+	sc := s.soulContainerByIdx(t, soulIdx)
+
+	ctx, cancel := context.WithTimeout(context.Background(), hostExecTimeout)
+	defer cancel()
+
+	// --no-auth-warning глушит stderr про пароль в argv (Exec склеивает stdout+stderr).
+	// `^user <name> ` — чёткая граница (не цепляет однопрефиксного соседа).
+	script := fmt.Sprintf("redis-cli -h %s -p %d --user %s --pass %s --no-auth-warning ACL LIST | grep -E %s",
+		shellQuote(host), port, shellQuote(adminUser), shellQuote(adminPass), shellQuote("^user "+wantUser+" "))
+	out, code, err := sc.Exec(ctx, []string{"/bin/sh", "-c", script})
+	if err != nil {
+		t.Fatalf("AssertRedisACLUser(soulIdx=%d user=%s): exec: %v\noutput=%s", soulIdx, wantUser, err, out)
+	}
+	if code != 0 {
+		t.Fatalf("AssertRedisACLUser(soulIdx=%d user=%s): нет в живом ACL LIST (redis-cli|grep exit=%d) — community.redis.acl не применил юзера?\noutput=%s",
+			soulIdx, wantUser, code, out)
+	}
+}
+
 // shellQuote оборачивает строку в одинарные кавычки, экранируя внутренние
 // одинарные кавычки по шаблону POSIX `'\”`. Используется только для путей и
 // substring-ов из тест-fixtures (контролируемый input, не user-data).

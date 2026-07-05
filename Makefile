@@ -290,15 +290,16 @@ e2e-live: build-linux
 		echo "skip tests/e2e-live (no Go packages under build-tag e2e_live)"; \
 	else \
 		echo "go test -tags=e2e_live ./... in tests/e2e-live"; \
-		(cd tests/e2e-live && go test -tags=e2e_live -timeout=30m -p 1 ./...) || exit 1; \
+		(cd tests/e2e-live && go test -tags=e2e_live -count=1 -timeout=30m -p 1 ./...) || exit 1; \
 	fi
 
 # e2e-live-gate — ОБЯЗАТЕЛЬНЫЙ локальный live-гейт перед батч-коммитом крупной
-# фичи (~15-25 мин, docker). Каноническое L3b-подмножество: механика доставки
-# SoulModule (TestL3bModuleDeliveryLive — ADR-065 install-synthesis → FetchModule
-# → Sigil-verify → hot-register → живое apply против redis) + apply-смок nginx
-# (TestL3bSmokeNginxLive) + smoke plugin-канала (TestL3bPluginChannel). Полный
-# `make e2e-live` остаётся nightly/pre-release.
+# фичи (~15-25 мин, docker). L3b-подмножество: механика доставки SoulModule
+# (TestL3bModuleDeliveryLive — ADR-065 install-synthesis → FetchModule → Sigil-verify
+# → hot-register → живое apply против redis) + apply-смок nginx (TestL3bSmokeNginxLive)
+# + smoke plugin-канала (TestL3bPluginChannel) + day-2 add_user на живом redis
+# (TestL3bRedisLive_Day2AddUser — весь плагин-канал ADR-065 против реального redis+sentinel).
+# Полный `make e2e-live` остаётся nightly/pre-release.
 #
 # Deps ОТЛИЧАЮТСЯ от e2e-live: нужен ещё нативный `build` — harness запускает
 # Keeper НА ХОСТЕ (host-arch keeper/bin/keeper, см. locateKeeperBinary), а не в
@@ -307,16 +308,35 @@ e2e-live: build-linux
 #
 # E2E_KEEPER_HOST — IP, по которому soul-контейнер дозванивается до Keeper-на-хосте;
 # на WSL2 нужен явный LAN-IP (localhost из контейнера не виден). Не задан снаружи —
-# автодетект первого IP через `hostname -I`. Гейт падает громко (без `|| true` —
-# exit-код go test доходит до make).
+# автодетект первого IP через `hostname -I`.
+#
+# NIM-45 anti-false-green (гейт обязан либо реально прогнать, либо честно упасть):
+#  - `build` — нативный keeper на дефолтный путь harness-а `keeper/bin/keeper`;
+#    без него `build-linux` даёт лишь keeper-linux-amd64, NewStack ТИХО скипает.
+#  - `-count=1` — иначе go-test-кеш отдаёт `ok (cached)` за секунды (false-green).
+#  - guard: fail при `(cached)` в summary или если любой gate-тест не дал `--- PASS`.
+# SHELL=bash — для `set -o pipefail` (сохранить exit go test через tee).
+e2e-live-gate: SHELL := /bin/bash
 e2e-live-gate: build build-linux
 	@if [ -z "$$(cd tests/e2e-live && go list -tags=e2e_live ./... 2>/dev/null)" ]; then \
 		echo "skip tests/e2e-live (no Go packages under build-tag e2e_live)"; \
 	else \
 		host="$${E2E_KEEPER_HOST:-$$(hostname -I | awk '{print $$1}')}"; \
-		echo "e2e-live-gate: go test -tags=e2e_live -run 'TestL3bModuleDeliveryLive|TestL3bSmokeNginxLive|TestL3bPluginChannel' . (E2E_KEEPER_HOST=$$host)"; \
-		(cd tests/e2e-live && E2E_KEEPER_HOST=$$host go test -tags=e2e_live -count=1 -timeout 25m -run 'TestL3bModuleDeliveryLive|TestL3bSmokeNginxLive|TestL3bPluginChannel' .) || exit 1; \
-		echo "e2e-live-gate: локальный live-гейт пройден"; \
+		log="$${TMPDIR:-/tmp}/soul-e2e-live-gate.log"; \
+		mask='TestL3bModuleDeliveryLive|TestL3bSmokeNginxLive|TestL3bPluginChannel|TestL3bRedisLive_Day2AddUser'; \
+		echo "e2e-live-gate: go test -tags=e2e_live -v -count=1 -run '$$mask' . (E2E_KEEPER_HOST=$$host)"; \
+		set -o pipefail; \
+		(cd tests/e2e-live && E2E_KEEPER_HOST=$$host go test -tags=e2e_live -v -count=1 -timeout 25m -p 1 -run "$$mask" .) 2>&1 | tee "$$log"; \
+		rc=$$?; \
+		if grep -qE '^ok[[:space:]].*\(cached\)' "$$log"; then \
+			echo "e2e-live-gate: FALSE-GREEN — '(cached)' в summary (кеш не отключён, -count=1 потерян)" >&2; exit 1; \
+		fi; \
+		for tc in TestL3bModuleDeliveryLive TestL3bSmokeNginxLive TestL3bPluginChannel TestL3bRedisLive_Day2AddUser; do \
+			grep -q "^--- PASS: $$tc" "$$log" || { \
+				echo "e2e-live-gate: FALSE-GREEN — $$tc не дал '--- PASS' (skip/fail/не запущен)" >&2; exit 1; }; \
+		done; \
+		[ $$rc -eq 0 ] && echo "e2e-live-gate: OK — все gate-тесты реально прогнаны (не cached, не skip)"; \
+		exit $$rc; \
 	fi
 
 # docker-build-keeper — собирает образ `keeper:e2e-k8s` для L3c kind-cluster.
