@@ -63,7 +63,9 @@ func RenderForHost(ctx context.Context, deps Deps, recipe *applyrun.Recipe, inca
 	if err != nil {
 		return nil, nil, fmt.Errorf("scenario: RenderForHost: load service: %w", err)
 	}
-	scn, err := parseScenarioFromArtifact(deps.Loader, art, recipe.ScenarioName)
+	// Acolyte воспроизводит путь run-goroutine: upgrade-прогон грузит upgrade/<slug>/
+	// (recipe.FromUpgrade), обычный — scenario/<name>/ (ADR-0068).
+	scn, err := parseScenarioFromArtifact(deps.Loader, art, recipe.ScenarioName, recipe.FromUpgrade)
 	if err != nil {
 		return nil, nil, err
 	}

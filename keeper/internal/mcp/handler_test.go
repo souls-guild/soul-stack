@@ -724,6 +724,10 @@ func (f *mcpLoader) LoadMigrationChain(_ *artifact.ServiceArtifact, _, _ int) (s
 	return f.chain, nil
 }
 
+func (f *mcpLoader) ListUpgrades(_ *artifact.ServiceArtifact) ([]artifact.Scenario, error) {
+	return nil, nil
+}
+
 // ReadFile — для destroy PrepareDestroy pre-check (наличие scenario `destroy`) и
 // sync input-валидации. localDir (если задан) — path-aware чтение с диска.
 func (f *mcpLoader) ReadFile(_ *artifact.ServiceArtifact, file string) ([]byte, error) {

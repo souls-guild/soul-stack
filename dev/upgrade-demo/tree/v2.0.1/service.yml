@@ -1,0 +1,17 @@
+name: upgrade-demo
+state_schema_version: 2
+description: >-
+  Демо-сервис NIM-34 (upgrade v2, ADR-0068), тег v2.0.1. Как v2.0.0
+  (state_schema_version=2 + migrations/001_to_002.yml), но БЕЗ каталога upgrade/.
+  Переход v1.0.0 -> v2.0.1 = режим LEGACY: upgrade-сценарий не найден, поэтому
+  upgrade-paths?to=v2.0.1 вернёт mode=legacy + reachable=true + state_migrations
+  [001->002], а POST upgrade сменит пин + прогонит миграцию + поставит status=drift
+  (host-оркестрации нет, оператор доводит обычным apply).
+
+state_schema:
+  type: object
+  properties:
+    note:
+      type: string
+    schema_v2:
+      type: boolean

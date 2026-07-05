@@ -1,0 +1,13 @@
+from_version: 1
+to_version: 2
+
+description: >-
+  Демо-миграция NIM-34: state_schema v1 -> v2 (ADR-019). Плоский set — помечаем
+  факт перехода на v2 полем schema_v2 (read-model). has()-guard back-compat:
+  повторный прогон не перетирает. Forward-only (down: не поддерживается,
+  восстановление через state_history).
+
+transform:
+  - set:
+      path:  state.schema_v2
+      value: "${ has(state.schema_v2) ? state.schema_v2 : true }"

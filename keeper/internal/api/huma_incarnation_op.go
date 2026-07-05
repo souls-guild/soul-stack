@@ -351,6 +351,34 @@ func incUpgradeOperation() huma.Operation {
 	}
 }
 
+// === GET /v1/incarnations/{name}/upgrade-paths (upgrade-paths) — READ (БЕЗ audit) ===
+
+// incUpgradePathsInput — huma-input GET .../upgrade-paths. Name — path; To — опц.
+// query-ref для on-demand анализа одной цели (пусто → дешёвый список тегов).
+type incUpgradePathsInput struct {
+	Name string `path:"name" doc:"имя инкарнации"`
+	To   string `query:"to" doc:"опц. целевой git-ref для on-demand анализа одной цели; пусто → список тегов реестра + is_current"`
+}
+
+// incUpgradePathsOutput — huma-output GET .../upgrade-paths (FULL-TYPED). Body —
+// native IncarnationUpgradePathsReply (paths ИЛИ target по режиму).
+type incUpgradePathsOutput struct {
+	Body IncarnationUpgradePathsReply
+}
+
+func incUpgradePathsOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "getIncarnationUpgradePaths",
+		Method:        http.MethodGet,
+		Path:          "/{name}/upgrade-paths",
+		Summary:       "Пути апгрейда инкарнации",
+		Description:   "Дешёвый список тегов реестра сервиса (пометка is_current) без ?to=; on-demand анализ одной цели (direction / found-legacy / state-миграции) с ?to=<ref> (ADR-0068 §6). Permission incarnation.upgrade (read-грань). Read-only, без audit.",
+		Tags:          []string{"incarnation"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError, http.StatusBadGateway},
+	}
+}
+
 // === POST /v1/incarnations/{name}/rerun-last (rerun-last) — SELF-AUDIT incarnation.rerun_last (202+body) ===
 
 // incRerunInput — huma-input POST .../rerun-last. Name — path; Body — typed тело.

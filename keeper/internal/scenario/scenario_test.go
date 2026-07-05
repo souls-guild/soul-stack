@@ -81,3 +81,27 @@ func TestConvergeIsOperational(t *testing.T) {
 		t.Errorf("converge (%q) не должен входить в LifecycleScenarioNames", ConvergeScenarioName)
 	}
 }
+
+// TestScenarioRelPath — выбор канала загрузки главного YAML сценария (ADR-0068 §3):
+// fromUpgrade=true → upgrade/<name>/main.yml (второй канал), false → scenario/<name>/
+// main.yml (сегодняшнее поведение по умолчанию). Guard на переключатель, который
+// parseScenarioFromArtifact отдаёт в loader.ReadFile.
+func TestScenarioRelPath(t *testing.T) {
+	tests := []struct {
+		name        string
+		scenario    string
+		fromUpgrade bool
+		want        string
+	}{
+		{"scenario-default", "create", false, "scenario/create/main.yml"},
+		{"upgrade-channel", "v2", true, "upgrade/v2/main.yml"},
+		{"scenario-default-op", "add_user", false, "scenario/add_user/main.yml"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := scenarioRelPath(tt.scenario, tt.fromUpgrade); got != tt.want {
+				t.Fatalf("scenarioRelPath(%q, %v) = %q, want %q", tt.scenario, tt.fromUpgrade, got, tt.want)
+			}
+		})
+	}
+}

@@ -1,0 +1,17 @@
+name: to_v2
+from: ["v1.0.0"]
+description: >-
+  Демо upgrade-сценарий NIM-34 (found-ветвь, ADR-0068 §5). Top-level from:
+  объявляет, что этот сценарий умеет апгрейдить инкарнацию с пина v1.0.0.
+  Живьём в dev-стенде НЕ запускается: found-автозапуск требует поднятых хостов
+  (Runner.Start), а demo-инкарнация bare (без souls). Здесь тело нужно лишь для
+  того, чтобы сканер upgrade/ распарсил сценарий и upgrade-paths?to=v2.0.0 показал
+  mode=found + slug=to_v2. Реальный переход раскатывался бы на хостах (уровень
+  e2e-live, см. README).
+
+# state_changes пусто: demo-сценарий ничего не коммитит в incarnation.state.
+state_changes: {}
+
+# tasks пусто: демо без souls (found-автозапуск host-работу раскатать не может —
+# уровень e2e-live). upgrade-paths?to=v2.0.0 показывает mode=found по from: выше.
+tasks: []

@@ -224,8 +224,9 @@ func incUpgrade(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecord
 	}
 	middleware.SetAuditPayload(r, reply.AuditPayload)
 	writeJSON(rec, http.StatusAccepted, struct {
-		ApplyID string `json:"apply_id"`
-	}{reply.Body.ApplyID}, shimLogger)
+		ApplyID    string  `json:"apply_id"`
+		RunApplyID *string `json:"run_apply_id,omitempty"`
+	}{reply.Body.ApplyID, reply.Body.RunApplyID}, shimLogger)
 	return rec
 }
 

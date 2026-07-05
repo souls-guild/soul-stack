@@ -171,7 +171,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		abort("scenario_load_failed", fmt.Errorf("scenario: load service: %w", err))
 		return
 	}
-	scn, err := r.parseScenario(art, spec.ScenarioName)
+	scn, err := r.parseScenario(art, spec.ScenarioName, spec.FromUpgrade)
 	if err != nil {
 		abort("scenario_load_failed", err)
 		return
@@ -912,16 +912,26 @@ func (r *Runner) lockRun(ctx context.Context, spec RunSpec) (*incarnation.Incarn
 // parseScenario читает scenario/<scenarioName>/main.yml из уже
 // материализованного снапшота сервиса и парсит его нормативным
 // config-парсером (diagnostics уровня error → ошибка загрузки).
-func (r *Runner) parseScenario(art *artifact.ServiceArtifact, scenarioName string) (*config.ScenarioManifest, error) {
-	return parseScenarioFromArtifact(r.deps.Loader, art, scenarioName)
+func (r *Runner) parseScenario(art *artifact.ServiceArtifact, scenarioName string, fromUpgrade bool) (*config.ScenarioManifest, error) {
+	return parseScenarioFromArtifact(r.deps.Loader, art, scenarioName, fromUpgrade)
+}
+
+// scenarioRelPath строит rel-путь главного YAML сценария в снапшоте сервиса:
+// upgrade/<name>/main.yml при fromUpgrade (ADR-0068), иначе scenario/<name>/main.yml.
+func scenarioRelPath(scenarioName string, fromUpgrade bool) string {
+	format := scenarioMainFile
+	if fromUpgrade {
+		format = upgradeMainFile
+	}
+	return fmt.Sprintf(format, scenarioName)
 }
 
 // parseScenarioFromArtifact — package-level форма [Runner.parseScenario]:
 // читает и парсит scenario/<scenarioName>/main.yml из снапшота сервиса.
 // Вынесена из метода, чтобы переиспользоваться Acolyte-путём ([RenderForHost])
 // без подъёма Runner-а. Поведение идентично — чистый read+parse без side-эффектов.
-func parseScenarioFromArtifact(loader *artifact.ServiceLoader, art *artifact.ServiceArtifact, scenarioName string) (*config.ScenarioManifest, error) {
-	rel := fmt.Sprintf(scenarioMainFile, scenarioName)
+func parseScenarioFromArtifact(loader *artifact.ServiceLoader, art *artifact.ServiceArtifact, scenarioName string, fromUpgrade bool) (*config.ScenarioManifest, error) {
+	rel := scenarioRelPath(scenarioName, fromUpgrade)
 	data, err := loader.ReadFile(art, rel)
 	if err != nil {
 		return nil, fmt.Errorf("scenario: read %s: %w", rel, err)

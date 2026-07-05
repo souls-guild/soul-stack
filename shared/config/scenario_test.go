@@ -1412,3 +1412,68 @@ tasks: []
 		t.Fatalf("create: не должен быть unknown_key (известное поле)")
 	}
 }
+
+// --- from: список версий-источников upgrade-сценария (ADR-0068) ---
+
+// TestLoadScenarioManifest_FromVersions — top-level `from:` (self-describing список
+// версий-источников upgrade-сценария) парсится строгим walker-ом БЕЗ unknown_key и
+// заполняет ScenarioManifest.FromVersions (ADR-0068 §3). Без поля FromVersions walker
+// отбраковал бы `from` как unknown_key — это и есть red без правки.
+func TestLoadScenarioManifest_FromVersions(t *testing.T) {
+	src := `name: v2
+from: ["v1.0.0", "v1.2.0"]
+tasks: []
+`
+	cfg, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	if diag.HasErrors(diags) {
+		dump(t, diags)
+		t.Fatalf("top-level from: должен быть валидным ключом (ADR-0068)")
+	}
+	if hasCodeAt(diags, "unknown_key", "$.from") {
+		dump(t, diags)
+		t.Fatalf("from: не должен быть unknown_key (известное поле)")
+	}
+	want := []string{"v1.0.0", "v1.2.0"}
+	if len(cfg.FromVersions) != len(want) {
+		t.Fatalf("cfg.FromVersions = %v, want %v", cfg.FromVersions, want)
+	}
+	for i, v := range want {
+		if cfg.FromVersions[i] != v {
+			t.Fatalf("cfg.FromVersions[%d] = %q, want %q", i, cfg.FromVersions[i], v)
+		}
+	}
+}
+
+// TestLoadScenarioManifest_FromVersionsAbsent — отсутствие ключа: FromVersions==nil
+// (обычный сценарий без upgrade-роли не становится upgrade-сценарием молча).
+func TestLoadScenarioManifest_FromVersionsAbsent(t *testing.T) {
+	src := `name: restart
+tasks: []
+`
+	cfg, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	if diag.HasErrors(diags) {
+		dump(t, diags)
+		t.Fatalf("отсутствие from: — валидно")
+	}
+	if cfg.FromVersions != nil {
+		t.Fatalf("cfg.FromVersions = %v, want nil", cfg.FromVersions)
+	}
+}
+
+// TestLoadScenarioManifest_FromVersionsBadType — скалярное значение `from:` вместо
+// списка → type_mismatch (ключ известен struct-полю, decode-фаза ловит тип).
+func TestLoadScenarioManifest_FromVersionsBadType(t *testing.T) {
+	src := `name: x
+from: "v1.0.0"
+tasks: []
+`
+	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	if !hasCode(diags, "type_mismatch") {
+		dump(t, diags)
+		t.Fatalf(`from: "v1.0.0" (скаляр вместо списка) должен дать type_mismatch`)
+	}
+	if hasCodeAt(diags, "unknown_key", "$.from") {
+		dump(t, diags)
+		t.Fatalf("from: не должен быть unknown_key (известное поле)")
+	}
+}

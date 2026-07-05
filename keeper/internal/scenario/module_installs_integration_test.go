@@ -358,3 +358,67 @@ func finalizeDriftHostWithPlanIndexes(t *testing.T, applyID, sid string, taskCou
 		t.Fatalf("UpdateStatus(success): %v", err)
 	}
 }
+
+// TestIntegration_RenderForHost_FromUpgradeLoadsUpgradeDir — GUARD render-пути
+// (ADR-0068): Acolyte по recipe.FromUpgrade=true рендерит upgrade/<slug>/main.yml,
+// а НЕ scenario/<slug>/. Оба каталога несут сценарий с одним именем, но разными
+// модулями-потребителями → однозначно видно, из какого прочитан план. Ловит
+// регресс render_host.go (проведение recipe.FromUpgrade в parseScenarioFromArtifact).
+func TestIntegration_RenderForHost_FromUpgradeLoadsUpgradeDir(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	seedIncarnation(t, "noop-prod")
+	seedConnectedSoul(t, "host-a.example.com", []string{"noop-prod"})
+	gitURL := moduleServiceRepo(t, `name: create
+state_changes: {}
+tasks:
+  - name: noop create
+    module: core.exec.run
+    params:
+      cmd: "true"
+`, map[string]string{
+		"scenario/to_v2/main.yml": `name: to_v2
+state_changes: {}
+tasks:
+  - name: from scenario dir
+    module: core.file.absent
+    params:
+      path: /tmp/from-scenario
+`,
+		"upgrade/to_v2/main.yml": `name: to_v2
+from: ["v1"]
+state_changes: {}
+tasks:
+  - name: from upgrade dir
+    module: core.file.present
+    params:
+      path: /tmp/from-upgrade
+      content: x
+`,
+	})
+
+	disp := &taskCaptureDispatcher{t: t, result: applyrun.StatusSuccess}
+	r := newRunner(t, disp, gitURL)
+
+	tasks, _, err := RenderForHost(context.Background(), r.deps, &applyrun.Recipe{
+		ServiceRef:   artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
+		ScenarioName: "to_v2",
+		FromUpgrade:  true,
+	}, "noop-prod", audit.NewULID(), "host-a.example.com")
+	if err != nil {
+		t.Fatalf("RenderForHost FromUpgrade: %v", err)
+	}
+
+	var sawUpgradeTask bool
+	for _, rt := range tasks {
+		switch rt.Module {
+		case "core.file.present":
+			sawUpgradeTask = true
+		case "core.file.absent":
+			t.Errorf("RenderForHost прочитал scenario/to_v2 (core.file.absent) вместо upgrade/to_v2 — recipe.FromUpgrade не проведён")
+		}
+	}
+	if !sawUpgradeTask {
+		t.Fatalf("RenderForHost FromUpgrade=true не отрендерил задачу upgrade/to_v2 (core.file.present); got %d tasks", len(tasks))
+	}
+}

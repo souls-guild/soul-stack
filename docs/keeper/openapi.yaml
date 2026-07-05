@@ -1499,10 +1499,33 @@ components:
         - mode
         - hosts
       type: object
+    IncarnationUpgradePathsReply:
+      additionalProperties: false
+      properties:
+        current_state_schema_version:
+          format: int64
+          type: integer
+        current_version:
+          type: string
+        paths:
+          items:
+            $ref: "#/components/schemas/UpgradePathRef"
+          type:
+            - array
+            - "null"
+        target:
+          $ref: "#/components/schemas/UpgradePathTarget"
+      required:
+        - current_version
+        - current_state_schema_version
+      type: object
     IncarnationUpgradeReply:
       additionalProperties: false
       properties:
         apply_id:
+          pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+          type: string
+        run_apply_id:
           pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
           type: string
       required:
@@ -2799,6 +2822,12 @@ components:
           type: string
         form:
           $ref: "#/components/schemas/ScenarioForm"
+        from_versions:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
         input_schema:
           additionalProperties: {}
           type: object
@@ -4032,6 +4061,59 @@ components:
       required:
         - herald
         - event_types
+      type: object
+    UpgradePathRef:
+      additionalProperties: false
+      properties:
+        commit:
+          type: string
+        is_current:
+          type: boolean
+        ref:
+          type: string
+        type:
+          type: string
+      required:
+        - ref
+        - type
+        - commit
+        - is_current
+      type: object
+    UpgradePathTarget:
+      additionalProperties: false
+      properties:
+        direction:
+          type: string
+        downgrade:
+          type: boolean
+        mode:
+          type: string
+        reachable:
+          type: boolean
+        resolved_commit:
+          type: string
+        slug:
+          type: string
+        state_migrations:
+          items:
+            $ref: "#/components/schemas/StateSchemaMigration"
+          type:
+            - array
+            - "null"
+        target_state_schema_version:
+          format: int64
+          type: integer
+        to:
+          type: string
+        unreachable_reason:
+          type: string
+      required:
+        - to
+        - resolved_commit
+        - target_state_schema_version
+        - direction
+        - downgrade
+        - reachable
       type: object
     VigilCreateRequest:
       additionalProperties: false
@@ -7663,6 +7745,65 @@ paths:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Internal Server Error
       summary: Перевести инкарнацию на новую версию
+      tags:
+        - incarnation
+  /v1/incarnations/{name}/upgrade-paths:
+    get:
+      description: Дешёвый список тегов реестра сервиса (пометка is_current) без ?to=; on-demand анализ одной цели (direction / found-legacy / state-миграции) с ?to=<ref> (ADR-0068 §6). Permission incarnation.upgrade (read-грань). Read-only, без audit.
+      operationId: getIncarnationUpgradePaths
+      parameters:
+        - description: имя инкарнации
+          in: path
+          name: name
+          required: true
+          schema:
+            description: имя инкарнации
+            type: string
+        - description: опц. целевой git-ref для on-demand анализа одной цели; пусто → список тегов реестра + is_current
+          explode: false
+          in: query
+          name: to
+          schema:
+            description: опц. целевой git-ref для on-demand анализа одной цели; пусто → список тегов реестра + is_current
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IncarnationUpgradePathsReply"
+          description: OK
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+        "502":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Bad Gateway
+      summary: Пути апгрейда инкарнации
       tags:
         - incarnation
   /v1/me/permissions:

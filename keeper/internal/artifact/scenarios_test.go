@@ -25,6 +25,21 @@ func writeScenario(t *testing.T, root, name, body string) string {
 	return p
 }
 
+// writeUpgrade — хелпер для подкладывания upgrade/<slug>/main.yml внутрь тестового
+// serviceRoot (зеркало writeScenario для второго канала дискавери, ADR-0068).
+func writeUpgrade(t *testing.T, root, slug, body string) string {
+	t.Helper()
+	dir := filepath.Join(root, upgradeDir, slug)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	p := filepath.Join(dir, scenarioMainFile)
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	return p
+}
+
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
@@ -500,5 +515,131 @@ func TestListScenarios_CreateFlagJSONOmitempty(t *testing.T) {
 	}
 	if strings.Contains(string(noCreate), `"create"`) {
 		t.Errorf("create=false scenario JSON must omit \"create\" (omitempty), got %s", noCreate)
+	}
+}
+
+// --- ListUpgrades: второй канал авто-дискавери upgrade/<slug>/ (ADR-0068 §3) ---
+
+// TestListUpgrades_FindsUpgradeWithFrom — upgrade/<slug>/main.yml с top-level `from:`
+// находится и проецируется в Scenario.FromVersions; Path указывает на upgrade/.
+func TestListUpgrades_FindsUpgradeWithFrom(t *testing.T) {
+	root := t.TempDir()
+	writeUpgrade(t, root, "v2", `description: sentinel→cluster на v2
+from: ["v1.0.0", "v1.2.0"]
+tasks: []
+`)
+
+	got, err := ListUpgrades(root, discardLogger())
+	if err != nil {
+		t.Fatalf("ListUpgrades: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1; got = %+v", len(got), got)
+	}
+	up := got[0]
+	if up.Name != "v2" {
+		t.Errorf("Name = %q, want v2", up.Name)
+	}
+	if up.Path != "upgrade/v2/main.yml" {
+		t.Errorf("Path = %q, want upgrade/v2/main.yml", up.Path)
+	}
+	want := []string{"v1.0.0", "v1.2.0"}
+	if len(up.FromVersions) != len(want) || up.FromVersions[0] != want[0] || up.FromVersions[1] != want[1] {
+		t.Errorf("FromVersions = %+v, want %+v", up.FromVersions, want)
+	}
+}
+
+// TestListUpgrades_IgnoresNonDirs — свободный файл под upgrade/ (не каталог)
+// пропускается, как и у ListScenarios.
+func TestListUpgrades_IgnoresNonDirs(t *testing.T) {
+	root := t.TempDir()
+	writeUpgrade(t, root, "v2", `from: ["v1.0.0"]
+tasks: []
+`)
+	// Свободный файл рядом с каталогами upgrade/ — не должен попасть в listing.
+	if err := os.WriteFile(filepath.Join(root, upgradeDir, "README.md"), []byte("noise"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	got, err := ListUpgrades(root, discardLogger())
+	if err != nil {
+		t.Fatalf("ListUpgrades: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "v2" {
+		t.Fatalf("got = %+v, want ровно [v2]", got)
+	}
+}
+
+// TestListUpgrades_MissingDir_Empty — отсутствие каталога upgrade/ → пустой список,
+// НЕ ошибка (сервис без upgrade-сценариев валиден, ADR-0068 §5 legacy-путь).
+func TestListUpgrades_MissingDir_Empty(t *testing.T) {
+	root := t.TempDir()
+	writeScenario(t, root, "create", "description: x\ntasks: []\n")
+
+	got, err := ListUpgrades(root, discardLogger())
+	if err != nil {
+		t.Fatalf("ListUpgrades без upgrade/ должен вернуть nil-ошибку, got %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("got = %+v, want пустой список", got)
+	}
+}
+
+// TestListScenarios_IgnoresUpgradeDir — РЕГРЕСС-ГУАРД изоляции (ADR-0068 §3):
+// upgrade/<slug>/ НЕ должен просачиваться в day-2 scenario-список, а scenario/ —
+// в upgrade-список. Каналы строго разделены.
+func TestListScenarios_IgnoresUpgradeDir(t *testing.T) {
+	root := t.TempDir()
+	writeScenario(t, root, "create", "description: стартовый\ntasks: []\n")
+	writeUpgrade(t, root, "v2", "from: [\"v1.0.0\"]\ntasks: []\n")
+
+	scenarios, err := ListScenarios(root, discardLogger())
+	if err != nil {
+		t.Fatalf("ListScenarios: %v", err)
+	}
+	if len(scenarios) != 1 || scenarios[0].Name != "create" {
+		t.Fatalf("ListScenarios = %+v, want ровно [create] (upgrade/ не должен просачиваться)", scenarios)
+	}
+
+	upgrades, err := ListUpgrades(root, discardLogger())
+	if err != nil {
+		t.Fatalf("ListUpgrades: %v", err)
+	}
+	if len(upgrades) != 1 || upgrades[0].Name != "v2" {
+		t.Fatalf("ListUpgrades = %+v, want ровно [v2] (scenario/ не должен просачиваться)", upgrades)
+	}
+}
+
+// TestListScenarios_StrayFromNotProjected — ФИЗИЧЕСКИЙ гейт изоляции поля (ADR-0068
+// §3): стрэй top-level `from:` в scenario/<name>/main.yml НЕ просачивается в day-2
+// reply — FromVersions заполняется только на upgrade/-канале (dir==upgradeDir), а не
+// по каталогу-косвенно. Регресс на случай, если оператор случайно напишет `from:` в
+// обычном сценарии.
+func TestListScenarios_StrayFromNotProjected(t *testing.T) {
+	root := t.TempDir()
+	writeScenario(t, root, "create", `description: стартовый
+from: ["v1.0.0"]
+tasks: []
+`)
+
+	got, err := ListScenarios(root, discardLogger())
+	if err != nil {
+		t.Fatalf("ListScenarios: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	if got[0].FromVersions != nil {
+		t.Fatalf("scenario/-запись не должна нести FromVersions (стрэй from: просочился): %+v", got[0].FromVersions)
+	}
+
+	// Тот же стрэй-guard симметрично: upgrade/-канал ДОЛЖЕН нести from:.
+	writeUpgrade(t, root, "v2", "from: [\"v1.0.0\"]\ntasks: []\n")
+	ups, err := ListUpgrades(root, discardLogger())
+	if err != nil {
+		t.Fatalf("ListUpgrades: %v", err)
+	}
+	if len(ups) != 1 || len(ups[0].FromVersions) != 1 || ups[0].FromVersions[0] != "v1.0.0" {
+		t.Fatalf("upgrade/-запись должна нести FromVersions=[v1.0.0], got %+v", ups)
 	}
 }

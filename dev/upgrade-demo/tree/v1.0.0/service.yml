@@ -1,0 +1,15 @@
+name: upgrade-demo
+state_schema_version: 1
+description: >-
+  Демо-сервис для ручного теста NIM-34 (upgrade v2, ADR-0068). Тег v1.0.0 —
+  стартовая версия: нет каталога upgrade/, нет create-сценария (создаётся
+  bare-инкарнация без хостов), нет migrations/. Пин v1.0.0 — точка отсчёта, из
+  которой upgrade-paths показывает переходы на v2.0.0 (found) и v2.0.1 (legacy).
+
+# state_schema_version = 1 → каталог migrations/ не обязателен (ADR-019).
+# state пустой у bare-инкарнации (нет create-прогона); поле note — заглушка схемы.
+state_schema:
+  type: object
+  properties:
+    note:
+      type: string
