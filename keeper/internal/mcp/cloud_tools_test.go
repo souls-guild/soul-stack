@@ -205,7 +205,7 @@ func newCloudToolHandler(t *testing.T, rbacCfg *rbactest.Config, pool *cloudFake
 		OperatorSvc: opSvc, RBAC: enf, AuditWriter: rec, Logger: logger, IncarnationDB: &fakePool{},
 	}
 	if pool != nil {
-		provSvc, err := provider.NewService(pool)
+		provSvc, err := provider.NewService(provider.ServiceDeps{Pool: pool})
 		if err != nil {
 			t.Fatalf("provider.NewService: %v", err)
 		}

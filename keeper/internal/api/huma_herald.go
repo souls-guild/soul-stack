@@ -43,6 +43,7 @@ func registerHumaHeraldCreate(humaAPI huma.API, heraldH *handlers.HeraldHandler)
 			Type:      in.Body.Type,
 			Config:    in.Body.Config,
 			SecretRef: in.Body.SecretRef,
+			Secret:    in.Body.Secret,
 			Enabled:   in.Body.Enabled,
 		})
 		if err != nil {
@@ -97,6 +98,7 @@ func registerHumaHeraldUpdate(humaAPI huma.API, heraldH *handlers.HeraldHandler)
 			Type:      in.Body.Type,
 			Config:    in.Body.Config,
 			SecretRef: in.Body.SecretRef,
+			Secret:    in.Body.Secret,
 			Enabled:   in.Body.Enabled,
 		})
 		if err != nil {

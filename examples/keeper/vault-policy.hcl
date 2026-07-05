@@ -37,6 +37,25 @@ path "secret/data/keeper/*" {
   capabilities = ["read"]
 }
 
+# --- KV v2: dual-mode приём секрета оператора (ADR-064, NIM-11) ---------------
+#
+# При plaintext-приёме секрета (Herald signing/channel-token, Provider cloud-
+# credentials) Keeper САМ пишет значение в Vault по детерминированному пути
+# secret/<domain>/<entity>/<field> и хранит в Postgres только ref. KV v2 держит
+# ЗНАЧЕНИЯ под data-путём. Нужны create+update (idempotent-write при update
+# перезаписывает по тому же пути) + read (резолв на потреблении: herald-доставка
+# читает signing/channel-token, cloud-flow читает credentials).
+#
+# Скоуп узкий (herald/*, provider/*), НЕ весь mount: keeper пишет ТОЛЬКО в свои
+# детерминированные префиксы. При кастомном kv_mount (keeper.yml::vault.kv_mount)
+# замените `secret/` на фактический mount.
+path "secret/data/herald/*" {
+  capabilities = ["create", "update", "read"]
+}
+path "secret/data/provider/*" {
+  capabilities = ["create", "update", "read"]
+}
+
 # --- PKI: подпись CSR SoulSeed при онбординге -------------------------------
 #
 # При Bootstrap-RPC (ADR-012(b)) Keeper выписывает SoulSeed-сертификат

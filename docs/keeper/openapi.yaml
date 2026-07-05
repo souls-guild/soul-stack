@@ -968,7 +968,7 @@ components:
       properties:
         config:
           additionalProperties: {}
-          description: per-type config (форма зависит от type; см. каталог GET /v1/herald-types)
+          description: "per-type config (форма зависит от type; см. каталог GET /v1/herald-types). Секрет канала (bot_token/webhook_url/header_secret) — dual-mode: значение (plaintext) ИЛИ *_ref (vault-путь)"
           type: object
         enabled:
           description: канал включён (опущено → true)
@@ -977,8 +977,11 @@ components:
           description: имя Herald-канала (kebab-case, 1..63), уникальное в кластере
           pattern: ^[a-z0-9-]{1,63}$
           type: string
+        secret:
+          description: "опц. plaintext webhook signing-token (dual-mode, ADR-064): keeper пишет его в Vault сам; XOR с secret_ref. Требует TLS-фронта (secret_ingest.accept_plaintext)"
+          type: string
         secret_ref:
-          description: опц. vault-ref на signing-token (vault:<mount>/<path>); сам секрет не хранится
+          description: опц. vault-ref на webhook signing-token (vault:<mount>/<path>); XOR с secret
           type: string
         type:
           description: "тип канала (closed-enum: webhook|telegram|slack|mattermost|discord|custom|email); значение вне enum → 422"
@@ -1081,13 +1084,16 @@ components:
       properties:
         config:
           additionalProperties: {}
-          description: per-type config (replace — полностью заменяет существующий)
+          description: "per-type config (replace — полностью заменяет существующий). Секрет канала — dual-mode: значение (plaintext) ИЛИ *_ref"
           type: object
         enabled:
           description: канал включён (опущено → true)
           type: boolean
+        secret:
+          description: "опц. plaintext webhook signing-token (dual-mode, ADR-064): keeper перезаписывает его в Vault по тому же пути; XOR с secret_ref"
+          type: string
         secret_ref:
-          description: опц. vault-ref на signing-token; отсутствие очищает подпись
+          description: опц. vault-ref на signing-token; XOR с secret; отсутствие обоих очищает подпись
           type: string
         type:
           description: "тип канала (closed-enum: webhook|telegram|slack|mattermost|discord|custom|email)"
@@ -2175,9 +2181,12 @@ components:
     ProviderCreateRequest:
       additionalProperties: false
       properties:
+        credentials:
+          additionalProperties: {}
+          description: "опц. plaintext cloud-credentials (dual-mode, ADR-064): напр. {access_key, secret_key}; keeper пишет их в Vault сам; XOR с credentials_ref. Требует TLS-фронта (secret_ingest.accept_plaintext)"
+          type: object
         credentials_ref:
-          description: vault-ref до credentials (vault:<path>); значение НЕ резолвится
-          pattern: "^vault:"
+          description: vault-ref до credentials (vault:<path>); XOR с credentials. Значение НЕ резолвится
           type: string
         fqdn_suffix:
           description: "суффикс FQDN VM (self-onboard: keeper предсказывает FQDN=<name>-<index>.<fqdn_suffix>). Опущено → self-onboard недоступен"
@@ -2197,7 +2206,6 @@ components:
         - name
         - type
         - region
-        - credentials_ref
       type: object
     ProviderListReply:
       additionalProperties: false

@@ -66,6 +66,11 @@ type KeeperConfig struct {
 	Sigil         *KeeperSigil   `yaml:"sigil,omitempty"`
 	Audit         *KeeperAudit   `yaml:"audit,omitempty"`
 
+	// SecretIngest — dual-mode приём plaintext-секретов оператора (ADR-064,
+	// NIM-11). Опц.; отсутствие/nil == secure default (plaintext запрещён,
+	// принимаются только *_ref). См. [KeeperSecretIngest].
+	SecretIngest *KeeperSecretIngest `yaml:"secret_ingest,omitempty"`
+
 	// Push — pilot wire-up SshDispatcher (S6, 2026-05-26). Pilot-path: inline
 	// `targets[]` + `providers[]` + single `host_ca_ref` в keeper.yml,
 	// single-provider routing. Long-term canon (S7): миграция в souls.ssh_target
@@ -898,6 +903,20 @@ type KeeperVault struct {
 	// `secret/internal/*`); сам system-floor конфигом НЕ выключается, только
 	// расширяется. Авторских `vault:`-refs в task params это НЕ касается.
 	InputDenyPaths []string `yaml:"input_deny_paths,omitempty"`
+}
+
+// KeeperSecretIngest — dual-mode приём секрета оператора (ADR-064, NIM-11).
+// Оператор может передать секрет значением (plaintext `secret`/`credentials`)
+// вместо vault-ref; keeper сам пишет его в Vault по детерминированному пути и
+// хранит в PG только ref.
+type KeeperSecretIngest struct {
+	// AcceptPlaintext — разрешить приём plaintext-секрета в Herald/Provider CRUD
+	// (Operator API + MCP). Default false (secure): при false plaintext
+	// отвергается 422, принимаются только `*_ref`. Включать ТОЛЬКО когда Operator
+	// API и MCP за TLS (ADR-064 митигация a): plaintext идёт по проводу
+	// оператор→keeper, cleartext-хоп недопустим. Keeper сам TLS Operator API не
+	// терминирует (за прокси), поэтому гарантия — операторская декларация.
+	AcceptPlaintext bool `yaml:"accept_plaintext"`
 }
 
 // KeeperVaultAuth — выбор и параметры auth-метода Vault.

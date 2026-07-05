@@ -66,14 +66,25 @@ func ValidHeraldType(t HeraldType) bool {
 // опц. opt-out флаги http_allowed/allow_private). SecretRef — vault-ref секрета
 // канала (signing-token), nullable: не каждому webhook нужна подпись.
 type Herald struct {
-	Name         string         `json:"name"`
-	Type         HeraldType     `json:"type"`
-	Config       map[string]any `json:"config"`
-	SecretRef    *string        `json:"secret_ref,omitempty"`
-	Enabled      bool           `json:"enabled"`
-	CreatedAt    time.Time      `json:"created_at"`
-	UpdatedAt    time.Time      `json:"updated_at"`
-	CreatedByAID *string        `json:"created_by_aid,omitempty"`
+	Name      string         `json:"name"`
+	Type      HeraldType     `json:"type"`
+	Config    map[string]any `json:"config"`
+	SecretRef *string        `json:"secret_ref,omitempty"`
+	// Secret — plaintext webhook signing-secret (dual-mode, ADR-064): оператор
+	// передаёт значение вместо SecretRef; Service материализует его в Vault
+	// ([materializeHeraldSecrets]) и заменяет на внутренний SecretRef. json:"-" —
+	// НИКОГДА не сериализуется (не в PG/View/audit), request-scoped, стирается
+	// после записи. XOR с SecretRef. Аналогично для config-полей канала (<base>
+	// plaintext XOR <base>_ref) — их plaintext живёт в Config до материализации.
+	Secret *string `json:"-"`
+	// SecretWritten — request-scoped маркер: keeper записал plaintext-секрет в
+	// Vault на этой операции (ADR-064 audit-event). json:"-"; читается audit-
+	// payload-ом (ключ plaintext_ingested), в PG/View не попадает.
+	SecretWritten bool      `json:"-"`
+	Enabled       bool      `json:"enabled"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	CreatedByAID  *string   `json:"created_by_aid,omitempty"`
 }
 
 // Tiding — runtime-представление строки реестра `tidings`.

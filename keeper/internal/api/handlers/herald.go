@@ -102,7 +102,10 @@ type HeraldCreateInput struct {
 	Type      string
 	Config    map[string]any
 	SecretRef *string
-	Enabled   *bool
+	// Secret — опц. plaintext webhook signing-secret (dual-mode, ADR-064); XOR с
+	// SecretRef. Service материализует его в Vault, plaintext не персистится.
+	Secret  *string
+	Enabled *bool
 }
 
 // HeraldUpdateInput — NATIVE request-форма PUT /v1/heralds/{name} (handler-native,
@@ -111,7 +114,10 @@ type HeraldUpdateInput struct {
 	Type      string
 	Config    map[string]any
 	SecretRef *string
-	Enabled   *bool
+	// Secret — опц. plaintext webhook signing-secret (dual-mode, ADR-064); XOR с
+	// SecretRef. Перезаписывается в Vault по тому же пути (idempotent-write).
+	Secret  *string
+	Enabled *bool
 }
 
 // HeraldWriteReply — извлечённый результат write-роутов Herald-а (CreateHeraldTyped/
@@ -139,6 +145,7 @@ func (h *HeraldHandler) CreateHeraldTyped(ctx context.Context, claims *keeperjwt
 		Type:         herald.HeraldType(req.Type),
 		Config:       req.Config,
 		SecretRef:    req.SecretRef,
+		Secret:       req.Secret,
 		Enabled:      boolOr(req.Enabled, true),
 		CreatedByAID: aidPtr(claims.Subject),
 	}
@@ -160,6 +167,7 @@ func (h *HeraldHandler) UpdateHeraldTyped(ctx context.Context, name string, req 
 		Type:      herald.HeraldType(req.Type),
 		Config:    req.Config,
 		SecretRef: req.SecretRef,
+		Secret:    req.Secret,
 		Enabled:   boolOr(req.Enabled, true),
 	}
 	updated, err := h.svc.UpdateHerald(ctx, hr)
@@ -273,6 +281,12 @@ func heraldAuditPayload(h *herald.Herald) middleware.AuditPayload {
 	}
 	if h.SecretRef != nil {
 		p["secret_ref"] = *h.SecretRef
+	}
+	// plaintext_ingested — маркер записи секрета keeper-ом (ADR-064 audit-event):
+	// оператор передал секрет значением, keeper записал его в Vault. БЕЗ plaintext.
+	// Ключ без sensitive-фрагмента → не маскируется (в отличие от secret_ref).
+	if h.SecretWritten {
+		p["plaintext_ingested"] = true
 	}
 	if h.CreatedByAID != nil {
 		p["created_by_aid"] = *h.CreatedByAID

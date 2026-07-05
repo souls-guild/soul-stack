@@ -54,6 +54,9 @@ type ProviderCreateInput struct {
 	Type           string
 	Region         string
 	CredentialsRef string
+	// Credentials — опц. plaintext cloud-credentials (dual-mode, ADR-064); XOR с
+	// CredentialsRef. Service материализует их в Vault, plaintext не персистится.
+	Credentials map[string]any
 	// FQDNSuffix — опц. суффикс FQDN VM (self-onboard Вариант T, ADR-017(h)).
 	// Пусто/nil → self-onboard недоступен для провайдера.
 	FQDNSuffix *string
@@ -101,6 +104,8 @@ type ProviderWriteReply struct {
 	Region         string
 	CredentialsRef string
 	FQDNSuffix     *string
+	// SecretWritten — keeper записал plaintext-credentials в Vault (ADR-064 audit).
+	SecretWritten bool
 }
 
 // AuditPayload собирает audit-payload create-роута Provider-а.
@@ -113,6 +118,10 @@ func (r ProviderWriteReply) AuditPayload() middleware.AuditPayload {
 	}
 	if r.FQDNSuffix != nil {
 		p["fqdn_suffix"] = *r.FQDNSuffix
+	}
+	// plaintext_ingested — маркер записи credentials keeper-ом (ADR-064), без plaintext.
+	if r.SecretWritten {
+		p["plaintext_ingested"] = true
 	}
 	return p
 }
@@ -146,10 +155,9 @@ func (h *ProviderHandler) CreateTyped(ctx context.Context, claims *keeperjwt.Cla
 	if req.Region == "" {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "field 'region' is required")}
 	}
-	if !provider.ValidCredentialsRef(req.CredentialsRef) {
-		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"field 'credentials_ref' must start with "+provider.CredentialsRefPrefix+" and carry a path")}
-	}
+	// credentials_ref / credentials — dual-mode XOR (ADR-064); формат/XOR/plaintext-
+	// disabled валидирует сервис (provider.IsValidationError → 422 ниже).
+	//
 	// fqdn_suffix опционален (self-onboard Вариант T); если задан — валидируем
 	// формат до round-trip-а (пустая строка не допускается — используй отсутствие).
 	if req.FQDNSuffix != nil {
@@ -164,6 +172,7 @@ func (h *ProviderHandler) CreateTyped(ctx context.Context, claims *keeperjwt.Cla
 		Type:           req.Type,
 		Region:         req.Region,
 		CredentialsRef: req.CredentialsRef,
+		Credentials:    req.Credentials,
 		FQDNSuffix:     req.FQDNSuffix,
 		CallerAID:      claims.Subject,
 	})
@@ -176,10 +185,13 @@ func (h *ProviderHandler) CreateTyped(ctx context.Context, claims *keeperjwt.Cla
 			Region:         p.Region,
 			CredentialsRef: p.CredentialsRef,
 			FQDNSuffix:     p.FQDNSuffix,
+			SecretWritten:  p.SecretWritten,
 		}, nil
 	case errors.Is(err, provider.ErrProviderAlreadyExists):
 		return zero, &problemError{problem.New(problem.TypeProviderExists, "",
 			"provider "+req.Name+" already exists")}
+	case provider.IsValidationError(err):
+		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", provider.PublicMessage(err))}
 	default:
 		h.logger.Error("provider.create: service failed",
 			slog.String("name", req.Name),

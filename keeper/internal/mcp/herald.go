@@ -60,7 +60,11 @@ type heraldCreateArgs struct {
 	Type      string         `json:"type"`
 	Config    map[string]any `json:"config"`
 	SecretRef *string        `json:"secret_ref"`
-	Enabled   *bool          `json:"enabled"`
+	// Secret — опц. plaintext webhook signing-token (dual-mode, ADR-064); XOR с
+	// secret_ref. Config-секреты канала (bot_token/webhook_url/…) — тоже dual-mode
+	// внутри config. keeper пишет plaintext в Vault, plaintext не персистится.
+	Secret  *string `json:"secret"`
+	Enabled *bool   `json:"enabled"`
 }
 
 type heraldUpdateArgs struct {
@@ -68,6 +72,7 @@ type heraldUpdateArgs struct {
 	Type      string         `json:"type"`
 	Config    map[string]any `json:"config"`
 	SecretRef *string        `json:"secret_ref"`
+	Secret    *string        `json:"secret"` // dual-mode plaintext (ADR-064), XOR secret_ref
 	Enabled   *bool          `json:"enabled"`
 }
 
@@ -115,6 +120,7 @@ func (h *Handler) callHeraldCreate(ctx context.Context, claims *jwt.Claims, req 
 		Type:         herald.HeraldType(a.Type),
 		Config:       a.Config,
 		SecretRef:    a.SecretRef,
+		Secret:       a.Secret,
 		Enabled:      enabled,
 		CreatedByAID: aidArgMCP(claims.Subject),
 	})
@@ -151,6 +157,7 @@ func (h *Handler) callHeraldUpdate(ctx context.Context, claims *jwt.Claims, req 
 		Type:      herald.HeraldType(a.Type),
 		Config:    a.Config,
 		SecretRef: a.SecretRef,
+		Secret:    a.Secret,
 		Enabled:   enabled,
 	})
 	if err != nil {
@@ -253,6 +260,10 @@ func heraldAuditMCP(h *herald.Herald) map[string]any {
 	}
 	if h.SecretRef != nil {
 		p["secret_ref"] = *h.SecretRef
+	}
+	// plaintext_ingested — маркер записи секрета keeper-ом (ADR-064), без plaintext.
+	if h.SecretWritten {
+		p["plaintext_ingested"] = true
 	}
 	if h.CreatedByAID != nil {
 		p["created_by_aid"] = *h.CreatedByAID

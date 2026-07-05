@@ -65,6 +65,7 @@ import (
 	keeperredis "github.com/souls-guild/soul-stack/keeper/internal/redis"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
 	"github.com/souls-guild/soul-stack/keeper/internal/scenario"
+	"github.com/souls-guild/soul-stack/keeper/internal/secretwrite"
 	"github.com/souls-guild/soul-stack/keeper/internal/serviceregistry"
 	"github.com/souls-guild/soul-stack/keeper/internal/sigil"
 	"github.com/souls-guild/soul-stack/keeper/internal/toll"
@@ -1779,6 +1780,20 @@ func (p *daemonPushProviderPublisher) PublishPushProvidersChanged(ctx context.Co
 	return err
 }
 
+// buildSecretWriter собирает writer материализации plaintext-секретов оператора
+// в Vault (ADR-064, NIM-11; dual-mode приём для Herald/Provider) поверх того же
+// Vault-клиента, что sigil/cert. d.vc не-nil после setupVault (Vault hard-
+// required, ADR-053). mount — из keeper.yml (vault.kv_mount, default "secret").
+func (d *daemon) buildSecretWriter() (*secretwrite.Writer, error) {
+	return secretwrite.NewWriter(d.vc, d.cfg.Vault.KVMount)
+}
+
+// acceptPlaintextSecrets — разрешён ли приём plaintext-секрета (ADR-064 митигация
+// a: TLS-фронт Operator API/MCP). Default false (secure): plaintext отвергается.
+func (d *daemon) acceptPlaintextSecrets() bool {
+	return d.cfg.SecretIngest != nil && d.cfg.SecretIngest.AcceptPlaintext
+}
+
 // setupHeraldSvc — CRUD-фасад реестров heralds/tidings + двухуровневая
 // инвалидация снимка Tiding-правил dispatcher-а (ADR-052, S4).
 //
@@ -1805,11 +1820,18 @@ func (d *daemon) setupHeraldSvc(ctx context.Context) error {
 	if d.heraldDispatcher != nil {
 		inv = d.heraldDispatcher
 	}
+	secretWriter, err := d.buildSecretWriter()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "keeper run: build herald secret writer: %v\n", err)
+		return errSetupFailed
+	}
 	svc, err := herald.NewService(herald.ServiceDeps{
-		Pool:        d.pool,
-		Invalidator: inv,
-		Redis:       redis,
-		Logger:      logger.With(slog.String("component", "herald-svc")),
+		Pool:            d.pool,
+		Invalidator:     inv,
+		Redis:           redis,
+		Logger:          logger.With(slog.String("component", "herald-svc")),
+		SecretWriter:    secretWriter,
+		AcceptPlaintext: d.acceptPlaintextSecrets(),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: build herald service: %v\n", err)
@@ -1856,7 +1878,16 @@ func (d *daemon) setupHeraldSvc(ctx context.Context) error {
 // После setupPG (нужен d.pool); ДО setupAPIServer/setupMCPServer (api.Deps и
 // HandlerDeps читают d.providerSvc/d.profileSvc).
 func (d *daemon) setupCloudCRUD(_ context.Context) error {
-	provSvc, err := provider.NewService(d.pool)
+	secretWriter, err := d.buildSecretWriter()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "keeper run: build provider secret writer: %v\n", err)
+		return errSetupFailed
+	}
+	provSvc, err := provider.NewService(provider.ServiceDeps{
+		Pool:            d.pool,
+		SecretWriter:    secretWriter,
+		AcceptPlaintext: d.acceptPlaintextSecrets(),
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: build provider service: %v\n", err)
 		return errSetupFailed

@@ -62,6 +62,7 @@ func registerHumaProviderCreate(humaAPI huma.API, providerH *handlers.ProviderHa
 			Type:           in.Body.Type,
 			Region:         in.Body.Region,
 			CredentialsRef: in.Body.CredentialsRef,
+			Credentials:    in.Body.Credentials,
 			FQDNSuffix:     in.Body.FQDNSuffix,
 		})
 		if err != nil {

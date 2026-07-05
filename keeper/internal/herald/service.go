@@ -25,6 +25,11 @@ type Service struct {
 	invalidator Invalidator
 	redis       RedisInvalidator
 	logger      *slog.Logger
+	// secretWriter/acceptPlaintext — dual-mode приём plaintext-секрета (ADR-064,
+	// NIM-11). secretWriter=nil ИЛИ acceptPlaintext=false → plaintext отвергается,
+	// принимаются только *_ref (secure default).
+	secretWriter    SecretWriter
+	acceptPlaintext bool
 }
 
 // Invalidator — узкая поверхность in-process-сброса кэша правил dispatcher-а.
@@ -49,6 +54,12 @@ type ServiceDeps struct {
 	Invalidator Invalidator
 	Redis       RedisInvalidator
 	Logger      *slog.Logger
+	// SecretWriter — материализация plaintext-секрета в Vault (dual-mode, ADR-064).
+	// nil → plaintext-приём недоступен (принимаются только *_ref).
+	SecretWriter SecretWriter
+	// AcceptPlaintext — разрешён ли приём plaintext (ADR-064 митигация a: TLS-фронт).
+	// false (default) → plaintext отвергается 422.
+	AcceptPlaintext bool
 }
 
 // NewService собирает service. Pool обязателен (nil → ошибка). nil Invalidator/
@@ -69,7 +80,14 @@ func NewService(d ServiceDeps) (*Service, error) {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &Service{pool: d.Pool, invalidator: inv, redis: redis, logger: logger}, nil
+	return &Service{
+		pool:            d.Pool,
+		invalidator:     inv,
+		redis:           redis,
+		logger:          logger,
+		secretWriter:    d.SecretWriter,
+		acceptPlaintext: d.AcceptPlaintext,
+	}, nil
 }
 
 // --- Herald ----------------------------------------------------------
@@ -79,6 +97,11 @@ func NewService(d ServiceDeps) (*Service, error) {
 // [ErrHeraldExists] (409). Валидация name/type/config/secret_ref — внутри
 // [InsertHerald] (до записи).
 func (s *Service) CreateHerald(ctx context.Context, h *Herald) (*Herald, error) {
+	// Dual-mode: plaintext-секреты → Vault, замена на внутренний ref (ADR-064).
+	// ДО Insert (в PG идёт только ref); plaintext стирается из h.
+	if err := materializeHeraldSecrets(ctx, s.secretWriter, s.acceptPlaintext, h); err != nil {
+		return nil, err
+	}
 	if err := InsertHerald(ctx, s.pool, h); err != nil {
 		return nil, err
 	}
@@ -99,6 +122,10 @@ func (s *Service) ListHeralds(ctx context.Context, offset, limit int) ([]*Herald
 // UpdateHerald заменяет mutable-поля канала (replace). Перечитывает запись после
 // апдейта, чтобы отдать актуальные timestamps. [ErrHeraldNotFound] при отсутствии.
 func (s *Service) UpdateHerald(ctx context.Context, h *Herald) (*Herald, error) {
+	// Dual-mode: plaintext → Vault (idempotent-write по тому же пути), ADR-064.
+	if err := materializeHeraldSecrets(ctx, s.secretWriter, s.acceptPlaintext, h); err != nil {
+		return nil, err
+	}
 	if err := UpdateHerald(ctx, s.pool, h); err != nil {
 		return nil, err
 	}
@@ -106,6 +133,7 @@ func (s *Service) UpdateHerald(ctx context.Context, h *Herald) (*Herald, error) 
 	if err != nil {
 		return nil, err
 	}
+	updated.SecretWritten = h.SecretWritten // маркер write-path переживает re-read
 	s.invalidate(ctx, h.Name)
 	return updated, nil
 }

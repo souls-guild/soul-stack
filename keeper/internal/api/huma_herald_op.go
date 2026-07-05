@@ -38,8 +38,9 @@ type heraldCreateInput struct {
 type HeraldCreateRequest struct {
 	Name      string         `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"имя Herald-канала (kebab-case, 1..63), уникальное в кластере"`
 	Type      string         `json:"type" required:"true" enum:"custom,discord,email,mattermost,slack,telegram,webhook" doc:"тип канала (closed-enum: webhook|telegram|slack|mattermost|discord|custom|email); значение вне enum → 422"`
-	Config    map[string]any `json:"config" required:"true" doc:"per-type config (форма зависит от type; см. каталог GET /v1/herald-types)"`
-	SecretRef *string        `json:"secret_ref,omitempty" doc:"опц. vault-ref на signing-token (vault:<mount>/<path>); сам секрет не хранится"`
+	Config    map[string]any `json:"config" required:"true" doc:"per-type config (форма зависит от type; см. каталог GET /v1/herald-types). Секрет канала (bot_token/webhook_url/header_secret) — dual-mode: значение (plaintext) ИЛИ *_ref (vault-путь)"`
+	SecretRef *string        `json:"secret_ref,omitempty" doc:"опц. vault-ref на webhook signing-token (vault:<mount>/<path>); XOR с secret"`
+	Secret    *string        `json:"secret,omitempty" doc:"опц. plaintext webhook signing-token (dual-mode, ADR-064): keeper пишет его в Vault сам; XOR с secret_ref. Требует TLS-фронта (secret_ingest.accept_plaintext)"`
 	Enabled   *bool          `json:"enabled,omitempty" doc:"канал включён (опущено → true)"`
 }
 
@@ -149,8 +150,9 @@ type heraldUpdateInput struct {
 // (committed-рукопись → HeraldUpdateRequest).
 type HeraldUpdateRequest struct {
 	Type      string         `json:"type" required:"true" enum:"custom,discord,email,mattermost,slack,telegram,webhook" doc:"тип канала (closed-enum: webhook|telegram|slack|mattermost|discord|custom|email)"`
-	Config    map[string]any `json:"config" required:"true" doc:"per-type config (replace — полностью заменяет существующий)"`
-	SecretRef *string        `json:"secret_ref,omitempty" doc:"опц. vault-ref на signing-token; отсутствие очищает подпись"`
+	Config    map[string]any `json:"config" required:"true" doc:"per-type config (replace — полностью заменяет существующий). Секрет канала — dual-mode: значение (plaintext) ИЛИ *_ref"`
+	SecretRef *string        `json:"secret_ref,omitempty" doc:"опц. vault-ref на signing-token; XOR с secret; отсутствие обоих очищает подпись"`
+	Secret    *string        `json:"secret,omitempty" doc:"опц. plaintext webhook signing-token (dual-mode, ADR-064): keeper перезаписывает его в Vault по тому же пути; XOR с secret_ref"`
 	Enabled   *bool          `json:"enabled,omitempty" doc:"канал включён (опущено → true)"`
 }
 

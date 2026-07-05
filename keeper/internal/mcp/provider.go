@@ -45,6 +45,9 @@ type providerCreateArgs struct {
 	Type           string `json:"type"`
 	Region         string `json:"region"`
 	CredentialsRef string `json:"credentials_ref"`
+	// Credentials — опц. plaintext cloud-credentials (dual-mode, ADR-064); XOR с
+	// credentials_ref. keeper пишет их в Vault, plaintext не персистится.
+	Credentials map[string]any `json:"credentials"`
 }
 
 func (h *Handler) callProviderCreate(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
@@ -70,10 +73,8 @@ func (h *Handler) callProviderCreate(ctx context.Context, claims *jwt.Claims, re
 	if a.Region == "" {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'region' is required")
 	}
-	if !provider.ValidCredentialsRef(a.CredentialsRef) {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
-			"field 'credentials_ref' must start with "+provider.CredentialsRefPrefix+" and carry a path")
-	}
+	// credentials_ref / credentials — dual-mode XOR (ADR-064); формат/XOR/plaintext-
+	// disabled валидирует сервис (provider.IsValidationError → validation-failed).
 	if err := h.deps.RBAC.Check(claims.Subject, "provider", "create", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden, "operator lacks required permission provider.create")
 	}
@@ -83,23 +84,32 @@ func (h *Handler) callProviderCreate(ctx context.Context, claims *jwt.Claims, re
 		Type:           a.Type,
 		Region:         a.Region,
 		CredentialsRef: a.CredentialsRef,
+		Credentials:    a.Credentials,
 		CallerAID:      claims.Subject,
 	})
 	if err != nil {
 		if errors.Is(err, provider.ErrProviderAlreadyExists) {
 			return h.toolError(req.ID, toolName, mcpCodeProviderExists, "provider "+a.Name+" already exists")
 		}
+		if provider.IsValidationError(err) {
+			return h.toolError(req.ID, toolName, mcpCodeValidationFailed, provider.PublicMessage(err))
+		}
 		h.deps.Logger.Error("mcp: provider.create failed", slog.String("name", a.Name), slog.Any("error", err))
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "create provider failed")
 	}
 
-	// Audit: credentials_ref пишется как ПУТЬ (не секрет).
-	h.writeAudit(audit.EventProviderCreated, claims.Subject, map[string]any{
+	// Audit: credentials_ref пишется как ПУТЬ (не секрет); plaintext_ingested —
+	// маркер записи credentials keeper-ом (ADR-064), без plaintext.
+	auditPayload := map[string]any{
 		"name":            p.Name,
 		"type":            p.Type,
 		"region":          p.Region,
 		"credentials_ref": p.CredentialsRef,
-	})
+	}
+	if p.SecretWritten {
+		auditPayload["plaintext_ingested"] = true
+	}
+	h.writeAudit(audit.EventProviderCreated, claims.Subject, auditPayload)
 	return h.toolResult(req.ID, toProviderViewOut(p))
 }
 

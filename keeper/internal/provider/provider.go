@@ -62,4 +62,8 @@ type Provider struct {
 	FQDNSuffix   *string   `json:"fqdn_suffix,omitempty"`
 	CreatedByAID *string   `json:"created_by_aid,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`
+	// SecretWritten — request-scoped маркер: keeper записал plaintext-credentials
+	// в Vault на этой операции (ADR-064 audit-event). json:"-"; читается audit-
+	// payload-ом (ключ plaintext_ingested), в PG/View не попадает.
+	SecretWritten bool `json:"-"`
 }

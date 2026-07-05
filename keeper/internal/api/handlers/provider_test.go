@@ -147,7 +147,7 @@ func assignScan(dst, src []any) error {
 
 func newProviderHandler(t *testing.T, pool provider.ExecQueryRower) *ProviderHandler {
 	t.Helper()
-	svc, err := provider.NewService(pool.(*fakeProviderPool))
+	svc, err := provider.NewService(provider.ServiceDeps{Pool: pool.(*fakeProviderPool)})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

@@ -26,11 +26,15 @@ type providerCreateInput struct {
 // произвольная строка; credentials_ref — vault-ref. additionalProperties=false
 // (huma-дефолт) → unknown поле → 400. Доменная валидация формата — в CreateTyped (422).
 type ProviderCreateRequest struct {
-	Name           string  `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"имя Cloud-Provider-а (kebab)"`
-	Type           string  `json:"type" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"имя CloudDriver-плагина (= plugins.cloud_drivers[].name)"`
-	Region         string  `json:"region" required:"true" doc:"регион провайдера"`
-	CredentialsRef string  `json:"credentials_ref" required:"true" pattern:"^vault:" doc:"vault-ref до credentials (vault:<path>); значение НЕ резолвится"`
-	FQDNSuffix     *string `json:"fqdn_suffix,omitempty" doc:"суффикс FQDN VM (self-onboard: keeper предсказывает FQDN=<name>-<index>.<fqdn_suffix>). Опущено → self-onboard недоступен"`
+	Name   string `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"имя Cloud-Provider-а (kebab)"`
+	Type   string `json:"type" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"имя CloudDriver-плагина (= plugins.cloud_drivers[].name)"`
+	Region string `json:"region" required:"true" doc:"регион провайдера"`
+	// credentials_ref XOR credentials (dual-mode, ADR-064): ровно одно. ref —
+	// vault-путь (значение НЕ резолвится); credentials — plaintext (keeper пишет
+	// в Vault сам). Формат/XOR валидирует сервис (422); pattern снят (условная валидация).
+	CredentialsRef string         `json:"credentials_ref,omitempty" doc:"vault-ref до credentials (vault:<path>); XOR с credentials. Значение НЕ резолвится"`
+	Credentials    map[string]any `json:"credentials,omitempty" doc:"опц. plaintext cloud-credentials (dual-mode, ADR-064): напр. {access_key, secret_key}; keeper пишет их в Vault сам; XOR с credentials_ref. Требует TLS-фронта (secret_ingest.accept_plaintext)"`
+	FQDNSuffix     *string        `json:"fqdn_suffix,omitempty" doc:"суффикс FQDN VM (self-onboard: keeper предсказывает FQDN=<name>-<index>.<fqdn_suffix>). Опущено → self-onboard недоступен"`
 }
 
 type providerCreateOutput struct {
