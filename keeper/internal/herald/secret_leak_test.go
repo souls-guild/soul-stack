@@ -69,11 +69,17 @@ func (tsRow) Scan(dst ...any) error {
 	return nil
 }
 
-// argsBlob стрингифицирует все PG-args в один blob для leak-проверки.
+// argsBlob стрингифицирует все PG-args в один blob для leak-проверки. []byte
+// (configBytes — marshaled JSONB) декодируется в строку: иначе `%v` печатает
+// байты-числа и substring-скан пропустил бы plaintext в config.
 func argsBlob(rows [][]any) string {
 	var b string
 	for _, r := range rows {
 		for _, a := range r {
+			if bs, ok := a.([]byte); ok {
+				b += string(bs) + "|"
+				continue
+			}
 			b += fmt.Sprintf("%v|", a)
 		}
 	}
@@ -174,6 +180,62 @@ func TestChannelTokenNoLeak(t *testing.T) {
 		t.Fatal("SecretWritten не взведён")
 	}
 	assertNoLeak(t, leakToken, pool, created)
+}
+
+// TestSlackWebhookURLNoLeak — config-секрет `webhook_url` (slack) plaintext → Vault.
+// ★Особый кейс: `webhook_url` НЕ содержит sensitive-фрагмента → MaskSecrets по
+// имени ключа его НЕ маскирует, поэтому удаление из config (materialize) —
+// ЕДИНСТВЕННАЯ защита. Проверяем, что plaintext не остаётся в config/PG/View.
+func TestSlackWebhookURLNoLeak(t *testing.T) {
+	vault := &capturingVault{}
+	pool := &capturingPool{}
+	svc := newLeakService(t, vault, pool, true)
+
+	const leakURL = "https://hooks.slack.com/services/T00/B00/PLAINTEXT-SLACK-4e5f6a"
+	h := &Herald{
+		Name:   "slack-alerts",
+		Type:   HeraldSlack,
+		Config: map[string]any{"webhook_url": leakURL},
+	}
+	created, err := svc.CreateHerald(context.Background(), h)
+	if err != nil {
+		t.Fatalf("CreateHerald: %v", err)
+	}
+	if len(vault.writes) != 1 || vault.writes[0] != leakURL {
+		t.Fatalf("vault writes=%v, want [%q]", vault.writes, leakURL)
+	}
+	if _, ok := created.Config["webhook_url"]; ok {
+		t.Fatal("config[webhook_url] plaintext не удалён (masking его не ловит!)")
+	}
+	if ref, _ := created.Config["webhook_url_ref"].(string); ref == "" || ref == leakURL {
+		t.Fatalf("config[webhook_url_ref]=%v — должен быть vault-ref", created.Config["webhook_url_ref"])
+	}
+	assertNoLeak(t, leakURL, pool, created)
+}
+
+// TestUpdateMaterializesSecret — update-путь тоже материализует plaintext (idempotent-write).
+func TestUpdateMaterializesSecret(t *testing.T) {
+	vault := &capturingVault{}
+	pool := &capturingPool{}
+	svc := newLeakService(t, vault, pool, true)
+
+	h := &Herald{
+		Name:   "ops-hook",
+		Type:   HeraldWebhook,
+		Config: map[string]any{"url": "https://example.com/hook"},
+		Secret: strptr(leakSigning),
+	}
+	updated, err := svc.UpdateHerald(context.Background(), h)
+	if err != nil {
+		t.Fatalf("UpdateHerald: %v", err)
+	}
+	if len(vault.writes) != 1 || vault.writes[0] != leakSigning {
+		t.Fatalf("update не записал plaintext в Vault: %v", vault.writes)
+	}
+	if !updated.SecretWritten {
+		t.Fatal("SecretWritten не переживает re-read на update")
+	}
+	assertNoLeak(t, leakSigning, pool, updated)
 }
 
 // TestSecretRefModeUnchanged — ref-режим (существующее поведение) без записи в Vault.
