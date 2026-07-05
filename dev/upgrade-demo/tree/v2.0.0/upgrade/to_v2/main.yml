@@ -1,3 +1,4 @@
+name: to_v2
 from: ["v1.0.0"]
 description: >-
   Демо upgrade-сценарий NIM-34 (found-ветвь, ADR-0068 §5). Top-level from:
@@ -11,8 +12,6 @@ description: >-
 # state_changes пусто: demo-сценарий ничего не коммитит в incarnation.state.
 state_changes: {}
 
-tasks:
-  - name: Демо-отметка перехода на v2 (no-op, тело только для парсинга)
-    module: core.exec.run
-    params:
-      command: "true"
+# tasks пусто: демо без souls (found-автозапуск host-работу раскатать не может —
+# уровень e2e-live). upgrade-paths?to=v2.0.0 показывает mode=found по from: выше.
+tasks: []
