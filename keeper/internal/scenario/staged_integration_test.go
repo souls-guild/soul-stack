@@ -113,10 +113,36 @@ type stagedDispatcher struct {
 
 	mu                sync.Mutex
 	targetedByPassage map[int][]string // passage → SID-ы, получившие ApplyRequest
+	// dispatchedPlan — все (passage, plan_index, name) из req.Tasks[] каждого
+	// ApplyRequest = ровно то, что Soul эхнул бы в TaskEvent.plan_index → audit
+	// task.executed. Ground-truth «реально исполненного плана» для guard-а H1
+	// (NIM-37): сверяется с apply_run_plan (persistRunPlan). Дедуп по plan_index
+	// делает reader (dispatchedPlanByIndex) — passage-1 диспатчится на N хостов.
+	dispatchedPlan []dispatchedTask
+}
+
+// dispatchedTask — одна отрендеренная задача, реально ушедшая в ApplyRequest
+// (эхо plan_index/name активного render'а Passage).
+type dispatchedTask struct {
+	passage   int
+	planIndex int
+	name      string
 }
 
 func newStagedDispatcher(t *testing.T, roleBySID map[string]string) *stagedDispatcher {
 	return &stagedDispatcher{t: t, roleBySID: roleBySID, targetedByPassage: map[int][]string{}}
+}
+
+// dispatchedPlanByIndex сворачивает dispatchedPlan в plan_index → (passage, name),
+// дедуплицируя одинаковые задачи, ушедшие на несколько хостов одного Passage.
+func (d *stagedDispatcher) dispatchedPlanByIndex() map[int]dispatchedTask {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := make(map[int]dispatchedTask, len(d.dispatchedPlan))
+	for _, dt := range d.dispatchedPlan {
+		out[dt.planIndex] = dt
+	}
+	return out
 }
 
 // emitterIndices воспроизводит контракт Soul-а (ADR-056 §S1 fix Variant B): для
@@ -141,6 +167,13 @@ func (d *stagedDispatcher) SendApply(ctx context.Context, sid string, req *keepe
 
 	d.mu.Lock()
 	d.targetedByPassage[passage] = append(d.targetedByPassage[passage], sid)
+	for _, task := range req.GetTasks() {
+		d.dispatchedPlan = append(d.dispatchedPlan, dispatchedTask{
+			passage:   passage,
+			planIndex: int(task.GetPlanIndex()),
+			name:      task.GetName(),
+		})
+	}
 	d.mu.Unlock()
 
 	if passage == 0 && d.failPassage0On[sid] {
@@ -249,6 +282,144 @@ func TestIntegration_2Passage_WhereTargetsOnlyMaster(t *testing.T) {
 	}
 	if len(got["host-b.example.com"]) != 1 || got["host-b.example.com"][0] != 0 {
 		t.Errorf("host-b passages = %v, want [0] (probe только — slave не таргетился Passage 1)", got["host-b.example.com"])
+	}
+}
+
+// stagedExpandingServiceRepo — staged-сценарий, где задача Passage 1 РАСКРЫВАЕТСЯ
+// (loop с 2 items) в N>1 RenderedTask с реальными plan_index. На render шага 5
+// (ActivePassage=0) она — ОДИН сжатый placeholder (индекс 1); на пере-рендере
+// Passage 1 (ActivePassage=1) — 2 задачи (индексы 1,2). Ровно кейс H1 (NIM-37):
+// персист плана обязан снять passage-1 из ЕГО активного render, а не из placeholder-а
+// шага 5. where: register.role делает задачу register-зависимой → Passage 1 (Stratify).
+func stagedExpandingServiceRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	repo, err := git.PlainInit(dir, false)
+	if err != nil {
+		t.Fatalf("PlainInit: %v", err)
+	}
+	write := func(rel, content string) {
+		full := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	write("service.yml", `name: noop
+state_schema_version: 1
+description: staged-render expanding-passage proof service
+state_schema:
+  type: object
+  properties: {}
+`)
+	write("scenario/expand/main.yml", `name: expand
+description: probe role (p0) then fan-out loop on live hosts (p1 expands to N tasks)
+state_changes: {}
+tasks:
+  - name: Probe role
+    module: core.exec.run
+    register: role
+    changed_when: "false"
+    params:
+      cmd: detect-role
+  - name: Fan out
+    module: core.exec.run
+    where: "register.role.stdout != ''"
+    loop:
+      items: "${ ['alpha', 'beta'] }"
+      as: item
+    params:
+      cmd: "configure ${ item }"
+`)
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree: %v", err)
+	}
+	if err := wt.AddGlob("."); err != nil {
+		t.Fatalf("AddGlob: %v", err)
+	}
+	if _, err := wt.Commit("init staged expanding service", &git.CommitOptions{
+		Author: &object.Signature{Name: "T", Email: "t@example.test", When: time.Now()},
+	}); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	return "file://" + dir
+}
+
+// TestIntegration_StagedExpandingPassage_RunPlanMatchesExecution — ★ GUARD H1
+// (NIM-37): при staged-прогоне, где задача Passage 1 раскрывается (loop 2 items),
+// persistRunPlan обязан снять apply_run_plan passage-1 из ЕГО активного render
+// (реальные plan_index 1,2), а НЕ из сжатого placeholder-а render шага 5 (один
+// индекс 1). ИНВАРИАНТ: множество plan_index в apply_run_plan (+name/passage) ==
+// множество plan_index, реально ушедшее в ApplyRequest (эхо TaskEvent.plan_index →
+// audit task.executed). Без фикса passage-1 персистится placeholder-ом (index 1),
+// apply_run_plan теряет index 2 → ассерт падает.
+func TestIntegration_StagedExpandingPassage_RunPlanMatchesExecution(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	seedIncarnation(t, "redis-prod")
+	seedConnectedSoul(t, "host-a.example.com", []string{"redis-prod"})
+	seedConnectedSoul(t, "host-b.example.com", []string{"redis-prod"})
+	gitURL := stagedExpandingServiceRepo(t)
+
+	disp := newStagedDispatcher(t, map[string]string{
+		"host-a.example.com": "master",
+		"host-b.example.com": "slave",
+	})
+	r := newRunner(t, disp, gitURL)
+
+	applyID := audit.NewULID()
+	if err := r.Start(context.Background(), RunSpec{
+		ApplyID:         applyID,
+		IncarnationName: "redis-prod",
+		ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
+		ScenarioName:    "expand",
+		StartedByAID:    "archon-alice",
+	}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
+
+	// Ground-truth: что реально ушло в ApplyRequest (эхо plan_index активного
+	// render'а каждого Passage) = что Soul записал бы в audit task.executed.
+	// probe idx0 (P0) + loop idx1,2 (P1) = 3 уникальных plan_index.
+	exec := disp.dispatchedPlanByIndex()
+	if len(exec) != 3 {
+		t.Fatalf("dispatched plan_index set = %v, want 3 (probe idx0 + loop idx1,2 раскрытого Passage 1)", exec)
+	}
+
+	// apply_run_plan (persistRunPlan) обязан совпасть с исполнением по множеству
+	// plan_index и по name/passage на каждый индекс.
+	plan, err := applyrun.SelectRunPlanByApplyID(context.Background(), integrationPool, applyID)
+	if err != nil {
+		t.Fatalf("SelectRunPlanByApplyID: %v", err)
+	}
+	planByIndex := map[int]applyrun.RunPlanTask{}
+	for _, p := range plan {
+		planByIndex[p.PlanIndex] = p
+	}
+	if len(planByIndex) != len(exec) {
+		var planIdx, execIdx []int
+		for k := range planByIndex {
+			planIdx = append(planIdx, k)
+		}
+		for k := range exec {
+			execIdx = append(execIdx, k)
+		}
+		sort.Ints(planIdx)
+		sort.Ints(execIdx)
+		t.Fatalf("★ H1: apply_run_plan plan_index = %v, want == исполнение %v (staged passage-1 снят placeholder-ом вместо активного render'а — index потерян)", planIdx, execIdx)
+	}
+	for idx, dt := range exec {
+		p, ok := planByIndex[idx]
+		if !ok {
+			t.Fatalf("★ H1: plan_index %d исполнен (passage %d, %q), но отсутствует в apply_run_plan — persistRunPlan снял сжатый placeholder вместо раскрытого render'а Passage 1", idx, dt.passage, dt.name)
+		}
+		if p.Passage != dt.passage || p.Name != dt.name {
+			t.Errorf("plan_index %d: apply_run_plan (passage=%d, name=%q) != исполнение (passage=%d, name=%q)", idx, p.Passage, p.Name, dt.passage, dt.name)
+		}
 	}
 }
 

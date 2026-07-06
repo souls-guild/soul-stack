@@ -468,12 +468,6 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		return
 	}
 
-	// NIM-37: персист host-инвариантного плана задач прогона (name/module/no_log/
-	// passage per plan_index) для read-эндпоинта /tasks. `tasks` тут — полный план
-	// прогона (staged: Passage 0 + placeholder-ы будущих Passage; метаданные плана
-	// host-инвариантны и стабильны между Passage). Best-effort — не валит прогон.
-	r.persistRunPlan(ctx, spec, tasks, log)
-
 	// 6. Dispatch: ветвление пути (ADR-027, Phase 1.4.2) × staged-render (ADR-056).
 	//
 	// Keeper-side задачи (`on: keeper`, docs/keeper/modules.md) исполняются ЛОКАЛЬНО
@@ -509,6 +503,8 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		// Passage 0, render шага 5 (ActivePassage=0) уже отрендерил их полноценно.
 		// Исполняем их ДО planned-fan-out-а host-задач — keeper-fail → abort, planned
 		// не пишется. КeeperRegister здесь пуст (P0, цепочки нет): host-fallback цел.
+		// NIM-37 (H1): персист плана Passage 0 (все задачи non-staged в нём) до dispatch.
+		r.persistRunPlan(ctx, spec, tasks, 0, log)
 		if err := r.dispatchKeeperTasks(ctx, spec, log, 0, tasks, plans); err != nil {
 			abort("keeper_dispatch_failed", err)
 			return
@@ -594,6 +590,13 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 				// и финальной свёртки changed_tasks (Index стабилен между Passage).
 				tasks, plans = pt, pp
 			}
+
+			// NIM-37 (H1): персист плана ИМЕННО этого Passage из его активного render
+			// (passageTasks: p=0 — render шага 5, p>0 — пере-render при ActivePassage=p).
+			// Фильтр t.Passage==p внутри выкидывает placeholder-ы будущих Passage (их
+			// сжатые индексы разошлись бы с раскрытым исполнением). ДО dispatch, best-
+			// effort. Идемпотентно+непересекающиеся passage-срезы → накопление, не затир.
+			r.persistRunPlan(ctx, spec, passageTasks, p, log)
 
 			// Keeper-side задачи ЭТОГО Passage (Слайс 2): исполняются на ПЕРЕ-
 			// рендеренных при ActivePassage=p tasks (passageTasks), СТРОГО ДО host-
@@ -1290,22 +1293,25 @@ func (r *Runner) emitRunCompleted(ctx context.Context, spec RunSpec, status stri
 	}
 }
 
-// persistRunPlan сохраняет host-инвариантный план задач прогона (apply_run_plan,
-// NIM-37) для read-эндпоинта /tasks: строка на plan_index с name/module/no_log/
-// passage. Вызывается один раз после render (шаг 5) — метаданные плана стабильны
-// между Passage. name/module/no_log — НЕ секрет (адрес/тип задачи, не значения
-// params), маскинг не нужен; params отложены в S1b.
+// persistRunPlan сохраняет host-инвариантный план задач АКТИВНОГО Passage прогона
+// (apply_run_plan, NIM-37) для read-эндпоинта /tasks: строка на plan_index с
+// name/module/no_log/passage. Вызывается ПО-PASSAGE из его активного render;
+// фильтр t.Passage != activePassage выкидывает placeholder-ы будущих Passage
+// (staged-render, ADR-056 §в.1), чьи сжатые индексы разъехались бы с реальным
+// раскрытым исполнением (H1). Идемпотентно (insertRunPlanSQL = ON CONFLICT DO
+// UPDATE), passage-срезы не пересекаются по plan_index. name/module/no_log — НЕ
+// секрет (адрес/тип задачи), маскинг не нужен; params отложены в S1b.
 //
 // Best-effort: r.deps.DB=nil (unit без PG) или ошибка записи только логируются —
 // потеря плана деградирует наблюдаемость /tasks, но не корректность прогона
 // (симметрично accumulateRegister/emitRunCompleted).
-func (r *Runner) persistRunPlan(ctx context.Context, spec RunSpec, tasks []*render.RenderedTask, log *slog.Logger) {
+func (r *Runner) persistRunPlan(ctx context.Context, spec RunSpec, tasks []*render.RenderedTask, activePassage int, log *slog.Logger) {
 	if r.deps.DB == nil || len(tasks) == 0 {
 		return
 	}
 	plan := make([]applyrun.RunPlanTask, 0, len(tasks))
 	for _, t := range tasks {
-		if t == nil {
+		if t == nil || t.Passage != activePassage {
 			continue
 		}
 		plan = append(plan, applyrun.RunPlanTask{
