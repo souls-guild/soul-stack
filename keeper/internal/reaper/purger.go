@@ -213,6 +213,19 @@ func (p *Purger) PurgeApplyRuns(ctx context.Context, maxAge time.Duration, batch
 	return p.callIntervalBatch(ctx, "purge_apply_runs", maxAge, batchSize)
 }
 
+// PurgeApplyRunPlan удаляет batch строк «плана задач прогона» (`apply_run_plan`,
+// миграция 096, NIM-37) прогонов, завершённых и старше `gracePeriod` (по
+// `created_at`). Default grace = 30d (align на `purge_apply_runs`).
+//
+// FK-каскада у плана нет (apply_id не PK ни в одной таблице), поэтому без этого
+// правила строки плана росли бы orphan-ами после сноса `apply_runs`. План
+// АКТИВНОГО прогона (нетерминальный apply_run) SQL-функция не трогает — фильтр
+// зашит в `purge_apply_run_plan` (097). Зеркало PurgeApplyTaskRegister, но по
+// apply_id (план host-инвариантен, sid у него нет).
+func (p *Purger) PurgeApplyRunPlan(ctx context.Context, gracePeriod time.Duration, batchSize int) (int64, error) {
+	return p.callIntervalBatch(ctx, "purge_apply_run_plan", gracePeriod, batchSize)
+}
+
 // PurgeVoyages удаляет batch завершённых Voyage-прогонов из реестра `voyages`
 // (миграция 059) с `finished_at` старше `maxAge`. Retention растущей истории
 // прогонов (реализация отложенного `purge_voyages`, ADR-046 §79). Default

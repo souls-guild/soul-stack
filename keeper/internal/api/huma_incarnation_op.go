@@ -239,6 +239,34 @@ func incRunDetailOperation() huma.Operation {
 	}
 }
 
+// === GET /v1/incarnations/{name}/runs/{apply_id}/tasks (run task plan + per-host) — READ (БЕЗ audit) — NIM-37 ===
+
+// incRunTasksInput — huma-input GET .../runs/{apply_id}/tasks. Name/ApplyID — path.
+// Формат apply_id (ULID) валидирует RunTasksTyped → 400 (не-ULID).
+type incRunTasksInput struct {
+	Name    string `path:"name" doc:"имя инкарнации"`
+	ApplyID string `path:"apply_id" doc:"ULID прогона; не-ULID → 400"`
+}
+
+// incRunTasksOutput — huma-output GET .../runs/{apply_id}/tasks (FULL-TYPED). Body —
+// native RunTasksReply (план задач прогона + per-host результаты).
+type incRunTasksOutput struct {
+	Body RunTasksReply
+}
+
+func incRunTasksOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "getIncarnationRunTasks",
+		Method:        http.MethodGet,
+		Path:          "/{name}/runs/{apply_id}/tasks",
+		Summary:       "Задачи прогона инкарнации (план + per-host)",
+		Description:   "План задач одного apply_id (plan_index/name/module/no_log/passage) + per-host статус/output/ошибка из журнала аудита (task.executed) джойном по plan_index. Чужой apply_id / вне RBAC-scope → 404. Permission incarnation.history. Read-only.",
+		Tags:          []string{"incarnation"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
+}
+
 // === POST /v1/incarnations/{name}/scenarios/{scenario} (run) — MIDDLEWARE-AUDIT incarnation.scenario_started (202+body) ===
 
 // incRunInput — huma-input POST .../scenarios/{scenario}. Name/Scenario — path; Body —

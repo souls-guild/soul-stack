@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -1349,6 +1350,129 @@ func (h *IncarnationHandler) RunDetailTyped(ctx context.Context, name, applyID s
 		StartedByAID: d.StartedByAID,
 		Hosts:        hosts,
 	}, nil
+}
+
+// RunTaskErrorView — error-часть per-host итога задачи (FAILED/TIMED_OUT).
+type RunTaskErrorView struct {
+	Code    string
+	Module  string
+	Message string
+}
+
+// RunTaskHostView — per-host итог одной задачи прогона (проекция audit task.executed):
+// статус + output (register_data) + error. Output/Error — nil, если отсутствуют.
+type RunTaskHostView struct {
+	SID    string
+	Status string
+	Output map[string]any
+	Error  *RunTaskErrorView
+}
+
+// RunTaskView — план одной задачи прогона (host-инвариантные name/module/no_log/
+// passage) + per-host результаты. Params — S1a всегда nil (значения params отложены
+// в S1b с secret-маскингом).
+type RunTaskView struct {
+	PlanIndex int
+	Passage   int
+	Name      string
+	Module    string
+	NoLog     bool
+	Params    map[string]any
+	Hosts     []RunTaskHostView
+}
+
+// RunTasksView — плоская доменная проекция GET .../runs/{apply_id}/tasks: план
+// прогона + per-host результаты джойном из audit_log.
+type RunTasksView struct {
+	Tasks []RunTaskView
+}
+
+// RunTasksTyped — доменная функция GET /v1/incarnations/{name}/runs/{apply_id}/tasks
+// (READ, NIM-37): план задач прогона (apply_run_plan) + per-host статус/output/error
+// из audit_log (`task.executed`) джойном по plan_index → sid. existence-probe (404) +
+// scope-гейт (вне scope → 404) через inScope; bad apply_id → 400; чужой/несуществующий
+// прогон → 404. RBAC — incarnation.history (как RunDetail), НЕ audit.read.
+//
+// hosts[] задачи — ТОЛЬКО хосты с результатом в audit (pending-хосты не включаются,
+// фронт добьёт). no_log-задача: output/error.message подавлены на write-path-е → не
+// отдаются. Последний task.executed на (plan_index, sid) побеждает (retry).
+func (h *IncarnationHandler) RunTasksTyped(ctx context.Context, name, applyID string, inScope func(*incarnation.Incarnation) bool) (RunTasksView, error) {
+	var zero RunTasksView
+
+	if !incarnation.ValidName(name) {
+		return zero, incProblem(problem.TypeValidationFailed, "path 'name' must match "+incarnation.NamePattern)
+	}
+	if !audit.IsValidULID(applyID) {
+		return zero, incProblem(problem.TypeMalformedRequest, "path 'apply_id' must be a Crockford-base32 ULID (26 chars)")
+	}
+
+	if _, err := h.existenceProbeInScope(ctx, name, inScope, "run-tasks"); err != nil {
+		return zero, err
+	}
+
+	// Scope-guard принадлежности прогона инкарнации: apply_run_plan не несёт
+	// incarnation_name — проверяем по apply_runs (чужой apply_id → 404, parity
+	// RunDetail SelectRunDetail).
+	ok, err := applyrun.RunExistsForIncarnation(ctx, h.db, applyID, name)
+	if err != nil {
+		h.logger.Error("incarnation.run-tasks: run-exists probe failed",
+			slog.String("name", name), slog.String("apply_id", applyID), slog.Any("error", err))
+		return zero, incProblem(problem.TypeInternalError, "get run tasks failed")
+	}
+	if !ok {
+		return zero, incProblem(problem.TypeNotFound, "run "+applyID+" not found")
+	}
+
+	plan, err := applyrun.SelectRunPlanByApplyID(ctx, h.db, applyID)
+	if err != nil {
+		h.logger.Error("incarnation.run-tasks: plan select failed",
+			slog.String("name", name), slog.String("apply_id", applyID), slog.Any("error", err))
+		return zero, incProblem(problem.TypeInternalError, "get run tasks failed")
+	}
+
+	// per-host результаты из audit (task.executed), сгруппированные plan_index → sid.
+	// runTasksAudit=nil (unit без reader) → план БЕЗ hosts. Последний результат на
+	// (plan_index, sid) побеждает (execs упорядочены по времени, поздний перезаписывает).
+	byPlanHost := map[int]map[string]RunTaskHostView{}
+	if h.runTasksAudit != nil {
+		execs, aerr := h.runTasksAudit.SelectTaskExecutions(ctx, applyID)
+		if aerr != nil {
+			h.logger.Error("incarnation.run-tasks: audit select failed",
+				slog.String("name", name), slog.String("apply_id", applyID), slog.Any("error", aerr))
+			return zero, incProblem(problem.TypeInternalError, "get run tasks failed")
+		}
+		for _, e := range execs {
+			hostsBySID := byPlanHost[e.PlanIndex]
+			if hostsBySID == nil {
+				hostsBySID = map[string]RunTaskHostView{}
+				byPlanHost[e.PlanIndex] = hostsBySID
+			}
+			hv := RunTaskHostView{SID: e.SID, Status: e.Status, Output: e.Output}
+			if e.Error != nil {
+				hv.Error = &RunTaskErrorView{Code: e.Error.Code, Module: e.Error.Module, Message: e.Error.Message}
+			}
+			hostsBySID[e.SID] = hv
+		}
+	}
+
+	tasks := make([]RunTaskView, 0, len(plan))
+	for _, p := range plan {
+		hosts := make([]RunTaskHostView, 0, len(byPlanHost[p.PlanIndex]))
+		for _, hv := range byPlanHost[p.PlanIndex] {
+			hosts = append(hosts, hv)
+		}
+		sort.Slice(hosts, func(i, j int) bool { return hosts[i].SID < hosts[j].SID })
+		tasks = append(tasks, RunTaskView{
+			PlanIndex: p.PlanIndex,
+			Passage:   p.Passage,
+			Name:      p.Name,
+			Module:    p.Module,
+			NoLog:     p.NoLog,
+			Params:    nil, // S1a: params отложены в S1b
+			Hosts:     hosts,
+		})
+	}
+	return RunTasksView{Tasks: tasks}, nil
 }
 
 // existenceProbeInScope — общий existence-probe + scope-гейт для Runs/RunDetail:

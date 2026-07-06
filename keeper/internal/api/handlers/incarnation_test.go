@@ -89,6 +89,12 @@ type fakeIncDB struct {
 	applyRunsCountRow func(sql string) pgx.Row
 	applyRunsRows     func() (pgx.Rows, error)
 
+	// Run-tasks read-view (GET .../runs/{apply_id}/tasks, NIM-37): EXISTS-probe
+	// принадлежности прогона инкарнации (runExistsRow, nil → true = «принадлежит»)
+	// и строки плана apply_run_plan (runPlanRows, nil → пустой план).
+	runExistsRow func(applyID, name string) pgx.Row
+	runPlanRows  func() (pgx.Rows, error)
+
 	// Global runs read-view (GET /v1/runs[/stats]): COUNT(*) по свёртке apply_runs.
 	// runsCalled/lastRunsSQL/lastRunsArgs — факт и содержимое count-запроса
 	// (fail-closed- и scope-pushdown-проверки). nil runsCountRow → 0.
@@ -170,6 +176,14 @@ func (f *fakeIncDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row
 		}
 		return staticRow{values: []any{int(0)}}
 	}
+	// Run-tasks scope-probe: EXISTS(SELECT 1 FROM apply_runs ...) — принадлежит ли
+	// прогон инкарнации (RunExistsForIncarnation, NIM-37). nil hook → true.
+	if strings.Contains(sql, "EXISTS(SELECT 1") && strings.Contains(sql, "FROM apply_runs") {
+		if f.runExistsRow != nil {
+			return f.runExistsRow(args[0].(string), args[1].(string))
+		}
+		return staticRow{values: []any{true}}
+	}
 	// Runs read-view (GET .../runs): COUNT(DISTINCT apply_id) FROM apply_runs.
 	// applyRunsCountRow контролирует значение; nil → 0 (пустой список прогонов).
 	if strings.Contains(sql, "COUNT(DISTINCT apply_id) FROM apply_runs") {
@@ -203,6 +217,15 @@ func (f *fakeIncDB) Query(_ context.Context, sql string, args ...any) (pgx.Rows,
 			}
 		}
 		return &stringRows{values: found}, nil
+	}
+	// Run-tasks: SELECT ... FROM apply_run_plan (план задач прогона, NIM-37). Стоит
+	// ПЕРЕД apply_runs-веткой: "FROM apply_run_plan" не содержит "FROM apply_runs",
+	// но держим порядок явным. nil hook → пустой план.
+	if strings.Contains(sql, "FROM apply_run_plan") {
+		if f.runPlanRows != nil {
+			return f.runPlanRows()
+		}
+		return &emptyRows{}, nil
 	}
 	// Runs read-view: SELECT ... FROM apply_runs (list прогонов / detail per-host).
 	// Отдельный hook от listRows (тот — incarnation-list), nil → пустой набор.

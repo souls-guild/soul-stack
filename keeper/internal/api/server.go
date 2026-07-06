@@ -531,6 +531,12 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	// refs-lister (тот же ls-remote-кеш, что у ServiceHandler) для дешёвого режима
 	// GET .../upgrade-paths (ADR-0068 §6); late-binding, конструктор не расширяем.
 	incH.SetServiceRefs(deps.ServiceRefs)
+	// read-side audit_log для GET .../runs/{apply_id}/tasks (per-host итоги задач
+	// прогона, NIM-37); late-binding, тот же *auditpg.Reader, что GET /v1/audit. nil
+	// AuditReader → /tasks отдаёт план без per-host результатов.
+	if deps.AuditReader != nil {
+		incH.SetRunTasksAuditReader(deps.AuditReader)
+	}
 	soulH := handlers.NewSoulHandler(deps.SoulDB, deps.RBAC, deps.SoulPresence, logger)
 
 	// clusterH опционален: при nil ClusterRegistry `GET /v1/cluster` не монтируется

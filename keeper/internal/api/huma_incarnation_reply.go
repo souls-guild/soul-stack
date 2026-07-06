@@ -386,6 +386,73 @@ func newRunDetailReply(v handlers.RunDetailView) RunDetailReply {
 	}
 }
 
+// === run tasks reply-DTO (план прогона + per-host результаты) — NIM-37 ===
+
+// RunTaskErrorEntry — native error-часть per-host итога задачи (FAILED/TIMED_OUT).
+// message omitempty: подавлен для no_log-задачи (может нести plaintext-секрет).
+type RunTaskErrorEntry struct {
+	Code    string `json:"code"`
+	Module  string `json:"module"`
+	Message string `json:"message,omitempty"`
+}
+
+// RunTaskHostEntry — native элемент tasks[].hosts[]: per-host итог задачи. output —
+// register_data (omitempty: nil у задач без register: / no_log). error — только на
+// упавшем хосте (omitempty). status — TASK_STATUS_* (keeperv1.TaskStatus).
+type RunTaskHostEntry struct {
+	SID    string                  `json:"sid" pattern:"^(keeper|__run__|[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*)$" doc:"FQDN хоста ЛИБО синтетический sid прогона (keeper=on:keeper)"`
+	Status string                  `json:"status" enum:"TASK_STATUS_UNSPECIFIED,TASK_STATUS_OK,TASK_STATUS_CHANGED,TASK_STATUS_SKIPPED,TASK_STATUS_FAILED,TASK_STATUS_TIMED_OUT,TASK_STATUS_CANCELLED"`
+	Output *map[string]interface{} `json:"output,omitempty"`
+	Error  *RunTaskErrorEntry      `json:"error,omitempty"`
+}
+
+// RunTaskEntry — native элемент tasks[]: план одной задачи (host-инвариантные
+// name/module/no_log/passage) + per-host результаты. params omitempty (S1a=nil,
+// значения params отложены в S1b с secret-маскингом). hosts — только хосты с
+// результатом в audit (pending-хосты не включаются).
+type RunTaskEntry struct {
+	PlanIndex int                     `json:"plan_index"`
+	Passage   int                     `json:"passage"`
+	Name      string                  `json:"name"`
+	Module    string                  `json:"module"`
+	NoLog     bool                    `json:"no_log"`
+	Params    *map[string]interface{} `json:"params,omitempty"`
+	Hosts     []RunTaskHostEntry      `json:"hosts"`
+}
+
+// RunTasksReply — native тело GET /v1/incarnations/{name}/runs/{apply_id}/tasks
+// (NIM-37): план задач прогона + per-host результаты джойном из audit_log. tasks
+// non-nil (пустой план → `[]`).
+type RunTasksReply struct {
+	Tasks []RunTaskEntry `json:"tasks"`
+}
+
+// newRunTasksReply проецирует доменный handlers.RunTasksView в native. tasks/hosts
+// материализуются как non-nil срезы (пустой план → `[]`).
+func newRunTasksReply(v handlers.RunTasksView) RunTasksReply {
+	tasks := make([]RunTaskEntry, len(v.Tasks))
+	for i, t := range v.Tasks {
+		hosts := make([]RunTaskHostEntry, len(t.Hosts))
+		for j, hs := range t.Hosts {
+			he := RunTaskHostEntry{SID: hs.SID, Status: hs.Status, Output: ptrMap(hs.Output)}
+			if hs.Error != nil {
+				he.Error = &RunTaskErrorEntry{Code: hs.Error.Code, Module: hs.Error.Module, Message: hs.Error.Message}
+			}
+			hosts[j] = he
+		}
+		tasks[i] = RunTaskEntry{
+			PlanIndex: t.PlanIndex,
+			Passage:   t.Passage,
+			Name:      t.Name,
+			Module:    t.Module,
+			NoLog:     t.NoLog,
+			Params:    ptrMap(t.Params),
+			Hosts:     hosts,
+		}
+	}
+	return RunTasksReply{Tasks: tasks}
+}
+
 // ptrMap оборачивает домен-`map[string]any` в `*map[string]interface{}`, сохраняя nil-различимость:
 // nil-map → nil-указатель (json-тег без omitempty → `null`), непустой → указатель на тот же map.
 func ptrMap(m map[string]any) *map[string]interface{} {

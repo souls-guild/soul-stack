@@ -124,6 +124,10 @@ func (f *fakePurger) PurgeApplyTaskRegister(_ context.Context, gracePeriod time.
 	return f.record("purge_apply_task_register", gracePeriod, batchSize, nil)
 }
 
+func (f *fakePurger) PurgeApplyRunPlan(_ context.Context, gracePeriod time.Duration, batchSize int) (int64, error) {
+	return f.record("purge_apply_run_plan", gracePeriod, batchSize, nil)
+}
+
 func (f *fakePurger) ReclaimApplyRuns(_ context.Context, lease time.Duration, batchSize int) (int64, error) {
 	return f.record("reclaim_apply_runs", lease, batchSize, nil)
 }
@@ -692,6 +696,10 @@ reaper:
       enabled: true
       max_age: 1h
       action: delete
+    purge_apply_run_plan:
+      enabled: true
+      max_age: 30d
+      action: delete
 `
 
 func TestRunner_DispatchesAllReaperRules(t *testing.T) {
@@ -711,7 +719,7 @@ func TestRunner_DispatchesAllReaperRules(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- rn.Run(ctx) }()
 
-	// Ждём, пока каждое из 13 правил вызвалось хотя бы раз.
+	// Ждём, пока каждое из 14 правил вызвалось хотя бы раз.
 	want := []string{
 		"purge_audit_old",
 		"expire_pending_seeds",
@@ -726,6 +734,7 @@ func TestRunner_DispatchesAllReaperRules(t *testing.T) {
 		"purge_state_history_archive",
 		"purge_archived_state_history",
 		"purge_apply_task_register",
+		"purge_apply_run_plan",
 	}
 	waitFor(t, 800*time.Millisecond, func() bool {
 		for _, r := range want {
@@ -792,7 +801,7 @@ func TestRunner_DryRun_SkipsAllReaperBRules(t *testing.T) {
 		"purge_souls", "purge_old_seeds", "mark_disconnected", "purge_apply_runs",
 		"purge_voyages", "purge_push_runs", "purge_incarnation_archive",
 		"purge_state_history_archive", "purge_archived_state_history",
-		"purge_apply_task_register",
+		"purge_apply_task_register", "purge_apply_run_plan",
 	} {
 		if got := fp.ruleCalls(r); got != 0 {
 			t.Errorf("rule %s: calls = %d under dry_run; want 0", r, got)

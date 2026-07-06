@@ -330,6 +330,8 @@ func (r staticRow) Scan(dest ...any) error {
 			*d = r.values[i].(int)
 		case *int64:
 			*d = r.values[i].(int64)
+		case *bool:
+			*d = r.values[i].(bool)
 		case **string:
 			if r.values[i] == nil {
 				*d = nil

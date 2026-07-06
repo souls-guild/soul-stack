@@ -114,6 +114,7 @@ func fullSpecGroups() []specGroup {
 			registerHumaIncarnationHistory(api, stub)
 			registerHumaIncarnationRuns(api, stub)
 			registerHumaIncarnationRunDetail(api, stub)
+			registerHumaIncarnationRunTasks(api, stub)
 			// SSE live-ход прогона (ADR-068 §A3): non-nil zero-deps регистрирует
 			// операцию для спеки (handler-closure при dump не вызывается).
 			registerHumaIncarnationRunEvents(api, &runEventsDeps{})

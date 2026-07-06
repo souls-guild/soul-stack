@@ -25,6 +25,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
+	"github.com/souls-guild/soul-stack/keeper/internal/auditpg"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
@@ -152,6 +153,19 @@ type IncarnationHandler struct {
 	// ами не расширяем; паттерн [OperatorHandler.SetProvisioningGate]); nil → дешёвый
 	// режим отвечает 500 (не сконфигурирован). on-demand ?to= refs НЕ использует.
 	refs ServiceRefsLister
+
+	// runTasksAudit — read-side task.executed для RunTasksTyped (per-host итог задач
+	// прогона, NIM-37). Инжектится late-binding-ом [SetRunTasksAuditReader] (тот же
+	// мотив, что refs). nil → /tasks отдаёт план БЕЗ per-host результатов (unit без
+	// audit-reader).
+	runTasksAudit RunTaskAuditReader
+}
+
+// RunTaskAuditReader — узкая read-поверхность audit_log для RunTasksTyped:
+// per-host итоги задач прогона (`task.executed`) джойном по plan_index (NIM-37).
+// *auditpg.Reader удовлетворяет.
+type RunTaskAuditReader interface {
+	SelectTaskExecutions(ctx context.Context, applyID string) ([]auditpg.TaskExecution, error)
 }
 
 // NewIncarnationHandler создаёт handler. runner / destroyer / drift / services /
@@ -182,6 +196,14 @@ func NewIncarnationHandler(db IncarnationDB, runner ScenarioStarter, destroyer D
 // не требуется (вызов до приёма запросов).
 func (h *IncarnationHandler) SetServiceRefs(refs ServiceRefsLister) {
 	h.refs = refs
+}
+
+// SetRunTasksAuditReader late-binding-ом подключает read-side audit_log для
+// [RunTasksTyped] (per-host итоги задач прогона, NIM-37). Отдельный сеттер, а не
+// арг конструктора (тот же мотив, что [SetServiceRefs]); nil → /tasks отдаёт план
+// без per-host результатов. Вызывается один раз в `keeper run` до старта сервера.
+func (h *IncarnationHandler) SetRunTasksAuditReader(r RunTaskAuditReader) {
+	h.runTasksAudit = r
 }
 
 // ContextReader возвращает read-поверхность БД handler-а для RBAC-экстрактора

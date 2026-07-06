@@ -130,6 +130,7 @@ reaper:
     mark_disconnected:    { enabled: true, stale_after: 90s, action: set_status, target_status: disconnected }
     purge_audit_old:      { enabled: true, max_age: 365d, action: delete }
     purge_apply_runs:     { enabled: true, max_age: 30d, action: delete }
+    purge_apply_run_plan: { enabled: true, max_age: 30d, action: delete }
     purge_apply_task_register: { enabled: true, max_age: 1h, action: delete }
 
 # Conductor (ADR-048) — симметрично keeper-a: оба инстанса поднимают планировщик,

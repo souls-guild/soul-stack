@@ -564,6 +564,10 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			).Group(func(r chi.Router) {
 				registerHumaIncarnationRuns(newHumaCadenceAPI(r), incH)
 				registerHumaIncarnationRunDetail(newHumaCadenceAPI(r), incH)
+				// GET .../runs/{apply_id}/tasks — план задач прогона + per-host
+				// результаты из audit (NIM-37). Та же incarnation.history-группа/scope,
+				// что RunDetail (in-handler inScope, action=history).
+				registerHumaIncarnationRunTasks(newHumaCadenceAPI(r), incH)
 			})
 
 			// GET /v1/incarnations/{name}/runs/{apply_id}/events — live-SSE прогона

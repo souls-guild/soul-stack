@@ -136,6 +136,15 @@ reaper:
       enabled: true
       max_age: 30d
       action: delete
+    purge_apply_run_plan:
+      # Retention плана задач прогона (apply_run_plan, миграция 096, NIM-37): DELETE
+      # строк плана прогонов старше max_age (по created_at) БЕЗ нетерминальных
+      # apply_runs. FK-каскада нет — без правила план рос бы orphan-ами после сноса
+      # apply_runs. Окно ВЫРОВНЕНО на purge_apply_runs (30d): эндпоинту /tasks план
+      # нужен столько же, сколько живёт сам прогон.
+      enabled: true
+      max_age: 30d
+      action: delete
     purge_voyages:
       # Retention растущей истории Voyage-прогонов (ADR-046 §79). DELETE finished
       # voyages (succeeded/failed/partial_failed/cancelled) старше max_age;

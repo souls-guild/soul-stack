@@ -98,6 +98,12 @@ const (
 	// больше времени «барьер → чтение register» при cross-Keeper-роутинге.
 	defaultPurgeApplyTaskRegisterGrace = time.Hour
 
+	// Grace для apply_run_plan (NIM-37): план прогона нужен эндпоинту /tasks столько
+	// же, сколько живёт apply-история — выровнено на defaultPurgeApplyRunsMaxAge (30d),
+	// иначе /tasks терял бы план раньше, чем RunDetail сам прогон. FK-каскада у плана
+	// нет — без правила план рос бы orphan-ами.
+	defaultPurgeApplyRunPlanGrace = defaultPurgeApplyRunsMaxAge
+
 	// Формальный duration-аргумент правила reclaim_apply_runs: recovery
 	// сравнивает claim_expires_at < NOW() напрямую (lease уже зашит в
 	// claim_expires_at при захвате Ward-а), поэтому это значение в предикат
@@ -152,6 +158,7 @@ type PurgerAPI interface {
 	PurgeStateHistoryArchive(ctx context.Context, maxAge time.Duration, batchSize int) (int64, error)
 	PurgeArchivedStateHistory(ctx context.Context, maxAge time.Duration, batchSize int) (int64, error)
 	PurgeApplyTaskRegister(ctx context.Context, gracePeriod time.Duration, batchSize int) (int64, error)
+	PurgeApplyRunPlan(ctx context.Context, gracePeriod time.Duration, batchSize int) (int64, error)
 	ReclaimApplyRuns(ctx context.Context, lease time.Duration, batchSize int) (int64, error)
 	ReportOrphanVaultKeys(ctx context.Context, grace time.Duration, batchSize int) (int64, error)
 	ArchiveStateHistory(ctx context.Context, keepLastN int, keepVersionBump bool, batchSize int) (int64, error)
@@ -539,6 +546,13 @@ func (r *Runner) dispatch(ctx context.Context, cfg *config.KeeperConfig) {
 			// (см. docs/keeper/reaper.md). Поле общее со структурой ReaperRule.
 			r.runDurationRule(ctx, name, rule.MaxAge, defaultPurgeApplyTaskRegisterGrace, batchSize, dryRun,
 				r.deps.Purger.PurgeApplyTaskRegister)
+		case "purge_apply_run_plan":
+			// `max_age` тут = grace после терминала прогона (NIM-37): план задач
+			// (apply_run_plan) старше grace БЕЗ нетерминальных apply_runs → DELETE.
+			// План активного прогона не трогается. FK-каскада нет — правило
+			// обязательно, иначе orphan-рост. Default grace = 30d (align apply-история).
+			r.runDurationRule(ctx, name, rule.MaxAge, defaultPurgeApplyRunPlanGrace, batchSize, dryRun,
+				r.deps.Purger.PurgeApplyRunPlan)
 		case "reclaim_apply_runs":
 			// Recovery-скан недо-доставленных Ward (ADR-027 amend, S4): только
 			// `claimed` с истёкшим claim_expires_at (умер ДО отдачи Soul-у) →

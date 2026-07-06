@@ -1,0 +1,206 @@
+package applyrun
+
+// Docker-free guard-тесты store-слоя плана задач прогона (apply_run_plan, NIM-37):
+// bulk-upsert-форма InsertRunPlan (параллельные unnest-массивы), no-op/валидация,
+// scan SelectRunPlanByApplyID и scope-probe RunExistsForIncarnation. Реальный
+// round-trip к PG — в integration_test.go; здесь проверяем SQL-форму, маппинг
+// колонок и граничные ветки без БД.
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+)
+
+// planRowsStub — pgx.Rows-stub над набором строк apply_run_plan в порядке колонок
+// selectRunPlanByApplyIDSQL (plan_index/name/module/no_log/passage). Scan reuse
+// пакетного assign (crud_test.go).
+type planRowsStub struct {
+	rows [][]any
+	idx  int
+}
+
+func (r *planRowsStub) Next() bool {
+	if r.idx >= len(r.rows) {
+		return false
+	}
+	r.idx++
+	return true
+}
+
+func (r *planRowsStub) Scan(dest ...any) error {
+	row := r.rows[r.idx-1]
+	if len(dest) != len(row) {
+		return errors.New("planRowsStub.Scan: len mismatch")
+	}
+	for i, d := range dest {
+		assign(d, row[i])
+	}
+	return nil
+}
+
+func (r *planRowsStub) Err() error                    { return nil }
+func (r *planRowsStub) Close()                        {}
+func (r *planRowsStub) CommandTag() pgconn.CommandTag { return pgconn.CommandTag{} }
+func (r *planRowsStub) FieldDescriptions() []pgconn.FieldDescription {
+	return nil
+}
+func (r *planRowsStub) Values() ([]any, error) { return nil, nil }
+func (r *planRowsStub) RawValues() [][]byte    { return nil }
+func (r *planRowsStub) Conn() *pgx.Conn        { return nil }
+
+// TestInsertRunPlan_BulkArrays — план из двух Passage кладётся ОДНИМ bulk-upsert-ом:
+// apply_id общий $1, остальные колонки — параллельные типизированные массивы в том
+// же порядке, что задачи. Ловит рассинхрон порядка колонок и потерю no_log/passage.
+func TestInsertRunPlan_BulkArrays(t *testing.T) {
+	f := &fakeDB{}
+	tasks := []RunPlanTask{
+		{ApplyID: "AP", PlanIndex: 0, Name: "install redis", Module: "core.pkg.installed", NoLog: false, Passage: 0},
+		{ApplyID: "AP", PlanIndex: 1, Name: "set password", Module: "core.exec.run", NoLog: true, Passage: 0},
+		{ApplyID: "AP", PlanIndex: 2, Name: "restart", Module: "core.service.running", NoLog: false, Passage: 1},
+	}
+	if err := InsertRunPlan(context.Background(), f, "AP", tasks); err != nil {
+		t.Fatalf("InsertRunPlan: %v", err)
+	}
+	if f.execCalls != 1 {
+		t.Fatalf("execCalls = %d, want 1 (единственный bulk-upsert)", f.execCalls)
+	}
+	if !strings.Contains(f.execSQL, "INSERT INTO apply_run_plan") {
+		t.Errorf("SQL не INSERT INTO apply_run_plan: %q", f.execSQL)
+	}
+	if !strings.Contains(f.execSQL, "ON CONFLICT (apply_id, plan_index)") {
+		t.Errorf("SQL без идемпотентного ON CONFLICT (apply_id, plan_index): %q", f.execSQL)
+	}
+	// args: $1 apply_id, $2 plan_index[], $3 name[], $4 module[], $5 no_log[], $6 passage[].
+	if len(f.execArgs) != 6 {
+		t.Fatalf("execArgs len = %d, want 6", len(f.execArgs))
+	}
+	if f.execArgs[0] != "AP" {
+		t.Errorf("args[0] apply_id = %v, want AP", f.execArgs[0])
+	}
+	planIdx, ok := f.execArgs[1].([]int)
+	if !ok || len(planIdx) != 3 || planIdx[0] != 0 || planIdx[2] != 2 {
+		t.Errorf("args[1] plan_index[] = %v, want [0 1 2]", f.execArgs[1])
+	}
+	names, ok := f.execArgs[2].([]string)
+	if !ok || names[1] != "set password" {
+		t.Errorf("args[2] name[] = %v, want [...,'set password',...]", f.execArgs[2])
+	}
+	modules, ok := f.execArgs[3].([]string)
+	if !ok || modules[2] != "core.service.running" {
+		t.Errorf("args[3] module[] = %v", f.execArgs[3])
+	}
+	noLogs, ok := f.execArgs[4].([]bool)
+	if !ok || noLogs[0] != false || noLogs[1] != true || noLogs[2] != false {
+		t.Errorf("args[4] no_log[] = %v, want [false true false]", f.execArgs[4])
+	}
+	passages, ok := f.execArgs[5].([]int)
+	if !ok || passages[2] != 1 {
+		t.Errorf("args[5] passage[] = %v, want [0 0 1]", f.execArgs[5])
+	}
+}
+
+// TestInsertRunPlan_EmptyApplyID — пустой apply_id отбивается ДО БД (ошибка, ноль Exec).
+func TestInsertRunPlan_EmptyApplyID(t *testing.T) {
+	f := &fakeDB{}
+	err := InsertRunPlan(context.Background(), f, "", []RunPlanTask{{PlanIndex: 0, Name: "x"}})
+	if err == nil {
+		t.Fatal("empty apply_id: ожидалась ошибка")
+	}
+	if f.execCalls != 0 {
+		t.Errorf("execCalls = %d, want 0 (в БД не ходим)", f.execCalls)
+	}
+}
+
+// TestInsertRunPlan_EmptyTasks_Noop — пустой план = no-op (nil error, ноль Exec):
+// прогон упал до render / keeper-only без задач не должен ронять InsertRunPlan.
+func TestInsertRunPlan_EmptyTasks_Noop(t *testing.T) {
+	f := &fakeDB{}
+	if err := InsertRunPlan(context.Background(), f, "AP", nil); err != nil {
+		t.Fatalf("empty tasks: want nil, got %v", err)
+	}
+	if f.execCalls != 0 {
+		t.Errorf("execCalls = %d, want 0 (нечего писать)", f.execCalls)
+	}
+}
+
+// TestSelectRunPlanByApplyID_Scan — маппинг колонок plan_index/name/module/no_log/
+// passage → RunPlanTask (ApplyID проставляется caller-ом из аргумента).
+func TestSelectRunPlanByApplyID_Scan(t *testing.T) {
+	f := &fakeDB{
+		queryFunc: func(_ string) (pgx.Rows, error) {
+			return &planRowsStub{rows: [][]any{
+				{0, "install", "core.pkg.installed", false, 0},
+				{1, "secret", "core.exec.run", true, 1},
+			}}, nil
+		},
+	}
+	got, err := SelectRunPlanByApplyID(context.Background(), f, "AP")
+	if err != nil {
+		t.Fatalf("SelectRunPlanByApplyID: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+	if got[0].ApplyID != "AP" || got[0].PlanIndex != 0 || got[0].Module != "core.pkg.installed" || got[0].NoLog {
+		t.Errorf("row0 = %+v", got[0])
+	}
+	if got[1].NoLog != true || got[1].Passage != 1 || got[1].Name != "secret" {
+		t.Errorf("row1 = %+v", got[1])
+	}
+}
+
+// TestSelectRunPlanByApplyID_QueryShape — стабильный ORDER BY plan_index + bind $1.
+func TestSelectRunPlanByApplyID_QueryShape(t *testing.T) {
+	f := &fakeDB{
+		queryFunc: func(_ string) (pgx.Rows, error) { return nil, errors.New("stop after capture") },
+	}
+	_, _ = SelectRunPlanByApplyID(context.Background(), f, "AP")
+	if !strings.Contains(f.querySQL, "FROM apply_run_plan") {
+		t.Errorf("SQL не из apply_run_plan: %q", f.querySQL)
+	}
+	if !strings.Contains(f.querySQL, "ORDER BY plan_index ASC") {
+		t.Errorf("SQL без ORDER BY plan_index ASC: %q", f.querySQL)
+	}
+	if len(f.queryArgs) != 1 || f.queryArgs[0] != "AP" {
+		t.Errorf("queryArgs = %v, want [AP]", f.queryArgs)
+	}
+}
+
+// TestRunExistsForIncarnation — scope-probe принадлежности прогона инкарнации:
+// EXISTS true/false пробрасывается; ErrNoRows → (false, nil) (не ошибка).
+func TestRunExistsForIncarnation(t *testing.T) {
+	cases := []struct {
+		name string
+		row  pgx.Row
+		want bool
+		err  bool
+	}{
+		{"exists", staticRow{values: []any{true}}, true, false},
+		{"absent", staticRow{values: []any{false}}, false, false},
+		{"no rows → false", errRow{err: pgx.ErrNoRows}, false, false},
+		{"db error → err", errRow{err: errors.New("boom")}, false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeDB{queryRowFunc: func(string) pgx.Row { return tc.row }}
+			got, err := RunExistsForIncarnation(context.Background(), f, "AP", "redis-prod")
+			if tc.err {
+				if err == nil {
+					t.Fatal("ожидалась ошибка")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected err: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

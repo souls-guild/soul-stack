@@ -388,6 +388,23 @@ func registerHumaIncarnationRunDetail(humaAPI huma.API, incH *handlers.Incarnati
 	})
 }
 
+// registerHumaIncarnationRunTasks монтирует GET /v1/incarnations/{name}/runs/{apply_id}/tasks
+// (READ-with-path, БЕЗ audit, NIM-37). scope-предикат тот же, что у History/RunDetail
+// (action=history). incH nil → no-op.
+func registerHumaIncarnationRunTasks(humaAPI huma.API, incH *handlers.IncarnationHandler) {
+	if incH == nil {
+		return
+	}
+	huma.Register(humaAPI, incRunTasksOperation(), func(ctx context.Context, in *incRunTasksInput) (*incRunTasksOutput, error) {
+		claims, _ := apimiddleware.ClaimsFromContext(ctx)
+		reply, err := incH.RunTasksTyped(ctx, in.Name, in.ApplyID, incH.GetInScopeFor(claims, "history"))
+		if err != nil {
+			return nil, incProblem(err)
+		}
+		return &incRunTasksOutput{Body: newRunTasksReply(reply)}, nil
+	})
+}
+
 // --- helpers ---
 
 // rawQueryCtxKey — context-key для raw url.Values, засташенного [stashRawQuery]-
@@ -456,6 +473,7 @@ func HumaIncarnationSpecYAML() (string, error) {
 		registerHumaIncarnationHistory(api, stub)
 		registerHumaIncarnationRuns(api, stub)
 		registerHumaIncarnationRunDetail(api, stub)
+		registerHumaIncarnationRunTasks(api, stub)
 		registerHumaIncarnationRun(api, stub)
 		registerHumaIncarnationUnlock(api, stub)
 		registerHumaIncarnationUpgrade(api, stub)

@@ -468,6 +468,12 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		return
 	}
 
+	// NIM-37: персист host-инвариантного плана задач прогона (name/module/no_log/
+	// passage per plan_index) для read-эндпоинта /tasks. `tasks` тут — полный план
+	// прогона (staged: Passage 0 + placeholder-ы будущих Passage; метаданные плана
+	// host-инвариантны и стабильны между Passage). Best-effort — не валит прогон.
+	r.persistRunPlan(ctx, spec, tasks, log)
+
 	// 6. Dispatch: ветвление пути (ADR-027, Phase 1.4.2) × staged-render (ADR-056).
 	//
 	// Keeper-side задачи (`on: keeper`, docs/keeper/modules.md) исполняются ЛОКАЛЬНО
@@ -1281,6 +1287,39 @@ func (r *Runner) emitRunCompleted(ctx context.Context, spec RunSpec, status stri
 	if err := r.deps.Audit.Write(wctx, ev); err != nil {
 		log.Warn("scenario: запись audit incarnation.run_completed провалена",
 			slog.String("incarnation", spec.IncarnationName), slog.Any("error", err))
+	}
+}
+
+// persistRunPlan сохраняет host-инвариантный план задач прогона (apply_run_plan,
+// NIM-37) для read-эндпоинта /tasks: строка на plan_index с name/module/no_log/
+// passage. Вызывается один раз после render (шаг 5) — метаданные плана стабильны
+// между Passage. name/module/no_log — НЕ секрет (адрес/тип задачи, не значения
+// params), маскинг не нужен; params отложены в S1b.
+//
+// Best-effort: r.deps.DB=nil (unit без PG) или ошибка записи только логируются —
+// потеря плана деградирует наблюдаемость /tasks, но не корректность прогона
+// (симметрично accumulateRegister/emitRunCompleted).
+func (r *Runner) persistRunPlan(ctx context.Context, spec RunSpec, tasks []*render.RenderedTask, log *slog.Logger) {
+	if r.deps.DB == nil || len(tasks) == 0 {
+		return
+	}
+	plan := make([]applyrun.RunPlanTask, 0, len(tasks))
+	for _, t := range tasks {
+		if t == nil {
+			continue
+		}
+		plan = append(plan, applyrun.RunPlanTask{
+			ApplyID:   spec.ApplyID,
+			PlanIndex: t.Index,
+			Name:      t.Name,
+			Module:    t.Module,
+			NoLog:     t.NoLog,
+			Passage:   t.Passage,
+		})
+	}
+	if err := applyrun.InsertRunPlan(ctx, r.deps.DB, spec.ApplyID, plan); err != nil {
+		log.Warn("scenario: персист плана задач прогона (apply_run_plan) провален — /tasks без плана",
+			slog.String("apply_id", spec.ApplyID), slog.Any("error", err))
 	}
 }
 
