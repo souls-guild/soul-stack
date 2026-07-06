@@ -59,9 +59,9 @@ func (r *planRowsStub) Conn() *pgx.Conn        { return nil }
 func TestInsertRunPlan_BulkArrays(t *testing.T) {
 	f := &fakeDB{}
 	tasks := []RunPlanTask{
-		{ApplyID: "AP", PlanIndex: 0, Name: "install redis", Module: "core.pkg.installed", NoLog: false, Passage: 0},
-		{ApplyID: "AP", PlanIndex: 1, Name: "set password", Module: "core.exec.run", NoLog: true, Passage: 0},
-		{ApplyID: "AP", PlanIndex: 2, Name: "restart", Module: "core.service.running", NoLog: false, Passage: 1},
+		{ApplyID: "AP", PlanIndex: 0, Name: "install redis", Module: "core.pkg.installed", NoLog: false, Passage: 0, Params: []byte(`{"name":"redis"}`)},
+		{ApplyID: "AP", PlanIndex: 1, Name: "set password", Module: "core.exec.run", NoLog: true, Passage: 0, Params: nil},
+		{ApplyID: "AP", PlanIndex: 2, Name: "restart", Module: "core.service.running", NoLog: false, Passage: 1, Params: []byte(`{"unit":"redis"}`)},
 	}
 	if err := InsertRunPlan(context.Background(), f, "AP", tasks); err != nil {
 		t.Fatalf("InsertRunPlan: %v", err)
@@ -75,9 +75,12 @@ func TestInsertRunPlan_BulkArrays(t *testing.T) {
 	if !strings.Contains(f.execSQL, "ON CONFLICT (apply_id, plan_index)") {
 		t.Errorf("SQL без идемпотентного ON CONFLICT (apply_id, plan_index): %q", f.execSQL)
 	}
-	// args: $1 apply_id, $2 plan_index[], $3 name[], $4 module[], $5 no_log[], $6 passage[].
-	if len(f.execArgs) != 6 {
-		t.Fatalf("execArgs len = %d, want 6", len(f.execArgs))
+	if !strings.Contains(f.execSQL, "params") || !strings.Contains(f.execSQL, "::jsonb") {
+		t.Errorf("SQL без params::jsonb: %q", f.execSQL)
+	}
+	// args: $1 apply_id, $2 plan_index[], $3 name[], $4 module[], $5 no_log[], $6 passage[], $7 params[].
+	if len(f.execArgs) != 7 {
+		t.Fatalf("execArgs len = %d, want 7", len(f.execArgs))
 	}
 	if f.execArgs[0] != "AP" {
 		t.Errorf("args[0] apply_id = %v, want AP", f.execArgs[0])
@@ -101,6 +104,20 @@ func TestInsertRunPlan_BulkArrays(t *testing.T) {
 	passages, ok := f.execArgs[5].([]int)
 	if !ok || passages[2] != 1 {
 		t.Errorf("args[5] passage[] = %v, want [0 0 1]", f.execArgs[5])
+	}
+	// params[] — параллельный *string-массив: JSON или nil (NULL) на позицию.
+	params, ok := f.execArgs[6].([]*string)
+	if !ok || len(params) != 3 {
+		t.Fatalf("args[6] params[] = %v, want []*string len 3", f.execArgs[6])
+	}
+	if params[0] == nil || *params[0] != `{"name":"redis"}` {
+		t.Errorf("params[0] = %v, want {\"name\":\"redis\"}", params[0])
+	}
+	if params[1] != nil {
+		t.Errorf("params[1] = %v, want nil (no_log → NULL)", *params[1])
+	}
+	if params[2] == nil || *params[2] != `{"unit":"redis"}` {
+		t.Errorf("params[2] = %v, want {\"unit\":\"redis\"}", params[2])
 	}
 }
 
@@ -129,13 +146,14 @@ func TestInsertRunPlan_EmptyTasks_Noop(t *testing.T) {
 }
 
 // TestSelectRunPlanByApplyID_Scan — маппинг колонок plan_index/name/module/no_log/
-// passage → RunPlanTask (ApplyID проставляется caller-ом из аргумента).
+// passage/params → RunPlanTask (ApplyID проставляется caller-ом из аргумента).
+// params: строка 0 несёт jsonb → []byte, строка 1 (no_log) — NULL → nil.
 func TestSelectRunPlanByApplyID_Scan(t *testing.T) {
 	f := &fakeDB{
 		queryFunc: func(_ string) (pgx.Rows, error) {
 			return &planRowsStub{rows: [][]any{
-				{0, "install", "core.pkg.installed", false, 0},
-				{1, "secret", "core.exec.run", true, 1},
+				{0, "install", "core.pkg.installed", false, 0, []byte(`{"name":"redis"}`)},
+				{1, "secret", "core.exec.run", true, 1, nil},
 			}}, nil
 		},
 	}
@@ -149,8 +167,14 @@ func TestSelectRunPlanByApplyID_Scan(t *testing.T) {
 	if got[0].ApplyID != "AP" || got[0].PlanIndex != 0 || got[0].Module != "core.pkg.installed" || got[0].NoLog {
 		t.Errorf("row0 = %+v", got[0])
 	}
+	if string(got[0].Params) != `{"name":"redis"}` {
+		t.Errorf("row0 Params = %s, want {\"name\":\"redis\"}", got[0].Params)
+	}
 	if got[1].NoLog != true || got[1].Passage != 1 || got[1].Name != "secret" {
 		t.Errorf("row1 = %+v", got[1])
+	}
+	if got[1].Params != nil {
+		t.Errorf("row1 Params = %s, want nil (NULL)", got[1].Params)
 	}
 }
 

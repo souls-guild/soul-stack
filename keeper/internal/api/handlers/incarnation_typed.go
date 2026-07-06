@@ -20,6 +20,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -1369,8 +1370,9 @@ type RunTaskHostView struct {
 }
 
 // RunTaskView — план одной задачи прогона (host-инвариантные name/module/no_log/
-// passage) + per-host результаты. Params — S1a всегда nil (значения params отложены
-// в S1b с secret-маскингом).
+// passage) + per-host результаты. Params — операторские input-параметры задачи
+// (NIM-37 S1b), уже masked seal-aware механизмом на write-path-е (persistRunPlan);
+// nil для no_log-задач и задач без params.
 type RunTaskView struct {
 	PlanIndex int
 	Passage   int
@@ -1468,11 +1470,27 @@ func (h *IncarnationHandler) RunTasksTyped(ctx context.Context, name, applyID st
 			Name:      p.Name,
 			Module:    p.Module,
 			NoLog:     p.NoLog,
-			Params:    nil, // S1a: params отложены в S1b
+			Params:    runPlanParams(p.Params), // S1b: masked params из apply_run_plan (NULL→nil)
 			Hosts:     hosts,
 		})
 	}
 	return RunTasksView{Tasks: tasks}, nil
+}
+
+// runPlanParams десериализует masked params задачи из хранимого jsonb
+// (apply_run_plan.params, NIM-37 S1b) в object для DTO. Значения УЖЕ замаскированы
+// на write-path-е (persistRunPlan) — здесь только чтение. Пустой/NULL (no_log-
+// задача либо задача без params) → nil (omitempty на wire). Битый JSON → nil (best-
+// effort: одна кривая строка не роняет весь /tasks).
+func runPlanParams(raw []byte) map[string]any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil
+	}
+	return m
 }
 
 // existenceProbeInScope — общий existence-probe + scope-гейт для Runs/RunDetail:

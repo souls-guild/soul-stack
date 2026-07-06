@@ -19,13 +19,14 @@ import (
 )
 
 // planRow — одна строка apply_run_plan (порядок колонок selectRunPlanByApplyIDSQL:
-// plan_index/name/module/no_log/passage).
+// plan_index/name/module/no_log/passage/params).
 type planRow struct {
 	planIndex int
 	name      string
 	module    string
 	noLog     bool
 	passage   int
+	params    []byte
 }
 
 // runPlanRowsStub — pgx.Rows-stub над набором строк плана прогона.
@@ -49,6 +50,7 @@ func (r *runPlanRowsStub) Scan(dest ...any) error {
 	*(dest[2].(*string)) = row.module
 	*(dest[3].(*bool)) = row.noLog
 	*(dest[4].(*int)) = row.passage
+	*(dest[5].(*[]byte)) = row.params
 	return nil
 }
 
@@ -130,12 +132,12 @@ func TestRunTasksTyped_EmptyPlan_OK(t *testing.T) {
 // TestRunTasksTyped_PlanAuditJoin — центральный guard: план из 3 задач джойнится с
 // audit-результатами по plan_index→sid. Проверяет last-wins (retry host-a),
 // сортировку хостов по sid, no_log→output подавлен, pending-задачу без audit
-// (hosts пуст), и что params в S1a всегда nil.
+// (hosts пуст), и что masked params (S1b) десериализуются из jsonb в object.
 func TestRunTasksTyped_PlanAuditJoin(t *testing.T) {
 	db := withPlan(&fakeIncDB{},
-		planRow{planIndex: 0, name: "install", module: "core.pkg.installed", noLog: false, passage: 0},
-		planRow{planIndex: 1, name: "secret", module: "core.exec.run", noLog: true, passage: 0},
-		planRow{planIndex: 2, name: "restart", module: "core.service.running", noLog: false, passage: 1},
+		planRow{planIndex: 0, name: "install", module: "core.pkg.installed", noLog: false, passage: 0, params: []byte(`{"name":"redis","state":"present"}`)},
+		planRow{planIndex: 1, name: "secret", module: "core.exec.run", noLog: true, passage: 0, params: nil},
+		planRow{planIndex: 2, name: "restart", module: "core.service.running", noLog: false, passage: 1, params: []byte(`{"unit":"redis"}`)},
 	)
 	// execs упорядочены по времени: для (idx0, host-a) первый OK перезаписывается
 	// поздним FAILED (retry, last-wins). idx1 — no_log: output подавлен на write-
@@ -163,8 +165,9 @@ func TestRunTasksTyped_PlanAuditJoin(t *testing.T) {
 	if t0.PlanIndex != 0 || t0.Name != "install" || t0.NoLog {
 		t.Errorf("task0 header = %+v", t0)
 	}
-	if t0.Params != nil {
-		t.Errorf("task0.Params = %v, want nil (S1a без params)", t0.Params)
+	// S1b: masked params из jsonb десериализованы в object.
+	if t0.Params == nil || t0.Params["name"] != "redis" || t0.Params["state"] != "present" {
+		t.Errorf("task0.Params = %v, want {name:redis, state:present}", t0.Params)
 	}
 	if len(t0.Hosts) != 2 {
 		t.Fatalf("task0 hosts = %d, want 2", len(t0.Hosts))
@@ -195,6 +198,10 @@ func TestRunTasksTyped_PlanAuditJoin(t *testing.T) {
 	if t1.PlanIndex != 1 || !t1.NoLog {
 		t.Errorf("task1 header = %+v, want plan_index=1 no_log=true", t1)
 	}
+	// no_log-задача: params НЕ хранятся (NULL) → nil в DTO (симметрия с output).
+	if t1.Params != nil {
+		t.Errorf("task1 (no_log) Params = %v, want nil (params не хранятся)", t1.Params)
+	}
 	if len(t1.Hosts) != 1 || t1.Hosts[0].SID != "host-a" {
 		t.Fatalf("task1 hosts = %+v, want [host-a]", t1.Hosts)
 	}
@@ -209,5 +216,52 @@ func TestRunTasksTyped_PlanAuditJoin(t *testing.T) {
 	}
 	if len(t2.Hosts) != 0 {
 		t.Errorf("task2 (pending) hosts = %d, want 0 (нет audit-результата)", len(t2.Hosts))
+	}
+	if t2.Params == nil || t2.Params["unit"] != "redis" {
+		t.Errorf("task2.Params = %v, want {unit:redis}", t2.Params)
+	}
+}
+
+// TestRunTasksTyped_MaskedParamsFlowThrough — masked-значение params (замаскировано
+// на write-path в persistRunPlan) доезжает до DTO КАК ЕСТЬ: handler не размаскирует
+// и не палит plaintext. Guard read-стороны «/tasks не раскрывает секрет»: строка
+// плана несёт уже-masked jsonb, в ответе только ***MASKED***.
+func TestRunTasksTyped_MaskedParamsFlowThrough(t *testing.T) {
+	db := withPlan(&fakeIncDB{},
+		planRow{planIndex: 0, name: "set password", module: "core.exec.run", noLog: false, passage: 0,
+			params: []byte(`{"user":"admin","password":"***MASKED***"}`)},
+	)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	v, err := h.RunTasksTyped(context.Background(), "redis-prod", validApplyID, allowScope)
+	if err != nil {
+		t.Fatalf("RunTasksTyped: %v", err)
+	}
+	if len(v.Tasks) != 1 {
+		t.Fatalf("len(Tasks) = %d, want 1", len(v.Tasks))
+	}
+	p := v.Tasks[0].Params
+	if p == nil || p["password"] != "***MASKED***" {
+		t.Errorf("params.password = %v, want ***MASKED*** (masked-значение доезжает как есть)", p["password"])
+	}
+	if p["user"] != "admin" {
+		t.Errorf("params.user = %v, want admin (не секрет, сохранён)", p["user"])
+	}
+}
+
+// TestRunTasksTyped_BrokenParamsJSON_Nil — битый jsonb в строке плана → params nil
+// (best-effort: одна кривая строка не роняет весь /tasks).
+func TestRunTasksTyped_BrokenParamsJSON_Nil(t *testing.T) {
+	db := withPlan(&fakeIncDB{},
+		planRow{planIndex: 0, name: "x", module: "core.exec.run", passage: 0, params: []byte(`{not json`)},
+	)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	v, err := h.RunTasksTyped(context.Background(), "redis-prod", validApplyID, allowScope)
+	if err != nil {
+		t.Fatalf("RunTasksTyped: %v", err)
+	}
+	if len(v.Tasks) != 1 || v.Tasks[0].Params != nil {
+		t.Errorf("broken params → %v, want nil", v.Tasks[0].Params)
 	}
 }

@@ -26,6 +26,13 @@ type RunPlanTask struct {
 
 	// Passage — индекс Passage staged-render (ADR-056); N=1 → 0.
 	Passage int
+
+	// Params — JSON операторских input-параметров задачи (NIM-37 S1b), уже
+	// masked seal-aware механизмом на write-path-е (scenario.persistRunPlan).
+	// nil/пусто → jsonb NULL: no_log-задача (params подавлены) либо задача без
+	// params. Транспортные ключи (template_content/render_context) отфильтрованы
+	// до записи. Store слой значения НЕ маскирует — только персистит/читает как есть.
+	Params []byte
 }
 
 // insertRunPlanSQL — bulk-upsert плана одним запросом через unnest-массивы
@@ -33,12 +40,12 @@ type RunPlanTask struct {
 // UPDATE идемпотентен: staged-прогон переспрашивает Render per-Passage, но план
 // (Index/name/module/no_log/passage) стабилен — повторная запись безвредна.
 const insertRunPlanSQL = `
-INSERT INTO apply_run_plan (apply_id, plan_index, name, module, no_log, passage)
-SELECT $1, u.plan_index, u.name, u.module, u.no_log, u.passage
-FROM unnest($2::int[], $3::text[], $4::text[], $5::bool[], $6::int[])
-     AS u(plan_index, name, module, no_log, passage)
+INSERT INTO apply_run_plan (apply_id, plan_index, name, module, no_log, passage, params)
+SELECT $1, u.plan_index, u.name, u.module, u.no_log, u.passage, u.params::jsonb
+FROM unnest($2::int[], $3::text[], $4::text[], $5::bool[], $6::int[], $7::text[])
+     AS u(plan_index, name, module, no_log, passage, params)
 ON CONFLICT (apply_id, plan_index)
-DO UPDATE SET name = EXCLUDED.name, module = EXCLUDED.module, no_log = EXCLUDED.no_log, passage = EXCLUDED.passage
+DO UPDATE SET name = EXCLUDED.name, module = EXCLUDED.module, no_log = EXCLUDED.no_log, passage = EXCLUDED.passage, params = EXCLUDED.params
 `
 
 // InsertRunPlan пишет план задач прогона (apply_run_plan) одним bulk-upsert-ом.
@@ -57,22 +64,29 @@ func InsertRunPlan(ctx context.Context, db ExecQueryRower, applyID string, tasks
 	modules := make([]string, len(tasks))
 	noLogs := make([]bool, len(tasks))
 	passages := make([]int, len(tasks))
+	// params — параллельный text[]-массив (каждый элемент — JSON или NULL),
+	// кастуется в jsonb в SQL. nil-элемент (no_log / нет params) → jsonb NULL.
+	params := make([]*string, len(tasks))
 	for i, t := range tasks {
 		planIdx[i] = t.PlanIndex
 		names[i] = t.Name
 		modules[i] = t.Module
 		noLogs[i] = t.NoLog
 		passages[i] = t.Passage
+		if len(t.Params) > 0 {
+			s := string(t.Params)
+			params[i] = &s
+		}
 	}
 
-	if _, err := db.Exec(ctx, insertRunPlanSQL, applyID, planIdx, names, modules, noLogs, passages); err != nil {
+	if _, err := db.Exec(ctx, insertRunPlanSQL, applyID, planIdx, names, modules, noLogs, passages, params); err != nil {
 		return fmt.Errorf("applyrun: insert run plan: %w", err)
 	}
 	return nil
 }
 
 const selectRunPlanByApplyIDSQL = `
-SELECT plan_index, name, module, no_log, passage
+SELECT plan_index, name, module, no_log, passage, params
 FROM apply_run_plan
 WHERE apply_id = $1
 ORDER BY plan_index ASC
@@ -91,7 +105,7 @@ func SelectRunPlanByApplyID(ctx context.Context, db ExecQueryRower, applyID stri
 	var out []RunPlanTask
 	for rows.Next() {
 		t := RunPlanTask{ApplyID: applyID}
-		if err := rows.Scan(&t.PlanIndex, &t.Name, &t.Module, &t.NoLog, &t.Passage); err != nil {
+		if err := rows.Scan(&t.PlanIndex, &t.Name, &t.Module, &t.NoLog, &t.Passage, &t.Params); err != nil {
 			return nil, fmt.Errorf("applyrun: run plan scan: %w", err)
 		}
 		out = append(out, t)

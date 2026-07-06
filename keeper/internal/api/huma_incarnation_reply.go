@@ -407,9 +407,10 @@ type RunTaskHostEntry struct {
 }
 
 // RunTaskEntry — native элемент tasks[]: план одной задачи (host-инвариантные
-// name/module/no_log/passage) + per-host результаты. params omitempty (S1a=nil,
-// значения params отложены в S1b с secret-маскингом). hosts — только хосты с
-// результатом в audit (pending-хосты не включаются).
+// name/module/no_log/passage) + per-host результаты. params omitempty — masked
+// операторские input-параметры задачи (NIM-37 S1b, secret-маскинг на write-path);
+// nil для no_log-задач и задач без params. hosts — только хосты с результатом в
+// audit (pending-хосты не включаются).
 type RunTaskEntry struct {
 	PlanIndex int                     `json:"plan_index"`
 	Passage   int                     `json:"passage"`

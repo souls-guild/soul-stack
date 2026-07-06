@@ -2,6 +2,7 @@ package scenario
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -504,7 +505,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		// Исполняем их ДО planned-fan-out-а host-задач — keeper-fail → abort, planned
 		// не пишется. КeeperRegister здесь пуст (P0, цепочки нет): host-fallback цел.
 		// NIM-37 (H1): персист плана Passage 0 (все задачи non-staged в нём) до dispatch.
-		r.persistRunPlan(ctx, spec, tasks, 0, log)
+		r.persistRunPlan(ctx, spec, tasks, 0, sealed.Paths(), log)
 		if err := r.dispatchKeeperTasks(ctx, spec, log, 0, tasks, plans); err != nil {
 			abort("keeper_dispatch_failed", err)
 			return
@@ -596,7 +597,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			// Фильтр t.Passage==p внутри выкидывает placeholder-ы будущих Passage (их
 			// сжатые индексы разошлись бы с раскрытым исполнением). ДО dispatch, best-
 			// effort. Идемпотентно+непересекающиеся passage-срезы → накопление, не затир.
-			r.persistRunPlan(ctx, spec, passageTasks, p, log)
+			r.persistRunPlan(ctx, spec, passageTasks, p, sealed.Paths(), log)
 
 			// Keeper-side задачи ЭТОГО Passage (Слайс 2): исполняются на ПЕРЕ-
 			// рендеренных при ActivePassage=p tasks (passageTasks), СТРОГО ДО host-
@@ -1295,17 +1296,20 @@ func (r *Runner) emitRunCompleted(ctx context.Context, spec RunSpec, status stri
 
 // persistRunPlan сохраняет host-инвариантный план задач АКТИВНОГО Passage прогона
 // (apply_run_plan, NIM-37) для read-эндпоинта /tasks: строка на plan_index с
-// name/module/no_log/passage. Вызывается ПО-PASSAGE из его активного render;
-// фильтр t.Passage != activePassage выкидывает placeholder-ы будущих Passage
-// (staged-render, ADR-056 §в.1), чьи сжатые индексы разъехались бы с реальным
-// раскрытым исполнением (H1). Идемпотентно (insertRunPlanSQL = ON CONFLICT DO
-// UPDATE), passage-срезы не пересекаются по plan_index. name/module/no_log — НЕ
-// секрет (адрес/тип задачи), маскинг не нужен; params отложены в S1b.
+// name/module/no_log/passage + masked params (S1b). Вызывается ПО-PASSAGE из его
+// активного render; фильтр t.Passage != activePassage выкидывает placeholder-ы
+// будущих Passage (staged-render, ADR-056 §в.1), чьи сжатые индексы разъехались бы
+// с реальным раскрытым исполнением (H1). Идемпотентно (insertRunPlanSQL = ON
+// CONFLICT DO UPDATE), passage-срезы не пересекаются по plan_index. name/module/
+// no_log — НЕ секрет (адрес/тип задачи), маскинг не нужен; params ЖЕ могут нести
+// секрет → maskRunPlanParams (seal-aware маскинг + фильтр транспорта) на write-path.
+// sealedPaths — sealed-пути прогона (sealed.Paths()) для того же seal-aware маскера,
+// что status_details/error_summary.
 //
 // Best-effort: r.deps.DB=nil (unit без PG) или ошибка записи только логируются —
 // потеря плана деградирует наблюдаемость /tasks, но не корректность прогона
 // (симметрично accumulateRegister/emitRunCompleted).
-func (r *Runner) persistRunPlan(ctx context.Context, spec RunSpec, tasks []*render.RenderedTask, activePassage int, log *slog.Logger) {
+func (r *Runner) persistRunPlan(ctx context.Context, spec RunSpec, tasks []*render.RenderedTask, activePassage int, sealedPaths map[string]bool, log *slog.Logger) {
 	if r.deps.DB == nil || len(tasks) == 0 {
 		return
 	}
@@ -1321,12 +1325,53 @@ func (r *Runner) persistRunPlan(ctx context.Context, spec RunSpec, tasks []*rend
 			Module:    t.Module,
 			NoLog:     t.NoLog,
 			Passage:   t.Passage,
+			Params:    maskRunPlanParams(t, sealedPaths),
 		})
 	}
 	if err := applyrun.InsertRunPlan(ctx, r.deps.DB, spec.ApplyID, plan); err != nil {
 		log.Warn("scenario: персист плана задач прогона (apply_run_plan) провален — /tasks без плана",
 			slog.String("apply_id", spec.ApplyID), slog.Any("error", err))
 	}
+}
+
+// paramTemplateContent / paramRenderContext — транспортные ключи params шага
+// core.file.rendered (зеркало render/template.go): template_content — прочитанное
+// Keeper-ом содержимое файла для Soul-side render, render_context — собранный
+// per-host корень text/template. Оба НЕ operator-facing «входные данные» задачи →
+// выкидываются из params перед персистом в apply_run_plan (NIM-37 S1b).
+const (
+	paramTemplateContent = "template_content"
+	paramRenderContext   = "render_context"
+)
+
+// maskRunPlanParams готовит params задачи к персисту в apply_run_plan (NIM-37 S1b):
+// protobuf Struct → map, выкидывает транспортные ключи (template_content/
+// render_context), прогоняет остаток через seal-aware маскинг (тот же
+// audit.MaskSecretsSealed, что status_details/error_summary: sealed-пути прогона +
+// vault-ref + regex-last-resort с алармом) — ВТОРОЙ барьер поверх того, что params
+// уже отрендерены. no_log-задача / нет Params / пустой остаток → nil (jsonb NULL,
+// симметрия с подавлением register_data для no_log). Ошибка marshal → nil (best-
+// effort: наблюдаемость params деградирует, персист плана не валится).
+func maskRunPlanParams(t *render.RenderedTask, sealedPaths map[string]bool) []byte {
+	if t == nil || t.NoLog || t.Params == nil {
+		return nil
+	}
+	m := t.Params.AsMap()
+	delete(m, paramTemplateContent)
+	delete(m, paramRenderContext)
+	if len(m) == 0 {
+		return nil
+	}
+	masked := audit.MaskSecretsSealed(m, audit.SealOpts{
+		Sealed:        sealedPaths,
+		RegexFallback: audit.DefaultSealHooks.RegexFallback,
+		Logger:        audit.DefaultSealHooks.Logger,
+	})
+	b, err := json.Marshal(masked)
+	if err != nil {
+		return nil
+	}
+	return b
 }
 
 // changedTasksPayload конвертирует []ChangedTask в JSON-payload-форму события
