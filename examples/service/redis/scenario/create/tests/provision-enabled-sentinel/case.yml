@@ -116,6 +116,9 @@ assert:
         provider: wb-dev
         profile: redis-small
         count: 3
+        # name — run-identity батча = incarnation.name (здесь "create"): драйвер именует VM
+        # <name>-<seq> + label soulstack-run=<name> (идемпотентность прогона, NIM-16).
+        name: create
         generate_userdata: false
 
     # (в) core.soul.registered: sid — список SID созданных VM (register.provision.hosts

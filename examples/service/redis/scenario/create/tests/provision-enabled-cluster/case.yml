@@ -110,6 +110,9 @@ assert:
         provider: wb-dev
         profile: redis-small
         count: 4
+        # name — run-identity батча = incarnation.name (здесь "create"): драйвер именует VM
+        # <name>-<seq> + label soulstack-run=<name> (идемпотентность прогона, NIM-16).
+        name: create
         generate_userdata: false
 
     # (б) core.bootstrap.delivered: install + доставка per-VM bootstrap-токена по SSH

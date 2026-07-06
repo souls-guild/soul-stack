@@ -141,6 +141,9 @@ assert:
         provider: wb-dev
         profile: redis-small
         count: 2
+        # name — run-identity батча = incarnation.name (здесь "migrate_cluster"): драйвер
+        # именует VM <name>-<seq> + label soulstack-run=<name> (идемпотентность, NIM-16).
+        name: migrate_cluster
         generate_userdata: false
 
     # (б) core.bootstrap.delivered: install + доставка per-VM bootstrap-токена по SSH

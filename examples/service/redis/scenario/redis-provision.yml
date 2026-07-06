@@ -69,6 +69,15 @@
     # CEL-wrapped-skip param-type-check (module_params.go) ловит только StringNode → int-
     # param `count` ложно реджектился бы как param_type_mismatch на folded-форме.
     count: "${ (input.redis_type == 'cluster') ? int(input.shards) * (1 + int(input.replicas_per_master)) : 1 + int(input.replicas_per_master) }"
+    # name — RUN-IDENTITY прогона (идемпотентность по инкарнации, NIM-16): драйвер именует
+    # VM <name>-<seq> и штампует label soulstack-run=<name> (nameBase→runLabel,
+    # provisioned.go→soul-cloud-*) → рестарт той же инкарнации переиспользует тот же батч VM
+    # (findByRunLabel, не плодит orphan). Без name create падает `no run identity`.
+    # incarnation.name — корневая Coven-метка (ADR-008), устойчива между прогонами. ОБЫЧНО
+    # матчит vmNameBasePattern, но incarnation.NamePattern ^[a-z0-9][a-z0-9-]{0,62}$ — его
+    # надмножество (старт-цифра / хвост-дефис / длина 51-63 пройдут инкарнацию, но провалят
+    # драйвер) → кросс-доменный guard (домен-mismatch) — отдельный тикет.
+    name: "${ incarnation.name }"
     generate_userdata: false
 
 # (б) Установка soul + доставка per-VM bootstrap-токена по SSH (on: keeper,
