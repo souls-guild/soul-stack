@@ -236,6 +236,32 @@ Permission: `incarnation.history`. **REST-only — MCP-tool-а нет.** Path-pa
 
 **Errors:** `400 malformed-request` (не-ULID `apply_id`), `404 not-found` (incarnation вне scope/не существует; `apply_id` не существует **или принадлежит другой инкарнации** — store-слой фильтрует `WHERE apply_id AND incarnation_name`, cross-incarnation чтение прогонов исключено), `422 validation-failed` (невалидный path-`name`).
 
+#### `GET /v1/incarnations/{name}/runs/{apply_id}/tasks` — задачи прогона (план + per-host)
+
+Permission: `incarnation.history` (тот же read-tier, что RunDetail — **НЕ** `audit.read`). **REST-only — MCP-tool-а нет.** Path-params: `name`, `apply_id` (ULID; не-ULID → `400 malformed-request`). OperationID: `getIncarnationRunTasks`.
+
+**Per-task** срез прогона (в отличие от detail-эндпоинта выше — тот отдаёт host-строки `apply_runs`): план задач (`apply_run_plan`) + итог каждой задачи на каждом хосте из журнала аудита (`task.executed`), джойн по `plan_index`. Под UI-таб «ход прогона»: какой сценарий шёл, из каких задач, что изменилось. `hosts[]` несёт только хосты с результатом в audit (pending не включаются — фронт добьёт).
+
+**Response `200 RunTasksReply`:** `{tasks: [RunTaskEntry]}` (пустой план → `[]`), порядок — `plan_index`:
+
+| Поле | Тип | Смысл |
+|---|---|---|
+| `plan_index` | `int` | Сквозной индекс задачи в плане сценария (ключ корреляции с `failed_plan_index` detail-эндпоинта). |
+| `passage` | `int` | Номер Passage staged-render. |
+| `name` | `string` | Имя задачи. |
+| `module` | `string` | Модуль задачи (`core.pkg.installed`, …). |
+| `no_log` | `bool` | `true` → задача помечена `no_log:`; `params` и per-host `output`/`error.message` подавлены — не отдаются вовсе. |
+| `params` | `object` (optional) | Отрендеренные операторские input-параметры задачи, **secret-masked** (секрет-нота ниже). Ключ опущен для `no_log`-задач и задач без params. |
+| `hosts[]` | `RunTaskHostEntry` | Per-host итог: `sid` (FQDN либо синтетический `keeper` для шага `on: keeper`), `status` (`TASK_STATUS_*`), `output` (register-данные, optional), `error` (`{code, module, message?}` — только на упавшем хосте; `message` подавлён для `no_log`). |
+
+**RBAC:** existence-`RequireAction(incarnation, history)` + in-handler inScope-предикат (parity RunDetail); incarnation вне scope/не существует **или** `apply_id` принадлежит другой инкарнации → единый `404 not-found`.
+
+**Errors:** `400 malformed-request` (не-ULID `apply_id`), `404 not-found`, `422 validation-failed` (невалидный path-`name`).
+
+> **★ Секрет-гигиена `params`.** `/tasks` показывает **отрендеренные** `params` задач операторам с `incarnation.history`. Значения маскируются seal-aware механизмом на write-path-е (перед записью в `apply_run_plan`, `audit.MaskSecretsSealed`; тот же слой, что `state`/`spec` — [§ Маскинг state/spec в GET-ответах](../operator-api.md#маскинг-state--spec-в-get-ответах-defense-in-depth)) — по ИЛИ трёх слоёв ([templating.md §7.4](../../templating.md#74-secret-маскинг)): sealed-провенанс (ячейка, чьё сырое `${…}` читало secret-input активной схемы / `vault(...)`), vault-ref-маркер и regex-last-resort по sensitive-имени ключа (`token`/`secret`/`password`/…); задачи `no_log: true` `params` не показывают вовсе.
+>
+> **Ограничение.** Секрет, вписанный **plaintext-константой прямо в `params`** под невинным именем ключа (без `vault(...)` / `${…}` / secret-input), маскинг **не поймает** — нет sealed-провенанса (выражения, читающего секрет-источник, не было), а невинное имя не матчит regex-last-resort. Не хардкодьте секреты в `params` — используйте `vault(...)`, secret-input или `no_log: true`.
+
 #### `GET /v1/runs` — глобальный список прогонов
 
 Permission: `incarnation.history` (reuse read-tier per-incarnation runs). **REST-only — MCP-tool-а нет.** OperationID: `listRuns`. Страница «All Runs» UI.
