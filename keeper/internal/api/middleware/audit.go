@@ -152,6 +152,15 @@ func (s *StatusRecorder) Write(b []byte) (int, error) {
 	return s.ResponseWriter.Write(b)
 }
 
+// NIM-37: SSE flush passthrough
+func (s *StatusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
+
+func (s *StatusRecorder) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // recorderCtxKey — non-exported context-key для общего [StatusRecorder],
 // которым делятся bridge (strict-слой) и Audit.
 type recorderCtxKey struct{}
