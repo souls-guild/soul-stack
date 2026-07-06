@@ -583,7 +583,9 @@ compute:
          default(input.redis_settings, {})
        ) }
   # ── redis_config_tls: ОБЩИЙ TLS-блок redis.conf обеих веток (R3, dedup) ───────
-  # ★ R3: общие 5 TLS-директив + port-guard, идентичные в cluster и sentinel-ветках
+  # tls-auth-clients:no — server-only TLS: community.redis коннектится без client-cert
+  # (mTLS не выписываем, NIM-53 находка #3; иначе redis default `yes` → certificate required).
+  # ★ R3: общие 6 TLS-директив + port-guard, идентичные в cluster и sentinel-ветках
   # (раньше дублировались). cluster-ветка ДОЛИВАЕТ свою tls-cluster:yes поверх (см.
   # redis_config ниже) — эта база её НЕ несёт (mode-агностична). tls_off → {} (тернар).
   # TLS-директивы выводятся из compute.conf_dir (destiny кладёт PEM в ${conf_dir}/tls/ —
@@ -597,7 +599,8 @@ compute:
                'tls-cert-file':    compute.conf_dir + '/tls/redis.crt',
                'tls-key-file':     compute.conf_dir + '/tls/redis.key',
                'tls-ca-cert-file': compute.conf_dir + '/tls/ca.crt',
-               'tls-replication':  'yes'
+               'tls-replication':  'yes',
+               'tls-auth-clients': 'no'
              },
              compute.tls_only_on ? { 'port': '0' } : {}
            )

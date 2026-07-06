@@ -82,6 +82,11 @@ sigil:
 
 plugins:
   cache_root: ${STAND_DEV_DIR}/plugins
+  # work_root — writable корень git-клонов резолвера (ADR-026 F-fetch). Дефолт
+  # /var/lib/soul-stack-keeper/plugin-src не писабелен под dev-юзером → clone падал
+  # бы, слот оставался пуст. СТРОГО вне cache_root (schema-guard). Каталог создаёт
+  # dev/provision.sh.
+  work_root: ${STAND_DEV_DIR}/plugin-work
   # CloudDriver-каталог. FilterByCatalog оставляет в discovery только плагины,
   # чьё manifest.name упомянуто здесь (поле `name`); без записи `wb` найденный
   # ручной кеш-слот wb-wb был бы отброшен.
@@ -97,15 +102,14 @@ plugins:
   # { name: wb, source: "ssh://...wb-plugins", ref: "<tag>" }.
   cloud_drivers:
     - { name: wb, source: "file:///dev/null/soul-cloud-wb-manual-slot", ref: "manual-0001" }
-  # SoulModule-каталог (эпик core.module.installed, S1) — та же схема, что у wb:
-  # кеш-слот /tmp/keeper-dev/plugins/community-redis/{manual-0001,current} наполнен
-  # ВРУЧНУЮ; file://-source без SOUL_STACK_ALLOW_FILE_REPOS=1 → warning резолвера,
-  # ручной current-symlink не тронут. Запись нужна ТОЛЬКО для FilterByCatalog
-  # (`name` = manifest.name плагина community.redis, т.е. `redis`).
-  # ВРЕМЕННО, под удаление: с реальным git-репо заменить на
-  # { name: redis, source: "ssh://...community-redis", ref: "<tag>" }.
+  # SoulModule-каталог (эпик core.module.installed, S1). source — git-репо со
+  # СОБРАННЫМ бинарём (dist/soul-mod-redis + manifest.yaml), которое материализует
+  # dev/provision.sh (шаг 9b). plugingit клонирует его (file://-scheme под
+  # SOUL_STACK_ALLOW_FILE_REPOS=1 — keeper-run.sh выставляет), кеширует слот
+  # community-redis/<sha> → current: плагин доступен для Sigil-allow (POST
+  # /v1/plugins/sigils) и day-2 redis. `name` = manifest.name (redis) для FilterByCatalog.
   soul_modules:
-    - { name: redis, source: "file:///dev/null/community-redis-manual-slot", ref: "manual-0001" }
+    - { name: redis, source: "file://${STAND_DEV_DIR}/plugin-repos/community-redis", ref: "v1.0.0" }
 
 plugin_runtime:
   socket_dir: ${STAND_DEV_DIR}/plugin-sockets

@@ -60,14 +60,31 @@ input:
       Новая политика вытеснения. Не задана → берётся ранее развёрнутая
       incarnation.state.maxmemory_policy (подложка).
 
+  io_threads:
+    type: integer
+    required: false
+    min: 0
+    # dedicated io_threads (симметрия covenant.yml create): io-threads — startup-only
+    # директива (плагин пропускает CONFIG SET), значение вступит при следующем рестарте
+    # процесса из redis.conf шага 1. БЕЗ default (как memory_mb/maxmemory_policy day-2):
+    # не задан или 0 → сохраняется ранее развёрнутое из state.redis_config (подложка).
+    description: >-
+      Новое число I/O-потоков Redis (директива io-threads, startup-only — вступит при
+      следующем рестарте процесса). Не задан или 0 → ранее развёрнутое
+      (incarnation.state, подложка).
+
   persistence:
     type: string
     required: false
-    enum: [off, aof, rdb, rdb_aof]
+    # ★ enum синхронизирован с essence.persistence_presets / covenant.yml (aof/rdb_aof
+    # разбиты на _1sec/_always): старые aof/rdb_aof — НЕ ключи presets → рвали render
+    # `no such key` в essence.persistence_presets[persistence] → incarnation error_locked.
+    enum: [off, aof_1sec, aof_always, rdb, rdb_aof_1sec, rdb_aof_always]
     description: >-
-      Новый режим persistence (транслируется в save/appendonly через
-      essence.persistence_presets). Не задан → ранее развёрнутый
-      incarnation.state.persistence (подложка).
+      Новый режим persistence (транслируется в save/appendonly/appendfsync через
+      essence.persistence_presets). off — без сохранения; aof_1sec/aof_always — только AOF
+      (fsync everysec/always); rdb — только снапшоты; rdb_aof_1sec/rdb_aof_always — снапшоты
+      + AOF. Не задан → ранее развёрнутый incarnation.state.persistence (подложка).
 
   redis_settings:
     type: object
@@ -90,8 +107,8 @@ input:
 # day-2 обязан иметь, что апдейтить: хотя бы одно изменяемое поле. INPUT-ONLY
 # (has()-цепочка, default()/essence недоступны в validate).
 validate:
-  - that: "has(input.memory_mb) || has(input.maxmemory_policy) || has(input.persistence) || has(input.redis_settings)"
-    message: "update_config требует хотя бы одно изменяемое поле (memory_mb/maxmemory_policy/persistence/redis_settings)"
+  - that: "has(input.memory_mb) || has(input.maxmemory_policy) || has(input.persistence) || has(input.io_threads) || has(input.redis_settings)"
+    message: "update_config требует хотя бы одно изменяемое поле (memory_mb/maxmemory_policy/persistence/io_threads/redis_settings)"
 
 # ── Вычисляемые scenario-vars (compute:, ADR-009 amendment) ──────────────────────
 # Рун-уровневый контекст (input/essence/incarnation — без soulprint, host-инвариант).
@@ -130,7 +147,7 @@ compute:
   # ── Перевычисленный redis_config (тот же merge-перевод, что create) ──────────
   # Слои (SHALLOW last-wins): РАЗВЁРНУТЫЙ incarnation.state.redis_config (база day-2 —
   # сохраняет TLS/cluster/прочие директивы, которые оператор сейчас не трогает) →
-  # persistence-пресет → вычисленные maxmemory/policy (вход ИЛИ state-подложка) →
+  # persistence-пресет → вычисленные maxmemory/policy/io-threads (вход ИЛИ state-подложка) →
   # input.redis_settings (passthrough дельта). TLS-директивы УЖЕ в базовом
   # state.redis_config (create их туда положил) — здесь НЕ перевычисляются (TLS-материал
   # update_config не трогает; ротация — rotate_tls). Аналогично cluster-директивы.
@@ -148,7 +165,10 @@ compute:
              ? { 'maxmemory-policy': input.maxmemory_policy }
              : (has(incarnation.state.maxmemory_policy) && incarnation.state.maxmemory_policy != ''
                   ? { 'maxmemory-policy': incarnation.state.maxmemory_policy }
-                  : {})
+                  : {}),
+           (has(input.io_threads) && int(input.io_threads) > 0)
+             ? { 'io-threads': string(int(input.io_threads)) }
+             : {}
          ),
          default(input.redis_settings, {})
        ) }
@@ -166,6 +186,10 @@ state_changes:
     value: "${ int(default(input.memory_mb, default(incarnation.state.memory_mb, 0))) }"
   - set: maxmemory_policy
     value: "${ default(input.maxmemory_policy, default(incarnation.state.maxmemory_policy, '')) }"
+  # io_threads read-model (подложка как memory_mb): задан → новый; иначе ранее
+  # развёрнутый state.io_threads; иначе 0. Держит state.io_threads ≡ redis_config['io-threads'].
+  - set: io_threads
+    value: "${ int(default(input.io_threads, default(incarnation.state.io_threads, 0))) }"
 
 tasks:
   # ── Version-aware валидатор имён директив redis_settings (assert, #6) ─────────────
@@ -271,16 +295,19 @@ tasks:
                  : {}
              ) }
 
-  # 2. HOT-RELOAD: применить hot-settable директивы к живому инстансу (CONFIG SET) +
-  #    CONFIG REWRITE (персист в redis.conf — на самом деле redis.conf уже отрендерен
-  #    шагом 1, но REWRITE гарантирует консистентность live↔файл по канону Redis).
-  #    Передаём ВЕСЬ compute.redis_config — плагин сам пропускает startup-only по
-  #    денилисту (port/dir/aclfile/cluster-enabled/loadmodule/…), применяет только
+  # 2. HOT-RELOAD: применить hot-settable директивы к живому инстансу (CONFIG SET).
+  #    ★ rewrite=false НАМЕРЕННО (NIM-53): redis.conf уже отрендерен ЦЕЛИКОМ шагом 1 — он
+  #    источник истины файла. CONFIG REWRITE перезаписал бы файл из ЖИВОГО in-memory конфига
+  #    и ОТКАТИЛ БЫ startup-only-директивы (io-threads/…) к их live-значению (плагин
+  #    пропускает их на CONFIG SET — процесс не рестартовал), стерев новое значение шага 1
+  #    «для следующего рестарта». Симметрия rotate_tls (рендер + hot-reload без rewrite).
+  #    Передаём ВЕСЬ compute.redis_config — плагин сам пропускает startup-only по денилисту
+  #    (port/dir/io-threads/aclfile/cluster-enabled/loadmodule/…), применяет только
   #    hot-settable. changed=false при no-op (честный CONFIG GET-diff в плагине →
   #    идемпотентность повторного прогона). addr/TLS-дискриминатор — из state.tls
   #    (compute.tls_*), как restart. changed_when здесь НЕ давим: реальный change
   #    (применённая директива) обязан отразиться в RunResult.
-  - name: Hot-reload changed config directives on the live instance (CONFIG SET + REWRITE)
+  - name: Hot-reload changed config directives on the live instance (CONFIG SET)
     module: community.redis.config
     params:
       addr:     "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
@@ -296,4 +323,6 @@ tasks:
       # (на живом инстансе уже выставлен create-ом), update_config его НЕ трогает. Плагин
       # итерирует ТОЛЬКО переданные ключи (директивы вне config не сбрасываются).
       config:   "${ compute.redis_config }"
-      rewrite:  true
+      # ★ rewrite=false (NIM-53): файл — источник истины шага 1 (см. коммент задачи).
+      # REWRITE откатил бы startup-only (io-threads) к live-значению — регресс NIM-53.
+      rewrite:  false

@@ -1,0 +1,133 @@
+# L0 guard (NIM-53 bug #2): update_config меняет io_threads через dedicated-поле → io-threads
+# долетает в rendered redis.conf И в state.redis_config со значением оператора, а hot-reload
+# идёт с rewrite=false. Регресс (live): io-threads (startup-only) рендерился в redis.conf
+# шагом 1, но task-2 CONFIG REWRITE переписывал файл из ЖИВОГО конфига (io-threads live=1 —
+# плагин пропускает startup-only на CONFIG SET) → redis.conf откатывался к io-threads 1.
+# Фикс: rewrite=false (файл — рендер шага 1) + dedicated io_threads (read-model state.io_threads).
+#
+# Ассертим: (1) redis.conf (core.file.rendered) config несёт io-threads:"2"; (2) hot-reload
+# (community.redis.config) rewrite=false + config несёт io-threads:"2" (плагин пропустит его
+# на живом — startup-only, вступит при следующем рестарте); (3) state_changes:
+# redis_config['io-threads']="2" И io_threads:2 (namedfield read-model консистентен).
+# Plaintext, render-only, герметично.
+name: update_config changes io_threads and it reaches redis.conf and state (rewrite=false)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.5 }
+    os: { arch: amd64 }
+
+  essence:
+    memory_reserve_percent: 75
+    conf_dir: /etc/redis
+    data_dir: /var/lib/redis
+    modules_base_url: "https://artifacts.example.com/redis/modules"
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+
+  # Развёрнутый state (create): io-threads НЕ в redis_config (io_threads=0 при create —
+  # covenant has-guard >0 не пишет директиву). update_config доливает io-threads=2.
+  state:
+    redis_type: sentinel
+    redis_version: "7.4.1"
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    persistence: rdb
+    memory_mb: 1024
+    maxmemory_policy: allkeys-lru
+    io_threads: 0
+    redis_config:
+      maxmemory:        "768mb"
+      maxmemory-policy: allkeys-lru
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+    redis_users: []
+
+  input:
+    # Дельта: ТОЛЬКО io_threads (dedicated) — проверяет и validate «io_threads — изменяемое
+    # поле», и прокидку значения оператора в redis.conf/state.
+    io_threads: 2
+
+  vault:
+    secret/redis/update_config:
+      password: upd-redis-pass-16chars
+    secret/redis/update_config/users/default_admin:
+      password: default-admin-secret-pass
+
+assert:
+  task_present:
+    # 1. redis.conf перерендерен с io-threads:"2" (для следующего рестарта). Прочие директивы
+    #    — подложка state (maxmemory/policy/save/appendonly). masteruser/masterauth доливаются.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/redis.conf
+        render_context:
+          vars:
+            conf_dir: /etc/redis
+            data_dir: /var/lib/redis
+            port: 6379
+            run_dir: /var/run/redis
+            log_dir: /var/log/redis
+            loadmodules:
+              - /var/lib/redis/modules/redisbloom.so
+              - /var/lib/redis/modules/rejson.so
+              - /var/lib/redis/modules/redisearch.so
+              - /var/lib/redis/modules/redistimeseries.so
+            config:
+              maxmemory: "768mb"
+              maxmemory-policy: allkeys-lru
+              save: "900 1 300 10 60 10000"
+              appendonly: "no"
+              io-threads: "2"
+              masteruser: default_admin
+              masterauth: default-admin-secret-pass
+          self:
+            sid: trial-host
+            covens: [update_config]
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+          essence: {}
+
+    # 2. HOT-RELOAD: rewrite=false (файл — рендер шага 1). config несёт io-threads:"2" —
+    #    плагин пропустит его на живом (startup-only денилист), значение вступит при рестарте.
+    - module: community.redis.config
+      params_subset:
+        addr: "127.0.0.1:6379"
+        username: default_admin
+        password: default-admin-secret-pass
+        tls: false
+        rewrite: false
+        config:
+          maxmemory: "768mb"
+          maxmemory-policy: allkeys-lru
+          save: "900 1 300 10 60 10000"
+          appendonly: "no"
+          io-threads: "2"
+
+  # 3. state read-model консистентен: redis_config несёт io-threads:"2" (write-model) И
+  #    io_threads:2 (namedfield). Регресс — io_threads оставался 0, разъезжаясь с redis_config.
+  state_changes:
+    redis_config:
+      maxmemory: "768mb"
+      maxmemory-policy: allkeys-lru
+      save: "900 1 300 10 60 10000"
+      appendonly: "no"
+      io-threads: "2"
+    persistence: rdb
+    memory_mb: 1024
+    maxmemory_policy: allkeys-lru
+    io_threads: 2

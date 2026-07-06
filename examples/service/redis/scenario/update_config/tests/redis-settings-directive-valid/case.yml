@@ -77,7 +77,8 @@ assert:
         addr: "127.0.0.1:6379"
         username: default_admin
         password: default-admin-secret-pass
-        rewrite: true
+        # rewrite=false (NIM-53): redis.conf шага 1 — источник истины файла.
+        rewrite: false
         config:
           maxmemory: "768mb"
           maxmemory-policy: allkeys-lru

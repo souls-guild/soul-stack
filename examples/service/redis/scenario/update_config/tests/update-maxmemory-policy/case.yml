@@ -1,15 +1,16 @@
 # L0-испытание update_config: day-2 hot-reload директив redis.conf БЕЗ рестарта.
 # Оператор меняет maxmemory_policy (allkeys-lru → volatile-lru); сценарий
 # перевычисляет merged redis_config (на базе РАЗВЁРНУТОГО incarnation.state.redis_config),
-# рендерит новый redis.conf и ОЖИВЛЯЕТ через community.redis.config (CONFIG SET +
-# REWRITE). Render-only, герметично. Plaintext (state.tls.enable=false → addr 6379).
+# рендерит новый redis.conf и ОЖИВЛЯЕТ через community.redis.config (CONFIG SET,
+# rewrite=false — файл держит рендер шага 1). Render-only, герметично. Plaintext (addr 6379).
 #
 # Что ассертим (критерий приёмки):
 #   1. redis.conf (core.file.rendered): новый merged config несёт изменённую директиву
 #      maxmemory-policy: volatile-lru + сохранённые из state (maxmemory/save/appendonly).
 #   2. hot-reload-шаг (community.redis.config): addr 127.0.0.1:6379 (plain), tls=false,
 #      password из vault (маскируется на выводе, в плане — резолвленное значение),
-#      rewrite=true, config несёт перевычисленный merged config.
+#      rewrite=false (redis.conf шага 1 — источник истины файла; NIM-53), config несёт
+#      перевычисленный merged config.
 #   3. state_changes: redis_config ≡ переданный в hot-reload config (один compute,
 #      без drift); maxmemory_policy = volatile-lru (namedfield read-model).
 #
@@ -119,8 +120,8 @@ assert:
           essence: {}
 
     # 2. HOT-RELOAD: community.redis.config к живому plain-инстансу. addr 6379 (plain),
-    #    tls=false, rewrite=true, config = перевычисленный merged. Денилист startup-only
-    #    отрабатывает на стороне плагина (здесь config hot-settable, startup-only нет).
+    #    tls=false, rewrite=false (NIM-53: файл — рендер шага 1), config = перевычисленный
+    #    merged. Денилист startup-only отрабатывает на стороне плагина (здесь hot-settable).
     - module: community.redis.config
       params_subset:
         addr: "127.0.0.1:6379"
@@ -128,7 +129,7 @@ assert:
         username: default_admin
         password: default-admin-secret-pass
         tls: false
-        rewrite: true
+        rewrite: false
         # config — ЧИСТЫЙ compute.redis_config БЕЗ masterauth-долива (hot-reload шлёт CONFIG
         # SET только операторской дельты; masteruser/masterauth — replication-материал,
         # update_config его не трогает на живом инстансе).

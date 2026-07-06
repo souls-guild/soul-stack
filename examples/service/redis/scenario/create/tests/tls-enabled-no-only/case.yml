@@ -128,6 +128,7 @@ assert:
               tls-key-file: /etc/redis/tls/redis.key
               tls-ca-cert-file: /etc/redis/tls/ca.crt
               tls-replication: "yes"
+              tls-auth-clients: "no"
               maxmemory: "256mb"
               maxmemory-policy: allkeys-lru
               maxclients: 10000
@@ -171,6 +172,7 @@ assert:
       tls-key-file: /etc/redis/tls/redis.key
       tls-ca-cert-file: /etc/redis/tls/ca.crt
       tls-replication: "yes"
+      tls-auth-clients: "no"
       maxmemory: "256mb"
       maxmemory-policy: allkeys-lru
       maxclients: 10000

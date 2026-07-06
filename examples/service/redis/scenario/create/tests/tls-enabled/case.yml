@@ -186,6 +186,7 @@ assert:
               tls-key-file: /etc/redis/tls/redis.key
               tls-ca-cert-file: /etc/redis/tls/ca.crt
               tls-replication: "yes"
+              tls-auth-clients: "no"
               # обычные директивы тоже на месте (TLS не вытеснил их).
               maxmemory: "256mb"
               maxmemory-policy: allkeys-lru
@@ -232,6 +233,7 @@ assert:
       tls-key-file: /etc/redis/tls/redis.key
       tls-ca-cert-file: /etc/redis/tls/ca.crt
       tls-replication: "yes"
+      tls-auth-clients: "no"
       maxmemory: "256mb"
       maxmemory-policy: allkeys-lru
       maxclients: 10000

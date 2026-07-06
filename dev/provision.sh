@@ -366,9 +366,17 @@ provision_git_repo() {
 if ! command -v git >/dev/null 2>&1; then
     fail "git CLI не найден в PATH — нужен для материализации service/destiny-репо"
 fi
+# go нужен для сборки плагина community.redis (шаг 9b) — plugingit F-fetch ждёт
+# СОБРАННЫЙ бинарь в dist/, на Keeper компиляции нет (ADR-026).
+if ! command -v go >/dev/null 2>&1; then
+    fail "go CLI не найден в PATH — нужен для сборки плагина community.redis"
+fi
 
 EXAMPLES="${REPO_ROOT}/examples"
-mkdir -p "${KEEPER_DEV_DIR}/repos" "${KEEPER_DEV_DIR}/destiny"
+# plugin-repos/ — git-репо собранных плагинов (source для plugins.soul_modules);
+# plugin-work/ — writable work_root резолвера (plugins.work_root, дефолт не писабелен).
+mkdir -p "${KEEPER_DEV_DIR}/repos" "${KEEPER_DEV_DIR}/destiny" \
+         "${KEEPER_DEV_DIR}/plugin-repos" "${KEEPER_DEV_DIR}/plugin-work"
 
 # service-репо (записи service_registry, см. шаг 10; ref: main).
 provision_git_repo \
@@ -403,6 +411,52 @@ provision_git_repo \
     "${EXAMPLES}/destiny/vector" \
     "${KEEPER_DEV_DIR}/destiny/vector" \
     v1.0.0 "destiny vector"
+
+# 9b. Плагин community.redis (SoulModule) — материализация СОБРАННОГО бинаря в git-репо.
+#
+# В отличие от service/destiny (provision_git_repo коммитит ИСХОДНИКИ), plugingit-
+# резолвер (ADR-026 F-fetch) на Keeper НЕ компилирует — ждёт готовый бинарь в
+# dist/<binary-name> рядом с manifest.yaml. Layout зеркалит harness
+# tests/e2e-live/harness/plugin.go (parity plugingit/resolver_test.go fixtureRepo).
+#
+# Сборка in-place (cwd=каталог исходников): go.mod плагина использует relative-replace
+# (../../../sdk, ../../../proto/plugin) — копировать дерево нельзя. GOWORK=off — плагин
+# вне go.work (прецедент Makefile test-plugins). -trimpath -ldflags "-buildid=" —
+# воспроизводимый sha256: иначе повторный provision меняет бинарь → инвалидирует
+# уже введённый Sigil-допуск.
+provision_community_redis_plugin() {
+    local src="${EXAMPLES}/module/soul-mod-community-redis"
+    local dest="${KEEPER_DEV_DIR}/plugin-repos/community-redis"
+    local bin="soul-mod-redis"
+    if [ ! -f "${src}/manifest.yaml" ]; then
+        fail "манифест плагина community.redis не найден: ${src}/manifest.yaml"
+    fi
+
+    log "сборка плагина community.redis (${bin}, linux/amd64, воспроизводимо)"
+    local tmp
+    tmp="$(mktemp -d)"
+    if ! ( cd "${src}" && GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+        go build -trimpath -ldflags "-buildid=" -o "${tmp}/${bin}" . ); then
+        rm -rf "${tmp}"
+        fail "go build плагина community.redis не удался (${src})"
+    fi
+
+    # Пересборка с нуля: детерминированный commit (GIT_* выше) → тот же SHA при
+    # неизменном бинаре, keeper переиспользует снапшот, а не плодит сироты в cache.
+    rm -rf "${dest}"
+    mkdir -p "${dest}/dist"
+    cp "${src}/manifest.yaml" "${dest}/manifest.yaml"
+    cp "${tmp}/${bin}" "${dest}/dist/${bin}"
+    chmod 0755 "${dest}/dist/${bin}"
+    rm -rf "${tmp}"
+
+    git -C "${dest}" init -q -b main
+    git -C "${dest}" add -A
+    git -C "${dest}" -c commit.gpgsign=false commit -q -m "плагин community.redis snapshot (dev-provision)"
+    git -C "${dest}" -c tag.gpgsign=false tag -f v1.0.0 >/dev/null
+    log "git-репо плагина community.redis @ ${dest} (branch main + tag v1.0.0, dist/${bin})"
+}
+provision_community_redis_plugin
 
 # 10. Seed реестра сервисов в Postgres (service_registry + keeper_settings).
 #

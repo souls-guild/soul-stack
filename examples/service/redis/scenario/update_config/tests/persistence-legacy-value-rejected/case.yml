@@ -1,0 +1,54 @@
+# L0 guard (NIM-53 bug #1, негатив): старое persistence-значение (rdb_aof) больше НЕ в enum
+# update_config → отвергается на INPUT-валидации (ResolveInputValues) ДО render. Держит
+# инвариант «старые aof/rdb_aof не принимаются»: они не ключи essence.persistence_presets,
+# их приём рвал бы render no-such-key → incarnation error_locked (см. позитив
+# persistence-canonical-value). Enum обязан отвергнуть их ДО applying, понятным отказом.
+name: update_config rejects a legacy persistence value (rdb_aof) at input validation
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.5 }
+    os: { arch: amd64 }
+
+  essence:
+    memory_reserve_percent: 75
+    conf_dir: /etc/redis
+    data_dir: /var/lib/redis
+    persistence_presets:
+      rdb:
+        save: "900 1 300 10 60 10000"
+        appendonly: "no"
+
+  state:
+    redis_type: sentinel
+    redis_version: "7.4.1"
+    tls:
+      enable:   false
+      only:     false
+      port:     7379
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    persistence: rdb
+    memory_mb: 1024
+    maxmemory_policy: allkeys-lru
+    io_threads: 0
+    redis_config:
+      maxmemory:        "768mb"
+      maxmemory-policy: allkeys-lru
+      save:             "900 1 300 10 60 10000"
+      appendonly:       "no"
+    redis_users: []
+
+  input:
+    # Старое значение из до-редизайн enum [off,aof,rdb,rdb_aof] — теперь НЕ в enum.
+    persistence: rdb_aof
+
+  vault:
+    secret/redis/update_config/users/default_admin:
+      password: default-admin-secret-pass
+
+# Прогон обрывается на input-валидации: persistence ∉ enum. Подстрока — маркер enum-отказа
+# ResolveInputValues (shared/config/input_value.go).
+expect_render_error: "не входит в enum"

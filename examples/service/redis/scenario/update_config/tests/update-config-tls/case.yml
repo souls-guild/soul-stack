@@ -13,7 +13,7 @@
 #   1. redis.conf перерендерен с новым merged config (изменён maxmemory; TLS-директивы
 #      СОХРАНЕНЫ из state.redis_config — update_config их не трогает, ротация — rotate_tls).
 #   2. hot-reload (community.redis.config): addr 127.0.0.1:7379 (TLS-порт из state.tls.port),
-#      tls=true, tls_ca = PEM CA, rewrite=true, config несёт TLS-директивы (плагин
+#      tls=true, tls_ca = PEM CA, rewrite=false (NIM-53), config несёт TLS-директивы (плагин
 #      пропустит startup-only tls-port по денилисту, применит hot-settable tls-cert-file и
 #      обычные директивы).
 #   3. state_changes: redis_config ≡ переданный config (один compute).
@@ -126,8 +126,9 @@ assert:
           essence: {}
 
     # 2. HOT-RELOAD ПО TLS: community.redis.config, addr на tls-порт (7379), tls=true,
-    #    tls_ca = PEM CA, rewrite=true. config несёт TLS-директивы — плагин пропустит
-    #    startup-only tls-port (денилист), применит hot-settable.
+    #    tls_ca = PEM CA, rewrite=false (NIM-53: redis.conf шага 1 — источник истины файла).
+    #    config несёт TLS-директивы — плагин пропустит startup-only tls-port (денилист),
+    #    применит hot-settable.
     - module: community.redis.config
       params_subset:
         addr: "127.0.0.1:7379"
@@ -136,7 +137,7 @@ assert:
         password: default-admin-secret-pass
         tls: true
         tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
-        rewrite: true
+        rewrite: false
         # config — ЧИСТЫЙ compute.redis_config БЕЗ masterauth-долива (hot-reload = только
         # операторская дельта; masteruser/masterauth — replication-материал, не трогается).
         config:
