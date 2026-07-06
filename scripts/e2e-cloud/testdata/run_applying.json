@@ -1,0 +1,15 @@
+{
+  "apply_id": "01J8ZK7Q9WGF3M2N7P4R5S6AP1",
+  "scenario": "create",
+  "status": "applying",
+  "started_at": "2026-07-06T10:00:00.000000000Z",
+  "hosts": [
+    {
+      "sid": "redis-auto-1.fedorovstepan2-dev.vm.xc.clv3",
+      "status": "running",
+      "passage": 0,
+      "attempt": 1,
+      "cancel_requested": false
+    }
+  ]
+}

@@ -91,7 +91,7 @@ PKG_ARCH ?= amd64
 KEEPER_IMAGE ?= soul-stack/keeper
 SOUL_IMAGE   ?= soul-stack/soul
 
-.PHONY: gen build build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-openapi check-openapi check-template check-stand-template check-soul-template sync-webui check-webui sbom pkg pkg-keeper pkg-soul pkg-soul-lint sign stress load-test help dev-souls-docker dev-souls-docker-down
+.PHONY: gen build build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-openapi check-openapi check-template check-stand-template check-soul-template sync-webui check-webui sbom pkg pkg-keeper pkg-soul pkg-soul-lint sign stress load-test help dev-souls-docker dev-souls-docker-down
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -418,6 +418,25 @@ e2e-k8s: docker-build-keeper docker-build-soul
 		echo "go test -tags=e2e_k8s ./... in tests/e2e-k8s"; \
 		(cd tests/e2e-k8s && go test -tags=e2e_k8s -timeout=30m -p 1 ./...) || exit 1; \
 	fi
+
+# --- Облачный live-E2E оркестратор (NIM-31) ---
+# e2e-cloud — прогон облачного live-E2E поверх Operator API keeper'а через teleport
+# (EXEC_MODE=tsh) или прямой curl (EXEC_MODE=local). НЕ входит в `check` (требует
+# облака/teleport + пред-собранные артефакты; симметрично e2e / e2e-live). Bring-up-
+# скрипты (WB-специфика) живут локально в $$SCRIPTS_DIR и в git НЕ коммитятся — раннер
+# зовёт их рантайм. Suite — переменная SUITE (create|create-destroy|day2). Примеры:
+#   make e2e-cloud SUITE=create-destroy
+#   DRY_RUN=1 make e2e-cloud SUITE=day2 SCENARIO=add_user   # печать вызовов без сети
+SUITE ?= create-destroy
+e2e-cloud:
+	@bash scripts/e2e-cloud/runbook.sh $(SUITE)
+
+# check-e2e-cloud — docker-free guard несущей логики оркестратора: classify/poll/
+# assert/run_scenario со стабом keeper_api на JSON-фикстурах (testdata/), мутац-пары
+# RED/GREEN. Входит в `check` рядом с прочими guard-шагами. Требует jq (как и dev-
+# скрипты репо: dev/provision.sh и др.); jq-less окружение падёт громко с подсказкой.
+check-e2e-cloud:
+	@bash scripts/e2e-cloud/test/guard.sh
 
 # `go mod tidy` на модуле без go-файлов выдаёт "no Go files" и фейлится,
 # поэтому модули с пустым `go list ./...` так же пропускаются.
@@ -826,7 +845,7 @@ sign:
 # пропускается через SKIP_VULNCHECK=1 (см. таргет), в CI гонит реально.
 # `test-plugins` — go.mod-плагины вне go.work (GOWORK=off). `trial` — L0-render
 # по корпусу examples/service/ (ловит сломанные case.yml-ассерты).
-check: check-fmt vet build test test-plugins check-gen check-openapi check-template check-stand-template check-soul-template check-webui check-doc-links check-vuln lint trial
+check: check-fmt vet build test test-plugins check-gen check-openapi check-template check-stand-template check-soul-template check-webui check-doc-links check-vuln lint trial check-e2e-cloud
 	@echo "check: все проверки пройдены"
 
 # gofmt-форматирование по всем модулям. `gofmt -l` печатает только файлы,
