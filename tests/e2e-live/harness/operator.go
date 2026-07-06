@@ -92,3 +92,23 @@ func (c *opClient) get(ctx context.Context, path string) ([]byte, int, error) {
 	}
 	return b, resp.StatusCode, nil
 }
+
+// del — DELETE с JWT, возвращает body+status. Симметрично post/get; нужен
+// teardown-эндпоинтам (DELETE /v1/incarnations/<name>?allow_destroy=...).
+func (c *opClient) del(ctx context.Context, path string) ([]byte, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.baseURL+path, nil)
+	if err != nil {
+		return nil, 0, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.jwt)
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("http: %w", err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("read body: %w", err)
+	}
+	return b, resp.StatusCode, nil
+}

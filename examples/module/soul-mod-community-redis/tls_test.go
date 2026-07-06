@@ -113,6 +113,26 @@ func TestBuildTLSConfig_CertWithoutKeyErrors(t *testing.T) {
 	}
 }
 
+// TestBuildTLSConfig_CABundleLoadsBoth — склейка двух CA PEM (CA-rollover rotate_tls:
+// scenario отдаёт tls_ca = старый ∪ новый CA) → x509-пул принимает ОБА
+// (AppendCertsFromPEM парсит несколько PEM-блоков подряд). Фиксирует, что bundle-строка
+// из compute.tls_ca валидна для плагина без правок самого плагина.
+func TestBuildTLSConfig_CABundleLoadsBoth(t *testing.T) {
+	caOld, _ := genCertPEM(t)
+	caNew, _ := genCertPEM(t)
+	bundle := caOld + "\n" + caNew // так compute.tls_ca склеивает старый+новый CA
+	cfg, err := buildTLSConfig(tlsParams{enabled: true, caPEM: bundle})
+	if err != nil {
+		t.Fatalf("buildTLSConfig(bundle): %v", err)
+	}
+	if cfg == nil || cfg.RootCAs == nil {
+		t.Fatal("bundle CA → RootCAs обязан быть загружен")
+	}
+	if got := len(cfg.RootCAs.Subjects()); got != 2 {
+		t.Fatalf("bundle из ДВУХ CA → пул обязан содержать оба сертификата, got %d", got)
+	}
+}
+
 // --- parseTLS + проброс в connConfig через connect-инъекцию ---
 
 // TestApply_TLSParamsReachConnect — все state-пути (command/config/replica/

@@ -12,6 +12,8 @@
 FROM debian:12-slim
 
 # Base deps: systemd + минимальный toolset для core.pkg/core.service-тестов.
+# openssl — CLI для AssertRedisTLSCertServed (NIM-54): fingerprint серверного
+# cert, который redis отдаёт по TLS (redis install тянет только libssl, не CLI).
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         systemd systemd-sysv \
         ca-certificates \
@@ -20,6 +22,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
         procps \
         iproute2 \
         dbus \
+        openssl \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
     && rm -f /lib/systemd/system/multi-user.target.wants/* \

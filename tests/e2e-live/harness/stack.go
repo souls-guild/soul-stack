@@ -867,6 +867,65 @@ func (s *Stack) WaitIncarnationStatus(t *testing.T, incarnationName, wantStatus 
 		incarnationName, wantStatus, timeoutSec, last)
 }
 
+// DeleteIncarnation сносит incarnation через Operator API (DELETE
+// /v1/incarnations/<name>?allow_destroy=<bool>). allow_destroy=true →
+// force-DELETE без teardown-сценария (синхронный каскад ON DELETE CASCADE в том
+// же запросе, incarnation_typed.go §DestroyTyped). Ассерт 2xx (роут → 202).
+func (s *Stack) DeleteIncarnation(t *testing.T, name string, allowDestroy bool) {
+	t.Helper()
+	c := s.opClient(t)
+	path := fmt.Sprintf("/v1/incarnations/%s?allow_destroy=%t", name, allowDestroy)
+	resp, status, err := c.del(context.Background(), path)
+	if err != nil {
+		t.Fatalf("DeleteIncarnation %s: http: %v", name, err)
+	}
+	if status < 200 || status >= 300 {
+		t.Fatalf("DeleteIncarnation %s (allow_destroy=%t): status %d, body=%s", name, allowDestroy, status, string(resp))
+	}
+}
+
+// AssertIncarnationAbsent — teardown-ассерт destroy-теста: GET incarnation → 404
+// И каскад ON DELETE CASCADE отработал (apply_runs / state_history по инкарнации
+// = 0 ЖИВЫХ строк; snapshot до удаления сохраняется в *_archive, migrations
+// 018/006). GET поллится: force-DELETE синхронен, но teardown-путь удаляет
+// строку асинхронно после 202.
+func (s *Stack) AssertIncarnationAbsent(t *testing.T, name string) {
+	t.Helper()
+	c := s.opClient(t)
+
+	deadline := time.Now().Add(15 * time.Second)
+	var lastStatus int
+	var lastBody []byte
+	for {
+		body, status, err := c.get(context.Background(), "/v1/incarnations/"+name)
+		if err != nil {
+			t.Fatalf("AssertIncarnationAbsent %s: GET: %v", name, err)
+		}
+		lastStatus, lastBody = status, body
+		if status == http.StatusNotFound {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("AssertIncarnationAbsent %s: GET status=%d, ожидался 404 (инкарнация не снесена)\nbody=%s", name, lastStatus, string(lastBody))
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for _, tbl := range []string{"apply_runs", "state_history"} {
+		var n int
+		// Имя таблицы — литерал из закрытого списка (не user-input), format безопасен.
+		q := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE incarnation_name = $1", tbl)
+		if err := s.db.QueryRow(ctx, q, name).Scan(&n); err != nil {
+			t.Fatalf("AssertIncarnationAbsent %s: count %s: %v", name, tbl, err)
+		}
+		if n != 0 {
+			t.Fatalf("AssertIncarnationAbsent %s: каскад не отработал — в %s осталось %d строк", name, tbl, n)
+		}
+	}
+}
+
 // stripServiceRef отрезает `@<ref>` (если есть). Operator API создаёт
 // incarnation по bare service-name (ADR-029).
 func stripServiceRef(ref string) string {

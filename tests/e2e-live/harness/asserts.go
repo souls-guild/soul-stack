@@ -684,6 +684,280 @@ func shellQuote(s string) string {
 	return `'` + strings.ReplaceAll(s, `'`, `'\''`) + `'`
 }
 
+// ── Redis day-2 asserts (NIM-54, L3b) ───────────────────────────────────────
+//
+// Живые redis-cli/openssl-ассерты day-2-сценариев (update_config / restart /
+// rotate_tls / update_users) поверх soul-контейнера. Единый описатель коннекта
+// RedisConn (plain XOR server-only-TLS) + приватный билдер redisCLIPrefix — все
+// публичные ассерты строятся поверх него одним sc.Exec. redis-cli присутствует
+// после установки redis-server сценарием create (как у AssertRedisACLUser);
+// openssl — в L3b-Dockerfile (нужен AssertRedisTLSCertServed).
+
+// defaultRedisCACertPath — дефолтный путь ca.crt внутри soul-контейнера при TLS
+// (essence.conf_dir=/etc/redis, PEM рендерится core.file.present в ${conf_dir}/tls).
+const defaultRedisCACertPath = "/etc/redis/tls/ca.crt"
+
+// RedisConn — параметры redis-cli-коннекта из soul-контейнера (plain или TLS).
+type RedisConn struct {
+	SoulIdx    int
+	Host       string
+	Port       int
+	User       string
+	Pass       string
+	TLS        bool
+	CACertPath string // ca.crt внутри контейнера при TLS; пусто → defaultRedisCACertPath
+}
+
+// redisCLIPrefix собирает `redis-cli …`-префикс из RedisConn: server-only-TLS
+// (--tls --cacert) при TLS, аутентификация (--user/--pass), -h/-p и
+// --no-auth-warning (глушит stderr про пароль в argv — Exec склеивает
+// stdout+stderr). Значения shell-quoted; caller дописывает redis-команду.
+func (c RedisConn) redisCLIPrefix() string {
+	var b strings.Builder
+	b.WriteString("redis-cli --no-auth-warning")
+	if c.TLS {
+		ca := c.CACertPath
+		if ca == "" {
+			ca = defaultRedisCACertPath
+		}
+		b.WriteString(" --tls --cacert " + shellQuote(ca))
+	}
+	b.WriteString(" -h " + shellQuote(c.Host))
+	fmt.Fprintf(&b, " -p %d", c.Port)
+	if c.User != "" {
+		b.WriteString(" --user " + shellQuote(c.User))
+	}
+	if c.Pass != "" {
+		b.WriteString(" --pass " + shellQuote(c.Pass))
+	}
+	return b.String()
+}
+
+// nonEmptyLines разбивает combined-output redis-cli на строки, тримит пробелы/CR
+// (redis INFO — CRLF) и выкидывает пустые.
+func nonEmptyLines(s string) []string {
+	var out []string
+	for _, ln := range strings.Split(s, "\n") {
+		if t := strings.TrimSpace(ln); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// AssertRedisConfigGet проверяет живое значение `CONFIG GET <param>` == want
+// (maxmemory / maxmemory-policy / appendonly и т.п.). redis-cli в raw-режиме
+// (не-TTY pipe) отдаёт две строки — имя параметра и значение; сравниваем вторую.
+func (s *Stack) AssertRedisConfigGet(t *testing.T, c RedisConn, param, want string) {
+	t.Helper()
+	sc := s.soulContainerByIdx(t, c.SoulIdx)
+
+	ctx, cancel := context.WithTimeout(context.Background(), hostExecTimeout)
+	defer cancel()
+
+	script := c.redisCLIPrefix() + " CONFIG GET " + shellQuote(param)
+	out, code, err := sc.Exec(ctx, []string{"/bin/sh", "-c", script})
+	if err != nil {
+		t.Fatalf("AssertRedisConfigGet(soulIdx=%d param=%s): exec: %v\noutput=%s", c.SoulIdx, param, err, out)
+	}
+	if code != 0 {
+		t.Fatalf("AssertRedisConfigGet(soulIdx=%d param=%s): redis-cli exit=%d\noutput=%s", c.SoulIdx, param, code, out)
+	}
+	lines := nonEmptyLines(out)
+	if len(lines) < 2 {
+		t.Fatalf("AssertRedisConfigGet(soulIdx=%d param=%s): CONFIG GET вернул <2 строк (параметр неизвестен redis?)\noutput=%q", c.SoulIdx, param, out)
+	}
+	if got := lines[1]; got != want {
+		t.Fatalf("AssertRedisConfigGet(soulIdx=%d param=%s): значение=%q, ожидалось %q\noutput=%q", c.SoulIdx, param, got, want, out)
+	}
+}
+
+// AssertRedisConfFileDirective читает redis.conf в контейнере (cat <confPath>) и
+// проверяет наличие строки `<directive> <want>`. Для startup-only-директив
+// (io-threads и пр. — startupOnlyDirectives community.redis), которые видны
+// только НА ДИСКЕ, а не через CONFIG GET. confPath обычно /etc/redis/redis.conf.
+func (s *Stack) AssertRedisConfFileDirective(t *testing.T, soulIdx int, confPath, directive, want string) {
+	t.Helper()
+	sc := s.soulContainerByIdx(t, soulIdx)
+
+	ctx, cancel := context.WithTimeout(context.Background(), hostExecTimeout)
+	defer cancel()
+
+	out, code, err := sc.Exec(ctx, []string{"cat", confPath})
+	if err != nil {
+		t.Fatalf("AssertRedisConfFileDirective(soulIdx=%d conf=%s directive=%s): cat: %v\noutput=%s", soulIdx, confPath, directive, err, out)
+	}
+	if code != 0 {
+		t.Fatalf("AssertRedisConfFileDirective(soulIdx=%d conf=%s directive=%s): cat exit=%d (нет файла?)\noutput=%s", soulIdx, confPath, directive, code, out)
+	}
+	for _, ln := range nonEmptyLines(out) {
+		if strings.HasPrefix(ln, "#") {
+			continue
+		}
+		fields := strings.Fields(ln)
+		if len(fields) < 2 || fields[0] != directive {
+			continue
+		}
+		if strings.Join(fields[1:], " ") == want {
+			return
+		}
+	}
+	t.Fatalf("AssertRedisConfFileDirective(soulIdx=%d conf=%s): директива `%s %s` не найдена на диске", soulIdx, confPath, directive, want)
+}
+
+// redisInfoField выполняет `INFO <section>` и возвращает значение поля
+// `<field>:<value>` (redis INFO — CRLF-разделённые `k:v`). Фейлит t, если
+// redis-cli упал или поле отсутствует. Общий низ AssertRedisRole/UptimeBelow.
+func (s *Stack) redisInfoField(t *testing.T, c RedisConn, section, field string) string {
+	t.Helper()
+	sc := s.soulContainerByIdx(t, c.SoulIdx)
+
+	ctx, cancel := context.WithTimeout(context.Background(), hostExecTimeout)
+	defer cancel()
+
+	script := c.redisCLIPrefix() + " INFO " + shellQuote(section)
+	out, code, err := sc.Exec(ctx, []string{"/bin/sh", "-c", script})
+	if err != nil {
+		t.Fatalf("redisInfoField(soulIdx=%d section=%s field=%s): exec: %v\noutput=%s", c.SoulIdx, section, field, err, out)
+	}
+	if code != 0 {
+		t.Fatalf("redisInfoField(soulIdx=%d section=%s field=%s): redis-cli exit=%d\noutput=%s", c.SoulIdx, section, field, code, out)
+	}
+	prefix := field + ":"
+	for _, ln := range nonEmptyLines(out) {
+		if strings.HasPrefix(ln, prefix) {
+			return strings.TrimPrefix(ln, prefix)
+		}
+	}
+	t.Fatalf("redisInfoField(soulIdx=%d section=%s): поле %q не найдено\noutput=%q", c.SoulIdx, section, field, out)
+	return ""
+}
+
+// AssertRedisRole проверяет роль узла (`INFO replication` → role:) == wantRole
+// ("master"/"slave"). Для restart/failover-сценариев.
+func (s *Stack) AssertRedisRole(t *testing.T, c RedisConn, wantRole string) {
+	t.Helper()
+	if got := s.redisInfoField(t, c, "replication", "role"); got != wantRole {
+		t.Fatalf("AssertRedisRole(soulIdx=%d): role=%q, ожидалось %q", c.SoulIdx, got, wantRole)
+	}
+}
+
+// AssertRedisUptimeBelow проверяет `INFO server` uptime_in_seconds < maxSec —
+// доказательство рестарта (uptime сброшен). Для restart-сценария.
+func (s *Stack) AssertRedisUptimeBelow(t *testing.T, c RedisConn, maxSec int) {
+	t.Helper()
+	raw := s.redisInfoField(t, c, "server", "uptime_in_seconds")
+	uptime, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		t.Fatalf("AssertRedisUptimeBelow(soulIdx=%d): uptime_in_seconds=%q не число: %v", c.SoulIdx, raw, err)
+	}
+	if uptime >= maxSec {
+		t.Fatalf("AssertRedisUptimeBelow(soulIdx=%d): uptime=%ds >= %ds — рестарт не произошёл?", c.SoulIdx, uptime, maxSec)
+	}
+}
+
+// AssertRedisACLUserAbsent проверяет, что юзера НЕТ в живом `ACL LIST`
+// (инверсия AssertRedisACLUser) — для update_users, где старый юзер удалён.
+func (s *Stack) AssertRedisACLUserAbsent(t *testing.T, c RedisConn, user string) {
+	t.Helper()
+	sc := s.soulContainerByIdx(t, c.SoulIdx)
+
+	ctx, cancel := context.WithTimeout(context.Background(), hostExecTimeout)
+	defer cancel()
+
+	// Без пайпа в grep: сначала убеждаемся, что redis-cli отработал (exit 0),
+	// потом проверяем строки — иначе «grep не нашёл» неотличимо от «redis-cli упал».
+	script := c.redisCLIPrefix() + " ACL LIST"
+	out, code, err := sc.Exec(ctx, []string{"/bin/sh", "-c", script})
+	if err != nil {
+		t.Fatalf("AssertRedisACLUserAbsent(soulIdx=%d user=%s): exec: %v\noutput=%s", c.SoulIdx, user, err, out)
+	}
+	if code != 0 {
+		t.Fatalf("AssertRedisACLUserAbsent(soulIdx=%d user=%s): redis-cli ACL LIST exit=%d\noutput=%s", c.SoulIdx, user, code, out)
+	}
+	prefix := "user " + user + " "
+	for _, ln := range nonEmptyLines(out) {
+		if strings.HasPrefix(ln, prefix) {
+			t.Fatalf("AssertRedisACLUserAbsent(soulIdx=%d user=%s): юзер всё ещё в ACL LIST (не удалён?)\nстрока=%q", c.SoulIdx, user, ln)
+		}
+	}
+}
+
+// AssertRedisACLUserPerms проверяет, что `ACL GETUSER <user>` содержит подстроку
+// прав wantPermsSubstr (напр. "+@read") — для update_users, где юзеру назначен
+// новый набор прав. Отсутствующий юзер → `(nil)`, подстрока не найдена → fail.
+func (s *Stack) AssertRedisACLUserPerms(t *testing.T, c RedisConn, user, wantPermsSubstr string) {
+	t.Helper()
+	sc := s.soulContainerByIdx(t, c.SoulIdx)
+
+	ctx, cancel := context.WithTimeout(context.Background(), hostExecTimeout)
+	defer cancel()
+
+	script := c.redisCLIPrefix() + " ACL GETUSER " + shellQuote(user)
+	out, code, err := sc.Exec(ctx, []string{"/bin/sh", "-c", script})
+	if err != nil {
+		t.Fatalf("AssertRedisACLUserPerms(soulIdx=%d user=%s): exec: %v\noutput=%s", c.SoulIdx, user, err, out)
+	}
+	if code != 0 {
+		t.Fatalf("AssertRedisACLUserPerms(soulIdx=%d user=%s): redis-cli ACL GETUSER exit=%d\noutput=%s", c.SoulIdx, user, code, out)
+	}
+	if !strings.Contains(out, wantPermsSubstr) {
+		t.Fatalf("AssertRedisACLUserPerms(soulIdx=%d user=%s): права %q не найдены (юзер отсутствует / другой набор?)\noutput=%s", c.SoulIdx, user, wantPermsSubstr, out)
+	}
+}
+
+// AssertRedisTLSCertServed вытаскивает SHA-256-fingerprint серверного cert,
+// который redis реально ОТДАЁТ по TLS, и сравнивает с ожидаемым. Для rotate_tls
+// (fingerprint ДО/ПОСЛЕ ротации доказывает смену ЖИВОГО cert-а, а не только
+// файла на диске). Реализация — openssl s_client (redis server-only-TLS,
+// tls-auth-clients no → клиентский cert не нужен) | openssl x509 -fingerprint.
+// openssl присутствует в L3b-Dockerfile. Регистр/двоеточия нормализуются.
+func (s *Stack) AssertRedisTLSCertServed(t *testing.T, c RedisConn, wantFingerprintSHA256 string) {
+	t.Helper()
+	sc := s.soulContainerByIdx(t, c.SoulIdx)
+
+	want := normalizeHexFingerprint(wantFingerprintSHA256)
+	if want == "" {
+		t.Fatalf("AssertRedisTLSCertServed(soulIdx=%d): пустой ожидаемый fingerprint", c.SoulIdx)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), hostExecTimeout)
+	defer cancel()
+
+	endpoint := fmt.Sprintf("%s:%d", c.Host, c.Port)
+	script := fmt.Sprintf(
+		"openssl s_client -connect %s </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256",
+		shellQuote(endpoint))
+	out, code, err := sc.Exec(ctx, []string{"/bin/sh", "-c", script})
+	if err != nil {
+		t.Fatalf("AssertRedisTLSCertServed(soulIdx=%d %s): exec: %v\noutput=%s", c.SoulIdx, endpoint, err, out)
+	}
+	got := normalizeHexFingerprint(out)
+	if code != 0 || got == "" {
+		t.Fatalf("AssertRedisTLSCertServed(soulIdx=%d %s): openssl не вернул fingerprint (redis не слушает TLS / нет openssl? exit=%d)\noutput=%s", c.SoulIdx, endpoint, code, out)
+	}
+	if got != want {
+		t.Fatalf("AssertRedisTLSCertServed(soulIdx=%d %s): served fingerprint=%s, ожидался %s", c.SoulIdx, endpoint, got, want)
+	}
+}
+
+// normalizeHexFingerprint выделяет hex-часть fingerprint-а (после '=', если
+// есть — форма `sha256 Fingerprint=AA:BB:…`) и оставляет только hex-цифры в
+// верхнем регистре: «AA:BB», «aabb», openssl-строка приводятся к одному виду.
+func normalizeHexFingerprint(s string) string {
+	if i := strings.IndexByte(s, '='); i >= 0 {
+		s = s[i+1:]
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F') {
+			b.WriteByte(ch)
+		}
+	}
+	return strings.ToUpper(b.String())
+}
+
 // ── Per-task flow-control asserts (FC-0) ────────────────────────────────────
 //
 // ★ РАЗВЕДКА FC-0. Per-task TaskStatus (SKIPPED/OK/CHANGED/FAILED/TIMED_OUT/

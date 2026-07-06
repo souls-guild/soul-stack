@@ -87,12 +87,20 @@ compute:
   admin_user: "${ 'default_admin' }"
   tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
   tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
-  # tls_ca — CA коннекта (PEM из vault(state.tls.ca_ref)). incarnation.state — PRE-RUN
-  # снимок (мутация state.tls.ca_ref → compute.ca_ref применяется ПОСЛЕ успешного apply),
-  # поэтому ЗДЕСЬ это ТЕКУЩЕЕ доверие: на ЭТОМ rotate-прогоне сервер ещё со СТАРЫМ cert,
-  # CONFIG SET коннектится старым CA и сам же подменяет материал. На СЛЕДУЮЩИХ day-2
-  # state.tls.ca_ref уже новый → коннект новым CA. Симметрично tls_port из state.tls.port.
-  tls_ca:   "${ compute.tls_on ? vault(incarnation.state.tls.ca_ref) : '' }"
+  # tls_ca — trust-store TLS-реконнектов шага 3. CA-rollover (input.ca_ref ≠ state.tls.
+  # ca_ref) → BUNDLE старого+нового CA (склейка PEM через '\n'): три CONFIG SET tls-*-file =
+  # три ОТДЕЛЬНЫХ реконнекта, STRADDLE-ящих подмену серверного cert (CONFIG SET tls-cert-file
+  # сам заставляет redis отдать новый cert со следующего реконнекта), поэтому единый
+  # trust-store обязан доверять ОБОИМ CA — иначе реконнект после подмены упрётся в unknown
+  # authority. x509-пул плагина (AppendCertsFromPEM) принимает склейку → плагин не трогаем.
+  # Без rollover (ca_ref не задан / == state) — одиночный текущий CA (state — PRE-RUN снимок,
+  # мутация ca_ref ПОСЛЕ apply). plaintext → пусто.
+  tls_ca: >-
+    ${ compute.tls_on
+         ? (has(input.ca_ref) && input.ca_ref != incarnation.state.tls.ca_ref
+              ? vault(incarnation.state.tls.ca_ref) + '\n' + vault(input.ca_ref)
+              : vault(incarnation.state.tls.ca_ref))
+         : '' }
   # ★ ИБ-КРИТИЧНО host-layout (v11→v12, Вариант A): conf_dir из essence (единый источник
   # с data_dir/modules_base_url ниже; прежний drift «conf_dir из compute, data_dir/
   # modules_base_url из state» устранён). conf_dir задаёт, КУДА destiny кладёт PEM

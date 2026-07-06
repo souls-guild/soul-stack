@@ -17,7 +17,7 @@
 #      ErrOnChangesUnknownRegister (был обход force changed:true до 52b16ed).
 #   3. reload re-read (три community.redis.command): addr 127.0.0.1:7379 (TLS-порт),
 #      ★ username=default_admin + его пароль (коннект под системным default_admin,
-#      requirepass убран), tls=true, tls_ca = PEM CA, args = CONFIG SET tls-cert-file/
+#      requirepass убран), tls=true, tls_ca = BUNDLE старого+нового CA (CA-rollover), args = CONFIG SET tls-cert-file/
 #      tls-key-file/tls-ca-cert-file на пути в ${conf_dir}/tls/. Args-дизамбигуатор
 #      присутствует; changed=true (force) БОЛЬШЕ НЕ должен стоять — task_absent ловит
 #      регресс обратно на force-форму (см. ниже).
@@ -62,12 +62,13 @@ fixtures:
   # Развёрнутый incarnation.state v3 с ВКЛЮЧЁННЫМ TLS (rotate-предусловие). Текущие refs
   # — СТАРЫЕ (state.tls.*_ref); input даёт новые.
   #
-  # ★ CA коннекта (compute.tls_ca) резолвится из incarnation.state.tls.ca_ref — а это
-  # PRE-RUN снимок (мутация на новый ref применяется ПОСЛЕ apply). Поэтому на ЭТОМ
-  # rotate-прогоне коннект идёт СТАРЫМ CA (tls#ca → CACERT) к серверу, у которого ещё
-  # старый cert; три CONFIG SET сами подменяют материал. Это ТЕКУЩЕЕ доверие коннекта;
-  # ротируемый ca_ref (input, tls-v2#ca) — новый CA, рендерящийся в файл для Redis и
-  # фиксируемый в state_changes (на СЛЕДУЮЩИХ day-2 коннект пойдёт уже им).
+  # ★ Кейс CA-ROLLOVER: input.ca_ref (tls-v2#ca → NEWCA) ≠ state.tls.ca_ref (tls#ca →
+  # CACERT), поэтому compute.tls_ca = BUNDLE старого+нового CA (CACERT-блок + '\n' +
+  # NEWCA-блок). Три CONFIG SET tls-*-file = три ОТДЕЛЬНЫХ реконнекта, straddle-ящих
+  # подмену серверного cert (tls-cert-file заставит redis отдать новый cert со следующего
+  # реконнекта) → trust-store обязан доверять ОБОИМ CA, иначе реконнект после подмены
+  # упрётся в unknown authority. Новый ca_ref рендерится в файл для Redis и фиксируется в
+  # state_changes (на СЛЕДУЮЩИХ day-2 rollover завершён → одиночный новый CA).
   state:
     redis_type: sentinel
     redis_version: "7.2.4"
@@ -251,7 +252,7 @@ assert:
       id: tls_certs
 
     # 3. RE-READ ПОД onchanges-ГЕЙТОМ: три community.redis.command (CONFIG SET tls-*-file),
-    #    addr на tls-порт, tls=true, tls_ca = CA коннекта, args на пути в /etc/redis/tls/.
+    #    addr на tls-порт, tls=true, tls_ca = BUNDLE старого+нового CA (rollover), args на пути в /etc/redis/tls/.
     #    changed=true (force) УБРАН — гейтинг теперь onchanges:[tls_certs] (см. task_absent
     #    ниже: регресс обратно на force ловится). Args — дизамбигуатор трёх вызовов.
     - module: community.redis.command
@@ -260,7 +261,7 @@ assert:
         username: default_admin
         password: default-admin-secret-pass
         tls: true
-        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nNEWCA\n-----END CERTIFICATE-----"
         args: ["CONFIG", "SET", "tls-cert-file", "/etc/redis/tls/redis.crt"]
     - module: community.redis.command
       params_subset:
@@ -268,7 +269,7 @@ assert:
         username: default_admin
         password: default-admin-secret-pass
         tls: true
-        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nNEWCA\n-----END CERTIFICATE-----"
         args: ["CONFIG", "SET", "tls-key-file", "/etc/redis/tls/redis.key"]
     - module: community.redis.command
       params_subset:
@@ -276,7 +277,7 @@ assert:
         username: default_admin
         password: default-admin-secret-pass
         tls: true
-        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
+        tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nNEWCA\n-----END CERTIFICATE-----"
         args: ["CONFIG", "SET", "tls-ca-cert-file", "/etc/redis/tls/ca.crt"]
 
   # ★ GUARD идемпотентности (render-уровень): force changed:true с reload-задач УБРАН.

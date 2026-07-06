@@ -298,7 +298,8 @@ e2e-live: build-linux
 # (TestL3bModuleDeliveryLive — ADR-065 install-synthesis → FetchModule → Sigil-verify
 # → hot-register → живое apply против redis) + apply-смок nginx (TestL3bSmokeNginxLive)
 # + smoke plugin-канала (TestL3bPluginChannel) + day-2 add_user на живом redis
-# (TestL3bRedisLive_Day2AddUser — весь плагин-канал ADR-065 против реального redis+sentinel).
+# (TestL3bRedisLive_Day2AddUser — весь плагин-канал ADR-065 против реального redis+sentinel)
+# + day-2 update_config/restart/update_users/destroy/rotate_tls (CA-rollover) на том же канале.
 # Полный `make e2e-live` остаётся nightly/pre-release.
 #
 # Deps ОТЛИЧАЮТСЯ от e2e-live: нужен ещё нативный `build` — harness запускает
@@ -326,15 +327,15 @@ e2e-live-gate: build build-linux
 	else \
 		host="$${E2E_KEEPER_HOST:-$$(hostname -I | awk '{print $$1}')}"; \
 		log="$${TMPDIR:-/tmp}/soul-e2e-live-gate.log"; \
-		mask='TestL3bModuleDeliveryLive|TestL3bSmokeNginxLive|TestL3bPluginChannel|TestL3bRedisLive_Day2AddUser'; \
+		mask='TestL3bModuleDeliveryLive|TestL3bSmokeNginxLive|TestL3bPluginChannel|TestL3bRedisLive_Day2AddUser|TestL3bRedisLive_Day2UpdateConfig|TestL3bRedisLive_Day2Restart|TestL3bRedisLive_Day2UpdateUsers|TestL3bRedisLive_Day2Destroy|TestL3bRedisLive_Day2RotateTls'; \
 		echo "e2e-live-gate: go test -tags=e2e_live -v -count=1 -run '$$mask' . (E2E_KEEPER_HOST=$$host)"; \
 		set -o pipefail; \
-		(cd tests/e2e-live && E2E_KEEPER_HOST=$$host go test -tags=e2e_live -v -count=1 -timeout 25m -p 1 -run "$$mask" .) 2>&1 | tee "$$log"; \
+		(cd tests/e2e-live && E2E_KEEPER_HOST=$$host go test -tags=e2e_live -v -count=1 -timeout 45m -p 1 -run "$$mask" .) 2>&1 | tee "$$log"; \
 		rc=$$?; \
 		if grep -qE '^ok[[:space:]].*\(cached\)' "$$log"; then \
 			echo "e2e-live-gate: FALSE-GREEN — '(cached)' в summary (кеш не отключён, -count=1 потерян)" >&2; exit 1; \
 		fi; \
-		for tc in TestL3bModuleDeliveryLive TestL3bSmokeNginxLive TestL3bPluginChannel TestL3bRedisLive_Day2AddUser; do \
+		for tc in TestL3bModuleDeliveryLive TestL3bSmokeNginxLive TestL3bPluginChannel TestL3bRedisLive_Day2AddUser TestL3bRedisLive_Day2UpdateConfig TestL3bRedisLive_Day2Restart TestL3bRedisLive_Day2UpdateUsers TestL3bRedisLive_Day2Destroy TestL3bRedisLive_Day2RotateTls; do \
 			grep -q "^--- PASS: $$tc" "$$log" || { \
 				echo "e2e-live-gate: FALSE-GREEN — $$tc не дал '--- PASS' (skip/fail/не запущен)" >&2; exit 1; }; \
 		done; \
