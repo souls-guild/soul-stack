@@ -16,8 +16,14 @@ description: >-
     (2) SOUL-SIDE teardown (прежний профиль DragonFly): когда create катился на СУЩЕСТВУЮЩИЕ
         хосты (provision: {enabled: false} — не провижен) — VM не наши, снимать облачно нечего,
         поэтому чистим Soul-side: остановить сервисы + удалить наши /etc-артефакты. Эти шаги
-        идемпотентны и БЕЗУСЛОВНЫ: на провиженной инкарнации они безвредно отработают на VM
-        (которые тут же снимает cloud-destroy), на не-провиженной — единственный teardown.
+        идемпотентны и БЕЗУСЛОВНЫ (нет when-гейта), но ПОРЯДОК относительно cloud-destroy разный
+        по ветке. На ПРОВИЖЕННОЙ инкарнации cloud.destroyed (keeper-задача) по keeper-инварианту
+        «keeper-задачи идут ПЕРВЫМИ в своём Passage» снимает эти хосты каскадом (souls→destroyed)
+        РАНЬШЕ host-fan-out — host-teardown-шаги диспатчатся на уже снятый хост, и keeper трактует
+        их как benign-терминал no_match (NIM-56 reconcile: хост снят СВОИМ destroy-каскадом), а НЕ
+        dispatch_failed/отказ (реальный disconnect/revoked остаётся отказом, fail-closed). На
+        НЕ-провиженной инкарнации cloud.destroyed group-drop-ается → host-teardown единственный и
+        отрабатывает штатно на живых хостах.
   Обе ветки в одном сценарии: cloud-cascade group-drop-ается на не-провиженных, Soul-side
   всегда активен. REUSE lifecycle-каркаса redis/destroy (input: {}, terminal, state_changes нет).
 

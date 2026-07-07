@@ -2,6 +2,7 @@ package scenario
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -9,10 +10,17 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
+	keepersoul "github.com/souls-guild/soul-stack/keeper/internal/soul"
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 	"github.com/souls-guild/soul-stack/shared/config"
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
+
+// errHostDestroyed — заклеймленный хост в статусе `destroyed` (снят cloud-destroy
+// каскадом; единственный писатель `destroyed` — coremod/cloud.CascadeDestroy, явный
+// терминал, не прокси disconnect/revoke/reap). claim.execute → benign no_match, не
+// отказ (NIM-56). Предикат status-based, не привязан к «этому прогону».
+var errHostDestroyed = errors.New("scenario: RenderForHost: хост снят cloud-destroy каскадом этого прогона")
 
 // RenderForHost воспроизводит Keeper-side render-конвейер прогона при claim
 // (ADR-027, Phase 1.4.3): по persisted-рецепту [applyrun.Recipe] и SID-у
@@ -88,7 +96,7 @@ func RenderForHost(ctx context.Context, deps Deps, recipe *applyrun.Recipe, inca
 	//    ошибка) делается ТУТ, до full-roster render-а — roster грузится всё равно,
 	//    проверка дешёвая. render оперирует ПОЛНЫМ roster-ом (стратегия Y), Acolyte
 	//    фильтрует свой SID на выходе.
-	hosts, err := loadRosterWithHost(ctx, deps.Topology, incarnationName, sid)
+	hosts, err := loadRosterWithHost(ctx, deps.Topology, deps.DB, incarnationName, sid)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -159,7 +167,11 @@ func RenderForHost(ctx context.Context, deps Deps, recipe *applyrun.Recipe, inca
 // ошибка: рендерить задание не на чем. Валидация single-SID сохранена ДО
 // render-а (roster грузится всё равно — проверка дешёвая, потеря проверки
 // disconnected-хоста недопустима).
-func loadRosterWithHost(ctx context.Context, topo *topology.Resolver, incarnationName, sid string) ([]*topology.HostFacts, error) {
+//
+// NIM-56: исключение — хост в статусе `destroyed` (снят cloud-destroy каскадом):
+// benign no_match, не отказ. Любое другое выпадение из roster-а
+// (disconnected/revoked/ErrSoulNotFound/read-fail) — generic-ошибка (fail-closed).
+func loadRosterWithHost(ctx context.Context, topo *topology.Resolver, db keepersoul.ExecQueryRower, incarnationName, sid string) ([]*topology.HostFacts, error) {
 	hosts, err := topo.LoadIncarnationHosts(ctx, incarnationName)
 	if err != nil {
 		return nil, fmt.Errorf("scenario: RenderForHost: topology: %w", err)
@@ -168,6 +180,9 @@ func loadRosterWithHost(ctx context.Context, topo *topology.Resolver, incarnatio
 		if h.SID == sid {
 			return hosts, nil
 		}
+	}
+	if s, serr := keepersoul.SelectBySID(ctx, db, sid); serr == nil && s.Status == keepersoul.StatusDestroyed {
+		return nil, errHostDestroyed
 	}
 	return nil, fmt.Errorf("scenario: RenderForHost: хост %q не в roster-е incarnation %q (disconnected с момента dispatch-а)", sid, incarnationName)
 }

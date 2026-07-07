@@ -88,6 +88,17 @@ fqdn — шаг падает (нельзя использовать как SID).
   при провале destroy реестры остаются нетронутыми (хост ещё «жив» у провайдера).
   Связку `sid↔vm_id` держит caller — ошибка в ней приведёт к destroy не той VM,
   поэтому источник `vm_ids`/`sids` должен быть доверенным.
+- **Cascade `souls→destroyed` предшествует host-teardown в destroy-прогоне (NIM-56).**
+  `core.cloud.destroyed` — keeper-задача; по инварианту «keeper-задачи идут ПЕРВЫМИ в
+  своём Passage» она снимает VM и каскадит `souls→destroyed` РАНЬШЕ, чем host-fan-out
+  host-teardown-шаги того же destroy-сценария (у сервисов с Soul-side teardown, напр.
+  `dragonfly`). Такой host-шаг диспатчится на уже снятый хост — в destroy-прогоне
+  (`TerminalDestroy`) scenario-runner при claim трактует хост, снятый СОБСТВЕННЫМ
+  destroy-каскадом этого прогона (`souls.status == 'destroyed'`), как benign-терминал
+  **`no_match`**, НЕ `dispatch_failed`: барьер засчитывает его на success-сторону, и
+  teardown не валится в `destroy_failed`. Дискриминатор однозначен — единственный писатель
+  статуса `destroyed` — эта cascade-транзакция (`CascadeDestroy`); любое другое выпадение
+  хоста из roster-а (disconnected / revoked / not-found) остаётся отказом (**fail-closed**).
 - **Plain bootstrap-token в register-output (`created`).** `hosts[].bootstrap_token`
   — **plain** одноразовый токен, намеренно в output: cloud-init flow обязан
   передать его на VM при первичной загрузке (единственный момент, когда plain-токен

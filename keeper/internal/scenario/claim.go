@@ -114,6 +114,19 @@ func (c *ClaimRunner) execute(ctx context.Context, run *applyrun.ApplyRun) {
 			log.Info("scenario: claim — render прерван drain-ом, Ward оставлен для recovery")
 			return
 		}
+		if errors.Is(err, errHostDestroyed) {
+			// NIM-56: хост в статусе destroyed (снят cloud-destroy каскадом) → benign no_match, не отказ.
+			if uerr := applyrun.UpdateStatus(ctx, c.deps.Deps.DB, run.ApplyID, run.SID, run.Passage, applyrun.StatusNoMatch, nil); uerr != nil {
+				if errors.Is(uerr, applyrun.ErrApplyRunAlreadyTerminal) {
+					log.Info("scenario: claim benign no_match (destroy-каскад) — single-winner no-op")
+					return
+				}
+				log.Error("scenario: claim benign no_match (destroy-каскад) не записан", slog.Any("error", uerr))
+				return
+			}
+			log.Info("scenario: claim — хост снят destroy-каскадом, benign no_match")
+			return
+		}
 		// err может транзитом нести vault:secret/-ref — маскируем перед записью
 		// в status (operator-facing, без маскинга наружу) и логом. Acolyte-путь
 		// seal-набор не ведёт (per-host render при claim, отдельный слайс) → nil
