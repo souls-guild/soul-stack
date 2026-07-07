@@ -902,6 +902,8 @@ components:
           type: string
         scenario:
           type: string
+        service:
+          type: string
         started_at:
           format: date-time
           type: string
@@ -918,6 +920,7 @@ components:
       required:
         - apply_id
         - incarnation
+        - service
         - scenario
         - status
         - started_at
@@ -9761,12 +9764,40 @@ paths:
           schema:
             description: фильтр по имени инкарнации; невалидное имя → 422
             type: string
-        - description: поле сортировки (started_at/finished_at/status/incarnation/scenario; дефолт started_at); невалидное → 422
+        - description: фильтр по сервису инкарнации-владельца (точное совпадение); длиннее 128 символов → 422
+          explode: false
+          in: query
+          name: service
+          schema:
+            description: фильтр по сервису инкарнации-владельца (точное совпадение); длиннее 128 символов → 422
+            type: string
+        - description: свободный поиск (substring, регистронезависимо) по incarnation/scenario/service/started_by; длиннее 128 символов → 422
+          explode: false
+          in: query
+          name: q
+          schema:
+            description: свободный поиск (substring, регистронезависимо) по incarnation/scenario/service/started_by; длиннее 128 символов → 422
+            type: string
+        - description: "фильтр: время старта прогона ≥ (RFC3339, inclusive); невалидное → 422"
+          explode: false
+          in: query
+          name: started_after
+          schema:
+            description: "фильтр: время старта прогона ≥ (RFC3339, inclusive); невалидное → 422"
+            type: string
+        - description: "фильтр: время старта прогона ≤ (RFC3339, inclusive); невалидное → 422"
+          explode: false
+          in: query
+          name: started_before
+          schema:
+            description: "фильтр: время старта прогона ≤ (RFC3339, inclusive); невалидное → 422"
+            type: string
+        - description: поле сортировки (started_at/finished_at/status/incarnation/service/scenario; дефолт started_at); невалидное → 422
           explode: false
           in: query
           name: sort
           schema:
-            description: поле сортировки (started_at/finished_at/status/incarnation/scenario; дефолт started_at); невалидное → 422
+            description: поле сортировки (started_at/finished_at/status/incarnation/service/scenario; дефолт started_at); невалидное → 422
             type: string
         - description: направление сортировки (asc/desc; дефолт desc); невалидное → 422
           explode: false

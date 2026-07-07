@@ -22,12 +22,16 @@ func registerHumaRunsList(humaAPI huma.API, incH *handlers.IncarnationHandler) {
 	}
 	huma.Register(humaAPI, runsListOperation(), func(ctx context.Context, in *runsListInput) (*runsListOutput, error) {
 		reply, err := incH.AllRunsTyped(ctx, claimsOrNil(ctx), handlers.AllRunsInput{
-			Status:      in.Status,
-			Incarnation: in.Incarnation,
-			Sort:        in.Sort,
-			SortDir:     in.SortDir,
-			Offset:      int(in.Offset),
-			Limit:       int(in.Limit),
+			Status:        in.Status,
+			Incarnation:   in.Incarnation,
+			Service:       in.Service,
+			Q:             in.Q,
+			StartedAfter:  in.StartedAfter,
+			StartedBefore: in.StartedBefore,
+			Sort:          in.Sort,
+			SortDir:       in.SortDir,
+			Offset:        int(in.Offset),
+			Limit:         int(in.Limit),
 		})
 		if err != nil {
 			return nil, incProblem(err)

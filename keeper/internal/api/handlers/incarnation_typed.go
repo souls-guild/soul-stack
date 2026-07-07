@@ -1220,8 +1220,11 @@ func (h *IncarnationHandler) HistoryTyped(ctx context.Context, name, applyID str
 // Incarnation — владелец прогона: в per-incarnation wire не отдаётся (имплицитен),
 // в глобальном GET /v1/runs — отдельное поле entry.
 type RunSummaryView struct {
-	ApplyID      string
-	Incarnation  string
+	ApplyID     string
+	Incarnation string
+	// Service — сервис инкарнации-владельца (глобальный GET /v1/runs; в per-
+	// incarnation wire не отдаётся). "" если недоступен.
+	Service      string
 	Scenario     string
 	Status       string
 	StartedAt    time.Time
@@ -1294,6 +1297,7 @@ func newRunSummaryView(s applyrun.RunSummary) RunSummaryView {
 	return RunSummaryView{
 		ApplyID:      s.ApplyID,
 		Incarnation:  s.Incarnation,
+		Service:      s.Service,
 		Scenario:     s.Scenario,
 		Status:       string(s.Status),
 		StartedAt:    s.StartedAt,

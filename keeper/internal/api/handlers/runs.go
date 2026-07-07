@@ -12,6 +12,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
+	"unicode/utf8"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
@@ -24,12 +26,29 @@ import (
 // глобальная свёртка apply_runs дороже плоского списка).
 const maxAllRunsPageLimit = 100
 
+// maxRunsFilterLen — cap длины текстовых фильтров service/q (GET /v1/runs) в
+// СИМВОЛАХ (рунах): длиннее → 422. Ни service, ни q — не доменные валидаторы:
+// service — bound exact-match по incarnation.service (у колонки нет формат-CHECK,
+// миграция 005; домен реестра, миграция 034, без cap длины), q — свободный ILIKE;
+// сужаем только длину, чтобы не резать легитимные значения и кириллицу по байтам.
+const maxRunsFilterLen = 128
+
 // AllRunsInput — вход GET /v1/runs (huma-слой биндит typed-query и передаёт сюда).
 type AllRunsInput struct {
 	Status      string
 	Incarnation string
-	// Sort — поле сортировки (started_at/finished_at/status/incarnation/scenario,
-	// "" = started_at); SortDir — asc|desc ("" = desc). Невалидное → 422. ADR-068 §B1.
+	// Service — фильтр по сервису инкарнации-владельца ("" = все); точное
+	// совпадение (bound), не доменный валидатор; длиннее maxRunsFilterLen → 422.
+	Service string
+	// Q — свободный поиск (substring) по incarnation/scenario/service/started_by
+	// ("" = без поиска); длиннее maxRunsFilterLen символов → 422.
+	Q string
+	// StartedAfter/StartedBefore — RFC3339-границы по времени старта прогона
+	// (inclusive; "" = не задано). Невалидный формат → 422.
+	StartedAfter  string
+	StartedBefore string
+	// Sort — поле сортировки (started_at/finished_at/status/incarnation/service/
+	// scenario, "" = started_at); SortDir — asc|desc ("" = desc). Невалидное → 422. ADR-068 §B1.
 	Sort    string
 	SortDir string
 	Offset  int
@@ -68,6 +87,42 @@ func (h *IncarnationHandler) AllRunsTyped(ctx context.Context, claims *jwt.Claim
 				"query 'incarnation' must match "+incarnation.NamePattern)
 		}
 		filter.Incarnation = in.Incarnation
+	}
+	if in.Service != "" {
+		// service — bound exact-match по incarnation.service (i.service = $N), не
+		// доменный валидатор: домен реестра (миграция 034) без cap длины, у колонки
+		// формат-CHECK-а нет (005). Мусор безопасен (пустая выдача, не 500) —
+		// ограничиваем только длину (в рунах, как q).
+		if utf8.RuneCountInString(in.Service) > maxRunsFilterLen {
+			return zero, incProblem(problem.TypeValidationFailed,
+				fmt.Sprintf("query 'service' too long: must be <= %d characters", maxRunsFilterLen))
+		}
+		filter.Service = in.Service
+	}
+	if in.Q != "" {
+		if utf8.RuneCountInString(in.Q) > maxRunsFilterLen {
+			return zero, incProblem(problem.TypeValidationFailed,
+				fmt.Sprintf("query 'q' too long: must be <= %d characters", maxRunsFilterLen))
+		}
+		filter.Q = in.Q
+	}
+	// Время старта — RFC3339-границы по агрегату (after>before не валидируем жёстко:
+	// пустая выдача безвредна). Невалидный формат → 422.
+	if in.StartedAfter != "" {
+		tm, err := time.Parse(time.RFC3339, in.StartedAfter)
+		if err != nil {
+			return zero, incProblem(problem.TypeValidationFailed,
+				"invalid 'started_after': must be RFC3339")
+		}
+		filter.StartedAfter = &tm
+	}
+	if in.StartedBefore != "" {
+		tm, err := time.Parse(time.RFC3339, in.StartedBefore)
+		if err != nil {
+			return zero, incProblem(problem.TypeValidationFailed,
+				"invalid 'started_before': must be RFC3339")
+		}
+		filter.StartedBefore = &tm
 	}
 	// Валидность sort/sort_dir — в store (whitelist), sentinel-ошибки → 422 ниже.
 	filter.Sort = in.Sort

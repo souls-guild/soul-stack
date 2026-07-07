@@ -22,12 +22,16 @@ import (
 // ведёт AllRunsTyped: невалидный status/incarnation → 422); offset/limit — int32 с
 // default (out-of-range/limit>100 → 400).
 type runsListInput struct {
-	Status      string `query:"status" doc:"фильтр по агрегатному статусу прогона (applying/success/failed/cancelled); невалидный → 422"`
-	Incarnation string `query:"incarnation" doc:"фильтр по имени инкарнации; невалидное имя → 422"`
-	Sort        string `query:"sort" doc:"поле сортировки (started_at/finished_at/status/incarnation/scenario; дефолт started_at); невалидное → 422"`
-	SortDir     string `query:"sort_dir" doc:"направление сортировки (asc/desc; дефолт desc); невалидное → 422"`
-	Offset      int32  `query:"offset" default:"0" doc:"сдвиг от начала набора, ≥0 (out-of-range → 400)"`
-	Limit       int32  `query:"limit" default:"50" doc:"размер страницы 1..100 (out-of-range → 400)"`
+	Status        string `query:"status" doc:"фильтр по агрегатному статусу прогона (applying/success/failed/cancelled); невалидный → 422"`
+	Incarnation   string `query:"incarnation" doc:"фильтр по имени инкарнации; невалидное имя → 422"`
+	Service       string `query:"service" doc:"фильтр по сервису инкарнации-владельца (точное совпадение); длиннее 128 символов → 422"`
+	Q             string `query:"q" doc:"свободный поиск (substring, регистронезависимо) по incarnation/scenario/service/started_by; длиннее 128 символов → 422"`
+	StartedAfter  string `query:"started_after" doc:"фильтр: время старта прогона ≥ (RFC3339, inclusive); невалидное → 422"`
+	StartedBefore string `query:"started_before" doc:"фильтр: время старта прогона ≤ (RFC3339, inclusive); невалидное → 422"`
+	Sort          string `query:"sort" doc:"поле сортировки (started_at/finished_at/status/incarnation/service/scenario; дефолт started_at); невалидное → 422"`
+	SortDir       string `query:"sort_dir" doc:"направление сортировки (asc/desc; дефолт desc); невалидное → 422"`
+	Offset        int32  `query:"offset" default:"0" doc:"сдвиг от начала набора, ≥0 (out-of-range → 400)"`
+	Limit         int32  `query:"limit" default:"50" doc:"размер страницы 1..100 (out-of-range → 400)"`
 }
 
 // runsListOutput — huma-output GET /v1/runs (FULL-TYPED). Body — native envelope
@@ -82,6 +86,7 @@ func runsStatsOperation() huma.Operation {
 type GlobalRunEntry struct {
 	ApplyID      string     `json:"apply_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"`
 	Incarnation  string     `json:"incarnation"`
+	Service      string     `json:"service"`
 	Scenario     string     `json:"scenario"`
 	Status       string     `json:"status" enum:"applying,success,failed,cancelled"`
 	StartedAt    time.Time  `json:"started_at"`
@@ -120,6 +125,7 @@ func newGlobalRunEntry(v handlers.RunSummaryView) GlobalRunEntry {
 	return GlobalRunEntry{
 		ApplyID:      v.ApplyID,
 		Incarnation:  v.Incarnation,
+		Service:      v.Service,
 		Scenario:     v.Scenario,
 		Status:       v.Status,
 		StartedAt:    v.StartedAt,

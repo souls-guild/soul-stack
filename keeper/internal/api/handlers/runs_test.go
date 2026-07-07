@@ -89,6 +89,106 @@ func TestAllRunsTyped_ValidSort_OK(t *testing.T) {
 	}
 }
 
+// TestAllRunsTyped_ServiceLongName_NoValidation422 — service-фильтр — точный
+// bound-match, НЕ доменный валидатор: легитимное имя сервиса длиной ≥64 (валидно
+// для реестра ^[a-z][a-z0-9-]*$, миграция 034 без cap длины; incarnation.service
+// без формат-CHECK, 005) не даёт 422, а доходит до store bind-аргом.
+func TestAllRunsTyped_ServiceLongName_NoValidation422(t *testing.T) {
+	db := &fakeIncDB{}
+	h := newRunsHandler(db, fakeIncScoper{unrestricted: true})
+	longSvc := strings.Repeat("a", 80) // валиден для реестра, но длиннее старого cap ValidName=63
+	if _, err := h.AllRunsTyped(context.Background(), runsClaims(),
+		AllRunsInput{Service: longSvc, Offset: 0, Limit: 50}); err != nil {
+		t.Fatalf("AllRunsTyped(long service): неожиданно 422/ошибка на валидном сервисе: %v", err)
+	}
+	if !db.runsCalled {
+		t.Error("длинное валидное имя сервиса не дошло до store (ошибочно отсечено валидатором)")
+	}
+	if !argsHasString(db.lastRunsArgs, longSvc) {
+		t.Errorf("service не пришёл bind-аргом: %v", db.lastRunsArgs)
+	}
+}
+
+// TestAllRunsTyped_ServiceGarbage_SafeBind — мусорный/инъекционный service —
+// bound bind-арг (не конкатенация): не 422 и не 500, доходит до store как
+// значение (на реальном PG exact-match даст пустую выдачу).
+func TestAllRunsTyped_ServiceGarbage_SafeBind(t *testing.T) {
+	db := &fakeIncDB{}
+	h := newRunsHandler(db, fakeIncScoper{unrestricted: true})
+	garbage := "no-such'; DROP TABLE incarnation;--"
+	if _, err := h.AllRunsTyped(context.Background(), runsClaims(),
+		AllRunsInput{Service: garbage, Offset: 0, Limit: 50}); err != nil {
+		t.Fatalf("AllRunsTyped(garbage service): want без ошибки (bound-фильтр), got %v", err)
+	}
+	if !db.runsCalled || !argsHasString(db.lastRunsArgs, garbage) {
+		t.Errorf("garbage service должен уйти bound bind-аргом (инъекционно безопасно): args=%v", db.lastRunsArgs)
+	}
+}
+
+// TestAllRunsTyped_FilterCapByRunes — cap service/q считается в РУНАХ, не байтах:
+// 128 кириллических символов (256 байт) проходят, 129 — 422 (оба поля).
+func TestAllRunsTyped_FilterCapByRunes(t *testing.T) {
+	db := &fakeIncDB{}
+	h := newRunsHandler(db, fakeIncScoper{unrestricted: true})
+	okRunes := strings.Repeat("я", 128) // 256 байт — в байтовом cap отсеклось бы
+	tooLong := strings.Repeat("я", 129) // 129 символов — за границей
+
+	if _, err := h.AllRunsTyped(context.Background(), runsClaims(),
+		AllRunsInput{Q: okRunes, Offset: 0, Limit: 50}); err != nil {
+		t.Fatalf("q=128 рун: неожиданно 422 (cap в байтах?): %v", err)
+	}
+	if _, err := h.AllRunsTyped(context.Background(), runsClaims(),
+		AllRunsInput{Service: okRunes, Offset: 0, Limit: 50}); err != nil {
+		t.Fatalf("service=128 рун: неожиданно 422 (cap в байтах?): %v", err)
+	}
+	_, err := h.AllRunsTyped(context.Background(), runsClaims(),
+		AllRunsInput{Q: tooLong, Offset: 0, Limit: 50})
+	requireProblemStatus(t, err, 422)
+	_, err = h.AllRunsTyped(context.Background(), runsClaims(),
+		AllRunsInput{Service: tooLong, Offset: 0, Limit: 50})
+	requireProblemStatus(t, err, 422)
+}
+
+// TestAllRunsTyped_BadStartedAfter_422 — малформед started_after (не RFC3339) → 422.
+func TestAllRunsTyped_BadStartedAfter_422(t *testing.T) {
+	h := newRunsHandler(&fakeIncDB{}, fakeIncScoper{unrestricted: true})
+	_, err := h.AllRunsTyped(context.Background(), runsClaims(),
+		AllRunsInput{StartedAfter: "2026-99-99", Offset: 0, Limit: 50})
+	requireProblemStatus(t, err, 422)
+}
+
+// TestAllRunsTyped_BadStartedBefore_422 — малформед started_before → 422.
+func TestAllRunsTyped_BadStartedBefore_422(t *testing.T) {
+	h := newRunsHandler(&fakeIncDB{}, fakeIncScoper{unrestricted: true})
+	_, err := h.AllRunsTyped(context.Background(), runsClaims(),
+		AllRunsInput{StartedBefore: "not-a-time", Offset: 0, Limit: 50})
+	requireProblemStatus(t, err, 422)
+}
+
+// TestAllRunsTyped_TimeFilters_Bind — валидные RFC3339-границы парсятся и уходят в
+// store bind-аргами (time.Time), путь не роняется.
+func TestAllRunsTyped_TimeFilters_Bind(t *testing.T) {
+	db := &fakeIncDB{}
+	h := newRunsHandler(db, fakeIncScoper{unrestricted: true})
+	if _, err := h.AllRunsTyped(context.Background(), runsClaims(),
+		AllRunsInput{StartedAfter: "2026-01-01T00:00:00Z", StartedBefore: "2026-12-31T23:59:59Z",
+			Offset: 0, Limit: 50}); err != nil {
+		t.Fatalf("AllRunsTyped(valid time): %v", err)
+	}
+	if !db.runsCalled {
+		t.Fatal("валидные time-границы не дошли до store")
+	}
+	var times int
+	for _, a := range db.lastRunsArgs {
+		if _, ok := a.(time.Time); ok {
+			times++
+		}
+	}
+	if times != 2 {
+		t.Errorf("ожидались 2 time.Time bind-арга (after/before), got %d: %v", times, db.lastRunsArgs)
+	}
+}
+
 // --- AllRunsTyped: fail-closed Purview ----------------------------------
 
 // TestAllRunsTyped_NilClaims_FailClosed — нет claims → пустая страница (200), store
@@ -205,9 +305,9 @@ func TestAllRunsTyped_Projection_OK(t *testing.T) {
 		runsCountRow: func(string) pgx.Row { return staticRow{values: []any{int(2)}} },
 		applyRunsRows: func() (pgx.Rows, error) {
 			return &globalRunRows{rows: []globalRunRow{
-				{applyID: "01HRUN2", incarnation: "redis-staging", scenario: "restart",
+				{applyID: "01HRUN2", incarnation: "redis-staging", service: "redis", scenario: "restart",
 					startedAt: now, status: "applying"},
-				{applyID: "01HRUN1", incarnation: "redis-prod", scenario: "create",
+				{applyID: "01HRUN1", incarnation: "redis-prod", service: "postgres", scenario: "create",
 					startedAt: now.Add(-time.Hour), finishedAt: &fin, startedBy: &aid, status: "success"},
 			}}, nil
 		},
@@ -224,12 +324,18 @@ func TestAllRunsTyped_Projection_OK(t *testing.T) {
 	if first.ApplyID != "01HRUN2" || first.Incarnation != "redis-staging" || first.Status != "applying" {
 		t.Errorf("Items[0] = %+v, want 01HRUN2/redis-staging/applying", first)
 	}
+	if first.Service != "redis" {
+		t.Errorf("Items[0].Service = %q, want redis (service не перенесён в проекцию)", first.Service)
+	}
 	if first.FinishedAt != nil || first.StartedByAID != nil {
 		t.Errorf("Items[0] applying: FinishedAt/StartedByAID должны быть nil: %+v", first)
 	}
 	second := reply.Items[1]
 	if second.Incarnation != "redis-prod" || second.Status != "success" {
 		t.Errorf("Items[1] = %+v, want redis-prod/success", second)
+	}
+	if second.Service != "postgres" {
+		t.Errorf("Items[1].Service = %q, want postgres", second.Service)
 	}
 	if second.FinishedAt == nil || second.StartedByAID == nil || *second.StartedByAID != aid {
 		t.Errorf("Items[1] success: FinishedAt/StartedByAID не перенесены: %+v", second)
@@ -285,12 +391,13 @@ func TestRunsStatsTyped_OK(t *testing.T) {
 // --- rows-стабы ----------------------------------------------------------
 
 // globalRunRow — одна строка глобального списка (порядок колонок listSQL
-// applyrun.ListRuns: apply_id/incarnation/scenario/started_at/finished_at/
-// started_by_aid/status).
+// applyrun.ListRuns: apply_id/incarnation/scenario/service/started_at/
+// finished_at/started_by_aid/status).
 type globalRunRow struct {
 	applyID     string
 	incarnation string
 	scenario    string
+	service     string
 	startedAt   time.Time
 	finishedAt  *time.Time
 	startedBy   *string
@@ -313,7 +420,7 @@ func (r *globalRunRows) Next() bool {
 
 func (r *globalRunRows) Scan(dest ...any) error {
 	row := r.rows[r.idx-1]
-	vals := []any{row.applyID, row.incarnation, row.scenario, row.startedAt,
+	vals := []any{row.applyID, row.incarnation, row.scenario, row.service, row.startedAt,
 		row.finishedAt, row.startedBy, row.status}
 	for i, d := range dest {
 		switch d := d.(type) {

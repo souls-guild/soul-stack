@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 )
@@ -24,6 +25,17 @@ type RunsFilter struct {
 	Status RunStatus
 	// Incarnation — фильтр по имени инкарнации ("" = все).
 	Incarnation string
+	// Service — фильтр по сервису инкарнации-владельца ("" = все); точное
+	// совпадение через incarnation.service (index-safe, incarnation_service_idx).
+	Service string
+	// Q — свободный поиск (ILIKE-substring) по incarnation/scenario/service/
+	// started_by ("" = без поиска). LIKE-метасимволы экранируются (литеральные).
+	Q string
+	// StartedAfter/StartedBefore — inclusive-границы по АГРЕГАТУ started_at прогона
+	// (MIN(started_at)); nil = не задано. Фильтр по агрегату → в outerWhere (после
+	// GROUP BY): started_at не константен внутри apply_id, в sub расщепил бы группу.
+	StartedAfter  *time.Time
+	StartedBefore *time.Time
 	// Sort — поле сортировки (whitelist [runsSortableColumns], "" = дефолт
 	// started_at). SortDir — asc|desc ("" = desc). Невалидное значение всплывает
 	// из [ListRuns] sentinel-ошибкой ([ErrInvalidRunsSortField]/[ErrInvalidRunsSortDir]
@@ -46,6 +58,7 @@ var runsSortableColumns = map[string]string{
 	"finished_at": "finished_at",
 	"status":      "status",
 	"incarnation": "incarnation",
+	"service":     "service",
 	"scenario":    "scenario",
 }
 
@@ -79,21 +92,28 @@ type RunsStats struct {
 // собраны из Go-констант (init ниже) — единый источник приоритетов applying >
 // failed > cancelled > success. Неизвестный статус трактуется как non-terminal
 // (parity default-ветки AggregateRunStatus).
+//
+// apply_runs заалиашена `ar`, incarnation — `i`: у incarnation свой status →
+// bare-колонки стали бы ambiguous. LEFT JOIN защитно (FK ON DELETE CASCADE не
+// оставляет orphan, но JOIN не роняет прогон при рассинхроне); service через
+// COALESCE к пустой строке — NULL-safe скан в string.
 var runsAggregateSelect = fmt.Sprintf(`
-SELECT apply_id,
-       MIN(incarnation_name)                           AS incarnation,
-       MIN(scenario)                                   AS scenario,
-       MIN(started_at)                                 AS started_at,
-       CASE WHEN bool_and(finished_at IS NOT NULL)
-            THEN MAX(finished_at) END                  AS finished_at,
-       MIN(started_by_aid)                             AS started_by_aid,
+SELECT ar.apply_id,
+       MIN(ar.incarnation_name)                        AS incarnation,
+       COALESCE(MIN(i.service), '')                    AS service,
+       MIN(ar.scenario)                                AS scenario,
+       MIN(ar.started_at)                              AS started_at,
+       CASE WHEN bool_and(ar.finished_at IS NOT NULL)
+            THEN MAX(ar.finished_at) END               AS finished_at,
+       MIN(ar.started_by_aid)                          AS started_by_aid,
        CASE
-         WHEN bool_or(status NOT IN (%[1]s))           THEN '%[2]s'
-         WHEN bool_or(status IN ('%[3]s','%[4]s'))     THEN '%[5]s'
-         WHEN bool_or(status = '%[6]s')                THEN '%[7]s'
+         WHEN bool_or(ar.status NOT IN (%[1]s))        THEN '%[2]s'
+         WHEN bool_or(ar.status IN ('%[3]s','%[4]s'))  THEN '%[5]s'
+         WHEN bool_or(ar.status = '%[6]s')             THEN '%[7]s'
          ELSE '%[8]s'
        END                                             AS status
-FROM apply_runs`,
+FROM apply_runs ar
+LEFT JOIN incarnation i ON ar.incarnation_name = i.name`,
 	terminalStatusesSQL(), RunStatusApplying,
 	StatusFailed, StatusOrphaned, RunStatusFailed,
 	StatusCancelled, RunStatusCancelled,
@@ -117,27 +137,62 @@ func buildRunsQuery(filter RunsFilter, scope incarnation.ListScope) (sub, outerW
 	var clauses []string
 	if filter.Incarnation != "" {
 		args = append(args, filter.Incarnation)
-		clauses = append(clauses, fmt.Sprintf("incarnation_name = $%d", len(args)))
+		clauses = append(clauses, fmt.Sprintf("ar.incarnation_name = $%d", len(args)))
+	}
+	if filter.Service != "" {
+		args = append(args, filter.Service)
+		clauses = append(clauses, fmt.Sprintf("i.service = $%d", len(args)))
+	}
+	if filter.Q != "" {
+		args = append(args, "%"+escapeLike(filter.Q)+"%")
+		n := len(args)
+		clauses = append(clauses, fmt.Sprintf(
+			"(ar.incarnation_name ILIKE $%[1]d OR ar.scenario ILIKE $%[1]d OR i.service ILIKE $%[1]d OR ar.started_by_aid ILIKE $%[1]d)",
+			n))
 	}
 	// Purview-scope — подзапросом по incarnation (fail-closed: пустой scope даёт
 	// WHERE FALSE внутри подзапроса → ни одного прогона).
 	cond, args := incarnation.ScopeCondition(args, scope)
 	if cond != "" {
-		clauses = append(clauses, "incarnation_name IN (SELECT name FROM incarnation WHERE "+cond+")")
+		clauses = append(clauses, "ar.incarnation_name IN (SELECT name FROM incarnation WHERE "+cond+")")
 	}
 
 	sub = runsAggregateSelect
 	if len(clauses) > 0 {
 		sub += "\nWHERE " + strings.Join(clauses, " AND ")
 	}
-	sub += "\nGROUP BY apply_id"
+	sub += "\nGROUP BY ar.apply_id"
 
+	// Внешний WHERE — по АГРЕГАТНЫМ колонкам свёртки (status, started_at):
+	// фильтруются ПОСЛЕ GROUP BY (started_at = MIN по apply_id, не константен внутри
+	// группы — в sub расщепил бы её). И countSQL, и listSQL строятся из sub+outerWhere
+	// → total/страница консистентны. Все значения — bind-параметры.
+	var outer []string
 	if filter.Status != "" {
 		args = append(args, string(filter.Status))
-		outerWhere = fmt.Sprintf("\nWHERE status = $%d", len(args))
+		outer = append(outer, fmt.Sprintf("status = $%d", len(args)))
+	}
+	if filter.StartedAfter != nil {
+		args = append(args, *filter.StartedAfter)
+		outer = append(outer, fmt.Sprintf("started_at >= $%d", len(args)))
+	}
+	if filter.StartedBefore != nil {
+		args = append(args, *filter.StartedBefore)
+		outer = append(outer, fmt.Sprintf("started_at <= $%d", len(args)))
+	}
+	if len(outer) > 0 {
+		outerWhere = "\nWHERE " + strings.Join(outer, " AND ")
 	}
 	return sub, outerWhere, args
 }
+
+// likeEscaper экранирует LIKE/ILIKE-метасимволы (backslash-escape по умолчанию в
+// PG): литеральные %/_/\ в свободном поиске не работают как wildcard. Один проход
+// NewReplacer (backslash первым в списке пар не даёт двойного экранирования).
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+// escapeLike готовит Q к подстановке в `%…%` ILIKE-паттерн.
+func escapeLike(s string) string { return likeEscaper.Replace(s) }
 
 // buildRunsOrderBy — тело ORDER BY из whitelist-поля + направления. Дефолт поля
 // started_at, направления desc (byte-exact прежнему `started_at DESC, apply_id DESC`).
@@ -196,7 +251,7 @@ func ListRuns(ctx context.Context, db ExecQueryRower, filter RunsFilter, scope i
 
 	// ORDER BY — из whitelist-выражения (не из сырого ввода); countSQL выше НЕ
 	// затрагивается — total от сортировки не зависит (ADR-068 §B1).
-	listSQL := "SELECT apply_id, incarnation, scenario, started_at, finished_at, started_by_aid, status FROM (" +
+	listSQL := "SELECT apply_id, incarnation, scenario, service, started_at, finished_at, started_by_aid, status FROM (" +
 		sub + ") runs" + outerWhere +
 		fmt.Sprintf("\nORDER BY %s OFFSET $%d LIMIT $%d", orderBy, len(args)+1, len(args)+2)
 	listArgs := append(append([]any{}, args...), offset, limit)
@@ -213,7 +268,7 @@ func ListRuns(ctx context.Context, db ExecQueryRower, filter RunsFilter, scope i
 			rs        RunSummary
 			statusStr string
 		)
-		if err := rows.Scan(&rs.ApplyID, &rs.Incarnation, &rs.Scenario, &rs.StartedAt,
+		if err := rows.Scan(&rs.ApplyID, &rs.Incarnation, &rs.Scenario, &rs.Service, &rs.StartedAt,
 			&rs.FinishedAt, &rs.StartedByAID, &statusStr); err != nil {
 			return nil, 0, fmt.Errorf("applyrun: scan global run: %w", err)
 		}

@@ -43,9 +43,12 @@ const (
 type RunSummary struct {
 	ApplyID     string
 	Incarnation string
-	Scenario    string
-	Status      RunStatus
-	StartedAt   time.Time
+	// Service — сервис инкарнации-владельца (JOIN incarnation; "" если
+	// инкарнация недоступна). Заполняется только глобальным ListRuns.
+	Service   string
+	Scenario  string
+	Status    RunStatus
+	StartedAt time.Time
 	// FinishedAt — NULL, пока хотя бы одна host-строка не финишировала (прогон
 	// applying); иначе MAX(finished_at) по строкам.
 	FinishedAt   *time.Time
