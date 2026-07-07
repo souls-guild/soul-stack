@@ -347,9 +347,9 @@ tasks:
   # пере-резолвится, и ТОЛЬКО потом cluster/sentinel-ветка видит созданные хосты в
   # soulprint.hosts. ★ ОБЩЕЕ PROVISION-ТЕЛО service-level (scenario/redis-provision.yml, то
   # же, что инклудит migrate_cluster/main.yml — дубликата нет; scenario-include фоллбэкает
-  # имя файла на service-level, orchestration.md §6). when по input.provision — НЕ
-  # статический (object-input, не enum) → placeholder-skip-форма include-when (не
-  # group-drop): на enabled=false/опущенной секции шаги тела не таргетят никого. has()-guard
+  # имя файла на service-level, orchestration.md §6). when по input.provision — статический
+  # (только input.*, без register/soulprint) → group-drop include-when: на enabled=false/
+  # опущенной секции всё provision-тело (вкл. NIM-58 name-guard) выброшено из плана. has()-guard
   # — секция опциональна (no-such-key без неё). ★ teardown НЕ здесь.
   - include: redis-provision.yml
     when: "has(input.provision) && input.provision.enabled"

@@ -76,6 +76,10 @@ type Fixtures struct {
 	Vault                map[string]map[string]any `yaml:"vault,omitempty"`
 	State                map[string]any            `yaml:"state,omitempty"`
 	DefaultDestinySource string                    `yaml:"default_destiny_source,omitempty"`
+
+	// IncarnationName — override имени инкарнации для L0 (NIM-58 guard-тесты);
+	// пусто → имя сценария (scn.Name), прежнее поведение БИТ-В-БИТ.
+	IncarnationName string `yaml:"incarnation_name,omitempty"`
 }
 
 // HostFixture — одна запись multi-host roster-а L0 (`fixtures.hosts[]`).

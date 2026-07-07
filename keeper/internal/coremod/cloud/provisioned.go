@@ -34,17 +34,17 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// vmNameBasePattern — форма base-имени VM (param `name`, self-onboard Вариант T).
-// lowercase-alnum + дефисы, старт/конец alnum, 1..50 — с учётом того, что драйвер
-// добавит `-<index>`, а FQDN=`<name>-<index>.<suffix>` обязан пройти SID-валидацию.
-// Совпадает по духу с WB name-паттерном (`^[a-z][a-z0-9-]{0,48}[a-z0-9]$`), но
-// keeper держит собственный floor — драйвер-специфичные лимиты проверяет драйвер.
-const vmNameBasePattern = `^[a-z][a-z0-9-]{0,48}[a-z0-9]$`
+// VMNameBasePattern — форма base-имени VM (param `name`, self-onboard Вариант T).
+// Единый источник паттерна: NIM-58 guard-assert в provision-телах сверяет
+// incarnation.name байт-в-байт против этого литерала (nameguard_pin_test).
+// lowercase-alnum + дефисы, старт/конец alnum, 1..50 — драйвер добавит `-<index>`,
+// FQDN=`<name>-<index>.<suffix>` обязан пройти SID-валидацию.
+const VMNameBasePattern = `^[a-z][a-z0-9-]{0,48}[a-z0-9]$`
 
-var vmNameBaseRe = regexp.MustCompile(vmNameBasePattern)
+var VMNameBaseRe = regexp.MustCompile(VMNameBasePattern)
 
-// validVMNameBase проверяет base-имя VM на соответствие [vmNameBasePattern].
-func validVMNameBase(name string) bool { return vmNameBaseRe.MatchString(name) }
+// ValidVMNameBase проверяет base-имя VM на соответствие [VMNameBasePattern].
+func ValidVMNameBase(name string) bool { return VMNameBaseRe.MatchString(name) }
 
 // Name — base-имя модуля без state-суффикса (ключ Registry). Author-форма
 // адреса задачи — `core.cloud.created` / `core.cloud.destroyed` (base + state);
@@ -185,8 +185,8 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 		name, nerr := util.OptStringParam(req.Params, "name")
 		if nerr != nil {
 			errs = append(errs, nerr.Error())
-		} else if name != "" && !validVMNameBase(name) {
-			errs = append(errs, fmt.Sprintf("param %q: %q must match %s (VM-name base for predictable FQDN)", "name", name, vmNameBasePattern))
+		} else if name != "" && !ValidVMNameBase(name) {
+			errs = append(errs, fmt.Sprintf("param %q: %q must match %s (VM-name base for predictable FQDN)", "name", name, VMNameBasePattern))
 		}
 		// self_onboard: true — VM онбордится сама из cloud-init (Вариант T):
 		// требует и name (для предсказания FQDN), и generate_userdata-путь (токены

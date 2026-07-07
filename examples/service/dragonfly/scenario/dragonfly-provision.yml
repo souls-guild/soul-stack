@@ -47,6 +47,13 @@
 #
 # ★ teardown (destroy) — НЕ здесь (отдельный сценарий, cascade core.cloud.destroyed).
 
+# NIM-58: incarnation.NamePattern ⊃ vmNameBasePattern — ранний guard до провижна.
+- name: Guard incarnation name is a valid VM-name base for cloud provisioning
+  assert:
+    that:
+      - "incarnation.name.matches('^[a-z][a-z0-9-]{0,48}[a-z0-9]$')"
+    message: "имя инкарнации не подходит как базовое имя VM для провижининга (нужно ^[a-z][a-z0-9-]{0,48}[a-z0-9]$): старт-цифра / хвост-дефис / длина 51-63 проходят create, но падают в CloudDriver — переименуй инкарнацию или создай с provision.enabled=false"
+
 # (а) Создание VM через CloudDriver (on: keeper, ADR-017). count = 1+replicas_per_master
 #     (топология sentinel). generate_userdata: false: VM создаётся БЕЗ cloud-init userdata
 #     (часть cloud-провайдеров отвергает ci_user_data) → VM auto-join Teleport, а весь

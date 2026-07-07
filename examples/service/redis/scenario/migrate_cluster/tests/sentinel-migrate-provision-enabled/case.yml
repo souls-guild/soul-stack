@@ -26,32 +26,35 @@ name: sentinel migrate provisions VMs first then deploys and seeds from external
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
+  # NIM-58: incarnation.name L0 по умолчанию = имя сценария ("migrate_cluster"),
+  # но подчёркивание — НЕвалидная VM-база; provision-guard требует реалистичное имя.
+  incarnation_name: "redis-prod"
   # Порядок намеренно не отсортирован (2, 1) — harness и master-election сортируют по SID.
   hosts:
     - sid: vm-2.example.com
-      covens: [migrate_cluster, redis]
+      covens: [redis-prod, redis]
       soulprint:
         network: { primary_ip: 10.0.0.2 }
         os: { arch: amd64 }
     - sid: vm-1.example.com
-      covens: [migrate_cluster, redis]
+      covens: [redis-prod, redis]
       soulprint:
         network: { primary_ip: 10.0.0.1 }
         os: { arch: amd64 }
   vault:
-    secret/redis/migrate_cluster:
+    secret/redis/redis-prod:
       password: s3cr3t-redis-pass-migrate
     # ★ РЕДИЗАЙН default_admin (2026-06-30): default_admin — системный юзер
     # внутрикластерного AUTH (auth_pass/PING шаги деплоя читают его по ветке users/<name>).
-    secret/redis/migrate_cluster/users/default_admin:
+    secret/redis/redis-prod/users/default_admin:
       password: default-admin-secret-pass
-    secret/redis/migrate_cluster/users/replica:
+    secret/redis/redis-prod/users/replica:
       password: replica-sys-secret-pass
-    secret/redis/migrate_cluster/users/monitoring:
+    secret/redis/redis-prod/users/monitoring:
       password: monitoring-sys-secret-pass
-    secret/redis/migrate_cluster/users/sentinel:
+    secret/redis/redis-prod/users/sentinel:
       password: sentinel-sys-secret-pass
-    secret/redis/migrate_cluster/users/haproxy:
+    secret/redis/redis-prod/users/haproxy:
       password: haproxy-sys-secret-pass
     # ★ Учётка ВНЕШНЕГО источника под pattern-guard secret/redis/migrate/*. Читается
     # авторским каналом vault(input.source.password_ref) — password_ref = ниже в input.
@@ -141,9 +144,9 @@ assert:
         provider: wb-dev
         profile: redis-small
         count: 2
-        # name — run-identity батча = incarnation.name (здесь "migrate_cluster"): драйвер
+        # name — run-identity батча = incarnation.name (здесь "redis-prod"): драйвер
         # именует VM <name>-<seq> + label soulstack-run=<name> (идемпотентность, NIM-16).
-        name: migrate_cluster
+        name: redis-prod
         generate_userdata: false
 
     # (б) core.bootstrap.delivered: install + доставка per-VM bootstrap-токена по SSH
@@ -162,13 +165,13 @@ assert:
           - { sid: vm-2.example.com, vm_id: i-bbb222, primary_ip: 10.0.0.2, bootstrap_token: tok-vm2 }
 
     # (в) core.soul.registered: sid — список SID созданных VM (register.provision.hosts
-    # .map(h, h.sid)); coven — корневой incarnation.name (migrate_cluster); барьер
+    # .map(h, h.sid)); coven — корневой incarnation.name (redis-prod); барьер
     # онбординга await_online + refresh_soulprint; await_timeout из input.provision (5m,
     # перекрывает essence 10m). Единственная core.soul.registered в плане.
     - module: core.soul.registered
       params_subset:
         sid: [vm-1.example.com, vm-2.example.com]
-        coven: [migrate_cluster]
+        coven: [redis-prod]
         await_online: true
         refresh_soulprint: true
         await_timeout: "5m"

@@ -183,7 +183,7 @@ func renderCase(ctx context.Context, c *Case, caseFile string) (renderedCase, er
 		Essence:     orEmptyMap(c.Fixtures.Essence),
 		Input:       effectiveInput,
 		Register:    orEmptyMap(c.Mocks.Register),
-		Incarnation: render.IncarnationMeta{Name: scn.Name},
+		Incarnation: render.IncarnationMeta{Name: incarnationName(scn.Name, c.Fixtures)}, // NIM-58
 		Hosts:       fixtureHosts(scn.Name, c.Fixtures),
 		Destiny:     destiny,
 		Templates:   templates,
@@ -394,6 +394,15 @@ func readWithin(base, name string) ([]byte, error) {
 		return nil, err
 	}
 	return os.ReadFile(full)
+}
+
+// incarnationName — имя инкарнации L0-прогона: fixtures.incarnation_name (override,
+// NIM-58) либо имя сценария по умолчанию.
+func incarnationName(scenarioName string, f Fixtures) string {
+	if f.IncarnationName != "" {
+		return f.IncarnationName
+	}
+	return scenarioName
 }
 
 // fixtureHosts строит roster L0 прогона из fixtures.
