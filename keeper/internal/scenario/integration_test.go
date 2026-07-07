@@ -2725,9 +2725,10 @@ func TestIntegration_MixedKeeperAndHost_Refresh_RunsToDispatch(t *testing.T) {
 	}
 }
 
-// seedCreateHistory вставляет state_history-snapshot упавшего `create`-сценария —
-// нужен scope=create-gate в [incarnation.UnlockForRerun] (последний упавший
-// сценарий обязан быть create). state_before == state_after = `{}`.
+// seedCreateHistory вставляет state_history-snapshot упавшего `create`-сценария И
+// проставляет incarnation.created_scenario='create' — вместе дают scope=create в
+// [incarnation.UnlockForRerun]: gate требует created_scenario == последний упавший
+// сценарий (значение create-пути проставляет handler/MCP, Create персистит). state_before == state_after = `{}`.
 func seedCreateHistory(t *testing.T, name string) {
 	t.Helper()
 	_, err := integrationPool.Exec(context.Background(), `
@@ -2736,6 +2737,10 @@ VALUES ($1, $2, 'create', '{}'::jsonb, '{}'::jsonb, $1)`,
 		audit.NewULID(), name)
 	if err != nil {
 		t.Fatalf("seedCreateHistory: %v", err)
+	}
+	if _, err := integrationPool.Exec(context.Background(),
+		`UPDATE incarnation SET created_scenario = 'create' WHERE name = $1`, name); err != nil {
+		t.Fatalf("seedCreateHistory (created_scenario): %v", err)
 	}
 }
 
