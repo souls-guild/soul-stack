@@ -143,6 +143,11 @@ const (
 	// отличаются исходом teardown-а.
 	EventIncarnationDestroyFailed EventType = "incarnation.destroy_failed"
 
+	// EventIncarnationSecretRevealed — оператор раскрыл секрет инкарнации через
+	// Operator API (POST /v1/incarnations/{name}/secrets/reveal). archon_aid — инициатор;
+	// payload {name, secret_id, key, path} — ЗНАЧЕНИЕ секрета НЕ кладём (факт, не содержимое).
+	EventIncarnationSecretRevealed EventType = "incarnation.secret_revealed"
+
 	// EventSoulCreated — Soul зарегистрирован в реестре `souls` через
 	// Operator API (`POST /v1/souls`): создана строка (status: pending) и
 	// для transport=agent выписан первый bootstrap-токен. `source: api`,

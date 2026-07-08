@@ -159,6 +159,18 @@ type IncarnationHandler struct {
 	// мотив, что refs). nil → /tasks отдаёт план БЕЗ per-host результатов (unit без
 	// audit-reader).
 	runTasksAudit RunTaskAuditReader
+
+	// vault — read-поверхность Vault KV для reveal-эндпоинта секретов (NIM-74).
+	// Инжектится late-binding-ом [SetVaultReader] (тот же мотив, что refs). nil →
+	// RevealSecretTyped отвечает 404 (секрет нераскрываем — endpoint не сконфигурирован).
+	vault VaultKVReader
+}
+
+// VaultKVReader — узкая read-поверхность Vault KV для reveal-эндпоинта (NIM-74):
+// резолв plaintext-секрета по logical-пути. keeper/internal/vault.Client
+// удовлетворяет как есть; сужение — герметичный unit-прогон с fixture-reader-ом.
+type VaultKVReader interface {
+	ReadKV(ctx context.Context, path string) (map[string]any, error)
 }
 
 // RunTaskAuditReader — узкая read-поверхность audit_log для RunTasksTyped:
@@ -204,6 +216,14 @@ func (h *IncarnationHandler) SetServiceRefs(refs ServiceRefsLister) {
 // без per-host результатов. Вызывается один раз в `keeper run` до старта сервера.
 func (h *IncarnationHandler) SetRunTasksAuditReader(r RunTaskAuditReader) {
 	h.runTasksAudit = r
+}
+
+// SetVaultReader late-binding-ом подключает Vault KV-reader для reveal-эндпоинта
+// секретов (NIM-74). Отдельный сеттер, а не арг конструктора (тот же мотив, что
+// [SetServiceRefs]); nil → RevealSecretTyped отвечает 404 (endpoint не
+// сконфигурирован). Вызывается один раз в `keeper run` до старта сервера.
+func (h *IncarnationHandler) SetVaultReader(v VaultKVReader) {
+	h.vault = v
 }
 
 // ContextReader возвращает read-поверхность БД handler-а для RBAC-экстрактора

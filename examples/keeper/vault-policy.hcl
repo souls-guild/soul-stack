@@ -56,6 +56,19 @@ path "secret/data/provider/*" {
   capabilities = ["create", "update", "read"]
 }
 
+# --- KV v2: reveal-раскрытие секретов инкарнации (NIM-74) --------------------
+#
+# Оператор с правом incarnation.view-secrets раскрывает plaintext секрета,
+# объявленного `revealable_secrets` сервиса (POST .../secrets/reveal). Keeper
+# резолвит значение keeper-side по vault_ref сервиса. Для redis-сервиса
+# vault_ref = secret/redis/<incarnation>/users/<key>#password → нужен read на
+# префикс, объявляемый манифестом. Read-only (значение только читается).
+# Скоуп узкий (redis/*), не весь mount; при кастомном kv_mount/пути в
+# revealable_secrets — поправьте префикс под свой манифест.
+path "secret/data/redis/*" {
+  capabilities = ["read"]
+}
+
 # --- PKI: подпись CSR SoulSeed при онбординге -------------------------------
 #
 # При Bootstrap-RPC (ADR-012(b)) Keeper выписывает SoulSeed-сертификат

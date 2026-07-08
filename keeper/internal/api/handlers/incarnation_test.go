@@ -2161,6 +2161,10 @@ type fakeLoader struct {
 	// secretSchemaForIncarnation обходит его на secret:true). nil → без state_schema.
 	stateSchema map[string]any
 
+	// revealableSecrets — секция revealable_secrets манифеста снапшота (NIM-74):
+	// revealableSecretsFor читает её на reveal-эндпоинте. nil → без reveal-деклараций.
+	revealableSecrets []config.RevealableSecret
+
 	loadCalls     int
 	chainCalls    int
 	readFileCalls int
@@ -2184,7 +2188,7 @@ func (f *fakeLoader) Load(_ context.Context, ref artifact.ServiceRef) (*artifact
 	return &artifact.ServiceArtifact{
 		Ref:      ref,
 		LocalDir: f.localDir,
-		Manifest: &config.ServiceManifest{StateSchemaVersion: f.targetSchema, Lifecycle: f.lifecycle, StateSchema: f.stateSchema},
+		Manifest: &config.ServiceManifest{StateSchemaVersion: f.targetSchema, Lifecycle: f.lifecycle, StateSchema: f.stateSchema, RevealableSecrets: f.revealableSecrets},
 	}, nil
 }
 

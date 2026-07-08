@@ -209,6 +209,12 @@ type Deps struct {
 	// передаёт *artifact.ServiceLoader.
 	ServiceLoader handlers.ServiceSnapshotLoader
 
+	// VaultClient — read-поверхность Vault KV для reveal-эндпоинта секретов
+	// инкарнации (NIM-74, POST/GET /v1/incarnations/{name}/secrets/*). Опционален:
+	// при nil RevealSecretTyped отвечает 404 (endpoint не сконфигурирован).
+	// Production-wire-up в `keeper run` передаёт *vault.Client (тот же d.vc).
+	VaultClient handlers.VaultKVReader
+
 	// PushRun — multi-host push-orchestrator (Variant C, ADR-004 push-flow +
 	// docs/keeper/push.md). При nil push.*-роуты не подключаются (паттерн
 	// SigilSvc/AugurSvc/OracleSvc): keeper стартует без SSH-плагинов, и
@@ -536,6 +542,11 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	// AuditReader → /tasks отдаёт план без per-host результатов.
 	if deps.AuditReader != nil {
 		incH.SetRunTasksAuditReader(deps.AuditReader)
+	}
+	// Vault KV-reader для reveal-эндпоинта секретов (NIM-74); late-binding. nil →
+	// RevealSecretTyped отвечает 404 (endpoint не сконфигурирован).
+	if deps.VaultClient != nil {
+		incH.SetVaultReader(deps.VaultClient)
 	}
 	soulH := handlers.NewSoulHandler(deps.SoulDB, deps.RBAC, deps.SoulPresence, logger)
 

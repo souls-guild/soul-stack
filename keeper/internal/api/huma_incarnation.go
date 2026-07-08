@@ -482,6 +482,8 @@ func HumaIncarnationSpecYAML() (string, error) {
 		registerHumaIncarnationDestroy(api, stub)
 		registerHumaIncarnationUpdateHosts(api, stub)
 		registerHumaIncarnationSetTraits(api, stub)
+		registerHumaIncarnationRevealSecret(api, stub)
+		registerHumaIncarnationRevealableSecrets(api, stub)
 		return nil
 	})
 }
