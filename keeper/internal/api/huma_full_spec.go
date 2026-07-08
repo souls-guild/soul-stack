@@ -126,6 +126,8 @@ func fullSpecGroups() []specGroup {
 			registerHumaIncarnationDestroy(api, stub)
 			registerHumaIncarnationUpdateHosts(api, stub)
 			registerHumaIncarnationSetTraits(api, stub)
+			registerHumaIncarnationRevealSecret(api, stub)
+			registerHumaIncarnationRevealableSecrets(api, stub)
 			return nil
 		}},
 		// choir смонтирован на группе /v1/incarnations, Operation.Path несёт
@@ -187,6 +189,7 @@ func fullSpecGroups() []specGroup {
 			registerHumaServiceScenarios(api, stub)
 			registerHumaServiceStateSchema(api, stub)
 			registerHumaServiceDependencies(api, stub)
+			registerHumaServiceDirectives(api, stub)
 			return nil
 		}},
 		{"/v1/provisioning-policy", func(api huma.API) error {

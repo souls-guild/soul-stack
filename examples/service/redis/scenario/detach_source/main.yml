@@ -1,35 +1,8 @@
 name: detach_source
 description: >-
-  Day-2: ОТЦЕПИТЬ внешний (старый) кластер от инкарнации, залитой через
-  migrate_cluster. После того как новый кластер догнал источник по offset (gate
-  migrate_cluster) И ОПЕРАТОР ОСТАНОВИЛ ЗАПИСЬ в старый кластер, этот сценарий
-  делает финальную проверку offset ещё раз (fail-closed) и переводит новый master
-  в самостоятельный режим (REPLICAOF NO ONE) — источник больше не нужен.
-
-  ★ ГРАНИЦА (★★ НЕ ВХОДИТ ★★): КВИЕС ЗАПИСИ В СТАРЫЙ КЛАСТЕР. Soul Stack НЕ
-  управляет клиентским трафиком приложений — остановку записи в источник перед
-  detach делает САМ ОПЕРАТОР. Сценарий лишь снимает финальный offset-snapshot и
-  отцепляет реплику; ЗАПИСИ, попавшие в источник ПОСЛЕ этого snapshot, будут
-  ПОТЕРЯНЫ (новый кластер их уже не подтянет — репликация разорвана). Порядок для
-  оператора: (1) остановить запись приложений в старый кластер; (2) запустить
-  detach_source. Этот инвариант — на операторе, сценарий его не форсит (нет канала
-  к клиентскому трафику).
-
-  ДИСПЕТЧЕР ПО incarnation.state.redis_type (day-2 знает режим из state, не из input —
-  входного redis_type у detach нет): для S1-пилота реализована ТОЛЬКО ветка sentinel
-  (detach_source/sentinel.yml). Ветка cluster — заглушка (detach_source/cluster.yml,
-  fail-closed assert) на S4: отцепление слот-aware Redis Cluster от источника требует
-  своего дизайна.
-
-  Источник берётся из incarnation.state.seeded_from.source_endpoints[0] (записан
-  migrate_cluster) — оператор НЕ передаёт его повторно (исключает рассинхрон «detach
-  не того источника»). ★ detach — обычный day-2 (нет runnable:false), оператор может
-  запустить его и на create'нутой инкарнации, которая НИКОГДА не мигрировала: у такой
-  seeded_from.source_endpoints ПУСТ (миграция 008_to_009 даёт каждой v9-инкарнации
-  пустой seeded_from). Этот случай отсекает assert-guard в sentinel.yml ВНЯТНЫМ отказом
-  «отцеплять нечего», а не опаковым index-out-of-bounds. Идемпотентность: detach уже
-  отцеплённой инкарнации (seeded_from.detached==true) — REPLICAOF NO ONE на
-  самостоятельном master no-op (плагин community.redis.detached идемпотентен).
+  Отцепить внешний источник от инкарнации, залитой через migrate_cluster: финальная
+  проверка offset (fail-closed) и перевод master-а в самостоятельный режим (REPLICAOF NO
+  ONE). Предусловие — оператор остановил запись в старый кластер.
 
 # Входного контракта оператора НЕТ: detach_source не принимает параметров — источник,
 # режим и коннект-данные берутся из incarnation.state (seeded_from/redis_type/tls/…),
@@ -39,7 +12,7 @@ description: >-
 # ── Вычисляемые scenario-vars (compute:) ─────────────────────────────────────────
 # Рун-уровневый контекст (incarnation/essence — без soulprint). source_master — master
 # ВНЕШНЕГО источника из state (записан migrate_cluster: seeded_from.source_endpoints[0]).
-# tls_* — дискриминатор коннекта к ЛОКАЛЬНОМУ инстансу из state.tls (как все day-2:
+# tls_* — дискриминатор коннекта к ЛОКАЛЬНОМУ инстансу из state.tls (как все сценарии сопровождения:
 # add_user/update_users/restart).
 #
 # ★ source_password/source_tls_ca (v10 прод-фикс) — учётка ВНЕШНЕГО источника для
@@ -72,7 +45,7 @@ compute:
   # ★ Шаг SENTINEL MONITOR (sentinel.yml, перенесён сюда из деплой-тела migrate_cluster:
   # его нельзя выполнять, пока новый master реплицирует источник — sentinel увидел бы
   # role:slave и инициировал failover → split-brain. После REPLICAOF NO ONE master снова
-  # автономен, мониторить безопасно). day-2 берёт всё из incarnation.state (входного
+  # автономен, мониторить безопасно). Сценарий берёт всё из incarnation.state (входного
   # контракта у detach нет):
   #   - sentinel_directives — те же per-master тайминги, что писал create/migrate в
   #     sentinel.conf, но из state.redis_sentinel (down_after_ms/failover_timeout_ms/
@@ -99,7 +72,7 @@ compute:
 # сохраняет source_endpoints (и любые будущие поля seeded_from), меняет только detached.
 # seeded_from-объект гарантирован у v9-инкарнаций (миграция 008_to_009), НО с ПУСТЫМ
 # source_endpoints у тех, что не проходили migrate_cluster (миграция даёт каждой v9
-# {source_endpoints:[], detached:false}). detach — обычный day-2 (нет runnable:false),
+# {source_endpoints:[], detached:false}). detach — обычный сценарий сопровождения (нет runnable:false),
 # оператор может запустить его на create'нутой инкарнации — такую отсекает assert-guard
 # в sentinel.yml (size(source_endpoints) >= 1), до этого merge она не доходит.
 state_changes:
@@ -107,7 +80,7 @@ state_changes:
     value: "${ merge(incarnation.state.seeded_from, {'detached': true}) }"
 
 # Тело прогона — ветки диспетчера по incarnation.state.redis_type. S1-пилот: sentinel
-# реализован, cluster — fail-closed заглушка (S4). when по state.redis_type — day-2
+# реализован, cluster — fail-closed заглушка (S4). when по state.redis_type —
 # режим-гейт (как диспетчер create по input.redis_type, но источник — state).
 tasks:
   - include: cluster.yml

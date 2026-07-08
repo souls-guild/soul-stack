@@ -137,6 +137,7 @@
   "mapRemovePair": "−",
   "mapDuplicateKeyError": "duplicate key",
   "mapIncompleteKeyError": "key is empty",
+  "mapUnknownDirectiveError": "unknown Redis {{version}} directive",
   "sectionBatchingLabel": "Batching",
   "sectionSchedulingLabel": "Scheduling",
   "sectionFlagsLabel": "Flags",

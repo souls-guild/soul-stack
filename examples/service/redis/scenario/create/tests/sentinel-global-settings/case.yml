@@ -93,7 +93,7 @@ assert:
       master_settings:
         down-after-milliseconds: "5000"
         failover-timeout: "60000"
-      # ГЛОБАЛЬНЫЕ директивы материализованы в read-model — day-2 читает их именованно.
+      # ГЛОБАЛЬНЫЕ директивы материализованы в read-model — повторный прогон читает их именованно.
       settings:
         resolve-hostnames: "yes"
         announce-hostnames: "yes"

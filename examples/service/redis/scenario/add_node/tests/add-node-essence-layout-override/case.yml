@@ -29,7 +29,7 @@ fixtures:
   vault:
     secret/redis/add_node/users/default_admin:
       password: default-admin-secret-pass
-  # ★ host-layout ПЕРЕОПРЕДЕЛЁН оператором в essence (v11→v12): day-2 обязан читать
+  # ★ host-layout ПЕРЕОПРЕДЕЛЁН оператором в essence (v11→v12): повторный прогон обязан читать
   # ИМЕННО эти пути (не дефолтные), чтобы новая нода легла в тот же layout, что кластер.
   essence:
     conf_dir: /opt/redis
@@ -67,7 +67,7 @@ assert:
       params_subset:
         path: /srv/redis-data/modules
     # ADD-NODE плагин: пустой master_sid → master.addr пуст (role=master). Endpoint-ы
-    # из roster. Доказывает, что day-2-проход дошёл до конца (render не сорвался).
+    # из roster. Доказывает, что повторный прогон дошёл до конца (render не сорвался).
     - module: community.redis.cluster
       params_subset:
         action: add-node

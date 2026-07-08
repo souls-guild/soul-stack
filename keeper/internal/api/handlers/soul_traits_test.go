@@ -175,7 +175,7 @@ func TestAssignTraits_BadMode_422(t *testing.T) {
 	}
 }
 
-// TestAssignTraits_BadKey_422 — kebab-формат ключа enforce-ится (422 ДО БД).
+// TestAssignTraits_BadKey_422 — формат ключа enforce-ится (заглавная → 422 ДО БД).
 func TestAssignTraits_BadKey_422(t *testing.T) {
 	pool := &fakeSoulPool{}
 	h := NewSoulHandler(pool, fakeScoper{unrestricted: true}, nil, nil)

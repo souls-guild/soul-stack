@@ -1,11 +1,11 @@
 # L0-испытание restart: rolling-restart реплик НА TLS-инстансе. Парный guard к
 # rolling-restart-replicas (plaintext) — покрывает TLS-ветку дискриминатора
-# day-2-гейта. Render-only, герметично. Roster — 2 хоста, probe-роль = slave.
+# гейта. Render-only, герметично. Roster — 2 хоста, probe-роль = slave.
 #
-# ★ Инвариант (day-2-конвенция, docs/destiny/production-conventions.md §7a, ADR-057
+# ★ Инвариант (конвенция, docs/destiny/production-conventions.md §7a, ADR-057
 # amendment): дискриминатор TLS берётся из ИМЕНОВАННОГО поля РАЗВЁРНУТОГО
 # incarnation.state.tls (state_schema v3), НЕ из essence и НЕ парсингом redis_config.
-# create записал в state.tls операторское TLS-намерение (enable/port); day-2 restart
+# create записал в state.tls операторское TLS-намерение (enable/port); restart
 # обязан коннектиться плагином ПО TLS, иначе plaintext-коннект на TLS-only Redis провалит
 # health-gate (а AUTH plaintext при открытом plain-порту — утечка пароля). Этот кейс
 # доказывает, что при state.tls.enable=true probe/health-gate рендерятся tls:true,
@@ -72,7 +72,7 @@ fixtures:
   # Пароль (secret/redis/restart/users/default_admin#password, incarnation.name == restart;
   # ★ РЕДИЗАЙН default_admin — коннект под системным default_admin, прежний secret/redis/
   # <inc>#password ДРОПНУТ) + PEM CA (secret/services/redis/tls#ca, по state.tls.ca_ref —
-  # day-2 резолвит его vault(); CA-ветка TLS-материала, не пароль — не меняется).
+  # повторный прогон резолвит его vault(); CA-ветка TLS-материала, не пароль — не меняется).
   vault:
     secret/redis/restart/users/default_admin:
       password: default-admin-secret-pass

@@ -1,37 +1,14 @@
 name: update_users
 description: >-
-  Day-2: МАССОВОЕ редактирование ВСЕХ operator-добавленных ACL-пользователей на УЖЕ
-  работающем Redis БЕЗ рестарта процесса (bulk-replace). Производственная конвенция
-  «hot-reload > рестарт» (docs/destiny/production-conventions.md §3a/§6): ACL
-  применяется на лету командой ACL LOAD (перечитать aclfile), рестарт демона не нужен.
+  ★ Перед запуском засей в Vault пароль КАЖДОГО юзера набора по пути
+  secret/redis/<incarnation>/users/<name>#password — пароли НЕ во входной форме
+  (Vault-конвенция), иначе прогон упадёт с ошибкой «секрет … не найден в Vault»
+  (тогда засей недостающие секреты и запусти снова).
 
-  ★ Семантика «правим всех»: оператор задаёт ПОЛНЫЙ НОВЫЙ набор operator-extra юзеров
-  (input.users — массив AclUser). Этот набор ЦЕЛИКОМ заменяет incarnation.state.redis_users
-  (bulk-replace, НЕ upsert): юзер, которого нет в новом наборе, УДАЛЯЕТСЯ из ACL.
-  Граница с add_user: add_user добавляет/переопределяет ОДНОГО (точечный upsert, набор
-  растёт); update_users задаёт ВЕСЬ набор разом (юзера можно убрать, исключив из массива).
 
-  ★ Системные служебные юзеры (replica/monitoring/sentinel/haproxy) этим сценарием НЕ
-  трогаются: они НЕ в state.redis_users (state хранит только operator-extra), а доливаются
-  в users.acl из essence.system_acl_users на КАЖДОМ рендере (как create/add_user). Удалить
-  системного через input.users нельзя — его имя зарезервировано (validate-guard ниже),
-  а долив из essence перекрыл бы любую попытку. Поэтому bulk-replace operator-extra НЕ
-  ломает репликацию/sentinel/health-check.
-
-  Пароль каждого юзера НЕ во входном контракте: лежит в Vault по конвенции
-  secret/redis/<incarnation>/users/<name>#password (как create/add_user/add_node),
-  резолвится keeper-side через vault() в render-фазе. Сценарий рендерит ПОЛНЫЙ users.acl
-  на диск (системные + новый operator-extra набор) и ОЖИВЛЯЕТ через community.redis.acl
-  (ACL LOAD).
-
-  Идемпотентность: ACL LOAD идемпотентен ПО КОНСТРУКЦИИ (приводит живой инстанс к файлу
-  независимо от текущего состояния); плагин делает честный diff ACL LIST до/после
-  (changed=false при совпадении). Рендер users.acl детерминирован (range по
-  отсортированному map). Day-2: инстанс УЖЕ работает (auth через vault()-пароль +
-  TLS-дискриминатор из incarnation.state.tls, как add_user/restart/update_config).
-
-  Таргетинг — на весь incarnation (on опущен, ADR-008/009): новый users.acl + ACL LOAD
-  идут на КАЖДЫЙ redis-server-хост. ACL host-инвариантен (один набор юзеров на кластер).
+  Заменить целиком набор operator-ACL-пользователей на работающем Redis без рестарта.
+  Пользователь, которого нет в новом наборе, удаляется; системные служебные юзеры не
+  трогаются.
 
 # ── Входной контракт оператора (docs/input.md) ────────────────────────────────
 # ПОЛНЫЙ НОВЫЙ набор operator-extra ACL-юзеров (массив AclUser, types.yml/ADR-062 $type)
@@ -46,7 +23,7 @@ input:
   users:
     type: array
     required: true
-    # ★ day-2 form-prefill (docs/input.md → «Pre-fill из state»): «правим ВСЕХ» =
+    # ★ form-prefill (docs/input.md → «Pre-fill из state»): «правим ВСЕХ» =
     # форма открывается с УЖЕ показанным текущим набором operator-extra (оператор
     # правит дельту, не вводит набор с нуля и не стирает его молча). Источник —
     # incarnation.state.redis_users (тот же массив AclUser, что state_changes пишет
@@ -85,7 +62,7 @@ validate:
 # restart/update_config: ACL LOAD идёт через TLS-коннект, если Redis на TLS.
 compute:
   # ── admin_user: имя СИСТЕМНОГО ACL-юзера внутрикластерного AUTH (default_admin) ──
-  # ★ РЕДИЗАЙН default_admin (2026-06-30): day-2-тело БЕЗ extends: covenant (нет общего
+  # ★ РЕДИЗАЙН default_admin (2026-06-30): тело сценария БЕЗ extends: covenant (нет общего
   # compute), поэтому имя системного admin-юзера объявляется ЛОКАЛЬНЫМ литералом — единый
   # источник внутри сценария (плагин-коннект community.redis.acl + masterauth-долив в
   # config + Vault-путь пароля читают compute.admin_user, не хардкодят 'default_admin' в
@@ -95,7 +72,7 @@ compute:
   tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
   # tls_ca — PEM CA-СОДЕРЖИМОЕ коннекта из ИМЕНОВАННОГО state.tls.ca_ref (vault() резолвит
   # Vault-ПУТЬ в PEM), симметрично tls_port из state.tls.port. После rotate_tls (меняет
-  # state.tls.ca_ref на новый путь) day-2 коннект берёт АКТУАЛЬНЫЙ CA — не устаревший
+  # state.tls.ca_ref на новый путь) коннект берёт АКТУАЛЬНЫЙ CA — не устаревший
   # essence-дефолт.
   tls_ca:   "${ compute.tls_on ? vault(incarnation.state.tls.ca_ref) : '' }"
 
@@ -122,13 +99,13 @@ tasks:
       destiny: redis
       input:
         version:  "${ default(incarnation.state.redis_version, '') }"
-        # ★ install: ОБЯЗАТЕЛЕН на day-2 (регресс live E2E 2026-07-01). Без него
+        # ★ install: ОБЯЗАТЕЛЕН на повторном прогоне (регресс live E2E 2026-07-01). Без него
         # диспетчер install.yml по !has(input.install) скатывается в package-ветку →
         # core.pkg `apt install redis-server=<version>` (версия из Nexus-binary в apt
         # ОТСУТСТВУЕТ → env exited 100). Собираем ТУ ЖЕ binary-структуру, что create
         # (deploy-body → compute.install из essence.install_method) — единый способ
         # установки. Отличие от covenant.install: version из РАЗВЁРНУТОГО state
-        # (redis_version), а не input.version (day-2 версию не переустанавливает).
+        # (redis_version), а не input.version (повторный прогон версию не переустанавливает).
         install: >-
           ${ (default(essence.install_method, 'binary') == 'binary')
                ? {
@@ -160,14 +137,14 @@ tasks:
         # ПЕРВЫМИ) + operator-extra (НОВЫЙ input.users — МАССИВ AclUser, ПОВЕРХ). update_users
         # перерендеривает ВЕСЬ файл (не append) → БЕЗ долива системных этот рендер СТЁР БЫ
         # replica/monitoring/sentinel/haproxy → сломал бы репликацию/sentinel/health-check
-        # на day-2. Системные доливаются на КАЖДОМ рендере из essence.system_acl_users (они
+        # на повторном прогоне. Системные доливаются на КАЖДОМ рендере из essence.system_acl_users (они
         # НЕ в state — state хранит только operator-extra, пункт 7 d2). last-wins: operator-
         # extra перекрывает одноимённого системного (но имена системных закрыты validate-guard
         # — коллизии быть не должно). Vault-пароль каждого — secret/redis/<inc>/users/<name>
         # #password (та же ветка). ★ bulk-replace: operator-extra-слой = input.users ЦЕЛИКОМ
         # (то, чего в нём нет, в файл не попадёт = удаление юзера). Идентичен render-у create
         # (там operator-extra = input.users), отличие лишь в источнике: create — при развёртке,
-        # update_users — day-2 для уже работающего инстанса.
+        # update_users — сопровождение уже работающего инстанса.
         users: >-
           ${ merge(
                merge(default(essence.system_acl_users, {}).map(name, {

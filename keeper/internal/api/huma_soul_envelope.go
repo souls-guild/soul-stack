@@ -89,7 +89,7 @@ type soulCovenAssignReply struct {
 // int32 (соглашение envelope-домена soul). reply output-only → input-422-риска pattern нет.
 type soulTraitsAssignReply struct {
 	Mode    string   `json:"mode" doc:"режим операции (merge/replace/remove)"`
-	Keys    []string `json:"keys" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$" doc:"затронутые trait-ключи (зеркало input)"` // ← soul.TraitKeyPattern (per-element, output-эхо)
+	Keys    []string `json:"keys" pattern:"^[a-z][a-z0-9]*([_-][a-z0-9]+)*$" doc:"затронутые trait-ключи (зеркало input)"` // ← soul.TraitKeyPattern (per-element, output-эхо)
 	Matched int32    `json:"matched" doc:"сколько хостов попало под selector ∩ scope"`
 	Changed int32    `json:"changed" doc:"сколько строк фактически изменено"`
 	Status  string   `json:"status" enum:"completed,partial" doc:"completed — все чанки закоммичены; partial — фейл середины"`

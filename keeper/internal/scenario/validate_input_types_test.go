@@ -230,3 +230,59 @@ func TestValidateInput_AclUserPerms_ValidAccepted(t *testing.T) {
 		}
 	}
 }
+
+// scenarioRequiredTypeField — самостоятельное поле `user: {$type: AclUser}` с
+// field-level `required: true`. После $type-резолва узел несёт форму типа
+// (object + RequiredProps) И перенесённый overlay-ссылкой Required=true
+// (applyRefOverlay, ADR-062). Омит `user` обязан упасть на requireInputValues.
+const scenarioRequiredTypeField = `name: create
+input:
+  user:
+    $type: AclUser
+    required: true
+tasks: []
+`
+
+// scenarioOptionalTypeField — тот же $type:AclUser-узел БЕЗ required. Омит
+// `user` проходит: required не выставлен, default нет → отсутствие легально.
+const scenarioOptionalTypeField = `name: create
+input:
+  user:
+    $type: AclUser
+tasks: []
+`
+
+// TestValidateInput_TypeRef_RequiredField_Omitted_Rejected — регресс-гард
+// backend-энфорсмента required на $type-резолвнутом object-узле (NIM-72):
+// омитнутое поле `user` с `required: true` даёт ErrInputInvalid на RUNTIME-пути
+// ValidateInput → ResolveInputValues → requireInputValues. Откат энфорсмента
+// (чтение s.Required на пострезолвном узле, input_value.go) молча пропустил бы
+// создание инкарнации без обязательного поля — этот тест ловит откат.
+func TestValidateInput_TypeRef_RequiredField_Omitted_Rejected(t *testing.T) {
+	root := writeServiceWithTypes(t, scenarioRequiredTypeField, typesAclUserPerms)
+	loader := &dirInputLoader{root: root}
+
+	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
+		map[string]any{}) // user омитнут
+	if err == nil {
+		t.Fatal("required $type:AclUser-поле без значения должно быть отклонено, got nil (энфорсмент required снят?)")
+	}
+	if !errors.Is(err, ErrInputInvalid) {
+		t.Fatalf("ожидался ErrInputInvalid (required на резолвнутом object-узле), got %v", err)
+	}
+}
+
+// TestValidateInput_TypeRef_OptionalField_Omitted_OK — парный кейс: тот же
+// $type:AclUser-узел БЕЗ required, омитнутый, ПРОХОДИТ. Замыкает гард — энфорсмент
+// не ложно-режет опциональные type-поля (required срабатывает ровно от Required=true,
+// не от одного лишь наличия RequiredProps резолвнутого типа).
+func TestValidateInput_TypeRef_OptionalField_Omitted_OK(t *testing.T) {
+	root := writeServiceWithTypes(t, scenarioOptionalTypeField, typesAclUserPerms)
+	loader := &dirInputLoader{root: root}
+
+	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
+		map[string]any{}) // user омитнут — легально для опционального поля
+	if err != nil {
+		t.Fatalf("опциональное $type:AclUser-поле без значения должно проходить, got %v", err)
+	}
+}

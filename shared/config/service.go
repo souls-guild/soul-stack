@@ -37,6 +37,11 @@ type ServiceManifest struct {
 	Destiny []DependencyRef `yaml:"destiny,omitempty"`
 	Modules []DependencyRef `yaml:"modules,omitempty"`
 
+	// RevealableSecrets — секреты инкарнации, раскрываемые оператором через
+	// reveal-эндпоинт под правом incarnation.view-secrets (NIM-74). Generic:
+	// сервис декларирует, что можно раскрыть, механизм не redis-специфичен.
+	RevealableSecrets []RevealableSecret `yaml:"revealable_secrets,omitempty"`
+
 	// Lifecycle — опциональная политика жизненного цикла инкарнаций сервиса
 	// (architecture.md → «Service — структура и manifest» § lifecycle:).
 	// Отсутствие блока (nil) = оба флага дефолтно true (backcompat): create
@@ -96,10 +101,40 @@ type DependencyRef struct {
 	Git  string `yaml:"git,omitempty"`
 }
 
+// RevealableSecret — запись секции `revealable_secrets[]` манифеста (NIM-74):
+// декларация раскрываемого оператором секрета инкарнации.
+//
+//   - ID — стабильный идентификатор (kebab/snake, уникален); клиент шлёт его в
+//     `secret_id` при reveal;
+//   - Label — подпись для UI;
+//   - Enumerate — state-путь массива объектов (`state.<segment>`); ключ = поле
+//     `name` элемента (конвенция redis AclUser.name) — множество допустимых `key`;
+//   - VaultRef — шаблон Vault-пути с плейсхолдерами `{incarnation}`/`{key}`
+//     (литеральная подстановка strings.ReplaceAll, обе величины провалидированы +
+//     vault.ParseRef режет traversal). Опц. `#field` — выбор поля секрета.
+type RevealableSecret struct {
+	ID        string `yaml:"id"`
+	Label     string `yaml:"label"`
+	Enumerate string `yaml:"enumerate"`
+	VaultRef  string `yaml:"vault_ref"`
+}
+
 var (
 	// reServiceName — canonical kebab-case: dash только между алфанумериков,
 	// без trailing/leading/double-dash. Симметрично с `reDestinyName`.
 	reServiceName = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
+
+	// reRevealID — id секрета revealable_secrets[]: lowercase-идентификатор с
+	// `-`/`_`-разделителями (без trailing/leading/double). Допускает snake_case
+	// (`user_password`) — контракт reveal фиксирует secret_id этой формы.
+	reRevealID = regexp.MustCompile(`^[a-z][a-z0-9]*([_-][a-z0-9]+)*$`)
+
+	// reRevealEnumerate — форма enumerate: `state.<segment>[.<segment>…]`
+	// (симметрично rePrefillFromStatePath).
+	reRevealEnumerate = regexp.MustCompile(`^state(\.[a-z][a-z0-9_]*)+$`)
+
+	// reRevealPlaceholder — плейсхолдер `{…}` в vault_ref (для проверки набора).
+	reRevealPlaceholder = regexp.MustCompile(`\{[^}]*\}`)
 
 	// reDependencyDestinyName — kebab-case одноуровневое имя destiny в
 	// `destiny[]`. Совпадает с `reDestinyName` (destiny.go), переиспользуем
@@ -228,6 +263,115 @@ func schemaValidateService(path string, root *ast.MappingNode, m *ServiceManifes
 	}
 	for i, dep := range m.Modules {
 		out = append(out, validateDependencyRef(root, "modules", i, dep, reDependencyModuleName)...)
+	}
+
+	// 6) revealable_secrets[] — reveal-декларации (NIM-74).
+	seenRevealIDs := make(map[string]int, len(m.RevealableSecrets))
+	for i, rs := range m.RevealableSecrets {
+		out = append(out, validateRevealableSecret(root, i, rs, seenRevealIDs)...)
+	}
+
+	return out
+}
+
+// validateRevealableSecret — проверка одной записи `revealable_secrets[]` (NIM-74):
+// id (required + reRevealID + уникален); enumerate (MVP required + форма
+// `state.<segment>`); vault_ref (required + содержит `{key}` при заданном enumerate +
+// плейсхолдеры только `{incarnation}`/`{key}`).
+func validateRevealableSecret(root *ast.MappingNode, idx int, rs RevealableSecret, seen map[string]int) []diag.Diagnostic {
+	var out []diag.Diagnostic
+	base := fmt.Sprintf("$.revealable_secrets[%d]", idx)
+
+	if rs.ID == "" {
+		out = append(out, atPath(root, base+".id", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    "missing_required_field",
+			Message: fmt.Sprintf("revealable_secrets[%d].id is required", idx),
+			Hint:    "declare a stable id (client passes it as secret_id)",
+		}))
+	} else if !reRevealID.MatchString(rs.ID) {
+		out = append(out, atPath(root, base+".id", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    "name_invalid_format",
+			Message: fmt.Sprintf("revealable_secrets[%d].id %q does not match %s", idx, rs.ID, reRevealID),
+			Hint:    "lowercase letters/digits with -/_ separators; must start with letter",
+		}))
+	} else if prev, dup := seen[rs.ID]; dup {
+		out = append(out, atPath(root, base+".id", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    "duplicate_id",
+			Message: fmt.Sprintf("revealable_secrets[%d].id %q duplicates revealable_secrets[%d].id", idx, rs.ID, prev),
+			Hint:    "each revealable secret id must be unique within the list",
+		}))
+	} else {
+		seen[rs.ID] = idx
+	}
+
+	if rs.Enumerate == "" {
+		out = append(out, atPath(root, base+".enumerate", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    "missing_required_field",
+			Message: fmt.Sprintf("revealable_secrets[%d].enumerate is required", idx),
+			Hint:    "declare enumerate: state.<array> — element .name yields the keys",
+		}))
+	} else if !reRevealEnumerate.MatchString(rs.Enumerate) {
+		out = append(out, atPath(root, base+".enumerate", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    "enumerate_invalid_format",
+			Message: fmt.Sprintf("revealable_secrets[%d].enumerate %q must have form state.<segment>", idx, rs.Enumerate),
+			Hint:    "example: state.redis_users",
+		}))
+	}
+
+	if rs.VaultRef == "" {
+		out = append(out, atPath(root, base+".vault_ref", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    "missing_required_field",
+			Message: fmt.Sprintf("revealable_secrets[%d].vault_ref is required", idx),
+			Hint:    "example: secret/redis/{incarnation}/users/{key}#password",
+		}))
+		return out
+	}
+	for _, ph := range reRevealPlaceholder.FindAllString(rs.VaultRef, -1) {
+		if ph != "{service}" && ph != "{incarnation}" && ph != "{key}" {
+			out = append(out, atPath(root, base+".vault_ref", diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+				Code:    "vault_ref_unknown_placeholder",
+				Message: fmt.Sprintf("revealable_secrets[%d].vault_ref uses unknown placeholder %s", idx, ph),
+				Hint:    "only {service}, {incarnation} and {key} are supported",
+			}))
+		}
+	}
+	// enumerate задан (в MVP всегда) ⇒ reveal per-элементный ⇒ путь ОБЯЗАН нести {key}.
+	if rs.Enumerate != "" && !strings.Contains(rs.VaultRef, "{key}") {
+		out = append(out, atPath(root, base+".vault_ref", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    "vault_ref_missing_key",
+			Message: fmt.Sprintf("revealable_secrets[%d].vault_ref must contain {key} when enumerate is set", idx),
+			Hint:    "per-element reveal requires {key}, e.g. .../users/{key}#password",
+		}))
+	}
+	// {service} И {incarnation} ОБЯЗАТЕЛЬНЫ (NIM-74 C1 defense-in-depth): путь
+	// привязан к неймспейсу секретов ИМЕННО этого сервиса этой инкарнации
+	// (secret/<service>/<incarnation>/…). Статический `secret/keeper/jwt-signing-key`
+	// без плейсхолдеров отвергается на load; рантайм-allowlist prefix + floor — 2-й слой.
+	if !strings.Contains(rs.VaultRef, "{service}") || !strings.Contains(rs.VaultRef, "{incarnation}") {
+		out = append(out, atPath(root, base+".vault_ref", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    "vault_ref_not_service_scoped",
+			Message: fmt.Sprintf("revealable_secrets[%d].vault_ref must contain {service} and {incarnation} (per-service/incarnation scoping)", idx),
+			Hint:    "scope the path, e.g. secret/{service}/{incarnation}/users/{key}#password",
+		}))
+	}
+	// #<field> ОБЯЗАТЕЛЕН: reveal раскрывает ровно одно скалярное поле секрета
+	// (рантайм selectRevealField без поля → вечный 404). Ловим на load.
+	if i := strings.LastIndexByte(rs.VaultRef, '#'); i < 0 || i == len(rs.VaultRef)-1 {
+		out = append(out, atPath(root, base+".vault_ref", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    "vault_ref_missing_field",
+			Message: fmt.Sprintf("revealable_secrets[%d].vault_ref must select a #<field> (single scalar value)", idx),
+			Hint:    "append the KV field, e.g. .../users/{key}#password",
+		}))
 	}
 
 	return out

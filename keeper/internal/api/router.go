@@ -533,6 +533,27 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				registerHumaIncarnationFormPrefill(newHumaCadenceAPI(r), incH)
 			})
 
+			// POST /v1/incarnations/{name}/secrets/reveal — раскрытие plaintext секрета
+			// (NIM-74). WRITE-SELF-AUDIT: incarnation.secret_revealed пишет сам handler
+			// внутри RevealSecretTyped ПОСЛЕ ReadKV (значение НЕ в payload; audit-middleware
+			// НЕ навешан, newHumaCadenceAPI). Permission incarnation.view-secrets (снятие
+			// маски, привилегированнее incarnation.get), scope incScope.
+			r.With(
+				apimiddleware.RequirePermissionMulti(enforcer, "incarnation", "view-secrets", incScope),
+			).Group(func(r chi.Router) {
+				registerHumaIncarnationRevealSecret(newHumaCadenceAPI(r), incH)
+			})
+
+			// GET /v1/incarnations/{name}/secrets/revealable — discovery раскрываемых
+			// секретов + keys из state (NIM-74). READ (БЕЗ audit, newHumaCadenceAPI).
+			// Existence-gate RequireAction(view-secrets); per-{name} scope — in-handler
+			// inScope (GetInScopeFor, action=view-secrets), как get/form-prefill.
+			r.With(
+				apimiddleware.RequireAction(enforcer, "incarnation", "view-secrets"),
+			).Group(func(r chi.Router) {
+				registerHumaIncarnationRevealableSecrets(newHumaCadenceAPI(r), incH)
+			})
+
 			// GET /v1/incarnations/{name}/upgrade-paths — read-анализ путей апгрейда
 			// (ADR-0068 §6): дешёвый список тегов реестра + on-demand ?to= per-target.
 			// READ (БЕЗ audit, newHumaCadenceAPI). Permission incarnation.upgrade (read-
@@ -1041,6 +1062,16 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 					apimiddleware.RequirePermission(enforcer, "service", "list", apimiddleware.NoSelector),
 				).Group(func(r chi.Router) {
 					registerHumaServiceDependencies(newHumaCadenceAPI(r), serviceH)
+				})
+
+				// /directives — каталог валидных директив redis.conf по версиям
+				// (essence.redis_directives) для UI-редактора redis_settings.
+				// permission service.list. ETag=snapshot SHA1 + immutable. 502 →
+				// loader упал.
+				r.With(
+					apimiddleware.RequirePermission(enforcer, "service", "list", apimiddleware.NoSelector),
+				).Group(func(r chi.Router) {
+					registerHumaServiceDirectives(newHumaCadenceAPI(r), serviceH)
 				})
 			})
 		}

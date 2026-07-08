@@ -163,7 +163,7 @@ assert:
     redis_version: "7.4.1"
     provisioned_vm_ids: [i-aaa111, i-bbb222, i-ccc333, i-ddd444]
     # provisioned_sids: SID каждой созданной VM (register.provision.hosts[].sid) — для
-    # cascade-destroy day-2 teardown (souls→destroyed/seeds→orphaned/tokens→burned).
+    # cascade-destroy teardown (souls→destroyed/seeds→orphaned/tokens→burned).
     # Тот же guard+форма, что provisioned_vm_ids (input.provision.enabled → .map(h, h.sid)).
     provisioned_sids: [vm-1.example.com, vm-2.example.com, vm-3.example.com, vm-4.example.com]
     provisioned_provider: wb-dev

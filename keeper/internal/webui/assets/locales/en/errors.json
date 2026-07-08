@@ -17,6 +17,7 @@
   "roleAlreadyExists": "A role with this name already exists.",
   "selectHostSid": "Select a host SID.",
   "selfLockout": "You cannot leave the cluster without a `*`-admin (self-lockout protection). Assign another operator with cluster-admin / * first.",
+  "secretPlaintextDisabled": "Entering a secret by value is disabled on the server. Switch to “Path (Vault)” and provide a vault-ref, or enable value ingestion on the Keeper side (behind a TLS front).",
   "svcAlreadyExists": "A Service with this name is already registered. Choose another name.",
   "svcBadRequest": "Request error: {{detail}}.",
   "svcCreatorMissing": "Creator AID is missing from the operators registry.",

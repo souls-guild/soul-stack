@@ -187,7 +187,7 @@ assert:
       appendonly:       "no"
     redis_users: []
     redis_hosts: []
-    # ★ read-model day-2 (редизайн): тайминги в master_settings (эффективный per-master
+    # ★ read-model (редизайн): тайминги в master_settings (эффективный per-master
     # dict = essence.sentinel_master_defaults поверх operator-dict, не задан → дефолты);
     # settings — глобальные sentinel-директивы (не заданы → {}).
     redis_sentinel:

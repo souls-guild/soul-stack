@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/shared/diag"
@@ -509,5 +510,195 @@ func TestParseTypeCatalog_NamePascalCase_OK(t *testing.T) {
 			dump(t, diags)
 			t.Fatalf("PascalCase-имя %q не должно давать input_type_ref_name_invalid", name)
 		}
+	}
+}
+
+// --- NIM-72: overlay field-level required/required_when с узла-ссылки $type ---
+
+// TestResolveTypeRefs_OverlayRequired — field-level `required: true` на узле-
+// ссылке НЕ теряется при резолве $type; object-level required-children типа
+// (RequiredProps) при этом сохраняются — это РАЗНЫЕ поля модели.
+func TestResolveTypeRefs_OverlayRequired(t *testing.T) {
+	cat, diags := ParseTypeCatalog("types.yml", []byte(`types:
+  AclUser:
+    type: object
+    additional_properties: false
+    required: [name, perms]
+    properties:
+      name:  { type: string }
+      perms: { type: string }
+      state: { type: string, default: "on", enum: [on, off] }
+`))
+	if diag.HasErrors(diags) {
+		dump(t, diags)
+		t.Fatalf("каталог AclUser невалиден")
+	}
+	in := schemaFromInput(t, `user:
+  $type: AclUser
+  required: true
+  description: "ACL user"
+`)
+	resolved, rdiags := ResolveTypeRefs(in, cat)
+	if diag.HasErrors(rdiags) {
+		dump(t, rdiags)
+		t.Fatalf("резолв не должен давать ошибок")
+	}
+	u := resolved["user"]
+	if u == nil || u.TypeRef != "" {
+		t.Fatalf("user должен быть резолвнут (TypeRef очищен), got %+v", u)
+	}
+	// (а) форма типа подставлена.
+	if u.Type != "object" || u.Properties["name"] == nil || u.Properties["perms"] == nil || u.Properties["state"] == nil {
+		t.Fatalf("user должен нести форму AclUser (object + name/perms/state), got %+v", u)
+	}
+	// (б) object-level required-children сохранены.
+	if len(u.RequiredProps) != 2 || u.RequiredProps[0] != "name" || u.RequiredProps[1] != "perms" {
+		t.Fatalf("object-level required [name perms] должны сохраниться, got %v", u.RequiredProps)
+	}
+	// (в) field-mandatory перенесён с узла-ссылки.
+	if !u.Required {
+		t.Fatalf("field-level `required: true` узла-ссылки должен перенестись (Required=true)")
+	}
+	// (г) description перенесён (регресс-защита прежнего overlay).
+	if u.Description != "ACL user" {
+		t.Fatalf("description узла-ссылки должен перенестись, got %q", u.Description)
+	}
+}
+
+// TestResolveTypeRefs_OverlayRequired_Enforced — поведенческий: после резолва
+// $type field-mandatory отсекает отсутствующий параметр, а сохранённые object-
+// level required-children отсекают неполный объект. До фикса пустой user молча
+// проходил (requiredKind типа == requiredList не триггерил field-mandatory).
+func TestResolveTypeRefs_OverlayRequired_Enforced(t *testing.T) {
+	cat, diags := ParseTypeCatalog("types.yml", []byte(`types:
+  AclUser:
+    type: object
+    required: [name, perms]
+    properties:
+      name:  { type: string }
+      perms: { type: string }
+`))
+	if diag.HasErrors(diags) {
+		dump(t, diags)
+		t.Fatalf("каталог невалиден")
+	}
+	in := schemaFromInput(t, `user:
+  $type: AclUser
+  required: true
+`)
+	resolved, rdiags := ResolveTypeRefs(in, cat)
+	if diag.HasErrors(rdiags) {
+		dump(t, rdiags)
+		t.Fatalf("резолв не должен давать ошибок")
+	}
+	// user не передан → field-mandatory отсекает (регресс NIM-72).
+	if _, err := ResolveInputValues(resolved, map[string]any{}); err == nil {
+		t.Fatalf("отсутствующий field-mandatory user должен отсекаться")
+	}
+	// user передан, но без обязательного perms → object-level required отсекает.
+	_, err := ResolveInputValues(resolved, map[string]any{
+		"user": map[string]any{"name": "app"},
+	})
+	if err == nil {
+		t.Fatalf("неполный user (без perms) должен отсекаться")
+	}
+	if !strings.Contains(err.Error(), "perms") {
+		t.Fatalf("ошибка должна указывать на perms, got %v", err)
+	}
+	// полный user → OK.
+	if _, err := ResolveInputValues(resolved, map[string]any{
+		"user": map[string]any{"name": "app", "perms": "on"},
+	}); err != nil {
+		t.Fatalf("полный user должен проходить: %v", err)
+	}
+}
+
+// TestResolveTypeRefs_OverlayRequiredWhen — required_when узла-ссылки переносится
+// на резолвнутую схему, если тип его не задал (условная обязательность не теряется).
+func TestResolveTypeRefs_OverlayRequiredWhen(t *testing.T) {
+	cat, diags := ParseTypeCatalog("types.yml", []byte(`types:
+  Endpoint:
+    type: object
+    properties:
+      host: { type: string }
+`))
+	if diag.HasErrors(diags) {
+		dump(t, diags)
+		t.Fatalf("каталог невалиден")
+	}
+	in := schemaFromInput(t, `target:
+  $type: Endpoint
+  required_when: "input.mode == 'remote'"
+`)
+	resolved, rdiags := ResolveTypeRefs(in, cat)
+	if diag.HasErrors(rdiags) {
+		dump(t, rdiags)
+		t.Fatalf("резолв не должен давать ошибок")
+	}
+	if resolved["target"].RequiredWhen != "input.mode == 'remote'" {
+		t.Fatalf("required_when узла-ссылки должен перенестись, got %q", resolved["target"].RequiredWhen)
+	}
+}
+
+// TestResolveTypeRefs_OverlayRequiredFalse — краевая: явный `required: false` на
+// узле-ссылке НЕ делает поле обязательным (overlay не выдумывает обязательность,
+// ложь ссылки не превращается в field-mandatory).
+func TestResolveTypeRefs_OverlayRequiredFalse(t *testing.T) {
+	cat, diags := ParseTypeCatalog("types.yml", []byte(`types:
+  AclUser:
+    type: object
+    required: [name, perms]
+    properties:
+      name:  { type: string }
+      perms: { type: string }
+`))
+	if diag.HasErrors(diags) {
+		dump(t, diags)
+		t.Fatalf("каталог невалиден")
+	}
+	in := schemaFromInput(t, `user:
+  $type: AclUser
+  required: false
+`)
+	resolved, rdiags := ResolveTypeRefs(in, cat)
+	if diag.HasErrors(rdiags) {
+		dump(t, rdiags)
+		t.Fatalf("резолв не должен давать ошибок")
+	}
+	if resolved["user"].Required {
+		t.Fatalf("явный `required: false` узла-ссылки НЕ должен делать поле обязательным")
+	}
+	// Поведенчески: отсутствующий user НЕ отсекается (не field-mandatory).
+	if _, err := ResolveInputValues(resolved, map[string]any{}); err != nil {
+		t.Fatalf("required:false → отсутствующий user должен проходить, got %v", err)
+	}
+}
+
+// TestResolveTypeRefs_OverlayRequiredWhen_TypeWins — краевая: required_when задан
+// И на типе (types.yml), И на узле-ссылке → побеждает required_when ТИПА (overlay
+// переносит только когда у типа его нет, ветка `resolved.RequiredWhen == ""`).
+func TestResolveTypeRefs_OverlayRequiredWhen_TypeWins(t *testing.T) {
+	cat, diags := ParseTypeCatalog("types.yml", []byte(`types:
+  Endpoint:
+    type: object
+    required_when: "input.mode == 'type_side'"
+    properties:
+      host: { type: string }
+`))
+	if diag.HasErrors(diags) {
+		dump(t, diags)
+		t.Fatalf("каталог невалиден")
+	}
+	in := schemaFromInput(t, `target:
+  $type: Endpoint
+  required_when: "input.mode == 'ref_side'"
+`)
+	resolved, rdiags := ResolveTypeRefs(in, cat)
+	if diag.HasErrors(rdiags) {
+		dump(t, rdiags)
+		t.Fatalf("резолв не должен давать ошибок")
+	}
+	if resolved["target"].RequiredWhen != "input.mode == 'type_side'" {
+		t.Fatalf("required_when типа должен победить (тип-wins), got %q", resolved["target"].RequiredWhen)
 	}
 }

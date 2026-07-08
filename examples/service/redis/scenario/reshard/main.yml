@@ -1,31 +1,11 @@
 name: reshard
 description: >-
-  Day-2: перенести N hash-слотов с одного master-а на другой в УЖЕ сформированном
-  Redis-кластере (режим redis_type=cluster). Аналог redis-cli `--cluster reshard`,
-  но ЦЕЛИКОМ через плагин community.redis (go-redis: CLUSTER NODES + SETSLOT
-  IMPORTING/MIGRATING + GETKEYSINSLOT + MIGRATE + SETSLOT NODE) — никакого
-  redis-cli/shell, capability плагина только network_outbound.
-
-  ★ НЕ ИДЕМПОТЕНТЕН (осознанно, как старый redis-cluster-live без unless):
-  повторный apply сдвинет ЕЩЁ `slots` слотов с from на to. Это императивная
-  exec-style day-2 операция — оператор зовёт её ЯВНО, она НЕ часть converge.
-  Прочие cluster-операции (create/add_node/remove_node) идемпотентны, reshard —
-  НЕТ. Запускать осознанно, ровно столько раз, сколько нужно переносов.
-
-  Оба master-а ОБЯЗАНЫ быть привязаны к incarnation Soul-ами и присутствовать в
-  roster прогона (soulprint.hosts) — endpoint-ы строятся из него по SID. Таргетинг —
-  по стабильному SID через where: (probe не нужен, ADR-008). Прогон зовётся на весь
-  incarnation: roster содержит и from, и to.
-
-  Граница (architect 2026-06-22): scenario оркеструет порядок/таргетинг и строит
-  ГОТОВУЮ топологию-карту (SID→addr) для плагина; плагин исполняет ОДНУ операцию
-  (reshard) — сам читает CLUSTER NODES с from, выбирает первые N слотов источника и
-  переносит их (ничего не транслирует). incarnation.state этим сценарием НЕ
-  мутируется (точная роль/раскладка слотов SID в state не пишется — follow-up,
-  симметрия с add_node/remove_node).
+  Перенести N hash-слотов с одного master-а на другой в сформированном Redis-кластере.
+  Императивная неидемпотентная операция: повторный вызов двигает ещё слоты — запускать
+  осознанно.
 
 # ── Входной контракт оператора (docs/input.md) ────────────────────────────────
-# Простые типизированные понятия day-2: с какого master-а, на какой и сколько
+# Простые типизированные понятия оператора: с какого master-а, на какой и сколько
 # слотов перенести.
 input:
   from_sid:
@@ -74,7 +54,7 @@ tasks:
   #    add_node/remove_node). ★ РЕДИЗАЙН default_admin (2026-06-30): коннект к нодам —
   #    под системным default_admin (username → AUTH, requirepass убран). password из
   #    новой Vault-ветки secret/redis/<inc>/users/default_admin#password; плагин коннектится
-  #    к нодам под этой парой (password маскируется). day-2-тело (вне covenant) хардкодит
+  #    к нодам под этой парой (password маскируется). Тело сценария (вне covenant) хардкодит
   #    'default_admin' напрямую (нет extends: covenant compute.admin_user).
   - name: Reshard N slots from source master to target master
     run_once: true

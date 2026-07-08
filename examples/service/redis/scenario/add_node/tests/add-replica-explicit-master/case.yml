@@ -28,7 +28,7 @@ fixtures:
   vault:
     secret/redis/add_node/users/default_admin:
       password: default-admin-secret-pass
-  # modules_base_url — в essence (v11→v12, Вариант A): вынесен из state, day-2 читает
+  # modules_base_url — в essence (v11→v12, Вариант A): вынесен из state, повторный прогон читает
   # отсюда (новая нода тянет .so из того же источника, что кластер).
   essence:
     modules_base_url: "https://artifacts.example.com/redis/modules"

@@ -259,7 +259,13 @@ func requireInputValues(schema InputSchemaMap, merged map[string]any) error {
 		if _, present := merged[name]; present {
 			continue
 		}
-		if s.requiredKind == requiredBool && s.Required {
+		// Required (field-level, bool) читается напрямую — не через requiredKind:
+		// пострезолвный $type-узел несёт object-level RequiredProps (requiredKind==
+		// requiredList от типа) И перенесённый overlay-ссылкой field-mandatory
+		// Required=true одновременно (ADR-062, applyRefOverlay). Симметрия с
+		// validateObjectFields, читающим RequiredProps напрямую. Для НЕрезолвных
+		// схем инвариант прежний: Required=true ⟺ requiredKind==requiredBool.
+		if s.Required {
 			return fmt.Errorf("input %q обязателен, но не передан и не имеет default", name)
 		}
 		if s.RequiredWhen != "" {

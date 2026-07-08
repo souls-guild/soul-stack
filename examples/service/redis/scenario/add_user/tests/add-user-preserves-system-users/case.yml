@@ -1,7 +1,7 @@
 # ★★ КРИТИЧНЫЙ guard-инвариант (system-ACL-users d2): add_user НЕ СТИРАЕТ системных.
 # add_user перерендеривает ПОЛНЫЙ users.acl из state.redis_users (только operator-extra).
 # БЕЗ долива системных из essence этот рендер СТЁР БЫ replica/monitoring/sentinel/haproxy
-# → сломал бы репликацию/sentinel/health-check на day-2. Этот кейс ДОКАЗЫВАЕТ, что
+# → сломал бы репликацию/sentinel/health-check на повторном прогоне. Этот кейс ДОКАЗЫВАЕТ, что
 # add_user доливает системных из essence.system_acl_users на КАЖДОМ рендере:
 #   users.acl несёт СИСТЕМНЫЕ (replica/monitoring/sentinel/haproxy) + operator-extra
 #   (новый alice + сохранённый bob), КАЖДЫЙ со своим vault-паролем.

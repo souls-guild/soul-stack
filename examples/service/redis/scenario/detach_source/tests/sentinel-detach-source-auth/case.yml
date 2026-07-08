@@ -1,5 +1,5 @@
 # L0-испытание detach_source в режиме sentinel под ЗАЩИЩЁННЫМ источником (v10 прод-фикс).
-# Day-2 для инкарнации, залитой migrate_cluster с AUTH+TLS-источником: state.seeded_from
+# Сценарий сопровождения для инкарнации, залитой migrate_cluster с AUTH+TLS-источником: state.seeded_from
 # несёт ССЫЛКИ на учётку источника (source_password_ref/source_tls_ca_ref — Vault-ПУТИ,
 # персистнуты migrate_cluster). Финальный offset-gate теперь АУТЕНТИФИЦИРУЕТСЯ к источнику:
 # compute.source_password = vault(seeded_from.source_password_ref), source_tls включается

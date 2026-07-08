@@ -114,7 +114,7 @@ func newServiceHandler(t *testing.T, pool *svcFakePool) *ServiceHandler {
 	if err != nil {
 		t.Fatalf("serviceregistry.NewService: %v", err)
 	}
-	return NewServiceHandler(svc, nil, nil, nil, nil, nil)
+	return NewServiceHandler(svc, nil, nil, nil, nil, nil, nil)
 }
 
 // newServiceHandlerWith собирает ServiceHandler поверх pool + произвольных lister-ов.
@@ -124,7 +124,18 @@ func newServiceHandlerWith(t *testing.T, pool *svcFakePool, refs ServiceRefsList
 	if err != nil {
 		t.Fatalf("serviceregistry.NewService: %v", err)
 	}
-	return NewServiceHandler(svc, refs, scen, ss, deps, nil)
+	return NewServiceHandler(svc, refs, scen, ss, deps, nil, nil)
+}
+
+// newServiceHandlerWithDirectives собирает ServiceHandler поверх pool + directives-
+// lister-а (остальные listers nil) для тестов /directives-домена.
+func newServiceHandlerWithDirectives(t *testing.T, pool *svcFakePool, directives ServiceDirectivesLister) *ServiceHandler {
+	t.Helper()
+	svc, err := serviceregistry.NewService(serviceregistry.ServiceDeps{Pool: pool})
+	if err != nil {
+		t.Fatalf("serviceregistry.NewService: %v", err)
+	}
+	return NewServiceHandler(svc, nil, nil, nil, nil, directives, nil)
 }
 
 func serviceRow(name, git, ref string) []any {
@@ -881,5 +892,118 @@ func TestServiceHandler_Deregister_InvalidatesStateSchema(t *testing.T) {
 	}
 	if len(lister.invalidate) != 1 || lister.invalidate[0] != "web" {
 		t.Errorf("ожидался Invalidate(\"web\") у state-schema-кеша, got %v", lister.invalidate)
+	}
+}
+
+// --- ListDirectives (NIM-76) ---
+
+type fakeDirectivesLister struct {
+	catalog    *artifact.DirectiveCatalog
+	err        error
+	gotRef     string
+	invalidate []string
+}
+
+func (f *fakeDirectivesLister) ListDirectives(_ context.Context, _, _, ref string) (*artifact.DirectiveCatalog, error) {
+	f.gotRef = ref
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.catalog, nil
+}
+
+func (f *fakeDirectivesLister) Invalidate(name string) {
+	f.invalidate = append(f.invalidate, name)
+}
+
+func sampleDirectiveCatalog() *artifact.DirectiveCatalog {
+	return &artifact.DirectiveCatalog{
+		SHA1: "cafebabe00",
+		Directives: map[string][]string{
+			"6.2": {"appendonly", "maxmemory"},
+			"8.2": {"appendonly", "maxmemory", "maxmemory-clients"},
+		},
+	}
+}
+
+func TestServiceHandler_ListDirectives_FullAndSHA1(t *testing.T) {
+	lister := &fakeDirectivesLister{catalog: sampleDirectiveCatalog()}
+	h := newServiceHandlerWithDirectives(t, &svcFakePool{getValues: serviceRow("redis", "https://git/redis.git", "v1")}, lister)
+	got, err := h.ListDirectivesTyped(context.Background(), "redis", "", "")
+	if err != nil {
+		t.Fatalf("ListDirectivesTyped: %v", err)
+	}
+	if got.SHA1 != "cafebabe00" {
+		t.Errorf("SHA1 = %q, want cafebabe00 (ETag-источник)", got.SHA1)
+	}
+	if len(got.Directives) != 2 {
+		t.Errorf("серий = %d, want 2 (весь каталог)", len(got.Directives))
+	}
+}
+
+func TestServiceHandler_ListDirectives_VersionNarrows(t *testing.T) {
+	lister := &fakeDirectivesLister{catalog: sampleDirectiveCatalog()}
+	h := newServiceHandlerWithDirectives(t, &svcFakePool{getValues: serviceRow("redis", "https://git/redis.git", "v1")}, lister)
+	got, err := h.ListDirectivesTyped(context.Background(), "redis", "", "8.2.2")
+	if err != nil {
+		t.Fatalf("ListDirectivesTyped: %v", err)
+	}
+	if len(got.Directives) != 1 || got.Directives["8.2"] == nil {
+		t.Fatalf("version=8.2.2 → %v, want ровно {8.2}", got.Directives)
+	}
+}
+
+func TestServiceHandler_ListDirectives_EmptyCatalogNonNil(t *testing.T) {
+	lister := &fakeDirectivesLister{catalog: &artifact.DirectiveCatalog{SHA1: "x", Directives: map[string][]string{}}}
+	h := newServiceHandlerWithDirectives(t, &svcFakePool{getValues: serviceRow("svc", "https://git/svc.git", "v1")}, lister)
+	got, err := h.ListDirectivesTyped(context.Background(), "svc", "", "")
+	if err != nil {
+		t.Fatalf("ListDirectivesTyped: %v", err)
+	}
+	if got.Directives == nil {
+		t.Errorf("directives is nil, want non-nil {} (мягкая деградация → 200)")
+	}
+}
+
+func TestServiceHandler_ListDirectives_RefOverride(t *testing.T) {
+	lister := &fakeDirectivesLister{catalog: sampleDirectiveCatalog()}
+	h := newServiceHandlerWithDirectives(t, &svcFakePool{getValues: serviceRow("redis", "https://git/redis.git", "v1")}, lister)
+	got, err := h.ListDirectivesTyped(context.Background(), "redis", "v9.9.9", "")
+	if err != nil {
+		t.Fatalf("ListDirectivesTyped: %v", err)
+	}
+	if lister.gotRef != "v9.9.9" || got.Ref != "v9.9.9" {
+		t.Errorf("ref override не сработал: lister.gotRef=%q got.Ref=%q, want v9.9.9", lister.gotRef, got.Ref)
+	}
+}
+
+func TestServiceHandler_ListDirectives_ServiceNotFound_404(t *testing.T) {
+	h := newServiceHandlerWithDirectives(t, &svcFakePool{getValues: nil}, &fakeDirectivesLister{catalog: sampleDirectiveCatalog()})
+	_, err := h.ListDirectivesTyped(context.Background(), "ghost", "", "")
+	wantProblem(t, err, problem.TypeNotFound)
+}
+
+func TestServiceHandler_ListDirectives_LoaderFails_502(t *testing.T) {
+	h := newServiceHandlerWithDirectives(t, &svcFakePool{getValues: serviceRow("redis", "https://git/redis.git", "v1")},
+		&fakeDirectivesLister{err: errSvcUnexpected("git unreachable")})
+	_, err := h.ListDirectivesTyped(context.Background(), "redis", "", "")
+	wantProblem(t, err, problem.TypeBadGateway)
+}
+
+func TestServiceHandler_ListDirectives_NoLister_500(t *testing.T) {
+	h := newServiceHandler(t, &svcFakePool{})
+	_, err := h.ListDirectivesTyped(context.Background(), "redis", "", "")
+	wantProblem(t, err, problem.TypeInternalError)
+}
+
+func TestServiceHandler_Update_InvalidatesDirectives(t *testing.T) {
+	lister := &fakeDirectivesLister{catalog: sampleDirectiveCatalog()}
+	h := newServiceHandlerWithDirectives(t, &svcFakePool{}, lister)
+	if _, err := h.UpdateTyped(context.Background(), claimsService(), "redis",
+		ServiceUpdateInput{Git: "https://git/redis-new.git", Ref: "v2"}); err != nil {
+		t.Fatalf("UpdateTyped: %v", err)
+	}
+	if len(lister.invalidate) != 1 || lister.invalidate[0] != "redis" {
+		t.Errorf("ожидался Invalidate(\"redis\") у directives-кеша, got %v", lister.invalidate)
 	}
 }

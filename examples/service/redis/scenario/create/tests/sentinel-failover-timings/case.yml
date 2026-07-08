@@ -4,7 +4,7 @@
 #   1. в плагин community.redis.sentinel params.config ключами
 #      `sentinel down-after-milliseconds master` / `sentinel failover-timeout master`
 #      (per-master SENTINEL SET reconcile — классифицируется плагином);
-#   2. в state.redis_sentinel.down_after_ms / failover_timeout_ms (read-model day-2).
+#   2. в state.redis_sentinel.down_after_ms / failover_timeout_ms (read-model).
 # Регресс «тайминги захардкожены/не читаются из input» = плагин/state получили бы
 # дефолты 5000/60000. Single-host sentinel (1 master + 0 реплик = standalone-эквивалент).
 name: operator sentinel failover timings flow to plugin config and state
@@ -98,7 +98,7 @@ assert:
     redis_version: "7.4.1"
     redis_users: []
     redis_hosts: []
-    # ★ read-model day-2 (редизайн): тайминги оператора в master_settings (эффективный
+    # ★ read-model (редизайн): тайминги оператора в master_settings (эффективный
     # per-master dict = essence-дефолты поверх operator); settings — глобальные (не заданы).
     redis_sentinel:
       master_name: master

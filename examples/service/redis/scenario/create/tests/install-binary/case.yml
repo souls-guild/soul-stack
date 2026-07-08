@@ -7,7 +7,7 @@
 # (input.version, enum). Первичный старт redis-server — ЕДИНСТВЕННЫЙ, в server.yml
 # (core.service.running), ПОСЛЕ рендера redis.conf/ACL + data/log/socket-каталогов;
 # преждевременный binary-restart УБРАН (см. architect-аудит 2026-06-29: вызывал
-# restart-loop на day-1, day-2 binary-upgrade рестарт вынесен в upgrade-сценарий/ручной).
+# restart-loop на старте; binary-upgrade-рестарт вынесен в upgrade-сценарий/ручной).
 #
 # ★ Редизайн install-модели: вместо tarball+extract — ТРИ отдельных core.url.fetched
 # прямо в bin_dir (схема ansible redis installation.yml). Идемпотентность нативная по

@@ -127,6 +127,15 @@ type Deps struct {
 	// *artifact.ServiceLoader.Load → artifact.ListDependencies.
 	ServiceDependencies handlers.ServiceDependenciesLister
 
+	// ServiceDirectives — TTL-кеш каталога валидных директив redis.conf по версиям
+	// (essence.redis_directives) для `GET /v1/services/{name}/directives` (UI-
+	// редактор redis_settings). Опционален: при nil /directives-эндпоинт отвечает
+	// 500 (фича не сконфигурирована); сам service-CRUD остаётся работоспособным.
+	// Production-wire-up в `keeper run` передаёт *serviceregistry.DirectivesCache
+	// поверх DirectiveListerFunc, разрешающего `(name,gitURL,ref)` через
+	// *artifact.ServiceLoader.Load → artifact.LoadDirectiveCatalog.
+	ServiceDirectives handlers.ServiceDirectivesLister
+
 	// AugurSvc — management-логика реестра Augur (omen.create/list/delete +
 	// rite.create/list/delete, ADR-025). При nil augur.*-роуты не подключаются
 	// (production-wire-up в `keeper run` передаёт тот же *augur.Service, что MCP).
@@ -208,6 +217,12 @@ type Deps struct {
 	// migration-chain). При nil Upgrade отвечает 500. Production-wire-up
 	// передаёт *artifact.ServiceLoader.
 	ServiceLoader handlers.ServiceSnapshotLoader
+
+	// VaultClient — read-поверхность Vault KV для reveal-эндпоинта секретов
+	// инкарнации (NIM-74, POST/GET /v1/incarnations/{name}/secrets/*). Опционален:
+	// при nil RevealSecretTyped отвечает 404 (endpoint не сконфигурирован).
+	// Production-wire-up в `keeper run` передаёт *vault.Client (тот же d.vc).
+	VaultClient handlers.VaultKVReader
 
 	// PushRun — multi-host push-orchestrator (Variant C, ADR-004 push-flow +
 	// docs/keeper/push.md). При nil push.*-роуты не подключаются (паттерн
@@ -537,6 +552,11 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	if deps.AuditReader != nil {
 		incH.SetRunTasksAuditReader(deps.AuditReader)
 	}
+	// Vault KV-reader для reveal-эндпоинта секретов (NIM-74); late-binding. nil →
+	// RevealSecretTyped отвечает 404 (endpoint не сконфигурирован).
+	if deps.VaultClient != nil {
+		incH.SetVaultReader(deps.VaultClient)
+	}
 	soulH := handlers.NewSoulHandler(deps.SoulDB, deps.RBAC, deps.SoulPresence, logger)
 
 	// clusterH опционален: при nil ClusterRegistry `GET /v1/cluster` не монтируется
@@ -587,7 +607,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	// Симметрично roleH / sigilH.
 	var serviceH *handlers.ServiceHandler
 	if deps.ServiceSvc != nil {
-		serviceH = handlers.NewServiceHandler(deps.ServiceSvc, deps.ServiceRefs, deps.ServiceScenarios, deps.ServiceStateSchema, deps.ServiceDependencies, logger)
+		serviceH = handlers.NewServiceHandler(deps.ServiceSvc, deps.ServiceRefs, deps.ServiceScenarios, deps.ServiceStateSchema, deps.ServiceDependencies, deps.ServiceDirectives, logger)
 	}
 
 	// provisioningPolicyH опционален: GET читает снимок политики (Holder), PUT
