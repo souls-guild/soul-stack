@@ -25,6 +25,13 @@ const typeRefKey = "$type"
 // и сломался бы молча — поэтому резолв строго backend-side ДО проекции.
 const typeAnnotationKey = "x-type"
 
+// typeRequiredAnnotationKey — field-level обязательность узла-ссылки `$type`
+// (NIM-72). DTO-ключ `required` на резолвнутом object-узле занят object-level
+// списком обязательных ДЕТЕЙ типа (массив имён), поэтому «само поле обязательно»
+// выражается отдельной аннотацией `x-required: true` — UI ставит `*` на поле,
+// не путая её со списком required-детей.
+const typeRequiredAnnotationKey = "x-required"
+
 // typeRefResolveDepthLimit — страховочный предел глубины подстановки (cycle-
 // detection ловит патологию раньше; этот лимит — second line для runaway).
 const typeRefResolveDepthLimit = 64
@@ -114,12 +121,15 @@ func resolveTypeNode(node any, catalog typeCatalog, stack map[string]bool, depth
 			rm = map[string]any{}
 		}
 		// Аннотация имени типа для UI + presentational overlay узла-ссылки поверх
-		// тела типа. field-level `required: <bool>` НЕ переносим: DTO-ключ `required`
-		// уже занят object-level списком обязательных детей типа (массив) — плоский
-		// контракт не выражает разом «поле обязательно» и «дети обязательны» одним
-		// ключом (представленческий gap, NIM-72; контракт DTO не меняем). description/
-		// required_when — отдельные ключи, безопасны, если тип их не задал.
+		// тела типа. field-level `required: <bool>` не кладём в DTO-ключ `required`
+		// (он занят object-level списком обязательных детей типа, массив) — вместо
+		// этого отдельная аннотация x-required (NIM-72): UI ставит `*` на само поле,
+		// не путая её со списком required-детей. description/required_when — отдельные
+		// ключи, безопасны, если тип их не задал.
 		rm[typeAnnotationKey] = ref
+		if rb, ok := m["required"].(bool); ok && rb {
+			rm[typeRequiredAnnotationKey] = true
+		}
 		if d, ok := stringValue(m["description"]); ok && d != "" {
 			rm["description"] = d
 		}
