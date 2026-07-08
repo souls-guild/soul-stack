@@ -35,18 +35,17 @@ func ValidTraitMode(m TraitMode) bool {
 	return false
 }
 
-// TraitKeyPattern — каноническая форма ключа trait-метки: одноуровневый
-// kebab-case, та же грамматика, что у Coven-метки ([CovenPattern]). Единый
-// словарь имён меток (Coven и Traits — две оси operator-set-меток, ADR-060):
-// одинаковая форма ключа избавляет оператора от двух разных правил именования и
-// держит jsonb-ключи предсказуемыми (без точек/пробелов/regex-спецсимволов).
-const TraitKeyPattern = CovenPattern
+// TraitKeyPattern — форма ключа trait-метки: kebab-ИЛИ-snake-case (`-`/`_` как
+// внутренние разделители). Отличие от [CovenPattern] (только `-`): trait-ключ —
+// свободное имя атрибута оператора (`owner_team`), `_` разрешён (NIM-67, ADR-060
+// «произвольные строковые ключи»). Грамматика = reScenarioName.
+const TraitKeyPattern = `^[a-z][a-z0-9]*([_-][a-z0-9]+)*$`
 
 var traitKeyRe = regexp.MustCompile(TraitKeyPattern)
 
 const traitKeyMaxLen = covenMaxLen
 
-// ValidTraitKey проверяет один ключ trait-метки (kebab-case, 1..63 символа).
+// ValidTraitKey проверяет один ключ trait-метки (kebab/snake-case, 1..63 символа).
 func ValidTraitKey(key string) bool {
 	if len(key) == 0 || len(key) > traitKeyMaxLen {
 		return false

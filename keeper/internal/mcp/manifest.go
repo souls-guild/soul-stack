@@ -1250,7 +1250,7 @@ var (
 "covens":{"type":"array","items":{"type":"string","pattern":"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"},"description":"Declared env-Coven-метки incarnation (ADR-008 amendment a). Влияют на RBAC-scope create: оператор со scoped-permission incarnation.create on coven=X может создать только incarnation с covens в своём scope."},
 "input":{"type":"object"},
 "create_scenario":{"type":"string","pattern":"^[a-z][a-z0-9_]*$","description":"Имя стартового сценария (механизм нескольких create-сценариев). Пусто: если сервис предлагает create-сценарии → выбор обязателен (validation-failed с их списком); если сервис без create-сценариев → bare-инкарнация (ready без прогона). Непустое обязано входить в create-набор сервиса (scenario с create: true), иначе validation-failed; сохраняется в incarnation.created_scenario (NULL для bare; rerun-last использует его на create-пути)."},
-"traits":{"type":"object","additionalProperties":{"oneOf":[{"type":"string"},{"type":"number"},{"type":"boolean"},{"type":"array","items":{"oneOf":[{"type":"string"},{"type":"number"},{"type":"boolean"}]}}]},"propertyNames":{"pattern":"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"},"description":"Operator-set trait-метки инкарнации (ADR-060 amend R1) ключ→(scalar|list of scalars). Извлекаются в incarnation.traits (источник истины) и проецируются в souls.traits хостов-членов."}}}`)
+"traits":{"type":"object","additionalProperties":{"oneOf":[{"type":"string"},{"type":"number"},{"type":"boolean"},{"type":"array","items":{"oneOf":[{"type":"string"},{"type":"number"},{"type":"boolean"}]}}]},"propertyNames":{"pattern":"^[a-z][a-z0-9]*([_-][a-z0-9]+)*$"},"description":"Operator-set trait-метки инкарнации (ADR-060 amend R1) ключ→(scalar|list of scalars). Извлекаются в incarnation.traits (источник истины) и проецируются в souls.traits хостов-членов."}}}`)
 
 	schemaIncarnationRunInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
@@ -1414,7 +1414,7 @@ var (
 "required":["name"],
 "properties":{
 "name":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$","description":"Имя incarnation."},
-"traits":{"type":"object","additionalProperties":{"oneOf":[{"type":"string"},{"type":"number"},{"type":"boolean"},{"type":"array","items":{"oneOf":[{"type":"string"},{"type":"number"},{"type":"boolean"}]}}]},"propertyNames":{"pattern":"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"},"description":"Полный набор operator-set trait-меток ключ→(scalar|list of scalars). Пустой/опущен = очистить метки. Заменяет incarnation.traits целиком."}}}`)
+"traits":{"type":"object","additionalProperties":{"oneOf":[{"type":"string"},{"type":"number"},{"type":"boolean"},{"type":"array","items":{"oneOf":[{"type":"string"},{"type":"number"},{"type":"boolean"}]}}]},"propertyNames":{"pattern":"^[a-z][a-z0-9]*([_-][a-z0-9]+)*$"},"description":"Полный набор operator-set trait-меток ключ→(scalar|list of scalars). Пустой/опущен = очистить метки. Заменяет incarnation.traits целиком."}}}`)
 
 	schemaIncarnationTraitsSetOutput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
@@ -1526,7 +1526,7 @@ var (
 "required":["selector"],
 "properties":{
 "mode":{"type":"string","enum":["merge","replace","remove"],"description":"merge (дефолт) — set/overwrite ключи; replace — заменить весь traits-map; remove — удалить ключи из keys."},
-"traits":{"type":"object","additionalProperties":{"oneOf":[{"type":"string"},{"type":"number"},{"type":"boolean"},{"type":"array","items":{"oneOf":[{"type":"string"},{"type":"number"},{"type":"boolean"}]}}]},"propertyNames":{"pattern":"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"},"description":"Набор ключ→значение для merge/replace; значение — scalar или list of scalars. Запрещён для remove."},
+"traits":{"type":"object","additionalProperties":{"oneOf":[{"type":"string"},{"type":"number"},{"type":"boolean"},{"type":"array","items":{"oneOf":[{"type":"string"},{"type":"number"},{"type":"boolean"}]}}]},"propertyNames":{"pattern":"^[a-z][a-z0-9]*([_-][a-z0-9]+)*$"},"description":"Набор ключ→значение для merge/replace; значение — scalar или list of scalars. Запрещён для remove."},
 "keys":{"type":"array","items":{"type":"string","pattern":"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"},"description":"Список имён ключей для remove (kebab-case). Запрещён для merge/replace."},
 "selector":{"type":"object","additionalProperties":false,"description":"Таргет хостов; пересекается с coven-scope оператора. Минимум один критерий обязателен.","properties":{
 "all":{"type":"boolean","description":"Весь реестр (∩ scope). Без host-фильтра."},

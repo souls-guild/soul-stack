@@ -19,13 +19,16 @@ func TestValidTraitMode(t *testing.T) {
 }
 
 func TestValidTraitKey(t *testing.T) {
-	good := []string{"namespace", "dc-eu", "tier-1", "a", "x9-y9"}
+	// NIM-67: `_` разрешён как внутренний разделитель (kebab/snake), но не
+	// ведущий/хвостовой/сдвоенный (симметрично `-`); заглавные/цифра-первой/точка
+	// остаются невалидны.
+	good := []string{"namespace", "dc-eu", "tier-1", "a", "x9-y9", "dc_eu", "owner_team", "product_id", "a_b"}
 	for _, k := range good {
 		if !ValidTraitKey(k) {
 			t.Errorf("ValidTraitKey(%q) = false, want true", k)
 		}
 	}
-	bad := []string{"", "Namespace", "1tier", "dc_eu", "dc-", "-dc", "a.b", "dc--eu"}
+	bad := []string{"", "Namespace", "1tier", "dc-", "-dc", "a.b", "dc--eu", "dc_", "_dc", "dc__eu", "dc-_eu", "Bad_Key"}
 	for _, k := range bad {
 		if ValidTraitKey(k) {
 			t.Errorf("ValidTraitKey(%q) = true, want false", k)
