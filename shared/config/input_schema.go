@@ -385,6 +385,13 @@ func validateInputSchemaNode(s *InputSchema, node *ast.MappingNode, path string)
 		}
 		name := keyTok.Value
 		if !inputSchemaKnownKeys[name] {
+			// `x-*` — vendor-extension (конвенция OpenAPI/JSON-Schema): backend
+			// прокидывает такие ключи в сырой DTO input_schema как аннотации для UI
+			// (напр. `x-directives: redis` — валидировать ключи против каталога
+			// директив, NIM-76). Не валидируем — passthrough, не unknown_key.
+			if strings.HasPrefix(name, "x-") {
+				continue
+			}
 			out = append(out, diagAt(keyTok.Position.Line, keyTok.Position.Column, diag.Diagnostic{
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 				Code:     "unknown_key",

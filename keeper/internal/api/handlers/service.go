@@ -66,6 +66,17 @@ type ServiceDependenciesLister interface {
 	ListDependencies(ctx context.Context, name, gitURL, ref string) (*artifact.ServiceDependencies, error)
 }
 
+// ServiceDirectivesLister — поверхность чтения ПОЛНОГО каталога директив (все
+// серии) сервиса + SHA1 снапшота из материализованного снапшота Service-репо для
+// `(name, ref)`. Симметрично [ServiceScenarioLister]: handler принимает
+// минимальную зависимость, реальный git-clone + чтение essence/_default.yaml —
+// внутри реализации (TTL-кеш + ServiceLoader). Version-сужение делает handler над
+// результатом (кеш version-agnostic). При nil
+// `GET /v1/services/{name}/directives` отвечает 500 «not configured».
+type ServiceDirectivesLister interface {
+	ListDirectives(ctx context.Context, name, gitURL, ref string) (*artifact.DirectiveCatalog, error)
+}
+
 // ServiceHandler — endpoint-ы реестра Service-ов (register / list / get /
 // update / deregister / list-refs / list-scenarios / list-state-schema).
 // Делегирует бизнес-логику в [serviceregistry.Service]; для /refs / /scenarios /
@@ -80,21 +91,22 @@ type ServiceHandler struct {
 	scenarios    ServiceScenarioLister
 	stateSchema  ServiceStateSchemaLister
 	dependencies ServiceDependenciesLister
+	directives   ServiceDirectivesLister
 	logger       *slog.Logger
 }
 
 // NewServiceHandler создаёт handler. svc обязателен (паника при nil —
 // единственная точка misconfiguration, caller обязан передать non-nil). refs /
-// scenarios / stateSchema / dependencies опциональны: при nil соответствующий
-// эндпоинт отвечает 500 (фича не сконфигурирована).
-func NewServiceHandler(svc *serviceregistry.Service, refs ServiceRefsLister, scenarios ServiceScenarioLister, stateSchema ServiceStateSchemaLister, dependencies ServiceDependenciesLister, logger *slog.Logger) *ServiceHandler {
+// scenarios / stateSchema / dependencies / directives опциональны: при nil
+// соответствующий эндпоинт отвечает 500 (фича не сконфигурирована).
+func NewServiceHandler(svc *serviceregistry.Service, refs ServiceRefsLister, scenarios ServiceScenarioLister, stateSchema ServiceStateSchemaLister, dependencies ServiceDependenciesLister, directives ServiceDirectivesLister, logger *slog.Logger) *ServiceHandler {
 	if svc == nil {
 		panic("handlers.NewServiceHandler: serviceregistry.Service is nil")
 	}
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
 	}
-	return &ServiceHandler{svc: svc, refs: refs, scenarios: scenarios, stateSchema: stateSchema, dependencies: dependencies, logger: logger}
+	return &ServiceHandler{svc: svc, refs: refs, scenarios: scenarios, stateSchema: stateSchema, dependencies: dependencies, directives: directives, logger: logger}
 }
 
 // ServiceSpecStub — непустой *ServiceHandler-заглушка для генерации huma-OpenAPI-
@@ -271,6 +283,7 @@ func (h *ServiceHandler) UpdateTyped(ctx context.Context, claims *jwt.Claims, na
 	h.invalidateScenarios(entry.Name)
 	h.invalidateStateSchema(entry.Name)
 	h.invalidateDependencies(entry.Name)
+	h.invalidateDirectives(entry.Name)
 
 	return ServiceUpdateReply{
 		Body: toServiceResponse(entry),
@@ -311,6 +324,7 @@ func (h *ServiceHandler) DeregisterTyped(ctx context.Context, name string) (Serv
 	h.invalidateScenarios(name)
 	h.invalidateStateSchema(name)
 	h.invalidateDependencies(name)
+	h.invalidateDirectives(name)
 	return ServiceNameReply{Name: name}, nil
 }
 
@@ -365,6 +379,19 @@ func (h *ServiceHandler) invalidateDependencies(name string) {
 		return
 	}
 	if inv, ok := h.dependencies.(interface{ Invalidate(string) }); ok {
+		inv.Invalidate(name)
+	}
+}
+
+// invalidateDirectives — best-effort инвалидация directives-кеши по name (парная
+// семантика с [invalidateDependencies]). После смены git-URL или удаления записи
+// закешированный каталог должен исчезнуть, чтобы UI redis_settings-редактор
+// подтянул каталог нового источника.
+func (h *ServiceHandler) invalidateDirectives(name string) {
+	if h.directives == nil {
+		return
+	}
+	if inv, ok := h.directives.(interface{ Invalidate(string) }); ok {
 		inv.Invalidate(name)
 	}
 }
@@ -734,6 +761,79 @@ func (h *ServiceHandler) ListDependenciesTyped(ctx context.Context, name, ref st
 		Ref:     ref,
 		Destiny: toDependencyViews(deps.Destiny),
 		Modules: toDependencyViews(deps.Modules),
+	}, nil
+}
+
+// ServiceDirectivesReply — GET /v1/services/{name}/directives body. Самодостаточный
+// JSON (как ServiceScenariosReply): service + ref эхо-дубли, sha1 снапшота (== ETag),
+// directives = карта `серия(major.minor) → отсортированные имена`. Сервис без каталога
+// → directives:{} (не null). Body напрямую (не native-DTO): элементы — примитивные
+// строки, huma-схема тривиальна. json-теги фиксируют wire; huma-регистратор читает
+// SHA1 для ETag/If-None-Match (см. huma_service.go).
+type ServiceDirectivesReply struct {
+	Service    string              `json:"service"`
+	Ref        string              `json:"ref"`
+	SHA1       string              `json:"sha1"`
+	Directives map[string][]string `json:"directives"`
+}
+
+// ListDirectivesTyped — GET /v1/services/{name}/directives (READ без audit): резолв
+// записи + чтение ПОЛНОГО каталога директив из снапшота + version-сужение (опц.).
+// name/ref/version приходят аргументами (ref="" → дефолт из реестра; version="" →
+// весь каталог). Ошибки — *problemError (500 нет lister-а/сбой реестра, 404 not-found,
+// 502 loader упал), успех — [ServiceDirectivesReply] с непустой (возможно пустой)
+// картой directives.
+func (h *ServiceHandler) ListDirectivesTyped(ctx context.Context, name, ref, version string) (ServiceDirectivesReply, error) {
+	var zero ServiceDirectivesReply
+	if h.directives == nil {
+		return zero, &problemError{problem.New(problem.TypeInternalError, "", "service directives lister not configured")}
+	}
+
+	entry, err := h.svc.GetService(ctx, name)
+	switch {
+	case err == nil:
+	case errors.Is(err, serviceregistry.ErrNotFound):
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "service "+name+" not found")}
+	default:
+		h.logger.Error("service.directives: get service failed",
+			slog.String("name", name),
+			slog.Any("error", err),
+		)
+		return zero, &problemError{problem.New(problem.TypeInternalError, "", "get service failed")}
+	}
+
+	if ref == "" {
+		ref = entry.Ref
+	}
+
+	catalog, err := h.directives.ListDirectives(ctx, entry.Name, entry.Git, ref)
+	if err != nil {
+		h.logger.Warn("service.directives: loader failed",
+			slog.String("name", name),
+			slog.String("git", entry.Git),
+			slog.String("ref", ref),
+			slog.Any("error", err),
+		)
+		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "directives loader failed for service "+name+": "+err.Error())}
+	}
+	if catalog == nil {
+		// Defensive: lister обязан вернуть non-nil при err=nil (паттерн ListStateSchema).
+		h.logger.Error("service.directives: loader returned nil without error",
+			slog.String("name", name))
+		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "directives loader returned empty result")}
+	}
+
+	// Version-сужение — над полным (кешированным) каталогом; пустой каталог →
+	// непустой {} (не null) для мягкой деградации фронта.
+	dirs := artifact.FilterDirectivesByVersion(catalog.Directives, version)
+	if dirs == nil {
+		dirs = map[string][]string{}
+	}
+	return ServiceDirectivesReply{
+		Service:    entry.Name,
+		Ref:        ref,
+		SHA1:       catalog.SHA1,
+		Directives: dirs,
 	}, nil
 }
 

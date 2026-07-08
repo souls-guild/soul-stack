@@ -12,6 +12,7 @@ package api
 import (
 	"context"
 	"log/slog"
+	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-chi/chi/v5"
@@ -188,6 +189,31 @@ func registerHumaServiceDependencies(humaAPI huma.API, serviceH *handlers.Servic
 	})
 }
 
+// registerHumaServiceDirectives монтирует GET /v1/services/{name}/directives через huma
+// (READ-with-path+query, БЕЗ audit). serviceH nil → no-op. Handler: ListDirectivesTyped
+// (name + опц. ref/version) → typed output (404/502 через problem) + ETag/Cache-Control
+// (каталог immutable на git-ref); If-None-Match совпал с SHA1 → 304 без тела. RBAC
+// service.list — на группе.
+func registerHumaServiceDirectives(humaAPI huma.API, serviceH *handlers.ServiceHandler) {
+	if serviceH == nil {
+		return
+	}
+	huma.Register(humaAPI, serviceDirectivesOperation(), func(ctx context.Context, in *serviceDirectivesInput) (*serviceDirectivesOutput, error) {
+		reply, err := serviceH.ListDirectivesTyped(ctx, in.Name, in.Ref, in.Version)
+		if err != nil {
+			return nil, serviceProblem(err)
+		}
+		out := &serviceDirectivesOutput{ETag: etagQuote(reply.SHA1), CacheControl: directivesCacheControlFor(reply.Ref)}
+		if etagMatchesSHA1(in.IfNoneMatch, reply.SHA1) {
+			out.Status = http.StatusNotModified // huma пропускает тело на 304
+			return out, nil
+		}
+		out.Status = http.StatusOK
+		out.Body = reply
+		return out, nil
+	})
+}
+
 // serviceMissingClaims — defensive-ответ при отсутствии claims в ctx (недостижим:
 // RequireJWT кладёт claims до huma). problem+json (parity roleMissingClaims).
 func serviceMissingClaims() huma.StatusError {
@@ -228,6 +254,7 @@ func HumaServiceSpecYAML() (string, error) {
 		registerHumaServiceScenarios(api, stub)
 		registerHumaServiceStateSchema(api, stub)
 		registerHumaServiceDependencies(api, stub)
+		registerHumaServiceDirectives(api, stub)
 		return nil
 	})
 }

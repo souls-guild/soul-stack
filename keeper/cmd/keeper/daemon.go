@@ -169,6 +169,12 @@ type daemon struct {
 	// не cluster-wide — read-only listing (parity с serviceStateSchema).
 	serviceDependencies *serviceregistry.DependenciesCache
 
+	// serviceDirectives — TTL-кеш каталога валидных директив redis.conf по версиям
+	// (essence.redis_directives) из снапшота git-репо Service-а для
+	// `GET /v1/services/{name}/directives` (UI-редактор redis_settings). Per-keeper,
+	// не cluster-wide — read-only каталог (parity с serviceDependencies).
+	serviceDirectives *serviceregistry.DirectivesCache
+
 	// --- augur (ADR-025) ---
 	// augurSvc — management-CRUD реестров Omen / Rite (OpenAPI/MCP). ОТЛИЧАЕТСЯ
 	// от Augur-брокера (keepergrpc.AugurDeps в EventStream): тот резолвит
@@ -1375,6 +1381,25 @@ func (d *daemon) setupScenarioDeps(_ context.Context) error {
 			return artifact.ListDependencies(art.LocalDir, logger)
 		}),
 		0, // 0 → дефолтный DependenciesTTL
+	)
+
+	// TTL-кеш каталога директив для `/v1/services/{name}/directives` (UI-редактор
+	// redis_settings). Lister грузит снапшот через d.serviceLoader.Load → полный
+	// artifact.LoadDirectiveCatalog(localDir, "") + SHA1 снапшота (ETag). Version-
+	// сужение делает handler над результатом. Parity с serviceDependencies.
+	d.serviceDirectives = serviceregistry.NewDirectivesCache(
+		serviceregistry.DirectiveListerFunc(func(ctx context.Context, name, gitURL, ref string) (*artifact.DirectiveCatalog, error) {
+			art, err := d.serviceLoader.Load(ctx, artifact.ServiceRef{Name: name, Git: gitURL, Ref: ref})
+			if err != nil {
+				return nil, err
+			}
+			dirs, err := artifact.LoadDirectiveCatalog(art.LocalDir, "")
+			if err != nil {
+				return nil, err
+			}
+			return &artifact.DirectiveCatalog{SHA1: art.SHA1, Directives: dirs}, nil
+		}),
+		0, // 0 → дефолтный DirectivesTTL
 	)
 
 	// topologyResolver собирается ниже, в setupGRPCEventStream: его presence-фаза
@@ -4042,6 +4067,7 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		ServiceScenarios:    d.serviceScenarios,
 		ServiceStateSchema:  d.serviceStateSchema,
 		ServiceDependencies: d.serviceDependencies,
+		ServiceDirectives:   d.serviceDirectives,
 		AugurSvc:            d.augurSvc,
 		OracleSvc:           d.oracleSvc,
 		OperatorDB:          d.pool,

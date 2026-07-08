@@ -14,6 +14,8 @@ package api
 
 import (
 	"net/http"
+	"regexp"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -320,4 +322,94 @@ func serviceDependenciesOperation() huma.Operation {
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError, http.StatusBadGateway},
 	}
+}
+
+// === GET /v1/services/{name}/directives (list-directives) — READ-with-path+query (БЕЗ audit) ===
+
+// directivesCacheControlImmutable — Cache-Control для IMMUTABLE-ref (pinned 40-hex
+// commit SHA): содержимое на нём криптографически неизменно → безопасно кешировать
+// на год без ревалидации.
+const directivesCacheControlImmutable = "public, max-age=31536000, immutable"
+
+// directivesCacheControlRevalidate — Cache-Control для MUTABLE-ref (ветка/тег-ИМЯ,
+// ADR-007: ветка разрешена как версия, тег git допускает force-move). `no-cache` =
+// «кешируй, но всегда ревалидируй перед использованием»: браузер шлёт If-None-Match
+// → 304 (дёшево), а серверный invalidateDirectives (Update/Deregister) не застревает
+// за годовым immutable-кешем и новый каталог доезжает до UI.
+const directivesCacheControlRevalidate = "no-cache"
+
+// reImmutableRef — ref в immutable-форме: полный 40-hex commit SHA. Ветка/тег-имя
+// (main / v1.2.3) сюда НЕ попадают — консервативно: надёжно отличить force-movable
+// тег от ветки без git-метаданных нельзя, потому любой не-SHA ref → revalidate.
+var reImmutableRef = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+
+// directivesCacheControlFor выбирает Cache-Control по форме ref (см. консты выше):
+// pinned commit SHA → immutable+год; ветка/тег-имя → no-cache (ревалидация ETag/304).
+func directivesCacheControlFor(ref string) string {
+	if reImmutableRef.MatchString(ref) {
+		return directivesCacheControlImmutable
+	}
+	return directivesCacheControlRevalidate
+}
+
+// serviceDirectivesInput — huma-input GET /v1/services/{name}/directives. Name —
+// path; Ref/Version — опц. query; If-None-Match — conditional-GET (304 при совпадении
+// с ETag=snapshot SHA1).
+type serviceDirectivesInput struct {
+	Name        string `path:"name" doc:"имя Service-а"`
+	Ref         string `query:"ref" doc:"опц. git-ref override (опущено → ref из реестра)"`
+	Version     string `query:"version" doc:"опц. версия (напр. 8.2.2) — сузить каталог до серии major.minor"`
+	IfNoneMatch string `header:"If-None-Match" doc:"conditional GET: 304, если совпало с ETag (snapshot SHA1)"`
+}
+
+// serviceDirectivesOutput — huma-output GET /v1/services/{name}/directives (FULL-TYPED).
+// Body — handlers.ServiceDirectivesReply. ETag/Cache-Control — response-заголовки
+// (header-теги; json:"-"). Status=304 → huma не пишет тело (huma.go transformAndWrite
+// пропускает body на StatusNotModified) — conditional-GET без 31КБ payload-а.
+type serviceDirectivesOutput struct {
+	Status       int    `json:"-"`
+	ETag         string `header:"ETag" json:"-"`
+	CacheControl string `header:"Cache-Control" json:"-"`
+	Body         handlers.ServiceDirectivesReply
+}
+
+// serviceDirectivesOperation — метаданные GET /v1/services/{name}/directives.
+// DefaultStatus=200. READ-роут: audit НЕ навешан. Permission service.list. Errors:
+// 403 RBAC, 404 not-found, 500 (нет lister-а/сбой реестра), 502 loader упал.
+func serviceDirectivesOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "listServiceDirectives",
+		Method:        http.MethodGet,
+		Path:          "/{name}/directives",
+		Summary:       "каталог валидных директив redis.conf по версиям",
+		Description:   "Каталог валидных имён директив сервиса (essence.redis_directives, карта серия major.minor → имена) для UI-редактора redis_settings (ADR-042). Permission service.list. Read-only, без audit. ?version=X.Y.Z сужает до серии. ETag=snapshot SHA1; If-None-Match → 304. Cache-Control: immutable+год для pinned commit-SHA ref, иначе no-cache (ветка/тег mutable — ревалидация через ETag/304). Сервис без каталога → directives:{} + 200. 502 — loader упал.",
+		Tags:          []string{"service"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError, http.StatusBadGateway},
+	}
+}
+
+// etagQuote оборачивает snapshot SHA1 в strong-ETag (`"<sha1>"`, RFC 7232).
+func etagQuote(sha1 string) string {
+	return `"` + sha1 + `"`
+}
+
+// etagMatchesSHA1 — совпал ли If-None-Match с текущим SHA1 (conditional-GET).
+// Парсит comma-list ETag-ов, снимает `W/`-префикс и кавычки; `*` матчит любой.
+// Пустой SHA1/If-None-Match → false (нечего сравнивать).
+func etagMatchesSHA1(ifNoneMatch, sha1 string) bool {
+	if sha1 == "" || ifNoneMatch == "" {
+		return false
+	}
+	for _, tok := range strings.Split(ifNoneMatch, ",") {
+		tok = strings.TrimSpace(tok)
+		if tok == "*" {
+			return true
+		}
+		tok = strings.TrimPrefix(tok, "W/")
+		if strings.Trim(tok, `"`) == sha1 {
+			return true
+		}
+	}
+	return false
 }
