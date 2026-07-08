@@ -259,11 +259,12 @@ func TestVault_InternalGuardNoFalsePositive(t *testing.T) {
 	}
 }
 
-// ── path-leak: missing-secret/missing-field — путь в ref-форме, маскируется ──
+// ── vault-not-found — actionable-путь, переживает маскинг (NIM-73) ───────────
 
-// Текст ошибки missing-secret должен нести путь в ref-форме vault:secret/...,
-// чтобы audit.MaskSecrets замаскировал всю строку (status_details/error_summary).
-func TestVault_MissingSecretErrorMasked(t *testing.T) {
+// Текст ошибки missing-secret несёт путь в ПЛОСКОЙ форме (secret/…, без
+// vault:-префикса) и переживает production-маскинг status_details/error_summary:
+// оператор видит, ЧТО досеять, а не `***MASKED***`.
+func TestVault_MissingSecretErrorActionable(t *testing.T) {
 	kv := &stubKV{secrets: map[string]map[string]any{}}
 	e := newVaultEngine(t, kv)
 
@@ -271,12 +272,28 @@ func TestVault_MissingSecretErrorMasked(t *testing.T) {
 	if err == nil {
 		t.Fatal("ожидали ошибку для отсутствующего секрета")
 	}
-	assertVaultPathMasked(t, err.Error(), "secret/redis/admin")
+	assertVaultPathActionable(t, err.Error(), "secret/redis/admin")
 }
 
-// Текст ошибки missing-field тоже несёт путь в ref-форме (имя поля — не секрет,
-// но путь — наводка на секрет-локацию).
-func TestVault_MissingFieldErrorMasked(t *testing.T) {
+// Форма с #field (как redis add_user: users/<name>#password): текст называет и
+// путь, и требуемое поле; плоская форма переживает маскинг.
+func TestVault_MissingSecretWithFieldActionable(t *testing.T) {
+	kv := &stubKV{secrets: map[string]map[string]any{}}
+	e := newVaultEngine(t, kv)
+
+	_, err := e.EvalInterpolation("${ vault('secret/redis/nosql/users/alice#password') }", Vars{})
+	if err == nil {
+		t.Fatal("ожидали ошибку для отсутствующего секрета юзера")
+	}
+	assertVaultPathActionable(t, err.Error(), "secret/redis/nosql/users/alice")
+	if !strings.Contains(err.Error(), "password") {
+		t.Fatalf("текст ошибки не называет требуемое поле password: %q", err.Error())
+	}
+}
+
+// Missing #field в существующем секрете: путь+имя поля в плоской форме,
+// переживает маскинг; значения других полей не утекают (см. …NoSecretLeak).
+func TestVault_MissingFieldErrorActionable(t *testing.T) {
 	kv := &stubKV{secrets: map[string]map[string]any{
 		"secret/redis/admin": {"password": "x"},
 	}}
@@ -286,24 +303,35 @@ func TestVault_MissingFieldErrorMasked(t *testing.T) {
 	if err == nil {
 		t.Fatal("ожидали ошибку для отсутствующего поля")
 	}
-	assertVaultPathMasked(t, err.Error(), "secret/redis/admin")
+	assertVaultPathActionable(t, err.Error(), "secret/redis/admin")
+	if !strings.Contains(err.Error(), "nope") {
+		t.Fatalf("текст ошибки не называет отсутствующее поле nope: %q", err.Error())
+	}
 }
 
-// assertVaultPathMasked проверяет, что (а) текст ошибки несёт путь в ref-форме
-// vault:<path>, и (б) при прогоне через audit.MaskSecrets вся строка целиком
-// заменяется на ***MASKED*** — путь не утекает в наблюдаемые каналы.
-func assertVaultPathMasked(t *testing.T, errText, path string) {
+// assertVaultPathActionable: текст ошибки vault() (а) несёт путь в ПЛОСКОЙ форме,
+// (б) НЕ несёт vault:-ref-маркер (иначе маскинг съел бы строку целиком), (в)
+// переживает production-маскинг (audit.MaskSecretsSealed — тот же, что
+// status_details/error_summary в lockIncarnation, с непустым seal-набором без
+// ключа error): результат НЕ `***MASKED***` и всё ещё содержит путь.
+func assertVaultPathActionable(t *testing.T, errText, path string) {
 	t.Helper()
-	if !strings.Contains(errText, "vault:"+path) {
-		t.Fatalf("текст ошибки не несёт путь в ref-форме vault:%s: %q", path, errText)
+	if !strings.Contains(errText, path) {
+		t.Fatalf("текст ошибки не несёт путь %q: %q", path, errText)
 	}
-	masked := audit.MaskSecrets(map[string]any{"error_summary": errText})
-	got, _ := masked["error_summary"].(string)
-	if got != "***MASKED***" {
-		t.Fatalf("audit.MaskSecrets не замаскировал ошибку с vault-путём: %q", got)
+	if strings.Contains(errText, "vault:"+path) {
+		t.Fatalf("текст ошибки несёт vault:-ref-форму (маскинг съест целиком): %q", errText)
 	}
-	if strings.Contains(got, path) {
-		t.Fatalf("путь %q утёк после маскинга: %q", path, got)
+	masked := audit.MaskSecretsSealed(
+		map[string]any{"error": errText},
+		audit.SealOpts{Sealed: map[string]bool{"config.password": true}},
+	)
+	got, _ := masked["error"].(string)
+	if got == "***MASKED***" {
+		t.Fatalf("actionable-ошибка замаскирована целиком: %q", got)
+	}
+	if !strings.Contains(got, path) {
+		t.Fatalf("путь %q пропал после маскинга: %q", path, got)
 	}
 }
 

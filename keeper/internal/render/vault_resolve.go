@@ -102,7 +102,14 @@ func readVaultRef(ctx context.Context, vc KVReader, ref string) (any, error) {
 
 	data, err := vc.ReadKV(ctx, logical)
 	if err != nil {
-		return nil, fmt.Errorf("render: чтение vault-ref %q: %w", ref, err)
+		// NIM-73: путь в ПЛОСКОЙ форме (logical, без `vault:`-префикса) — actionable-
+		// диагностика, переживающая observability-маскинг (audit.vaultRefRe ловит
+		// только `vault:<mount>/`). У ненайденного секрета значения нет → утечки нет.
+		// Симметрия с shared/cel.callVault. `%w` сохраняет цепочку ErrVaultKVNotFound.
+		if field != "" {
+			return nil, fmt.Errorf("render: секрет %s#%s не резолвится: %w", logical, field, err)
+		}
+		return nil, fmt.Errorf("render: секрет %s не резолвится: %w", logical, err)
 	}
 
 	if field == "" {
@@ -110,7 +117,9 @@ func readVaultRef(ctx context.Context, vc KVReader, ref string) (any, error) {
 	}
 	val, ok := data[field]
 	if !ok {
-		return nil, fmt.Errorf("render: vault-ref %q: поле %q отсутствует в секрете", ref, field)
+		// Путь+имя поля — actionable (какое поле досеять), не секрет-значение
+		// (значения других полей в текст не идут). Плоская форма (NIM-73).
+		return nil, fmt.Errorf("render: в секрете %s нет поля %q", logical, field)
 	}
 	return val, nil
 }
