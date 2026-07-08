@@ -567,3 +567,56 @@ func TestAssign_NilPointerColumns(t *testing.T) {
 		t.Errorf("**time.Time from nil src = %v, want nil", tp)
 	}
 }
+
+// TestBuildOperatorWhere_Q — guard: свободный поиск Q даёт ILIKE по display_name/aid,
+// экранирует LIKE-метасимволы (%/_/\) в аргументе и корректно нумерует $N вместе с
+// другими фильтрами (auth_method/revoked).
+func TestBuildOperatorWhere_Q(t *testing.T) {
+	tests := []struct {
+		name      string
+		filter    ListFilter
+		wantConds []string
+		wantArgs  []any
+	}{
+		{
+			name:      "q_only",
+			filter:    ListFilter{Q: "foo", IncludeRevoked: true},
+			wantConds: []string{"(display_name ILIKE $1 OR aid ILIKE $1)"},
+			wantArgs:  []any{"%foo%"},
+		},
+		{
+			name:      "q_escapes_wildcards",
+			filter:    ListFilter{Q: `a%b_c\d`, IncludeRevoked: true},
+			wantConds: []string{"(display_name ILIKE $1 OR aid ILIKE $1)"},
+			wantArgs:  []any{`%a\%b\_c\\d%`},
+		},
+		{
+			name:   "q_with_auth_method_and_revoked",
+			filter: ListFilter{AuthMethod: AuthMethodJWT, Q: "bar"}, // IncludeRevoked=false → revoked_at IS NULL
+			wantConds: []string{
+				"auth_method = $1",
+				"(display_name ILIKE $2 OR aid ILIKE $2)",
+				"revoked_at IS NULL",
+			},
+			wantArgs: []any{"jwt", "%bar%"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			where, args := buildOperatorWhere(tt.filter)
+			for _, c := range tt.wantConds {
+				if !strings.Contains(where, c) {
+					t.Errorf("WHERE %q не содержит %q", where, c)
+				}
+			}
+			if len(args) != len(tt.wantArgs) {
+				t.Fatalf("args = %v, want %v", args, tt.wantArgs)
+			}
+			for i := range tt.wantArgs {
+				if args[i] != tt.wantArgs[i] {
+					t.Errorf("args[%d] = %v, want %v", i, args[i], tt.wantArgs[i])
+				}
+			}
+		})
+	}
+}

@@ -8107,7 +8107,7 @@ paths:
         - module
   /v1/operators:
     get:
-      description: Реестр операторов с фильтрами (auth_method enum, revoked) и пагинацией. Permission operator.list. Read-only, без audit.
+      description: Реестр операторов с фильтрами (auth_method enum, revoked, q — substring-поиск по display_name/aid, регистронезависимо) и пагинацией. Permission operator.list. Read-only, без audit.
       operationId: listOperators
       parameters:
         - description: фильтр по форме credential; значение вне enum → 422
@@ -8130,6 +8130,13 @@ paths:
           schema:
             description: включать ревокнутых (false — только активные); bad-value → 400
             type: boolean
+        - description: свободный поиск по display_name/aid (substring, регистронезависимо); пусто → без фильтра
+          explode: false
+          in: query
+          name: q
+          schema:
+            description: свободный поиск по display_name/aid (substring, регистронезависимо); пусто → без фильтра
+            type: string
         - description: сдвиг от начала набора, ≥0 (совпадает с shared/api.ParsePage; out-of-range → 400)
           explode: false
           in: query
