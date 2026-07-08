@@ -1063,6 +1063,16 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				).Group(func(r chi.Router) {
 					registerHumaServiceDependencies(newHumaCadenceAPI(r), serviceH)
 				})
+
+				// /directives — каталог валидных директив redis.conf по версиям
+				// (essence.redis_directives) для UI-редактора redis_settings.
+				// permission service.list. ETag=snapshot SHA1 + immutable. 502 →
+				// loader упал.
+				r.With(
+					apimiddleware.RequirePermission(enforcer, "service", "list", apimiddleware.NoSelector),
+				).Group(func(r chi.Router) {
+					registerHumaServiceDirectives(newHumaCadenceAPI(r), serviceH)
+				})
 			})
 		}
 

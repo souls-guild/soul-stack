@@ -189,6 +189,7 @@ func fullSpecGroups() []specGroup {
 			registerHumaServiceScenarios(api, stub)
 			registerHumaServiceStateSchema(api, stub)
 			registerHumaServiceDependencies(api, stub)
+			registerHumaServiceDirectives(api, stub)
 			return nil
 		}},
 		{"/v1/provisioning-policy", func(api huma.API) error {

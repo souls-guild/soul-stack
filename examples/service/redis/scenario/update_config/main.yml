@@ -64,6 +64,9 @@ input:
   redis_settings:
     type: object
     required: false
+    # x-directives: redis — валидировать ключи против каталога директив сервиса
+    # (essence.redis_directives). Долетает в DTO input_schema сырым (NIM-76).
+    x-directives: redis
     description: >-
       Passthrough-директивы redis.conf (key→value, строки), перекрывают дефолты/пресет
       в merge (last-wins). Для директив, не покрытых простыми полями. Сливаются ПОВЕРХ
