@@ -1527,7 +1527,7 @@ var (
 "properties":{
 "mode":{"type":"string","enum":["merge","replace","remove"],"description":"merge (дефолт) — set/overwrite ключи; replace — заменить весь traits-map; remove — удалить ключи из keys."},
 "traits":{"type":"object","additionalProperties":{"oneOf":[{"type":"string"},{"type":"number"},{"type":"boolean"},{"type":"array","items":{"oneOf":[{"type":"string"},{"type":"number"},{"type":"boolean"}]}}]},"propertyNames":{"pattern":"^[a-z][a-z0-9]*([_-][a-z0-9]+)*$"},"description":"Набор ключ→значение для merge/replace; значение — scalar или list of scalars. Запрещён для remove."},
-"keys":{"type":"array","items":{"type":"string","pattern":"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"},"description":"Список имён ключей для remove (kebab-case). Запрещён для merge/replace."},
+"keys":{"type":"array","items":{"type":"string","pattern":"^[a-z][a-z0-9]*([_-][a-z0-9]+)*$"},"description":"Список имён ключей для remove. Запрещён для merge/replace."},
 "selector":{"type":"object","additionalProperties":false,"description":"Таргет хостов; пересекается с coven-scope оператора. Минимум один критерий обязателен.","properties":{
 "all":{"type":"boolean","description":"Весь реестр (∩ scope). Без host-фильтра."},
 "sids":{"type":"array","items":{"type":"string","pattern":"^[a-z0-9][a-z0-9.-]{0,253}$"},"description":"Точечный список SID."},
