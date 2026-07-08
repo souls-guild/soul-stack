@@ -350,11 +350,9 @@ func resolveSchemaRefs(schema *InputSchema, catalog TypeCatalog, stack map[strin
 		stack[ref] = true
 		resolved, diags := resolveSchemaRefs(target, catalog, stack, path, depth+1)
 		delete(stack, ref)
-		// Описание/обязательность узла-ссылки (description/required/required_when
-		// на самом `$type`-узле) сейчас в MVP не переносим: узел-ссылка несёт
-		// ТОЛЬКО `$type`. Любой иной ключ рядом — уже отвергнут conflict-проверкой
-		// (type/properties/items) либо допустим как presentational (description) —
-		// его сохраняем, накладывая поверх резолвнутой схемы.
+		// Собственные ключи узла-ссылки (description/required/required_when) поверх
+		// резолвнутого типа — applyRefOverlay (форму типа не трогает). Конфликтующие
+		// ключи (type/properties/items) уже отвергнуты conflict-проверкой.
 		if resolved != nil {
 			applyRefOverlay(schema, resolved)
 		}
@@ -390,14 +388,24 @@ func resolveSchemaRefs(schema *InputSchema, catalog TypeCatalog, stack map[strin
 	return &out, diags
 }
 
-// applyRefOverlay переносит presentational-поля с узла-ссылки на резолвнутую
-// схему (узел `{ $type: T, description: "..." }` сохраняет своё description).
-// Поверх резолвнутого типа кладём ТОЛЬКО непустые presentational-ключи ссылки,
-// не затирая саму форму типа. MVP: только description (единственный безопасный
-// presentational-ключ, не меняющий контракт формы).
+// applyRefOverlay накладывает собственные ключи узла-ссылки `{ $type: T, … }`
+// поверх резолвнутой схемы типа — хирургически, форму типа не меняя:
+//   - description — подпись ссылки;
+//   - field-level обязательность ссылки (`required: <bool>`, requiredKind==
+//     requiredBool) → поле Required. requiredKind/RequiredProps резолвнутого типа
+//     НЕ трогаем: object-level `required: [a,b]` типа (requiredList) и field-
+//     mandatory ссылки — РАЗНЫЕ поля модели, сосуществуют (requireInputValues
+//     читает Required, validateObjectFields — RequiredProps);
+//   - required_when — CEL-условная обязательность ссылки, если тип её не задал.
 func applyRefOverlay(ref, resolved *InputSchema) {
 	if ref.Description != "" {
 		resolved.Description = ref.Description
+	}
+	if ref.requiredKind == requiredBool {
+		resolved.Required = ref.Required
+	}
+	if ref.RequiredWhen != "" && resolved.RequiredWhen == "" {
+		resolved.RequiredWhen = ref.RequiredWhen
 	}
 }
 
