@@ -63,6 +63,7 @@ func registerHumaOperatorList(humaAPI huma.API, opH *handlers.OperatorHandler) {
 		filter := operator.ListFilter{
 			AuthMethod:     operator.AuthMethod(in.AuthMethod), // пустой → фильтр не применяется; enum huma уже отбил вне набора (422)
 			IncludeRevoked: in.Revoked,
+			Q:              in.Q, // pass-through: пусто → без фильтра (parity /v1/runs)
 		}
 		page, err := opH.ListTyped(ctx, filter, int(in.Offset), int(in.Limit))
 		if err != nil {

@@ -78,6 +78,8 @@ func operatorCreateOperation() huma.Operation {
 //     LDAP,OIDC}; ldap/oidc — федеративная аутентификация (ADR-058), only-add к прежнему;
 //   - Revoked — bool: huma parseInto на bad-value даёт "invalid boolean …" → 400
 //     (hasQueryParseError). Опущен → false (только активные, parity легаси);
+//   - Q — свободный substring-поиск (ILIKE) по display_name/aid, регистронезависимо;
+//     пусто → фильтр не применяется (parity /v1/runs q);
 //   - Offset/Limit — int32 (НЕ Go-int: huma на int эмитит int64, committed-спека
 //     несёт int32) с `default` (offset 0, limit 50, совпадает с shared/api.ParsePage).
 //     bad-int → 400 (parseInto). ГРАНИЦЫ диапазона (offset≥0, limit∈[1,1000]) НЕ
@@ -87,6 +89,7 @@ func operatorCreateOperation() huma.Operation {
 type operatorListInput struct {
 	AuthMethod string `query:"auth_method" enum:"jwt,mtls,combined,ldap,oidc" doc:"фильтр по форме credential; значение вне enum → 422"`
 	Revoked    bool   `query:"revoked" doc:"включать ревокнутых (false — только активные); bad-value → 400"`
+	Q          string `query:"q" doc:"свободный поиск по display_name/aid (substring, регистронезависимо); пусто → без фильтра"`
 	Offset     int32  `query:"offset" default:"0" doc:"сдвиг от начала набора, ≥0 (совпадает с shared/api.ParsePage; out-of-range → 400)"`
 	Limit      int32  `query:"limit" default:"50" doc:"размер страницы 1..1000 (совпадает с shared/api.ParsePage; out-of-range → 400)"`
 }
@@ -118,7 +121,7 @@ func operatorListOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/",
 		Summary:       "Список Архонтов (paged + фильтры)",
-		Description:   "Реестр операторов с фильтрами (auth_method enum, revoked) и пагинацией. Permission operator.list. Read-only, без audit.",
+		Description:   "Реестр операторов с фильтрами (auth_method enum, revoked, q — substring-поиск по display_name/aid, регистронезависимо) и пагинацией. Permission operator.list. Read-only, без audit.",
 		Tags:          []string{"operator"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},

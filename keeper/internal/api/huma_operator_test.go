@@ -193,9 +193,29 @@ func (opRBAC) RolesOf(string) []string { return nil }
 // группе + (для write) huma-audit-middleware вариант B + huma-операция.
 // injectClaims заменяет RequireJWT.
 func humaOperatorRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, auditW audit.Writer) *chi.Mux {
+	return humaOperatorRouterWithPool(t, enforcer, auditW, opPool{})
+}
+
+// opCapturePool — opPool + перехват SQL/args list-SELECT (для guard-а bind ?q=).
+type opCapturePool struct {
+	opPool
+	listSQL  string
+	listArgs []any
+}
+
+func (p *opCapturePool) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	if strings.Contains(sql, "SELECT aid, display_name") && strings.Contains(sql, "FROM operators") {
+		p.listSQL, p.listArgs = sql, args
+	}
+	return p.opPool.Query(ctx, sql, args...)
+}
+
+// humaOperatorRouterWithPool — humaOperatorRouter с инъекцией OperatorPool (guard-ы,
+// которым нужно перехватить SQL/args доменного запроса).
+func humaOperatorRouterWithPool(t *testing.T, enforcer apimiddleware.PermissionChecker, auditW audit.Writer, pool handlers.OperatorPool) *chi.Mux {
 	t.Helper()
 	installHumaErrorOverride()
-	opH := handlers.NewOperatorHandler(opPool{}, opIssuer{}, opRBAC{}, time.Hour, nil)
+	opH := handlers.NewOperatorHandler(pool, opIssuer{}, opRBAC{}, time.Hour, nil)
 
 	r := chi.NewRouter()
 	injectClaims := func(next http.Handler) http.Handler {
@@ -327,6 +347,33 @@ func TestHumaOperator_List_GoldenWire(t *testing.T) {
 	const golden = `{"items":[{"aid":"archon-bob","auth_method":"jwt","bootstrap_initial":true,"created_at":"2026-06-13T10:00:00Z","created_via":"bootstrap","display_name":"Bob"}],"limit":50,"offset":0,"total":1}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire-дрейф operator.list:\n got  = %s\n want = %s", got, golden)
+	}
+}
+
+// TestHumaOperator_List_Q_BindsToFilter — guard: ?q=<val> биндится в
+// operatorListInput.Q и доходит до SQL как ILIKE-предикат по display_name/aid с
+// экранированным (%→\%) аргументом.
+func TestHumaOperator_List_Q_BindsToFilter(t *testing.T) {
+	pool := &opCapturePool{}
+	r := humaOperatorRouterWithPool(t, strictAllowAll{}, nil, pool)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/operators?q=a%25b", nil) // q="a%b"
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(pool.listSQL, "display_name ILIKE") || !strings.Contains(pool.listSQL, "aid ILIKE") {
+		t.Fatalf("list SQL без ILIKE-предиката q: %q", pool.listSQL)
+	}
+	const wantArg = `%a\%b%`
+	found := false
+	for _, a := range pool.listArgs {
+		if a == wantArg {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("list args %v не содержат экранированного q-аргумента %q", pool.listArgs, wantArg)
 	}
 }
 

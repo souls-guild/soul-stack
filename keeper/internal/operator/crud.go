@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -96,6 +97,8 @@ const countNonSystemOperatorsSQL = `SELECT COUNT(*) FROM operators WHERE created
 type ListFilter struct {
 	AuthMethod     AuthMethod
 	IncludeRevoked bool
+	// Q — свободный substring-поиск (ILIKE) по display_name/aid; "" = без фильтра.
+	Q string
 }
 
 // Insert вставляет нового Архонта в реестр.
@@ -313,6 +316,11 @@ func buildOperatorWhere(f ListFilter) (string, []any) {
 		args = append(args, string(f.AuthMethod))
 		conds = append(conds, "auth_method = $"+intToString(len(args)))
 	}
+	if f.Q != "" {
+		args = append(args, "%"+escapeLike(f.Q)+"%")
+		n := intToString(len(args))
+		conds = append(conds, "(display_name ILIKE $"+n+" OR aid ILIKE $"+n+")")
+	}
 	if !f.IncludeRevoked {
 		conds = append(conds, "revoked_at IS NULL")
 	}
@@ -328,6 +336,13 @@ func buildOperatorWhere(f ListFilter) (string, []any) {
 	}
 	return out, args
 }
+
+// likeEscaper экранирует ILIKE-метасимволы (%/_/\) в свободном поиске Q —
+// backslash-escape (PG-дефолт); backslash первым, чтобы не удвоить экранирование.
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+// escapeLike готовит Q к подстановке в `%…%` ILIKE-паттерн.
+func escapeLike(s string) string { return likeEscaper.Replace(s) }
 
 // intToString — мелкий helper для построения $N плейсхолдеров. Симметрично
 // errand.Store::itoa (там inline strconv-free для одного места); operator-
