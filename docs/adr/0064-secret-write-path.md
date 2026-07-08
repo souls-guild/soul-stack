@@ -84,3 +84,13 @@ Operator API Herald/Provider CRUD + OpenAPI (drift-regen) + companion UI (`types
 - **[ADR-026](0026-sigil.md)** — образец keeper-side write-path в Vault (`sigil.Introduce` → `WriteKV` → PG-ref).
 - **[ADR-053](0053-dependency-tiers.md)** — Vault hard-required (write-path опирается на него); дополнительное послабление security-предпосылки фиксируется здесь как осознанный trade-off.
 - **[ADR-014](0014-operator-identity.md)** — паттерн keeper-side секрета в Vault KV.
+
+## Amendment 2026-07-08 (NIM-73): путь ненайденного секрета в текстах ошибок — плоская форма мимо маскера
+
+**Реализовано (NIM-73)** — уточняет митигацию (b) «строгий masking во всех sink-ах» для READ/резолв-пути секрета (`vault()` в CEL-фазе, `vault:`-ref в params), симметрично write-path выше.
+
+**Решение.** Когда Vault-секрет **не найден** (KV path not found / нет доступа / нет поля), текст ошибки несёт **логический путь секрета в плоской форме** (`secret/redis/<inc>/users/<name>#password`) — БЕЗ `vault:<mount>/`-маркера, поэтому он **переживает** observability-маскинг (`audit.vaultRefRe` / `MaskSecrets`) и оседает в `status_details` / `error_summary` / логах внятным текстом, а не `***MASKED***`.
+
+**Обоснование — путь = локация, не значение.** Путь ненайденного секрета говорит оператору, ЧТО досеять в Vault; по несуществующему пути значения нет — утекать нечему. Actionable-диагностика важнее, чем маскировать несекрет. **Маскинг ЗНАЧЕНИЯ секрета сохранён:** реально резолвнутый секрет по-прежнему маскируется на выходе (маскинг-слой не тронут); транспортные детали ошибки Vault в текст НЕ пробрасываются; значения соседних полей секрета в текст НЕ подставляются.
+
+**Реализация:** [shared/cel/vault.go](../../shared/cel/vault.go) (`callVault` / `vaultPathHint`) + [keeper/internal/render/vault_resolve.go](../../keeper/internal/render/vault_resolve.go) (`readVaultRef`) — плоская форма на обоих путях резолва.
