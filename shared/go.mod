@@ -10,7 +10,7 @@ require (
 
 require (
 	github.com/Masterminds/sprig/v3 v3.3.0
-	github.com/cyphar/filepath-securejoin v0.6.1
+	github.com/cyphar/filepath-securejoin v0.7.0
 	github.com/google/cel-go v0.28.1
 	github.com/oklog/ulid/v2 v2.1.1
 	go.opentelemetry.io/otel v1.44.0
