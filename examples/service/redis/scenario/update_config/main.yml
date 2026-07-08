@@ -1,33 +1,9 @@
 name: update_config
 description: >-
-  Day-2: изменить директивы redis.conf на УЖЕ работающем Redis БЕЗ рестарта
-  процесса (hot-reload через CONFIG SET). Производственная конвенция «hot-reload >
-  рестарт» для сервисов с live-reconfig (docs/destiny/production-conventions.md
-  §3a/§6): рестарт демона дорог (сброс реплик/клиентов, окно недоступности), а
-  большинство директив Redis применяются на лету. Рестарт остаётся только за
-  systemd-unit-уровнем (hardening drop-in, destiny redis server.yml).
-
-  Оператор задаёт ИЗМЕНЁННЫЕ простые понятия (memory_mb/maxmemory_policy/
-  persistence/redis_settings) — те же, что create. Сценарий ПЕРЕВЫЧИСЛЯЕТ
-  итоговый redis_config (тот же compute.redis_config-перевод, что create, с
-  ДОПОЛНЕНИЕМ из incarnation.state как подложки), рендерит ПОЛНЫЙ redis.conf на
-  диск (для следующего рестарта процесса) и ОЖИВЛЯЕТ изменения на живом инстансе
-  через плагин community.redis.config (CONFIG SET hot-settable + CONFIG REWRITE).
-
-  ★ Startup-only-директивы (port/tls-port/bind/dir/aclfile/cluster-enabled/
-  loadmodule/…) CONFIG SET отвергает — плагин их ПРОПУСКАЕТ (денилист в
-  community.redis.config). Они уже отрендерены в redis.conf и вступят в силу при
-  следующем рестарте процесса. update_config НЕ меняет TLS-материал и НЕ трогает
-  ACL — для этого отдельные сценарии rotate_tls / add_user (явная аудит-семантика).
-
-  Идемпотентность: повторный прогон с тем же вводом → CONFIG GET перед каждым SET
-  даёт совпадение (no-op, changed=false на стороне плагина); рендер redis.conf
-  детерминирован (отсортированный merge). Day-2: инстанс УЖЕ работает (auth через
-  vault()-пароль + TLS-дискриминатор из incarnation.state.tls, как restart).
-
-  Таргетинг — на весь incarnation (on опущен, ADR-008/009): новый redis.conf и
-  hot-reload идут на КАЖДЫЙ redis-server-хост инкарнации. cluster/sentinel —
-  director-агностично: config-директивы host-инвариантны (compute, без soulprint).
+  Day-2: изменить директивы redis.conf на работающем Redis без рестарта (hot-reload
+  через CONFIG SET). Оператор задаёт изменённые простые понятия (память, eviction,
+  persistence), сценарий перевычисляет redis.conf и применяет hot-settable директивы на
+  живом инстансе.
 
 # ── Входной контракт оператора (docs/input.md) ────────────────────────────────
 # Простые типизированные понятия — изменяемое подмножество create-контракта. Не

@@ -1,25 +1,8 @@
 name: remove_node
 description: >-
-  Day-2: вывести ОДНУ ноду из УЖЕ сформированного Redis-кластера (режим
-  redis_type=cluster). Аналог redis-cli `--cluster del-node`, но ЦЕЛИКОМ через
-  плагин community.redis (go-redis: CLUSTER NODES/FORGET + при master-е со слотами
-  миграция слотов SETSLOT/MIGRATE) — никакого redis-cli/shell, capability плагина
-  только network_outbound.
-
-  Удаляемая нода ОБЯЗАНА быть привязанной к incarnation Soul-ом и присутствовать в
-  roster прогона (soulprint.hosts) — endpoint-ы строятся из него по SID. Таргетинг —
-  по стабильному SID через where: (probe не нужен, ADR-008). Прогон зовётся на весь
-  incarnation: roster содержит и удаляемую ноду, и seed.
-
-  Граница (architect 2026-06-22): scenario оркеструет порядок/таргетинг и строит
-  ГОТОВУЮ топологию-карту (SID→addr) для плагина; плагин исполняет ОДНУ операцию
-  (remove-node) и сам решает миграцию слотов/FORGET (получает готовые endpoint-ы,
-  ничего не транслирует).
-
-  Decommission самого хоста (остановка redis, чистка nodes.conf, удаление Soul-а из
-  incarnation) — ВНЕ этого сценария: remove_node меняет ЖИВУЮ топологию кластера,
-  не декларацию. incarnation.state этим сценарием НЕ мутируется (точная роль SID в
-  state не пишется — follow-up, симметрия с add_node).
+  Day-2: вывести ОДНУ ноду из сформированного Redis-кластера (режим cluster) через
+  плагин community.redis (CLUSTER FORGET + миграция слотов при master-е). Меняет живую
+  топологию кластера; decommission самого хоста — вне сценария.
 
 # ── Входной контракт оператора (docs/input.md) ────────────────────────────────
 # Простые типизированные понятия day-2: какой SID вывести и через какую

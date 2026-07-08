@@ -1,37 +1,8 @@
 name: update_users
 description: >-
-  Day-2: МАССОВОЕ редактирование ВСЕХ operator-добавленных ACL-пользователей на УЖЕ
-  работающем Redis БЕЗ рестарта процесса (bulk-replace). Производственная конвенция
-  «hot-reload > рестарт» (docs/destiny/production-conventions.md §3a/§6): ACL
-  применяется на лету командой ACL LOAD (перечитать aclfile), рестарт демона не нужен.
-
-  ★ Семантика «правим всех»: оператор задаёт ПОЛНЫЙ НОВЫЙ набор operator-extra юзеров
-  (input.users — массив AclUser). Этот набор ЦЕЛИКОМ заменяет incarnation.state.redis_users
-  (bulk-replace, НЕ upsert): юзер, которого нет в новом наборе, УДАЛЯЕТСЯ из ACL.
-  Граница с add_user: add_user добавляет/переопределяет ОДНОГО (точечный upsert, набор
-  растёт); update_users задаёт ВЕСЬ набор разом (юзера можно убрать, исключив из массива).
-
-  ★ Системные служебные юзеры (replica/monitoring/sentinel/haproxy) этим сценарием НЕ
-  трогаются: они НЕ в state.redis_users (state хранит только operator-extra), а доливаются
-  в users.acl из essence.system_acl_users на КАЖДОМ рендере (как create/add_user). Удалить
-  системного через input.users нельзя — его имя зарезервировано (validate-guard ниже),
-  а долив из essence перекрыл бы любую попытку. Поэтому bulk-replace operator-extra НЕ
-  ломает репликацию/sentinel/health-check.
-
-  Пароль каждого юзера НЕ во входном контракте: лежит в Vault по конвенции
-  secret/redis/<incarnation>/users/<name>#password (как create/add_user/add_node),
-  резолвится keeper-side через vault() в render-фазе. Сценарий рендерит ПОЛНЫЙ users.acl
-  на диск (системные + новый operator-extra набор) и ОЖИВЛЯЕТ через community.redis.acl
-  (ACL LOAD).
-
-  Идемпотентность: ACL LOAD идемпотентен ПО КОНСТРУКЦИИ (приводит живой инстанс к файлу
-  независимо от текущего состояния); плагин делает честный diff ACL LIST до/после
-  (changed=false при совпадении). Рендер users.acl детерминирован (range по
-  отсортированному map). Day-2: инстанс УЖЕ работает (auth через vault()-пароль +
-  TLS-дискриминатор из incarnation.state.tls, как add_user/restart/update_config).
-
-  Таргетинг — на весь incarnation (on опущен, ADR-008/009): новый users.acl + ACL LOAD
-  идут на КАЖДЫЙ redis-server-хост. ACL host-инвариантен (один набор юзеров на кластер).
+  Day-2: массово заменить ВЕСЬ набор operator-ACL-пользователей на работающем Redis без
+  рестарта (bulk-replace через ACL LOAD). Юзер, отсутствующий в новом наборе, удаляется;
+  системные служебные юзеры не трогаются.
 
 # ── Входной контракт оператора (docs/input.md) ────────────────────────────────
 # ПОЛНЫЙ НОВЫЙ набор operator-extra ACL-юзеров (массив AclUser, types.yml/ADR-062 $type)

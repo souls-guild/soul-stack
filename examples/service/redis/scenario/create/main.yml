@@ -7,42 +7,10 @@ name: create
 # годен как bootstrap не из-за имени, а потому что несёт этот флаг.
 create: true
 description: >-
-  Развернуть Redis (концепция Ansible-роли, redis-консолидация). Оператор задаёт
-  ПРОСТЫЕ типизированные понятия (режим, сколько памяти, какая persistence, какая
-  eviction-политика, какие ACL-юзеры, топология шардов), а сценарий ТРАНСЛИРУЕТ их
-  в детальный redis.conf. Граница (architect 2026-06-22):
-
-    - простой слой = строго типизированный структурный `input:` ниже (Named Dict,
-      каждый параметр чёткого типа), НЕ свободный текст;
-    - слой трансляции = тело сценария: данные-таблицы (persistence_presets,
-      memory_reserve_percent) живут в essence; вычисление maxmemory — inline-CEL;
-      слияние слоёв — CEL-функция merge() (SHALLOW last-wins, templating.md §2.3);
-    - итоговый redis_config рендерится в ПОЛНЫЙ redis.conf at-CREATE (источник
-      истины) — здесь merge нужен. CONFIG SET живого инстанса — это day-2
-      update_config (отдельный сценарий), в create плагин config НЕ вызываем.
-
-  ДИСПЕТЧЕР ПО redis_type (2026-06-22): этот файл — диспетчер. Тело прогона вынесено
-  в ветки create/cluster.yml / sentinel.yml, подключаемые через include: ниже.
-  Ветвление делает CONDITIONAL-INCLUDE (orchestration.md §6, Вариант B group-drop):
-  `when: input.redis_type == '<mode>'` стоит НА include-задаче — статический
-  input-предикат (isStaticWhen) РЕАЛЬНО исключает неактивную ветку из плана
-  (render-phase group-drop), а не гасит её placeholder-skip-ом. Прежний per-task when
-  по каждой задаче ветки убран (гейт переехал на include): дублировал бы include-when.
-  Оператор всегда зовёт create; режим выбирает redis_type. enum redis_type гарантирует
-  попадание ровно в одну ветку (тихого зелёного no-op быть не может). L0-кейсы ассертят
-  presence-матчером (task_present/task_absent), которому group-drop безопасен
-  (позиционные индексы не важны).
-
-  ★ РЕЖИМЫ СЕРВИСА сужены до sentinel/cluster (2026-06-25): standalone и sentinel_only
-  убраны из сервиса (решение пользователя). standalone покрывается sentinel с 0 реплик
-  (один master + sentinel-демон); sentinel_only нужен только в DESTINY `redis` (её
-  гибкость sentinel_enabled/deploy_redis остаётся для переиспользования, напр. DragonFly),
-  но не как режим этого сервиса. Сужение enum redis_type ([sentinel, cluster]) — bump
-  state_schema_version 3→4 + миграция 003_to_004 (forward-only remap старых режимов).
-
-  Пароли НЕ во входном контракте: лежат в Vault, резолвятся KEEPER-SIDE через CEL
-  vault() в render-фазе (templating.md §2.3/§4) — на хост доезжает уже ЗНАЧЕНИЕ
-  (ADR-012). Путь строится из доверенного контекста (incarnation), не из input.
+  Развернуть Redis с нуля в режиме sentinel или cluster, подняв под топологию VM через
+  cloud-provision в том же прогоне (provision включён по умолчанию). Оператор задаёт
+  ПРОСТЫЕ типизированные понятия (режим, память, persistence, eviction, ACL-юзеры,
+  топология шардов), а сценарий ТРАНСЛИРУЕТ их в полный redis.conf.
 
 # ── extends: covenant — общий контракт секций (S4 пилот) ───────────────────────────
 # Секции input (КРОМЕ provision-дельты ниже) / compute / state_changes / validate
@@ -240,8 +208,8 @@ form:
     # не error. Если понадобится снова показать (per-Coven/ENV-override provider) — вернуть
     # секцию сюда. ★ TODO: prod/dev provider switch (ENV keeper / Coven-overlay) — отдельный ADR.
 
-# Тело прогона — ветки диспетчера, по одной на режим (CONDITIONAL-INCLUDE, см. описание
-# сценария выше). Порядок include — cluster, sentinel; индексы не важны (ветки
+# Тело прогона — ветки диспетчера, по одной на режим (CONDITIONAL-INCLUDE, orchestration.md §6,
+# Вариант B group-drop). Порядок include — cluster, sentinel; индексы не важны (ветки
 # взаимоисключающие по enum). Отдельного mode-guard нет: неизвестный redis_type
 # отвергает input-валидация Keeper-а по enum ДО рендера.
 tasks:

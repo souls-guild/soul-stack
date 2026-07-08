@@ -1,33 +1,8 @@
 name: add_user
 description: >-
-  Day-2: добавить (или переопределить) ОДНОГО ACL-пользователя на УЖЕ работающем
-  Redis БЕЗ рестарта процесса. Производственная конвенция «hot-reload > рестарт»
-  (docs/destiny/production-conventions.md §3a/§6): ACL применяется на лету командой
-  ACL LOAD (перечитать aclfile), рестарт демона не нужен.
-
-  Оператор задаёт ОДНУ запись AclUser (name + perms + state) — тот же тип, что элемент
-  массива create input.users (types.yml, ADR-062). perms валидируется тем же re2-
-  паттерном AclUser, что в create (закрывает day-2-мусор: невалидная ACL-строка
-  отсекается на input-валидации, а не доезжает до users.acl). Пароль НЕ во входном
-  контракте: лежит в Vault по конвенции
-  secret/redis/<incarnation>/users/<name>#password (как create/add_node), резолвится
-  keeper-side через vault() в render-фазе. Сценарий мержит нового юзера в РАЗВЁРНУТЫЙ
-  incarnation.state.redis_users, рендерит ПОЛНЫЙ users.acl на диск и ОЖИВЛЯЕТ через
-  community.redis.acl (ACL LOAD).
-
-  ★ Граница с update_config/rotate_tls: add_user трогает ТОЛЬКО ACL (users.acl +
-  ACL LOAD), redis.conf и TLS-материал не перерендеривает — отдельная аудит-семантика
-  «изменился список пользователей». users.acl рендерит destiny redis (тот же кирпич,
-  что create) — здесь подменяется только vars.users набор.
-
-  Идемпотентность: ACL LOAD идемпотентен ПО КОНСТРУКЦИИ (приводит живой инстанс к
-  файлу независимо от текущего состояния); плагин делает честный diff ACL LIST
-  до/после (changed=false при совпадении). Рендер users.acl детерминирован (range по
-  отсортированному map). Day-2: инстанс УЖЕ работает (auth через vault()-пароль +
-  TLS-дискриминатор из incarnation.state.tls, как restart/update_config).
-
-  Таргетинг — на весь incarnation (on опущен, ADR-008/009): новый users.acl + ACL LOAD
-  идут на КАЖДЫЙ redis-server-хост. ACL host-инвариантен (один набор юзеров на кластер).
+  Day-2: добавить или переопределить ОДНОГО ACL-пользователя на работающем Redis без
+  рестарта (ACL LOAD). Пароль берётся из Vault; сценарий рендерит полный users.acl и
+  оживляет его на живом инстансе.
 
 # ── Входной контракт оператора (docs/input.md) ────────────────────────────────
 # ОДНА запись AclUser (types.yml, ADR-062 $type): имя юзера, его ACL-права, on/off.
