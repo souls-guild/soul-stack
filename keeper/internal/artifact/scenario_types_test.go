@@ -250,3 +250,91 @@ func TestListScenarios_SharedTypeIsolated(t *testing.T) {
 		t.Fatalf("оба использования Endpoint должны нести x-type=Endpoint: a=%#v b.items=%#v", a, bItems)
 	}
 }
+
+// TestListScenarios_TypeRefKeepsRequiredChildren — NIM-72: при резолве $type для
+// DTO object-level `required: [name, perms]` тела типа (массив детей) НЕ
+// перезаписывается булевым `required: true` узла-ссылки (клоббер списка, на
+// который завязан UI). Presentational-ключ description переносится.
+func TestListScenarios_TypeRefKeepsRequiredChildren(t *testing.T) {
+	root := t.TempDir()
+	writeTypesCatalog(t, root, `types:
+  AclUser:
+    type: object
+    required: [name, perms]
+    properties:
+      name:
+        type: string
+      perms:
+        type: string
+      state:
+        type: string
+`)
+	writeScenario(t, root, "add_user", `input:
+  user:
+    $type: AclUser
+    required: true
+    description: "ACL user"
+`)
+
+	got, err := ListScenarios(root, discardLogger())
+	if err != nil {
+		t.Fatalf("ListScenarios: %v", err)
+	}
+	user, ok := got[0].InputSchema["user"].(map[string]any)
+	if !ok {
+		t.Fatalf("user не map: %#v", got[0].InputSchema["user"])
+	}
+	// $type резолвнут + x-type аннотация.
+	if _, stillRef := user[typeRefKey]; stillRef {
+		t.Fatalf("$type должен быть резолвнут: %#v", user)
+	}
+	if user[typeAnnotationKey] != "AclUser" {
+		t.Fatalf("x-type = %v, ожидался AclUser", user[typeAnnotationKey])
+	}
+	// object-level required-массив НЕ перезаписан булевым true узла-ссылки.
+	req, ok := user["required"].([]any)
+	if !ok {
+		t.Fatalf("required должен остаться массивом [name perms], got %#v (%T)", user["required"], user["required"])
+	}
+	if len(req) != 2 || req[0] != "name" || req[1] != "perms" {
+		t.Fatalf("required-массив искажён: %#v", req)
+	}
+	// properties типа сохранены.
+	if _, ok := user["properties"].(map[string]any); !ok {
+		t.Fatalf("properties должны сохраниться: %#v", user)
+	}
+	// presentational description узла-ссылки перенесён.
+	if user["description"] != "ACL user" {
+		t.Fatalf("description = %v, ожидался перенос с узла-ссылки", user["description"])
+	}
+}
+
+// TestListScenarios_TypeRefCarriesRequiredWhen — NIM-72: required_when узла-ссылки
+// переносится в DTO (отдельный ключ, не конфликтует с required-массивом типа).
+func TestListScenarios_TypeRefCarriesRequiredWhen(t *testing.T) {
+	root := t.TempDir()
+	writeTypesCatalog(t, root, `types:
+  Endpoint:
+    type: object
+    properties:
+      host:
+        type: string
+`)
+	writeScenario(t, root, "deploy", `input:
+  target:
+    $type: Endpoint
+    required_when: "input.mode == 'remote'"
+`)
+
+	got, err := ListScenarios(root, discardLogger())
+	if err != nil {
+		t.Fatalf("ListScenarios: %v", err)
+	}
+	target := got[0].InputSchema["target"].(map[string]any)
+	if target["required_when"] != "input.mode == 'remote'" {
+		t.Fatalf("required_when узла-ссылки должен перенестись в DTO, got %v", target["required_when"])
+	}
+	if target[typeAnnotationKey] != "Endpoint" {
+		t.Fatalf("x-type = %v, ожидался Endpoint", target[typeAnnotationKey])
+	}
+}
