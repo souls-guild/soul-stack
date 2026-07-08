@@ -542,7 +542,7 @@ Permission: `incarnation.traits-set`. MCP-tool: `keeper.incarnation.traits-set`.
 
 | Поле | Тип | Required | Смысл |
 |---|---|---|---|
-| `traits` | `object` | optional | Полный набор trait-меток: ключ → значение `scalar` (`string`/`number`/`boolean`) ИЛИ `list of scalars` (`["alice", "bob"]`). Ключ — `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`. **Replace-семантика** — переданный набор заменяет текущий целиком; пустой `{}` / опущенное поле = **очистить** все метки. Вложенный объект / массив-в-массиве → `422`. |
+| `traits` | `object` | optional | Полный набор trait-меток: ключ → значение `scalar` (`string`/`number`/`boolean`) ИЛИ `list of scalars` (`["alice", "bob"]`). Ключ — `^[a-z][a-z0-9]*([_-][a-z0-9]+)*$` (kebab/snake-case, `_` разрешён — NIM-67). **Replace-семантика** — переданный набор заменяет текущий целиком; пустой `{}` / опущенное поле = **очистить** все метки. Вложенный объект / массив-в-массиве → `422`. |
 
 ```json
 {
