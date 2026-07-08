@@ -14,7 +14,7 @@ fixtures:
     network: { primary_ip: 10.0.0.5 }
     os: { arch: amd64 }
 
-  # host-layout — в essence (v11→v12, Вариант A): вынесен из state, day-2 читает отсюда.
+  # host-layout — в essence (v11→v12, Вариант A): вынесен из state, повторный прогон читает отсюда.
   essence:
     conf_dir: /etc/redis
     data_dir: /var/lib/redis

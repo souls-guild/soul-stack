@@ -1,7 +1,7 @@
-# L0-испытание detach_source в режиме sentinel (S1-пилот, happy-path). Day-2 для
+# L0-испытание detach_source в режиме sentinel (S1-пилот, happy-path). Сценарий сопровождения для
 # инкарнации, ранее залитой migrate_cluster (incarnation.state.seeded_from с detached:false,
 # источник 10.9.0.1:6379). Roster из 1 хоста (новый master). Диспетчер по
-# incarnation.state.redis_type (day-2 знает режим из state).
+# incarnation.state.redis_type (detach знает режим из state).
 #
 # Render-only, герметично. Диспетчер инклудит cluster.yml + sentinel.yml через
 # CONDITIONAL-INCLUDE (when: на include по state.redis_type): sentinel-инкарнация →
@@ -52,7 +52,7 @@ fixtures:
     redis_users: []
     # ★ redis_sentinel (state_schema v9): тайминги/master_name sentinel. ОБЯЗАТЕЛЕН для
     # перенесённого сюда SENTINEL MONITOR (split-brain-фикс): compute.sentinel_directives/
-    # sentinel_master_name day-2 собираются ИЗ НЕГО (входного контракта у detach нет).
+    # sentinel_master_name собираются ИЗ НЕГО (входного контракта у detach нет).
     redis_sentinel:
       master_name: master
       quorum: 0
@@ -103,7 +103,7 @@ assert:
     # Выполняется ПОСЛЕ REPLICAOF NO ONE (master снова автономен). monitor.ip=10.0.0.1
     # (master-election: roster = новый master), quorum=1 (size(1)/2+1=1). master_name=master,
     # redis_version=7.2.4, config (тайминги 5000/60000) — всё из incarnation.state (compute
-    # .sentinel_master_name/redis_version/sentinel_directives, day-2 нет input). auth_pass —
+    # .sentinel_master_name/redis_version/sentinel_directives, у detach нет input). auth_pass —
     # наш secret/redis/<inc>#password. Единственная community.redis.sentinel в плане.
     - module: community.redis.sentinel
       params_subset:

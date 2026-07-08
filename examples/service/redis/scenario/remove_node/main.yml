@@ -5,7 +5,7 @@ description: >-
   хоста — вне сценария.
 
 # ── Входной контракт оператора (docs/input.md) ────────────────────────────────
-# Простые типизированные понятия day-2: какой SID вывести и через какую
+# Простые типизированные понятия оператора: какой SID вывести и через какую
 # существующую ноду контактировать (seed для CLUSTER NODES/FORGET).
 input:
   remove_node_sid:
@@ -47,7 +47,7 @@ tasks:
   #    (2026-06-30): коннект к нодам — под системным default_admin (username → AUTH,
   #    requirepass убран). password из новой Vault-ветки secret/redis/<inc>/users/
   #    default_admin#password; плагин коннектится к нодам под этой парой (password
-  #    маскируется). day-2-тело (вне covenant) хардкодит 'default_admin' напрямую.
+  #    маскируется). Тело сценария (вне covenant) хардкодит 'default_admin' напрямую.
   - name: Remove the node from the cluster (slot-migration + CLUSTER FORGET)
     run_once: true
     module: community.redis.cluster

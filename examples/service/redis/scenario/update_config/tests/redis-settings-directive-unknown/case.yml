@@ -1,5 +1,5 @@
 # L0-испытание version-aware валидатора имён директив redis_settings в update_config
-# (assert, #6) — НЕГАТИВ, day-2. ★ qa-gap: day-2 update_config принимает redis_settings
+# (assert, #6) — НЕГАТИВ. ★ qa-gap: update_config принимает redis_settings
 # (passthrough KEY→VALUE) — без проверки опечатка молча уходила бы в CONFIG SET / следующий
 # рестарт. essence несёт каталог redis_directives с серией 7.2; РАЗВЁРНУТАЯ версия
 # (incarnation.state.redis_version) = 7.2.4 → серия 7.2. redis_settings содержит
@@ -7,9 +7,9 @@
 # рвётся на KEEPER-SIDE (422 assert-failed) ДО любого dispatch, понятным сообщением.
 #
 # Симметрия create/tests/redis-settings-directive-unknown: тот же замысел (passthrough
-# не протаскивает мусорное имя молча), но на day-2-пути — версию берём из state, не из
+# не протаскивает мусорное имя молча), но на повторном прогоне — версию берём из state, не из
 # input. validate-фаза проходит (redis_settings задан → has() true), обрыв даёт assert.
-name: day-2 redis_settings with an unknown directive name aborts at render (catalog assert)
+name: redis_settings with an unknown directive name aborts at render (catalog assert)
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
@@ -19,7 +19,7 @@ fixtures:
 
   essence:
     memory_reserve_percent: 75
-    # host-layout — в essence (v11→v12, Вариант A): вынесен из state, day-2 читает отсюда.
+    # host-layout — в essence (v11→v12, Вариант A): вынесен из state, повторный прогон читает отсюда.
     conf_dir: /etc/redis
     data_dir: /var/lib/redis
     modules_base_url: "https://artifacts.example.com/redis/modules"

@@ -1,12 +1,12 @@
 # L0-испытание version-aware валидатора имён директив redis_settings в update_config
-# (assert, #6) — ПОЗИТИВ, day-2. essence несёт каталог redis_directives с серией 7.2;
+# (assert, #6) — ПОЗИТИВ. essence несёт каталог redis_directives с серией 7.2;
 # РАЗВЁРНУТАЯ версия (incarnation.state.redis_version) = 7.2.4 → серия 7.2.
 # redis_settings содержит ВАЛИДНОЕ имя (appendfsync ∈ каталог[7.2]) → assert проходит,
 # директива доезжает до hot-reload (community.redis.config) и итогового redis_config.
 #
-# Парный к day-2 redis-settings-directive-unknown (там опечатка рвёт render). Покрывает
-# true-ветку assert и доказывает, что валидатор не ложно-блокирует валидную day-2-директиву.
-name: day-2 redis_settings with a valid directive name passes the catalog assert
+# Парный к redis-settings-directive-unknown (там опечатка рвёт render). Покрывает
+# true-ветку assert и доказывает, что валидатор не ложно-блокирует валидную директиву.
+name: redis_settings with a valid directive name passes the catalog assert
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
@@ -16,7 +16,7 @@ fixtures:
 
   essence:
     memory_reserve_percent: 75
-    # host-layout — в essence (v11→v12, Вариант A): вынесен из state, day-2 читает отсюда.
+    # host-layout — в essence (v11→v12, Вариант A): вынесен из state, повторный прогон читает отсюда.
     conf_dir: /etc/redis
     data_dir: /var/lib/redis
     modules_base_url: "https://artifacts.example.com/redis/modules"

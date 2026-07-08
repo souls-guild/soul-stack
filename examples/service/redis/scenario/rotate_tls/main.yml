@@ -44,12 +44,12 @@ validate:
 # Рун-уровневый контекст (input/essence/incarnation — без soulprint). tls_* —
 # дискриминатор коннекта плагина из state.tls (как restart/update_config). Здесь TLS
 # заведомо включён (assert-guard ниже), но дискриминатор оставлен симметричным
-# остальным day-2-сценариям (единый паттерн).
+# остальным сценариям сопровождения (единый паттерн).
 compute:
   # ── admin_user: имя системного ACL-юзера внутрикластерного AUTH (default_admin) ──
   # ★ РЕДИЗАЙН default_admin (2026-06-30): коннект CONFIG SET к live-Redis идёт под
   # системным default_admin (requirepass убран). rotate_tls НЕ extends covenant, поэтому
-  # имя хардкодится здесь литералом (как covenant.compute.admin_user, day-2-тела вне
+  # имя хардкодится здесь литералом (как covenant.compute.admin_user, тела сценариев вне
   # covenant — см. covenant.yml). Пароль — secret/redis/<inc>/users/default_admin#password.
   admin_user: "${ 'default_admin' }"
   tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
@@ -57,7 +57,7 @@ compute:
   # tls_ca — CA коннекта (PEM из vault(state.tls.ca_ref)). incarnation.state — PRE-RUN
   # снимок (мутация state.tls.ca_ref → compute.ca_ref применяется ПОСЛЕ успешного apply),
   # поэтому ЗДЕСЬ это ТЕКУЩЕЕ доверие: на ЭТОМ rotate-прогоне сервер ещё со СТАРЫМ cert,
-  # CONFIG SET коннектится старым CA и сам же подменяет материал. На СЛЕДУЮЩИХ day-2
+  # CONFIG SET коннектится старым CA и сам же подменяет материал. На СЛЕДУЮЩИХ прогонах
   # state.tls.ca_ref уже новый → коннект новым CA. Симметрично tls_port из state.tls.port.
   tls_ca:   "${ compute.tls_on ? vault(incarnation.state.tls.ca_ref) : '' }"
   # ★ ИБ-КРИТИЧНО host-layout (v11→v12, Вариант A): conf_dir из essence (единый источник
@@ -78,7 +78,7 @@ compute:
   ca_ref:   "${ has(input.ca_ref)   ? input.ca_ref   : incarnation.state.tls.ca_ref }"
 
 # ── Мутация incarnation.state ─────────────────────────────────────────────────
-# day-2 фиксирует НОВЫЕ Vault-refs cert/key/ca (read-model state.tls.*_ref). enable/
+# Сценарий фиксирует НОВЫЕ Vault-refs cert/key/ca (read-model state.tls.*_ref). enable/
 # only/port НЕ меняются (rotate только материал). Тот же compute.*_ref, что ушёл в
 # render PEM destiny. add/modify по namedfield state.tls (ADR-057): обновляем refs.
 state_changes:
@@ -119,13 +119,13 @@ tasks:
       destiny: redis
       input:
         version:  "${ default(incarnation.state.redis_version, '') }"
-        # ★ install: ОБЯЗАТЕЛЕН на day-2 (регресс live E2E 2026-07-01). Без него
+        # ★ install: ОБЯЗАТЕЛЕН на повторном прогоне (регресс live E2E 2026-07-01). Без него
         # диспетчер install.yml по !has(input.install) скатывается в package-ветку →
         # core.pkg `apt install redis-server=<version>` (версия из Nexus-binary в apt
         # ОТСУТСТВУЕТ → env exited 100). Собираем ТУ ЖЕ binary-структуру, что create
         # (deploy-body → compute.install из essence.install_method) — единый способ
         # установки. Отличие от covenant.install: version из РАЗВЁРНУТОГО state
-        # (redis_version), а не input.version (day-2 версию не переустанавливает).
+        # (redis_version), а не input.version (повторный прогон версию не переустанавливает).
         install: >-
           ${ (default(essence.install_method, 'binary') == 'binary')
                ? {

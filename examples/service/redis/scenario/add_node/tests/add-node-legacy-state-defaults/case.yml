@@ -1,10 +1,10 @@
-# L0-испытание add_node — DAY-2 has()-SAFE, host-layout из ESSENCE (v11→v12, Вариант A).
+# L0-испытание add_node — has()-SAFE, host-layout из ESSENCE (v11→v12, Вариант A).
 # Guard: add_node читает conf_dir/data_dir/modules_base_url из essence через
 # default(essence.<x>, '<дефолт>'). Когда essence НЕ переопределяет host-layout
 # (essence без этих ключей), default ловит отсутствие листа и НЕ падает «no such key»,
 # отдавая дефолтные пути. Регресс «голый essence.conf_dir» = render-фейл no-such-key
 # на essence без host-layout-override. Переезд с incarnation.state на essence: host-
-# layout вынесен из state в essence (v11→v12), day-2 читает его оттуда.
+# layout вынесен из state в essence (v11→v12), повторный прогон читает его оттуда.
 #
 # essence НАМЕРЕННО без conf_dir/data_dir/modules_base_url (layout не переопределён).
 # Ожидаем:
@@ -33,7 +33,7 @@ fixtures:
     secret/redis/add_node/users/default_admin:
       password: default-admin-secret-pass
   # essence БЕЗ conf_dir/data_dir/modules_base_url: host-layout НЕ переопределён
-  # оператором → day-2 читает его дефолтными путями (default(essence.<x>, '<деф>')).
+  # оператором → повторный прогон читает его дефолтными путями (default(essence.<x>, '<деф>')).
   # essence-блок опущен целиком (пустой essence) — проверяем has()-safe на отсутствие
   # всех трёх ключей разом. redis_version="" — без пина (< 8 эффективно → модули
   # проходят дефолтными путями).
@@ -74,7 +74,7 @@ assert:
       params_subset:
         path: /var/lib/redis
     # ADD-NODE плагин: пустой master_sid → master.addr пуст (role=master). Endpoint-ы
-    # из roster. Доказывает, что day-2-проход дошёл до конца (render не сорвался).
+    # из roster. Доказывает, что повторный прогон дошёл до конца (render не сорвался).
     - module: community.redis.cluster
       params_subset:
         action: add-node

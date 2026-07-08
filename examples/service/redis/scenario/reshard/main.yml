@@ -5,7 +5,7 @@ description: >-
   осознанно.
 
 # ── Входной контракт оператора (docs/input.md) ────────────────────────────────
-# Простые типизированные понятия day-2: с какого master-а, на какой и сколько
+# Простые типизированные понятия оператора: с какого master-а, на какой и сколько
 # слотов перенести.
 input:
   from_sid:
@@ -54,7 +54,7 @@ tasks:
   #    add_node/remove_node). ★ РЕДИЗАЙН default_admin (2026-06-30): коннект к нодам —
   #    под системным default_admin (username → AUTH, requirepass убран). password из
   #    новой Vault-ветки secret/redis/<inc>/users/default_admin#password; плагин коннектится
-  #    к нодам под этой парой (password маскируется). day-2-тело (вне covenant) хардкодит
+  #    к нодам под этой парой (password маскируется). Тело сценария (вне covenant) хардкодит
   #    'default_admin' напрямую (нет extends: covenant compute.admin_user).
   - name: Reshard N slots from source master to target master
     run_once: true

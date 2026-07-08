@@ -148,6 +148,6 @@ assert:
     # provider из input.provision (гейт input.provision.enabled, тернар state_changes).
     provisioned_vm_ids: [i-aaa111, i-bbb222, i-ccc333]
     # provisioned_sids: SID каждой созданной VM (register.provision.hosts[].sid) — для
-    # cascade-destroy day-2 teardown. Тот же guard+форма, что provisioned_vm_ids.
+    # cascade-destroy teardown. Тот же guard+форма, что provisioned_vm_ids.
     provisioned_sids: [vm-1.example.com, vm-2.example.com, vm-3.example.com]
     provisioned_provider: wb-dev

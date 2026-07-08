@@ -56,13 +56,13 @@ input:
     # директивы redis.conf плоский map имя→строка (`maxmemory 512mb`), value-тип string
     # точен (ADR-045: object + скалярный value-тип → key→value-виджет, не сырой JSON).
     # Раньше тут было additional_properties: true (произвольный JSON) — UI рисовал
-    # сырой JSON, а опечатка day-2 директивы протаскивалась молча (assert ниже её ловит).
+    # сырой JSON, а опечатка директивы протаскивалась молча (assert ниже её ловит).
     properties: {}
     additional_properties:
       type: string
 
 # ── Декларативные input-инварианты (validate:) ───────────────────────────────────
-# day-2 обязан иметь, что апдейтить: хотя бы одно изменяемое поле. INPUT-ONLY
+# Сценарий обязан иметь, что апдейтить: хотя бы одно изменяемое поле. INPUT-ONLY
 # (has()-цепочка, default()/essence недоступны в validate).
 validate:
   - that: "has(input.memory_mb) || has(input.maxmemory_policy) || has(input.persistence) || has(input.redis_settings)"
@@ -70,16 +70,16 @@ validate:
 
 # ── Вычисляемые scenario-vars (compute:, ADR-009 amendment) ──────────────────────
 # Рун-уровневый контекст (input/essence/incarnation — без soulprint, host-инвариант).
-# Источник истины day-2 — incarnation.state (что РАЗВЁРНУТО), вход — ДЕЛЬТА оператора.
+# Источник истины — incarnation.state (что РАЗВЁРНУТО), вход — ДЕЛЬТА оператора.
 #
 # tls_* — дискриминатор коннекта плагина из ИМЕНОВАННОГО state.tls (state_schema v3,
-# day-2-конвенция §7a), идентично restart: плагин обязан коннектиться по TLS, если
+# конвенция §7a), идентично restart: плагин обязан коннектиться по TLS, если
 # Redis на TLS (иначе plaintext на TLS-only провалит шаг; AUTH plaintext при открытом
 # plain-порту — утечка пароля). tls_ca — PEM CA из vault(incarnation.state.tls.ca_ref)
 # (плагин ждёт PEM, не путь; в state лежит Vault-ПУТЬ, vault() резолвит в PEM).
 compute:
   # ── admin_user: имя СИСТЕМНОГО ACL-юзера внутрикластерного AUTH (default_admin) ──
-  # ★ РЕДИЗАЙН default_admin (2026-06-30): day-2-тело БЕЗ extends: covenant (нет общего
+  # ★ РЕДИЗАЙН default_admin (2026-06-30): тело сценария БЕЗ extends: covenant (нет общего
   # compute), поэтому имя системного admin-юзера объявляется ЛОКАЛЬНЫМ литералом — единый
   # источник внутри сценария (плагин-коннект community.redis.config + masterauth-долив в
   # apply.input.config + Vault-путь пароля читают compute.admin_user, не хардкодят
@@ -88,11 +88,11 @@ compute:
   tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
   tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
   # tls_ca из ИМЕНОВАННОГО state.tls.ca_ref, симметрично tls_port из state.tls.port. После
-  # rotate_tls (меняет state.tls.ca_ref) day-2 коннект берёт АКТУАЛЬНЫЙ CA, не essence-дефолт.
+  # rotate_tls (меняет state.tls.ca_ref) коннект берёт АКТУАЛЬНЫЙ CA, не essence-дефолт.
   tls_ca:   "${ compute.tls_on ? vault(incarnation.state.tls.ca_ref) : '' }"
 
   # ── Эффективная версия redis (для version-aware валидатора redis_settings, #6) ──
-  # day-2 версию НЕ переустанавливает — берём РАЗВЁРНУТУЮ из incarnation.state
+  # Повторный прогон версию НЕ переустанавливает — берём РАЗВЁРНУТУЮ из incarnation.state
   # (зафиксирована create). Серия major.minor этой версии выбирает набор валидных
   # директив в каталоге (assert ниже). Старые инкарнации без поля → '' (assert skip:
   # не-каталожную версию не блокируем). Симметрия с compute.redis_version create.
@@ -103,7 +103,7 @@ compute:
   persistence: "${ default(input.persistence, default(incarnation.state.persistence, 'rdb')) }"
 
   # ── Перевычисленный redis_config (тот же merge-перевод, что create) ──────────
-  # Слои (SHALLOW last-wins): РАЗВЁРНУТЫЙ incarnation.state.redis_config (база day-2 —
+  # Слои (SHALLOW last-wins): РАЗВЁРНУТЫЙ incarnation.state.redis_config (база повторного прогона —
   # сохраняет TLS/cluster/прочие директивы, которые оператор сейчас не трогает) →
   # persistence-пресет → вычисленные maxmemory/policy (вход ИЛИ state-подложка) →
   # input.redis_settings (passthrough дельта). TLS-директивы УЖЕ в базовом
@@ -129,7 +129,7 @@ compute:
        ) }
 
 # ── Мутация incarnation.state ─────────────────────────────────────────────────
-# day-2 фиксирует НОВЫЙ развёрнутый redis_config + изменённые namedfields (read-model
+# Сценарий фиксирует НОВЫЙ развёрнутый redis_config + изменённые namedfields (read-model
 # из тех же compute/input, что redis_config — без drift, как create). Не заданные
 # оператором namedfields сохраняют прежнее значение (подложка из state).
 state_changes:
@@ -144,7 +144,7 @@ state_changes:
 
 tasks:
   # ── Version-aware валидатор имён директив redis_settings (assert, #6) ─────────────
-  # ★ qa-gap (day-2): update_config принимает redis_settings (passthrough KEY→VALUE) —
+  # ★ qa-gap: update_config принимает redis_settings (passthrough KEY→VALUE) —
   # без проверки оператор молча протащит опечатку (`maxmemoyr 512mb`) или директиву
   # чужой версии → CONFIG SET отвергнет / redis-server не перезапустится (поздний,
   # непонятный отказ). Тот же assert-валидатор, что в create/main.yml: сверяет КАЖДОЕ
@@ -157,7 +157,7 @@ tasks:
   # INPUT-ONLY (essence недоступен, структурный CEL-барьер). essence.redis_directives
   # доступен ТОЛЬКО assert-у (полный scenario-контекст). Run-level, host-инвариантно.
   #
-  # ВЕРСИЯ — compute.redis_version (РАЗВЁРНУТАЯ, из incarnation.state). day-2 версию не
+  # ВЕРСИЯ — compute.redis_version (РАЗВЁРНУТАЯ, из incarnation.state). Повторный прогон версию не
   # меняет → валидируем против той же серии, что задеплоена. EMPTY-CATALOG-SKIP
   # (!has(essence.redis_directives)) — каталог опционален (минимальные fixtures);
   # версия вне каталога (compute.redis_version == '' или серия отсутствует) → skip.
@@ -183,13 +183,13 @@ tasks:
       destiny: redis
       input:
         version:  "${ default(incarnation.state.redis_version, '') }"
-        # ★ install: ОБЯЗАТЕЛЕН на day-2 (регресс live E2E 2026-07-01). Без него
+        # ★ install: ОБЯЗАТЕЛЕН на повторном прогоне (регресс live E2E 2026-07-01). Без него
         # диспетчер install.yml по !has(input.install) скатывается в package-ветку →
         # core.pkg `apt install redis-server=<version>` (версия из Nexus-binary в apt
         # ОТСУТСТВУЕТ → env exited 100). Собираем ТУ ЖЕ binary-структуру, что create
         # (deploy-body → compute.install из essence.install_method) — единый способ
         # установки. Отличие от covenant.install: version из РАЗВЁРНУТОГО state
-        # (redis_version), а не input.version (day-2 версию не переустанавливает).
+        # (redis_version), а не input.version (повторный прогон версию не переустанавливает).
         install: >-
           ${ (default(essence.install_method, 'binary') == 'binary')
                ? {

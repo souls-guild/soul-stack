@@ -243,14 +243,14 @@ state_changes:
   # timestamp (детерминизм L0; время миграции — в state_history). detached ВЕТВИТСЯ по
   # режиму:
   #   - sentinel → false: источник ещё ЖИВ, отцепление (REPLICAOF NO ONE) — отдельный
-  #     day-2 detach_source ПОСЛЕ ручного квиеса записи оператором;
+  #     detach_source ПОСЛЕ ручного квиеса записи оператором;
   #   - cluster → true: B3-поток АТОМАРЕН — forget-external (выкидывание старых нод)
   #     выполнен в migrate-фазе ЭТОГО прогона (cluster.yml шаг 4), источник уже отцеплён
   #     → detached сразу true. detach_source/cluster.yml ничего не отцепляет (honest-
   #     сообщение «forget выполнен в migrate_cluster»).
   # ★ source_password_ref/source_tls_ca_ref (v10) — ПЕРСИСТИМ ССЫЛКИ (Vault-ПУТИ, НЕ
   #   значения) на учётку внешнего источника из input.source.password_ref/tls_ca_ref:
-  #   day-2 detach_source делает финальный offset-gate к источнику, и без этих ref'ов
+  #   detach_source делает финальный offset-gate к источнику, и без этих ref'ов
   #   коннект к AUTH/TLS-источнику падал бы (учётка не во входном контракте detach,
   #   секрет в state не оседает — ИБ). detach читает их vault()-ом keeper-side. Оба
   #   опциональны во входе → default('') (источник без AUTH/TLS). Кладём ПУТЬ-строку

@@ -23,10 +23,10 @@ state_changes: {}
 # выражение, результат тот же.
 #
 # ★ Источник истины — incarnation.state.tls (ИМЕНОВАННОЕ поле намерения, state_schema
-# v3, day-2-конвенция docs/destiny/production-conventions.md §7a, ADR-057 amendment),
+# v3, конвенция docs/destiny/production-conventions.md §7a, ADR-057 amendment),
 # НЕ essence и НЕ парсинг redis_config: create транслирует operator-ввод TLS
 # (tls_enabled/tls_keep_plain) → named-field state.tls (тот же compute.tls_*, что дал
-# TLS-блок redis_config); на day-2 essence
+# TLS-блок redis_config); на повторном прогоне essence
 # НЕПОЛНА (не видит operator-override). Раньше дискриминатор парсил opaque write-model
 # (`'tls-port' in incarnation.state.redis_config`); v3 даёт ИМЕНОВАННЫЙ read-model
 # state.tls.enable — читаемее и без bracket-нотации дефисного ключа.
@@ -59,9 +59,9 @@ tasks:
   #
   # ★ TLS-дискриминатор вынесен в scenario-level compute: (см. блок compute выше):
   # tls_on/tls_port/tls_ca объявлены ОДИН раз, задачи ссылаются compute.<name>. Источник
-  # истины — incarnation.state.tls (ИМЕНОВАННОЕ поле v3, day-2-конвенция §7a). ca_ref на
+  # истины — incarnation.state.tls (ИМЕНОВАННОЕ поле v3, конвенция §7a). ca_ref на
   # create записан в state.tls.ca_ref как Vault-ПУТЬ (не PEM), а плагину нужно PEM-
-  # СОДЕРЖИМОЕ → day-2 берёт CA через vault(incarnation.state.tls.ca_ref): актуальный путь
+  # СОДЕРЖИМОЕ → повторный прогон берёт CA через vault(incarnation.state.tls.ca_ref): актуальный путь
   # после rotate_tls, а не устаревший essence-дефолт. addr на
   # compute.tls_on/tls_port: TLS включён → '127.0.0.1:' + tls-порт (string(state.tls.port),
   # INTEGER в v3), иначе plaintext 6379.
@@ -73,7 +73,7 @@ tasks:
       addr:     "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
       # ★ РЕДИЗАЙН default_admin (2026-06-30): probe-коннект — под системным default_admin
       # (username → AUTH, requirepass убран). password из новой Vault-ветки secret/redis/
-      # <inc>/users/default_admin#password. day-2-тело (вне covenant) хардкодит 'default_admin'.
+      # <inc>/users/default_admin#password. Тело сценария (вне covenant) хардкодит 'default_admin'.
       username: default_admin
       password: "${ vault('secret/redis/' + incarnation.name + '/users/default_admin#password') }"
       tls:      "${ compute.tls_on }"

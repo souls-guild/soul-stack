@@ -1,7 +1,7 @@
 # ★★ КРИТИЧНЫЙ guard-инвариант (system-ACL-users d2): update_users НЕ СТИРАЕТ системных.
 # update_users перерендеривает ПОЛНЫЙ users.acl, заменяя operator-extra на input.users.
 # БЕЗ долива системных из essence этот рендер СТЁР БЫ replica/monitoring/sentinel/haproxy
-# → сломал бы репликацию/sentinel/health-check на day-2. Этот кейс ДОКАЗЫВАЕТ, что
+# → сломал бы репликацию/sentinel/health-check на повторном прогоне. Этот кейс ДОКАЗЫВАЕТ, что
 # update_users доливает системных из essence.system_acl_users на КАЖДОМ рендере, даже
 # при полной замене operator-extra:
 #   users.acl несёт СИСТЕМНЫЕ (replica/monitoring/sentinel/haproxy) + НОВЫЙ operator-extra

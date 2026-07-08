@@ -1,4 +1,4 @@
-# L0-испытание rotate_tls: day-2 ротация TLS-материала БЕЗ рестарта. Оператор задаёт
+# L0-испытание rotate_tls: ротация TLS-материала БЕЗ рестарта. Оператор задаёт
 # НОВЫЕ Vault-refs cert/key/ca; сценарий перерендеривает PEM в ${conf_dir}/tls/ из
 # новых refs и шлёт три CONFIG SET tls-*-file через community.redis.command под
 # onchanges-гейтом (Redis 6.2+ пересоздаёт SSL_CTX и перечитывает live). Render-only,
@@ -67,7 +67,7 @@ fixtures:
   # rotate-прогоне коннект идёт СТАРЫМ CA (tls#ca → CACERT) к серверу, у которого ещё
   # старый cert; три CONFIG SET сами подменяют материал. Это ТЕКУЩЕЕ доверие коннекта;
   # ротируемый ca_ref (input, tls-v2#ca) — новый CA, рендерящийся в файл для Redis и
-  # фиксируемый в state_changes (на СЛЕДУЮЩИХ day-2 коннект пойдёт уже им).
+  # фиксируемый в state_changes (на СЛЕДУЮЩИХ прогонах коннект пойдёт уже им).
   state:
     redis_type: sentinel
     redis_version: "7.2.4"

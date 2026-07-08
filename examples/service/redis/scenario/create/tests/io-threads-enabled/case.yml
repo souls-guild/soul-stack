@@ -82,7 +82,7 @@ assert:
   state_changes:
     redis_type: sentinel
     redis_version: "7.4.1"
-    # io-threads материализован в read-model redis_config (state) — day-2 видит выбор.
+    # io-threads материализован в read-model redis_config (state) — повторный прогон видит выбор.
     redis_config:
       maxmemory: "256mb"
       save: "900 1 300 10 60 10000"

@@ -1,8 +1,8 @@
 # L0-испытание update_config НА TLS-инстансе. Парный guard к update-maxmemory-policy
-# (plaintext) — покрывает TLS-ветку дискриминатора day-2-гейта (compute.tls_on=true).
+# (plaintext) — покрывает TLS-ветку дискриминатора гейта (compute.tls_on=true).
 # Render-only, герметично.
 #
-# ★ Инвариант (day-2-конвенция §7a, ADR-057 amendment): дискриминатор TLS берётся из
+# ★ Инвариант (конвенция §7a, ADR-057 amendment): дискриминатор TLS берётся из
 # ИМЕНОВАННОГО incarnation.state.tls (state_schema v3), НЕ из essence/redis_config.
 # При state.tls.enable=true hot-reload-шаг (community.redis.config) обязан коннектиться
 # по TLS: addr на state.tls.port, tls=true, tls_ca = PEM CA из vault(state.tls.ca_ref)
@@ -26,7 +26,7 @@ fixtures:
     os: { arch: amd64 }
 
   # host-layout (conf_dir/data_dir/modules_base_url) — в essence (v11→v12, Вариант A):
-  # вынесен из state, day-2 читает отсюда.
+  # вынесен из state, повторный прогон читает отсюда.
   essence:
     memory_reserve_percent: 75
     conf_dir: /etc/redis
@@ -38,7 +38,7 @@ fixtures:
         appendonly: "no"
 
   # Развёрнутый incarnation.state v3 (от create с TLS): tls.enable=true + port 7379.
-  # state.tls.ca_ref — источник CA day-2-коннекта (vault() резолвит путь в PEM).
+  # state.tls.ca_ref — источник CA коннекта (vault() резолвит путь в PEM).
   state:
     redis_type: sentinel
     redis_version: "7.2.4"
