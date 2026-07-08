@@ -27,7 +27,7 @@
 #   4. ★ FORGET: community.redis.cluster action:forget-external, nodes-MAP + source_nodes.
 #   5. state_changes: create-набор (cluster) + seeded_from {source_endpoints:[источник],
 #      detached:TRUE} — cluster B3 атомарна, forget в migrate-фазе → detached сразу true
-#      (в отличие от sentinel, где detached:false и отцеп — day-2).
+#      (в отличие от sentinel, где detached:false и отцеп — сценарий сопровождения).
 #
 # ВНИМАНИЕ L0-ограничение (как create/cluster-3shards): apply.input host-инвариантен в
 # пилоте (резолвится на ПЕРВОМ targeted-хосте) → render_context.self в destiny = node-1.
@@ -255,7 +255,7 @@ assert:
     # ★ seed-source read-model (v10): откуда мигрировали + detached:TRUE (B3 атомарна) +
     # ССЫЛКИ на учётку источника. source_password_ref = input.source.password_ref;
     # source_tls_ca_ref='' (tls:false, tls_ca_ref не задан). ★ cluster detached:true →
-    # detach_source/cluster.yml ничего не отцепляет, ref'ы не используются day-2, но
+    # detach_source/cluster.yml ничего не отцепляет, ref'ы не используются, но
     # персистятся симметрично sentinel (единая форма seeded_from v10).
     seeded_from:
       source_endpoints:

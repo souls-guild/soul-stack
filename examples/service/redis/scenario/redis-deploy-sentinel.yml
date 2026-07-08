@@ -254,7 +254,7 @@
 #    ★ #7: config — те же per-master тайминги (compute.sentinel_directives), что в стартовом
 #    sentinel.conf. Плагин classifyConfig раскладывает ключи `sentinel <opt> <master>` в
 #    per-master и применяет SENTINEL SET (reconcileMasterParams) — на create идемпотентно
-#    совпадёт со стартовым конфигом, на day-2 даст live-апдейт таймингов.
+#    совпадёт со стартовым конфигом, на повторном прогоне даст live-апдейт таймингов.
 #
 #    ★★ КОНТРАКТ-ФЛАГ sentinel_monitor_now (prod-фикс sentinel-migrate split-brain) ★★
 #    Гейт `when: vars.sentinel_monitor_now` — выполнять ли MONITOR СЕЙЧАС (в этом деплое).

@@ -1,7 +1,7 @@
 # L0-испытание update_users НА TLS-инстансе. Парный guard к bulk-replace-removes-user —
 # покрывает TLS-ветку дискриминатора (compute.tls_on=true). Render-only, герметично.
 #
-# ★ Инвариант (day-2-конвенция §7a): при state.tls.enable=true ACL LOAD-шаг
+# ★ Инвариант (конвенция §7a): при state.tls.enable=true ACL LOAD-шаг
 # (community.redis.acl) обязан коннектиться по TLS (addr на state.tls.port, tls=true,
 # tls_ca = PEM CA из vault(state.tls.ca_ref)) — иначе plaintext-коннект на TLS-only
 # Redis провалит ACL LOAD. CA берётся из ИМЕНОВАННОГО state.tls.ca_ref (актуальный после
@@ -20,14 +20,14 @@ fixtures:
     network: { primary_ip: 10.0.0.6 }
     os: { arch: amd64 }
 
-  # host-layout — в essence (v11→v12, Вариант A): вынесен из state, day-2 читает отсюда.
+  # host-layout — в essence (v11→v12, Вариант A): вынесен из state, повторный прогон читает отсюда.
   essence:
     conf_dir: /etc/redis
     data_dir: /var/lib/redis
     modules_base_url: "https://artifacts.example.com/redis/modules"
 
   # Развёрнутый incarnation.state v6 с TLS; ранее был bob, новый набор = {alice}.
-  # state.tls.ca_ref — источник CA day-2-коннекта (vault() резолвит путь в PEM).
+  # state.tls.ca_ref — источник CA коннекта (vault() резолвит путь в PEM).
   state:
     redis_type: sentinel
     redis_version: "7.2.4"

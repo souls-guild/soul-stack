@@ -7,14 +7,14 @@
 #
 # Поток:
 #   0. PRECONDITION-GUARD: инкарнация ДОЛЖНА быть залита migrate_cluster (seeded_from
-#      .source_endpoints непуст). detach — обычный day-2 (нет runnable:false), оператор
+#      .source_endpoints непуст). detach — обычный сценарий сопровождения (нет runnable:false), оператор
 #      может запустить его на create'нутой инкарнации, которая никогда не мигрировала —
 #      у такой source_endpoints ПУСТ (миграция 008_to_009 даёт каждой v9 пустой
 #      seeded_from). assert ОТСЕКАЕТ её ВНЯТНЫМ отказом ДО probe (render-фазный
 #      fail-closed, симметрично cluster.yml-заглушке), вместо опаковой ошибки compute
 #      `index out of bounds`. Стоит ПЕРВЫМ — раньше любого коннекта к Redis.
 #   1. ФИНАЛЬНЫЙ offset-gate ПЕРЕД detach (повторно, как migrate_cluster шаг 3, но на
-#      day-2 источник из state): убедиться, что новый master ВСЁ ЕЩЁ синхронен с
+#      этом прогоне источник из state): убедиться, что новый master ВСЁ ЕЩЁ синхронен с
 #      источником НЕПОСРЕДСТВЕННО перед разрывом. fail-closed: не синхронен за окно →
 #      шаг failed → state НЕ коммитится → error_locked (detached НЕ выставится, источник
 #      останется привязан — безопаснее, чем отцепить недогнанную реплику и потерять хвост).
@@ -29,7 +29,7 @@
 #      sentinel-демоны получают команду мониторить реального master. Форма задачи —
 #      1:1 копия шага 4 деплой-тела (community.redis.sentinel, monitor.ip=master-election,
 #      quorum=большинство, тайминги из compute.sentinel_directives); источники адаптированы
-#      на day-2-state (master_name/тайминги/версия из incarnation.state, см. compute main.yml).
+#      на state (master_name/тайминги/версия из incarnation.state, см. compute main.yml).
 #      Стоит ПОСЛЕ шага 2 — мониторим уже автономный master, не реплику.
 
 # 0. PRECONDITION-GUARD: seeded_from.source_endpoints непуст (инкарнация прошла
@@ -72,7 +72,7 @@
   params:
     addr:            "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
     source_addr:     "${ compute.source_master }"
-    # ★ РЕДИЗАЙН default_admin: LOCAL-коннект под default_admin (requirepass убран). day-2-тело
+    # ★ РЕДИЗАЙН default_admin: LOCAL-коннект под default_admin (requirepass убран). Тело сценария
     # ВНЕ covenant → имя admin-юзера хардкодим 'default_admin' (нет compute.admin_user).
     # source_password — учётка ВНЕШНЕГО источника (из state-ссылок).
     username:        "${ 'default_admin' }"
@@ -109,7 +109,7 @@
 #    Форма — 1:1 копия шага 4 redis-deploy-sentinel.yml (community.redis.sentinel на КАЖДОМ
 #    хосте; addr — локальный sentinel 127.0.0.1:26379; monitor.ip — HOST-ИНВАРИАНТНЫЙ master
 #    из master-election soulprint.hosts[0]; quorum — большинство size/2+1; auth_pass — keeper-
-#    side vault()-резолв). Отличие — ИСТОЧНИКИ day-2 берутся из incarnation.state (входного
+#    side vault()-резолв). Отличие — ИСТОЧНИКИ берутся из incarnation.state (входного
 #    контракта у detach нет): master_name/тайминги/версия — compute.sentinel_master_name/
 #    sentinel_directives/redis_version (собраны из state.redis_sentinel/redis_version, см.
 #    compute main.yml), а не из essence/input. На detach roster = новый master (soulprint
@@ -121,7 +121,7 @@
     master_name: "${ compute.sentinel_master_name }"
     # ★ РЕДИЗАЙН default_admin: CONNECTION-AUTH к :26379 под default_admin (built-in default →
     # off, коннект под системным default_admin sentinel-набора). username/password — пара
-    # коннекта; auth_user/auth_pass — реквизиты мониторинга master. day-2-тело ВНЕ covenant →
+    # коннекта; auth_user/auth_pass — реквизиты мониторинга master. Тело сценария ВНЕ covenant →
     # имя admin-юзера хардкодим 'default_admin'. Без них коннект к ACL-демону → NOAUTH.
     username:    "${ 'default_admin' }"
     password:    "${ vault('secret/redis/' + incarnation.name + '/users/default_admin#password') }"

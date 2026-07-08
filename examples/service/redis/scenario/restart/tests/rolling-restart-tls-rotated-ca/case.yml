@@ -1,9 +1,9 @@
-# L0-GUARD фикса latent-бага «day-2 CA из essence вместо state» (аудит 2026-06-26).
+# L0-GUARD фикса latent-бага «CA из essence вместо state» (аудит 2026-06-26).
 # Сценарий-после-rotate_tls: state.tls.ca_ref УЖЕ переписан на НОВЫЙ Vault-путь
 # (rotate_tls сменил CA-материал и зафиксировал новый ref в state). essence.tls_ca_ref
 # при этом остался author-дефолтом (rotate его НЕ трогает) — он указывает на СТАРЫЙ CA.
 #
-# ★ ПРОВЕРЯЕМЫЙ ИНВАРИАНТ: day-2 коннект (compute.tls_ca) обязан резолвить CA из
+# ★ ПРОВЕРЯЕМЫЙ ИНВАРИАНТ: коннект (compute.tls_ca) обязан резолвить CA из
 # ИМЕНОВАННОГО incarnation.state.tls.ca_ref (АКТУАЛЬНЫЙ, новый), НЕ из essence.tls_ca_ref
 # (устаревший). До фикса tls_ca = vault(essence.tls_ca_ref) → коннект СТАРЫМ CA к серверу
 # с НОВЫМ cert → TLS verify падает → шаг failed → error_locked. Этот кейс ловит регресс:
@@ -32,7 +32,7 @@ fixtures:
     reason: "rolling restart after CA rotation for L0 guard"
 
   # Развёрнутый incarnation.state v3 ПОСЛЕ rotate_tls: state.tls.ca_ref — НОВЫЙ путь
-  # (tls-v2). Это источник истины day-2-коннекта (read-model v3). port=7379 INTEGER.
+  # (tls-v2). Это источник истины коннекта (read-model v3). port=7379 INTEGER.
   state:
     redis_type: sentinel
     redis_version: "7.2.4"
@@ -53,7 +53,7 @@ fixtures:
       tls-replication:  "yes"
 
   # essence.tls_ca_ref — author-дефолт, УКАЗЫВАЕТ НА СТАРЫЙ CA (tls#ca). После фикса
-  # day-2 его НЕ читает; присутствует здесь РОВНО чтобы доказать, что коннект НЕ берёт
+  # повторный прогон его НЕ читает; присутствует здесь РОВНО чтобы доказать, что коннект НЕ берёт
   # его (regress-ловушка: вернись код на essence — увидел бы OLD-CA, ассерт упал бы).
   essence:
     tls_ca_ref: "secret/services/redis/tls#ca"

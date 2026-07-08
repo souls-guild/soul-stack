@@ -1,39 +1,14 @@
 name: add_user
 description: >-
-  Day-2: добавить (или переопределить) ОДНОГО ACL-пользователя на УЖЕ работающем
-  Redis БЕЗ рестарта процесса. Производственная конвенция «hot-reload > рестарт»
-  (docs/destiny/production-conventions.md §3a/§6): ACL применяется на лету командой
-  ACL LOAD (перечитать aclfile), рестарт демона не нужен.
-
-  Оператор задаёт ОДНУ запись AclUser (name + perms + state) — тот же тип, что элемент
-  массива create input.users (types.yml, ADR-062). perms валидируется тем же re2-
-  паттерном AclUser, что в create (закрывает day-2-мусор: невалидная ACL-строка
-  отсекается на input-валидации, а не доезжает до users.acl). Пароль НЕ во входном
-  контракте: лежит в Vault по конвенции
-  secret/redis/<incarnation>/users/<name>#password (как create/add_node), резолвится
-  keeper-side через vault() в render-фазе. Сценарий мержит нового юзера в РАЗВЁРНУТЫЙ
-  incarnation.state.redis_users, рендерит ПОЛНЫЙ users.acl на диск и ОЖИВЛЯЕТ через
-  community.redis.acl (ACL LOAD).
-
-  ★ Граница с update_config/rotate_tls: add_user трогает ТОЛЬКО ACL (users.acl +
-  ACL LOAD), redis.conf и TLS-материал не перерендеривает — отдельная аудит-семантика
-  «изменился список пользователей». users.acl рендерит destiny redis (тот же кирпич,
-  что create) — здесь подменяется только vars.users набор.
-
-  Идемпотентность: ACL LOAD идемпотентен ПО КОНСТРУКЦИИ (приводит живой инстанс к
-  файлу независимо от текущего состояния); плагин делает честный diff ACL LIST
-  до/после (changed=false при совпадении). Рендер users.acl детерминирован (range по
-  отсортированному map). Day-2: инстанс УЖЕ работает (auth через vault()-пароль +
-  TLS-дискриминатор из incarnation.state.tls, как restart/update_config).
-
-  Таргетинг — на весь incarnation (on опущен, ADR-008/009): новый users.acl + ACL LOAD
-  идут на КАЖДЫЙ redis-server-хост. ACL host-инвариантен (один набор юзеров на кластер).
+  Добавить или переопределить одного ACL-пользователя на работающем Redis без рестарта.
+  Пароль берётся из Vault; сценарий рендерит полный users.acl и применяет его на живом
+  инстансе.
 
 # ── Входной контракт оператора (docs/input.md) ────────────────────────────────
 # ОДНА запись AclUser (types.yml, ADR-062 $type): имя юзера, его ACL-права, on/off.
 # Тот же тип, что элемент массива create input.users — единый источник правды формы
 # и валидации (perms-pattern). Пароль — НЕ во входе (Vault-конвенция, см. description).
-# Один юзер за прогон — атомарная day-2 операция «добавить пользователя» (массовое
+# Один юзер за прогон — атомарная операция сопровождения «добавить пользователя» (массовое
 # редактирование набора → update_users, bulk-replace).
 #
 # ★ wave 2 (2026-06-26): прежний нетипизированный {username, perms, state} заменён
@@ -41,7 +16,7 @@ description: >-
 # поле user.name. Эффект — perms теперь валидируется re2-паттерном AclUser (token-shape-
 # фильтр create), которого у прежнего свободного perms не было: невалидная ACL-строка
 # (мусор/инъекции/переводы строк) отсекается на input-валидации (422), а не доезжает
-# до users.acl на day-2.
+# до users.acl.
 input:
   user:
     $type: AclUser
@@ -68,7 +43,7 @@ validate:
 # update_config: ACL LOAD идёт через TLS-коннект, если Redis на TLS.
 compute:
   # ── admin_user: имя СИСТЕМНОГО ACL-юзера внутрикластерного AUTH (default_admin) ──
-  # ★ РЕДИЗАЙН default_admin (2026-06-30): day-2-тело БЕЗ extends: covenant (нет общего
+  # ★ РЕДИЗАЙН default_admin (2026-06-30): тело сценария БЕЗ extends: covenant (нет общего
   # compute), поэтому имя системного admin-юзера объявляется ЛОКАЛЬНЫМ литералом — единый
   # источник внутри сценария (плагин-коннект community.redis.acl + masterauth-долив в
   # config + Vault-путь пароля читают compute.admin_user, не хардкодят 'default_admin' в
@@ -79,7 +54,7 @@ compute:
   # tls_ca — PEM CA-СОДЕРЖИМОЕ коннекта (плагин ждёт PEM, не путь). Берётся из
   # ИМЕНОВАННОГО state.tls.ca_ref (Vault-ПУТЬ в state, vault() резолвит в PEM),
   # симметрично tls_port из state.tls.port. После rotate_tls (меняет state.tls.ca_ref
-  # на новый путь) day-2 коннект использует АКТУАЛЬНЫЙ CA — не устаревший essence-дефолт.
+  # на новый путь) коннект использует АКТУАЛЬНЫЙ CA — не устаревший essence-дефолт.
   tls_ca:   "${ compute.tls_on ? vault(incarnation.state.tls.ca_ref) : '' }"
 
   # ── Новый набор ACL-юзеров: РАЗВЁРНУТЫЙ state.redis_users + добавляемый юзер ──
@@ -101,7 +76,7 @@ compute:
        + [{ 'name': input.user.name, 'perms': input.user.perms, 'state': default(input.user.state, 'on') }] }
 
 # ── Мутация incarnation.state ─────────────────────────────────────────────────
-# day-2 фиксирует НОВЫЙ набор ACL-юзеров (массив AclUser [{name,perms,state}], wave
+# Сценарий фиксирует НОВЫЙ набор ACL-юзеров (массив AclUser [{name,perms,state}], wave
 # 1b, БЕЗ пароля — он keeper-side vault, ADR-012). Тот же compute.users_new (массив),
 # что ушёл в render users.acl.
 state_changes:
@@ -121,13 +96,13 @@ tasks:
       destiny: redis
       input:
         version:  "${ default(incarnation.state.redis_version, '') }"
-        # ★ install: ОБЯЗАТЕЛЕН на day-2 (регресс live E2E 2026-07-01). Без него
+        # ★ install: ОБЯЗАТЕЛЕН на повторном прогоне (регресс live E2E 2026-07-01). Без него
         # диспетчер install.yml по !has(input.install) скатывается в package-ветку →
         # core.pkg `apt install redis-server=<version>` (версия из Nexus-binary в apt
         # ОТСУТСТВУЕТ → env exited 100). Собираем ТУ ЖЕ binary-структуру, что create
         # (deploy-body → compute.install из essence.install_method) — единый способ
         # установки. Отличие от covenant.install: version из РАЗВЁРНУТОГО state
-        # (redis_version), а не input.version (day-2 версию не переустанавливает).
+        # (redis_version), а не input.version (повторный прогон версию не переустанавливает).
         install: >-
           ${ (default(essence.install_method, 'binary') == 'binary')
                ? {
@@ -159,7 +134,7 @@ tasks:
         # ПЕРВЫМИ) + operator-extra (state.redis_users + новый, compute.users_new — МАССИВ
         # AclUser, wave 1b, ПОВЕРХ). add_user перерендеривает ВЕСЬ файл (не append) → БЕЗ долива системных
         # этот рендер СТЁР БЫ replica/monitoring/sentinel/haproxy → сломал бы репликацию/
-        # sentinel/health-check на day-2. Системные доливаются на КАЖДОМ рендере из
+        # sentinel/health-check на повторном прогоне. Системные доливаются на КАЖДОМ рендере из
         # essence.system_acl_users (они НЕ в state — state хранит только operator-extra,
         # пункт 7 d2). last-wins: operator-extra перекрывает одноимённого системного
         # (но имена системных закрыты validate-guard create — коллизии быть не должно).

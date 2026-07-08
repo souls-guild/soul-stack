@@ -1,4 +1,4 @@
-# L0-испытание update_config: day-2 hot-reload директив redis.conf БЕЗ рестарта.
+# L0-испытание update_config: hot-reload директив redis.conf БЕЗ рестарта.
 # Оператор меняет maxmemory_policy (allkeys-lru → volatile-lru); сценарий
 # перевычисляет merged redis_config (на базе РАЗВЁРНУТОГО incarnation.state.redis_config),
 # рендерит новый redis.conf и ОЖИВЛЯЕТ через community.redis.config (CONFIG SET,
@@ -28,7 +28,7 @@ fixtures:
 
   # essence-подложка: persistence_presets + memory_reserve (для перевычисления maxmemory
   # из сохранённого state.memory_mb) + host-layout (v11→v12: conf_dir/data_dir/
-  # modules_base_url вынесены из state в essence, Вариант A; day-2 читает их отсюда).
+  # modules_base_url вынесены из state в essence, Вариант A; повторный прогон читает их отсюда).
   essence:
     memory_reserve_percent: 75
     conf_dir: /etc/redis

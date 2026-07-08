@@ -1,36 +1,8 @@
 name: destroy
 description: >-
-  Teardown: снять VM, поднятые create-прогоном через cloud-provision (ADR-061,
-  Вариант A), и каскадно вычистить keeper-реестры этих хостов. Lifecycle-сценарий
-  (НЕ runnable из Run-формы — terminal-флоу DELETE /v1/incarnations/{name}, как
-  create — bootstrap): keeper трактует имя `destroy` как фазу жизненного цикла
-  (scenario.LifecycleScenarioNames), запускается в режиме TerminalDestroy.
-
-  Симметрия с create/provision.yml: provision поднимает VM (core.cloud.created,
-  on: keeper) и фиксирует в incarnation.state ФАКТ «эти хосты подняты нашим
-  прогоном» — provisioned_vm_ids (provider-side id для cloud-destroy),
-  provisioned_sids (Keeper-side SID для cascade), provisioned_provider (имя
-  Provider). destroy читает их обратно из incarnation.state (keeper-side задача
-  видит pre-run снимок incarnation.state.<path>, симметрично Soul-side — render
-  commit 68912a8) и зовёт core.cloud.destroyed (on: keeper) с обратной операцией:
-  PluginHost.Destroy(vm_ids) + cascade одной PG-транзакцией (souls→destroyed,
-  active soul_seeds→orphaned, active bootstrap_tokens→burned). Cascade нужен
-  потому, что Reaper НЕ снимает pending-VM-souls сам (mark_disconnected только
-  connected→disconnected); без sids записи повисли бы осиротевшими (нарушение
-  anti-replay bootstrap-токенов).
-
-  ★ ГРУППИРОВКА НА НЕ-ПРОВИЖЕННЫХ: destroy на инкарнации, развёрнутой БЕЗ
-  cloud-provision (deploy на существующие VM), не имеет смысла — VM не наши,
-  снимать нечего. Гейт `when: size(...provisioned_vm_ids...) > 0` стоит НА
-  задаче destroyed; это статический предикат (зависит ТОЛЬКО от incarnation.*,
-  isStaticWhen) → render-phase GROUP-DROP: на пустом provisioned_vm_ids задача
-  физически не попадает в план (а не гасится placeholder-skip-ом). Инкарнации без
-  provision проходят teardown без cloud-вызова.
-
-  ★ state_changes ОТСУТСТВУЮТ намеренно: destroy терминальный — инкарнация
-  удаляется (auto_destroy), чистить provisioned_* в state бессмысленно (state
-  уходит вместе с инкарнацией). Зеркало create, где state НАПОЛНЯЕТСЯ; здесь
-  state не трогаем.
+  Снять VM, поднятые сценарием create, и каскадно вычистить keeper-реестры этих хостов.
+  Lifecycle-сценарий (флоу DELETE /v1/incarnations/{name}, не из Run-формы); на
+  инкарнациях без provision — no-op.
 
 # ── Входной контракт оператора ────────────────────────────────────────────────
 # Пуст: destroy не принимает операторского ввода. Что снимать (provider, vm_ids,

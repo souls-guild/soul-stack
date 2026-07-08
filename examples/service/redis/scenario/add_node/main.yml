@@ -1,25 +1,10 @@
 name: add_node
 description: >-
-  Day-2: присоединить ОДНУ новую ноду к УЖЕ сформированному Redis-кластеру
-  (режим redis_type=cluster). Аналог redis-cli `--cluster add-node`, но ЦЕЛИКОМ
-  через плагин community.redis (go-redis: CLUSTER MEET/REPLICATE/NODES) — никакого
-  redis-cli/shell, capability плагина только network_outbound.
-
-  Новая нода ОБЯЗАНА быть уже привязанной к incarnation как Soul (онбординг —
-  вне сценария). Таргетинг новой ноды — по стабильному SID через where: (probe не
-  нужен, ADR-008). Прогон зовётся на весь incarnation: roster (soulprint.hosts)
-  содержит и существующие ноды, и новичка — из него строятся endpoint-ы.
-
-  Граница (architect 2026-06-22): scenario оркеструет порядок/таргетинг и строит
-  ГОТОВУЮ топологию-карту для плагина; плагин исполняет ОДНУ операцию (add-node) и
-  ничего не транслирует. Per-host директивы (cluster-announce-ip) рендерит destiny
-  `redis` из .self (TILING-урок), НЕ apply.input.
-
-  role=master добавляет ПУСТОЙ master (без слотов): перенос слотов на новый master —
-  это ОТДЕЛЬНАЯ операция reshard (follow-up). add-node слоты не двигает.
+  Присоединить одну новую ноду к сформированному Redis-кластеру. Нода должна быть уже
+  онборжена как Soul; master добавляется пустым — перенос слотов делает отдельный reshard.
 
 # ── Входной контракт оператора (docs/input.md) ────────────────────────────────
-# Простые типизированные понятия day-2: какой SID добавить, какой ролью, с какой
+# Простые типизированные понятия оператора: какой SID добавить, какой ролью, с какой
 # существующей нодой контактировать (seed), к какому master привязать реплику.
 input:
   new_node_sid:
@@ -86,7 +71,7 @@ tasks:
       destiny: redis
       input:
         version:  "${ default(incarnation.state.redis_version, '') }"
-        # ★ install: ОБЯЗАТЕЛЕН на day-2 (регресс live E2E 2026-07-01). Новая нода
+        # ★ install: ОБЯЗАТЕЛЕН на повторном прогоне (регресс live E2E 2026-07-01). Новая нода
         # приходит БЕЗ redis — install.yml ставит его. Без install-структуры диспетчер
         # по !has(input.install) скатывается в package-ветку → core.pkg `apt install
         # redis-server=<version>` (версия из Nexus-binary в apt ОТСУТСТВУЕТ → env exited
@@ -121,7 +106,7 @@ tasks:
         # реплика при FULLSYNC проходит AUTH ТОЛЬКО по статической masterauth в redis.conf
         # (плагин шлёт лишь REPLICATE master-id, masterauth не выставляет) — без неё PSYNC
         # упёрся бы в NOAUTH → master_link_status:DOWN. Доливается на новой ноде host-инвариантно
-        # (один default_admin на кластер). Failover-safe: на role=master инертны. day-2-тело
+        # (один default_admin на кластер). Failover-safe: на role=master инертны. Тело сценария
         # (вне covenant) хардкодит 'default_admin' напрямую. masterauth — vault()-В-ЯЧЕЙКЕ
         # (seal-маскинг, ADR-010 §7.4); путь — secret/redis/<inc>/users/default_admin#password.
         config: >-
@@ -165,7 +150,7 @@ tasks:
   #    community.redis.command, retry/until через retry. addr localhost (плагин на
   #    самой ноде). ★ РЕДИЗАЙН default_admin (2026-06-30): PING-коннект — под системным
   #    default_admin (username → AUTH, requirepass убран); пароль из новой Vault-ветки
-  #    users/default_admin. day-2-тело (вне covenant) хардкодит 'default_admin'.
+  #    users/default_admin. Тело сценария (вне covenant) хардкодит 'default_admin'.
   - name: Wait for the new node to answer PING
     where: soulprint.self.sid == input.new_node_sid
     module: community.redis.command

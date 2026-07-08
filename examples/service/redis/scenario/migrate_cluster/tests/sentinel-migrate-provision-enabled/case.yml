@@ -226,14 +226,14 @@ assert:
 
   # ★ SPLIT-BRAIN-ФИКС: SENTINEL MONITOR НЕ исполняется в миграции (как sentinel-migrate-
   # 1master-1replica). when: vars.sentinel_monitor_now (=false) → static-when placeholder-skip
-  # шага 4 деплой-тела (Params=nil, presence task_absent проходит). MONITOR делает day-2
+  # шага 4 деплой-тела (Params=nil, presence task_absent проходит). MONITOR делает
   # detach_source ПОСЛЕ REPLICAOF NO ONE.
   task_absent:
     - module: community.redis.sentinel
 
   # create-набор state + cloud-provision read-model + seed-source read-model. redis_config
   # БЕЗ cluster-директив (sentinel). provisioned_* — ФАКТ «эти VM подняты этим migrate-
-  # прогоном» (для cascade-destroy day-2 teardown); тот же guard+форма, что create.
+  # прогоном» (для cascade-destroy teardown); тот же guard+форма, что create.
   # seeded_from: source_endpoints = source.hosts ЦЕЛИКОМ, detached:false (источник ещё жив).
   state_changes:
     redis_type: sentinel
