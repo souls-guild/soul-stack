@@ -50,13 +50,6 @@ type KVReader interface {
 // path + resolver-носитель контекста). Пользователь пишет vault('path').
 const vaultFuncName = "__vault_read"
 
-// vaultRefPrefix — каноничный префикс vault-reference (`vault:<mount>/<path>`).
-// Совпадает с keeper/internal/render.vaultRefPrefix и audit.CredentialsRefPrefix
-// без `secret/`-хвоста (shared/cel не может импортировать keeper/internal —
-// слоистость, поэтому константа дублируется здесь). Используется только при
-// нормализации пути vault() к ref-форме в текстах ошибок (см. vaultRefForm).
-const vaultRefPrefix = "vault:"
-
 // vaultResolverVar — зарезервированная activation-переменная, несущая
 // per-eval resolver {ctx, kv} в binding функции. Имя с префиксом '__'
 // зарезервировано за internal-механизмами: авторские выражения с любым
@@ -198,7 +191,13 @@ func expandVaultMacro(mef parser.ExprHelper, _ ast.Expr, args []ast.Expr) (ast.E
 // контекста), resolver — носитель {ctx, kv} из активации. Возвращает map
 // секрета (без #field) либо одно поле (с #field). Ошибки Vault/формата —
 // types.NewErr (штатная CEL eval-ошибка, не паника); plaintext-секрет в текст
-// ошибки не подставляется, а путь Vault маскируется на выходе как vault-ref.
+// ошибки НЕ подставляется. Путь отсутствующего/битого секрета даётся в ПЛОСКОЙ
+// форме (NIM-73): у не найденного секрета нет значения для утечки, а путь —
+// actionable-диагностика (оператор должен знать, ЧТО досеять в Vault). Плоская
+// форма переживает observability-маскинг (audit.vaultRefRe ловит только
+// `vault:<mount>/`), поэтому status_details/error_summary несут внятный текст, а
+// не `***MASKED***`. Реально резолвнутый секрет-ЗНАЧЕНИЕ по-прежнему маскируется
+// на выходе (маскинг-слой не тронут).
 func callVault(pathVal, resolverVal ref.Val) ref.Val {
 	path, ok := pathVal.Value().(string)
 	if !ok {
@@ -216,14 +215,16 @@ func callVault(pathVal, resolverVal ref.Val) ref.Val {
 
 	data, rerr := readKVMemoized(res.ctx, res.kv, body)
 	if rerr != nil {
-		// rerr может нести bare-путь (vault.ErrVaultKVNotFound: secret/<path>),
-		// который НЕ ловится маркером CredentialsRefPrefix (`vault:secret/`) —
-		// между `vault:` и `secret/` в тексте sentinel-а стоит ` KV path not
-		// found: `. Поэтому НЕ пробрасываем rerr.Error() как есть: формируем
-		// текст с путём в ref-форме `vault:<body>`, тогда audit.MaskSecrets
-		// маскирует всю строку целиком (status_details / error_summary).
-		// Симметрия с vault:-ref (render/vault_resolve.go ParseRef).
-		return types.NewErr("vault(): чтение секрета %s: путь не найден или ошибка Vault", vaultRefForm(body))
+		// NIM-73: НЕ пробрасываем rerr.Error() (может нести транспортные детали),
+		// а формируем actionable-текст с путём в ПЛОСКОЙ форме. У ненайденного
+		// секрета значения нет → утечки нет; путь+поле говорят оператору, ЧТО
+		// досеять (secret/redis/<inc>/users/<name>#password). Плоская форма не
+		// содержит `vault:<mount>/`, поэтому переживает маскинг status_details/
+		// error_summary — оператор видит внятную причину, а не `***MASKED***`.
+		if field != "" {
+			return types.NewErr("vault(): секрет %s#%s не найден в Vault (KV path not found или нет доступа)", vaultPathHint(body), field)
+		}
+		return types.NewErr("vault(): секрет %s не найден в Vault (KV path not found или нет доступа)", vaultPathHint(body))
 	}
 
 	if field == "" {
@@ -231,21 +232,23 @@ func callVault(pathVal, resolverVal ref.Val) ref.Val {
 	}
 	val, ok := data[field]
 	if !ok {
-		// Имя поля — не секрет (это ключ внутри секрета), но путь — секрет:
-		// даём его в ref-форме, чтобы строка целиком маскировалась на выходе.
-		return types.NewErr("vault(): поле %q отсутствует в секрете %s", field, vaultRefForm(body))
+		// Путь+имя поля — actionable-диагностика (какое поле досеять), не секрет-
+		// значение: значения других полей секрета в текст НЕ подставляются. Путь
+		// в плоской форме — переживает маскинг (NIM-73).
+		return types.NewErr("vault(): в секрете %s нет поля %q", vaultPathHint(body), field)
 	}
 	return types.DefaultTypeAdapter.NativeToValue(val)
 }
 
-// vaultRefForm приводит путь Vault KV к каноничной ref-форме `vault:<body>`
-// (нормализуя ведущий '/'), под которую заточен маркер
-// audit.CredentialsRefPrefix (`vault:secret/`). Используется только при
-// формировании текста ошибок vault(): путь — секрет (наводка на секрет-локацию),
-// и должен маскироваться целиком при попадании в наблюдаемые каналы
-// (status_details / error_summary / логи). Симметрия с vault:-ref в params.
-func vaultRefForm(body string) string {
-	return vaultRefPrefix + strings.TrimPrefix(body, "/")
+// vaultPathHint нормализует путь Vault KV для actionable-текстов ошибок vault()
+// (NIM-73): плоская форма без `vault:`-префикса, ведущий '/' срезан. Плоский путь
+// НЕ содержит маркера `vault:<mount>/` (audit.vaultRefRe), поэтому переживает
+// observability-маскинг status_details/error_summary — оператор видит, ЧТО
+// досеять. Путь ненайденного/битого секрета — не секрет-значение (значения по
+// нему нет), а диагностика; сам резолвнутый секрет маскируется отдельно (маскинг-
+// слой не тронут).
+func vaultPathHint(body string) string {
+	return strings.TrimPrefix(body, "/")
 }
 
 // splitVaultField разбивает аргумент vault() на путь и опциональное #field
@@ -281,7 +284,7 @@ func validateVaultPath(body string) error {
 	}
 	slash := strings.IndexByte(b, '/')
 	if slash <= 0 || slash == len(b)-1 {
-		return fmt.Errorf("путь %q должен иметь форму <mount>/<path> (например secret/redis/admin)", vaultRefForm(body))
+		return fmt.Errorf("путь %q должен иметь форму <mount>/<path> (например secret/redis/admin)", vaultPathHint(body))
 	}
 	return nil
 }

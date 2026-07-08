@@ -382,11 +382,13 @@ func TestRender_CELVaultResolvesRealValue(t *testing.T) {
 	}
 }
 
-// TestRender_CELVaultMissingSecret_PathMasked — missing-secret в CEL vault()
-// через pipeline даёт ошибку, текст которой несёт путь в ref-форме vault:secret/
-// → audit.MaskSecrets маскирует её целиком (после фикса leak-а пути в тексте
-// ошибки ReadKV). Гарантирует, что путь не утечёт в status_details/error_summary.
-func TestRender_CELVaultMissingSecret_PathMasked(t *testing.T) {
+// TestRender_CELVaultMissingSecret_ActionablePath — missing-secret в CEL vault()
+// через pipeline (NIM-73) даёт actionable-ошибку: путь в ПЛОСКОЙ форме
+// (secret/…#password), которая переживает production-маскинг status_details/
+// error_summary. Оператор видит, ЧТО досеять, а не `***MASKED***`. Маскинг-слой
+// не тронут: реально резолвнутый секрет-ЗНАЧЕНИЕ по-прежнему маскируется (см.
+// TestRender_CELVaultResolvesRealValue выше).
+func TestRender_CELVaultMissingSecret_ActionablePath(t *testing.T) {
 	kv := &pipelineStubKV{secrets: map[string]map[string]any{}}
 	manifest := &config.ScenarioManifest{
 		Name: "vault-miss",
@@ -413,12 +415,25 @@ func TestRender_CELVaultMissingSecret_PathMasked(t *testing.T) {
 	if err == nil {
 		t.Fatal("Render: ожидалась ошибка отсутствующего секрета")
 	}
-	if !strings.Contains(err.Error(), "vault:secret/redis/admin") {
-		t.Fatalf("текст ошибки не несёт путь в ref-форме: %q", err.Error())
+	if !strings.Contains(err.Error(), "secret/redis/admin") {
+		t.Fatalf("текст ошибки не несёт путь секрета (actionable): %q", err.Error())
 	}
-	masked := audit.MaskSecrets(map[string]any{"error_summary": err.Error()})
-	if got, _ := masked["error_summary"].(string); got != "***MASKED***" {
-		t.Fatalf("audit.MaskSecrets не замаскировал ошибку с vault-путём: %q", got)
+	if strings.Contains(err.Error(), "vault:secret/redis/admin") {
+		t.Fatalf("текст ошибки несёт vault:-ref-форму (маскинг съест целиком): %q", err.Error())
+	}
+	// Тот же маскинг, что status_details/error_summary в lockIncarnation, с
+	// seal-набором, несущим реальную sealed-ячейку прогона (env.REDIS_PASSWORD).
+	// Ошибка идёт под ключом error → seal её не трогает, путь остаётся виден.
+	masked := audit.MaskSecretsSealed(
+		map[string]any{"error": err.Error()},
+		audit.SealOpts{Sealed: map[string]bool{"env.REDIS_PASSWORD": true}},
+	)
+	got, _ := masked["error"].(string)
+	if got == "***MASKED***" {
+		t.Fatalf("actionable-ошибка замаскирована целиком: %q", got)
+	}
+	if !strings.Contains(got, "secret/redis/admin") {
+		t.Fatalf("путь секрета пропал после маскинга: %q", got)
 	}
 }
 

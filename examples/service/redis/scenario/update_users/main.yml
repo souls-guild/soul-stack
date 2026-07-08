@@ -1,5 +1,11 @@
 name: update_users
 description: >-
+  ★ Перед запуском засей в Vault пароль КАЖДОГО юзера набора по пути
+  secret/redis/<incarnation>/users/<name>#password — пароли НЕ во входной форме
+  (Vault-конвенция), иначе прогон упадёт с ошибкой «секрет … не найден в Vault»
+  (тогда засей недостающие секреты и запусти снова).
+
+
   Day-2: МАССОВОЕ редактирование ВСЕХ operator-добавленных ACL-пользователей на УЖЕ
   работающем Redis БЕЗ рестарта процесса (bulk-replace). Производственная конвенция
   «hot-reload > рестарт» (docs/destiny/production-conventions.md §3a/§6): ACL
