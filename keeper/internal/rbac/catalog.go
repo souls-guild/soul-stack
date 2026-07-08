@@ -11,12 +11,12 @@ package rbac
 import "sort"
 
 // AllowedPermissions — каталог permission-имён из rbac.md → §Каталог
-// permissions. 102 имени (сумма категорий ниже):
+// permissions. 103 имени (сумма категорий ниже):
 //
 //   - operator (5): create / revoke / issue-token / list / read;
 //   - role (6): create / delete / list / update / grant-operator / revoke-operator;
 //   - synod (8): create / update / delete / list / add-operator / remove-operator / grant-role / revoke-role (ADR-049);
-//   - incarnation (13): create / rerun-last / run / get / list / history / unlock / upgrade / destroy / check-drift / update-hosts / update (deprecated-alias) / traits-set;
+//   - incarnation (14): create / rerun-last / run / get / list / history / unlock / upgrade / destroy / check-drift / update-hosts / update (deprecated-alias) / traits-set / view-secrets;
 //   - soul (6): list / create / issue-token / coven-assign / traits-assign / ssh-target-update;
 //   - plugin (3): allow / revoke / list;
 //   - sigil (4): key-introduce / key-retire / key-list / key-set-primary;
@@ -124,6 +124,13 @@ var AllowedPermissions = map[string]struct{}{
 	// soul.traits-assign / incarnation.update-hosts). Тот же scope-селектор
 	// incarnation/coven/service по path-{name}, что у incarnation.update-hosts.
 	"incarnation.traits-set": {},
+	// incarnation.view-secrets — раскрытие (reveal) plaintext-значения секрета
+	// инкарнации, объявленного `revealable_secrets` сервиса (NIM-74): POST
+	// .../secrets/reveal + discovery GET .../secrets/revealable. Строго
+	// привилегированнее `incarnation.get` (снятие маски, не read под маской).
+	// Тот же scope-селектор incarnation/coven/service по path-{name}, что у прочих
+	// incarnation-мутаций. Audit `incarnation.secret_revealed` (без значения).
+	"incarnation.view-secrets": {},
 
 	// soul.*
 	"soul.list":         {},

@@ -194,6 +194,13 @@ func humaIncarnationRouter(t *testing.T, enforcer incEnforcer, auditW audit.Writ
 			r.With(injectClaims, multi("update-hosts")).Group(func(r chi.Router) {
 				registerHumaIncarnationUpdateHosts(newHumaCadenceAPI(r), incH)
 			})
+			// reveal-секретов (NIM-74): POST self-audit + GET read, оба под view-secrets.
+			r.With(injectClaims, multi("view-secrets")).Group(func(r chi.Router) {
+				registerHumaIncarnationRevealSecret(newHumaCadenceAPI(r), incH)
+			})
+			r.With(injectClaims, apimiddleware.RequireAction(enforcer, "incarnation", "view-secrets")).Group(func(r chi.Router) {
+				registerHumaIncarnationRevealableSecrets(newHumaCadenceAPI(r), incH)
+			})
 			// READ
 			r.With(injectClaims, stashRawQuery, apimiddleware.RequireAction(enforcer, "incarnation", "list")).Group(func(r chi.Router) {
 				registerHumaIncarnationList(newHumaCadenceAPI(r), incH)
@@ -272,6 +279,36 @@ func TestHumaIncarnation_Create_RBACDeny_403_NoAudit(t *testing.T) {
 	}
 	if len(auditCap.Events()) != 0 {
 		t.Errorf("audit записан на 403 — RBAC-deny не должен доходить до handler-а")
+	}
+}
+
+// TestHumaIncarnation_RevealSecret_RBACDeny_403 — reveal-эндпоинт без права
+// incarnation.view-secrets отбивается 403 middleware-ом ДО handler-а (NIM-74). audit
+// на 403 не пишется (RBAC-deny не доходит до self-audit RevealSecretTyped).
+func TestHumaIncarnation_RevealSecret_RBACDeny_403(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	r := humaIncarnationRouter(t, incEnforcer{allow: false}, auditCap, incScopeAllow())
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations/redis-prod/secrets/reveal",
+		strings.NewReader(`{"secret_id":"user_password","key":"alice"}`))
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+	if len(auditCap.Events()) != 0 {
+		t.Errorf("audit записан на 403 reveal — RBAC-deny не должен доходить до handler-а")
+	}
+}
+
+// TestHumaIncarnation_RevealableSecrets_RBACDeny_403 — discovery без права
+// view-secrets → 403 через existence-gate RequireAction.
+func TestHumaIncarnation_RevealableSecrets_RBACDeny_403(t *testing.T) {
+	r := humaIncarnationRouter(t, incEnforcer{allow: false}, nil, incScopeAllow())
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/incarnations/redis-prod/secrets/revealable", nil)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 }
 

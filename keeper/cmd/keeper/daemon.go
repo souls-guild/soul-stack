@@ -4082,9 +4082,12 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		ScenarioDrift:       d.scenarioRunner,
 		ServiceRegistry:     d.serviceRegistry,
 		ServiceLoader:       d.serviceLoader,
-		PushRun:             d.pushRun,
-		PushProviderSvc:     d.pushProviderSvc,
-		HeraldSvc:           d.heraldSvc,
+		// VaultClient — Vault KV-reader для reveal-эндпоинта секретов инкарнации
+		// (NIM-74). Тот же d.vc, что резолвит vault:-ref/`${ vault(...) }` в render.
+		VaultClient:     d.vc,
+		PushRun:         d.pushRun,
+		PushProviderSvc: d.pushProviderSvc,
+		HeraldSvc:       d.heraldSvc,
 		// ProviderSvc / ProfileSvc — Cloud-CRUD-фасады (ADR-017). Те же
 		// экземпляры, что MCP-HandlerDeps (single source of truth). nil только
 		// если pool не создан (не должно случиться в production-path).

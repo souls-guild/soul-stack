@@ -4,7 +4,7 @@
 
 ## Endpoint-секции
 
-Mapping endpoint ↔ MCP-tool ↔ permission (таблица 15 роутов) — в корневом [operator-api.md → Incarnation (15)](../operator-api.md#incarnation-15--жизненный-цикл-runtime-инстансов-adr-009); глобальные `/v1/runs*` — [operator-api.md → Runs (2)](../operator-api.md#runs-2--глобальный-read-view-прогонов-через-все-инкарнации).
+Mapping endpoint ↔ MCP-tool ↔ permission (таблица 17 роутов) — в корневом [operator-api.md → Incarnation (17)](../operator-api.md#incarnation-17--жизненный-цикл-runtime-инстансов-adr-009); глобальные `/v1/runs*` — [operator-api.md → Runs (2)](../operator-api.md#runs-2--глобальный-read-view-прогонов-через-все-инкарнации).
 
 #### `POST /v1/incarnations` — создать instance
 

@@ -384,3 +384,13 @@ destiny:
 # интерфейс к живому Redis (examples/module/soul-mod-community-redis/).
 modules:
   - { name: community.redis, ref: v1.0.0 }
+
+# Раскрываемые секреты инкарнации (NIM-74): оператор с правом incarnation.view-secrets
+# раскрывает plaintext пароля ACL-юзера из State-вьюхи. enumerate=state.redis_users —
+# множество допустимых key = имена элементов (element.name); vault_ref — конвенция
+# secret/redis/<incarnation>/users/<name>#password (та же ветка, что day-2 сценарии).
+revealable_secrets:
+  - id: user_password
+    label: "Пароль пользователя Redis"
+    enumerate: state.redis_users
+    vault_ref: "secret/{service}/{incarnation}/users/{key}#password"
