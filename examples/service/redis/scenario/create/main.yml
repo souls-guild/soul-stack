@@ -7,10 +7,10 @@ name: create
 # годен как bootstrap не из-за имени, а потому что несёт этот флаг.
 create: true
 description: >-
-  Развернуть Redis с нуля в режиме sentinel или cluster, подняв под топологию VM через
-  cloud-provision в том же прогоне (provision включён по умолчанию). Оператор задаёт
-  ПРОСТЫЕ типизированные понятия (режим, память, persistence, eviction, ACL-юзеры,
-  топология шардов), а сценарий ТРАНСЛИРУЕТ их в полный redis.conf.
+  Развернуть Redis с нуля в режиме sentinel или cluster: под нужную топологию поднимаются
+  VM через cloud-provision в том же прогоне. Оператор задаёт простые понятия (режим,
+  память, persistence, eviction, ACL-юзеры, шарды), а сценарий разворачивает их в полный
+  redis.conf.
 
 # ── extends: covenant — общий контракт секций (S4 пилот) ───────────────────────────
 # Секции input (КРОМЕ provision-дельты ниже) / compute / state_changes / validate

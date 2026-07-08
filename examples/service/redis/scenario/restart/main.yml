@@ -1,8 +1,8 @@
 name: restart
 description: >-
-  Day-2: rolling-restart Redis без изменения конфига (режимы sentinel/cluster). Роль
-  каждого хоста определяется живым probe, реплики рестартятся по одной со строгим
-  ресинк-гейтом, master — последним.
+  Rolling-restart Redis без изменения конфига (sentinel/cluster). Роль каждого хоста
+  определяется живым probe: реплики перезапускаются по одной со строгим ресинк-гейтом,
+  master — последним.
 
 # Формат блока — docs/input.md.
 input:

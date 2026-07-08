@@ -1,8 +1,8 @@
 name: destroy
 description: >-
-  Teardown: снять VM, поднятые create через cloud-provision, и каскадно вычистить
-  keeper-реестры этих хостов. Lifecycle-сценарий (не runnable из Run-формы, флоу
-  DELETE /v1/incarnations/{name}); на инкарнациях без provision — no-op.
+  Снять VM, поднятые сценарием create, и каскадно вычистить keeper-реестры этих хостов.
+  Lifecycle-сценарий (флоу DELETE /v1/incarnations/{name}, не из Run-формы); на
+  инкарнациях без provision — no-op.
 
 # ── Входной контракт оператора ────────────────────────────────────────────────
 # Пуст: destroy не принимает операторского ввода. Что снимать (provider, vm_ids,
