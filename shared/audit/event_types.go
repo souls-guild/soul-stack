@@ -71,7 +71,7 @@ const (
 	// rerun-last`, architecture.md → «Атомарность и error_locked»). `source: api` /
 	// `mcp`, `archon_aid` — инициатор; payload: `{name, reason, scenario,
 	// previous_status, apply_id}` (scenario — имя перезапущенного: bootstrap
-	// `create`/… ИЛИ day-2 add_user/…). Атомарно снимает error_locked (state НЕ
+	// `create`/… ИЛИ операционный add_user/…). Атомарно снимает error_locked (state НЕ
 	// трогается — last known-good, snapshot в state_history) и тем же действием
 	// запускает последний упавший сценарий (переход error_locked → applying минуя
 	// ready под одним FOR UPDATE). Отдельное событие от `incarnation.unlocked`
@@ -286,7 +286,7 @@ const (
 	// ротировало истекающий сервисный серт инкарнации: Keeper сгенерил новый
 	// keypair+CSR (R2), подписал через Vault PKI, положил материал в Vault,
 	// вписал новую active-строку Warrant (старую → superseded) и заспавнил Voyage
-	// day-2-сценария rotate_tls для доставки нового PEM на хосты. Область
+	// операционного сценария rotate_tls для доставки нового PEM на хосты. Область
 	// `cert.*` (keeper-side lifecycle, parity `voyage.reclaimed`). `source:
 	// keeper_internal`, `archon_aid: NULL`, `correlation_id = voyage_id`. Payload:
 	// `{incarnation, kind, voyage_id, fingerprint, serial_number, not_after,

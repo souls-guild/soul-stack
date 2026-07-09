@@ -1,6 +1,6 @@
 //go:build e2e_live
 
-// L3b E2E day-2: examples/service/redis::rotate_tls на ЖИВОМ TLS-Redis — ЖИВОЕ
+// L3b E2E операция: examples/service/redis::rotate_tls на ЖИВОМ TLS-Redis — ЖИВОЕ
 // доказательство находки #4 (rotate_tls CA-rollover hot-swap). create поднимает
 // redis в connection_mode=tls (server-only-TLS, cert1/ca1 из дефолтных essence-
 // Vault-путей), rotate_tls уводит инстанс на НЕЗАВИСИМЫЙ новый CA (cert2/ca2):
@@ -21,7 +21,7 @@ import (
 	"github.com/souls-guild/soul-stack/tests/e2e-live/harness"
 )
 
-func TestL3bRedisLive_Day2RotateTls(t *testing.T) {
+func TestL3bRedisLive_OpsRotateTls(t *testing.T) {
 	repoURL := harness.BuildCommunityRedisPlugin(t)
 
 	stack := harness.NewStack(t, harness.Config{

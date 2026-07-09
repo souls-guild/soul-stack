@@ -34,7 +34,7 @@ DragonFly redis-совместим.
 forward-only (ADR-019):
 
 - [`001_to_002`](migrations/001_to_002.yml) — `install` + host-layout (`conf_dir`/`data_dir`)
-  вынесены из state в `essence` (read-model без читателей / day-2 читают essence напрямую).
+  вынесены из state в `essence` (read-model без читателей / операционные сценарии читают essence напрямую).
   У DragonFly **нет** `modules_base_url` (redis-модули к DF неприменимы) — вырезаются три
   поля, не четыре;
 - [`002_to_003`](migrations/002_to_003.yml) — cloud-provision read-model: `provisioned_vm_ids`
@@ -139,10 +139,10 @@ overcommit/swappiness/сетевые буферы/бэклоги), данные-
 `username=default_admin`. Встроенный DragonFly-юзер `default` рендерится `off` (в наборах его
 нет), пока оператор не объявит его в `input.users`.
 
-Во всех задачах, рендерящих `users.acl` (create + day-2 `add_user`/`update_users`), набор
+Во всех задачах, рендерящих `users.acl` (create + операционные `add_user`/`update_users`), набор
 собирается двойным `merge()`: системные из essence (нижний слой) + operator-extra (поверх,
 last-wins). Системные **не лежат в state** — доливаются из essence на **каждом** рендере,
-иначе перерендер стёр бы `replica`/`sentinel` и сломал day-2 репликацию.
+иначе перерендер стёр бы `replica`/`sentinel` и сломал репликацию.
 
 ## Сценарии
 
@@ -188,7 +188,7 @@ last-wins). Системные **не лежат в state** — доливают
 фоллбэкают на `essence.provision_*`; секция скрыта из Run-формы. Чтобы катить на **готовый**
 roster — `provision: {enabled: false}` явно.
 
-### Day-2 сценарии
+### Операционные сценарии
 
 - **[`add_user`](scenario/add_user/main.yml)** — добавить/переопределить **одного** ACL-юзера
   без рестарта (hot-reload `ACL LOAD` через `community.redis.acl`). Мержит в `state.df_users`,
@@ -285,7 +285,7 @@ go run ./cmd/soul-trial run ../examples/service/dragonfly/scenario/create/tests/
 # cloud-provision on/off
 go run ./cmd/soul-trial run ../examples/service/dragonfly/scenario/create/tests/provision-enabled-sentinel/case.yml
 go run ./cmd/soul-trial run ../examples/service/dragonfly/scenario/create/tests/provision-disabled/case.yml
-# day-2
+# операционные сценарии
 go run ./cmd/soul-trial run ../examples/service/dragonfly/scenario/add_user/tests/add-user-plaintext/case.yml
 go run ./cmd/soul-trial run ../examples/service/dragonfly/scenario/update_users/tests/bulk-replace-removes-user/case.yml
 go run ./cmd/soul-trial run ../examples/service/dragonfly/scenario/restart/tests/rolling-restart-replicas/case.yml

@@ -268,7 +268,7 @@ func TestIntegration_KeeperChain_3Passage_TransitiveRegister(t *testing.T) {
 	}
 }
 
-// TestIntegration_KeeperChain_Rerun_NoPKConflict — ★ №5 (day-2 rerun). Два
+// TestIntegration_KeeperChain_Rerun_NoPKConflict — ★ №5 (операционный rerun). Два
 // последовательных прогона одной staged keeper-цепочки с РАЗНЫМИ apply_id.
 // ASSERT:
 //   - второй прогон НЕ ловит PK-конфликт на apply_runs(apply_id, keeper, passage)

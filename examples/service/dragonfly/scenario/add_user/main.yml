@@ -1,6 +1,6 @@
 name: add_user
 description: >-
-  Day-2: добавить (или переопределить) ОДНОГО ACL-пользователя на УЖЕ работающем DragonFly
+  Операционный сценарий: добавить (или переопределить) ОДНОГО ACL-пользователя на УЖЕ работающем DragonFly
   БЕЗ рестарта процесса. Производственная конвенция «hot-reload > рестарт»
   (docs/destiny/production-conventions.md §3a/§6): ACL применяется на лету командой ACL LOAD
   (перечитать aclfile), рестарт демона не нужен. REUSE из redis/add_user (DragonFly несёт
@@ -21,7 +21,7 @@ description: >-
 
   Идемпотентность: ACL LOAD идемпотентен ПО КОНСТРУКЦИИ (приводит живой инстанс к файлу
   независимо от текущего состояния); плагин делает честный diff ACL LIST до/после (changed=false
-  при совпадении). Рендер users.acl детерминирован (range по отсортированному map). Day-2:
+  при совпадении). Рендер users.acl детерминирован (range по отсортированному map). В эксплуатации:
   инстанс УЖЕ работает (auth через vault()-пароль + TLS-дискриминатор из incarnation.state.tls).
 
   Таргетинг — на весь incarnation (on опущен, ADR-008/009): новый users.acl + ACL LOAD идут на
@@ -31,7 +31,7 @@ description: >-
 # ОДНА запись AclUser (types.yml, ADR-062 $type): имя юзера, его ACL-права, on/off. Тот же
 # тип, что элемент массива create input.users — единый источник правды формы и валидации
 # (perms-pattern). Пароль — НЕ во входе (Vault-конвенция, см. description). Один юзер за
-# прогон — атомарная day-2 операция «добавить пользователя» (массовое редактирование набора
+# прогон — атомарная эксплуатационная операция «добавить пользователя» (массовое редактирование набора
 # → update_users, bulk-replace).
 input:
   user:
@@ -62,12 +62,12 @@ validate:
 # у ACL LOAD убраны даже на TLS-инстансе). run_dir host-инвариант; default дублирует дефолт.
 compute:
   local_addr: "${ 'unix:' + default(essence.run_dir, '/var/run/dragonfly') + '/dragonfly.sock' }"
-  # ★ admin_user (редизайн default_admin): имя системного admin-юзера. day-2 вне covenant
+  # ★ admin_user (редизайн default_admin): имя системного admin-юзера. Операционный сценарий вне covenant
   # (dragonfly без covenant.yml) — литерал прямо здесь. ACL LOAD коннектится под ним.
   admin_user: "${ 'default_admin' }"
   # ── Эффективный host-layout: install/conf_dir/data_dir из essence (v1→v2, миграция) ──
   # install/conf_dir/data_dir ВЫНЕСЕНЫ из state в essence — читаем essence напрямую
-  # (default() ловит отсутствие листа). install у day-2 read-model без реального читателя
+  # (default() ловит отсутствие листа). install у операционных сценариев read-model без реального читателя
   # (destiny рендерит конфиги, установка уже прошла на create) → консервативный package-дефолт.
   install:  "${ (default(essence.install_method, 'package') == 'binary') ? { 'method': 'binary', 'base_url': default(essence.binary_base_url, ''), 'version': default(essence.binary_version, '') } : { 'method': 'package' } }"
   conf_dir: "${ default(essence.conf_dir, '/etc/dragonfly') }"
@@ -87,7 +87,7 @@ compute:
        + [{ 'name': input.user.name, 'perms': input.user.perms, 'state': default(input.user.state, 'on') }] }
 
 # ── Мутация incarnation.state ─────────────────────────────────────────────────
-# day-2 фиксирует НОВЫЙ набор ACL-юзеров (массив AclUser [{name,perms,state}], БЕЗ пароля —
+# операционный сценарий фиксирует НОВЫЙ набор ACL-юзеров (массив AclUser [{name,perms,state}], БЕЗ пароля —
 # он keeper-side vault, ADR-012). Тот же compute.users_new (массив), что ушёл в render users.acl.
 state_changes:
   - set: df_users
@@ -126,7 +126,7 @@ tasks:
         # operator-extra (state.df_users + новый, compute.users_new — МАССИВ AclUser, ПОВЕРХ).
         # add_user перерендеривает ВЕСЬ файл (не append) → БЕЗ долива системных этот рендер СТЁР
         # БЫ default_admin/replica/monitoring/sentinel/haproxy → сломал бы AUTH/репликацию/sentinel
-        # на day-2. Системные (вкл. default_admin) доливаются на КАЖДОМ рендере из
+        # в эксплуатации. Системные (вкл. default_admin) доливаются на КАЖДОМ рендере из
         # essence.system_acl_users. last-wins: operator-extra перекрывает одноимённого системного
         # (имена системных закрыты validate-guard — коллизии нет). Vault-пароль каждого —
         # secret/dragonfly/<inc>/users/<name>#password.

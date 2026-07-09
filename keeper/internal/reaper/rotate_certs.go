@@ -24,7 +24,7 @@ import (
 // push-пакет ради одного идентификатора.
 const rotateCertsSystemAID = "archon-system"
 
-// rotateTLSScenario — имя day-2-сценария, доставляющего новый TLS-материал на
+// rotateTLSScenario — имя операционного сценария, доставляющего новый TLS-материал на
 // хосты инкарнации (examples/service/redis/scenario/rotate_tls). Voyage
 // kind=scenario с этим именем таргетит инкарнацию целиком (rotate_tls: `on`
 // опущен → весь incarnation).

@@ -21,7 +21,7 @@
 // Для НЕ-первых юзеров (admin уже есть) auth-коннект успешен → fallback не нужен.
 //
 // Идемпотентность: usersInfo(name) до операции. present + юзер есть → no-op
-// (changed=false; смена пароля/ролей — day-2 update, вне PILOT). present + нет →
+// (changed=false; смена пароля/ролей — операционный сценарий, вне PILOT). present + нет →
 // createUser (changed=true). absent + есть → dropUser (changed=true). absent +
 // нет → no-op.
 //
@@ -95,7 +95,7 @@ func (m *MongoModule) applyUser(ctx context.Context, stream grpc.ServerStreaming
 	switch state {
 	case "present":
 		if exists {
-			// Юзер уже есть — no-op (смена пароля/ролей — day-2 update, вне PILOT).
+			// Юзер уже есть — no-op (смена пароля/ролей — операционный сценарий, вне PILOT).
 			return sendOutcome(stream, false, fmt.Sprintf("user %q already present", name), map[string]any{
 				"present":         true,
 				"changed":         false,

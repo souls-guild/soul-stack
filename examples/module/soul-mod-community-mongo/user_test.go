@@ -141,7 +141,7 @@ func TestApplyUser_AuthWorks_NoBootstrap(t *testing.T) {
 }
 
 // TestApplyUser_PresentIdempotent_NoOp — юзер уже есть → no-op (changed=false),
-// createUser НЕ вызывается (idempotency; смена пароля/ролей — day-2).
+// createUser НЕ вызывается (idempotency; смена пароля/ролей — операционный сценарий).
 func TestApplyUser_PresentIdempotent_NoOp(t *testing.T) {
 	authConn := &fakeConn{rawByName: map[string]bson.Raw{
 		"usersInfo": usersRaw(1), // юзер есть (и проба ok, и exists=true)

@@ -1,4 +1,4 @@
-# Day-2: рабочий цикл оператора
+# Эксплуатация: рабочий цикл оператора
 
 Этот гайд — следующий шаг после [first-service.md](first-service.md). Там ты собрал сервис, зарегистрировал его и создал инкарнацию; здесь ты её **эксплуатируешь**: повторно прогоняешь, проверяешь дрейф, таргетишь часть флота, апгрейдишь версию, масштабируешь и разбираешь инциденты.
 
@@ -124,7 +124,7 @@ curl -s -X POST http://127.0.0.1:8080/v1/incarnations/hello-demo/upgrade \
 
 Добавить душу во флот — это онбординг нового Soul (как в [getting-started.md → Шаг 6](../getting-started.md#шаг-6-онбордить-один-soul)): зарегистрировать хост с нужными covens, выпустить bootstrap-токен, применить `soul init` на хосте. На dev-стенде это делает `make dev-souls` (переподнимает флот по реестру БД, covens сохраняются).
 
-Ключевое для day-2: **новый хост подхватывается late-binding автоматически**. Если ты онбордил хост в coven `prod`, то:
+Ключевое для эксплуатации: **новый хост подхватывается late-binding автоматически**. Если ты онбордил хост в coven `prod`, то:
 
 - следующий прогон со `where:`/`on: [prod]` (раздел 3) включит его без правки сценария — таргет резолвится в момент run;
 - регулярные прогоны по расписанию (**Cadence**, [ADR-046](../adr/0046-cadence.md#adr-046-cadence--регулярные-запуски-scheduledrecurring-voyage)) и event-driven реакции (**Vigil**, [ADR-030](../adr/0030-vigil-oracle.md#adr-030-vigil--oracle--event-driven-мониторинг-beacons--reactor)) накроют его на следующем тике — оба резолвят target на момент срабатывания, а не на момент настройки.
@@ -161,7 +161,7 @@ curl -s -X POST http://127.0.0.1:8080/v1/incarnations/hello-demo/unlock \
 
 ## 7. Что наблюдать
 
-Метрики Prometheus — на `:9090/metrics`, namespace `keeper_*` (Keeper-side) и `soul_*` (Soul-side). В обычной day-2-практике следи за немногим:
+Метрики Prometheus — на `:9090/metrics`, namespace `keeper_*` (Keeper-side) и `soul_*` (Soul-side). В обычной эксплуатационной практике следи за немногим:
 
 - **`keeper_grpc_streams_active`** — сколько душ онлайн; падение ниже ожидаемого числа = часть флота отвалилась (сверь с `souls.status = 'disconnected'`).
 - **Apply failure rate** — `rate(keeper_scenario_runs_total{result="failed"}[15m]) / rate(keeper_scenario_runs_total[15m])`; рост = прогоны фейлятся, инкарнации уходят в `error_locked`.

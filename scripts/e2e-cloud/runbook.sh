@@ -7,7 +7,7 @@
 # Bring-up-скрипты (WB-специфика) живут локально в $SCRIPTS_DIR, в git НЕ коммитятся —
 # раннер зовёт их рантайм. Креды — только из env/VM, НИКОГДА из ~/.zsh_wb.
 #
-# Usage: [ENV...] runbook.sh <create|create-destroy|day2>
+# Usage: [ENV...] runbook.sh <create|create-destroy|operations>
 #   DRY_RUN=1 — печать последовательности вызовов + отчёт-скелет без сети.
 #   Полный список параметров — docs/testing (docs-writer) и delegation NIM-31.
 
@@ -63,7 +63,7 @@ export EXEC_MODE KEEPER_API FQDN_SUFFIX TSH_NODE TELEPORT_HOME REMOTE_JWT REMOTE
 . "${SELF_DIR}/lib/report.sh"
 . "${SELF_DIR}/lib/preflight.sh"
 . "${SELF_DIR}/lib/bringup.sh"
-. "${SELF_DIR}/suites/day2.sh"
+. "${SELF_DIR}/suites/operations.sh"
 . "${SELF_DIR}/suites/create.sh"
 . "${SELF_DIR}/suites/create-destroy.sh"
 
@@ -81,9 +81,9 @@ fi
 case "$SUITE" in
 create) suite_create; rc=$? ;;
 create-destroy) suite_create_destroy; rc=$? ;;
-day2) suite_day2; rc=$? ;;
+operations) suite_operations; rc=$? ;;
 *)
-	_e2e_log "неизвестный suite: ${SUITE} (create|create-destroy|day2)"
+	_e2e_log "неизвестный suite: ${SUITE} (create|create-destroy|operations)"
 	report_summary "FAIL (bad suite)" 2
 	exit 2
 	;;

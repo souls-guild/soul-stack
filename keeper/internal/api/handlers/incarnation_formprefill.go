@@ -1,7 +1,7 @@
 package handlers
 
 // Form-prefill-handler Operator API (`POST /v1/incarnations/{name}/scenarios/
-// {scenario}/form-prefill`) — day-2 pre-fill UI-формы сценария ТЕКУЩИМИ
+// {scenario}/form-prefill`) — операционный pre-fill UI-формы сценария ТЕКУЩИМИ
 // значениями incarnation.state (docs/input.md → «Pre-fill из state»).
 //
 // Поля схемы сценария, объявившие `prefill_from_state: state.<path>`, в форме

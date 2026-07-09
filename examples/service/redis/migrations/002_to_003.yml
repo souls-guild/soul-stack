@@ -3,7 +3,7 @@ to_version: 3
 
 description: >-
   state_schema v2 → v3 (richer state, architect a9e1c2c6): opaque redis_config
-  ДОПОЛНЯЕТСЯ именованными полями НАМЕРЕНИЯ (read-model day-2) — tls/install/
+  ДОПОЛНЯЕТСЯ именованными полями НАМЕРЕНИЯ (read-model) — tls/install/
   persistence/memory_mb/maxmemory_policy/modules/sysctl_settings + топология
   (shards/replicas/sentinel_quorum). redis_config/redis_users/redis_hosts/
   redis_sentinel НЕ трогаются (write-model сохраняется как есть).
@@ -24,7 +24,7 @@ description: >-
       - replicas        ← число redis_hosts с role==replica (если roster в state есть);
 
     DEFAULT (в v2-state принципиально НЕТ, а essence в migration-CEL недоступен):
-      - tls.cert_ref/key_ref/ca_ref ← '' (Vault-ПУТИ PEM в state не лежали; на day-2
+      - tls.cert_ref/key_ref/ca_ref ← '' (Vault-ПУТИ PEM в state не лежали; на
         restart ca_ref берётся из essence.tls_ca_ref — стабильный author-context);
       - install ← {method: package} (способ установки v2 не фиксировал);
       - modules ← [] (Redis-модули v2 не фиксировал);
@@ -65,7 +65,7 @@ transform:
   # положить сюда строку — нарушить схему и разойтись с create. Расширение sandbox
   # int(string) требует отдельного ADR (ADR-019 fixed surface). Точный порт
   # восстанавливается на следующем create-override. На НЕ-дефолтном TLS-порту это
-  # потеря — оператор перезадаёт create (best-effort, см. description). Важный day-2-
+  # потеря — оператор перезадаёт create (best-effort, см. description). Важный операционный
   # сигнал — tls.enable (bool, восстановим точно); restart на нём дискриминирует.
   - set:
       path:  state.tls.port

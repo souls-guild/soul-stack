@@ -16,7 +16,7 @@ command -v jq >/dev/null 2>&1 || { echo "guard: требуется jq в PATH"; 
 . "${ROOT}/lib/keeper-api.sh" # http_body/http_code + seam-декларация (переопределим стабом)
 . "${ROOT}/lib/poll.sh"
 . "${ROOT}/lib/assert.sh"
-. "${ROOT}/suites/day2.sh" # run_scenario
+. "${ROOT}/suites/operations.sh" # run_scenario
 
 # --- стаб keeper_api: очередь "code:fixture" (fixture без .json; '-' = пустое тело).
 # keeper_api зовётся в $()-подстановке (субшелл) → индекс держим в ФАЙЛЕ, иначе

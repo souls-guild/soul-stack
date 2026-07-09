@@ -107,7 +107,7 @@ plugins:
   # dev/provision.sh (шаг 9b). plugingit клонирует его (file://-scheme под
   # SOUL_STACK_ALLOW_FILE_REPOS=1 — keeper-run.sh выставляет), кеширует слот
   # community-redis/<sha> → current: плагин доступен для Sigil-allow (POST
-  # /v1/plugins/sigils) и day-2 redis. `name` = manifest.name (redis) для FilterByCatalog.
+  # /v1/plugins/sigils) и эксплуатации redis. `name` = manifest.name (redis) для FilterByCatalog.
   soul_modules:
     - { name: redis, source: "file:///tmp/keeper-dev/plugin-repos/community-redis", ref: "v1.0.0" }
 

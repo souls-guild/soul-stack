@@ -15,7 +15,7 @@
 | `name` | `string` (kebab-case) | yes | Имя нового instance. |
 | `service` | `string` | yes | Имя сервиса. |
 | `covens` | `array<string>` | optional | Declared env-Coven-метки ([ADR-008](../../adr/0008-coven-stable-tags.md#adr-008-coven--только-стабильные-логические-теги) amendment a). |
-| `traits` | `object` | optional | Operator-set trait-метки инкарнации (ключ → `scalar`\|`list of scalars`, [ADR-060](../../adr/0060-traits.md)). Кладутся в `incarnation.traits` + проекция в `souls.traits` хостов-членов. Day-2 замена — `keeper.incarnation.traits-set`. |
+| `traits` | `object` | optional | Operator-set trait-метки инкарнации (ключ → `scalar`\|`list of scalars`, [ADR-060](../../adr/0060-traits.md)). Кладутся в `incarnation.traits` + проекция в `souls.traits` хостов-членов. Операционная замена — `keeper.incarnation.traits-set`. |
 | `create_scenario` | `string` | conditional | Имя стартового сценария (scenario с `create: true`). Required, если сервис предлагает ≥1 create-сценарий (пусто → `validation-failed` со списком годных); значение вне набора → `validation-failed`. Сервис без create-сценариев → пусто даёт bare-инкарнацию. Подробности — [operator-api/incarnations.md → Выбор стартового сценария](../operator-api/incarnations.md#выбор-стартового-сценария-и-bare-инкарнация). |
 | `input` | `object` | optional | Input выбранного стартового сценария (валидируется против его `input:`-схемы). |
 
@@ -30,7 +30,7 @@
 
 Перезапуск **последнего упавшего** сценария из `error_locked`: зеркало REST [`POST /v1/incarnations/{name}/rerun-last`](../operator-api/incarnations.md#post-v1incarnationsnamererun-last--перезапустить-последний-упавший-сценарий-из-error_locked). Permission: `incarnation.rerun-last`. Async: **да**.
 
-Под одним `FOR UPDATE` снимает блок (`state` НЕ трогается — last known-good, snapshot в `state_history`) и тем же действием перезапускает **последний упавший сценарий** инкарнации — bootstrap (`create`/…, если провалилось создание) ИЛИ day-2-операцию (`add_user`/…) — с сохранённым input упавшего прогона (`error_locked → applying` минуя `ready`). Input восстанавливается из `incarnation.spec.input` (create-путь) либо из рецепта упавшего прогона (`apply_runs.recipe.input`, day-2-путь), не из дефолтов. Отличие от `keeper.incarnation.unlock`: тот лишь снимает блок, rerun снимает и перезапускает упавший сценарий одним действием. Работает только из `error_locked`; статус не `error_locked` → `incarnation-locked`, input упавшего прогона недоступен (прогон упал до dispatch и рецепт не записан / рецепт вычищен ретеншном / legacy-прогон, fail-closed) → отдельный код `rerun-input-unavailable` ([mcp-tools.md → Errors](../mcp-tools.md#errors)). Опрос статуса — `keeper.incarnation.get`. Audit-событие — `incarnation.rerun_last` (НЕ `incarnation.unlocked`).
+Под одним `FOR UPDATE` снимает блок (`state` НЕ трогается — last known-good, snapshot в `state_history`) и тем же действием перезапускает **последний упавший сценарий** инкарнации — bootstrap (`create`/…, если провалилось создание) ИЛИ эксплуатационную операцию (`add_user`/…) — с сохранённым input упавшего прогона (`error_locked → applying` минуя `ready`). Input восстанавливается из `incarnation.spec.input` (create-путь) либо из рецепта упавшего прогона (`apply_runs.recipe.input`, операционный путь), не из дефолтов. Отличие от `keeper.incarnation.unlock`: тот лишь снимает блок, rerun снимает и перезапускает упавший сценарий одним действием. Работает только из `error_locked`; статус не `error_locked` → `incarnation-locked`, input упавшего прогона недоступен (прогон упал до dispatch и рецепт не записан / рецепт вычищен ретеншном / legacy-прогон, fail-closed) → отдельный код `rerun-input-unavailable` ([mcp-tools.md → Errors](../mcp-tools.md#errors)). Опрос статуса — `keeper.incarnation.get`. Audit-событие — `incarnation.rerun_last` (НЕ `incarnation.unlocked`).
 
 **Input:**
 
@@ -45,9 +45,9 @@
 |---|---|---|
 | `_apply_id` | `string` (ULID) | ID перезапущенного прогона. |
 | `incarnation` | `string` | Имя instance. |
-| `scenario` | `string` | Имя перезапущенного (последнего упавшего) сценария — bootstrap `create`/… или day-2 `add_user`/…. |
+| `scenario` | `string` | Имя перезапущенного (последнего упавшего) сценария — bootstrap `create`/… или операционный `add_user`/…. |
 
-Ошибки: `not-found` (incarnation не существует), `incarnation-locked` (статус не `error_locked`), `rerun-input-unavailable` (input упавшего day-2-прогона недоступен — прогон упал до dispatch и рецепт не записан / рецепт вычищен ретеншном / legacy-прогон без рецепта), `validation-failed` (пустой `reason` / `reason` длиннее 500 символов / битый `name` / сервис инкарнации не зарегистрирован), `internal-error` (runner не сконфигурирован / транзакция / запуск).
+Ошибки: `not-found` (incarnation не существует), `incarnation-locked` (статус не `error_locked`), `rerun-input-unavailable` (input упавшего операционного прогона недоступен — прогон упал до dispatch и рецепт не записан / рецепт вычищен ретеншном / legacy-прогон без рецепта), `validation-failed` (пустой `reason` / `reason` длиннее 500 символов / битый `name` / сервис инкарнации не зарегистрирован), `internal-error` (runner не сконфигурирован / транзакция / запуск).
 
 #### `keeper.incarnation.run`
 

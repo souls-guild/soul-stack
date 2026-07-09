@@ -180,7 +180,7 @@ func TestIntegration_ProjectedTraits_ContainmentTargeting(t *testing.T) {
 	}
 }
 
-// TestIntegration_UpdateTraits_PersistsAndReturnsKeys — day-2 PUT-путь: целостная
+// TestIntegration_UpdateTraits_PersistsAndReturnsKeys — операционный PUT-путь: целостная
 // замена incarnation.traits персистится в колонку, OldKeys/NewKeys корректны.
 func TestIntegration_UpdateTraits_PersistsAndReturnsKeys(t *testing.T) {
 	resetAll(t)

@@ -64,9 +64,9 @@ type fakeIncDB struct {
 	// `SELECT scenario, apply_id FROM state_history ... ORDER BY history_id DESC LIMIT 1`.
 	// nil → дефолт [create, <applyID>] (create-путь: последний упавший = create).
 	lastScenarioRow func(name string) pgx.Row
-	// Rerun-last day-2-path: recipe probe `SELECT recipe FROM apply_runs WHERE
+	// Rerun-last (операционный путь): recipe probe `SELECT recipe FROM apply_runs WHERE
 	// apply_id = $1 AND recipe IS NOT NULL LIMIT 1`. nil → ErrNoRows (fail-closed:
-	// recipe недоступен). Задать для day-2 happy-path.
+	// recipe недоступен). Задать для happy-path.
 	recipeRow func(applyID string) pgx.Row
 
 	// Upgrade-path: SELECT FOR UPDATE (state, state_schema_version, status).
@@ -1953,13 +1953,13 @@ func makeIncStatusRowBare(name, status string) pgx.Row {
 	}}
 }
 
-// TestIncarnation_Run_BareIncarnation_Day2_202 — GUARD Фаза 2: bare-инкарнация
-// (created_scenario IS NULL) запускает ОБЫЧНЫЙ operational-сценарий (day-2) через
+// TestIncarnation_Run_BareIncarnation_Ops_202 — GUARD Фаза 2: bare-инкарнация
+// (created_scenario IS NULL) запускает ОБЫЧНЫЙ operational-сценарий через
 // RunTyped штатно — 202, прогон стартует. RunTyped резолвит инкарнацию по
-// SelectByName и НЕ читает created_scenario для day-2-запуска (он нужен только
-// rerun-last на create-пути). Регресс = day-2-путь начинает требовать created_scenario не-NULL
-// (или паникует на NULL-проекции) → bare-инкарнации лишаются day-2-операций.
-func TestIncarnation_Run_BareIncarnation_Day2_202(t *testing.T) {
+// SelectByName и НЕ читает created_scenario для операционного запуска (он нужен только
+// rerun-last на create-пути). Регресс = операционный путь начинает требовать created_scenario не-NULL
+// (или паникует на NULL-проекции) → bare-инкарнации лишаются эксплуатационных операций.
+func TestIncarnation_Run_BareIncarnation_Ops_202(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncStatusRowBare(name, "ready") },
 	}
@@ -1973,10 +1973,10 @@ func TestIncarnation_Run_BareIncarnation_Day2_202(t *testing.T) {
 	rec := incRun(h, req)
 
 	if rec.Code != http.StatusAccepted {
-		t.Fatalf("Code = %d, want 202 (bare day-2 run), body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("Code = %d, want 202 (bare operational run), body=%s", rec.Code, rec.Body.String())
 	}
 	if starter.calls != 1 {
-		t.Fatalf("starter.calls = %d, want 1 (bare инкарнация допускает day-2 operational-сценарий)", starter.calls)
+		t.Fatalf("starter.calls = %d, want 1 (bare инкарнация допускает операционный сценарий)", starter.calls)
 	}
 	if starter.gotSpec.ScenarioName != "add_user" {
 		t.Errorf("RunSpec.ScenarioName = %q, want add_user", starter.gotSpec.ScenarioName)

@@ -283,7 +283,7 @@ func TestToolsCall_IncarnationCreate_CreateScenarioInvalidName(t *testing.T) {
 // TestToolsCall_IncarnationCreate_CreateScenarioNotEligible — валидное по форме,
 // но НЕ входящее в create-набор сервиса имя (нет `create: true`, в снапшоте
 // отсутствует) → validation-failed, insert НЕ выполняется. Защита от bootstrap-а
-// инкарнации произвольным (например day-2) сценарием.
+// инкарнации произвольным (например операционным) сценарием.
 func TestToolsCall_IncarnationCreate_CreateScenarioNotEligible(t *testing.T) {
 	pool := &fakePool{incInsertFn: func(_, _ string) error {
 		t.Error("Create must NOT insert on non-eligible create_scenario")

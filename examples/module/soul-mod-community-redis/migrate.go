@@ -1,5 +1,5 @@
 // migrate-cluster плагина community.redis — миграция «старый кластер → новый
-// кластер той же топологии» в ТРИ day-2-шага (каждый — отдельный action cluster):
+// кластер той же топологии» в ТРИ операционных шага (каждый — отдельный action cluster):
 //
 //	join-external      — вступление НОВЫХ cluster-mode нод в УЖЕ существующий
 //	                     (старый) кластер репликами старых мастеров 1:1 (CLUSTER
@@ -62,7 +62,7 @@ func validateClusterJoinExternal(f map[string]*structpb.Value) []string {
 }
 
 // applyClusterJoinExternal вливает новые cluster-mode ноды в старый кластер и
-// делает каждую репликой смаппленного старого мастера (day-2 migration step 1):
+// делает каждую репликой смаппленного старого мастера (migration step 1):
 //
 //  1. коннект к первой source-seed → CLUSTER NODES → старые мастера + их слоты;
 //  2. fail-fast: число старых мастеров != shards_dest → 1:1 невозможен;
@@ -367,7 +367,7 @@ func validateClusterFailoverTakeover(f map[string]*structpb.Value) []string {
 }
 
 // applyClusterFailoverTakeover промоутит новые узлы (реплики старых мастеров после
-// join-external) в мастера через GRACEFUL CLUSTER FAILOVER (day-2 migration step 2):
+// join-external) в мастера через GRACEFUL CLUSTER FAILOVER (migration step 2):
 //
 //  1. ★sync-gate ДО первого failover: на КАЖДОМ новом узле INFO replication
 //     master_link_status == "up" (реплика догнала свой старый мастер). Хоть один
@@ -543,7 +543,7 @@ func validateClusterForgetExternal(f map[string]*structpb.Value) []string {
 }
 
 // applyClusterForgetExternal выкидывает старые узлы из кластера через CLUSTER
-// FORGET на каждой новой ноде (day-2 migration step 3, после failover-takeover):
+// FORGET на каждой новой ноде (migration step 3, после failover-takeover):
 //
 //  1. коннект к source_nodes (старые seed, перебор по порядку) → CLUSTER NODES →
 //     node-id СТАРОГО кластера (мастера И реплики — выкидываем всех). ★Строки новых

@@ -8,7 +8,7 @@ description: >-
     - source_tls_ca_ref   (string) — Vault-ПУТЬ к CA для TLS-коннекта к источнику.
   Это ССЫЛКИ (Vault-пути), НЕ секреты — в state PEM/пароль не оседает (ИБ, симметрия
   с tls.*_ref). migrate_cluster ПЕРСИСТИТ их из input.source.password_ref/tls_ca_ref;
-  day-2 detach_source читает их vault()-ом keeper-side для финального offset-gate к
+  detach_source читает их vault()-ом keeper-side для финального offset-gate к
   источнику. До v10 учётка источника в state НЕ хранилась (только во входном контракте
   migrate_cluster) → detach под AUTH/TLS-источником падал коннектом → НИКОГДА не
   проходил (error_locked). Теперь detach аутентифицируется к защищённому источнику.

@@ -43,7 +43,7 @@ type IncarnationCreateRequest struct {
 	// Traits — operator-set trait-метки инкарнации (ADR-060 amend R1): map ключ →
 	// scalar | list of scalars. Кладутся в incarnation.traits (источник истины) и
 	// материализованно проецируются в souls.traits хостов-членов. Формат/значение
-	// валидирует домен (вложенный объект/массив → 422). Day-2 замена — PUT
+	// валидирует домен (вложенный объект/массив → 422). Операционная замена — PUT
 	// .../traits.
 	Traits map[string]any `json:"traits,omitempty" doc:"operator-set trait-метки (ключ → scalar|list of scalars), ADR-060"`
 	// CreateScenario — выбор стартового сценария (механизм нескольких create-
@@ -433,7 +433,7 @@ func incRerunOperation() huma.Operation {
 		Method:        http.MethodPost,
 		Path:          "/{name}/rerun-last",
 		Summary:       "Перезапустить последний упавший сценарий из error_locked",
-		Description:   "Снимает error_locked и тем же действием перезапускает последний упавший сценарий инкарнации (bootstrap create/… или day-2 add_user/…) с сохранённым input упавшего прогона (одна tx FOR UPDATE). Permission incarnation.rerun-last.",
+		Description:   "Снимает error_locked и тем же действием перезапускает последний упавший сценарий инкарнации (bootstrap create/… или операционный add_user/…) с сохранённым input упавшего прогона (одна tx FOR UPDATE). Permission incarnation.rerun-last.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusAccepted,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},

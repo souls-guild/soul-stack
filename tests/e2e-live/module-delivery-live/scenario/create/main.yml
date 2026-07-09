@@ -12,7 +12,7 @@ state_changes: {}
 
 tasks:
   # apt redis-server (retry против флапающего apt-mirror, как smoke-nginx-live).
-  # Дефолтный Debian-redis: 127.0.0.1:6379 без auth — цель PING в day-2.
+  # Дефолтный Debian-redis: 127.0.0.1:6379 без auth — цель PING в операционном сценарии.
   - name: Install redis-server package
     module: core.pkg.installed
     retry: { count: 3, delay: 10s }

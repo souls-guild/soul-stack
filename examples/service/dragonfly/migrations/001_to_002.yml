@@ -4,7 +4,7 @@ to_version: 2
 description: >-
   v1→v2: вынос install + host-layout (conf_dir/data_dir) из incarnation.state в
   essence (симметрия redis 011_to_012, Вариант A). install — read-model без
-  читателей; conf_dir/data_dir — day-2 переведены на essence-чтение
+  читателей; conf_dir/data_dir — в операционных сценариях переведены на essence-чтение
   (default(essence.<x>, '<деф>')). Forward-only, delete no-op на инкарнациях без
   полей. ★ DragonFly vs redis: у DragonFly НЕТ modules_base_url (redis-модули .so к
   DF неприменимы) — вырезаются ТОЛЬКО три поля. sysctl_settings ОСТАЁТСЯ в state

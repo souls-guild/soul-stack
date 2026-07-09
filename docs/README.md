@@ -44,7 +44,7 @@
 
 | Документ | Что это / для цели |
 |---|---|
-| [guides/day-2.md](guides/day-2.md) | **Рабочий цикл оператора (Day-2).** Пошаговые практики: drift-check и reconcile, апгрейды Service и Soul, масштабирование флота, инциденты и восстановление, автоматизация регулярных операций. Мост между первоначальным deployments и повседневной эксплуатацией. |
+| [guides/operator-workflow.md](guides/operator-workflow.md) | **Рабочий цикл оператора.** Пошаговые практики: drift-check и reconcile, апгрейды Service и Soul, масштабирование флота, инциденты и восстановление, автоматизация регулярных операций. Мост между первоначальным deployments и повседневной эксплуатацией. |
 | [operations/monitoring.md](operations/monitoring.md) | Мониторинг кластера: метрики Prometheus, OTel, что и как наблюдать. |
 | [operations/scaling.md](operations/scaling.md) | Горизонтальное масштабирование stateless-Keeper-кластера под большой флот. |
 | [operations/upgrade.md](operations/upgrade.md) | Обновление кластера и сервисов: порядок, совместимость, миграции. |

@@ -68,9 +68,9 @@ type fakePool struct {
 	// create-путь (последний упавший = created).
 	lastScenarioFn func(name string) (string, error)
 
-	// recipeFn — backing для rerun-last day-2 recipe probe `SELECT recipe FROM
+	// recipeFn — backing для rerun-last recipe probe `SELECT recipe FROM
 	// apply_runs WHERE apply_id = $1 AND recipe IS NOT NULL LIMIT 1`. nil →
-	// ErrNoRows (fail-closed). Задать для day-2 happy-path (recipe-jsonb с input).
+	// ErrNoRows (fail-closed). Задать для happy-path (recipe-jsonb с input).
 	recipeFn func(applyID string) ([]byte, error)
 
 	// soulBulkCountFn — backing для souls-bulk-проекции traits (SyncTraitsToHosts
@@ -169,7 +169,7 @@ func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row 
 		_, total := f.historyItems(name, incarnation.HistoryFilter{})
 		return countRow{n: total}
 	}
-	// UPDATE incarnation … RETURNING updated_at (UpdateHosts/UpdateTraits day-2
+	// UPDATE incarnation … RETURNING updated_at (UpdateHosts/UpdateTraits операционные
 	// мутации): отдаём свежий updated_at на Scan(*time.Time). Идёт ДО общего
 	// `FROM incarnation`-матча (тот предикат стоит и в WHERE этого UPDATE).
 	if contains(sql, "UPDATE incarnation") && contains(sql, "RETURNING updated_at") {
@@ -218,7 +218,7 @@ func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row 
 		}
 		return staticRow{values: []any{last, dummyApplyID}}
 	}
-	// rerun-last day-2 recipe probe: SELECT recipe FROM apply_runs WHERE apply_id …
+	// rerun-last recipe probe: SELECT recipe FROM apply_runs WHERE apply_id …
 	if contains(sql, "FROM apply_runs") && contains(sql, "recipe IS NOT NULL") {
 		if f.recipeFn != nil {
 			b, err := f.recipeFn(args[0].(string))

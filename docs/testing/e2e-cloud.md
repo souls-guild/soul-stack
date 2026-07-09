@@ -1,7 +1,7 @@
 # Облачный live-E2E оркестратор (`scripts/e2e-cloud/`)
 
 Runbook повторяемого live-прогона Soul Stack против **постоянного** keeper'а на
-облачной VM. Оператор одной командой гонит create / day-2 / destroy-сценарии
+облачной VM. Оператор одной командой гонит create / операционные / destroy-сценарии
 (redis и далее DragonFly) через Operator API и получает отчёт с ассертами.
 Переиспользуемо для регрессий и pre-release проверки.
 
@@ -116,7 +116,7 @@ E2E_BRINGUP_STEPS="deploy-keeper deploy-service batch-onboard distribute-plugin 
 ```bash
 make e2e-cloud SUITE=create-destroy
 # либо напрямую:
-bash scripts/e2e-cloud/runbook.sh <create|create-destroy|day2>
+bash scripts/e2e-cloud/runbook.sh <create|create-destroy|operations>
 ```
 
 Сухой прогон без сети — `DRY_RUN=1`: печатает последовательность вызовов и генерит
@@ -124,7 +124,7 @@ bash scripts/e2e-cloud/runbook.sh <create|create-destroy|day2>
 шагов перед реальным прогоном.
 
 ```bash
-DRY_RUN=1 make e2e-cloud SUITE=day2 SCENARIO=add_user SCENARIO_INPUT='{"name":"alice"}'
+DRY_RUN=1 make e2e-cloud SUITE=operations SCENARIO=add_user SCENARIO_INPUT='{"name":"alice"}'
 ```
 
 ### Ключевые параметры (env, дефолты)
@@ -148,9 +148,9 @@ DRY_RUN=1 make e2e-cloud SUITE=day2 SCENARIO=add_user SCENARIO_INPUT='{"name":"a
 | `COVENS` | (пусто) | covens при create (CSV → JSON-массив) |
 | `E2E_CREATE_INPUT` | (пусто) | `input`-JSON для create |
 | `E2E_CREATE_MODE` | `engine` | `engine` (POST создаёт) / `script` (создаёт bring-up, движок ловит latest `apply_id` из `/runs`) |
-| `SCENARIO` / `SCENARIO_INPUT` | (пусто) | day-2: одиночный сценарий + его `input`-JSON |
-| `SCENARIOS` | (пусто) | day-2: `;`-список (`name` или `name::<json>`) |
-| `STATE_ASSERT_PATH` / `STATE_ASSERT_EXPECTED` | (пусто) | day-2: опц. ассерт state-поля после сценария |
+| `SCENARIO` / `SCENARIO_INPUT` | (пусто) | операция: одиночный сценарий + его `input`-JSON |
+| `SCENARIOS` | (пусто) | операция: `;`-список (`name` или `name::<json>`) |
+| `STATE_ASSERT_PATH` / `STATE_ASSERT_EXPECTED` | (пусто) | операция: опц. ассерт state-поля после сценария |
 | `ALLOW_DESTROY` | `true` | destroy без teardown (`allow_destroy=true`) |
 | `HEALTHY_TERMINAL` | `ready` | здоровый терминал `incarnation.status` |
 | `SCRIPTS_DIR` | `.pm/scripts` | каталог локальных bring-up-скриптов |
@@ -174,20 +174,20 @@ DRY_RUN=1 make e2e-cloud SUITE=day2 SCENARIO=add_user SCENARIO_INPUT='{"name":"a
   уже есть и залочена (`error_locked` / `migration_failed`) — `unlock` + destroy +
   ждать исчезновения; затем `create`-suite; затем `DELETE` и подтверждение сноса.
   **Повторный прогон обязан пройти без ручных вмешательств** — это критерий приёмки.
-- **`day2`** — generic-движок `run_scenario`: `POST /scenarios/{scenario}` → poll →
+- **`operations`** — generic-движок `run_scenario`: `POST /scenarios/{scenario}` → poll →
   `assert_run_success`. Одиночный сценарий (`$SCENARIO` + `$SCENARIO_INPUT`) или
   `;`-список (`$SCENARIOS`, элемент `name` или `name::<json>`). Имя сценария —
   любое service-defined (`add_user` / `update_config` / `restart` / `rotate_tls` /
   cluster-ops). Опц. после одиночного успешного сценария — ассерт state-поля
   (`$STATE_ASSERT_PATH` == `$STATE_ASSERT_EXPECTED`).
 
-Пример day-2:
+Пример операции:
 
 ```bash
 EXEC_MODE=tsh INCARNATION=redis-auto \
   SCENARIO=add_user SCENARIO_INPUT='{"name":"alice","acl":"~* +@read"}' \
   STATE_ASSERT_PATH='.state.users[]?.name' STATE_ASSERT_EXPECTED=alice \
-  make e2e-cloud SUITE=day2
+  make e2e-cloud SUITE=operations
 ```
 
 ## Что ассертит
@@ -215,7 +215,7 @@ drift | error_locked | migration_failed | provisioning | ready`).
 **Destroy** ассертится по исчезновению: `GET /{name}` → **404** (надёжнее статуса
 teardown-прогона — покрывает и `allow_destroy=true` без teardown).
 
-**Day-2 state** (опц.) — `assert_state_field` извлекает jq-путь из `.state` и
+**Операционный state** (опц.) — `assert_state_field` извлекает jq-путь из `.state` и
 сравнивает с ожидаемым (contains-семантика для стримов вроде `.state.users[]?.name`).
 
 Подтверждённые роуты Operator API (все под `/v1`, `Authorization: Bearer <jwt>`):
@@ -223,7 +223,7 @@ teardown-прогона — покрывает и `allow_destroy=true` без te
 | Операция | Роут |
 |---|---|
 | create | `POST /v1/incarnations` → 202 `IncarnationCreateReply` |
-| day-2 (generic) | `POST /v1/incarnations/{name}/scenarios/{scenario}` → 202 `IncarnationRunReply` |
+| операция (generic) | `POST /v1/incarnations/{name}/scenarios/{scenario}` → 202 `IncarnationRunReply` |
 | destroy | `DELETE /v1/incarnations/{name}?allow_destroy=<bool>` → 202 `IncarnationDestroyReply` |
 | unlock | `POST /v1/incarnations/{name}/unlock` → 200 |
 | статус прогона | `GET /v1/incarnations/{name}/runs/{apply_id}` → `RunDetailReply` |

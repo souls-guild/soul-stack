@@ -4,7 +4,7 @@ description: >-
   NIM-32 S2 live-гейт доставки SoulModule-плагинов (ADR-065 S5, живая гарантия
   NIM-8). Сервис ДЕКЛАРИРУЕТ community.redis в modules[] и НЕ содержит явного
   install-шага нигде. create ставит redis core-модулями без потребителя плагина
-  (негатив: синтеза в create-плане нет); day-2 verify_live зовёт
+  (негатив: синтеза в create-плане нет); операционный verify_live зовёт
   community.redis.command — keeper авто-синтезирует core.module.installed из
   этой manifest-декларации ПЕРЕД потребителем, Soul в ОДНОМ прогоне
   fetch→verify→atomic-rename→hot-register и тут же исполняет потребителя.
@@ -17,6 +17,6 @@ state_schema:
 # modules[] — явная manifest-декларация зависимости (ADR-065(e) amendment):
 # keeper синтезирует core.module.installed {name, ref} перед первым потребителем
 # community.redis.* в плане. Потребителя в create НЕТ → синтеза в create-плане
-# нет; потребитель — только в day-2 verify_live.
+# нет; потребитель — только в операционном verify_live.
 modules:
   - { name: community.redis, ref: v1.0.0 }

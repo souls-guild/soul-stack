@@ -4,7 +4,7 @@
 -- под cert-rotation Вар1 (Keeper-центр). Ось скана Reaper-правила
 -- `rotate_due_certs` — `not_after`: серты, чей срок истекает в пределах
 -- порога, ротируются централизованно (Keeper генерит новый keypair+CSR,
--- SignCSR через Vault PKI, WriteKV в Vault, спавн Voyage day-2-сценария
+-- SignCSR через Vault PKI, WriteKV в Vault, спавн Voyage операционного сценария
 -- rotate_tls).
 --
 -- ★ ОТЛИЧИЕ ОТ soul_seeds (009): soul_seeds — IDENTITY-серты Soul-агентов

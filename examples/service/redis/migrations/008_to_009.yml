@@ -7,7 +7,7 @@ description: >-
     - seeded_from {source_endpoints: array string, detached: bool} — ОТКУДА залиты
       данные при миграции с внешнего Redis-кластера. source_endpoints — адреса
       источника; detached — отцеплён ли источник (false после migrate, источник ещё
-      жив; true после day-2 detach_source). Время в state НЕ кладём — детерминизм L0
+      жив; true после detach_source). Время в state НЕ кладём — детерминизм L0
       (now() в migration-CEL запрещён ADR-019); момент берётся из state_history
       (snapshot per-change несёт время). Timestamps в самом state — отложенный S-batch.
 

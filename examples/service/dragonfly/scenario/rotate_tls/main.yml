@@ -1,6 +1,6 @@
 name: rotate_tls
 description: >-
-  Day-2: ротация TLS-материала DragonFly (серверный cert/key + CA) БЕЗ рестарта процесса.
+  Операционный сценарий: ротация TLS-материала DragonFly (серверный cert/key + CA) БЕЗ рестарта процесса.
   DragonFly перечитывает cert/key/CA на лету по CONFIG SET tls_*_file — рестарт демона не
   нужен (производственная конвенция «hot-reload > рестарт», docs/destiny/production-
   conventions.md §3a/§6). REUSE из redis/rotate_tls.
@@ -85,10 +85,10 @@ validate:
 compute:
   local_addr: "${ 'unix:' + default(essence.run_dir, '/var/run/dragonfly') + '/dragonfly.sock' }"
   # ★ admin_user (редизайн default_admin): 3 CONFIG SET tls_*_file коннектятся под ним
-  # (requirepass убран). Литерал (day-2 вне covenant).
+  # (requirepass убран). Литерал (операционный сценарий вне covenant).
   admin_user: "${ 'default_admin' }"
   # ── host-layout из essence (v1→v2, миграция): conf_dir/data_dir/install больше не в state ──
-  # ★ conf_dir из essence (не state) — day-2 читает актуальный layout; PEM кладётся в
+  # ★ conf_dir из essence (не state) — операционный сценарий читает актуальный layout; PEM кладётся в
   # ${conf_dir}/tls/. install у rotate read-model без реального читателя → package-дефолт.
   conf_dir:   "${ default(essence.conf_dir, '/etc/dragonfly') }"
   data_dir:   "${ default(essence.data_dir, '/var/lib/dragonfly') }"
@@ -102,7 +102,7 @@ compute:
   ca_ref:   "${ has(input.ca_ref)   ? input.ca_ref   : incarnation.state.tls.ca_ref }"
 
 # ── Мутация incarnation.state ─────────────────────────────────────────────────
-# day-2 фиксирует НОВЫЕ Vault-refs cert/key/ca (read-model state.tls.*_ref). enable НЕ меняется
+# операционный сценарий фиксирует НОВЫЕ Vault-refs cert/key/ca (read-model state.tls.*_ref). enable НЕ меняется
 # (rotate только материал). ★ БЕЗ only/port: у DragonFly TLS на основном порту (нет tls_port,
 # нет «только-TLS»). Тот же compute.*_ref, что ушёл в render PEM destiny.
 state_changes:

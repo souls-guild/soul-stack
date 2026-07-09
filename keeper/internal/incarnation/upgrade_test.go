@@ -714,15 +714,15 @@ func TestUnlockForRerun_RejectNonErrorLocked(t *testing.T) {
 	}
 }
 
-// TestUnlockForRerun_Day2_ReusesRecipeInput — day-2 happy-path: последний упавший
+// TestUnlockForRerun_Ops_ReusesRecipeInput — happy-path: последний упавший
 // — add_user (≠ created `create`), его input берётся из recipe apply_run (НЕ из
 // spec.input) → допуск, Scenario=="add_user", Input=={user:alice}.
-func TestUnlockForRerun_Day2_ReusesRecipeInput(t *testing.T) {
+func TestUnlockForRerun_Ops_ReusesRecipeInput(t *testing.T) {
 	const applyID = "01HRERUN00000000000000000E"
 	tx := &fakeTx{
 		execErrAt: -1,
 		queryRows: []scriptedRow{
-			// spec.input несёт version — НЕ должен просочиться (day-2 берёт recipe).
+			// spec.input несёт version — НЕ должен просочиться (операционный путь берёт recipe).
 			{values: []any{[]byte(`{"primary":"redis-01"}`), "error_locked", "create", []byte(`{"input":{"version":"8.6.1"}}`)}},
 			{values: []any{"add_user", "01HFAILEDRUN0000000000000E"}},
 			{values: []any{[]byte(`{"scenario_name":"add_user","input":{"user":"alice"}}`)}},
@@ -732,37 +732,37 @@ func TestUnlockForRerun_Day2_ReusesRecipeInput(t *testing.T) {
 
 	res, err := UnlockForRerun(context.Background(), pool, "redis-prod", "rerun add_user", "archon-alice", "01HRERUNHIST000000000000E", applyID)
 	if err != nil {
-		t.Fatalf("UnlockForRerun day-2 add_user: %v", err)
+		t.Fatalf("UnlockForRerun operational add_user: %v", err)
 	}
 	if res.Scenario != "add_user" {
-		t.Errorf("Scenario = %q, want add_user (последний упавший day-2)", res.Scenario)
+		t.Errorf("Scenario = %q, want add_user (последний упавший операционный сценарий)", res.Scenario)
 	}
 	if res.Input == nil {
-		t.Fatal("UnlockResult.Input = nil — recipe.input НЕ прочитан (day-2 регресс)")
+		t.Fatal("UnlockResult.Input = nil — recipe.input НЕ прочитан (операционный регресс)")
 	}
 	if res.Input["user"] != "alice" {
 		t.Errorf("UnlockResult.Input[user] = %v, want alice (recipe.input)", res.Input["user"])
 	}
 	if _, leaked := res.Input["version"]; leaked {
-		t.Error("UnlockResult.Input несёт spec.input[version] — day-2 обязан брать recipe.input, не spec")
+		t.Error("UnlockResult.Input несёт spec.input[version] — операционный сценарий обязан брать recipe.input, не spec")
 	}
 	// recipe без from_upgrade → FromUpgrade=false (перезапуск из scenario/, ADR-0068).
 	if res.FromUpgrade {
 		t.Error("UnlockResult.FromUpgrade = true, want false (recipe без from_upgrade)")
 	}
 	if !tx.committed {
-		t.Error("rerun-last day-2 tx not committed")
+		t.Error("rerun-last operational tx not committed")
 	}
-	// history-label — rerun-last, применён последний упавший day-2-сценарий.
+	// history-label — rerun-last, применён последний упавший операционный сценарий.
 	if tx.execArgs[0][2] != rerunLastScenarioLabel {
 		t.Errorf("history scenario = %v, want %q", tx.execArgs[0][2], rerunLastScenarioLabel)
 	}
 }
 
-// TestUnlockForRerun_Day2_RecipeNull_FailClosed — day-2, но recipe отсутствует
+// TestUnlockForRerun_Ops_RecipeNull_FailClosed — операционный сценарий, но recipe отсутствует
 // (recipe IS NULL / apply_run вычищен → ErrNoRows): fail-closed
 // ErrRerunInputUnavailable, транзакция НЕ коммитится (без silent bootstrap-input).
-func TestUnlockForRerun_Day2_RecipeNull_FailClosed(t *testing.T) {
+func TestUnlockForRerun_Ops_RecipeNull_FailClosed(t *testing.T) {
 	tx := &fakeTx{
 		execErrAt: -1,
 		queryRows: []scriptedRow{
@@ -785,10 +785,10 @@ func TestUnlockForRerun_Day2_RecipeNull_FailClosed(t *testing.T) {
 	}
 }
 
-// TestUnlockForRerun_Day2_BareIncarnation — bare-инкарнация (created_scenario IS
-// NULL) залочена day-2-сценарием: rerun-last применим через recipe-путь
-// (created==nil → day-2), Scenario=="add_user", Input из recipe.
-func TestUnlockForRerun_Day2_BareIncarnation(t *testing.T) {
+// TestUnlockForRerun_Ops_BareIncarnation — bare-инкарнация (created_scenario IS
+// NULL) залочена операционным сценарием: rerun-last применим через recipe-путь
+// (created==nil → операционный путь), Scenario=="add_user", Input из recipe.
+func TestUnlockForRerun_Ops_BareIncarnation(t *testing.T) {
 	tx := &fakeTx{
 		execErrAt: -1,
 		queryRows: []scriptedRow{
@@ -799,9 +799,9 @@ func TestUnlockForRerun_Day2_BareIncarnation(t *testing.T) {
 	}
 	pool := &fakePool{txs: []*fakeTx{tx}}
 
-	res, err := UnlockForRerun(context.Background(), pool, "redis-bare", "rerun bare day-2", "archon-alice", "01HRERUNHIST00000000000B0", "01HRERUN0000000000000000B0")
+	res, err := UnlockForRerun(context.Background(), pool, "redis-bare", "rerun bare operational", "archon-alice", "01HRERUNHIST00000000000B0", "01HRERUN0000000000000000B0")
 	if err != nil {
-		t.Fatalf("UnlockForRerun bare day-2: %v", err)
+		t.Fatalf("UnlockForRerun bare operational: %v", err)
 	}
 	if res.Scenario != "add_user" {
 		t.Errorf("Scenario = %q, want add_user", res.Scenario)
@@ -810,7 +810,7 @@ func TestUnlockForRerun_Day2_BareIncarnation(t *testing.T) {
 		t.Errorf("UnlockResult.Input = %v, want {user:bob} (recipe.input)", res.Input)
 	}
 	if !tx.committed {
-		t.Error("rerun-last bare day-2 tx not committed")
+		t.Error("rerun-last bare operational tx not committed")
 	}
 }
 
@@ -1065,10 +1065,10 @@ func TestUpgradeStateSchema_SlugWithoutRunApplyID_Legacy(t *testing.T) {
 	}
 }
 
-// TestUnlockForRerun_Day2_FromUpgradeRecipe — упавший day-2-прогон был upgrade-
+// TestUnlockForRerun_Ops_FromUpgradeRecipe — упавший операционный прогон был upgrade-
 // сценарием (recipe.from_upgrade=true, ADR-0068): rerun-last возвращает
 // FromUpgrade=true, чтобы RunSpec перезапустил его из upgrade/, а не scenario/.
-func TestUnlockForRerun_Day2_FromUpgradeRecipe(t *testing.T) {
+func TestUnlockForRerun_Ops_FromUpgradeRecipe(t *testing.T) {
 	tx := &fakeTx{
 		execErrAt: -1,
 		queryRows: []scriptedRow{
@@ -1081,7 +1081,7 @@ func TestUnlockForRerun_Day2_FromUpgradeRecipe(t *testing.T) {
 
 	res, err := UnlockForRerun(context.Background(), pool, "redis-prod", "rerun upgrade", "archon-alice", "01HRERUNHIST0000000000UPG", "01HRERUN000000000000000UPG")
 	if err != nil {
-		t.Fatalf("UnlockForRerun day-2 upgrade: %v", err)
+		t.Fatalf("UnlockForRerun operational upgrade: %v", err)
 	}
 	if !res.FromUpgrade {
 		t.Error("UnlockResult.FromUpgrade = false, want true (recipe.from_upgrade → rerun из upgrade/)")

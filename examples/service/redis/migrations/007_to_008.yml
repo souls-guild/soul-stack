@@ -5,7 +5,7 @@ description: >-
   state_schema v7 → v8: cascade-destroy read-model (ADR-061, дополнение к v7
   cloud-provision). state ДОПОЛНЯЕТСЯ полем:
     - provisioned_sids (array string) — SID (FQDN) каждой VM, поднятой нашим
-      create-прогоном. day-2 teardown (cascade destroy) читает их, чтобы добить
+      create-прогоном. teardown (cascade destroy) читает их, чтобы добить
       осиротевшие souls (→destroyed), seeds (→orphaned) и bootstrap-токены
       (→burned): Reaper НЕ снимает pending-VM-souls (mark_disconnected только
       connected→disconnected), без sids они повисли бы (нарушение anti-replay).

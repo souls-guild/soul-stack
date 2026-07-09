@@ -374,7 +374,7 @@ func TestApplyConfig_PartialDiff(t *testing.T) {
 // TestApplyConfig_MultiwordValueNoOp — P3-регресс: многословное значение
 // (save "900 1 300 10 60 10000") при space-join+strings.Fields рассыпалось бы в
 // перепутанные пары → current != want → ложный CONFIG SET (потеря
-// идемпотентности на day-2 update_config). Типизированный ConfigGet сохраняет
+// идемпотентности на update_config). Типизированный ConfigGet сохраняет
 // значение целиком → live == want → no-op.
 func TestApplyConfig_MultiwordValueNoOp(t *testing.T) {
 	const save = "900 1 300 10 60 10000"
@@ -448,7 +448,7 @@ func TestApplyConfig_RewriteCallsConfigRewrite(t *testing.T) {
 }
 
 // TestApplyConfig_StartupOnlyDirectivesSkipped — денилист startup-only: CONFIG SET
-// их отвергает, day-2 рендерит ПОЛНЫЙ redis.conf (с ними), поэтому плагин их
+// их отвергает, операционный сценарий рендерит ПОЛНЫЙ redis.conf (с ними), поэтому плагин их
 // ПРОПУСКАЕТ (не падает). Hot-settable директивы того же вызова применяются как
 // обычно. Проверяем: ни CONFIG GET, ни CONFIG SET по startup-only НЕ вызваны;
 // hot-settable применена; skipped/skippedCount в Output корректны.

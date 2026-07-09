@@ -27,7 +27,7 @@ description: >-
 #     «как развёрнуто».
 #   - именованные поля (memory_mb/wiredtiger_cache_gb/...) — НАМЕРЕНИЕ оператора в простых
 #     типизированных понятиях (read-model). install и host-layout (conf_dir/data_dir)
-#     вынесены в essence (author-context, day-2 читают essence напрямую).
+#     вынесены в essence (author-context, операционные сценарии читают essence напрямую).
 # ОБА заполняются из ОДНОГО compute-прохода create — рассинхрона нет.
 state_schema:
   type: object

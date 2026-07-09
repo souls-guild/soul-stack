@@ -5,7 +5,7 @@
 #
 # ★ REUSE из service redis 1:1 (DragonFly redis-совместим: ACL-формат и perms-токены
 # идентичны). В PILOT (sentinel-only, create) AclUser читает ТОЛЬКО create (массив
-# input.users); add_user/update_users — день-2, СЛЕД. слайс.
+# input.users); add_user/update_users — операционный сценарий, СЛЕД. слайс.
 types:
   # AclUser — одна запись ACL-пользователя DragonFly (operator-extra). create читает
   # массив таких записей (input.users). Единый perms-pattern (token-shape-фильтр re2,

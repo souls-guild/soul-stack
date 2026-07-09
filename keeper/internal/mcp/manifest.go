@@ -280,7 +280,7 @@ var catalogManifest = []toolEntry{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.incarnation.rerun-last",
-			Description:  "Снимает error_locked и тем же действием перезапускает ПОСЛЕДНИЙ упавший сценарий инкарнации (bootstrap 'create'/… или day-2 add_user/…) с сохранённым input упавшего прогона. Только из error_locked. Асинхронная операция — возвращает _apply_id + scenario. Permission: incarnation.rerun-last.",
+			Description:  "Снимает error_locked и тем же действием перезапускает ПОСЛЕДНИЙ упавший сценарий инкарнации (bootstrap 'create'/… или операционный add_user/…) с сохранённым input упавшего прогона. Только из error_locked. Асинхронная операция — возвращает _apply_id + scenario. Permission: incarnation.rerun-last.",
 			InputSchema:  schemaIncarnationRerunLastInput,
 			OutputSchema: schemaIncarnationRerunLastOutput,
 		},
@@ -1328,7 +1328,7 @@ var (
 "properties":{
 "_apply_id":{"type":"string","description":"ULID перезапущенного прогона."},
 "incarnation":{"type":"string"},
-"scenario":{"type":"string","description":"Имя перезапущенного сценария (последний упавший: bootstrap 'create'/… или day-2 add_user/…)."}}}`)
+"scenario":{"type":"string","description":"Имя перезапущенного сценария (последний упавший: bootstrap 'create'/… или операционный add_user/…)."}}}`)
 
 	schemaIncarnationUnlockOutput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",

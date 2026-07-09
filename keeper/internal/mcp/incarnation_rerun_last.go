@@ -32,7 +32,7 @@ type incarnationRerunLastOutput struct {
 // callIncarnationRerunLast — mutating async-tool keeper.incarnation.rerun-last.
 // Паритет REST IncarnationHandler.RerunLast: снимает error_locked и тем же
 // действием перезапускает ПОСЛЕДНИЙ упавший сценарий — bootstrap `create`/… ИЛИ
-// day-2 add_user/… (architecture.md → «Атомарность и error_locked»). Под одним
+// операционный add_user/… (architecture.md → «Атомарность и error_locked»). Под одним
 // FOR UPDATE: error_locked → applying минуя ready.
 //
 // RBAC-context — covens ∪ {name} (name-bound, паритет unlock). audit:
@@ -115,8 +115,8 @@ func (h *Handler) callIncarnationRerunLast(ctx context.Context, claims *jwt.Clai
 	// Перезапуск последнего упавшего сценария (async): статус уже applying
 	// (UnlockForRerun). FromLocked — lockRun не транзитит статус повторно, обязан
 	// увидеть applying. ScenarioName — имя упавшего сценария из UnlockResult (create
-	// ИЛИ day-2). Input — его сохранённый input (spec.input на create-пути / recipe.
-	// input на day-2-пути, прочитан тем же FOR UPDATE): без него перезапуск с
+	// ИЛИ операционный). Input — его сохранённый input (spec.input на create-пути / recipe.
+	// input на операционном пути, прочитан тем же FOR UPDATE): без него перезапуск с
 	// required-полями (redis cluster: version/shards) упал бы на input-валидации /
 	// применил дефолты (паритет REST RerunLastTyped).
 	if err := h.deps.ScenarioRunner.Start(ctx, scenario.RunSpec{

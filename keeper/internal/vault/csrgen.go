@@ -11,7 +11,7 @@ import (
 
 // serviceCSRKeySize — размер RSA-ключа сервисного серта. 2048 — паритет с
 // SoulSeed-CSR (soul/internal/bootstrap, rsaKeySize) и достаточная стойкость
-// для day-2 TLS-материала с регулярной ротацией.
+// для TLS-материала с регулярной ротацией.
 const serviceCSRKeySize = 2048
 
 // CSRParams — параметры генерации CSR сервисного серта.

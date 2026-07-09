@@ -11,7 +11,7 @@ description: >-
   cluster и sentinel (диспетчер по redis_type). sentinel с replicas_per_master=0
   даёт standalone-эквивалент (один master + sentinel-демон). Режимы standalone и
   sentinel_only убраны из СЕРВИСА (sentinel_only остаётся capability в destiny
-  `redis` для переиспользования, напр. DragonFly). Day-2 hot-reload реализован:
+  `redis` для переиспользования, напр. DragonFly). Операционный hot-reload реализован:
   `update_config` (CONFIG SET hot-settable + REWRITE), `add_user` (ACL LOAD),
   `rotate_tls` (CONFIG SET tls-*-file, live cert-reload), а также `restart`
   (systemd-unit-уровень), `add_node`/`remove_node`/`reshard` (cluster).
@@ -25,7 +25,7 @@ description: >-
 #   - 001_to_002 (migrations/001_to_002.yml): redis_users из списка имён в map
 #     name → {perms, state} (демо-грамматики DSL — rename + set + foreach + delete).
 #   - 002_to_003 (migrations/002_to_003.yml): «richer state» — opaque redis_config
-#     ДОПОЛНЯЕТСЯ ИМЕНОВАННЫМИ полями намерения (read-model day-2): tls/install/
+#     ДОПОЛНЯЕТСЯ ИМЕНОВАННЫМИ полями намерения (read-model): tls/install/
 #     persistence/memory_mb/maxmemory_policy/modules/sysctl_settings + топология
 #     (shards/replicas/sentinel_quorum). Best-effort: извлекаемое — из redis_config/
 #     redis_sentinel, неизвлекаемое — консервативный default (см. описание миграции).
@@ -34,7 +34,7 @@ description: >-
 #     sentinel_only → sentinel (чтобы state остался schema-валиден). ★ СЕМАНТИКА
 #     remap-а требует архитектурного подтверждения (см. описание миграции).
 #   - 004_to_005 (migrations/004_to_005.yml): тайминги failover sentinel (#7) —
-#     redis_sentinel ДОПОЛНЯЕТСЯ down_after_ms/failover_timeout_ms (read-model day-2).
+#     redis_sentinel ДОПОЛНЯЕТСЯ down_after_ms/failover_timeout_ms (read-model).
 #     Только для sentinel-инкарнаций (redis_sentinel непуст); для cluster (redis_sentinel
 #     {}) — no-op. Best-effort default = роль-дефолты 5000/60000 (точное значение
 #     восстанавливается на следующем create-override). Симметрично 002_to_003 namedfields.
@@ -48,14 +48,14 @@ description: >-
 #     users.acl.tmpl, НЕ порядок элементов state. Пустой/отсутствующий map → пустой массив.
 #   - 006_to_007 (migrations/006_to_007.yml): cloud-provision read-model (ADR-061,
 #     Вариант A: create поднимает VM в том же прогоне). state ДОПОЛНЯЕТСЯ полями
-#     provisioned_vm_ids (array string — provider-vm-id созданных VM, day-2 teardown
+#     provisioned_vm_ids (array string — provider-vm-id созданных VM, teardown
 #     читает их для destroy) и provisioned_provider (string — имя cloud-Provider).
 #     Существующим инкарнациям (развёрнутым БЕЗ provision) — консервативный default:
 #     provisioned_vm_ids=[] и provisioned_provider='' (не провиженные нашим сервисом).
 #     ДВА плоских set (поля независимы) — has()-guard back-compat для инкарнаций без них.
 #   - 007_to_008 (migrations/007_to_008.yml): cascade-destroy read-model (дополнение к
 #     v7). state ДОПОЛНЯЕТСЯ provisioned_sids (array string — SID/FQDN созданных нашим
-#     прогоном VM). day-2 teardown читает их для cascade destroy реестров souls/seeds/
+#     прогоном VM). teardown читает их для cascade destroy реестров souls/seeds/
 #     tokens (Reaper НЕ снимает pending-VM-souls сам → без sids осиротевшие записи
 #     повисли бы, anti-replay нарушен). Рядом с provisioned_vm_ids: vm_ids — provider-id
 #     (для core.cloud.destroyed), sids — Keeper-id Soul (для cascade destroy) — разные
@@ -63,7 +63,7 @@ description: >-
 #   - 008_to_009 (migrations/008_to_009.yml): seed-source read-model (S1-пилот
 #     migrate_cluster). state ДОПОЛНЯЕТСЯ вложенным объектом seeded_from — ОТКУДА
 #     залиты данные при миграции с внешнего кластера: source_endpoints (array string)
-#     и detached (bool — false после migrate, true после day-2 detach_source). Время
+#     и detached (bool — false после migrate, true после detach_source). Время
 #     намеренно НЕ в state (детерминизм L0; now() в migration-CEL запрещён ADR-019) —
 #     берётся из state_history (snapshot per-change). Существующим инкарнациям (обычный
 #     create, не миграция) — консервативный default {source_endpoints: [], detached: false}.
@@ -72,7 +72,7 @@ description: >-
 #     (guard на объекте, не на листьях). Остальной state НЕ трогается.
 #   - 009_to_010 (migrations/009_to_010.yml): seeded_from ДОПОЛНЯЕТСЯ ССЫЛКАМИ на учётку
 #     внешнего источника — source_password_ref (Vault-ПУТЬ к паролю) + source_tls_ca_ref
-#     (Vault-ПУТЬ к CA), оба string. Прод-фикс блокера detach под AUTH-источником: day-2
+#     (Vault-ПУТЬ к CA), оба string. Прод-фикс блокера detach под AUTH-источником:
 #     detach_source делает финальный offset-gate к ВНЕШНЕМУ источнику, но раньше учётка
 #     источника в state НЕ хранилась (только в input.source.* у migrate_cluster) → коннект
 #     к AUTH-источнику падал → detach НИКОГДА не проходил (error_locked). Теперь migrate
@@ -112,10 +112,10 @@ description: >-
 #     простого ввода в redis.conf-map (что реально уйдёт в render и CONFIG SET). Это
 #     write-model «как развёрнуто».
 #   - именованные поля (tls/persistence/...) — НАМЕРЕНИЕ оператора в простых
-#     типизированных понятиях (read-model). День-2-сценарии читают их именованно
+#     типизированных понятиях (read-model). Операционные сценарии читают их именованно
 #     (restart — state.tls, update_config — state.persistence/memory_mb). install и
 #     host-layout (conf_dir/data_dir/modules_base_url) вынесены в essence (v11→v12,
-#     Вариант A): install — read-model без читателей, layout — day-2 читают essence.
+#     Вариант A): install — read-model без читателей, layout — операционные сценарии читают essence.
 # ОБА представления заполняются из ОДНОГО compute-прохода create (compute.*): namedfields
 # и redis_config считаются из тех же compute.tls_*/input.* — рассинхрона между ними нет.
 state_schema:
@@ -138,14 +138,14 @@ state_schema:
       additionalProperties: true
 
     # ── Именованные поля намерения (read-model, v3) ───────────────────────────
-    # Простые типизированные понятия оператора, рядом с opaque redis_config. День-2-
+    # Простые типизированные понятия оператора, рядом с opaque redis_config. Операционные
     # сценарии читают их ИМЕНОВАННО (не парсят redis_config). Заполняются create из
     # тех же compute.*/input, что и redis_config (один источник истины, без drift).
 
     # TLS-намерение: включён ли TLS, закрыт ли plain-порт, на каком TLS-порту, и
     # Vault-ПУТИ серверного cert/key/CA (НЕ сам PEM — секрет в state не лежит, ИБ).
     # Заполняется из compute.tls_on/tls_only_on/tls_port/tls_*_ref (те же значения,
-    # что ушли в TLS-блок redis_config). day-2 restart читает state.tls.enable/port.
+    # что ушли в TLS-блок redis_config). restart читает state.tls.enable/port.
     tls:
       type: object
       additionalProperties: false
@@ -244,7 +244,7 @@ state_schema:
     # ФАКТ «эти хосты подняты нашим create-прогоном через cloud-create». Заполняется
     # create ТОЛЬКО когда input.provision.enabled (provider/vm_ids/sids из register
     # core.cloud.created); иначе [] / '' (хосты не провиженные сервисом — declared
-    # roster). day-2 teardown читает provisioned_vm_ids для core.cloud.destroyed.
+    # roster). teardown читает provisioned_vm_ids для core.cloud.destroyed.
     # provider — имя cloud-Provider в реестре (для того же destroy-вызова).
     provisioned_vm_ids:
       type: array
@@ -254,7 +254,7 @@ state_schema:
       type: string
     # provisioned_sids (v8): SID (FQDN) каждой VM, поднятой этим create-прогоном. ОТЛИЧНО
     # от provisioned_vm_ids: vm_ids — provider-side id (для core.cloud.destroyed), sids —
-    # Keeper-side идентичность Soul. day-2 teardown (cascade destroy) читает sids, чтобы
+    # Keeper-side идентичность Soul. teardown (cascade destroy) читает sids, чтобы
     # добить осиротевшие souls (→destroyed) / seeds (→orphaned) / bootstrap-токены
     # (→burned): Reaper НЕ снимает pending-VM-souls сам (mark_disconnected только
     # connected→disconnected), без sids записи повисли бы (нарушение anti-replay).
@@ -269,7 +269,7 @@ state_schema:
     # ФАКТ «данные инкарнации залиты миграцией с ВНЕШНЕГО Redis-кластера» (S1
     # migrate_cluster). source_endpoints — адреса источника (откуда тянули);
     # detached — отцеплён ли источник: false сразу после migrate (источник ещё
-    # жив, реплицируем/догружаем), true после day-2 detach_source (источник
+    # жив, реплицируем/догружаем), true после detach_source (источник
     # больше не нужен). Время сюда НЕ кладём — оно в state_history (snapshot
     # per-change несёт время), а в самом state остаётся детерминированным (важно
     # для L0; timestamps в state — отложенный S-batch). Обычный create (не
@@ -278,7 +278,7 @@ state_schema:
     #
     # ★ source_password_ref / source_tls_ca_ref (v10) — ССЫЛКИ (Vault-ПУТИ, НЕ
     # значения) на учётку ВНЕШНЕГО источника, ПЕРСИСТЯТСЯ migrate_cluster из
-    # input.source.password_ref/tls_ca_ref. Прод-фикс: day-2 detach_source делает
+    # input.source.password_ref/tls_ca_ref. Прод-фикс: detach_source делает
     # финальный offset-gate к источнику, и если источник под AUTH/TLS — без этих
     # ref'ов коннект упирался бы в отказ (учётка не во входном контракте detach,
     # секрет в state не оседает — ИБ). detach читает их vault()-ом keeper-side
@@ -314,7 +314,7 @@ state_schema:
     # types-эпика, ADR-062 AclUser; перевод map→array, миграция 005_to_006). name —
     # имя юзера (раньше был map-ключ); perms — полная ACL-строка (директивы Redis ACL
     # как есть). Наполняется create из input.users (тоже массив AclUser); пароли — НЕ
-    # в state (keeper-side Vault, ADR-012). day-2 (add_user/add_node/update_config/
+    # в state (keeper-side Vault, ADR-012). операционные сценарии (add_user/add_node/update_config/
     # rotate_tls) читают массив через .map(u, {u.name: {...}}) → собирают тот же
     # destiny-map имя→{perms,state,password}, что и прежде (destiny-контракт не менялся).
     redis_users:
@@ -388,7 +388,7 @@ modules:
 # Раскрываемые секреты инкарнации (NIM-74): оператор с правом incarnation.view-secrets
 # раскрывает plaintext пароля ACL-юзера из State-вьюхи. enumerate=state.redis_users —
 # множество допустимых key = имена элементов (element.name); vault_ref — конвенция
-# secret/redis/<incarnation>/users/<name>#password (та же ветка, что day-2 сценарии).
+# secret/redis/<incarnation>/users/<name>#password (та же ветка, что операционные сценарии).
 revealable_secrets:
   - id: user_password
     label: "Пароль пользователя Redis"

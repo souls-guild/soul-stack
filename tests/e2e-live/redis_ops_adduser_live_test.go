@@ -1,11 +1,11 @@
 //go:build e2e_live
 
-// L3b E2E day-2: examples/service/redis::add_user через community-плагин —
+// L3b E2E операция: examples/service/redis::add_user через community-плагин —
 // live-guard NIM-8 (auto-deps) + ADR-065 S5. Доказывает ПОЛНУЮ цепочку
-// day-2 плагин-канала на ЖИВОМ Redis:
+// операционного плагин-канала на ЖИВОМ Redis:
 //
 //	create (sentinel, 0 реплик = standalone-эквивалент) поднимает redis-server →
-//	day-2 add_user: синтез install community.redis (auto-deps ADR-065) → FetchModule
+//	операционный add_user: синтез install community.redis (auto-deps ADR-065) → FetchModule
 //	(plugingit.Resolver F-fetch из git-source-репо) → Sigil-verify (допуск v1.0.0) →
 //	hot-register → community.redis.acl (ACL LOAD) против РЕАЛЬНОГО инстанса → state/audit.
 //
@@ -24,7 +24,7 @@ import (
 	"github.com/souls-guild/soul-stack/tests/e2e-live/harness"
 )
 
-func TestL3bRedisLive_Day2AddUser(t *testing.T) {
+func TestL3bRedisLive_OpsAddUser(t *testing.T) {
 	// Сборка community-плагина ДО NewStack: source-URL нужен на buildKeeperYAML.
 	repoURL := harness.BuildCommunityRedisPlugin(t)
 
@@ -90,7 +90,7 @@ func TestL3bRedisLive_Day2AddUser(t *testing.T) {
 	// 3 экспортёра, замерено ~115s) + commit-барьер; ready наступает ~120s.
 	stack.WaitIncarnationReady(t, inc, 300)
 
-	// Day-2 add_user: тут синтезируется install community.redis → FetchModule → Sigil-verify
+	// Операционный add_user: тут синтезируется install community.redis → FetchModule → Sigil-verify
 	// → hot-register → community.redis.acl (ACL LOAD). Пароль нового юзера — НЕ во входе (Vault).
 	addApply := stack.RunScenario(t, inc, "add_user", map[string]any{
 		"user": map[string]any{

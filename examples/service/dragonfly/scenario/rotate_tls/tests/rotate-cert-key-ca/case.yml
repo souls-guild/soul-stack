@@ -1,4 +1,4 @@
-# L0-испытание rotate_tls: day-2 ротация TLS-материала БЕЗ рестарта. Оператор задаёт НОВЫЕ
+# L0-испытание rotate_tls: ротация TLS-материала БЕЗ рестарта. Оператор задаёт НОВЫЕ
 # Vault-refs cert/key/ca; сценарий перерендеривает PEM в ${conf_dir}/tls/ из новых refs и шлёт
 # три CONFIG SET tls_*_file (UNDERSCORE — DragonFly-форма!) через community.redis.command под
 # onchanges-гейтом (DragonFly пересоздаёт SSL_CTX и перечитывает live). Render-only, герметично.

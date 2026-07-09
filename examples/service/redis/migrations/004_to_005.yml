@@ -3,7 +3,7 @@ to_version: 5
 
 description: >-
   state_schema v4 → v5: тайминги failover sentinel (#7, 2026-06-26). redis_sentinel
-  ДОПОЛНЯЕТСЯ именованными полями down_after_ms/failover_timeout_ms (read-model day-2),
+  ДОПОЛНЯЕТСЯ именованными полями down_after_ms/failover_timeout_ms (read-model),
   симметрично richer-state 002_to_003. Только для sentinel-инкарнаций (redis_sentinel
   непуст); для cluster (redis_sentinel == {}) — no-op (sentinel-фактов нет).
 
@@ -27,7 +27,7 @@ description: >-
   redis_sentinel.master_ip — пересборка его НЕ переносит (map-литерал migration-CEL не
   умеет conditional-ключ, а безусловный master_ip:'' добавил бы лишний ключ всем sentinel-
   инкарнациям). Для режима sentinel master выбирается из roster-а — master_ip read-model
-  не используется day-2; восстановится на следующем create-override. Потеря приемлема
+  не используется операционными сценариями; восстановится на следующем create-override. Потеря приемлема
   (best-effort, как memory_mb в 002_to_003).
 
 transform:

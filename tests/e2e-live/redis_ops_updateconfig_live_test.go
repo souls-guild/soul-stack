@@ -1,6 +1,6 @@
 //go:build e2e_live
 
-// L3b E2E day-2: examples/service/redis::update_config на ЖИВОМ Redis — hot-reload
+// L3b E2E операция: examples/service/redis::update_config на ЖИВОМ Redis — hot-reload
 // директив без рестарта процесса. Закрывает находки NIM-53: #1 persistence-enum
 // aof_1sec — валидный ключ essence.persistence_presets (render не крашит на «no such
 // key»); #2 io-threads — startup-only директива (CONFIG SET её пропускает, денилист
@@ -9,7 +9,7 @@ package e2e_live_test
 
 import "testing"
 
-func TestL3bRedisLive_Day2UpdateConfig(t *testing.T) {
+func TestL3bRedisLive_OpsUpdateConfig(t *testing.T) {
 	stack, inc, adminPass := setupRedisStandalone(t, "rdb", "volatile-lru", 1024)
 	c := plainConn(adminPass)
 

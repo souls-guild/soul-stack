@@ -58,7 +58,7 @@ type redisConn interface {
 	// (go-redis отдаёт map[string]string нативно). НЕ через Do+strings.Fields:
 	// многословные значения (напр. save "900 1 300 10 60 10000") при space-join +
 	// Fields рассыпаются в перепутанные пары → ложный CONFIG SET, потеря
-	// идемпотентности на day-2 update_config.
+	// идемпотентности на update_config.
 	ConfigGet(ctx context.Context, param string) (map[string]string, error)
 	// GetKeysInSlot читает CLUSTER GETKEYSINSLOT <slot> <count> через
 	// ТИПИЗИРОВАННЫЙ путь драйвера ([]string нативно). НЕ через Do+strings.Fields:
@@ -215,7 +215,7 @@ func (m *RedisModule) applyCommand(ctx context.Context, stream grpc.ServerStream
 
 // startupOnlyDirectives — директивы redis.conf, которые задаются ТОЛЬКО при старте
 // процесса: CONFIG SET их отвергает («Unknown option or number of arguments» /
-// «can't set ... at runtime»). day-2 update_config рендерит ПОЛНЫЙ redis.conf
+// «can't set ... at runtime»). update_config рендерит ПОЛНЫЙ redis.conf
 // (включая такие директивы — они нужны при следующем рестарте процесса), но к
 // ЖИВОМУ инстансу их применить нельзя. Чтобы CONFIG SET не падал на них, плагин их
 // ПРОПУСКАЕТ (skip-счётчик в Output) — hot-settable применяются как обычно. Смена
@@ -261,7 +261,7 @@ var startupOnlyDirectives = map[string]bool{
 // директивы (defense-in-depth: значение могло прийти из vault, напр. requirepass).
 //
 // ★ Startup-only-директивы (startupOnlyDirectives) ПРОПУСКАЮТСЯ: CONFIG SET их
-// отвергает, а day-2 рендерит ПОЛНЫЙ redis.conf (включая их — для следующего
+// отвергает, а операционный сценарий рендерит ПОЛНЫЙ redis.conf (включая их — для следующего
 // рестарта). Без skip CONFIG SET dir/port/... падал бы и рвал прогон. Hot-settable
 // директивы того же вызова применяются нормально; число пропущенных — в Output
 // (skipped), их имена — отдельным полем для аудита.

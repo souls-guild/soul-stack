@@ -206,12 +206,12 @@ var writeRoutesNoAudit = map[route]string{
 	// service.list»). audit намеренно не пишется.
 	{http.MethodPost, "/v1/modules/{name}/form-prep"}: "ADR-045 S3: read-only-резолв source-каталогов UI-формы (живые SID-ы), без мутации состояния — audit намеренно не пишется (паттерн soul.list/service.list)",
 
-	// POST /v1/incarnations/{name}/scenarios/{scenario}/form-prefill — day-2
+	// POST /v1/incarnations/{name}/scenarios/{scenario}/form-prefill — операционный
 	// pre-fill UI-формы сценария из incarnation.state (docs/input.md). POST по
 	// HTTP-методу (несёт опц. тело-ref), но read-only-резолв по семантике —
 	// читает state одной инкарнации, ничего не мутирует. Permission
 	// incarnation.get (паттерн read). audit намеренно не пишется.
-	{http.MethodPost, "/v1/incarnations/{name}/scenarios/{scenario}/form-prefill"}: "day-2 pre-fill формы из incarnation.state (docs/input.md): read-only-резолв одной инкарнации, без мутации — audit намеренно не пишется (паттерн get/module.form-prep)",
+	{http.MethodPost, "/v1/incarnations/{name}/scenarios/{scenario}/form-prefill"}: "операционный pre-fill формы из incarnation.state (docs/input.md): read-only-резолв одной инкарнации, без мутации — audit намеренно не пишется (паттерн get/module.form-prep)",
 }
 
 // writeMethods — HTTP-методы, считающиеся мутирующими для guard-а.

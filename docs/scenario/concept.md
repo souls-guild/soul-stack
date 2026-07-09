@@ -4,7 +4,7 @@ Scenario — **оркестрационный слой** Soul Stack-а: одна
 
 Папка `scenario/<name>/` в git-репо сервиса, точка входа `main.yml`. Версия — git ref service-репо ([ADR-007](../adr/0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте)).
 
-> **Второй канал авто-дискавери — `upgrade/`.** Version-к-версии upgrade-сценарии живут в отдельном каталоге `upgrade/<slug>/` рядом со `scenario/` (self-describing ключ `from:` — версии-источники), запускаются апгрейдом (`POST /v1/incarnations/{name}/upgrade`) и в обычных day-2-списках сценариев не показываются. Дизайн — [ADR-0068](../adr/0068-service-upgrade-v2.md).
+> **Второй канал авто-дискавери — `upgrade/`.** Version-к-версии upgrade-сценарии живут в отдельном каталоге `upgrade/<slug>/` рядом со `scenario/` (self-describing ключ `from:` — версии-источники), запускаются апгрейдом (`POST /v1/incarnations/{name}/upgrade`) и в обычных списках сценариев не показываются. Дизайн — [ADR-0068](../adr/0068-service-upgrade-v2.md).
 
 ## Что такое scenario в новой модели
 

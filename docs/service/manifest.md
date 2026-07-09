@@ -58,7 +58,7 @@ service-<name>/
 
 Сценарии перечислять в `service.yml` не нужно — keeper находит их auto-discover-ом по каталогу `scenario/`.
 
-Второй канал авто-дискавери — каталог `upgrade/<slug>/` рядом со `scenario/`: version-к-версии upgrade-сценарии с self-describing top-level ключом `from:` (версии-источники). Их запускает `POST /v1/incarnations/{name}/upgrade`, а в обычных day-2-списках сценариев они не показываются. Дизайн — [ADR-0068](../adr/0068-service-upgrade-v2.md), имена — [naming-rules.md → Upgrade v2](../naming-rules.md#upgrade-v2-каталог-upgrade-ключ-from-upgrade-paths).
+Второй канал авто-дискавери — каталог `upgrade/<slug>/` рядом со `scenario/`: version-к-версии upgrade-сценарии с self-describing top-level ключом `from:` (версии-источники). Их запускает `POST /v1/incarnations/{name}/upgrade`, а в обычных списках сценариев они не показываются. Дизайн — [ADR-0068](../adr/0068-service-upgrade-v2.md), имена — [naming-rules.md → Upgrade v2](../naming-rules.md#upgrade-v2-каталог-upgrade-ключ-from-upgrade-paths).
 
 ## `service.yml` — манифест
 
@@ -202,7 +202,7 @@ tasks:
 - **Декларация — в сценарии, не в манифесте.** Стартовый набор сервиса keeper выводит **auto-discover-ом**: сканирует `scenario/`, в набор попадают **ровно** сценарии с `create: true`. В `service.yml` стартовые сценарии не перечисляются (как и любые другие — keeper находит их по каталогу `scenario/`, см. [«Раскладка репозитория»](#раскладка-репозитория)).
 - **Имя `create` НЕ привилегировано.** Сценарий с именем `create` попадает в набор, только если сам несёт `create: true` — ровно как любой другой. Магического дефолтного `create` больше нет.
 - **Несколько create-сценариев — норма.** Сервис может предлагать несколько стартовых путей (например redis: `create` — с нуля, `create_from_souls` — на готовых хостах, `migrate_cluster` — с заливкой данных из внешнего источника). Оператор выбирает один полем `create_scenario`; если у сервиса ≥1 create-сценарий, выбор **обязателен** (пустой → `422`, input валидируется против схемы конкретного сценария).
-- **Сервис без `create: true`-сценариев → bare-инкарнация.** Если ни один сценарий не несёт `create: true`, `POST /v1/incarnations` создаёт **bare-инкарнацию**: запись в `ready` без прогона и без `apply_id` (`incarnation.created_scenario` = `null`). Дальше работа — через day-2-операции (`POST /v1/incarnations/{name}/scenarios/{scenario}`). Такой сервис состоит только из day-2-сценариев и не умеет «поднимать себя с нуля» одним вызовом — это валидный паттерн.
+- **Сервис без `create: true`-сценариев → bare-инкарнация.** Если ни один сценарий не несёт `create: true`, `POST /v1/incarnations` создаёт **bare-инкарнацию**: запись в `ready` без прогона и без `apply_id` (`incarnation.created_scenario` = `null`). Дальше работа — через операции (`POST /v1/incarnations/{name}/scenarios/{scenario}`). Такой сервис состоит только из операционных сценариев и не умеет «поднимать себя с нуля» одним вызовом — это валидный паттерн.
 
 Семантика выбора, три ветви контракта и bare-инкарнация со стороны API — [`docs/keeper/operator-api/incarnations.md → Выбор стартового сценария и bare-инкарнация`](../keeper/operator-api/incarnations.md#выбор-стартового-сценария-и-bare-инкарнация).
 

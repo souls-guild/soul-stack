@@ -156,14 +156,14 @@ func TestRerunLast_NoStoredInput_NilInput_202(t *testing.T) {
 	}
 }
 
-// TestRerunLast_Day2_ReusesRecipeInput_202 — day-2 happy-path: последний упавший
+// TestRerunLast_Ops_ReusesRecipeInput_202 — happy-path: последний упавший
 // — add_user (≠ created `create`), его input берётся из recipe apply_run → 202,
 // RunSpec.ScenarioName=="add_user", RunSpec.Input=={user:alice} (не spec.input),
 // reply.Scenario=="add_user", audit scenario=="add_user".
-func TestRerunLast_Day2_ReusesRecipeInput_202(t *testing.T) {
+func TestRerunLast_Ops_ReusesRecipeInput_202(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(n string) pgx.Row { return makeIncStatusRow(n, "error_locked") },
-		// spec.input несёт version — НЕ должен просочиться на day-2-пути.
+		// spec.input несёт version — НЕ должен просочиться на операционном пути.
 		unlockSelectRow: func(_ string) pgx.Row {
 			return makeUnlockSelectRowSpec("error_locked", []byte(`{"input":{"version":"8.6.1"}}`))
 		},
@@ -180,7 +180,7 @@ func TestRerunLast_Day2_ReusesRecipeInput_202(t *testing.T) {
 
 	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun add_user verified")
 	if err != nil {
-		t.Fatalf("RerunLastTyped day-2 err = %v", err)
+		t.Fatalf("RerunLastTyped operational err = %v", err)
 	}
 	if out.Scenario != "add_user" {
 		t.Errorf("reply scenario = %q, want add_user", out.Scenario)
@@ -189,14 +189,14 @@ func TestRerunLast_Day2_ReusesRecipeInput_202(t *testing.T) {
 		t.Fatalf("scenario start calls = %d, want 1", starter.calls)
 	}
 	if starter.gotSpec.ScenarioName != "add_user" {
-		t.Errorf("ScenarioName = %q, want add_user (последний упавший day-2)", starter.gotSpec.ScenarioName)
+		t.Errorf("ScenarioName = %q, want add_user (последний упавший операционный сценарий)", starter.gotSpec.ScenarioName)
 	}
 	gotInput := starter.gotSpec.Input
 	if gotInput == nil || gotInput["user"] != "alice" {
 		t.Fatalf("RunSpec.Input = %v, want {user:alice} (recipe.input)", gotInput)
 	}
 	if _, leaked := gotInput["version"]; leaked {
-		t.Error("RunSpec.Input несёт spec.input[version] — day-2 обязан брать recipe.input")
+		t.Error("RunSpec.Input несёт spec.input[version] — операционный сценарий обязан брать recipe.input")
 	}
 	var ev *audit.Event
 	for _, e := range aw.events {
@@ -207,18 +207,18 @@ func TestRerunLast_Day2_ReusesRecipeInput_202(t *testing.T) {
 	if ev == nil || ev.Payload["scenario"] != "add_user" {
 		t.Errorf("audit scenario = %v, want add_user", ev)
 	}
-	// day-2 recipe без from_upgrade → RunSpec.FromUpgrade=false (перезапуск из scenario/).
+	// recipe без from_upgrade → RunSpec.FromUpgrade=false (перезапуск из scenario/).
 	if starter.gotSpec.FromUpgrade {
 		t.Error("RunSpec.FromUpgrade = true, want false (recipe без from_upgrade)")
 	}
 }
 
-// TestRerunLast_Day2_FromUpgradeRecipe_202 — MAJOR-guard (ADR-0068): rerun-last
+// TestRerunLast_Ops_FromUpgradeRecipe_202 — MAJOR-guard (ADR-0068): rerun-last
 // прогона, чей recipe.from_upgrade=true (упавший found-автозапуск upgrade-сценария),
 // обязан пробросить FromUpgrade=true в RunSpec — иначе перезапуск ищет scenario/<slug>/
 // (которого нет, §3) и падает 500. Проверяет проводку UnlockResult.FromUpgrade →
 // RunSpec.FromUpgrade на уровне ХЕНДЛЕРА (DB-слой это не ловит).
-func TestRerunLast_Day2_FromUpgradeRecipe_202(t *testing.T) {
+func TestRerunLast_Ops_FromUpgradeRecipe_202(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(n string) pgx.Row { return makeIncStatusRow(n, "error_locked") },
 		unlockSelectRow: func(_ string) pgx.Row {
@@ -237,7 +237,7 @@ func TestRerunLast_Day2_FromUpgradeRecipe_202(t *testing.T) {
 
 	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun upgrade verified")
 	if err != nil {
-		t.Fatalf("RerunLastTyped day-2 upgrade err = %v", err)
+		t.Fatalf("RerunLastTyped operational upgrade err = %v", err)
 	}
 	if out.Scenario != "to_v2" {
 		t.Errorf("reply scenario = %q, want to_v2", out.Scenario)
@@ -253,10 +253,10 @@ func TestRerunLast_Day2_FromUpgradeRecipe_202(t *testing.T) {
 	}
 }
 
-// TestRerunLast_Day2_BareIncarnation_202 — bare-инкарнация (created_scenario IS
-// NULL) залочена day-2-сценарием → rerun-last применим через recipe-путь (было:
+// TestRerunLast_Ops_BareIncarnation_202 — bare-инкарнация (created_scenario IS
+// NULL) залочена операционным сценарием → rerun-last применим через recipe-путь (было:
 // 409). ScenarioName из last-run, Input из recipe.
-func TestRerunLast_Day2_BareIncarnation_202(t *testing.T) {
+func TestRerunLast_Ops_BareIncarnation_202(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(n string) pgx.Row { return makeIncStatusRow(n, "error_locked") },
 		unlockSelectRow: func(_ string) pgx.Row { return makeUnlockSelectRowBare("error_locked") },
@@ -270,9 +270,9 @@ func TestRerunLast_Day2_BareIncarnation_202(t *testing.T) {
 	starter := &fakeStarter{}
 	h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
-	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-bare", "rerun bare day-2")
+	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-bare", "rerun bare operational")
 	if err != nil {
-		t.Fatalf("RerunLastTyped bare day-2 err = %v", err)
+		t.Fatalf("RerunLastTyped bare operational err = %v", err)
 	}
 	if out.Scenario != "update_acl" {
 		t.Errorf("reply scenario = %q, want update_acl", out.Scenario)
@@ -285,11 +285,11 @@ func TestRerunLast_Day2_BareIncarnation_202(t *testing.T) {
 	}
 }
 
-// TestRerunLast_Day2_RecipeUnavailable_409 — day-2, но recipe отсутствует (recipe
+// TestRerunLast_Ops_RecipeUnavailable_409 — операционный сценарий, но recipe отсутствует (recipe
 // IS NULL / apply_run вычищен → ErrNoRows): fail-closed 409 rerun-input-unavailable
 // (отдельный problem-type от incarnation-locked — machine-readable отличие от
 // «статус не error_locked»), прогон НЕ стартует (без silent bootstrap-input).
-func TestRerunLast_Day2_RecipeUnavailable_409(t *testing.T) {
+func TestRerunLast_Ops_RecipeUnavailable_409(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(n string) pgx.Row { return makeIncStatusRow(n, "error_locked") },
 		unlockSelectRow: func(_ string) pgx.Row { return makeUnlockSelectRow("error_locked") },

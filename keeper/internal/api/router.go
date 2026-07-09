@@ -51,7 +51,7 @@ import (
 //	GET    /v1/incarnations/{name}                   — get incarnation (M0.6c-1).
 //	GET    /v1/incarnations/{name}/history           — state_history (M0.6c-1).
 //	POST   /v1/incarnations/{name}/scenarios/{scenario} — run named scenario (M0.6c).
-//	POST   /v1/incarnations/{name}/scenarios/{scenario}/form-prefill — day-2 prefill формы из state (docs/input.md).
+//	POST   /v1/incarnations/{name}/scenarios/{scenario}/form-prefill — операционный prefill формы из state (docs/input.md).
 //	POST   /v1/incarnations/{name}/unlock            — снять error_locked (M0.6c).
 //	POST   /v1/incarnations/{name}/upgrade           — перевод state_schema_version (ADR-019).
 //	GET    /v1/incarnations/{name}/upgrade-paths     — пути апгрейда: теги + on-demand ?to= (ADR-0068 §6).
@@ -520,7 +520,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				registerHumaIncarnationGet(newHumaCadenceAPI(r), incH)
 			})
 
-			// POST /v1/incarnations/{name}/scenarios/{scenario}/form-prefill — day-2
+			// POST /v1/incarnations/{name}/scenarios/{scenario}/form-prefill — операционный
 			// pre-fill UI-формы сценария из incarnation.state (docs/input.md). READ-
 			// резолв (не мутация): audit НЕ навешан, newHumaCadenceAPI. Permission
 			// incarnation.get (reuse: кто читает инкарнацию, тот и получает prefill её

@@ -135,7 +135,7 @@ spec:
         state present — создать юзера (если нет), absent — удалить (если есть).
         Идемпотентен по usersInfo (уже в нужном состоянии → changed=false). ★ первый
         admin создаётся через localhost-exception (no-auth loopback-коннект, пока
-        admin-БД пуста). Смена пароля/ролей существующего юзера — day-2 (вне PILOT).
+        admin-БД пуста). Смена пароля/ролей существующего юзера — операционный сценарий (вне PILOT).
         Без dry-run preview.
       input:
         addr:

@@ -41,7 +41,7 @@ input:
     min: 0
     # dedicated io_threads (симметрия covenant.yml create): io-threads — startup-only
     # директива (плагин пропускает CONFIG SET), значение вступит при следующем рестарте
-    # процесса из redis.conf шага 1. БЕЗ default (как memory_mb/maxmemory_policy day-2):
+    # процесса из redis.conf шага 1. БЕЗ default (как memory_mb/maxmemory_policy):
     # не задан или 0 → сохраняется ранее развёрнутое из state.redis_config (подложка).
     description: >-
       Новое число I/O-потоков Redis (директива io-threads, startup-only — вступит при

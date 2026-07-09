@@ -386,7 +386,7 @@ compute:
 
 # ── Мутация incarnation.state ─────────────────────────────────────────────────
 # После успешного apply Keeper фиксирует развёрнутое (ADR-009 §7.1, ADR-057 list-форма).
-# df_config — тот же compute.df_config, что ушёл в render: повторный apply и day-2 видят
+# df_config — тот же compute.df_config, что ушёл в render: повторный apply и операционные сценарии видят
 # один источник истины.
 state_changes:
   - set: df_version
@@ -394,7 +394,7 @@ state_changes:
   - set: df_config
     value: "${ compute.df_config }"
   # tls: тот же compute.tls_* (cert/key/ca — Vault-ПУТИ, не PEM). ★ БЕЗ only/port: у DragonFly
-  # TLS на основном порту (нет tls_port, нет «только-TLS») — day-2 коннектится по сокету.
+  # TLS на основном порту (нет tls_port, нет «только-TLS») — операционный сценарий коннектится по сокету.
   - set: tls
     value: >-
       ${ {
@@ -404,7 +404,7 @@ state_changes:
            'ca_ref':   compute.tls_ca_ref
          } }
   # ★ install + host-layout (conf_dir/data_dir) вынесены в essence (v1→v2, Вариант A):
-  # install — read-model без читателей, layout — day-2 читают essence напрямую
+  # install — read-model без читателей, layout — операционные сценарии читают essence напрямую
   # (default(essence.<x>, '<деф>')). Их set-ов больше нет — ключей нет в state_schema,
   # set писал бы поле вне схемы → валидация state упала бы.
   - set: memory_mb
@@ -470,7 +470,7 @@ state_changes:
       ${ (has(input.provision) && input.provision.enabled)
            ? register.provision.vm_ids
            : [] }
-  # provisioned_sids: SID (FQDN) созданных VM — для cascade-destroy day-2 teardown
+  # provisioned_sids: SID (FQDN) созданных VM — для cascade-destroy teardown
   # (souls→destroyed/seeds→orphaned/tokens→burned; Reaper НЕ снимает pending-VM-souls).
   # Тот же GUARD по input.provision, что vm_ids/provider. sids собираются из
   # register.provision.hosts[].sid (.map — то же выражение, что params.sid шага (в)

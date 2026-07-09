@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generic day-2 движок: любой service-defined сценарий через POST
+# Generic-движок операционных сценариев: любой service-defined сценарий через POST
 # /v1/incarnations/{name}/scenarios/{scenario} → poll → assert_run_success. Имя
 # сценария — в PATH (add_user/update_config/restart/rotate_tls/...). run_scenario —
 # чистая (сеть только keeper_api), тестируется guard-ом на фикстурах.
@@ -48,11 +48,11 @@ _split_scenarios() {
 	done <<<"$1"
 }
 
-# suite_day2 — одиночный сценарий ($SCENARIO + $SCENARIO_INPUT) или построчный список
+# suite_operations — одиночный сценарий ($SCENARIO + $SCENARIO_INPUT) или построчный список
 # $SCENARIOS (одна запись = одна строка; запись: `name` или `name::<json-input>`;
 # перевод строки — разделитель записей, чтобы ';' в JSON не рвал запись). Опц.
 # state-ассерт $STATE_ASSERT_PATH / $STATE_ASSERT_EXPECTED после успешного сценария.
-suite_day2() {
+suite_operations() {
 	local name="${INCARNATION:-redis-auto}"
 	local -a entries=()
 	if [[ -n "${SCENARIOS:-}" ]]; then
@@ -60,8 +60,8 @@ suite_day2() {
 	elif [[ -n "${SCENARIO:-}" ]]; then
 		entries=("${SCENARIO}${SCENARIO_INPUT:+::${SCENARIO_INPUT}}")
 	else
-		_e2e_log "day2: задай SCENARIO=<имя> [SCENARIO_INPUT=<json>] или SCENARIOS=\$'s1\\ns2::{...}' (запись на строку)"
-		report_step "day2: параметры" - "$(_utc_now)" - - - "нет SCENARIO/SCENARIOS" FAIL
+		_e2e_log "operations: задай SCENARIO=<имя> [SCENARIO_INPUT=<json>] или SCENARIOS=\$'s1\\ns2::{...}' (запись на строку)"
+		report_step "operations: параметры" - "$(_utc_now)" - - - "нет SCENARIO/SCENARIOS" FAIL
 		return 2
 	fi
 	local e scenario input start rc overall=0
@@ -73,20 +73,20 @@ suite_day2() {
 		start="$(_utc_now)"; local t0=$SECONDS
 		run_scenario "$name" "$scenario" "$input"; rc=$?
 		if [[ $rc -eq 0 ]]; then
-			report_step "day2: ${scenario}" "${RUN_APPLY_ID:--}" "$start" "$((SECONDS - t0))" "${RUN_HTTP:--}" "${RUN_STATUS:--}" "run=success" PASS
+			report_step "operations: ${scenario}" "${RUN_APPLY_ID:--}" "$start" "$((SECONDS - t0))" "${RUN_HTTP:--}" "${RUN_STATUS:--}" "run=success" PASS
 		else
-			report_step "day2: ${scenario}" "${RUN_APPLY_ID:--}" "$start" "$((SECONDS - t0))" "${RUN_HTTP:--}" "${RUN_STATUS:--}" "run=fail:rc${rc}" FAIL
+			report_step "operations: ${scenario}" "${RUN_APPLY_ID:--}" "$start" "$((SECONDS - t0))" "${RUN_HTTP:--}" "${RUN_STATUS:--}" "run=fail:rc${rc}" FAIL
 			overall=1
 		fi
 		if [[ $rc -eq 0 && -n "${STATE_ASSERT_PATH:-}" && "${DRY_RUN:-0}" == 1 ]]; then
-			report_step "day2: state-assert" - "$(_utc_now)" - - - "dry-run (синтетический state)" SKIP
+			report_step "operations: state-assert" - "$(_utc_now)" - - - "dry-run (синтетический state)" SKIP
 		elif [[ $rc -eq 0 && -n "${STATE_ASSERT_PATH:-}" ]]; then
 			local inc
 			inc="$(http_body "$(keeper_api GET "/v1/incarnations/${name}")")"
 			if assert_state_field "$inc" "${STATE_ASSERT_PATH}" "${STATE_ASSERT_EXPECTED:-}"; then
-				report_step "day2: state-assert" - "$(_utc_now)" - 200 - "${STATE_ASSERT_PATH}==${STATE_ASSERT_EXPECTED}" PASS
+				report_step "operations: state-assert" - "$(_utc_now)" - 200 - "${STATE_ASSERT_PATH}==${STATE_ASSERT_EXPECTED}" PASS
 			else
-				report_step "day2: state-assert" - "$(_utc_now)" - 200 - "${STATE_ASSERT_PATH}!=${STATE_ASSERT_EXPECTED}" FAIL
+				report_step "operations: state-assert" - "$(_utc_now)" - 200 - "${STATE_ASSERT_PATH}!=${STATE_ASSERT_EXPECTED}" FAIL
 				overall=1
 			fi
 		fi

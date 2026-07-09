@@ -43,13 +43,13 @@ var (
 	// шире — покрывает три блокирующих статуса): rerun сужает допуск до одного.
 	ErrIncarnationNotErrorLocked = errors.New("incarnation: not in error_locked status (rerun-last requires error_locked)")
 	// ErrRerunInputUnavailable — rerun-last не может восстановить input упавшего
-	// day-2-прогона: последний snapshot state_history указывает на apply_run,
+	// операционного прогона: последний snapshot state_history указывает на apply_run,
 	// чьего рецепта (`apply_runs.recipe`) нет — recipe IS NULL по одной из причин:
 	// прогон упал ДО dispatch (render_failed/no_hosts/preflight) → терминальную
 	// строку пишет sentinel-путь ensureTerminalApplyRun (run.go) без рецепта; ЛИБО
 	// legacy-путь dispatchWave (Insert(running) рецепт не несёт); ЛИБО строка
 	// apply_run вычищена Reaper-ретеншном (purge_apply_runs). Fail-closed: без сохранённого
-	// input перезапуск day-2-сценария применил бы дефолты / упал на input-
+	// input перезапуск операционного сценария применил бы дефолты / упал на input-
 	// валидации — вместо этого отказ, оператор снимает блок обычным unlock и
 	// запускает нужный сценарий вручную с явным input. create-путь (последний
 	// упавший == created_scenario) этого sentinel-а не достигает — input берётся
@@ -904,13 +904,13 @@ var _ TxBeginner = (*pgxpool.Pool)(nil)
 // Scenario заполняется ТОЛЬКО [UnlockForRerun] (для [Unlock] — ""): имя
 // сценария, который caller перезапускает через runner.Start. Это последний
 // упавший сценарий инкарнации (последний snapshot state_history) — bootstrap-
-// сценарий на create-пути (== incarnation.created_scenario) ИЛИ day-2-сценарий
+// сценарий на create-пути (== incarnation.created_scenario) ИЛИ операционный сценарий
 // (add_user / update_acl / …). Заменяет прежний хардкод «перезапускаем только
 // created_scenario»: rerun-last перезапускает фактически провалившуюся операцию.
 //
 // Input заполняется ТОЛЬКО [UnlockForRerun] (для [Unlock] — nil): input упавшего
 // прогона. На create-пути — сохранённый оператор-input incarnation.spec.input
-// (прочитан под тем же FOR UPDATE). На day-2-пути — input из рецепта упавшего
+// (прочитан под тем же FOR UPDATE). На операционном пути — input из рецепта упавшего
 // apply_run (`apply_runs.recipe.input`, инвариант A: vault-ref строками, секреты
 // не раскрыты). Caller пробрасывает его в RunSpec.Input — rerun-last
 // восстанавливает падение с ТЕМИ ЖЕ входными значениями (version/shards/user/…),
@@ -922,13 +922,13 @@ type UnlockResult struct {
 	Input          map[string]any
 	// FromUpgrade — упавший прогон был upgrade-сценарием (recipe.from_upgrade,
 	// ADR-0068): rerun-last обязан перезапустить его из upgrade/<slug>/, а не
-	// scenario/<slug>/. Заполняется только day-2-путём [UnlockForRerun] (create
+	// scenario/<slug>/. Заполняется только операционным путём [UnlockForRerun] (create
 	// никогда не upgrade → false). Caller пробрасывает в RunSpec.FromUpgrade.
 	FromUpgrade bool
 }
 
 // InputFromSpec извлекает ключ `input` из freeform jsonb-объекта: либо
-// incarnation.spec (create-путь), либо recipe apply_run (day-2-путь, [UnlockForRerun]).
+// incarnation.spec (create-путь), либо recipe apply_run (операционный путь, [UnlockForRerun]).
 // Отсутствие ключа / не-object форма → nil без ошибки (jsonb freeform).
 func InputFromSpec(spec map[string]any) map[string]any {
 	if spec == nil {
@@ -1245,14 +1245,14 @@ const rerunLastScenarioLabel = "rerun-last"
 // Scope=last-failed: перезапускается ПОСЛЕДНИЙ упавший сценарий инкарнации
 // (последний snapshot state_history: run.go::abort → lockIncarnation →
 // UpdateStateFromRun пишет туда имя упавшего сценария и его apply_id). Это может
-// быть создавший bootstrap (`create`/`create_cluster`/…) ИЛИ day-2-сценарий
+// быть создавший bootstrap (`create`/`create_cluster`/…) ИЛИ операционный сценарий
 // (add_user / update_acl / …) — оба перезапускаются одинаково.
 //
 // Восстановление input упавшего прогона (чтобы перезапуск шёл с ТЕМИ ЖЕ
 // значениями, а не с дефолтами):
 //   - create-путь (последний упавший == incarnation.created_scenario): input из
 //     incarnation.spec.input, прочитанный тем же FOR UPDATE (живёт с инкарнацией).
-//   - day-2-путь (иначе, включая bare-инкарнацию с created_scenario IS NULL):
+//   - операционный путь (иначе, включая bare-инкарнацию с created_scenario IS NULL):
 //     input из рецепта упавшего apply_run (`apply_runs.recipe.input` по apply_id
 //     последнего snapshot-а; инвариант A — vault-ref строками, секреты не
 //     раскрыты). Рецепт недоступен → fail-closed [ErrRerunInputUnavailable]
@@ -1266,14 +1266,14 @@ const rerunLastScenarioLabel = "rerun-last"
 // прогоном.
 //
 // Атомарность: одна транзакция SELECT … FOR UPDATE → gate error_locked →
-// last-failed probe → (day-2) recipe probe → INSERT state_history →
+// last-failed probe → (операционный) recipe probe → INSERT state_history →
 // UPDATE status=applying → commit. FOR UPDATE сериализует rerun относительно
 // конкурентного scenario-runner-а (его lockRun лочит ту же строку).
 //
 // Возврат:
 //   - [ErrIncarnationNotFound]       — name не существует (404).
 //   - [ErrIncarnationNotErrorLocked] — статус не error_locked (409).
-//   - [ErrRerunInputUnavailable]     — day-2-путь, но input упавшего прогона
+//   - [ErrRerunInputUnavailable]     — операционный путь, но input упавшего прогона
 //     недоступен (recipe IS NULL: ранний abort без рецепта / legacy / apply_run
 //     вычищен — полный список у sentinel) (409).
 //
@@ -1330,7 +1330,7 @@ FOR UPDATE
 	// Scope=last-failed: перезапускается ПОСЛЕДНИЙ упавший сценарий инкарнации.
 	// Последний snapshot state_history несёт имя упавшего сценария И apply_id того
 	// прогона (run.go::abort → lockIncarnation → UpdateStateFromRun). apply_id —
-	// авторитетная корреляция с рецептом (day-2 input), точнее сопоставления по
+	// авторитетная корреляция с рецептом (операционный input), точнее сопоставления по
 	// имени сценария. Та же FOR UPDATE-tx: чтение сериализовано относительно
 	// конкурентного scenario-runner-а.
 	const lastRunSQL = `
@@ -1354,8 +1354,8 @@ LIMIT 1
 		return nil, fmt.Errorf("incarnation: rerun-last last-run probe: %w", err)
 	}
 
-	// Восстановление input упавшего прогона: create-путь vs day-2-путь.
-	// fromUpgrade — только day-2 (recipe.from_upgrade); create-путь всегда false.
+	// Восстановление input упавшего прогона: create-путь vs операционный путь.
+	// fromUpgrade — только на операционном пути (recipe.from_upgrade); create-путь всегда false.
 	var (
 		rerunInput  map[string]any
 		fromUpgrade bool
@@ -1368,8 +1368,8 @@ LIMIT 1
 		spec, _ := unmarshalJSONB(specBytes)
 		rerunInput = InputFromSpec(spec)
 	} else {
-		// day-2-путь (включая bare-инкарнацию, created_scenario IS NULL): input
-		// упавшего day-2-прогона живёт только в рецепте apply_run. Читаем recipe по
+		// операционный путь (включая bare-инкарнацию, created_scenario IS NULL): input
+		// упавшего операционного прогона живёт только в рецепте apply_run. Читаем recipe по
 		// apply_id последнего snapshot-а (любая passage/sid-строка прогона — recipe
 		// один на прогон). Рецепт недоступен → fail-closed
 		// [ErrRerunInputUnavailable] (причины — у sentinel), tx НЕ коммитится.

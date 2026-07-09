@@ -347,12 +347,12 @@ func TestSentinelUnit_ConfDirInReadWritePaths(t *testing.T) {
 }
 
 // TestRedisServerHardening_ConfDirInReadWritePaths — ПРЯМОЙ regress-guard того же
-// класса для redis-server (аудит дефекта sentinel, 2026-06-28). day-2 сценарий
+// класса для redis-server (аудит дефекта sentinel, 2026-06-28). Операционный сценарий
 // update_config делает CONFIG REWRITE (community.redis.config rewrite:true) —
 // redis-server переписывает redis.conf, чтобы персистить применённые директивы.
 // Hardening drop-in имел ProtectSystem=strict + ReadWritePaths БЕЗ conf_dir → при
 // первой реально изменившейся директиве CONFIG REWRITE упёрся бы в read-only /etc
-// (та же ошибка, что у sentinel, но проявляется на day-2, не на create). Фикс:
+// (та же ошибка, что у sentinel, но проявляется в эксплуатации, не на create). Фикс:
 // conf_dir добавлен в ReadWritePaths hardening.conf.tmpl (и провязан var-ом в
 // tasks/server.yml). Тест рендерит РЕАЛЬНЫЙ drop-in и доказывает наличие conf_dir в
 // ReadWritePaths. Возврат шаблона без conf_dir завалит тест.

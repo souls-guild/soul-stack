@@ -73,7 +73,7 @@ Health-probe через go-mongo-driver `Ping` (primary). **Read-only**,
 
 `createUser`/`dropUser` (upsert) над живым `mongod` целиком через go-mongo-driver.
 Идемпотентен по `usersInfo(name)`: `present` + юзер есть → no-op (смена
-пароля/ролей существующего юзера — day-2, вне pilot); `present` + нет →
+пароля/ролей существующего юзера — операционный сценарий, вне pilot); `present` + нет →
 `createUser` (`changed=true`); `absent` + есть → `dropUser` (`changed=true`);
 `absent` + нет → no-op.
 

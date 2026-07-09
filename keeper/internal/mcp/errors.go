@@ -37,7 +37,7 @@ const (
 	// URN-suffix-ы). incarnation-locked покрывает state-конфликты ресурса
 	// (error_locked / busy / downgrade / schema-mismatch — REST маппит их в один
 	// problem-type TypeIncarnationLocked). rerun-input-unavailable отделён от него
-	// (симметрия REST TypeRerunInputUnavailable): rerun-last day-2 не может
+	// (симметрия REST TypeRerunInputUnavailable): rerun-last на операционном пути не может
 	// восстановить input упавшего прогона (причины — см. sentinel
 	// [incarnation.ErrRerunInputUnavailable]) — machine-readable отличие от
 	// «статус не error_locked».
@@ -221,7 +221,7 @@ func mapServiceErrorToMCP(err error) (code, detail string) {
 //   - TypeIncarnationExists  → incarnation-already-exists.
 //   - TypeIncarnationLocked  → incarnation-locked (state-конфликты ресурса:
 //     not-unlockable / not-error-locked / busy / locked / downgrade / schema-mismatch).
-//   - TypeRerunInputUnavailable → rerun-input-unavailable (rerun-last day-2: input
+//   - TypeRerunInputUnavailable → rerun-input-unavailable (rerun-last на операционном пути: input
 //     упавшего прогона недоступен — причины см. [incarnation.ErrRerunInputUnavailable]).
 //   - TypeValidationFailed   → validation-failed (no-op upgrade / broken chain).
 //

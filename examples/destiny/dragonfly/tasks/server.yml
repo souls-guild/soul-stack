@@ -16,8 +16,8 @@
 #   юнитом (его не трогаем). Поэтому НИ hardening-drop-in-задачи, НИ onchanges-рестарта за
 #   ним здесь нет (минус задача против redis-server.yml). На at-create первичный старт
 #   (core.service.running) поднимает с финальным flagfile/ACL/cert — отдельный рестарт не
-#   нужен. dragonfly.conf/users.acl/TLS PEM СОЗНАТЕЛЬНО НЕ рестартят (hot-reload day-2 —
-#   СЛЕД. слайс): рендер кладёт желаемое состояние на диск, оживление — day-2-шаг.
+#   нужен. dragonfly.conf/users.acl/TLS PEM СОЗНАТЕЛЬНО НЕ рестартят (hot-reload —
+#   СЛЕД. слайс): рендер кладёт желаемое состояние на диск, оживление — операционный шаг.
 #
 # ЧАСТИЧНЫЙ inner-гейт tls.enable (только PEM-задачи, не весь файл) ОСТАЁТСЯ in-block
 # (nested TLS-block ниже): include-when дропнул бы файл целиком, не подмножество задач.
@@ -49,7 +49,7 @@
         mode: "0750"
 
     # Серверный сертификат. mode 0600 owner dragonfly. content = vault(ref) В ЯЧЕЙКЕ →
-    # sealed vault-слоем. register — рестарт при ротации (day-2, СЛЕД. слайс).
+    # sealed vault-слоем. register — рестарт при ротации (операционный сценарий, СЛЕД. слайс).
     - name: Render the TLS server certificate
       module: core.file.present
       register: dragonfly_tls_cert
@@ -85,7 +85,7 @@
         group: "${ vars.dragonfly_group }"
 
 # users.acl из переданного MAP ACL-юзеров имя→{perms,state,password} (--aclfile во
-# flagfile). register для day-2 (рестарт на изменение — СЛЕД. слайс). owner/group
+# flagfile). register для операционных сценариев (рестарт на изменение — СЛЕД. слайс). owner/group
 # dragonfly, mode 0640 — файл содержит password-хеши, читает только сервис. Шаблон
 # range-ит MAP (Go сортирует ключи → детерминизм) и хеширует пароль (sha256). DF
 # принимает redis-формат aclfile с `#<sha256hex>` (acl/user.cc SetPasswordHash is_hashed).
@@ -101,7 +101,7 @@
     vars:
       users: "${ default(input.users, {}) }"
 
-# dragonfly.conf (FLAGFILE) из merged-конфига. register для day-2. owner/group dragonfly,
+# dragonfly.conf (FLAGFILE) из merged-конфига. register для операционных сценариев. owner/group dragonfly,
 # mode 0640 — flagfile несёт masterauth/password-хеши, читает только сервис. Шаблон печатает
 # базовые --флаги + range merged config (см. dragonfly.flags.tmpl). ★ РЕДИЗАЙН default_admin:
 # vars.password УБРАН (requirepass убран из flagfile) — аутентификация под ACL-юзером
@@ -127,7 +127,7 @@
 
 # core.service dragonfly running. На at-create первичный старт поднимает с финальным
 # flagfile/ACL/cert (рендер выше уже на диске) — отдельного рестарта нет (DF hardening в
-# самом юните, нет drop-in-рестарт-кейса; config/acl/tls hot-reload — day-2, СЛЕД. слайс).
+# самом юните, нет drop-in-рестарт-кейса; config/acl/tls hot-reload — операционный сценарий, СЛЕД. слайс).
 # deploy_dragonfly=false сервис НЕ держит — весь файл group-drop.
 - name: Ensure DragonFly is running and enabled at boot
   module: core.service.running

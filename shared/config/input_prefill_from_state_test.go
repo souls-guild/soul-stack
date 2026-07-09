@@ -10,7 +10,7 @@ import (
 // TestResolveInputValues_PrefillFromStateNotLeaked — GUARD (инвариант a):
 // `prefill_from_state` НЕ участвует в резолве эффективного input. Поле с этим
 // ключом БЕЗ default и БЕЗ переданного значения отсутствует в эффективном input
-// (prefill — day-2 UI-hint, НЕ create-дефолт; incarnation.state не должен
+// (prefill — операционный UI-hint, НЕ create-дефолт; incarnation.state не должен
 // протечь в input-резолв). Ловит регресс «prefill_from_state незаметно стал
 // дефолтом».
 func TestResolveInputValues_PrefillFromStateNotLeaked(t *testing.T) {

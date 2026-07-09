@@ -684,9 +684,9 @@ func shellQuote(s string) string {
 	return `'` + strings.ReplaceAll(s, `'`, `'\''`) + `'`
 }
 
-// ── Redis day-2 asserts (NIM-54, L3b) ───────────────────────────────────────
+// ── Redis operational asserts (NIM-54, L3b) ───────────────────────────────────────
 //
-// Живые redis-cli/openssl-ассерты day-2-сценариев (update_config / restart /
+// Живые redis-cli/openssl-ассерты операционных сценариев (update_config / restart /
 // rotate_tls / update_users) поверх soul-контейнера. Единый описатель коннекта
 // RedisConn (plain XOR server-only-TLS) + приватный билдер redisCLIPrefix — все
 // публичные ассерты строятся поверх него одним sc.Exec. redis-cli присутствует

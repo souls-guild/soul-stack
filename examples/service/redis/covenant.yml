@@ -61,7 +61,7 @@ input:
   # ★ Раскладка conf_dir/data_dir тоже НЕ операторский input (#2): дефолты переехали
   # в essence (conf_dir/data_dir), compute читает их оттуда. Override — в spec.essence
   # инкарнации, не в Run-форме. В state conf_dir/data_dir НЕ персистятся (state_changes
-  # их не пишет, см. ниже) — layout живёт в essence, day-2 add_node читает
+  # их не пишет, см. ниже) — layout живёт в essence, add_node читает
   # essence.conf_dir/data_dir (has()-safe default). Источник правки — только essence.
 
   memory_mb:
@@ -426,7 +426,7 @@ compute:
   # плагин-вызовах community.redis.* (params.username/master_username/auth_user) и в Vault-
   # пути его пароля — НЕ хардкодят 'default_admin' в десятках мест. Литерал (не из input/
   # essence): имя системного юзера — инвариант сервиса, не операторский выбор. Пароль
-  # default_admin — secret/redis/<inc>/users/<admin_user>#password. ★ day-2-тела
+  # default_admin — secret/redis/<inc>/users/<admin_user>#password. ★ тела операционных сценариев
   # (вне covenant) хардкодят 'default_admin' напрямую (у них нет extends: covenant compute).
   admin_user: "${ 'default_admin' }"
   # ── TLS-флаги: enum connection_mode + essence-параметры (редизайн) ────────────
@@ -635,7 +635,7 @@ compute:
 # ── Мутация incarnation.state ─────────────────────────────────────────────────
 # После успешного apply Keeper фиксирует развёрнутое (ADR-009 §7.1, ADR-057
 # list-форма). redis_config — ИТОГ трансляции (тот же compute.redis_config, что ушёл
-# в render redis.conf веток cluster/sentinel): повторный apply и day-2-сценарии видят
+# в render redis.conf веток cluster/sentinel): повторный apply и операционные сценарии видят
 # один источник истины. Раньше выражение merge() ДУБЛИРОВАЛОСЬ здесь и в
 # apply.input.config веток (DRIFT-GUARD руками); теперь оно объявлено ОДИН раз в
 # compute: выше — drift снят самим compute.
@@ -691,7 +691,7 @@ state_changes:
   - set: modules
     value: "${ compute.redis_modules_deployed }"
   # ★ install + host-layout (conf_dir/data_dir/modules_base_url) вынесены в essence
-  # (v11→v12, Вариант A): install — read-model без читателей, layout — day-2 читают
+  # (v11→v12, Вариант A): install — read-model без читателей, layout — операционные сценарии читают
   # essence напрямую (default(essence.<x>, '<деф>')). Здесь их set-ов больше нет —
   # ключей нет в state_schema, set писал бы поле вне схемы → валидация state упала бы.
   # sysctl_settings: применённый host-tuning (тот же essence.sysctl_settings, что
@@ -753,7 +753,7 @@ state_changes:
       ${ (has(input.provision) && input.provision.enabled)
            ? register.provision.vm_ids
            : [] }
-  # provisioned_sids: SID (FQDN) созданных VM — для cascade-destroy day-2 teardown
+  # provisioned_sids: SID (FQDN) созданных VM — для cascade-destroy teardown
   # (souls→destroyed/seeds→orphaned/tokens→burned; Reaper НЕ снимает pending-VM-souls).
   # Тот же GUARD по input.provision, что vm_ids/provider (на non-provision-прогоне
   # register.provision не существует → тернар короткозамыкает, register.* не трогается).
@@ -796,7 +796,7 @@ state_changes:
   # ★ Редизайн: прежние именованные тайминги down_after_ms/failover_timeout_ms поглощены
   # обобщённым per-master dict. read-model хранит ЭФФЕКТИВНЫЙ map per-master опций
   # (master_settings = essence.sentinel_master_defaults поверх input.sentinel_master_settings,
-  # last-wins) и глобальные settings (input.sentinel_settings) — day-2 читает их именованно
+  # last-wins) и глобальные settings (input.sentinel_settings) — операционные сценарии читают их именованно
   # (как install/tls). Вне режима sentinel — пустой объект (только cluster остаётся).
   - set: redis_sentinel
     value: >-

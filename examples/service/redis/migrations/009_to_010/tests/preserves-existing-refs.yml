@@ -3,7 +3,7 @@ description: >
   Идемпотентность: инкарнация, у которой ref'ы УЖЕ заполнены (повторный прогон
   миграции / inline-seed migrate_cluster v10), сохраняет их как есть —
   лист-guard has() возвращает текущее значение, не перезатирает ''-дефолтом.
-  source_endpoints/detached (включая detached:true после day-2 detach) тоже
+  source_endpoints/detached (включая detached:true после detach) тоже
   проходят насквозь.
 
 state_before:

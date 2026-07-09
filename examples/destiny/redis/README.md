@@ -137,7 +137,7 @@ create/ротации. Пустой map → валидный пустой aclfil
 
 Это **destiny-кирпич** (пакет per-host задач для одного инстанса), а **не сервис**.
 Здесь нет `state_schema`, миграций, оператора простого ввода (`memory_mb` / `persistence` /
-`shards` / `redis_type`), трансляции в `redis_config`, оркестрации и day-2-операций —
+`shards` / `redis_type`), трансляции в `redis_config`, оркестрации и эксплуатационных операций —
 всё это сервис-обёртка [`examples/service/redis/`](../../service/redis/README.md).
 Destiny не решает, какой режим разворачивается, и не вызывает плагин
 [`community.redis`](../../../docs/module/community/redis/README.md) (живой Redis —
@@ -146,7 +146,7 @@ Destiny не решает, какой режим разворачивается,
 ## Ссылки
 
 - [`examples/service/redis/`](../../service/redis/README.md) — сервис-обёртка: входной
-  контракт оператора, `state_schema`, трансляция, оркестрация, режимы и day-2.
+  контракт оператора, `state_schema`, трансляция, оркестрация, режимы и операционные сценарии.
 - [`destiny.yml`](destiny.yml) — манифест и полная схема `input:`.
 - [docs/destiny/](../../../docs/destiny/README.md) — формат destiny и механика `tasks/`/`include:`.
 - [docs/templating.md](../../../docs/templating.md) — CEL + text/template, `${ vault(ref) }`, seal-маскинг.

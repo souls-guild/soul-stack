@@ -297,9 +297,9 @@ e2e-live: build-linux
 # фичи (~15-25 мин, docker). L3b-подмножество: механика доставки SoulModule
 # (TestL3bModuleDeliveryLive — ADR-065 install-synthesis → FetchModule → Sigil-verify
 # → hot-register → живое apply против redis) + apply-смок nginx (TestL3bSmokeNginxLive)
-# + smoke plugin-канала (TestL3bPluginChannel) + day-2 add_user на живом redis
-# (TestL3bRedisLive_Day2AddUser — весь плагин-канал ADR-065 против реального redis+sentinel)
-# + day-2 update_config/restart/update_users/destroy/rotate_tls (CA-rollover) на том же канале.
+# + smoke plugin-канала (TestL3bPluginChannel) + операционный add_user на живом redis
+# (TestL3bRedisLive_OpsAddUser — весь плагин-канал ADR-065 против реального redis+sentinel)
+# + операционные update_config/restart/update_users/destroy/rotate_tls (CA-rollover) на том же канале.
 # Полный `make e2e-live` остаётся nightly/pre-release.
 #
 # Deps ОТЛИЧАЮТСЯ от e2e-live: нужен ещё нативный `build` — harness запускает
@@ -327,7 +327,7 @@ e2e-live-gate: build build-linux
 	else \
 		host="$${E2E_KEEPER_HOST:-$$(hostname -I | awk '{print $$1}')}"; \
 		log="$${TMPDIR:-/tmp}/soul-e2e-live-gate.log"; \
-		mask='TestL3bModuleDeliveryLive|TestL3bSmokeNginxLive|TestL3bPluginChannel|TestL3bRedisLive_Day2AddUser|TestL3bRedisLive_Day2UpdateConfig|TestL3bRedisLive_Day2Restart|TestL3bRedisLive_Day2UpdateUsers|TestL3bRedisLive_Day2Destroy|TestL3bRedisLive_Day2RotateTls'; \
+		mask='TestL3bModuleDeliveryLive|TestL3bSmokeNginxLive|TestL3bPluginChannel|TestL3bRedisLive_OpsAddUser|TestL3bRedisLive_OpsUpdateConfig|TestL3bRedisLive_OpsRestart|TestL3bRedisLive_OpsUpdateUsers|TestL3bRedisLive_OpsDestroy|TestL3bRedisLive_OpsRotateTls'; \
 		echo "e2e-live-gate: go test -tags=e2e_live -v -count=1 -run '$$mask' . (E2E_KEEPER_HOST=$$host)"; \
 		set -o pipefail; \
 		(cd tests/e2e-live && E2E_KEEPER_HOST=$$host go test -tags=e2e_live -v -count=1 -timeout 45m -p 1 -run "$$mask" .) 2>&1 | tee "$$log"; \
@@ -335,7 +335,7 @@ e2e-live-gate: build build-linux
 		if grep -qE '^ok[[:space:]].*\(cached\)' "$$log"; then \
 			echo "e2e-live-gate: FALSE-GREEN — '(cached)' в summary (кеш не отключён, -count=1 потерян)" >&2; exit 1; \
 		fi; \
-		for tc in TestL3bModuleDeliveryLive TestL3bSmokeNginxLive TestL3bPluginChannel TestL3bRedisLive_Day2AddUser TestL3bRedisLive_Day2UpdateConfig TestL3bRedisLive_Day2Restart TestL3bRedisLive_Day2UpdateUsers TestL3bRedisLive_Day2Destroy TestL3bRedisLive_Day2RotateTls; do \
+		for tc in TestL3bModuleDeliveryLive TestL3bSmokeNginxLive TestL3bPluginChannel TestL3bRedisLive_OpsAddUser TestL3bRedisLive_OpsUpdateConfig TestL3bRedisLive_OpsRestart TestL3bRedisLive_OpsUpdateUsers TestL3bRedisLive_OpsDestroy TestL3bRedisLive_OpsRotateTls; do \
 			grep -q "^--- PASS: $$tc" "$$log" || { \
 				echo "e2e-live-gate: FALSE-GREEN — $$tc не дал '--- PASS' (skip/fail/не запущен)" >&2; exit 1; }; \
 		done; \
@@ -425,9 +425,9 @@ e2e-k8s: docker-build-keeper docker-build-soul
 # (EXEC_MODE=tsh) или прямой curl (EXEC_MODE=local). НЕ входит в `check` (требует
 # облака/teleport + пред-собранные артефакты; симметрично e2e / e2e-live). Bring-up-
 # скрипты (WB-специфика) живут локально в $$SCRIPTS_DIR и в git НЕ коммитятся — раннер
-# зовёт их рантайм. Suite — переменная SUITE (create|create-destroy|day2). Примеры:
+# зовёт их рантайм. Suite — переменная SUITE (create|create-destroy|operations). Примеры:
 #   make e2e-cloud SUITE=create-destroy
-#   DRY_RUN=1 make e2e-cloud SUITE=day2 SCENARIO=add_user   # печать вызовов без сети
+#   DRY_RUN=1 make e2e-cloud SUITE=operations SCENARIO=add_user   # печать вызовов без сети
 SUITE ?= create-destroy
 e2e-cloud:
 	@bash scripts/e2e-cloud/runbook.sh $(SUITE)
@@ -545,7 +545,7 @@ dev-souls:
 	@bash -c '. dev/stand-env.sh && stand_summary'
 	@bash dev/souls-up.sh
 
-# Поднять локальный флот souls как docker-контейнеры (soul-docker-1..N) для day-2
+# Поднять локальный флот souls как docker-контейнеры (soul-docker-1..N) для операционных
 # сценариев и UI-тестов без облака (NIM-26). N — переменная SOULS_COUNT. WSL2:
 # KEEPER_HOST=host-IP (см. docs/dev/local-setup.md). Скрипт — dev/souls-docker-up.sh.
 SOULS_COUNT ?= 3

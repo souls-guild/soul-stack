@@ -1,4 +1,4 @@
-# L0-испытание add_user: day-2 добавление ACL-пользователя БЕЗ рестарта (ACL LOAD).
+# L0-испытание add_user: добавление ACL-пользователя БЕЗ рестарта (ACL LOAD).
 # Оператор добавляет юзера alice; сценарий мержит его в РАЗВЁРНУТЫЙ state.df_users, рендерит
 # ПОЛНЫЙ users.acl (alice + ранее развёрнутый bob) через destiny `dragonfly` и ОЖИВЛЯЕТ через
 # community.redis.acl (ACL LOAD). Render-only, герметично. Plaintext (addr 6379).

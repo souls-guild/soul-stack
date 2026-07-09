@@ -4,10 +4,10 @@
 // shell/redis-cli/exec — capability плагина остаётся только network_outbound.
 //
 // action=create собирает кластер с нуля; action=add-node присоединяет ОДНУ новую
-// ноду к УЖЕ сформированному кластеру (day-2); action=remove-node выводит ОДНУ
-// ноду из кластера (day-2, с миграцией её слотов на оставшиеся masters, если она
+// ноду к УЖЕ сформированному кластеру (операционный сценарий); action=remove-node выводит ОДНУ
+// ноду из кластера (операционный сценарий, с миграцией её слотов на оставшиеся masters, если она
 // master со слотами). action=reshard переносит N слотов с одного master-а на
-// другой (day-2, зеркало redis-cli `--cluster reshard`). Миграция «старый кластер
+// другой (операционный сценарий, зеркало redis-cli `--cluster reshard`). Миграция «старый кластер
 // → новый» (см. migrate.go) — три шага: action=join-external вливает НОВЫЕ ноды в
 // ЧУЖОЙ (старый) кластер репликами его мастеров 1:1; action=failover-takeover
 // промоутит эти реплики в мастера через graceful CLUSTER FAILOVER (после sync-gate,
@@ -16,7 +16,7 @@
 //
 // ★ reshard ИМПЕРАТИВЕН и НЕ идемпотентен (осознанно, как старый
 // redis-cluster-live без unless): повторный apply сдвинет ещё N слотов. Это
-// exec-style day-2 операция — оператор зовёт её явно, она НЕ часть converge.
+// exec-style операция — оператор зовёт её явно, она НЕ часть converge.
 // create/add-node/remove-node/join-external/failover-takeover/forget-external,
 // напротив, идемпотентны (no-op на сошедшемся входе: узел уже реплика/master/забыт).
 //
@@ -415,7 +415,7 @@ func (m *RedisModule) applyClusterCreate(ctx context.Context, stream grpc.Server
 }
 
 // applyClusterAddNode присоединяет ОДНУ новую ноду к сформированному кластеру
-// (day-2): CLUSTER MEET через seed → ожидание сходимости → назначение роли.
+// (операционный сценарий): CLUSTER MEET через seed → ожидание сходимости → назначение роли.
 //
 //	role=replica — CLUSTER REPLICATE: новичок становится репликой указанного
 //	  master-а (params.master) либо, если master не задан, мастера с наименьшим
@@ -522,7 +522,7 @@ func (m *RedisModule) applyClusterAddNode(ctx context.Context, stream grpc.Serve
 // (redis-cli использует тот же масштаб; ограничивает размер одного MIGRATE).
 const migrateBatch = 100
 
-// applyClusterRemoveNode выводит ОДНУ ноду из кластера (day-2). Если удаляемая —
+// applyClusterRemoveNode выводит ОДНУ ноду из кластера (операционный сценарий). Если удаляемая —
 // master СО слотами, её слоты СНАЧАЛА мигрируются на оставшиеся masters
 // (CLUSTER SETSLOT IMPORTING/MIGRATING + GETKEYSINSLOT + MIGRATE keys + SETSLOT
 // NODE), затем CLUSTER FORGET на ВСЕХ оставшихся нодах. Если удаляемая — replica
@@ -602,13 +602,13 @@ func (m *RedisModule) applyClusterRemoveNode(ctx context.Context, stream grpc.Se
 }
 
 // applyClusterReshard переносит N слотов с одного master-а (from) на другой (to)
-// в УЖЕ сформированном кластере (day-2). Зеркало redis-cli `--cluster reshard`:
+// в УЖЕ сформированном кластере (операционный сценарий). Зеркало redis-cli `--cluster reshard`:
 // выбирает первые N слотов источника (по возрастанию) и переносит каждый через
 // migrateOneSlot (SETSLOT IMPORTING на цели → MIGRATING на источнике →
 // GETKEYSINSLOT + MIGRATE лосслесс → SETSLOT NODE на обеих нодах).
 //
 // ★ НЕ ИДЕМПОТЕНТЕН (осознанно): повторный apply сдвинет ещё N слотов с from на
-// to. Это императивная exec-style day-2 операция — оператор зовёт её явно, не
+// to. Это императивная exec-style операция — оператор зовёт её явно, не
 // часть converge. Никакого unless/probe «уже перенесено» нет.
 //
 // Топология (CLUSTER NODES с from) даёт node-id обоих master-ов и текущие слоты

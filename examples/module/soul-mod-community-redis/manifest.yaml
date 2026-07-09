@@ -394,7 +394,7 @@ spec:
     # ★ STARTUP-ONLY ДЕНИЛИСТ: директивы, задаваемые только при старте процесса
     # (port/tls-port/bind/unixsocket/io-threads/cluster-enabled/aclfile/logfile/
     # pidfile/dir/daemonize/supervised/dbfilename/loadmodule/syslog-*/databases/…),
-    # CONFIG SET отвергает. day-2 update_config рендерит ПОЛНЫЙ redis.conf (с ними —
+    # CONFIG SET отвергает. update_config рендерит ПОЛНЫЙ redis.conf (с ними —
     # для следующего рестарта процесса), поэтому такие директивы плагин ПРОПУСКАЕТ
     # (не падает): hot-settable применяются как обычно, число/имена пропущенных идут
     # в Output (skippedCount/skipped). Смена startup-only вступит в силу при рестарте
@@ -535,16 +535,16 @@ spec:
     #                     Идемпотентен: повторный create на сформированном
     #                     кластере → changed=false, no-op.
     #   action=add-node — присоединить ОДНУ новую ноду к сформированному кластеру
-    #                     (day-2): MEET через seed → REPLICATE (role=replica) либо
+    #                     (операционный сценарий): MEET через seed → REPLICATE (role=replica) либо
     #                     пустой master (role=master). Идемпотентен: нода уже в
     #                     CLUSTER NODES → changed=false, no-op.
-    #   action=remove-node — вывести ОДНУ ноду из кластера (day-2). master СО
+    #   action=remove-node — вывести ОДНУ ноду из кластера (операционный сценарий). master СО
     #                     слотами: сначала миграция слотов на оставшиеся masters
     #                     (SETSLOT IMPORTING/MIGRATING + GETKEYSINSLOT + MIGRATE +
     #                     SETSLOT NODE), затем CLUSTER FORGET на всех оставшихся.
     #                     replica / master без слотов: просто FORGET на всех.
     #                     Идемпотентен: ноды уже нет в CLUSTER NODES → no-op.
-    #   action=reshard  — перенести N слотов с master-а from на master to (day-2,
+    #   action=reshard  — перенести N слотов с master-а from на master to (операционный сценарий,
     #                     зеркало redis-cli `--cluster reshard`): первые N слотов
     #                     источника по возрастанию, каждый через SETSLOT IMPORTING/
     #                     MIGRATING + GETKEYSINSLOT + MIGRATE + SETSLOT NODE.
@@ -554,7 +554,7 @@ spec:
     #                     redis-cluster-live без unless).
     #   action=join-external — влить НОВЫЕ cluster-mode ноды в УЖЕ существующий
     #                     (старый) кластер и сделать каждую репликой старого мастера
-    #                     1:1 (day-2 migration step 1): коннект к source_nodes →
+    #                     1:1 (migration step 1): коннект к source_nodes →
     #                     CLUSTER NODES старого кластера → маппинг новый-узел↔
     #                     старый-мастер (узлы по ключу nodes, мастера по первому
     #                     слоту) → MEET old-seed + waitConverge + REPLICATE на
@@ -567,7 +567,7 @@ spec:
     #                     шаги failover-takeover + forget-external (ниже).
     #   action=failover-takeover — промоутить новые узлы (реплики старых мастеров
     #                     после join-external) в мастера через GRACEFUL CLUSTER
-    #                     FAILOVER (day-2 migration step 2). ★СНАЧАЛА sync-gate: на
+    #                     FAILOVER (migration step 2). ★СНАЧАЛА sync-gate: на
     #                     КАЖДОМ новом узле INFO replication master_link_status==up
     #                     (реплика догнала старый мастер) — хоть один не догнал →
     #                     ОШИБКА ДО первого failover (ранний failover теряет хвост).
@@ -578,7 +578,7 @@ spec:
     #                     FORCE/TAKEOVER (split-brain). Идемпотентен: узел уже master
     #                     → no-op.
     #   action=forget-external — выкинуть старые узлы из кластера через CLUSTER
-    #                     FORGET на каждой новой ноде (day-2 migration step 3, после
+    #                     FORGET на каждой новой ноде (migration step 3, после
     #                     failover-takeover): коннект к source_nodes → CLUSTER NODES
     #                     старого кластера → ВСЕ старые node-id (мастера И реплики) →
     #                     CLUSTER FORGET <old-id> на КАЖДОЙ новой ноде. ★БЕЗ миграции
@@ -600,7 +600,7 @@ spec:
         идемпотентен (ноды уже нет → no-op). action=reshard — перенести N слотов
         с master from на master to (SETSLOT/MIGRATE первых N слотов источника).
         ★ reshard НЕ ИДЕМПОТЕНТЕН (осознанно): повторный apply сдвинет ещё N
-        слотов — императивная exec-style day-2 операция, НЕ часть converge
+        слотов — императивная exec-style операция, НЕ часть converge
         (create/add-node/remove-node, напротив, идемпотентны). action=join-external
         — влить новые cluster-mode ноды в СТАРЫЙ кластер репликами старых мастеров
         1:1 (MEET old-seed + REPLICATE; маппинг узлы↔мастера по ключу/первому

@@ -1,13 +1,13 @@
 //go:build e2e_live
 
-// L3b E2E day-2: examples/service/redis::restart на ЖИВОМ Redis — rolling-restart
+// L3b E2E операция: examples/service/redis::restart на ЖИВОМ Redis — rolling-restart
 // демона без изменения конфига. Доказывает: uptime сброшен (рестарт реально
 // произошёл), роль master (0 реплик), конфиг пережил рестарт.
 package e2e_live_test
 
 import "testing"
 
-func TestL3bRedisLive_Day2Restart(t *testing.T) {
+func TestL3bRedisLive_OpsRestart(t *testing.T) {
 	stack, inc, adminPass := setupRedisStandalone(t, "rdb", "volatile-lru", 1024)
 	c := plainConn(adminPass)
 

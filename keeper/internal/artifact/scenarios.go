@@ -23,7 +23,7 @@ const scenarioDir = "scenario"
 
 // upgradeDir — второй канал авто-дискавери сценариев (ADR-0068 §3): каталог
 // `upgrade/<slug>/main.yml` рядом со scenarioDir. Держит version-к-версии
-// upgrade-сценарии отдельно от day-2 scenario/ (в обычных списках не мелькают).
+// upgrade-сценарии отдельно от scenario/ (в обычных списках не мелькают).
 const upgradeDir = "upgrade"
 
 // scenarioMainFile — корневой YAML scenario внутри `<dir>/<name>/`.
@@ -196,10 +196,10 @@ type scenarioFormFieldYAML struct {
 // ListScenarios сканирует `scenario/*/main.yml` в материализованном снапшоте
 // service-репозитория (serviceRoot — абсолютный путь к снапшоту, обычно
 // [ServiceArtifact.LocalDir]) и возвращает отсортированный по имени список
-// scenario-метаданных для day-2 UI-dropdown.
+// scenario-метаданных для операционного UI-dropdown.
 //
 // Это ТОЛЬКО scenario/-канал: upgrade/<slug>/ здесь НЕ появляется (ADR-0068 §3 —
-// upgrade-сценарии не пугают оператора в day-2-списках; их отдаёт [ListUpgrades]).
+// upgrade-сценарии не пугают оператора в обычных списках сценариев; их отдаёт [ListUpgrades]).
 func ListScenarios(serviceRoot string, logger *slog.Logger) ([]Scenario, error) {
 	return listFromDir(serviceRoot, scenarioDir, logger)
 }
@@ -329,7 +329,7 @@ func loadScenario(serviceRoot, dir, name string, logger *slog.Logger) (Scenario,
 		Form:        scenarioFormProjection(raw.Form),
 	}
 	// Изоляция канала ФИЗИЧЕСКАЯ, не только по каталогу (ADR-0068 §3): стрэй `from:`
-	// в scenario/<name>/main.yml не должен просочиться в day-2 reply — FromVersions
+	// в scenario/<name>/main.yml не должен просочиться в reply — FromVersions
 	// несёт только upgrade/-канал.
 	if dir == upgradeDir {
 		sc.FromVersions = raw.FromVersions

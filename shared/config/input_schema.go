@@ -60,13 +60,13 @@ type InputSchema struct {
 	RequiredWhen string `yaml:"required_when,omitempty"`
 
 	// PrefillFromState — путь `state.<path>` (dot-нотация) в incarnation.state,
-	// чьё ТЕКУЩЕЕ значение UI подставляет как pre-fill day-2-формы сценария
+	// чьё ТЕКУЩЕЕ значение UI подставляет как pre-fill операционной формы сценария
 	// (docs/input.md → «Pre-fill из state»). Это ПОДСКАЗКА формы, НЕ часть
 	// резолва значений: ключ намеренно НЕ участвует в [ResolveInputValues] /
 	// [mergeInputDefaults] (incarnation.state не должен протечь в эффективный
-	// input — иначе day-2-prefill незаметно стал бы create-дефолтом). Граница с
+	// input — иначе операционный prefill незаметно стал бы create-дефолтом). Граница с
 	// `default`: `default` — статичный create-дефолт (в merge, в эффективный
-	// input); `prefill_from_state` — day-2 UI-hint, виден только form-prefill-
+	// input); `prefill_from_state` — операционный UI-hint, виден только form-prefill-
 	// эндпоинту. Они сосуществуют на одном поле.
 	//
 	// Синтаксис корня `state.<path>` переиспользует statepredicate ADR-047 (тот
@@ -462,7 +462,7 @@ func validateInputSchemaNode(s *InputSchema, node *ast.MappingNode, path string)
 		out = append(out, validateRequiredWhen(s, kv, path)...)
 	}
 
-	// prefill_from_state — путь `state.<path>` (dot-нотация) day-2 UI-prefill-
+	// prefill_from_state — путь `state.<path>` (dot-нотация) операционный UI-prefill-
 	// hint (docs/input.md → «Pre-fill из state»). Применим к любому type (форма
 	// поля резолвится из значения state любого типа), поэтому проверяется до
 	// per-type-fork. Невалидный путь → input_prefill_from_state_invalid.

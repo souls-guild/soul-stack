@@ -65,7 +65,7 @@ func TestL3bModuleDeliveryLive_SynthesisFetchHotRegister(t *testing.T) {
 	const incName = "module-delivery"
 
 	// Coven-членство ДО create: roster резолвится по incarnation.name ∈ coven[]
-	// (ADR-008). WaitSoulprintReported — soul полностью онлайн до day-2 roster-резолва.
+	// (ADR-008). WaitSoulprintReported — soul полностью онлайн до roster-резолва.
 	stack.AddSoulToCoven(t, 0, incName)
 	stack.WaitSoulprintReported(t, 0, 60)
 

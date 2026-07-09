@@ -189,7 +189,7 @@ compute:
 # ── Мутация incarnation.state ─────────────────────────────────────────────────
 # После успешного apply Keeper фиксирует развёрнутое (ADR-009 §7.1, ADR-057 list-форма).
 # mongo_config — тот же compute.mongo_config, что ушёл в render mongod.conf: повторный apply
-# и day-2 видят один источник истины.
+# и операционные сценарии видят один источник истины.
 state_changes:
   - set: mongo_version
     value: "${ compute.mongo_version }"

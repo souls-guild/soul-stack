@@ -121,7 +121,7 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	autoCreate := true
 	// bareNoScenario — сервис не предлагает ни одного create-сценария (нет
 	// `create: true`): инкарнация создаётся StatusReady БЕЗ прогона (готова к
-	// day-2). created_scenario пишется NULL (см. createScenarioCol). Отлично от
+	// эксплуатации). created_scenario пишется NULL (см. createScenarioCol). Отлично от
 	// autoCreate=false: там bootstrap-сценарий ЕСТЬ (chosen), но прогон отложен —
 	// created_scenario непустое. Оба не запускают runner.Start → bare (ниже).
 	bareNoScenario := false
@@ -588,7 +588,7 @@ type IncarnationRerunLastView struct {
 	ApplyID     string
 	Incarnation string
 	// Scenario — имя перезапущенного сценария (последний упавший: bootstrap
-	// `create`/… ИЛИ day-2 add_user/…). UI показывает его лейблом.
+	// `create`/… ИЛИ операционный add_user/…). UI показывает его лейблом.
 	Scenario string
 }
 
@@ -655,7 +655,7 @@ func (h *IncarnationHandler) RerunLastTyped(ctx context.Context, claims *jwt.Cla
 	}
 
 	// rerun-last перезапускает ПОСЛЕДНИЙ упавший сценарий (UnlockForRerun вернул его
-	// имя и input под FOR UPDATE): bootstrap `create`/… на create-пути ИЛИ day-2
+	// имя и input под FOR UPDATE): bootstrap `create`/… на create-пути ИЛИ операционный
 	// add_user/… — с ТЕМИ ЖЕ входными значениями (spec.input или recipe.input), а не
 	// с дефолтами.
 	if err := h.runner.Start(ctx, scenario.RunSpec{

@@ -116,7 +116,7 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 	}()
 
 	// per-render-pass vault()-memo: повторный vault(тот-же-путь) в этом проходе
-	// (per-host × day-2 redis ACL/sentinel — десятки одинаковых чтений) берётся из
+	// (per-host × redis ACL/sentinel — десятки одинаковых чтений) берётся из
 	// кеша, Vault не бьётся снова. Scope — ровно этот Render-вызов (одна
 	// инкарнация): кеш живёт в ctx, не на Engine (тот шарится между прогонами).
 	ctx = cel.WithVaultMemo(ctx)

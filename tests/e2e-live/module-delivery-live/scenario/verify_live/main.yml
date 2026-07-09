@@ -1,6 +1,6 @@
 name: verify_live
 description: >-
-  Day-2: единственная задача-потребитель community.redis.command (PING). Keeper
+  Операционный сценарий: единственная задача-потребитель community.redis.command (PING). Keeper
   синтезирует core.module.installed (install community.redis) ПЕРЕД ней из
   manifest-декларации modules[] (ADR-065(e)); Soul в ЭТОМ прогоне
   fetch→verify→atomic-rename→hot-register плагин и ТУТ ЖЕ исполняет потребителя

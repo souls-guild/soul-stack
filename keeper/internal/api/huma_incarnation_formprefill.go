@@ -2,7 +2,7 @@ package api
 
 // FULL-TYPED форма INCARNATION form-prefill-роута (code-first источник OpenAPI,
 // ADR-054 §Pattern). POST /v1/incarnations/{name}/scenarios/{scenario}/form-prefill
-// — day-2 pre-fill UI-формы сценария текущими значениями incarnation.state
+// — операционный pre-fill UI-формы сценария текущими значениями incarnation.state
 // (docs/input.md → «Pre-fill из state»). Резолв (не мутация), тела НЕТ: audit НЕ
 // навешан. RBAC incarnation.get + scope-предикат (ADR-047) — на группе.
 // Go-типы — единственный источник правды схемы.
@@ -48,7 +48,7 @@ func incFormPrefillOperation() huma.Operation {
 		OperationID:   "incarnationFormPrefill",
 		Method:        http.MethodPost,
 		Path:          "/{name}/scenarios/{scenario}/form-prefill",
-		Summary:       "Pre-fill day-2-формы сценария из incarnation.state",
+		Summary:       "Pre-fill формы операционного сценария из incarnation.state",
 		Description:   "Текущие значения state под поля схемы сценария с prefill_from_state (docs/input.md). Path-whitelist (клиент путь не задаёт), secret-поля исключены. Вне RBAC-scope → 404. Permission incarnation.get. Read-only, без audit.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusOK,

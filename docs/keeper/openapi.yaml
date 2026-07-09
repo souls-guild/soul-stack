@@ -7352,7 +7352,7 @@ paths:
         - incarnation
   /v1/incarnations/{name}/rerun-last:
     post:
-      description: Снимает error_locked и тем же действием перезапускает последний упавший сценарий инкарнации (bootstrap create/… или day-2 add_user/…) с сохранённым input упавшего прогона (одна tx FOR UPDATE). Permission incarnation.rerun-last.
+      description: Снимает error_locked и тем же действием перезапускает последний упавший сценарий инкарнации (bootstrap create/… или операционный add_user/…) с сохранённым input упавшего прогона (одна tx FOR UPDATE). Permission incarnation.rerun-last.
       operationId: rerunLastIncarnation
       parameters:
         - description: имя инкарнации
@@ -7782,7 +7782,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Internal Server Error
-      summary: Pre-fill day-2-формы сценария из incarnation.state
+      summary: Pre-fill формы операционного сценария из incarnation.state
       tags:
         - incarnation
   /v1/incarnations/{name}/secrets/reveal:

@@ -273,6 +273,6 @@
 # register'ы binary-ветки (redis_server_bin/redis_server_links/redis_server_unit) остаются
 # объявленными (захват результата fetch/links/unit), потребителя-onchanges у них теперь нет.
 #
-# ★ day-2 binary-upgrade рестарт вынесен в upgrade-сценарий/ручной — ВРЕМЕННО, см.
+# ★ binary-upgrade рестарт вынесен в upgrade-сценарий/ручной — ВРЕМЕННО, см.
 # architect-аудит 2026-06-29: апгрейд бинаря на ЖИВОМ инстансе НЕ авто-рестартит
-# (core.service.running видит active → no-op), пока нет day-2 upgrade-сценария.
+# (core.service.running видит active → no-op), пока нет upgrade-сценария.

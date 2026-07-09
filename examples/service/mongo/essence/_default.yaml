@@ -33,7 +33,7 @@ binary_allow_private: true
 # ── Host-layout: базовые каталоги конфигурации и данных MongoDB ───────────────────
 # conf_dir/data_dir — author-context (оператор переопределяет раскладку в spec.essence под
 # свой storage-layout). compute читает их отсюда, гонит в render. В state НЕ персистятся —
-# day-2 читает layout из essence.conf_dir/data_dir (has()-safe default). Дефолт = официальный
+# операционный сценарий читает layout из essence.conf_dir/data_dir (has()-safe default). Дефолт = официальный
 # layout MongoDB (mongod.conf в /etc, данные в /var/lib/mongodb).
 conf_dir: /etc/mongodb
 data_dir: /var/lib/mongodb

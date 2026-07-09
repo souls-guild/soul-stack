@@ -53,7 +53,7 @@ description: >-
      отбрасывает) — отдельный delete не нужен (set перезаписывает redis_sentinel
      целиком, удалённые ключи не остаются). best-effort master_ip: редкий
      ремапнутый sentinel_only (003_to_004) мог нести master_ip — пересборка его НЕ
-     переносит (как 004_to_005; master выбирается из roster-а, read-model day-2 его
+     переносит (как 004_to_005; master выбирается из roster-а, read-model его
      не использует; восстановится на следующем create-override).
 
   Forward-only (down: не поддерживается; восстановление — через state_history).

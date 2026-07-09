@@ -183,7 +183,7 @@
     owner: "${ vars.root_owner }"
     group: "${ vars.root_group }"
     # ReadWritePaths из vars: data_dir следует за override оператора, run_dir/log_dir —
-    # системные каталоги socket/pid/log. conf_dir (тоже override-аемый) — под day-2
+    # системные каталоги socket/pid/log. conf_dir (тоже override-аемый) — под операционный
     # CONFIG REWRITE update_config: redis-server переписывает redis.conf, без conf_dir в
     # RW strict держит /etc только-чтение → REWRITE падает (см. hardening.conf.tmpl).
     vars:
@@ -208,10 +208,10 @@
 # restart).
 #
 # ★ redis.conf / users.acl / TLS PEM СОЗНАТЕЛЬНО НЕ рестартят (нет в onchanges). Они
-# ОЖИВЛЯЮТСЯ hot-reload в day-2-сценариях сервиса (конвенция «hot-reload > рестарт»,
+# ОЖИВЛЯЮТСЯ hot-reload в операционных сценариях сервиса (конвенция «hot-reload > рестарт»,
 # docs/destiny/production-conventions.md §3a/§6): update_config → CONFIG SET/REWRITE;
 # add_user → ACL LOAD; rotate_tls → CONFIG SET tls-*-file (Redis 6.2+ live). Рендер
-# файлов остаётся ЗДЕСЬ (кладёт желаемое состояние на диск); ОЖИВЛЕНИЕ — day-2-шаг. На
+# файлов остаётся ЗДЕСЬ (кладёт желаемое состояние на диск); ОЖИВЛЕНИЕ — операционный шаг. На
 # at-create первичный старт (core.service.running выше) поднимает уже с финальным
 # конфигом/ACL/cert, отдельный рестарт не нужен.
 #

@@ -5,7 +5,7 @@ description: >-
   state_schema v6 → v7: cloud-provision read-model (ADR-061, Вариант A — create
   поднимает VM в том же прогоне). state ДОПОЛНЯЕТСЯ двумя независимыми полями:
     - provisioned_vm_ids (array string) — provider-vm-id VM, поднятых нашим
-      create-прогоном (day-2 teardown читает их для core.cloud.destroyed);
+      create-прогоном (teardown читает их для core.cloud.destroyed);
     - provisioned_provider (string) — имя cloud-Provider в реестре (тот же
       destroy-вызов).
 

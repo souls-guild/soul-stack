@@ -471,7 +471,7 @@ create: true
 	writeScenario(t, root, "create_cluster", `description: cluster-bootstrap
 create: true
 `)
-	writeScenario(t, root, "add_user", `description: day-2 операция
+	writeScenario(t, root, "add_user", `description: операционный сценарий
 create: false
 `)
 	writeScenario(t, root, "restart", `description: рестарт без флага
@@ -586,7 +586,7 @@ func TestListUpgrades_MissingDir_Empty(t *testing.T) {
 }
 
 // TestListScenarios_IgnoresUpgradeDir — РЕГРЕСС-ГУАРД изоляции (ADR-0068 §3):
-// upgrade/<slug>/ НЕ должен просачиваться в day-2 scenario-список, а scenario/ —
+// upgrade/<slug>/ НЕ должен просачиваться в scenario-список, а scenario/ —
 // в upgrade-список. Каналы строго разделены.
 func TestListScenarios_IgnoresUpgradeDir(t *testing.T) {
 	root := t.TempDir()
@@ -611,7 +611,7 @@ func TestListScenarios_IgnoresUpgradeDir(t *testing.T) {
 }
 
 // TestListScenarios_StrayFromNotProjected — ФИЗИЧЕСКИЙ гейт изоляции поля (ADR-0068
-// §3): стрэй top-level `from:` в scenario/<name>/main.yml НЕ просачивается в day-2
+// §3): стрэй top-level `from:` в scenario/<name>/main.yml НЕ просачивается в
 // reply — FromVersions заполняется только на upgrade/-канале (dir==upgradeDir), а не
 // по каталогу-косвенно. Регресс на случай, если оператор случайно напишет `from:` в
 // обычном сценарии.

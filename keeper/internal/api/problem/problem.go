@@ -45,7 +45,7 @@ const (
 	TypeIncarnationExists    = "https://soul-stack.io/errors/incarnation-already-exists"
 	TypeIncarnationLocked    = "https://soul-stack.io/errors/incarnation-locked"
 	// TypeRerunInputUnavailable — `rerun-last` не может восстановить input упавшего
-	// day-2-прогона: рецепт (`apply_runs.recipe`) недоступен (recipe IS NULL на
+	// операционного прогона: рецепт (`apply_runs.recipe`) недоступен (recipe IS NULL на
 	// legacy-пути dispatchWave ЛИБО строка вычищена Reaper-ретеншном). 409 Conflict,
 	// как и [TypeIncarnationLocked] (тот же HTTP-класс «целевое состояние
 	// недостижимо»), но отдельный URN: оба кейса rerun-last были неразличимы

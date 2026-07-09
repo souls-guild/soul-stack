@@ -46,7 +46,7 @@ fixtures:
     reason: "rolling restart over TLS for L0"
 
   # Развёрнутый incarnation.state v3 (от create с включённым TLS): ИМЕНОВАННОЕ поле
-  # state.tls несёт enable=true + port=7379 (INTEGER). День-2 гейт смотрит СЮДА (не в
+  # state.tls несёт enable=true + port=7379 (INTEGER). Операционный гейт смотрит СЮДА (не в
   # essence, не парсит redis_config) — это и есть проверяемый инвариант. redis_config
   # (write-model) присутствует тоже (реалистичный v3-state), но дискриминатор его
   # больше НЕ читает.

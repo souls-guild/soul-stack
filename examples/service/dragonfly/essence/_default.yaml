@@ -167,7 +167,7 @@ sentinel_redis_package_version: "5:7.0.15-1~deb12u7"
 # полными правами `~* &* +@all`, доливается ВСЕГДА (как replica/monitoring) — в ОБА набора.
 # Заменил прежнюю модель «default в requirepass»: requirepass УСТАРЕЛ и убран из flagfile,
 # вся аутентификация (вкл. внутреннюю: репликация/sentinel/health-PING) идёт под default_admin.
-# Плагин community.redis коннектится username=default_admin (см. create/day-2 деплой-тела).
+# Плагин community.redis коннектится username=default_admin (см. create/операционные деплой-тела).
 # DragonFly несёт полный redis-совместимый ACL (SETUSER/aclfile с #<sha256>/masteruser/
 # masterauth — acl/user.cc, tls_helpers.cc), поэтому модель переносится без адаптации.
 #

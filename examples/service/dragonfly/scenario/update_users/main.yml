@@ -1,6 +1,6 @@
 name: update_users
 description: >-
-  Day-2: МАССОВОЕ редактирование ВСЕХ operator-добавленных ACL-пользователей на УЖЕ
+  Операционный сценарий: МАССОВОЕ редактирование ВСЕХ operator-добавленных ACL-пользователей на УЖЕ
   работающем DragonFly БЕЗ рестарта процесса (bulk-replace). Производственная конвенция
   «hot-reload > рестарт» (docs/destiny/production-conventions.md §3a/§6): ACL применяется на
   лету командой ACL LOAD, рестарт демона не нужен. REUSE из redis/update_users (DragonFly
@@ -24,7 +24,7 @@ description: >-
   (системные + новый operator-extra набор) и ОЖИВЛЯЕТ через community.redis.acl (ACL LOAD).
 
   Идемпотентность: ACL LOAD идемпотентен ПО КОНСТРУКЦИИ; плагин делает честный diff ACL LIST
-  до/после (changed=false при совпадении). Рендер users.acl детерминирован. Day-2: инстанс УЖЕ
+  до/после (changed=false при совпадении). Рендер users.acl детерминирован. В эксплуатации: инстанс УЖЕ
   работает (auth через vault()-пароль + TLS-дискриминатор из incarnation.state.tls).
 
   Таргетинг — на весь incarnation (on опущен, ADR-008/009): новый users.acl + ACL LOAD идут на
@@ -39,7 +39,7 @@ input:
   users:
     type: array
     required: true
-    # day-2 form-prefill (docs/input.md → «Pre-fill из state»): «правим ВСЕХ» = форма
+    # form-prefill (docs/input.md → «Pre-fill из state»): «правим ВСЕХ» = форма
     # открывается с УЖЕ показанным текущим набором operator-extra (оператор правит дельту, не
     # вводит набор с нуля и не стирает его молча). Источник — incarnation.state.df_users (тот
     # же массив AclUser, что state_changes пишет ниже: set df_users <- input.users), поэтому
@@ -78,7 +78,7 @@ validate:
 # у ACL LOAD убраны даже на TLS-инстансе). run_dir host-инвариант; default дублирует дефолт.
 compute:
   local_addr: "${ 'unix:' + default(essence.run_dir, '/var/run/dragonfly') + '/dragonfly.sock' }"
-  # ★ admin_user (редизайн default_admin): имя системного admin-юзера, литерал (day-2 вне
+  # ★ admin_user (редизайн default_admin): имя системного admin-юзера, литерал (операционный сценарий вне
   # covenant). ACL LOAD коннектится под ним; masteruser/masterauth-долив читает его.
   admin_user: "${ 'default_admin' }"
   # ── Эффективный host-layout: install/conf_dir/data_dir из essence (v1→v2, миграция) ──
@@ -124,7 +124,7 @@ tasks:
         # ★★ КРИТИЧНО (system-ACL-users): ПОЛНЫЙ users.acl = СИСТЕМНЫЕ (из essence, ПЕРВЫМИ) +
         # operator-extra (НОВЫЙ input.users — МАССИВ AclUser, ПОВЕРХ). update_users перерендеривает
         # ВЕСЬ файл (не append) → БЕЗ долива системных этот рендер СТЁР БЫ default_admin/replica/
-        # monitoring/sentinel/haproxy → сломал бы AUTH/репликацию/sentinel на day-2. Системные (вкл.
+        # monitoring/sentinel/haproxy → сломал бы AUTH/репликацию/sentinel в эксплуатации. Системные (вкл.
         # default_admin) доливаются на КАЖДОМ рендере из essence.system_acl_users. last-wins:
         # operator-extra перекрывает одноимённого системного (имена системных закрыты validate-
         # guard — коллизии нет). Vault-пароль каждого — secret/dragonfly/<inc>/users/<name>#password.

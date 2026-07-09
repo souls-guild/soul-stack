@@ -1,6 +1,6 @@
 name: restart
 description: >-
-  Day-2: rolling-restart DragonFly (sentinel-режим — master-replica) БЕЗ изменения
+  Операционный сценарий: rolling-restart DragonFly (sentinel-режим — master-replica) БЕЗ изменения
   конфига. REUSE идиомы probe→where rolling-restart из redis/restart (ADR-056/008):
   фактическая роль каждого хоста ВОЛАТИЛЬНА (после возможного sentinel-failover declared-
   роль create уже неверна), поэтому роль берётся ЖИВЫМ probe непосредственно перед
@@ -53,12 +53,12 @@ state_changes: {}
 # TLS-инстансе): tls/tls_ca у локальных probe/health-gate УБРАНЫ. Поэтому TLS-дискриминатор
 # (tls_on/tls_port/tls_ca) для restart БОЛЬШЕ НЕ НУЖЕН — он применялся только к локальным
 # коннектам, которые теперь UDS. run_dir host-инвариант (vars destiny); default дублирует
-# дефолт (scenario не видит destiny-vars); essence на day-2 неполна, но run_dir — не operator-
+# дефолт (scenario не видит destiny-vars); essence в операционных сценариях неполна, но run_dir — не operator-
 # override, дефолт верен.
 compute:
   local_addr: "${ 'unix:' + default(essence.run_dir, '/var/run/dragonfly') + '/dragonfly.sock' }"
   # ★ admin_user (редизайн default_admin): probe роли + health-gate реплики коннектятся к
-  # локальному DragonFly под ним (requirepass убран). Литерал (day-2 вне covenant).
+  # локальному DragonFly под ним (requirepass убран). Литерал (операционный сценарий вне covenant).
   admin_user: "${ 'default_admin' }"
 
 tasks:

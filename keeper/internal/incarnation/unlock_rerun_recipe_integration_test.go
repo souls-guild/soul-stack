@@ -7,25 +7,25 @@ import (
 	"testing"
 )
 
-// TestIntegration_UnlockForRerun_Day2_ReusesRecipeInput — day-2 ветка rerun-last на
+// TestIntegration_UnlockForRerun_Ops_ReusesRecipeInput — операционная ветка rerun-last на
 // РЕАЛЬНОМ PG (не fakeTx-unit): последний упавший сценарий ≠ created_scenario →
 // UnlockForRerun восстанавливает input из apply_runs.recipe, НЕ из spec.input.
 // Гард закрывает класс fixture/schema-drift в recipe-пробе (SELECT recipe FROM
 // apply_runs), который unit-fakeTx не ловит (NIM-65).
-func TestIntegration_UnlockForRerun_Day2_ReusesRecipeInput(t *testing.T) {
+func TestIntegration_UnlockForRerun_Ops_ReusesRecipeInput(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	ctx := context.Background()
 
 	const (
 		name         = "redis-prod"
-		failedAID    = "01HDAY20FAILED000000000001" // apply_id упавшего day-2 (state_history + apply_runs)
+		failedAID    = "01HDAY20FAILED000000000001" // apply_id упавшего операционного прогона (state_history + apply_runs)
 		snapHistID   = "01HDAY20SNAP00000000000001"
 		newApplyID   = "01HDAY20RERUN0000000000001" // apply_id нового rerun-прогона
 		newHistoryID = "01HDAY20HIST00000000000001"
 	)
 	creator, created := "archon-alice", "create"
-	// Инкарнация создана `create`; version в spec.input НЕ должен просочиться (day-2
+	// Инкарнация создана `create`; version в spec.input НЕ должен просочиться (операционный путь
 	// обязан брать recipe.input упавшего add_user).
 	inc := &Incarnation{
 		Name: name, Service: "redis", ServiceVersion: "v1.0.0",
@@ -36,7 +36,7 @@ func TestIntegration_UnlockForRerun_Day2_ReusesRecipeInput(t *testing.T) {
 	if err := Create(ctx, integrationPool, inc); err != nil {
 		t.Fatalf("Create error_locked: %v", err)
 	}
-	// Последний snapshot: упавший day-2 add_user (≠ created `create`) + его apply_id.
+	// Последний snapshot: упавший операционный add_user (≠ created `create`) + его apply_id.
 	if _, err := integrationPool.Exec(ctx, `
 INSERT INTO state_history (history_id, incarnation_name, scenario, state_before, state_after, apply_id)
 VALUES ($1, $2, 'add_user', '{}'::jsonb, '{}'::jsonb, $3)`,
@@ -54,16 +54,16 @@ VALUES ($1, 'host-1', $2, 'add_user', 'failed', $3,
 
 	res, err := UnlockForRerun(ctx, integrationPool, name, "rerun add_user", creator, newHistoryID, newApplyID)
 	if err != nil {
-		t.Fatalf("UnlockForRerun day-2: %v", err)
+		t.Fatalf("UnlockForRerun operational: %v", err)
 	}
 	if res.Scenario != "add_user" {
-		t.Errorf("Scenario = %q, want add_user (последний упавший day-2)", res.Scenario)
+		t.Errorf("Scenario = %q, want add_user (последний упавший операционный сценарий)", res.Scenario)
 	}
 	if res.Input == nil || res.Input["user"] != "alice" {
-		t.Errorf("Input = %v, want {user:alice} из recipe (day-2 берёт recipe.input, не spec)", res.Input)
+		t.Errorf("Input = %v, want {user:alice} из recipe (операционный сценарий берёт recipe.input, не spec)", res.Input)
 	}
 	if _, leaked := res.Input["version"]; leaked {
-		t.Error("Input несёт spec.input[version] — day-2 обязан брать recipe.input, не spec")
+		t.Error("Input несёт spec.input[version] — операционный сценарий обязан брать recipe.input, не spec")
 	}
 	if res.FromUpgrade {
 		t.Error("FromUpgrade = true, want false (recipe без from_upgrade)")

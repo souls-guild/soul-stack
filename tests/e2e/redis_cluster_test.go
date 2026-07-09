@@ -13,7 +13,7 @@
 //
 // Прежние отдельные сервисы redis-cluster / redis-cluster-live удалены: их
 // cluster-флоу поглощён режимом cluster консолидированного redis (диспетчер по
-// redis_type + day-2 scenarios add_node/remove_node/reshard). Probe→where
+// redis_type + operational scenarios add_node/remove_node/reshard). Probe→where
 // (оригинальный redis-cluster update_acl) перенесён на rolling-restart сценарий
 // стадии A (scenario/restart) — здесь не дублируется.
 //
