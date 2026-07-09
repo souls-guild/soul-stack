@@ -92,13 +92,17 @@ func (m *Module) applyAptPresent(stream grpc.ServerStreamingServer[pluginv1.Appl
 //
 //	deb [signed-by=<keyPath> arch=...] <uri> <suite> <components...>
 //
-// signed-by присутствует только если ключ задан (привязка доверия к репо).
-// enabled=false → строка закомментирована (apt не имеет enabled-флага в
-// one-line формате; стандартная практика — comment-out).
+// signed-by/arch присутствуют только если заданы (signed-by — привязка доверия
+// к репо; arch — multi-arch репо, [ADR-071]). enabled=false → строка
+// закомментирована (apt не имеет enabled-флага в one-line формате; стандартная
+// практика — comment-out).
 func aptListContent(p repoParams, keyPath string) []byte {
 	var opts []string
 	if p.gpgKey != "" {
 		opts = append(opts, "signed-by="+keyPath)
+	}
+	if len(p.arch) > 0 {
+		opts = append(opts, "arch="+strings.Join(p.arch, ","))
 	}
 	var b strings.Builder
 	if !p.enabled {
@@ -280,10 +284,10 @@ func (m *Module) ensureFile(path string, content []byte) (bool, error) {
 // отличается. gpgKey трактуется как inline-содержимое ключа (PEM/ASCII-armored
 // или бинарный keyring — пишем как есть). Ключ критичен для supply-chain.
 //
-// Замечание: gpgKey-как-URL (скачать ключ по https) в MVP НЕ реализуется —
-// download-by-URL это отдельный модуль core.url; здесь ключ передаётся inline
-// (CEL может подставить содержимое через ${ file(...) } или vault). Это
-// сознательное ограничение MVP, расширяемо позже.
+// Ключ-по-URL здесь НЕ качается намеренно ([ADR-071] §(g), вариант B): сеть/SSRF
+// остаётся в core.url.fetched (network_outbound + SSRF-guard + checksum), а
+// core.repo — pure-FS. Зеркало redis.io подключается связкой core.url.fetched →
+// gpg_key: ${ file(<path>) } (см. docs/module/core/repo/README.md).
 func (m *Module) ensureKey(keyPath, gpgKey string) (bool, error) {
 	cur, existed, err := readFile(keyPath)
 	if err != nil {

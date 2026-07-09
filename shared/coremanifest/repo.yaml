@@ -17,6 +17,7 @@ spec:
         gpg_check:  { type: bool,   description: "Проверять подпись пакетов (default true; opt-out даёт warning)." }
         suite:      { type: string, description: "apt suite/дистрибутив (напр. stable)." }
         components: { type: list,   items: { type: string }, description: "apt components (напр. [main, contrib])." }
+        arch:       { type: list,   items: { type: string }, description: "apt архитектуры репо (напр. [amd64]) → arch= в опциях; только apt, [a-z0-9]." }
         enabled:    { type: bool,   description: "Репозиторий включён (default true)." }
     absent:
       description: Описание репозитория удалено (GPG-ключ не трогается).

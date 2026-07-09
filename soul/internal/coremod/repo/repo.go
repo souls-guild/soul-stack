@@ -101,6 +101,7 @@ type repoParams struct {
 	gpgCheck   bool
 	components []string
 	suite      string
+	arch       []string
 	enabled    bool
 }
 
@@ -146,6 +147,11 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 	}
 	if _, err := util.OptStringSliceParam(req.Params, "components"); err != nil {
 		errs = append(errs, err.Error())
+	}
+	if arch, err := util.OptStringSliceParam(req.Params, "arch"); err != nil {
+		errs = append(errs, err.Error())
+	} else if verr := validateArch(arch); verr != nil {
+		errs = append(errs, verr.Error())
 	}
 	if _, err := util.OptBoolParam(req.Params, "enabled"); err != nil {
 		errs = append(errs, err.Error())
@@ -213,6 +219,12 @@ func (m *Module) readParamsFromPlan(req *pluginv1.PlanRequest) (repoParams, erro
 	}
 	if p.components, err = util.OptStringSliceParam(req.Params, "components"); err != nil {
 		return p, err
+	}
+	if p.arch, err = util.OptStringSliceParam(req.Params, "arch"); err != nil {
+		return p, err
+	}
+	if verr := validateArch(p.arch); verr != nil {
+		return p, verr
 	}
 	p.gpgCheck, err = planBoolDefault(req, "gpg_check", true)
 	if err != nil {
@@ -384,6 +396,12 @@ func (m *Module) readParams(req *pluginv1.ApplyRequest) (repoParams, error) {
 	if p.components, err = util.OptStringSliceParam(req.Params, "components"); err != nil {
 		return p, err
 	}
+	if p.arch, err = util.OptStringSliceParam(req.Params, "arch"); err != nil {
+		return p, err
+	}
+	if verr := validateArch(p.arch); verr != nil {
+		return p, verr
+	}
 
 	p.gpgCheck, err = boolParamDefault(req, "gpg_check", true)
 	if err != nil {
@@ -430,6 +448,23 @@ func validateName(name string) error {
 		case r == '-', r == '_', r == '.':
 		default:
 			return fmt.Errorf("param %q: only [A-Za-z0-9._-] allowed, got %q", "name", name)
+		}
+	}
+	return nil
+}
+
+// validateArch санитизирует токены архитектур: значение попадает внутрь
+// apt-опций `deb [... arch=<v>]`, поэтому пробел/скобка/`=` сломали бы синтаксис
+// опций (инъекция). apt-архитектуры — строчные alnum (amd64/arm64/i386/all/…).
+func validateArch(arch []string) error {
+	for _, a := range arch {
+		if a == "" {
+			return fmt.Errorf("param %q: architecture must not be empty", "arch")
+		}
+		for _, r := range a {
+			if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9') {
+				return fmt.Errorf("param %q: only [a-z0-9] allowed per architecture, got %q", "arch", a)
+			}
 		}
 	}
 	return nil

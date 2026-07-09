@@ -30,10 +30,11 @@ backend-ам:
 |---|---|---|---|
 | `name` | string | required | Имя репозитория. Становится именем файла (`<name>.list`/`<name>.repo`), поэтому валидируется: только `[A-Za-z0-9._-]`, без `/`, `\` и `..` (защита от path-traversal — записи вне целевого каталога). |
 | `uri` | string | required (для `present`) | Базовый URL репозитория. Допустимы `http://` и `https://` (`file://`/`ftp://`/пустая — ошибка). `http://` легитимен для внутреннего зеркала, но даёт обязательный warning (см. [Безопасность](#безопасность)). |
-| `gpg_key` | string | optional | Содержимое GPG-ключа inline (ASCII-armored/PEM или бинарный keyring — пишется как есть). Для apt материализуется в `/etc/apt/keyrings/<name>.gpg` (mode `0644`) и подключается через `signed-by=`; для dnf/yum пишется в `gpgkey=`. Скачивание ключа по URL в MVP **не** реализовано (CEL может подставить содержимое через `${ file(...) }`/`vault`). Критичен для supply-chain. |
+| `gpg_key` | string | optional | Содержимое GPG-ключа inline (ASCII-armored/PEM или бинарный keyring — пишется как есть). Для apt материализуется в `/etc/apt/keyrings/<name>.gpg` (mode `0644`) и подключается через `signed-by=`; для dnf/yum пишется в `gpgkey=`. Ключ **по URL в core.repo намеренно не качается** (ADR-071 §(g), вариант B): сеть/SSRF остаётся в [`core.url.fetched`](../url/README.md) (network_outbound + SSRF-guard + checksum), а сюда содержимое подаётся inline через `${ file(...) }`/`vault`. Критичен для supply-chain. |
 | `gpg_check` | bool | optional (default `true`) | Криптопроверка пакетов. `false` — opt-out, разрешён, но даёт обязательный warning (симметрия checksum-opt-out в core.url). Для dnf/yum пишется в `gpgcheck=`. |
 | `suite` | string | optional | Suite/дистрибутив (apt: `deb <uri> <suite> <components>`). На dnf/yum/apk не влияет (apk кладёт полный URL в `uri`). |
 | `components` | list | optional | Компоненты apt-строки (`main contrib …`). Только apt. |
+| `arch` | list | optional | Архитектуры apt-строки → опция `[arch=amd64,arm64 …]` (после `signed-by=`). Токены санитизируются (`[a-z0-9]`, без пробелов/скобок — защита от инъекции в опции). Только apt; на dnf/yum/apk игнорируется (как `suite`/`components`). ADR-071. |
 | `enabled` | bool | optional (default `true`) | Включён ли репозиторий. `false`: для apt/apk строка закомментирована (`# …`), для dnf/yum — `enabled=0`. |
 
 ## absent — params
@@ -97,6 +98,46 @@ core.url, с обязательными warning-ами вместо запрет
     components: [main]
     gpg_key: "${ file('files/example.gpg.asc') }"
 ```
+
+### Зеркало upstream в закрытом контуре (ADR-071, вариант B)
+
+Подключение внутреннего apt-зеркала (напр. redis.io в Nexus) — двумя шагами: ключ
+приносит `core.url.fetched` (там network_outbound + SSRF-guard + checksum), а
+`core.repo` объявляет репо inline-ключом через `${ file(...) }` и задаёт `arch`.
+core.repo сети НЕ касается (pure-FS) — ключ-по-URL остаётся вне модуля:
+
+```yaml
+# 1) ключ redis.io из внутреннего зеркала (allow_private — internal Nexus, ADR-067)
+- name: Fetch redis.io signing key
+  module: core.url.fetched
+  params:
+    url: https://nexus.internal/repository/redis-raw/redis.gpg
+    path: /etc/soul-stack/keys/redis.asc
+    checksum: "sha256:<hex>"
+    allow_private: true
+
+# 2) объявить зеркало apt (uri=Nexus, arch=amd64, ключ inline)
+- name: Declare redis.io apt mirror
+  module: core.repo.present
+  params:
+    name: redis
+    uri: https://nexus.internal/repository/redis-apt
+    suite: bookworm
+    components: [main]
+    arch: [amd64]
+    gpg_key: "${ file('/etc/soul-stack/keys/redis.asc') }"
+```
+
+Результат — `/etc/apt/sources.list.d/redis.list`:
+
+```
+deb [signed-by=/etc/apt/keyrings/redis.gpg arch=amd64] https://nexus.internal/repository/redis-apt bookworm main
+```
+
+Ключ может быть ASCII-armored (`.asc`): apt ≥ 1.4 читает armored keyring по
+`signed-by=` напрямую; если нужен бинарный keyring — зеркало отдаёт уже
+dearmored-ключ (dearmor вне core.repo). Установку пакета из объявленного зеркала
+делает `core.pkg.installed` с `=version`-пином (S3/NIM-105).
 
 `absent` (apk) — удаление матчится по `uri`:
 

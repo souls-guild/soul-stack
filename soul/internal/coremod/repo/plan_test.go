@@ -214,6 +214,62 @@ func TestPlan_Absent_Apt_Exists_Drift(t *testing.T) {
 	assertRootUnchanged(t, root, before)
 }
 
+// TestPlan_Apt_ArchDrift — .list без arch=, желаемый arch → drift, без мутаций.
+func TestPlan_Apt_ArchDrift(t *testing.T) {
+	m, root := newModule(t, util.PkgMgrApt)
+	if err := os.MkdirAll(m.AptSourcesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(m.AptSourcesDir, "nexus.list"),
+		[]byte("deb https://m/deb bookworm main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotRoot(t, root)
+
+	stream := &planStream{}
+	if err := m.Plan(&pluginv1.PlanRequest{
+		State: "present",
+		Params: mustStruct(t, map[string]any{
+			"name": "nexus", "uri": "https://m/deb", "suite": "bookworm",
+			"components": []any{"main"}, "arch": []any{"amd64"},
+		}),
+	}, stream); err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if got := stream.last(); got == nil || !got.GetChanged() {
+		t.Fatalf("changed=false, want true (arch drift)")
+	}
+	assertRootUnchanged(t, root, before)
+}
+
+// TestPlan_Apt_ArchMatch_Clean — .list с точным arch= совпадает → clean.
+func TestPlan_Apt_ArchMatch_Clean(t *testing.T) {
+	m, root := newModule(t, util.PkgMgrApt)
+	if err := os.MkdirAll(m.AptSourcesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(m.AptSourcesDir, "nexus.list"),
+		[]byte("deb [arch=amd64] https://m/deb bookworm main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotRoot(t, root)
+
+	stream := &planStream{}
+	if err := m.Plan(&pluginv1.PlanRequest{
+		State: "present",
+		Params: mustStruct(t, map[string]any{
+			"name": "nexus", "uri": "https://m/deb", "suite": "bookworm",
+			"components": []any{"main"}, "arch": []any{"amd64"},
+		}),
+	}, stream); err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if got := stream.last(); got == nil || got.GetChanged() {
+		t.Fatalf("changed=%v, want false (arch match)", got.GetChanged())
+	}
+	assertRootUnchanged(t, root, before)
+}
+
 // TestPlan_Absent_Apt_Missing_Clean — .list нет → clean.
 func TestPlan_Absent_Apt_Missing_Clean(t *testing.T) {
 	m, root := newModule(t, util.PkgMgrApt)
