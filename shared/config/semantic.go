@@ -59,6 +59,7 @@ func semanticValidateKeeper(c *KeeperConfig, root *ast.MappingNode) []diag.Diagn
 	if c.Auth != nil && c.Auth.JWT != nil {
 		out = append(out, checkDuration(root, "$.auth.jwt.ttl_default", c.Auth.JWT.TTLDefault)...)
 		out = append(out, checkDuration(root, "$.auth.jwt.ttl_bootstrap", c.Auth.JWT.TTLBootstrap)...)
+		out = append(out, checkDuration(root, "$.auth.jwt.exchange_ttl", c.Auth.JWT.ExchangeTTL)...)
 	}
 	if c.PluginRuntime != nil {
 		out = append(out, checkDuration(root, "$.plugin_runtime.startup_timeout", c.PluginRuntime.StartupTimeout)...)

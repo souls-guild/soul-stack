@@ -113,8 +113,8 @@ func TestLDAPLogin_SetsSecureCookie(t *testing.T) {
 	if c.SameSite != http.SameSiteStrictMode {
 		t.Errorf("cookie SameSite = %v, want Strict", c.SameSite)
 	}
-	if c.Path != "/" {
-		t.Errorf("cookie Path = %q, want /", c.Path)
+	if c.Path != "/auth" {
+		t.Errorf("cookie Path = %q, want /auth (NIM-77: сужение с /)", c.Path)
 	}
 	// JWT-токена в теле НЕТ (cookie-only доставка).
 	if strings.Contains(rec.Body.String(), "ey.tok.jwt") {

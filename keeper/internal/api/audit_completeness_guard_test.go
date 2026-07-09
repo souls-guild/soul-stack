@@ -212,6 +212,13 @@ var writeRoutesNoAudit = map[route]string{
 	// читает state одной инкарнации, ничего не мутирует. Permission
 	// incarnation.get (паттерн read). audit намеренно не пишется.
 	{http.MethodPost, "/v1/incarnations/{name}/scenarios/{scenario}/form-prefill"}: "day-2 pre-fill формы из incarnation.state (docs/input.md): read-only-резолв одной инкарнации, без мутации — audit намеренно не пишется (паттерн get/module.form-prep)",
+
+	// POST /auth/token — обмен session-cookie на короткий Bearer (NIM-77, Вариант B).
+	// POST по HTTP-методу, но не мутирует состояние: перевыпуск токена из уже
+	// проверенной cookie (high-freq refresh на каждую вкладку/перезагрузку SPA).
+	// audit намеренно не пишется — иначе поток refresh-ов затопил бы audit_log
+	// (сам факт логина уже фиксируется operator.login на /auth/{ldap,oidc}).
+	{http.MethodPost, "/auth/token"}: "NIM-77: обмен session-cookie→короткий Bearer, read-like refresh без мутации состояния — audit намеренно не пишется (high-freq; логин уже пишет operator.login)",
 }
 
 // writeMethods — HTTP-методы, считающиеся мутирующими для guard-а.

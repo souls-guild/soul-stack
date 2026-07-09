@@ -1075,6 +1075,10 @@ type KeeperAuthJWT struct {
 	Issuer        string `yaml:"issuer,omitempty"`
 	TTLDefault    string `yaml:"ttl_default,omitempty"`
 	TTLBootstrap  string `yaml:"ttl_bootstrap,omitempty"`
+	// ExchangeTTL — короткий TTL Bearer, выдаваемого POST /auth/token в обмен на
+	// session-cookie (NIM-77/ADR-058 Вариант B). Отдельный от ttl_default (24h);
+	// дефолт 10m, floor 1m (значение ниже минимума поднимается). Duration-строка.
+	ExchangeTTL string `yaml:"exchange_ttl,omitempty" json:"exchange_ttl,omitempty"`
 }
 
 // KeeperAuthLDAP — конфиг LDAP-аутентификации (ADR-058(c)/(e), стадия 1

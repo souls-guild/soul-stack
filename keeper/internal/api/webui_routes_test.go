@@ -66,6 +66,8 @@ func webUIRouter(t *testing.T, verifier *keeperjwt.Verifier, webUIEnabled bool) 
 		webUIEnabled,
 		nil,                                  // ldapAuth (LDAP не сконфигурирован в тесте)
 		nil,                                  // oidcAuth (OIDC не сконфигурирован в тесте)
+		nil,                                  // authToken (обмен /auth/token не тестируется здесь)
+		AuthMethodsDeps{},                    // authMethods (/auth/methods монтируется, но не проверяется)
 		nil,                                  // loginGuard (anti-bruteforce off в тесте)
 		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
 		nil,                                  // soulStatsStaleFn (дефолт 90s в тесте)

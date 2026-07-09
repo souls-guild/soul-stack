@@ -227,6 +227,8 @@ func collectRoutes(t *testing.T) map[route]struct{} {
 		false,                                // webUIEnabled — /ui вне /v1, drift-walker его не видит; держим выключенным для чистоты периметра
 		nil,                                  // ldapAuth (LDAP не сконфигурирован в тесте)
 		nil,                                  // oidcAuth (OIDC не сконфигурирован в тесте)
+		authTokenSpecStub(),                  // authToken — /auth/token монтируется (NIM-77); в спеке И роутере → без allowlist
+		AuthMethodsDeps{Password: true},      // authMethods — /auth/methods монтируется безусловно
 		nil,                                  // loginGuard (anti-bruteforce off в тесте)
 		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
 		nil,                                  // soulStatsStaleFn (дефолт 90s в тесте)

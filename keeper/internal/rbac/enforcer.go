@@ -158,6 +158,14 @@ func (e *Enforcer) Check(aid, resource, action string, context map[string]string
 		ErrPermissionDenied, aid, resource, action, joinRoleNames(roles))
 }
 
+// IsRevoked — держит ли снимок AID в revoked-проекции (ADR-014 Amendment).
+// Дешёвый map-lookup без ролей/permission-логики; обмен cookie→Bearer
+// (POST /auth/token, NIM-77) отсекает ревокнутого Архонта in-memory, не SQL.
+func (e *Enforcer) IsRevoked(aid string) bool {
+	_, ok := e.revoked[aid]
+	return ok
+}
+
 // HasWildcard — true, если у AID есть хотя бы одна `*`-permission
 // (через любую из ролей). Используется self-lockout инвариантом —
 // «нельзя ревокнуть последнего cluster-admin» (rbac.md → Инвариант self-lockout).

@@ -101,6 +101,8 @@ func metaRouter(t *testing.T, verifier *keeperjwt.Verifier) http.Handler {
 		false,                                // webUIEnabled — meta-тесты /ui не проверяют (guard в webui_routes_test.go)
 		nil,                                  // ldapAuth (LDAP не сконфигурирован в тесте)
 		nil,                                  // oidcAuth (OIDC не сконфигурирован в тесте)
+		nil,                                  // authToken (обмен /auth/token не тестируется здесь)
+		AuthMethodsDeps{},                    // authMethods (/auth/methods монтируется, но не проверяется)
 		nil,                                  // loginGuard (anti-bruteforce off в тесте)
 		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
 		nil,                                  // soulStatsStaleFn (дефолт 90s в тесте)

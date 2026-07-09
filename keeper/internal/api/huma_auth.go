@@ -30,19 +30,24 @@ const sessionCookieName = "soul_session"
 
 // newSessionCookie собирает Set-Cookie с внутренним JWT — ЕДИНАЯ точка для LDAP и
 // OIDC (ADR-058(g)/(№4): симметрия способов логина обязательна). HttpOnly+Secure+
-// `SameSite=Strict`+`Path=/`.
+// `SameSite=Strict`+`Path=/auth`.
+//
+// Path=/auth (сужен с `/`, NIM-77): единственный серверный читатель cookie — POST
+// /auth/token (обмен на короткий Bearer, Вариант B). Браузер шлёт cookie ТОЛЬКО на
+// `/auth/*`, не на /v1//mcp//docs — сужение поверхности утечки 24h-credential
+// (cookie не приклеивается к каждому API-запросу).
 //
 // SameSite=Strict безопасен и для OIDC-callback (MED-фикс рассинхрона Lax↔Strict,
 // 2026-06-24): SameSite ограничивает ОТПРАВКУ cookie на cross-site-запрос, а не её
 // УСТАНОВКУ. На cross-site top-level redirect от IdP мы cookie СТАВИМ (Set-Cookie на
 // ответе callback-а), а не читаем; следующий шаг — same-site top-level навигация на
-// `/ui` (302 Location), на которой Strict-cookie ОТПРАВЛЯЕТСЯ. Прежний Lax на OIDC
-// был избыточной послаблением и расходился с LDAP — устранено.
+// `/ui` (302 Location). Эта навигация НЕ шлёт /auth-cookie (Path не совпал), но она
+// и не требуется: сессию UI поднимает через POST /auth/token (обмен на Bearer).
 func newSessionCookie(token string, ttl time.Duration) *http.Cookie {
 	return &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    token,
-		Path:     "/",
+		Path:     "/auth",
 		HttpOnly: true,
 		Secure:   true, // TLS-required периметр (ADR-002 mTLS/HTTPS)
 		SameSite: http.SameSiteStrictMode,
