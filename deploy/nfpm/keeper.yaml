@@ -19,7 +19,7 @@ description: |
   gRPC bidi-stream поверх mTLS, OpenAPI/MCP для операторов, Postgres + Redis.
 vendor: Soul Stack
 homepage: https://github.com/souls-guild/soul-stack
-license: Apache-2.0
+license: BUSL-1.1
 
 contents:
   - src: ./keeper/bin/keeper

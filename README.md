@@ -49,4 +49,4 @@
 
 ## Лицензия
 
-[Apache License 2.0](LICENSE). Открытое ядро (open core): enterprise-фичи — в отдельных репозиториях под отдельной коммерческой лицензией, тянут это ядро как зависимость ([ADR-016](docs/adr/0016-parity-license.md)).
+Ядро (этот репозиторий) — [Business Source License 1.1](LICENSE) (fair-code): исходники открыты, production-использование разрешено, **кроме** перепродажи Soul Stack третьим лицам как hosted/managed-сервиса; каждая версия автоматически становится [Apache 2.0](https://www.apache.org/licenses/LICENSE-2.0) через 2 года (Change Date). SDK, примеры и плагины — Apache 2.0; enterprise-фичи — отдельная коммерческая лицензия ([ADR-016](docs/adr/0016-parity-license.md)). Что вам можно простыми словами — [LICENSING.md](LICENSING.md).

@@ -113,7 +113,7 @@ Soul Stack — система управления конфигурациями 
 
 ### [ADR-016. Стратегия parity с SaltStack/Ansible и лицензия Soul Stack](adr/0016-parity-license.md)
 
-Вынесен в [`docs/adr/0016-parity-license.md`](adr/0016-parity-license.md). Лицензия — Apache 2.0 (open core / freemium: enterprise-фичи в отдельных репо). Стратегия parity — гибрид без wrapper-а: core MVP — наш Go-рерайт, экзотика — community-плагины через SDK; wrapper Ansible запрещён (GPLv3 + Python-runtime). Amendments: Plugin SDK Фаза 2 (10 official `soul-mod-*`, namespace `official`, template-механизм).
+Вынесен в [`docs/adr/0016-parity-license.md`](adr/0016-parity-license.md). Лицензия — **BSL 1.1** для ядра (этот репо) и frontend (`soul-stack-web`): fair-code, Change License Apache 2.0, Change Date 2 года (Amendment 2026-07-09); SDK/examples/плагины — Apache 2.0; enterprise-фичи — отдельная коммерческая лицензия. Стратегия parity — гибрид без wrapper-а: core MVP — наш Go-рерайт, экзотика — community-плагины через SDK; wrapper Ansible запрещён (GPLv3 + Python-runtime). Amendments: Plugin SDK Фаза 2 (10 official `soul-mod-*`, namespace `official`, template-механизм); fair-code/BSL (лицензия).
 
 ### [ADR-017. Keeper-side core-модули расширены: `core.cloud.provisioned`, `core.vault.kv-read`](adr/0017-keeper-side-core.md)
 

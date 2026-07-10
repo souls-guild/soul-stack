@@ -63,7 +63,7 @@ ARG VERSION=0.0.0-dev
 LABEL org.opencontainers.image.title="soul-stack-keeper" \
       org.opencontainers.image.description="Soul Stack Keeper (ADR-004) — central node" \
       org.opencontainers.image.source="https://github.com/souls-guild/soul-stack" \
-      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.licenses="BUSL-1.1" \
       org.opencontainers.image.version="${VERSION}"
 
 COPY --from=builder /out/keeper /usr/local/bin/keeper

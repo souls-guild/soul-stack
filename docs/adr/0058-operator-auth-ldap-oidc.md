@@ -158,16 +158,16 @@
   - **AID-claim иммутабельность (OIDC, security-fix 2026-06-24):** дефолт `aid_claim` — **`sub`** (иммутабельный непрозрачный субъект IdP). Semantic-валидация (`checkAuthOIDC`) выдаёт **WARN** (`oidc_aid_claim_mutable`), если `aid_claim` ∈ {`email`, `preferred_username`}: эти claim user/admin-mutable у IdP, и их переназначение позволило бы чужому человеку залогиниться под существующим AID (identity-spoofing). WARN, не ERROR — оператор может осознанно выбрать (например, стабильный корпоративный email), безопасность = качество подсказки, не запрет.
   - **Refresh (РЕШЕНО — нет, развилка №5):** refresh-механизма нет; по истечении короткого internal-JWT — повторный federated-login.
 
-- **(h) Библиотеки и лицензии (проект Apache-2.0, [ADR-016](0016-parity-license.md)).**
+- **(h) Библиотеки и лицензии (ядро — BSL 1.1, [ADR-016](0016-parity-license.md); зависимости — permissive, включаются в дистрибутив ядра).**
 
-  | библиотека | назначение | лицензия | совместимость с Apache-2.0 |
+  | библиотека | назначение | лицензия | можно включать в ядро |
   |---|---|---|---|
   | `github.com/coreos/go-oidc/v3` | OIDC discovery / JWKS / id_token verify | Apache-2.0 | ✅ |
   | `golang.org/x/oauth2` | OAuth2 code-exchange | BSD-3-Clause | ✅ |
   | `github.com/go-ldap/ldap/v3` | LDAP bind / search | MIT | ✅ |
   | `github.com/golang-jwt/jwt/v5` | внутренний JWT (уже в проекте, ADR-014) | MIT | ✅ |
 
-  Все совместимы с Apache-2.0; CLA пока не требуется (ADR-016). `go-ldap/v3` **добавлен** в `keeper/go.mod` (стадия 1). `go-oidc/v3` + `x/oauth2` **добавлены** в `keeper/go.mod` (стадия 2). Тесты используют `github.com/go-jose/go-jose/v4` (транзитивная зависимость go-oidc, Apache-2.0) для подписи id_token mock-IdP.
+  Все под permissive-лицензиями (Apache-2.0 / BSD-3 / MIT) — их можно включать в дистрибутив ядра под BSL 1.1; CLA — по [ADR-016](0016-parity-license.md) (заводится до первого внешнего contributor-а). `go-ldap/v3` **добавлен** в `keeper/go.mod` (стадия 1). `go-oidc/v3` + `x/oauth2` **добавлены** в `keeper/go.mod` (стадия 2). Тесты используют `github.com/go-jose/go-jose/v4` (транзитивная зависимость go-oidc, Apache-2.0) для подписи id_token mock-IdP.
 
 - **(i) Политика провижининга операторов (РЕАЛИЗОВАНО, Часть B).** Кластер-уровневый гейт «какими методами вообще можно СОЗДАВАТЬ оператора» — отдельно от того, какие способы логина сконфигурированы.
 

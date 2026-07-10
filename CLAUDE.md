@@ -10,7 +10,7 @@
 - **Go-каркас** по [ADR-011](docs/adr/0011-go-layout.md): `go.work` + 7 модулей (`proto/`, `proto/plugin/`, `shared/`, `sdk/`, `keeper/`, `soul/`, `soul-lint/`), stub-бинари (`keeper`/`soul`/`soul-lint` печатают `<binary> stub`).
 - **Proto-контракт Keeper↔Soul v1** по [ADR-012](docs/adr/0012-keeper-soul-grpc.md) с committed generated Go (`proto/gen/go/keeper/v1/*.pb.go`).
 - **Typed Soulprint** ([ADR-018](docs/adr/0018-soulprint-typed.md)) и **Migration DSL** ([ADR-019](docs/adr/0019-state-migration-dsl.md)) в proto и docs.
-- **`LICENSE`** Apache 2.0 ([ADR-016](docs/adr/0016-parity-license.md), open core / freemium).
+- **`LICENSE`** BSL 1.1 (fair-code; ядро → Apache 2.0 через 2 года) — SDK/плагины остаются Apache 2.0 ([ADR-016](docs/adr/0016-parity-license.md), Amendment 2026-07-09).
 - **`Makefile`** с таргетами `gen` / `build` / `test` / `tidy` — все зелёные, `make gen` идемпотентен.
 - **Git history**: `main`, 4 commit-а (initial baseline + ADR-018 + canonical `.self` переписка + ADR-019).
 - **Реальной логики ни одного бинаря нет** — только stub-ы и proto-контракты.
