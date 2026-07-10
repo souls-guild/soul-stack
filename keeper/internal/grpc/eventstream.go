@@ -1251,6 +1251,8 @@ func (h *eventStreamHandler) dispatch(ctx context.Context, sid, sessionID string
 		h.handleRunResult(ctx, sid, sessionID, p.RunResult)
 	case *keeperv1.FromSoul_SoulprintReport:
 		h.handleSoulprintReport(ctx, sid, sessionID, p.SoulprintReport)
+	case *keeperv1.FromSoul_HostUtilization:
+		h.handleHostUtilization(ctx, sid, sessionID, p.HostUtilization)
 	case *keeperv1.FromSoul_SeedRotationRequest:
 		h.handleSeedRotationRequest(ctx, sid, sessionID, p.SeedRotationRequest)
 	case *keeperv1.FromSoul_AugurRequest:

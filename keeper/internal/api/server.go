@@ -176,6 +176,14 @@ type Deps struct {
 	// тем же Redis-клиентом, что и topology-резолверу (keeperredis.SoulsStreamAlive).
 	SoulPresence handlers.SoulPresence
 
+	// UtilizationReader — Redis-слой host-vitals для telemetry-эндпоинтов
+	// (NIM-86, ADR-006): GET /v1/souls/{sid}/telemetry и
+	// /v1/incarnations/{name}/telemetry читают снимок утилизации из Redis, НЕ
+	// из PG. Опционален: при nil (single-instance dev / unit без Redis) ридер
+	// no-op (stale/empty). Production-wire-up в `keeper run` передаёт обёртку
+	// над тем же Redis-клиентом (keeperredis.ReadUtilization).
+	UtilizationReader handlers.UtilizationReader
+
 	// SoulStatsStaleFn — провайдер порога «протухшего» last_seen_at для
 	// stale_count в `GET /v1/souls/stats` (тот же mark_disconnected.stale_after
 	// Reaper-а). Функция читает СВЕЖИЙ конфиг (hot-reload) на каждом запросе,
@@ -559,6 +567,10 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	}
 	soulH := handlers.NewSoulHandler(deps.SoulDB, deps.RBAC, deps.SoulPresence, logger)
 
+	// telemetryH — host-vitals read-эндпоинты (NIM-86). Переиспользует soulH
+	// (scope-гейт + coven-листинг); reader nil (dev/unit без Redis) → no-op.
+	telemetryH := handlers.NewTelemetryHandler(deps.UtilizationReader, soulH, logger)
+
 	// clusterH опционален: при nil ClusterRegistry `GET /v1/cluster` не монтируется
 	// (single-Keeper dev без Redis — cluster-view не нужен). self_health использует
 	// те же PG/Redis/Vault-pingers, что `/readyz` (health.Check — единый источник).
@@ -789,7 +801,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	// через `*/events`-chain (fetch-streaming, A0); отдельного минтинг-эндпоинта нет.
 	runEventsDeps := newRunEventsDeps(deps.ApplyBus, deps.IncarnationDB, deps.RBAC, logger)
 
-	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, augurH, oracleH, pushH, pushProviderH, providerH, profileH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, heraldTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.LoginGuard, deps.LoginLimitCfg, deps.SoulStatsStaleFn, clusterH, runEventsDeps, logger)
+	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, telemetryH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, augurH, oracleH, pushH, pushProviderH, providerH, profileH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, heraldTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.LoginGuard, deps.LoginLimitCfg, deps.SoulStatsStaleFn, clusterH, runEventsDeps, logger)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,

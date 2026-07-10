@@ -54,6 +54,7 @@ func TestHumaCadence_RestReachable_ChiCoexistence(t *testing.T) {
 		stubOperatorHandler(t),
 		handlers.NewIncarnationHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil),
 		handlers.NewSoulHandler(nil, nil, nil, nil),
+		handlers.TelemetrySpecStub(),
 		stubRoleHandler(t), stubSynodHandler(t), stubSigilHandler(t), stubSigilKeyHandler(t),
 		stubServiceHandler(t), nil, stubAugurHandler(t), stubOracleHandler(t),
 		nil,                                     // pushH

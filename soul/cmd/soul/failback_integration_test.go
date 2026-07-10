@@ -56,6 +56,7 @@ import (
 
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 	"github.com/souls-guild/soul-stack/soul/internal/coremod"
+	installmod "github.com/souls-guild/soul-stack/soul/internal/coremod/module"
 	soulgrpc "github.com/souls-guild/soul-stack/soul/internal/grpc"
 	"github.com/souls-guild/soul-stack/soul/internal/runtime"
 )
@@ -101,14 +102,15 @@ func TestReconnect_LeaseHeld_BackoffNotReset(t *testing.T) {
 	// держат число попыток в единицах. initial=20ms/no-jitter — детерминируем.
 	store := backoffOnlyStore(t, srv.addr, "20ms", "20ms")
 
-	runner := runtime.NewApplyRunner(coremod.Default(), nil)
+	runner := runtime.NewApplyRunner(coremod.Default(installmod.Deps{}), nil)
 	sp := newTestPusher("soul-host.example")
+	up := newTestUtilPusher("soul-host.example")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	loopDone := make(chan struct{})
 	go func() {
 		defer close(loopDone)
-		reconnectLoop(ctx, store, cli, runner, nil, sp, nil, nil, nil, nil, logger)
+		reconnectLoop(ctx, store, cli, runner, nil, sp, up, nil, nil, nil, nil, logger)
 	}()
 	defer func() {
 		cancel()
@@ -177,13 +179,14 @@ func TestReconnect_LeaseHeld_SpraysToOtherEndpoint(t *testing.T) {
 	// на priority=1 (lease-held), что усложнит наблюдение. interval большой.
 	store := backoffOnlyStore(t, leaseHeld.addr, "20ms", "200ms")
 
-	runner := runtime.NewApplyRunner(coremod.Default(), nil)
+	runner := runtime.NewApplyRunner(coremod.Default(installmod.Deps{}), nil)
 	sp := newTestPusher("soul-host.example")
+	up := newTestUtilPusher("soul-host.example")
 	ctx, cancel := context.WithCancel(context.Background())
 	loopDone := make(chan struct{})
 	go func() {
 		defer close(loopDone)
-		reconnectLoop(ctx, store, cli, runner, nil, sp, nil, nil, nil, nil, logger)
+		reconnectLoop(ctx, store, cli, runner, nil, sp, up, nil, nil, nil, nil, logger)
 	}()
 	defer func() {
 		cancel()
@@ -289,7 +292,7 @@ func TestFailbackIntegration_TwoEndpoints(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	runner := runtime.NewApplyRunner(coremod.Default(), nil)
+	runner := runtime.NewApplyRunner(coremod.Default(installmod.Deps{}), nil)
 
 	// backoff/failback больше не передаются параметрами — reconnectLoop читает
 	// их из store на каждой итерации (hot-reload, ADR-021). Собираем store со
@@ -306,14 +309,15 @@ func TestFailbackIntegration_TwoEndpoints(t *testing.T) {
 	//   - sigils/anchors — nil: verify Sigil нужен только на Apply custom-плагина;
 	//   - scheduler — nil: VigilSnapshot в тесте не приходит.
 	sp := newTestPusher("soul-host.example")
+	up := newTestUtilPusher("soul-host.example")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	loopDone := make(chan struct{})
 	go func() {
 		defer close(loopDone)
 		// Сигнатура: reconnectLoop(ctx, store, client, runner, errandRunner,
-		// sp, metrics, sigils, anchors, scheduler, logger).
-		reconnectLoop(ctx, store, cli, runner, nil, sp, nil, nil, nil, nil, logger)
+		// sp, up, metrics, sigils, anchors, scheduler, logger).
+		reconnectLoop(ctx, store, cli, runner, nil, sp, up, nil, nil, nil, nil, logger)
 	}()
 	defer func() {
 		cancel()

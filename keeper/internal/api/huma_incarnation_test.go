@@ -54,6 +54,7 @@ func TestHumaIncarnation_ChiCoexistence(t *testing.T) {
 		stubOperatorHandler(t),
 		incH,
 		handlers.NewSoulHandler(nil, nil, nil, nil),
+		handlers.TelemetrySpecStub(),
 		stubRoleHandler(t), stubSynodHandler(t), stubSigilHandler(t), stubSigilKeyHandler(t),
 		stubServiceHandler(t), nil, stubAugurHandler(t), stubOracleHandler(t),
 		nil,                                     // pushH

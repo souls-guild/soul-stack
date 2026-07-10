@@ -192,6 +192,7 @@ func collectRoutes(t *testing.T) map[route]struct{} {
 		stubOperatorHandler(t),
 		handlers.NewIncarnationHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil),
 		handlers.NewSoulHandler(nil, nil, nil, nil),
+		handlers.TelemetrySpecStub(), // telemetryH — telemetry-роуты non-opt-in; non-nil stub → появляются в chi.Walk (совпадение со спекой)
 		stubRoleHandler(t),
 		stubSynodHandler(t),
 		stubSigilHandler(t),

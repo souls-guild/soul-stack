@@ -1113,6 +1113,22 @@ components:
         - type
         - config
       type: object
+    HostTelemetry:
+      additionalProperties: false
+      properties:
+        collected_at:
+          format: date-time
+          type: string
+        latest:
+          $ref: "#/components/schemas/UtilizationLatest"
+        sid:
+          type: string
+        stale:
+          type: boolean
+      required:
+        - sid
+        - stale
+      type: object
     HumaProblemError:
       additionalProperties: false
       properties:
@@ -1511,6 +1527,25 @@ components:
         - destroying
         - destroy_failed
       type: string
+    IncarnationTelemetryReply:
+      additionalProperties: false
+      properties:
+        hosts:
+          items:
+            $ref: "#/components/schemas/HostTelemetry"
+          type:
+            - array
+            - "null"
+        incarnation:
+          type: string
+        truncated:
+          description: true если флот ковена превысил cap и список хостов усечён (обзорный glance)
+          type: boolean
+      required:
+        - incarnation
+        - truncated
+        - hosts
+      type: object
     IncarnationUnlockReply:
       additionalProperties: false
       properties:
@@ -3723,6 +3758,37 @@ components:
         - expired
         - destroyed
       type: string
+    SoulTelemetryReply:
+      additionalProperties: false
+      properties:
+        collected_at:
+          description: Soul-side момент сбора
+          format: date-time
+          type: string
+        latest:
+          $ref: "#/components/schemas/UtilizationLatest"
+          description: последний снимок (nil если данных нет)
+        received_at:
+          description: Keeper-side момент приёма
+          format: date-time
+          type: string
+        sid:
+          description: SID (FQDN) Soul-а
+          type: string
+        stale:
+          description: true если снимок протух (возраст > TTL) или данных нет
+          type: boolean
+        window:
+          description: окно точек для спарклайнов, newest-first
+          items:
+            $ref: "#/components/schemas/UtilizationWindowPoint"
+          type:
+            - array
+            - "null"
+      required:
+        - sid
+        - stale
+      type: object
     SoulTraitsAssignReply:
       additionalProperties: false
       properties:
@@ -4054,6 +4120,22 @@ components:
         - operators
         - roles
       type: object
+    TelemetryDisk:
+      additionalProperties: false
+      properties:
+        mount:
+          type: string
+        total_mb:
+          format: int64
+          type: integer
+        used_mb:
+          format: int64
+          type: integer
+      required:
+        - mount
+        - used_mb
+        - total_mb
+      type: object
     Tiding:
       additionalProperties: false
       properties:
@@ -4279,6 +4361,74 @@ components:
         - direction
         - downgrade
         - reachable
+      type: object
+    UtilizationLatest:
+      additionalProperties: false
+      properties:
+        cpu_pct:
+          format: double
+          type: number
+        disks:
+          items:
+            $ref: "#/components/schemas/TelemetryDisk"
+          type:
+            - array
+            - "null"
+        load1:
+          format: double
+          type: number
+        load15:
+          format: double
+          type: number
+        load5:
+          format: double
+          type: number
+        mem_total_mb:
+          format: int64
+          type: integer
+        mem_used_mb:
+          format: int64
+          type: integer
+        swap_used_mb:
+          format: int64
+          type: integer
+        uptime_sec:
+          format: int64
+          type: integer
+      required:
+        - cpu_pct
+        - load1
+        - load5
+        - load15
+        - mem_used_mb
+        - mem_total_mb
+        - swap_used_mb
+        - uptime_sec
+      type: object
+    UtilizationWindowPoint:
+      additionalProperties: false
+      properties:
+        collected_at:
+          format: date-time
+          type: string
+        cpu_pct:
+          format: double
+          type: number
+        load1:
+          format: double
+          type: number
+        mem_total_mb:
+          format: int64
+          type: integer
+        mem_used_mb:
+          format: int64
+          type: integer
+      required:
+        - collected_at
+        - cpu_pct
+        - load1
+        - mem_used_mb
+        - mem_total_mb
       type: object
     VigilCreateRequest:
       additionalProperties: false
@@ -7883,6 +8033,46 @@ paths:
       summary: Список раскрываемых секретов инкарнации
       tags:
         - incarnation
+  /v1/incarnations/{name}/telemetry:
+    get:
+      description: Агрегат последних снимков утилизации по хостам инкарнации (latest+stale на хост, без окна) из Redis (NIM-86). Permission incarnation.get; видимость хостов — soul-read-scope. Пустой флот / вне scope → hosts:[]. Read-only, без audit.
+      operationId: getIncarnationTelemetry
+      parameters:
+        - description: имя инкарнации (корневой Coven-label хостов)
+          in: path
+          name: name
+          required: true
+          schema:
+            description: имя инкарнации (корневой Coven-label хостов)
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IncarnationTelemetryReply"
+          description: OK
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Host-vitals хостов инкарнации
+      tags:
+        - incarnation
   /v1/incarnations/{name}/traits:
     put:
       description: Целостная замена incarnation.traits (ADR-060) — источника истины, проецируемого в souls.traits хостов-членов. Permission incarnation.traits-set.
@@ -11423,6 +11613,52 @@ paths:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Internal Server Error
       summary: Обновить SSH-реквизиты Soul-а
+      tags:
+        - soul
+  /v1/souls/{sid}/telemetry:
+    get:
+      description: Последний снимок утилизации хоста (CPU/load/mem/disk) + окно для спарклайнов из Redis (NIM-86, ADR-006), со scope-гейтом. Permission soul.list. stale=true если снимок протух или данных нет (старый агент → graceful). Read-only, без audit.
+      operationId: getSoulTelemetry
+      parameters:
+        - description: SID (FQDN) Soul-а
+          in: path
+          name: sid
+          required: true
+          schema:
+            description: SID (FQDN) Soul-а
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SoulTelemetryReply"
+          description: OK
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Host-vitals Soul-а
       tags:
         - soul
   /v1/synods:

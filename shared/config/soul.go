@@ -12,13 +12,14 @@ import (
 type SoulConfig struct {
 	SID string `yaml:"sid,omitempty"`
 
-	Paths     SoulPaths      `yaml:"paths,omitempty"`
-	Keeper    SoulKeeper     `yaml:"keeper"`
-	Soulprint *SoulSoulprint `yaml:"soulprint,omitempty"`
-	Cleanup   *SoulCleanup   `yaml:"cleanup,omitempty"`
-	Logging   SoulLogging    `yaml:"logging,omitempty"`
-	Metrics   *SoulMetrics   `yaml:"metrics,omitempty"`
-	OTel      *SoulOTel      `yaml:"otel,omitempty"`
+	Paths       SoulPaths        `yaml:"paths,omitempty"`
+	Keeper      SoulKeeper       `yaml:"keeper"`
+	Soulprint   *SoulSoulprint   `yaml:"soulprint,omitempty"`
+	Utilization *SoulUtilization `yaml:"utilization,omitempty"`
+	Cleanup     *SoulCleanup     `yaml:"cleanup,omitempty"`
+	Logging     SoulLogging      `yaml:"logging,omitempty"`
+	Metrics     *SoulMetrics     `yaml:"metrics,omitempty"`
+	OTel        *SoulOTel        `yaml:"otel,omitempty"`
 
 	PluginRuntime *PluginRuntime `yaml:"plugin_runtime,omitempty"`
 	HotReload     *HotReload     `yaml:"hot_reload,omitempty"`
@@ -115,6 +116,12 @@ type SoulKeeperTLS struct {
 // SoulSoulprint — параметры периодического сбора фактов.
 type SoulSoulprint struct {
 	RefreshInterval string `yaml:"refresh_interval,omitempty"`
+}
+
+// SoulUtilization — параметры периодической отправки живой утилизации хоста
+// (ADR-071). `interval` — каденс pulse (default 30s, floor 10s в cmd/soul).
+type SoulUtilization struct {
+	Interval string `yaml:"interval,omitempty"`
 }
 
 // SoulCleanup — локальный cleanup-цикл кеша модулей.

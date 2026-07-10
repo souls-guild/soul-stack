@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+package soulstack.keeper.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;keeperv1";
+
+// HostUtilization — снимок живой утилизации ресурсов хоста (CPU%/load/mem/disk/uptime),
+// лёгкий периодический pulse Soul→Keeper по presence-каналу (ADR-071). Слой отдельный от
+// SoulprintFacts (статические grains, ADR-018): утилизация волатильна, не targeting-факт,
+// свой каденс (~30s). Хранится в Redis (горячее, не PG). only-add по ADR-012(c).
+message HostUtilization {
+  // Soul-side момент сбора; Keeper-side received_at хранится отдельно (freshness).
+  google.protobuf.Timestamp collected_at = 1;
+
+  double cpu_pct = 2;   // 0..100, весь хост, дельта загрузки с прошлого сбора
+  double load1   = 3;
+  double load5   = 4;
+  double load15  = 5;
+
+  int64 mem_used_mb  = 6;   // used = total - available
+  int64 mem_total_mb = 7;
+  int64 swap_used_mb = 8;
+
+  // Утилизация не-виртуальных точек монтирования (tmpfs/proc/sys/cgroup отфильтрованы).
+  repeated DiskUtilization disks = 9;
+
+  int64 uptime_sec = 10;
+}
+
+// DiskUtilization — занятость одной точки монтирования. Объёмы в МБ (как MemoryFacts).
+message DiskUtilization {
+  string mount    = 1;
+  int64  used_mb  = 2;
+  int64  total_mb = 3;
+}
