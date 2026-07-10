@@ -35,6 +35,8 @@ import (
 	keeperoidc "github.com/souls-guild/soul-stack/keeper/internal/auth/oidc"
 	"github.com/souls-guild/soul-stack/keeper/internal/bootstrap"
 	"github.com/souls-guild/soul-stack/keeper/internal/cadence"
+	"github.com/souls-guild/soul-stack/keeper/internal/certissue"
+	"github.com/souls-guild/soul-stack/keeper/internal/certpolicy"
 	"github.com/souls-guild/soul-stack/keeper/internal/cloudinit"
 	"github.com/souls-guild/soul-stack/keeper/internal/conductor"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod"
@@ -174,6 +176,15 @@ type daemon struct {
 	// `GET /v1/services/{name}/directives` (UI-редактор redis_settings). Per-keeper,
 	// не cluster-wide — read-only каталог (parity с serviceDependencies).
 	serviceDirectives *serviceregistry.DirectivesCache
+
+	// serviceCertPolicy — TTL-кеш секции `certificate_rotation:` манифеста Service-а
+	// (parity с serviceStateSchema); питает certPolicyResolver. Per-keeper, read-only.
+	serviceCertPolicy *serviceregistry.CertPolicyCache
+
+	// certPolicyResolver — резолвер эффективной cert-rotation-политики инкарнации
+	// (incarnation → пиновый снапшот сервиса → секция certificate_rotation). Общий
+	// вход reaper.CertRotator (кого ротировать) и core.cert.issued (роль подписи).
+	certPolicyResolver *certpolicy.Resolver
 
 	// --- augur (ADR-025) ---
 	// augurSvc — management-CRUD реестров Omen / Rite (OpenAPI/MCP). ОТЛИЧАЕТСЯ
@@ -980,6 +991,19 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 		// Vault (Deps.Vault выше) и извлекает метаданные сам. KID — issued_by_kid.
 		CertStore: coremodcert.NewPGStore(d.pool),
 		KID:       cfg.KID,
+		// Cert* — state `core.cert.issued` (NIM-99): общий signer/writer/csrgen с
+		// reaper.CertRotator. CertPolicy — лениво (резолвер строится в setupScenarioDeps
+		// ПОСЛЕ этого шага); PKIMount — hot-reload keeper.yml snapshot.
+		CertSigner:      certPKISignerAdapter{vc: d.vc},
+		CertVaultWriter: d.vc,
+		CertPolicy:      lazyCertPolicy{d: d},
+		CertCSRGen:      certServiceCSRGen,
+		CertPKIMount: func() string {
+			if c := d.store.Get(); c != nil {
+				return c.Vault.PKIMount
+			}
+			return ""
+		},
 		// `core.bootstrap.delivered` teleport-режим (ADR-063 amendment): dialer
 		// из keeper.yml::push.teleport. nil/"" → direct, и т.к. direct-набор
 		// (providers/host-CA) тут не заполнен, модуль не регистрируется.
@@ -1417,6 +1441,15 @@ func (d *daemon) setupScenarioDeps(_ context.Context) error {
 	// serviceHolder (TTL-poll + pub/sub-инвалидация, поднят в setupServiceRegistry).
 	// Resolve — синхронный, lock-free; hot-reload реестра/скаляра прозрачен.
 	d.serviceRegistry = scenario.NewServiceRegistry(d.serviceHolder)
+	// serviceCertPolicy + certPolicyResolver (NIM-99): TTL-кеш секции
+	// certificate_rotation манифеста (parity с прочими service*-кешами) и резолвер
+	// эффективной политики инкарнации. Питают reaper.CertRotator (кого ротировать) и
+	// core.cert.issued (роль PKI-подписи из манифеста).
+	d.serviceCertPolicy = serviceregistry.NewCertPolicyCache(
+		serviceregistry.CertPolicyListerFunc(func(ctx context.Context, name, gitURL, ref string) (*artifact.CertPolicyInfo, error) {
+			return d.serviceLoader.LoadCertPolicy(ctx, artifact.ServiceRef{Name: name, Git: gitURL, Ref: ref})
+		}), 0)
+	d.certPolicyResolver = certpolicy.NewResolver(d.pool, d.serviceRegistry, d.serviceCertPolicy)
 	// Источник destiny-артефактов для apply:destiny (ADR-009): git-URL —
 	// default_destiny_source + {name} (читается ЛЕНИВО из serviceHolder, чтобы
 	// hot-reload скаляра доезжал), ref — service.yml::destiny[].
@@ -4798,6 +4831,19 @@ func (p lazySoulPresence) SoulsStreamAlive(ctx context.Context, sids []string) (
 	return keeperredis.SoulsStreamAlive(ctx, p.d.redisClient, sids)
 }
 
+// lazyCertPolicy — резолвер cert-rotation-политики для `core.cert.issued`,
+// читающий d.certPolicyResolver ЛЕНИВО: setupCoreModules собирает coremod.Deps ДО
+// setupScenarioDeps, где резолвер конструируется. nil-резолвер → явная ошибка
+// (шаг issued failed), а не паника.
+type lazyCertPolicy struct{ d *daemon }
+
+func (l lazyCertPolicy) Resolve(ctx context.Context, name string) (certpolicy.Policy, error) {
+	if l.d.certPolicyResolver == nil {
+		return certpolicy.Policy{}, fmt.Errorf("cert policy resolver not ready")
+	}
+	return l.d.certPolicyResolver.Resolve(ctx, name)
+}
+
 // leaseOwnerChecker адаптирует Redis-клиент под multi-keeper-guard старого
 // dispatch-пути scenario-runner-а (footgun acolytes=0): возвращает KID-владельца
 // SID-lease. Узкая склейка ради изоляции scenario-пакета от keeperredis (runner
@@ -5494,14 +5540,9 @@ func (d *daemon) setupReaper(ctx context.Context) error {
 			certRotator = reaper.NewCertRotator(d.pool, reaper.CertRotatorDeps{
 				Signer: certPKISignerAdapter{vc: d.vc},
 				Vault:  d.vc,
-				CSRGen: func(cn string, dns []string) ([]byte, []byte, error) {
-					g, gerr := keepervault.GenerateServiceCSR(keepervault.CSRParams{CommonName: cn, DNSNames: dns})
-					if gerr != nil {
-						return nil, nil, gerr
-					}
-					return g.PrivateKeyPEM, g.CSRPEM, nil
-				},
+				CSRGen: certServiceCSRGen,
 				Cfg:    func() reaper.CertRotatorConfig { return resolveCertRotatorConfig(d.store.Get(), logger) },
+				Policy: d.certPolicyResolver,
 				Audit:  d.auditWriter,
 				Logger: logger,
 				KID:    cfg.KID,
@@ -5562,22 +5603,34 @@ func (d *daemon) setupReaper(ctx context.Context) error {
 	return nil
 }
 
-// certPKISignerAdapter адаптирует *keepervault.Client к reaper.PKISigner:
-// vault.SignCSR возвращает *vault.SignedCertificate, reaper ждёт *reaper.SignedCert
-// (reaper не импортирует vault-пакет ради типа результата — см. rotate_certs.go).
+// certPKISignerAdapter адаптирует *keepervault.Client к certissue.Signer:
+// vault.SignCSR возвращает *vault.SignedCertificate, certissue ждёт *certissue.SignedCert
+// (certissue не импортирует vault-пакет ради типа результата — см. certissue/issue.go).
+// Общий signer для reaper.CertRotator и core.cert.issued.
 type certPKISignerAdapter struct{ vc *keepervault.Client }
 
-func (a certPKISignerAdapter) SignCSR(ctx context.Context, mount, role, csrPEM string) (*reaper.SignedCert, error) {
+func (a certPKISignerAdapter) SignCSR(ctx context.Context, mount, role, csrPEM string) (*certissue.SignedCert, error) {
 	signed, err := a.vc.SignCSR(ctx, mount, role, csrPEM)
 	if err != nil {
 		return nil, err
 	}
-	return &reaper.SignedCert{
+	return &certissue.SignedCert{
 		CertificatePEM: signed.CertificatePEM,
 		CAChainPEM:     signed.CAChainPEM,
 		SerialNumber:   signed.SerialNumber,
 		NotAfter:       signed.NotAfter,
 	}, nil
+}
+
+// certServiceCSRGen генерит keypair+CSR (keeper-side, R2) через
+// vault.GenerateServiceCSR. Пакет-функция (не inline-замыкание): один источник для
+// reaper.CertRotator и core.cert.issued (coremod.Deps.CertCSRGen).
+func certServiceCSRGen(cn string, dns []string) ([]byte, []byte, error) {
+	g, gerr := keepervault.GenerateServiceCSR(keepervault.CSRParams{CommonName: cn, DNSNames: dns})
+	if gerr != nil {
+		return nil, nil, gerr
+	}
+	return g.PrivateKeyPEM, g.CSRPEM, nil
 }
 
 // resolveCertRotatorConfig извлекает политику `rotate_due_certs` из (возможно
@@ -5598,7 +5651,6 @@ func resolveCertRotatorConfig(cfg *config.KeeperConfig, logger *slog.Logger) rea
 		return out
 	}
 	out.DefaultPKIMount = cfg.Vault.PKIMount
-	out.DefaultPKIRole = cfg.Vault.PKIRole
 	if cfg.Reaper == nil || cfg.Reaper.Rules == nil {
 		return out
 	}
