@@ -4,7 +4,7 @@ package utilization
 
 import "context"
 
-// systemSource вне Linux/macOS (windows и пр.) — заглушка (ADR-071:
+// systemSource вне Linux/macOS (windows и пр.) — заглушка (ADR-072:
 // production-target — Linux). Все методы zero-value.
 type systemSource struct{}
 

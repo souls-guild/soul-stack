@@ -8,7 +8,7 @@ import "context"
 //
 // Все методы best-effort: при недоступности факта возвращают zero-value
 // (0 / пустой slice), не error и не panic (симметрия с soulprint.Source,
-// ADR-018/ADR-071 — Keeper толерантен к sparse-полям).
+// ADR-018/ADR-072 — Keeper толерантен к sparse-полям).
 type Source interface {
 	// Load — load average за 1/5/15 минут.
 	Load(ctx context.Context) LoadAvg

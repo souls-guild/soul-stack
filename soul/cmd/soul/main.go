@@ -532,7 +532,7 @@ func runDaemon(args []string) int {
 		// interval не фиксируем здесь: handleSession читает актуальное
 		// soulprint.refresh_interval из store на старте каждой сессии (hot-reload).
 	}
-	// up — pulse утилизации (ADR-071). Collector один на процесс: stateful (cpu%
+	// up — pulse утилизации (ADR-072). Collector один на процесс: stateful (cpu%
 	// считается дельтой тиков), непрерывность дельты переживает reconnect.
 	up := utilizationPusher{
 		collector: utilization.NewCollector(utilization.NewSystemSource()),
@@ -984,7 +984,7 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 	stopSoulprint := sp.startTicker(ctx, soulprintTick)
 	defer stopSoulprint()
 
-	// HostUtilization (ADR-071): первый pulse — сразу при установке сессии, дальше
+	// HostUtilization (ADR-072): первый pulse — сразу при установке сессии, дальше
 	// по тикеру utilization.interval. Send-ы идут из select-loop-а (writer один);
 	// ошибка initial-push НЕ разрывает сессию (волатильный факт, следующий тик
 	// повторит) — в отличие от WardRoster.
@@ -1424,7 +1424,7 @@ type utilizationReportSink interface {
 	SendHostUtilization(*keeperv1.HostUtilization) error
 }
 
-// utilizationPusher — сбор + периодическая отправка HostUtilization (ADR-071),
+// utilizationPusher — сбор + периодическая отправка HostUtilization (ADR-072),
 // зеркало soulprintPusher. Collector stateful (cpu% — дельта тиков), поэтому
 // живёт один на процесс; тикер только сигналит select-loop-у handleSession
 // (он же единственный writer сессии).
@@ -1458,7 +1458,7 @@ func loadSoulprintInterval(cfg *config.SoulConfig) (time.Duration, error) {
 	return d, nil
 }
 
-// utilizationInterval* — каденс pulse утилизации (ADR-071). Диапазон [floor,
+// utilizationInterval* — каденс pulse утилизации (ADR-072). Диапазон [floor,
 // ceiling]: слишком частый pulse греет presence-канал, а редкий (> ceiling)
 // пережил бы Keeper-side UtilizationTTL (90s = 3× ceiling) → здоровый хост
 // протух бы. Бо́льший интервал станет возможен, когда NIM-87 научит нести/

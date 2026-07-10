@@ -1,6 +1,6 @@
 // Package utilization — Soul-side сбор живой утилизации хоста (CPU%/load/mem/
 // disk/uptime) и заполнение [keeperv1.HostUtilization] для периодической
-// отправки Keeper-у по presence-каналу (ADR-071).
+// отправки Keeper-у по presence-каналу (ADR-072).
 //
 // Волатильный слой, отдельный от статического soulprint (ADR-018): свой каденс
 // (~30s), не targeting-факт, хранится в Redis (горячее, не PG). Best-effort как
@@ -33,7 +33,7 @@ func NewCollector(src Source) *Collector {
 }
 
 // Collect делает один снимок утилизации с collected_at = now. sid в message нет
-// (authority — mTLS peer cert на Keeper-е, ADR-071); принимается лишь ради
+// (authority — mTLS peer cert на Keeper-е, ADR-072); принимается лишь ради
 // симметрии сигнатуры с soulprint.Collect. Ошибок не возвращает.
 func (c *Collector) Collect(ctx context.Context, _ string) *keeperv1.HostUtilization {
 	load := c.src.Load(ctx)

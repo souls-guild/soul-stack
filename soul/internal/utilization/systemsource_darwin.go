@@ -5,7 +5,7 @@ package utilization
 import "context"
 
 // systemSource на macOS (dev-машина) — заглушка: живая утилизация не собирается
-// (ADR-071: production-target — Linux). Все методы zero-value.
+// (ADR-072: production-target — Linux). Все методы zero-value.
 type systemSource struct{}
 
 // NewSystemSource — заглушка не-Linux (см. doc systemSource).

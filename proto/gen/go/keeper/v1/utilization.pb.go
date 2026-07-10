@@ -23,7 +23,7 @@ const (
 )
 
 // HostUtilization — снимок живой утилизации ресурсов хоста (CPU%/load/mem/disk/uptime),
-// лёгкий периодический pulse Soul→Keeper по presence-каналу (ADR-071). Слой отдельный от
+// лёгкий периодический pulse Soul→Keeper по presence-каналу (ADR-072). Слой отдельный от
 // SoulprintFacts (статические grains, ADR-018): утилизация волатильна, не targeting-факт,
 // свой каденс (~30s). Хранится в Redis (горячее, не PG). only-add по ADR-012(c).
 type HostUtilization struct {

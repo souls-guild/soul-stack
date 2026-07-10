@@ -13,8 +13,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 )
 
-// newUtilHandler — handler с standalone-miniredis-Redis-ом (TxPipeline требует
-// одного слота — cluster-режим тут не подходит) и capture-audit-ом.
+// newUtilHandler — handler с miniredis-Redis-ом (unit-харнесс) и capture-audit-ом.
 func newUtilHandler(t *testing.T) (*eventStreamHandler, *keeperredis.Client) {
 	t.Helper()
 	mr := miniredis.RunT(t)
@@ -97,7 +96,7 @@ func TestHandleHostUtilization_NilRedisNoPanic(t *testing.T) {
 
 // TestHandleHostUtilization_WriteFailure_GracefulNoPanic — сбой записи в Redis
 // (закрытый клиент) НЕ паникует и НЕ всплывает наверх (handler void → warn), и НЕ
-// трогает lease/presence: авторитет живости независим от vitals (ADR-071(e)).
+// трогает lease/presence: авторитет живости независим от vitals (ADR-072(e)).
 func TestHandleHostUtilization_WriteFailure_GracefulNoPanic(t *testing.T) {
 	h, rc := newUtilHandler(t)
 	if err := rc.Close(); err != nil {

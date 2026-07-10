@@ -1,4 +1,4 @@
-# ADR-071. Host-Utilization — лёгкая телеметрия утилизации хостов через presence-канал
+# ADR-072. Host-Utilization — лёгкая телеметрия утилизации хостов через presence-канал
 
 - **Контекст.** Оператору при заходе в инкарнацию нужна **свежая утилизация хостов** (CPU%/load/mem/disk/uptime) — «не задыхается ли инстанс прямо сейчас» — **без разворачивания Prometheus**. Живой утилизации сегодня нет нигде: `SoulprintReport` ([ADR-018](0018-soulprint-typed.md)) несёт **статические** grains (refresh 5m, CEL-адресуемо `soulprint.self.*` — targeting-факты, не живая нагрузка); node-exporter (детальный pull-путь метрик хоста — Prometheus-primary [ADR-024](0024-observability.md), эталон рядом с log-shipping [ADR-067](0067-vector-log-shipping.md)) — **дорогой opt-in**: требует scrape-инфраструктуры и разворачивается не везде. Нужен **третий, дешёвый push-слой** поверх уже существующего presence-стрима Soul→Keeper — чтобы latest-утилизация была под рукой сразу, без внешней инфры.
 

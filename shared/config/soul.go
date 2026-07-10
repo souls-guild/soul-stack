@@ -119,7 +119,7 @@ type SoulSoulprint struct {
 }
 
 // SoulUtilization — параметры периодической отправки живой утилизации хоста
-// (ADR-071). `interval` — каденс pulse (default 30s, floor 10s в cmd/soul).
+// (ADR-072). `interval` — каденс pulse (default 30s, floor 10s в cmd/soul).
 type SoulUtilization struct {
 	Interval string `yaml:"interval,omitempty"`
 }

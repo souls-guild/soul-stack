@@ -72,7 +72,7 @@ func TestUtilizationPusher_StartTicker(t *testing.T) {
 	}
 }
 
-// Floor 10s + ceiling 30s + default 30s (ADR-071): значение зажимается в
+// Floor 10s + ceiling 30s + default 30s (ADR-072): значение зажимается в
 // [10s,30s], отсутствие блока → дефолт, кривая строка → error.
 func TestLoadUtilizationInterval(t *testing.T) {
 	cases := []struct {
