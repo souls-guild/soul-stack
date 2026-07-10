@@ -328,6 +328,7 @@ type FromKeeper struct {
 	//	*FromKeeper_VigilSnapshot
 	//	*FromKeeper_ErrandRequest
 	//	*FromKeeper_CancelErrand
+	//	*FromKeeper_TelemetryConfig
 	Payload       isFromKeeper_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -469,6 +470,15 @@ func (x *FromKeeper) GetCancelErrand() *CancelErrand {
 	return nil
 }
 
+func (x *FromKeeper) GetTelemetryConfig() *TelemetryConfig {
+	if x != nil {
+		if x, ok := x.Payload.(*FromKeeper_TelemetryConfig); ok {
+			return x.TelemetryConfig
+		}
+	}
+	return nil
+}
+
 type isFromKeeper_Payload interface {
 	isFromKeeper_Payload()
 }
@@ -517,6 +527,10 @@ type FromKeeper_CancelErrand struct {
 	CancelErrand *CancelErrand `protobuf:"bytes,11,opt,name=cancel_errand,json=cancelErrand,proto3,oneof"`
 }
 
+type FromKeeper_TelemetryConfig struct {
+	TelemetryConfig *TelemetryConfig `protobuf:"bytes,12,opt,name=telemetry_config,json=telemetryConfig,proto3,oneof"`
+}
+
 func (*FromKeeper_HelloReply) isFromKeeper_Payload() {}
 
 func (*FromKeeper_ApplyRequest) isFromKeeper_Payload() {}
@@ -538,6 +552,8 @@ func (*FromKeeper_VigilSnapshot) isFromKeeper_Payload() {}
 func (*FromKeeper_ErrandRequest) isFromKeeper_Payload() {}
 
 func (*FromKeeper_CancelErrand) isFromKeeper_Payload() {}
+
+func (*FromKeeper_TelemetryConfig) isFromKeeper_Payload() {}
 
 var File_keeper_v1_keeper_proto protoreflect.FileDescriptor
 
@@ -562,7 +578,7 @@ const file_keeper_v1_keeper_proto_rawDesc = "" +
 	"\rerrand_result\x18\t \x01(\v2!.soulstack.keeper.v1.ErrandResultH\x00R\ferrandResult\x12Q\n" +
 	"\x10host_utilization\x18\n" +
 	" \x01(\v2$.soulstack.keeper.v1.HostUtilizationH\x00R\x0fhostUtilizationB\t\n" +
-	"\apayload\"\xdc\x06\n" +
+	"\apayload\"\xaf\a\n" +
 	"\n" +
 	"FromKeeper\x12B\n" +
 	"\vhello_reply\x18\x01 \x01(\v2\x1f.soulstack.keeper.v1.HelloReplyH\x00R\n" +
@@ -578,7 +594,8 @@ const file_keeper_v1_keeper_proto_rawDesc = "" +
 	"\x0evigil_snapshot\x18\t \x01(\v2\".soulstack.keeper.v1.VigilSnapshotH\x00R\rvigilSnapshot\x12K\n" +
 	"\x0eerrand_request\x18\n" +
 	" \x01(\v2\".soulstack.keeper.v1.ErrandRequestH\x00R\rerrandRequest\x12H\n" +
-	"\rcancel_errand\x18\v \x01(\v2!.soulstack.keeper.v1.CancelErrandH\x00R\fcancelErrandB\t\n" +
+	"\rcancel_errand\x18\v \x01(\v2!.soulstack.keeper.v1.CancelErrandH\x00R\fcancelErrand\x12Q\n" +
+	"\x10telemetry_config\x18\f \x01(\v2$.soulstack.keeper.v1.TelemetryConfigH\x00R\x0ftelemetryConfigB\t\n" +
 	"\apayload2\xda\x02\n" +
 	"\x06Keeper\x12H\n" +
 	"\x04Ping\x12 .soulstack.keeper.v1.PingRequest\x1a\x1e.soulstack.keeper.v1.PingReply\x12W\n" +
@@ -625,10 +642,11 @@ var file_keeper_v1_keeper_proto_goTypes = []any{
 	(*VigilSnapshot)(nil),       // 22: soulstack.keeper.v1.VigilSnapshot
 	(*ErrandRequest)(nil),       // 23: soulstack.keeper.v1.ErrandRequest
 	(*CancelErrand)(nil),        // 24: soulstack.keeper.v1.CancelErrand
-	(*BootstrapRequest)(nil),    // 25: soulstack.keeper.v1.BootstrapRequest
-	(*PluginFetchRequest)(nil),  // 26: soulstack.keeper.v1.PluginFetchRequest
-	(*BootstrapReply)(nil),      // 27: soulstack.keeper.v1.BootstrapReply
-	(*PluginChunk)(nil),         // 28: soulstack.keeper.v1.PluginChunk
+	(*TelemetryConfig)(nil),     // 25: soulstack.keeper.v1.TelemetryConfig
+	(*BootstrapRequest)(nil),    // 26: soulstack.keeper.v1.BootstrapRequest
+	(*PluginFetchRequest)(nil),  // 27: soulstack.keeper.v1.PluginFetchRequest
+	(*BootstrapReply)(nil),      // 28: soulstack.keeper.v1.BootstrapReply
+	(*PluginChunk)(nil),         // 29: soulstack.keeper.v1.PluginChunk
 }
 var file_keeper_v1_keeper_proto_depIdxs = []int32{
 	4,  // 0: soulstack.keeper.v1.FromSoul.hello:type_name -> soulstack.keeper.v1.Hello
@@ -652,19 +670,20 @@ var file_keeper_v1_keeper_proto_depIdxs = []int32{
 	22, // 18: soulstack.keeper.v1.FromKeeper.vigil_snapshot:type_name -> soulstack.keeper.v1.VigilSnapshot
 	23, // 19: soulstack.keeper.v1.FromKeeper.errand_request:type_name -> soulstack.keeper.v1.ErrandRequest
 	24, // 20: soulstack.keeper.v1.FromKeeper.cancel_errand:type_name -> soulstack.keeper.v1.CancelErrand
-	0,  // 21: soulstack.keeper.v1.Keeper.Ping:input_type -> soulstack.keeper.v1.PingRequest
-	25, // 22: soulstack.keeper.v1.Keeper.Bootstrap:input_type -> soulstack.keeper.v1.BootstrapRequest
-	2,  // 23: soulstack.keeper.v1.Keeper.EventStream:input_type -> soulstack.keeper.v1.FromSoul
-	26, // 24: soulstack.keeper.v1.Keeper.FetchModule:input_type -> soulstack.keeper.v1.PluginFetchRequest
-	1,  // 25: soulstack.keeper.v1.Keeper.Ping:output_type -> soulstack.keeper.v1.PingReply
-	27, // 26: soulstack.keeper.v1.Keeper.Bootstrap:output_type -> soulstack.keeper.v1.BootstrapReply
-	3,  // 27: soulstack.keeper.v1.Keeper.EventStream:output_type -> soulstack.keeper.v1.FromKeeper
-	28, // 28: soulstack.keeper.v1.Keeper.FetchModule:output_type -> soulstack.keeper.v1.PluginChunk
-	25, // [25:29] is the sub-list for method output_type
-	21, // [21:25] is the sub-list for method input_type
-	21, // [21:21] is the sub-list for extension type_name
-	21, // [21:21] is the sub-list for extension extendee
-	0,  // [0:21] is the sub-list for field type_name
+	25, // 21: soulstack.keeper.v1.FromKeeper.telemetry_config:type_name -> soulstack.keeper.v1.TelemetryConfig
+	0,  // 22: soulstack.keeper.v1.Keeper.Ping:input_type -> soulstack.keeper.v1.PingRequest
+	26, // 23: soulstack.keeper.v1.Keeper.Bootstrap:input_type -> soulstack.keeper.v1.BootstrapRequest
+	2,  // 24: soulstack.keeper.v1.Keeper.EventStream:input_type -> soulstack.keeper.v1.FromSoul
+	27, // 25: soulstack.keeper.v1.Keeper.FetchModule:input_type -> soulstack.keeper.v1.PluginFetchRequest
+	1,  // 26: soulstack.keeper.v1.Keeper.Ping:output_type -> soulstack.keeper.v1.PingReply
+	28, // 27: soulstack.keeper.v1.Keeper.Bootstrap:output_type -> soulstack.keeper.v1.BootstrapReply
+	3,  // 28: soulstack.keeper.v1.Keeper.EventStream:output_type -> soulstack.keeper.v1.FromKeeper
+	29, // 29: soulstack.keeper.v1.Keeper.FetchModule:output_type -> soulstack.keeper.v1.PluginChunk
+	26, // [26:30] is the sub-list for method output_type
+	22, // [22:26] is the sub-list for method input_type
+	22, // [22:22] is the sub-list for extension type_name
+	22, // [22:22] is the sub-list for extension extendee
+	0,  // [0:22] is the sub-list for field type_name
 }
 
 func init() { file_keeper_v1_keeper_proto_init() }
@@ -705,6 +724,7 @@ func file_keeper_v1_keeper_proto_init() {
 		(*FromKeeper_VigilSnapshot)(nil),
 		(*FromKeeper_ErrandRequest)(nil),
 		(*FromKeeper_CancelErrand)(nil),
+		(*FromKeeper_TelemetryConfig)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

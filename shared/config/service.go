@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/goccy/go-yaml/ast"
 
@@ -50,6 +51,12 @@ type ServiceManifest struct {
 	// [LifecycleConfig.AutoCreateEnabled] / [LifecycleConfig.AutoDestroyEnabled]
 	// (nil-safe: и nil-блок, и nil-флаг трактуются как true).
 	Lifecycle *LifecycleConfig `yaml:"lifecycle,omitempty"`
+
+	// Telemetry — опциональная политика host-vitals телеметрии (ADR-072, NIM-87).
+	// Отсутствие блока (nil) = дефолт: enabled, interval 30s, все коллекторы.
+	// Разыменование — через nil-safe геттеры [TelemetryConfig.EnabledOrDefault] /
+	// [TelemetryConfig.IntervalOrDefault] / [TelemetryConfig.CollectorsOrDefault].
+	Telemetry *TelemetryConfig `yaml:"telemetry,omitempty"`
 }
 
 // LifecycleConfig — блок `lifecycle:` манифеста сервиса. Оба флага —
@@ -82,6 +89,51 @@ func (l *LifecycleConfig) AutoDestroyEnabled() bool {
 		return true
 	}
 	return *l.AutoDestroy
+}
+
+// KnownCollectors — закрытый набор host-vitals коллекторов (ADR-072, NIM-87).
+var KnownCollectors = []string{"cpu", "mem", "disk", "load", "uptime"}
+
+// TelemetryIntervalFloor — нижняя граница telemetry.interval (anti-DoS floor).
+const TelemetryIntervalFloor = 10 * time.Second
+
+// IsKnownCollector — принадлежит ли name закрытому набору KnownCollectors.
+func IsKnownCollector(name string) bool {
+	return contains(KnownCollectors, name)
+}
+
+// TelemetryConfig — блок `telemetry:` манифеста сервиса (ADR-072, NIM-87).
+// Enabled — `*bool` (nil → дефолт true): отличает «не задано» от «явно false».
+type TelemetryConfig struct {
+	Enabled    *bool    `yaml:"enabled,omitempty"`
+	Interval   *string  `yaml:"interval,omitempty"`
+	Collectors []string `yaml:"collectors,omitempty"`
+}
+
+// EnabledOrDefault — nil-safe: nil-блок ИЛИ nil-флаг → true (backcompat).
+func (t *TelemetryConfig) EnabledOrDefault() bool {
+	if t == nil || t.Enabled == nil {
+		return true
+	}
+	return *t.Enabled
+}
+
+// IntervalOrDefault — nil-safe: nil-блок ИЛИ nil/пустой Interval → "30s".
+func (t *TelemetryConfig) IntervalOrDefault() string {
+	if t == nil || t.Interval == nil || *t.Interval == "" {
+		return "30s"
+	}
+	return *t.Interval
+}
+
+// CollectorsOrDefault — nil-safe: nil-блок ИЛИ пустой список → копия KnownCollectors.
+func (t *TelemetryConfig) CollectorsOrDefault() []string {
+	if t == nil || len(t.Collectors) == 0 {
+		out := make([]string, len(KnownCollectors))
+		copy(out, KnownCollectors)
+		return out
+	}
+	return t.Collectors
 }
 
 // DependencyRef — запись в `destiny[]` / `modules[]`: `{name, ref}` + опц. `git`.
@@ -269,6 +321,37 @@ func schemaValidateService(path string, root *ast.MappingNode, m *ServiceManifes
 	seenRevealIDs := make(map[string]int, len(m.RevealableSecrets))
 	for i, rs := range m.RevealableSecrets {
 		out = append(out, validateRevealableSecret(root, i, rs, seenRevealIDs)...)
+	}
+
+	// 7) telemetry — опц. host-vitals политика (ADR-072, NIM-87). nil-блок
+	// пропускаем (backcompat). Enabled не валидируем; cross-field инвариантов нет.
+	if m.Telemetry != nil {
+		for _, c := range m.Telemetry.Collectors {
+			if !IsKnownCollector(c) {
+				out = append(out, atPath(root, "$.telemetry.collectors", diag.Diagnostic{
+					Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+					Code:    "unknown_collector",
+					Message: fmt.Sprintf("telemetry.collectors: unknown collector %q; known set: %s", c, strings.Join(KnownCollectors, ", ")),
+					Hint:    "allowed collectors: " + strings.Join(KnownCollectors, ", "),
+				}))
+			}
+		}
+		if m.Telemetry.Interval != nil && *m.Telemetry.Interval != "" {
+			if d, err := ParseDuration(*m.Telemetry.Interval); err != nil {
+				out = append(out, atPath(root, "$.telemetry.interval", diag.Diagnostic{
+					Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+					Code:    "duration_invalid",
+					Message: fmt.Sprintf("telemetry.interval: invalid duration %q: %v", *m.Telemetry.Interval, err),
+					Hint:    "use Go-duration (e.g. 30s, 1m) or <N>d for days",
+				}))
+			} else if d < TelemetryIntervalFloor {
+				out = append(out, atPath(root, "$.telemetry.interval", diag.Diagnostic{
+					Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+					Code:    "value_out_of_range",
+					Message: fmt.Sprintf("telemetry.interval must be >= 10s (anti-DoS floor), got %s", d),
+				}))
+			}
+		}
 	}
 
 	return out

@@ -177,6 +177,59 @@ func TestWriteUtilization_NilCollectedAt(t *testing.T) {
 	}
 }
 
+// TestUtilizationTTL — чистая функция масштабирования TTL под каденс (NIM-87):
+// 3×interval с флором UtilizationTTL (90s) и потолком (кламп interval_sec на
+// 10800 → TTL 32400s); 0/малый/отрицательный interval → флор.
+func TestUtilizationTTL(t *testing.T) {
+	cases := []struct {
+		intervalSec int32
+		want        time.Duration
+	}{
+		{0, 90 * time.Second},             // старый soul без поля → флор
+		{-5, 90 * time.Second},            // отрицательный (сбой) → 0 → флор
+		{30, 90 * time.Second},            // 3×30=90 == флор
+		{10, 90 * time.Second},            // 3×10=30 < флор → 90
+		{60, 180 * time.Second},           // 3×60=180
+		{600, 1800 * time.Second},         // 3×600=1800
+		{10800, 32400 * time.Second},      // 3×10800=32400 == потолок
+		{2147483647, 32400 * time.Second}, // int32-max → кламп → потолок 32400
+	}
+	for _, tc := range cases {
+		if got := utilizationTTL(tc.intervalSec); got != tc.want {
+			t.Errorf("utilizationTTL(%d) = %v, want %v", tc.intervalSec, got, tc.want)
+		}
+	}
+}
+
+// TestWriteUtilization_TTLScalesWithInterval — больший interval_sec → TTL выше
+// флора; interval_sec персистится и читается назад.
+func TestWriteUtilization_TTLScalesWithInterval(t *testing.T) {
+	c, mr := newClientMR(t)
+	ctx := context.Background()
+	sid := "host.example.com"
+	ev := sampleUtilization(time.Now())
+	ev.IntervalSec = 600 // → TTL 1800s
+
+	if err := WriteUtilization(ctx, c, sid, ev, time.Now()); err != nil {
+		t.Fatalf("WriteUtilization: %v", err)
+	}
+
+	for _, key := range []string{UtilizationKey(sid), UtilizationWindowKey(sid)} {
+		ttl := mr.TTL(key)
+		if ttl <= UtilizationTTL || ttl > 1800*time.Second {
+			t.Errorf("TTL(%q) = %v, want (%v, 1800s]", key, ttl, UtilizationTTL)
+		}
+	}
+
+	snap, ok, err := ReadUtilization(ctx, c, sid)
+	if err != nil || !ok {
+		t.Fatalf("ReadUtilization: ok=%v err=%v", ok, err)
+	}
+	if snap.IntervalSec != 600 {
+		t.Errorf("IntervalSec = %d, want 600 (round-trip)", snap.IntervalSec)
+	}
+}
+
 func TestWriteUtilization_Rejects(t *testing.T) {
 	c, _ := newClientMR(t)
 	ctx := context.Background()

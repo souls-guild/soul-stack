@@ -537,7 +537,11 @@ func runDaemon(args []string) int {
 	up := utilizationPusher{
 		collector: utilization.NewCollector(utilization.NewSystemSource()),
 		sid:       sid,
-		// interval читается из store на старте каждой сессии (hot-reload), как у sp.
+		// telemetry — durable holder доставленного Keeper-ом конфига (NIM-87):
+		// pointer шарится между копиями up при reconnect → директива переживает
+		// reconnect. Дефолт до первой директивы: все коллекторы, pulse включён.
+		telemetry: &telemetryState{collectors: allCollectorsSet()},
+		// interval читается из store/holder на старте каждой сессии (hot-reload).
 	}
 
 	// Soulprint-факт → core-модули (Вариант A, ADR-018(b)): собираем снимок хоста
@@ -944,7 +948,9 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 	// изменение применяется при следующем reconnect (sub-second-латентность не нужна).
 	fb := resolveFailback(store, logger)
 	sp.interval = resolveSoulprintInterval(store, logger)
-	up.interval = resolveUtilizationInterval(store, logger)
+	// Прецеденс каденса utilization: delivered (durable-директива, переживает
+	// reconnect) > soul-local utilization.interval > built-in (NIM-87).
+	up.interval = effectiveStartInterval(up.telemetry, store, logger)
 
 	// failbackCtx живёт ровно для одной попытки failback-loop. При swap-е
 	// предыдущий cancel вызывается до создания нового — это держит число
@@ -984,16 +990,28 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 	stopSoulprint := sp.startTicker(ctx, soulprintTick)
 	defer stopSoulprint()
 
-	// HostUtilization (ADR-072): первый pulse — сразу при установке сессии, дальше
-	// по тикеру utilization.interval. Send-ы идут из select-loop-а (writer один);
-	// ошибка initial-push НЕ разрывает сессию (волатильный факт, следующий тик
-	// повторит) — в отличие от WardRoster.
-	if err := up.pushOnce(ctx, sess); err != nil {
-		logger.Warn("utilization: initial report send failed", slog.Any("error", err))
-	}
+	// HostUtilization (ADR-072): pulse под текущий эффективный конфиг. Каденс/
+	// enable/коллекторы могут смениться живьём приходом FromKeeper.TelemetryConfig
+	// (NIM-87) — тикер пере-создаётся БЕЗ рестарта процесса. startUtilPulse
+	// (пере)поднимает тикер под up.interval и делает немедленный pushOnce;
+	// enabled=false → тикер остановлен, не шлём. Все Send идут из select-loop-а
+	// (writer один); ошибка push НЕ разрывает сессию (волатильный факт, следующий
+	// тик/директива повторит) — в отличие от WardRoster.
 	utilizationTick := make(chan struct{}, 1)
-	stopUtil := up.startTicker(ctx, utilizationTick)
-	defer stopUtil()
+	stopUtil := func() {}
+	startUtilPulse := func() {
+		stopUtil()
+		if !up.telemetry.pulseEnabled() {
+			stopUtil = func() {}
+			return
+		}
+		if err := up.pushOnce(ctx, sess); err != nil {
+			logger.Warn("utilization: report send failed", slog.Any("error", err))
+		}
+		stopUtil = up.startTicker(ctx, utilizationTick)
+	}
+	startUtilPulse()
+	defer func() { stopUtil() }()
 
 	swapCh := make(chan *soulgrpc.StreamSession)
 	startFailback := func(priority int) {
@@ -1273,6 +1291,22 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 				logger.Info("beacon: vigil snapshot applied (ReplaceAll)",
 					slog.Int("count", len(vigils)),
 				)
+			case *keeperv1.FromKeeper_TelemetryConfig:
+				// Живая директива host-vitals (ADR-072, NIM-87): обновляем durable
+				// holder (переживёт reconnect) и пере-создаём util-тикер под новый
+				// каденс/коллекторы/enable БЕЗ рестарта процесса. Образец —
+				// FromKeeper_VigilSnapshot выше. Тот же select-loop-goroutine, что
+				// tick-обработчик и pushOnce → чтение/запись holder сериализованы,
+				// мьютекс не нужен (ticker-goroutine holder не читает, лишь сигналит).
+				cfg := payload.TelemetryConfig
+				up.telemetry.applyTelemetryConfig(cfg)
+				up.interval = up.telemetry.interval
+				startUtilPulse()
+				logger.Info("telemetry: config applied (live)",
+					slog.Bool("enabled", up.telemetry.enabled),
+					slog.Duration("interval", up.telemetry.interval),
+					slog.Int("collectors", len(up.telemetry.collectors)),
+				)
 			case *keeperv1.FromKeeper_SeedRotationReply:
 				logger.Info("seed_rotation_reply: ignored (M2.3+)")
 			case *keeperv1.FromKeeper_HelloReply:
@@ -1432,11 +1466,22 @@ type utilizationPusher struct {
 	collector *utilization.Collector
 	sid       string
 	interval  time.Duration
+	// telemetry — durable holder доставленного конфига (pointer → переживает
+	// reconnect). nil в тестовой обвязке = дефолт: собираем всё, pulse включён.
+	telemetry *telemetryState
 }
 
-// pushOnce собирает утилизацию и отправляет один HostUtilization в sink.
+// pushOnce собирает утилизацию (лишь включённые коллекторы из holder) и
+// отправляет один HostUtilization в sink, проставив эффективный каденс в
+// interval_sec — Keeper по нему масштабирует UtilizationTTL (NIM-87).
 func (p utilizationPusher) pushOnce(ctx context.Context, sink utilizationReportSink) error {
-	return sink.SendHostUtilization(p.collector.Collect(ctx, p.sid))
+	var set utilization.CollectorSet
+	if p.telemetry != nil {
+		set = p.telemetry.collectors
+	}
+	snap := p.collector.Collect(ctx, p.sid, set)
+	snap.IntervalSec = int32(p.interval.Seconds())
+	return sink.SendHostUtilization(snap)
 }
 
 // startTicker см. [startIntervalTicker].
@@ -1486,6 +1531,90 @@ func loadUtilizationInterval(cfg *config.SoulConfig) (time.Duration, error) {
 		return utilizationCeilingInterval, nil
 	}
 	return d, nil
+}
+
+// utilizationDeliveredCeiling — потолок интервала, доставленного директивой
+// FromKeeper.TelemetryConfig (NIM-87). Отличается от soul-local ceiling (30s,
+// loadUtilizationInterval): keeper вправе задать больший каденс, т.к. soul несёт
+// interval_sec в payload и keeper масштабирует TTL. Sanity-bound на TTL (ADR-072).
+const utilizationDeliveredCeiling = 3600 * time.Second
+
+// telemetryState — durable снимок доставленной Keeper-ом telemetry-директивы
+// (FromKeeper.TelemetryConfig, ADR-072/NIM-87). Живёт один на процесс (pointer-
+// поле utilizationPusher, шаренное между копиями up при reconnect) → доставленный
+// конфиг переживает reconnect. Читается/пишется только из select-loop-а
+// handleSession (единственный writer/reader сессии), синхронизация не нужна.
+type telemetryState struct {
+	delivered  bool // была ли доставлена хотя бы одна директива
+	enabled    bool
+	interval   time.Duration // клампнутый [floor,ceiling]
+	collectors utilization.CollectorSet
+}
+
+// applyTelemetryConfig мержит директиву в durable-состояние. interval клампится
+// в [floor 10s, ceiling 3600s] (defense-in-depth: keeper уже клампит); пустой
+// Collectors → все 5; неизвестные имена игнорируются.
+func (s *telemetryState) applyTelemetryConfig(cfg *keeperv1.TelemetryConfig) {
+	if cfg == nil {
+		return
+	}
+	s.delivered = true
+	s.enabled = cfg.GetEnabled()
+	s.interval = clampUtilizationInterval(time.Duration(cfg.GetIntervalSec()) * time.Second)
+	s.collectors = collectorSetFromNames(cfg.GetCollectors())
+}
+
+// pulseEnabled — слать ли pulse. nil-holder / нет доставки → да (дефолт); иначе
+// по delivered enabled.
+func (s *telemetryState) pulseEnabled() bool {
+	return s == nil || !s.delivered || s.enabled
+}
+
+// clampUtilizationInterval зажимает доставленный интервал в [floor 10s, ceiling
+// 3600s] (NIM-87).
+func clampUtilizationInterval(d time.Duration) time.Duration {
+	switch {
+	case d < utilizationFloorInterval:
+		return utilizationFloorInterval
+	case d > utilizationDeliveredCeiling:
+		return utilizationDeliveredCeiling
+	default:
+		return d
+	}
+}
+
+// collectorSetFromNames строит CollectorSet из имён директивы: пустой список →
+// все 5 (config.KnownCollectors), иначе только валидные (config.IsKnownCollector).
+func collectorSetFromNames(names []string) utilization.CollectorSet {
+	if len(names) == 0 {
+		return allCollectorsSet()
+	}
+	set := make(utilization.CollectorSet, len(names))
+	for _, n := range names {
+		if config.IsKnownCollector(n) {
+			set[n] = true
+		}
+	}
+	return set
+}
+
+// allCollectorsSet — набор со всеми известными коллекторами (дефолт без директивы).
+func allCollectorsSet() utilization.CollectorSet {
+	set := make(utilization.CollectorSet, len(config.KnownCollectors))
+	for _, n := range config.KnownCollectors {
+		set[n] = true
+	}
+	return set
+}
+
+// effectiveStartInterval — прецеденс каденса на старте сессии: delivered
+// (durable-директива, переживает reconnect) > soul-local utilization.interval >
+// built-in 30s.
+func effectiveStartInterval(ts *telemetryState, store *config.Store[config.SoulConfig], logger *slog.Logger) time.Duration {
+	if ts != nil && ts.delivered {
+		return ts.interval
+	}
+	return resolveUtilizationInterval(store, logger)
 }
 
 func loadFailback(cfg *config.SoulConfig) (failbackParams, error) {

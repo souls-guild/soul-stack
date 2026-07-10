@@ -342,7 +342,7 @@ func stubServiceHandler(t *testing.T) *handlers.ServiceHandler {
 	if err != nil {
 		t.Fatalf("serviceregistry.NewService(stub): %v", err)
 	}
-	return handlers.NewServiceHandler(svc, nil, nil, nil, nil, nil, nil)
+	return handlers.NewServiceHandler(svc, nil, nil, nil, nil, nil, nil, nil)
 }
 
 type stubServicePool struct{ serviceregistry.ServicePool }

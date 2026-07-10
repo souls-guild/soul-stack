@@ -184,6 +184,13 @@ type EventStreamDeps struct {
 	// передаёт реестр vigils (тот же pool, что OracleDeps.DB).
 	VigilSource VigilSource
 
+	// TelemetrySource — резолвер эффективного telemetry-конфига host-vitals
+	// per-SID для connect-time broadcast-а каденса/коллекторов (ADR-072, NIM-87).
+	// nil → broadcast no-op (dev / unit / push-обвязка). Production wire-up
+	// (`keeper run`) передаёт telemetrySource над общим pool + serviceRegistry +
+	// serviceLoader + essenceResolver.
+	TelemetrySource TelemetrySource
+
 	// TollNotifier — Toll cluster-detector hook (ADR-038): handler зовёт его
 	// при выходе из receive-loop-а (disconnect-event). nil → Toll не подключён
 	// (single-instance/dev без Redis): hook no-op. Production wire-up
@@ -227,6 +234,18 @@ type TollNotifier interface {
 // [keeperv1.VigilDef].
 type VigilSource interface {
 	ActiveVigilsForSID(ctx context.Context, sid string) ([]*keeperv1.VigilDef, error)
+}
+
+// TelemetrySource — узкая поверхность резолва эффективного telemetry-конфига
+// хоста (манифест `telemetry:` + essence-override), нужная connect-time
+// broadcast-у ([broadcastTelemetryConfig], ADR-072, NIM-87). Сужение до одного
+// метода изолирует EventStream-handler от цепочки soul→incarnation→service-
+// artifact→essence и допускает fake в unit-тестах. Реализация — [telemetrySource]
+// (events_telemetry.go). (nil, nil) = «конфига нет» (хост без инкарнации):
+// broadcast скипается, Soul держит soul-local каденс (в отличие от Vigil/Sigil
+// ReplaceAll, где пустой набор всё равно шлётся).
+type TelemetrySource interface {
+	ResolveForSID(ctx context.Context, sid string) (*keeperv1.TelemetryConfig, error)
 }
 
 // SigilStore — узкая поверхность реестра plugin_sigils, нужная connect-time
@@ -616,6 +635,13 @@ func (h *eventStreamHandler) EventStream(stream grpclib.BidiStreamingServer[keep
 	// ReplaceAll: Soul-scheduler заменяет весь локальный набор Vigil этим
 	// списком (S1). Best-effort — см. [broadcastVigils].
 	h.broadcastVigils(ctx, stream, sid, sessionID)
+
+	// Connect-time broadcast эффективного telemetry-конфига host-vitals (ADR-072,
+	// NIM-87): в той же горутине после VigilSnapshot, ДО старта send-loop-а —
+	// напрямую stream.Send (порядок гарантирован). Резолв per-SID (манифест
+	// `telemetry:` + essence-override). Нет инкарнации → скип (Soul на soul-local
+	// каденсе, не пустой конфиг). Best-effort — см. [broadcastTelemetryConfig].
+	h.broadcastTelemetryConfig(ctx, stream, sid, sessionID)
 
 	// Стрим считается открытым после успешного handshake (HelloReply
 	// доставлен). Inc/Dec — gauge активных стримов; Dec в defer гарантирует

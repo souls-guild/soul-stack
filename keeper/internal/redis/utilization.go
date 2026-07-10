@@ -20,12 +20,32 @@ import (
 const (
 	// UtilizationWindowSize — длина окна точек (cap для LTRIM).
 	UtilizationWindowSize = 60
-	// UtilizationTTL — время жизни latest/окна. 3× потолка интервала Soul-а
-	// (ceiling 30s): при любом валидном интервале [10s,30s] ключ переживает ≥3
-	// pulse-а. NIM-87 для бо́льших интервалов обязан нести/масштабировать TTL,
-	// иначе здоровый хост протухнет.
+	// UtilizationTTL — ФЛОР времени жизни latest/окна (NIM-87). Эффективный TTL
+	// масштабируется [utilizationTTL] под каденс Soul-а (3× interval_sec из
+	// payload), но не опускается ниже этого флора: при 0/старом soul (нет
+	// interval_sec) ключ живёт ≥3 pulse-а на дефолтном каденсе 30s.
 	UtilizationTTL = 90 * time.Second
+	// utilizationIntervalSecCeil — верхний кламп interval_sec из payload (3×3600) против «бессмертного» TTL от rogue/старого Soul (безопасность на первом месте).
+	utilizationIntervalSecCeil = 3 * 3600
 )
+
+// utilizationTTL масштабирует TTL vitals-ключей под эффективный каденс Soul-а
+// (NIM-87): 3× interval_sec, кламп в [UtilizationTTL, 3×utilizationIntervalSecCeil].
+// intervalSec ≤0 (старый soul без поля / сбой) → флор; аномально большой (rogue/
+// забагованный Soul) капается потолком — иначе TTL-ключ стал бы «бессмертным».
+func utilizationTTL(intervalSec int32) time.Duration {
+	if intervalSec < 0 {
+		intervalSec = 0
+	}
+	if intervalSec > utilizationIntervalSecCeil {
+		intervalSec = utilizationIntervalSecCeil
+	}
+	ttl := 3 * time.Duration(intervalSec) * time.Second
+	if ttl < UtilizationTTL {
+		return UtilizationTTL
+	}
+	return ttl
+}
 
 // UtilizationKey — Hash последнего снимка утилизации SID-а.
 func UtilizationKey(sid string) string { return "soul:" + sid + ":util" }
@@ -53,6 +73,9 @@ type UtilizationSnapshot struct {
 	SwapUsedMB  int64
 	UptimeSec   int64
 	Disks       []DiskUsage
+	// IntervalSec — эффективный каденс, на котором Soul прислал снимок (NIM-87);
+	// 0 для старого soul без поля. Отражает решённый Keeper-ом telemetry-интервал.
+	IntervalSec int32
 }
 
 // UtilizationPoint — компактная точка окна для спарклайнов.
@@ -108,6 +131,10 @@ func WriteUtilization(ctx context.Context, c *Client, sid string, ev *keeperv1.H
 	key := UtilizationKey(sid)
 	winKey := UtilizationWindowKey(sid)
 
+	// TTL масштабируется под эффективный каденс Soul-а (NIM-87): больший интервал
+	// → больший TTL (≥3 pulse-а), с флором UtilizationTTL для 0/старого soul.
+	ttl := utilizationTTL(ev.GetIntervalSec())
+
 	pipe := c.underlying().Pipeline()
 	pipe.HSet(ctx, key, map[string]any{
 		"collected_at": collectedStr,
@@ -120,12 +147,13 @@ func WriteUtilization(ctx context.Context, c *Client, sid string, ev *keeperv1.H
 		"mem_total_mb": ev.GetMemTotalMb(),
 		"swap_used_mb": ev.GetSwapUsedMb(),
 		"uptime_sec":   ev.GetUptimeSec(),
+		"interval_sec": ev.GetIntervalSec(),
 		"disks":        string(disksJSON),
 	})
-	pipe.Expire(ctx, key, UtilizationTTL)
+	pipe.Expire(ctx, key, ttl)
 	pipe.LPush(ctx, winKey, string(pointJSON))
 	pipe.LTrim(ctx, winKey, 0, UtilizationWindowSize-1)
-	pipe.Expire(ctx, winKey, UtilizationTTL)
+	pipe.Expire(ctx, winKey, ttl)
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("redis.WriteUtilization: pipeline EXEC: %w", err)
 	}
@@ -160,6 +188,7 @@ func ReadUtilization(ctx context.Context, c *Client, sid string) (UtilizationSna
 	snap.MemTotalMB = parseUtilInt(res["mem_total_mb"])
 	snap.SwapUsedMB = parseUtilInt(res["swap_used_mb"])
 	snap.UptimeSec = parseUtilInt(res["uptime_sec"])
+	snap.IntervalSec = int32(parseUtilInt(res["interval_sec"]))
 	if raw := res["disks"]; raw != "" {
 		if err := json.Unmarshal([]byte(raw), &snap.Disks); err != nil {
 			return snap, false, fmt.Errorf("redis.ReadUtilization: parse disks: %w", err)

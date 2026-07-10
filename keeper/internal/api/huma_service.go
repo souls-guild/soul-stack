@@ -214,6 +214,31 @@ func registerHumaServiceDirectives(humaAPI huma.API, serviceH *handlers.ServiceH
 	})
 }
 
+// registerHumaServiceTelemetry монтирует GET /v1/services/{name}/telemetry через huma
+// (READ-with-path+query, БЕЗ audit). serviceH nil → no-op. Handler:
+// ListServiceTelemetryTyped (name + опц. ref) → typed output (404/502 через problem) +
+// ETag/Cache-Control (конфиг immutable на git-ref); If-None-Match совпал с SHA1 → 304
+// без тела. RBAC service.list — на группе.
+func registerHumaServiceTelemetry(humaAPI huma.API, serviceH *handlers.ServiceHandler) {
+	if serviceH == nil {
+		return
+	}
+	huma.Register(humaAPI, serviceTelemetryOperation(), func(ctx context.Context, in *serviceTelemetryInput) (*serviceTelemetryOutput, error) {
+		reply, err := serviceH.ListServiceTelemetryTyped(ctx, in.Name, in.Ref)
+		if err != nil {
+			return nil, serviceProblem(err)
+		}
+		out := &serviceTelemetryOutput{ETag: etagQuote(reply.SHA1), CacheControl: directivesCacheControlFor(reply.Ref)}
+		if etagMatchesSHA1(in.IfNoneMatch, reply.SHA1) {
+			out.Status = http.StatusNotModified // huma пропускает тело на 304
+			return out, nil
+		}
+		out.Status = http.StatusOK
+		out.Body = reply
+		return out, nil
+	})
+}
+
 // serviceMissingClaims — defensive-ответ при отсутствии claims в ctx (недостижим:
 // RequireJWT кладёт claims до huma). problem+json (parity roleMissingClaims).
 func serviceMissingClaims() huma.StatusError {
@@ -255,6 +280,7 @@ func HumaServiceSpecYAML() (string, error) {
 		registerHumaServiceStateSchema(api, stub)
 		registerHumaServiceDependencies(api, stub)
 		registerHumaServiceDirectives(api, stub)
+		registerHumaServiceTelemetry(api, stub)
 		return nil
 	})
 }
