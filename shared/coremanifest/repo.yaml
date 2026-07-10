@@ -13,7 +13,7 @@ spec:
       input:
         name:       { type: string, required: true, description: "Имя репозитория (= имя файла-описания, [A-Za-z0-9._-])." }
         uri:        { type: string, required: true, description: "URL репозитория (http/https; http даёт обязательный warning)." }
-        gpg_key:    { type: string, description: "URL или armored GPG-ключ для supply-chain-проверки." }
+        gpg_key:    { type: string, description: "GPG-ключ (supply-chain): apt — inline armored/binary keyring; dnf/yum — URL или путь в gpgkey=. Ключ-по-URL для apt — через core.url.fetched (ADR-071 вариант B)." }
         gpg_check:  { type: bool,   description: "Проверять подпись пакетов (default true; opt-out даёт warning)." }
         suite:      { type: string, description: "apt suite/дистрибутив (напр. stable)." }
         components: { type: list,   items: { type: string }, description: "apt components (напр. [main, contrib])." }
